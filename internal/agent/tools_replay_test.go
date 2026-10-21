@@ -9,6 +9,10 @@ import (
 	"testing/synctest"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
+
+	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/dialect/generic"
+	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 )
 
 // chunkOf is a chunk of artifact id: one that adds to the artifact when appendMode is set, else one that replaces it.
@@ -194,10 +198,11 @@ func kinds(evs []Event) []string {
 	return out
 }
 
-// runAnswer feeds events to an assembler that answers a task paused as paused says, and returns what it emitted.
+// runAnswer feeds events to an assembler that answers a tool approval of a task paused as paused says, and returns what
+// it emitted.
 func runAnswer(paused *a2a.Task, evs []a2a.Event) (got []Event) {
 	asm := newAssembler(func(e Event) { got = append(got, e) })
-	asm.seed(paused)
+	asm.seed(paused, true)
 	for _, ev := range evs {
 		asm.apply(ev)
 	}
@@ -253,7 +258,7 @@ func TestAResultWhoseCallTheEarlierTurnSentIsDeliveredWithItsCall(t *testing.T) 
 			var got []Event
 			asm.emit = func(e Event) { got = append(got, e) }
 			if paused != nil {
-				asm.seed(paused)
+				asm.seed(paused, true)
 			}
 			for _, ev := range evs {
 				asm.apply(ev)
@@ -261,6 +266,73 @@ func TestAResultWhoseCallTheEarlierTurnSentIsDeliveredWithItsCall(t *testing.T) 
 			k := kinds(got)
 			if text, result := slices.Index(k, "text"), slices.Index(k, "result"); result < text || result != len(k)-2 {
 				t.Errorf("events = %q, want the result after the text and just before the end", k)
+			}
+		})
+	}
+}
+
+// readsPauses makes an Agent read paused tasks as the dialect d does, which a Pool does for every Agent.
+func readsPauses(d dialect.Dialect) func(*Config) {
+	return func(c *Config) { c.ParseInteraction = d.ParseInteraction }
+}
+
+// answerFixture answers the task paused as paused says with the recorded stream of the answering turn, through an
+// Agent that reads pauses as d does, and returns what it delivered.
+func answerFixture(t *testing.T, d dialect.Dialect, paused *a2a.Task, answering string) []Event {
+	t.Helper()
+	events := fixtureEvents(t, answering)
+	ch := make(chan item, len(events))
+	for _, ev := range events {
+		ch <- item{ev: ev}
+	}
+	m := newMemConn(t, []chan item{ch}, nil, getResult{task: paused})
+	h, got := collector()
+	msg := &a2a.Message{ID: "a1", Role: a2a.MessageRoleUser, TaskID: paused.ID, ContextID: paused.ContextID, Parts: a2a.ContentParts{a2a.NewTextPart("yes")}}
+	if err := memAgent(t, m, readsPauses(d)).Answer(t.Context(), msg, h); err != nil {
+		t.Fatal(err)
+	}
+	return *got
+}
+
+// bothDialects are the dialects that read kagent 1.0's pauses, each as a Pool makes it.
+func bothDialects() map[string]dialect.Dialect {
+	return map[string]dialect.Dialect{"kagent-v1": kagentv1.New(0), "a2a": generic.New(0)}
+}
+
+// An answer to a question (kagent 1.0, askuser/04-good-answer) streams the result of the ask_user call the turn paused
+// on, and not the call. That call was the paused turn's, shown as it paused, and unlike an approved call it is not taken
+// from the task: the answer has no step for it. Its result waits for a call that never comes and is delivered as the send
+// ends, just before the final, where it names no call of this send.
+func TestAnAnswerToAQuestionDoesNotDeliverTheQuestionsCall(t *testing.T) {
+	pause := fixtureEvents(t, "askuser/03-pause-good-answer.response.sse")
+	paused, ok := pause[len(pause)-1].(*a2a.Task)
+	if !ok || paused.Status.State != a2a.TaskStateInputRequired {
+		t.Fatalf("last event of the pause = %#v, want the INPUT_REQUIRED task", pause[len(pause)-1])
+	}
+	for name, d := range bothDialects() {
+		t.Run(name, func(t *testing.T) {
+			k := kinds(answerFixture(t, d, paused, "askuser/04-good-answer.response.sse"))
+			if slices.Contains(k, "call") {
+				t.Errorf("events = %q, want no call: the ask_user call is the paused turn's", k)
+			}
+			if text, result := slices.Index(k, "text"), slices.Index(k, "result"); result < text || result != len(k)-2 {
+				t.Errorf("events = %q, want the result of call_ask after the text and just before the final: it waited for its call", k)
+			}
+		})
+	}
+}
+
+// Both dialects read an approval as one, so the approved call is taken from the task and its step begins before the text
+// that follows it.
+func TestAnApprovalTakesItsCallFromTheTaskInBothDialects(t *testing.T) {
+	for name, d := range bothDialects() {
+		t.Run(name, func(t *testing.T) {
+			got := answerFixture(t, d, pausedTask(t), "approval/02-approve.response.sse")
+			if g, want := outcomes(got), []string{"call call_1", `result call_1 {"output":"8"}`}; !reflect.DeepEqual(g, want) {
+				t.Errorf("tool events = %q, want %q", g, want)
+			}
+			if k := kinds(got); slices.Index(k, "text") < slices.Index(k, "result") {
+				t.Errorf("events = %q, want the call and result before the text", k)
 			}
 		})
 	}
@@ -277,7 +349,7 @@ func TestAnswerReadsThePausedTaskBeforeItSends(t *testing.T) {
 	m := newMemConn(t, []chan item{ch}, nil, getResult{task: paused})
 	h, got := collector()
 	msg := &a2a.Message{ID: "a1", Role: a2a.MessageRoleUser, TaskID: paused.ID, ContextID: paused.ContextID, Parts: a2a.ContentParts{a2a.NewTextPart("yes")}}
-	if err := memAgent(t, m, nil).Answer(t.Context(), msg, h); err != nil {
+	if err := memAgent(t, m, readsPauses(kagentv1.New(0))).Answer(t.Context(), msg, h); err != nil {
 		t.Fatal(err)
 	}
 	if g, want := m.calls(), []string{"get " + string(paused.ID), "send", "send ended"}; !slices.Equal(g, want) {
