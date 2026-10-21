@@ -19,8 +19,9 @@
 // nothing new passes Config.ActivityDelay, a Working… card begins in the stream, or a Working… line in the message
 // that is updated. The delay is one timer wake of the run, and it is the only write that comes of a clock: every other
 // write follows an event. A turn whose context ends before its final event, as when the agent refuses the send or does
-// not take an answer, ends what it showed as a failed task's is ended: its stream is stopped and its status line goes. Text
-// is built at the last step, from the raw events (package render), and is literal: the platform makes it inert.
+// not take an answer, is ended the way a failed task is: its stream is stopped and its status line goes. One whose task
+// goes on under a later turn (session.ErrTurnContinues) is left for that turn to take over. Text is built at the last
+// step, from the raw events (package render), and is literal: the platform makes it inert.
 package live
 
 import (
@@ -46,6 +47,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render"
+	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -201,8 +203,9 @@ type Run struct {
 	turn Turn
 	wake chan struct{} // a slot: the state changed
 	done chan struct{}
-	// end ends the run's context, as the end of the turn's does: a later run of the same turn ends it so (see Start).
-	end context.CancelFunc
+	// end ends the run's context, as the end of the turn's does: a later run of the same turn ends it so, with
+	// session.ErrTurnContinues (see Start).
+	end context.CancelCauseFunc
 	// eligible says the turn may show steps: it began as a stream, on a platform that has them. It is set at the
 	// start and never changed, which is why Handle may read it; streaming, which a takeover clears, is the goroutine's.
 	eligible bool
@@ -292,10 +295,10 @@ const (
 // written, or given up on, or when ctx ends: a turn that has shown something by then is ended first, as a task
 // that failed is (see cut).
 //
-// A turn that a run of this Renderer still renders, under the same Source, is taken over: the earlier run is ended as if its
-// context had ended, and the new one writes nothing until the earlier has finished, so that the two never write the message
-// at once and the earlier, which knows less, never writes over the later. The session does this when it follows a task
-// again under the turn whose send has not yet returned.
+// A turn that a run of this Renderer still renders, under the same Source, is taken over: the earlier run's context is
+// ended with session.ErrTurnContinues, so it leaves what it showed, and the new one writes nothing until the earlier has
+// finished, so that the two never write the message at once and the earlier, which knows less, never writes over the
+// later. The session does this when it follows a task again under the turn whose send has not yet returned.
 func (r *Renderer) Start(ctx context.Context, t Turn) *Run {
 	streaming := t.Mode == v1alpha1.OutputLive && t.Recipient != "" && r.caps.Streams
 	u := &Run{cfg: r.cfg, caps: r.caps, turn: t, streaming: streaming, eligible: streaming && r.caps.Steps, wake: make(chan struct{}, 1), done: make(chan struct{}), texts: map[a2a.ArtifactID]string{}, progress: v1alpha1.ProgressSteps}
@@ -309,21 +312,24 @@ func (r *Renderer) Start(ctx context.Context, t Turn) *Run {
 		u.started = r.cfg.Now()
 		u.gapAt, u.gapOpen, u.gapSeq, u.calls = u.started, true, 1, map[string]bool{}
 	}
-	ctx, u.end = context.WithCancel(ctx)
+	ctx, u.end = context.WithCancelCause(ctx)
 	r.mu.Lock()
 	prev := r.current[t.Source]
 	r.current[t.Source] = u
 	r.mu.Unlock()
 	if prev != nil {
-		prev.end()
+		prev.end(session.ErrTurnContinues)
 	}
 	r.runs.Add(1)
 	go func() {
 		defer r.runs.Done()
-		defer u.end()
+		defer u.end(nil)
 		defer r.forget(t.Source, u)
 		if prev != nil {
-			<-prev.done
+			select { // a run that the earlier one would hold up for its final deadline need not wait once its own turn is over
+			case <-prev.done:
+			case <-ctx.Done():
+			}
 		}
 		u.run(ctx)
 	}()
@@ -591,7 +597,7 @@ func (u *Run) run(ctx context.Context) {
 		if finalOp == nil && u.isFinal() {
 			finalCtx, finalOp = telemetry.Start(context.WithoutCancel(ctx), "agentkourier.render.finalize", attribute.String("agentkourier.render.mode", string(u.turn.Mode)), attribute.String("agentkourier.turn.id", u.turn.Source))
 		}
-		if u.cutShort { // no final came: whatever the closing write did, the turn's output was not delivered
+		if u.cutShort && finalOutcome == "delivered" { // no final came: what was written ends the turn, and is no output delivered
 			finalOutcome = "cancelled"
 		}
 		if finalOp != nil {
@@ -614,7 +620,7 @@ func (u *Run) run(ctx context.Context) {
 		gap, gapSeq = u.arm(gap, gapSeq)
 		select {
 		case <-ctx.Done():
-			if !u.isFinal() && !u.cut(ref) { // a turn that never ended owes nothing, but what it showed
+			if !u.isFinal() && !u.cut(ctx, ref) { // a turn that never ended owes nothing, but what it showed
 				return
 			}
 		case <-u.wake:
@@ -627,7 +633,7 @@ func (u *Run) run(ctx context.Context) {
 				finalCtx, finalOp = telemetry.Start(context.WithoutCancel(ctx), "agentkourier.render.finalize", attribute.String("agentkourier.render.mode", string(u.turn.Mode)), attribute.String("agentkourier.turn.id", u.turn.Source))
 			}
 			if d := next.Sub(u.cfg.Now()); d > 0 && !u.sleep(ctx, d) {
-				if !u.isFinal() && u.cut(ref) {
+				if !u.isFinal() && u.cut(ctx, ref) {
 					continue
 				}
 				if u.isFinal() {
@@ -641,7 +647,7 @@ func (u *Run) run(ctx context.Context) {
 				// A stream that was started stands as a message too, though ref is the update path's alone: it was started for a step
 				// that the platform then refused, and is empty. It is stopped with the text of a turn with no output, as the update
 				// path's message is, or it is left open for good.
-				if ref.ID == "" && !u.streamOpen() {
+				if ref.ID == "" && !u.streamOpen() && !u.adopt(ctx, &ref) {
 					finalOutcome = "empty_output"
 					return
 				}
@@ -712,13 +718,15 @@ func (u *Run) run(ctx context.Context) {
 }
 
 // cut ends a turn whose context ended before its final event, and says whether the run has a write to make for it. The send
-// failed, or the agent did not take the turn (the session tells the thread so with a notice of its own), or a later run of the
-// turn has taken it over: no event will come. A turn that has shown nothing owes nothing. One that has shown something is made
+// failed, or the agent did not take the turn (the session tells the thread so with a notice of its own): no event will come.
+// A turn whose task goes on under a later turn (the cause is session.ErrTurnContinues: a lost stream that is followed again,
+// a shutdown that recovery follows, or a later run of the turn in this process) leaves what it showed for that turn, which
+// takes the message over, and writes nothing. A turn that has shown nothing owes nothing. One that has shown something is made
 // final, as a task that failed is: an unclaimed Working… card and the activity card end as Stopped, a step with no result is
 // ended, and the update path's status line goes, so that nothing is left saying that the agent is at work. A stream is
 // stopped, and a message is updated, by the writes of a final, with no footer: nothing ended that could be rated. A message
 // that already shows what the final would makes no write. It is the goroutine's.
-func (u *Run) cut(ref chat.Ref) bool {
+func (u *Run) cut(ctx context.Context, ref chat.Ref) bool {
 	var now time.Time
 	if u.timed {
 		now = u.cfg.Now()
@@ -728,7 +736,7 @@ func (u *Run) cut(ref chat.Ref) bool {
 	case u.final: // the final came after all: the run writes it
 		u.mu.Unlock()
 		return true
-	case ref.ID == "" && !u.streamOpen():
+	case ref.ID == "" && !u.streamOpen(), errors.Is(context.Cause(ctx), session.ErrTurnContinues):
 		u.mu.Unlock()
 		return false
 	}
@@ -738,6 +746,31 @@ func (u *Run) cut(ref chat.Ref) bool {
 	u.cutShort = true
 	v := u.snapshot()
 	return !v.ok || u.want(v) != u.sent // with nothing left to show, the message is replaced by "(no output)" (run)
+}
+
+// adopt finds the message that an earlier run of a recovered turn left, for a turn that ends with nothing to show of its own:
+// that run's stream, left open when its task went on, or its message, with its Working… or tool line. It makes the message
+// this run's to end, stopped if it streams and updated, as takeOver does, and says whether there is one. A turn that is not
+// recovered has no earlier run. It is the goroutine's.
+func (u *Run) adopt(ctx context.Context, ref *chat.Ref) bool {
+	if !u.turn.Recovered {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), u.cfg.WriteTimeout)
+	defer cancel()
+	row, err := u.cfg.Store.GetOutbox(ctx, outbox.ID(u.turn.Source, store.OutboxReply))
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return false
+	case err != nil:
+		u.cfg.Logger.WarnContext(ctx, "live: the earlier message of a recovered turn could not be read; it is left as it is", "channel", u.turn.Channel, "err", err)
+		return false
+	case row.MessageRef == "":
+		return false
+	}
+	u.streaming = false
+	*ref, u.adoptStop = u.cfg.Platform.RefAt(u.turn.Channel, u.turn.Thread, row.MessageRef), true
+	return true
 }
 
 // streamOpen says a stream this turn started has not been stopped. It is the goroutine's.

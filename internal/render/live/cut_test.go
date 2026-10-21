@@ -2,13 +2,19 @@ package live_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
+	"github.com/agentkourier/agent-kourier/internal/session"
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
@@ -141,8 +147,9 @@ func TestATurnThatShowedNothingWritesNothingWhenItsContextEnds(t *testing.T) {
 }
 
 // A run of a turn whose earlier run is still going (the session follows the task again under the same turn while the send
-// that lost it has not yet returned) takes the message over only once the earlier one has ended what it showed: the earlier
-// run makes no write after the later one's, so it cannot put back what it showed over the later one's answer.
+// that lost it has not yet returned) takes the message over only once the earlier one has ended: the earlier run leaves what
+// it showed to the later one, and makes no write after the later one's, so it cannot put back what it showed over the later
+// one's answer. The stream is stopped once, by the later run's takeover.
 func TestALaterRunOfATurnWritesOnlyOnceTheEarlierHasEnded(t *testing.T) {
 	for _, recipient := range []string{"U1", ""} {
 		t.Run(map[string]string{"U1": "stream", "": "alert thread"}[recipient], func(t *testing.T) {
@@ -166,14 +173,152 @@ func TestALaterRunOfATurnWritesOnlyOnceTheEarlierHasEnded(t *testing.T) {
 			if m.Streaming || !strings.HasPrefix(m.Text, "Done.") {
 				t.Errorf("message %+v; want the later run's answer, and no stream", m)
 			}
-			for _, c := range m.Tasks() {
-				if c.Status == "in_progress" {
-					t.Errorf("card %+v is left under way", c)
-				}
+			if n := len(e.rec.sent("/chat.stopStream")); recipient != "" && n != 1 {
+				t.Errorf("%d stops; want the later run's takeover alone", n)
 			}
 			if strings.Contains(string(m.Blocks), "Working") {
 				t.Errorf("blocks %s; want no Working… line", m.Blocks)
 			}
 		})
 	}
+}
+
+// startCause starts a turn of the test's thread whose context the test ends with a cause.
+func (e *env) startCause(t *testing.T, turn live.Turn) (*live.Run, context.CancelCauseFunc) {
+	t.Helper()
+	ctx, cancel := context.WithCancelCause(t.Context())
+	t.Cleanup(func() { cancel(nil) })
+	turn.Source, turn.Channel, turn.Thread = "turn-1", "C1", e.root
+	return e.live.Start(ctx, turn), cancel
+}
+
+// A turn whose task continues under a later turn (a lost stream, followed again, or a shutdown, after which recovery follows
+// it) leaves what it showed as it is, for that turn to take over: the stream is not stopped and the line is not taken down.
+// The later turn takes the message over whether it has text or nothing to show, so no Working… is left for good.
+func TestATurnThatContinuesLeavesItsMessageToTheLaterTurn(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		recipient string
+		later     func(run *live.Run)
+		want      string
+	}{
+		{"stream, the follow has the answer", "U1", func(run *live.Run) { run.Handle(text("a", "Done.")); run.Handle(agent.FinalEvent{}) }, "Done."},
+		{"stream, the follow has nothing", "U1", func(run *live.Run) { run.Handle(agent.FinalEvent{}) }, "(no output)"},
+		{"alert thread, the follow has the answer", "", func(run *live.Run) { run.Handle(text("a", "Done.")); run.Handle(agent.FinalEvent{}) }, "Done."},
+		{"alert thread, the follow has nothing", "", func(run *live.Run) { run.Handle(agent.FinalEvent{}) }, "(no output)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := setup(t)
+			first, end := e.startCause(t, live.Turn{Mode: v1alpha1.OutputLive, Progress: sa, Recipient: tc.recipient})
+			e.until(t, "the Working…", 6*time.Second, func() bool {
+				return strings.Contains(e.said(), "Working…") || len(e.reply().Tasks()) == 1
+			})
+			writes := e.writes()
+			end(session.ErrTurnContinues)
+			select {
+			case <-first.Done():
+			case <-time.After(5 * time.Second):
+				t.Fatal("the run did not end with its context")
+			}
+			if n := e.writes(); n != writes {
+				t.Fatalf("%d writes after the turn was handed on; want none", n-writes)
+			}
+			if tc.recipient != "" && !e.reply().Streaming {
+				t.Fatal("the stream was stopped; want it left for the follow")
+			}
+			later, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Progress: sa, Recipient: tc.recipient, Recovered: true})
+			tc.later(later)
+			e.finish(t, later)
+			th := e.fake.Thread("C1", e.root)
+			if m := th[len(th)-1]; len(th) != 2 || m.Streaming || m.Text != tc.want || strings.Contains(string(m.Blocks), "Working") {
+				t.Errorf("thread %d long, message %q (streaming %v), blocks %s; want one message saying %q", len(th), m.Text, m.Streaming, m.Blocks, tc.want)
+			}
+		})
+	}
+}
+
+// ownStopFails is a Platform whose streams this run starts stop with err.
+type ownStopFails struct {
+	chat.Platform
+	err error
+}
+
+func (p ownStopFails) Stream(ctx context.Context, at chat.Target, recipient, markdown string) (chat.Stream, error) {
+	s, err := p.Platform.Stream(ctx, at, recipient, markdown)
+	if err != nil {
+		return nil, err
+	}
+	return stoppingFails{Stream: s, err: p.err}, nil
+}
+
+// A stream that the platform ended before the turn was cut short (Slack ends one left idle) has nothing left to stop: the
+// stop is tried once, its refusal is no failure, and nothing replaces the message.
+func TestACutTurnWhoseStreamEndedAlreadyLeavesIt(t *testing.T) {
+	e := setup(t)
+	e.cfg.Platform = ownStopFails{Platform: e.cfg.Platform, err: fmt.Errorf("%w: message_not_in_streaming_state", chat.ErrNotStreaming)}
+	e.live = newRenderer(t, e.cfg)
+	run, cancel := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Progress: sa, Recipient: "U1"})
+	run.Handle(text("a", "Checking."))
+	e.writesReach(t, 1)
+	cancel()
+	e.finish(t, run)
+	if strings.Contains(e.logs.String(), "tried again") || strings.Contains(e.logs.String(), "giving up") {
+		t.Errorf("the refused stop was retried:\n%s", e.logs)
+	}
+	if n := len(e.rec.sent("/chat.update")); n != 0 {
+		t.Errorf("%d updates; want none", n)
+	}
+}
+
+// A turn cut short is counted as cancelled when its closing write went through, and by how the write failed when it did not,
+// so that the alert on failed finals still sees it.
+func TestACutTurnIsCountedByHowItsClosingWriteWent(t *testing.T) {
+	for _, tc := range []struct {
+		name, outcome string
+		err           error
+	}{{"delivered", "cancelled", nil}, {"refused for good", "permanent_failure", chat.ErrInvalid}} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := setup(t)
+			if tc.err != nil {
+				e.cfg.Platform = ownStopFails{Platform: e.cfg.Platform, err: tc.err}
+			}
+			reg := prometheus.NewRegistry()
+			obs, err := telemetry.New(reg, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			renderer := newRenderer(t, e.cfg)
+			ctx, cancel := context.WithCancel(telemetry.WithObserver(t.Context(), obs))
+			defer cancel()
+			run := renderer.Start(ctx, live.Turn{Source: "turn-1", Channel: "C1", Thread: e.root, Mode: v1alpha1.OutputLive, Recipient: "U1"})
+			run.Handle(text("a", "Checking."))
+			e.writesReach(t, 1)
+			cancel()
+			e.finish(t, run)
+			if got := finalOutcomes(t, reg); strings.Join(got, ",") != tc.outcome {
+				t.Errorf("final outcomes %v; want %s", got, tc.outcome)
+			}
+		})
+	}
+}
+
+// finalOutcomes is the outcome label of each agentkourier_render_final_total series that has counted something.
+func finalOutcomes(t *testing.T, reg *prometheus.Registry) []string {
+	t.Helper()
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, f := range families {
+		if f.GetName() != "agentkourier_render_final_total" {
+			continue
+		}
+		for _, m := range f.Metric {
+			if m.Counter.GetValue() > 0 {
+				out = append(out, m.Label[0].GetValue())
+			}
+		}
+	}
+	return out
 }

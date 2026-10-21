@@ -997,8 +997,11 @@ making the prefix optional breaks multi-turn context.
     the failure notice as a message of its own) ends what it showed as a failed task's: a stream is stopped with an
     unclaimed `Working…` card and the `activity` card as `Stopped`, and a call with no result ended; on the update path the
     status line goes, and a message with no text says `(no output)`. Neither carries the feedback buttons. A turn that
-    showed nothing posts nothing. A second run of the same turn (the task followed again while the send that lost it has
-    not returned) writes only once the first has ended what it showed.
+    showed nothing posts nothing. A turn whose task goes on is not ended: when its stream was lost and the task is followed
+    again, or Agent Kourier is shutting down and recovery follows the task, its stream or message is left as it is, and the
+    turn that follows the task takes it over (stopped and updated to its text, or to `(no output)` when it has none). A
+    second run of the same turn in one process (the task followed again while the send that lost it has not returned)
+    writes only once the first has ended, and the first leaves the message to it.
   - On the update path only (no stream recipient, as in an alert thread), and only when `output` is `live` and `progress` is
     not `steps`, the renderer also marks the thread busy, through the optional `chat.BusyMarker` (`Caps.Busy`). On Slack
     that is `assistant.threads.setStatus` with the status `is working…` and no loading messages. The mark is set when the turn
