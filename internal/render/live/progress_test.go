@@ -668,10 +668,15 @@ var progressScripts = []struct {
 		eventually(t, "the line", func() bool { return strings.Contains(e.said(), "Working…") })
 		run.Handle(result("c1", map[string]any{"output": "3 pods"}))
 		e.until(t, "one step", 3*time.Second, func() bool { return strings.Contains(e.said(), "Working… (1 step)") })
-		e.advanceTo(started.Add(2*time.Minute + 5*time.Second))
+		// The second call and its result are one write only if they reach the run while its window is shut. The write of the
+		// first step shut it, and the clock stands still until both are in, so the run cannot write between them, however it is
+		// scheduled. Set the clock first, and the window is open when the call comes: the run may write the call alone, as
+		// (2 min, 1 step). The clock is then set to the time the line should give, which opens the window, and the run writes
+		// both with the minutes of that moment.
 		run.Handle(call("c2", "fetch", nil))
 		run.Handle(result("c2", map[string]any{"error": "call rejected"}))
-		e.until(t, "the minutes", 3*time.Second, func() bool { return strings.Contains(e.said(), "(2 min, 2 steps, 1 failed)") })
+		e.advanceTo(started.Add(2*time.Minute + 5*time.Second))
+		eventually(t, "the minutes", func() bool { return strings.Contains(e.said(), "(2 min, 2 steps, 1 failed)") })
 		run.Handle(text("a", "Three pods, all ready."))
 		run.Handle(agent.FinalEvent{})
 		e.finish(t, run)
