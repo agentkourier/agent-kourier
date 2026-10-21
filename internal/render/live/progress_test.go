@@ -866,13 +866,14 @@ func TestACallReportedAgainDoesNotBringBackItsLine(t *testing.T) {
 }
 
 // The modes go on after a stream turn is taken over by the update path (a recovered turn that finds a message that was never a
-// stream): the message shows Working… in a gap, and the activity mode its line.
+// stream): the message shows a Working… card in a gap, and the activity mode its card, as the stream would have. A turn that
+// took over a stream carries its steps in its updates, and no status line beside them.
 func TestTheProgressModesGoOnAfterTheTurnMovesToTheUpdatePath(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		mode v1alpha1.ProgressMode
 		want string
-	}{{"steps-and-activity", sa, "Working…"}, {"activity", activity, "Working… (1 step)"}} {
+	}{{"steps-and-activity", sa, "Working…"}, {"activity", activity, "Working… 1 step"}} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := setup(t)
 			e.postedByUpdate(t)
@@ -883,7 +884,12 @@ func TestTheProgressModesGoOnAfterTheTurnMovesToTheUpdatePath(t *testing.T) {
 			} else {
 				again.Handle(text("a", "partial"))
 			}
-			e.until(t, tc.want, 8*time.Second, func() bool { return strings.Contains(e.said(), tc.want) })
+			e.until(t, tc.want, 8*time.Second, func() bool {
+				return slices.ContainsFunc(e.tasks(), func(c fakeslack.Task) bool { return c.Title == tc.want && c.Status == "in_progress" })
+			})
+			if strings.Contains(e.said(), `"context"`) {
+				t.Errorf("blocks %s; want the card and no status line beside it", e.said())
+			}
 			if len(e.rec.sent("/chat.startStream")) != 0 {
 				t.Error("the taken-over turn started a stream")
 			}

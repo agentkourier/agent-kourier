@@ -223,6 +223,13 @@ type Notice struct {
 	Detail     string // a short reason, fixed text: never agent output, never a secret
 }
 
+// ErrTurnContinues is the cause with which the context a Sink's Turn was given ends when the turn's task goes on without
+// it: its stream was lost and the task is followed again, or the manager is shutting down and recovery follows the task
+// after the restart. A later turn of the same message renders the rest, so a renderer leaves what the turn showed for
+// that turn to take over. Any other end of that context ends the turn for good: the send failed, the agent did not take
+// the turn, or the turn's events are over.
+var ErrTurnContinues = errors.New("session: the turn's task continues under a later turn")
+
 // Sink receives the output of turns; the renderer (WP-32) implements it. Turn returns the
 // handler for one turn's events, FinalEvent included, or nil. The handler runs on the goroutine
 // that reads the agent's stream, so it must not block: a slow renderer stalls the read, and

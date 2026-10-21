@@ -11,15 +11,18 @@
 // final message, and an Update after the stop only if what was streamed diverged from the final text (see
 // stream.go). On a platform that has progress steps (Caps.Steps) a stream shows each tool call as a step, where in
 // the text it was made: begun when the call is, finished when its result is. A step is only ever moved
-// forward, so nothing has to be taken back. Otherwise, such as in an alert thread, or on a platform that does not
+// forward, so nothing has to be taken back, save a call that a pause waits to have approved, which ends as waiting
+// (snapshot). Otherwise, such as in an alert thread, or on a platform that does not
 // stream, the turn posts and updates, and shows the latest tool call as a status line, in the past tense once its result
 // has arrived (render.Turn says when the line is shown). Neither path ever
 // updates a message that is still streaming. Between tool calls the agent is silent and the model is deciding, which
 // can take longer than a person waits, so a turn may show that it is working (Turn.Progress, spec 8.3): once a gap with
 // nothing new passes Config.ActivityDelay, a Working… card begins in the stream, or a Working… line in the message
 // that is updated. The delay is one timer wake of the run, and it is the only write that comes of a clock: every other
-// write follows an event. Text is built at the last step, from the raw events (package
-// render), and is literal: the platform makes it inert.
+// write follows an event. A turn whose context ends before its final event, as when the agent refuses the send or does
+// not take an answer, is ended the way a failed task is: its stream is stopped and its status line goes. One whose task
+// goes on under a later turn (session.ErrTurnContinues) is left for that turn to take over. Text is built at the last
+// step, from the raw events (package render), and is literal: the platform makes it inert.
 package live
 
 import (
@@ -45,6 +48,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render"
+	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -100,6 +104,10 @@ type Renderer struct {
 	// once it has said it cannot: no turn asks again.
 	busy    chat.BusyMarker
 	busyOff atomic.Bool
+	// current is the latest run of each turn that has not ended, by the turn's Source: a run of a turn that one already
+	// renders takes the message over from it (see Start).
+	mu      sync.Mutex
+	current map[string]*Run
 }
 
 // New returns a Renderer over cfg. It refuses a Config without its Sender, Platform or Store, naming the field, so that a
@@ -137,7 +145,7 @@ func New(cfg Config) (*Renderer, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
-	r := &Renderer{cfg: cfg, caps: cfg.Platform.Capabilities()}
+	r := &Renderer{cfg: cfg, caps: cfg.Platform.Capabilities(), current: map[string]*Run{}}
 	if m, ok := cfg.Platform.(chat.BusyMarker); ok && r.caps.Busy {
 		r.busy = m
 	}
@@ -176,7 +184,7 @@ type Turn struct {
 	Recipient string
 	// Recovered says the turn continues a message that may exist already, and is updated to the
 	// whole text. A chat turn that finds its stream's row with the ts recorded stops that stream
-	// (which it has lost the connection to) and updates the message. A row with no ts is the window
+	// (which it has lost the connection to) and updates the message, with its steps (takeOver). A row with no ts is the window
 	// of R16: an orphan stream may exist and cannot be found, so the whole text is posted as a new
 	// message, under its own row, and the orphan is left to Slack's timeout.
 	// UNCONFIRMED(WP-04): whether Slack ends an orphaned stream, and what it answers to a stop of a
@@ -196,6 +204,9 @@ type Run struct {
 	turn Turn
 	wake chan struct{} // a slot: the state changed
 	done chan struct{}
+	// end ends the run's context, as the end of the turn's does: a later run of the same turn ends it so, with
+	// session.ErrTurnContinues (see Start).
+	end context.CancelCauseFunc
 	// eligible says the turn may show steps: it began as a stream, on a platform that has them. It is set at the
 	// start and never changed, which is why Handle may read it; streaming, which a takeover clears, is the goroutine's.
 	eligible bool
@@ -217,6 +228,9 @@ type Run struct {
 	// paused says the final event was a pause for input, not the end of the task: the reply so far is a question, and no answer to
 	// rate.
 	paused bool
+	// awaiting is the call IDs of the tool calls that the pause asks a person to approve (FinalEvent.AwaitingApproval):
+	// their steps end as waiting, not as how the call went so far.
+	awaiting []string
 
 	// Below: only a run that is timed keeps these.
 	started  time.Time       // when the run started
@@ -243,13 +257,16 @@ type Run struct {
 	recorded  bool   // and holds the stream's ts
 	stopped   bool
 	adoptStop bool        // the message is a stream of an earlier run, to stop before it is updated
+	adopted   bool        // the message is a stream of an earlier run, which this turn took over and updates
 	diverged  bool        // the streamed text is not a prefix of the final text
 	stream    chat.Stream // the stream this turn started
 	streamed  string      // the markdown sent to the stream so far
 	stepsSent []chat.Step // the steps sent to the stream, each as it was last sent
-	stepsOff  bool        // the platform refused a step for good: the turn goes on without steps
+	stepsOff  bool        // the platform refused a step, or a message with steps, for good: the turn goes on without steps
 	stepFails int         // steps that failed in a row
 	more      bool        // a write left steps to begin, which the next window goes on with
+	// cutShort says the turn's context ended before its final event, and the run is ending what the turn showed (see cut).
+	cutShort bool
 }
 
 // stepRec is a tool call of a stream, which is a step: the call, how it ended, and where in the text it was made.
@@ -280,7 +297,13 @@ const (
 )
 
 // Start begins rendering a turn and returns it. Its goroutine ends once the final text is
-// written, or given up on, or when ctx ends.
+// written, or given up on, or when ctx ends: a turn that has shown something by then is ended first, as a task
+// that failed is (see cut).
+//
+// A turn that a run of this Renderer still renders, under the same Source, is taken over: the earlier run's context is
+// ended with session.ErrTurnContinues, so it leaves what it showed, and the new one writes nothing until the earlier has
+// finished, so that the two never write the message at once and the earlier, which knows less, never writes over the
+// later. The session does this when it follows a task again under the turn whose send has not yet returned.
 func (r *Renderer) Start(ctx context.Context, t Turn) *Run {
 	streaming := t.Mode == v1alpha1.OutputLive && t.Recipient != "" && r.caps.Streams
 	u := &Run{cfg: r.cfg, caps: r.caps, turn: t, streaming: streaming, eligible: streaming && r.caps.Steps, wake: make(chan struct{}, 1), done: make(chan struct{}), texts: map[a2a.ArtifactID]string{}, progress: v1alpha1.ProgressSteps}
@@ -294,9 +317,37 @@ func (r *Renderer) Start(ctx context.Context, t Turn) *Run {
 		u.started = r.cfg.Now()
 		u.gapAt, u.gapOpen, u.gapSeq, u.calls = u.started, true, 1, map[string]bool{}
 	}
+	ctx, u.end = context.WithCancelCause(ctx)
+	r.mu.Lock()
+	prev := r.current[t.Source]
+	r.current[t.Source] = u
+	r.mu.Unlock()
+	if prev != nil {
+		prev.end(session.ErrTurnContinues)
+	}
 	r.runs.Add(1)
-	go func() { defer r.runs.Done(); u.run(ctx) }()
+	go func() {
+		defer r.runs.Done()
+		defer u.end(nil)
+		defer r.forget(t.Source, u)
+		if prev != nil {
+			select { // a run that the earlier one would hold up for its final deadline need not wait once its own turn is over
+			case <-prev.done:
+			case <-ctx.Done():
+			}
+		}
+		u.run(ctx)
+	}()
 	return u
+}
+
+// forget drops u as the current run of its turn, unless a later run has taken its place.
+func (r *Renderer) forget(source string, u *Run) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.current[source] == u {
+		delete(r.current, source)
+	}
 }
 
 // Done is closed when the goroutine has ended.
@@ -346,6 +397,9 @@ func (u *Run) Handle(ev agent.Event) {
 	case agent.FinalEvent:
 		u.final = true
 		u.paused = e.Task != nil && (e.Task.Status.State == a2a.TaskStateInputRequired || e.Task.Status.State == a2a.TaskStateAuthRequired)
+		if u.paused {
+			u.awaiting = e.AwaitingApproval
+		}
 		if u.timed {
 			u.gapOpen = false
 			u.endWorking(now, endingOf(e.Task))
@@ -551,6 +605,9 @@ func (u *Run) run(ctx context.Context) {
 		if finalOp == nil && u.isFinal() {
 			finalCtx, finalOp = telemetry.Start(context.WithoutCancel(ctx), "agentkourier.render.finalize", attribute.String("agentkourier.render.mode", string(u.turn.Mode)), attribute.String("agentkourier.turn.id", u.turn.Source))
 		}
+		if u.cutShort && finalOutcome == "delivered" { // no final came: what was written ends the turn, and is no output delivered
+			finalOutcome = "cancelled"
+		}
 		if finalOp != nil {
 			trace.SpanFromContext(finalCtx).SetAttributes(attribute.Int("agentkourier.render.attempts", writes))
 			telemetry.Count(ctx, "agentkourier_render_final_total", finalOutcome)
@@ -571,7 +628,7 @@ func (u *Run) run(ctx context.Context) {
 		gap, gapSeq = u.arm(gap, gapSeq)
 		select {
 		case <-ctx.Done():
-			if !u.isFinal() { // a turn that never ended owes nothing
+			if !u.isFinal() && !u.cut(ctx, ref) { // a turn that never ended owes nothing, but what it showed
 				return
 			}
 		case <-u.wake:
@@ -584,6 +641,9 @@ func (u *Run) run(ctx context.Context) {
 				finalCtx, finalOp = telemetry.Start(context.WithoutCancel(ctx), "agentkourier.render.finalize", attribute.String("agentkourier.render.mode", string(u.turn.Mode)), attribute.String("agentkourier.turn.id", u.turn.Source))
 			}
 			if d := next.Sub(u.cfg.Now()); d > 0 && !u.sleep(ctx, d) {
+				if !u.isFinal() && u.cut(ctx, ref) {
+					continue
+				}
 				if u.isFinal() {
 					finalOutcome = "deadline_exceeded"
 					u.cfg.Logger.ErrorContext(ctx, "live: the final text was not written before its deadline", "channel", u.turn.Channel)
@@ -595,7 +655,7 @@ func (u *Run) run(ctx context.Context) {
 				// A stream that was started stands as a message too, though ref is the update path's alone: it was started for a step
 				// that the platform then refused, and is empty. It is stopped with the text of a turn with no output, as the update
 				// path's message is, or it is left open for good.
-				if ref.ID == "" && !u.streamOpen() {
+				if ref.ID == "" && !u.streamOpen() && !u.adopt(ctx, &ref) {
 					finalOutcome = "empty_output"
 					return
 				}
@@ -665,6 +725,62 @@ func (u *Run) run(ctx context.Context) {
 	}
 }
 
+// cut ends a turn whose context ended before its final event, and says whether the run has a write to make for it. The send
+// failed, or the agent did not take the turn (the session tells the thread so with a notice of its own): no event will come.
+// A turn whose task goes on under a later turn (the cause is session.ErrTurnContinues: a lost stream that is followed again,
+// a shutdown that recovery follows, or a later run of the turn in this process) leaves what it showed for that turn, which
+// takes the message over, and writes nothing. A turn that has shown nothing owes nothing. One that has shown something is made
+// final, as a task that failed is: an unclaimed Working… card and the activity card end as Stopped, a step with no result is
+// ended, and the update path's status line goes, so that nothing is left saying that the agent is at work. A stream is
+// stopped, and a message is updated, by the writes of a final, with no footer: nothing ended that could be rated. A message
+// that already shows what the final would makes no write. It is the goroutine's.
+func (u *Run) cut(ctx context.Context, ref chat.Ref) bool {
+	var now time.Time
+	if u.timed {
+		now = u.cfg.Now()
+	}
+	u.mu.Lock()
+	switch {
+	case u.final: // the final came after all: the run writes it
+		u.mu.Unlock()
+		return true
+	case ref.ID == "" && !u.streamOpen(), errors.Is(context.Cause(ctx), session.ErrTurnContinues):
+		u.mu.Unlock()
+		return false
+	}
+	u.final, u.paused, u.gapOpen = true, false, false
+	u.endWorking(now, render.EndedFailed)
+	u.mu.Unlock()
+	u.cutShort = true
+	v := u.snapshot()
+	return !v.ok || u.want(v) != u.sent // with nothing left to show, the message is replaced by "(no output)" (run)
+}
+
+// adopt finds the message that an earlier run of a recovered turn left, for a turn that ends with nothing to show of its own:
+// that run's stream, left open when its task went on, or its message, with its Working… or tool line. It makes the message
+// this run's to end, stopped if it streams and updated, as takeOver does, and says whether there is one. A turn that is not
+// recovered has no earlier run. It is the goroutine's.
+func (u *Run) adopt(ctx context.Context, ref *chat.Ref) bool {
+	if !u.turn.Recovered {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), u.cfg.WriteTimeout)
+	defer cancel()
+	row, err := u.cfg.Store.GetOutbox(ctx, outbox.ID(u.turn.Source, store.OutboxReply))
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return false
+	case err != nil:
+		u.cfg.Logger.WarnContext(ctx, "live: the earlier message of a recovered turn could not be read; it is left as it is", "channel", u.turn.Channel, "err", err)
+		return false
+	case row.MessageRef == "":
+		return false
+	}
+	u.streaming = false
+	*ref, u.adoptStop = u.cfg.Platform.RefAt(u.turn.Channel, u.turn.Thread, row.MessageRef), true
+	return true
+}
+
 // streamOpen says a stream this turn started has not been stopped. It is the goroutine's.
 func (u *Run) streamOpen() bool { return u.streaming && u.stream != nil && !u.stopped }
 
@@ -707,8 +823,46 @@ func (u *Run) want(v view) string {
 	if u.streaming {
 		return v.body + "\x00" + stepsKey(v.steps) + map[bool]string{false: "", true: "\x00final"}[v.final]
 	}
-	key, _ := json.Marshal(v.m) // a message of parts of known kinds always marshals
+	key, _ := json.Marshal(u.message(v)) // a message of parts of known kinds always marshals
 	return string(key)
+}
+
+// message is the message an update writes for v: v's own, after the steps of v while the turn shows them. A stream's
+// steps are the stream's, and a message that replaces the stream must carry them, for a platform may drop the stream's
+// cards when the message is updated, as Slack does (probed 2026-10-21): the update of a stream that diverged, and every
+// update of a stream that this turn took over (carries). No post carries them: what the outbox stores is v.m.
+func (u *Run) message(v view) chat.Message {
+	if len(v.steps) == 0 || u.stepsOff {
+		return v.m
+	}
+	m := v.m
+	m.Parts = append([]chat.Part{chat.Steps{Steps: v.steps}}, v.m.Parts...)
+	return m
+}
+
+// update replaces the message at ref with the message of v. The steps never cost the reply its text: a message that
+// carries them and that the platform refuses as content it cannot show is sent again at once without them, with a
+// warning, and the turn shows no steps from then on. Today a refusal of that kind is never retried, so without this the
+// steps would take the answer down with them.
+func (u *Run) update(ctx context.Context, ref chat.Ref, v view) error {
+	carried := len(v.steps) > 0 && !u.stepsOff
+	err := u.cfg.Platform.Update(ctx, ref, chat.Say(u.message(v)))
+	if err == nil || !carried || !u.cannotShow(err) {
+		return err
+	}
+	u.cfg.Logger.WarnContext(ctx, "live: the platform refused the message with its steps; it is sent again without them", "channel", u.turn.Channel, "err", err)
+	u.stepsOff = true
+	return u.cfg.Platform.Update(ctx, ref, chat.Say(v.m))
+}
+
+// cannotShow says whether err is the platform's refusal of a message's content: one it found malformed, too large, or of a
+// form it does not take.
+func (u *Run) cannotShow(err error) bool {
+	if errors.Is(err, chat.ErrInvalid) || errors.Is(err, chat.ErrTooLarge) {
+		return true
+	}
+	v := u.cfg.Platform.Classify(chat.OpPost, err)
+	return v.Class == chat.Permanent && v.Reason == chat.ReasonInvalidContent
 }
 
 // stepsKey is the steps by ID, state and title: what a stream shows of them.
@@ -744,7 +898,7 @@ func (u *Run) write(ctx context.Context, ref *chat.Ref, v view) (telemetryErr er
 			}
 			u.adoptStop = false
 		}
-		err := u.cfg.Platform.Update(ctx, *ref, chat.Say(v.m))
+		err := u.update(ctx, *ref, v)
 		if err == nil {
 			u.sent = u.want(v)
 		}
@@ -764,10 +918,12 @@ func (u *Run) write(ctx context.Context, ref *chat.Ref, v view) (telemetryErr er
 
 // view is what the state shows at one moment.
 type view struct {
-	m     chat.Message // the message of the update path: the text so far, and the latest tool call's status line as render.Turn shows it
-	body  string       // the text a stream carries
-	steps []chat.Step  // the steps a stream shows, in the order of the calls, each in the state to show
-	pos   []int        // where in body each step follows: the text before that place was written before the call
+	m    chat.Message // the message of the update path: the text so far, and the latest tool call's status line as render.Turn shows it
+	body string       // the text a stream carries
+	// steps are the steps a stream shows, in the order of the calls, each in the state to show; and those of a turn that took
+	// over a stream, which its updates carry (message).
+	steps []chat.Step
+	pos   []int // where in body each step follows: the text before that place was written before the call
 	final bool
 	rated bool // the final is the task's end, not a pause: the footer belongs on it
 	ok    bool // there is something to show yet
@@ -776,17 +932,25 @@ type view struct {
 // snapshot builds the state: the text so far as the body and, on the update path, the status line of the latest tool
 // call, in the tense of how far it has got (render.Turn says when it is shown), and on the stream path the steps. A
 // state with a status line is writable with no text, so a call that returned replaces the line that said it was under way.
-// Once the turn is final the line is gone, and a step with no result is ended: the turn will not hear of it again.
+// Once the turn is final the line is gone, and a step with no result is ended: the turn will not hear of it again. A turn
+// that took over a stream has the steps too, which its updates carry, and no status line, since its cards say the same:
+// steps make it writable with no text until the final, which with no text is "(no output)" under them.
+//
+// At a pause for a tool approval the step of each call it waits on is shown as waiting for the approval, done, whatever the
+// call had reported (render.AwaitingApproval): kagent reports such a call with a "requires confirmation" error, and a step
+// that is not done when the stream stops reads as failed. Such a step may go from failed to done, the one outcome that is
+// changed once shown; the answer's message shows the call again, with how it ended.
 func (u *Run) snapshot() view {
+	carries := u.carries()
 	u.mu.Lock()
 	events := make([]agent.TextEvent, 0, len(u.order))
 	for _, id := range u.order {
 		events = append(events, agent.TextEvent{ArtifactID: id, Text: u.texts[id]})
 	}
-	tool, toolState, final, paused := u.tool, u.toolState, u.final, u.paused
+	tool, toolState, final, paused, awaiting := u.tool, u.toolState, u.final, u.paused, u.awaiting
 	idle, begun, finished, failed := u.idle, u.begun && !u.texted, u.finished, u.failed
 	var recs []stepRec
-	if u.stepsOn() {
+	if u.stepsOn() || carries {
 		recs = slices.Clone(u.steps)
 	}
 	u.mu.Unlock()
@@ -794,10 +958,10 @@ func (u *Run) snapshot() view {
 	if u.timed {
 		now = u.cfg.Now()
 	}
-	v := view{final: final, rated: final && !paused}
+	v := view{final: final, rated: final && !paused && !u.cutShort}
 	var shown *agent.ToolCallEvent
-	var status string           // the update path's indicator that the agent is working
-	if !final && !u.streaming { // on the stream path a tool call is a step, and has no status line
+	var status string                       // the update path's indicator that the agent is working
+	if !final && !u.streaming && !carries { // on the stream path a tool call is a step, and has no status line
 		shown = tool
 		switch {
 		case u.progress == v1alpha1.ProgressActivity: // names no tool
@@ -831,10 +995,16 @@ func (u *Run) snapshot() view {
 		if strings.HasPrefix(v.body, before) {
 			pos = len(before)
 		}
-		v.steps = append(v.steps, u.stepOf(id, r, state, now, finished, failed))
+		if r.kind == callStep && r.call.CallID != "" && slices.Contains(awaiting, r.call.CallID) {
+			v.steps = append(v.steps, render.AwaitingApproval(id, r.call))
+		} else {
+			v.steps = append(v.steps, u.stepOf(id, r, state, now, finished, failed))
+		}
 		v.pos = append(v.pos, pos)
 	}
-	v.ok = v.ok || len(v.steps) > 0
+	if u.streaming || !final {
+		v.ok = v.ok || len(v.steps) > 0
+	}
 	return v
 }
 
@@ -856,3 +1026,8 @@ func (u *Run) stepOf(id string, r stepRec, state chat.StepState, now time.Time, 
 // stepsOn says whether the stream shows steps: the turn is eligible for them (a stream, on a platform that has them),
 // it is still the stream it began as, and the platform has not refused one.
 func (u *Run) stepsOn() bool { return u.eligible && u.streaming && !u.stepsOff }
+
+// carries says whether the turn's updates carry its steps: it is eligible for them, it took over the stream of an earlier
+// run, which is the message it updates (a platform such as Slack drops a stream's cards from a message it updates), and the
+// platform has not refused a message with them.
+func (u *Run) carries() bool { return u.eligible && u.adopted && !u.streaming && !u.stepsOff }

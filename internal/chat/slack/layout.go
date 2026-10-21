@@ -107,6 +107,7 @@ func renderMessage(m chat.Message) (Content, error) {
 		return Content{}, err
 	}
 	var blocks []map[string]any
+	var cards []stepsAt
 	var first string // the first text a part has, to stand for a message with no fallback of its own
 	note := func(s string) {
 		if first == "" {
@@ -115,6 +116,10 @@ func renderMessage(m chat.Message) (Content, error) {
 	}
 	for i, p := range m.Parts {
 		switch p := p.(type) {
+		case chat.Steps:
+			if len(p.Steps) > 0 { // a step's title is no text of the message's own, and never stands for its fallback
+				cards = append(cards, stepsAt{at: len(blocks), steps: p.Steps})
+			}
 		case chat.Header:
 			if t := text(p.Text, maxHeader, true); t != "" {
 				blocks = append(blocks, map[string]any{"type": "header", "text": plainObject(t)})
@@ -147,16 +152,88 @@ func renderMessage(m chat.Message) (Content, error) {
 		}
 	}
 	said := notBlank(chat.Clean(m.Fallback, false), chat.Clean(first, false))
+	if len(blocks) > maxBlocks {
+		return Content{}, fmt.Errorf("%w: %d blocks", chat.ErrTooLarge, len(blocks))
+	}
+	blocks = withCards(blocks, cards)
 	if len(blocks) == 0 { // the fallback is the message, and is shown as plain text
 		said = cmp.Or(said, noText)
 		blocks = append(blocks, section(text(notBlank(said, noText), maxSection, false)))
 	}
 	fallback := text(said, caps.Limit(chat.WhereFallback), false)
-	if len(blocks) > maxBlocks {
-		return Content{}, fmt.Errorf("%w: %d blocks", chat.ErrTooLarge, len(blocks))
-	}
 	return content(fallback, blocks)
 }
+
+// stepsAt is the steps of a Steps part, and the place in the message's other blocks where their cards go.
+type stepsAt struct {
+	at    int
+	steps []chat.Step
+}
+
+// withCards is blocks with the cards of each Steps part at its place. The steps are decoration, and have what room the
+// other blocks leave of 50: when there are more than fit, the first are shown, in order, and a line after the last card
+// shown counts the rest. A message with no room left shows none.
+func withCards(blocks []map[string]any, cards []stepsAt) []map[string]any {
+	if len(cards) == 0 {
+		return blocks
+	}
+	room, total := maxBlocks-len(blocks), 0
+	for _, c := range cards {
+		total += len(c.steps)
+	}
+	shown := total
+	if total > room {
+		shown = max(room-1, 0) // one block is the line that counts the rest
+	}
+	insert := make(map[int][]map[string]any)
+	n := 0
+	for _, c := range cards {
+		for _, st := range c.steps {
+			if n == shown {
+				break
+			}
+			insert[c.at] = append(insert[c.at], taskCard(st))
+			n++
+		}
+		if n == shown && shown < total && room > 0 {
+			insert[c.at] = append(insert[c.at], contextLine(strconv.Itoa(total-shown)+" more steps are not shown."))
+			room = 0 // the line is said once
+		}
+	}
+	out := make([]map[string]any, 0, len(blocks)+n+1)
+	for i := range len(blocks) + 1 {
+		out = append(out, insert[i]...)
+		if i < len(blocks) {
+			out = append(out, blocks[i])
+		}
+	}
+	return out
+}
+
+// taskCard is a step as a task_card block, which Slack shows as it shows a stream's card (probed 2026-10-21 in a sandbox
+// workspace, by chat.postMessage and chat.update, read back through conversations.replies and seen in the web client):
+// the status and the output of taskStatus. Slack shows a task_card's title and the text of its rich_text details as the
+// characters they hold: a second probe that day, in the web client, posted the hostile text "<!here>", "<!channel>",
+// "<@U…>", "<#C…>", "<https://x|y>", "[x](url)", "&amp;", "*bold*", "`code`" and a bare URL in both, and every one was
+// shown as typed, with no mention, link, style or notification, and an escaped title was shown with its entities and
+// backslashes. So both are cleaned onto one line and cut, and not escaped, as approval.go treats rich_text: an escape there
+// would be shown. A stream's task_update title is escaped still (stepTitle), since how Slack reads a chunk's text is not
+// known.
+func taskCard(st chat.Step) map[string]any {
+	status, output := taskStatus(st.State)
+	title := cmp.Or(fitWith(chat.Clean(st.Title, true), caps.Limit(chat.WhereStepTitle), literal), "(blank)")
+	b := map[string]any{"type": "task_card", "task_id": st.ID, "title": title, "status": string(status)}
+	if d := fitWith(chat.Clean(st.Detail, true), caps.Limit(chat.WhereStepDetail), literal); d != "" {
+		b["details"] = richText(richSection(d))
+	}
+	if output != "" {
+		b["output"] = richText(richSection(output))
+	}
+	return b
+}
+
+// literal is the escaper of text that is shown as the characters it holds: it changes none of them.
+func literal() escaper { return func(r rune) string { return string(r) } }
 
 // notBlank is a if it says something, else b.
 func notBlank(a, b string) string {

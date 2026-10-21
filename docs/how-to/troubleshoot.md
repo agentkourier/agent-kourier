@@ -243,6 +243,38 @@ update's message from the agent while the task is `working`; see
 (`steps-and-activity`), a `Working…` card still appears in a chat thread when 3 seconds pass with no new text; see
 [Output](../explanation/threads-and-sessions.md#output).
 
+## An alert thread shows no `is working…` status
+
+Agent Kourier sets Slack's assistant status only on a turn whose reply does not stream, which on Slack is an alert
+thread's, with `output: live` and `chat.progress` set to `steps-and-activity` (the default) or `activity`. A chat thread,
+whose reply streams, never gets it, and neither does a Binding with `progress: steps` or `output: final`.
+
+If Slack refused the call with a code that says the app, token or workspace cannot use the method, Agent Kourier logs this
+once, at info level, with the connection (`conn`) and Slack's `code`:
+
+```text
+slack: Slack refused assistant.threads.setStatus, so threads are not shown as busy on this connection until restart
+```
+
+From then on it sets no status on any thread of that connection, and calls Slack for none, until its process restarts.
+A likely cause is a missing scope: add `assistant:write` to the app's bot token scopes, reinstall the app, then restart
+Agent Kourier ([Configure Slack](configure-slack.md#what-the-app-is-allowed-to-do) has the codes and what was tested).
+
+Any other failure stops the status for that turn only, and the turn goes on. It is logged at warn level, with the error in
+`err`:
+
+```text
+live: marking the thread as busy failed; the turn goes on without it
+```
+
+If taking the status off at the end of a turn fails, the warning is
+`live: taking the busy mark off the thread failed; it stays until the next message in the thread`.
+`agentkourier_chat_api_calls_total{operation="SetThreadStatus"}` counts the calls by outcome.
+
+In our testing (October 2026, Slack's desktop web client; mobile not checked), Slack showed the status only to clients
+that were open when it was set, and a reply the bot posted in the thread removed it. This is observed behaviour, not checked
+against Slack's documentation. Agent Kourier sets the status again after each write of the message but the last, and clears it when the turn ends.
+
 ## The kagent install uses far more memory than expected
 
 The chart's defaults run a UI, several MCP servers and ten bundled agents, about 2.3 GiB of

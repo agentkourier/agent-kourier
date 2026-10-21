@@ -42,7 +42,8 @@ import (
 // reply: its text goes out once. A step still under way at the stop has no outcome to show, and it is ended before the
 // stop is sent, with the steps, so that the stop is the one call that carries the last of the text and nothing else. If the
 // text is no longer a prefix of the state, nothing can be appended: the stream is stopped with no suffix, and an
-// Update then replaces the message with the final one, never while the stream runs.
+// Update then replaces the message with the final one, never while the stream runs. Slack drops a stream's cards from a
+// message it updates (probed 2026-10-21), so that update carries the steps, ended as the stop ends them.
 func (u *Run) writeStream(ctx context.Context, ref *chat.Ref, v view) error {
 	id := outbox.ID(u.turn.Source, store.OutboxReply)
 	if !u.rowMade {
@@ -119,12 +120,17 @@ func (u *Run) writeStream(ctx context.Context, ref *chat.Ref, v view) error {
 			u.diverged, suffix = true, ""
 		}
 		if err := u.stream.Stop(ctx, suffix, u.stopFooter(v), id); err != nil {
-			return err
+			if !u.cutShort || !errors.Is(err, chat.ErrNotStreaming) {
+				return err
+			}
+			// A turn cut short whose stream ended already, as the platform may end a stream left idle: there is nothing
+			// left to end, and no final text to replace it with.
+			u.diverged = false
 		}
 		u.stopped = true
 	}
-	if u.diverged {
-		if err := u.cfg.Platform.Update(ctx, u.stream.Ref(), chat.Say(v.m)); err != nil {
+	if u.diverged { // the update replaces the stream's cards as well as its text, so it carries the steps (message)
+		if err := u.update(ctx, u.stream.Ref(), v); err != nil {
 			return err
 		}
 		u.diverged = false
@@ -200,7 +206,8 @@ func (u *Run) shown(v view) view {
 // A stream that has ended says so to the text that follows, which is where it is dealt with.
 //
 // When the steps of a turn are ended, the cards already shown stay in the state they were last sent in, a running one
-// among them. UNCONFIRMED(WP-04): how Slack shows such a card once the stream stops.
+// among them. Slack shows every card that is not complete as an error once the stream stops (probed on 2026-10-21, not
+// in its documentation).
 func (u *Run) sendStep(ctx context.Context, st chat.Step, final bool) (bool, error) {
 	err := u.stream.Step(ctx, st)
 	if err == nil {
@@ -238,18 +245,19 @@ func (u *Run) sendStep(ctx context.Context, st chat.Step, final bool) (bool, err
 
 // takeOver carries on a turn whose stream row exists already. With the ts recorded, the stream of
 // the earlier attempt is the message: it is stopped, if it still runs, and updated to the whole
-// text. It shows no steps of its own, so none of the earlier attempt's is shown twice: a step is begun only on
-// the stream this run started. With none, the earlier attempt may have started a stream that cannot be found (R16): the
-// whole text is posted as a new message, under a row of its own.
-// UNCONFIRMED(WP-04): whether the update that follows the stop of an adopted stream removes the cards the earlier run
-// showed, or leaves them as they were last sent.
+// text. A step is begun only on the stream this run started, so none is added to the earlier attempt's stream. Its
+// updates carry the run's steps instead (carries), the earlier attempt's calls among them, since the agent reports
+// them again: Slack drops a stream's cards from a message it updates, and shows the task_card blocks of the update
+// (probed 2026-10-21 in a sandbox workspace, by chat.update read back through conversations.replies and seen in the
+// web client). With no ts, the earlier attempt may have started a stream that cannot be found (R16): the whole text is
+// posted as a new message, under a row of its own, through the outbox, which stores no steps.
 func (u *Run) takeOver(ctx context.Context, ref *chat.Ref, id string) error {
 	row, err := u.cfg.Store.GetOutbox(ctx, id)
 	if err != nil {
 		return err
 	}
 	if row.MessageRef != "" {
-		u.streaming = false
+		u.streaming, u.adopted = false, true
 		*ref, u.adoptStop = u.cfg.Platform.RefAt(u.turn.Channel, u.turn.Thread, row.MessageRef), true
 		return u.writeMoved(ctx, ref)
 	}
@@ -266,7 +274,8 @@ func (u *Run) postInstead(ctx context.Context, ref *chat.Ref) error {
 
 // writeMoved writes a turn that has just moved from the stream to the update path. The view it was given was the stream's,
 // which shows a tool call as a step and a wait as a card, and so may have no message at all; the update path's own view
-// shows them as status lines, and is the one to write. A state with nothing to show yet writes nothing. A turn that ended
+// shows them as status lines, or, for a turn that took over a stream, as the steps its updates carry, and is the one to
+// write. A state with nothing to show yet writes nothing. A turn that ended
 // with nothing follows the rule of the run loop: where a message stands (the one an earlier run left, which this turn took
 // over) it is updated to "(no output)", so that no status line is left up; where there is none, nothing is posted, and the
 // turn ends as errNothingToShow. A stream that was refused showed nothing, so nothing is lost by it.

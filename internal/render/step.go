@@ -54,6 +54,20 @@ func Failed(response any) bool {
 	return false
 }
 
+// ApprovalTitle begins the title of the step of a tool call that waits for a person to approve it, which the tool's name
+// ends.
+const ApprovalTitle = "Approval requested: "
+
+// AwaitingApproval is the step of a tool call that the task paused to have approved, in the state it is left in when the
+// stream stops at the pause: retitled to say that the approval was asked for, and done, since the call has not failed
+// and a platform may show a step that is not done at the stop of its stream as failed (Slack does). Its detail is the
+// call's, as Step has it. The answer's own message shows the call again, with how it ended.
+func AwaitingApproval(id string, call agent.ToolCallEvent) chat.Step {
+	st := Step(id, call, chat.StepDone)
+	st.Title = ApprovalTitle + st.Title
+	return st
+}
+
 // The titles of the cards that stand for time, not for a tool call. They name nothing the agent did: the model's reasoning
 // is never read, so a gap is not called thinking.
 const (

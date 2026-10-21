@@ -95,14 +95,23 @@ when the turn ends empty, and is not left open.
 A `Working…` card that no tool call took over ends under a title that says how, never as a tick on `Working…`. If text came
 while it was open it is `Wrote the answer`. If the turn ends first, it is `Finished` for a completed task, `Waiting for your
 answer` when the agent asks a question, and `Stopped`, shown as an error, when the task failed, was cancelled or was
-rejected. The `activity` card ends the same way, as `Worked` for text or a completed task, with the same `Waiting for your
-answer` and `Stopped`. A card that was never sent when a turn ends with no text is not sent at all.
+rejected, or when the request failed before the task ended, as when the agent did not take an answer. The failure notice
+is then a message of its own, and the reply's stream is stopped, not left running. A lost connection to the agent, or a
+restart of Agent Kourier, is not such a failure: the task is followed again, and the reply it had is taken over and
+updated, to `(no output)` if the task has nothing to show. The `activity` card ends the same way, as `Worked` for text or a
+completed task, with the same `Waiting for your answer` and `Stopped`. A card that was never sent when a turn ends with no text is not sent at all.
+
+A tool call's card that has no result when the turn ends is complete, with `No result was reported.` under it. When the
+agent pauses for a [tool approval](../how-to/agent-questions.md#tool-approvals), the card of each call the approval is
+about ends as `Approval requested: name`, complete, whatever the call reported before the pause (kagent reports such a
+call with an error that asks for the confirmation). The prompt is a message of its own, and the reply after the decision
+shows the call again with how it ended.
 
 A Binding that sets no `progress` gets `steps-and-activity`, so a Binding written before the field existed now shows
 `Working…` in a gap. Set `progress: steps` to keep the cards and lines alone.
 
 On Slack, an alert thread in `steps-and-activity` or `activity` also gets Slack's assistant status, `is working…`. Agent
-Kourier sets it when the turn starts, before the thread has any reply, and again after each write, because a reply in the
+Kourier sets it when the turn starts, before the thread has any reply, and again after each write but the last, because a reply in the
 thread may take it off. It clears it when the turn ends, whether the turn finished, failed, was cancelled or stopped to ask a
 question. It adds no write of its own on a timer. A chat thread never sets it. If Slack answers that the app or workspace cannot use the method, Agent Kourier logs
 that once at info level and sets no status on that connection until it restarts; any other error stops it for that turn only.
@@ -110,15 +119,21 @@ The replies are unaffected. In our testing the status reached only clients
 that were open when it was set, so it adds to the `Working…` line and does not replace it
 ([Configure Slack](../how-to/configure-slack.md#what-the-app-is-allowed-to-do) has what was tested and which scope).
 
-On the generic `a2a` dialect there are no tool events: `steps` shows nothing until text, `steps-and-activity` shows a
-`Working…` card in each gap, and `activity` shows its card with no step count. When the platform has no step cards, or Slack
-refuses them for a stream (the stream is then plain text), no mode shows a card.
+Every dialect reads tool calls the same way, so an agent on the generic `a2a` dialect that marks its tool parts as Google
+ADK or kagent does (`adk_type`, `kagent_type` or `kagent.dev/a2a/part-type`) gets the same cards and lines. An agent that
+marks none has no tool events: `steps` shows nothing until text, `steps-and-activity` shows a `Working…` card in each gap,
+and `activity` shows its card with no step count. When the platform has no step cards, or Slack refuses them for a stream
+(the stream is then plain text), no mode shows a card.
 
 ## Restarts
 
 Agent Kourier persists sessions, queued replies, pending questions and intended posts. After a restart it finds the
 tasks that were running, asks the agent for their state, and renders their output under the turn that started them, so
-a half-written message is replaced with the whole answer and the thread finishes once.
+a half-written message is replaced with the whole answer and the thread finishes once. In a chat thread the replacement
+keeps the cards the stream would show, before the text: each tool call's, or in the activity modes the `Working…` or
+activity card, kept up to date while the task runs, and a call with no result by the end says
+`No result was reported.`. The same holds when a reply's text changed after it was streamed and the message is
+rewritten. If Slack refuses the cards, the message is written again without them.
 
 ## Lifetime
 

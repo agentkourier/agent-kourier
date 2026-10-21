@@ -15,9 +15,10 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
-	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
+
+	slackgo "github.com/slack-go/slack"
 )
 
 // chunksOf is the chunks of a streaming request.
@@ -478,29 +479,38 @@ func TestAFailingStepNeverHoldsBackTheStop(t *testing.T) {
 	}
 }
 
-// A run that takes over the stream of an earlier run shows no steps of its own: it ends that stream and updates the
-// message, so no step of the earlier run is shown twice.
-func TestARecoveredTurnAddsNoStepsToTheStreamItTakesOver(t *testing.T) {
+// streamedThenLost is an earlier run of the test's turn that streamed text and began the step of a call, and was lost
+// with the stream open and its ts recorded, as a process that crashed leaves it (leftOpen).
+func (e *env) streamedThenLost(t *testing.T) {
+	t.Helper()
+	e.leftOpen(t, "partial", chat.Step{ID: "s1", Title: "search", State: chat.StepRunning})
+}
+
+// A run that takes over the stream of an earlier run ends that stream and updates the message, and the update carries
+// every step the run has, since Slack drops a stream's cards from a message it updates: the steps of the earlier run are
+// shown once, by the update, and none is added to the stream. While the run goes on its updates show the steps as they
+// stand, and at the end a step with no result is ended, as a stream's is at its stop.
+func TestARecoveredTurnKeepsTheStepsOfTheStreamItTakesOver(t *testing.T) {
 	e := setup(t)
-	release := e.hold() // the first write is not throttled: text and call must be in before it, or the step waits for a window nobody turns
-	t.Cleanup(release)
-	first, cancel := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1"})
-	first.Handle(text("a", "partial"))
-	first.Handle(call("c1", "search", nil))
-	release()
-	eventually(t, "the step and the ts to be recorded", func() bool {
-		row, err := e.store.GetOutbox(t.Context(), outbox.ID("turn-1", "reply"))
-		return err == nil && row.MessageRef != "" && len(e.tasks()) == 1
-	})
-	cancel()
-	<-first.Done()
+	e.streamedThenLost(t)
 	appends := len(e.rec.sent("/chat.appendStream"))
 
+	release := e.hold()
+	t.Cleanup(release)
 	again, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1", Recovered: true})
-	again.Handle(text("a", "the whole answer"))
-	again.Handle(call("c1", "search", nil)) // the earlier run's call, said again
+	again.Handle(text("a", "the whole"))
+	again.Handle(call("c1", "search", map[string]any{"q": "up"})) // the earlier run's call, said again
 	again.Handle(result("c1", map[string]any{"output": "x"}))
 	again.Handle(call("c2", "fetch", nil))
+	release()
+	eventually(t, "an update that shows the steps as they stand", func() bool {
+		got := e.tasks()
+		return len(got) == 2 && got[0].Status == "complete" && got[1].Status == "in_progress" && !e.reply().Streaming
+	})
+	if blocks := e.reply().Blocks; strings.Contains(string(blocks), "Calling") {
+		t.Errorf("blocks %s; want no status line beside the cards, which say the same", blocks)
+	}
+	again.Handle(text("a", "the whole answer"))
 	again.Handle(agent.FinalEvent{})
 	e.finish(t, again)
 
@@ -511,10 +521,106 @@ func TestARecoveredTurnAddsNoStepsToTheStreamItTakesOver(t *testing.T) {
 	if got := e.rec.sent("/chat.appendStream"); len(got) != appends {
 		t.Fatalf("%d appends, %d before the takeover; want the takeover to append nothing, steps included", len(got), appends)
 	}
-	if got := th[1].Tasks(); len(got) != 1 || got[0].ID != "s1" {
-		t.Fatalf("tasks %+v; want the earlier run's one step and no other", got)
+	want := []fakeslack.Task{
+		{ID: "s1", Title: "search", Status: "complete", Details: `q="up"`},
+		{ID: "s2", Title: "fetch", Status: "complete", Output: "No result was reported."},
+	}
+	if got := th[1].Tasks(); !slices.Equal(got, want) {
+		t.Fatalf("tasks %+v; want %+v: every step of the run, the one with no result ended", got, want)
+	}
+	if got := strings.Join(blockTypes(t, th[1].Blocks), ","); got != "task_card,task_card,markdown" {
+		t.Errorf("blocks %s; want the cards before the text", got)
 	}
 	e.assertLastStopIsBare(t)
+}
+
+// blockTypes is the type of each block of raw, in order.
+func blockTypes(t *testing.T, raw json.RawMessage) []string {
+	t.Helper()
+	var blocks []struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		t.Fatalf("blocks %s: %v", raw, err)
+	}
+	var out []string
+	for _, b := range blocks {
+		out = append(out, b.Type)
+	}
+	return out
+}
+
+// A stream whose text diverged is stopped and replaced by an update, which carries its steps: Slack would drop the
+// cards the stream showed with the text it replaces.
+func TestAStreamThatDivergedKeepsItsStepsInTheUpdateThatReplacesIt(t *testing.T) {
+	e := setup(t)
+	release := e.hold()
+	t.Cleanup(release)
+	run := e.stream(t)
+	run.Handle(text("a", "The answer is 41"))
+	run.Handle(call("c1", "search", nil))
+	run.Handle(result("c1", map[string]any{"output": "x"}))
+	release()
+	eventually(t, "the step", func() bool { got := e.tasks(); return len(got) == 1 && got[0].Status == "complete" })
+	run.Handle(text("a", "The answer is 42")) // not an extension of what was streamed
+	run.Handle(agent.FinalEvent{})
+	e.finish(t, run)
+	m := e.reply()
+	if m.Streaming || m.Text != "The answer is 42" || len(e.rec.sent("/chat.update")) != 1 {
+		t.Fatalf("message %+v after %d updates; want the final text, by one update after the stop", m, len(e.rec.sent("/chat.update")))
+	}
+	if got := m.Tasks(); len(got) != 1 || got[0].ID != "s1" || got[0].Status != "complete" {
+		t.Fatalf("tasks %+v; want the stream's step, kept by the update", got)
+	}
+}
+
+// refusesSteps is a platform that refuses an update with steps as Slack refuses blocks it cannot take.
+type refusesSteps struct {
+	chat.Platform
+	refused *atomic.Int32
+}
+
+func (p refusesSteps) Update(ctx context.Context, r chat.Ref, o chat.Outgoing) error {
+	if o.Message != nil && slices.ContainsFunc(o.Message.Parts, func(p chat.Part) bool { _, ok := p.(chat.Steps); return ok }) {
+		p.refused.Add(1)
+		return slackgo.SlackErrorResponse{Err: "invalid_blocks"}
+	}
+	return p.Platform.Update(ctx, r, o)
+}
+
+// The steps never cost the reply its text: an update that the platform refuses as content it cannot show is sent again
+// without them, at once, with a warning, and the turn shows no steps from then on.
+func TestAnUpdateRefusedWithItsStepsIsSentAgainWithout(t *testing.T) {
+	e := setup(t)
+	e.streamedThenLost(t)
+	refused := new(atomic.Int32)
+	e.cfg.Platform = refusesSteps{Platform: e.cfg.Platform, refused: refused}
+	e.live = newRenderer(t, e.cfg)
+	release := e.hold()
+	t.Cleanup(release)
+	again, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1", Recovered: true})
+	again.Handle(text("a", "the whole answer"))
+	again.Handle(call("c1", "search", nil))
+	again.Handle(result("c1", map[string]any{"output": "x"}))
+	release()
+	eventually(t, "the refused update and the one without steps", func() bool {
+		return refused.Load() == 1 && e.updates() == 1 && e.reply().Text == "the whole answer"
+	})
+	again.Handle(call("c2", "fetch", nil)) // a change after the refusal: its update must not try the steps again
+	e.window(t)
+	eventually(t, "the next update", func() bool { return e.updates() == 2 })
+	again.Handle(agent.FinalEvent{})
+	e.finish(t, again)
+	m := e.reply()
+	if m.Streaming || m.Text != "the whole answer" || len(m.Tasks()) != 0 {
+		t.Fatalf("message %+v, tasks %+v; want the whole text, and no card", m, m.Tasks())
+	}
+	if n := refused.Load(); n != 1 {
+		t.Errorf("%d updates with steps; want the one that was refused, and none after it", n)
+	}
+	if !strings.Contains(e.logs.String(), "level=WARN") || !strings.Contains(e.logs.String(), "without them") {
+		t.Errorf("logs:\n%s\nwant a warning that the message was sent without its steps", e.logs)
+	}
 }
 
 // The renderer of a FakePlatform with every capability shows steps through the neutral seam alone, with no Slack under it.

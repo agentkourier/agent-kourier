@@ -938,10 +938,13 @@ making the prefix optional breaks multi-turn context.
   answer is about a task that goes on, whose snapshots hold the paused turn's tool parts too, so before it sends the
   answer the client reads the paused task (`GetTask`, one unary call per answer; an unreadable task is answered
   without it) and counts every tool part in it as delivered: the answer shows its own steps. The turn that approves a call
-  streams only the result, the call being the paused turn's, so a live result whose call the send has not delivered makes
-  the client deliver that call, and only the call, from the task it read, before the result and the text after it, so
-  the approved call is one step that begins before the answer and ends done. When the call is nowhere, the result
-  waits, and is delivered when the send ends or fails; a send that fails and is followed starts over from the snapshot,
+  streams only the result, the call being the paused turn's, so when the dialect reads the paused task as a tool approval,
+  a live result whose call the send has not delivered makes the client deliver that call, and only the call, from the
+  task it read, before the result and the text after it, so the approved call is one step that begins before the answer
+  and ends done. An answered question's call (kagent's `ask_user`) is a step of the paused turn only, which showed it as
+  it asked: the client takes no call from the task, and the question's result, which the answer streams, waits and is
+  delivered as the send ends, where it is no step's. When the call is nowhere, the result waits, and is delivered when
+  the send ends or fails; a send that fails and is followed starts over from the snapshot,
   so a follow may deliver a result again, and the card keeps the first.
   Known gap: if the stream drops on an approving turn before the real result streams, and `GetTask`
   returns only the call and the stale error, the error is delivered and the step ends failed, and the real
@@ -993,6 +996,15 @@ making the prefix optional breaks multi-turn context.
     its details and output are appended, so the adapter sends a card's detail and output once, in every mode (the claiming
     call's detail goes with the claim, and the chunks after it carry none on the wire). Stopping a stream turns a card still
     running into an error, so every card, an unclaimed `Working…` card included, is finished before the stop.
+  - A turn whose send ends with no final event (the agent refused the send, or did not take an answer, and the thread gets
+    the failure notice as a message of its own) ends what it showed as a failed task's: a stream is stopped with an
+    unclaimed `Working…` card and the `activity` card as `Stopped`, and a call with no result ended; on the update path the
+    status line goes, and a message with no text says `(no output)`. Neither carries the feedback buttons. A turn that
+    showed nothing posts nothing. A turn whose task goes on is not ended: when its stream was lost and the task is followed
+    again, or Agent Kourier is shutting down and recovery follows the task, its stream or message is left as it is, and the
+    turn that follows the task takes it over (stopped and updated to its text, or to `(no output)` when it has none). A
+    second run of the same turn in one process (the task followed again while the send that lost it has not returned)
+    writes only once the first has ended, and the first leaves the message to it.
   - On the update path only (no stream recipient, as in an alert thread), and only when `output` is `live` and `progress` is
     not `steps`, the renderer also marks the thread busy, through the optional `chat.BusyMarker` (`Caps.Busy`). On Slack
     that is `assistant.threads.setStatus` with the status `is working…` and no loading messages. The mark is set when the turn
@@ -1027,7 +1039,11 @@ making the prefix optional breaks multi-turn context.
   session records the turn whose output the task belongs to, in the same write as the task (the
   turn that began it, and after a button answer the answer's), and recovery renders the task's output
   under it, so a stream that the stopped process left open is ended and replaced with the whole output
-  and no half-written message stays in the thread; with no recorded turn it is posted anew.
+  and no half-written message stays in the thread; with no recorded turn it is posted anew. The
+  replacement keeps the steps: Slack drops a stream's cards from a message it updates, so every update
+  of a stream taken over, and the update that corrects a stream whose text diverged, carries the turn's
+  steps as cards before the text, a step with no result ended as a stop ends it. If Slack refuses the
+  update for its cards, it is sent again without them, so the steps never cost the answer.
 
 ### 8.4 Interactions
 

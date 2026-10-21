@@ -550,13 +550,15 @@ func TestWaitGivesUpWhenItsContextEndsAndLeavesTheRunToItsOwn(t *testing.T) {
 		t.Errorf("Wait = %v, want the context's deadline, the run being still alive", err)
 	}
 	cancel()
-	<-run.Done()
+	e.finish(t, run) // the run ends what it showed in its window, which the clock opens
 	if err := e.live.Wait(t.Context()); err != nil {
 		t.Errorf("Wait after the run ended = %v, want nil", err)
 	}
 }
 
-func TestAbandonedTurnEndsWithItsContext(t *testing.T) {
+// A turn whose context ends with no final, while it waits for its window, writes what it has in that window, as the end of
+// the turn, and ends. After the end an event does nothing.
+func TestAbandonedTurnSettlesItsMessageAndEnds(t *testing.T) {
 	e := setup(t)
 	run, cancel := e.start(t, v1alpha1.OutputLive, false)
 	run.Handle(text("a", "partial"))
@@ -564,10 +566,12 @@ func TestAbandonedTurnEndsWithItsContext(t *testing.T) {
 	run.Handle(text("a", "partial, more")) // leaves the goroutine waiting for its window
 	eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
 	cancel()
-	select {
-	case <-run.Done():
-	case <-time.After(5 * time.Second):
-		t.Fatal("the run did not end when its context did")
+	e.finish(t, run)
+	if m := e.reply(); m.Text != "partial, more" {
+		t.Errorf("message %q; want the text the turn had when its context ended", m.Text)
 	}
 	run.Handle(text("a", "after the end")) // must not block or panic
+	if n := e.updates(); n != 1 {
+		t.Errorf("%d updates; want the one that settled the message", n)
+	}
 }
