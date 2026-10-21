@@ -10,8 +10,10 @@ is that image by digest. Nothing is released by hand.
 2. Open a release pull request that sets `version` in `charts/agent-kourier/Chart.yaml` to `X.Y.Z` and every
    release version the public docs name to match. `make docs-check` lists each page that still names the old version
    (`release-version`), so the pull request cannot go green with a page left behind. The chart's golden files carry
-   the version in a label: refresh them with `go test ./test/chart -update` (with `helm` installed). Merge it. Skip this for a
-   prerelease tag (`vX.Y.Z-rc.1`): while one is tried, the chart and the docs keep naming the last release.
+   the version in a label: refresh them with `go test ./test/chart -update` (with `helm` installed). For a new minor
+   version (`X.Y.0`), also add `"X.Y"` at the top of `hack/docs/versions.yaml`, so the documentation site publishes
+   the new release line; until its tag exists the site skips it. Merge it. Skip this for a prerelease tag
+   (`vX.Y.Z-rc.1`): while one is tried, the chart and the docs keep naming the last release.
 3. Before tagging, confirm that `ci.yml`, `security.yml` and `codeql.yml` have completed successfully for that
    exact commit from a push to `main`. The release gate checks the same commit and the latest attempt again; a
    missing, pending, failed or pull-request-only run blocks the release.
@@ -64,6 +66,8 @@ Once a published or draft GitHub Release exists for the tag, the read-only gate 
   verified digests. `.github/release.yml` groups the notes by the labels `pr-labels.yml` sets from each pull
   request's title, and leaves out release pull requests (`chore(release): ...`). Re-running a completed release leaves matching release information unchanged; conflicting
   tag, prerelease state or digest information fails rather than being overwritten.
+- For a final tag, after the Release exists, starts `docs.yml` on `main` (`actions: write`, no checkout), which
+  rebuilds the documentation site with the new tag as its release line's version. A prerelease is not published there.
 
 The job summary lists both digests. The chart's `tag` stays empty: the digest wins.
 

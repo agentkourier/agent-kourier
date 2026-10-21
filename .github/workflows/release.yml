@@ -240,3 +240,20 @@ jobs:
             '{tag_name: $tag, name: $name, body: $body, draft: false, prerelease: $prerelease}' >"${payload}"
           gh api --method POST "repos/${REPOSITORY}/releases" --input "${payload}" >/dev/null
           echo "created release ${TAG} with verified image and chart digests"
+
+  # The documentation site builds each release line from its newest final tag (hack/docs/versions.yaml), so a final
+  # release changes it, but a tag push does not run docs.yml, which deploys only from main. This starts it there once
+  # the release exists. A prerelease is never published on the site. No checkout: it only asks the Actions API.
+  docs:
+    needs: publish
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      actions: write # start the docs workflow on main
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Redeploy the documentation site
+        run: gh workflow run docs.yml --repo "${REPOSITORY}" --ref main
