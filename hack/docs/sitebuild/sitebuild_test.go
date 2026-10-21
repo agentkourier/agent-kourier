@@ -108,9 +108,12 @@ func TestCheckOut(t *testing.T) {
 		{filepath.Join(root, "bin", "versioned-site"), true},
 		{filepath.FromSlash("/tmp/site"), true},
 		{filepath.Join(root, "bin", "docs-venv-site"), true}, // a sibling, not the virtualenv
-		{root, false},                       // -out . or -out ""
-		{filepath.FromSlash("/"), false},    // holds the repository
-		{filepath.Join(root, "bin"), false}, // holds the virtualenv
+		{root, false},                        // -out . or -out ""
+		{filepath.FromSlash("/"), false},     // holds the repository
+		{filepath.Join(root, "bin"), false},  // holds the virtualenv
+		{filepath.Join(root, "docs"), false}, // sources: inside the repository, outside bin/
+		{filepath.Join(root, ".git"), false},
+		{filepath.Join(venv, "site"), false}, // inside the virtualenv
 		{venv, false},
 	} {
 		if err := checkOut(root, tt.out, venv); (err == nil) != tt.ok {

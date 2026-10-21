@@ -529,10 +529,15 @@ func within(dir, path string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-// checkOut refuses an output directory that sitebuild's clearing would take the repository or the virtualenv with.
+// checkOut refuses an output directory that sitebuild's clearing would take sources or the virtualenv with: one that is
+// or holds the repository or the virtualenv, one inside the virtualenv, or one inside the repository but outside bin/,
+// where the build's own outputs live.
 func checkOut(root, out, venv string) error {
-	if within(out, root) || within(out, venv) {
-		return fmt.Errorf("refusing to replace %s: it holds the repository or the docs virtualenv", out)
+	switch {
+	case within(out, root) || within(out, venv) || within(venv, out):
+		return fmt.Errorf("refusing to replace %s: it is, holds or is inside the repository or the docs virtualenv", out)
+	case within(root, out) && !within(filepath.Join(root, "bin"), out):
+		return fmt.Errorf("refusing to replace %s: inside the repository, the output goes under bin/", out)
 	}
 	return nil
 }

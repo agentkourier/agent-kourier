@@ -24,6 +24,11 @@ is that image by digest. Nothing is released by hand.
 If a first release attempt fails before its GitHub Release is created, rerun that tag after fixing the failure.
 Once a published or draft GitHub Release exists for the tag, the read-only gate refuses to rebuild it.
 
+The documentation site builds each release line from its newest final tag, whether or not that tag has a GitHub
+Release. A docs deploy from `main` while a failed attempt waits for its rerun publishes that tag's docs early. A final
+tag that is never released, such as one the gate refused, must be deleted, or the site publishes its docs as that
+line's.
+
 ## What the workflow does
 
 `.github/workflows/release.yml` runs `hack/release/release.sh`, the script behind `make release-image`:
@@ -36,7 +41,8 @@ Once a published or draft GitHub Release exists for the tag, the read-only gate 
   The scheduled released-image rescan is the only permitted skipped job. A pending run fails closed with a message
   to wait; the gate never reruns or changes a workflow run.
 - Refuses a final tag `vX.Y.Z` unless `charts/agent-kourier/Chart.yaml` at the tagged commit says `version: X.Y.Z`
-  (`hack/release/check-version.sh`), so no release goes out before the pull request that points the docs at it.
+  and `hack/docs/versions.yaml` lists `X.Y` (`hack/release/check-version.sh`), so no release goes out before the pull
+  request that points the docs at it, or without a place on the documentation site.
 - Checks the Releases API before granting the build job access to the registry. A 404 means this is the first
   release attempt; a published or draft Release, an authorization failure or any other API error stops the workflow.
 - Refuses a tag that is not on `main`.
