@@ -22,6 +22,10 @@ type Task struct {
 // twice; and a chunk that leaves details or output out, or sends them empty, keeps what the card had. A chunk always
 // carries a title and a status (slack-go sets both), so a chunk without them was not observed; here an empty one
 // keeps the card's too.
+//
+// Once the stream has stopped, a card that is not complete is an error, as Slack shows it after chat.stopStream
+// (probed on 2026-10-21 through the API: an in_progress or pending card read back as error; not in Slack's
+// documentation).
 func (m Message) Tasks() []Task {
 	var out []Task
 	for _, raw := range m.Chunks {
@@ -56,6 +60,13 @@ func (m Message) Tasks() []Task {
 		}
 		t.Details += c.Details
 		t.Output += c.Output
+	}
+	if !m.Streaming {
+		for i := range out {
+			if out[i].Status != "complete" {
+				out[i].Status = "error"
+			}
+		}
 	}
 	return append(out, m.taskCards()...)
 }

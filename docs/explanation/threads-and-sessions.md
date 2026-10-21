@@ -98,6 +98,12 @@ answer` when the agent asks a question, and `Stopped`, shown as an error, when t
 rejected. The `activity` card ends the same way, as `Worked` for text or a completed task, with the same `Waiting for your
 answer` and `Stopped`. A card that was never sent when a turn ends with no text is not sent at all.
 
+A tool call's card that has no result when the turn ends is complete, with `No result was reported.` under it. When the
+agent pauses for a [tool approval](../how-to/agent-questions.md#tool-approvals), the card of each call the approval is
+about ends as `Approval requested: name`, complete, whatever the call reported before the pause (kagent reports such a
+call with an error that asks for the confirmation). The prompt is a message of its own, and the reply after the decision
+shows the call again with how it ended.
+
 A Binding that sets no `progress` gets `steps-and-activity`, so a Binding written before the field existed now shows
 `Working…` in a gap. Set `progress: steps` to keep the cards and lines alone.
 

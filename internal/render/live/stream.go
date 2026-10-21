@@ -201,7 +201,8 @@ func (u *Run) shown(v view) view {
 // A stream that has ended says so to the text that follows, which is where it is dealt with.
 //
 // When the steps of a turn are ended, the cards already shown stay in the state they were last sent in, a running one
-// among them. UNCONFIRMED(WP-04): how Slack shows such a card once the stream stops.
+// among them. Slack shows every card that is not complete as an error once the stream stops (probed on 2026-10-21, not
+// in its documentation).
 func (u *Run) sendStep(ctx context.Context, st chat.Step, final bool) (bool, error) {
 	err := u.stream.Step(ctx, st)
 	if err == nil {

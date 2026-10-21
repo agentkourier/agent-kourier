@@ -49,9 +49,10 @@ type Config struct {
 	// that is busy with a task (ErrNotReady). A Pool sets it from its dialect. Nil says never, and every
 	// -32004 is plain busy.
 	NotReady func(err error) bool
-	// ParseInteraction reads the interaction a paused task waits on, so that an answer can tell a tool approval from a
-	// question (see (*assembler).seed). A Pool sets it from its dialect. Nil reads no pause, and every answer is
-	// assembled as an answer to a question.
+	// ParseInteraction reads the interaction a task paused on input waits on: the dialect's ParseInteraction. It is
+	// what tells a tool approval from a question, as on an answer, and the final event of a pause for a tool approval
+	// names the calls the approval waits on with it (FinalEvent.AwaitingApproval). A Pool sets it from its dialect.
+	// Nil reads none.
 	ParseInteraction func(task a2a.Task) (*dialect.Interaction, error)
 }
 
@@ -122,6 +123,7 @@ func (a *Agent) send(ctx context.Context, msg *a2a.Message, h Handler, answer bo
 		return fmt.Errorf("%w: connect to agent: %w", ErrNotSent, typed(err, false))
 	}
 	asm := newAssembler(h)
+	asm.interaction = a.cfg.ParseInteraction
 	asm.replies = !answer // an answer's task is msg.TaskID: a Message must not end it as a reply with no task
 	defer asm.release("") // a result still waiting for its call has no later assembler to deliver it
 	if answer && msg.TaskID != "" {

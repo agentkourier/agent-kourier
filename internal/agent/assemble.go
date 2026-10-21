@@ -34,6 +34,8 @@ type assembler struct {
 	changes   int  // events emitted so far: text, tool, state, and final
 	replies   bool // a task-less agent Message may be the reply: set for a Send, never for an Answer or a follow
 	unshown   bool // an agent Message came before any task where it cannot be the reply: on an Answer
+	// interaction reads the pause of the task that ends the send (Config.ParseInteraction); nil reads none.
+	interaction func(a2a.Task) (*dialect.Interaction, error)
 }
 
 func newAssembler(h Handler) *assembler {
@@ -109,7 +111,27 @@ func (a *assembler) message(m *a2a.Message) {
 func (a *assembler) end(task *a2a.Task) {
 	a.release("")
 	a.final = task
-	a.emit(FinalEvent{Task: task})
+	a.emit(FinalEvent{Task: task, AwaitingApproval: a.awaitingApproval(task)})
+}
+
+// awaitingApproval is the call IDs of the tool calls that a task paused for a tool approval waits on, as the dialect
+// reads the pause. A pause it cannot read, a question, and an approval a sub-agent raised name none: a sub-agent's calls
+// are not this stream's, and one may have the ID of a call of this stream.
+func (a *assembler) awaitingApproval(task *a2a.Task) []string {
+	if a.interaction == nil || task == nil || task.Status.State != a2a.TaskStateInputRequired {
+		return nil
+	}
+	in, err := a.interaction(*task)
+	if err != nil || in == nil || in.Kind != dialect.ToolApproval || in.Nested != nil {
+		return nil
+	}
+	var ids []string
+	for _, t := range in.Tools {
+		if t.CallID != "" {
+			ids = append(ids, t.CallID)
+		}
+	}
+	return ids
 }
 
 // settled reports whether a task has nothing more to stream: it ended or awaits input.

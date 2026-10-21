@@ -11,7 +11,8 @@
 // final message, and an Update after the stop only if what was streamed diverged from the final text (see
 // stream.go). On a platform that has progress steps (Caps.Steps) a stream shows each tool call as a step, where in
 // the text it was made: begun when the call is, finished when its result is. A step is only ever moved
-// forward, so nothing has to be taken back. Otherwise, such as in an alert thread, or on a platform that does not
+// forward, so nothing has to be taken back, save a call that a pause waits to have approved, which ends as waiting
+// (snapshot). Otherwise, such as in an alert thread, or on a platform that does not
 // stream, the turn posts and updates, and shows the latest tool call as a status line, in the past tense once its result
 // has arrived (render.Turn says when the line is shown). Neither path ever
 // updates a message that is still streaming. Between tool calls the agent is silent and the model is deciding, which
@@ -217,6 +218,9 @@ type Run struct {
 	// paused says the final event was a pause for input, not the end of the task: the reply so far is a question, and no answer to
 	// rate.
 	paused bool
+	// awaiting is the call IDs of the tool calls that the pause asks a person to approve (FinalEvent.AwaitingApproval):
+	// their steps end as waiting, not as how the call went so far.
+	awaiting []string
 
 	// Below: only a run that is timed keeps these.
 	started  time.Time       // when the run started
@@ -347,6 +351,9 @@ func (u *Run) Handle(ev agent.Event) {
 	case agent.FinalEvent:
 		u.final = true
 		u.paused = e.Task != nil && (e.Task.Status.State == a2a.TaskStateInputRequired || e.Task.Status.State == a2a.TaskStateAuthRequired)
+		if u.paused {
+			u.awaiting = e.AwaitingApproval
+		}
 		if u.timed {
 			u.gapOpen = false
 			u.endWorking(now, endingOf(e.Task))
@@ -820,6 +827,11 @@ type view struct {
 // Once the turn is final the line is gone, and a step with no result is ended: the turn will not hear of it again. A turn
 // that took over a stream has the steps too, which its updates carry, and no status line, since its cards say the same:
 // steps make it writable with no text until the final, which with no text is "(no output)" under them.
+//
+// At a pause for a tool approval the step of each call it waits on is shown as waiting for the approval, done, whatever the
+// call had reported (render.AwaitingApproval): kagent reports such a call with a "requires confirmation" error, and a step
+// that is not done when the stream stops reads as failed. Such a step may go from failed to done, the one outcome that is
+// changed once shown; the answer's message shows the call again, with how it ended.
 func (u *Run) snapshot() view {
 	carries := u.carries()
 	u.mu.Lock()
@@ -827,7 +839,7 @@ func (u *Run) snapshot() view {
 	for _, id := range u.order {
 		events = append(events, agent.TextEvent{ArtifactID: id, Text: u.texts[id]})
 	}
-	tool, toolState, final, paused := u.tool, u.toolState, u.final, u.paused
+	tool, toolState, final, paused, awaiting := u.tool, u.toolState, u.final, u.paused, u.awaiting
 	idle, begun, finished, failed := u.idle, u.begun && !u.texted, u.finished, u.failed
 	var recs []stepRec
 	if u.stepsOn() || carries {
@@ -875,7 +887,11 @@ func (u *Run) snapshot() view {
 		if strings.HasPrefix(v.body, before) {
 			pos = len(before)
 		}
-		v.steps = append(v.steps, u.stepOf(id, r, state, now, finished, failed))
+		if r.kind == callStep && r.call.CallID != "" && slices.Contains(awaiting, r.call.CallID) {
+			v.steps = append(v.steps, render.AwaitingApproval(id, r.call))
+		} else {
+			v.steps = append(v.steps, u.stepOf(id, r, state, now, finished, failed))
+		}
 		v.pos = append(v.pos, pos)
 	}
 	if u.streaming || !final {
