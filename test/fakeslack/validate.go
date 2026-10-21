@@ -161,6 +161,8 @@ func blockOK(raw json.RawMessage, streaming bool, markdown *int, ids map[string]
 	case "header":
 		n, ok := textLen(b.Text)
 		return ok && n >= 1 && n <= maxHeaderText
+	case "task_card":
+		return taskCardOK(raw)
 	case "section":
 		return sectionOK(b.Text, b.Fields, b.Accessory)
 	case "context", "context_actions":
@@ -178,6 +180,41 @@ func blockOK(raw json.RawMessage, streaming bool, markdown *int, ids map[string]
 			if !elementKnown(e) || !actionElementOK(e) {
 				return false
 			}
+		}
+	}
+	return true
+}
+
+// taskCardOK checks a task_card block: a task_id and a title, one of the
+// statuses slack-go names if it has one, and details and output that are
+// rich_text blocks if it has them. chat.postMessage and chat.update accept the
+// block (Slack, probed 2026-10-21 in a sandbox workspace, with the statuses
+// in_progress, complete and error and the details a rich_text block).
+//
+// UNCONFIRMED(WP-04): that Slack refuses a card with no task_id or title, or
+// with another status, and invalid_blocks as the code it refuses one with.
+func taskCardOK(raw json.RawMessage) bool {
+	var c struct {
+		TaskID  string          `json:"task_id"`
+		Title   string          `json:"title"`
+		Status  string          `json:"status"`
+		Details json.RawMessage `json:"details"`
+		Output  json.RawMessage `json:"output"`
+	}
+	if json.Unmarshal(raw, &c) != nil || c.TaskID == "" || c.Title == "" || runes(c.TaskID) > maxID {
+		return false
+	}
+	switch c.Status {
+	case "", "pending", "in_progress", "complete", "error":
+	default:
+		return false
+	}
+	for _, r := range []json.RawMessage{c.Details, c.Output} {
+		var rt struct {
+			Type string `json:"type"`
+		}
+		if r != nil && (json.Unmarshal(r, &rt) != nil || rt.Type != "rich_text") {
+			return false
 		}
 	}
 	return true
@@ -239,7 +276,7 @@ func actionElementOK(raw json.RawMessage) bool {
 func knownBlock(t string) bool {
 	switch t {
 	case "actions", "alert", "card", "carousel", "context", "context_actions", "divider", "file", "header", "image", "input",
-		"markdown", "rich_text", "section", "table", "video":
+		"markdown", "rich_text", "section", "table", "task_card", "video":
 		return true
 	}
 	return false

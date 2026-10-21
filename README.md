@@ -55,8 +55,10 @@ Without a broker, each of these is code in every agent that talks to chat:
   tool calls shown as step cards or status lines where the backend reports them, and a `Working…` sign of life while the agent is
   silent (`chat.progress`).
 - **Questions and approvals.** With `interactions.askUser`, the agent's question appears in
-  the thread and the answer resumes the same task. With kagent, a tool call can wait for an
-  Approve or Deny press, optionally limited to Slack user groups.
+  the thread and the answer resumes the same task. With kagent, or an agent on the `a2a` dialect
+  whose card lists kagent's human-in-the-loop extension, a tool call can wait for an Approve or
+  Deny press, optionally limited to Slack user groups
+  ([Connect a generic A2A agent](docs/how-to/connect-a2a-agent.md#what-works-on-this-dialect)).
 - **Restart recovery.** Agent Kourier stores sessions, queued replies and pending questions,
   and posts through a durable outbox, so a crash does not repeat a post
   ([one exception](docs/explanation/delivery.md#the-one-window)).

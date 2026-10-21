@@ -12,6 +12,13 @@ import (
 // least one block, so a metadata-only update, or blocks=[] without text, is
 // no_text.
 //
+// An update with blocks replaces the content of a stream that was stopped, and its
+// cards with it: the stream's chunks are dropped, and the task_card blocks of the
+// update are the cards the message shows (Slack, probed 2026-10-21 in a sandbox
+// workspace by chat.update, read back through conversations.replies and seen in
+// the web client: an update whose blocks had no task_card dropped the stream's
+// cards, and one whose blocks had them showed them).
+//
 // UNCONFIRMED(WP-04): invalid_arguments for a missing ts; fields the request
 // omits are kept, though real Slack may clear omitted blocks, so Agent Kourier should
 // always send text and blocks together; blocks=[] alongside text clears the
@@ -52,7 +59,7 @@ func (s *Server) updateMessage(form url.Values) (response, string) {
 			m.Text = form.Get("text")
 		}
 		if form.Has("blocks") {
-			m.Blocks = blocksOrNil(form.Get("blocks"))
+			m.Blocks, m.Chunks = blocksOrNil(form.Get("blocks")), nil
 		}
 		if meta != nil {
 			m.Metadata = meta

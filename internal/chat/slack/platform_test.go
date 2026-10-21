@@ -216,6 +216,11 @@ func walk(v any, out *[]chattest.Shown) {
 			*out = append(*out, richTextShown(v)...)
 			return
 		}
+		// A task_card's title is the characters it holds, with no construct in it: the probe of 2026-10-21 in the web client
+		// showed hostile titles (tokens, links, markdown, entities) as typed, acting on none (layout.go, taskCard).
+		if s, isString := v["title"].(string); typ == "task_card" && isString {
+			*out = append(*out, chattest.Shown{Displayed: s})
+		}
 		switch s, isString := v["text"].(string); {
 		case typ == "plain_text" && isString:
 			*out = append(*out, chattest.ScanSlackPlain(s))

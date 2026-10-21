@@ -113,7 +113,7 @@ func (w Where) String() string {
 // caller degrades (no Streams: a turn is posted once when it ends).
 type Caps struct {
 	Streams   bool // Stream works
-	Steps     bool // Stream.Step shows progress steps in a stream; needs Streams
+	Steps     bool // Stream.Step shows progress steps in a stream, and a message shows its Steps part; needs Streams
 	Ephemeral bool // Ephemeral shows a message to one person alone
 	Edits     bool // Update works
 	Inputs    bool // a Prompt's questions are answered inline; otherwise by a reply

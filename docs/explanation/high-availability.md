@@ -108,7 +108,8 @@ before a turn is resent, and a recovered stream escapes everything.
 
 - **A stream the old leader left open.** The session records which turn a task belongs to, so the new leader renders
   the recovered task under that turn: it finds the turn's outbox row and stream, ends the stream, and replaces the
-  half-written message with the whole output.
+  half-written message with the whole output, with the cards the stream would show before the text: each tool call's, or
+  in the activity modes the `Working…` or activity card.
 - **Slack events.** Agent Kourier acknowledges an event only after its turn is queued, so an event the old leader took
   and did not acknowledge is delivered again. If both replicas are briefly connected while one is paused, a message
   delivered to both is still one turn, because turns are queued by message ID.

@@ -80,6 +80,11 @@ all**, and **Deny all**. The prompt refuses a tool name or argument that cannot 
 value, or does not fit in one message; Agent Kourier does not truncate an approval prompt. Secrets are replaced with
 `[redacted]` before the prompt is stored and shown.
 
+In a chat thread, the reply that the agent paused in ends at the pause, and its card for each call the approval is about
+ends complete and titled `Approval requested: name`, not as an error: the call is waiting, not failed. The cards of an
+approval that a sub-agent raised are not retitled. The reply after the decision shows the call again with how it ended,
+an error when it was denied.
+
 The first complete, authorized decision wins. An incomplete press is rejected with an ephemeral message and does not reach
 the agent. Agent Kourier audits the decision before sending it under the Binding's service identity, then replaces the
 prompt with an ending that shows each tool's Approved or Denied verdict and removes the controls. The audit records the
