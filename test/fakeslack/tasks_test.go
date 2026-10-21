@@ -58,6 +58,32 @@ func TestTasksMergeEachTaskUpdateAsSlackDoes(t *testing.T) {
 	}
 }
 
+// TestAStopLeavesOnlyCompleteCards: once the stream stops, every card that is not complete is an error, as Slack shows it
+// (probed 2026-10-21): only complete survives a stop. While the stream runs, the cards are as they were sent.
+func TestAStopLeavesOnlyCompleteCards(t *testing.T) {
+	fake, api := newFake(t)
+	parent := post(t, api, text("question"))
+	ts, err := startIn(api, "C1", parent, append(recipients(), chunks(slack.NewMarkdownTextChunk("Hel")))...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := api.AppendStream("C1", ts, chunks(task("s1", "search", slack.TaskCardStatusInProgress), task("s2", "fetch", slack.TaskCardStatusComplete),
+		task("s3", "wait", slack.TaskCardStatusPending))); err != nil {
+		t.Fatal(err)
+	}
+	running := []fakeslack.Task{{ID: "s1", Title: "search", Status: "in_progress"}, {ID: "s2", Title: "fetch", Status: "complete"}, {ID: "s3", Title: "wait", Status: "pending"}}
+	if got := fake.Thread("C1", parent)[1].Tasks(); !slices.Equal(got, running) {
+		t.Fatalf("Tasks while streaming = %+v; want %+v", got, running)
+	}
+	if _, _, err := api.StopStream("C1", ts); err != nil {
+		t.Fatal(err)
+	}
+	stopped := []fakeslack.Task{{ID: "s1", Title: "search", Status: "error"}, {ID: "s2", Title: "fetch", Status: "complete"}, {ID: "s3", Title: "wait", Status: "error"}}
+	if got := fake.Thread("C1", parent)[1].Tasks(); !slices.Equal(got, stopped) {
+		t.Fatalf("Tasks after the stop = %+v; want %+v", got, stopped)
+	}
+}
+
 func TestAMessageThatWasNeverStreamedHasNoTasks(t *testing.T) {
 	fake, api := newFake(t)
 	parent := post(t, api, text("question"))

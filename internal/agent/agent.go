@@ -9,6 +9,7 @@ import (
 	"iter"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -48,6 +49,10 @@ type Config struct {
 	// that is busy with a task (ErrNotReady). A Pool sets it from its dialect. Nil says never, and every
 	// -32004 is plain busy.
 	NotReady func(err error) bool
+	// Interaction reads the interaction a task paused on input waits on: the dialect's ParseInteraction. The final
+	// event of a pause for a tool approval names the calls it waits on with it (FinalEvent.AwaitingApproval). A Pool
+	// sets it from its dialect. Nil reads none.
+	Interaction func(task a2a.Task) (*dialect.Interaction, error)
 }
 
 func (c Config) withDefaults() Config {
@@ -117,6 +122,7 @@ func (a *Agent) send(ctx context.Context, msg *a2a.Message, h Handler, answer bo
 		return fmt.Errorf("%w: connect to agent: %w", ErrNotSent, typed(err, false))
 	}
 	asm := newAssembler(h)
+	asm.interaction = a.cfg.Interaction
 	asm.replies = !answer // an answer's task is msg.TaskID: a Message must not end it as a reply with no task
 	defer asm.release("") // a result still waiting for its call has no later assembler to deliver it
 	if answer && msg.TaskID != "" {
