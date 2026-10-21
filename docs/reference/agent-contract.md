@@ -177,6 +177,37 @@ on `a2a` is a status message made only of non-empty text parts, with a `messageI
 from the last question's. Anything else in `input-required` cannot be shown, so the task is cancelled and the thread is
 told. The answer to a text question is one text part sent to the paused `taskId` and `contextId`.
 
+## Structured questions and tool approvals
+
+Questions with choices, several questions at once, and tool approvals use kagent's human-in-the-loop extension,
+`https://kagent.dev/extensions/hitl/v1`. kagent 1.0 speaks it. Any other agent gets them on the `a2a` dialect by
+speaking it the same way:
+
+| The agent must | Otherwise |
+|---|---|
+| List `https://kagent.dev/extensions/hitl/v1` in the card's `capabilities.extensions` (`required` may be true) | Requests carry no `A2A-Extensions` header for it, so an agent that sends its structured pause only when asked (as kagent does) sends text alone |
+| Pause in `input-required` on a task with an ID, with a status message whose `extensions` names the URI and whose `metadata` holds the request under the URI as key | The pause is read as a text question if its parts are text alone, and as unusable otherwise: the task is cancelled and the thread told |
+| For a tool approval, send `{"type": "tool_approval_request", "hint": "...", "tools": [{"id": "...", "call_id": "...", "name": "...", "args": {...}}]}`: 1 to 20 tools, each with an `id` | The pause is unusable. A name or argument that Agent Kourier's cleaning would change, or that does not fit in one message, also makes it unusable, because the approver would not see what runs |
+| For questions, send `{"type": "ask_user_request", "id": "...", "hint": "...", "questions": [{"question": "...", "choices": [...], "multiple": false}]}`: an `id`, and 1 to 20 questions of at most 100 choices each. No choices (`[]` or none) asks for free text | The pause is unusable |
+| For a pause a sub-agent raised, add `"nested": {"subagent_name": "...", "task_id": "...", "context_id": "...", "tools": [...]}`, with the sub-agent's name and task. A nested approval needs exactly one outer tool, with an `id`, and decides the nested tools. A nested question needs exactly one nested tool named `ask_user`, with an `id`, which the answer echoes | The pause is unusable |
+| Take the answer on the paused task, and resume it | A JSON-RPC `-32603` to the answer cancels the task and tells the thread |
+
+The answer is a user message to the paused `taskId` and `contextId`, with `extensions` naming the URI, the
+`A2A-Extensions` header naming it whatever the card lists, the actor under `agentkourier.dev/actor`, and one text part.
+Its payload, under the URI in `metadata`, is:
+
+- For a tool approval: `{"type": "tool_approval_response", "approvals": [{"id": "...", "approved": true}]}`, one entry
+  per tool, by its `id`, in the request's order. A denied tool has `"approved": false` and a `rejection_reason`: "denied
+  by an approver in chat" for a person's denial, "denied by agent-kourier: no one decided in time" at the timeout, and
+  "denied by agent-kourier: this Binding does not allow tool approvals" when the Binding sets no
+  `interactions.toolApprovals`. The text part is `approved`, or `rejected` when any tool is denied.
+- For questions: `{"type": "ask_user_response", "id": "...", "answers": [{"answer": ["..."]}]}`, echoing the request's
+  `id` (for a nested question, the nested tool's), with one entry per question in order, each holding the chosen choices
+  or the free text. The text part is each question's answers joined with `, `, and the questions joined with `; `.
+
+The text part is not prefixed with the actor, as a turn's is. Agent Kourier checks every answer before sending it: each
+question answered, each answer one of its choices when there are any, each tool decided once.
+
 ## Errors
 
 | The agent answers | What Agent Kourier does |

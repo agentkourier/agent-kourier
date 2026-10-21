@@ -68,7 +68,9 @@ In the Binding's `identity`:
   extension in its `extensions` and carries the extension's payload is read and answered as the `kagent-v1` dialect
   reads and answers it, and `interactions.askUser`, `toolApprovals` and `approverGroups` apply as described in
   [Agent questions](agent-questions.md). Such a question takes its answer from the prompt's controls only, never from a
-  typed reply. kagent 1.0.0-alpha5's agent card lists the extension; 0.9.x has not been checked.
+  typed reply. kagent 1.0.0-alpha5's agent card lists the extension; 0.9.x has not been checked. What another agent
+  must send, and what it gets back, is in
+  [Structured questions and tool approvals](../reference/agent-contract.md#structured-questions-and-tool-approvals).
 - Not: structured pauses from an agent without that extension. Any other pause must be text alone; a pause with any part
   that is not text cannot be used, so the task is cancelled. A payload that the status message does not name in its
   `extensions` is not read, and the pause is handled as text.
