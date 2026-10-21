@@ -95,8 +95,9 @@ when the turn ends empty, and is not left open.
 A `Working…` card that no tool call took over ends under a title that says how, never as a tick on `Working…`. If text came
 while it was open it is `Wrote the answer`. If the turn ends first, it is `Finished` for a completed task, `Waiting for your
 answer` when the agent asks a question, and `Stopped`, shown as an error, when the task failed, was cancelled or was
-rejected. The `activity` card ends the same way, as `Worked` for text or a completed task, with the same `Waiting for your
-answer` and `Stopped`. A card that was never sent when a turn ends with no text is not sent at all.
+rejected, or when the request failed before the task ended, as when the agent did not take an answer. The failure notice
+is then a message of its own, and the reply's stream is stopped, not left running. The `activity` card ends the same way,
+as `Worked` for text or a completed task, with the same `Waiting for your answer` and `Stopped`. A card that was never sent when a turn ends with no text is not sent at all.
 
 A Binding that sets no `progress` gets `steps-and-activity`, so a Binding written before the field existed now shows
 `Working…` in a gap. Set `progress: steps` to keep the cards and lines alone.

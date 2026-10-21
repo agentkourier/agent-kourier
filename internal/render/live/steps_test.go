@@ -15,7 +15,6 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
-	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
@@ -482,18 +481,7 @@ func TestAFailingStepNeverHoldsBackTheStop(t *testing.T) {
 // message, so no step of the earlier run is shown twice.
 func TestARecoveredTurnAddsNoStepsToTheStreamItTakesOver(t *testing.T) {
 	e := setup(t)
-	release := e.hold() // the first write is not throttled: text and call must be in before it, or the step waits for a window nobody turns
-	t.Cleanup(release)
-	first, cancel := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1"})
-	first.Handle(text("a", "partial"))
-	first.Handle(call("c1", "search", nil))
-	release()
-	eventually(t, "the step and the ts to be recorded", func() bool {
-		row, err := e.store.GetOutbox(t.Context(), outbox.ID("turn-1", "reply"))
-		return err == nil && row.MessageRef != "" && len(e.tasks()) == 1
-	})
-	cancel()
-	<-first.Done()
+	e.leftOpen(t, "partial", chat.Step{ID: "s1", Title: "search", State: chat.StepRunning}) // an earlier process's stream, with its step
 	appends := len(e.rec.sent("/chat.appendStream"))
 
 	again, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1", Recovered: true})
