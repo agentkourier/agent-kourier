@@ -22,6 +22,7 @@ var scenarioAgents = map[string]string{
 	"S11": "spike-approve",
 	"S12": "scenario-fails",
 	"S13": "scenario-tools",
+	"S26": "scenario-answer-fails",
 }
 
 // serve starts the stub behind withControl. The stub closes before the server: that ends the held

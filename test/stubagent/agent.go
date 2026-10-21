@@ -268,6 +268,9 @@ func (a *Agent) admit(m obj, owner string, ext bool) (*stream, *rpcError) {
 		if first == nil || d.reply.p != first.p { // the task paused again, for something else
 			return nil, busyError("resource conflict")
 		}
+		if rf, ok := refusal(steps); ok { // the task keeps its pause; the send is answered once the gate opens
+			return &stream{wait: s.gateLocked(rf.gate), fail: busyError(rf.msg), end: true}, nil
+		}
 		return a.commit(id, m, d.reply, steps, ext), nil
 	}
 	return a.start(id, m, d.sess, steps, ext), nil
@@ -539,10 +542,11 @@ func (a *Agent) subscribeTask(ctx context.Context, o *rw, params json.RawMessage
 // the log from the index it had when the snapshot was taken, so nothing is missed or repeated.
 type stream struct {
 	t     *task
-	first obj       // the event that opens a join, or nil
-	from  int       // the first log index to send after it
-	end   bool      // first is the whole answer
-	fail  *rpcError // ends the stream, after first, with this error
+	wait  <-chan struct{} // if set, nothing is written until it closes (the gate of RefuseAnswer)
+	first obj             // the event that opens a join, or nil
+	from  int             // the first log index to send after it
+	end   bool            // first, or fail, is the whole answer
+	fail  *rpcError       // ends the stream, after first, with this error
 }
 
 // follow writes the stream until a final event, the client going away, or the server closing.
@@ -550,14 +554,23 @@ type stream struct {
 // closed first, and what was written is not the outcome of the turn. The turn runs on
 // regardless of the client.
 func (s *Server) follow(ctx context.Context, o *rw, st *stream) bool {
+	if st.wait != nil {
+		select {
+		case <-st.wait:
+		case <-ctx.Done():
+			return false
+		case <-s.ctx.Done():
+			return false
+		}
+	}
 	if st.first != nil {
 		o.event(st.first)
-		if st.fail != nil {
-			o.fail(st.fail)
-		}
-		if st.end {
-			return true
-		}
+	}
+	if st.fail != nil {
+		o.fail(st.fail)
+	}
+	if st.end {
+		return true
 	}
 	from := st.from
 	for {

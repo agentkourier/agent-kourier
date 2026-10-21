@@ -375,3 +375,57 @@ func TestScenarioContextAgentHoldsOnAGateAfterItsAnswer(t *testing.T) {
 		t.Errorf("final text %q, want %q", got, want)
 	}
 }
+
+// scenario-answer-fails asks a question, and the turn its answer resumes fails: "fail gate:G" holds the resumed turn on G
+// and then fails the task; "refuse gate:G" holds the answer's send on G and then refuses it as not ready, so the task
+// still waits for input. With no gate in the prompt it finishes at once.
+func TestScenarioAnswerFailsAgent(t *testing.T) {
+	s := stubagent.New()
+	t.Cleanup(s.Close)
+	stubagent.ScenarioAgents(s)
+	c := withHITL(&client{t: t, url: s.AgentURL("kagent", "scenario-answer-fails"), hdr: http.Header{}})
+	pause := func(id, prompt string) (taskID string, answer obj) {
+		evs := c.send(msg(id, prompt, ""))
+		taskID, ctxID, state := ids(last(evs))
+		request, _ := dig(last(evs), "result", "task", "status", "message", "metadata", hitlURI).(obj)
+		if state != inputRequired || request == nil {
+			t.Fatalf("%q ended %s with request %v, want a question", prompt, state, request)
+		}
+		return taskID, reply(id+"-answer", "x", ctxID, taskID, answers(request["id"].(string), []string{"api"}))
+	}
+
+	t.Run("fail", func(t *testing.T) {
+		taskID, answer := pause("f1", "fail gate:answer-fail-1")
+		got := answerAsync(t, c, answer)
+		expectNoAnswer(t, got)
+		if _, held := c.call("GetTask", obj{"id": taskID}); describe(held) != "task:WORKING" {
+			t.Errorf("held task is %s, want task:WORKING", describe(held))
+		}
+		s.Release("answer-fail-1")
+		final := last(receive(t, got))
+		if _, _, state := ids(final); state != "TASK_STATE_FAILED" || statusText(final) != "The model call failed after the answer." {
+			t.Errorf("answered task ended %s with %q, want FAILED with the model's failure", state, statusText(final))
+		}
+	})
+
+	t.Run("refuse", func(t *testing.T) {
+		taskID, answer := pause("r1", "refuse gate:answer-refuse-1")
+		got := answerAsync(t, c, answer)
+		expectNoAnswer(t, got)
+		s.Release("answer-refuse-1")
+		evs := receive(t, got)
+		if len(evs) != 1 || dig(evs[0], "error", "code") != float64(-32004) || dig(evs[0], "error", "message") != notReady {
+			t.Errorf("answer got %v, want only -32004 %q", evs, notReady)
+		}
+		if _, after := c.call("GetTask", obj{"id": taskID}); describe(after) != "task:INPUT_REQUIRED" {
+			t.Errorf("task after the refusal is %s, want task:INPUT_REQUIRED", describe(after))
+		}
+	})
+
+	t.Run("no gate", func(t *testing.T) {
+		final := last(c.send(msg("n1", "refuse", "")))
+		if _, _, state := ids(final); state != "TASK_STATE_COMPLETED" || taskText(final) != "No gate named, not asking." {
+			t.Errorf("no gate: %s, %q; want it to finish at once", state, taskText(final))
+		}
+	})
+}
