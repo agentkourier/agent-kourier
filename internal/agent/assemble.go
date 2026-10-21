@@ -34,7 +34,7 @@ type assembler struct {
 	changes   int  // events emitted so far: text, tool, state, and final
 	replies   bool // a task-less agent Message may be the reply: set for a Send, never for an Answer or a follow
 	unshown   bool // an agent Message came before any task where it cannot be the reply: on an Answer
-	// interaction reads the pause of the task that ends the send (Config.Interaction); nil reads none.
+	// interaction reads the pause of the task that ends the send (Config.ParseInteraction); nil reads none.
 	interaction func(a2a.Task) (*dialect.Interaction, error)
 }
 

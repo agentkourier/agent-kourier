@@ -94,7 +94,8 @@ func NewPool(d dialect.Dialect, cfg Config) *Pool {
 // Agent returns an Agent for t. It is cheap and connects on first use.
 func (p *Pool) Agent(t Target) *Agent {
 	cfg := p.cfg
-	cfg.NotReady, cfg.Interaction = p.dialect.NotReady, p.dialect.ParseInteraction
+	cfg.NotReady = p.dialect.NotReady
+	cfg.ParseInteraction = p.dialect.ParseInteraction
 	return New(func(ctx context.Context) (Conn, error) { return p.conn(ctx, t) }, cfg)
 }
 

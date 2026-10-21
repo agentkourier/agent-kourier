@@ -55,7 +55,7 @@ type StateEvent struct {
 type FinalEvent struct {
 	Task *a2a.Task
 	// AwaitingApproval is the call IDs of the tool calls that a task paused for a tool approval waits on, as the
-	// dialect reads the pause (Config.Interaction): a renderer shows those calls as waiting, not as failed. It is
+	// dialect reads the pause (Config.ParseInteraction): a renderer shows those calls as waiting, not as failed. It is
 	// empty for any other end, and for a pause the Agent was given no way to read.
 	AwaitingApproval []string
 }

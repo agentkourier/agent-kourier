@@ -65,9 +65,9 @@ func TestTheFinalOfAnApprovalNamesTheCallsItWaitsOn(t *testing.T) {
 func TestAPoolsAgentsReadPausesWithItsDialect(t *testing.T) {
 	p := NewPool(kagentv1.New(0), Config{})
 	t.Cleanup(p.Close)
-	read := p.Agent(Target{}).cfg.Interaction
+	read := p.Agent(Target{}).cfg.ParseInteraction
 	if read == nil {
-		t.Fatal("Config.Interaction is nil; want the dialect's ParseInteraction")
+		t.Fatal("Config.ParseInteraction is nil; want the dialect's ParseInteraction")
 	}
 	evs := fixtureEvents(t, "approval/01-pause-approve.response.sse")
 	if in, err := read(*evs[len(evs)-1].(*a2a.Task)); err != nil || in == nil || in.Kind != dialect.ToolApproval {

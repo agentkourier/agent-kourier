@@ -55,7 +55,7 @@ func TestAStepThatWaitsForApprovalEndsCompleteAndSaysSo(t *testing.T) {
 		} {
 			t.Run(d.name+"/"+tc.name, func(t *testing.T) {
 				e := setup(t)
-				cfg := agent.Config{Interaction: d.d.ParseInteraction}
+				cfg := agent.Config{ParseInteraction: d.d.ParseInteraction}
 				pause := recordedEvents(t, tc.pause)
 				run := e.stream(t)
 				a := agent.New(func(context.Context) (agent.Conn, error) { return recordedConn{events: pause}, nil }, cfg)
