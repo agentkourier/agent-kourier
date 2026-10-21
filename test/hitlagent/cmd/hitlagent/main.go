@@ -36,9 +36,13 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	handler, err := hitlagent.NewHandler(agentURL)
+	if err != nil {
+		return err
+	}
 	srv := &http.Server{
 		Addr:              ":" + port,
-		Handler:           hitlagent.NewHandler(agentURL),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	errc := make(chan error, 1)

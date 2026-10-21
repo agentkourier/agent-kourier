@@ -62,8 +62,14 @@ func NewCard(agentURL string) *a2a.AgentCard {
 }
 
 // NewHandler returns the agent's HTTP handler: the card at a2asrv.WellKnownAgentCardPath and JSON-RPC at "/".
-func NewHandler(agentURL string) http.Handler {
+func NewHandler(agentURL string) (http.Handler, error) {
 	card := NewCard(agentURL)
+	// The enforcer gets the card's capabilities alone: given the whole card it would also check message parts
+	// against the input modes, and the card's "text" is not a media type.
+	enforcer, err := a2asrv.NewAgentCardEnforcer(&a2a.AgentCard{Capabilities: card.Capabilities})
+	if err != nil {
+		return nil, fmt.Errorf("agent card enforcer: %w", err)
+	}
 	ag := &agent{
 		store: taskstore.NewInMemory(&taskstore.InMemoryStoreConfig{
 			Authenticator: func(context.Context) (string, error) { return storeUser, nil },
@@ -72,14 +78,13 @@ func NewHandler(agentURL string) http.Handler {
 	}
 	reqHandler := a2asrv.NewHandler(ag,
 		a2asrv.WithTaskStore(ag.store),
-		a2asrv.WithCapabilityChecks(&card.Capabilities),
-		a2asrv.WithCallInterceptors(ag),
+		a2asrv.WithCallInterceptors(enforcer, ag),
 	)
 
 	mux := http.NewServeMux()
 	mux.Handle(a2asrv.WellKnownAgentCardPath, a2asrv.NewStaticAgentCardHandler(card))
 	mux.Handle("/{$}", echoExtension(a2asrv.NewJSONRPCHandler(reqHandler)))
-	return mux
+	return mux, nil
 }
 
 // echoExtension names the HITL extension in the response's A2A-Extensions header when the request asked for it.
