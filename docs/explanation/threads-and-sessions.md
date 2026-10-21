@@ -120,8 +120,9 @@ Agent Kourier persists sessions, queued replies, pending questions and intended 
 tasks that were running, asks the agent for their state, and renders their output under the turn that started them, so
 a half-written message is replaced with the whole answer and the thread finishes once. In a chat thread the replacement
 keeps the cards the stream would show, before the text: each tool call's, or in the activity modes the `Working…` or
-activity card, kept up to date while the task runs, and a call with no result by the end says `No result was reported.`. The same holds when a reply's text changed after it was
-streamed and the message is rewritten. If Slack refuses the cards, the message is written again without them.
+activity card, kept up to date while the task runs, and a call with no result by the end says
+`No result was reported.`. The same holds when a reply's text changed after it was streamed and the message is
+rewritten. If Slack refuses the cards, the message is written again without them.
 
 ## Lifetime
 
