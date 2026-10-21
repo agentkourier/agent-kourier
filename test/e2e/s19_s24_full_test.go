@@ -63,6 +63,42 @@ func TestS20_FullDenialContinuesTheTurn(t *testing.T) {
 	})
 }
 
+// TestS19_FullApprovalRunsTheToolOverTheA2ADialect is S19 on an a2a Binding to the same kagent agent: the generic
+// dialect asks for kagent's HITL extension, which kagent's card lists, reads the approval and sends the decision.
+func TestS19_FullApprovalRunsTheToolOverTheA2ADialect(t *testing.T) {
+	runFullApproval(t, fullApprovalCase{
+		channel:      ChannelA2AS19,
+		user:         "UA2AS19",
+		binding:      "agent-kourier/full-a2a-s19",
+		scenario:     "approval",
+		tool:         "add_numbers",
+		action:       chat.ActionApproveAll,
+		verdict:      "Approved",
+		outcome:      "approved",
+		auditOutcome: `answered approved=1 denied=0 approved_tools=["add_numbers"]`,
+		continuation: "Approval result received.",
+		mcpDelta:     1,
+	})
+}
+
+// TestS20_FullDenialContinuesTheTurnOverTheA2ADialect is S20 on an a2a Binding: the denial reaches kagent and the tool
+// does not run.
+func TestS20_FullDenialContinuesTheTurnOverTheA2ADialect(t *testing.T) {
+	runFullApproval(t, fullApprovalCase{
+		channel:      ChannelA2AS20,
+		user:         "UA2AS20",
+		binding:      "agent-kourier/full-a2a-s20",
+		scenario:     "approval",
+		tool:         "add_numbers",
+		action:       chat.ActionDenyAll,
+		verdict:      "Denied",
+		outcome:      "denied",
+		auditOutcome: `answered approved=0 denied=1 denied_tools=["add_numbers"]`,
+		continuation: "Approval result received.",
+		mcpDelta:     0,
+	})
+}
+
 func runFullApproval(t *testing.T, tc fullApprovalCase) {
 	t.Helper()
 	s := fullApprovalScenario(t)
