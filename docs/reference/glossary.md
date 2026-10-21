@@ -43,8 +43,8 @@ Cooldown
 
 Dialect
 :   The per-backend part of the A2A client: URL layout, card location, identity header and how a pause is read. Both
-    read kagent's human-in-the-loop extension: `kagent-v1` always asks for it, and `a2a` asks for it when the agent card
-    lists it.
+    ask for kagent's human-in-the-loop extension when the agent card lists it; `kagent-v1` reads a pause only through
+    it, and `a2a` reads it through the extension or as a text question.
 
 Digest line
 :   One line at the top level of a channel that counts the alerts a trigger's limits stopped in a window.
@@ -63,9 +63,7 @@ Front door
 
 Interaction
 :   A pause in which the agent waits for a person: a question (ask-user), or a tool approval when the Binding
-    enables `interactions.toolApprovals`. Structured pauses use kagent's human-in-the-loop extension. On the `a2a`
-    dialect a pause is read as the extension's when its status message names the extension and carries its payload;
-    any other pause is a text question when it is text alone, and unusable otherwise.
+    enables `interactions.toolApprovals`. Structured pauses use kagent's human-in-the-loop extension.
 
 Investigation
 :   A session that a trigger or an alert started rather than a person.

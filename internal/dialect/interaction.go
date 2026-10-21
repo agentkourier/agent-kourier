@@ -74,9 +74,8 @@ type Interaction struct {
 	Questions []Question `json:"questions"`  // AskUser
 	Tools     []Tool     `json:"tools"`      // ToolApproval
 	Nested    *Nested    `json:"nested"`     // nil unless a sub-agent raised it
-	// Extension is the URI of the A2A extension the pause was read through, for a dialect that reads pauses more than
-	// one way: the a2a dialect sets kagent's HITL extension, and leaves it empty for a text question. The dialect
-	// answers by it, so it is kept unchanged with the rest; empty on every interaction stored before it existed.
+	// Extension is the URI of the A2A extension the pause was read through, empty for a text question. A dialect that
+	// reads pauses more than one way (the a2a dialect) answers by it. Interactions stored before it existed have none.
 	Extension string `json:"extension,omitempty"`
 }
 

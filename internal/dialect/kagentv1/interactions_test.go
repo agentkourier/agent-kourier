@@ -61,7 +61,7 @@ func TestParseInteraction(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			task := dialecttest.KagentTask(t, tc.file)
 			if tc.want != nil {
-				tc.want.TaskID, tc.want.ContextID = task.ID, task.ContextID
+				tc.want.TaskID, tc.want.ContextID, tc.want.Extension = task.ID, task.ContextID, HITLExtension
 			}
 			checkParse(t, task, tc.want, tc.reason)
 		})
@@ -111,7 +111,7 @@ func TestParseInteraction(t *testing.T) {
 	for _, tc := range sources {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.want != nil {
-				tc.want.TaskID, tc.want.ContextID = "task-1", "ctx-1"
+				tc.want.TaskID, tc.want.ContextID, tc.want.Extension = "task-1", "ctx-1", HITLExtension
 			}
 			checkParse(t, pausedOn(tc.payload), tc.want, tc.reason)
 		})
@@ -123,6 +123,9 @@ func TestParseInteraction(t *testing.T) {
 	noMessage := pausedOn(askReq)
 	noMessage.Status.Message = nil
 	checkParse(t, noMessage, nil, "no HITL payload")
+	noID := pausedOn(askReq) // an answer is addressed to the task, so a pause on one with no ID could never be answered
+	noID.ID = ""
+	checkParse(t, noID, nil, "paused task has no ID")
 	notAnObject := pausedOn(askReq)
 	notAnObject.Status.Message.Metadata[HITLExtension] = "please answer"
 	checkParse(t, notAnObject, nil, "malformed")

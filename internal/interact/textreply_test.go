@@ -318,7 +318,7 @@ func TestTextReplyToAStructuredFreeTextQuestionOnA2AStaysQueued(t *testing.T) {
 	msg.Metadata = map[string]any{kagentv1.HITLExtension: map[string]any{"type": "ask_user_request", "id": "req-1", "questions": []map[string]any{{"question": "Which service?", "choices": []string{}}}}}
 	task := a2a.Task{ID: "task-1", ContextID: "ctx-1", Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired, Timestamp: &at, Message: msg}}
 	in, err := d.ParseInteraction(task)
-	if err != nil || in.TextReplies || in.Kind != dialect.AskUser {
+	if err != nil || in == nil || in.TextReplies || in.Kind != dialect.AskUser {
 		t.Fatalf("pause = %+v, %v; want a structured question that takes no text replies", in, err)
 	}
 	id := interact.InteractionID(*in)

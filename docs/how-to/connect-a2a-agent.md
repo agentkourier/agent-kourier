@@ -62,15 +62,11 @@ In the Binding's `identity`:
   not shown.
 - Structured questions (with choices, several at once, or from a sub-agent) and tool approvals, when the agent card
   lists kagent's human-in-the-loop extension, `https://kagent.dev/extensions/hitl/v1`, under
-  `capabilities.extensions`. Agent Kourier then sends `A2A-Extensions: https://kagent.dev/extensions/hitl/v1` on every
-  A2A call to the agent (the card fetch has none); for a card that does not list it, no such header is sent, except on
-  an answer to a pause read as the extension's, which names the extension and always carries the header. A pause whose status message names the
-  extension in its `extensions` and carries the extension's payload is read and answered as the `kagent-v1` dialect
-  reads and answers it, and `interactions.askUser`, `toolApprovals` and `approverGroups` apply as described in
-  [Agent questions](agent-questions.md). Such a question takes its answer from the prompt's controls only, never from a
-  typed reply. kagent 1.0.0-alpha5's agent card lists the extension; 0.9.x has not been checked. What another agent
-  must send, and what it gets back, is in
-  [Structured questions and tool approvals](../reference/agent-contract.md#structured-questions-and-tool-approvals).
+  `capabilities.extensions`. Agent Kourier then asks for the extension, and reads and answers a pause that names it as
+  the `kagent-v1` dialect does; the [agent contract](../reference/agent-contract.md#structured-questions-and-tool-approvals)
+  has what is sent and read. `interactions.askUser`, `toolApprovals` and `approverGroups` apply as described in
+  [Agent questions](agent-questions.md). A structured question takes its answer from the prompt's controls only, never
+  from a typed reply. kagent 1.0.0-alpha5's agent card lists the extension; 0.9.x has not been checked.
 - Not: structured pauses from an agent without that extension. Agent Kourier does not read a framework's own approval
   format (see [Why approvals use one extension](../explanation/why-a2a.md#why-approvals-use-one-extension)). Any other
   pause must be text alone; a pause with any part that is not text cannot be used, so the task is cancelled. A payload that the status message does not name in its

@@ -82,7 +82,6 @@ call gives it nothing to ask about after a restart.
   bearer token or a user ID header, and the agent or a proxy in front of it has to verify it. kagent's controller port
   trusts identity without verifying it, so it needs a verifying front door. See [Security model](security.md).
 
-
 ## Why approvals use one extension
 
 A tool approval needs more than a question. The person approving must see exactly which tool will run and with which
@@ -117,6 +116,7 @@ not gated by `approverGroups`, and is not audited as a decision.
 
 The cost is a dependency on an extension kagent maintains. Agent Kourier holds to `v1` as the agent contract
 describes it. If A2A publishes a standard extension for approvals, Agent Kourier will read that one too.
+
 ## In practice
 
 To point a Binding at an agent that speaks A2A, see [Connect a generic A2A agent](../how-to/connect-a2a-agent.md). For

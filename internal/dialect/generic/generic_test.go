@@ -24,10 +24,20 @@ import (
 func TestConnectPinsEndpointAndPreservesActorRouting(t *testing.T) {
 	// The URL is used as written: kagent 0.9.x answers a POST to ".../agent" with a 307 to ".../agent/", and the
 	// dialect follows no redirect, so an operator who writes the slash needs it sent. The card is under the
-	// endpoint either way.
-	for _, tc := range []struct{ name, suffix, post string }{
-		{"no trailing slash", "/a2a", "/a2a"},
-		{"trailing slash kept", "/a2a/", "/a2a/"},
+	// endpoint either way. Every call asks for kagent's HITL extension when the card lists it, required or not, and
+	// only then: it is how a kagent agent sends its structured pause, without which it sends ADK's hint as text alone.
+	hitl := func(required bool) []a2a.AgentExtension {
+		return []a2a.AgentExtension{{URI: kagentv1.HITLExtension, Required: required}}
+	}
+	for _, tc := range []struct {
+		name, suffix, post string
+		exts               []a2a.AgentExtension
+		header             string // A2A-Extensions on the call
+	}{
+		{"no trailing slash", "/a2a", "/a2a", nil, ""},
+		{"trailing slash kept", "/a2a/", "/a2a/", nil, ""},
+		{"card lists HITL", "/a2a", "/a2a", hitl(false), kagentv1.HITLExtension},
+		{"card requires HITL", "/a2a", "/a2a", hitl(true), kagentv1.HITLExtension},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var calls atomic.Int32
@@ -36,12 +46,12 @@ func TestConnectPinsEndpointAndPreservesActorRouting(t *testing.T) {
 				if r.Header.Get("Authorization") != "Bearer token" || r.Header.Get("ate-target-actor") != "default/sre" {
 					t.Errorf("identity or routing header missing")
 				}
-				if r.Header.Get("A2A-Extensions") != "" {
-					t.Error("generic client negotiated kagent HITL")
+				if r.URL.Path == tc.post && r.Header.Get("A2A-Extensions") != tc.header {
+					t.Errorf("A2A-Extensions = %q, want %q", r.Header.Get("A2A-Extensions"), tc.header)
 				}
 				switch r.URL.Path {
 				case "/a2a/.well-known/agent-card.json":
-					card := a2a.AgentCard{Name: "sre", Version: "1", Capabilities: a2a.AgentCapabilities{Streaming: true}, SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface("http://card.invalid/a2a", a2a.TransportProtocolJSONRPC)}}
+					card := a2a.AgentCard{Name: "sre", Version: "1", Capabilities: a2a.AgentCapabilities{Streaming: true, Extensions: tc.exts}, SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface("http://card.invalid/a2a", a2a.TransportProtocolJSONRPC)}}
 					_ = json.NewEncoder(w).Encode(card)
 				case tc.post:
 					w.Header().Set("Content-Type", "application/json")
@@ -158,47 +168,10 @@ func TestRejectRequiredExtensionAndRedirect(t *testing.T) {
 	}
 }
 
-// TestConnectNegotiatesHITLWhenTheCardListsIt pins that the a2a dialect asks for kagent's HITL extension on every call
-// to an agent whose card lists it, and only then (TestConnectPinsEndpointAndPreservesActorRouting has the card without
-// it). It is how a kagent agent sends its structured pause; without the header it sends ADK's hint as text alone.
-func TestConnectNegotiatesHITLWhenTheCardListsIt(t *testing.T) {
-	for _, required := range []bool{false, true} {
-		t.Run(map[bool]string{false: "optional", true: "required"}[required], func(t *testing.T) {
-			var posts atomic.Int32
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path == "/a2a/.well-known/agent-card.json" {
-					card := a2a.AgentCard{Name: "sre", Version: "1", Capabilities: a2a.AgentCapabilities{Streaming: true, Extensions: []a2a.AgentExtension{{URI: kagentv1.HITLExtension, Required: required}}}, SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface("http://card.invalid/a2a", a2a.TransportProtocolJSONRPC)}}
-					_ = json.NewEncoder(w).Encode(card)
-					return
-				}
-				posts.Add(1)
-				if got := r.Header.Get("A2A-Extensions"); got != kagentv1.HITLExtension {
-					t.Errorf("A2A-Extensions = %q, want %q", got, kagentv1.HITLExtension)
-				}
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":"1","result":{"id":"t1","contextId":"c1","status":{"state":"TASK_STATE_COMPLETED"}}}`))
-			}))
-			defer srv.Close()
-			d := generic.New(time.Second)
-			defer d.CloseIdleConnections()
-			client, err := d.Connect(t.Context(), &v1alpha1.AgentBackend{Spec: v1alpha1.AgentBackendSpec{URL: srv.URL + "/a2a"}}, v1alpha1.AgentRef{}, dialect.Credentials{Token: secret.New("token")})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := client.GetTask(t.Context(), &a2a.GetTaskRequest{ID: "t1"}); err != nil {
-				t.Fatal(err)
-			}
-			if posts.Load() != 1 {
-				t.Fatalf("posts = %d, want 1", posts.Load())
-			}
-		})
-	}
-}
-
-// TestAMessageThatListsTheExtensionIsSentAsIts pins that a message naming kagent's HITL extension in its extensions
+// TestASendAsksForTheExtensionsItsMessageNames pins that a message naming kagent's HITL extension in its extensions
 // (an answer to a HITL pause) goes with A2A-Extensions naming it, whatever the card lists, so that the agent reads the
 // payload as the extension's; a message that names no extension, or one the dialect does not speak, adds nothing.
-func TestAMessageThatListsTheExtensionIsSentAsIts(t *testing.T) {
+func TestASendAsksForTheExtensionsItsMessageNames(t *testing.T) {
 	var got atomic.Pointer[[]string]
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/a2a/.well-known/agent-card.json" {
@@ -309,7 +282,6 @@ func TestReadsHITLWhenTheMessageDeclaresIt(t *testing.T) {
 				if werr != nil || want == nil || err != nil || in == nil {
 					t.Fatalf("got %+v, %v; kagent-v1 reads %+v, %v; want both to read a pause", in, err, want, werr)
 				}
-				want.Extension = kagentv1.HITLExtension // the one thing the a2a dialect adds: what it answers by
 				if !reflect.DeepEqual(in, want) || in.TextReplies {
 					t.Errorf("got %+v; want kagent-v1's %+v marked with the extension, not taking text replies", in, want)
 				}

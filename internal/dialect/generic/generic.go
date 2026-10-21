@@ -53,25 +53,16 @@ func (d *Dialect) Connect(ctx context.Context, backend *v1alpha1.AgentBackend, a
 
 // ParseInteraction reads a pause whose status message declares kagent's HITL extension and carries its payload as
 // kagent-v1 does: a question or tool approval that does not take text replies. Any other pause must be a text question;
-// structured parts cannot be approved as text. The gate is the message's own declaration, not the card: a payload the
-// message does not name in its extensions is read as text, so that metadata an agent did not say it uses is never taken
-// for the extension's.
+// structured parts cannot be approved as text, and a payload the message does not name in its extensions is not read.
 func (d *Dialect) ParseInteraction(task a2a.Task) (*dialect.Interaction, error) {
 	if task.Status.State != a2a.TaskStateInputRequired {
 		return nil, nil
 	}
+	if msg := task.Status.Message; msg != nil && slices.Contains(msg.Extensions, kagentv1.HITLExtension) && msg.Metadata[kagentv1.HITLExtension] != nil {
+		return d.Dialect.ParseInteraction(task)
+	}
 	fail := func() (*dialect.Interaction, error) {
 		return nil, fmt.Errorf("text question missing or structured: %w", dialect.ErrUnusablePause)
-	}
-	if msg := task.Status.Message; msg != nil && slices.Contains(msg.Extensions, kagentv1.HITLExtension) && msg.Metadata[kagentv1.HITLExtension] != nil {
-		if task.ID == "" { // an answer is addressed to the task, so one with no ID could never be answered
-			return nil, fmt.Errorf("HITL pause on a task with no ID: %w", dialect.ErrUnusablePause)
-		}
-		in, err := d.Dialect.ParseInteraction(task)
-		if in != nil {
-			in.Extension = kagentv1.HITLExtension
-		}
-		return in, err
 	}
 	if task.ID == "" || task.Status.Message == nil {
 		return fail()

@@ -210,7 +210,8 @@ func retryAfter(h http.Header) time.Duration {
 
 // messageExtensions asks for each offered extension that an outgoing message names in its extensions, whatever the card
 // lists: a message that carries an extension's payload (an answer to a HITL pause) is sent as that extension's, so the
-// agent reads the payload as such. It only adds to what the activator asks for.
+// agent reads the payload as such. It only adds to what the activator asks for; a URI both ask for is sent once, because
+// a2a-go's ServiceParams.Append drops a value already present (a2aclient/middleware.go, v2.6.0).
 type messageExtensions struct {
 	a2aclient.PassthroughInterceptor
 	offered []string
