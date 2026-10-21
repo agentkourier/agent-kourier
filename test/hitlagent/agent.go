@@ -13,9 +13,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
+	"github.com/a2aproject/a2a-go/v2/a2asrv/eventqueue"
 	"github.com/a2aproject/a2a-go/v2/a2asrv/taskstore"
 )
 
@@ -63,6 +65,16 @@ func NewCard(agentURL string) *a2a.AgentCard {
 
 // NewHandler returns the agent's HTTP handler: the card at a2asrv.WellKnownAgentCardPath and JSON-RPC at "/".
 func NewHandler(agentURL string) (http.Handler, error) {
+	return newHandler(agentURL, hooks{})
+}
+
+// hooks let this package's tests hold the agent at points the SDK gives no signal for. A nil hook does nothing.
+type hooks struct {
+	paused    func() // after a turn has yielded its approval pause, before Execute returns
+	canceling func() // when Cancel is called
+}
+
+func newHandler(agentURL string, h hooks) (http.Handler, error) {
 	card := NewCard(agentURL)
 	// The enforcer gets the card's capabilities alone: given the whole card it would also check message parts
 	// against the input modes, and the card's "text" is not a media type.
@@ -75,6 +87,7 @@ func NewHandler(agentURL string) (http.Handler, error) {
 			Authenticator: func(context.Context) (string, error) { return storeUser, nil },
 		}),
 		turns: make(map[string]a2a.TaskID),
+		hooks: h,
 	}
 	reqHandler := a2asrv.NewHandler(ag,
 		a2asrv.WithTaskStore(ag.store),
@@ -83,8 +96,54 @@ func NewHandler(agentURL string) (http.Handler, error) {
 
 	mux := http.NewServeMux()
 	mux.Handle(a2asrv.WellKnownAgentCardPath, a2asrv.NewStaticAgentCardHandler(card))
-	mux.Handle("/{$}", echoExtension(a2asrv.NewJSONRPCHandler(reqHandler)))
+	mux.Handle("/{$}", echoExtension(a2asrv.NewJSONRPCHandler(pausedCancel{RequestHandler: reqHandler, store: ag.store})))
 	return mux, nil
+}
+
+// cancelAttempts and cancelRetryInterval bound how long CancelTask waits for the SDK to let go of a turn that has
+// ended: the SDK gives no signal for it, and it is brief, as nothing is left to do but clean up.
+const (
+	cancelAttempts      = 500
+	cancelRetryInterval = time.Millisecond
+)
+
+// pausedCancel makes CancelTask of a paused task work while the SDK still holds the turn that paused it. a2a-go's
+// in-process execution manager keeps a turn registered from its final event until Execute has returned and the turn
+// is cleaned up, and hands a cancel that arrives in that window to the turn, which no longer reads events: the cancel
+// fails with "queue is closed" once the turn's event pipe is closed, or else as not cancelable, because the turn
+// resolved to input-required. Neither is true of the task, which is paused, so CancelTask tries again, and the SDK
+// cancels the task on its own once the turn is gone.
+//
+// The gap is in a2a-go's internal/taskexec/local_manager.go: Cancel does not wait on the execution's exiting flag as
+// waitForExiting does for Execute. Remove this wrapper once Cancel does.
+type pausedCancel struct {
+	a2asrv.RequestHandler
+
+	store taskstore.Store
+}
+
+// CancelTask cancels the task, trying again while the cancel is lost to a turn that has ended.
+func (h pausedCancel) CancelTask(ctx context.Context, req *a2a.CancelTaskRequest) (*a2a.Task, error) {
+	for attempt := 1; ; attempt++ {
+		task, err := h.RequestHandler.CancelTask(ctx, req)
+		if err == nil || attempt == cancelAttempts || !h.lostToEndedTurn(ctx, req, err) {
+			return task, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(cancelRetryInterval):
+		}
+	}
+}
+
+// lostToEndedTurn reports whether err is the SDK handing the cancel to a turn that has ended while the task is paused.
+func (h pausedCancel) lostToEndedTurn(ctx context.Context, req *a2a.CancelTaskRequest, err error) bool {
+	if req == nil || (!errors.Is(err, eventqueue.ErrQueueClosed) && !errors.Is(err, a2a.ErrTaskNotCancelable)) {
+		return false
+	}
+	stored, gerr := h.store.Get(ctx, req.ID)
+	return gerr == nil && stored.Task.Status.State == a2a.TaskStateInputRequired
 }
 
 // echoExtension names the HITL extension in the response's A2A-Extensions header when the request asked for it.
@@ -116,6 +175,7 @@ type agent struct {
 	a2asrv.PassthroughCallInterceptor
 
 	store taskstore.Store
+	hooks hooks
 
 	mu    sync.Mutex
 	turns map[string]a2a.TaskID // messageId of a new turn -> the task it started
@@ -179,6 +239,9 @@ func (a *agent) Execute(_ context.Context, execCtx *a2asrv.ExecutorContext) iter
 // Cancel moves the task to canceled.
 func (a *agent) Cancel(_ context.Context, execCtx *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {
 	return func(yield func(a2a.Event, error) bool) {
+		if a.hooks.canceling != nil {
+			a.hooks.canceling()
+		}
 		yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateCanceled, nil), nil)
 	}
 }
@@ -201,7 +264,9 @@ func (a *agent) newTurn(execCtx *a2asrv.ExecutorContext, yield func(a2a.Event, e
 			yield(failed(execCtx, err), nil)
 			return
 		}
-		yield(pause, nil)
+		if yield(pause, nil) && a.hooks.paused != nil {
+			a.hooks.paused()
+		}
 		return
 	}
 
