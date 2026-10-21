@@ -29,7 +29,11 @@ type harness struct {
 // Agent Kourier would be (it ignores the card's interface URL and uses the configured endpoint).
 func newHarness(t *testing.T) *harness {
 	t.Helper()
-	srv := httptest.NewServer(NewHandler(""))
+	h, err := NewHandler("")
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 
 	ctx := testContext(t)
@@ -359,6 +363,7 @@ func rawStreamErrorCode(ctx context.Context, t *testing.T, endpoint string, msg 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set(a2a.SvcParamVersion, string(a2a.Version))
 	req.Header.Set(a2a.SvcParamExtensions, ExtensionURI)
 	req.Header.Set("Authorization", "Bearer fake-test-token")
 	resp, err := http.DefaultClient.Do(req)
