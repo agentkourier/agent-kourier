@@ -55,8 +55,9 @@ type Message struct {
 	LatestReply string `json:"latest_reply,omitempty"`
 
 	// Streaming is true from chat.startStream until chat.stopStream, and Chunks
-	// holds every chunk the streaming calls sent, as sent. Both are for test
-	// assertions and are not part of Slack's message shape.
+	// holds every chunk the streaming calls sent, as sent, until a chat.update with
+	// blocks replaces them, as it replaces the stream's cards in Slack. Both are
+	// for test assertions and are not part of Slack's message shape.
 	Streaming bool              `json:"-"`
 	Chunks    []json.RawMessage `json:"-"`
 

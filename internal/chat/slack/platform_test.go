@@ -216,6 +216,9 @@ func walk(v any, out *[]chattest.Shown) {
 			*out = append(*out, richTextShown(v)...)
 			return
 		}
+		if s, isString := v["title"].(string); typ == "task_card" && isString { // a card's title is read as a task's text is
+			*out = append(*out, taskShown(s))
+		}
 		switch s, isString := v["text"].(string); {
 		case typ == "plain_text" && isString:
 			*out = append(*out, chattest.ScanSlackPlain(s))

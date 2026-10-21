@@ -38,6 +38,12 @@ func TestTheStoredV1FormIsPinned(t *testing.T) {
 			chat.ToolLine{Name: "kubectl", Summary: "ns=prod", State: chat.ToolRan}, chat.ToolLine{Name: "ping", State: chat.ToolFailed},
 		}}),
 			`{"v":1,"message":{"parts":[{"kind":"tool","name":"kubectl","summary":"ns=prod","state":"ran"},{"kind":"tool","name":"ping","state":"failed"}]}}`},
+		"steps": {chat.Say(chat.Message{Parts: []chat.Part{chat.Steps{Steps: []chat.Step{
+			{ID: "s1", Title: "kubectl", Detail: "ns=prod"}, {ID: "s2", Title: "ping", State: chat.StepDone},
+			{ID: "s3", Title: "fetch", State: chat.StepFailed}, {ID: "s4", Title: "wait", State: chat.StepEnded},
+		}}}}),
+			`{"v":1,"message":{"parts":[{"kind":"steps","steps":[{"id":"s1","title":"kubectl","detail":"ns=prod"},` +
+				`{"id":"s2","title":"ping","state":"done"},{"id":"s3","title":"fetch","state":"failed"},{"id":"s4","title":"wait","state":"ended"}]}]}}`},
 		"prompt": {chat.Ask(prompt),
 			`{"v":1,"prompt":{"id":"ix-1","hint":"Which?","questions":[{"text":"Env?","choices":["prod","dev"],"multiple":true},` +
 				`{"text":"Why?"}],"deadline":"2026-10-02T12:00:00Z","subagent":"sre"}}`},

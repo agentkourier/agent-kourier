@@ -55,6 +55,11 @@ func MessageFields(m chat.Message) []Field {
 			for _, b := range p.Buttons {
 				add(b.Label, chat.WhereButton)
 			}
+		case chat.Steps:
+			for _, st := range p.Steps {
+				add(st.Title, chat.WhereStepTitle)
+				add(st.Detail, chat.WhereStepDetail)
+			}
 		}
 	}
 	return out

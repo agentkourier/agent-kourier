@@ -118,7 +118,10 @@ refuses them for a stream (the stream is then plain text), no mode shows a card.
 
 Agent Kourier persists sessions, queued replies, pending questions and intended posts. After a restart it finds the
 tasks that were running, asks the agent for their state, and renders their output under the turn that started them, so
-a half-written message is replaced with the whole answer and the thread finishes once.
+a half-written message is replaced with the whole answer and the thread finishes once. In a chat thread the replacement
+keeps the step cards, before the text: one for each tool call the task reports, kept up to date while the task runs, and
+a call with no result by the end says `No result was reported.`. The same holds when a reply's text changed after it was
+streamed and the message is rewritten. If Slack refuses the cards, the message is written again without them.
 
 ## Lifetime
 

@@ -663,10 +663,14 @@ func (f *FakePlatform) literal(s string, w chat.Where) Shown {
 
 func (f *FakePlatform) showMarkdown(md string) Shown { return f.literal(md, chat.WhereStream) }
 
-// show is every field of o as the fake shows it. The caller holds f.mu.
+// show is every field of o as the fake shows it: a fake whose caps say no Steps shows nothing of a message's steps. The
+// caller holds f.mu.
 func (f *FakePlatform) show(o chat.Outgoing) []Shown {
 	var out []Shown
 	for _, fld := range Fields(o) {
+		if !f.caps.Steps && (fld.Where == chat.WhereStepTitle || fld.Where == chat.WhereStepDetail) {
+			continue
+		}
 		out = append(out, f.literal(fld.Text, fld.Where))
 	}
 	return out

@@ -107,6 +107,8 @@ var everyPart = chat.Message{Fallback: "fallback", Parts: []chat.Part{
 	chat.ToolLine{Name: "kubectl", Summary: "ns=\"prod\""}, chat.ToolLine{Name: "kubectl", Summary: "ns=\"prod\"", State: chat.ToolRan},
 	chat.ToolLine{Name: "ping", State: chat.ToolFailed}, chat.Mention{User: "U0123456789", Text: "answered first"},
 	chat.Buttons{Buttons: []chat.Button{{ID: "go", Label: "Go", Value: "ix-1", Primary: true}}},
+	chat.Steps{Steps: []chat.Step{{ID: "s1", Title: "search", Detail: `q="up"`}, {ID: "s2", Title: "fetch", State: chat.StepDone},
+		{ID: "s3", Title: "ping", State: chat.StepFailed}, {ID: "s4", Title: "wait", State: chat.StepEnded}}},
 }}
 
 func TestOutgoingSurvivesTheOutboxRoundTrip(t *testing.T) {
@@ -160,6 +162,8 @@ func TestValidateRefusesWhatCannotBeDelivered(t *testing.T) {
 		"a nil part":                      chat.Say(chat.Message{Fallback: "x", Parts: []chat.Part{chat.Header{Text: "h"}, nil}}),
 		"a part by pointer":               chat.Say(chat.Message{Fallback: "x", Parts: []chat.Part{&chat.Header{Text: "h"}}}),
 		"a tool line of an unknown state": chat.Say(chat.Message{Parts: []chat.Part{chat.ToolLine{Name: "t", State: "vanished"}}}),
+		"a step with no ID":               chat.Say(chat.Message{Parts: []chat.Part{chat.Steps{Steps: []chat.Step{{Title: "t"}}}}}),
+		"a step of an unknown state":      chat.Say(chat.Message{Parts: []chat.Part{chat.Steps{Steps: []chat.Step{{ID: "s1", Title: "t", State: 99}}}}}),
 	} {
 		if err := o.Validate(); !errors.Is(err, chat.ErrInvalid) {
 			t.Errorf("%s: Validate = %v, want ErrInvalid", name, err)

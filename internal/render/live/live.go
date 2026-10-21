@@ -176,7 +176,7 @@ type Turn struct {
 	Recipient string
 	// Recovered says the turn continues a message that may exist already, and is updated to the
 	// whole text. A chat turn that finds its stream's row with the ts recorded stops that stream
-	// (which it has lost the connection to) and updates the message. A row with no ts is the window
+	// (which it has lost the connection to) and updates the message, with its steps (takeOver). A row with no ts is the window
 	// of R16: an orphan stream may exist and cannot be found, so the whole text is posted as a new
 	// message, under its own row, and the orphan is left to Slack's timeout.
 	// UNCONFIRMED(WP-04): whether Slack ends an orphaned stream, and what it answers to a stop of a
@@ -243,11 +243,12 @@ type Run struct {
 	recorded  bool   // and holds the stream's ts
 	stopped   bool
 	adoptStop bool        // the message is a stream of an earlier run, to stop before it is updated
+	adopted   bool        // the message is a stream of an earlier run, which this turn took over and updates
 	diverged  bool        // the streamed text is not a prefix of the final text
 	stream    chat.Stream // the stream this turn started
 	streamed  string      // the markdown sent to the stream so far
 	stepsSent []chat.Step // the steps sent to the stream, each as it was last sent
-	stepsOff  bool        // the platform refused a step for good: the turn goes on without steps
+	stepsOff  bool        // the platform refused a step, or a message with steps, for good: the turn goes on without steps
 	stepFails int         // steps that failed in a row
 	more      bool        // a write left steps to begin, which the next window goes on with
 }
@@ -707,8 +708,46 @@ func (u *Run) want(v view) string {
 	if u.streaming {
 		return v.body + "\x00" + stepsKey(v.steps) + map[bool]string{false: "", true: "\x00final"}[v.final]
 	}
-	key, _ := json.Marshal(v.m) // a message of parts of known kinds always marshals
+	key, _ := json.Marshal(u.message(v)) // a message of parts of known kinds always marshals
 	return string(key)
+}
+
+// message is the message an update writes for v: v's own, after the steps of v while the turn shows them. A stream's
+// steps are the stream's, and a message that replaces the stream must carry them, for a platform may drop the stream's
+// cards when the message is updated, as Slack does (probed 2026-10-21): the update of a stream that diverged, and every
+// update of a stream that this turn took over (carries). No post carries them: what the outbox stores is v.m.
+func (u *Run) message(v view) chat.Message {
+	if len(v.steps) == 0 || u.stepsOff {
+		return v.m
+	}
+	m := v.m
+	m.Parts = append([]chat.Part{chat.Steps{Steps: v.steps}}, v.m.Parts...)
+	return m
+}
+
+// update replaces the message at ref with the message of v. The steps never cost the reply its text: a message that
+// carries them and that the platform refuses as content it cannot show is sent again at once without them, with a
+// warning, and the turn shows no steps from then on. Today a refusal of that kind is never retried, so without this the
+// steps would take the answer down with them.
+func (u *Run) update(ctx context.Context, ref chat.Ref, v view) error {
+	carried := len(v.steps) > 0 && !u.stepsOff
+	err := u.cfg.Platform.Update(ctx, ref, chat.Say(u.message(v)))
+	if err == nil || !carried || !u.cannotShow(err) {
+		return err
+	}
+	u.cfg.Logger.WarnContext(ctx, "live: the platform refused the message with its steps; it is sent again without them", "channel", u.turn.Channel, "err", err)
+	u.stepsOff = true
+	return u.cfg.Platform.Update(ctx, ref, chat.Say(v.m))
+}
+
+// cannotShow says whether err is the platform's refusal of a message's content: one it found malformed, too large, or of a
+// form it does not take.
+func (u *Run) cannotShow(err error) bool {
+	if errors.Is(err, chat.ErrInvalid) || errors.Is(err, chat.ErrTooLarge) {
+		return true
+	}
+	v := u.cfg.Platform.Classify(chat.OpPost, err)
+	return v.Class == chat.Permanent && v.Reason == chat.ReasonInvalidContent
 }
 
 // stepsKey is the steps by ID, state and title: what a stream shows of them.
@@ -744,7 +783,7 @@ func (u *Run) write(ctx context.Context, ref *chat.Ref, v view) (telemetryErr er
 			}
 			u.adoptStop = false
 		}
-		err := u.cfg.Platform.Update(ctx, *ref, chat.Say(v.m))
+		err := u.update(ctx, *ref, v)
 		if err == nil {
 			u.sent = u.want(v)
 		}
@@ -764,10 +803,12 @@ func (u *Run) write(ctx context.Context, ref *chat.Ref, v view) (telemetryErr er
 
 // view is what the state shows at one moment.
 type view struct {
-	m     chat.Message // the message of the update path: the text so far, and the latest tool call's status line as render.Turn shows it
-	body  string       // the text a stream carries
-	steps []chat.Step  // the steps a stream shows, in the order of the calls, each in the state to show
-	pos   []int        // where in body each step follows: the text before that place was written before the call
+	m    chat.Message // the message of the update path: the text so far, and the latest tool call's status line as render.Turn shows it
+	body string       // the text a stream carries
+	// steps are the steps a stream shows, in the order of the calls, each in the state to show; and those of a turn that took
+	// over a stream, which its updates carry (message).
+	steps []chat.Step
+	pos   []int // where in body each step follows: the text before that place was written before the call
 	final bool
 	rated bool // the final is the task's end, not a pause: the footer belongs on it
 	ok    bool // there is something to show yet
@@ -776,8 +817,11 @@ type view struct {
 // snapshot builds the state: the text so far as the body and, on the update path, the status line of the latest tool
 // call, in the tense of how far it has got (render.Turn says when it is shown), and on the stream path the steps. A
 // state with a status line is writable with no text, so a call that returned replaces the line that said it was under way.
-// Once the turn is final the line is gone, and a step with no result is ended: the turn will not hear of it again.
+// Once the turn is final the line is gone, and a step with no result is ended: the turn will not hear of it again. A turn
+// that took over a stream has the steps too, which its updates carry, and no status line, since its cards say the same:
+// steps make it writable with no text until the final, which with no text is "(no output)" under them.
 func (u *Run) snapshot() view {
+	carries := u.carries()
 	u.mu.Lock()
 	events := make([]agent.TextEvent, 0, len(u.order))
 	for _, id := range u.order {
@@ -786,7 +830,7 @@ func (u *Run) snapshot() view {
 	tool, toolState, final, paused := u.tool, u.toolState, u.final, u.paused
 	idle, begun, finished, failed := u.idle, u.begun && !u.texted, u.finished, u.failed
 	var recs []stepRec
-	if u.stepsOn() {
+	if u.stepsOn() || carries {
 		recs = slices.Clone(u.steps)
 	}
 	u.mu.Unlock()
@@ -796,8 +840,8 @@ func (u *Run) snapshot() view {
 	}
 	v := view{final: final, rated: final && !paused}
 	var shown *agent.ToolCallEvent
-	var status string           // the update path's indicator that the agent is working
-	if !final && !u.streaming { // on the stream path a tool call is a step, and has no status line
+	var status string                       // the update path's indicator that the agent is working
+	if !final && !u.streaming && !carries { // on the stream path a tool call is a step, and has no status line
 		shown = tool
 		switch {
 		case u.progress == v1alpha1.ProgressActivity: // names no tool
@@ -834,7 +878,9 @@ func (u *Run) snapshot() view {
 		v.steps = append(v.steps, u.stepOf(id, r, state, now, finished, failed))
 		v.pos = append(v.pos, pos)
 	}
-	v.ok = v.ok || len(v.steps) > 0
+	if u.streaming || !final {
+		v.ok = v.ok || len(v.steps) > 0
+	}
 	return v
 }
 
@@ -856,3 +902,8 @@ func (u *Run) stepOf(id string, r stepRec, state chat.StepState, now time.Time, 
 // stepsOn says whether the stream shows steps: the turn is eligible for them (a stream, on a platform that has them),
 // it is still the stream it began as, and the platform has not refused one.
 func (u *Run) stepsOn() bool { return u.eligible && u.streaming && !u.stepsOff }
+
+// carries says whether the turn's updates carry its steps: it is eligible for them, it took over the stream of an earlier
+// run, which is the message it updates (a platform such as Slack drops a stream's cards from a message it updates), and the
+// platform has not refused a message with them.
+func (u *Run) carries() bool { return u.eligible && u.adopted && !u.streaming && !u.stepsOff }
