@@ -127,7 +127,7 @@ func (a *Agent) send(ctx context.Context, msg *a2a.Message, h Handler, answer bo
 	if answer && msg.TaskID != "" {
 		// The paused task, as it is before the answer: what it holds is not this turn's news (see (*assembler).seed). One
 		// unary call per answer, which a person made; a task that cannot be read is answered without it.
-		if paused, err := a.getTask(ctx, conn, msg.TaskID); err == nil {
+		if paused, err := a.getTask(ctx, conn, msg.TaskID); err == nil && paused != nil {
 			asm.seed(paused, a.approval(paused))
 		}
 	}
