@@ -140,7 +140,7 @@ Every Slack call Agent Kourier makes, and the scope in the manifest that allows 
 While an agent investigates an alert thread, Agent Kourier calls `assistant.threads.setStatus`, which shows Slack's assistant
 status (`is working…`) in the thread. It does this only when `chat.progress` is not `steps` and `output` is `live`, and
 never in a thread that a person's message started, whose reply streams instead. It sets the status when the turn starts and
-again after each write, because a reply in the thread may take it off, and clears it when the turn ends.
+again after each write but the last, because a reply in the thread may take it off, and clears it when the turn ends.
 
 The manifest asks for `assistant:write` because that is the scope with which we have seen the status render. The Slack Go
 library that Agent Kourier uses says the method accepts `chat:write` or `assistant:write`, and that `assistant:write` is

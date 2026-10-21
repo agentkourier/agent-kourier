@@ -257,7 +257,7 @@ slack: Slack refused assistant.threads.setStatus, so threads are not shown as bu
 ```
 
 From then on it sets no status on any thread of that connection, and calls Slack for none, until its process restarts.
-The usual cause is a missing scope: add `assistant:write` to the app's bot token scopes, reinstall the app, then restart
+A likely cause is a missing scope: add `assistant:write` to the app's bot token scopes, reinstall the app, then restart
 Agent Kourier ([Configure Slack](configure-slack.md#what-the-app-is-allowed-to-do) has the codes and what was tested).
 
 Any other failure stops the status for that turn only, and the turn goes on. It is logged at warn level, with the error in
