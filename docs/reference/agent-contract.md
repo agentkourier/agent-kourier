@@ -226,7 +226,11 @@ Notes for an agent author:
 - A tool's `id` is what its decision names. Make each unique within the request, and give every new pause on a task new
   IDs (for questions, a new `id`): Agent Kourier tells one pause from another by the task, the request's `id` and the
   tool IDs. `call_id` is optional; it is kept with the request and not shown.
-- `hint` is optional. It is the prompt's heading, so keep it to one line; it may be shown cut.
+- `hint` is optional. It is the prompt's heading, and stays on the prompt after it ends, so keep it to one line;
+  it may be shown cut. Without one, the heading is "The agent needs your approval" for a tool approval and "The agent
+  needs your input" for questions. A hint that starts "Please approve or reject the tool call" and names
+  `ToolConfirmation` is dropped: that is the instruction ADK writes for a client, which kagent sends as the hint, and
+  it is not for the approver.
 - A tool's `name` and `args` are shown as sent, apart from redacted secrets. Arguments may be any JSON value, nested.
   A pause is unusable when the prompt could not show a tool exactly: a name, key or string with a control character
   other than tab and line ends, or too long to show whole; a name or key with characters or spacing that cleaning would

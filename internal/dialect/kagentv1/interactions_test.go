@@ -37,7 +37,6 @@ func TestParseInteraction(t *testing.T) {
 		return dialect.Question{Text: text, Choices: choices, Multiple: multiple}
 	}
 	tool := dialect.Tool{ID: "adk-eaf5e6dc-d569-4784-91af-2420f1eb0c97", CallID: "call_1", Name: "add_numbers", Args: map[string]any{"a": 3.0, "b": 5.0}}
-	const approvalHint = "Please approve or reject the tool call add_numbers() by responding with a FunctionResponse with an expected ToolConfirmation payload. (add_numbers)"
 	fixtures := []struct { // captured from kagent 1.0.0-alpha5 (WP-02)
 		name, file string
 		want       *dialect.Interaction // nil: not a usable pause
@@ -49,7 +48,9 @@ func TestParseInteraction(t *testing.T) {
 		{"multi-select and free-text questions", "askuser/21-pause-good-two-answers.response.sse", &dialect.Interaction{
 			Kind: dialect.AskUser, RequestID: "adk-3e9067a2-a7b2-4850-b36e-d6b0f91e4cad",
 			Questions: []dialect.Question{q("Which databases?", true, "PostgreSQL", "MySQL"), {Text: "Favorite color?", Choices: []string{}}}}, ""}, // kagent sends "choices": [] for free text
-		{"tool approval", "approval/01-pause-approve.response.sse", &dialect.Interaction{Kind: dialect.ToolApproval, Hint: approvalHint, Tools: []dialect.Tool{tool}}, ""},
+		// The recorded hint is ADK's instruction to a client ("... by responding with a FunctionResponse with an expected
+		// ToolConfirmation payload. (add_numbers)"), not words for a person: it is dropped, and the prompt uses its own heading.
+		{"tool approval", "approval/01-pause-approve.response.sse", &dialect.Interaction{Kind: dialect.ToolApproval, Tools: []dialect.Tool{tool}}, ""},
 		{"sub-agent ask-user is flat at alpha5", "nested/01-pause.response.sse", &dialect.Interaction{
 			Kind: dialect.AskUser, RequestID: "adk-a80b11e7-3305-45cf-85b4-378644236931",
 			Questions: []dialect.Question{q("Which region?", false, "east", "west")}}, ""},
@@ -71,6 +72,10 @@ func TestParseInteraction(t *testing.T) {
 	// v1.0.0-alpha5's BuildHITLStatusMessage builds them (go/adk/pkg/a2a/hitl.go), not
 	// taken from a live run: WP-02 could not capture a nested case.
 	askReq := map[string]any{"type": "ask_user_request", "id": "r1", "questions": []any{map[string]any{"question": "Region?", "choices": []any{"east"}}}}
+	twoTools := map[string]any{"type": "tool_approval_request", "tools": []any{map[string]any{"id": "a", "name": "x"}, map[string]any{"id": "b", "name": "y"}}}
+	wantTwo := []dialect.Tool{{ID: "a", Name: "x"}, {ID: "b", Name: "y"}}
+	// ADK's instruction for two tools, in the shape test/stubagent writes it: alpha5 was recorded with one tool only.
+	const adkHint = "Please approve or reject the tool call x(), y() by responding with a FunctionResponse with an expected ToolConfirmation payload. (x, y)"
 	wantNested := &dialect.Nested{Subagent: "k8s-agent", TaskID: "sub-task", ContextID: "sub-ctx"}
 	wantInner := dialect.Tool{ID: "inner-1", CallID: "c9", Name: "delete_file", Args: map[string]any{"path": "/x"}}
 	sources := []struct {
@@ -101,6 +106,20 @@ func TestParseInteraction(t *testing.T) {
 		{"nested approval whose outer tool has no id", merge(adkNestedApproval(), "tools", []any{map[string]any{"name": "k8s-agent"}}), nil, "exactly one outer tool"},
 		{"several tools in one pause", map[string]any{"type": "tool_approval_request", "tools": []any{map[string]any{"id": "a", "name": "x"}, map[string]any{"id": "b", "name": "y"}}},
 			&dialect.Interaction{Kind: dialect.ToolApproval, Tools: []dialect.Tool{{ID: "a", Name: "x"}, {ID: "b", Name: "y"}}}, ""},
+		{"ADK's confirmation instruction for several tools is dropped", merge(twoTools, "hint", adkHint),
+			&dialect.Interaction{Kind: dialect.ToolApproval, Tools: wantTwo}, ""},
+		{"ADK's confirmation instruction is dropped from a question too", merge(askReq, "hint", adkHint),
+			&dialect.Interaction{Kind: dialect.AskUser, RequestID: "r1", Questions: []dialect.Question{q("Region?", false, "east")}}, ""},
+		{"an agent's own approval hint is kept", merge(twoTools, "hint", "Restart the payments deployment?"),
+			&dialect.Interaction{Kind: dialect.ToolApproval, Hint: "Restart the payments deployment?", Tools: wantTwo}, ""},
+		{"a hint that only starts like ADK's is kept", merge(twoTools, "hint", "Please approve or reject the tool call that restarts payments"),
+			&dialect.Interaction{Kind: dialect.ToolApproval, Hint: "Please approve or reject the tool call that restarts payments", Tools: wantTwo}, ""},
+		{"a hint that names ToolConfirmation without ADK's opening is kept", merge(twoTools, "hint", "Approve x and y (sent as a ToolConfirmation)"),
+			&dialect.Interaction{Kind: dialect.ToolApproval, Hint: "Approve x and y (sent as a ToolConfirmation)", Tools: wantTwo}, ""},
+		{"ADK's confirmation instruction after leading space is dropped", merge(twoTools, "hint", " \n"+adkHint),
+			&dialect.Interaction{Kind: dialect.ToolApproval, Tools: wantTwo}, ""},
+		{"an agent's own question hint is kept", merge(askReq, "hint", "Pick a region"),
+			&dialect.Interaction{Kind: dialect.AskUser, Hint: "Pick a region", RequestID: "r1", Questions: []dialect.Question{q("Region?", false, "east")}}, ""},
 		{"unknown type", map[string]any{"type": "surprise"}, nil, "unknown request type"},
 		{"a payload of the wrong shape", map[string]any{"type": 7}, nil, "malformed"},
 		{"ask-user without an id", merge(askReq, "id", ""), nil, "ask-user request has no id"},
