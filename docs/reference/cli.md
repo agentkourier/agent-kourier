@@ -4,7 +4,7 @@ This page lists the `agent-kourier` binary's environment variables, flags, subco
 `cmd/agent-kourier` reads them.
 
 The broker is configured by environment variables, which the Helm chart sets from its values. It takes one flag,
-`--version`, and one subcommand, `dry-run`.
+`--version`, and two subcommands, `dry-run` and `init`.
 
 ## Environment
 
@@ -69,3 +69,40 @@ Slack (`conversations.history`), and posts, starts and writes nothing.
 
 Each line's outcome is one of `matched`, `unmatched`, `excluded`, `other_bot`, `own`, `person` or `ignored`. Reading the
 output is in [Tune triggers with a dry run](../how-to/tune-triggers.md).
+
+## `agent-kourier init`
+
+Writes a first-install Helm values file, checks it, and prints the commands that create the Secrets and install the
+chart. The 0.1.2 release and the ones before it do not have it. It posts nothing to Slack and changes nothing in a cluster. The step-by-step use
+is in [Install with Helm](../how-to/install-with-helm.md#write-it-with-init).
+
+Every value that no option gives is asked on standard input, with the default in brackets. The questions go to standard
+error and the commands to standard output. If the input ends before a value without a default is given, the command
+exits 2 and names the option. The question whether the agent verifies tokens is asked only when another question was.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--out` | `my-values.yaml` | The file to write. An existing file is not overwritten unless `--force` is set, and a symbolic link is never followed. |
+| `--force` | `false` | Overwrite the file. |
+| `--dialect` | asked, default `a2a` | The agent's dialect: `a2a` or `kagent-v1`. |
+| `--agent-url` | asked | The agent's URL. |
+| `--agent-namespace` | asked | The agent's namespace. |
+| `--agent-name` | asked | The agent's name. |
+| `--channel` | asked | The channel, by ID (`C...`, or `G...`), or by name, with or without a leading `#`. A name is looked up with `conversations.list`, which needs a bot token and the scopes `channels:read` and `groups:read`; the file holds the ID. |
+| `--agent-token` | `false` (asked) | The agent verifies tokens: the Binding's `identity.tokenSecretRef` names the Secret `agent-kourier-agent-token`, key `token`, and the commands create it. |
+| `--namespace` | `agent-kourier` | The release's namespace. Resources that name none are checked in it, and the commands name it. |
+| `--token-file` | | A file with the bot token, as for `dry-run`. Else `SLACK_BOT_TOKEN`. |
+
+The checks, in order: a channel name is looked up; the resources that the chart renders from the values (the
+ChatConnection `slack`, the AgentBackend `agent` and the Binding `my-binding`) are loaded with the broker's loader, which
+defaults and validates them; and, with a bot token, a `conversations.history` request for the channel shows that the
+bot can read it (`channels:history`, or `groups:history` for a private channel, and the bot in the channel). The request
+asks for messages newer than the moment it is made, so it fetches none. Without a bot token the Slack checks are skipped
+and the command says so. Nothing is written unless every check passes. The loader does not check references between
+resources or the Secrets: those errors show only when the pod starts.
+
+The `helm install` command it prints names the chart version of the binary's own release, and none for a build that is
+not a release (version `dev`), where Helm takes the newest chart.
+
+Exit codes: 0 for a written file; 1 when Slack rejects the token; 2 for a wrong option, answer, token file or values, or an
+existing file; 4 for any other failure, such as Slack refusing the channel read.

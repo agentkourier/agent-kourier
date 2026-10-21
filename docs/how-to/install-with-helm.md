@@ -75,15 +75,53 @@ Tokens never go in the values file. The chart refuses a value that looks like a 
 ## Write the values
 
 The chart takes Agent Kourier's three resource kinds under `config`: the ChatConnection, the AgentBackend and the
-Binding. They are nested, so they go in a values file rather than in `--set` flags. Download the starter file, a
-complete first install with an agent that does not exist yet:
+Binding. They are nested, so they go in a values file rather than in `--set` flags. There are two ways to get one: let
+`agent-kourier init` write it, or download a starter file and edit it.
+
+### Write it with `init`
+
+`agent-kourier init` asks for the agent's dialect (`a2a` or `kagent-v1`), URL, namespace and name, and for the channel.
+It writes `my-values.yaml` in the shape of the starter file below, loads what the chart would render from it with the
+loader that Agent Kourier starts with, and prints the `kubectl` commands for the Secrets above and the `helm install`
+command below, with your namespace in them. It writes nothing if the values do not load, and it does not overwrite a file
+unless you pass `--force`.
+
+!!! note "`init` is not in the 0.1.2 release"
+
+    The 0.1.2 binary and image, and the releases before it, do not have `init`. Until a release has it, run it from a
+    checkout of this repository with Go. A build that is not a release has no chart version to name, so the `helm install`
+    command it prints has no `--version`, and Helm takes the newest chart.
+
+```sh
+go run ./cmd/agent-kourier init
+```
+
+Every question has an option, so the same run needs no terminal. Give the channel by ID, or by name when a bot token is
+set:
+
+```sh
+go run ./cmd/agent-kourier init --dialect a2a \
+  --agent-url http://my-agent.my-namespace.svc.cluster.local:8083/a2a/ \
+  --agent-namespace my-namespace --agent-name my-agent --channel C0123456789
+```
+
+With the bot token in `SLACK_BOT_TOKEN` (or in a file named by `--token-file`), `init` also looks a channel name up and
+checks that the bot can read the channel, as the dry run below does. Without a token it skips Slack, says so, and needs
+the channel's ID. Add `--agent-token` if the agent verifies tokens: the Binding then reads the token from the Secret
+`agent-kourier-agent-token`, and `init` prints the command that creates it. The options are in
+[Command line and environment](../reference/cli.md#agent-kourier-init).
+
+### Download the starter file
+
+Or download the starter file, a complete first install with an agent that does not exist yet:
 
 ```sh
 curl -fsSLo my-values.yaml https://raw.githubusercontent.com/agentkourier/agent-kourier/main/examples/helm/my-values.yaml
 ```
 
 It is this file. Change the four lines marked `yours`: the agent's URL, namespace and name, and the channel's ID, which
-starts with `C` (`G` for an older private channel), not the channel's name. The `-f` flags below pass it to Helm.
+starts with `C` (`G` for an older private channel), not the channel's name. `init` writes the same
+resources with those four values filled in. The `-f` flags below pass it to Helm.
 
 ```yaml title="my-values.yaml"
 --8<-- "my-values.yaml"

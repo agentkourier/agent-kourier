@@ -1,8 +1,9 @@
 // Command Agent Kourier is the agent-kourier broker. See spec.md for the design.
 //
-// It is configured by environment variables, which the Deployment sets, and takes one flag, --version, and one
-// subcommand, dry-run (dryrun.go), which replays a channel's history through a Binding's chat triggers and
-// reads Slack with a bot token from a file or SLACK_BOT_TOKEN:
+// It is configured by environment variables, which the Deployment sets, and takes one flag, --version, and two
+// subcommands: dry-run (dryrun.go), which replays a channel's history through a Binding's chat triggers and
+// reads Slack with a bot token from a file or SLACK_BOT_TOKEN, and init (initcmd.go), which writes a first-install
+// Helm values file, checks it, and prints the commands to install with it:
 //
 //	AGENTKOURIER_CONFIG_DIR     the resource files (default /etc/agent-kourier)
 //	AGENTKOURIER_DB_PATH        the SQLite file, on the volume (default /data/agent-kourier.db)
@@ -237,6 +238,9 @@ func run(args []string, ver string, stdout, stderr io.Writer, getenv func(string
 	if len(args) > 0 && args[0] == "dry-run" {
 		return dryRunCommand(args[1:], stdout, stderr, getenv)
 	}
+	if len(args) > 0 && args[0] == "init" {
+		return initCommand(args[1:], ver, os.Stdin, stdout, stderr, getenv)
+	}
 	fs := flag.NewFlagSet("agent-kourier", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	showVersion := fs.Bool("version", false, "print the version and exit")
@@ -247,7 +251,7 @@ func run(args []string, ver string, stdout, stderr io.Writer, getenv func(string
 	// fall through and start the broker: in a pod, a second one. The broker takes no arguments. The argument is not
 	// echoed: a person may have typed a token in its place.
 	if fs.NArg() > 0 {
-		_, _ = fmt.Fprintln(stderr, "agent-kourier: unknown command; the broker takes no arguments (did you mean dry-run?)")
+		_, _ = fmt.Fprintln(stderr, "agent-kourier: unknown command; the broker takes no arguments (did you mean dry-run or init?)")
 		return exitUsage
 	}
 	if *showVersion {
