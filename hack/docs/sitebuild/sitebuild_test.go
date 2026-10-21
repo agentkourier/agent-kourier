@@ -24,6 +24,8 @@ func TestParseVersions(t *testing.T) {
 		{"a leading zero", "releases: [\"0.01\"]\n", nil, "not MAJOR.MINOR"},
 		{"dev is not a release line", "releases: [\"dev\"]\n", nil, "not MAJOR.MINOR"},
 		{"a repeat", "releases: [\"0.1\", \"0.1\"]\n", nil, "listed twice"},
+		{"oldest first", "releases: [\"0.1\", \"0.2\"]\n", nil, "newest first"},
+		{"minor compared as a number", "releases: [\"1.9\", \"1.10\"]\n", nil, "newest first"},
 		{"an unknown key", "releases: [\"0.1\"]\nlatest: \"0.1\"\n", nil, "unknown field"},
 	}
 	for _, tt := range tests {
@@ -74,6 +76,49 @@ func TestResolveSkipsUntaggedLine(t *testing.T) {
 	}
 }
 
+func TestUntrackedTag(t *testing.T) {
+	tests := []struct {
+		name  string
+		lines []string
+		tags  []string
+		want  string
+	}{
+		{"every line listed", []string{"0.2", "0.1"}, []string{"v0.1.2", "v0.2.0"}, ""},
+		{"a new minor not listed", []string{"0.1"}, []string{"v0.1.2", "v0.2.0"}, "v0.2.0"},
+		{"a new major not listed", []string{"0.10"}, []string{"v0.10.1", "v1.0.0"}, "v1.0.0"},
+		{"a prerelease of the next minor", []string{"0.1"}, []string{"v0.1.2", "v0.2.0-rc.1"}, ""},
+		{"an older line dropped from the file", []string{"0.2"}, []string{"v0.1.2", "v0.2.0"}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := untrackedTag(tt.lines, tt.tags); got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCheckOut(t *testing.T) {
+	root := filepath.FromSlash("/repo")
+	venv := filepath.Join(root, "bin", "docs-venv")
+	for _, tt := range []struct {
+		out string
+		ok  bool
+	}{
+		{filepath.Join(root, "bin", "versioned-site"), true},
+		{filepath.FromSlash("/tmp/site"), true},
+		{filepath.Join(root, "bin", "docs-venv-site"), true}, // a sibling, not the virtualenv
+		{root, false},                       // -out . or -out ""
+		{filepath.FromSlash("/"), false},    // holds the repository
+		{filepath.Join(root, "bin"), false}, // holds the virtualenv
+		{venv, false},
+	} {
+		if err := checkOut(root, tt.out, venv); (err == nil) != tt.ok {
+			t.Errorf("checkOut(%q) = %v, want ok %v", tt.out, err, tt.ok)
+		}
+	}
+}
+
 func TestVersionsJSON(t *testing.T) {
 	b, err := versionsJSON([]release{{Line: "0.2", Tag: "v0.2.1"}, {Line: "0.1", Tag: "v0.1.2"}})
 	if err != nil {
@@ -103,10 +148,18 @@ func TestVersionsJSON(t *testing.T) {
 }
 
 func TestWrapperConfig(t *testing.T) {
-	got := wrapperConfig("https://agentkourier.dev/", "0.1")
-	for _, want := range []string{"INHERIT: mkdocs.yml\n", "site_url: https://agentkourier.dev/0.1/\n", "provider: mike\n", "default: latest\n"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("wrapper lacks %q:\n%s", want, got)
+	for _, tt := range []struct{ siteURL, root string }{
+		{"https://agentkourier.dev/", "/"},
+		{"https://example.org/docs/", "/docs/"},
+	} {
+		got, err := wrapperConfig(tt.siteURL, "0.1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{"INHERIT: mkdocs.yml\n", "site_url: " + tt.siteURL + "0.1/\n", "site_root: " + tt.root + "\n", "provider: mike\n", "default: latest\n"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("wrapper lacks %q:\n%s", want, got)
+			}
 		}
 	}
 }
@@ -163,25 +216,21 @@ func TestHeaderBlock(t *testing.T) {
 	}
 }
 
-func TestLegacyEntries(t *testing.T) {
-	dir := t.TempDir()
-	for _, d := range []string{"how-to", "assets"} {
-		if err := os.Mkdir(filepath.Join(dir, d), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, f := range []string{"index.html", "404.html", "favicon.ico", "_headers", "sitemap.xml"} {
-		if err := os.WriteFile(filepath.Join(dir, f), nil, 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	got, err := legacyEntries(dir)
+// The rules for the unversioned site's paths come from the fixed list, whatever the latest build holds.
+func TestRedirectsKeepLegacyPaths(t *testing.T) {
+	got, err := redirects("0.2", legacyPaths)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []entry{{"assets", true}, {"how-to", true}, {"index.html", false}, {"sitemap.xml", false}}
-	if !slices.Equal(got, want) {
-		t.Errorf("got %v, want %v", got, want)
+	for _, want := range []string{"/demo/* /latest/demo/:splat 301\n", "/index.html /latest/index.html 301\n"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("_redirects lacks %q", want)
+		}
+	}
+	for _, e := range legacyPaths {
+		if slices.Contains(rootFiles, e.name) {
+			t.Errorf("%s is both copied to the root and redirected", e.name)
+		}
 	}
 }
 

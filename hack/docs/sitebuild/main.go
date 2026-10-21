@@ -16,6 +16,7 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -23,6 +24,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -76,7 +78,22 @@ var (
 	siteURLRe = regexp.MustCompile(`(?m)^site_url:\s*(\S+)\s*$`)
 )
 
-// parseVersions reads the release lines of hack/docs/versions.yaml: X.Y each, no repeats, at least one.
+// lineOrder orders two release lines (MAJOR.MINOR) by version, as cmp.Compare does.
+func lineOrder(a, b string) int {
+	am, an, _ := strings.Cut(a, ".")
+	bm, bn, _ := strings.Cut(b, ".")
+	x, _ := strconv.Atoi(am)
+	y, _ := strconv.Atoi(bm)
+	if c := cmp.Compare(x, y); c != 0 {
+		return c
+	}
+	x, _ = strconv.Atoi(an)
+	y, _ = strconv.Atoi(bn)
+	return cmp.Compare(x, y)
+}
+
+// parseVersions reads the release lines of hack/docs/versions.yaml: X.Y each, newest first, no repeats, at least
+// one. The order decides which line is latest, so a line out of order fails rather than moving latest.
 func parseVersions(data []byte) ([]string, error) {
 	var f versionsFile
 	if err := yaml.UnmarshalStrict(data, &f); err != nil {
@@ -91,6 +108,9 @@ func parseVersions(data []byte) ([]string, error) {
 		}
 		if slices.Contains(f.Releases[:i], line) {
 			return nil, fmt.Errorf("release line %q is listed twice", line)
+		}
+		if i > 0 && lineOrder(line, f.Releases[i-1]) > 0 {
+			return nil, fmt.Errorf("release line %q is listed after the older %q; list the lines newest first", line, f.Releases[i-1])
 		}
 	}
 	return f.Releases, nil
@@ -109,6 +129,18 @@ func newestTag(line string, tags []string) string {
 		}
 	}
 	return best
+}
+
+// untrackedTag returns a final tag whose release line is newer than every line in the file, or "" when there is none:
+// the release pull request of a new minor version did not add its line, and latest would stay on the older line.
+func untrackedTag(lines, tags []string) string {
+	for _, tag := range tags {
+		m := finalTag.FindStringSubmatch(tag)
+		if m != nil && lineOrder(m[1]+"."+m[2], lines[0]) > 0 {
+			return tag
+		}
+	}
+	return ""
 }
 
 // resolve pairs each release line with its newest final tag, in the file's order, and drops a line with no tag yet.
@@ -140,23 +172,29 @@ func versionsJSON(releases []release) ([]byte, error) {
 	return append(b, '\n'), nil
 }
 
-// wrapperConfig is the config a version is built with: its own mkdocs.yml, its directory's site_url, and the
-// selector.
-func wrapperConfig(siteURL, version string) string {
+// wrapperConfig is the config a version is built with: its own mkdocs.yml, its directory's site_url, the selector,
+// and the path of the site's root (extra.site_root), which the banner links to. A relative link cannot do: MkDocs
+// gives 404.html an absolute base_url.
+func wrapperConfig(siteURL, version string) (string, error) {
+	u, err := url.Parse(siteURL)
+	if err != nil {
+		return "", fmt.Errorf("site_url: %w", err)
+	}
 	return fmt.Sprintf(`# Written by hack/docs/sitebuild for one version of the versioned site, and removed after the build.
 INHERIT: mkdocs.yml
 site_url: %s%s/
 extra:
+  site_root: %s
   version:
     provider: mike
     default: %s
     alias: true
-`, siteURL, version, latestAlias)
+`, siteURL, version, cmp.Or(u.Path, "/"), latestAlias), nil
 }
 
 // redirects is the site's _redirects. The root and /latest/ lead to the latest release line with a temporary
-// redirect, since a release moves them. Each top-level entry of the unversioned site (the latest line's build, which
-// has the same layout) leads to the same path under /latest/ with a permanent one. Cloudflare Pages applies a redirect
+// redirect, since a release moves them. Each top-level entry of the unversioned site leads to the same path under
+// /latest/ with a permanent one. Cloudflare Pages applies a redirect
 // even where a file exists, so the rules name those entries rather than match everything. Static rules come first, as
 // Pages asks.
 func redirects(latest string, topLevel []entry) (string, error) {
@@ -221,20 +259,13 @@ type entry struct {
 // for a path no version has, and the icon browsers ask the root for.
 var rootFiles = []string{"404.html", "favicon.ico"}
 
-// legacyEntries are the latest build's top-level entries that the unversioned site served and _redirects sends on.
-func legacyEntries(dir string) ([]entry, error) {
-	des, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", dir, err)
-	}
-	var out []entry
-	for _, de := range des {
-		if de.Name() == "_headers" || slices.Contains(rootFiles, de.Name()) {
-			continue
-		}
-		out = append(out, entry{name: de.Name(), dir: de.IsDir()})
-	}
-	return out, nil
+// legacyPaths are the top-level entries the unversioned site served, before the site had versions, other than
+// rootFiles. They are fixed, not read from the latest build: a later release that drops one must keep its old links
+// working, and one that adds an entry must not gain a permanent redirect for a path the unversioned site never had.
+var legacyPaths = []entry{
+	{"assets", true}, {"demo", true}, {"explanation", true}, {"how-to", true}, {"reference", true},
+	{"search", true}, {"stylesheets", true}, {"tutorials", true},
+	{"index.html", false}, {"site.webmanifest", false}, {"sitemap.xml", false}, {"sitemap.xml.gz", false},
 }
 
 // builder runs the builds.
@@ -311,8 +342,12 @@ func (b *builder) build(ctx context.Context, tree, version string) (err error) {
 	if err != nil {
 		return err
 	}
+	config, err := wrapperConfig(b.siteURL, version)
+	if err != nil {
+		return err
+	}
 	wrapper := filepath.Join(tree, wrapperFile)
-	if err := os.WriteFile(wrapper, []byte(wrapperConfig(b.siteURL, version)), 0o644); err != nil { //nolint:gosec // a config beside mkdocs.yml, as readable
+	if err := os.WriteFile(wrapper, []byte(config), 0o644); err != nil { //nolint:gosec // a config beside mkdocs.yml, as readable
 		return fmt.Errorf("write %s: %w", wrapper, err)
 	}
 	defer func() { err = errors.Join(err, os.Remove(wrapper)) }()
@@ -346,11 +381,7 @@ func (b *builder) assemble(releases []release) error {
 	if err != nil {
 		return err
 	}
-	legacy, err := legacyEntries(filepath.Join(b.out, latest))
-	if err != nil {
-		return err
-	}
-	redir, err := redirects(latest, legacy)
+	redir, err := redirects(latest, legacyPaths)
 	if err != nil {
 		return err
 	}
@@ -455,9 +486,15 @@ func buildSite(ctx context.Context, out, venv, versionsPath string) error {
 		return err
 	}
 	b := &builder{root: root, out: absUnder(root, out), venv: absUnder(root, venv), siteURL: u}
+	if err := checkOut(b.root, b.out, b.venv); err != nil {
+		return err
+	}
 	tags, err := b.tags(ctx)
 	if err != nil {
 		return err
+	}
+	if tag := untrackedTag(lines, tags); tag != "" {
+		return fmt.Errorf("%s has no line for the release %s; add its MAJOR.MINOR at the top", versionsPath, tag)
 	}
 	releases, skipped := resolve(lines, tags)
 	for _, line := range skipped {
@@ -483,6 +520,20 @@ func buildSite(ctx context.Context, out, venv, versionsPath string) error {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "sitebuild: wrote %s (latest %s from %s)\n", b.out, releases[0].Line, releases[0].Tag)
+	return nil
+}
+
+// within reports whether path is dir or inside it.
+func within(dir, path string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// checkOut refuses an output directory that sitebuild's clearing would take the repository or the virtualenv with.
+func checkOut(root, out, venv string) error {
+	if within(out, root) || within(out, venv) {
+		return fmt.Errorf("refusing to replace %s: it holds the repository or the docs virtualenv", out)
+	}
 	return nil
 }
 
