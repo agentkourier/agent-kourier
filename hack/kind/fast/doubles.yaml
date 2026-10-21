@@ -1,9 +1,10 @@
 # The fast tier's test doubles, from the one image up-fast.sh builds and loads. Every Service is
 # ClusterIP and stays that way: the fake Slack's /_control/ and the stub agent's
 # /_control/release/ have no authentication, so their ports are never published (no NodePort,
-# Ingress, LoadBalancer or hostPort). verify.sh checks that for both.
+# Ingress, LoadBalancer or hostPort). verify.sh checks that for both, and for hitlagent, which checks no credential.
 # Agent Kourier reaches them at fakeslack.e2e.svc.cluster.local:8080 (slack-go API URL plus "/"),
-# stubagent.e2e.svc.cluster.local:8080/agents/kagent/<agent> and sink.e2e.svc.cluster.local:8080.
+# stubagent.e2e.svc.cluster.local:8080/agents/kagent/<agent>, hitlagent.e2e.svc.cluster.local:8080/ (an A2A agent
+# written from the agent contract alone, test/hitlagent) and sink.e2e.svc.cluster.local:8080.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -80,6 +81,41 @@ metadata:
 spec:
   type: ClusterIP
   selector: {app: stubagent}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hitlagent
+  namespace: e2e
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: hitlagent}
+  template:
+    metadata:
+      labels: {app: hitlagent}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: hitlagent
+          image: agent-kourier-e2e/fast-doubles:dev
+          imagePullPolicy: Never
+          command: ["/hitlagent"]
+          env: [{name: PORT, value: "8080"}, {name: AGENT_URL, value: "http://hitlagent.e2e.svc.cluster.local:8080/"}]
+          ports: [{containerPort: 8080}]
+          readinessProbe: {tcpSocket: {port: 8080}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hitlagent
+  namespace: e2e
+spec:
+  type: ClusterIP
+  selector: {app: hitlagent}
   ports: [{port: 8080, targetPort: 8080}]
 ---
 apiVersion: apps/v1

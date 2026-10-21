@@ -35,3 +35,12 @@ metadata: {name: stub-a2a-approve, namespace: agent-kourier}
 spec:
   dialect: a2a
   url: http://stubagent.e2e.svc.cluster.local:8080/agents/kagent/spike-approve
+---
+# An agent that is no stub of kagent's: test/hitlagent, written from the agent contract alone, which lists kagent's HITL
+# extension on its card and pauses for one approval (S19 and S20 over a2a with it). It checks no credential.
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: hitlagent-a2a, namespace: agent-kourier}
+spec:
+  dialect: a2a
+  url: http://hitlagent.e2e.svc.cluster.local:8080/

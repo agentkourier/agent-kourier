@@ -79,8 +79,8 @@ func TestShippedConfigLoadsAndResolves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(set.Bindings) != 23 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 5 {
-		t.Fatalf("Load = %d Bindings, %d connections and %d backends; want a Binding for the smoke test and one for each of fourteen scenarios, three for S16's cases, five for the a2a dialect against the plain pod, one connection, and the backend of the kagent-v1 Bindings and four of the a2a ones (a2aDir)",
+	if len(set.Bindings) != 25 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 6 {
+		t.Fatalf("Load = %d Bindings, %d connections and %d backends; want a Binding for the smoke test and one for each of fourteen scenarios, three for S16's cases, five for the a2a dialect against the plain pod and two against hitlagent, one connection, and the backend of the kagent-v1 Bindings and five of the a2a ones (a2aDir)",
 			len(set.Bindings), len(set.ChatConnections), len(set.AgentBackends))
 	}
 	snap, err := config.Resolve(t.Context(), set, upFastSecrets)
@@ -181,6 +181,8 @@ func TestScenarioBindings(t *testing.T) {
 		{"S4 over a2a", e2e.ChannelA2AS4, "scenario-gated", false, false, v1alpha1.OutputLive},
 		{"S5 over a2a", e2e.ChannelA2AS5, "test-agent", false, false, v1alpha1.OutputFinal},
 		{"S19 over a2a", e2e.ChannelA2AS19, "spike-approve", false, true, v1alpha1.OutputLive},
+		{"S19 over a2a with hitlagent", e2e.ChannelA2AContractS19, "hitlagent", false, true, v1alpha1.OutputLive},
+		{"S20 over a2a with hitlagent", e2e.ChannelA2AContractS20, "hitlagent", false, true, v1alpha1.OutputLive},
 	} {
 		rb, ok := snap.BindingForChannel("agent-kourier", "slack-fast", tc.channel)
 		if !ok {
@@ -238,6 +240,12 @@ func TestA2ABindingsReachTheStubAgentByItsExactURL(t *testing.T) {
 			t.Errorf("%s over a2a: channel %s has the token reference %+v; want the static token of Secret agent-kourier-agent-token", tc.scenario, tc.channel, ref)
 		}
 	}
+	for _, channel := range []string{e2e.ChannelA2AContractS19, e2e.ChannelA2AContractS20} {
+		rb, ok := snap.BindingForChannel("agent-kourier", "slack-fast", channel)
+		if !ok || rb.Backend.Spec.Dialect != v1alpha1.DialectA2A || rb.Backend.Spec.URL != "http://hitlagent.e2e.svc.cluster.local:8080/" {
+			t.Errorf("channel %s resolves to %+v, %v; want the a2a dialect at hitlagent's URL", channel, rb, ok)
+		}
+	}
 	// The other Bindings stay on kagent's dialect: only the a2a channels change it.
 	rb, ok := snap.BindingForChannel("agent-kourier", "slack-fast", e2e.ChannelS1)
 	if !ok || rb.Backend.Spec.Dialect != v1alpha1.DialectKagentV1 || rb.Backend.Spec.URL != "http://stubagent.e2e.svc.cluster.local:8080" {
@@ -288,7 +296,7 @@ func TestTheRunnerJobRunsTheA2AContextTest(t *testing.T) {
 	if err != nil || pattern == "" {
 		t.Fatalf("the Job's -test.run pattern is %q (%v); want a regular expression", pattern, err)
 	}
-	for _, name := range []string{"TestA2A_APlainPodThatRestartedAnswersAThreadFromAFreshContext", "TestS1_AReplyStreamsIntoANewThreadOverTheA2ADialect", "TestS19_AnApprovalRunsTheToolOverTheA2ADialect"} {
+	for _, name := range []string{"TestA2A_APlainPodThatRestartedAnswersAThreadFromAFreshContext", "TestS1_AReplyStreamsIntoANewThreadOverTheA2ADialect", "TestS19_AnApprovalRunsTheToolOverTheA2ADialect", "TestS19_AContractOnlyAgentsApprovalRunsTheToolOverTheA2ADialect"} {
 		if !re.MatchString(name) {
 			t.Errorf("the Job's pattern %q does not select %s, so it would never run", pattern, name)
 		}
@@ -521,8 +529,8 @@ func TestFullTierConfig(t *testing.T) {
 		}
 	}
 	set, err := config.Load(t.Context(), dir)
-	if err != nil || len(set.AgentBackends) != 1 {
-		t.Fatalf("Load = %+v, %v; want one AgentBackend", set, err)
+	if err != nil || len(set.AgentBackends) != 2 {
+		t.Fatalf("Load = %+v, %v; want two AgentBackends: the front door for kagent-v1, and an a2a one at the approval agent", set, err)
 	}
 	snap, err := config.Resolve(t.Context(), set, upFastSecrets)
 	if err != nil {
@@ -539,6 +547,20 @@ func TestFullTierConfig(t *testing.T) {
 		}
 		if rb.Binding.Spec.Agent.Namespace != "kagent" {
 			t.Errorf("channel %s names agent namespace %q; the full tier's agents are in kagent", channel, rb.Binding.Spec.Agent.Namespace)
+		}
+	}
+	// S19 and S20 again over the a2a dialect: the same front door, at the approval agent's exact URL, with approvals on.
+	for _, channel := range []string{e2e.ChannelA2AS19, e2e.ChannelA2AS20} {
+		rb, ok := snap.BindingForChannel("agent-kourier", "slack-fast", channel)
+		if !ok {
+			t.Errorf("channel %s resolves to no Binding in the full tier", channel)
+			continue
+		}
+		if b := rb.Backend.Spec; b.Dialect != v1alpha1.DialectA2A || b.URL != "http://kagent-frontdoor.kagent.svc.cluster.local:4180/agents/kagent/scenario-approval" {
+			t.Errorf("channel %s goes to %s (%s); want the a2a dialect at the approval agent's URL behind the front door", channel, b.URL, b.Dialect)
+		}
+		if rb.Binding.Spec.Agent.Name != "scenario-approval" || !rb.Binding.Spec.Interactions.ToolApprovals {
+			t.Errorf("channel %s is bound to %s with toolApprovals %t; want scenario-approval with approvals on", channel, rb.Binding.Spec.Agent.Name, rb.Binding.Spec.Interactions.ToolApprovals)
 		}
 	}
 }

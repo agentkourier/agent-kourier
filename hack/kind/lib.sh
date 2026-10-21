@@ -122,7 +122,7 @@ build_doubles_image() {
     *) die "unsupported Docker architecture" ;;
   esac
   BUILD=$(mktemp -d)
-  for double in fakeslack stubagent sink signaler; do
+  for double in fakeslack stubagent sink signaler hitlagent; do
     GOOS=linux GOARCH=${goarch} CGO_ENABLED=0 go build -C "${ROOT}" -o "${BUILD}/${double}" "./test/${double}/cmd/${double}"
   done
   docker build -q -f "${HERE}/fast/Dockerfile" --build-arg "RUNTIME_IMAGE=${RUNTIME_IMAGE}" -t "${DOUBLES_IMAGE}" "${BUILD}" >/dev/null
@@ -135,8 +135,8 @@ build_doubles_image() {
 apply_doubles() {
   "${K[@]}" apply -f "${HERE}/fast/doubles.yaml" >/dev/null
   # Restart so a rebuilt image (same tag) is picked up.
-  "${K[@]}" -n e2e rollout restart deploy/fakeslack deploy/stubagent deploy/sink >/dev/null
-  "${K[@]}" -n e2e rollout status deploy/fakeslack deploy/stubagent deploy/sink --timeout=180s
+  "${K[@]}" -n e2e rollout restart deploy/fakeslack deploy/stubagent deploy/hitlagent deploy/sink >/dev/null
+  "${K[@]}" -n e2e rollout status deploy/fakeslack deploy/stubagent deploy/hitlagent deploy/sink --timeout=180s
   "${K[@]}" apply -f "${HERE}/fast/alertmanager.yaml" >/dev/null
   "${K[@]}" -n monitoring wait --for=condition=Available alertmanager/agent-kourier --timeout=180s
 }
@@ -181,8 +181,8 @@ assert_app_unpublished() {
 
 assert_never_published() {
   local app ingresses ports hostports apiserver='^6443/tcp -> 127\.0\.0\.1:[0-9]+$'
-  echo "== never published: the fake Slack's /_control/ and the stub agent's /_control/release/ have no authentication"
-  for app in fakeslack stubagent; do
+  echo "== never published: the fake Slack's /_control/ and the stub agent's /_control/release/ have no authentication, nor has hitlagent"
+  for app in fakeslack stubagent hitlagent; do
     assert_app_unpublished e2e "${app}"
   done
   ingresses=$("${K[@]}" -n e2e get ingress -o name)

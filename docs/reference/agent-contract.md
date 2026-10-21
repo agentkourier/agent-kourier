@@ -210,6 +210,28 @@ Its payload, under the URI in `metadata`, is:
 The text part is not prefixed with the actor, as a turn's is. Agent Kourier checks every answer before sending it: each
 question answered, each answer one of its choices when there are any, each tool decided once.
 
+Notes for an agent author:
+
+- States and roles are written here in their short form. On the A2A 1.0 wire they are `TASK_STATE_INPUT_REQUIRED`,
+  `ROLE_AGENT` and so on, and on 0.3 `input-required` and `agent`; the SDKs spell them for you.
+- Send the payload whenever you pause, whether or not the request asked for the extension. Agent Kourier asks when the
+  card lists it, and reads a pause that names it either way.
+- Text parts beside the payload are allowed and are not shown: the prompt is built from the payload. They are for a
+  client without the extension.
+- A tool's `id` is what its decision names. Make each unique within the request, and give every new pause on a task new
+  IDs (for questions, a new `id`): Agent Kourier tells one pause from another by the task, the request's `id` and the
+  tool IDs. `call_id` is optional; it is kept with the request and not shown.
+- `hint` is optional. It is the prompt's heading, so keep it to one line; it may be shown cut.
+- A tool's `name` and `args` are shown as sent, apart from redacted secrets. Arguments may be any JSON value, nested.
+  A pause is unusable when the prompt could not show a tool exactly: a name, key or string with a control character
+  other than tab and line ends, or too long to show whole; a name or key with characters or spacing that cleaning would
+  change, or a name the audit log cannot write whole (300 ASCII characters at most); an integer of magnitude 2^53 or more.
+- Read the decision from the payload, matching approvals by `id`. The text part of the answer is a summary.
+  Agent Kourier always sends a `rejection_reason` with a denial.
+- Agent Kourier never sends an incomplete or unknown answer. If you refuse one anyway with `-32603`, Agent Kourier cancels the task and tells the thread.
+- Gated tool calls need not appear as tool parts. If they do, they are shown as steps (see
+  [Tool calls and results](#tool-calls-and-results)).
+
 ## Errors
 
 | The agent answers | What Agent Kourier does |
