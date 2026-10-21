@@ -74,6 +74,9 @@ type Interaction struct {
 	Questions []Question `json:"questions"`  // AskUser
 	Tools     []Tool     `json:"tools"`      // ToolApproval
 	Nested    *Nested    `json:"nested"`     // nil unless a sub-agent raised it
+	// Extension is the URI of the A2A extension the pause was read through, empty for a text question. A dialect that
+	// reads pauses more than one way (the a2a dialect) answers by it. Interactions stored before it existed have none.
+	Extension string `json:"extension,omitempty"`
 }
 
 // Decision is a person's verdict on one tool call.

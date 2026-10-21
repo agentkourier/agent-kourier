@@ -1,0 +1,19 @@
+# S20 over the a2a dialect with an agent written from the agent contract alone (test/hitlagent, see agentbackend-a2a.yaml):
+# a person denies its one tool call. The channel and the agent are pinned by test/kindmanifests and
+# test/e2e/scenarios.go.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: fast-a2a-contract-s20, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {namespace: agent-kourier, name: hitlagent-a2a}
+    namespace: kagent
+    name: hitlagent
+  identity:
+    userId: agent-kourier-fast
+    tokenSecretRef: {name: agent-kourier-agent-token}
+  chat:
+    connectionRef: {namespace: agent-kourier, name: slack-fast}
+    channel: CA2AC20
+    output: live
+  interactions: {toolApprovals: true}

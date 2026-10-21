@@ -325,7 +325,7 @@ func TestCardMeetsTheAgentContract(t *testing.T) {
 	}
 	for _, ext := range card.Capabilities.Extensions {
 		if ext.Required {
-			t.Errorf("the card requires extension %s; the a2a dialect speaks none", ext.URI)
+			t.Errorf("the card requires extension %s, which the docs agent does not need", ext.URI)
 		}
 	}
 }

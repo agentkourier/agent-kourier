@@ -303,7 +303,7 @@ func TestWereAdmittedPassesAStoreErrorOn(t *testing.T) {
 
 func TestIsTextQuestion(t *testing.T) {
 	ask := func(change func(*dialect.Interaction)) *dialect.Interaction {
-		in := &dialect.Interaction{Kind: dialect.AskUser, Questions: []dialect.Question{{Text: "Which service?"}}}
+		in := &dialect.Interaction{TextReplies: true, Kind: dialect.AskUser, Questions: []dialect.Question{{Text: "Which service?"}}}
 		change(in)
 		return in
 	}
@@ -315,6 +315,7 @@ func TestIsTextQuestion(t *testing.T) {
 		{"one question with no choices", ask(func(*dialect.Interaction) {}), true},
 		{"choices that are an empty list (kagent sends one for free text)", ask(func(in *dialect.Interaction) { in.Questions[0].Choices = []string{} }), true},
 		{"no interaction", nil, false},
+		{"one question with no choices, not marked for text replies", ask(func(in *dialect.Interaction) { in.TextReplies = false }), false},
 		{"one question with choices", ask(func(in *dialect.Interaction) { in.Questions[0].Choices = []string{"a", "b"} }), false},
 		{"two questions", ask(func(in *dialect.Interaction) { in.Questions = append(in.Questions, dialect.Question{Text: "Why?"}) }), false},
 		{"no question", ask(func(in *dialect.Interaction) { in.Questions = nil }), false},

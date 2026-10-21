@@ -11,7 +11,9 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/agentkourier/agent-kourier/internal/audit"
+	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/generic"
+	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -301,6 +303,45 @@ func TestTextReplyToAQuestionThatTakesNoTextStaysQueued(t *testing.T) {
 	}
 	queued, err := r.st.NextReply(t.Context(), key)
 	if err != nil || queued.InteractionID != "" || len(r.sess.answers()) != 0 || len(r.aud.got) != 0 {
+		t.Fatalf("the reply was claimed or decided: %+v, %v", queued, err)
+	}
+}
+
+// On the a2a dialect, a free-text question in kagent's HITL extension has the shape of a text question, but its prompt
+// invites no typed reply, so the dialect does not mark it as taking one and a typed reply is never decided against it.
+func TestTextReplyToAStructuredFreeTextQuestionOnA2AStaysQueued(t *testing.T) {
+	r := newPressRig(t)
+	d := generic.New(time.Second)
+	at := d0
+	msg := a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("Which service?"))
+	msg.Extensions = []string{kagentv1.HITLExtension}
+	msg.Metadata = map[string]any{kagentv1.HITLExtension: map[string]any{"type": "ask_user_request", "id": "req-1", "questions": []map[string]any{{"question": "Which service?", "choices": []string{}}}}}
+	task := a2a.Task{ID: "task-1", ContextID: "ctx-1", Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired, Timestamp: &at, Message: msg}}
+	in, err := d.ParseInteraction(task)
+	if err != nil || in == nil || in.TextReplies || in.Kind != dialect.AskUser {
+		t.Fatalf("pause = %+v, %v; want a structured question that takes no text replies", in, err)
+	}
+	id := interact.InteractionID(*in)
+	req, _ := json.Marshal(in)
+	if _, err := r.st.CreateInteraction(t.Context(), store.Interaction{ID: id, Key: key, TaskID: "task-1", Kind: store.InteractionAskUser, Request: req, CreatedAt: d0, Deadline: deadline}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.st.SetInteractionMessageRef(t.Context(), id, "100.1"); err != nil {
+		t.Fatal(err)
+	}
+	r.task(t, "task-1")
+	r.pl, err = interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{interact.Binding{Dialect: d, AskUser: true, Timeout: time.Minute}}, Authorizer: r.az, Ephemerals: r.eph, Decider: r.d, Auditor: r.aud, Now: func() time.Time { return r.now }}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply := store.Reply{ID: "reply-1", Key: key, UserID: "UALICE1", MessageRef: "101.1", Text: "checkout", EnqueuedAt: r.now}
+	if _, err := r.st.EnqueueReply(t.Context(), reply); err != nil {
+		t.Fatal(err)
+	}
+	if done, err := r.textReply(t, key, reply, task); done != session.TextReplyNotAnswer || err != nil {
+		t.Fatalf("TextReply = %v, %v; want not-an-answer for a question that takes no text", done, err)
+	}
+	if queued, err := r.st.NextReply(t.Context(), key); err != nil || queued.InteractionID != "" || len(r.sess.answers()) != 0 || len(r.aud.got) != 0 {
 		t.Fatalf("the reply was claimed or decided: %+v, %v", queued, err)
 	}
 }

@@ -51,8 +51,8 @@ const (
 
 // The channels of the scenarios run again through the generic a2a dialect against the stub agent in its plain pod (the fast tier
 // only, hack/kind/fast/agent-kourier/a2a/binding-a2a-*.yaml): the same agents as the kagent-v1 channels above, each reached at its
-// exact agent URL as an agent in a plain Deployment would be. Only the text scenarios run, since the stub's questions are
-// kagent's structured ones. test/kindmanifests pins the dialect and the URL of each.
+// exact agent URL as an agent in a plain Deployment would be. The text scenarios run, and S19's approval, which the dialect reads
+// because the stub's card lists kagent's HITL extension. test/kindmanifests pins the dialect and the URL of each.
 const (
 	// ChannelA2AS1 is S1's over a2a: scenario-gated, live output.
 	ChannelA2AS1 = "CA2AS1"
@@ -60,6 +60,15 @@ const (
 	ChannelA2AS4 = "CA2AS4"
 	// ChannelA2AS5 is S5's over a2a: test-agent, final output, for the crash-after-post fault.
 	ChannelA2AS5 = "CA2AS5"
+	// ChannelA2AS19 is S19's over a2a, with tool approvals enabled, through the HITL extension the card lists: the fast
+	// tier's stub spike-approve, and the full tier's real kagent scenario-approval (each tier deploys its own Binding).
+	ChannelA2AS19 = "CA2AS19"
+	// ChannelA2AS20 is S20's over a2a, the full tier's only: real kagent's scenario-approval, denied.
+	ChannelA2AS20 = "CA2AS20"
+	// ChannelA2AContractS19 and ChannelA2AContractS20 are S19's and S20's over a2a with an agent that is no stub of
+	// kagent's: test/hitlagent, written from the agent contract alone (the fast tier's only).
+	ChannelA2AContractS19 = "CA2AC19"
+	ChannelA2AContractS20 = "CA2AC20"
 	// ChannelA2AMemory is the channel of the scenario that restarts the stub agent between two turns: scenario-memory, which
 	// says what its context has had, so that a context the agent lost shows.
 	ChannelA2AMemory = "CA2AM"

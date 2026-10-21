@@ -67,11 +67,12 @@ func unusable(reason string) error {
 	return fmt.Errorf("%w: %s", dialect.ErrUnusablePause, reason)
 }
 
-// ParseInteraction returns the interaction a task paused on. A task that is not
+// ParseInteraction returns the interaction a task paused on, marked with HITLExtension, which
+// the a2a dialect answers by. A task that is not
 // input-required has none, and gives nil, nil. An input-required task whose HITL request
 // cannot be answered gives an error wrapping dialect.ErrUnusablePause, because kagent-v1
-// never falls back to free text: no payload (the request lacked the extension header,
-// which Connect sends), an unknown type, no id, no questions or tools, a tool without an
+// never falls back to free text: a task with no ID, no payload (the request lacked the
+// extension header, which Connect sends), an unknown type, no id, no questions or tools, a tool without an
 // id, more than 20 questions, 100 choices or 20 tools, or a nested request that fails the
 // checks below.
 //
@@ -88,6 +89,9 @@ func (*Dialect) ParseInteraction(task a2a.Task) (*dialect.Interaction, error) {
 	if task.Status.State != a2a.TaskStateInputRequired {
 		return nil, nil // no structured pause is the documented "nothing to parse", not a failure
 	}
+	if task.ID == "" {
+		return nil, unusable("paused task has no ID") // the answer is addressed to it
+	}
 	msg := task.Status.Message
 	if msg == nil || msg.Metadata[HITLExtension] == nil {
 		return nil, unusable("no HITL payload (was the extension header sent?)")
@@ -97,7 +101,7 @@ func (*Dialect) ParseInteraction(task a2a.Task) (*dialect.Interaction, error) {
 	if err != nil || json.Unmarshal(raw, &req) != nil {
 		return nil, unusable("malformed HITL payload")
 	}
-	in := &dialect.Interaction{TaskID: task.ID, ContextID: task.ContextID, Hint: req.Hint}
+	in := &dialect.Interaction{TaskID: task.ID, ContextID: task.ContextID, Hint: req.Hint, Extension: HITLExtension}
 	if n := req.Nested; n != nil {
 		if n.TaskID == "" || n.SubagentName == "" {
 			return nil, unusable("nested request has no sub-agent name or task")

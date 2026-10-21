@@ -19,12 +19,12 @@ func TestStoredFormat(t *testing.T) {
 			`{"kind":"ask_user","task_id":"task-1","context_id":"ctx-1","hint":"pick","request_id":"req-1",` +
 				`"questions":[{"text":"Which?","choices":["a","b"],"multiple":true}],` +
 				`"tools":[{"id":"t1","call_id":"c1","name":"add","args":{"a":3}}],` +
-				`"nested":{"subagent":"specialist","task_id":"task-2","context_id":"ctx-2"}}`,
+				`"nested":{"subagent":"specialist","task_id":"task-2","context_id":"ctx-2"},"extension":"https://example.test/ext"}`,
 			func() any { return new(Interaction) },
 			&Interaction{Kind: AskUser, TaskID: "task-1", ContextID: "ctx-1", Hint: "pick", RequestID: "req-1",
 				Questions: []Question{{Text: "Which?", Choices: []string{"a", "b"}, Multiple: true}},
 				Tools:     []Tool{{ID: "t1", CallID: "c1", Name: "add", Args: map[string]any{"a": 3.0}}},
-				Nested:    &Nested{Subagent: "specialist", TaskID: "task-2", ContextID: "ctx-2"}},
+				Nested:    &Nested{Subagent: "specialist", TaskID: "task-2", ContextID: "ctx-2"}, Extension: "https://example.test/ext"},
 		},
 		"an answer": {
 			`{"request_id":"req-1","answers":[["a"]],"decisions":[{"tool_id":"t1","approved":false,"reason":"no"}]}`,

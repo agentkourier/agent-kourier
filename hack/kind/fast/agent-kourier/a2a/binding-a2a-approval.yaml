@@ -1,0 +1,20 @@
+# S19 over the a2a dialect: a person approves the stub approval agent's tool call, reached as a plain pod (see
+# agentbackend-a2a.yaml). The stub's card lists kagent's HITL extension, so the dialect asks for it and gets the structured
+# approval, as kagent-v1 does on binding-approval-approve.yaml; on a channel of its own, with the same Secret as fast-chat's.
+# The channel and the agent are pinned by test/kindmanifests and test/e2e/scenarios.go.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: fast-a2a-s19, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {namespace: agent-kourier, name: stub-a2a-approve}
+    namespace: kagent
+    name: spike-approve
+  identity:
+    userId: agent-kourier-fast
+    tokenSecretRef: {name: agent-kourier-agent-token}
+  chat:
+    connectionRef: {namespace: agent-kourier, name: slack-fast}
+    channel: CA2AS19
+    output: live
+  interactions: {toolApprovals: true}

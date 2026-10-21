@@ -221,13 +221,9 @@ A 0.3 agent has no task list, so Agent Kourier cannot ask whether the agent alre
 before it sends the turn again. After a restart that interrupted a turn, or after a send
 whose outcome was unknown because the stream dropped before the first event, the turn may run
 a second time and post a second answer. For a read-only agent that wastes a model call and
-nothing else. An agent that changes things can do the change twice. On the `a2a` dialect Agent
-Kourier shows the tool calls it can read, but it cannot approve or deny them, so the agent's own
-tool list and the role behind its tools are the only fence on a write. Slack tool approvals are available only to a `kagent-v1` Binding with
-`interactions.toolApprovals: true`. On the `a2a` dialect, a kagent approval pause that arrives as text alone (kagent
-1.0.0-alpha5 sends one that asks for a `FunctionResponse`; 0.9.x has not been tested) is handled as a question: on a
-Binding with `interactions.askUser: false` the task is cancelled, and otherwise kagent's text is posted and the reply
-is sent back as plain text, never as an approval.
+nothing else. An agent that changes things can do the change twice. Slack tool approvals need `kagent-v1`, or `a2a` with
+kagent's human-in-the-loop extension; for any other agent, its own tool list and the role behind its tools are the only
+fence on a write. See [Connect a generic A2A agent](connect-a2a-agent.md#what-works-on-this-dialect).
 
 ## `Multi-Attach error for volume` while the pod rolls
 

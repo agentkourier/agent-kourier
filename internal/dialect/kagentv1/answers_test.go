@@ -10,6 +10,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/dialect/dialecttest"
 )
 
 // plain decodes v through JSON, so a typed payload and a recorded one compare equal.
@@ -57,7 +58,7 @@ func TestBuildResponseMatchesAcceptedRequests(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := &Dialect{}
-			in := mustParse(t, fixtureTask(t, tc.pause))
+			in := mustParse(t, dialecttest.KagentTask(t, tc.pause))
 			got, err := d.BuildResponse(*in, tc.answer(in))
 			if err != nil {
 				t.Fatal(err)
@@ -88,8 +89,8 @@ func TestBuildResponseMatchesAcceptedRequests(t *testing.T) {
 
 func TestBuildResponseRefusesIncompleteAnswers(t *testing.T) {
 	d := &Dialect{}
-	two := mustParse(t, fixtureTask(t, "askuser/21-pause-good-two-answers.response.sse")) // multi-select, then free text
-	one := mustParse(t, fixtureTask(t, "askuser/02-ask.response.sse"))                    // single-select
+	two := mustParse(t, dialecttest.KagentTask(t, "askuser/21-pause-good-two-answers.response.sse")) // multi-select, then free text
+	one := mustParse(t, dialecttest.KagentTask(t, "askuser/02-ask.response.sse"))                    // single-select
 	tools := mustParse(t, pausedOn(map[string]any{"type": "tool_approval_request",
 		"tools": []any{map[string]any{"id": "a", "name": "x"}, map[string]any{"id": "b", "name": "y"}}}))
 	ans := func(in *dialect.Interaction, a ...[]string) dialect.Answer {
@@ -192,7 +193,7 @@ func TestBuildResponseNestedIDs(t *testing.T) {
 // kagent, and an extra part is unmeasured on a message whose only accepted shape is one part.
 func TestAttributeLeavesAnswersWithoutAPrefix(t *testing.T) {
 	d := &Dialect{}
-	in := mustParse(t, fixtureTask(t, "askuser/02-ask.response.sse"))
+	in := mustParse(t, dialecttest.KagentTask(t, "askuser/02-ask.response.sse"))
 	msg, err := d.BuildResponse(*in, dialect.Answer{RequestID: in.RequestID, Answers: [][]string{{"MySQL"}}})
 	if err != nil {
 		t.Fatal(err)

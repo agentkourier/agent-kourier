@@ -11,7 +11,7 @@ are A2A 1.0's, with the 0.3 name in brackets.
 | Serve A2A 1.0 or 0.3 over JSON-RPC, on HTTP or HTTPS | Interfaces that are not JSON-RPC are dropped from the card. A card with none left fails the turn with `agent card lists no JSON-RPC interface` |
 | Serve its card at the endpoint, with any trailing slash trimmed, plus `/.well-known/agent-card.json`. On `a2a` the endpoint is the AgentBackend's `url` as written; on `kagent-v1` it is `url` plus `/agents/<namespace>/<name>` | The card fetch fails and the turn is retried, then fails after 15 minutes |
 | Set `capabilities.streaming: true` on the card | The agent is refused, as above. The non-streaming send is never used |
-| Mark no extension `required` that the dialect does not speak. `kagent-v1` speaks kagent's human-in-the-loop extension; `a2a` speaks none | The connect fails with `agent requires an unsupported extension` |
+| Mark no extension `required` that the dialect does not speak. Both dialects speak kagent's human-in-the-loop extension and no other | The connect fails with `agent requires an unsupported extension` |
 | Answer at the endpoint itself, without a redirect | A 3xx is a failed call; no redirect is followed |
 | Send response headers within 30 seconds of every call, streams included | The call fails as a lost connection |
 
@@ -54,8 +54,9 @@ the identity that calls the agent is always the Binding's.
 
 Every request carries one identity header, `Authorization: Bearer` from the Binding's `identity.tokenSecretRef` or
 `X-User-Id` from `identity.userId`, plus the AgentBackend's static `headers`. It may also carry the W3C trace context headers
-`traceparent` and `tracestate`. On `kagent-v1`, the `A2A-Extensions` header asks for kagent's human-in-the-loop
-extension when the card lists it.
+`traceparent` and `tracestate`. On both dialects, the `A2A-Extensions` header asks for kagent's human-in-the-loop
+extension when the card lists it, and on every message that names the extension in its `extensions` (an answer to one of
+its pauses) whatever the card lists.
 
 ## Replies
 
@@ -155,7 +156,8 @@ so a follow may deliver a result again; the card keeps the first.
 
 Each tool call is a step card in a chat thread, finished when its result arrives, and a failed one if the result has an
 `error` entry that holds something or an `isError` entry that is true. Structured tool approvals are separate: they need
-kagent 1.0's pause payload, so only `kagent-v1` reads them.
+the pause payload of kagent's human-in-the-loop extension, which `kagent-v1` always reads and `a2a` reads when the agent
+card lists the extension.
 
 ## Task states
 
@@ -169,10 +171,66 @@ kagent 1.0's pause payload, so only `kagent-v1` reads them.
 | `auth-required` | Not supported, on either dialect. Agent Kourier tells the thread that the agent paused in a way it cannot use, cancels the task, and then sends the replies queued behind it |
 | Any other terminal state | Treated as `failed` |
 
-A question on `a2a` is a status message made only of non-empty text parts, with a `messageId` or a status
-`timestamp` that differs from the last question's. Anything else in `input-required` cannot be shown, so the task is
-cancelled and the thread is told. The answer is one text part sent to the paused `taskId` and `contextId`. On
-`kagent-v1`, the question is kagent's human-in-the-loop payload in the status message's metadata.
+On `kagent-v1`, the question is kagent's human-in-the-loop payload in the status message's metadata. On `a2a`, a status
+message that names that extension in its `extensions` and carries the payload is read the same way. Any other question
+on `a2a` is a status message made only of non-empty text parts, with a `messageId` or a status `timestamp` that differs
+from the last question's. Anything else in `input-required` cannot be shown, so the task is cancelled and the thread is
+told. The answer to a text question is one text part sent to the paused `taskId` and `contextId`.
+
+## Structured questions and tool approvals
+
+Questions with choices, several questions at once, and tool approvals use kagent's human-in-the-loop extension,
+`https://kagent.dev/extensions/hitl/v1`. kagent 1.0 speaks it. Any other agent gets them on the `a2a` dialect by
+speaking it the same way. Agent Kourier reads no framework's own approval format, so an agent built on another framework
+speaks this extension through an adapter of its own; see
+[Why approvals use one extension](../explanation/why-a2a.md#why-approvals-use-one-extension).
+
+| The agent must | Otherwise |
+|---|---|
+| List `https://kagent.dev/extensions/hitl/v1` in the card's `capabilities.extensions` (`required` may be true) | Requests carry no `A2A-Extensions` header for it, so an agent that sends its structured pause only when asked (as kagent does) sends text alone |
+| Pause in `input-required` on a task with an ID, with a status message whose `extensions` names the URI and whose `metadata` holds the request under the URI as key | The pause is read as a text question if its parts are text alone, and as unusable otherwise: the task is cancelled and the thread told |
+| For a tool approval, send `{"type": "tool_approval_request", "hint": "...", "tools": [{"id": "...", "call_id": "...", "name": "...", "args": {...}}]}`: 1 to 20 tools, each with an `id` | The pause is unusable. A name or argument that Agent Kourier's cleaning would change, or that does not fit in one message, also makes it unusable, because the approver would not see what runs |
+| For questions, send `{"type": "ask_user_request", "id": "...", "hint": "...", "questions": [{"question": "...", "choices": [...], "multiple": false}]}`: an `id`, and 1 to 20 questions of at most 100 choices each. No choices (`[]` or none) asks for free text | The pause is unusable |
+| For a pause a sub-agent raised, add `"nested": {"subagent_name": "...", "task_id": "...", "context_id": "...", "tools": [...]}`, with the sub-agent's name and task. A nested approval needs exactly one outer tool, with an `id`, and decides the nested tools. A nested question needs exactly one nested tool named `ask_user`, with an `id`, which the answer echoes | The pause is unusable |
+| Take the answer on the paused task, and resume it | A JSON-RPC `-32603` to the answer cancels the task and tells the thread |
+
+The answer is a user message to the paused `taskId` and `contextId`, with `extensions` naming the URI, the
+`A2A-Extensions` header naming it whatever the card lists, the actor under `agentkourier.dev/actor`, and one text part.
+Its payload, under the URI in `metadata`, is:
+
+- For a tool approval: `{"type": "tool_approval_response", "approvals": [{"id": "...", "approved": true}]}`, one entry
+  per tool, by its `id`, in the request's order. A denied tool has `"approved": false` and a `rejection_reason`: "denied
+  by an approver in chat" for a person's denial, "denied by agent-kourier: no one decided in time" at the timeout, and
+  "denied by agent-kourier: this Binding does not allow tool approvals" when the Binding sets no
+  `interactions.toolApprovals`. The text part is `approved`, or `rejected` when any tool is denied.
+- For questions: `{"type": "ask_user_response", "id": "...", "answers": [{"answer": ["..."]}]}`, echoing the request's
+  `id` (for a nested question, the nested tool's), with one entry per question in order, each holding the chosen choices
+  or the free text. The text part is each question's answers joined with `, `, and the questions joined with `; `.
+
+The text part is not prefixed with the actor, as a turn's is. Agent Kourier checks every answer before sending it: each
+question answered, each answer one of its choices when there are any, each tool decided once.
+
+Notes for an agent author:
+
+- States and roles are written here in their short form. On the A2A 1.0 wire they are `TASK_STATE_INPUT_REQUIRED`,
+  `ROLE_AGENT` and so on, and on 0.3 `input-required` and `agent`; the SDKs spell them for you.
+- Send the payload whenever you pause, whether or not the request asked for the extension. Agent Kourier asks when the
+  card lists it, and reads a pause that names it either way.
+- Text parts beside the payload are allowed and are not shown: the prompt is built from the payload. They are for a
+  client without the extension.
+- A tool's `id` is what its decision names. Make each unique within the request, and give every new pause on a task new
+  IDs (for questions, a new `id`): Agent Kourier tells one pause from another by the task, the request's `id` and the
+  tool IDs. `call_id` is optional; it is kept with the request and not shown.
+- `hint` is optional. It is the prompt's heading, so keep it to one line; it may be shown cut.
+- A tool's `name` and `args` are shown as sent, apart from redacted secrets. Arguments may be any JSON value, nested.
+  A pause is unusable when the prompt could not show a tool exactly: a name, key or string with a control character
+  other than tab and line ends, or too long to show whole; a name or key with characters or spacing that cleaning would
+  change, or a name the audit log cannot write whole (300 ASCII characters at most); an integer of magnitude 2^53 or more.
+- Read the decision from the payload, matching approvals by `id`. The text part of the answer is a summary.
+  Agent Kourier always sends a `rejection_reason` with a denial.
+- Agent Kourier never sends an incomplete or unknown answer. If you refuse one anyway with `-32603`, Agent Kourier cancels the task and tells the thread.
+- Gated tool calls need not appear as tool parts. If they do, they are shown as steps (see
+  [Tool calls and results](#tool-calls-and-results)).
 
 ## Errors
 

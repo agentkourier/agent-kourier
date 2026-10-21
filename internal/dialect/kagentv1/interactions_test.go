@@ -1,11 +1,8 @@
 package kagentv1
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -13,32 +10,8 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/dialect/dialecttest"
 )
-
-// fixtureTask returns the task in the last event of a recorded SSE stream under
-// test/fixtures/kagent.
-func fixtureTask(t *testing.T, name string) a2a.Task {
-	t.Helper()
-	b, err := os.ReadFile(filepath.Join("..", "..", "..", "test", "fixtures", "kagent", name))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var last string
-	for line := range strings.SplitSeq(string(b), "\n") {
-		if data, ok := strings.CutPrefix(line, "data: "); ok {
-			last = data
-		}
-	}
-	var event struct {
-		Result struct {
-			Task a2a.Task `json:"task"`
-		} `json:"result"`
-	}
-	if err := json.Unmarshal([]byte(last), &event); err != nil {
-		t.Fatal(err)
-	}
-	return event.Result.Task
-}
 
 // pausedOn returns a task paused with the given HITL payload, as a payload not captured
 // from kagent (a source-only shape, or a malformed one).
@@ -86,9 +59,9 @@ func TestParseInteraction(t *testing.T) {
 	}
 	for _, tc := range fixtures {
 		t.Run(tc.name, func(t *testing.T) {
-			task := fixtureTask(t, tc.file)
+			task := dialecttest.KagentTask(t, tc.file)
 			if tc.want != nil {
-				tc.want.TaskID, tc.want.ContextID = task.ID, task.ContextID
+				tc.want.TaskID, tc.want.ContextID, tc.want.Extension = task.ID, task.ContextID, HITLExtension
 			}
 			checkParse(t, task, tc.want, tc.reason)
 		})
@@ -138,7 +111,7 @@ func TestParseInteraction(t *testing.T) {
 	for _, tc := range sources {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.want != nil {
-				tc.want.TaskID, tc.want.ContextID = "task-1", "ctx-1"
+				tc.want.TaskID, tc.want.ContextID, tc.want.Extension = "task-1", "ctx-1", HITLExtension
 			}
 			checkParse(t, pausedOn(tc.payload), tc.want, tc.reason)
 		})
@@ -150,6 +123,9 @@ func TestParseInteraction(t *testing.T) {
 	noMessage := pausedOn(askReq)
 	noMessage.Status.Message = nil
 	checkParse(t, noMessage, nil, "no HITL payload")
+	noID := pausedOn(askReq) // an answer is addressed to the task, so a pause on one with no ID could never be answered
+	noID.ID = ""
+	checkParse(t, noID, nil, "paused task has no ID")
 	notAnObject := pausedOn(askReq)
 	notAnObject.Status.Message.Metadata[HITLExtension] = "please answer"
 	checkParse(t, notAnObject, nil, "malformed")

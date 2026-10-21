@@ -19,7 +19,7 @@ import (
 // reply in the queue was admitted as (the runner), and WereAdmitted which messages were admitted at all (thread
 // context). The one question left open at the intake is whether a reply queued as a turn is, now, the answer to the
 // question the paused task waits on: JudgeAnswer decides it for the runner, through the text-reply handler, and
-// IsTextQuestion is the shape of a question that a typed reply can answer.
+// IsTextQuestion says which questions a typed reply can answer.
 
 // AdmissionKind is what a reply was classified as. The set is closed.
 type AdmissionKind string
@@ -92,12 +92,11 @@ func WereAdmitted(ctx context.Context, record ReplyRecord, messageIDs []string) 
 	return record.HasReplies(ctx, messageIDs)
 }
 
-// IsTextQuestion says whether the interaction in is a question that a typed reply can answer: the agent asks the
-// user for one answer, to one question that offers no choices. It is the shape of a question that the dialect marks
-// as taking text replies (dialect.Interaction.TextReplies) and that the store keeps marked; a reply is never decided
-// against any other. A nil interaction is no question.
+// IsTextQuestion says whether the interaction in is a question that a typed reply can answer: the dialect marks it as
+// taking text replies (dialect.Interaction.TextReplies), as the store keeps it marked, and it asks for one answer to one
+// question with no choices. A nil interaction is no question.
 func IsTextQuestion(in *dialect.Interaction) bool {
-	return in != nil && in.Kind == dialect.AskUser && len(in.Questions) == 1 && len(in.Questions[0].Choices) == 0
+	return in != nil && in.TextReplies && in.Kind == dialect.AskUser && len(in.Questions) == 1 && len(in.Questions[0].Choices) == 0
 }
 
 // AskedQuestion is the facts of the question that the paused task waits on, which AnswerVerdict depends on. The
@@ -189,8 +188,7 @@ type ReplyFacts struct {
 // TakesTextReplies says whether a Binding whose backend speaks dialect has questions that a typed reply in the
 // thread can answer (spec 8.4: the a2a dialect). It is the one definition. What it leaves to data is per question:
 // the dialect marks each question it makes (dialect.Interaction.TextReplies), the store keeps the mark (the
-// text_replies column) for PendingTextQuestion, and IsTextQuestion is the shape that interact checks before it decides
-// an answer.
+// text_replies column) for PendingTextQuestion, and IsTextQuestion is what interact checks before it decides an answer.
 func TakesTextReplies(name string) bool { return name == string(v1alpha1.DialectA2A) }
 
 // gated says the mode holds this reply back: in mention mode a reply that does not mention Agent Kourier is no turn (D38).

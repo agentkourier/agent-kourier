@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -13,6 +15,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/dialect/dialecttest"
 	"github.com/agentkourier/agent-kourier/internal/dialect/generic"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/secret"
@@ -21,10 +24,20 @@ import (
 func TestConnectPinsEndpointAndPreservesActorRouting(t *testing.T) {
 	// The URL is used as written: kagent 0.9.x answers a POST to ".../agent" with a 307 to ".../agent/", and the
 	// dialect follows no redirect, so an operator who writes the slash needs it sent. The card is under the
-	// endpoint either way.
-	for _, tc := range []struct{ name, suffix, post string }{
-		{"no trailing slash", "/a2a", "/a2a"},
-		{"trailing slash kept", "/a2a/", "/a2a/"},
+	// endpoint either way. Every call asks for kagent's HITL extension when the card lists it, required or not, and
+	// only then: it is how a kagent agent sends its structured pause, without which it sends ADK's hint as text alone.
+	hitl := func(required bool) []a2a.AgentExtension {
+		return []a2a.AgentExtension{{URI: kagentv1.HITLExtension, Required: required}}
+	}
+	for _, tc := range []struct {
+		name, suffix, post string
+		exts               []a2a.AgentExtension
+		header             string // A2A-Extensions on the call
+	}{
+		{"no trailing slash", "/a2a", "/a2a", nil, ""},
+		{"trailing slash kept", "/a2a/", "/a2a/", nil, ""},
+		{"card lists HITL", "/a2a", "/a2a", hitl(false), kagentv1.HITLExtension},
+		{"card requires HITL", "/a2a", "/a2a", hitl(true), kagentv1.HITLExtension},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var calls atomic.Int32
@@ -33,12 +46,12 @@ func TestConnectPinsEndpointAndPreservesActorRouting(t *testing.T) {
 				if r.Header.Get("Authorization") != "Bearer token" || r.Header.Get("ate-target-actor") != "default/sre" {
 					t.Errorf("identity or routing header missing")
 				}
-				if r.Header.Get("A2A-Extensions") != "" {
-					t.Error("generic client negotiated kagent HITL")
+				if r.URL.Path == tc.post && r.Header.Get("A2A-Extensions") != tc.header {
+					t.Errorf("A2A-Extensions = %q, want %q", r.Header.Get("A2A-Extensions"), tc.header)
 				}
 				switch r.URL.Path {
 				case "/a2a/.well-known/agent-card.json":
-					card := a2a.AgentCard{Name: "sre", Version: "1", Capabilities: a2a.AgentCapabilities{Streaming: true}, SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface("http://card.invalid/a2a", a2a.TransportProtocolJSONRPC)}}
+					card := a2a.AgentCard{Name: "sre", Version: "1", Capabilities: a2a.AgentCapabilities{Streaming: true, Extensions: tc.exts}, SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface("http://card.invalid/a2a", a2a.TransportProtocolJSONRPC)}}
 					_ = json.NewEncoder(w).Encode(card)
 				case tc.post:
 					w.Header().Set("Content-Type", "application/json")
@@ -155,12 +168,66 @@ func TestRejectRequiredExtensionAndRedirect(t *testing.T) {
 	}
 }
 
-// The generic dialect reads a pause as text and nothing else: even a task carrying kagent's
-// HITL tool-approval metadata never becomes a tool approval, because Agent Kourier would then
-// answer with a decision the backend does not understand. It is a text question, or unusable.
-func TestNeverReturnsToolApproval(t *testing.T) {
+// TestASendAsksForTheExtensionsItsMessageNames pins that a message naming kagent's HITL extension in its extensions
+// (an answer to a HITL pause) goes with A2A-Extensions naming it, whatever the card lists, so that the agent reads the
+// payload as the extension's; a message that names no extension, or one the dialect does not speak, adds nothing.
+func TestASendAsksForTheExtensionsItsMessageNames(t *testing.T) {
+	var got atomic.Pointer[[]string]
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/a2a/.well-known/agent-card.json" {
+			card := a2a.AgentCard{Name: "sre", Version: "1", Capabilities: a2a.AgentCapabilities{Streaming: true}, SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface("http://card.invalid/a2a", a2a.TransportProtocolJSONRPC)}}
+			_ = json.NewEncoder(w).Encode(card)
+			return
+		}
+		h := r.Header.Values("A2A-Extensions")
+		got.Store(&h)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":"1","result":{"task":{"id":"t1","contextId":"c1","status":{"state":"TASK_STATE_COMPLETED"}}}}`))
+	}))
+	defer srv.Close()
 	d := generic.New(time.Second)
 	defer d.CloseIdleConnections()
+	client, err := d.Connect(t.Context(), &v1alpha1.AgentBackend{Spec: v1alpha1.AgentBackendSpec{URL: srv.URL + "/a2a"}}, v1alpha1.AgentRef{}, dialect.Credentials{Token: secret.New("token")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name       string
+		extensions []string
+		want       string
+	}{
+		{"an answer that names the extension", []string{kagentv1.HITLExtension}, kagentv1.HITLExtension},
+		{"a message that names none", nil, ""},
+		{"a message that names one the dialect does not speak", []string{"https://example.test/other"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("approved"))
+			msg.TaskID, msg.Extensions = "t1", tc.extensions
+			if _, err := client.SendMessage(t.Context(), &a2a.SendMessageRequest{Message: msg}); err != nil {
+				t.Fatal(err)
+			}
+			h := got.Load()
+			if h == nil || strings.Join(*h, ",") != tc.want {
+				t.Errorf("A2A-Extensions = %v; want %q", h, tc.want)
+			}
+		})
+	}
+	got.Store(nil)
+	_, _ = client.GetTask(t.Context(), &a2a.GetTaskRequest{ID: "t1"}) // the reply's shape does not matter, only the request's header
+	if h := got.Load(); h == nil || len(*h) != 0 {
+		t.Errorf("a call that sends no message asked for %v", h)
+	}
+}
+
+// TestReadsHITLWhenTheMessageDeclaresIt pins which pauses the a2a dialect reads as kagent's HITL extension: a status
+// message that lists the extension and carries its payload, as kagent sends it when the request asked for the
+// extension. It is then read exactly as kagent-v1 reads it. Every other pause is a text question, or unusable, as it
+// was before: a payload the message does not declare is not trusted to be the extension's.
+func TestReadsHITLWhenTheMessageDeclaresIt(t *testing.T) {
+	d := generic.New(time.Second)
+	defer d.CloseIdleConnections()
+	kagent := kagentv1.New(time.Second)
+	defer kagent.CloseIdleConnections()
 	approval := map[string]any{
 		"type":  "tool_approval_request",
 		"hint":  "Please approve or reject the tool call add_numbers()",
@@ -169,36 +236,153 @@ func TestNeverReturnsToolApproval(t *testing.T) {
 	paused := func(msg *a2a.Message) a2a.Task {
 		return a2a.Task{ID: "t1", ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired, Message: msg}}
 	}
-	withMeta := func(msg *a2a.Message, meta map[string]any) *a2a.Message {
-		msg.ID, msg.Metadata = "m1", meta
+	withMeta := func(msg *a2a.Message, meta map[string]any, extensions ...string) *a2a.Message {
+		msg.ID, msg.Metadata, msg.Extensions = "m1", meta, extensions
 		return msg
 	}
 	hitl := map[string]any{kagentv1.HITLExtension: approval}
 	for _, tc := range []struct {
 		name string
 		task a2a.Task
-		text bool // a text question; otherwise ErrUnusablePause
+		want string // "text", "hitl" (as kagent-v1 reads it) or "unusable"
 	}{
-		{"plain text question", paused(withMeta(a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("Which service?")), nil)), true},
-		{"HITL approval metadata with the hint as text", paused(withMeta(a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("Please approve or reject add_numbers()")), hitl)), true},
-		{"HITL approval metadata with a data part", paused(withMeta(a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewDataPart(approval)), hitl)), false},
-		{"HITL approval metadata and no parts", paused(withMeta(a2a.NewMessage(a2a.MessageRoleAgent), hitl)), false},
-		{"nested HITL approval metadata", paused(withMeta(a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("Approve?")), map[string]any{kagentv1.HITLExtension: map[string]any{
+		{"plain text question", paused(withMeta(a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("Which service?")), nil)), "text"},
+		{"undeclared HITL metadata with the hint as text", paused(withMeta(a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("Please approve or reject add_numbers()")), hitl)), "text"},
+		{"undeclared HITL metadata with a data part", paused(withMeta(a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewDataPart(approval)), hitl)), "unusable"},
+		{"declared extension without its payload", paused(withMeta(a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("Which service?")), nil, kagentv1.HITLExtension)), "text"},
+		{"declared HITL approval", paused(withMeta(a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("Approve?")), hitl, kagentv1.HITLExtension)), "hitl"},
+		{"declared nested HITL approval", paused(withMeta(a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("Approve?")), map[string]any{kagentv1.HITLExtension: map[string]any{
 			"type": "tool_approval_request", "tools": approval["tools"],
 			"nested": map[string]any{"subagent_name": "k8s-agent", "task_id": "sub", "tools": approval["tools"]},
-		}})), true},
-		{"no message", paused(nil), false},
+		}}, kagentv1.HITLExtension)), "hitl"},
+		{"declared malformed HITL payload", paused(withMeta(a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("Approve?")), map[string]any{kagentv1.HITLExtension: map[string]any{"type": "tool_approval_request"}}, kagentv1.HITLExtension)), "unusable"},
+		{"kagent tool approval, recorded", dialecttest.KagentTask(t, "approval/01-pause-approve.response.sse"), "hitl"},
+		{"kagent ask-user, recorded", dialecttest.KagentTask(t, "askuser/02-ask.response.sse"), "hitl"},
+		{"kagent tool approval without the header, recorded", dialecttest.KagentTask(t, "approval/13-ask-without-extension-header.response.sse"), "text"},
+		{"no message", paused(nil), "unusable"},
+		{"declared HITL approval on a task with no ID", func() a2a.Task {
+			task := paused(withMeta(a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("Approve?")), hitl, kagentv1.HITLExtension))
+			task.ID = ""
+			return task
+		}(), "unusable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			in, err := d.ParseInteraction(tc.task)
-			if !tc.text {
+			switch tc.want {
+			case "unusable":
 				if in != nil || !errors.Is(err, dialect.ErrUnusablePause) {
 					t.Errorf("got %+v, %v; want ErrUnusablePause", in, err)
 				}
-				return
+			case "text":
+				if err != nil || in == nil || in.Kind != dialect.AskUser || !in.TextReplies || len(in.Questions) != 1 || len(in.Tools) != 0 || in.Nested != nil {
+					t.Errorf("got %+v, %v; want a text question with no tools", in, err)
+				}
+			case "hitl":
+				want, werr := kagent.ParseInteraction(tc.task)
+				if werr != nil || want == nil || err != nil || in == nil {
+					t.Fatalf("got %+v, %v; kagent-v1 reads %+v, %v; want both to read a pause", in, err, want, werr)
+				}
+				if !reflect.DeepEqual(in, want) || in.TextReplies {
+					t.Errorf("got %+v; want kagent-v1's %+v marked with the extension, not taking text replies", in, want)
+				}
 			}
-			if err != nil || in == nil || in.Kind != dialect.AskUser || !in.TextReplies || len(in.Questions) != 1 || len(in.Tools) != 0 || in.Nested != nil {
-				t.Errorf("got %+v, %v; want a text question with no tools", in, err)
+		})
+	}
+}
+
+// assertRecordedAnswer fails t unless msg is the answer recorded as accepted in the request name: the same task, context,
+// extensions and HITL payload. The text part is the dialect's own and is not compared.
+func assertRecordedAnswer(t *testing.T, msg a2a.Message, name string) {
+	t.Helper()
+	want := dialecttest.KagentRequestMessage(t, name)
+	got, err := json.Marshal(msg.Metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorded, err := json.Marshal(want.Metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(recorded) || !reflect.DeepEqual(msg.Extensions, want.Extensions) || msg.TaskID != want.TaskID || msg.ContextID != want.ContextID {
+		t.Errorf("answer to task %s, context %s, extensions %v, metadata %s; want the one recorded in %s: %s, %s, %v, %s",
+			msg.TaskID, msg.ContextID, msg.Extensions, got, name, want.TaskID, want.ContextID, want.Extensions, recorded)
+	}
+}
+
+// TestAnswersHITLAsKagentDoes pins that an answer to a HITL pause is kagent's structured reply, the one recorded as
+// approving the call (approval/02), and that attribution leaves its text alone.
+func TestAnswersHITLAsKagentDoes(t *testing.T) {
+	d := generic.New(time.Second)
+	defer d.CloseIdleConnections()
+	in, err := d.ParseInteraction(dialecttest.KagentTask(t, "approval/01-pause-approve.response.sse"))
+	if err != nil || in == nil || in.Kind != dialect.ToolApproval {
+		t.Fatalf("pause = %+v, %v; want a tool approval", in, err)
+	}
+	msg, err := d.BuildResponse(*in, dialect.Answer{Decisions: []dialect.Decision{{ToolID: in.Tools[0].ID, Approved: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRecordedAnswer(t, msg, "approval/02-approve.request.json")
+	// Attribution keeps the structured answer's one measured shape: the actor goes in metadata, not the text.
+	d.Attribute(&msg, dialect.User{ID: "U1", Platform: dialect.Platform{ID: "slack", Name: "Slack"}})
+	if msg.Parts[0].Text() != "approved" {
+		t.Errorf("attributed answer text = %q, want it unprefixed", msg.Parts[0].Text())
+	}
+	if _, err := d.BuildResponse(*in, dialect.Answer{Answers: [][]string{{"yes"}}}); err == nil {
+		t.Error("a typed answer decided a tool approval")
+	}
+}
+
+// TestAnswersHITLQuestionsAsKagentDoes pins that the answer to a HITL question with choices is kagent's structured reply,
+// the one recorded as answering it (askuser/04), and that an answer outside the choices is refused as kagent-v1 refuses it.
+func TestAnswersHITLQuestionsAsKagentDoes(t *testing.T) {
+	d := generic.New(time.Second)
+	defer d.CloseIdleConnections()
+	in, err := d.ParseInteraction(dialecttest.KagentTask(t, "askuser/03-pause-good-answer.response.sse"))
+	if err != nil || in == nil || in.Kind != dialect.AskUser || in.TextReplies || len(in.Questions) != 1 || len(in.Questions[0].Choices) != 2 {
+		t.Fatalf("pause = %+v, %v; want a HITL question with two choices", in, err)
+	}
+	msg, err := d.BuildResponse(*in, dialect.Answer{RequestID: in.RequestID, Answers: [][]string{{"PostgreSQL"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRecordedAnswer(t, msg, "askuser/04-good-answer.request.json")
+	if msg.Parts[0].Text() != "PostgreSQL" {
+		t.Errorf("answer text = %q, want the choice, as recorded", msg.Parts[0].Text())
+	}
+	if _, err := d.BuildResponse(*in, dialect.Answer{RequestID: in.RequestID, Answers: [][]string{{"SQLite"}}}); err == nil {
+		t.Error("an answer outside the choices was built")
+	}
+}
+
+// TestAnswersByTheExtensionItWasReadThrough pins that the answer's shape follows Interaction.Extension alone: whether a
+// question takes typed replies is a separate choice, and changing it never turns a HITL answer into plain text or a text
+// answer into a HITL payload.
+func TestAnswersByTheExtensionItWasReadThrough(t *testing.T) {
+	d := generic.New(time.Second)
+	defer d.CloseIdleConnections()
+	free := dialect.Interaction{Kind: dialect.AskUser, TaskID: "t1", ContextID: "c1", RequestID: "r1", Questions: []dialect.Question{{Text: "Which service?"}}}
+	answer := dialect.Answer{RequestID: "r1", Answers: [][]string{{"checkout"}}}
+	for _, tc := range []struct {
+		name        string
+		extension   string
+		textReplies bool
+		hitl        bool // the answer carries kagent's HITL payload
+	}{
+		{"text question", "", true, false},
+		{"text question not taking typed replies", "", false, false},
+		{"HITL question", kagentv1.HITLExtension, false, true},
+		{"HITL question taking typed replies", kagentv1.HITLExtension, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := free
+			in.Extension, in.TextReplies = tc.extension, tc.textReplies
+			msg, err := d.BuildResponse(in, answer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, hitl := msg.Metadata[kagentv1.HITLExtension]; hitl != tc.hitl || slices.Contains(msg.Extensions, kagentv1.HITLExtension) != tc.hitl {
+				t.Errorf("answer %+v carries the HITL payload: %v; want %v", msg, hitl, tc.hitl)
 			}
 		})
 	}

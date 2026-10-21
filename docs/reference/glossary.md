@@ -42,8 +42,9 @@ Cooldown
     the same key adds a note and starts no turn.
 
 Dialect
-:   The per-backend part of the A2A client: URL layout, card location, identity header and how a pause is read. `a2a`
-    is generic; `kagent-v1` adds kagent's human-in-the-loop extension.
+:   The per-backend part of the A2A client: URL layout, card location, identity header and how a pause is read. Both
+    ask for kagent's human-in-the-loop extension when the agent card lists it; `kagent-v1` reads a pause only through
+    it, and `a2a` reads it through the extension or as a text question.
 
 Digest line
 :   One line at the top level of a channel that counts the alerts a trigger's limits stopped in a window.
@@ -61,8 +62,8 @@ Front door
     Required in front of kagent.
 
 Interaction
-:   A pause in which the agent waits for a person: a question (ask-user), or a kagent-v1 tool approval when the Binding
-    enables `interactions.toolApprovals`. A generic A2A structured pause is unusable.
+:   A pause in which the agent waits for a person: a question (ask-user), or a tool approval when the Binding
+    enables `interactions.toolApprovals`. Structured pauses use kagent's human-in-the-loop extension.
 
 Investigation
 :   A session that a trigger or an alert started rather than a person.

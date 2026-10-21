@@ -1,4 +1,5 @@
-// Package generic implements A2A 1.0 JSON-RPC with plain-text questions.
+// Package generic implements A2A 1.0 JSON-RPC with plain-text questions, and kagent's HITL extension: it asks for the
+// extension when the card lists it, and reads a pause as the extension's when the pause's own message declares it.
 package generic
 
 import (
@@ -6,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -36,7 +38,8 @@ func (*Dialect) Endpoint(backend *v1alpha1.AgentBackend, _ v1alpha1.AgentRef) (s
 	return u.String(), nil
 }
 
-// Connect fetches the card and pins JSON-RPC to the configured gateway.
+// Connect fetches the card and pins JSON-RPC to the configured gateway. It offers kagent's HITL extension, which the
+// client activates (sends A2A-Extensions for) only when the card lists it, so an agent that does not is sent no header.
 func (d *Dialect) Connect(ctx context.Context, backend *v1alpha1.AgentBackend, agent v1alpha1.AgentRef, creds dialect.Credentials) (*a2aclient.Client, error) {
 	endpoint, err := d.Endpoint(backend, agent)
 	if err != nil {
@@ -45,13 +48,18 @@ func (d *Dialect) Connect(ctx context.Context, backend *v1alpha1.AgentBackend, a
 	if d.Dialect == nil {
 		return nil, errors.New("generic: Connect needs New")
 	}
-	return d.ConnectEndpoint(ctx, endpoint, creds)
+	return d.ConnectEndpoint(ctx, endpoint, creds, kagentv1.HITLExtension)
 }
 
-// ParseInteraction accepts only text questions. Structured parts cannot be approved as text.
-func (*Dialect) ParseInteraction(task a2a.Task) (*dialect.Interaction, error) {
+// ParseInteraction reads a pause whose status message declares kagent's HITL extension and carries its payload as
+// kagent-v1 does: a question or tool approval that does not take text replies. Any other pause must be a text question;
+// structured parts cannot be approved as text, and a payload the message does not name in its extensions is not read.
+func (d *Dialect) ParseInteraction(task a2a.Task) (*dialect.Interaction, error) {
 	if task.Status.State != a2a.TaskStateInputRequired {
 		return nil, nil
+	}
+	if msg := task.Status.Message; msg != nil && slices.Contains(msg.Extensions, kagentv1.HITLExtension) && msg.Metadata[kagentv1.HITLExtension] != nil {
+		return d.Dialect.ParseInteraction(task)
 	}
 	fail := func() (*dialect.Interaction, error) {
 		return nil, fmt.Errorf("text question missing or structured: %w", dialect.ErrUnusablePause)
@@ -87,8 +95,13 @@ func (*Dialect) ParseInteraction(task a2a.Task) (*dialect.Interaction, error) {
 	return &dialect.Interaction{TextReplies: true, Kind: dialect.AskUser, TaskID: task.ID, ContextID: task.ContextID, RequestID: request, Questions: []dialect.Question{{Text: question}}, Hint: "Reply in this thread or submit your answer below."}, nil
 }
 
-// BuildResponse addresses one complete text answer to the paused task.
-func (*Dialect) BuildResponse(in dialect.Interaction, answer dialect.Answer) (a2a.Message, error) {
+// BuildResponse answers a pause read through kagent's HITL extension (Interaction.Extension) as kagent-v1 does, and any
+// other with one complete text answer to its text question. An interaction stored before Extension existed has none,
+// and was a text question.
+func (d *Dialect) BuildResponse(in dialect.Interaction, answer dialect.Answer) (a2a.Message, error) {
+	if in.Extension == kagentv1.HITLExtension {
+		return d.Dialect.BuildResponse(in, answer)
+	}
 	if in.Kind != dialect.AskUser || in.TaskID == "" || answer.RequestID != in.RequestID || len(in.Questions) != 1 || len(in.Questions[0].Choices) != 0 || len(answer.Answers) != 1 || len(answer.Answers[0]) != 1 || strings.TrimSpace(answer.Answers[0][0]) == "" || len(answer.Decisions) != 0 {
 		return a2a.Message{}, errors.New("one complete text answer to the current question is required")
 	}

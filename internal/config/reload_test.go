@@ -147,15 +147,41 @@ func TestReloaderRebuildsOnlyOnChangeButRechecksSecrets(t *testing.T) {
 	}
 }
 
-func TestReloaderWarnsWhenApprovalsHaveNoApproverGroups(t *testing.T) {
-	dir := specDir(t)
-	path := filepath.Join(dir, "binding.yaml")
-	writeFile(t, path, strings.Replace(mustRead(t, path), "    askUser: true\n", "    askUser: true\n    toolApprovals: true\n", 1))
-	var logs bytes.Buffer
-	r := NewReloader(ReloaderConfig{Dir: dir, Secrets: specSecrets(), Logger: slog.New(slog.NewTextHandler(&logs, nil))})
-	mustReload(t, r, true)
-	if got := logs.String(); !strings.Contains(got, "tool approvals are enabled without approver groups; any non-bot channel member may decide") || !strings.Contains(got, "binding=sre/sre-alerts") {
-		t.Errorf("warning log = %q; want a warning naming the Binding", got)
+// Both dialects post tool approvals: a2a for an agent whose card lists kagent's HITL extension. The warning cannot know
+// the card at load, so it is the same on both.
+func TestReloaderWarnsAboutApproversOnEveryDialect(t *testing.T) {
+	const anyMember = "tool approvals are enabled without approver groups; any non-bot channel member may decide"
+	for _, tc := range []struct {
+		name, dialect, interactions string
+		warn                        bool
+	}{
+		{"kagent without groups", "kagent-v1", "    toolApprovals: true\n", true},
+		{"kagent with groups", "kagent-v1", "    toolApprovals: true\n    approverGroups: [S0123456789]\n", false},
+		{"a2a without groups", "a2a", "    toolApprovals: true\n", true},
+		{"a2a with groups", "a2a", "    toolApprovals: true\n    approverGroups: [S0123456789]\n", false},
+		{"a2a without approvals", "a2a", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := specDir(t)
+			// Each edit must find its line, or a case would run on the testdata as it is (kagent-v1, no approvals) and pass.
+			edit := func(file, old, replacement string) {
+				path := filepath.Join(dir, file)
+				body := mustRead(t, path)
+				if !strings.Contains(body, old) {
+					t.Fatalf("%s has no %q to replace", file, old)
+				}
+				writeFile(t, path, strings.Replace(body, old, replacement, 1))
+			}
+			edit("binding.yaml", "    askUser: true\n", "    askUser: true\n"+tc.interactions)
+			edit("agentbackend.yaml", "dialect: kagent-v1", "dialect: "+tc.dialect)
+			var logs bytes.Buffer
+			r := NewReloader(ReloaderConfig{Dir: dir, Secrets: specSecrets(), Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+			mustReload(t, r, true)
+			got := logs.String()
+			if warned := strings.Contains(got, anyMember) && strings.Contains(got, "binding=sre/sre-alerts"); warned != tc.warn {
+				t.Errorf("log = %q; want the warning naming the Binding: %v", got, tc.warn)
+			}
+		})
 	}
 }
 

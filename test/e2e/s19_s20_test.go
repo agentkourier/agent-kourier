@@ -29,6 +29,54 @@ func TestS19_AnApprovalRunsTheTool(t *testing.T) {
 	})
 }
 
+// TestS19_AnApprovalRunsTheToolOverTheA2ADialect: S19 on an a2a Binding. The stub's card lists kagent's HITL extension, so
+// the generic dialect asks for it, reads the structured approval and sends the structured decision.
+func TestS19_AnApprovalRunsTheToolOverTheA2ADialect(t *testing.T) {
+	runFastToolApproval(t, fastToolApprovalCase{
+		name:         "approve-a2a",
+		channel:      ChannelA2AS19,
+		user:         "UA2AS19",
+		binding:      "agent-kourier/fast-a2a-s19",
+		action:       chat.ActionApproveAll,
+		verdict:      "Approved",
+		continuation: "I have added 3 and 5. The result is 8.",
+		outcome:      "approved",
+		auditOutcome: `answered approved=1 denied=0 approved_tools=["add_numbers"]`,
+	})
+}
+
+// TestS19_AContractOnlyAgentsApprovalRunsTheToolOverTheA2ADialect: S19 with test/hitlagent, an A2A agent written from
+// the agent contract's description of kagent's HITL extension and no kagent code, which shows the contract is enough.
+func TestS19_AContractOnlyAgentsApprovalRunsTheToolOverTheA2ADialect(t *testing.T) {
+	runFastToolApproval(t, fastToolApprovalCase{
+		name:         "approve-contract",
+		channel:      ChannelA2AContractS19,
+		user:         "UA2AC19",
+		binding:      "agent-kourier/fast-a2a-contract-s19",
+		action:       chat.ActionApproveAll,
+		verdict:      "Approved",
+		continuation: "Approved: 3 + 5 = 8.",
+		outcome:      "approved",
+		auditOutcome: `answered approved=1 denied=0 approved_tools=["add_numbers"]`,
+	})
+}
+
+// TestS20_AContractOnlyAgentsDenialContinuesTheTurnOverTheA2ADialect: S20 with test/hitlagent; the agent gets the
+// denial and its fixed reason, and the tool does not run.
+func TestS20_AContractOnlyAgentsDenialContinuesTheTurnOverTheA2ADialect(t *testing.T) {
+	runFastToolApproval(t, fastToolApprovalCase{
+		name:         "deny-contract",
+		channel:      ChannelA2AContractS20,
+		user:         "UA2AC20",
+		binding:      "agent-kourier/fast-a2a-contract-s20",
+		action:       chat.ActionDenyAll,
+		verdict:      "Denied",
+		continuation: "Denied: denied by an approver in chat",
+		outcome:      "denied",
+		auditOutcome: `answered approved=0 denied=1 denied_tools=["add_numbers"]`,
+	})
+}
+
 // TestS20_ADenialContinuesTheTurn: the approval-enabled Binding sends a denial to the stub. The edited prompt records
 // the denied tool, the stub's rejection continuation reaches the thread, and the decision is counted.
 func TestS20_ADenialContinuesTheTurn(t *testing.T) {
