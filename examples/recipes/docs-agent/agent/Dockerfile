@@ -22,7 +22,7 @@
 # CORPUS_REMOVE names further directories to take out afterwards, such as "drafts" for your own documentation; give
 # your own documentation context a .dockerignore of its own to keep them from being sent. Only Markdown files go into
 # the image.
-FROM golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS build
+FROM golang:1.27.3@sha256:957861185dbf29d93668ace41e011d091c6e779953d47f0316ef2cc58e28fe2b AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
