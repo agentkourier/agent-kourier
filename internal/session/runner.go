@@ -786,17 +786,30 @@ func (m *Manager) drive(t *tstate, send func(context.Context, agent.Handler) err
 	}
 	m.begin(t)
 	h := func(agent.Event) {}
-	// The sink's context ends when the send returns, not with the manager: a turn that ends with
-	// no FinalEvent frees what the sink started for it. A sink that must settle a finished turn
-	// does so on a context of its own (the renderer's bounded flush).
-	tctx, endTurn := context.WithCancel(parentCtx)
-	defer endTurn()
+	// The send's context ends with the manager. The sink's context ends when the drive returns, and
+	// only then: a turn that ends with no FinalEvent frees what the sink started for it, with
+	// ErrTurnContinues as the cause when the task goes on (a lost stream, followed again, or a
+	// shutdown, after which recovery follows it), so that the renderer leaves the message to the
+	// later turn rather than ending it. A sink that must settle a finished turn does so on a
+	// context of its own (the renderer's bounded flush).
+	tctx, endSend := context.WithCancel(parentCtx)
+	defer endSend()
+	sinkCtx, endTurn := context.WithCancelCause(context.WithoutCancel(parentCtx))
+	defer func() {
+		var cause error
+		// A blocked send that is tried again (unsent, retry) is no follow: the resend is a turn of its own, which would
+		// not take this one's message over, so this turn is ended.
+		if (out == blocked && t.follow) || m.ctx.Err() != nil {
+			cause = ErrTurnContinues
+		}
+		endTurn(cause)
+	}()
 	// An answer's output is a message of its own, named after the answer: it must not overwrite
 	// the output of the turn that paused. A task found again after a restart, or followed again
 	// after a lost stream, continues the message it had.
 	shown := t.outputTurn()
 	ref := TurnRef{Key: key, Binding: t.sess.Binding, MessageID: shown.ID, UserID: shown.User, Output: t.b.Output, Progress: t.b.Progress, Recovered: t.recovered || t.follow, Restarted: t.recovered, Feedback: feedbackOf(shown.User, t.b), ThreadReplies: t.b.ThreadReplies}
-	if sh := m.cfg.Sink.Turn(tctx, ref); sh != nil {
+	if sh := m.cfg.Sink.Turn(sinkCtx, ref); sh != nil {
 		h = sh
 	}
 	var final *a2a.Task

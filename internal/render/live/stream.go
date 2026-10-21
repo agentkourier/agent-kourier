@@ -120,7 +120,12 @@ func (u *Run) writeStream(ctx context.Context, ref *chat.Ref, v view) error {
 			u.diverged, suffix = true, ""
 		}
 		if err := u.stream.Stop(ctx, suffix, u.stopFooter(v), id); err != nil {
-			return err
+			if !u.cutShort || !errors.Is(err, chat.ErrNotStreaming) {
+				return err
+			}
+			// A turn cut short whose stream ended already, as the platform may end a stream left idle: there is nothing
+			// left to end, and no final text to replace it with.
+			u.diverged = false
 		}
 		u.stopped = true
 	}

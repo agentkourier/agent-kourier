@@ -996,6 +996,15 @@ making the prefix optional breaks multi-turn context.
     its details and output are appended, so the adapter sends a card's detail and output once, in every mode (the claiming
     call's detail goes with the claim, and the chunks after it carry none on the wire). Stopping a stream turns a card still
     running into an error, so every card, an unclaimed `Working…` card included, is finished before the stop.
+  - A turn whose send ends with no final event (the agent refused the send, or did not take an answer, and the thread gets
+    the failure notice as a message of its own) ends what it showed as a failed task's: a stream is stopped with an
+    unclaimed `Working…` card and the `activity` card as `Stopped`, and a call with no result ended; on the update path the
+    status line goes, and a message with no text says `(no output)`. Neither carries the feedback buttons. A turn that
+    showed nothing posts nothing. A turn whose task goes on is not ended: when its stream was lost and the task is followed
+    again, or Agent Kourier is shutting down and recovery follows the task, its stream or message is left as it is, and the
+    turn that follows the task takes it over (stopped and updated to its text, or to `(no output)` when it has none). A
+    second run of the same turn in one process (the task followed again while the send that lost it has not returned)
+    writes only once the first has ended, and the first leaves the message to it.
   - On the update path only (no stream recipient, as in an alert thread), and only when `output` is `live` and `progress` is
     not `steps`, the renderer also marks the thread busy, through the optional `chat.BusyMarker` (`Caps.Busy`). On Slack
     that is `assistant.threads.setStatus` with the status `is working…` and no loading messages. The mark is set when the turn
