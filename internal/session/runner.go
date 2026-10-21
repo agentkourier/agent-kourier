@@ -797,7 +797,9 @@ func (m *Manager) drive(t *tstate, send func(context.Context, agent.Handler) err
 	sinkCtx, endTurn := context.WithCancelCause(context.WithoutCancel(parentCtx))
 	defer func() {
 		var cause error
-		if out == blocked || m.ctx.Err() != nil {
+		// A blocked send that is tried again (unsent, retry) is no follow: the resend is a turn of its own, which would
+		// not take this one's message over, so this turn is ended.
+		if (out == blocked && t.follow) || m.ctx.Err() != nil {
 			cause = ErrTurnContinues
 		}
 		endTurn(cause)

@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -51,6 +52,26 @@ func TestTheSinksContextSaysWhetherTheTurnContinues(t *testing.T) {
 		}
 		if cause := sink.causeOf(t, 1); errors.Is(cause, ErrTurnContinues) {
 			t.Errorf("the follow that saw the task end ended its sink context with %v; want the turn over", cause)
+		}
+	})
+	t.Run("a send that is tried again is no follow", func(t *testing.T) {
+		// The resend is a turn of its own, not a recovered one, so it would not take over what this send showed: the send's
+		// sink context ends the turn, and the renderer ends what it showed.
+		f := newFixture(t)
+		sink := f.live()
+		f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, 2*time.Millisecond
+		f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+			if n == 0 {
+				return fmt.Errorf("%w: the agent is down", agent.ErrNotSent)
+			}
+			return turn(h, n, a2a.TaskStateCompleted)
+		}
+		if _, err := f.submit(inbound("1")); err != nil {
+			t.Fatal(err)
+		}
+		waitFinal(t, sink)
+		if cause := sink.causeOf(t, 0); cause == nil || errors.Is(cause, ErrTurnContinues) {
+			t.Errorf("the sink context of a send that is tried again ended with %v; want the turn over", cause)
 		}
 	})
 	t.Run("the agent refused to continue", func(t *testing.T) {
