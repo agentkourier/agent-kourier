@@ -62,7 +62,8 @@ Front door
 
 Interaction
 :   A pause in which the agent waits for a person: a question (ask-user), or a kagent-v1 tool approval when the Binding
-    enables `interactions.toolApprovals`. A generic A2A structured pause is unusable.
+    enables `interactions.toolApprovals`. On the generic `a2a` dialect, a pause that is not one text question
+    ([Task states](agent-contract.md#task-states)) is unusable.
 
 Investigation
 :   A session that a trigger or an alert started rather than a person.

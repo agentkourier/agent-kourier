@@ -169,9 +169,9 @@ kagent 1.0's pause payload, so only `kagent-v1` reads them.
 | `auth-required` | Not supported, on either dialect. Agent Kourier tells the thread that the agent paused in a way it cannot use, cancels the task, and then sends the replies queued behind it |
 | Any other terminal state | Treated as `failed` |
 
-A question on `a2a` is a status message made only of non-empty text parts, with a `messageId` or a status
-`timestamp` that differs from the last question's. Anything else in `input-required` cannot be shown, so the task is
-cancelled and the thread is told. The answer is one text part sent to the paused `taskId` and `contextId`. On
+A question on `a2a` is a status message made only of text parts whose text, joined and trimmed, is not blank. It
+needs a `messageId`, or without one a status `timestamp`, and an earlier, different question on the same task must not
+have used it. Anything else in `input-required` cannot be used, so the task is cancelled and the thread is told. The answer is one text part sent to the paused `taskId` and `contextId`. On
 `kagent-v1`, the question is kagent's human-in-the-loop payload in the status message's metadata.
 
 ## Errors

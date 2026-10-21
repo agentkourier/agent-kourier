@@ -29,10 +29,10 @@ Without `askUser: true`, Agent Kourier cancels the agent's task and says so in t
 
 === "Generic A2A"
 
-    The `a2a` dialect shows an agent's text-only `input-required` pause as one text question, which you can
-    answer with **Submit** or with a typed reply in the thread; its prompt says so. A pause that is not one usable
-    text question cannot be used, so the task is cancelled and the thread is told; see
-    [Connect a generic A2A agent](connect-a2a-agent.md#what-works-on-this-dialect) for the rule. In a Binding with
+    The `a2a` dialect shows an `input-required` pause as one text question when it meets the rule in
+    [Task states](../reference/agent-contract.md#task-states), and you can answer it with **Submit** or with a typed
+    reply in the thread; its prompt says so. Any other pause cannot be used, so the task is cancelled and the thread
+    is told. In a Binding with
     `chat.threadReplies: mention`, that reply needs no mention.
 
 ## How an answer is taken

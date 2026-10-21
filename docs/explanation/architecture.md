@@ -133,9 +133,10 @@ Structured questions and approvals depend on the backend's interaction contract.
 The generic A2A dialect supports text continuation: a plain-text `input-required`
 question is persisted and posted, and a thread reply is accepted under the same
 membership, audit and deadline checks as a button press before it is sent to the
-paused task. A pause that is not one usable text question is unusable on that dialect
-and cancels the task, and a kagent approval pause that arrives as text (recorded with
-kagent 1.0.0-alpha5) is handled as a question, never as an approval (see
+paused task. Any other pause, one that breaks the question rule in
+[Task states](../reference/agent-contract.md#task-states), cancels the task. A kagent
+approval pause that arrives as text alone (recorded with kagent 1.0.0-alpha5) is handled
+as a question, never as an approval (see
 [what works on the generic dialect](../how-to/connect-a2a-agent.md#what-works-on-this-dialect)).
 The kagent dialect additionally understands structured questions. Tool step cards do
 not depend on the dialect: every dialect shows the tool calls and results that an
@@ -154,7 +155,7 @@ front door sits in this path, so the agent must verify the Binding's bearer ID t
 itself, as the reference agent does (issuer, audience and subject), or an
 OIDC-verifying proxy must sit in front of a TLS gateway to the router. Chat, queued replies, restart recovery, actor suspend and resume, and
 in-thread text answers are tested in the AX kind tier. Structured tool approvals
-are kagent-only, and a pause that is not one usable text question cancels the task with a notice. The generic dialect shows tool steps for an agent
+are kagent-only, and a pause that is not a text question cancels the task with a notice. The generic dialect shows tool steps for an agent
 that marks its tool parts as Google ADK or kagent does. AX's own
 lifecycle (task, template, egress policy) stays with the operator. See the
 [AX reference agent](https://github.com/agentkourier/agent-kourier/blob/main/examples/ax/README.md) and the

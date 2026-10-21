@@ -236,8 +236,11 @@ reaches it as text alone (recorded with kagent 1.0.0-alpha5; 0.9.x has not been 
 
 The cancel is counted on `agentkourier_approval_outcomes_total` with `outcome="ask_user_cancelled"`, the label of
 every question a Binding turns away, not `auto_denied` or a decided-approval outcome. With `askUser: true` the pause
-is a question: its answer or timeout adds nothing to that metric, which counts decided and timed-out tool approvals
-only. To get an approval prompt, point the Binding at an AgentBackend with `dialect: kagent-v1` on kagent 1.0; see
+is a question, and neither its answer nor its timeout is counted on that metric: a question is counted there only when
+a Binding turns it away.
+
+To get an approval prompt, point the Binding at an AgentBackend with `dialect: kagent-v1` on kagent 1.0, and set
+`interactions.toolApprovals: true`. Without it the approval is denied, and counted as `auto_denied`; see
 [Connect a kagent agent](connect-kagent.md).
 
 ## `Multi-Attach error for volume` while the pod rolls
