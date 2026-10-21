@@ -478,9 +478,31 @@ func TestCancelPausedTask(t *testing.T) {
 	}
 }
 
+// TestCancelCompletedTaskFailsAtOnce pins that CancelTask tries again only for a paused task: a completed one is not
+// cancelable, and saying so must not wait out the retries.
+func TestCancelCompletedTaskFailsAtOnce(t *testing.T) {
+	h := newHarness(t)
+	ctx := testContext(t)
+	events, err := h.stream(ctx, t, userTurn("hello, then cancel"))
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	id := events[0].TaskInfo().TaskID
+
+	start := time.Now()
+	_, err = h.client.CancelTask(ctx, &a2a.CancelTaskRequest{ID: id})
+	if !errors.Is(err, a2a.ErrTaskNotCancelable) {
+		t.Fatalf("cancel of a completed task: %v, want not cancelable", err)
+	}
+	if took := time.Since(start); took > 100*time.Millisecond {
+		t.Errorf("cancel of a completed task took %s, want no retries", took)
+	}
+}
+
 // TestCancelAsPausedTurnEnds cancels a paused task while the SDK still holds the turn that paused it: the client has
 // the input-required event, but Execute has not returned. The SDK hands such a cancel to the finished turn, which
-// cannot take it, so the agent must cancel the task again once the turn is gone.
+// cannot take it, so the agent must cancel the task again once the turn is gone. This holds the not-cancelable case;
+// the "queue is closed" case has no hook for its window and is exercised only when TestCancelPausedTask hits it.
 func TestCancelAsPausedTurnEnds(t *testing.T) {
 	cancelSeen, done := make(chan struct{}), make(chan struct{})
 	var once sync.Once

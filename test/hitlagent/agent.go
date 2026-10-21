@@ -113,6 +113,9 @@ const (
 // fails with "queue is closed" once the turn's event pipe is closed, or else as not cancelable, because the turn
 // resolved to input-required. Neither is true of the task, which is paused, so CancelTask tries again, and the SDK
 // cancels the task on its own once the turn is gone.
+//
+// The gap is in a2a-go's internal/taskexec/local_manager.go: Cancel does not wait on the execution's exiting flag as
+// waitForExiting does for Execute. Remove this wrapper once Cancel does.
 type pausedCancel struct {
 	a2asrv.RequestHandler
 
