@@ -4,13 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -74,169 +72,15 @@ func (t handlerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	return res, nil
 }
 
-// shownBy is what the person sees of the text of one request, and the constructs Slack acts on in it, read as
-// Slack reads each kind of text, each by the reader of its own dialect: the top-level text and a mrkdwn object as mrkdwn (ScanSlack, which has no
-// backslash escape), a markdown block and markdown_text as CommonMark with code shown literally (ScanCommonMarkLiteralCode:
-// what the probe of 2026-10-04 measured, rows 04, 19 and 20 of docs/spikes/slack-code-rendering.md; the code that is
-// there is only what Agent Kourier wrote; a "<!", "<@" or "<#" in it is still reported, as it is not in what Agent Kourier writes), and a plain_text object
-// as the characters it holds (ScanSlackPlain), in which style is not a construct but a token or a link would
-// still be one (a plain_text object is not known to parse them, UNCONFIRMED(WP-04), and the adapter does not rely
-// on that).
+// shownBy is what the person sees of the text of one request, and the constructs Slack acts on in it: the text,
+// markdown_text, chunks and blocks of its form, read by chattest.ShownSlackMessage.
 func shownBy(r sentRequest) []chattest.Shown {
-	var out []chattest.Shown
-	if s := r.form.Get("text"); s != "" {
-		out = append(out, chattest.ScanSlack(s))
-	}
-	if s := r.form.Get("markdown_text"); s != "" {
-		out = append(out, chattest.ScanCommonMarkLiteralCode(s))
-	}
-	if raw := r.form.Get("chunks"); raw != "" {
-		out = append(out, chunkTexts(raw)...)
-	}
-	if raw := r.form.Get("blocks"); raw != "" {
-		var blocks any
-		if json.Unmarshal([]byte(raw), &blocks) == nil {
-			walk(blocks, &out)
-		}
-	}
-	return out
-}
-
-// chunkTexts reads the chunks of a streaming request: a markdown_text chunk as CommonMark, as markdown_text is, and the
-// title, details and output of a task_update chunk by taskShown.
-func chunkTexts(raw string) []chattest.Shown {
-	var chunks []struct {
-		Type    string `json:"type"`
-		Text    string `json:"text"`
-		Title   string `json:"title"`
-		Details string `json:"details"`
-		Output  string `json:"output"`
-	}
-	if json.Unmarshal([]byte(raw), &chunks) != nil {
-		return nil
-	}
-	var out []chattest.Shown
-	if len(chunks) == 0 {
-		return nil
-	}
-	for _, c := range chunks {
-		if c.Text != "" {
-			out = append(out, chattest.ScanCommonMarkLiteralCode(c.Text))
-		}
-		for _, s := range []string{c.Title, c.Details, c.Output} {
-			if s != "" {
-				out = append(out, taskShown(s))
-			}
-		}
-	}
-	return out
-}
-
-// taskEscapes undoes the escapes the adapter writes in a task's text: the three entities of Slack's text, and the
-// backslash escapes that keep a link, an image or a link reference definition out of markdown.
-var taskEscapes = strings.NewReplacer("&amp;", "&", "&lt;", "<", "&gt;", ">", `\\`, `\`, `\[`, "[", `\(`, "(")
-
-// taskShown is how a task's text is read, which Slack does not say (UNCONFIRMED(WP-04)): the constructs in it are
-// those of CommonMark, the strictest of the readings it may have, and what a person sees is the characters it holds with
-// the adapter's escapes undone. A reading as plain text finds no construct and shows the backslashes; one as mrkdwn
-// finds only the tokens that the entities already stop. Style is the one thing that may act (see slackSubject).
-func taskShown(s string) chattest.Shown {
-	return chattest.Shown{Displayed: taskEscapes.Replace(s), Active: chattest.ScanCommonMark(s).Active}
-}
-
-// richTextShown is how a rich_text block is read, which is where the adapter shows the name and the arguments of a tool: one
-// Shown for each element of the block, with the characters of its text elements as what is displayed. A
-// rich_text_section, which carries a name, is only that. A rich_text_preformatted, which carries arguments, is a block
-// of code, the one construct reported. A token in a text element is not reported, because Block Kit has no token in
-// text: a mention, a broadcast, a channel and a link in rich_text are elements of their own type. Every element or
-// sub-element of the block that is not a text element with no other field (a user, a broadcast, a channel, a link,
-// a styled or any other text, an element of another type) is reported as the construct it is, on every Shown of the block,
-// so that the adapter cannot put one anywhere in it by accident. The 2026-10-13 live approval probe returned the
-// generated hostile fields as text leaves; this reader remains structural so the unit suite still rejects any future
-// renderer change that introduces an active rich_text element.
-func richTextShown(block map[string]any) []chattest.Shown {
-	var found []chattest.Active
-	report := func(kind chattest.Kind, el map[string]any) {
-		found = append(found, chattest.Active{Kind: kind, Text: fmt.Sprint(el)})
-	}
-	var shown []chattest.Shown
-	var code []bool
-	for _, e := range asList(block["elements"]) {
-		el, _ := e.(map[string]any)
-		typ, _ := el["type"].(string)
-		if typ != "rich_text_section" && typ != "rich_text_preformatted" {
-			report(chattest.KindHTML, el)
-			continue
-		}
-		var text strings.Builder
-		for _, c := range asList(el["elements"]) {
-			child, _ := c.(map[string]any)
-			ctyp, _ := child["type"].(string)
-			s, isString := child["text"].(string)
-			switch {
-			case ctyp == "text" && isString && len(child) == 2: // no style, no other field
-				text.WriteString(s)
-			case ctyp == "user":
-				report(chattest.KindMention, child)
-			case ctyp == "broadcast":
-				report(chattest.KindBroadcast, child)
-			case ctyp == "channel":
-				report(chattest.KindChannelLink, child)
-			case ctyp == "link":
-				report(chattest.KindLink, child)
-			default:
-				report(chattest.KindHTML, child)
-			}
-		}
-		shown = append(shown, chattest.Shown{Displayed: text.String()})
-		code = append(code, typ == "rich_text_preformatted")
-	}
-	if len(shown) == 0 { // a block of nothing readable still reports what it holds
-		shown = append(shown, chattest.Shown{})
-		code = append(code, false)
-	}
-	for i := range shown {
-		shown[i].Active = slices.Clone(found)
-		if code[i] {
-			shown[i].Active = append(shown[i].Active, chattest.Active{Kind: chattest.KindCode, Text: shown[i].Displayed})
-		}
-	}
-	return shown
-}
-
-func walk(v any, out *[]chattest.Shown) {
-	switch v := v.(type) {
-	case []any:
-		for _, e := range v {
-			walk(e, out)
-		}
-	case map[string]any:
-		typ, _ := v["type"].(string)
-		if typ == "rich_text" {
-			*out = append(*out, richTextShown(v)...)
-			return
-		}
-		// A task_card's title is the characters it holds, with no construct in it: the probe of 2026-10-21 in the web client
-		// showed hostile titles (tokens, links, markdown, entities) as typed, acting on none (layout.go, taskCard).
-		if s, isString := v["title"].(string); typ == "task_card" && isString {
-			*out = append(*out, chattest.Shown{Displayed: s})
-		}
-		switch s, isString := v["text"].(string); {
-		case typ == "plain_text" && isString:
-			*out = append(*out, chattest.ScanSlackPlain(s))
-		case typ == "mrkdwn" && isString:
-			*out = append(*out, chattest.ScanSlack(s))
-		case typ == "markdown" && isString:
-			*out = append(*out, chattest.ScanCommonMarkLiteralCode(s))
-		}
-		for k, e := range v {
-			if k != "text" || typ == "" { // a text object is a leaf; a block's text is walked as its own object
-				walk(e, out)
-			} else if _, isObject := e.(map[string]any); isObject {
-				walk(e, out)
-			}
-		}
-	}
+	return chattest.ShownSlackMessage(chattest.SlackMessage{
+		Text:         r.form.Get("text"),
+		MarkdownText: r.form.Get("markdown_text"),
+		Blocks:       json.RawMessage(r.form.Get("blocks")),
+		Chunks:       json.RawMessage(r.form.Get("chunks")),
+	})
 }
 
 // slackSubject is the Slack adapter over the fake Slack, as a conformance subject. Concessions are what
@@ -287,7 +131,7 @@ func slackSubject(t *testing.T) (chattest.Subject, *slack.Platform) {
 		Concessions: []chattest.Concession{{
 			Where: chat.WhereToolArgs, Kinds: []chattest.Kind{chattest.KindCode},
 			Why: "the arguments of a tool are shown as preformatted text, which is code, on purpose: they are a command or data, and " +
-				"must be read as typed. Nothing else a reader acts on is in the block (richTextShown)",
+				"must be read as typed. Nothing else a reader acts on is in the block (chattest.ShownSlackMessage)",
 		}, {
 			Where: chat.WhereStepTitle, Kinds: chattest.StyleKinds(),
 			Why: "a task's text may be read as markdown, in which *a* is bold: cosmetic, and every construct that is not style (a link, an " +
@@ -372,9 +216,11 @@ func TestTheReadingOfARichTextBlockFindsWhatIsNotPlainText(t *testing.T) {
 		for i, e := range elements {
 			list[i] = e
 		}
-		var got []chattest.Shown
-		walk([]any{map[string]any{"type": "rich_text", "elements": list}}, &got)
-		return got
+		blocks, err := json.Marshal([]any{map[string]any{"type": "rich_text", "elements": list}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return chattest.ShownSlackMessage(chattest.SlackMessage{Blocks: blocks})
 	}
 	got := read(el("rich_text_section", text("1. <!channel>")), el("rich_text_preformatted", text("<@U0123456789> [x](https://evil.test)"), text("\nmore")))
 	if len(got) != 2 || got[0].Displayed != "1. <!channel>" || got[1].Displayed != "<@U0123456789> [x](https://evil.test)\nmore" {
