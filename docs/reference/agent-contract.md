@@ -181,7 +181,9 @@ told. The answer to a text question is one text part sent to the paused `taskId`
 
 Questions with choices, several questions at once, and tool approvals use kagent's human-in-the-loop extension,
 `https://kagent.dev/extensions/hitl/v1`. kagent 1.0 speaks it. Any other agent gets them on the `a2a` dialect by
-speaking it the same way:
+speaking it the same way. Agent Kourier reads no framework's own approval format, so an agent built on another framework
+speaks this extension through an adapter of its own; see
+[Why approvals use one extension](../explanation/why-a2a.md#why-approvals-use-one-extension).
 
 | The agent must | Otherwise |
 |---|---|

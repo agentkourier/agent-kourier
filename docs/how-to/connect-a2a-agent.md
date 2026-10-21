@@ -71,8 +71,9 @@ In the Binding's `identity`:
   typed reply. kagent 1.0.0-alpha5's agent card lists the extension; 0.9.x has not been checked. What another agent
   must send, and what it gets back, is in
   [Structured questions and tool approvals](../reference/agent-contract.md#structured-questions-and-tool-approvals).
-- Not: structured pauses from an agent without that extension. Any other pause must be text alone; a pause with any part
-  that is not text cannot be used, so the task is cancelled. A payload that the status message does not name in its
+- Not: structured pauses from an agent without that extension. Agent Kourier does not read a framework's own approval
+  format (see [Why approvals use one extension](../explanation/why-a2a.md#why-approvals-use-one-extension)). Any other
+  pause must be text alone; a pause with any part that is not text cannot be used, so the task is cancelled. A payload that the status message does not name in its
   `extensions` is not read, and the pause is handled as text.
 - A kagent agent paused for a tool approval without the extension (its card does not list it, or a request did not ask
   for it) sends text alone, asking for a `FunctionResponse` (recorded with kagent 1.0.0-alpha5). Agent Kourier handles
