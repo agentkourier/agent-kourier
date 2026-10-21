@@ -1030,7 +1030,11 @@ making the prefix optional breaks multi-turn context.
   session records the turn whose output the task belongs to, in the same write as the task (the
   turn that began it, and after a button answer the answer's), and recovery renders the task's output
   under it, so a stream that the stopped process left open is ended and replaced with the whole output
-  and no half-written message stays in the thread; with no recorded turn it is posted anew.
+  and no half-written message stays in the thread; with no recorded turn it is posted anew. The
+  replacement keeps the steps: Slack drops a stream's cards from a message it updates, so every update
+  of a stream taken over, and the update that corrects a stream whose text diverged, carries the turn's
+  steps as cards before the text, a step with no result ended as a stop ends it. If Slack refuses the
+  update for its cards, it is sent again without them, so the steps never cost the answer.
 
 ### 8.4 Interactions
 

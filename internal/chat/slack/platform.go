@@ -341,6 +341,27 @@ func (s *stream) settle(saved mdText, unsure bool, err error) {
 // would read as success. It is the only text of a step that is not the agent's.
 const noResult = "No result was reported."
 
+// taskStatus is the status of a card for a step in the state given, and the output it shows, which is noResult for a
+// step that ended with no outcome and nothing for any other. A stream's task_update and a message's task_card show a
+// step alike.
+func taskStatus(s chat.StepState) (slackgo.TaskCardStatus, string) {
+	switch s {
+	case chat.StepDone:
+		return slackgo.TaskCardStatusComplete, ""
+	case chat.StepFailed:
+		return slackgo.TaskCardStatusError, ""
+	case chat.StepEnded:
+		return slackgo.TaskCardStatusComplete, noResult
+	}
+	return slackgo.TaskCardStatusInProgress, ""
+}
+
+// stepTitle is the title of a card: the step's title as stepText has it, or "(blank)" if nothing is left of it, as a
+// button's label is.
+func stepTitle(s string) string {
+	return cmp.Or(stepText(s, caps.Limit(chat.WhereStepTitle)), "(blank)")
+}
+
 // Step shows the progress of one unit of the agent's work as a task_update chunk, which Slack shows as a card. The
 // title and the details are untrusted text of one line, cleaned, escaped as markdown is (a task's text is not known to
 // be plain, so nothing in it may be a link or a mention if it is rendered as markdown) and cut at the cap of a task's
@@ -359,18 +380,9 @@ func (s *stream) Step(ctx context.Context, st chat.Step) error {
 	if st.ID == "" {
 		return fmt.Errorf("%w: a step with no ID", chat.ErrInvalid)
 	}
-	u := TaskUpdate{ID: st.ID, Title: cmp.Or(stepText(st.Title, caps.Limit(chat.WhereStepTitle)), "(blank)")}
-	output := ""
-	switch st.State {
-	case chat.StepDone:
-		u.Status = string(slackgo.TaskCardStatusComplete)
-	case chat.StepFailed:
-		u.Status = string(slackgo.TaskCardStatusError)
-	case chat.StepEnded:
-		u.Status, output = string(slackgo.TaskCardStatusComplete), noResult
-	default:
-		u.Status = string(slackgo.TaskCardStatusInProgress)
-	}
+	u := TaskUpdate{ID: st.ID, Title: stepTitle(st.Title)}
+	status, output := taskStatus(st.State)
+	u.Status = string(status)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	was := s.shown[st.ID]

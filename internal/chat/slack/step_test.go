@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -364,5 +365,133 @@ func TestAStepsDetailsGoAgainOnlyAfterSlackRefusedTheChunk(t *testing.T) {
 				t.Errorf("the chunk after the failure = %v; want details in it: %v", last, tc.again)
 			}
 		})
+	}
+}
+
+// The steps of a message are task_card blocks, before the parts that follow them, each in the status a stream's step of
+// that state has, and a step that ended with no outcome says so in its output, as the stream's card does. An update
+// shows them as a post does: an update is how a message that replaces a stream keeps the stream's cards.
+func TestTheStepsOfAMessageAreTaskCardsBeforeItsText(t *testing.T) {
+	w := newWorld(t)
+	msg := chat.Message{Fallback: "the answer", Parts: []chat.Part{
+		chat.Steps{Steps: []chat.Step{
+			{ID: "s1", Title: "kubectl", Detail: `ns="prod"`}, {ID: "s2", Title: "search", State: chat.StepDone},
+			{ID: "s3", Title: "fetch", State: chat.StepFailed}, {ID: "s4", Title: "ping", State: chat.StepEnded},
+		}},
+		chat.Body{Markdown: "the answer"},
+	}}
+	ref, err := w.p.Post(t.Context(), w.target, chat.Say(chat.Message{Fallback: "first"}), "tag-steps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, send := range map[string]func() error{
+		"post":   func() error { _, err := w.p.Post(t.Context(), w.target, chat.Say(msg), "tag-steps-2"); return err },
+		"update": func() error { return w.p.Update(t.Context(), ref, chat.Say(msg)) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := send(); err != nil {
+				t.Fatal(err)
+			}
+			m, blocks := w.last(t)
+			if name == "update" {
+				m, blocks = w.fake.Thread("C1", w.target.Thread)[1], nil
+				if err := json.Unmarshal(m.Blocks, &blocks); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := strings.Join(types(blocks), ","); got != "task_card,task_card,task_card,task_card,markdown" {
+				t.Fatalf("blocks %s; want the four cards and then the text", got)
+			}
+			want := []fakeslack.Task{
+				{ID: "s1", Title: "kubectl", Status: "in_progress", Details: `ns="prod"`}, {ID: "s2", Title: "search", Status: "complete"},
+				{ID: "s3", Title: "fetch", Status: "error"}, {ID: "s4", Title: "ping", Status: "complete", Output: "No result was reported."},
+			}
+			if got := m.Tasks(); !slices.Equal(got, want) || m.Text != "the answer" {
+				t.Errorf("Tasks %+v, text %q; want %+v and the fallback", got, m.Text, want)
+			}
+		})
+	}
+}
+
+// A card's title and the text of its details are shown by Slack as the characters they hold (probed 2026-10-21), so each is
+// cleaned onto one line and cut at the cap of a step's text, and not escaped: an escape would be shown.
+func TestTheCardsOfAMessageAreCleanedAndCappedAndNotEscaped(t *testing.T) {
+	long := strings.Repeat("x", 600)
+	for _, tc := range []struct {
+		name, title, detail   string
+		wantTitle, wantDetail string
+	}{
+		{"a broadcast", "<!channel>", "<!here>", "<!channel>", "<!here>"},
+		{"a markdown link", "[x](https://evil.test)", "[y](https://evil.test)", "[x](https://evil.test)", "[y](https://evil.test)"},
+		{"an ampersand and a mention", "a & <@U0123456789>", "", "a & <@U0123456789>", ""},
+		{"a line break and a hidden character", "a\nb\u200b\u202ec", "d\r\ne", "a bc", "d e"},
+		{"nothing once cleaned", "\u200b\u200d", "", "(blank)", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.post(t, chat.Say(chat.Message{Fallback: "f", Parts: []chat.Part{chat.Steps{Steps: []chat.Step{{ID: "s1", Title: tc.title, Detail: tc.detail}}}}}))
+			m, _ := w.last(t)
+			if got := m.Tasks(); len(got) != 1 || got[0].Title != tc.wantTitle || got[0].Details != tc.wantDetail {
+				t.Errorf("Tasks = %+v; want title %q and details %q", got, tc.wantTitle, tc.wantDetail)
+			}
+		})
+	}
+	t.Run("capped", func(t *testing.T) {
+		w := newWorld(t)
+		w.post(t, chat.Say(chat.Message{Fallback: "f", Parts: []chat.Part{chat.Steps{Steps: []chat.Step{{ID: "s1", Title: long, Detail: long}}}}}))
+		m, _ := w.last(t)
+		got := m.Tasks()[0]
+		for name, s := range map[string]string{"title": got.Title, "details": got.Details} {
+			if chat.Units(s) > 256 || !strings.HasSuffix(s, chat.Truncated) {
+				t.Errorf("%s is %d units; want at most 256, cut and marked", name, chat.Units(s))
+			}
+		}
+	})
+}
+
+// One title, two places: in a task_card block it is the characters it holds, which is how Slack shows a card's title, and in
+// a stream's task_update chunk it is escaped still, since how Slack reads a chunk's text is not known.
+func TestACardTitleIsLiteralAndAStreamStepTitleIsEscaped(t *testing.T) {
+	const title = "<!here> & [x](u)"
+	w := newWorld(t)
+	blocks := w.post(t, chat.Say(chat.Message{Fallback: "f", Parts: []chat.Part{chat.Steps{Steps: []chat.Step{{ID: "s1", Title: title}}}}}))
+	if len(blocks) != 1 || blocks[0]["type"] != "task_card" || blocks[0]["title"] != title {
+		t.Errorf("blocks %v; want one task_card titled %q, unescaped", blocks, title)
+	}
+	st, err := w.p.Stream(t.Context(), w.target, "U1", "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Step(t.Context(), chat.Step{ID: "s1", Title: title}); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := w.last(t)
+	if got := m.Tasks(); len(got) != 1 || got[0].Title != `&lt;!here&gt; &amp; [x]\(u)` {
+		t.Errorf("stream tasks %+v; want the chunk's title escaped as before", got)
+	}
+}
+
+// A message holds 50 blocks, and its steps have what room the rest leaves: the cards that do not fit are counted on a line
+// of their own after the last one shown, and the text and the buttons are all there.
+func TestTheStepsOfAMessageFitInWhatTheRestLeavesOfFiftyBlocks(t *testing.T) {
+	w := newWorld(t)
+	var steps []chat.Step
+	for i := range 60 {
+		steps = append(steps, chat.Step{ID: "s" + strconv.Itoa(i+1), Title: "tool", State: chat.StepDone})
+	}
+	blocks := w.post(t, chat.Say(chat.Message{Fallback: "f", Parts: []chat.Part{
+		chat.Steps{Steps: steps}, chat.Body{Markdown: "the answer"},
+		chat.Buttons{Buttons: []chat.Button{{ID: "up", Label: "Useful", Value: "v"}}},
+	}}))
+	got := types(blocks)
+	if len(got) != 50 || got[46] != "task_card" || got[47] != "context" || got[48] != "markdown" || got[49] != "actions" {
+		t.Fatalf("%d blocks %v; want 47 cards, the line that counts the rest, the text and the buttons", len(got), got)
+	}
+	elements, _ := blocks[47]["elements"].([]any)
+	if line, _ := elements[0].(map[string]any)["text"].(string); line != "13 more steps are not shown." {
+		t.Errorf("the line says %q; want the count of the cards left out", line)
+	}
+	if m, _ := w.last(t); m.Tasks()[46].ID != "s47" {
+		t.Errorf("the last card shown is %+v; want the first 47 in order", m.Tasks()[46])
 	}
 }
