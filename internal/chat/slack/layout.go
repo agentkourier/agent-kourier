@@ -117,9 +117,8 @@ func renderMessage(m chat.Message) (Content, error) {
 	for i, p := range m.Parts {
 		switch p := p.(type) {
 		case chat.Steps:
-			if len(p.Steps) > 0 {
+			if len(p.Steps) > 0 { // a step's title is no text of the message's own, and never stands for its fallback
 				cards = append(cards, stepsAt{at: len(blocks), steps: p.Steps})
-				note(p.Steps[0].Title)
 			}
 		case chat.Header:
 			if t := text(p.Text, maxHeader, true); t != "" {
@@ -213,13 +212,17 @@ func withCards(blocks []map[string]any, cards []stepsAt) []map[string]any {
 
 // taskCard is a step as a task_card block, which Slack shows as it shows a stream's card (probed 2026-10-21 in a sandbox
 // workspace, by chat.postMessage and chat.update, read back through conversations.replies and seen in the web client):
-// the status and the output of taskStatus, and the title as stepTitle has it. The details and the output are rich_text,
-// whose text elements are literal (approval.go), so the details are cleaned onto one line and cut, and not escaped: an
-// entity there would be shown as one. UNCONFIRMED(WP-04): that Slack shows a task_card's rich_text as literally as it
-// shows a rich_text block's, and how it reads the title, which is escaped as a task_update's is.
+// the status and the output of taskStatus. Slack shows a task_card's title and the text of its rich_text details as the
+// characters they hold: a second probe that day, in the web client, posted the hostile text "<!here>", "<!channel>",
+// "<@U…>", "<#C…>", "<https://x|y>", "[x](url)", "&amp;", "*bold*", "`code`" and a bare URL in both, and every one was
+// shown as typed, with no mention, link, style or notification, and an escaped title was shown with its entities and
+// backslashes. So both are cleaned onto one line and cut, and not escaped, as approval.go treats rich_text: an escape there
+// would be shown. A stream's task_update title is escaped still (stepTitle), since how Slack reads a chunk's text is not
+// known.
 func taskCard(st chat.Step) map[string]any {
 	status, output := taskStatus(st.State)
-	b := map[string]any{"type": "task_card", "task_id": st.ID, "title": stepTitle(st.Title), "status": string(status)}
+	title := cmp.Or(fitWith(chat.Clean(st.Title, true), caps.Limit(chat.WhereStepTitle), literal), "(blank)")
+	b := map[string]any{"type": "task_card", "task_id": st.ID, "title": title, "status": string(status)}
 	if d := fitWith(chat.Clean(st.Detail, true), caps.Limit(chat.WhereStepDetail), literal); d != "" {
 		b["details"] = richText(richSection(d))
 	}

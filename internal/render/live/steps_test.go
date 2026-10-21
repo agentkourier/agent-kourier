@@ -614,8 +614,14 @@ func TestAnUpdateRefusedWithItsStepsIsSentAgainWithout(t *testing.T) {
 	again.Handle(text("a", "the whole answer"))
 	again.Handle(call("c1", "search", nil))
 	again.Handle(result("c1", map[string]any{"output": "x"}))
-	again.Handle(agent.FinalEvent{})
 	release()
+	eventually(t, "the refused update and the one without steps", func() bool {
+		return refused.Load() == 1 && e.updates() == 1 && e.reply().Text == "the whole answer"
+	})
+	again.Handle(call("c2", "fetch", nil)) // a change after the refusal: its update must not try the steps again
+	e.window(t)
+	eventually(t, "the next update", func() bool { return e.updates() == 2 })
+	again.Handle(agent.FinalEvent{})
 	e.finish(t, again)
 	m := e.reply()
 	if m.Streaming || m.Text != "the whole answer" || len(m.Tasks()) != 0 {

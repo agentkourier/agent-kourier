@@ -413,17 +413,17 @@ func TestTheStepsOfAMessageAreTaskCardsBeforeItsText(t *testing.T) {
 	}
 }
 
-// A card's title is escaped as a stream's step's is, since Slack does not say how it reads it, and its details are the
-// characters of a rich_text text element, which is literal: cleaned onto one line and cut, and not escaped, so that an
-// entity is not shown as one (approval.go reads rich_text the same way). Each is cut at the cap of a step's text.
-func TestTheCardsOfAMessageAreCleanedEscapedAndCapped(t *testing.T) {
+// A card's title and the text of its details are shown by Slack as the characters they hold (probed 2026-10-21), so each is
+// cleaned onto one line and cut at the cap of a step's text, and not escaped: an escape would be shown.
+func TestTheCardsOfAMessageAreCleanedAndCappedAndNotEscaped(t *testing.T) {
 	long := strings.Repeat("x", 600)
 	for _, tc := range []struct {
 		name, title, detail   string
 		wantTitle, wantDetail string
 	}{
-		{"a broadcast", "<!channel>", "<!here>", "&lt;!channel&gt;", "<!here>"},
-		{"a markdown link", "[x](https://evil.test)", "[y](https://evil.test)", `\[x]\(https://evil.test)`, "[y](https://evil.test)"},
+		{"a broadcast", "<!channel>", "<!here>", "<!channel>", "<!here>"},
+		{"a markdown link", "[x](https://evil.test)", "[y](https://evil.test)", "[x](https://evil.test)", "[y](https://evil.test)"},
+		{"an ampersand and a mention", "a & <@U0123456789>", "", "a & <@U0123456789>", ""},
 		{"a line break and a hidden character", "a\nb\u200b\u202ec", "d\r\ne", "a bc", "d e"},
 		{"nothing once cleaned", "\u200b\u200d", "", "(blank)", ""},
 	} {
@@ -447,6 +447,28 @@ func TestTheCardsOfAMessageAreCleanedEscapedAndCapped(t *testing.T) {
 			}
 		}
 	})
+}
+
+// One title, two places: in a task_card block it is the characters it holds, which is how Slack shows a card's title, and in
+// a stream's task_update chunk it is escaped still, since how Slack reads a chunk's text is not known.
+func TestACardTitleIsLiteralAndAStreamStepTitleIsEscaped(t *testing.T) {
+	const title = "<!here> & [x](u)"
+	w := newWorld(t)
+	blocks := w.post(t, chat.Say(chat.Message{Fallback: "f", Parts: []chat.Part{chat.Steps{Steps: []chat.Step{{ID: "s1", Title: title}}}}}))
+	if len(blocks) != 1 || blocks[0]["type"] != "task_card" || blocks[0]["title"] != title {
+		t.Errorf("blocks %v; want one task_card titled %q, unescaped", blocks, title)
+	}
+	st, err := w.p.Stream(t.Context(), w.target, "U1", "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Step(t.Context(), chat.Step{ID: "s1", Title: title}); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := w.last(t)
+	if got := m.Tasks(); len(got) != 1 || got[0].Title != `&lt;!here&gt; &amp; [x]\(u)` {
+		t.Errorf("stream tasks %+v; want the chunk's title escaped as before", got)
+	}
 }
 
 // A message holds 50 blocks, and its steps have what room the rest leaves: the cards that do not fit are counted on a line
