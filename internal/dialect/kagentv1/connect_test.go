@@ -202,6 +202,8 @@ func TestHTTPStatusErrorCarriesRetryAfter(t *testing.T) {
 		{"garbage", "soon", 0, 0},
 		{"negative", "-5", 0, 0},
 		{"a plus sign: delay-seconds is digits only", "+5", 0, 0},
+		{"a day", "86400", 24 * time.Hour, 24 * time.Hour},
+		{"a second over a day: capped", "86401", 24 * time.Hour, 24 * time.Hour},
 		{"twenty digits: capped, not zero", "99999999999999999999", 24 * time.Hour, 24 * time.Hour},
 		{"absent", "", 0, 0},
 	} {

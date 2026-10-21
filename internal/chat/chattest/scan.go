@@ -265,12 +265,24 @@ func token(s string, out *strings.Builder, active *[]Active) int {
 		kind = KindMention
 	case strings.HasPrefix(body, "#"):
 		kind = KindChannelLink
-	case strings.Contains(body, "://") || strings.HasPrefix(body, "mailto:") || strings.HasPrefix(body, "tel:") || strings.HasPrefix(body, "javascript:"):
+	case strings.Contains(body, "://") || linkScheme(body):
 		kind = KindLink
 	}
 	*active = append(*active, Active{kind, s[:end+1]})
 	out.WriteString(label)
 	return end + 1
+}
+
+// linkScheme says whether s starts with a scheme that links without "://": one that mails, phones, or
+// runs or carries a document. A scheme is case-insensitive.
+func linkScheme(s string) bool {
+	s = strings.ToLower(s)
+	for _, scheme := range []string{"mailto:", "tel:", "javascript:", "vbscript:", "data:"} {
+		if strings.HasPrefix(s, scheme) {
+			return true
+		}
+	}
+	return false
 }
 
 // code reads a code span or a fenced block at the start of s, and shows its text as it is. In Slack's mrkdwn

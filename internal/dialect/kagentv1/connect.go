@@ -197,7 +197,10 @@ func retryAfter(h http.Header) time.Duration {
 	// RFC 9110 delay-seconds is digits only, so ParseUint, which rejects a sign. A value too
 	// large for a uint64 is a very long delay: it takes the cap, not 0.
 	if secs, err := strconv.ParseUint(v, 10, 64); err == nil || errors.Is(err, strconv.ErrRange) {
-		return time.Duration(min(secs, uint64(day/time.Second))) * time.Second
+		if secs >= uint64(day/time.Second) {
+			return day
+		}
+		return time.Duration(secs) * time.Second
 	}
 	if at, err := http.ParseTime(v); err == nil {
 		return min(max(time.Until(at), 0), day)
