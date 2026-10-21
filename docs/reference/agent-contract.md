@@ -173,9 +173,14 @@ card lists the extension.
 
 On `kagent-v1`, the question is kagent's human-in-the-loop payload in the status message's metadata. On `a2a`, a status
 message that names that extension in its `extensions` and carries the payload is read the same way. Any other question
-on `a2a` is a status message made only of non-empty text parts, with a `messageId` or a status `timestamp` that differs
-from the last question's. Anything else in `input-required` cannot be shown, so the task is cancelled and the thread is
-told. The answer to a text question is one text part sent to the paused `taskId` and `contextId`.
+on `a2a` is a status message, on a task with an ID, whose parts are all text, and whose text is not blank once the parts
+are joined and trimmed. The task ID with the message's `messageId`, or with its status `timestamp` when it has no
+`messageId`, names the question. The same name with the same text is the same question, and is not posted again. Give
+each new question a new name: a different question under a name already used cannot be shown, unless the earlier
+question was settled long enough ago for its request to have been
+[cleared](stored-data.md#interactions-request-and-answer), in which case it is taken for the earlier question. A pause
+that breaks these rules, and anything else in `input-required`, cannot be shown, so the task is cancelled and the thread
+is told. The answer to a text question is one text part sent to the paused `taskId` and `contextId`.
 
 ## Structured questions and tool approvals
 
