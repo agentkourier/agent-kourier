@@ -464,6 +464,10 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 		return idle, fmt.Errorf("read queue: %w", err)
 	}
 	sctx = telemetry.Restore(sctx, r.TraceParent, r.TraceState)
+	// The intake writes the row before it marks the turn fresh, both under its lock: wait out an intake that
+	// may be between the two, or a turn this process just queued is taken for one an earlier process sent.
+	m.intake.Lock()
+	m.intake.Unlock() //nolint:staticcheck // SA2001: an empty critical section is the point, a barrier
 	m.mu.Lock()
 	if _, fresh := m.fresh[r.ID]; !fresh { // an earlier process may have marked it queued, and nothing here knows
 		m.marked[r.ID] = struct{}{} // so it is taken off when the turn is sent or ends, which does no harm if it is not there

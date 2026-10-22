@@ -319,6 +319,39 @@ func TestRetryStateStartsOverAfterANamedTurn(t *testing.T) {
 	}
 }
 
+// A turn this process queued is not a resend, however soon the runner reads it: the intake marks it fresh only after
+// it writes the row, and the runner waits for that. Turn 2 has a context to look in, so a lookup would show.
+func TestATurnReadAsItIsQueuedIsNotLookedUp(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	<-sink.finals
+	f.nextSent()
+	f.st.mu.Lock()
+	f.st.onEnqueued = func() { // the row is written and not yet marked: a runner takes it up now
+		f.st.mu.Lock()
+		f.st.onEnqueued = nil
+		f.st.mu.Unlock()
+		f.m.start(key)
+		select { // a runner that waits for the intake sends nothing
+		case <-f.agent.sent:
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	f.st.mu.Unlock()
+	if _, err := f.submit(inbound("2")); err != nil {
+		t.Fatal(err)
+	}
+	<-sink.finals
+	f.agent.mu.Lock()
+	defer f.agent.mu.Unlock()
+	if want := "[send send]"; fmt.Sprint(f.agent.seq) != want {
+		t.Errorf("calls = %v; want %s: turn 2's first send is no resend, so it has no lookup", f.agent.seq, want)
+	}
+}
+
 // A turn sent once and not known to have been taken is looked up before any resend into its
 // context, whatever failed the first time, and however the resend is triggered (spec 8.2).
 func TestPreviouslySentTurnIsLookedUpBeforeAnyResend(t *testing.T) {
