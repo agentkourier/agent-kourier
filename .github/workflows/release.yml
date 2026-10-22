@@ -241,7 +241,7 @@ jobs:
           gh api --method POST "repos/${REPOSITORY}/releases" --input "${payload}" >/dev/null
           echo "created release ${TAG} with verified image and chart digests"
 
-  # The documentation site builds each release line from its newest final tag (hack/docs/versions.yaml), so a final
+  # The documentation site publishes every final tag of the release lines in hack/docs/versions.yaml, so a final
   # release changes it, but a tag push does not run docs.yml, which deploys only from main. This starts it there once
   # the release exists. A prerelease is never published on the site. No checkout: it only asks the Actions API.
   docs:

@@ -1,8 +1,9 @@
-# The release lines the documentation site publishes, newest first (`make docs-site`, hack/docs/sitebuild).
+# The release lines whose tags the documentation site publishes, newest first (`make docs-site`, hack/docs/sitebuild).
 #
-# Each line is built from its newest final tag (vX.Y.Z, no prerelease suffix) into its own directory, as
-# agentkourier.dev/0.1/. The first line that has a tag is "latest", where the site's root leads. A line with no tag yet
-# is skipped, so the release pull request of a new minor version adds its line here before the tag exists. main is
-# always published too, as dev. Remove a line to stop publishing it.
+# Every final tag (vX.Y.Z, no prerelease suffix) of a line is built into its own directory, as agentkourier.dev/0.1.3/,
+# and the line's own path, agentkourier.dev/0.1/, leads to its newest tag. The newest tag of the first line that has a
+# tag is "latest", where the site's root leads. A line with no tag yet is skipped, so the release pull request of a new
+# minor version adds its line here before the tag exists. main is always published too, as dev. Remove a line to stop
+# publishing its tags.
 releases:
   - "0.1"

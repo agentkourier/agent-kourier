@@ -47,31 +47,33 @@ func TestParseVersions(t *testing.T) {
 	}
 }
 
-func TestNewestTag(t *testing.T) {
+func TestLineTags(t *testing.T) {
 	tags := []string{"v0.1.0", "v0.1.2", "v0.1.10", "v0.1.11-rc.1", "v0.2.0-rc.1", "v0.10.0", "v1.0.0", "x0.1.12", "v0.1.12x"}
 	tests := []struct {
-		line, want string
+		line string
+		want []string
 	}{
-		{"0.1", "v0.1.10"}, // numeric, not lexical; a prerelease never counts
-		{"0.2", ""},        // only a prerelease so far
-		{"0.10", "v0.10.0"},
-		{"1.0", "v1.0.0"},
-		{"2.0", ""},
+		{"0.1", []string{"v0.1.10", "v0.1.2", "v0.1.0"}}, // numeric, not lexical; a prerelease never counts
+		{"0.2", nil}, // only a prerelease so far
+		{"0.10", []string{"v0.10.0"}},
+		{"1.0", []string{"v1.0.0"}},
+		{"2.0", nil},
 	}
 	for _, tt := range tests {
-		if got := newestTag(tt.line, tags); got != tt.want {
-			t.Errorf("newestTag(%q) = %q, want %q", tt.line, got, tt.want)
+		if got := lineTags(tt.line, tags); !slices.Equal(got, tt.want) {
+			t.Errorf("lineTags(%q) = %v, want %v", tt.line, got, tt.want)
 		}
 	}
 }
 
-func TestResolveSkipsUntaggedLine(t *testing.T) {
-	// The release pull request for 0.2 adds the line before its tag exists.
-	got, skipped := resolve([]string{"0.2", "0.1"}, []string{"v0.1.2", "v0.2.0-rc.1"})
-	if want := []release{{Line: "0.1", Tag: "v0.1.2"}}; !slices.Equal(got, want) {
+func TestResolve(t *testing.T) {
+	// The release pull request for 0.3 adds the line before its tag exists.
+	got, skipped := resolve([]string{"0.3", "0.2", "0.1"}, []string{"v0.1.0", "v0.2.0", "v0.1.1", "v0.2.1", "v0.3.0-rc.1"})
+	want := []release{{"0.2", "v0.2.1"}, {"0.2", "v0.2.0"}, {"0.1", "v0.1.1"}, {"0.1", "v0.1.0"}}
+	if !slices.Equal(got, want) {
 		t.Errorf("releases = %v, want %v", got, want)
 	}
-	if want := []string{"0.2"}; !slices.Equal(skipped, want) {
+	if want := []string{"0.3"}; !slices.Equal(skipped, want) {
 		t.Errorf("skipped = %v, want %v", skipped, want)
 	}
 }
@@ -123,7 +125,7 @@ func TestCheckOut(t *testing.T) {
 }
 
 func TestVersionsJSON(t *testing.T) {
-	b, err := versionsJSON([]release{{Line: "0.2", Tag: "v0.2.1"}, {Line: "0.1", Tag: "v0.1.2"}})
+	b, err := versionsJSON([]release{{Line: "0.2", Tag: "v0.2.1"}, {Line: "0.2", Tag: "v0.2.0"}, {Line: "0.1", Tag: "v0.1.2"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,8 +135,9 @@ func TestVersionsJSON(t *testing.T) {
 	}
 	want := []versionEntry{
 		{Version: "dev", Title: "main (unreleased)", Aliases: []string{}},
-		{Version: "0.2", Title: "v0.2.1", Aliases: []string{"latest"}},
-		{Version: "0.1", Title: "v0.1.2", Aliases: []string{}},
+		{Version: "0.2.1", Title: "v0.2.1", Aliases: []string{"latest"}},
+		{Version: "0.2.0", Title: "v0.2.0", Aliases: []string{}},
+		{Version: "0.1.2", Title: "v0.1.2", Aliases: []string{}},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %d entries, want %d", len(got), len(want))
@@ -168,7 +171,8 @@ func TestWrapperConfig(t *testing.T) {
 }
 
 func TestRedirects(t *testing.T) {
-	got, err := redirects("0.1", []entry{{"how-to", true}, {"index.html", false}, {"sitemap.xml", false}, {"assets", true}})
+	releases := []release{{"0.2", "v0.2.1"}, {"0.2", "v0.2.0"}, {"0.1", "v0.1.3"}, {"0.1", "v0.1.2"}}
+	got, err := redirects(releases, []entry{{"how-to", true}, {"index.html", false}, {"assets", true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,10 +184,13 @@ func TestRedirects(t *testing.T) {
 	}
 	want := []string{
 		"/ /latest/ 302",
-		"/latest /0.1/ 302",
+		"/latest /0.2.1/ 302",
+		"/0.2 /0.2.1/ 302", // each line to its newest tag
+		"/0.1 /0.1.3/ 302",
 		"/index.html /latest/index.html 301",
-		"/sitemap.xml /latest/sitemap.xml 301",
-		"/latest/* /0.1/:splat 302",
+		"/latest/* /0.2.1/:splat 302",
+		"/0.2/* /0.2.1/:splat 302",
+		"/0.1/* /0.1.3/:splat 302",
 		"/how-to/* /latest/how-to/:splat 301",
 		"/assets/* /latest/assets/:splat 301",
 	}
@@ -197,31 +204,59 @@ func TestRedirectsLimit(t *testing.T) {
 	for i := range 100 {
 		many = append(many, entry{name: "d" + string(rune('a'+i%26)) + string(rune('a'+i/26)), dir: true})
 	}
-	if _, err := redirects("0.1", many); err == nil || !strings.Contains(err.Error(), "dynamic") {
+	if _, err := redirects([]release{{"0.1", "v0.1.0"}}, many); err == nil || !strings.Contains(err.Error(), "dynamic") {
 		t.Errorf("err = %v, want the dynamic rule limit", err)
 	}
 }
 
-func TestHeaderBlock(t *testing.T) {
-	in := "# A comment.\n/stylesheets/*\n  Cache-Control: max-age=300\n\n/\n  Cache-Control: max-age=300\n/assets/javascripts/*\n\tCache-Control: immutable\n"
-	got, n, err := headerBlock("0.1", []byte(in))
+func TestParseHeaders(t *testing.T) {
+	in := "# A comment.\n/stylesheets/*\n  Cache-Control: max-age=300\n\n/\n  Cache-Control: max-age=300\n/assets/javascripts/*\n\tCache-Control: immutable\n\tX-A: b\n"
+	got, err := parseHeaders([]byte(in))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "/0.1/stylesheets/*\n  Cache-Control: max-age=300\n/0.1/\n  Cache-Control: max-age=300\n/0.1/assets/javascripts/*\n  Cache-Control: immutable\n"
-	if got != want || n != 3 {
-		t.Errorf("got %d rules:\n%s\nwant 3:\n%s", n, got, want)
+	want := []headerRule{
+		{"/stylesheets/*", []string{"Cache-Control: max-age=300"}},
+		{"/", []string{"Cache-Control: max-age=300"}},
+		{"/assets/javascripts/*", []string{"Cache-Control: immutable", "X-A: b"}},
+	}
+	if !slices.EqualFunc(got, want, func(a, b headerRule) bool { return a.text("") == b.text("") }) {
+		t.Errorf("got %v, want %v", got, want)
 	}
 	for _, bad := range []string{"  Cache-Control: x\n", "stylesheets/*\n"} {
-		if _, _, err := headerBlock("0.1", []byte(bad)); err == nil {
-			t.Errorf("headerBlock(%q) = nil error", bad)
+		if _, err := parseHeaders([]byte(bad)); err == nil {
+			t.Errorf("parseHeaders(%q) = nil error", bad)
 		}
+	}
+}
+
+func TestMergeHeaders(t *testing.T) {
+	short := headerRule{"/stylesheets/*", []string{"Cache-Control: max-age=300"}}
+	long := headerRule{"/assets/*", []string{"Cache-Control: immutable"}}
+	newer := headerRule{"/*.html", []string{"Cache-Control: max-age=60"}}
+	got, n := mergeHeaders([]string{"dev", "0.1.1", "0.1.0"}, map[string][]headerRule{
+		"dev":   {short, long, newer},
+		"0.1.1": {short, long},
+		"0.1.0": {short, {"/assets/*", []string{"Cache-Control: max-age=60"}}}, // same path, other headers
+	})
+	want := "/:version/stylesheets/*\n  Cache-Control: max-age=300\n" + // every version has it
+		"/dev/assets/*\n  Cache-Control: immutable\n" +
+		"/dev/*.html\n  Cache-Control: max-age=60\n" +
+		"/0.1.1/assets/*\n  Cache-Control: immutable\n" +
+		"/0.1.0/assets/*\n  Cache-Control: max-age=60\n"
+	if got != want || n != 5 {
+		t.Errorf("got %d rules:\n%s\nwant 5:\n%s", n, got, want)
+	}
+	// A version with no _headers shares nothing, so every rule stays under its version.
+	got, n = mergeHeaders([]string{"dev", "0.1.0"}, map[string][]headerRule{"dev": {short}})
+	if want := "/dev/stylesheets/*\n  Cache-Control: max-age=300\n"; got != want || n != 1 {
+		t.Errorf("got %d rules:\n%s\nwant 1:\n%s", n, got, want)
 	}
 }
 
 // The rules for the unversioned site's paths come from the fixed list, whatever the latest build holds.
 func TestRedirectsKeepLegacyPaths(t *testing.T) {
-	got, err := redirects("0.2", legacyPaths)
+	got, err := redirects([]release{{"0.2", "v0.2.0"}}, legacyPaths)
 	if err != nil {
 		t.Fatal(err)
 	}

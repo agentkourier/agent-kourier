@@ -61,9 +61,10 @@ golangci-lint runs as `go tool golangci-lint`, never a global install.
   binary lacks the test hooks. All three need Docker.
 - `make docs-ref` regenerates `docs/reference/` from the API types and the chart values; `make docs-build` builds the site (strict) and runs `docs-check`.
 - `make docs-site` builds the versioned site that production serves into `bin/versioned-site` (`hack/docs/sitebuild`): this tree as
-  `dev/`, and each release line in `hack/docs/versions.yaml` (newest first) from its newest final tag, in a temporary
-  worktree with that tag's own pinned requirements, the first as `latest`. It writes `versions.json` (Material's version
-  selector), `_redirects` (the root and the old unversioned paths to `/latest/`) and `_headers` at the root. It needs the tags.
+  `dev/`, and every final tag of the release lines in `hack/docs/versions.yaml` (newest first) as `X.Y.Z/`, each in a
+  temporary worktree with that tag's own pinned requirements, the newest as `latest`. It writes `versions.json` (Material's
+  version selector), `_redirects` (the root and the old unversioned paths to `/latest/`, each line's `/X.Y/` to its newest
+  tag) and `_headers` at the root. It needs the tags.
 - `make docs-check` fails on a misspelt product name (`hack/docs/namecheck` reads `mkdocs.yml`, the theme
   overrides, `docs/` except `brand` and `spikes`, and the files that pages of `docs/` include with `--8<--`, found under the
   snippets `base_path` in `mkdocs.yml`; an include it cannot find fails too, and `kourier/` as a path segment is not a misspelling) and, in the public sources (`README.md`, the chart
