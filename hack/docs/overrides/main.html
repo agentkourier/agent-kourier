@@ -1,5 +1,18 @@
 {% extends "base.html" %}
 
+{#- The banner Material shows on a version other than latest, on the versioned site (make docs-site): dev, which is
+    main, and an older release line. Each version is built with its own tag's templates, so a line whose newest tag
+    predates this block shows no banner. The link leads to the site's root (extra.site_root, which sitebuild sets),
+    which redirects to latest; a link relative to base_url breaks on 404.html, whose base_url is absolute. -#}
+{% block outdated %}
+  {%- if config.site_url.endswith("/dev/") %}
+  These pages describe main, which can have changes that no release has yet.
+  {%- else %}
+  These pages describe an older release.
+  {%- endif %}
+  <a href="{{ config.extra.site_root }}"><strong>Read the docs for the current release.</strong></a>
+{% endblock %}
+
 {% block extrahead %}
   {#- Inter (400, 600, 700) for text and headings, JetBrains Mono for code. -#}
   <link rel="preconnect" href="https://fonts.googleapis.com">

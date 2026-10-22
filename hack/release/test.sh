@@ -118,8 +118,8 @@ echo "== an authorization error fails closed"
 run_release_case release-auth-error 1 release-auth-error
 contains "release-auth-error: reports an indeterminate release state" "could not determine whether release" "${TMP}/release-auth-error.out"
 
-run_version_case() { # TAG CHART_VERSION WANT_STATUS NAME
-  local tag=$1 version=$2 want=$3 name=$4 status chart
+run_version_case() { # TAG CHART_VERSION WANT_STATUS NAME [VERSIONS_YAML]
+  local tag=$1 version=$2 want=$3 name=$4 versions=${5:-${TMP}/versions.yaml} status chart
   chart=${TMP}/${name}-Chart.yaml
   if [ -n "${version}" ]; then
     printf 'apiVersion: v2\nname: agent-kourier\nversion: %s\nappVersion: dev\n' "${version}" >"${chart}"
@@ -127,11 +127,13 @@ run_version_case() { # TAG CHART_VERSION WANT_STATUS NAME
     printf 'apiVersion: v2\nname: agent-kourier\n' >"${chart}"
   fi
   set +e
-  "${CHECK_VERSION}" "${tag}" "${chart}" >"${TMP}/${name}.out" 2>&1
+  "${CHECK_VERSION}" "${tag}" "${chart}" "${versions}" >"${TMP}/${name}.out" 2>&1
   status=$?
   set -e
   check "${name}: exit status" "${want}" "${status}"
 }
+
+printf 'releases:\n  - "1.2"\n  - 1.1 # unquoted\n' >"${TMP}/versions.yaml"
 
 echo "== a release tag must be the chart's version"
 run_version_case v1.2.3 1.2.3 0 version-match
@@ -145,11 +147,20 @@ contains "version-prerelease: skips the check" "is a prerelease" "${TMP}/version
 run_version_case 1.2.3 1.2.3 1 version-no-v
 run_version_case v1.2 1.2.3 1 version-short
 
+echo "== a final release tag's line must be listed for the documentation site"
+run_version_case v1.1.4 1.1.4 0 version-line-unquoted
+run_version_case v1.3.0 1.3.0 1 version-line-missing
+contains "version-line-missing: says what to add" 'does not list the release line 1.3: add "1.3"' "${TMP}/version-line-missing.out"
+printf 'releases:\n  - "1x0"\n  - "1.02"\n  - "11.0"\n' >"${TMP}/near-versions.yaml"
+run_version_case v1.0.2 1.0.2 1 version-line-exact "${TMP}/near-versions.yaml" # 1.0 matches none of 1x0, 1.02, 11.0
+run_version_case v1.3.0-rc.1 1.2.3 0 version-line-prerelease
+run_version_case v1.2.3 1.2.3 1 version-line-no-file "${TMP}/no-such-versions.yaml"
+
 echo "== the repository's chart version passes as a release tag"
 set +e
 "${CHECK_VERSION}" "v$(sed -n 's/^version:[[:space:]]*//p' "${HERE}/../../charts/agent-kourier/Chart.yaml" | head -n 1)" >"${TMP}/version-repo.out" 2>&1
 status=$?
 set -e
-check "version-repo: the chart's own version passes" 0 "${status}"
+check "version-repo: the chart's own version and the repository's versions.yaml pass" 0 "${status}"
 
 echo "all passed"
