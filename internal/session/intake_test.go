@@ -41,6 +41,7 @@ type spyStore struct {
 	onSet      func()           // runs when a task is cleared
 	onClearAck func()           // runs before ClearSessionAcknowledgment updates the active task turn
 	onNext     func()           // runs before NextReply reads the queue
+	onEnqueued func()           // runs after EnqueueReply wrote a row
 	gate       chan struct{}    // when set, the first GetSession waits for a second, or 200 ms
 	reads      int
 }
@@ -147,7 +148,14 @@ func (s *spyStore) EnqueueReply(ctx context.Context, r store.Reply) (bool, error
 	if err := s.failOnce("enqueue"); err != nil {
 		return false, err
 	}
-	return s.Store.EnqueueReply(ctx, r)
+	enqueued, err := s.Store.EnqueueReply(ctx, r)
+	s.mu.Lock()
+	hook := s.onEnqueued
+	s.mu.Unlock()
+	if hook != nil && enqueued {
+		hook()
+	}
+	return enqueued, err
 }
 
 type fixture struct {

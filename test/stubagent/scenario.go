@@ -14,6 +14,9 @@ const gateName = `[\w-]+`
 var (
 	gatePattern   = regexp.MustCompile(`gate:(` + gateName + `)`) // finds the gate a prompt names
 	validGatePatt = regexp.MustCompile(`^` + gateName + `$`)
+	// refusePrompt finds the "refuse gate:G" that makes scenario-answer-fails refuse the answer; a gate name that
+	// holds the word does not.
+	refusePrompt = regexp.MustCompile(`\brefuse gate:` + gateName)
 	// blockTag finds the name of the untrusted block Agent Kourier appends to a trigger's first prompt.
 	blockTag = regexp.MustCompile(`untrusted-data-[0-9a-f]{12}`)
 	// threadBlockOpen finds the opening line of the block of thread replies Agent Kourier appends to a mentioned turn in a
@@ -21,6 +24,10 @@ var (
 	// inline, so a match on the line is the block's own.
 	threadBlockOpen = regexp.MustCompile(`(?m)^<(thread-replies-[0-9a-f]{12})>$`)
 )
+
+// NotReady is the text of kagent's -32004 for a session that cannot take input, which its dialect in
+// internal/dialect/kagentv1 reads as not ready, not busy. scenario-answer-fails refuses an answer with it.
+const NotReady = "cannot accept work during a lifecycle operation"
 
 // ValidGate reports whether name can name a gate. Gates stay open for the life of the server, so
 // a name is used once: a reused name is already released.
@@ -47,6 +54,11 @@ func ValidGate(name string) bool { return validGatePatt.MatchString(name) }
 //   - scenario-context says which turn of its context it is, how many replies of the thread the turn carried and the tag of
 //     the block that held them: "Turn 2. Replies: 1. Block: thread-replies-0123456789ab.", or "Block: none." for a turn
 //     with no block. With "gate:G" in the prompt it then holds on the gate and ends with " Released.", as scenario-gated.
+//   - scenario-answer-fails asks "Which service?" (free text), and the answer never gets a reply: with "fail gate:G"
+//     in the prompt the turn the answer resumes holds on G, says nothing, then ends the task FAILED ("The model call
+//     failed after the answer."); with "refuse gate:G" the answer's send waits on G, then is refused with -32004
+//     NotReady (RefuseAnswer), which kagent's dialect reads as not ready, and the task still waits for input. With no
+//     gate in the prompt it finishes at once, as scenario-gated.
 //
 // The scenarios and the agents that serve them in the cluster:
 //
@@ -72,6 +84,9 @@ func ValidGate(name string) bool { return validGatePatt.MatchString(name) }
 //	                      that an alert's first turn is the template's output and the hashed block
 //	S18  scenario-context "Turn N. Replies: K. Block: <tag|none>." shows that a mention-only Binding sent the unmentioned
 //	                      replies since the last turn, once, in a block of their own
+//	S26  scenario-answer-fails
+//	                      the answer's turn shows the progress card while G is held, then fails or is
+//	                      refused as not ready; release G through /_control/release/{gate}, as for S1
 func ScenarioAgents(s *Server) {
 	const ns = "kagent"
 	s.Agent(ns, "scenario-alert").Reply(func(prompt string) []Step {
@@ -127,6 +142,22 @@ func ScenarioAgents(s *Server) {
 			return []Step{Text()}
 		}
 		return []Step{Fail("Incorrect API key provided: sk-proj-********************wxyz. HTTP 401")}
+	})
+	s.Agent(ns, "scenario-answer-fails").Reply(func(prompt string) []Step {
+		m := gatePattern.FindStringSubmatch(prompt)
+		if m == nil {
+			return []Step{Text("No gate named, not asking.")}
+		}
+		refuse := refusePrompt.MatchString(prompt)
+		return []Step{Ask([]Question{{Question: "Which service?"}}, func(r Response) []Step {
+			switch {
+			case r.Plain():
+				return plain()
+			case refuse:
+				return []Step{RefuseAnswer(m[1], NotReady)}
+			}
+			return []Step{Hold(m[1]), Fail("The model call failed after the answer.")}
+		})}
 	})
 	s.Agent(ns, "scenario-ask").Reply(func(string) []Step {
 		return []Step{Ask([]Question{

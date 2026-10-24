@@ -166,7 +166,7 @@ e2e-ax-down: ## Tear down only the AX E2E tier
 
 # The documentation site (mkdocs.yml, docs/): MkDocs with Material, in a virtualenv under bin/ with the versions
 # pinned in hack/docs/requirements.txt. Needs Python 3.
-.PHONY: docs docs-build docs-ref docs-check docs-diagrams
+.PHONY: docs docs-build docs-site docs-ref docs-check docs-diagrams
 DOCS_VENV := bin/docs-venv
 
 $(DOCS_VENV)/.installed: hack/docs/requirements.txt
@@ -193,3 +193,6 @@ docs: $(DOCS_VENV)/.installed docs-ref ## Serve the documentation site at http:/
 
 docs-build: $(DOCS_VENV)/.installed docs-ref docs-check ## Build the documentation site into bin/site; any warning fails the build
 	$(DOCS_VENV)/bin/mkdocs build --strict --site-dir bin/site
+
+docs-site: $(DOCS_VENV)/.installed docs-ref docs-check ## Build the versioned site into bin/versioned-site: this tree as dev, each release line in hack/docs/versions.yaml from its newest tag
+	go run ./hack/docs/sitebuild -venv $(DOCS_VENV) -out bin/versioned-site
