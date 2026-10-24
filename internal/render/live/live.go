@@ -289,7 +289,7 @@ const (
 	// callStep is a tool call: the call, and how it ended.
 	callStep stepKind = iota
 	// workingStep is a Working… card for a gap. The next tool call takes it over and it becomes that call's step; text, or the
-	// end of the turn, ends it under a title of its own (render.WorkingEnded).
+	// end of the turn, ends it under a title of its own (render.WorkingEnded), which a tool call after the text changes.
 	workingStep
 	// activityStep is the one card of the activity mode, which shows counts and no call; it ends at the first text or the end
 	// of the turn, with what it counted then.
@@ -484,6 +484,7 @@ func (u *Run) callMade(e agent.ToolCallEvent, now time.Time) {
 		u.anon = false
 	}
 	u.idle = false // the tool's own line takes the place of Working…
+	u.followText()
 	u.beginActivity()
 	u.reopenGap(now)
 }
@@ -552,7 +553,8 @@ func (u *Run) openIdle(seq int, now time.Time) {
 
 // endWorking ends what stands for time, as e says, when text comes or the turn ends: a Working… card that no call claimed,
 // and the activity card, with the counts and the time it stands at. A card ends once. Only text that came while a Working…
-// card was open says that it wrote the answer; a final that ends it says how the task ended. The caller holds u.mu.
+// card was open says that it wrote the answer, until a tool call follows that text (followText); a final that ends it says how
+// the task ended. The caller holds u.mu.
 func (u *Run) endWorking(now time.Time, e render.Ending) {
 	n := len(u.steps)
 	if n == 0 || u.steps[n-1].ending != render.NotEnded {
@@ -563,6 +565,17 @@ func (u *Run) endWorking(now time.Time, e render.Ending) {
 		r.ending = e
 	case activityStep:
 		r.ending, r.steps, r.failed, r.endedAt = e, u.finished, u.failed, now
+	}
+}
+
+// followText makes the text that ended a Working… card an update, now that a tool call follows it: the card said that it
+// wrote the answer while nothing but text came after (render.WroteTitle), and the answer is what comes after this call. The
+// caller holds u.mu.
+func (u *Run) followText() {
+	for i := range u.steps {
+		if r := &u.steps[i]; r.kind == workingStep && r.ending == render.EndedByText {
+			r.ending = render.EndedByUpdate
+		}
 	}
 }
 

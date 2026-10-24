@@ -178,10 +178,10 @@ Binding fails to load for it.
 
 - **A chat thread gains `Working…` cards.** When 3 seconds pass with no new text and no tool call under way, a card titled
   `Working…` begins in the stream. The next tool call takes that card over, so it carries the tool's name; if text comes
-  first, the card is retitled `Wrote the answer`; a card still open when the turn ends becomes `Finished`, or `Stopped` (an
+  first, the card is retitled `Wrote the answer`, and `Wrote an update` if a tool call follows that text; a card still open when the turn ends becomes `Finished`, or `Stopped` (an
   error) if the task failed or was cancelled. A thread that used to show one card for each tool call can now show one more,
-  and each gap longer than 3 seconds costs at most two more writes to Slack (the card's begin and, when no tool call takes
-  it over, its end). This needs a platform with step cards; an agent that marks no tool parts (see
+  and each gap longer than 3 seconds costs at most three more writes to Slack (the card's begin; its end, when no tool call
+  takes it over; and its retitle, when text ended it and a tool call follows that text). This needs a platform with step cards; an agent that marks no tool parts (see
   [the next section](#upgrade-to-the-release-that-reads-tool-steps-on-every-dialect)) gets `Working…` cards alone.
 - **An alert thread gains a `Working…` line.** After the same 3 seconds, the message the investigation updates shows
   `Working…` as a line of small print in place of the line of a tool call that returned, under the text so far if there is

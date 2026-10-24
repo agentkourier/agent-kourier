@@ -971,16 +971,16 @@ making the prefix optional breaks multi-turn context.
   stretch 22 s). The renderer's run loop wakes on a timer as well as on events. A gap is the time since the last text, the
   last tool result with no other call under way, or the start of the turn; no gap runs while a call with an ID is under
   way. When a gap has run `Config.ActivityDelay` (3 s) with nothing new, the renderer shows that the agent is working, once
-  for the gap; every other write follows an event. So a gap longer than the delay costs at most two writes more than `steps`
-  spends in a chat thread (each `Step` is its own `chat.appendStream`: the card's begin and, when no tool call takes it over,
-  its end), and one more `chat.update` in an alert thread. The `activity` mode writes its card when a result
+  for the gap; every other write follows an event. So a gap longer than the delay costs at most three writes more than `steps`
+  spends in a chat thread (each `Step` is its own `chat.appendStream`: the card's begin; its end, when no tool call takes it
+  over; and its retitle, when text ended it and a tool call follows that text), and one more `chat.update` in an alert thread. The `activity` mode writes its card when a result
   changes a count, at most once a window (the actual `chat.appendStream` rate tier is unverified). The modes:
   - `steps`: a card per tool call in a chat thread, the status line above in an alert thread.
   - `steps-and-activity` (the default): the same, and a gap longer than the delay adds one `Working…`. In a stream it is a
     card begun in the running state with no detail. The next tool call takes that card over: the card's title becomes the
     tool's, the tool's detail is shown then, and the result finishes it with its status alone (one card; the gap cost the begin).
     A card no call took is ended under a title of its own, so that no card ticks on `Working…`: `Wrote the answer` if text
-    came while it was open; at the end of the turn, `Finished` for a completed task, `Waiting for your answer` for a
+    came while it was open, retitled `Wrote an update` when a tool call follows that text, which was then not the answer; at the end of the turn, `Finished` for a completed task, `Waiting for your answer` for a
     pause for input, and `Stopped`, an error and not a tick, for a task that failed, was cancelled or was rejected. A card
     that was never sent when the turn ends with no text is not sent at all: no stream is made for it. A call that arrives
     before the delay begins its card directly. On the update path `Working…` is a line of small print that replaces the
