@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
+
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/chat"
@@ -534,6 +536,63 @@ func TestARecoveredTurnKeepsTheStepsOfTheStreamItTakesOver(t *testing.T) {
 	e.assertLastStopIsBare(t)
 }
 
+// A run that took over a stream and ends with no text, as a pause for a question or an approval does, ends with the cards
+// its updates carry: they are what the turn shows, as a stream that stops with steps and no text shows them. No "(no
+// output)" is put under them, and a turn that showed no text has no reply to rate.
+func TestATurnThatTookOverAStreamEndsWithItsCardsAndNoPlaceholder(t *testing.T) {
+	pause := func(awaiting ...string) agent.FinalEvent {
+		return agent.FinalEvent{Task: &a2a.Task{ID: "t1", Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired}}, AwaitingApproval: awaiting}
+	}
+	for _, tc := range []struct {
+		name  string
+		final agent.FinalEvent
+		want  []fakeslack.Task
+	}{
+		{"a question", pause(), []fakeslack.Task{
+			{ID: "s1", Title: "search", Status: "complete", Details: `q="up"`},
+			{ID: "s2", Title: "delete_pod", Status: "error"},
+		}},
+		{"an approval", pause("c2"), []fakeslack.Task{
+			{ID: "s1", Title: "search", Status: "complete", Details: `q="up"`},
+			{ID: "s2", Title: "Approval requested: delete_pod", Status: "complete"},
+		}},
+		{"the end, with no text", agent.FinalEvent{}, []fakeslack.Task{
+			{ID: "s1", Title: "search", Status: "complete", Details: `q="up"`},
+			{ID: "s2", Title: "delete_pod", Status: "error"},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := setup(t)
+			e.leftOpen(t, "", chat.Step{ID: "s1", Title: "search", State: chat.StepRunning})
+			release := e.hold()
+			t.Cleanup(release)
+			again, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1", Recovered: true, Footer: []chat.Part{chat.Context{Text: "rate me"}}})
+			again.Handle(call("c1", "search", map[string]any{"q": "up"})) // the earlier run's call, said again
+			again.Handle(result("c1", map[string]any{"output": "x"}))
+			again.Handle(call("c2", "delete_pod", nil))
+			again.Handle(result("c2", map[string]any{"error": "the call requires confirmation"}))
+			again.Handle(tc.final)
+			release()
+			e.finish(t, again)
+
+			th := e.fake.Thread("C1", e.root)
+			m := th[len(th)-1]
+			if len(th) != 2 || m.Streaming {
+				t.Fatalf("thread %+v; want one message, no longer streaming", th)
+			}
+			if got := m.Tasks(); !slices.Equal(got, tc.want) {
+				t.Fatalf("tasks %+v; want %+v", got, tc.want)
+			}
+			if got := strings.Join(blockTypes(t, m.Blocks), ","); got != "task_card,task_card" {
+				t.Errorf("blocks %s; want the cards and nothing under them", m.Blocks)
+			}
+			if strings.Contains(m.Text, "(no output)") || strings.Contains(string(m.Blocks), "(no output)") {
+				t.Errorf("message %q with blocks %s; want no placeholder under the cards", m.Text, m.Blocks)
+			}
+		})
+	}
+}
+
 // blockTypes is the type of each block of raw, in order.
 func blockTypes(t *testing.T, raw json.RawMessage) []string {
 	t.Helper()
@@ -620,6 +679,33 @@ func TestAnUpdateRefusedWithItsStepsIsSentAgainWithout(t *testing.T) {
 	}
 	if !strings.Contains(e.logs.String(), "level=WARN") || !strings.Contains(e.logs.String(), "without them") {
 		t.Errorf("logs:\n%s\nwant a warning that the message was sent without its steps", e.logs)
+	}
+}
+
+// A turn that took over a stream and ends with its cards and no text shows nothing once the platform refuses the cards: the
+// update sent again without them says "(no output)", as a turn that showed nothing does, and is never a message with no parts.
+func TestAFinalWithNoTextRefusedWithItsStepsSaysThereWasNoOutput(t *testing.T) {
+	e := setup(t)
+	e.leftOpen(t, "", chat.Step{ID: "s1", Title: "search", State: chat.StepRunning})
+	refused := new(atomic.Int32)
+	e.cfg.Platform = refusesSteps{Platform: e.cfg.Platform, refused: refused}
+	e.live = newRenderer(t, e.cfg)
+	release := e.hold()
+	t.Cleanup(release)
+	again, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1", Recovered: true})
+	again.Handle(call("c1", "search", nil))
+	again.Handle(result("c1", map[string]any{"output": "x"}))
+	again.Handle(agent.FinalEvent{Task: &a2a.Task{ID: "t1", Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired}}})
+	release()
+	e.finish(t, again)
+	if m := e.reply(); m.Streaming || m.Text != "(no output)" || len(m.Tasks()) != 0 {
+		t.Fatalf("message %+v, tasks %+v; want it to say there was no output, with no card", m, m.Tasks())
+	}
+	if n := refused.Load(); n != 1 {
+		t.Errorf("%d updates with steps; want the one that was refused", n)
+	}
+	if l := e.logs.String(); strings.Contains(l, "cannot be sent") || strings.Contains(l, "no text and no parts") {
+		t.Errorf("a write of an empty message was tried:\n%s", l)
 	}
 }
 
