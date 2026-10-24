@@ -109,3 +109,48 @@ func TestTheSinksContextSaysWhetherTheTurnContinues(t *testing.T) {
 		}
 	})
 }
+
+// A follow that ends without driving the task (the agent no longer has it, or it is cancelled as wedged, and the thread is
+// told so) still gives the sink a turn, the one the lost stream handed its message on to: recovered, of the same message,
+// and with a context that is already over and does not continue, so that the renderer ends what the lost stream showed.
+func TestAFollowThatEndsWithoutDrivingEndsTheTurnItWasHanded(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		get    func(f *fixture) func(a2a.TaskID) (*a2a.Task, error)
+		notice NoticeKind
+	}{
+		{"the agent no longer has the task", func(*fixture) func(a2a.TaskID) (*a2a.Task, error) {
+			return func(a2a.TaskID) (*a2a.Task, error) { return nil, a2a.NewError(a2a.ErrTaskNotFound, "gone") }
+		}, NoticeSessionGone},
+		{"the task is cancelled as wedged", func(f *fixture) func(a2a.TaskID) (*a2a.Task, error) {
+			return func(a2a.TaskID) (*a2a.Task, error) {
+				f.now.Store(t0.Add(2 * time.Hour).UnixNano())
+				return nil, errors.New("agent unreachable")
+			}
+		}, NoticeWedged},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			sink := f.live()
+			f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, 2*time.Millisecond
+			f.agent.script = lost(errors.New("connection reset"))
+			f.agent.get = tc.get(f)
+			f.agent.follow = func(a2a.TaskID, agent.Handler) error { return errors.New("follow must not run") }
+			if _, err := f.submit(inbound("1")); err != nil {
+				t.Fatal(err)
+			}
+			eventually(t, "the notice", func() bool { return len(sink.noticesOf(tc.notice)) == 1 })
+			if cause := sink.causeOf(t, 0); !errors.Is(cause, ErrTurnContinues) {
+				t.Errorf("the lost send's sink context ended with %v; want ErrTurnContinues", cause)
+			}
+			if cause := sink.causeOf(t, 1); errors.Is(cause, ErrTurnContinues) {
+				t.Errorf("the follow's sink context ended with %v; want the turn over", cause)
+			}
+			sink.mu.Lock()
+			defer sink.mu.Unlock()
+			if len(sink.refs) != 2 || !sink.refs[1].Recovered || sink.refs[1].MessageID != sink.refs[0].MessageID {
+				t.Errorf("sink turns %+v; want the send's and a recovered one of the same message", sink.refs)
+			}
+		})
+	}
+}

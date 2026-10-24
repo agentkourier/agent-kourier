@@ -237,6 +237,50 @@ func TestATurnThatContinuesLeavesItsMessageToTheLaterTurn(t *testing.T) {
 	}
 }
 
+// A follow that ends with no final event and nothing of its own (the agent refused it, the task was cancelled as wedged, or
+// the session no longer has it, and the session tells the thread so) ends what the turn it followed showed, as that turn
+// would have ended it had it not been handed on: the stream is stopped with its text, its Working… card ended as Stopped, and
+// the update path loses its status line and keeps its text. Nothing asks for a rating, and the later run posts nothing.
+func TestAFollowThatEndsWithNothingEndsWhatItWasHanded(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		recipient string
+	}{{"stream", "U1"}, {"alert thread", ""}} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := setup(t)
+			first, end := e.startCause(t, live.Turn{Mode: v1alpha1.OutputLive, Progress: sa, Recipient: tc.recipient})
+			first.Handle(text("a", "Checking the pods."))
+			e.writesReach(t, 1)
+			e.until(t, "the Working…", 6*time.Second, func() bool {
+				return strings.Contains(e.said(), "Working…") || len(e.reply().Tasks()) == 1
+			})
+			end(session.ErrTurnContinues) // the stream was lost: the task is followed again
+			select {
+			case <-first.Done():
+			case <-time.After(5 * time.Second):
+				t.Fatal("the run did not end with its context")
+			}
+			later, cancel := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Progress: sa, Recipient: tc.recipient, Recovered: true})
+			cancel() // the follow ended with no event
+			e.finish(t, later)
+			th := e.fake.Thread("C1", e.root)
+			m := th[len(th)-1]
+			if len(th) != 2 || m.Streaming {
+				t.Fatalf("thread %d long, streaming %v; want the one message, stopped", len(th), m.Streaming)
+			}
+			if !strings.HasPrefix(m.Text, "Checking the pods.") || strings.Contains(string(m.Blocks), "Working") {
+				t.Errorf("message %q, blocks %s; want the text the turn had and no Working…", m.Text, m.Blocks)
+			}
+			if got := taskLines(m); tc.recipient != "" && strings.Join(got, ",") != "s1 Stopped error" {
+				t.Errorf("cards %v; want the Working… card ended as Stopped", got)
+			}
+			if buttons, questions := hasFooter(string(m.Blocks)); buttons || questions > 0 {
+				t.Errorf("a turn that ended with no final asks for a rating: %s", m.Blocks)
+			}
+		})
+	}
+}
+
 // ownStopFails is a Platform whose streams this run starts stop with err.
 type ownStopFails struct {
 	chat.Platform

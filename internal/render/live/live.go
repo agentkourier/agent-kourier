@@ -21,8 +21,9 @@
 // that is updated. The delay is one timer wake of the run, and it is the only write that comes of a clock: every other
 // write follows an event. A turn whose context ends before its final event, as when the agent refuses the send or does
 // not take an answer, is ended the way a failed task is: its stream is stopped and its status line goes. One whose task
-// goes on under a later turn (session.ErrTurnContinues) is left for that turn to take over. Text is built at the last
-// step, from the raw events (package render), and is literal: the platform makes it inert.
+// goes on under a later turn (session.ErrTurnContinues) is left for that turn to take over, or to end as this one would
+// have if that turn ends with no final event and nothing of its own. Text is built at the last step, from the raw events
+// (package render), and is literal: the platform makes it inert.
 package live
 
 import (
@@ -108,6 +109,9 @@ type Renderer struct {
 	// renders takes the message over from it (see Start).
 	mu      sync.Mutex
 	current map[string]*Run
+	// left is the run of each turn that ended with its task going on and a message still showing it at work, by the turn's
+	// Source, until a later run of the turn ends it or takes the message over (see endLeft).
+	left map[string]*Run
 }
 
 // New returns a Renderer over cfg. It refuses a Config without its Sender, Platform or Store, naming the field, so that a
@@ -145,7 +149,7 @@ func New(cfg Config) (*Renderer, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
-	r := &Renderer{cfg: cfg, caps: cfg.Platform.Capabilities(), current: map[string]*Run{}}
+	r := &Renderer{cfg: cfg, caps: cfg.Platform.Capabilities(), current: map[string]*Run{}, left: map[string]*Run{}}
 	if m, ok := cfg.Platform.(chat.BusyMarker); ok && r.caps.Busy {
 		r.busy = m
 	}
@@ -206,7 +210,10 @@ type Run struct {
 	done chan struct{}
 	// end ends the run's context, as the end of the turn's does: a later run of the same turn ends it so, with
 	// session.ErrTurnContinues (see Start).
-	end context.CancelCauseFunc
+	end   context.CancelCauseFunc
+	owner *Renderer // the Renderer that started the run, which keeps the run its turn left (endLeft)
+	// earlier is the run of the same turn that was still rendering it when this one started, if any (Start).
+	earlier *Run
 	// eligible says the turn may show steps: it began as a stream, on a platform that has them. It is set at the
 	// start and never changed, which is why Handle may read it; streaming, which a takeover clears, is the goroutine's.
 	eligible bool
@@ -267,6 +274,10 @@ type Run struct {
 	more      bool        // a write left steps to begin, which the next window goes on with
 	// cutShort says the turn's context ended before its final event, and the run is ending what the turn showed (see cut).
 	cutShort bool
+	// continues says the turn's context ended with session.ErrTurnContinues, and the run left what it showed for a later
+	// turn; ref is the message as the run left it, which a later run that ends it runs the loop on again (endLeft).
+	continues bool
+	ref       chat.Ref
 }
 
 // stepRec is a tool call of a stream, which is a step: the call, how it ended, and where in the text it was made.
@@ -306,7 +317,7 @@ const (
 // later. The session does this when it follows a task again under the turn whose send has not yet returned.
 func (r *Renderer) Start(ctx context.Context, t Turn) *Run {
 	streaming := t.Mode == v1alpha1.OutputLive && t.Recipient != "" && r.caps.Streams
-	u := &Run{cfg: r.cfg, caps: r.caps, turn: t, streaming: streaming, eligible: streaming && r.caps.Steps, wake: make(chan struct{}, 1), done: make(chan struct{}), texts: map[a2a.ArtifactID]string{}, progress: v1alpha1.ProgressSteps}
+	u := &Run{cfg: r.cfg, caps: r.caps, owner: r, turn: t, streaming: streaming, eligible: streaming && r.caps.Steps, wake: make(chan struct{}, 1), done: make(chan struct{}), texts: map[a2a.ArtifactID]string{}, progress: v1alpha1.ProgressSteps}
 	if t.Mode == v1alpha1.OutputLive && (t.Progress == v1alpha1.ProgressStepsAndActivity || t.Progress == v1alpha1.ProgressActivity) {
 		u.progress = t.Progress
 	}
@@ -322,12 +333,14 @@ func (r *Renderer) Start(ctx context.Context, t Turn) *Run {
 	prev := r.current[t.Source]
 	r.current[t.Source] = u
 	r.mu.Unlock()
+	u.earlier = prev
 	if prev != nil {
 		prev.end(session.ErrTurnContinues)
 	}
 	r.runs.Add(1)
 	go func() {
 		defer r.runs.Done()
+		defer close(u.done) // once the run is forgotten, or left for a later run, so that the later one finds it
 		defer u.end(nil)
 		defer r.forget(t.Source, u)
 		if prev != nil {
@@ -337,17 +350,35 @@ func (r *Renderer) Start(ctx context.Context, t Turn) *Run {
 			}
 		}
 		u.run(ctx)
+		u.earlier = nil // a run left for a later one holds no chain of the runs before it
 	}()
 	return u
 }
 
-// forget drops u as the current run of its turn, unless a later run has taken its place.
+// forget drops u as the current run of its turn, unless a later run has taken its place. A run that left a message showing
+// its turn at work, for the turn its task goes on under, is kept as the turn's left run; a run whose turn is over has ended
+// the left one, or taken its message over, and drops it. One that continues with nothing shown keeps the left run as it is.
 func (r *Renderer) forget(source string, u *Run) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.current[source] == u {
 		delete(r.current, source)
 	}
+	switch {
+	case !u.continues:
+		delete(r.left, source)
+	case u.ref.ID != "" || u.streamOpen():
+		r.left[source] = u
+	}
+}
+
+// takeLeft returns the left run of the turn source, if there is one, and drops it.
+func (r *Renderer) takeLeft(source string) *Run {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	u := r.left[source]
+	delete(r.left, source)
+	return u
 }
 
 // Done is closed when the goroutine has ended.
@@ -594,7 +625,6 @@ func (u *Run) stepIndex(callID string) int {
 
 // run writes the state each time its window opens, until the final text is out.
 func (u *Run) run(ctx context.Context) {
-	defer close(u.done)
 	defer func() { u.busy.clear(ctx) }() // on every way out: the turn is over, and the thread is not busy
 	u.busy.set(ctx)
 	var finalOp *telemetry.Operation
@@ -619,7 +649,8 @@ func (u *Run) run(ctx context.Context) {
 			finalOp.FinishOutcome(failure, finalOutcome)
 		}
 	}()
-	var ref chat.Ref // the message, once there is one
+	ref := u.ref // the message, once there is one: the one an earlier pass left, when the run is ending it (endLeft)
+	defer func() { u.ref = ref }()
 	var next time.Time
 	fails := 0
 	var gap <-chan time.Time // the delay timer of the open gap, if the turn keeps time
@@ -739,13 +770,18 @@ func (u *Run) cut(ctx context.Context, ref chat.Ref) bool {
 	if u.timed {
 		now = u.cfg.Now()
 	}
+	u.continues = errors.Is(context.Cause(ctx), session.ErrTurnContinues)
 	u.mu.Lock()
 	switch {
 	case u.final: // the final came after all: the run writes it
 		u.mu.Unlock()
 		return true
-	case ref.ID == "" && !u.streamOpen(), errors.Is(context.Cause(ctx), session.ErrTurnContinues):
+	case u.continues:
 		u.mu.Unlock()
+		return false
+	case ref.ID == "" && !u.streamOpen():
+		u.mu.Unlock()
+		u.endLeft(ctx)
 		return false
 	}
 	u.final, u.paused, u.gapOpen = true, false, false
@@ -754,6 +790,25 @@ func (u *Run) cut(ctx context.Context, ref chat.Ref) bool {
 	u.cutShort = true
 	v := u.snapshot()
 	return !v.ok || u.want(v) != u.sent // with nothing left to show, the message is replaced by "(no output)" (run)
+}
+
+// endLeft ends what an earlier run of a recovered turn left when its task went on, for a turn that ends with no final event
+// and nothing of its own: the follow was refused, or ended without driving the task, and the session tells the thread why.
+// The earlier run is over, and its state is as it left it: its loop runs again, here, on this run's context, which has ended
+// for good, so it is cut as it would have been had its task not gone on, its text kept and its stream stopped. A turn that is
+// not recovered has no earlier run, and neither has one whose earlier run left nothing, or was in another process. It is the
+// goroutine's.
+func (u *Run) endLeft(ctx context.Context) {
+	if !u.turn.Recovered {
+		return
+	}
+	if u.earlier != nil { // it may be the one to leave the message, once it has ended
+		<-u.earlier.done
+	}
+	if left := u.owner.takeLeft(u.turn.Source); left != nil {
+		<-left.done
+		left.run(ctx)
+	}
 }
 
 // adopt finds the message that an earlier run of a recovered turn left, for a turn that ends with nothing to show of its own:
