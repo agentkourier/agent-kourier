@@ -464,15 +464,20 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 		return idle, fmt.Errorf("read queue: %w", err)
 	}
 	sctx = telemetry.Restore(sctx, r.TraceParent, r.TraceState)
-	// The intake writes the row before it marks the turn fresh, both under its lock: wait out an intake that
-	// may be between the two, or a turn this process just queued is taken for one an earlier process sent.
-	m.intake.Lock()
-	m.intake.Unlock() //nolint:staticcheck // SA2001: an empty critical section is the point, a barrier
 	m.mu.Lock()
-	if _, fresh := m.fresh[r.ID]; !fresh { // an earlier process may have marked it queued, and nothing here knows
-		m.marked[r.ID] = struct{}{} // so it is taken off when the turn is sent or ends, which does no harm if it is not there
-	}
+	_, fresh := m.fresh[r.ID]
 	m.mu.Unlock()
+	if !fresh {
+		// The intake writes the row before it marks the turn fresh, both under its lock: wait out an intake that
+		// may be between the two, or a turn this process just queued is taken for one an earlier process sent.
+		m.intake.Lock()
+		m.intake.Unlock() //nolint:staticcheck // SA2001: an empty critical section is the point, a barrier
+		m.mu.Lock()
+		if _, fresh = m.fresh[r.ID]; !fresh { // an earlier process may have marked it queued, and nothing here knows
+			m.marked[r.ID] = struct{}{} // so it is taken off when the turn is sent or ends, which does no harm if it is not there
+		}
+		m.mu.Unlock()
+	}
 	sess, err := m.cfg.Store.GetSession(sctx, key, readAll, m.cfg.Now())
 	if err != nil {
 		return idle, fmt.Errorf("read session: %w", err)
@@ -530,7 +535,7 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 	hold := m.held(key, r.ID, sess)
 	m.mu.Lock()
 	prev := m.attempted[key]
-	_, fresh := m.fresh[r.ID]
+	_, fresh = m.fresh[r.ID]
 	// A turn this process sent before, or one it did not enqueue itself (a process that died may have
 	// sent it), is a resend: looked up first, however the wake got here.
 	resend := prev.id == r.ID || !fresh

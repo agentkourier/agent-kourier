@@ -329,13 +329,21 @@ func TestATurnReadAsItIsQueuedIsNotLookedUp(t *testing.T) {
 	}
 	<-sink.finals
 	f.nextSent()
+	read := make(chan struct{})
 	f.st.mu.Lock()
 	f.st.onEnqueued = func() { // the row is written and not yet marked: a runner takes it up now
 		f.st.mu.Lock()
 		f.st.onEnqueued = nil
+		f.st.onNext = func() { // the runner's read, the first while the intake waits here
+			f.st.mu.Lock()
+			f.st.onNext = nil
+			f.st.mu.Unlock()
+			close(read)
+		}
 		f.st.mu.Unlock()
 		f.m.start(key)
-		select { // a runner that waits for the intake sends nothing
+		<-read
+		select { // a runner past the read that does not wait for the intake looks the turn up and sends now
 		case <-f.agent.sent:
 		case <-time.After(200 * time.Millisecond):
 		}
