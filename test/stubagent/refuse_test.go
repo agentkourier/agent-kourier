@@ -28,6 +28,42 @@ func answerAsync(c *client, params obj) <-chan answered {
 	return got
 }
 
+// answerUnaryAsync sends the answer to a paused task as a unary SendMessage from another goroutine, and returns
+// where its JSON body arrives. Like answerAsync, the goroutine reports to the channel only.
+func answerUnaryAsync(t *testing.T, c *client, params obj) <-chan answered {
+	t.Helper()
+	req := request(t, http.MethodPost, c.url, obj{"jsonrpc": "2.0", "id": "1", "method": "SendMessage", "params": params}, c.hdr)
+	got := make(chan answered, 1)
+	go func() {
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			got <- answered{err: err}
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		var ev obj
+		if err := json.NewDecoder(resp.Body).Decode(&ev); err != nil {
+			got <- answered{err: fmt.Errorf("HTTP %d: decode: %w", resp.StatusCode, err)}
+			return
+		}
+		if resp.StatusCode != http.StatusOK {
+			err = fmt.Errorf("HTTP %d, want 200", resp.StatusCode)
+		}
+		got <- answered{[]obj{ev}, err}
+	}()
+	return got
+}
+
+// waitClosed waits a few seconds for ch to close, and fails the test with what if it does not.
+func waitClosed(t *testing.T, ch <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatal(what)
+	}
+}
+
 // expectNoAnswer fails the test if the answer arrives within a short wait: the gate it waits at is shut.
 func expectNoAnswer(t *testing.T, got <-chan answered) {
 	t.Helper()
@@ -111,11 +147,7 @@ func TestRefuseAnswerRefusesTheAnswerOnceItsGateIsReleased(t *testing.T) {
 	_, before := c.call("GetTask", obj{"id": taskID})
 
 	got := answerAsync(c, reply("m2", "x", ctxID, taskID, answers(request["id"].(string), []string{"PostgreSQL"})))
-	select {
-	case <-reached:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the answer did not reach the agent")
-	}
+	waitClosed(t, reached, "the answer did not reach the agent")
 	expectNoAnswer(t, got)
 
 	// The held send holds no lock: the task can be read, and a new task started in another context. A send that
@@ -159,32 +191,8 @@ func TestRefuseAnswerRefusesAUnaryAnswer(t *testing.T) {
 	}))
 	c = withHITL(c)
 	_, taskID, ctxID, pause := paused(t, c)
-	body := obj{"jsonrpc": "2.0", "id": "1", "method": "SendMessage",
-		"params": reply("m2", "x", ctxID, taskID, answers(pause["id"].(string), []string{"MySQL"}))}
-	req := request(t, http.MethodPost, c.url, body, c.hdr)
-	got := make(chan answered, 1)
-	go func() {
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			got <- answered{err: err}
-			return
-		}
-		defer func() { _ = resp.Body.Close() }()
-		var ev obj
-		if err := json.NewDecoder(resp.Body).Decode(&ev); err != nil {
-			got <- answered{err: fmt.Errorf("HTTP %d: decode: %w", resp.StatusCode, err)}
-			return
-		}
-		if resp.StatusCode != http.StatusOK {
-			err = fmt.Errorf("HTTP %d, want 200", resp.StatusCode)
-		}
-		got <- answered{[]obj{ev}, err}
-	}()
-	select {
-	case <-reached:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the answer did not reach the agent")
-	}
+	got := answerUnaryAsync(t, c, reply("m2", "x", ctxID, taskID, answers(pause["id"].(string), []string{"MySQL"})))
+	waitClosed(t, reached, "the answer did not reach the agent")
 	expectNoAnswer(t, got)
 
 	s.Release("refuse-2")
