@@ -8,7 +8,7 @@
 // At the root of the output it writes what Material and Cloudflare Pages read there: versions.json (the format mike
 // writes, which Material's selector reads), _redirects (the root and /latest/ to the latest version, each release
 // line's /X.Y/ to its newest tag, and the paths of the unversioned site to /latest/, so old links keep working) and
-// _headers (the versions' own rules: once for every version when they all have it, else under its directory). It
+// _headers (this tree's own rules, once for every version, since they are the deployment's cache policy). It
 // copies the latest version's 404.html and favicon.ico to the root.
 //
 // Run it from the repository root, through `make docs-site`. It needs the release tags (a full clone), Python 3 and
@@ -241,81 +241,33 @@ func redirects(releases []release, topLevel []entry) (string, error) {
 	return b.String(), nil
 }
 
-// headerRule is one rule of a _headers file: a path and the headers under it.
-type headerRule struct {
-	path    string
-	headers []string
-}
+// versionPlaceholder stands for any version's directory in a _headers path. Each top-level directory of the site is a
+// version: the unversioned site's paths redirect.
+const versionPlaceholder = ":version"
 
-// text is the rule under a path prefix, as _headers writes it.
-func (r headerRule) text(prefix string) string {
+// headerBlock is a _headers file's rules, each path moved under dir. A rule's path is a line that starts with a slash;
+// its headers are the indented lines after it; comments and blank lines are dropped.
+func headerBlock(dir string, rules []byte) (block string, n int, err error) {
 	var b strings.Builder
-	b.WriteString(prefix + r.path + "\n")
-	for _, h := range r.headers {
-		b.WriteString("  " + h + "\n")
-	}
-	return b.String()
-}
-
-// parseHeaders reads a version's _headers. A rule's path is a line that starts with a slash; its headers are the
-// indented lines after it; comments and blank lines are dropped.
-func parseHeaders(data []byte) ([]headerRule, error) {
-	var rules []headerRule
-	sc := bufio.NewScanner(strings.NewReader(string(data)))
+	sc := bufio.NewScanner(strings.NewReader(string(rules)))
 	for sc.Scan() {
 		line := sc.Text()
 		trimmed := strings.TrimSpace(line)
 		switch {
 		case trimmed == "" || strings.HasPrefix(trimmed, "#"):
 		case strings.HasPrefix(line, "/"):
-			rules = append(rules, headerRule{path: line})
+			b.WriteString("/" + dir + line + "\n")
+			n++
 		case line[0] == ' ' || line[0] == '\t':
-			if len(rules) == 0 {
-				return nil, fmt.Errorf("header %q comes before any path", trimmed)
+			if n == 0 {
+				return "", 0, fmt.Errorf("header %q comes before any path", trimmed)
 			}
-			rules[len(rules)-1].headers = append(rules[len(rules)-1].headers, trimmed)
+			b.WriteString("  " + trimmed + "\n")
 		default:
-			return nil, fmt.Errorf("line %q is neither a path nor an indented header", line)
+			return "", 0, fmt.Errorf("line %q is neither a path nor an indented header", line)
 		}
 	}
-	return rules, sc.Err()
-}
-
-// versionPlaceholder stands for any version's directory in a rule every version shares. Each top-level directory of
-// the site is a version: the unversioned site's paths redirect.
-const versionPlaceholder = "/:version"
-
-// mergeHeaders is the rules of every version (in order) under their directories. A rule every version has, the same,
-// is written once under versionPlaceholder, which keeps the count within Pages' limit as tags are added; the rest are
-// written under each version's directory. It returns the text and the number of rules.
-func mergeHeaders(order []string, rules map[string][]headerRule) (string, int) {
-	var b strings.Builder
-	n := 0
-	shared := func(r headerRule) bool {
-		for _, v := range order {
-			if !slices.ContainsFunc(rules[v], func(o headerRule) bool { return o.text("") == r.text("") }) {
-				return false
-			}
-		}
-		return true
-	}
-	if len(order) > 0 {
-		for _, r := range rules[order[0]] {
-			if shared(r) {
-				b.WriteString(r.text(versionPlaceholder))
-				n++
-			}
-		}
-	}
-	for _, v := range order {
-		for _, r := range rules[v] {
-			if !shared(r) {
-				b.WriteString(r.text("/" + v))
-				n++
-			}
-		}
-	}
-	return b.String(), n
+	return b.String(), n, sc.Err()
 }
 
 // entry is a top-level file or directory of a build.
@@ -458,30 +410,27 @@ func (b *builder) assemble(releases []release) error {
 	for _, r := range releases {
 		versions = append(versions, r.version())
 	}
-	perVersion := map[string][]headerRule{}
+	// The headers are the deployment's cache policy, not a release's content: this tree's rules apply to every
+	// version, under versionPlaceholder, so the file stays the same size however many tags are published.
+	devHeaders := filepath.Join(b.out, devVersion, "_headers")
+	data, err := os.ReadFile(devHeaders) //nolint:gosec // a file of the build sitebuild just wrote
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read %s: %w", devHeaders, err)
+	}
+	block, n, err := headerBlock(versionPlaceholder, data)
+	if err != nil {
+		return fmt.Errorf("%s: %w", devHeaders, err)
+	}
 	for _, v := range versions {
-		path := filepath.Join(b.out, v, "_headers")
-		data, err := os.ReadFile(path) //nolint:gosec // a file of the build sitebuild just wrote
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("read %s: %w", path, err)
-		}
-		if perVersion[v], err = parseHeaders(data); err != nil {
-			return fmt.Errorf("%s: %w", path, err)
-		}
 		// Pages reads only the root's _headers; a version's own would be served as a page.
-		if err := os.Remove(path); err != nil {
-			return fmt.Errorf("remove %s: %w", path, err)
+		if err := os.Remove(filepath.Join(b.out, v, "_headers")); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove %s's _headers: %w", v, err)
 		}
 	}
-	merged, n := mergeHeaders(versions, perVersion)
 	var hdr strings.Builder
-	hdr.WriteString("# Written by hack/docs/sitebuild: the versions' own _headers, once under /:version when every version has\n")
-	hdr.WriteString("# the rule, else under the version's directory.\n")
+	hdr.WriteString("# Written by hack/docs/sitebuild: this tree's _headers, for every version under /:version.\n")
 	hdr.WriteString("/versions.json\n  Cache-Control: public, max-age=300, must-revalidate\n")
-	hdr.WriteString(merged)
+	hdr.WriteString(block)
 	rules := 1 + n
 	if rules > maxHeaderRules {
 		return fmt.Errorf("_headers has %d rules; Cloudflare Pages allows %d", rules, maxHeaderRules)

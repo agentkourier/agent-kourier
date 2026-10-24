@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -209,48 +210,20 @@ func TestRedirectsLimit(t *testing.T) {
 	}
 }
 
-func TestParseHeaders(t *testing.T) {
-	in := "# A comment.\n/stylesheets/*\n  Cache-Control: max-age=300\n\n/\n  Cache-Control: max-age=300\n/assets/javascripts/*\n\tCache-Control: immutable\n\tX-A: b\n"
-	got, err := parseHeaders([]byte(in))
+func TestHeaderBlock(t *testing.T) {
+	in := "# A comment.\n/stylesheets/*\n  Cache-Control: max-age=300\n\n/\n  Cache-Control: max-age=300\n/assets/javascripts/*\n\tCache-Control: immutable\n"
+	got, n, err := headerBlock(versionPlaceholder, []byte(in))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []headerRule{
-		{"/stylesheets/*", []string{"Cache-Control: max-age=300"}},
-		{"/", []string{"Cache-Control: max-age=300"}},
-		{"/assets/javascripts/*", []string{"Cache-Control: immutable", "X-A: b"}},
-	}
-	if !slices.EqualFunc(got, want, func(a, b headerRule) bool { return a.text("") == b.text("") }) {
-		t.Errorf("got %v, want %v", got, want)
+	want := "/:version/stylesheets/*\n  Cache-Control: max-age=300\n/:version/\n  Cache-Control: max-age=300\n/:version/assets/javascripts/*\n  Cache-Control: immutable\n"
+	if got != want || n != 3 {
+		t.Errorf("got %d rules:\n%s\nwant 3:\n%s", n, got, want)
 	}
 	for _, bad := range []string{"  Cache-Control: x\n", "stylesheets/*\n"} {
-		if _, err := parseHeaders([]byte(bad)); err == nil {
-			t.Errorf("parseHeaders(%q) = nil error", bad)
+		if _, _, err := headerBlock(versionPlaceholder, []byte(bad)); err == nil {
+			t.Errorf("headerBlock(%q) = nil error", bad)
 		}
-	}
-}
-
-func TestMergeHeaders(t *testing.T) {
-	short := headerRule{"/stylesheets/*", []string{"Cache-Control: max-age=300"}}
-	long := headerRule{"/assets/*", []string{"Cache-Control: immutable"}}
-	newer := headerRule{"/*.html", []string{"Cache-Control: max-age=60"}}
-	got, n := mergeHeaders([]string{"dev", "0.1.1", "0.1.0"}, map[string][]headerRule{
-		"dev":   {short, long, newer},
-		"0.1.1": {short, long},
-		"0.1.0": {short, {"/assets/*", []string{"Cache-Control: max-age=60"}}}, // same path, other headers
-	})
-	want := "/:version/stylesheets/*\n  Cache-Control: max-age=300\n" + // every version has it
-		"/dev/assets/*\n  Cache-Control: immutable\n" +
-		"/dev/*.html\n  Cache-Control: max-age=60\n" +
-		"/0.1.1/assets/*\n  Cache-Control: immutable\n" +
-		"/0.1.0/assets/*\n  Cache-Control: max-age=60\n"
-	if got != want || n != 5 {
-		t.Errorf("got %d rules:\n%s\nwant 5:\n%s", n, got, want)
-	}
-	// A version with no _headers shares nothing, so every rule stays under its version.
-	got, n = mergeHeaders([]string{"dev", "0.1.0"}, map[string][]headerRule{"dev": {short}})
-	if want := "/dev/stylesheets/*\n  Cache-Control: max-age=300\n"; got != want || n != 1 {
-		t.Errorf("got %d rules:\n%s\nwant 1:\n%s", n, got, want)
 	}
 }
 
@@ -295,5 +268,41 @@ func TestRepositoryVersionsFile(t *testing.T) {
 	}
 	if _, err := parseVersions(data); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// assemble writes this tree's _headers once, for every version, whatever an older tag's own say, and removes each
+// version's copy, which Pages would serve as a page.
+func TestAssembleHeadersFollowThisTree(t *testing.T) {
+	out := t.TempDir()
+	write := func(path, data string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(out, path)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(out, path), []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("dev/_headers", "/*.html\n  Cache-Control: max-age=60\n")
+	write("0.1.1/_headers", "/*.html\n  Cache-Control: max-age=300\n") // an older policy
+	write("0.1.1/404.html", "not found")
+	write("0.1.1/favicon.ico", "icon")
+	write("0.1.0/index.html", "no _headers in this tag")
+	b := &builder{out: out}
+	if err := b.assemble([]release{{"0.1", "v0.1.1"}, {"0.1", "v0.1.0"}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(out, "_headers"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "/:version/*.html\n  Cache-Control: max-age=60\n"; !strings.HasSuffix(string(got), want) || strings.Contains(string(got), "max-age=300\n") {
+		t.Errorf("_headers =\n%s\nwant it to end with this tree's rule only:\n%s", got, want)
+	}
+	for _, v := range []string{"dev", "0.1.1", "0.1.0"} {
+		if _, err := os.Stat(filepath.Join(out, v, "_headers")); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s/_headers is still there (err %v)", v, err)
+		}
 	}
 }
