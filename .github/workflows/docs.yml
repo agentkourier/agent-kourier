@@ -1,5 +1,8 @@
 # The documentation site (mkdocs.yml, docs/): built and checked on every pull request that touches it, deployed to
 # Cloudflare Pages from main (https://agentkourier.dev), and to a preview URL from a pull request in this repository.
+# Production is the versioned site (make docs-site, hack/docs/sitebuild): main as /dev/ and each release line in
+# hack/docs/versions.yaml from its newest final tag, the newest as /latest/. A preview is the pull request's tree alone.
+# A final release starts this workflow on main (release.yml): its tag changes the site without touching these paths.
 #
 # Secrets. Put them in GitHub environments, never in the repository's own secrets: a repository secret is readable by
 # any pull request that edits this file. The owner sets (Settings, Environments):
@@ -53,9 +56,11 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
+      # The full history: the versioned site builds each release line from its tag.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
       # Go runs the reference generator (hack/docs/refgen), the name check (hack/docs/namecheck) and the content check
       # (hack/docs/contentcheck: internal IDs, removed names, workspace identifiers, and the READMEs' links). Its cache
       # and pip's are the job's own and follow ci.yml's rules: every run restores, only a push to main saves.
@@ -103,6 +108,11 @@ jobs:
           CONTENTCHECK_WORKSPACE: ${{ secrets.CONTENTCHECK_WORKSPACE }}
       - name: The committed reference pages are current
         run: git diff --exit-code -- docs/reference
+      # Every run builds the versioned site, so a pull request that breaks it (or a tag's build) fails here; only main
+      # deploys it.
+      - run: make docs-site
+        env:
+          CONTENTCHECK_WORKSPACE: ${{ secrets.CONTENTCHECK_WORKSPACE }}
       - if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -118,7 +128,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: site
-          path: bin/site
+          path: ${{ github.event_name == 'pull_request' && 'bin/site' || 'bin/versioned-site' }}
           retention-days: 7
           if-no-files-found: error
 
