@@ -2,6 +2,7 @@
 # Tests for install-kind-tools.sh. Offline: each case sources the installer in a subshell and replaces its download
 # function with one that copies local fixtures and records the URLs it was asked for, so no case reaches the network.
 # Run as `hack/ci/test.sh`.
+# shellcheck disable=SC2031 # run_installer's subshell re-sources the pins; the ones read here are the top-level copy
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -18,13 +19,9 @@ fail() {
   exit 1
 }
 
-sha256_of() {
-  if command -v sha256sum >/dev/null; then
-    sha256sum "$1" | cut -d' ' -f1
-  else
-    shasum -a 256 "$1" | cut -d' ' -f1
-  fi
-}
+# The pins and sha256_of, for the checks below; main runs only when the installer is executed.
+# shellcheck source=hack/ci/install-kind-tools.sh
+source "${SCRIPT}"
 
 # Fixtures: a fake binary for kind, kubectl and jq, and a helm release tarball that holds one under linux-amd64/.
 FIX=${TMP}/fixtures
@@ -83,15 +80,26 @@ for name in kind kubectl helm jq; do
   [ "$("${dir}/${name}")" = "fake-${name}" ] || fail "${dir}/${name} is not the downloaded ${name}"
 done
 [ "$(find "${dir}" -mindepth 1 | wc -l | tr -d ' ')" = 4 ] || fail "bin dir holds more than the four tools: $(ls -A "${dir}")"
-# shellcheck source=hack/ci/install-kind-tools.sh
-versions=$(source "${SCRIPT}" && printf '%s %s %s %s' "${KIND_VERSION}" "${KUBECTL_VERSION}" "${HELM_VERSION}" "${JQ_VERSION}")
-read -r kind_v kubectl_v helm_v jq_v <<<"${versions}"
-want_urls="https://github.com/kubernetes-sigs/kind/releases/download/${kind_v}/kind-linux-amd64
-https://dl.k8s.io/release/${kubectl_v}/bin/linux/amd64/kubectl
-https://get.helm.sh/helm-${helm_v}-linux-amd64.tar.gz
-https://github.com/jqlang/jq/releases/download/jq-${jq_v}/jq-linux-amd64"
+want_urls="https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64
+https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl
+https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz
+https://github.com/jqlang/jq/releases/download/jq-${JQ_VERSION}/jq-linux-amd64"
 [ "$(cat "${log}")" = "${want_urls}" ] || fail "downloaded from [$(cat "${log}")], want [${want_urls}]"
-case "${helm_v}" in v4.*) ;; *) fail "helm pin ${helm_v} is not Helm 4 (require_helm4 in hack/kind/lib.sh)" ;; esac
+echo "ok"
+
+echo "== the pins agree with the rest of the repository"
+case "${HELM_VERSION}" in v4.*) ;; *) fail "helm pin ${HELM_VERSION} is not Helm 4 (require_helm4 in hack/kind/lib.sh)" ;; esac
+for wf in ci.yml release.yml; do
+  # The version azure/setup-helm installs for the chart tests and the release.
+  got=$(awk '/azure\/setup-helm@/ {f=1} f && /version:/ {print $2; exit}' "${HERE}/../../.github/workflows/${wf}")
+  [ "${got}" = "${HELM_VERSION}" ] || fail "${wf} installs helm [${got}], the kind tools pin ${HELM_VERSION}: keep them equal"
+done
+# kubectl is supported within one minor of the cluster; the cluster is NODE_IMAGE, which Renovate bumps on its own.
+node_minor=$(sed -n 's/^NODE_IMAGE=kindest\/node:v1\.\([0-9]*\)\..*/\1/p' "${HERE}/../kind/lib.sh")
+kubectl_minor=$(printf '%s' "${KUBECTL_VERSION}" | sed -n 's/^v1\.\([0-9]*\)\..*/\1/p')
+[ -n "${node_minor}" ] && [ -n "${kubectl_minor}" ] || fail "cannot read the minor of NODE_IMAGE [${node_minor}] or KUBECTL_VERSION [${kubectl_minor}]"
+[ $((kubectl_minor - node_minor)) -le 1 ] && [ $((node_minor - kubectl_minor)) -le 1 ] ||
+  fail "kubectl ${KUBECTL_VERSION} is more than one minor from NODE_IMAGE's v1.${node_minor} in hack/kind/lib.sh"
 echo "ok"
 
 echo "== a rerun replaces the tools in place"
@@ -154,8 +162,7 @@ echo "ok"
 echo "== every supported platform has a pinned sha256 for every tool"
 for host in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
   for name in kind kubectl helm jq; do
-    # shellcheck source=hack/ci/install-kind-tools.sh
-    sum=$(source "${SCRIPT}" && pinned_sha256 "${name}" "${host}")
+    sum=$(pinned_sha256 "${name}" "${host}")
     [[ ${sum} =~ ^[0-9a-f]{64}$ ]] || fail "no sha256 pinned for ${name} on ${host}: [${sum}]"
   done
 done
