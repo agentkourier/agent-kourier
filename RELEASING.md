@@ -12,7 +12,7 @@ is that image by digest. Nothing is released by hand.
    (`release-version`), so the pull request cannot go green with a page left behind. The chart's golden files carry
    the version in a label: refresh them with `go test ./test/chart -update` (with `helm` installed). For a new minor
    version (`X.Y.0`), also add `"X.Y"` at the top of `hack/docs/versions.yaml`, so the documentation site publishes
-   the new release line; until its tag exists the site skips it. Merge it. Skip this for a prerelease tag
+   the new release line's tags; until its first tag exists the site skips it. Merge it. Skip this for a prerelease tag
    (`vX.Y.Z-rc.1`): while one is tried, the chart and the docs keep naming the last release.
 3. Before tagging, confirm that `ci.yml`, `security.yml` and `codeql.yml` have completed successfully for that
    exact commit from a push to `main`. The release gate checks the same commit and the latest attempt again; a
@@ -24,10 +24,10 @@ is that image by digest. Nothing is released by hand.
 If a first release attempt fails before its GitHub Release is created, rerun that tag after fixing the failure.
 Once a published or draft GitHub Release exists for the tag, the read-only gate refuses to rebuild it.
 
-The documentation site builds each release line from its newest final tag, whether or not that tag has a GitHub
+The documentation site publishes every final tag of a listed release line, whether or not that tag has a GitHub
 Release. A docs deploy from `main` while a failed attempt waits for its rerun publishes that tag's docs early. A final
-tag that is never released, such as one the gate refused, must be deleted, or the site publishes its docs as that
-line's.
+tag that is never released, such as one the gate refused, must be deleted, or the site publishes its docs, as its
+line's newest and perhaps as latest.
 
 ## What the workflow does
 
@@ -73,7 +73,8 @@ line's.
   request's title, and leaves out release pull requests (`chore(release): ...`). Re-running a completed release leaves matching release information unchanged; conflicting
   tag, prerelease state or digest information fails rather than being overwritten.
 - For a final tag, after the Release exists, starts `docs.yml` on `main` (`actions: write`, no checkout), which
-  rebuilds the documentation site with the new tag as its release line's version. A prerelease is not published there.
+  rebuilds the documentation site with the new tag as a version of its own, its line's newest and, for the newest line,
+  latest. A prerelease is not published there.
 
 The job summary lists both digests. The chart's `tag` stays empty: the digest wins.
 

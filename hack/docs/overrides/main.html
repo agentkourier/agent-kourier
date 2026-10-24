@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 
 {#- The banner Material shows on a version other than latest, on the versioned site (make docs-site): dev, which is
-    main, and an older release line. Each version is built with its own tag's templates, so a line whose newest tag
-    predates this block shows no banner. The link leads to the site's root (extra.site_root, which sitebuild sets),
+    main, and an older release. Each version is built with its own tag's templates, so a release whose tag predates
+    this block shows no banner. The link leads to the site's root (extra.site_root, which sitebuild sets),
     which redirects to latest; a link relative to base_url breaks on 404.html, whose base_url is absolute. -#}
 {% block outdated %}
   {%- if config.site_url.endswith("/dev/") %}

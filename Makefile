@@ -194,5 +194,5 @@ docs: $(DOCS_VENV)/.installed docs-ref ## Serve the documentation site at http:/
 docs-build: $(DOCS_VENV)/.installed docs-ref docs-check ## Build the documentation site into bin/site; any warning fails the build
 	$(DOCS_VENV)/bin/mkdocs build --strict --site-dir bin/site
 
-docs-site: $(DOCS_VENV)/.installed docs-ref docs-check ## Build the versioned site into bin/versioned-site: this tree as dev, each release line in hack/docs/versions.yaml from its newest tag
+docs-site: $(DOCS_VENV)/.installed docs-ref docs-check ## Build the versioned site into bin/versioned-site: this tree as dev, and every final tag of the release lines in hack/docs/versions.yaml
 	go run ./hack/docs/sitebuild -venv $(DOCS_VENV) -out bin/versioned-site

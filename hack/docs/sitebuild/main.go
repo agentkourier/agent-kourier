@@ -1,14 +1,15 @@
-// Command sitebuild builds the versioned documentation site that agentkourier.dev serves. It builds every release
-// line that hack/docs/versions.yaml names from that line's newest final tag (vX.Y.Z, no prerelease suffix), each in
-// its own git worktree with that tag's pinned MkDocs requirements, and the working tree as dev. Each version lands in
-// its own directory (0.1/, dev/) of the output, built with its own site_url and Material's version selector through a
-// wrapper config that inherits the version's mkdocs.yml, so an old tag builds unchanged. The first release line with a
-// tag is latest.
+// Command sitebuild builds the versioned documentation site that agentkourier.dev serves. It builds every final tag
+// (vX.Y.Z, no prerelease suffix) of each release line that hack/docs/versions.yaml names, each in its own git worktree
+// with that tag's pinned MkDocs requirements, and the working tree as dev. A release can add features in a patch
+// version, so each tag is a version of its own. Each version lands in its own directory (0.1.3/, dev/) of the
+// output, built with its own site_url and Material's version selector through a wrapper config that inherits the
+// version's mkdocs.yml, so an old tag builds unchanged. The newest tag of the first release line with a tag is latest.
 //
 // At the root of the output it writes what Material and Cloudflare Pages read there: versions.json (the format mike
-// writes, which Material's selector reads), _redirects (the root and /latest/ to the latest line, and the paths of
-// the unversioned site to /latest/, so old links keep working) and _headers (each version's own rules, under its
-// directory). It copies the latest line's 404.html and favicon.ico to the root.
+// writes, which Material's selector reads), _redirects (the root and /latest/ to the latest version, each release
+// line's /X.Y/ to its newest tag, and the paths of the unversioned site to /latest/, so old links keep working) and
+// _headers (this tree's own rules, once for every version, since they are the deployment's cache policy). It
+// copies the latest version's 404.html and favicon.ico to the root.
 //
 // Run it from the repository root, through `make docs-site`. It needs the release tags (a full clone), Python 3 and
 // the docs virtualenv that `make docs-build` installs.
@@ -41,7 +42,7 @@ import (
 const (
 	// devVersion is the directory and versions.json entry of the working tree's build.
 	devVersion = "dev"
-	// latestAlias is the alias of the newest release line, and the version Material's banner treats as current.
+	// latestAlias is the alias of the newest version, and the version Material's banner treats as current.
 	latestAlias = "latest"
 	// requirementsFile pins a tree's MkDocs and Material versions.
 	requirementsFile = "hack/docs/requirements.txt"
@@ -59,11 +60,14 @@ type versionsFile struct {
 	Releases []string `json:"releases"`
 }
 
-// release is a release line and the tag it is built from.
+// release is a final tag and its release line.
 type release struct {
 	Line string // 0.1
 	Tag  string // v0.1.2
 }
+
+// version is the release's directory and versions.json entry: its tag without the v.
+func (r release) version() string { return strings.TrimPrefix(r.Tag, "v") }
 
 // versionEntry is one entry of versions.json, in the format mike writes.
 type versionEntry struct {
@@ -116,19 +120,20 @@ func parseVersions(data []byte) ([]string, error) {
 	return f.Releases, nil
 }
 
-// newestTag returns the newest final tag of a release line, or "" when the line has none yet.
-func newestTag(line string, tags []string) string {
-	best, bestPatch := "", -1
+// lineTags returns the final tags of a release line, newest first; none when the line has no tag yet.
+func lineTags(line string, tags []string) []string {
+	var got []string
+	patch := map[string]int{}
 	for _, tag := range tags {
 		m := finalTag.FindStringSubmatch(tag)
 		if m == nil || m[1]+"."+m[2] != line {
 			continue
 		}
-		if patch, _ := strconv.Atoi(m[3]); patch > bestPatch {
-			best, bestPatch = tag, patch
-		}
+		got = append(got, tag)
+		patch[tag], _ = strconv.Atoi(m[3])
 	}
-	return best
+	slices.SortFunc(got, func(a, b string) int { return cmp.Compare(patch[b], patch[a]) })
+	return got
 }
 
 // untrackedTag returns a final tag whose release line is newer than every line in the file, or "" when there is none:
@@ -143,19 +148,22 @@ func untrackedTag(lines, tags []string) string {
 	return ""
 }
 
-// resolve pairs each release line with its newest final tag, in the file's order, and drops a line with no tag yet.
+// resolve lists the final tags of each release line, newest line first and newest tag first within it, so the first
+// is latest, and names the lines with no tag yet.
 func resolve(lines, tags []string) (got []release, skipped []string) {
 	for _, line := range lines {
-		if tag := newestTag(line, tags); tag != "" {
-			got = append(got, release{Line: line, Tag: tag})
-		} else {
+		lt := lineTags(line, tags)
+		if len(lt) == 0 {
 			skipped = append(skipped, line)
+		}
+		for _, tag := range lt {
+			got = append(got, release{Line: line, Tag: tag})
 		}
 	}
 	return got, skipped
 }
 
-// versionsJSON is the site's versions.json: dev first, then the release lines, the first of them latest.
+// versionsJSON is the site's versions.json: dev first, then the releases, the first of them latest.
 func versionsJSON(releases []release) ([]byte, error) {
 	entries := []versionEntry{{Version: devVersion, Title: "main (unreleased)", Aliases: []string{}}}
 	for i, r := range releases {
@@ -163,7 +171,7 @@ func versionsJSON(releases []release) ([]byte, error) {
 		if i == 0 {
 			aliases = append(aliases, latestAlias)
 		}
-		entries = append(entries, versionEntry{Version: r.Line, Title: r.Tag, Aliases: aliases})
+		entries = append(entries, versionEntry{Version: r.version(), Title: r.Tag, Aliases: aliases})
 	}
 	b, err := json.MarshalIndent(entries, "", "  ")
 	if err != nil {
@@ -192,18 +200,27 @@ extra:
 `, siteURL, version, cmp.Or(u.Path, "/"), latestAlias), nil
 }
 
-// redirects is the site's _redirects. The root and /latest/ lead to the latest release line with a temporary
-// redirect, since a release moves them. Each top-level entry of the unversioned site leads to the same path under
-// /latest/ with a permanent one. Cloudflare Pages applies a redirect
-// even where a file exists, so the rules name those entries rather than match everything. Static rules come first, as
-// Pages asks.
-func redirects(latest string, topLevel []entry) (string, error) {
-	var static, dynamic []string
-	static = append(static,
-		"/ /"+latestAlias+"/ 302",
-		"/"+latestAlias+" /"+latest+"/ 302",
-	)
-	dynamic = append(dynamic, "/"+latestAlias+"/* /"+latest+"/:splat 302")
+// redirects is the site's _redirects for the releases, newest first. The root and /latest/ lead to the latest version,
+// and each release line's /X.Y/ to its newest tag, with a temporary redirect, since a release moves them. Each
+// top-level entry of the unversioned site leads to the same path under /latest/ with a permanent one. Cloudflare Pages
+// applies a redirect even where a file exists, so the rules name those entries rather than match everything. Static
+// rules come first, as Pages asks.
+func redirects(releases []release, topLevel []entry) (string, error) {
+	latest := releases[0].version()
+	static := []string{
+		"/ /" + latestAlias + "/ 302",
+		"/" + latestAlias + " /" + latest + "/ 302",
+	}
+	dynamic := []string{"/" + latestAlias + "/* /" + latest + "/:splat 302"}
+	var lines []string
+	for _, r := range releases {
+		if slices.Contains(lines, r.Line) {
+			continue // only the line's newest tag, which comes first
+		}
+		lines = append(lines, r.Line)
+		static = append(static, fmt.Sprintf("/%s /%s/ 302", r.Line, r.version()))
+		dynamic = append(dynamic, fmt.Sprintf("/%s/* /%s/:splat 302", r.Line, r.version()))
+	}
 	for _, e := range topLevel {
 		if e.dir {
 			dynamic = append(dynamic, fmt.Sprintf("/%s/* /%s/%s/:splat 301", e.name, latestAlias, e.name))
@@ -216,17 +233,21 @@ func redirects(latest string, topLevel []entry) (string, error) {
 			len(static), len(dynamic), maxStaticRedirects, maxDynamicRedirects)
 	}
 	var b strings.Builder
-	b.WriteString("# Written by hack/docs/sitebuild. The root and /latest/ lead to the latest release line; the paths of the\n")
-	b.WriteString("# unversioned site lead to the same page under /latest/.\n")
+	b.WriteString("# Written by hack/docs/sitebuild. The root and /latest/ lead to the latest version, each release line's\n")
+	b.WriteString("# /X.Y/ to its newest tag, and the paths of the unversioned site to the same page under /latest/.\n")
 	for _, r := range append(static, dynamic...) {
 		b.WriteString(r + "\n")
 	}
 	return b.String(), nil
 }
 
-// headerBlock is one version's _headers rules, each path moved under the version's directory. A rule's path is a
-// line that starts with a slash; its headers are the indented lines after it; comments and blank lines are dropped.
-func headerBlock(version string, rules []byte) (block string, n int, err error) {
+// versionPlaceholder stands for any version's directory in a _headers path. Each top-level directory of the site is a
+// version: the unversioned site's paths redirect.
+const versionPlaceholder = ":version"
+
+// headerBlock is a _headers file's rules, each path moved under dir. A rule's path is a line that starts with a slash;
+// its headers are the indented lines after it; comments and blank lines are dropped.
+func headerBlock(dir string, rules []byte) (block string, n int, err error) {
 	var b strings.Builder
 	sc := bufio.NewScanner(strings.NewReader(string(rules)))
 	for sc.Scan() {
@@ -235,7 +256,7 @@ func headerBlock(version string, rules []byte) (block string, n int, err error) 
 		switch {
 		case trimmed == "" || strings.HasPrefix(trimmed, "#"):
 		case strings.HasPrefix(line, "/"):
-			b.WriteString("/" + version + line + "\n")
+			b.WriteString("/" + dir + line + "\n")
 			n++
 		case line[0] == ' ' || line[0] == '\t':
 			if n == 0 {
@@ -255,7 +276,7 @@ type entry struct {
 	dir  bool
 }
 
-// rootFiles are the latest build's files that are copied to the root rather than redirected: the page Pages shows
+// rootFiles are the latest version's files that are copied to the root rather than redirected: the page Pages shows
 // for a path no version has, and the icon browsers ask the root for.
 var rootFiles = []string{"404.html", "favicon.ico"}
 
@@ -356,7 +377,7 @@ func (b *builder) build(ctx context.Context, tree, version string) (err error) {
 		"--site-dir", filepath.Join(b.out, version))
 }
 
-// buildRelease builds a release line from its tag, in a worktree that is removed afterwards.
+// buildRelease builds a release from its tag, in a worktree that is removed afterwards.
 func (b *builder) buildRelease(ctx context.Context, r release) (err error) {
 	tmp, err := os.MkdirTemp("", "sitebuild-")
 	if err != nil {
@@ -371,48 +392,46 @@ func (b *builder) buildRelease(ctx context.Context, r release) (err error) {
 		// Not ctx: an interrupted build still removes its worktree.
 		err = errors.Join(err, run(context.WithoutCancel(ctx), b.root, "git", "worktree", "remove", "--force", tree))
 	}()
-	return b.build(ctx, tree, r.Line)
+	return b.build(ctx, tree, r.version())
 }
 
 // assemble writes the root files once every version is built.
 func (b *builder) assemble(releases []release) error {
-	latest := releases[0].Line
+	latest := releases[0].version()
 	vj, err := versionsJSON(releases)
 	if err != nil {
 		return err
 	}
-	redir, err := redirects(latest, legacyPaths)
+	redir, err := redirects(releases, legacyPaths)
 	if err != nil {
 		return err
 	}
-	var hdr strings.Builder
-	hdr.WriteString("# Written by hack/docs/sitebuild: each version's own _headers, under its directory.\n")
-	hdr.WriteString("/versions.json\n  Cache-Control: public, max-age=300, must-revalidate\n")
-	rules := 1
 	versions := []string{devVersion}
 	for _, r := range releases {
-		versions = append(versions, r.Line)
+		versions = append(versions, r.version())
+	}
+	// The headers are the deployment's cache policy, not a release's content: this tree's rules apply to every
+	// version, under versionPlaceholder, so the file stays the same size however many tags are published.
+	devHeaders := filepath.Join(b.out, devVersion, "_headers")
+	data, err := os.ReadFile(devHeaders) //nolint:gosec // a file of the build sitebuild just wrote
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read %s: %w", devHeaders, err)
+	}
+	block, n, err := headerBlock(versionPlaceholder, data)
+	if err != nil {
+		return fmt.Errorf("%s: %w", devHeaders, err)
 	}
 	for _, v := range versions {
-		path := filepath.Join(b.out, v, "_headers")
-		data, err := os.ReadFile(path) //nolint:gosec // a file of the build sitebuild just wrote
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("read %s: %w", path, err)
-		}
-		block, n, err := headerBlock(v, data)
-		if err != nil {
-			return fmt.Errorf("%s: %w", path, err)
-		}
-		hdr.WriteString(block)
-		rules += n
 		// Pages reads only the root's _headers; a version's own would be served as a page.
-		if err := os.Remove(path); err != nil {
-			return fmt.Errorf("remove %s: %w", path, err)
+		if err := os.Remove(filepath.Join(b.out, v, "_headers")); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove %s's _headers: %w", v, err)
 		}
 	}
+	var hdr strings.Builder
+	hdr.WriteString("# Written by hack/docs/sitebuild: this tree's _headers, for every version under /:version.\n")
+	hdr.WriteString("/versions.json\n  Cache-Control: public, max-age=300, must-revalidate\n")
+	hdr.WriteString(block)
+	rules := 1 + n
 	if rules > maxHeaderRules {
 		return fmt.Errorf("_headers has %d rules; Cloudflare Pages allows %d", rules, maxHeaderRules)
 	}
@@ -457,7 +476,7 @@ func main() { os.Exit(runMain()) }
 func runMain() int {
 	out := flag.String("out", "bin/versioned-site", "the output directory, replaced on each run")
 	venv := flag.String("venv", "bin/docs-venv", "the docs virtualenv for this tree's requirements")
-	versions := flag.String("versions", "hack/docs/versions.yaml", "the release lines to publish")
+	versions := flag.String("versions", "hack/docs/versions.yaml", "the release lines whose tags to publish")
 	flag.Parse()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -511,7 +530,7 @@ func buildSite(ctx context.Context, out, venv, versionsPath string) error {
 		return err
 	}
 	for _, r := range releases {
-		fmt.Fprintf(os.Stderr, "sitebuild: building %s from %s\n", r.Line, r.Tag)
+		fmt.Fprintf(os.Stderr, "sitebuild: building %s from %s\n", r.version(), r.Tag)
 		if err := b.buildRelease(ctx, r); err != nil {
 			return err
 		}
@@ -519,7 +538,7 @@ func buildSite(ctx context.Context, out, venv, versionsPath string) error {
 	if err := b.assemble(releases); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "sitebuild: wrote %s (latest %s from %s)\n", b.out, releases[0].Line, releases[0].Tag)
+	fmt.Fprintf(os.Stderr, "sitebuild: wrote %s (%d releases, latest %s)\n", b.out, len(releases), releases[0].Tag)
 	return nil
 }
 

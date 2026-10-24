@@ -1,7 +1,8 @@
 # The documentation site (mkdocs.yml, docs/): built and checked on every pull request that touches it, deployed to
 # Cloudflare Pages from main (https://agentkourier.dev), and to a preview URL from a pull request in this repository.
-# Production is the versioned site (make docs-site, hack/docs/sitebuild): main as /dev/ and each release line in
-# hack/docs/versions.yaml from its newest final tag, the newest as /latest/. A preview is the pull request's tree alone.
+# Production is the versioned site (make docs-site, hack/docs/sitebuild): main as /dev/ and every final tag of the
+# release lines in hack/docs/versions.yaml, as /X.Y.Z/, the newest as /latest/ and each line's newest as /X.Y/. A
+# preview is the pull request's tree alone.
 # A final release starts this workflow on main (release.yml): its tag changes the site without touching these paths.
 #
 # Secrets. Put them in GitHub environments, never in the repository's own secrets: a repository secret is readable by
@@ -56,7 +57,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
-      # The full history: the versioned site builds each release line from its tag.
+      # The full history: the versioned site builds each release from its tag.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
