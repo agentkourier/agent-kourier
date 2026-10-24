@@ -329,6 +329,9 @@ func TestATurnReadAsItIsQueuedIsNotLookedUp(t *testing.T) {
 	}
 	<-sink.finals
 	f.nextSent()
+	// Turn 1's runner reads the queue once more before it retires: if that read lands between turn 2's row and the
+	// hooks below, onNext never runs and the intake waits on read for ever, holding the lock the runner waits on.
+	f.retired(t)
 	read := make(chan struct{})
 	f.st.mu.Lock()
 	f.st.onEnqueued = func() { // the row is written and not yet marked: a runner takes it up now
