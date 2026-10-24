@@ -14,6 +14,21 @@
 {% endblock %}
 
 {% block extrahead %}
+  {#- Material keeps the repository facts in the header (latest release, stars, forks) in sessionStorage and never
+      fetches them again while the tab lives, so a tab opened before a release keeps showing the old one. Drop them
+      after an hour, or at once when the tab has no timestamp or an unreadable one (the negated `<` is deliberate: it
+      is true for NaN as well); this runs before Material's bundle reads them, so it fetches them again. The helpers and the key are Material's
+      (partials/javascripts/base.html, included above this block). -#}
+  <script>
+    try {
+      const at = __md_get("__source_at", sessionStorage)
+      if (!(Date.now() - at < 60 * 60 * 1000)) {
+        sessionStorage.removeItem(__md_scope.pathname + ".__source")
+        __md_set("__source_at", Date.now(), sessionStorage)
+      }
+    } catch (e) {}
+  </script>
+
   {#- Inter (400, 600, 700) for text and headings, JetBrains Mono for code. -#}
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
