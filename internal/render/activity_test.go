@@ -27,6 +27,7 @@ func TestWorkingEndedIsRetitledByHowItEnded(t *testing.T) {
 		state chat.StepState
 	}{
 		{"text", EndedByText, "Wrote the answer", chat.StepDone},
+		{"text that a tool call followed", EndedByUpdate, "Wrote an update", chat.StepDone},
 		{"a completed task", EndedCompleted, "Finished", chat.StepDone},
 		{"a pause for input", EndedPaused, "Waiting for your answer", chat.StepDone},
 		{"a task that did not finish", EndedFailed, "Stopped", chat.StepFailed},

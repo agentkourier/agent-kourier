@@ -175,6 +175,31 @@ func TestAnUnclaimedWorkingCardIsRetitledAndFinishedWhenTextComes(t *testing.T) 
 	}
 }
 
+// Text that a tool call follows was not the answer: the card it ended, which said so while nothing followed, is retitled when
+// the call comes, in the write that begins the call's own card.
+func TestAnUnclaimedWorkingCardThatACallFollowsIsRetitledAnUpdate(t *testing.T) {
+	e := setup(t)
+	run := e.progressRun(t, sa, "U1")
+	run.Handle(text("a", "Checking."))
+	e.writesReach(t, 1)
+	e.until(t, "the Working… card", 5*time.Second, func() bool { return len(e.tasks()) == 1 })
+	run.Handle(text("b", "Looking at the pods."))
+	e.until(t, "the card finished", 3*time.Second, func() bool { return e.tasks()[0].Status == "complete" })
+	run.Handle(call("c1", "kubectl_get", map[string]any{"ns": "prod"}))
+	e.until(t, "the call's card", 3*time.Second, func() bool { return len(e.tasks()) == 2 })
+	run.Handle(result("c1", map[string]any{"output": "3 pods"}))
+	run.Handle(text("c", "Three pods."))
+	run.Handle(agent.FinalEvent{})
+	e.finish(t, run)
+	wantCards(t, e.reply(),
+		"s1 Working… in_progress",
+		"s1 Wrote the answer complete",
+		"s1 Wrote an update complete",
+		`s2 kubectl_get in_progress [ns="prod"]`,
+		"s2 kubectl_get complete",
+	)
+}
+
 // An unclaimed card is finished before the stop when the turn ends with the gap open and no more text. No text came while it
 // was open, so it does not say that it wrote the answer.
 func TestAnUnclaimedWorkingCardIsFinishedBeforeTheStop(t *testing.T) {

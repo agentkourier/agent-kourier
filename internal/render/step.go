@@ -73,9 +73,12 @@ func AwaitingApproval(id string, call agent.ToolCallEvent) chat.Step {
 const (
 	// WorkingTitle is the title of the idle card and of the activity card while it runs.
 	WorkingTitle = "Working…"
-	// WroteTitle is the title of an idle card that no tool call claimed, once text came while it was open: the gap was the
-	// model writing.
+	// WroteTitle is the title of an idle card that no tool call claimed, once text came while it was open and while no tool
+	// call has followed that text: the gap was the model writing, and what it wrote is the answer for all that is known.
 	WroteTitle = "Wrote the answer"
+	// UpdateTitle is the title of such a card once a tool call follows the text: the text was written on the way, and the
+	// answer comes after the call.
+	UpdateTitle = "Wrote an update"
 	// FinishedTitle is the title of an idle card that the end of a completed task closed, with no text since it opened.
 	FinishedTitle = "Finished"
 	// WorkedTitle is the title of the activity card when its task completed, or text came.
@@ -96,6 +99,8 @@ const (
 	NotEnded Ending = iota
 	// EndedByText is a card that text came to while it was open.
 	EndedByText
+	// EndedByUpdate is a card that text came to while it was open, which a tool call followed: the text was not the answer.
+	EndedByUpdate
 	// EndedCompleted is a card that the end of a completed task closed.
 	EndedCompleted
 	// EndedPaused is a card that a pause for input closed.
@@ -125,6 +130,8 @@ func WorkingEnded(id string, e Ending) chat.Step {
 	switch e {
 	case EndedByText:
 		title = WroteTitle
+	case EndedByUpdate:
+		title = UpdateTitle
 	case EndedPaused:
 		title = WaitingTitle
 	case EndedFailed:
