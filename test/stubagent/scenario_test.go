@@ -394,28 +394,30 @@ func TestScenarioAnswerFailsAgent(t *testing.T) {
 		return taskID, reply(id+"-answer", "x", ctxID, taskID, answers(request["id"].(string), []string{"api"}))
 	}
 
-	t.Run("fail", func(t *testing.T) {
-		taskID, answer := pause("f1", "fail gate:answer-fail-1")
-		got := answerAsync(t, c, answer)
-		expectNoAnswer(t, got)
-		if _, held := c.call("GetTask", obj{"id": taskID}); describe(held) != "task:WORKING" {
-			t.Errorf("held task is %s, want task:WORKING", describe(held))
-		}
-		s.Release("answer-fail-1")
-		final := last(receive(t, got))
-		if _, _, state := ids(final); state != "TASK_STATE_FAILED" || statusText(final) != "The model call failed after the answer." {
-			t.Errorf("answered task ended %s with %q, want FAILED with the model's failure", state, statusText(final))
-		}
-	})
+	// A gate whose name says "refuse" does not make a fail prompt refuse.
+	for i, gate := range []string{"answer-fail-1", "refuse-in-the-name-1"} {
+		t.Run("fail on "+gate, func(t *testing.T) {
+			taskID, answer := pause(fmt.Sprintf("f%d", i), "fail gate:"+gate)
+			got := answerAsync(c, answer)
+			stateWithin(t, c, taskID, "task:WORKING") // the answer was taken, and its turn holds
+			expectNoAnswer(t, got)
+			s.Release(gate)
+			final := last(receive(t, got))
+			if _, _, state := ids(final); state != "TASK_STATE_FAILED" || statusText(final) != "The model call failed after the answer." {
+				t.Errorf("answered task ended %s with %q, want FAILED with the model's failure", state, statusText(final))
+			}
+		})
+	}
 
 	t.Run("refuse", func(t *testing.T) {
 		taskID, answer := pause("r1", "refuse gate:answer-refuse-1")
-		got := answerAsync(t, c, answer)
+		got := answerAsync(c, answer)
+		waitReceived(t, s, "r1-answer")
 		expectNoAnswer(t, got)
 		s.Release("answer-refuse-1")
 		evs := receive(t, got)
-		if len(evs) != 1 || dig(evs[0], "error", "code") != float64(-32004) || dig(evs[0], "error", "message") != notReady {
-			t.Errorf("answer got %v, want only -32004 %q", evs, notReady)
+		if len(evs) != 1 || dig(evs[0], "error", "code") != float64(-32004) || dig(evs[0], "error", "message") != stubagent.NotReady {
+			t.Errorf("answer got %v, want only -32004 %q", evs, stubagent.NotReady)
 		}
 		if _, after := c.call("GetTask", obj{"id": taskID}); describe(after) != "task:INPUT_REQUIRED" {
 			t.Errorf("task after the refusal is %s, want task:INPUT_REQUIRED", describe(after))

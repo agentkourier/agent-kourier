@@ -76,12 +76,12 @@ func (h holdStep) play(r *run) bool {
 }
 
 // RefuseAnswer refuses the answer instead of taking it, when it is among the steps that the then of Ask or
-// RequestApproval returns: the answer's send waits at the gate until Server.Release opens it, holding no lock, so the task can be read and
-// other calls served meanwhile, and then answers -32004 with msg, as kagent answers a send that its session cannot
-// take. No step of the continuation runs, the answer is not in the task's history, and the task still waits for
-// input with the same request. A client that leaves before the gate opens gets nothing. The steps of a continuation
-// run only once the answer is taken, so Hold cannot delay the send's answer; this step does. In a turn that no answer
-// resumed it has nothing to refuse, and it ends the task FAILED, so the mistake shows.
+// RequestApproval returns: the answer's send waits at the gate until Server.Release opens it, holding no lock, so
+// the task can be read and other calls served meanwhile, and then answers -32004 with msg, as kagent answers a send
+// that its session cannot take. No step of the continuation runs, the answer is not in the task's history, and the
+// task still waits for input with the same request. A client that leaves before the gate opens gets nothing. The
+// steps of a continuation run only once the answer is taken, so Hold cannot delay the send's answer; this step
+// does. In a turn that no answer resumed it has nothing to refuse, and it ends the task FAILED, so the mistake shows.
 func RefuseAnswer(gate, msg string) Step { return refuseStep{gate, msg} }
 
 type refuseStep struct{ gate, msg string }
