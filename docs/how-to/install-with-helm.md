@@ -22,8 +22,8 @@ Each release publishes a Helm chart and a container image for `linux/amd64` and 
 
 | Artifact | Reference |
 |---|---|
-| Chart | `oci://ghcr.io/agentkourier/charts/agent-kourier`, version `0.1.2` |
-| Image | `ghcr.io/agentkourier/agent-kourier:v0.1.2` |
+| Chart | `oci://ghcr.io/agentkourier/charts/agent-kourier`, version `0.1.3` |
+| Image | `ghcr.io/agentkourier/agent-kourier:v0.1.3` |
 
 The chart pins the image by digest, so you set no image values to install it. The
 [GitHub Release](https://github.com/agentkourier/agent-kourier/releases) of each version names both digests.
@@ -36,7 +36,7 @@ digest from the GitHub Release and name the workflow's exact identity:
 ```sh
 cosign verify ghcr.io/agentkourier/agent-kourier@sha256:<image digest> \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity https://github.com/agentkourier/agent-kourier/.github/workflows/release.yml@refs/tags/v0.1.2
+  --certificate-identity https://github.com/agentkourier/agent-kourier/.github/workflows/release.yml@refs/tags/v0.1.3
 ```
 
 The chart is `ghcr.io/agentkourier/charts/agent-kourier@sha256:<chart digest>`, checked the same way.
@@ -86,26 +86,30 @@ loader that Agent Kourier starts with, and prints the `kubectl` commands for the
 command below, with your namespace in them. It writes nothing if the values do not load, and it does not overwrite a file
 unless you pass `--force`.
 
-!!! note "`init` is not in the 0.1.2 release"
-
-    The 0.1.2 binary and image, and the releases before it, do not have `init`. Until a release has it, run it from a
-    checkout of this repository with Go. A build that is not a release has no chart version to name, so the `helm install`
-    command it prints has no `--version`, and Helm takes the newest chart.
+Run it from the released image, in the directory that should get `my-values.yaml`. `-it` lets it ask its questions,
+and `--user` runs it as you, so it can write the file into your directory (the image's own user is 65532):
 
 ```sh
-go run ./cmd/agent-kourier init
+docker run --rm -it --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work \
+  ghcr.io/agentkourier/agent-kourier:v0.1.3 init
 ```
+
+The `helm install` command it prints names the chart version of the image's release. Releases before 0.1.3 do not
+have `init`. From a checkout of this repository, `go run ./cmd/agent-kourier init` runs the same command; a build that is
+not a release has no chart version to name, so the command it prints has no `--version`, and Helm takes the newest chart.
 
 Every question has an option, so the same run needs no terminal. Give the channel by ID, or by name when a bot token is
 set:
 
 ```sh
-go run ./cmd/agent-kourier init --dialect a2a \
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work \
+  ghcr.io/agentkourier/agent-kourier:v0.1.3 init --dialect a2a \
   --agent-url http://my-agent.my-namespace.svc.cluster.local:8083/a2a/ \
   --agent-namespace my-namespace --agent-name my-agent --channel C0123456789
 ```
 
-With the bot token in `SLACK_BOT_TOKEN` (or in a file named by `--token-file`), `init` also looks a channel name up and
+With the bot token in `SLACK_BOT_TOKEN` (exported, and passed with `-e SLACK_BOT_TOKEN`) or in a file named by
+`--token-file` (mounted into the container), `init` also looks a channel name up and
 checks that the bot can read the channel, as the dry run below does. Without a token it skips Slack, says so, and needs
 the channel's ID. Add `--agent-token` if the agent verifies tokens: the Binding then reads the token from the Secret
 `agent-kourier-agent-token`, and `init` prints the command that creates it. The options are in
@@ -129,7 +133,7 @@ resources with those four values filled in. The `-f` flags below pass it to Helm
 
 Every field is in the [Binding](../reference/binding.md), [AgentBackend](../reference/agentbackend.md) and
 [ChatConnection](../reference/chatconnection.md) references, and every chart value in [Helm values](../reference/helm-values.md).
-`helm show values oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.2` prints the chart's defaults with their
+`helm show values oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.3` prints the chart's defaults with their
 comments. Keep the file: an upgrade passes it again.
 
 ## Check the values before you install
@@ -141,7 +145,7 @@ writes, with `yq`:
 
 ```sh
 mkdir -p rendered
-helm template agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.2 \
+helm template agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.3 \
   -n agent-kourier -f my-values.yaml --show-only templates/configmap.yaml |
   yq -r '.data[] | "---\n" + .' > rendered/resources.yaml
 ```
@@ -151,7 +155,7 @@ named as `namespace/name`:
 
 ```sh
 docker run --rm -e SLACK_BOT_TOKEN -v "$PWD/rendered:/config:ro" \
-  ghcr.io/agentkourier/agent-kourier:v0.1.2 dry-run --config /config --binding agent-kourier/my-binding
+  ghcr.io/agentkourier/agent-kourier:v0.1.3 dry-run --config /config --binding agent-kourier/my-binding
 ```
 
 An error that starts `agent-kourier dry-run: load /config:` names the file, the resource and the field. The files load
@@ -163,7 +167,7 @@ resources or the Secrets: those errors show only when the pod starts. Reading th
 ## Install the chart
 
 ```sh
-helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.2 \
+helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.3 \
   -n agent-kourier -f my-values.yaml
 ```
 

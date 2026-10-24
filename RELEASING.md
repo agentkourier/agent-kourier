@@ -10,8 +10,10 @@ is that image by digest. Nothing is released by hand.
 2. Open a release pull request that sets `version` in `charts/agent-kourier/Chart.yaml` to `X.Y.Z` and every
    release version the public docs name to match. `make docs-check` lists each page that still names the old version
    (`release-version`), so the pull request cannot go green with a page left behind. The chart's golden files carry
-   the version in a label: refresh them with `go test ./test/chart -update` (with `helm` installed). Merge it. Skip this for a
-   prerelease tag (`vX.Y.Z-rc.1`): while one is tried, the chart and the docs keep naming the last release.
+   the version in a label: refresh them with `go test ./test/chart -update` (with `helm` installed). For a new minor
+   version (`X.Y.0`), also add `"X.Y"` at the top of `hack/docs/versions.yaml`, so the documentation site publishes
+   the new release line; until its tag exists the site skips it. Merge it. Skip this for a prerelease tag
+   (`vX.Y.Z-rc.1`): while one is tried, the chart and the docs keep naming the last release.
 3. Before tagging, confirm that `ci.yml`, `security.yml` and `codeql.yml` have completed successfully for that
    exact commit from a push to `main`. The release gate checks the same commit and the latest attempt again; a
    missing, pending, failed or pull-request-only run blocks the release.
@@ -21,6 +23,11 @@ is that image by digest. Nothing is released by hand.
 
 If a first release attempt fails before its GitHub Release is created, rerun that tag after fixing the failure.
 Once a published or draft GitHub Release exists for the tag, the read-only gate refuses to rebuild it.
+
+The documentation site builds each release line from its newest final tag, whether or not that tag has a GitHub
+Release. A docs deploy from `main` while a failed attempt waits for its rerun publishes that tag's docs early. A final
+tag that is never released, such as one the gate refused, must be deleted, or the site publishes its docs as that
+line's.
 
 ## What the workflow does
 
@@ -34,7 +41,8 @@ Once a published or draft GitHub Release exists for the tag, the read-only gate 
   The scheduled released-image rescan is the only permitted skipped job. A pending run fails closed with a message
   to wait; the gate never reruns or changes a workflow run.
 - Refuses a final tag `vX.Y.Z` unless `charts/agent-kourier/Chart.yaml` at the tagged commit says `version: X.Y.Z`
-  (`hack/release/check-version.sh`), so no release goes out before the pull request that points the docs at it.
+  and `hack/docs/versions.yaml` lists `X.Y` (`hack/release/check-version.sh`), so no release goes out before the pull
+  request that points the docs at it, or without a place on the documentation site.
 - Checks the Releases API before granting the build job access to the registry. A 404 means this is the first
   release attempt; a published or draft Release, an authorization failure or any other API error stops the workflow.
 - Refuses a tag that is not on `main`.
@@ -64,6 +72,8 @@ Once a published or draft GitHub Release exists for the tag, the read-only gate 
   verified digests. `.github/release.yml` groups the notes by the labels `pr-labels.yml` sets from each pull
   request's title, and leaves out release pull requests (`chore(release): ...`). Re-running a completed release leaves matching release information unchanged; conflicting
   tag, prerelease state or digest information fails rather than being overwritten.
+- For a final tag, after the Release exists, starts `docs.yml` on `main` (`actions: write`, no checkout), which
+  rebuilds the documentation site with the new tag as its release line's version. A prerelease is not published there.
 
 The job summary lists both digests. The chart's `tag` stays empty: the digest wins.
 
