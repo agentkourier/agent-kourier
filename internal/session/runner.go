@@ -37,6 +37,7 @@ type convo struct {
 	cancelNow     bool            // the task is known to be wedged: cancel it at once, without waiting for its age
 	patient       bool            // the turn is never given up on: the agent may have taken it
 	follow        *tstate         // the turn whose task is followed again, after its stream was lost
+	left          *tstate         // the head turn whose send's outcome is unknown: what it showed waits for its next attempt
 	paused        *tstate         // the turn whose task waits for input, while it does
 	answers       chan answerWork // answers to the paused task, for the parked runner to send
 	attach        *tstate         // a recovered task for the runner to take up; guarded by the Manager's mutex
@@ -215,8 +216,13 @@ func (m *Manager) run(key Key, c *convo) {
 			case <-m.cfg.After(m.backoff(c.tries)):
 			case <-m.ctx.Done():
 			}
-		case (out == idle || err != nil) && m.retire(key):
-			return
+		case out == idle || err != nil:
+			// A turn held behind a task, or one that failed with no attempt of its own, takes over nothing: what its send
+			// handed on is ended before the runner can retire, so that no later runner's turn is started ahead of the end.
+			m.endLeft(c)
+			if m.retire(key) {
+				return
+			}
 		}
 	}
 }
@@ -716,7 +722,8 @@ type tstate struct {
 	recovered bool            // the task was found again after a restart
 	began     store.TaskTurn  // the turn the session recorded for the recovered task, whose output the renderer continues; zero if none was
 	texted    bool            // the turn said something to read: kept across a stream lost and followed, for the renderer keeps the message
-	handed    bool            // the last drive ended with the task followed again: what it showed waits for the follow's sink turn
+	handed    bool            // the last drive ended with the task followed again, or the turn tried again after an unknown outcome: what it showed waits for the next attempt's sink turn
+	takes     bool            // the attempt takes over what an earlier attempt of the turn handed on (convo.left)
 	key       Key
 	c         *convo
 	r         store.Reply
@@ -746,11 +753,11 @@ func (t *tstate) outputTurn() store.TaskTurn {
 }
 
 // sinkRef is the TurnRef the sink is given for this attempt. An answer's output is a message of its own, named after the
-// answer: it must not overwrite the output of the turn that paused. A task found again after a restart, or followed again
-// after a lost stream, continues the message it had.
+// answer: it must not overwrite the output of the turn that paused. A task found again after a restart, followed again
+// after a lost stream, or looked up or sent again after a send of unknown outcome, continues the message it had.
 func (t *tstate) sinkRef() TurnRef {
 	shown := t.outputTurn()
-	return TurnRef{Key: t.key, Binding: t.sess.Binding, MessageID: shown.ID, UserID: shown.User, Output: t.b.Output, Progress: t.b.Progress, Recovered: t.recovered || t.follow, Restarted: t.recovered, Feedback: feedbackOf(shown.User, t.b), ThreadReplies: t.b.ThreadReplies}
+	return TurnRef{Key: t.key, Binding: t.sess.Binding, MessageID: shown.ID, UserID: shown.User, Output: t.b.Output, Progress: t.b.Progress, Recovered: t.recovered || t.follow || t.takes, Restarted: t.recovered, Feedback: feedbackOf(shown.User, t.b), ThreadReplies: t.b.ThreadReplies}
 }
 
 // feedbackOf is the feedback buttons the final message of a turn written by user carries (TurnRef.Feedback).
@@ -806,23 +813,39 @@ func (m *Manager) drive(t *tstate, send func(context.Context, agent.Handler) err
 	h := func(agent.Event) {}
 	// The send's context ends with the manager. The sink's context ends when the drive returns, and
 	// only then: a turn that ends with no FinalEvent frees what the sink started for it, with
-	// ErrTurnContinues as the cause when the task goes on (a lost stream, followed again, or a
-	// shutdown, after which recovery follows it), so that the renderer leaves the message to the
-	// later turn rather than ending it. A sink that must settle a finished turn does so on a
-	// context of its own (the renderer's bounded flush).
+	// ErrTurnContinues as the cause when the task goes on (a lost stream, followed again, a send of
+	// unknown outcome, looked up and followed or sent again, or a shutdown, after which recovery
+	// follows it), so that the renderer leaves the message to the later turn rather than ending it.
+	// A sink that must settle a finished turn does so on a context of its own (the renderer's
+	// bounded flush).
 	tctx, endSend := context.WithCancel(parentCtx)
 	defer endSend()
 	sinkCtx, endTurn := context.WithCancelCause(context.WithoutCancel(parentCtx))
 	defer func() {
 		var cause error
-		// A blocked send that is tried again (unsent, retry) is no follow: the resend is a turn of its own, which would
-		// not take this one's message over, so this turn is ended.
-		t.handed = out == blocked && t.follow
+		// A blocked send that is tried again goes on only while the agent may have the turn: an outcome that was unknown
+		// stays so through a resend that never left. The next attempt, a follow or a resend, is given the turn recovered and
+		// takes the message over, or ends it. A turn the agent never had (not sent, busy, not ready) is ended.
+		m.mu.Lock()
+		unknown := m.attempted[key].id == r.ID && m.attempted[key].unknown
+		m.mu.Unlock()
+		t.handed = out == blocked && (t.follow || unknown)
+		if t.handed && !t.follow { // a follow's own resume ends what it was handed
+			c.left = t
+		}
 		if t.handed || m.ctx.Err() != nil {
 			cause = ErrTurnContinues
 		}
 		endTurn(cause)
 	}()
+	if l := c.left; l != nil { // an earlier attempt handed its message on
+		c.left = nil
+		if l.outputTurn().ID == t.outputTurn().ID {
+			t.takes = true
+		} else {
+			m.endHanded(l)
+		}
+	}
 	if sh := m.cfg.Sink.Turn(sinkCtx, t.sinkRef()); sh != nil {
 		h = sh
 	}
@@ -1205,11 +1228,12 @@ func (m *Manager) resume(c *convo) (out outcome, err error) {
 	return m.drive(t, func(ctx context.Context, h agent.Handler) error { return t.b.Agent.Follow(ctx, t.taskID, h) })
 }
 
-// endHanded ends the turn that a lost stream handed its message on to, for a follow that ended without a sink turn of its
-// own: the agent no longer had the task, it was cancelled as wedged, or the follow was refused before it began, and the
-// thread was told so. The sink is given that turn, recovered, on a context that is over at once with no ErrTurnContinues,
-// so that it ends what the lost stream showed as it ends any turn with no final event (a stopped stream, no Working… left).
-// A shutdown leaves it to recovery, and a follow that drove the task had its own turn.
+// endHanded ends the turn that a lost stream, or a send of unknown outcome, handed its message on to, for an attempt that
+// ended without a sink turn of its own: the agent no longer had the task, it was cancelled as wedged, the follow was refused
+// before it began, or the turn was given up on or dropped before it was sent again, and the thread was told so. The sink is
+// given that turn, recovered, on a context that is over at once with no ErrTurnContinues, so that it ends what was handed on
+// as it ends any turn with no final event (a stopped stream, no Working… left). A shutdown leaves it to recovery, and an
+// attempt that drove the task had its own turn.
 func (m *Manager) endHanded(t *tstate) {
 	if !t.handed || m.ctx.Err() != nil {
 		return
@@ -1217,7 +1241,18 @@ func (m *Manager) endHanded(t *tstate) {
 	t.handed = false
 	ctx, end := context.WithCancel(context.WithoutCancel(m.ctx))
 	end()
-	m.cfg.Sink.Turn(ctx, t.sinkRef())
+	ref := t.sinkRef()
+	ref.Recovered = true
+	m.cfg.Sink.Turn(ctx, ref)
+}
+
+// endLeft ends what the head turn's send of unknown outcome handed on (convo.left), for a turn that ends, or a runner
+// that retires, without another attempt of it taking that over.
+func (m *Manager) endLeft(c *convo) {
+	if l := c.left; l != nil {
+		c.left = nil
+		m.endHanded(l)
+	}
 }
 
 // wedgedByAge reports whether a WORKING task has gone too long without life (R17): it counts

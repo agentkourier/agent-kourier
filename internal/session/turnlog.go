@@ -111,6 +111,9 @@ func (m *Manager) finish(t *tstate, outcome TurnOutcome, extra ...any) {
 	m.mu.Unlock()
 	m.unqueue(t) // however it ended, the reply waits no more: most turns have been unqueued, when they were sent
 	m.unacknowledge(t)
+	if t.c != nil && t.c.left != nil && t.c.left.r.ID == t.r.ID { // it ended before an attempt took over what it handed on
+		m.endLeft(t.c)
+	}
 	attrs := append(m.turnAttrs(t), "outcome", string(outcome))
 	if begun {
 		attrs = append(attrs, "duration_ms", m.cfg.Now().Sub(start).Milliseconds())

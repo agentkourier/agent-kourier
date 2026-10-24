@@ -772,7 +772,7 @@ func (u *Run) run(ctx context.Context) {
 // cut ends a turn whose context ended before its final event, and says whether the run has a write to make for it. The send
 // failed, or the agent did not take the turn (the session tells the thread so with a notice of its own): no event will come.
 // A turn whose task goes on under a later turn (the cause is session.ErrTurnContinues: a lost stream that is followed again,
-// a shutdown that recovery follows, or a later run of the turn in this process) leaves what it showed for that turn, which
+// a send of unknown outcome that is tried again, a shutdown that recovery follows, or a later run of the turn in this process) leaves what it showed for that turn, which
 // takes the message over, and writes nothing. A turn that has shown nothing owes nothing. One that has shown something is made
 // final, as a task that failed is: an unclaimed Working… card and the activity card end as Stopped, a step with no result is
 // ended, and the update path's status line goes, so that nothing is left saying that the agent is at work. A stream is
@@ -806,7 +806,8 @@ func (u *Run) cut(ctx context.Context, ref chat.Ref) bool {
 }
 
 // endLeft ends what an earlier run of a recovered turn left when its task went on, for a turn that ends with no final event
-// and nothing of its own: the follow was refused, or ended without driving the task, and the session tells the thread why.
+// and nothing of its own: the follow or the resend was refused, or the turn ended without driving the task, and the session
+// tells the thread why.
 // The earlier run is over, and its state is as it left it: its loop runs again, here, on this run's context, which has ended
 // for good, so it is cut as it would have been had its task not gone on, its text kept and its stream stopped. A turn that is
 // not recovered has no earlier run, and neither has one whose earlier run left nothing, or was in another process. It is the

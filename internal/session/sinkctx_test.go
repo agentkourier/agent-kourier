@@ -54,9 +54,9 @@ func TestTheSinksContextSaysWhetherTheTurnContinues(t *testing.T) {
 			t.Errorf("the follow that saw the task end ended its sink context with %v; want the turn over", cause)
 		}
 	})
-	t.Run("a send that is tried again is no follow", func(t *testing.T) {
-		// The resend is a turn of its own, not a recovered one, so it would not take over what this send showed: the send's
-		// sink context ends the turn, and the renderer ends what it showed.
+	t.Run("a send that never left is no follow", func(t *testing.T) {
+		// The agent never had the turn, so nothing of it goes on: the send's sink context ends the turn, and the renderer
+		// ends what it showed.
 		f := newFixture(t)
 		sink := f.live()
 		f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, 2*time.Millisecond
@@ -152,5 +152,87 @@ func TestAFollowThatEndsWithoutDrivingEndsTheTurnItWasHanded(t *testing.T) {
 				t.Errorf("sink turns %+v; want the send's and a recovered one of the same message", sink.refs)
 			}
 		})
+	}
+}
+
+// A send whose outcome is unknown may have reached the agent, and the turn is tried again: looked up, then followed or sent
+// once more, under the same message. Until the agent is known to have it or not, what the send showed is handed on, as a
+// lost stream's is: its sink context ends with ErrTurnContinues, as does that of a later attempt that fails before the
+// outcome is known, and the attempt after it is given the turn recovered, of the same message, so that it takes what was
+// shown over rather than find it stopped and empty.
+func TestASendOfUnknownOutcomeHandsItsMessageOn(t *testing.T) {
+	unknown := func() error { return fmt.Errorf("%w: dial tcp: i/o timeout", agent.ErrOutcomeUnknown) }
+	notSent := func() error { return fmt.Errorf("%w: connection refused", agent.ErrNotSent) }
+	for _, tc := range []struct {
+		name     string
+		failures []func() error // the first sends fail like this, and the one after them works
+	}{
+		{"once", []func() error{unknown}},
+		{"then not sent", []func() error{unknown, notSent}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			sink := f.live()
+			f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, 2*time.Millisecond
+			f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+				if n < len(tc.failures) {
+					return tc.failures[n]()
+				}
+				return turn(h, n, a2a.TaskStateCompleted)
+			}
+			if _, err := f.submit(inbound("1")); err != nil {
+				t.Fatal(err)
+			}
+			waitFinal(t, sink)
+			for i := range tc.failures {
+				if cause := sink.causeOf(t, i); !errors.Is(cause, ErrTurnContinues) {
+					t.Errorf("the sink context of failed send %d ended with %v; want ErrTurnContinues", i, cause)
+				}
+			}
+			if cause := sink.causeOf(t, len(tc.failures)); errors.Is(cause, ErrTurnContinues) {
+				t.Errorf("the sink context of the send that ended the task ended with %v; want the turn over", cause)
+			}
+			sink.mu.Lock()
+			defer sink.mu.Unlock()
+			if len(sink.refs) != len(tc.failures)+1 || sink.refs[0].Recovered {
+				t.Fatalf("sink turns %+v; want the first send's, not recovered, and one per send after it", sink.refs)
+			}
+			for _, ref := range sink.refs[1:] {
+				if !ref.Recovered || ref.MessageID != sink.refs[0].MessageID {
+					t.Errorf("sink turns %+v; want every send after the first recovered, of the same message", sink.refs)
+				}
+			}
+		})
+	}
+}
+
+// A turn whose send's outcome was unknown, and that then ends without another sink turn (the lookup that has to come first
+// fails until the turn is given up on, and the thread is told so), still ends what that send handed on: the sink is given the
+// turn, recovered, of the same message, on a context that is already over and does not continue.
+func TestATurnGivenUpOnAfterAnUnknownOutcomeEndsWhatItHandedOn(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, 2*time.Millisecond
+	f.agent.script = unknown(1) // turn 2's send: turn 1 gave the session a context, so it is looked up before a resend
+	f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
+		f.now.Add(int64(time.Hour)) // time passes, so that the turn is given up on
+		return nil, nil, errors.New("agent unreachable")
+	}
+	for _, ts := range []string{"1", "2"} {
+		if _, err := f.submit(inbound(ts)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+	if cause := sink.causeOf(t, 1); !errors.Is(cause, ErrTurnContinues) {
+		t.Errorf("the sink context of the send of unknown outcome ended with %v; want ErrTurnContinues", cause)
+	}
+	if cause := sink.causeOf(t, 2); errors.Is(cause, ErrTurnContinues) {
+		t.Errorf("the sink context of the turn given up on ended with %v; want the turn over", cause)
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.refs) != 3 || !sink.refs[2].Recovered || sink.refs[2].MessageID != sink.refs[1].MessageID {
+		t.Errorf("sink turns %+v; want turn 1's, turn 2's send and a recovered one of turn 2's message", sink.refs)
 	}
 }
