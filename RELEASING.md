@@ -183,7 +183,7 @@ the lists above. Each Go job in `ci.yml`, `security.yml`, `codeql.yml` and `docs
 OS, the Go version and the `go.sum` files it builds from. Only a job on a push to `main` saves one, when its exact key
 is not saved yet, whether its steps passed or failed (a cancelled job saves nothing); pull requests read `main`'s caches
 and save none, so a pull request runs cold until a push run on `main` has saved them. The jobs that install Python
-packages, `echo-agent` in `ci.yml` and `build` in `docs.yml`, keep pip's cache under the same rules, keyed on the job,
+packages, `echo-agent` and `prompt-agent` in `ci.yml` and `build` in `docs.yml`, keep pip's cache under the same rules, keyed on the job,
 the runner OS, the Python version and the requirements files they install from. `docs.yml` runs on a push to `main`
 only when the push changes a path in its `push` trigger, so only such a push saves the `build` job's caches. Each job has its own timeout, set from the times seen on a cold cache. The kind
 tiers are not in CI. They would need a runner with Docker and about 8 GB free, the `kind`, `kubectl`,

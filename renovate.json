@@ -96,12 +96,22 @@
         "examples/recipes/echo-agent/**"
       ],
       "groupName": "echo-agent Python dependencies"
+    },
+    {
+      "matchManagers": [
+        "pip-compile"
+      ],
+      "matchFileNames": [
+        "examples/recipes/prompt-agent/**"
+      ],
+      "groupName": "prompt-agent Python dependencies"
     }
   ],
   "pip-compile": {
     "managerFilePatterns": [
       "/(^|/)hack/docs/requirements\\.txt$/",
-      "/(^|/)examples/recipes/echo-agent/agent/requirements(-dev)?\\.txt$/"
+      "/(^|/)examples/recipes/echo-agent/agent/requirements(-dev)?\\.txt$/",
+      "/(^|/)examples/recipes/prompt-agent/agent/requirements(-dev)?\\.txt$/"
     ]
   },
   "customManagers": [
