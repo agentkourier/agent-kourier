@@ -1003,6 +1003,9 @@ making the prefix optional breaks multi-turn context.
     showed nothing posts nothing. A turn whose task goes on is not ended: when its stream was lost and the task is followed
     again, or Agent Kourier is shutting down and recovery follows the task, its stream or message is left as it is, and the
     turn that follows the task takes it over (stopped and updated to its text, or to `(no output)` when it has none). A
+    follow that ends with no final event and nothing of its own (refused, or ended without following, the task gone or
+    cancelled as wedged) ends the message the earlier turn left as that turn would have been ended: stopped, its text kept,
+    its status line gone. The session gives such a follow a turn even when it never streamed. A
     second run of the same turn in one process (the task followed again while the send that lost it has not returned)
     writes only once the first has ended, and the first leaves the message to it.
   - On the update path only (no stream recipient, as in an alert thread), and only when `output` is `live` and `progress` is
