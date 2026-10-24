@@ -8,7 +8,8 @@
 # is set it is also appended there, so the job's later steps find the tools. It refuses to run as root and never
 # uses sudo: BIN_DIR must be a directory this user can write. Hosts: linux and darwin, amd64 and arm64.
 #
-# hack/ci/test.sh sources this file (main runs only when it is executed) and replaces download and pinned_sha256.
+# hack/ci/test.sh sources this file (main runs only when it is executed): it reads the pins and sha256_of, and
+# replaces detect_platform, download and pinned_sha256.
 set -euo pipefail
 
 # The pins. To bump a tool, change its version here and replace its four sha256 values in pinned_sha256 with the
