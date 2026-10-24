@@ -903,9 +903,10 @@ func TestTheProgressModesGoOnAfterTheTurnMovesToTheUpdatePath(t *testing.T) {
 	}
 }
 
-// A turn that moves from the stream to the update path and ends with nothing to show follows the rule of a turn that never
-// streamed: where a message stands it is updated to "(no output)", and where there is none nothing is posted. It is never a
-// write of a message with no parts, which would fail for good.
+// A turn that moves from the stream to the update path and ends with no text follows the rule of a turn that never streamed:
+// where there is no message nothing is posted, and where a message stands it is updated to what the turn shows, which for a
+// turn that took the message over is the cards of its steps, with no "(no output)" under them. It is never a write of a
+// message with no parts, which would fail for good.
 func TestAMovedTurnThatEndsWithNothingToShowDoesNotWriteAnEmptyMessage(t *testing.T) {
 	// The first write is made with all the events: the call, its result and the final.
 	events := func(run *live.Run) {
@@ -934,7 +935,7 @@ func TestAMovedTurnThatEndsWithNothingToShowDoesNotWriteAnEmptyMessage(t *testin
 			t.Errorf("the end of a turn with nothing to show was retried as a failed write:\n%s", l)
 		}
 	})
-	t.Run("a message stands: it says there was no output", func(t *testing.T) {
+	t.Run("a message stands: it shows the step, and nothing under it", func(t *testing.T) {
 		e := setup(t)
 		e.postedByUpdate(t)
 		release := e.hold()
@@ -943,8 +944,8 @@ func TestAMovedTurnThatEndsWithNothingToShowDoesNotWriteAnEmptyMessage(t *testin
 		events(again)
 		release()
 		e.finish(t, again)
-		if m := e.reply(); m.Text != "(no output)" {
-			t.Errorf("message %+v; want it updated to no output", m)
+		if m := e.reply(); strings.Join(blockTypes(t, m.Blocks), ",") != "task_card" || strings.Contains(string(m.Blocks), "(no output)") {
+			t.Errorf("message %+v; want it updated to the step's card alone", m)
 		}
 		if l := e.logs.String(); strings.Contains(l, "cannot be sent") || strings.Contains(l, "no text and no parts") {
 			t.Errorf("a write of an empty message was tried:\n%s", l)
