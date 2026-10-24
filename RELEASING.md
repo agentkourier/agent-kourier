@@ -188,5 +188,6 @@ packages, `echo-agent` in `ci.yml` and `build` in `docs.yml`, keep pip's cache u
 the runner OS, the Python version and the requirements files they install from. `docs.yml` runs on a push to `main`
 only when the push changes a path in its `push` trigger, so only such a push saves the `build` job's caches. Each job has its own timeout, set from the times seen on a cold cache. The kind
 tiers are not in CI. They would need a runner with Docker and about 8 GB free, the `kind`, `kubectl`,
-`helm` and `jq` binaries installed at pinned versions, and the pinned node and base images pulled (the tiers
+`helm` and `jq` binaries installed at pinned versions (`hack/ci/install-kind-tools.sh` installs them, each checked
+against a pinned sha256), and the pinned node and base images pulled (the tiers
 take minutes to bring up, so they are best as a separate nightly or label-triggered workflow, not on every PR).
