@@ -329,6 +329,7 @@ func TestATurnReadAsItIsQueuedIsNotLookedUp(t *testing.T) {
 	}
 	<-sink.finals
 	f.nextSent()
+	f.retired(t) // turn 1's runner is gone, so the runner the hook starts is the one reader, and it reads through onNext
 	read := make(chan struct{})
 	f.st.mu.Lock()
 	f.st.onEnqueued = func() { // the row is written and not yet marked: a runner takes it up now
