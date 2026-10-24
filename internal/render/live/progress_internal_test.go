@@ -1,6 +1,7 @@
 package live
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -125,6 +126,65 @@ func TestAnIdleCardSaysItWroteTheAnswerOnlyForTextThatCameWhileItWasOpen(t *test
 	v := u.snapshot()
 	if len(v.steps) != 2 || v.steps[1].Title != "Finished" {
 		t.Errorf("steps %+v; want the card the final ended to say Finished, not that it wrote anything", v.steps)
+	}
+}
+
+// A card that text ended says it wrote the answer only while nothing but text follows: a tool call after that text makes it
+// an update, since the answer comes after the call. A call reported again is no call after the text, and a card that no text
+// came to wrote nothing.
+func TestAnIdleCardEndedByTextIsTitledByWhatFollowsTheText(t *testing.T) {
+	search := agent.ToolCallEvent{CallID: "c1", Name: "search"}
+	for _, tc := range []struct {
+		name   string
+		before []agent.Event // before the gap opens the card
+		after  []agent.Event // while the card is open, and after
+		title  string
+	}{
+		{"text then a tool call", nil, []agent.Event{
+			agent.TextEvent{ArtifactID: "a", Text: "Checking. Looking at the pods."},
+			agent.ToolCallEvent{CallID: "c2", Name: "kubectl_get"},
+			agent.ToolResultEvent{CallID: "c2", Response: map[string]any{"output": "3 pods"}},
+			agent.TextEvent{ArtifactID: "b", Text: "Three pods."},
+			agent.FinalEvent{},
+		}, "Wrote an update"},
+		{"text then a call with no ID", nil, []agent.Event{
+			agent.TextEvent{ArtifactID: "a", Text: "Checking. Looking at the pods."},
+			agent.ToolCallEvent{Name: "kubectl_get"},
+			agent.FinalEvent{},
+		}, "Wrote an update"},
+		{"text as the final answer", nil, []agent.Event{
+			agent.TextEvent{ArtifactID: "a", Text: "Checking. Three pods."},
+			agent.FinalEvent{},
+		}, "Wrote the answer"},
+		{"text, then a call made before it reported again", []agent.Event{
+			search, agent.ToolResultEvent{CallID: "c1", Response: map[string]any{"output": "x"}},
+		}, []agent.Event{
+			agent.TextEvent{ArtifactID: "a", Text: "Checking. Three pods."},
+			search,
+			agent.FinalEvent{},
+		}, "Wrote the answer"},
+		{"a gap with no text", nil, []agent.Event{agent.FinalEvent{}}, "Finished"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			u, clk := newTimedRun(true, v1alpha1.ProgressStepsAndActivity)
+			u.Handle(agent.TextEvent{ArtifactID: "a", Text: "Checking."})
+			for _, ev := range tc.before {
+				u.Handle(ev)
+			}
+			n := len(u.steps)
+			clk.pass(u, 3*time.Second)
+			if len(u.steps) != n+1 || u.steps[n].kind != workingStep {
+				t.Fatalf("steps %+v after the delay; want a Working… card last", u.steps)
+			}
+			u.sentStep(render.WorkingStep(fmt.Sprintf("s%d", n+1)))
+			for _, ev := range tc.after {
+				u.Handle(ev)
+			}
+			v := u.snapshot()
+			if len(v.steps) <= n || v.steps[n].Title != tc.title || v.steps[n].State != chat.StepDone {
+				t.Errorf("steps %+v; want the card %q, done", v.steps, tc.title)
+			}
+		})
 	}
 }
 

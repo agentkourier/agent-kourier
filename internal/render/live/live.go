@@ -300,7 +300,7 @@ const (
 	// callStep is a tool call: the call, and how it ended.
 	callStep stepKind = iota
 	// workingStep is a Working… card for a gap. The next tool call takes it over and it becomes that call's step; text, or the
-	// end of the turn, ends it under a title of its own (render.WorkingEnded).
+	// end of the turn, ends it under a title of its own (render.WorkingEnded), which a tool call after the text changes.
 	workingStep
 	// activityStep is the one card of the activity mode, which shows counts and no call; it ends at the first text or the end
 	// of the turn, with what it counted then.
@@ -515,6 +515,7 @@ func (u *Run) callMade(e agent.ToolCallEvent, now time.Time) {
 		u.anon = false
 	}
 	u.idle = false // the tool's own line takes the place of Working…
+	u.followText()
 	u.beginActivity()
 	u.reopenGap(now)
 }
@@ -583,7 +584,8 @@ func (u *Run) openIdle(seq int, now time.Time) {
 
 // endWorking ends what stands for time, as e says, when text comes or the turn ends: a Working… card that no call claimed,
 // and the activity card, with the counts and the time it stands at. A card ends once. Only text that came while a Working…
-// card was open says that it wrote the answer; a final that ends it says how the task ended. The caller holds u.mu.
+// card was open says that it wrote the answer, until a tool call follows that text (followText); a final that ends it says how
+// the task ended. The caller holds u.mu.
 func (u *Run) endWorking(now time.Time, e render.Ending) {
 	n := len(u.steps)
 	if n == 0 || u.steps[n-1].ending != render.NotEnded {
@@ -594,6 +596,17 @@ func (u *Run) endWorking(now time.Time, e render.Ending) {
 		r.ending = e
 	case activityStep:
 		r.ending, r.steps, r.failed, r.endedAt = e, u.finished, u.failed, now
+	}
+}
+
+// followText makes the text that ended a Working… card an update, now that a tool call follows it: the card said that it
+// wrote the answer while nothing but text came after (render.WroteTitle), and the answer is what comes after this call. The
+// caller holds u.mu.
+func (u *Run) followText() {
+	for i := range u.steps {
+		if r := &u.steps[i]; r.kind == workingStep && r.ending == render.EndedByText {
+			r.ending = render.EndedByUpdate
+		}
 	}
 }
 
@@ -898,7 +911,7 @@ func (u *Run) message(v view) chat.Message {
 // update replaces the message at ref with the message of v. The steps never cost the reply its text: a message that
 // carries them and that the platform refuses as content it cannot show is sent again at once without them, with a
 // warning, and the turn shows no steps from then on. Today a refusal of that kind is never retried, so without this the
-// steps would take the answer down with them.
+// steps would take the answer down with them. A final whose steps were all it showed says "(no output)" without them.
 func (u *Run) update(ctx context.Context, ref chat.Ref, v view) error {
 	carried := len(v.steps) > 0 && !u.stepsOff
 	err := u.cfg.Platform.Update(ctx, ref, chat.Say(u.message(v)))
@@ -907,7 +920,11 @@ func (u *Run) update(ctx context.Context, ref chat.Ref, v view) error {
 	}
 	u.cfg.Logger.WarnContext(ctx, "live: the platform refused the message with its steps; it is sent again without them", "channel", u.turn.Channel, "err", err)
 	u.stepsOff = true
-	return u.cfg.Platform.Update(ctx, ref, chat.Say(v.m))
+	m := v.m
+	if v.final && m.Fallback == "" && len(m.Parts) == 0 {
+		m = render.Nothing()
+	}
+	return u.cfg.Platform.Update(ctx, ref, chat.Say(m))
 }
 
 // cannotShow says whether err is the platform's refusal of a message's content: one it found malformed, too large, or of a
@@ -989,7 +1006,8 @@ type view struct {
 // state with a status line is writable with no text, so a call that returned replaces the line that said it was under way.
 // Once the turn is final the line is gone, and a step with no result is ended: the turn will not hear of it again. A turn
 // that took over a stream has the steps too, which its updates carry, and no status line, since its cards say the same:
-// steps make it writable with no text until the final, which with no text is "(no output)" under them.
+// steps make it writable with no text, the final included: a pause, or an end, with no text shows the cards and nothing
+// under them, as a stream that stops with steps and no text does. Only a turn with no text and no step is "(no output)".
 //
 // At a pause for a tool approval the step of each call it waits on is shown as waiting for the approval, done, whatever the
 // call had reported (render.AwaitingApproval): kagent reports such a call with a "requires confirmation" error, and a step
@@ -1033,7 +1051,7 @@ func (u *Run) snapshot() view {
 	if status != "" {
 		v.m, v.ok = render.WithStatus(v.m, status), true
 	}
-	if v.rated && len(u.turn.Footer) > 0 { // a turn that ended with no text is replaced below by "(no output)", footer and all
+	if v.rated && v.body != "" && len(u.turn.Footer) > 0 { // a turn that ended with no text has no reply to rate, as a stream's stop says (stopFooter)
 		v.m.Parts = append(slices.Clone(v.m.Parts), u.turn.Footer...)
 	}
 	for i, r := range recs {
@@ -1057,9 +1075,7 @@ func (u *Run) snapshot() view {
 		}
 		v.pos = append(v.pos, pos)
 	}
-	if u.streaming || !final {
-		v.ok = v.ok || len(v.steps) > 0
-	}
+	v.ok = v.ok || len(v.steps) > 0
 	return v
 }
 

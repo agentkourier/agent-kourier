@@ -175,6 +175,31 @@ func TestAnUnclaimedWorkingCardIsRetitledAndFinishedWhenTextComes(t *testing.T) 
 	}
 }
 
+// Text that a tool call follows was not the answer: the card it ended, which said so while nothing followed, is retitled when
+// the call comes, in the write that begins the call's own card.
+func TestAnUnclaimedWorkingCardThatACallFollowsIsRetitledAnUpdate(t *testing.T) {
+	e := setup(t)
+	run := e.progressRun(t, sa, "U1")
+	run.Handle(text("a", "Checking."))
+	e.writesReach(t, 1)
+	e.until(t, "the Working… card", 5*time.Second, func() bool { return len(e.tasks()) == 1 })
+	run.Handle(text("b", "Looking at the pods."))
+	e.until(t, "the card finished", 3*time.Second, func() bool { return e.tasks()[0].Status == "complete" })
+	run.Handle(call("c1", "kubectl_get", map[string]any{"ns": "prod"}))
+	e.until(t, "the call's card", 3*time.Second, func() bool { return len(e.tasks()) == 2 })
+	run.Handle(result("c1", map[string]any{"output": "3 pods"}))
+	run.Handle(text("c", "Three pods."))
+	run.Handle(agent.FinalEvent{})
+	e.finish(t, run)
+	wantCards(t, e.reply(),
+		"s1 Working… in_progress",
+		"s1 Wrote the answer complete",
+		"s1 Wrote an update complete",
+		`s2 kubectl_get in_progress [ns="prod"]`,
+		"s2 kubectl_get complete",
+	)
+}
+
 // An unclaimed card is finished before the stop when the turn ends with the gap open and no more text. No text came while it
 // was open, so it does not say that it wrote the answer.
 func TestAnUnclaimedWorkingCardIsFinishedBeforeTheStop(t *testing.T) {
@@ -903,9 +928,10 @@ func TestTheProgressModesGoOnAfterTheTurnMovesToTheUpdatePath(t *testing.T) {
 	}
 }
 
-// A turn that moves from the stream to the update path and ends with nothing to show follows the rule of a turn that never
-// streamed: where a message stands it is updated to "(no output)", and where there is none nothing is posted. It is never a
-// write of a message with no parts, which would fail for good.
+// A turn that moves from the stream to the update path and ends with no text follows the rule of a turn that never streamed:
+// where there is no message nothing is posted, and where a message stands it is updated to what the turn shows, which for a
+// turn that took the message over is the cards of its steps, with no "(no output)" under them. It is never a write of a
+// message with no parts, which would fail for good.
 func TestAMovedTurnThatEndsWithNothingToShowDoesNotWriteAnEmptyMessage(t *testing.T) {
 	// The first write is made with all the events: the call, its result and the final.
 	events := func(run *live.Run) {
@@ -934,7 +960,7 @@ func TestAMovedTurnThatEndsWithNothingToShowDoesNotWriteAnEmptyMessage(t *testin
 			t.Errorf("the end of a turn with nothing to show was retried as a failed write:\n%s", l)
 		}
 	})
-	t.Run("a message stands: it says there was no output", func(t *testing.T) {
+	t.Run("a message stands: it shows the step, and nothing under it", func(t *testing.T) {
 		e := setup(t)
 		e.postedByUpdate(t)
 		release := e.hold()
@@ -943,8 +969,8 @@ func TestAMovedTurnThatEndsWithNothingToShowDoesNotWriteAnEmptyMessage(t *testin
 		events(again)
 		release()
 		e.finish(t, again)
-		if m := e.reply(); m.Text != "(no output)" {
-			t.Errorf("message %+v; want it updated to no output", m)
+		if m := e.reply(); strings.Join(blockTypes(t, m.Blocks), ",") != "task_card" || strings.Contains(string(m.Blocks), "(no output)") {
+			t.Errorf("message %+v; want it updated to the step's card alone", m)
 		}
 		if l := e.logs.String(); strings.Contains(l, "cannot be sent") || strings.Contains(l, "no text and no parts") {
 			t.Errorf("a write of an empty message was tried:\n%s", l)

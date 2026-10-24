@@ -276,9 +276,9 @@ func (u *Run) postInstead(ctx context.Context, ref *chat.Ref) error {
 // which shows a tool call as a step and a wait as a card, and so may have no message at all; the update path's own view
 // shows them as status lines, or, for a turn that took over a stream, as the steps its updates carry, and is the one to
 // write. A state with nothing to show yet writes nothing. A turn that ended
-// with nothing follows the rule of the run loop: where a message stands (the one an earlier run left, which this turn took
-// over) it is updated to "(no output)", so that no status line is left up; where there is none, nothing is posted, and the
-// turn ends as errNothingToShow. A stream that was refused showed nothing, so nothing is lost by it.
+// with nothing, no text and no step, follows the rule of the run loop: where a message stands (the one an earlier run left,
+// which this turn took over) it is updated to "(no output)", so that no status line is left up; where there is none, nothing
+// is posted, and the turn ends as errNothingToShow. A stream that was refused showed nothing, so nothing is lost by it.
 func (u *Run) writeMoved(ctx context.Context, ref *chat.Ref) error {
 	v := u.snapshot()
 	if !v.ok {
