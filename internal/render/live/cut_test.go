@@ -281,6 +281,52 @@ func TestAFollowThatEndsWithNothingEndsWhatItWasHanded(t *testing.T) {
 	}
 }
 
+// A message that an earlier process left for a turn whose task went on has no run of this Renderer to end it. A recovered run
+// of the turn that ends with no final event and nothing of its own still stops that message's stream, which keeps its text
+// (the platform shows the card that was under way as ended). A message that is updated, as in an alert thread, is left as it
+// is: what it says is not known here, and an update would have to replace it.
+func TestARecoveredRunEndsTheStreamAnEarlierProcessLeft(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		recipient string
+	}{{"stream", "U1"}, {"alert thread", ""}} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := setup(t)
+			first, end := e.startCause(t, live.Turn{Mode: v1alpha1.OutputLive, Progress: sa, Recipient: tc.recipient})
+			first.Handle(text("a", "Checking the pods."))
+			e.writesReach(t, 1)
+			e.until(t, "the Working…", 6*time.Second, func() bool {
+				return strings.Contains(e.said(), "Working…") || len(e.reply().Tasks()) == 1
+			})
+			end(session.ErrTurnContinues) // the process stops, and leaves the task to recovery
+			select {
+			case <-first.Done():
+			case <-time.After(5 * time.Second):
+				t.Fatal("the run did not end with its context")
+			}
+			left := e.reply()
+			e.live = newRenderer(t, e.cfg) // the restarted process
+			later, cancel := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Progress: sa, Recipient: tc.recipient, Recovered: true})
+			cancel() // the attempt ended with no event, and the session tells the thread why
+			e.finish(t, later)
+			th := e.fake.Thread("C1", e.root)
+			m := th[len(th)-1]
+			if len(th) != 2 || m.Streaming {
+				t.Fatalf("thread %d long, streaming %v; want the one message, not streaming", len(th), m.Streaming)
+			}
+			if tc.recipient == "" && (m.Text != left.Text || string(m.Blocks) != string(left.Blocks)) {
+				t.Errorf("message %q, blocks %s; want it as the earlier process left it", m.Text, m.Blocks)
+			}
+			if !strings.HasPrefix(m.Text, "Checking the pods.") {
+				t.Errorf("message %q; want the text the earlier process showed", m.Text)
+			}
+			if buttons, questions := hasFooter(string(m.Blocks)); buttons || questions > 0 {
+				t.Errorf("a turn that ended with no final asks for a rating: %s", m.Blocks)
+			}
+		})
+	}
+}
+
 // ownStopFails is a Platform whose streams this run starts stop with err.
 type ownStopFails struct {
 	chat.Platform

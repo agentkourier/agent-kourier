@@ -259,3 +259,36 @@ func TestATurnAnEarlierProcessQueuedIsGivenRecovered(t *testing.T) {
 		t.Errorf("sink turns %+v; want one, recovered, of the turn's message", sink.refs)
 	}
 }
+
+// A turn that an earlier process queued may have a message that process left, which no attempt of this one has taken over.
+// When its lookup fails until it is given up on, so that it is never sent or followed here, the sink is still given the turn,
+// recovered, on a context that is already over and does not continue, so that the renderer ends what was left.
+func TestATurnAnEarlierProcessQueuedThatIsGivenUpOnIsEnded(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, 2*time.Millisecond
+	if err := f.st.UpsertSession(t.Context(), store.Session{Key: key, Binding: "ns/b1", ContextID: "c1", LastActivity: t0}); err != nil {
+		t.Fatal(err)
+	}
+	in := inbound("1")
+	if _, err := f.st.EnqueueReply(t.Context(), store.Reply{ID: in.MessageID, Key: key, UserID: in.UserID, MessageRef: in.MessageRef, Text: in.Text, EnqueuedAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
+		f.now.Add(int64(time.Hour)) // time passes, so that the turn is given up on
+		return nil, nil, errors.New("agent unreachable")
+	}
+	f.m.wake(key) // the restarted process finds it in the queue
+	eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+	if cause := sink.causeOf(t, 0); errors.Is(cause, ErrTurnContinues) {
+		t.Errorf("the sink context of the turn given up on ended with %v; want the turn over", cause)
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.refs) != 1 || !sink.refs[0].Recovered || sink.refs[0].MessageID != in.MessageID {
+		t.Errorf("sink turns %+v; want one, recovered, of the turn's message", sink.refs)
+	}
+	if sends, _, _ := f.agent.counts(); sends != 0 {
+		t.Errorf("%d sends; want none: nothing is known of the turn", sends)
+	}
+}

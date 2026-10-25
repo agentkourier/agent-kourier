@@ -810,8 +810,9 @@ func (u *Run) cut(ctx context.Context, ref chat.Ref) bool {
 // tells the thread why.
 // The earlier run is over, and its state is as it left it: its loop runs again, here, on this run's context, which has ended
 // for good, so it is cut as it would have been had its task not gone on, its text kept and its stream stopped. A turn that is
-// not recovered has no earlier run, and neither has one whose earlier run left nothing, or was in another process. It is the
-// goroutine's.
+// not recovered has no earlier run, and neither has one whose earlier run left nothing, or was in another process. With no
+// earlier run here, a message the turn's row records may still be a stream that another process left: it is stopped, which
+// keeps its text (stopEarlier). It is the goroutine's.
 func (u *Run) endLeft(ctx context.Context) {
 	if !u.turn.Recovered {
 		return
@@ -822,6 +823,34 @@ func (u *Run) endLeft(ctx context.Context) {
 	if left := u.owner.takeLeft(u.turn.Source); left != nil {
 		<-left.done
 		left.run(ctx)
+		return
+	}
+	u.stopEarlier(ctx)
+}
+
+// stopEarlier stops the stream that the turn's outbox row records, if it still runs, for a recovered turn that ends with nothing
+// of its own and no earlier run of this Renderer to end what was shown: another process started it and left it for the task that
+// went on. Its state is not known here, so the stop carries nothing: the stream keeps its text, and the platform shows a card that
+// was under way as ended (Slack shows it as an error). A message that does not stream, such as an alert thread's, is left as it
+// is, since an update would have to replace what it says. It is tried once: a stream that cannot be stopped now is left to the
+// platform. It is the goroutine's.
+func (u *Run) stopEarlier(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), u.cfg.WriteTimeout)
+	defer cancel()
+	id := outbox.ID(u.turn.Source, store.OutboxReply)
+	row, err := u.cfg.Store.GetOutbox(ctx, id)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return
+	case err != nil:
+		u.cfg.Logger.WarnContext(ctx, "live: the earlier message of a recovered turn could not be read; it is left as it is", "channel", u.turn.Channel, "err", err)
+		return
+	case row.MessageRef == "":
+		return
+	}
+	err = u.cfg.Platform.StreamAt(u.cfg.Platform.RefAt(u.turn.Channel, u.turn.Thread, row.MessageRef)).Stop(ctx, "", chat.Message{}, id)
+	if err != nil && !errors.Is(err, chat.ErrNotStreaming) {
+		u.cfg.Logger.WarnContext(ctx, "live: the stream an earlier process left could not be stopped; it is left to the platform", "channel", u.turn.Channel, "err", err)
 	}
 }
 

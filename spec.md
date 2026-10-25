@@ -1010,9 +1010,12 @@ making the prefix optional breaks multi-turn context.
     before (this process tried it, or an earlier process queued it) is given to the renderer recovered. A follow or resend that ends with no final event
     and nothing of its own (refused, or ended without following, the task gone or cancelled as wedged, or the turn given
     up on before it was sent again) ends the message the earlier turn left as that turn would have been ended: stopped,
-    its text kept, its status line gone. The session gives the renderer such a turn even when it never streamed. This
-    end works in one process: a message that an earlier process left is taken over by a later attempt that has
-    something to show, or a final event, and is otherwise not ended by Agent Kourier. A
+    its text kept, its status line gone. The session gives the renderer such a turn even when it never streamed, and
+    when a turn that an earlier process may have sent is given up on before it is sent or followed. A message that an
+    earlier process left is taken over by a later attempt that has something to show, or a final event; otherwise a
+    stream is stopped with nothing more (its text kept, the card that was under way shown by the platform as ended),
+    and a message that is updated, as in an alert thread, is left as the earlier process left it, its content not
+    being known. A
     second run of the same turn in one process (the task followed again while the send that lost it has not returned)
     writes only once the first has ended, and the first leaves the message to it.
   - On the update path only (no stream recipient, as in an alert thread), and only when `output` is `live` and `progress` is

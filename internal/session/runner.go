@@ -569,6 +569,11 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 				}
 			case err != nil:
 				c.patient = c.patient || hold != nil // a turn the agent took is never failed
+				if resend && c.left == nil {
+					// An earlier attempt, maybe an earlier process's, may have left a message that no attempt here has taken
+					// over: a turn given up on before it is sent or followed ends it (finish).
+					t.handed, c.left = true, t
+				}
 				return m.retry(t, fmt.Errorf("look up turn %s: %w", r.ID, err))
 			case task != nil:
 				if len(holders) > 1 {
