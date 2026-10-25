@@ -292,3 +292,53 @@ func TestATurnAnEarlierProcessQueuedThatIsGivenUpOnIsEnded(t *testing.T) {
 		t.Errorf("%d sends; want none: nothing is known of the turn", sends)
 	}
 }
+
+// Only the first attempt in this process at a turn that an earlier process queued is recovered: it takes over, or ends, what that
+// process may have left. Once it has, a later attempt here (the agent was busy, and the turn is sent again) has only what this
+// process showed to continue, which it ended or handed on itself, so it is no recovered turn, and a turn this process queued is
+// never one unless a send of unknown outcome handed its message on.
+func TestOnlyTheFirstAttemptAtATurnAnEarlierProcessQueuedIsRecovered(t *testing.T) {
+	busy := func(_ context.Context, n int, h agent.Handler) error {
+		if n == 0 {
+			return fmt.Errorf("%w: -32004", agent.ErrBusy)
+		}
+		return turn(h, n, a2a.TaskStateCompleted)
+	}
+	for _, tc := range []struct {
+		name    string
+		earlier bool // an earlier process queued the turn
+		want    []bool
+	}{
+		{"an earlier process queued it", true, []bool{true, false}},
+		{"this process queued it", false, []bool{false, false}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			sink := f.live()
+			f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, 2*time.Millisecond
+			f.agent.script = busy
+			in := inbound("1")
+			if tc.earlier {
+				if err := f.st.UpsertSession(t.Context(), store.Session{Key: key, Binding: "ns/b1", LastActivity: t0}); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := f.st.EnqueueReply(t.Context(), store.Reply{ID: in.MessageID, Key: key, UserID: in.UserID, MessageRef: in.MessageRef, Text: in.Text, EnqueuedAt: t0}); err != nil {
+					t.Fatal(err)
+				}
+				f.m.wake(key)
+			} else if _, err := f.submit(in); err != nil {
+				t.Fatal(err)
+			}
+			waitFinal(t, sink)
+			sink.mu.Lock()
+			defer sink.mu.Unlock()
+			var got []bool
+			for _, ref := range sink.refs {
+				got = append(got, ref.Recovered)
+			}
+			if fmt.Sprint(got) != fmt.Sprint(tc.want) {
+				t.Errorf("recovered by attempt %v; want %v", got, tc.want)
+			}
+		})
+	}
+}

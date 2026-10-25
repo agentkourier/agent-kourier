@@ -1006,12 +1006,15 @@ making the prefix optional breaks multi-turn context.
     since the first send may be the task that keeps the agent busy), or Agent Kourier is shutting down and recovery
     follows the task, its stream or message is left as it is, and the turn that follows the task, or sends it again,
     takes it over (stopped and updated to its text, or to `(no output)` when it has none). A send that the agent never
-    had (not sent, busy, not ready), with no unknown outcome before it, is ended. Any attempt of a turn that may have been sent
-    before (this process tried it, or an earlier process queued it) is given to the renderer recovered. A follow or resend that ends with no final event
+    had (not sent, busy, not ready), with no unknown outcome before it, is ended. The renderer is given recovered the attempt
+    after one that handed its message on, and the first attempt in this process at a turn that an earlier process
+    queued; a later attempt that posts under the turn's row and finds it made already writes the message again, since
+    the post returns the earlier message. A follow or resend that ends with no final event
     and nothing of its own (refused, or ended without following, the task gone or cancelled as wedged, or the turn given
     up on before it was sent again) ends the message the earlier turn left as that turn would have been ended: stopped,
-    its text kept, its status line gone. The session gives the renderer such a turn even when it never streamed, and
-    when a turn that an earlier process may have sent is given up on before it is sent or followed. A message that an
+    its text kept, its status line gone. The session gives the renderer such a turn even when it never streamed, when a
+    turn that an earlier process may have sent is given up on before it is sent or followed, and when its runner
+    stops with the turn still queued (a store read failed). A message that an
     earlier process left is taken over by a later attempt that has something to show, or a final event; otherwise a
     stream is stopped with nothing more (its text kept, the card that was under way shown by the platform as ended),
     and a message that is updated, as in an alert thread, is left as the earlier process left it, its content not

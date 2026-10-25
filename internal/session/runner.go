@@ -217,9 +217,14 @@ func (m *Manager) run(key Key, c *convo) {
 			case <-m.ctx.Done():
 			}
 		case out == idle || err != nil:
-			// A turn held behind a task, or one that failed with no attempt of its own, takes over nothing: what its send
-			// handed on is ended before the runner can retire, so that no later runner's turn is started ahead of the end.
-			m.endLeft(c)
+			// A runner that retires takes over nothing more: what a send handed on is ended before it can retire, so that no later
+			// runner's turn is started ahead of the end. One that goes on, for a wake came, tries the head turn again at once.
+			m.mu.Lock()
+			again := c.again
+			m.mu.Unlock()
+			if !again {
+				m.endLeft(c)
+			}
 			if m.retire(key) {
 				return
 			}
@@ -547,9 +552,11 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 	resend := prev.id == r.ID || !fresh
 	m.attempted[key] = attempt{id: r.ID, unknown: prev.id == r.ID && prev.unknown}
 	m.mu.Unlock()
-	// An earlier attempt, here or in an earlier process, may have left a message for the turn: this one continues it, so
-	// that the renderer updates it rather than take the outbox's ref of it for what this attempt shows.
-	t.takes = resend
+	// The first attempt here at a turn that an earlier process queued continues what that process may have left for it, which
+	// no attempt here has taken over or ended: the renderer takes it over, or ends it. A later attempt here has only what this
+	// process showed, which it ended itself, or handed on (convo.left).
+	first := !fresh && prev.id != r.ID
+	t.takes = first
 	if hold != nil || resend {
 		// The agent may already have this turn, and a resend into an existing context is not
 		// deduplicated, so look it up first, whatever failed the first time: found, it is followed
@@ -569,9 +576,9 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 				}
 			case err != nil:
 				c.patient = c.patient || hold != nil // a turn the agent took is never failed
-				if resend && c.left == nil {
-					// An earlier attempt, maybe an earlier process's, may have left a message that no attempt here has taken
-					// over: a turn given up on before it is sent or followed ends it (finish).
+				if first && c.left == nil {
+					// An earlier process may have left a message that no attempt here has taken over: a turn given up on before
+					// it is sent or followed ends it (finish).
 					t.handed, c.left = true, t
 				}
 				return m.retry(t, fmt.Errorf("look up turn %s: %w", r.ID, err))
@@ -982,7 +989,7 @@ func (m *Manager) answer(c *convo, work answerWork) (outcome, error) {
 	}
 	msg := work.msg
 	t := *c.paused
-	t.answer, t.nid, t.taskID, t.follow = true, msg.ID, msg.TaskID, false
+	t.answer, t.nid, t.taskID, t.follow, t.takes = true, msg.ID, msg.TaskID, false, false // the answer's output is a message of its own
 	if work.reply.ID == "" {
 		m.mu.Lock()
 		work.reply = c.pendingReply

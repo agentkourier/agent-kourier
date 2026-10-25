@@ -317,6 +317,9 @@ func TestARecoveredRunEndsTheStreamAnEarlierProcessLeft(t *testing.T) {
 			if tc.recipient == "" && (m.Text != left.Text || string(m.Blocks) != string(left.Blocks)) {
 				t.Errorf("message %q, blocks %s; want it as the earlier process left it", m.Text, m.Blocks)
 			}
+			if n := len(e.rec.sent("/chat.stopStream")); tc.recipient == "" && n != 0 {
+				t.Errorf("%d stops of a message that never streamed; want none", n)
+			}
 			if !strings.HasPrefix(m.Text, "Checking the pods.") {
 				t.Errorf("message %q; want the text the earlier process showed", m.Text)
 			}
@@ -324,6 +327,25 @@ func TestARecoveredRunEndsTheStreamAnEarlierProcessLeft(t *testing.T) {
 				t.Errorf("a turn that ended with no final asks for a rating: %s", m.Blocks)
 			}
 		})
+	}
+}
+
+// A later attempt at a turn whose earlier attempt posted a message (a Working… line, ended when that attempt's send failed)
+// finds the turn's row made already, and the message the outbox returns for its post is the earlier one, which does not say what
+// the later attempt gave it. It writes the message again, recovered or not, so that its answer is what the thread shows.
+func TestALaterAttemptRewritesTheMessageAnEarlierOnePosted(t *testing.T) {
+	e := setup(t)
+	first, cancel := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Progress: sa})
+	e.until(t, "the Working…", 6*time.Second, func() bool { return strings.Contains(e.said(), "Working…") })
+	cancel() // the send failed, and is tried again
+	e.finish(t, first)
+	later, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Progress: sa})
+	later.Handle(text("a", "Done."))
+	later.Handle(agent.FinalEvent{})
+	e.finish(t, later)
+	th := e.fake.Thread("C1", e.root)
+	if m := th[len(th)-1]; len(th) != 2 || m.Text != "Done." {
+		t.Errorf("thread %d long, message %q; want the one message, saying %q", len(th), m.Text, "Done.")
 	}
 }
 
