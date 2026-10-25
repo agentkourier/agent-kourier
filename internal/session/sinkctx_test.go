@@ -10,6 +10,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
 // causeOf waits for the context the sink was given for turn i to end, and returns why it ended.
@@ -234,5 +235,27 @@ func TestATurnGivenUpOnAfterAnUnknownOutcomeEndsWhatItHandedOn(t *testing.T) {
 	defer sink.mu.Unlock()
 	if len(sink.refs) != 3 || !sink.refs[2].Recovered || sink.refs[2].MessageID != sink.refs[1].MessageID {
 		t.Errorf("sink turns %+v; want turn 1's, turn 2's send and a recovered one of turn 2's message", sink.refs)
+	}
+}
+
+// A turn that an earlier process queued may have been sent by it, and that process may have left a message for the turn
+// (a send of unknown outcome hands it on): this process's attempt is given the turn recovered, so that the renderer updates
+// that message to what the attempt shows, rather than take the message the outbox returns for the content it was given.
+func TestATurnAnEarlierProcessQueuedIsGivenRecovered(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	if err := f.st.UpsertSession(t.Context(), store.Session{Key: key, Binding: "ns/b1", LastActivity: t0}); err != nil {
+		t.Fatal(err)
+	}
+	in := inbound("1")
+	if _, err := f.st.EnqueueReply(t.Context(), store.Reply{ID: in.MessageID, Key: key, UserID: in.UserID, MessageRef: in.MessageRef, Text: in.Text, EnqueuedAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	f.m.wake(key) // the restarted process finds it in the queue
+	waitFinal(t, sink)
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.refs) != 1 || !sink.refs[0].Recovered || sink.refs[0].MessageID != in.MessageID {
+		t.Errorf("sink turns %+v; want one, recovered, of the turn's message", sink.refs)
 	}
 }

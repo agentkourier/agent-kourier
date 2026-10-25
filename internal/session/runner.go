@@ -547,6 +547,9 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 	resend := prev.id == r.ID || !fresh
 	m.attempted[key] = attempt{id: r.ID, unknown: prev.id == r.ID && prev.unknown}
 	m.mu.Unlock()
+	// An earlier attempt, here or in an earlier process, may have left a message for the turn: this one continues it, so
+	// that the renderer updates it rather than take the outbox's ref of it for what this attempt shows.
+	t.takes = resend
 	if hold != nil || resend {
 		// The agent may already have this turn, and a resend into an existing context is not
 		// deduplicated, so look it up first, whatever failed the first time: found, it is followed
@@ -723,7 +726,7 @@ type tstate struct {
 	began     store.TaskTurn  // the turn the session recorded for the recovered task, whose output the renderer continues; zero if none was
 	texted    bool            // the turn said something to read: kept across a stream lost and followed, for the renderer keeps the message
 	handed    bool            // the last drive ended with the task followed again, or the turn tried again after an unknown outcome: what it showed waits for the next attempt's sink turn
-	takes     bool            // the attempt takes over what an earlier attempt of the turn handed on (convo.left)
+	takes     bool            // the attempt continues what an earlier attempt of the turn may have shown: a resend, or what convo.left handed on
 	key       Key
 	c         *convo
 	r         store.Reply

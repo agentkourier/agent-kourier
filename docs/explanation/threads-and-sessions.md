@@ -103,7 +103,8 @@ updated, to `(no output)` if the task has nothing to show. Nor is a request that
 answer, such as one cut off by a timeout: the reply stays as it is while the request is looked up and followed, or sent
 again, and that attempt takes the reply over. If following the task again is refused, or finds it gone or wedged, or the
 request is given up on before the agent is known to have it, the reply is ended as a failed request's is, and keeps the
-text it had. The `activity` card ends the same way, as `Worked` for text or a
+text it had. When Agent Kourier restarts in between, the restarted process takes the reply over once it has something to
+show or the task ends, but does not end it for those failures: the reply stays as the earlier process left it. The `activity` card ends the same way, as `Worked` for text or a
 completed task, with the same `Waiting for your answer` and `Stopped`. A card that was never sent when a turn ends with no text is not sent at all.
 
 A tool call's card that has no result when the turn ends is complete, with `No result was reported.` under it. When the

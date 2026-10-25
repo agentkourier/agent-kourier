@@ -701,7 +701,8 @@ func TestRecoverAttachesToARunnerThatWokeFirst(t *testing.T) {
 	waitFinal(t, sink) // then the held reply
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
-	if len(sink.refs) != 2 || sink.refs[0].MessageID != "task:t1" || !sink.refs[0].Recovered || sink.refs[1].Recovered {
+	// The reply was queued before the restart, so the earlier process may have sent it: it too continues its own message.
+	if len(sink.refs) != 2 || sink.refs[0].MessageID != "task:t1" || !sink.refs[0].Recovered || sink.refs[1].MessageID != inbound("1").MessageID {
 		t.Errorf("turn refs = %+v; want t1 recovered once, then the reply", sink.refs)
 	}
 	if sends, _, follows := f.agent.counts(); sends != 1 || follows != 1 {
