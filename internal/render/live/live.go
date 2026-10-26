@@ -772,7 +772,7 @@ func (u *Run) run(ctx context.Context) {
 // cut ends a turn whose context ended before its final event, and says whether the run has a write to make for it. The send
 // failed, or the agent did not take the turn (the session tells the thread so with a notice of its own): no event will come.
 // A turn whose task goes on under a later turn (the cause is session.ErrTurnContinues: a lost stream that is followed again,
-// a shutdown that recovery follows, or a later run of the turn in this process) leaves what it showed for that turn, which
+// a send of unknown outcome that is tried again, a shutdown that recovery follows, or a later run of the turn in this process) leaves what it showed for that turn, which
 // takes the message over, and writes nothing. A turn that has shown nothing owes nothing. One that has shown something is made
 // final, as a task that failed is: an unclaimed Working… card and the activity card end as Stopped, a step with no result is
 // ended, and the update path's status line goes, so that nothing is left saying that the agent is at work. A stream is
@@ -806,11 +806,13 @@ func (u *Run) cut(ctx context.Context, ref chat.Ref) bool {
 }
 
 // endLeft ends what an earlier run of a recovered turn left when its task went on, for a turn that ends with no final event
-// and nothing of its own: the follow was refused, or ended without driving the task, and the session tells the thread why.
+// and nothing of its own: the follow or the resend was refused, or the turn ended without driving the task, and the session
+// tells the thread why.
 // The earlier run is over, and its state is as it left it: its loop runs again, here, on this run's context, which has ended
 // for good, so it is cut as it would have been had its task not gone on, its text kept and its stream stopped. A turn that is
-// not recovered has no earlier run, and neither has one whose earlier run left nothing, or was in another process. It is the
-// goroutine's.
+// not recovered has no earlier run, and neither has one whose earlier run left nothing, or was in another process. With no
+// earlier run here, the message the turn's row records may still be a stream that another process left: a turn that streams
+// stops it, which keeps its text (stopEarlier). It is the goroutine's.
 func (u *Run) endLeft(ctx context.Context) {
 	if !u.turn.Recovered {
 		return
@@ -821,6 +823,36 @@ func (u *Run) endLeft(ctx context.Context) {
 	if left := u.owner.takeLeft(u.turn.Source); left != nil {
 		<-left.done
 		left.run(ctx)
+		return
+	}
+	if u.turn.Recipient != "" { // only a turn shown to a person streams
+		u.stopEarlier(ctx)
+	}
+}
+
+// stopEarlier stops the stream that the turn's outbox row records, if it still runs, for a recovered turn that ends with nothing
+// of its own and no earlier run of this Renderer to end what was shown: another process started it and left it for the task that
+// went on. Its state is not known here, so the stop carries nothing: the stream keeps its text, and the platform shows a card that
+// was under way as ended (Slack shows it as an error). A message that has stopped already answers ErrNotStreaming. A turn with no
+// Recipient never streams, and its message, such as an alert thread's, is left as it is (endLeft), since an update would have to
+// replace what it says. It is tried once: a stream that cannot be stopped now is left to the platform. It is the goroutine's.
+func (u *Run) stopEarlier(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), u.cfg.WriteTimeout)
+	defer cancel()
+	id := outbox.ID(u.turn.Source, store.OutboxReply)
+	row, err := u.cfg.Store.GetOutbox(ctx, id)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return
+	case err != nil:
+		u.cfg.Logger.WarnContext(ctx, "live: the earlier message of a recovered turn could not be read; it is left as it is", "channel", u.turn.Channel, "err", err)
+		return
+	case row.MessageRef == "":
+		return
+	}
+	err = u.cfg.Platform.StreamAt(u.cfg.Platform.RefAt(u.turn.Channel, u.turn.Thread, row.MessageRef)).Stop(ctx, "", chat.Message{}, id)
+	if err != nil && !errors.Is(err, chat.ErrNotStreaming) {
+		u.cfg.Logger.WarnContext(ctx, "live: the stream an earlier process left could not be stopped; it is left to the platform", "channel", u.turn.Channel, "err", err)
 	}
 }
 
@@ -977,15 +1009,23 @@ func (u *Run) write(ctx context.Context, ref *chat.Ref, v view) (telemetryErr er
 		return err
 	}
 	u.sends++
+	earlier := u.sends == 1 && u.rowMadeBefore(ctx)
 	got, err := u.cfg.Sender.Send(ctx, outbox.Post{Source: u.turn.Source, Role: store.OutboxReply, Channel: u.turn.Channel, Thread: u.turn.Thread, Out: chat.Say(v.m)})
 	if err == nil {
 		*ref = got
-		// A Send that follows a failed one, or a recovered turn's, returns the message that is
-		// there already, or posts the payload stored first, not necessarily this content.
-		u.stale = u.sends > 1 || u.turn.Recovered
+		// A Send that follows a failed one, or that finds the turn's row made already (by an earlier attempt, here or in an
+		// earlier process), returns the message that is there, or posts the payload stored first, not necessarily this content.
+		u.stale = u.sends > 1 || earlier
 		u.sent = u.want(v)
 	}
 	return err
+}
+
+// rowMadeBefore says whether the outbox row this turn posts under is there before its first post: an earlier attempt at the turn
+// made it, and may have posted a message that the post then returns. A read that fails says so too: at worst one more write.
+func (u *Run) rowMadeBefore(ctx context.Context) bool {
+	_, err := u.cfg.Store.GetOutbox(ctx, outbox.ID(u.turn.Source, store.OutboxReply))
+	return !errors.Is(err, store.ErrNotFound)
 }
 
 // view is what the state shows at one moment.

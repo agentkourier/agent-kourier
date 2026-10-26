@@ -1001,11 +1001,24 @@ making the prefix optional breaks multi-turn context.
     unclaimed `Working…` card and the `activity` card as `Stopped`, and a call with no result ended; on the update path the
     status line goes, and a message with no text says `(no output)`. Neither carries the feedback buttons. A turn that
     showed nothing posts nothing. A turn whose task goes on is not ended: when its stream was lost and the task is followed
-    again, or Agent Kourier is shutting down and recovery follows the task, its stream or message is left as it is, and the
-    turn that follows the task takes it over (stopped and updated to its text, or to `(no output)` when it has none). A
-    follow that ends with no final event and nothing of its own (refused, or ended without following, the task gone or
-    cancelled as wedged) ends the message the earlier turn left as that turn would have been ended: stopped, its text kept,
-    its status line gone. The session gives such a follow a turn even when it never streamed. A
+    again, its send's outcome is unknown and the turn is looked up and followed or sent again (until the agent takes the
+    turn or it ends: a resend that never left, or that the agent refuses as busy or not ready, keeps the outcome unknown,
+    since the first send may be the task that keeps the agent busy), or Agent Kourier is shutting down and recovery
+    follows the task, its stream or message is left as it is, and the turn that follows the task, or sends it again,
+    takes it over (stopped and updated to its text, or to `(no output)` when it has none). A send that the agent never
+    had (not sent, busy, not ready), with no unknown outcome before it, is ended. The renderer is given recovered the attempt
+    after one that handed its message on, and the first attempt in this process at a turn that an earlier process
+    queued; a later attempt that posts under the turn's row and finds it made already writes the message again, since
+    the post returns the earlier message. A follow or resend that ends with no final event
+    and nothing of its own (refused, or ended without following, the task gone or cancelled as wedged, or the turn given
+    up on before it was sent again) ends the message the earlier turn left as that turn would have been ended: stopped,
+    its text kept, its status line gone. The session gives the renderer such a turn even when it never streamed, when a
+    turn that an earlier process may have sent is given up on before it is sent or followed, and when its runner
+    stops with the turn still queued (a store read failed). A message that an
+    earlier process left is taken over by a later attempt that has something to show, or a final event; otherwise a
+    stream is stopped with nothing more (its text kept, the card that was under way shown by the platform as ended),
+    and a message that is updated, as in an alert thread, is left as the earlier process left it, its content not
+    being known. A
     second run of the same turn in one process (the task followed again while the send that lost it has not returned)
     writes only once the first has ended, and the first leaves the message to it.
   - On the update path only (no stream recipient, as in an alert thread), and only when `output` is `live` and `progress` is

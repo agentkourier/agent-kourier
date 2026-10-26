@@ -129,7 +129,8 @@ type TurnRef struct {
 	// The renderer ignores it when Output is final.
 	Progress v1alpha1.ProgressMode
 	// Recovered says the output continues a message that may exist already: the task was found
-	// again after a restart, or followed again after a lost stream. Some of it may be in the
+	// again after a restart, followed again after a lost stream, or looked up or sent again after
+	// a send of unknown outcome. Some of it may be in the
 	// thread, so the renderer updates what it posted before, or posts the whole. The output of an
 	// answer to a pause is not that: its MessageID is the answer's own, a new message.
 	Recovered bool
@@ -224,8 +225,8 @@ type Notice struct {
 }
 
 // ErrTurnContinues is the cause with which the context a Sink's Turn was given ends when the turn's task goes on without
-// it: its stream was lost and the task is followed again, or the manager is shutting down and recovery follows the task
-// after the restart. A later turn of the same message renders the rest, so a renderer leaves what the turn showed for
+// it: its stream was lost and the task is followed again, its send's outcome is unknown and the turn is looked up and
+// followed or sent again, or the manager is shutting down and recovery follows the task after the restart. A later turn of the same message renders the rest, so a renderer leaves what the turn showed for
 // that turn to take over. Any other end of that context ends the turn for good: the send failed, the agent did not take
 // the turn, or the turn's events are over.
 var ErrTurnContinues = errors.New("session: the turn's task continues under a later turn")
