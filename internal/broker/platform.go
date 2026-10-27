@@ -62,15 +62,6 @@ type builtPlatform struct {
 	closeIdle func()
 }
 
-// MarkBusy is chat.BusyMarker, which the platform may be. builtPlatform embeds the interface, which hides it, and the renderer is
-// given the built platform and asks it by a type assertion; a platform that cannot is chat.ErrNoBusy.
-func (p builtPlatform) MarkBusy(ctx context.Context, t chat.Target, busy bool) error {
-	if m, ok := p.Platform.(chat.BusyMarker); ok {
-		return m.MarkBusy(ctx, t, busy)
-	}
-	return chat.ErrNoBusy
-}
-
 // newPlatform builds the adapter of the connection's platform: the one place that names a platform. Only
 // slack exists; any other platform is a wiring error, which no retry mends. The Slack client gets a transport of its
 // own, so that its idle connections can be closed at shutdown. onConnection, if set, is told whether the platform's

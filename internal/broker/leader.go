@@ -171,10 +171,10 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	retain, err := newRetention(retentionConfig{Store: st, Interval: cfg.retentionEvery, AuditRetention: cfg.AuditRetention, ThreadTTLs: bindings.ThreadTTLs,
 		Canceller: bindings, Audit: auditor, Holds: mgr.HoldsTask, OnRemoved: metrics.RetentionRemoved, Logger: log,
 		EnsureAcknowledgment: func(ctx context.Context, r store.Reply) error {
-			return sink.QueueNotice(ctx, r.Key, session.Notice{ID: r.ID + "/acknowledgment", Kind: session.NoticeAcknowledged, MessageRef: r.MessageRef, Reaction: r.Acknowledgment})
+			return sink.QueueNotice(ctx, r.Key, session.Notice{ID: session.AcknowledgmentID(r.ID), Kind: session.NoticeAcknowledged, MessageRef: r.MessageRef, Reaction: r.Acknowledgment})
 		},
 		ClearAcknowledgment: func(ctx context.Context, r store.Reply) error {
-			return sink.QueueNotice(ctx, r.Key, session.Notice{ID: r.ID + "/acknowledgment", Kind: session.NoticeUnacknowledged, MessageRef: r.MessageRef, Reaction: r.Acknowledgment})
+			return sink.QueueNotice(ctx, r.Key, session.Notice{ID: session.AcknowledgmentID(r.ID), Kind: session.NoticeUnacknowledged, MessageRef: r.MessageRef, Reaction: r.Acknowledgment})
 		}})
 	if err != nil {
 		return nil, fmt.Errorf("store retention: %w", err)
@@ -189,7 +189,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	// mention takes. The threads of the keys are in the store; the permalink comes from what the platform learned when it
 	// connected, since the start runs on the acknowledgement path and may call neither Slack nor the agent.
 	starter, err := newTriggerStarter(triggerStarterConfig{
-		Conn: connName, Submit: mgr, Notice: sink.QueueNotice, Audit: auditor, Link: permalinks(platform.Platform), Log: log,
+		Conn: connName, Submit: mgr, Notice: sink.QueueNotice, Audit: auditor, Link: platform.Permalink, Log: log,
 	})
 	if err != nil {
 		return nil, err

@@ -333,15 +333,11 @@ func (su suite) presses(t *testing.T) {
 
 	su.run(t, "a reply pinned to a question delays its timeout until it is delivered, in or out of the store", func(t *testing.T, s store.Store) {
 		ctx := t.Context()
-		c, ok := s.(replyClaimer)
-		if !ok {
-			t.Fatal("the store has no ClaimReplyInteraction")
-		}
 		r := newReply("r1", key)
 		r.EnqueuedAt = t0.Add(time.Minute)
 		_, err := s.EnqueueReply(ctx, r)
 		noErr(t, err, "enqueue")
-		noErr(t, c.ClaimReplyInteraction(ctx, "r1", "q"), "claim")
+		noErr(t, s.ClaimReplyInteraction(ctx, "r1", "q"), "claim")
 		for _, tc := range []struct {
 			before time.Time
 			want   bool

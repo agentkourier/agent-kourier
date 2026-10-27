@@ -99,13 +99,7 @@ func (p *Pipeline) textReply(ctx context.Context, key store.ConversationKey, rep
 		return session.TextReplyRetry, fmt.Errorf("text reply %s: unknown answer verdict %q", reply.ID, v)
 	}
 	if queued.Kind == session.AdmitTurn {
-		claims, ok := p.cfg.Store.(interface {
-			ClaimReplyInteraction(context.Context, string, string) error
-		})
-		if !ok {
-			return session.TextReplyRetry, errors.New("text replies require durable question claims")
-		}
-		if err := claims.ClaimReplyInteraction(ctx, reply.ID, id); err != nil {
+		if err := p.cfg.Store.ClaimReplyInteraction(ctx, reply.ID, id); err != nil {
 			return session.TextReplyRetry, err
 		}
 	}

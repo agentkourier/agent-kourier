@@ -174,6 +174,10 @@ func listStaleTasks(h store.SessionHorizons, limit int) call {
 	return func(ctx context.Context, s store.Store) error { _, err := s.ListStaleTasks(ctx, h, limit); return err }
 }
 
+func staleTaskTurn(k store.ConversationKey, taskID string) call {
+	return func(ctx context.Context, s store.Store) error { _, err := s.StaleTaskTurn(ctx, k, taskID); return err }
+}
+
 func endStaleTask(h store.SessionHorizons, t store.StaleTask, now time.Time) call {
 	return func(ctx context.Context, s store.Store) error { _, err := s.EndStaleTask(ctx, h, t, now); return err }
 }
@@ -477,6 +481,9 @@ func specs() []spec {
 		{"ListStaleTasks", listStaleTasks(horizons, 10), with(
 			limitCalls(func(n int) call { return listStaleTasks(horizons, n) }),
 			horizonCalls(func(h store.SessionHorizons) call { return listStaleTasks(h, 10) }))},
+		{"StaleTaskTurn", staleTaskTurn(key, "t1"), with(
+			withKeys(func(k store.ConversationKey) call { return staleTaskTurn(k, "t1") }),
+			map[string]call{"no TaskID": staleTaskTurn(key, "")})},
 		{"EndStaleTask", endStaleTask(horizons, store.StaleTask{Key: key, TaskID: "t1"}, t0), with(
 			horizonCalls(func(h store.SessionHorizons) call {
 				return endStaleTask(h, store.StaleTask{Key: key, TaskID: "t1"}, t0)
@@ -573,6 +580,11 @@ func specs() []spec {
 			"no ID":   markReplyDelivered("", t0),
 			"no time": markReplyDelivered("r1", time.Time{}),
 		}},
+		{"ListAcknowledgmentReplies", func(ctx context.Context, s store.Store) error { _, err := s.ListAcknowledgmentReplies(ctx); return err }, nil},
+		{"ListPendingAcknowledgmentReplies", func(ctx context.Context, s store.Store) error {
+			_, err := s.ListPendingAcknowledgmentReplies(ctx)
+			return err
+		}, nil},
 		{"AbandonStrandedReplies", abandonStrandedReplies(t0, time.Hour), map[string]call{
 			"no now": abandonStrandedReplies(time.Time{}, time.Hour),
 			"age 0":  abandonStrandedReplies(t0, 0),
@@ -728,7 +740,7 @@ func horizonCalls(f func(store.SessionHorizons) call) map[string]call {
 
 // operations are the methods of store.Store that the guard does not record as operations: Close ends the store and has
 // no span, and the claim of a reply's question has never had one.
-var untracked = []string{"Close"}
+var untracked = []string{"Close", "ClaimReplyInteraction"}
 
 // storeMethods returns the names of the operations of store.Store.
 func storeMethods() []string {

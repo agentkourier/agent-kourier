@@ -10,9 +10,9 @@ import (
 // stops asking, and the platform has reported it already, so the caller says nothing more of it.
 var ErrNoBusy = errors.New("chat: the platform cannot show a thread as busy")
 
-// BusyMarker is an optional interface of a Platform: it shows a thread as busy, a sign that Agent Kourier is working in it
-// that needs no message of its own, for a thread where the turn has posted nothing yet, such as an alert's. Caps.Busy says
-// whether the platform does, so a caller asks first and a platform that shows none need not implement it.
+// BusyMarker is the part of a Platform that shows a thread as busy, a sign that Agent Kourier is working in it that needs
+// no message of its own, for a thread where the turn has posted nothing yet, such as an alert's. Caps.Busy says whether
+// the platform does, so a caller asks first, and a platform that shows none says ErrNoBusy.
 //
 // It is a courtesy and best effort: a platform may show the mark only to clients that are open when it is set,
 // and may drop it when a message is posted in the thread. So a caller sets it when its work begins, sets it again after

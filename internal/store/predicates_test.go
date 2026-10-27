@@ -68,6 +68,13 @@ func TestFixedPredicates(t *testing.T) {
 		{"OutboxDerivedFromReplyRow", store.OutboxDerivedFromReplyRow("o", "rr"), [2]string{
 			`o.event_id >= rr.id || '/' AND o.event_id < rr.id || '0'`,
 			`o.event_id COLLATE "C" >= rr.id || '/' AND o.event_id COLLATE "C" < rr.id || '0'`}},
+		{"AcknowledgmentHeld", store.AcknowledgmentHeld("reply_queue"), [2]string{
+			`EXISTS (SELECT 1 FROM sessions s WHERE s.connection = reply_queue.connection AND s.channel = reply_queue.channel` +
+				` AND s.thread_ts = reply_queue.thread_ts AND s.task_id <> '' AND s.turn_acknowledgment <> ''` +
+				` AND (s.turn_acknowledgment_id = reply_queue.id OR (s.turn_acknowledgment_id = '' AND s.turn_id = reply_queue.id)))`,
+			`EXISTS (SELECT 1 FROM sessions s WHERE s.connection = reply_queue.connection AND s.channel = reply_queue.channel` +
+				` AND s.thread_ts = reply_queue.thread_ts AND s.task_id <> '' AND s.turn_acknowledgment <> ''` +
+				` AND (s.turn_acknowledgment_id = reply_queue.id OR (s.turn_acknowledgment_id = '' AND s.turn_id = reply_queue.id)))`}},
 		{"TriggerThreadOpen", store.TriggerThreadOpen(""), [2]string{`closed_at = 0`, `closed_at IS NULL`}},
 		{"TriggerThreadClosed", store.TriggerThreadClosed(""), [2]string{`closed_at <> 0`, `closed_at IS NOT NULL`}},
 		{"TriggerThreadUnstarted", store.TriggerThreadUnstarted("t"), [2]string{`t.cooldown_until = 0`, `t.cooldown_until IS NULL`}},

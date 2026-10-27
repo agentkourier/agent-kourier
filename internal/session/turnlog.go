@@ -152,7 +152,7 @@ func (m *Manager) unacknowledgeReply(key Key, r store.Reply, sourceID string) {
 	if sourceID == "" || r.MessageRef == "" || r.Acknowledgment == "" {
 		return
 	}
-	m.cfg.Sink.Notice(m.ctx, key, Notice{ID: acknowledgmentID(sourceID), Kind: NoticeUnacknowledged, MessageRef: r.MessageRef, Reaction: r.Acknowledgment})
+	m.cfg.Sink.Notice(m.ctx, key, Notice{ID: AcknowledgmentID(sourceID), Kind: NoticeUnacknowledged, MessageRef: r.MessageRef, Reaction: r.Acknowledgment})
 }
 
 // discardAnswer settles a consumed text reply when the interaction policy did not enqueue a continuation. A consumed

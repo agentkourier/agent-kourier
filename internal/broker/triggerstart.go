@@ -27,7 +27,7 @@ type triggerAuditor interface {
 }
 
 // triggerStarterConfig is what a triggerStarter is made from. Every field is required: newTriggerStarter refuses a config
-// without one and names it. Link is the one that may legitimately do nothing, and says so with noPermalink.
+// without one and names it. Link is the one that may legitimately do nothing: a platform that makes no links says false.
 type triggerStarterConfig struct {
 	// Conn is the ChatConnection as it appears in keys and message IDs: namespace/name.
 	Conn   string
@@ -35,8 +35,8 @@ type triggerStarterConfig struct {
 	// Notice queues a note in a thread (live.Sink.QueueNotice); its error means the note was not written.
 	Notice func(ctx context.Context, key session.Key, n session.Notice) error
 	Audit  triggerAuditor
-	// Link builds the permalink of a message, and says false if the platform cannot (chat.Permalinker). noPermalink says it
-	// always: the view's Link is then empty.
+	// Link builds the permalink of a message (chat.Permalinker), and says false if the platform cannot: the view's Link is
+	// then empty.
 	Link func(chat.Ref) (string, bool)
 	Log  *slog.Logger
 }
@@ -69,22 +69,11 @@ func newTriggerStarter(cfg triggerStarterConfig) (*triggerStarter, error) {
 	case cfg.Audit == nil:
 		return nil, errors.New("broker: Audit is required for the trigger start: a refused start is recorded")
 	case cfg.Link == nil:
-		return nil, errors.New("broker: Link is required for the trigger start (noPermalink for a platform that makes none)")
+		return nil, errors.New("broker: Link is required for the trigger start (the platform's Permalink)")
 	case cfg.Log == nil:
 		return nil, errors.New("broker: Log is required for the trigger start")
 	}
 	return &triggerStarter{conn: cfg.Conn, submit: cfg.Submit, notice: cfg.Notice, audit: cfg.Audit, link: cfg.Link, log: cfg.Log}, nil
-}
-
-// noPermalink is the Link of a platform that makes none: the prompt's link is empty.
-func noPermalink(chat.Ref) (string, bool) { return "", false }
-
-// permalinks returns the permalink builder of p, or noPermalink if the platform makes none.
-func permalinks(p chat.Platform) func(chat.Ref) (string, bool) {
-	if l, ok := p.(chat.Permalinker); ok {
-		return l.Permalink
-	}
-	return noPermalink
 }
 
 // OnStart implements IntakeConfig.OnStart.

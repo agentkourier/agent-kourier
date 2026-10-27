@@ -457,3 +457,12 @@ func storeReply(id, ref, reaction string) store.Reply {
 func sameAcknowledgments(got, want []Notice) bool {
 	return slices.Equal(got, want)
 }
+
+// The ID of an acknowledgment notice is the outbox's key for the reaction, and is stored, so the add and the removal of
+// one message's reaction share it whoever queues them (the intake, the runner, the broker's retention retries), and the
+// outbox finds it as a row derived from the reply (store.OutboxDerivedFromReplyRow: the reply's ID, "/" and a suffix).
+func TestAcknowledgmentIDIsTheMessageIDAndASuffix(t *testing.T) {
+	if got, want := AcknowledgmentID("1712.0001"), "1712.0001/acknowledgment"; got != want {
+		t.Errorf("AcknowledgmentID = %q; want %q", got, want)
+	}
+}

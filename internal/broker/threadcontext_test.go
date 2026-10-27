@@ -77,8 +77,12 @@ func (w *windowReader) reads() []readCall {
 	return append([]readCall(nil), w.calls...)
 }
 
-// noReads is a platform that cannot read a thread: it does not implement chat.ThreadReader, as a platform that predates it.
+// noReads is a platform that cannot read a thread: it says chat.ErrNoThreadReads.
 type noReads struct{ chat.Platform }
+
+func (noReads) ThreadBetween(context.Context, chat.Target, string, string, int) ([]chat.HistoryMessage, int, error) {
+	return nil, 0, chat.ErrNoThreadReads
+}
 
 // turnSet is a reply queue that knows which messages were turns. It counts the lookups: eligible asks once for the whole
 // window, by HasReplies (the interface it is held to has no other lookup).

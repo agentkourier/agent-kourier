@@ -67,15 +67,13 @@ type entry struct {
 }
 
 // Pool keeps one connected client per (Binding, agent), reconnecting when the backend URL or
-// the credentials change. Connecting fetches the agent card, a network round trip: keep it
-// off Slack's 3-second acknowledgement path by calling Warm there and Send later. It is safe
-// for concurrent use.
+// the credentials change. Connecting fetches the agent card, a network round trip, on an
+// Agent's first use. It is safe for concurrent use.
 type Pool struct {
 	dialect dialect.Dialect
 	cfg     Config
-	bg      context.Context // ends the warm-ups when the pool closes
+	bg      context.Context // ends the connects in flight when the pool closes
 	stop    context.CancelFunc
-	warming sync.WaitGroup
 	key     [32]byte // keys the seal
 
 	mu      sync.Mutex
@@ -99,22 +97,7 @@ func (p *Pool) Agent(t Target) *Agent {
 	return New(func(ctx context.Context) (Conn, error) { return p.conn(ctx, t) }, cfg)
 }
 
-// Warm connects to t's agent in the background and returns at once. A failed warm-up is
-// forgotten: the next call connects again and reports the error.
-func (p *Pool) Warm(t Target) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.closed {
-		return
-	}
-	p.warming.Add(1)
-	go func() {
-		defer p.warming.Done()
-		_, _ = p.conn(p.bg, t)
-	}()
-}
-
-// Close stops the warm-ups, waits for them, and closes every client. Calls after it fail
+// Close cancels the connects in flight and closes every client. Calls after it fail
 // with ErrPoolClosed; streams already running end with their own context.
 func (p *Pool) Close() {
 	p.mu.Lock()
@@ -122,7 +105,6 @@ func (p *Pool) Close() {
 	entries := slices.Collect(maps.Values(p.entries))
 	p.mu.Unlock()
 	p.stop()
-	p.warming.Wait()
 	for _, e := range entries {
 		e.mu.Lock()
 		if e.client != nil {

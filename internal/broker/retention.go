@@ -73,13 +73,17 @@ const (
 	RemovedStaleInteractions   = "stale_task_interactions"
 )
 
-// retentionStore is what the retention loop asks of the store: store.ReplyQueue's backstop, store.AuditRetention,
-// store.SessionRetention and store.StaleTasks.
+// retentionStore is what the retention loop asks of the store: store.ReplyQueue's backstop, the acknowledgments it
+// retries (store.AcknowledgmentLister, store.PendingAcknowledgmentLister), store.AuditRetention, store.SessionRetention
+// and store.StaleTasks.
 type retentionStore interface {
 	AbandonStrandedReplies(ctx context.Context, now time.Time, age time.Duration) (int, error)
+	store.AcknowledgmentLister
+	store.PendingAcknowledgmentLister
 	PurgeAudit(ctx context.Context, before time.Time, limit int) (int, error)
 	PurgeExpiredSessions(ctx context.Context, h store.SessionHorizons, limit int) (store.PurgedSessions, error)
 	ListStaleTasks(ctx context.Context, h store.SessionHorizons, limit int) ([]store.StaleTask, error)
+	store.StaleTaskTurnReader
 	EndStaleTask(ctx context.Context, h store.SessionHorizons, t store.StaleTask, now time.Time) (store.EndedStaleTask, error)
 }
 
@@ -229,30 +233,10 @@ func (r *retention) abandonReplies(ctx context.Context) {
 	var n int
 	var err error
 	if r.cfg.EnsureAcknowledgment != nil {
-		if lister, ok := r.cfg.Store.(store.PendingAcknowledgmentLister); ok {
-			var rows []store.Reply
-			rows, err = lister.ListPendingAcknowledgmentReplies(ctx)
-			if err == nil {
-				for _, row := range rows {
-					if err = r.cfg.EnsureAcknowledgment(ctx, row); err != nil {
-						break
-					}
-				}
-			}
-		}
+		err = eachReply(ctx, r.cfg.Store.ListPendingAcknowledgmentReplies, r.cfg.EnsureAcknowledgment)
 	}
 	if err == nil && r.cfg.ClearAcknowledgment != nil {
-		if lister, ok := r.cfg.Store.(store.AcknowledgmentLister); ok {
-			var rows []store.Reply
-			rows, err = lister.ListAcknowledgmentReplies(ctx, now, r.cfg.ReplyAge)
-			if err == nil {
-				for _, row := range rows {
-					if err = r.cfg.ClearAcknowledgment(ctx, row); err != nil {
-						break
-					}
-				}
-			}
-		}
+		err = eachReply(ctx, r.cfg.Store.ListAcknowledgmentReplies, r.cfg.ClearAcknowledgment)
 	}
 	if err == nil {
 		n, err = r.cfg.Store.AbandonStrandedReplies(ctx, now, r.cfg.ReplyAge)
@@ -264,6 +248,20 @@ func (r *retention) abandonReplies(ctx context.Context) {
 		r.removed(RemovedStrandedReplies, n)
 		r.cfg.Logger.WarnContext(ctx, "retention: dropped replies that were never delivered, and their text", "dropped", n, "age", r.cfg.ReplyAge)
 	}
+}
+
+// eachReply hands each reply that list returns to queue, and stops at the first error.
+func eachReply(ctx context.Context, list func(context.Context) ([]store.Reply, error), queue func(context.Context, store.Reply) error) error {
+	rows, err := list(ctx)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if err := queue(ctx, row); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // sessionHorizons is when each Binding's sessions are past deleting: its threadTTL and the grace after now. A session
@@ -366,11 +364,7 @@ func (r *retention) staleAcknowledgment(ctx context.Context, t store.StaleTask) 
 	if r.cfg.ClearAcknowledgment == nil {
 		return nil, nil
 	}
-	reader, ok := r.cfg.Store.(store.StaleTaskTurnReader)
-	if !ok {
-		return nil, nil
-	}
-	turn, err := reader.StaleTaskTurn(ctx, t.Key, t.TaskID)
+	turn, err := r.cfg.Store.StaleTaskTurn(ctx, t.Key, t.TaskID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, nil
 	}

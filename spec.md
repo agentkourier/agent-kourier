@@ -1022,7 +1022,7 @@ making the prefix optional breaks multi-turn context.
     second run of the same turn in one process (the task followed again while the send that lost it has not returned)
     writes only once the first has ended, and the first leaves the message to it.
   - On the update path only (no stream recipient, as in an alert thread), and only when `output` is `live` and `progress` is
-    not `steps`, the renderer also marks the thread busy, through the optional `chat.BusyMarker` (`Caps.Busy`). On Slack
+    not `steps`, the renderer also marks the thread busy, through `chat.BusyMarker` when `Caps.Busy` says it can. On Slack
     that is `assistant.threads.setStatus` with the status `is working…` and no loading messages. The mark is set when the turn
     starts, set again after each write the run makes anyway (a post in the thread takes it off), and cleared with an empty
     status when the run ends: final, failed, paused for input, cancelled or the turn's context ending. It has no timer and

@@ -90,6 +90,18 @@ func OutboxDerivedFromReplyID(o Ref, id string) Cond {
 	})
 }
 
+// AcknowledgmentHeld is the replies r whose acknowledgment a task still holds: the session of r's thread has an active
+// task, and its turn's acknowledgment is r's (named by its own ID, or, for a turn recorded before it had one, by the
+// turn's). Such a reaction is the task's to take off when it ends; retention leaves it alone. r must be named, as the
+// subquery's sessions s have the same columns.
+func AcknowledgmentHeld(r Ref) Fixed {
+	return func(Dialect) string {
+		return "EXISTS (SELECT 1 FROM sessions s WHERE s.connection = " + r.col("connection") + " AND s.channel = " + r.col("channel") +
+			" AND s.thread_ts = " + r.col("thread_ts") + " AND s.task_id <> '' AND s.turn_acknowledgment <> ''" +
+			" AND (s.turn_acknowledgment_id = " + r.col("id") + " OR (s.turn_acknowledgment_id = '' AND s.turn_id = " + r.col("id") + ")))"
+	}
+}
+
 // NothingHoldsBack is the sessions s that may be deleted for what they own, whatever their age: no task active or
 // paused, no interaction pending, no reply that was never delivered, no outbox row pending (made for the thread, or
 // derived from one of the session's replies). A session that is held back is deleted by the first sweep after what

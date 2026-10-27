@@ -207,14 +207,6 @@ func (su suite) replyRetention(t *testing.T) {
 	})
 
 	su.run(t, "acknowledgment retention lists completed removals and live additions separately", func(t *testing.T, s store.Store) {
-		lister, ok := s.(store.AcknowledgmentLister)
-		if !ok {
-			t.Fatal("store does not implement AcknowledgmentLister")
-		}
-		pending, ok := s.(store.PendingAcknowledgmentLister)
-		if !ok {
-			t.Fatal("store does not implement PendingAcknowledgmentLister")
-		}
 		ctx := t.Context()
 		old := newReply("ack-old", key)
 		old.EnqueuedAt = t0
@@ -234,7 +226,7 @@ func (su suite) replyRetention(t *testing.T) {
 		noErr(t, s.MarkReplyDelivered(ctx, active.ID, t0.Add(time.Hour)), "deliver active acknowledgment reply")
 		noErr(t, s.SetSessionTask(ctx, other, "c1", "task1", store.TaskTurn{ID: active.ID, MessageRef: active.MessageRef, Acknowledgment: active.Acknowledgment}), "active task")
 
-		got, err := lister.ListAcknowledgmentReplies(ctx, t0.Add(age), age)
+		got, err := s.ListAcknowledgmentReplies(ctx)
 		noErr(t, err, "list acknowledgment replies")
 		ids := make([]string, 0, len(got))
 		for _, r := range got {
@@ -245,7 +237,7 @@ func (su suite) replyRetention(t *testing.T) {
 			t.Fatalf("acknowledgment replies = %v; want completed, inactive tombstones only %v", ids, want)
 		}
 
-		gotPending, err := pending.ListPendingAcknowledgmentReplies(ctx)
+		gotPending, err := s.ListPendingAcknowledgmentReplies(ctx)
 		noErr(t, err, "list pending acknowledgment replies")
 		ids = ids[:0]
 		for _, r := range gotPending {
@@ -261,7 +253,7 @@ func (su suite) replyRetention(t *testing.T) {
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				noErr(t, s.SetSessionTask(ctx, other, "c1", "task1", store.TaskTurn{ID: tc.outputID, MessageRef: active.MessageRef, AcknowledgmentID: tc.sourceID}), "pause without an active acknowledgment")
-				removed, err := lister.ListAcknowledgmentReplies(ctx, t0.Add(age), age)
+				removed, err := s.ListAcknowledgmentReplies(ctx)
 				noErr(t, err, "list paused acknowledgment removals")
 				removalIDs := make([]string, 0, len(removed))
 				for _, r := range removed {
@@ -271,7 +263,7 @@ func (su suite) replyRetention(t *testing.T) {
 				if want := []string{"ack-active", "ack-delivered"}; !slices.Equal(removalIDs, want) {
 					t.Fatalf("paused removals = %v; want %v", removalIDs, want)
 				}
-				added, err := pending.ListPendingAcknowledgmentReplies(ctx)
+				added, err := s.ListPendingAcknowledgmentReplies(ctx)
 				noErr(t, err, "list paused acknowledgment additions")
 				for _, r := range added {
 					if r.ID == active.ID {

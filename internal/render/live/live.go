@@ -101,8 +101,8 @@ type Renderer struct {
 	cfg  Config
 	caps chat.Caps      // what the platform can do and how much it shows, asked once
 	runs sync.WaitGroup // the goroutines of the turns started and not over
-	// busy is the platform as a chat.BusyMarker, if it is one and says it shows a thread as busy (Caps.Busy). busyOff is set
-	// once it has said it cannot: no turn asks again.
+	// busy is the platform, if it says it shows a thread as busy (Caps.Busy). busyOff is set once it has said it cannot: no
+	// turn asks again.
 	busy    chat.BusyMarker
 	busyOff atomic.Bool
 	// current is the latest run of each turn that has not ended, by the turn's Source: a run of a turn that one already
@@ -150,8 +150,8 @@ func New(cfg Config) (*Renderer, error) {
 		cfg.Logger = slog.Default()
 	}
 	r := &Renderer{cfg: cfg, caps: cfg.Platform.Capabilities(), current: map[string]*Run{}, left: map[string]*Run{}}
-	if m, ok := cfg.Platform.(chat.BusyMarker); ok && r.caps.Busy {
-		r.busy = m
+	if r.caps.Busy {
+		r.busy = cfg.Platform
 	}
 	return r, nil
 }

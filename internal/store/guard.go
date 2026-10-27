@@ -15,22 +15,11 @@ import (
 // batch of two billion rows is a bug in the caller, not a request. ListAudit has a bound of its own, 1 to 1000.
 const MaxLimit = math.MaxInt32
 
-// Adapter is what a store backend implements: the whole of Store, and the one extension that text replies need
-// (ReplyInteractionClaimer). An adapter renders operations as SQL and runs them in its transactions; it can rely on
-// every argument it is given being legal, and it records no telemetry, because Guard does both once, for every
-// backend.
+// Adapter is what a store backend implements: the whole of Store. An adapter renders operations as SQL and runs them in
+// its transactions; it can rely on every argument it is given being legal, and it records no telemetry, because Guard
+// does both once, for every backend.
 type Adapter interface {
 	Store
-	ReplyInteractionClaimer
-}
-
-// ReplyInteractionClaimer pins a queued answer to one question. It is not part of ReplyQueue: only the interactions
-// package asks the store for it, as an optional interface, and every Adapter has it.
-type ReplyInteractionClaimer interface {
-	// ClaimReplyInteraction pins the queued reply id to the question interaction. A retry with the same pair changes
-	// nothing and succeeds; a reply already pinned to another question is left as it is, and the call returns
-	// ErrNotFound, as it does for a reply that is not queued. An empty id or interaction is ErrInvalid.
-	ClaimReplyInteraction(ctx context.Context, id, interaction string) error
 }
 
 // Guarded is the store seam: a Store that checks every argument and records every operation's telemetry once, over
@@ -48,10 +37,7 @@ type Guarded struct {
 	noRows []error
 }
 
-var (
-	_ Store                   = (*Guarded)(nil)
-	_ ReplyInteractionClaimer = (*Guarded)(nil)
-)
+var _ Store = (*Guarded)(nil)
 
 // GuardOption changes how Guard sets up a Guarded.
 type GuardOption func(*Guarded)

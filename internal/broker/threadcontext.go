@@ -45,9 +45,8 @@ const (
 // threadContextConfig configures a threadContext. Platform and Replies are required: newThreadContext refuses a config
 // without them, naming the field. Logger and After are tunables with defaults.
 type threadContextConfig struct {
-	// Platform is the built chat platform, as the broker uses it (the fenced one, with an election). Whether it can read a
-	// thread is asked of it by a type assertion on this value, as the trigger start asks for chat.Permalinker, and never of
-	// builtPlatform, which hides it.
+	// Platform is the built chat platform, as the broker uses it (the fenced one, with an election). A platform that cannot
+	// read a thread says chat.ErrNoThreadReads.
 	Platform chat.Platform
 	// Replies is the reply queue, which session.WereAdmitted reads to tell a reply that was a turn or an answer.
 	Replies session.ReplyRecord
@@ -59,7 +58,6 @@ type threadContextConfig struct {
 // threadContext implements session.Config.ThreadContext.
 type threadContext struct {
 	platform chat.Platform
-	reader   chat.ThreadReader // nil if the platform does not implement it
 	replies  session.ReplyRecord
 	log      *slog.Logger
 	after    func(time.Duration) <-chan time.Time
@@ -77,7 +75,6 @@ func newThreadContext(cfg threadContextConfig) (*threadContext, error) {
 		return nil, errors.New("broker: Replies is required for the thread context: it asks whether a message was a turn")
 	}
 	t := &threadContext{platform: cfg.Platform, replies: cfg.Replies, log: cfg.Logger, after: cfg.After, noted: map[string]bool{}}
-	t.reader, _ = cfg.Platform.(chat.ThreadReader)
 	if t.log == nil {
 		t.log = slog.Default()
 	}
@@ -99,9 +96,6 @@ func (t *threadContext) Section(ctx context.Context, key session.Key, binding, a
 func (t *threadContext) build(ctx context.Context, key session.Key, binding, after, before string) (section, outcome string) {
 	if after == before { // nothing lies between a message and itself; an inverted window is the platform's to say (chat.ThreadReader)
 		return "", threadEmpty
-	}
-	if t.reader == nil {
-		return "", t.unsupported(ctx, binding)
 	}
 	target := chat.Target{Conn: key.Connection, Channel: key.Channel, Thread: key.Thread}
 	msgs, dropped, err := t.read(ctx, target, after, before)
@@ -131,7 +125,7 @@ func (t *threadContext) build(ctx context.Context, key session.Key, binding, aft
 // read reads the window, and once more if the platform said to wait a few seconds: a rate limit that asks for up to
 // threadRateWaitMax is waited out once; any other error, a longer wait, or a second refusal is the caller's to do without.
 func (t *threadContext) read(ctx context.Context, target chat.Target, after, before string) ([]chat.HistoryMessage, int, error) {
-	msgs, dropped, err := t.reader.ThreadBetween(ctx, target, after, before, threadFetchLimit)
+	msgs, dropped, err := t.platform.ThreadBetween(ctx, target, after, before, threadFetchLimit)
 	if err == nil || errors.Is(err, chat.ErrNoThreadReads) || errors.Is(err, chat.ErrThreadTooLong) {
 		return msgs, dropped, err
 	}
@@ -144,7 +138,7 @@ func (t *threadContext) read(ctx context.Context, target chat.Target, after, bef
 	case <-ctx.Done():
 		return nil, 0, ctx.Err()
 	}
-	return t.reader.ThreadBetween(ctx, target, after, before, threadFetchLimit)
+	return t.platform.ThreadBetween(ctx, target, after, before, threadFetchLimit)
 }
 
 // eligible returns the replies of msgs that the context shows, oldest first: a person's message that the adapter would

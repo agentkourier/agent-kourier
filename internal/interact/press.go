@@ -50,9 +50,11 @@ type PressDecider interface {
 	Decide(ctx context.Context, pd PressDecision) error
 }
 
-// PressStore is what the pipeline keeps and reads: the presses waiting, and the interactions they answer.
+// PressStore is what the pipeline keeps and reads: the presses waiting, the interactions they answer, and the claim
+// that pins a typed answer to its question.
 type PressStore interface {
 	store.Presses
+	store.ReplyInteractionClaimer
 	GetInteraction(ctx context.Context, id string) (store.Interaction, error)
 }
 

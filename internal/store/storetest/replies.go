@@ -1,7 +1,6 @@
 package storetest
 
 import (
-	"context"
 	"fmt"
 	"runtime"
 	"slices"
@@ -15,12 +14,6 @@ import (
 
 func newReply(id string, k store.ConversationKey) store.Reply {
 	return store.Reply{ID: id, Key: k, UserID: "U1", MessageRef: "1700.01", Acknowledgment: "eyes", Text: "hello", EnqueuedAt: t0}
-}
-
-// replyClaimer is the part of a store that the interactions package asks for by type assertion and that
-// store.ReplyQueue does not list: pinning a queued answer to one question.
-type replyClaimer interface {
-	ClaimReplyInteraction(ctx context.Context, id, interaction string) error
 }
 
 func (su suite) replyQueue(t *testing.T) {
@@ -286,11 +279,7 @@ func (su suite) replyQueue(t *testing.T) {
 		}
 		// a2 is delivered (a tombstone, its text cleared) and a3 is pinned to a question: both are still rows.
 		noErr(t, s.MarkReplyDelivered(ctx, "a2", t0), "deliver a2")
-		c, ok := s.(replyClaimer)
-		if !ok {
-			t.Fatal("the store has no ClaimReplyInteraction")
-		}
-		noErr(t, c.ClaimReplyInteraction(ctx, "a3", "q1"), "pin a3")
+		noErr(t, s.ClaimReplyInteraction(ctx, "a3", "q1"), "pin a3")
 
 		for _, tc := range []struct{ below, want string }{
 			{"a4", "a3"}, // pinned: still the previous row
@@ -454,14 +443,9 @@ func (su suite) replyQueue(t *testing.T) {
 		}
 	})
 
-	// ClaimReplyInteraction is not in store.ReplyQueue, but the interactions package asks the store for it
-	// by type assertion, and a store without it cannot answer a text question.
+	// ClaimReplyInteraction is what lets a typed reply answer a text question.
 	su.run(t, "a queued answer is pinned to one question and cannot answer another", func(t *testing.T, s store.Store) {
 		ctx := t.Context()
-		c, ok := s.(replyClaimer)
-		if !ok {
-			t.Fatal("the store has no ClaimReplyInteraction(ctx, id, interaction) error: text replies need it")
-		}
 		for _, id := range []string{"r1", "r2"} {
 			_, err := s.EnqueueReply(ctx, newReply(id, key))
 			noErr(t, err, "enqueue "+id)
@@ -469,16 +453,16 @@ func (su suite) replyQueue(t *testing.T) {
 		if got, _ := s.NextReply(ctx, key); got.InteractionID != "" {
 			t.Fatalf("a reply is queued pinned to %q", got.InteractionID)
 		}
-		noErr(t, c.ClaimReplyInteraction(ctx, "r2", "q1"), "claim")
-		noErr(t, c.ClaimReplyInteraction(ctx, "r2", "q1"), "the same claim again")
+		noErr(t, s.ClaimReplyInteraction(ctx, "r2", "q1"), "claim")
+		noErr(t, s.ClaimReplyInteraction(ctx, "r2", "q1"), "the same claim again")
 		// Implicit: today a claim for another question fails with ErrNotFound, the error of an update
 		// that matched no row, and not with ErrConflict. Only the failure is pinned.
-		if err := c.ClaimReplyInteraction(ctx, "r2", "q2"); err == nil {
+		if err := s.ClaimReplyInteraction(ctx, "r2", "q2"); err == nil {
 			t.Error("a claim of a reply already pinned to another question succeeded")
 		}
-		isErr(t, c.ClaimReplyInteraction(ctx, "nope", "q1"), store.ErrNotFound, "claim of an unknown reply")
-		isErr(t, c.ClaimReplyInteraction(ctx, "", "q1"), store.ErrInvalid, "claim with no reply")
-		isErr(t, c.ClaimReplyInteraction(ctx, "r1", ""), store.ErrInvalid, "claim with no question")
+		isErr(t, s.ClaimReplyInteraction(ctx, "nope", "q1"), store.ErrNotFound, "claim of an unknown reply")
+		isErr(t, s.ClaimReplyInteraction(ctx, "", "q1"), store.ErrInvalid, "claim with no reply")
+		isErr(t, s.ClaimReplyInteraction(ctx, "r1", ""), store.ErrInvalid, "claim with no question")
 
 		head, err := s.NextReply(ctx, key)
 		if err != nil || head.ID != "r1" || head.InteractionID != "" {

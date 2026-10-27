@@ -68,7 +68,7 @@ func (f *fakeRetentionStore) AbandonStrandedReplies(_ context.Context, _ time.Ti
 	return f.dropped, nil
 }
 
-func (f *fakeRetentionStore) ListAcknowledgmentReplies(_ context.Context, _ time.Time, _ time.Duration) ([]store.Reply, error) {
+func (f *fakeRetentionStore) ListAcknowledgmentReplies(_ context.Context) ([]store.Reply, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.order = append(f.order, "ListAcknowledgmentReplies")
@@ -267,6 +267,34 @@ func TestRetentionRetriesAcknowledgmentRemovalBeforeDroppingReplies(t *testing.T
 	}
 	if want := []string{"ListAcknowledgmentReplies", "ListAcknowledgmentReplies", "AbandonStrandedReplies"}; !slices.Equal(f.order, want) {
 		t.Errorf("retention call order = %v; want %v", f.order, want)
+	}
+}
+
+// A store behind a wrapper that embeds only the interface retention takes (as the election tests' fencedSQLite embeds
+// openedStore) still gets the acknowledgment retries and the stale task's reaction removal: they are methods of that
+// interface, not found by a type assertion that the wrapper would defeat.
+func TestRetentionReachesTheAcknowledgmentsOfAWrappedStore(t *testing.T) {
+	key := store.ConversationKey{Connection: "slack", Channel: "C1", Thread: "1.1"}
+	f := &fakeRetentionStore{
+		pendingReplies: []store.Reply{{ID: "pending-1", Key: key, MessageRef: "1.2", Acknowledgment: "eyes"}},
+		ackReplies:     []store.Reply{{ID: "delivered-1", Key: key, MessageRef: "1.3", Acknowledgment: "eyes"}},
+		staleTurns:     map[string]store.TaskTurn{"task-1": {ID: "turn-1", MessageRef: "1.4", Acknowledgment: "eyes"}},
+	}
+	var ensured, cleared []string
+	r, err := newRetention(harmless(retentionConfig{Store: struct{ retentionStore }{f},
+		EnsureAcknowledgment: func(_ context.Context, r store.Reply) error { ensured = append(ensured, r.ID); return nil },
+		ClearAcknowledgment:  func(_ context.Context, r store.Reply) error { cleared = append(cleared, r.ID); return nil },
+		Now:                  func() time.Time { return sweepNow }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.abandonReplies(t.Context())
+	if !slices.Equal(ensured, []string{"pending-1"}) || !slices.Equal(cleared, []string{"delivered-1"}) {
+		t.Errorf("ensured %v and cleared %v; want [pending-1] and [delivered-1]", ensured, cleared)
+	}
+	reply, err := r.staleAcknowledgment(t.Context(), store.StaleTask{Key: key, TaskID: "task-1"})
+	if err != nil || reply == nil || reply.ID != "turn-1" {
+		t.Errorf("staleAcknowledgment = %+v, %v; want the reaction of turn-1", reply, err)
 	}
 }
 
