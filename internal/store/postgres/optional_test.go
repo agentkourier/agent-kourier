@@ -11,8 +11,8 @@ import (
 
 // TestTheStoreKeepsItsOptionalInterfaces: the broker asks the store it holds for more than store.Store (Fenced, which is
 // what makes it wait for a lease, and metrics), and the guarded store that Open returns answers each as the adapter
-// always did. No server is needed: the
-// answers are in the type, and an empty holder is refused before the pool is touched.
+// always did. No server is needed: the answers are in the type, and an empty holder is refused before the pool is
+// touched.
 func TestTheStoreKeepsItsOptionalInterfaces(t *testing.T) {
 	var s store.Store = guard(&adapter{})
 	fenced, ok := s.(store.Fenced)

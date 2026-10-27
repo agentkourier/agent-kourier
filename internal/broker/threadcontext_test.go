@@ -613,12 +613,11 @@ func TestThreadContextOverTheFakePlatform(t *testing.T) {
 }
 
 func TestThreadContextOnAPlatformThatCannotReadAThread(t *testing.T) {
-	// With SQLite there is no fence wrapper: the platform is the adapter, which may not implement the read at all. With
-	// Postgres the fence wraps it and always implements the method, which answers that the platform cannot.
+	// The platform says chat.ErrNoThreadReads itself. With SQLite there is no fence wrapper; with Postgres the fence wraps
+	// the platform and passes the read, and its answer, through.
 	for name, wrap := range map[string]func(chat.Platform) chat.Platform{
-		"unwrapped, as with SQLite":     func(p chat.Platform) chat.Platform { return noReads{p} },
-		"fenced, as with an election":   func(p chat.Platform) chat.Platform { return fencedPlatform{Platform: noReads{p}} },
-		"an adapter that says it can't": func(p chat.Platform) chat.Platform { return erroring{p, chat.ErrNoThreadReads} },
+		"unwrapped, as with SQLite":   func(p chat.Platform) chat.Platform { return noReads{p} },
+		"fenced, as with an election": func(p chat.Platform) chat.Platform { return fencedPlatform{Platform: noReads{p}} },
 	} {
 		t.Run(name, func(t *testing.T) {
 			w := newTCWorld(t)
