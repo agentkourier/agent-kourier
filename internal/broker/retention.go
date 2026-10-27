@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -247,11 +248,7 @@ func (r *retention) abandonReplies(ctx context.Context) {
 			var rows []store.Reply
 			rows, err = lister.ListAcknowledgmentReplies(ctx, now, r.cfg.ReplyAge)
 			if err == nil {
-				for _, row := range rows {
-					if err = r.clearAcknowledgment(ctx, lister, row); err != nil {
-						break
-					}
-				}
+				err = r.clearAcknowledgments(ctx, lister, rows)
 			}
 		}
 	}
@@ -267,17 +264,29 @@ func (r *retention) abandonReplies(ctx context.Context) {
 	}
 }
 
-// clearAcknowledgment queues the removal of the delivered reply row's acknowledgment and then settles the reply, so that
-// it is listed no more: one removal for each reply, not one at every tick until its session is deleted. A reply that has
-// gone since it was listed has nothing left to settle.
-func (r *retention) clearAcknowledgment(ctx context.Context, lister store.AcknowledgmentLister, row store.Reply) error {
-	if err := r.cfg.ClearAcknowledgment(ctx, row); err != nil {
-		return err
+// clearAcknowledgments queues the removal of each delivered reply's acknowledgment, and stops at the first that fails,
+// whose error it returns. It then settles the replies whose removals it queued, so that they are listed no more: one
+// removal for each reply, not one at every tick until its session is deleted. A settle that fails is logged and is not
+// returned, for the removals are queued and hold nothing back; the next tick queues them again, which the outbox makes
+// harmless, and settles them.
+func (r *retention) clearAcknowledgments(ctx context.Context, lister store.AcknowledgmentLister, rows []store.Reply) error {
+	queued := make([]string, 0, len(rows))
+	var err error
+	for _, row := range rows {
+		if err = r.cfg.ClearAcknowledgment(ctx, row); err != nil {
+			break
+		}
+		queued = append(queued, row.ID)
 	}
-	if err := lister.SettleAcknowledgmentReply(ctx, row.ID); err != nil && !errors.Is(err, store.ErrNotFound) {
-		return err
+	for chunk := range slices.Chunk(queued, store.MaxReplyIDs) {
+		if serr := lister.SettleAcknowledgmentReplies(ctx, chunk); serr != nil {
+			if ctx.Err() == nil {
+				r.cfg.Logger.WarnContext(ctx, "retention: replies whose acknowledgment removals are queued could not be settled; they will be queued again", "replies", len(queued), "err", serr)
+			}
+			break
+		}
 	}
-	return nil
+	return err
 }
 
 // sessionHorizons is when each Binding's sessions are past deleting: its threadTTL and the grace after now. A session

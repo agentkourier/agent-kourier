@@ -127,17 +127,17 @@ func (g *Guarded) ListAcknowledgmentReplies(ctx context.Context, now time.Time, 
 	return replies, err
 }
 
-// SettleAcknowledgmentReply implements AcknowledgmentLister.
-func (g *Guarded) SettleAcknowledgmentReply(ctx context.Context, id string) error {
-	return g.run(ctx, "agentkourier.store.SettleAcknowledgmentReply", func(ctx context.Context) error {
-		if id == "" {
-			return fmt.Errorf("settle acknowledgment reply: an ID is required: %w", ErrInvalid)
+// SettleAcknowledgmentReplies implements AcknowledgmentLister.
+func (g *Guarded) SettleAcknowledgmentReplies(ctx context.Context, ids []string) error {
+	return g.run(ctx, "agentkourier.store.SettleAcknowledgmentReplies", func(ctx context.Context) error {
+		if len(ids) > MaxReplyIDs || slices.Contains(ids, "") {
+			return fmt.Errorf("settle acknowledgment replies: %d IDs, none empty and at most %d, are required: %w", len(ids), MaxReplyIDs, ErrInvalid)
 		}
 		lister, ok := g.a.(AcknowledgmentLister)
 		if !ok {
-			return fmt.Errorf("settle acknowledgment reply: adapter does not support retention metadata: %w", ErrInvalid)
+			return fmt.Errorf("settle acknowledgment replies: adapter does not support retention metadata: %w", ErrInvalid)
 		}
-		return lister.SettleAcknowledgmentReply(ctx, id)
+		return lister.SettleAcknowledgmentReplies(ctx, ids)
 	})
 }
 

@@ -171,11 +171,20 @@ func (s *adapter) ListAcknowledgmentReplies(ctx context.Context, _ time.Time, _ 
 	return replies, nil
 }
 
-// SettleAcknowledgmentReply implements store.AcknowledgmentLister. A settled row still matches, so a repeat
-// counts it and succeeds.
-func (s *adapter) SettleAcknowledgmentReply(ctx context.Context, id string) error {
-	n, err := s.exec(ctx, `UPDATE reply_queue SET acknowledgment = '' WHERE id = ? AND `+store.DeliveredReplies("").Text(Dialect{}), id)
-	return errIfUnchanged(n, err, fmt.Sprintf("settle acknowledgment reply %q", id))
+// SettleAcknowledgmentReplies implements store.AcknowledgmentLister: one statement for each chunk of the IDs, as
+// HasReplies asks them. A chunk that fails leaves those before it settled, which a retry finds settled already.
+func (s *adapter) SettleAcknowledgmentReplies(ctx context.Context, ids []string) error {
+	for chunk := range slices.Chunk(ids, hasRepliesChunk) {
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		if _, err := s.exec(ctx, `UPDATE reply_queue SET acknowledgment = '' WHERE id IN (?`+strings.Repeat(`, ?`, len(chunk)-1)+`)
+			AND acknowledgment <> '' AND `+store.DeliveredReplies("").Text(Dialect{}), args...); err != nil {
+			return fmt.Errorf("settle acknowledgment replies: %w", err)
+		}
+	}
+	return nil
 }
 
 // ListPendingAcknowledgmentReplies implements store.PendingAcknowledgmentLister.

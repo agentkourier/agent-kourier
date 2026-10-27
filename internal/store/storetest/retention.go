@@ -313,14 +313,27 @@ func (su suite) replyRetention(t *testing.T) {
 		if got, want := listed(t), []string{"settled", "unsettled"}; !slices.Equal(got, want) {
 			t.Fatalf("before the settle, acknowledgment replies = %v; want %v", got, want)
 		}
-		noErr(t, lister.SettleAcknowledgmentReply(ctx, "settled"), "settle")
-		noErr(t, lister.SettleAcknowledgmentReply(ctx, "settled"), "settle again") // a repeat changes nothing and succeeds
+		// One call settles what it can: an undelivered reply's add may still be needed, and an unknown one is not there.
+		noErr(t, lister.SettleAcknowledgmentReplies(ctx, []string{"settled", "queued", "nope"}), "settle")
+		noErr(t, lister.SettleAcknowledgmentReplies(ctx, []string{"settled", "settled"}), "settle again") // a repeat changes nothing
+		noErr(t, lister.SettleAcknowledgmentReplies(ctx, nil), "settle none")
 		if got, want := listed(t), []string{"unsettled"}; !slices.Equal(got, want) {
 			t.Fatalf("after the settle, acknowledgment replies = %v; want %v: a settled removal is not queued again", got, want)
 		}
-		isErr(t, lister.SettleAcknowledgmentReply(ctx, "queued"), store.ErrNotFound, "settle an undelivered reply")
-		isErr(t, lister.SettleAcknowledgmentReply(ctx, "nope"), store.ErrNotFound, "settle an unknown reply")
-		isErr(t, lister.SettleAcknowledgmentReply(ctx, ""), store.ErrInvalid, "settle no reply")
+		isErr(t, lister.SettleAcknowledgmentReplies(ctx, []string{"unsettled", ""}), store.ErrInvalid, "settle an empty ID")
+		isErr(t, lister.SettleAcknowledgmentReplies(ctx, make([]string, store.MaxReplyIDs+1)), store.ErrInvalid, "settle more than MaxReplyIDs")
+		if got, want := listed(t), []string{"unsettled"}; !slices.Equal(got, want) {
+			t.Fatalf("after refused settles, acknowledgment replies = %v; want %v: a refused call settles nothing", got, want)
+		}
+		many := make([]string, store.MaxReplyIDs) // more than one statement's worth, which an adapter may chunk
+		for i := range many {
+			many[i] = fmt.Sprint("absent-", i)
+		}
+		many[len(many)-1] = "unsettled"
+		noErr(t, lister.SettleAcknowledgmentReplies(ctx, many), "settle MaxReplyIDs")
+		if got := listed(t); len(got) != 0 {
+			t.Fatalf("after settling the last of MaxReplyIDs, acknowledgment replies = %v; want none", got)
+		}
 		got, err := pending.ListPendingAcknowledgmentReplies(ctx)
 		noErr(t, err, "list pending acknowledgment replies")
 		if len(got) != 1 || got[0].ID != "queued" || got[0].Acknowledgment != "eyes" {

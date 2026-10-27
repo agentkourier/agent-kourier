@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -64,6 +65,54 @@ func TestAcknowledgmentLifecycleUsesTheConfiguredReaction(t *testing.T) {
 		{ID: second.MessageID + "/acknowledgment", Kind: NoticeUnacknowledged, MessageRef: second.MessageRef, Reaction: "eyes"},
 	}) {
 		t.Fatalf("acknowledgment removals after completion = %+v", got)
+	}
+}
+
+// With Config.Unacknowledge set, a turn's removal goes through it, named by its source reply, in place of the sink, so
+// that the wiring can settle the reply once the removal is queued. A failure is the hook's to report: the manager logs it
+// and goes on, and the next turn's removal is still handed over.
+func TestAcknowledgmentRemovalGoesThroughUnacknowledge(t *testing.T) {
+	f := newFixture(t)
+	f.ackConfigured, f.ackEnabled, f.ackEmoji = true, true, "eyes"
+	sink := f.live()
+	type removal struct {
+		source string
+		n      Notice
+	}
+	var mu sync.Mutex
+	var got []removal
+	f.m.cfg.Unacknowledge = func(_ context.Context, _ Key, source string, n Notice) error {
+		mu.Lock()
+		defer mu.Unlock()
+		got = append(got, removal{source, n})
+		if len(got) == 1 {
+			return errors.New("outbox unavailable")
+		}
+		return nil
+	}
+	f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+		accepted(h, n)
+		return turn(h, n, a2a.TaskStateCompleted)
+	}
+	first, second := inbound("1"), inbound("2")
+	for _, in := range []Inbound{first, second} {
+		if _, err := f.submit(in); err != nil {
+			t.Fatal(err)
+		}
+		waitFinal(t, sink)
+	}
+	f.retired(t)
+	mu.Lock()
+	defer mu.Unlock()
+	want := []removal{
+		{first.MessageID, Notice{ID: first.MessageID + "/acknowledgment", Kind: NoticeUnacknowledged, MessageRef: first.MessageRef, Reaction: "eyes"}},
+		{second.MessageID, Notice{ID: second.MessageID + "/acknowledgment", Kind: NoticeUnacknowledged, MessageRef: second.MessageRef, Reaction: "eyes"}},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("removals handed to Unacknowledge = %+v; want %+v", got, want)
+	}
+	if n := sink.noticesOf(NoticeUnacknowledged); len(n) != 0 {
+		t.Fatalf("removals on the sink = %+v; want none: Unacknowledge queues them", n)
 	}
 }
 

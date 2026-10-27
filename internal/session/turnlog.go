@@ -152,7 +152,14 @@ func (m *Manager) unacknowledgeReply(key Key, r store.Reply, sourceID string) {
 	if sourceID == "" || r.MessageRef == "" || r.Acknowledgment == "" {
 		return
 	}
-	m.cfg.Sink.Notice(m.ctx, key, Notice{ID: acknowledgmentID(sourceID), Kind: NoticeUnacknowledged, MessageRef: r.MessageRef, Reaction: r.Acknowledgment})
+	n := Notice{ID: acknowledgmentID(sourceID), Kind: NoticeUnacknowledged, MessageRef: r.MessageRef, Reaction: r.Acknowledgment}
+	if m.cfg.Unacknowledge == nil {
+		m.cfg.Sink.Notice(m.ctx, key, n)
+		return
+	}
+	if err := m.cfg.Unacknowledge(m.ctx, key, sourceID, n); err != nil {
+		m.cfg.Logger.WarnContext(m.ctx, "session: an acknowledgment removal was not queued and settled; retention will queue it", "channel", key.Channel, "err", err)
+	}
 }
 
 // discardAnswer settles a consumed text reply when the interaction policy did not enqueue a continuation. A consumed

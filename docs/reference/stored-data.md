@@ -210,10 +210,12 @@ of the default `threadTTL`, after which a session is expired and recovery skips 
 and counted in `agentkourier_retention_removed_total{what="stranded_replies"}`. The retention sweep queues removal of a
 dropped reply's configured acknowledgment reaction through the outbox.
 
-The reply row keeps the original acknowledgment emoji and source message reference, and an active task's session keeps
-them with its turn. These values let recovery remove the same reaction after a restart or Binding configuration change.
-Once a delivered reply's task has ended and the retention sweep has queued the removal of its reaction in the outbox, the
-sweep clears the emoji from the reply row, so the removal is queued once rather than at every sweep.
+The reply row keeps the source message reference, and the original acknowledgment emoji until the removal of its reaction
+is queued; an active task's session keeps both with its turn. These values let recovery remove the same reaction after a
+restart or Binding configuration change. When a turn ends, or pauses on a question, Agent Kourier queues the removal in the
+outbox and then clears the emoji from the delivered reply row. The retention sweep queues the removal again, and clears the
+emoji, only for a delivered reply that still has one and whose task has ended: one whose removal or clear failed, or one
+left by a crash. A reply whose emoji is cleared is not swept again.
 
 ### Thread replies in a mention-only Binding
 
