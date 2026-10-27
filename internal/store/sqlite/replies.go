@@ -148,7 +148,7 @@ func (s *adapter) ListAcknowledgmentReplies(ctx context.Context) ([]store.Reply,
 	//nolint:gosec // G202: the policy predicate is rendered by store.DeliveredReplies for this dialect.
 	rows, err := s.read.QueryContext(ctx, `SELECT id, connection, channel, thread_ts, user_id, message_ts, acknowledgment, enqueued_at
 		FROM reply_queue
-		WHERE acknowledgment <> '' AND `+store.DeliveredReplies("").Text(Dialect{})+` AND NOT `+store.AcknowledgmentHeld("reply_queue").Text(Dialect{}))
+		WHERE acknowledgment <> '' AND `+store.DeliveredReplies("").Text(Dialect{})+` AND NOT `+store.AcknowledgmentHeld("").Text(Dialect{}))
 	if err != nil {
 		return nil, fmt.Errorf("list acknowledgment replies: %w", err)
 	}
@@ -174,7 +174,7 @@ func (s *adapter) ListPendingAcknowledgmentReplies(ctx context.Context) ([]store
 	//nolint:gosec // G202: the policy predicate is rendered by store.UndeliveredReplies for this dialect.
 	rows, err := s.read.QueryContext(ctx, `SELECT id, connection, channel, thread_ts, user_id, message_ts, acknowledgment, enqueued_at
 		FROM reply_queue
-		WHERE acknowledgment <> '' AND (`+store.UndeliveredReplies("").Text(Dialect{})+` OR `+store.AcknowledgmentHeld("reply_queue").Text(Dialect{})+`)`)
+		WHERE acknowledgment <> '' AND (`+store.UndeliveredReplies("").Text(Dialect{})+` OR `+store.AcknowledgmentHeld("").Text(Dialect{})+`)`)
 	if err != nil {
 		return nil, fmt.Errorf("list pending acknowledgment replies: %w", err)
 	}

@@ -68,7 +68,8 @@ type entry struct {
 
 // Pool keeps one connected client per (Binding, agent), reconnecting when the backend URL or
 // the credentials change. Connecting fetches the agent card, a network round trip, on an
-// Agent's first use. It is safe for concurrent use.
+// Agent's first use, so that use belongs off Slack's 3-second acknowledgement path. It is
+// safe for concurrent use.
 type Pool struct {
 	dialect dialect.Dialect
 	cfg     Config

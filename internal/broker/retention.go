@@ -82,9 +82,7 @@ type retentionStore interface {
 	store.PendingAcknowledgmentLister
 	PurgeAudit(ctx context.Context, before time.Time, limit int) (int, error)
 	PurgeExpiredSessions(ctx context.Context, h store.SessionHorizons, limit int) (store.PurgedSessions, error)
-	ListStaleTasks(ctx context.Context, h store.SessionHorizons, limit int) ([]store.StaleTask, error)
-	store.StaleTaskTurnReader
-	EndStaleTask(ctx context.Context, h store.SessionHorizons, t store.StaleTask, now time.Time) (store.EndedStaleTask, error)
+	store.StaleTasks
 }
 
 // taskCanceller cancels a task at the agent of a Binding: Bindings. It returns the service identity the call was made

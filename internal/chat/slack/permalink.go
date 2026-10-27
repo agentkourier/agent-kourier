@@ -31,8 +31,6 @@ func workspaceOrigin(raw string) string {
 type workspaceURLer interface{ WorkspaceURL() string }
 
 var (
-	_ chat.Permalinker = (*Platform)(nil)
-
 	channelID = regexp.MustCompile(`^[A-Z0-9]{1,32}$`)
 	messageTS = regexp.MustCompile(`^[0-9]{1,16}\.[0-9]{1,16}$`)
 )

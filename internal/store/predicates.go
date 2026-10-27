@@ -92,9 +92,13 @@ func OutboxDerivedFromReplyID(o Ref, id string) Cond {
 
 // AcknowledgmentHeld is the replies r whose acknowledgment a task still holds: the session of r's thread has an active
 // task, and its turn's acknowledgment is r's (named by its own ID, or, for a turn recorded before it had one, by the
-// turn's). Such a reaction is the task's to take off when it ends; retention leaves it alone. r must be named, as the
-// subquery's sessions s have the same columns.
+// turn's). Such a reaction is the task's to take off when it ends; retention leaves it alone. An r of "" is the
+// unaliased reply_queue, which the predicate names in full: a bare column would bind to the subquery's sessions s, which
+// have the same columns.
 func AcknowledgmentHeld(r Ref) Fixed {
+	if r == "" {
+		r = "reply_queue"
+	}
 	return func(Dialect) string {
 		return "EXISTS (SELECT 1 FROM sessions s WHERE s.connection = " + r.col("connection") + " AND s.channel = " + r.col("channel") +
 			" AND s.thread_ts = " + r.col("thread_ts") + " AND s.task_id <> '' AND s.turn_acknowledgment <> ''" +

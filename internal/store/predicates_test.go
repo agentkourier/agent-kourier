@@ -75,6 +75,13 @@ func TestFixedPredicates(t *testing.T) {
 			`EXISTS (SELECT 1 FROM sessions s WHERE s.connection = reply_queue.connection AND s.channel = reply_queue.channel` +
 				` AND s.thread_ts = reply_queue.thread_ts AND s.task_id <> '' AND s.turn_acknowledgment <> ''` +
 				` AND (s.turn_acknowledgment_id = reply_queue.id OR (s.turn_acknowledgment_id = '' AND s.turn_id = reply_queue.id)))`}},
+		{"AcknowledgmentHeld bare: the unaliased reply_queue, never the subquery's sessions", store.AcknowledgmentHeld(""), [2]string{
+			`EXISTS (SELECT 1 FROM sessions s WHERE s.connection = reply_queue.connection AND s.channel = reply_queue.channel` +
+				` AND s.thread_ts = reply_queue.thread_ts AND s.task_id <> '' AND s.turn_acknowledgment <> ''` +
+				` AND (s.turn_acknowledgment_id = reply_queue.id OR (s.turn_acknowledgment_id = '' AND s.turn_id = reply_queue.id)))`,
+			`EXISTS (SELECT 1 FROM sessions s WHERE s.connection = reply_queue.connection AND s.channel = reply_queue.channel` +
+				` AND s.thread_ts = reply_queue.thread_ts AND s.task_id <> '' AND s.turn_acknowledgment <> ''` +
+				` AND (s.turn_acknowledgment_id = reply_queue.id OR (s.turn_acknowledgment_id = '' AND s.turn_id = reply_queue.id)))`}},
 		{"TriggerThreadOpen", store.TriggerThreadOpen(""), [2]string{`closed_at = 0`, `closed_at IS NULL`}},
 		{"TriggerThreadClosed", store.TriggerThreadClosed(""), [2]string{`closed_at <> 0`, `closed_at IS NOT NULL`}},
 		{"TriggerThreadUnstarted", store.TriggerThreadUnstarted("t"), [2]string{`t.cooldown_until = 0`, `t.cooldown_until IS NULL`}},
