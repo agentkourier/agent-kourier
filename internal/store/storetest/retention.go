@@ -321,7 +321,12 @@ func (su suite) replyRetention(t *testing.T) {
 			t.Fatalf("after the settle, acknowledgment replies = %v; want %v: a settled removal is not queued again", got, want)
 		}
 		isErr(t, lister.SettleAcknowledgmentReplies(ctx, []string{"unsettled", ""}), store.ErrInvalid, "settle an empty ID")
-		isErr(t, lister.SettleAcknowledgmentReplies(ctx, make([]string, store.MaxReplyIDs+1)), store.ErrInvalid, "settle more than MaxReplyIDs")
+		tooMany := make([]string, store.MaxReplyIDs+1) // none empty, so that only the count refuses it
+		for i := range tooMany {
+			tooMany[i] = fmt.Sprint("absent-", i)
+		}
+		tooMany[len(tooMany)-1] = "unsettled"
+		isErr(t, lister.SettleAcknowledgmentReplies(ctx, tooMany), store.ErrInvalid, "settle more than MaxReplyIDs")
 		if got, want := listed(t), []string{"unsettled"}; !slices.Equal(got, want) {
 			t.Fatalf("after refused settles, acknowledgment replies = %v; want %v: a refused call settles nothing", got, want)
 		}

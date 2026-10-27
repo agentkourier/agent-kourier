@@ -212,10 +212,11 @@ dropped reply's configured acknowledgment reaction through the outbox.
 
 The reply row keeps the source message reference, and the original acknowledgment emoji until the removal of its reaction
 is queued; an active task's session keeps both with its turn. These values let recovery remove the same reaction after a
-restart or Binding configuration change. When a turn ends, or pauses on a question, Agent Kourier queues the removal in the
-outbox and then clears the emoji from the delivered reply row. The retention sweep queues the removal again, and clears the
-emoji, only for a delivered reply that still has one and whose task has ended: one whose removal or clear failed, or one
-left by a crash. A reply whose emoji is cleared is not swept again.
+restart or Binding configuration change. Agent Kourier queues the removal in the outbox, and then clears the emoji from the
+delivered reply row, when the reaction is no longer wanted: when a turn ends or pauses on a question, when an answer fails
+and its question waits again, and when a typed answer is consumed without continuing the task. The retention sweep
+queues the removal again, and clears the emoji, only for a delivered reply that still has one and whose task has ended:
+one whose removal or clear failed, or one left by a crash. A reply whose emoji is cleared is not swept again.
 
 ### Thread replies in a mention-only Binding
 
