@@ -18,9 +18,7 @@ const MaxLimit = math.MaxInt32
 // Adapter is what a store backend implements: the whole of Store. An adapter renders operations as SQL and runs them in
 // its transactions; it can rely on every argument it is given being legal, and it records no telemetry, because Guard
 // does both once, for every backend.
-type Adapter interface {
-	Store
-}
+type Adapter = Store
 
 // Guarded is the store seam: a Store that checks every argument and records every operation's telemetry once, over
 // an Adapter that does the storing. The checks run before the adapter is called, so an invalid call never reaches it;

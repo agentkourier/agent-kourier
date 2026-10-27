@@ -80,8 +80,8 @@ type retentionStore interface {
 	AbandonStrandedReplies(ctx context.Context, now time.Time, age time.Duration) (int, error)
 	store.AcknowledgmentLister
 	store.PendingAcknowledgmentLister
-	PurgeAudit(ctx context.Context, before time.Time, limit int) (int, error)
-	PurgeExpiredSessions(ctx context.Context, h store.SessionHorizons, limit int) (store.PurgedSessions, error)
+	store.AuditRetention
+	store.SessionRetention
 	store.StaleTasks
 }
 
@@ -134,10 +134,10 @@ type retentionConfig struct {
 	StaleBatch, MaxStaleBatches int
 	// OnRemoved is told what each pass removed (the Removed constants) and how many, when it removed any, for a metric.
 	OnRemoved func(what string, n int)
-	// EnsureAcknowledgment queues a durable add for a queued reply. It is optional for stores and tests that do not
+	// EnsureAcknowledgment queues a durable add for a queued reply. It is optional for tests and wirings that do not
 	// run a chat sink; the leader wires it to the renderer's outbox path so a transient intake failure is retried.
 	EnsureAcknowledgment func(context.Context, store.Reply) error
-	// ClearAcknowledgment queues a durable removal for a delivered reply. It is optional for stores and tests that do
+	// ClearAcknowledgment queues a durable removal for a delivered reply. It is optional for tests and wirings that do
 	// not run a chat sink; the leader wires it to the renderer's outbox path.
 	ClearAcknowledgment func(context.Context, store.Reply) error
 	Now                 func() time.Time // time.Now if nil

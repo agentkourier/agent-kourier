@@ -93,16 +93,16 @@ func OutboxDerivedFromReplyID(o Ref, id string) Cond {
 // AcknowledgmentHeld is the replies r whose acknowledgment a task still holds: the session of r's thread has an active
 // task, and its turn's acknowledgment is r's (named by its own ID, or, for a turn recorded before it had one, by the
 // turn's). Such a reaction is the task's to take off when it ends; retention leaves it alone. An r of "" is the
-// unaliased reply_queue, which the predicate names in full: a bare column would bind to the subquery's sessions s, which
-// have the same columns.
+// unaliased reply_queue, which the predicate names in full: a bare column would bind to the subquery's sessions, which
+// have the same columns. The subquery names its sessions "held", an alias no statement gives r.
 func AcknowledgmentHeld(r Ref) Fixed {
 	if r == "" {
 		r = "reply_queue"
 	}
 	return func(Dialect) string {
-		return "EXISTS (SELECT 1 FROM sessions s WHERE s.connection = " + r.col("connection") + " AND s.channel = " + r.col("channel") +
-			" AND s.thread_ts = " + r.col("thread_ts") + " AND s.task_id <> '' AND s.turn_acknowledgment <> ''" +
-			" AND (s.turn_acknowledgment_id = " + r.col("id") + " OR (s.turn_acknowledgment_id = '' AND s.turn_id = " + r.col("id") + ")))"
+		return "EXISTS (SELECT 1 FROM sessions held WHERE held.connection = " + r.col("connection") + " AND held.channel = " + r.col("channel") +
+			" AND held.thread_ts = " + r.col("thread_ts") + " AND held.task_id <> '' AND held.turn_acknowledgment <> ''" +
+			" AND (held.turn_acknowledgment_id = " + r.col("id") + " OR (held.turn_acknowledgment_id = '' AND held.turn_id = " + r.col("id") + ")))"
 	}
 }
 
