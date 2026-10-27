@@ -157,7 +157,7 @@ func (m *Manager) unacknowledgeReply(key Key, r store.Reply, sourceID string) {
 		m.cfg.Sink.Notice(m.ctx, key, n)
 		return
 	}
-	if err := m.cfg.Unacknowledge(m.ctx, key, sourceID, n); err != nil {
+	if err := m.cfg.Unacknowledge(m.ctx, key, sourceID, n); err != nil && m.ctx.Err() == nil {
 		m.cfg.Logger.WarnContext(m.ctx, "session: an acknowledgment removal did not complete; retention will finish it", "channel", key.Channel, "err", err)
 	}
 }

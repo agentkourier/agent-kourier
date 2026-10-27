@@ -79,7 +79,7 @@ func TestPreviousReplyUsesTheThreadIndex(t *testing.T) {
 func TestSettleAcknowledgmentRepliesIsAllOrNothing(t *testing.T) {
 	ctx := t.Context()
 	s := openTemp(t)
-	ids := make([]string, 2*hasRepliesChunk+200)
+	ids := make([]string, 2*replyIDChunk+200)
 	for i := range ids {
 		ids[i] = fmt.Sprint("r", i)
 		if _, err := s.EnqueueReply(ctx, store.Reply{ID: ids[i], Key: key, UserID: "U1", MessageRef: "1700.01", Acknowledgment: "eyes", Text: "hello", EnqueuedAt: t0}); err != nil {
@@ -89,7 +89,7 @@ func TestSettleAcknowledgmentRepliesIsAllOrNothing(t *testing.T) {
 	if _, err := s.a.write.ExecContext(ctx, `UPDATE reply_queue SET delivered_at = ?, text = ''`, ts(t0)); err != nil {
 		t.Fatal(err)
 	}
-	failing := ids[hasRepliesChunk+1]
+	failing := ids[replyIDChunk+1]
 	if _, err := s.a.write.ExecContext(ctx, `CREATE TEMP TRIGGER fail_settle BEFORE UPDATE OF acknowledgment ON reply_queue
 		WHEN NEW.id = '`+failing+`' BEGIN SELECT RAISE(ABORT, 'settle refused'); END`); err != nil {
 		t.Fatal(err)

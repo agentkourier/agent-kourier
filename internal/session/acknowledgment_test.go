@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -114,6 +115,39 @@ func TestAcknowledgmentRemovalGoesThroughUnacknowledge(t *testing.T) {
 	}
 	if n := sink.noticesOf(NoticeUnacknowledged); len(n) != 0 {
 		t.Fatalf("removals on the sink = %+v; want none: Unacknowledge queues them", n)
+	}
+}
+
+// A removal that fails because the manager is closing is not warned about: the shutdown cancelled it, retention queues
+// it, and every turn that ends in the shutdown would otherwise log the same line. One that fails while the manager runs is.
+func TestUnacknowledgeFailureIsWarnedOnlyWhileTheManagerRuns(t *testing.T) {
+	r := store.Reply{ID: "slack:slack:C1:1", Key: key, MessageRef: "1", Acknowledgment: "eyes"}
+	for _, tc := range []struct {
+		name     string
+		closing  bool
+		wantWarn bool
+	}{
+		{name: "running", wantWarn: true},
+		{name: "closing", closing: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			var logs strings.Builder
+			f.m.cfg.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+			f.m.cfg.Unacknowledge = func(ctx context.Context, _ Key, _ string, _ Notice) error {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				return errors.New("outbox unavailable")
+			}
+			if tc.closing {
+				f.m.stop()
+			}
+			f.m.unacknowledgeReply(key, r, r.ID)
+			if got := strings.Contains(logs.String(), "acknowledgment removal did not complete"); got != tc.wantWarn {
+				t.Errorf("warned = %v (log %q); want %v", got, logs.String(), tc.wantWarn)
+			}
+		})
 	}
 }
 

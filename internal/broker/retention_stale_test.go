@@ -244,6 +244,29 @@ func TestRetentionDoesNotSettleAStaleAcknowledgmentThatWasNotQueued(t *testing.T
 	}
 }
 
+// A stale task's reply that could not be settled after its removal was queued leaves the task ended, audited and counted,
+// and is warned about: the next abandonReplies lists the reply and queues its removal again.
+func TestRetentionEndsAStaleTaskWhoseQueuedAcknowledgmentCannotBeSettled(t *testing.T) {
+	g := newStaleRig(t, []store.StaleTask{stale("1.1", "ns/long", "t1")}, nil)
+	g.f.staleTurns = map[string]store.TaskTurn{"t1": {ID: "question/answer", AcknowledgmentID: "message-1", MessageRef: "1.1", Acknowledgment: "eyes"}}
+	g.f.settleErr = errors.New("disk full")
+	var cleared int
+	g.r.cfg.ClearAcknowledgment = func(context.Context, store.Reply) error { cleared++; return nil }
+	g.r.endStaleTasks(t.Context())
+	if cleared != 1 || !slices.Contains(g.f.order, "EndStaleTask") {
+		t.Errorf("cleared %d, calls %v; want the task ended and its removal queued once", cleared, g.f.order)
+	}
+	if got := g.audit.got(); len(got) != 1 || got[0].task.TaskID != "t1" {
+		t.Errorf("audited %+v; want t1", got)
+	}
+	if got := g.counted(); got[RemovedStaleTasks] != 1 {
+		t.Errorf("counted %v; want the 1 task", got)
+	}
+	if got := g.logs.String(); !strings.Contains(got, "could not be settled") || !strings.Contains(got, "disk full") {
+		t.Errorf("the log %q; want the settle failure warned", got)
+	}
+}
+
 func equal[T comparable](a, b []T) bool {
 	if len(a) != len(b) {
 		return false
