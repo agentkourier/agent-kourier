@@ -463,7 +463,7 @@ var errThreadRead = errors.New("the platform's own error")
 
 // A thread read is a read: it passes the fence whatever the lease says (this fence has never seen a renewal, which stops
 // the process for a write), and it gets the platform's answer as it is.
-func TestChatFencePassesThreadReadsOnAndSaysWhenThePlatformCannot(t *testing.T) {
+func TestChatFencePassesThreadReadsOn(t *testing.T) {
 	var stops []string
 	fence := &leaseFence{clock: newLeaseClock(nil), limit: time.Second, stop: func(reason string) { stops = append(stops, reason) }} // never renewed: a write is refused
 	inner := &threadPlatform{recordingPlatform: &recordingPlatform{}}

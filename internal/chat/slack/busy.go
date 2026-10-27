@@ -43,8 +43,6 @@ type threadStatuser interface {
 	SetThreadStatus(ctx context.Context, channel, threadTS, status string) error
 }
 
-var _ chat.BusyMarker = (*Platform)(nil)
-
 // MarkBusy implements chat.BusyMarker as the assistant status of the thread: "is working…" to mark it, and an empty status to
 // take the mark off. It needs no stream and no message of the thread's. A refusal that says the app or workspace cannot show
 // it (refusesStatus) turns the status off for this connection for the life of the process: it is logged once, with the way to

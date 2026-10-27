@@ -168,8 +168,6 @@ type threadReader interface {
 	ThreadBetween(ctx context.Context, conn, channel, threadTS, after, before string, limit int) ([]chat.HistoryMessage, int, error)
 }
 
-var _ chat.ThreadReader = (*Platform)(nil)
-
 // ThreadBetween implements chat.ThreadReader over the Client's (Client.ThreadBetween). An API that cannot read a thread
 // is chat.ErrNoThreadReads. A target that names no thread is chat.ErrInvalid.
 func (p *Platform) ThreadBetween(ctx context.Context, t chat.Target, after, before string, limit int) ([]chat.HistoryMessage, int, error) {

@@ -127,8 +127,8 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 		return nil, err
 	}
 	// A mentioned turn of a mention-only Binding carries the replies since the previous turn, which are read through the
-	// platform as it is built here (fenced with an election: the read is not a write, and the fence forwards it).
-	threads, err := newThreadContext(threadContextConfig{Platform: platform.Platform, Replies: st, Logger: log})
+	// platform as it is built here (fenced with an election: the read is not a write, so the fence passes it).
+	threads, err := newThreadContext(threadContextConfig{Platform: platform, Replies: st, Logger: log})
 	if err != nil {
 		return nil, err
 	}
