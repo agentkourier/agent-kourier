@@ -152,7 +152,7 @@ func (m *Manager) unacknowledgeReply(key Key, r store.Reply, sourceID string) {
 	if sourceID == "" || r.MessageRef == "" || r.Acknowledgment == "" {
 		return
 	}
-	n := Notice{ID: acknowledgmentID(sourceID), Kind: NoticeUnacknowledged, MessageRef: r.MessageRef, Reaction: r.Acknowledgment}
+	n := Notice{ID: AcknowledgmentID(sourceID), Kind: NoticeUnacknowledged, MessageRef: r.MessageRef, Reaction: r.Acknowledgment}
 	if m.cfg.Unacknowledge == nil {
 		m.cfg.Sink.Notice(m.ctx, key, n)
 		return

@@ -30,8 +30,9 @@ type Reply struct {
 	EnqueuedAt    time.Time
 }
 
-// MaxReplyIDs is the most IDs that one HasReplies call may ask about (ErrInvalid above it). It bounds the size of one
-// call, and so of the statement or the chunks of statements that an adapter runs for it, not the answer.
+// MaxReplyIDs is the most IDs that one call that takes many reply IDs (HasReplies, AcknowledgmentLister's
+// SettleAcknowledgmentReplies) may name (ErrInvalid above it). It bounds the size of one call, and so of the statement or
+// the chunks of statements that an adapter runs for it, not the answer; a caller with more makes several calls.
 const MaxReplyIDs = 10000
 
 // ReplyQueue persists per-session FIFO queues of replies. Delivery is

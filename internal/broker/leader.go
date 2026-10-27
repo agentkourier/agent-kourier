@@ -176,10 +176,10 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	retain, err := newRetention(retentionConfig{Store: st, Interval: cfg.retentionEvery, AuditRetention: cfg.AuditRetention, ThreadTTLs: bindings.ThreadTTLs,
 		Canceller: bindings, Audit: auditor, Holds: mgr.HoldsTask, OnRemoved: metrics.RetentionRemoved, Logger: log,
 		EnsureAcknowledgment: func(ctx context.Context, r store.Reply) error {
-			return sink.QueueNotice(ctx, r.Key, session.Notice{ID: r.ID + "/acknowledgment", Kind: session.NoticeAcknowledged, MessageRef: r.MessageRef, Reaction: r.Acknowledgment})
+			return sink.QueueNotice(ctx, r.Key, session.Notice{ID: session.AcknowledgmentID(r.ID), Kind: session.NoticeAcknowledged, MessageRef: r.MessageRef, Reaction: r.Acknowledgment})
 		},
 		ClearAcknowledgment: func(ctx context.Context, r store.Reply) error {
-			return sink.QueueNotice(ctx, r.Key, session.Notice{ID: r.ID + "/acknowledgment", Kind: session.NoticeUnacknowledged, MessageRef: r.MessageRef, Reaction: r.Acknowledgment})
+			return sink.QueueNotice(ctx, r.Key, session.Notice{ID: session.AcknowledgmentID(r.ID), Kind: session.NoticeUnacknowledged, MessageRef: r.MessageRef, Reaction: r.Acknowledgment})
 		}})
 	if err != nil {
 		return nil, fmt.Errorf("store retention: %w", err)

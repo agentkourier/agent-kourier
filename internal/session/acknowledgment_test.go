@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -173,6 +174,7 @@ func TestAcknowledgmentIsClearedAtPauseAndRecreatedForTypedAnswer(t *testing.T) 
 		return turn(h, 0, a2a.TaskStateCompleted)
 	}
 	sink := f.live()
+	sources := f.viaUnacknowledge(sink) // the pause and the answer's end both settle through the hook
 	first := inbound("1")
 	if _, err := f.submit(first); err != nil {
 		t.Fatal(err)
@@ -212,6 +214,9 @@ func TestAcknowledgmentIsClearedAtPauseAndRecreatedForTypedAnswer(t *testing.T) 
 	}
 	if got := sink.noticesOf(NoticeUnacknowledged); !sameAcknowledgments(got, wantRemovals) {
 		t.Fatalf("pause and answer removals = %+v; want %+v", got, wantRemovals)
+	}
+	if got, want := sources(), removalSources(wantRemovals); !slices.Equal(got, want) {
+		t.Fatalf("sources handed to Unacknowledge = %v; want %v", got, want)
 	}
 }
 
@@ -294,6 +299,7 @@ func TestConsumedTextReplyWithoutContinuationClearsItsAcknowledgment(t *testing.
 		return TextReplyConsumed, nil // rejected or stale answers are consumed without a continuation
 	})
 	sink := f.live()
+	sources := f.viaUnacknowledge(sink) // the consumed answer is settled through the hook, with no turn of its own
 	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
@@ -313,11 +319,15 @@ func TestConsumedTextReplyWithoutContinuationClearsItsAcknowledgment(t *testing.
 		t.Fatal(err)
 	}
 	f.retired(t)
-	if got := sink.noticesOf(NoticeUnacknowledged); !sameAcknowledgments(got, []Notice{
+	want := []Notice{
 		{ID: inbound("1").MessageID + "/acknowledgment", Kind: NoticeUnacknowledged, MessageRef: "1", Reaction: "eyes"},
 		{ID: inbound("2").MessageID + "/acknowledgment", Kind: NoticeUnacknowledged, MessageRef: "2", Reaction: "eyes"},
-	}) {
+	}
+	if got := sink.noticesOf(NoticeUnacknowledged); !sameAcknowledgments(got, want) {
 		t.Fatalf("consumed text reply removals = %+v; want one for the question and one for the consumed reply", got)
+	}
+	if got, want := sources(), removalSources(want); !slices.Equal(got, want) {
+		t.Fatalf("sources handed to Unacknowledge = %v; want %v", got, want)
 	}
 }
 
@@ -344,6 +354,7 @@ func TestAnswerBusyReparkSettlesTheFailedAnswerAcknowledgment(t *testing.T) {
 		return TextReplyConsumed, f.m.Answer(ctx, k, msg)
 	})
 	sink := f.live()
+	sources := f.viaUnacknowledge(sink) // the failed answer is settled through the hook when its question is parked again
 	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
@@ -376,6 +387,9 @@ func TestAnswerBusyReparkSettlesTheFailedAnswerAcknowledgment(t *testing.T) {
 	}
 	if got := sink.noticesOf(NoticeUnacknowledged); !sameAcknowledgments(got, want) {
 		t.Fatalf("answer retry removals = %+v; want %+v", got, want)
+	}
+	if got, want := sources(), removalSources(want); !slices.Equal(got, want) {
+		t.Fatalf("sources handed to Unacknowledge = %v; want %v", got, want)
 	}
 }
 
@@ -501,6 +515,42 @@ func TestRecoveredPauseClearsAcknowledgmentOwnership(t *testing.T) {
 
 func storeReply(id, ref, reaction string) store.Reply {
 	return store.Reply{ID: id, Key: key, MessageRef: ref, Acknowledgment: reaction}
+}
+
+// viaUnacknowledge routes the manager's acknowledgment removals through Config.Unacknowledge, which hands each one on to
+// sink, as the broker's hook queues it, and returns a func that reports the source replies the hook was handed, sorted. A
+// path that went around the hook would leave its removal on the sink with no source, and one that named the wrong source
+// would not match its notice's ID.
+func (f *fixture) viaUnacknowledge(sink *fakeSink) func() []string {
+	var mu sync.Mutex
+	var sources []string
+	f.m.cfg.Unacknowledge = func(ctx context.Context, key Key, source string, n Notice) error {
+		if n.ID != AcknowledgmentID(source) {
+			f.t.Errorf("Unacknowledge source %q with notice %q; want the notice of that source", source, n.ID)
+		}
+		mu.Lock()
+		sources = append(sources, source)
+		mu.Unlock()
+		sink.Notice(ctx, key, n)
+		return nil
+	}
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		got := slices.Clone(sources)
+		slices.Sort(got)
+		return got
+	}
+}
+
+// removalSources is the sorted source message IDs of the removals want.
+func removalSources(want []Notice) []string {
+	ids := make([]string, len(want))
+	for i, n := range want {
+		ids[i] = strings.TrimSuffix(n.ID, "/acknowledgment")
+	}
+	slices.Sort(ids)
+	return ids
 }
 
 func sameAcknowledgments(got, want []Notice) bool {
