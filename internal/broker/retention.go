@@ -265,10 +265,11 @@ func (r *retention) abandonReplies(ctx context.Context) {
 }
 
 // clearAcknowledgments queues the removal of each delivered reply's acknowledgment, and stops at the first that fails,
-// whose error it returns. It then settles the replies whose removals it queued, so that they are listed no more: one
-// removal for each reply, not one at every tick until its session is deleted. A settle that fails is logged and is not
-// returned, for the removals are queued and hold nothing back; the next tick queues them again, which the outbox makes
-// harmless, and settles them.
+// whose error it returns. It then settles the replies whose removals it queued, a batch at a time, so that they are listed
+// no more: one removal for each reply, not one at every tick until its session is deleted. The replies of a batch that fails
+// are counted in one warning, with the last error, and the error is not returned, for their removals are queued and hold
+// nothing back; the next tick queues them again, which the outbox makes harmless, and settles them. The batches after a
+// failed one are still tried.
 func (r *retention) clearAcknowledgments(ctx context.Context, lister store.AcknowledgmentLister, rows []store.Reply) error {
 	queued := make([]string, 0, len(rows))
 	var err error
@@ -278,13 +279,16 @@ func (r *retention) clearAcknowledgments(ctx context.Context, lister store.Ackno
 		}
 		queued = append(queued, row.ID)
 	}
-	for chunk := range slices.Chunk(queued, store.MaxReplyIDs) {
-		if serr := lister.SettleAcknowledgmentReplies(ctx, chunk); serr != nil {
-			if ctx.Err() == nil {
-				r.cfg.Logger.WarnContext(ctx, "retention: replies whose acknowledgment removals are queued could not be settled; they will be queued again", "replies", len(queued), "err", serr)
-			}
-			break
+	unsettled := 0
+	var serr error
+	for chunk := range slices.Chunk(queued, store.MaxReplyIDs) { // a batch that fails leaves the next to be tried
+		if e := lister.SettleAcknowledgmentReplies(ctx, chunk); e != nil {
+			unsettled += len(chunk)
+			serr = e
 		}
+	}
+	if serr != nil && ctx.Err() == nil {
+		r.cfg.Logger.WarnContext(ctx, "retention: replies whose acknowledgment removals are queued could not be settled; they will be queued again", "unsettled", unsettled, "err", serr)
 	}
 	return err
 }

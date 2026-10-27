@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"maps"
@@ -31,6 +32,8 @@ type fakeRetentionStore struct {
 	ackLists       int
 	settled        [][]string // each SettleAcknowledgmentReplies call's IDs; a settled reply is listed no more
 	settleErr      error      // what SettleAcknowledgmentReplies returns, instead of settling
+	settleErrOn    int        // the one SettleAcknowledgmentReplies call, counted from 1, that settleErr fails; 0 fails every call
+	settleCalls    int
 	pendingReplies []store.Reply
 	pendingLists   int
 	staleTurns     map[string]store.TaskTurn
@@ -82,7 +85,8 @@ func (f *fakeRetentionStore) SettleAcknowledgmentReplies(_ context.Context, ids 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.order = append(f.order, "SettleAcknowledgmentReplies")
-	if f.settleErr != nil {
+	f.settleCalls++
+	if f.settleErr != nil && (f.settleErrOn == 0 || f.settleErrOn == f.settleCalls) {
 		return f.settleErr
 	}
 	f.settled = append(f.settled, slices.Clone(ids))
@@ -319,6 +323,28 @@ func TestRetentionSettlesQueuedAcknowledgmentRemovals(t *testing.T) {
 		}
 		if len(f.abandons) != 3 {
 			t.Errorf("abandonments = %d; want one for each pass", len(f.abandons))
+		}
+	})
+	t.Run("a batch that fails", func(t *testing.T) {
+		// More than one settle call's worth: a failed batch leaves the batches after it to be settled, and the warning
+		// counts what is left unsettled, not everything the pass queued.
+		rows := make([]store.Reply, store.MaxReplyIDs+2)
+		for i := range rows {
+			rows[i] = ack(fmt.Sprint("reply-", i))
+		}
+		f := &fakeRetentionStore{ackReplies: rows, settleErr: errors.New("disk full"), settleErrOn: 1}
+		var logs strings.Builder
+		r, err := newRetention(harmless(retentionConfig{Store: f, ClearAcknowledgment: func(context.Context, store.Reply) error { return nil },
+			Now: func() time.Time { return sweepNow }, Logger: slog.New(slog.NewTextHandler(&logs, nil))}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.abandonReplies(t.Context())
+		if f.settleCalls != 2 || len(f.settled) != 1 || len(f.settled[0]) != 2 {
+			t.Fatalf("settle calls = %d, settled = %d batches; want the second batch, of 2, settled after the first failed", f.settleCalls, len(f.settled))
+		}
+		if want := fmt.Sprint("unsettled=", store.MaxReplyIDs); !strings.Contains(logs.String(), want) {
+			t.Errorf("log = %q; want it to count %s", logs.String(), want)
 		}
 	})
 	t.Run("a removal that fails to queue", func(t *testing.T) {
