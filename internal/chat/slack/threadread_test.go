@@ -305,13 +305,6 @@ func TestPlatformThreadBetweenNamesTheConnectionAndTheThread(t *testing.T) {
 	}
 }
 
-func TestPlatformThreadBetweenWithAnAPIThatCannotReadThreads(t *testing.T) {
-	p := slack.NewPlatform(nil, threadConn)
-	if _, _, err := p.ThreadBetween(t.Context(), chat.Target{Channel: "C1", Thread: "1.000001"}, "", "", 10); !errors.Is(err, chat.ErrNoThreadReads) {
-		t.Errorf("ThreadBetween of a platform whose API cannot read a thread = %v; want ErrNoThreadReads", err)
-	}
-}
-
 // stubThread serves pages of conversations.replies by cursor and auth.test, and records the form of each read.
 type stubThread struct {
 	mu    sync.Mutex

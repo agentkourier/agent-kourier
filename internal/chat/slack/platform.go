@@ -62,6 +62,9 @@ type API interface {
 	IsInAnyUserGroup(ctx context.Context, groups []string, user string) (bool, error)
 	IsBot(ctx context.Context, user string) (bool, error)
 	ResolveUser(ctx context.Context, id string) (dialect.User, error)
+	ThreadBetween(ctx context.Context, conn, channel, threadTS, after, before string, limit int) ([]chat.HistoryMessage, int, error)
+	SetThreadStatus(ctx context.Context, channel, threadTS, status string) error
+	WorkspaceURL() string
 }
 
 var _ API = (*Client)(nil)
@@ -163,19 +166,10 @@ func (p *Platform) Find(ctx context.Context, t chat.Target, tag string, since ti
 	return p.ref(t.Channel, t.Thread, ts), true, nil
 }
 
-// threadReader is what ThreadBetween asks of the API: the *Client has it, and a double of it may not.
-type threadReader interface {
-	ThreadBetween(ctx context.Context, conn, channel, threadTS, after, before string, limit int) ([]chat.HistoryMessage, int, error)
-}
-
-// ThreadBetween implements chat.ThreadReader over the Client's (Client.ThreadBetween). An API that cannot read a thread
-// is chat.ErrNoThreadReads. A target that names no thread is chat.ErrInvalid.
+// ThreadBetween implements chat.ThreadReader over the Client's (Client.ThreadBetween). A target that names no thread is
+// chat.ErrInvalid.
 func (p *Platform) ThreadBetween(ctx context.Context, t chat.Target, after, before string, limit int) ([]chat.HistoryMessage, int, error) {
-	r, ok := p.c.(threadReader)
-	if !ok {
-		return nil, 0, chat.ErrNoThreadReads
-	}
-	return r.ThreadBetween(ctx, p.conn, t.Channel, t.Thread, after, before, limit)
+	return p.c.ThreadBetween(ctx, p.conn, t.Channel, t.Thread, after, before, limit)
 }
 
 // Update replaces the message at r with o. Slack takes the blocks again with every update, so an update
