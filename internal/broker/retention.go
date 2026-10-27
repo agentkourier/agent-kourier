@@ -136,7 +136,8 @@ type retentionConfig struct {
 	// run a chat sink; the leader wires it to the renderer's outbox path so a transient intake failure is retried.
 	EnsureAcknowledgment func(context.Context, store.Reply) error
 	// ClearAcknowledgment queues a durable removal for a delivered reply. It is optional for stores and tests that do
-	// not run a chat sink; the leader wires it to the renderer's outbox path.
+	// not run a chat sink; the leader wires it to the renderer's outbox path. Once it returns nil the reply is settled
+	// (store.AcknowledgmentLister), so a removal is queued once and not at every tick.
 	ClearAcknowledgment func(context.Context, store.Reply) error
 	Now                 func() time.Time // time.Now if nil
 	Logger              *slog.Logger     // slog.Default() if nil
@@ -247,7 +248,7 @@ func (r *retention) abandonReplies(ctx context.Context) {
 			rows, err = lister.ListAcknowledgmentReplies(ctx, now, r.cfg.ReplyAge)
 			if err == nil {
 				for _, row := range rows {
-					if err = r.cfg.ClearAcknowledgment(ctx, row); err != nil {
+					if err = r.clearAcknowledgment(ctx, lister, row); err != nil {
 						break
 					}
 				}
@@ -264,6 +265,19 @@ func (r *retention) abandonReplies(ctx context.Context) {
 		r.removed(RemovedStrandedReplies, n)
 		r.cfg.Logger.WarnContext(ctx, "retention: dropped replies that were never delivered, and their text", "dropped", n, "age", r.cfg.ReplyAge)
 	}
+}
+
+// clearAcknowledgment queues the removal of the delivered reply row's acknowledgment and then settles the reply, so that
+// it is listed no more: one removal for each reply, not one at every tick until its session is deleted. A reply that has
+// gone since it was listed has nothing left to settle.
+func (r *retention) clearAcknowledgment(ctx context.Context, lister store.AcknowledgmentLister, row store.Reply) error {
+	if err := r.cfg.ClearAcknowledgment(ctx, row); err != nil {
+		return err
+	}
+	if err := lister.SettleAcknowledgmentReply(ctx, row.ID); err != nil && !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
+	return nil
 }
 
 // sessionHorizons is when each Binding's sessions are past deleting: its threadTTL and the grace after now. A session

@@ -29,6 +29,8 @@ type fakeRetentionStore struct {
 	dropped        int // what AbandonStrandedReplies reports
 	ackReplies     []store.Reply
 	ackLists       int
+	settled        []string // each SettleAcknowledgmentReply call, by reply ID; a settled reply is listed no more
+	settleErr      error    // what SettleAcknowledgmentReply returns, instead of settling
 	pendingReplies []store.Reply
 	pendingLists   int
 	staleTurns     map[string]store.TaskTurn
@@ -74,6 +76,18 @@ func (f *fakeRetentionStore) ListAcknowledgmentReplies(_ context.Context, _ time
 	f.order = append(f.order, "ListAcknowledgmentReplies")
 	f.ackLists++
 	return append([]store.Reply(nil), f.ackReplies...), nil
+}
+
+func (f *fakeRetentionStore) SettleAcknowledgmentReply(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.order = append(f.order, "SettleAcknowledgmentReply")
+	if f.settleErr != nil {
+		return f.settleErr
+	}
+	f.settled = append(f.settled, id)
+	f.ackReplies = slices.DeleteFunc(f.ackReplies, func(r store.Reply) bool { return r.ID == id })
+	return nil
 }
 
 func (f *fakeRetentionStore) ListPendingAcknowledgmentReplies(_ context.Context) ([]store.Reply, error) {
@@ -265,8 +279,51 @@ func TestRetentionRetriesAcknowledgmentRemovalBeforeDroppingReplies(t *testing.T
 	if attempts != 2 || !slices.Equal(cleared, []string{"reply-1"}) || len(f.abandons) != 1 {
 		t.Fatalf("second cleanup pass: attempts=%d cleared=%v abandons=%v; want removal retry before one abandonment", attempts, cleared, f.abandons)
 	}
-	if want := []string{"ListAcknowledgmentReplies", "ListAcknowledgmentReplies", "AbandonStrandedReplies"}; !slices.Equal(f.order, want) {
-		t.Errorf("retention call order = %v; want %v", f.order, want)
+	if want := []string{"ListAcknowledgmentReplies", "ListAcknowledgmentReplies", "SettleAcknowledgmentReply", "AbandonStrandedReplies"}; !slices.Equal(f.order, want) {
+		t.Errorf("retention call order = %v; want %v: a removal that failed to queue is not settled", f.order, want)
+	}
+}
+
+// A removal is queued once: once it is, the reply is settled and is not listed, and queued, again at every tick until its
+// session is deleted. A reply whose settle failed is queued again at the next tick, which the outbox makes harmless; one
+// that has gone since it was listed (ErrNotFound) has nothing to settle, and the pass goes on.
+func TestRetentionSettlesAQueuedAcknowledgmentRemoval(t *testing.T) {
+	ack := func(id string) store.Reply {
+		return store.Reply{ID: id, Key: store.ConversationKey{Connection: "slack", Channel: "C1", Thread: "1.1"}, MessageRef: "1.1", Acknowledgment: "eyes"}
+	}
+	f := &fakeRetentionStore{ackReplies: []store.Reply{ack("reply-1"), ack("reply-2")}, settleErr: errors.New("disk full")}
+	var queued []string
+	r, err := newRetention(harmless(retentionConfig{Store: f, ClearAcknowledgment: func(_ context.Context, r store.Reply) error {
+		queued = append(queued, r.ID)
+		return nil
+	}, Now: func() time.Time { return sweepNow }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.abandonReplies(t.Context())
+	if !slices.Equal(queued, []string{"reply-1"}) || len(f.abandons) != 0 {
+		t.Fatalf("a pass whose settle fails: queued=%v abandons=%v; want it to stop at the failure, before abandonment", queued, f.abandons)
+	}
+	f.settleErr = nil
+	for range 3 {
+		r.abandonReplies(t.Context())
+	}
+	if want := []string{"reply-1", "reply-1", "reply-2"}; !slices.Equal(queued, want) {
+		t.Errorf("removals queued over four passes = %v; want %v: each once after its settle", queued, want)
+	}
+	if want := []string{"reply-1", "reply-2"}; !slices.Equal(f.settled, want) {
+		t.Errorf("settled = %v; want %v", f.settled, want)
+	}
+	if len(f.abandons) != 3 {
+		t.Errorf("abandonments = %d; want one for each pass that settled", len(f.abandons))
+	}
+
+	gone := &fakeRetentionStore{ackReplies: []store.Reply{ack("reply-1"), ack("reply-2")}, settleErr: store.ErrNotFound}
+	queued = nil
+	r.cfg.Store = gone
+	r.abandonReplies(t.Context())
+	if !slices.Equal(queued, []string{"reply-1", "reply-2"}) || len(gone.abandons) != 1 {
+		t.Errorf("a pass whose replies have gone: queued=%v abandons=%v; want both queued and the pass to go on", queued, gone.abandons)
 	}
 }
 

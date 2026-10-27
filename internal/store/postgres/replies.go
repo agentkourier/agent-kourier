@@ -166,6 +166,13 @@ func (s *adapter) ListAcknowledgmentReplies(ctx context.Context, _ time.Time, _ 
 	return replies, nil
 }
 
+// SettleAcknowledgmentReply implements store.AcknowledgmentLister. A settled row still matches, so a repeat
+// counts it and succeeds.
+func (s *adapter) SettleAcknowledgmentReply(ctx context.Context, id string) error {
+	n, err := s.exec(ctx, `UPDATE reply_queue SET acknowledgment = '' WHERE id = $1 AND `+store.DeliveredReplies("").Text(Dialect{}), id)
+	return errIfUnchanged(n, err, fmt.Sprintf("settle acknowledgment reply %q", id))
+}
+
 // ListPendingAcknowledgmentReplies implements store.PendingAcknowledgmentLister.
 func (s *adapter) ListPendingAcknowledgmentReplies(ctx context.Context) ([]store.Reply, error) {
 	rows, err := s.pool.Query(ctx, `SELECT id, connection, channel, thread_ts, user_id, message_ts, acknowledgment, enqueued_at

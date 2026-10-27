@@ -127,6 +127,20 @@ func (g *Guarded) ListAcknowledgmentReplies(ctx context.Context, now time.Time, 
 	return replies, err
 }
 
+// SettleAcknowledgmentReply implements AcknowledgmentLister.
+func (g *Guarded) SettleAcknowledgmentReply(ctx context.Context, id string) error {
+	return g.run(ctx, "agentkourier.store.SettleAcknowledgmentReply", func(ctx context.Context) error {
+		if id == "" {
+			return fmt.Errorf("settle acknowledgment reply: an ID is required: %w", ErrInvalid)
+		}
+		lister, ok := g.a.(AcknowledgmentLister)
+		if !ok {
+			return fmt.Errorf("settle acknowledgment reply: adapter does not support retention metadata: %w", ErrInvalid)
+		}
+		return lister.SettleAcknowledgmentReply(ctx, id)
+	})
+}
+
 // ListPendingAcknowledgmentReplies implements PendingAcknowledgmentLister. It
 // is used by retention to retry acknowledgment additions for replies whose task
 // is still active or whose queue row has not been delivered.

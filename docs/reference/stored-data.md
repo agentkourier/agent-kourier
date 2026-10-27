@@ -212,6 +212,8 @@ dropped reply's configured acknowledgment reaction through the outbox.
 
 The reply row keeps the original acknowledgment emoji and source message reference, and an active task's session keeps
 them with its turn. These values let recovery remove the same reaction after a restart or Binding configuration change.
+Once a delivered reply's task has ended and the retention sweep has queued the removal of its reaction in the outbox, the
+sweep clears the emoji from the reply row, so the removal is queued once rather than at every sweep.
 
 ### Thread replies in a mention-only Binding
 

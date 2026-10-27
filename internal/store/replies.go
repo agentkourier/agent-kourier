@@ -95,6 +95,12 @@ type ReplyQueue interface {
 // racing a task that is still processing the message.
 type AcknowledgmentLister interface {
 	ListAcknowledgmentReplies(ctx context.Context, now time.Time, age time.Duration) ([]Reply, error)
+	// SettleAcknowledgmentReply records that the removal of the delivered reply id's acknowledgment is durably queued:
+	// it clears the reply's acknowledgment metadata, so neither lister returns the reply again. Without it every
+	// tombstone would be listed, and its removal queued again, at each retention tick until its session is deleted.
+	// A repeat changes nothing and succeeds. It returns ErrNotFound for an unknown or undelivered reply, whose add
+	// may still be needed, and ErrInvalid for an empty id.
+	SettleAcknowledgmentReply(ctx context.Context, id string) error
 }
 
 // PendingAcknowledgmentLister is an optional retention extension. It lists replies
