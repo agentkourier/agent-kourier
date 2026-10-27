@@ -172,17 +172,27 @@ func (s *adapter) ListAcknowledgmentReplies(ctx context.Context, _ time.Time, _ 
 }
 
 // SettleAcknowledgmentReplies implements store.AcknowledgmentLister: one statement for each chunk of the IDs, as
-// HasReplies asks them. A chunk that fails leaves those before it settled, which a retry finds settled already.
+// HasReplies asks them, all in one transaction, so that a call that fails has settled none of them.
 func (s *adapter) SettleAcknowledgmentReplies(ctx context.Context, ids []string) error {
-	for chunk := range slices.Chunk(ids, hasRepliesChunk) {
-		args := make([]any, len(chunk))
-		for i, id := range chunk {
-			args[i] = id
+	if len(ids) == 0 {
+		return nil
+	}
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		for chunk := range slices.Chunk(ids, hasRepliesChunk) {
+			args := make([]any, len(chunk))
+			for i, id := range chunk {
+				args[i] = id
+			}
+			//nolint:gosec // G202: the text is "?" placeholders and the predicate is rendered by store.DeliveredReplies; every ID is an argument
+			if _, err := tx.ExecContext(ctx, `UPDATE reply_queue SET acknowledgment = '' WHERE id IN (?`+strings.Repeat(`, ?`, len(chunk)-1)+`)
+				AND acknowledgment <> '' AND `+store.DeliveredReplies("").Text(Dialect{}), args...); err != nil {
+				return err
+			}
 		}
-		if _, err := s.exec(ctx, `UPDATE reply_queue SET acknowledgment = '' WHERE id IN (?`+strings.Repeat(`, ?`, len(chunk)-1)+`)
-			AND acknowledgment <> '' AND `+store.DeliveredReplies("").Text(Dialect{}), args...); err != nil {
-			return fmt.Errorf("settle acknowledgment replies: %w", err)
-		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("settle acknowledgment replies: %w", err)
 	}
 	return nil
 }

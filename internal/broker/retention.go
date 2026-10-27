@@ -137,8 +137,9 @@ type retentionConfig struct {
 	// run a chat sink; the leader wires it to the renderer's outbox path so a transient intake failure is retried.
 	EnsureAcknowledgment func(context.Context, store.Reply) error
 	// ClearAcknowledgment queues a durable removal for a delivered reply. It is optional for stores and tests that do
-	// not run a chat sink; the leader wires it to the renderer's outbox path. Once it returns nil the reply is settled
-	// (store.AcknowledgmentLister), so a removal is queued once and not at every tick.
+	// not run a chat sink; the leader wires it to the renderer's outbox path. Once it returns nil the loop settles the
+	// reply (store.AcknowledgmentLister), the sweep of delivered replies and the ending of a stale task alike, so a
+	// removal is queued once and not at every tick.
 	ClearAcknowledgment func(context.Context, store.Reply) error
 	Now                 func() time.Time // time.Now if nil
 	Logger              *slog.Logger     // slog.Default() if nil
@@ -364,9 +365,7 @@ list:
 				}
 			case ended.Ended:
 				if ack != nil && r.cfg.ClearAcknowledgment != nil {
-					if err := r.cfg.ClearAcknowledgment(ctx, *ack); err != nil && ctx.Err() == nil {
-						r.cfg.Logger.WarnContext(ctx, "retention: acknowledgment removal for an ended stale task could not be queued", "err", err)
-					}
+					r.clearStaleAcknowledgment(ctx, *ack)
 				}
 				tally.add(cancel.how, ended.Interactions)
 				r.auditStale(ctx, t, cancel, ended.Interactions)
@@ -386,6 +385,26 @@ list:
 		}
 		r.cfg.Logger.InfoContext(ctx, "retention: ended tasks that a crash left on sessions that have been expired for good",
 			"tasks", tally.tasks, "interactions", tally.interactions, "cancelled", tally.cancelled, "cancel_failed", tally.failed, "cancel_skipped", tally.skipped)
+	}
+}
+
+// clearStaleAcknowledgment queues the removal of the acknowledgment of an ended stale task's reply and settles the reply, so
+// that abandonReplies does not list it and queue the removal again. Either failure is logged: a reply whose removal was not
+// queued is not settled, and abandonReplies queues it; one that was queued and not settled is queued again there, which the
+// outbox makes harmless.
+func (r *retention) clearStaleAcknowledgment(ctx context.Context, ack store.Reply) {
+	if err := r.cfg.ClearAcknowledgment(ctx, ack); err != nil {
+		if ctx.Err() == nil {
+			r.cfg.Logger.WarnContext(ctx, "retention: acknowledgment removal for an ended stale task could not be queued", "err", err)
+		}
+		return
+	}
+	lister, ok := r.cfg.Store.(store.AcknowledgmentLister)
+	if !ok {
+		return
+	}
+	if err := lister.SettleAcknowledgmentReplies(ctx, []string{ack.ID}); err != nil && ctx.Err() == nil {
+		r.cfg.Logger.WarnContext(ctx, "retention: the reply of an ended stale task, whose acknowledgment removal is queued, could not be settled; it will be queued again", "err", err)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -225,6 +226,21 @@ func TestRetentionClearsStaleAcknowledgmentAfterEndingTheTask(t *testing.T) {
 	want := []store.Reply{{ID: "message-1", Key: task.Key, MessageRef: "1.1", Acknowledgment: "eyes"}}
 	if !equal(cleared, want) {
 		t.Errorf("cleared acknowledgments = %+v; want %+v", cleared, want)
+	}
+	// Settled in the same pass, so that the next abandonReplies does not list the reply and queue its removal again.
+	if want := [][]string{{"message-1"}}; !slices.EqualFunc(g.f.settled, want, slices.Equal) {
+		t.Errorf("settled = %v; want %v", g.f.settled, want)
+	}
+}
+
+// A stale task's acknowledgment removal that could not be queued is not settled: abandonReplies must still find the reply.
+func TestRetentionDoesNotSettleAStaleAcknowledgmentThatWasNotQueued(t *testing.T) {
+	g := newStaleRig(t, []store.StaleTask{stale("1.1", "ns/long", "t1")}, nil)
+	g.f.staleTurns = map[string]store.TaskTurn{"t1": {ID: "question/answer", AcknowledgmentID: "message-1", MessageRef: "1.1", Acknowledgment: "eyes"}}
+	g.r.cfg.ClearAcknowledgment = func(context.Context, store.Reply) error { return errors.New("outbox unavailable") }
+	g.r.endStaleTasks(t.Context())
+	if len(g.f.settled) != 0 || slices.Contains(g.f.order, "SettleAcknowledgmentReplies") {
+		t.Errorf("settled = %v, calls %v; want no settle for a removal that was not queued", g.f.settled, g.f.order)
 	}
 }
 
