@@ -18,8 +18,8 @@ type StaleTask struct {
 	TaskID string
 }
 
-// StaleTaskTurnReader is an optional retention extension. It reads the source turn
-// metadata of a stale task before EndStaleTask clears it.
+// StaleTaskTurnReader reads the source turn metadata of a stale task before EndStaleTask clears it, so that retention
+// can take the turn's acknowledgment off.
 type StaleTaskTurnReader interface {
 	StaleTaskTurn(ctx context.Context, key ConversationKey, taskID string) (TaskTurn, error)
 }
@@ -37,6 +37,7 @@ type EndedStaleTask struct {
 // such sessions (SessionRetention) is not held back by them for ever. It is a separate interface so that nothing which
 // serves a thread can reach it.
 type StaleTasks interface {
+	StaleTaskTurnReader
 	// ListStaleTasks returns at most limit sessions that are past their horizon (SessionHorizons) and record a task,
 	// the ones last active longest ago first. It reads, and changes nothing: a session inside its horizon is never
 	// listed, whatever it records. Every horizon must be set, and limit 1 to MaxLimit (ErrInvalid otherwise).

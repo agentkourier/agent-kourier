@@ -445,7 +445,8 @@ func (f *FakePlatform) Unreact(_ context.Context, r chat.Ref, name string) error
 	return nil
 }
 
-var _ chat.BusyMarker = (*FakePlatform)(nil)
+// Permalink implements chat.Permalinker: the fake makes no links.
+func (f *FakePlatform) Permalink(chat.Ref) (string, bool) { return "", false }
 
 // MarkBusy implements chat.BusyMarker. A thread stays busy until it is cleared or Post puts a message in it, which is
 // what a platform's mark does (chat.BusyMarker). A fake whose caps say no Busy says chat.ErrNoBusy and shows none.
@@ -483,8 +484,6 @@ func (f *FakePlatform) BusyCalls() []BusyCall {
 	defer f.mu.Unlock()
 	return slices.Clone(f.busyCalls)
 }
-
-var _ chat.ThreadReader = (*FakePlatform)(nil)
 
 // ThreadBetween implements chat.ThreadReader over what the fake holds of the thread: what was posted in it (Agent Kourier's own,
 // Own) and what Say delivered to it, by their IDs, which it compares as a platform's timestamps ("seconds.fraction"; the

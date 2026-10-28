@@ -313,18 +313,11 @@ func (c *checker) contract() {
 }
 
 // busyContract checks what a platform promises of the busy mark (chat.BusyMarker). A platform whose Caps.Busy is false says
-// ErrNoBusy if it implements the interface at all, and one whose Caps.Busy is true implements it, sets and clears a mark
-// without error or ErrNoBusy (which a platform may say later, once it finds it cannot), refuses a target with no thread as
-// invalid, and shows no text for any of it: the mark's words are the platform's own.
+// ErrNoBusy, and one whose Caps.Busy is true sets and clears a mark without error or ErrNoBusy (which a platform may say
+// later, once it finds it cannot), refuses a target with no thread as invalid, and shows no text for any of it: the mark's
+// words are the platform's own.
 func (c *checker) busyContract() {
-	b, implemented := c.s.Platform.(chat.BusyMarker)
-	switch {
-	case !implemented && c.caps.Busy:
-		c.add(RuleContract, 0, "MarkBusy", "busy", "Busy is true and the platform is no chat.BusyMarker")
-		return
-	case !implemented:
-		return
-	}
+	b := c.s.Platform
 	c.s.Sent()
 	_ = c.s.Inert()
 	for _, busy := range []bool{true, false} {

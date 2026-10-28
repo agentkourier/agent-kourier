@@ -101,9 +101,7 @@ type Renderer struct {
 	cfg  Config
 	caps chat.Caps      // what the platform can do and how much it shows, asked once
 	runs sync.WaitGroup // the goroutines of the turns started and not over
-	// busy is the platform as a chat.BusyMarker, if it is one and says it shows a thread as busy (Caps.Busy). busyOff is set
-	// once it has said it cannot: no turn asks again.
-	busy    chat.BusyMarker
+	// busyOff is set once the platform has said it cannot show a thread as busy (chat.ErrNoBusy): no turn asks again.
 	busyOff atomic.Bool
 	// current is the latest run of each turn that has not ended, by the turn's Source: a run of a turn that one already
 	// renders takes the message over from it (see Start).
@@ -149,11 +147,7 @@ func New(cfg Config) (*Renderer, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
-	r := &Renderer{cfg: cfg, caps: cfg.Platform.Capabilities(), current: map[string]*Run{}, left: map[string]*Run{}}
-	if m, ok := cfg.Platform.(chat.BusyMarker); ok && r.caps.Busy {
-		r.busy = m
-	}
-	return r, nil
+	return &Renderer{cfg: cfg, caps: cfg.Platform.Capabilities(), current: map[string]*Run{}, left: map[string]*Run{}}, nil
 }
 
 // Wait returns once every turn started so far has ended, or with ctx's error if that comes first, so that
@@ -321,8 +315,8 @@ func (r *Renderer) Start(ctx context.Context, t Turn) *Run {
 	if t.Mode == v1alpha1.OutputLive && (t.Progress == v1alpha1.ProgressStepsAndActivity || t.Progress == v1alpha1.ProgressActivity) {
 		u.progress = t.Progress
 	}
-	if r.busy != nil && !streaming && u.progress != v1alpha1.ProgressSteps {
-		u.busy = &busyMark{m: r.busy, off: &r.busyOff, at: chat.Target{Channel: t.Channel, Thread: t.Thread}, run: u}
+	if r.caps.Busy && !streaming && u.progress != v1alpha1.ProgressSteps {
+		u.busy = &busyMark{m: r.cfg.Platform, off: &r.busyOff, at: chat.Target{Channel: t.Channel, Thread: t.Thread}, run: u}
 	}
 	if u.timed = u.progress != v1alpha1.ProgressSteps && (!streaming || r.caps.Steps); u.timed {
 		u.started = r.cfg.Now()

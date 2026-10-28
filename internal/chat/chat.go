@@ -117,7 +117,7 @@ type Caps struct {
 	Ephemeral bool // Ephemeral shows a message to one person alone
 	Edits     bool // Update works
 	Inputs    bool // a Prompt's questions are answered inline; otherwise by a reply
-	Busy      bool // the Platform is a BusyMarker and shows a thread as busy; a platform may still say ErrNoBusy later
+	Busy      bool // MarkBusy shows a thread as busy; otherwise it says ErrNoBusy, as a platform may later even when this is set
 	// AckReaction is the reaction name, without colons, that Agent Kourier puts on an accepted message while it works, when a
 	// Binding's acknowledgment names none. The API names no reaction, so each platform says which one is its own (Slack:
 	// hourglass_flowing_sand). Empty means the platform has none, and an acknowledgment that names none shows nothing.

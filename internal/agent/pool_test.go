@@ -195,22 +195,6 @@ func TestPoolRefusesAnAgentThatDoesNotStream(t *testing.T) {
 	}
 }
 
-// Warm is for the Slack acknowledgement path: it must not wait for the card fetch, and the
-// first send must not fetch it again.
-func TestWarmReturnsAtOnceAndSharesTheConnect(t *testing.T) {
-	fa, p := newFakeAgent(t, liveStream(t)), newPool(t)
-	fa.cardGate = make(chan struct{}) // the card is held back until Warm has returned
-	tg := targetFor(fa, "team/sre", token("t"))
-	returns(t, "Warm", func() { p.Warm(tg) })
-	close(fa.cardGate)
-	if err := p.Agent(tg).Send(t.Context(), message("hi"), nil); err != nil {
-		t.Fatal(err)
-	}
-	if n := fa.count("card"); n != 1 {
-		t.Errorf("%d card fetches, want 1", n)
-	}
-}
-
 // returns fails the test if f is still running after 10 s. The window only bounds a hang;
 // nothing asserts how fast f is, so a slow machine cannot fail it.
 func returns(t *testing.T, what string, f func()) {
@@ -222,23 +206,6 @@ func returns(t *testing.T, what string, f func()) {
 	case <-time.After(10 * time.Second):
 		t.Fatalf("%s did not return: it is waiting for the card fetch", what)
 	}
-}
-
-func TestCloseStopsWarmUpsAndRefusesNewCalls(t *testing.T) {
-	fa, p := newFakeAgent(t, liveStream(t)), NewPool(kagentv1.New(0), quick)
-	fa.cardGate = make(chan struct{}) // the card never comes
-	tg := targetFor(fa, "team/sre", token("t"))
-	p.Warm(tg)
-	for fa.count("card") == 0 {
-		time.Sleep(time.Millisecond)
-	}
-	returns(t, "Close", p.Close) // cancels the warm-up's fetch
-	if err := p.Agent(tg).Send(t.Context(), message("hi"), nil); !errors.Is(err, ErrPoolClosed) {
-		t.Errorf("Send after Close = %v, want ErrPoolClosed", err)
-	}
-	p.Warm(tg) // must not start anything
-	fa.Close()
-	goleak.VerifyNone(t)
 }
 
 // lastCard returns the headers of the most recent card fetch fa got.

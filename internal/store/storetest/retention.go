@@ -207,14 +207,6 @@ func (su suite) replyRetention(t *testing.T) {
 	})
 
 	su.run(t, "acknowledgment retention lists completed removals and live additions separately", func(t *testing.T, s store.Store) {
-		lister, ok := s.(store.AcknowledgmentLister)
-		if !ok {
-			t.Fatal("store does not implement AcknowledgmentLister")
-		}
-		pending, ok := s.(store.PendingAcknowledgmentLister)
-		if !ok {
-			t.Fatal("store does not implement PendingAcknowledgmentLister")
-		}
 		ctx := t.Context()
 		old := newReply("ack-old", key)
 		old.EnqueuedAt = t0
@@ -234,7 +226,7 @@ func (su suite) replyRetention(t *testing.T) {
 		noErr(t, s.MarkReplyDelivered(ctx, active.ID, t0.Add(time.Hour)), "deliver active acknowledgment reply")
 		noErr(t, s.SetSessionTask(ctx, other, "c1", "task1", store.TaskTurn{ID: active.ID, MessageRef: active.MessageRef, Acknowledgment: active.Acknowledgment}), "active task")
 
-		got, err := lister.ListAcknowledgmentReplies(ctx, t0.Add(age), age)
+		got, err := s.ListAcknowledgmentReplies(ctx)
 		noErr(t, err, "list acknowledgment replies")
 		ids := make([]string, 0, len(got))
 		for _, r := range got {
@@ -245,7 +237,7 @@ func (su suite) replyRetention(t *testing.T) {
 			t.Fatalf("acknowledgment replies = %v; want completed, inactive tombstones only %v", ids, want)
 		}
 
-		gotPending, err := pending.ListPendingAcknowledgmentReplies(ctx)
+		gotPending, err := s.ListPendingAcknowledgmentReplies(ctx)
 		noErr(t, err, "list pending acknowledgment replies")
 		ids = ids[:0]
 		for _, r := range gotPending {
@@ -261,7 +253,7 @@ func (su suite) replyRetention(t *testing.T) {
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				noErr(t, s.SetSessionTask(ctx, other, "c1", "task1", store.TaskTurn{ID: tc.outputID, MessageRef: active.MessageRef, AcknowledgmentID: tc.sourceID}), "pause without an active acknowledgment")
-				removed, err := lister.ListAcknowledgmentReplies(ctx, t0.Add(age), age)
+				removed, err := s.ListAcknowledgmentReplies(ctx)
 				noErr(t, err, "list paused acknowledgment removals")
 				removalIDs := make([]string, 0, len(removed))
 				for _, r := range removed {
@@ -271,7 +263,7 @@ func (su suite) replyRetention(t *testing.T) {
 				if want := []string{"ack-active", "ack-delivered"}; !slices.Equal(removalIDs, want) {
 					t.Fatalf("paused removals = %v; want %v", removalIDs, want)
 				}
-				added, err := pending.ListPendingAcknowledgmentReplies(ctx)
+				added, err := s.ListPendingAcknowledgmentReplies(ctx)
 				noErr(t, err, "list paused acknowledgment additions")
 				for _, r := range added {
 					if r.ID == active.ID {
@@ -283,14 +275,6 @@ func (su suite) replyRetention(t *testing.T) {
 	})
 
 	su.run(t, "a settled acknowledgment is listed for removal no more", func(t *testing.T, s store.Store) {
-		lister, ok := s.(store.AcknowledgmentLister)
-		if !ok {
-			t.Fatal("store does not implement AcknowledgmentLister")
-		}
-		pending, ok := s.(store.PendingAcknowledgmentLister)
-		if !ok {
-			t.Fatal("store does not implement PendingAcknowledgmentLister")
-		}
 		ctx := t.Context()
 		for _, r := range []store.Reply{newReply("settled", key), newReply("unsettled", other), newReply("queued", keyOf("3.3"))} {
 			if _, err := s.EnqueueReply(ctx, r); err != nil {
@@ -301,7 +285,7 @@ func (su suite) replyRetention(t *testing.T) {
 		noErr(t, s.MarkReplyDelivered(ctx, "unsettled", t0.Add(time.Hour)), "deliver unsettled")
 		listed := func(t *testing.T) []string {
 			t.Helper()
-			got, err := lister.ListAcknowledgmentReplies(ctx, t0.Add(age), age)
+			got, err := s.ListAcknowledgmentReplies(ctx)
 			noErr(t, err, "list acknowledgment replies")
 			ids := make([]string, 0, len(got))
 			for _, r := range got {
@@ -314,19 +298,19 @@ func (su suite) replyRetention(t *testing.T) {
 			t.Fatalf("before the settle, acknowledgment replies = %v; want %v", got, want)
 		}
 		// One call settles what it can: an undelivered reply's add may still be needed, and an unknown one is not there.
-		noErr(t, lister.SettleAcknowledgmentReplies(ctx, []string{"settled", "queued", "nope"}), "settle")
-		noErr(t, lister.SettleAcknowledgmentReplies(ctx, []string{"settled", "settled"}), "settle again") // a repeat changes nothing
-		noErr(t, lister.SettleAcknowledgmentReplies(ctx, nil), "settle none")
+		noErr(t, s.SettleAcknowledgmentReplies(ctx, []string{"settled", "queued", "nope"}), "settle")
+		noErr(t, s.SettleAcknowledgmentReplies(ctx, []string{"settled", "settled"}), "settle again") // a repeat changes nothing
+		noErr(t, s.SettleAcknowledgmentReplies(ctx, nil), "settle none")
 		if got, want := listed(t), []string{"unsettled"}; !slices.Equal(got, want) {
 			t.Fatalf("after the settle, acknowledgment replies = %v; want %v: a settled removal is not queued again", got, want)
 		}
-		isErr(t, lister.SettleAcknowledgmentReplies(ctx, []string{"unsettled", ""}), store.ErrInvalid, "settle an empty ID")
+		isErr(t, s.SettleAcknowledgmentReplies(ctx, []string{"unsettled", ""}), store.ErrInvalid, "settle an empty ID")
 		tooMany := make([]string, store.MaxReplyIDs+1) // none empty, so that only the count refuses it
 		for i := range tooMany {
 			tooMany[i] = fmt.Sprint("absent-", i)
 		}
 		tooMany[len(tooMany)-1] = "unsettled"
-		isErr(t, lister.SettleAcknowledgmentReplies(ctx, tooMany), store.ErrInvalid, "settle more than MaxReplyIDs")
+		isErr(t, s.SettleAcknowledgmentReplies(ctx, tooMany), store.ErrInvalid, "settle more than MaxReplyIDs")
 		if got, want := listed(t), []string{"unsettled"}; !slices.Equal(got, want) {
 			t.Fatalf("after refused settles, acknowledgment replies = %v; want %v: a refused call settles nothing", got, want)
 		}
@@ -335,11 +319,11 @@ func (su suite) replyRetention(t *testing.T) {
 			many[i] = fmt.Sprint("absent-", i)
 		}
 		many[len(many)-1] = "unsettled"
-		noErr(t, lister.SettleAcknowledgmentReplies(ctx, many), "settle MaxReplyIDs")
+		noErr(t, s.SettleAcknowledgmentReplies(ctx, many), "settle MaxReplyIDs")
 		if got := listed(t); len(got) != 0 {
 			t.Fatalf("after settling the last of MaxReplyIDs, acknowledgment replies = %v; want none", got)
 		}
-		got, err := pending.ListPendingAcknowledgmentReplies(ctx)
+		got, err := s.ListPendingAcknowledgmentReplies(ctx)
 		noErr(t, err, "list pending acknowledgment replies")
 		if len(got) != 1 || got[0].ID != "queued" || got[0].Acknowledgment != "eyes" {
 			t.Fatalf("pending acknowledgment replies = %+v; want the undelivered reply, its acknowledgment kept", got)

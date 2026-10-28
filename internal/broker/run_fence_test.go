@@ -32,6 +32,11 @@ func (w *writeCounter) React(context.Context, string, string, string) error {
 	return nil
 }
 
+func (w *writeCounter) SetThreadStatus(context.Context, string, string, string) error {
+	w.other.Add(1)
+	return nil
+}
+
 func (w *writeCounter) writes() int32 { return w.posts.Load() + w.other.Load() }
 
 // stepping is a clock that a minute passes between every two readings of: a leader whose lease clock reads it has a lease

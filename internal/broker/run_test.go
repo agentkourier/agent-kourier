@@ -23,6 +23,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/klog/v2"
 
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/config/k8ssecrets"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
@@ -94,6 +95,16 @@ func (idleSlack) Unreact(context.Context, string, string, string) error         
 func (idleSlack) IsInAnyUserGroup(context.Context, []string, string) (bool, error) {
 	return false, nil
 }
+
+func (idleSlack) SetThreadStatus(context.Context, string, string, string) error { return nil }
+
+// ThreadBetween says the idle Slack reads no thread, so a turn goes on without the thread's context.
+func (idleSlack) ThreadBetween(context.Context, string, string, string, string, string, int) ([]chat.HistoryMessage, int, error) {
+	return nil, 0, chat.ErrNoThreadReads
+}
+
+// WorkspaceURL is "", the address of a Slack that never connected, so the Platform makes no permalinks.
+func (idleSlack) WorkspaceURL() string { return "" }
 
 // revokedReacts is idleSlack whose reactions fail the way a revoked bot token fails them.
 type revokedReacts struct{ idleSlack }

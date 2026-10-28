@@ -74,18 +74,19 @@ func (m Inbound) Field(f v1alpha1.MessageField) string {
 	return ""
 }
 
-// Permalinker is an optional interface of a Platform: it builds a link to a message from what the platform learned when
-// it connected, with no call of its own, so it is fit for the acknowledgement path, where a call is not allowed.
+// Permalinker is the part of a Platform that builds a link to a message from what the platform learned when it
+// connected, with no call of its own, so it is fit for the acknowledgement path, where a call is not allowed. A platform
+// that makes no links says false.
 type Permalinker interface {
 	// Permalink returns the link to the message r, and false if the platform cannot make one: it has not connected
 	// yet, or r does not name a message of the platform's.
 	Permalink(r Ref) (string, bool)
 }
 
-// ThreadReader is an optional interface of a Platform: it reads the replies in a thread that people wrote between two
-// messages, which a mention-only Binding shows an agent as the context of the mention (spec 8.2). A platform that cannot
-// read a thread does not implement it, and one that does may still be unable to at the moment (ErrNoThreadReads), so a
-// caller asks and goes on without the context when it is told no.
+// ThreadReader is the part of a Platform that reads the replies in a thread that people wrote between two messages,
+// which a mention-only Binding shows an agent as the context of the mention (spec 8.2). A platform that cannot read a
+// thread, for good or at the moment, says ErrNoThreadReads, so a caller asks and goes on without the context when it is
+// told no.
 type ThreadReader interface {
 	// ThreadBetween returns the messages of the thread t.Thread whose IDs are strictly after after and strictly before
 	// before, oldest first, each decoded as the adapter decodes a live message: a message that Run would drop is Ignored,
@@ -158,9 +159,8 @@ var (
 	// ErrTooLarge is returned by Fits for a prompt that does not fit in one message even in its
 	// plainest form. No retry mends it, and the caller reports the pause as unusable.
 	ErrTooLarge = errors.New("chat: the prompt does not fit in one message")
-	// ErrNoThreadReads is returned by ThreadBetween of a platform that cannot read a thread: it does not implement
-	// ThreadReader (the broker's wrapper says it for the platform it wraps), or the adapter has no way to. The caller
-	// goes on without the thread's earlier replies; no retry mends it.
+	// ErrNoThreadReads is returned by ThreadBetween of a platform that cannot read a thread, for good or at the moment.
+	// The caller goes on without the thread's earlier replies; no retry mends it.
 	ErrNoThreadReads = errors.New("chat: the platform cannot read the replies of a thread")
 	// ErrThreadTooLong is wrapped by the error of a ThreadBetween whose window is longer than the platform will read in
 	// one call. No retry mends it: the same window is as long the next time. The caller goes on without the replies, as
@@ -241,6 +241,10 @@ type Platform interface {
 	Classify(op Op, err error) Verdict
 	// Capabilities says what the platform can do and how much it shows.
 	Capabilities() Caps
+
+	Permalinker
+	ThreadReader
+	BusyMarker
 }
 
 // Op is the kind of call an error came from, since what is permanent differs: a post to a channel that

@@ -18,6 +18,11 @@ type fakeAdapter struct {
 
 var _ store.Adapter = (*fakeAdapter)(nil)
 
+func (f *fakeAdapter) StaleTaskTurn(_ context.Context, _ store.ConversationKey, _ string) (store.TaskTurn, error) {
+	f.record("StaleTaskTurn")
+	return zero[store.TaskTurn](), f.err
+}
+
 func (f *fakeAdapter) record(name string) { f.calls = append(f.calls, name) }
 
 func zero[T any]() (z T) { return z }
@@ -152,6 +157,11 @@ func (f *fakeAdapter) HasReplies(_ context.Context, _ []string) (map[string]bool
 	return zero[map[string]bool](), f.err
 }
 
+func (f *fakeAdapter) ListAcknowledgmentReplies(_ context.Context) ([]store.Reply, error) {
+	f.record("ListAcknowledgmentReplies")
+	return zero[[]store.Reply](), f.err
+}
+
 func (f *fakeAdapter) ListActiveSessions(_ context.Context) ([]store.Session, error) {
 	f.record("ListActiveSessions")
 	return zero[[]store.Session](), f.err
@@ -170,6 +180,11 @@ func (f *fakeAdapter) ListDecidedInteractions(_ context.Context, _ time.Time) ([
 func (f *fakeAdapter) ListDueInteractions(_ context.Context, _ time.Time) ([]store.Interaction, error) {
 	f.record("ListDueInteractions")
 	return zero[[]store.Interaction](), f.err
+}
+
+func (f *fakeAdapter) ListPendingAcknowledgmentReplies(_ context.Context) ([]store.Reply, error) {
+	f.record("ListPendingAcknowledgmentReplies")
+	return zero[[]store.Reply](), f.err
 }
 
 func (f *fakeAdapter) ListPresses(_ context.Context) ([]store.Press, error) {
@@ -330,6 +345,11 @@ func (f *fakeAdapter) SetSessionTask(_ context.Context, _ store.ConversationKey,
 
 func (f *fakeAdapter) ClearSessionAcknowledgment(_ context.Context, _ store.ConversationKey, _, _ string) error {
 	f.record("ClearSessionAcknowledgment")
+	return f.err
+}
+
+func (f *fakeAdapter) SettleAcknowledgmentReplies(_ context.Context, _ []string) error {
+	f.record("SettleAcknowledgmentReplies")
 	return f.err
 }
 

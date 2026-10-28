@@ -160,11 +160,3 @@ func TestARateLimitIsAClassifiedWait(t *testing.T) {
 		t.Errorf("MarkBusy = %v, want a rate limit that Classify reads as a wait", err)
 	}
 }
-
-// A client that cannot make the call (a double of the API) is the same as a refusal, with no call and nothing to log.
-func TestAnAPIWithoutTheCallCannotShowBusy(t *testing.T) {
-	p := slack.NewPlatform(struct{ slack.API }{}, "ns/conn")
-	if err := p.MarkBusy(t.Context(), busyThread, true); !errors.Is(err, chat.ErrNoBusy) {
-		t.Errorf("MarkBusy = %v, want ErrNoBusy", err)
-	}
-}

@@ -279,12 +279,8 @@ func TestNewTriggerStarterNamesTheFieldThatIsMissing(t *testing.T) {
 	}
 }
 
-// A platform that makes no permalink is given noPermalink, and not nil: the start asks it for a link either way.
-func TestPermalinksOfAPlatformThatMakesNoneIsNoPermalink(t *testing.T) {
-	if link, ok := permalinks(struct{ chat.Platform }{})(chat.Ref{Channel: "C1", ID: "1.1"}); ok || link != "" {
-		t.Errorf("permalinks = %q, %v; want none", link, ok)
-	}
-}
+// noPermalink is the Link of a platform that makes none: the prompt's link is empty.
+func noPermalink(chat.Ref) (string, bool) { return "", false }
 
 // Every trigger start reports botMessage as the source, in the view and in the session's origin.
 func TestOnStartSourceIsTheTriggerType(t *testing.T) {

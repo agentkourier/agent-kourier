@@ -144,13 +144,11 @@ func (s *adapter) AbandonStrandedReplies(ctx context.Context, now time.Time, age
 
 // ListAcknowledgmentReplies implements store.AcknowledgmentLister. It returns
 // delivered tombstones whose originating task is no longer active.
-func (s *adapter) ListAcknowledgmentReplies(ctx context.Context, _ time.Time, _ time.Duration) ([]store.Reply, error) {
+func (s *adapter) ListAcknowledgmentReplies(ctx context.Context) ([]store.Reply, error) {
 	//nolint:gosec // G202: the policy predicate is rendered by store.DeliveredReplies for this dialect.
 	rows, err := s.read.QueryContext(ctx, `SELECT id, connection, channel, thread_ts, user_id, message_ts, acknowledgment, enqueued_at
 		FROM reply_queue
-		WHERE acknowledgment <> '' AND `+store.DeliveredReplies("").Text(Dialect{})+` AND NOT EXISTS (SELECT 1 FROM sessions s
-			WHERE s.connection = reply_queue.connection AND s.channel = reply_queue.channel
-			AND s.thread_ts = reply_queue.thread_ts AND s.task_id <> '' AND s.turn_acknowledgment <> '' AND (s.turn_acknowledgment_id = reply_queue.id OR (s.turn_acknowledgment_id = '' AND s.turn_id = reply_queue.id)))`)
+		WHERE acknowledgment <> '' AND `+store.DeliveredReplies("").Text(Dialect{})+` AND NOT `+store.AcknowledgmentHeld("").Text(Dialect{}))
 	if err != nil {
 		return nil, fmt.Errorf("list acknowledgment replies: %w", err)
 	}
@@ -202,9 +200,7 @@ func (s *adapter) ListPendingAcknowledgmentReplies(ctx context.Context) ([]store
 	//nolint:gosec // G202: the policy predicate is rendered by store.UndeliveredReplies for this dialect.
 	rows, err := s.read.QueryContext(ctx, `SELECT id, connection, channel, thread_ts, user_id, message_ts, acknowledgment, enqueued_at
 		FROM reply_queue
-		WHERE acknowledgment <> '' AND (`+store.UndeliveredReplies("").Text(Dialect{})+` OR EXISTS (SELECT 1 FROM sessions s
-			WHERE s.connection = reply_queue.connection AND s.channel = reply_queue.channel
-			AND s.thread_ts = reply_queue.thread_ts AND s.task_id <> '' AND s.turn_acknowledgment <> '' AND (s.turn_acknowledgment_id = reply_queue.id OR (s.turn_acknowledgment_id = '' AND s.turn_id = reply_queue.id))))`)
+		WHERE acknowledgment <> '' AND (`+store.UndeliveredReplies("").Text(Dialect{})+` OR `+store.AcknowledgmentHeld("").Text(Dialect{})+`)`)
 	if err != nil {
 		return nil, fmt.Errorf("list pending acknowledgment replies: %w", err)
 	}

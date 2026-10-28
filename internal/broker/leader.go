@@ -127,16 +127,13 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 		return nil, err
 	}
 	// A mentioned turn of a mention-only Binding carries the replies since the previous turn, which are read through the
-	// platform as it is built here (fenced with an election: the read is not a write, and the fence forwards it).
-	threads, err := newThreadContext(threadContextConfig{Platform: platform.Platform, Replies: st, Logger: log})
+	// platform as it is built here (fenced with an election: the read is not a write, so the fence passes it).
+	threads, err := newThreadContext(threadContextConfig{Platform: platform, Replies: st, Logger: log})
 	if err != nil {
 		return nil, err
 	}
 	// A turn's acknowledgment removal is queued and its reply settled at once, so that retention does not queue it again.
-	var unack func(context.Context, session.Key, string, session.Notice) error
-	if settler, ok := st.(store.AcknowledgmentLister); ok {
-		unack = unacknowledge(sink.QueueNotice, settler.SettleAcknowledgmentReplies)
-	}
+	unack := unacknowledge(sink.QueueNotice, st.SettleAcknowledgmentReplies)
 	mgr, err := session.New(session.Config{Context: runCtx, Store: st, Questions: st, Bindings: bindings, Users: users{platform}, Sink: ix.tap, TextReply: ix.replies.Decide, Logger: log, Audit: auditor, OnTurnEnd: metrics.TurnOutcome, ThreadContext: threads.Section, AnswerWatcher: ix.reopened, Unacknowledge: unack})
 	if err != nil {
 		return nil, fmt.Errorf("session manager: %w", err)
@@ -194,7 +191,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	// mention takes. The threads of the keys are in the store; the permalink comes from what the platform learned when it
 	// connected, since the start runs on the acknowledgement path and may call neither Slack nor the agent.
 	starter, err := newTriggerStarter(triggerStarterConfig{
-		Conn: connName, Submit: mgr, Notice: sink.QueueNotice, Audit: auditor, Link: permalinks(platform.Platform), Log: log,
+		Conn: connName, Submit: mgr, Notice: sink.QueueNotice, Audit: auditor, Link: platform.Permalink, Log: log,
 	})
 	if err != nil {
 		return nil, err
