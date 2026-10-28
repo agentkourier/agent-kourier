@@ -61,6 +61,9 @@ type Store interface {
 	TriggerThreads
 	TriggerRuns
 	ReplyQueue
+	ReplyInteractionClaimer
+	AcknowledgmentLister
+	PendingAcknowledgmentLister
 	Feedback
 	Audit
 	AuditRetention

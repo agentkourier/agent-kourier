@@ -208,39 +208,13 @@ func (p fencedPlatform) Unreact(ctx context.Context, r chat.Ref, name string) er
 	return p.Platform.Unreact(ctx, r, name)
 }
 
-// Permalink is chat.Permalinker, which the platform may be: a link is built from what the platform learned, with no call,
-// so it is a read.
-func (p fencedPlatform) Permalink(r chat.Ref) (string, bool) {
-	if l, ok := p.Platform.(chat.Permalinker); ok {
-		return l.Permalink(r)
-	}
-	return "", false
-}
-
-// ThreadBetween is chat.ThreadReader, which the platform may be: it reads a thread and changes nothing, so it is no write
-// and the fence does not check it. The method exists so that the fence does not hide the capability of the platform it
-// wraps, as it does not hide Permalink; a platform that cannot read a thread is chat.ErrNoThreadReads. The fence is only
-// there when the election is (with SQLite there is none), and the built platform hides the method too, so a caller asks the
-// built platform's inner Platform with a type assertion, as the trigger start does for chat.Permalinker.
-func (p fencedPlatform) ThreadBetween(ctx context.Context, t chat.Target, after, before string, limit int) ([]chat.HistoryMessage, int, error) {
-	if r, ok := p.Platform.(chat.ThreadReader); ok {
-		return r.ThreadBetween(ctx, t, after, before, limit)
-	}
-	return nil, 0, chat.ErrNoThreadReads
-}
-
-// MarkBusy is chat.BusyMarker, which the platform may be: marking a thread is a write to the chat, so it is checked, and the
-// method exists so that the fence does not hide the capability of the platform it wraps, as it does not hide Permalink. A
-// platform that cannot is chat.ErrNoBusy, and nothing is checked for a call that is not made.
+// MarkBusy marks a thread, a write to the chat, so it is checked. Permalink and ThreadBetween build a link and read a
+// thread, which change nothing, so they pass through unchecked.
 func (p fencedPlatform) MarkBusy(ctx context.Context, t chat.Target, busy bool) error {
-	m, ok := p.Platform.(chat.BusyMarker)
-	if !ok {
-		return chat.ErrNoBusy
-	}
 	if err := p.fence.allow("MarkBusy"); err != nil {
 		return err
 	}
-	return m.MarkBusy(ctx, t, busy)
+	return p.Platform.MarkBusy(ctx, t, busy)
 }
 
 type fencedStream struct {

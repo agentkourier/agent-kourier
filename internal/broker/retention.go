@@ -74,14 +74,16 @@ const (
 	RemovedStaleInteractions   = "stale_task_interactions"
 )
 
-// retentionStore is what the retention loop asks of the store: store.ReplyQueue's backstop, store.AuditRetention,
-// store.SessionRetention and store.StaleTasks.
+// retentionStore is what the retention loop asks of the store: store.ReplyQueue's backstop, the acknowledgments it
+// retries (store.AcknowledgmentLister, store.PendingAcknowledgmentLister), store.AuditRetention, store.SessionRetention
+// and store.StaleTasks.
 type retentionStore interface {
 	AbandonStrandedReplies(ctx context.Context, now time.Time, age time.Duration) (int, error)
-	PurgeAudit(ctx context.Context, before time.Time, limit int) (int, error)
-	PurgeExpiredSessions(ctx context.Context, h store.SessionHorizons, limit int) (store.PurgedSessions, error)
-	ListStaleTasks(ctx context.Context, h store.SessionHorizons, limit int) ([]store.StaleTask, error)
-	EndStaleTask(ctx context.Context, h store.SessionHorizons, t store.StaleTask, now time.Time) (store.EndedStaleTask, error)
+	store.AcknowledgmentLister
+	store.PendingAcknowledgmentLister
+	store.AuditRetention
+	store.SessionRetention
+	store.StaleTasks
 }
 
 // taskCanceller cancels a task at the agent of a Binding: Bindings. It returns the service identity the call was made
@@ -133,10 +135,10 @@ type retentionConfig struct {
 	StaleBatch, MaxStaleBatches int
 	// OnRemoved is told what each pass removed (the Removed constants) and how many, when it removed any, for a metric.
 	OnRemoved func(what string, n int)
-	// EnsureAcknowledgment queues a durable add for a queued reply. It is optional for stores and tests that do not
+	// EnsureAcknowledgment queues a durable add for a queued reply. It is optional for tests and wirings that do not
 	// run a chat sink; the leader wires it to the renderer's outbox path so a transient intake failure is retried.
 	EnsureAcknowledgment func(context.Context, store.Reply) error
-	// ClearAcknowledgment queues a durable removal for a delivered reply. It is optional for stores and tests that do
+	// ClearAcknowledgment queues a durable removal for a delivered reply. It is optional for tests and wirings that do
 	// not run a chat sink; the leader wires it to the renderer's outbox path. Once it returns nil the loop settles the
 	// reply (store.AcknowledgmentLister), the sweep of delivered replies and the ending of a stale task alike, so a
 	// removal is queued once and not at every tick.
@@ -232,25 +234,13 @@ func (r *retention) abandonReplies(ctx context.Context) {
 	var n int
 	var err error
 	if r.cfg.EnsureAcknowledgment != nil {
-		if lister, ok := r.cfg.Store.(store.PendingAcknowledgmentLister); ok {
-			var rows []store.Reply
-			rows, err = lister.ListPendingAcknowledgmentReplies(ctx)
-			if err == nil {
-				for _, row := range rows {
-					if err = r.cfg.EnsureAcknowledgment(ctx, row); err != nil {
-						break
-					}
-				}
-			}
-		}
+		err = eachReply(ctx, r.cfg.Store.ListPendingAcknowledgmentReplies, r.cfg.EnsureAcknowledgment)
 	}
 	if err == nil && r.cfg.ClearAcknowledgment != nil {
-		if lister, ok := r.cfg.Store.(store.AcknowledgmentLister); ok {
-			var rows []store.Reply
-			rows, err = lister.ListAcknowledgmentReplies(ctx, now, r.cfg.ReplyAge)
-			if err == nil {
-				err = r.clearAcknowledgments(ctx, lister, rows)
-			}
+		var rows []store.Reply
+		rows, err = r.cfg.Store.ListAcknowledgmentReplies(ctx)
+		if err == nil {
+			err = r.clearAcknowledgments(ctx, rows)
 		}
 	}
 	if err == nil {
@@ -265,13 +255,27 @@ func (r *retention) abandonReplies(ctx context.Context) {
 	}
 }
 
+// eachReply hands each reply that list returns to queue, and stops at the first error.
+func eachReply(ctx context.Context, list func(context.Context) ([]store.Reply, error), queue func(context.Context, store.Reply) error) error {
+	rows, err := list(ctx)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if err := queue(ctx, row); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // clearAcknowledgments queues the removal of each delivered reply's acknowledgment, and stops at the first that fails,
 // whose error it returns. It then settles the replies whose removals it queued, a batch at a time, so that they are listed
 // no more: one removal for each reply, not one at every tick until its session is deleted. The replies of a batch that fails
 // are counted in one warning, with the last error, and the error is not returned, for their removals are queued and hold
 // nothing back; the next tick queues them again, which the outbox makes harmless, and settles them. The batches after a
 // failed one are still tried.
-func (r *retention) clearAcknowledgments(ctx context.Context, lister store.AcknowledgmentLister, rows []store.Reply) error {
+func (r *retention) clearAcknowledgments(ctx context.Context, rows []store.Reply) error {
 	queued := make([]string, 0, len(rows))
 	var err error
 	for _, row := range rows {
@@ -283,7 +287,7 @@ func (r *retention) clearAcknowledgments(ctx context.Context, lister store.Ackno
 	unsettled := 0
 	var serr error
 	for chunk := range slices.Chunk(queued, store.MaxReplyIDs) { // a batch that fails leaves the next to be tried
-		if e := lister.SettleAcknowledgmentReplies(ctx, chunk); e != nil {
+		if e := r.cfg.Store.SettleAcknowledgmentReplies(ctx, chunk); e != nil {
 			unsettled += len(chunk)
 			serr = e
 		}
@@ -399,11 +403,7 @@ func (r *retention) clearStaleAcknowledgment(ctx context.Context, ack store.Repl
 		}
 		return
 	}
-	lister, ok := r.cfg.Store.(store.AcknowledgmentLister)
-	if !ok {
-		return
-	}
-	if err := lister.SettleAcknowledgmentReplies(ctx, []string{ack.ID}); err != nil && ctx.Err() == nil {
+	if err := r.cfg.Store.SettleAcknowledgmentReplies(ctx, []string{ack.ID}); err != nil && ctx.Err() == nil {
 		r.cfg.Logger.WarnContext(ctx, "retention: the reply of an ended stale task, whose acknowledgment removal is queued, could not be settled; it will be queued again", "err", err)
 	}
 }
@@ -412,11 +412,7 @@ func (r *retention) staleAcknowledgment(ctx context.Context, t store.StaleTask) 
 	if r.cfg.ClearAcknowledgment == nil {
 		return nil, nil
 	}
-	reader, ok := r.cfg.Store.(store.StaleTaskTurnReader)
-	if !ok {
-		return nil, nil
-	}
-	turn, err := reader.StaleTaskTurn(ctx, t.Key, t.TaskID)
+	turn, err := r.cfg.Store.StaleTaskTurn(ctx, t.Key, t.TaskID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, nil
 	}

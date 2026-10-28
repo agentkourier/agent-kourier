@@ -120,17 +120,10 @@ func (g *Guarded) AbandonStrandedReplies(ctx context.Context, now time.Time, age
 
 // ListAcknowledgmentReplies implements AcknowledgmentLister. It is used by
 // retention to retry removals whose replies were already delivered.
-func (g *Guarded) ListAcknowledgmentReplies(ctx context.Context, now time.Time, age time.Duration) (replies []Reply, err error) {
+func (g *Guarded) ListAcknowledgmentReplies(ctx context.Context) (replies []Reply, err error) {
 	err = g.run(ctx, "agentkourier.store.ListAcknowledgmentReplies", func(ctx context.Context) error {
-		if now.IsZero() || age <= 0 {
-			return fmt.Errorf("list acknowledgment replies: a time and a positive age are required: %w", ErrInvalid)
-		}
-		lister, ok := g.a.(AcknowledgmentLister)
-		if !ok {
-			return fmt.Errorf("list acknowledgment replies: adapter does not support retention metadata: %w", ErrInvalid)
-		}
 		var err error
-		replies, err = lister.ListAcknowledgmentReplies(ctx, now, age)
+		replies, err = g.a.ListAcknowledgmentReplies(ctx)
 		return err
 	})
 	return replies, err
@@ -142,11 +135,7 @@ func (g *Guarded) SettleAcknowledgmentReplies(ctx context.Context, ids []string)
 		if err := validReplyIDs("settle acknowledgment replies", ids); err != nil {
 			return err
 		}
-		lister, ok := g.a.(AcknowledgmentLister)
-		if !ok {
-			return fmt.Errorf("settle acknowledgment replies: adapter does not support retention metadata: %w", ErrInvalid)
-		}
-		return lister.SettleAcknowledgmentReplies(ctx, ids)
+		return g.a.SettleAcknowledgmentReplies(ctx, ids)
 	})
 }
 
@@ -155,12 +144,8 @@ func (g *Guarded) SettleAcknowledgmentReplies(ctx context.Context, ids []string)
 // is still active or whose queue row has not been delivered.
 func (g *Guarded) ListPendingAcknowledgmentReplies(ctx context.Context) (replies []Reply, err error) {
 	err = g.run(ctx, "agentkourier.store.ListPendingAcknowledgmentReplies", func(ctx context.Context) error {
-		lister, ok := g.a.(PendingAcknowledgmentLister)
-		if !ok {
-			return fmt.Errorf("list pending acknowledgment replies: adapter does not support retention metadata: %w", ErrInvalid)
-		}
 		var err error
-		replies, err = lister.ListPendingAcknowledgmentReplies(ctx)
+		replies, err = g.a.ListPendingAcknowledgmentReplies(ctx)
 		return err
 	})
 	return replies, err

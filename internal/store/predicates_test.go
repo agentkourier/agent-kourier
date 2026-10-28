@@ -68,6 +68,27 @@ func TestFixedPredicates(t *testing.T) {
 		{"OutboxDerivedFromReplyRow", store.OutboxDerivedFromReplyRow("o", "rr"), [2]string{
 			`o.event_id >= rr.id || '/' AND o.event_id < rr.id || '0'`,
 			`o.event_id COLLATE "C" >= rr.id || '/' AND o.event_id COLLATE "C" < rr.id || '0'`}},
+		{"AcknowledgmentHeld", store.AcknowledgmentHeld("reply_queue"), [2]string{
+			`EXISTS (SELECT 1 FROM sessions held WHERE held.connection = reply_queue.connection AND held.channel = reply_queue.channel` +
+				` AND held.thread_ts = reply_queue.thread_ts AND held.task_id <> '' AND held.turn_acknowledgment <> ''` +
+				` AND (held.turn_acknowledgment_id = reply_queue.id OR (held.turn_acknowledgment_id = '' AND held.turn_id = reply_queue.id)))`,
+			`EXISTS (SELECT 1 FROM sessions held WHERE held.connection = reply_queue.connection AND held.channel = reply_queue.channel` +
+				` AND held.thread_ts = reply_queue.thread_ts AND held.task_id <> '' AND held.turn_acknowledgment <> ''` +
+				` AND (held.turn_acknowledgment_id = reply_queue.id OR (held.turn_acknowledgment_id = '' AND held.turn_id = reply_queue.id)))`}},
+		{"AcknowledgmentHeld bare: the unaliased reply_queue, never the subquery's sessions", store.AcknowledgmentHeld(""), [2]string{
+			`EXISTS (SELECT 1 FROM sessions held WHERE held.connection = reply_queue.connection AND held.channel = reply_queue.channel` +
+				` AND held.thread_ts = reply_queue.thread_ts AND held.task_id <> '' AND held.turn_acknowledgment <> ''` +
+				` AND (held.turn_acknowledgment_id = reply_queue.id OR (held.turn_acknowledgment_id = '' AND held.turn_id = reply_queue.id)))`,
+			`EXISTS (SELECT 1 FROM sessions held WHERE held.connection = reply_queue.connection AND held.channel = reply_queue.channel` +
+				` AND held.thread_ts = reply_queue.thread_ts AND held.task_id <> '' AND held.turn_acknowledgment <> ''` +
+				` AND (held.turn_acknowledgment_id = reply_queue.id OR (held.turn_acknowledgment_id = '' AND held.turn_id = reply_queue.id)))`}},
+		{"AcknowledgmentHeld over an r aliased s: the subquery's own alias does not take its name", store.AcknowledgmentHeld("s"), [2]string{
+			`EXISTS (SELECT 1 FROM sessions held WHERE held.connection = s.connection AND held.channel = s.channel` +
+				` AND held.thread_ts = s.thread_ts AND held.task_id <> '' AND held.turn_acknowledgment <> ''` +
+				` AND (held.turn_acknowledgment_id = s.id OR (held.turn_acknowledgment_id = '' AND held.turn_id = s.id)))`,
+			`EXISTS (SELECT 1 FROM sessions held WHERE held.connection = s.connection AND held.channel = s.channel` +
+				` AND held.thread_ts = s.thread_ts AND held.task_id <> '' AND held.turn_acknowledgment <> ''` +
+				` AND (held.turn_acknowledgment_id = s.id OR (held.turn_acknowledgment_id = '' AND held.turn_id = s.id)))`}},
 		{"TriggerThreadOpen", store.TriggerThreadOpen(""), [2]string{`closed_at = 0`, `closed_at IS NULL`}},
 		{"TriggerThreadClosed", store.TriggerThreadClosed(""), [2]string{`closed_at <> 0`, `closed_at IS NOT NULL`}},
 		{"TriggerThreadUnstarted", store.TriggerThreadUnstarted("t"), [2]string{`t.cooldown_until = 0`, `t.cooldown_until IS NULL`}},

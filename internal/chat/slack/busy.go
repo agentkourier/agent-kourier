@@ -38,13 +38,6 @@ func (c *Client) SetThreadStatus(ctx context.Context, channel, threadTS, status 
 	return nil
 }
 
-// threadStatuser is what MarkBusy asks of the API: the *Client has it, and a double of it may not.
-type threadStatuser interface {
-	SetThreadStatus(ctx context.Context, channel, threadTS, status string) error
-}
-
-var _ chat.BusyMarker = (*Platform)(nil)
-
 // MarkBusy implements chat.BusyMarker as the assistant status of the thread: "is working…" to mark it, and an empty status to
 // take the mark off. It needs no stream and no message of the thread's. A refusal that says the app or workspace cannot show
 // it (refusesStatus) turns the status off for this connection for the life of the process: it is logged once, with the way to
@@ -54,15 +47,14 @@ func (p *Platform) MarkBusy(ctx context.Context, t chat.Target, busy bool) error
 	if t.Thread == "" {
 		return fmt.Errorf("slack: %w: a status is shown in a thread", chat.ErrInvalid)
 	}
-	s, ok := p.c.(threadStatuser)
-	if !ok || p.statusOff.Load() {
+	if p.statusOff.Load() {
 		return chat.ErrNoBusy
 	}
 	status := ""
 	if busy {
 		status = busyStatus
 	}
-	err := s.SetThreadStatus(ctx, t.Channel, t.Thread, status)
+	err := p.c.SetThreadStatus(ctx, t.Channel, t.Thread, status)
 	if err == nil {
 		return nil
 	}
