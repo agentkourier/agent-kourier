@@ -329,7 +329,7 @@ type Config struct {
 	// Unacknowledge, if set, queues the removal of an acknowledgment, the notice n, in place of Sink.Notice, and returns
 	// the error of it; source is the reply whose reaction it is. The broker queues the removal and then settles that
 	// reply (store.AcknowledgmentLister), so that retention does not queue it again. Its error, which says which step
-	// failed, is logged, and retention queues the removal of a reply that was not settled. Nil sends the notice to Sink.Notice, and retention settles.
+	// failed, is logged while the manager runs (not once Close has cancelled it), and retention queues the removal of a reply that was not settled. Nil sends the notice to Sink.Notice, and retention settles.
 	Unacknowledge func(ctx context.Context, key Key, source string, n Notice) error
 }
 
