@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -225,6 +226,44 @@ func TestRetentionClearsStaleAcknowledgmentAfterEndingTheTask(t *testing.T) {
 	want := []store.Reply{{ID: "message-1", Key: task.Key, MessageRef: "1.1", Acknowledgment: "eyes"}}
 	if !equal(cleared, want) {
 		t.Errorf("cleared acknowledgments = %+v; want %+v", cleared, want)
+	}
+	// Settled in the same pass, so that the next abandonReplies does not list the reply and queue its removal again.
+	if want := [][]string{{"message-1"}}; !slices.EqualFunc(g.f.settled, want, slices.Equal) {
+		t.Errorf("settled = %v; want %v", g.f.settled, want)
+	}
+}
+
+// A stale task's acknowledgment removal that could not be queued is not settled: abandonReplies must still find the reply.
+func TestRetentionDoesNotSettleAStaleAcknowledgmentThatWasNotQueued(t *testing.T) {
+	g := newStaleRig(t, []store.StaleTask{stale("1.1", "ns/long", "t1")}, nil)
+	g.f.staleTurns = map[string]store.TaskTurn{"t1": {ID: "question/answer", AcknowledgmentID: "message-1", MessageRef: "1.1", Acknowledgment: "eyes"}}
+	g.r.cfg.ClearAcknowledgment = func(context.Context, store.Reply) error { return errors.New("outbox unavailable") }
+	g.r.endStaleTasks(t.Context())
+	if len(g.f.settled) != 0 || slices.Contains(g.f.order, "SettleAcknowledgmentReplies") {
+		t.Errorf("settled = %v, calls %v; want no settle for a removal that was not queued", g.f.settled, g.f.order)
+	}
+}
+
+// A stale task's reply that could not be settled after its removal was queued leaves the task ended, audited and counted,
+// and is warned about: the next abandonReplies lists the reply and queues its removal again.
+func TestRetentionEndsAStaleTaskWhoseQueuedAcknowledgmentCannotBeSettled(t *testing.T) {
+	g := newStaleRig(t, []store.StaleTask{stale("1.1", "ns/long", "t1")}, nil)
+	g.f.staleTurns = map[string]store.TaskTurn{"t1": {ID: "question/answer", AcknowledgmentID: "message-1", MessageRef: "1.1", Acknowledgment: "eyes"}}
+	g.f.settleErr = errors.New("disk full")
+	var cleared int
+	g.r.cfg.ClearAcknowledgment = func(context.Context, store.Reply) error { cleared++; return nil }
+	g.r.endStaleTasks(t.Context())
+	if cleared != 1 || !slices.Contains(g.f.order, "EndStaleTask") {
+		t.Errorf("cleared %d, calls %v; want the task ended and its removal queued once", cleared, g.f.order)
+	}
+	if got := g.audit.got(); len(got) != 1 || got[0].task.TaskID != "t1" {
+		t.Errorf("audited %+v; want t1", got)
+	}
+	if got := g.counted(); got[RemovedStaleTasks] != 1 {
+		t.Errorf("counted %v; want the 1 task", got)
+	}
+	if got := g.logs.String(); !strings.Contains(got, "could not be settled") || !strings.Contains(got, "disk full") {
+		t.Errorf("the log %q; want the settle failure warned", got)
 	}
 }
 

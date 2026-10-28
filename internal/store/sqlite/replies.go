@@ -32,14 +32,14 @@ func (s *adapter) HasReply(ctx context.Context, id string) (bool, error) {
 	return found, nil
 }
 
-// hasRepliesChunk is how many IDs one HasReplies statement carries: well under the 999 variables that older SQLite
-// builds allow, and a longer list (up to store.MaxReplyIDs) is asked in several statements.
-const hasRepliesChunk = 500
+// replyIDChunk is how many IDs one HasReplies or SettleAcknowledgmentReplies statement carries: well under the 999
+// variables that older SQLite builds allow, and a longer list (up to store.MaxReplyIDs) takes several statements.
+const replyIDChunk = 500
 
 // HasReplies implements store.ReplyQueue: one statement for each chunk of the IDs, which the unique index on id serves.
 func (s *adapter) HasReplies(ctx context.Context, ids []string) (map[string]bool, error) {
 	found := make(map[string]bool, len(ids))
-	for chunk := range slices.Chunk(ids, hasRepliesChunk) {
+	for chunk := range slices.Chunk(ids, replyIDChunk) {
 		args := make([]any, len(chunk))
 		for i, id := range chunk {
 			args[i] = id
@@ -167,6 +167,32 @@ func (s *adapter) ListAcknowledgmentReplies(ctx context.Context) ([]store.Reply,
 		return nil, fmt.Errorf("list acknowledgment replies: %w", err)
 	}
 	return replies, nil
+}
+
+// SettleAcknowledgmentReplies implements store.AcknowledgmentLister: one statement for each chunk of the IDs, as
+// HasReplies asks them, all in one transaction, so that a call that fails has settled none of them.
+func (s *adapter) SettleAcknowledgmentReplies(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		for chunk := range slices.Chunk(ids, replyIDChunk) {
+			args := make([]any, len(chunk))
+			for i, id := range chunk {
+				args[i] = id
+			}
+			//nolint:gosec // G202: the text is "?" placeholders and the predicate is rendered by store.DeliveredReplies; every ID is an argument
+			if _, err := tx.ExecContext(ctx, `UPDATE reply_queue SET acknowledgment = '' WHERE id IN (?`+strings.Repeat(`, ?`, len(chunk)-1)+`)
+				AND acknowledgment <> '' AND `+store.DeliveredReplies("").Text(Dialect{}), args...); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("settle acknowledgment replies: %w", err)
+	}
+	return nil
 }
 
 // ListPendingAcknowledgmentReplies implements store.PendingAcknowledgmentLister.

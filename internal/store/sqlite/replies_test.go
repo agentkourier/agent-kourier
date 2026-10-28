@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -69,5 +70,51 @@ func TestPreviousReplyUsesTheThreadIndex(t *testing.T) {
 	plan := strings.Join(queryPlan(t, openTemp(t), previousReplyQuery, []any{"slack", "C1", "1.1", int64(5)}), "\n")
 	if !strings.Contains(plan, "USING INDEX reply_queue_thread (connection=? AND channel=? AND thread_ts=? AND rowid<?)") || strings.Contains(plan, "TEMP B-TREE") {
 		t.Errorf("plan = %q; want a seek of reply_queue_thread to the rows below the sequence, with no sort", plan)
+	}
+}
+
+// A settle of more IDs than one statement carries runs its statements in one transaction, so that a call that fails has
+// settled none of them, as Postgres's one statement has not, and the count retention logs for a failed call is exact. A
+// trigger fails the update of one reply in the second statement.
+func TestSettleAcknowledgmentRepliesIsAllOrNothing(t *testing.T) {
+	ctx := t.Context()
+	s := openTemp(t)
+	ids := make([]string, 2*replyIDChunk+200)
+	for i := range ids {
+		ids[i] = fmt.Sprint("r", i)
+		if _, err := s.EnqueueReply(ctx, store.Reply{ID: ids[i], Key: key, UserID: "U1", MessageRef: "1700.01", Acknowledgment: "eyes", Text: "hello", EnqueuedAt: t0}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.a.write.ExecContext(ctx, `UPDATE reply_queue SET delivered_at = ?, text = ''`, ts(t0)); err != nil {
+		t.Fatal(err)
+	}
+	failing := ids[replyIDChunk+1]
+	if _, err := s.a.write.ExecContext(ctx, `CREATE TEMP TRIGGER fail_settle BEFORE UPDATE OF acknowledgment ON reply_queue
+		WHEN NEW.id = '`+failing+`' BEGIN SELECT RAISE(ABORT, 'settle refused'); END`); err != nil {
+		t.Fatal(err)
+	}
+	settled := func() int {
+		t.Helper()
+		var n int
+		if err := s.a.write.QueryRowContext(ctx, `SELECT COUNT(*) FROM reply_queue WHERE acknowledgment = ''`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if err := s.SettleAcknowledgmentReplies(ctx, ids); err == nil || !strings.Contains(err.Error(), "settle refused") {
+		t.Fatalf("SettleAcknowledgmentReplies = %v; want the trigger's error", err)
+	}
+	if n := settled(); n != 0 {
+		t.Fatalf("%d replies settled by a call that failed; want none", n)
+	}
+	if _, err := s.a.write.ExecContext(ctx, `DROP TRIGGER fail_settle`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SettleAcknowledgmentReplies(ctx, ids); err != nil {
+		t.Fatal(err)
+	}
+	if n := settled(); n != len(ids) {
+		t.Fatalf("%d replies settled; want all %d", n, len(ids))
 	}
 }

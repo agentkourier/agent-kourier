@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"maps"
@@ -29,6 +30,10 @@ type fakeRetentionStore struct {
 	dropped        int // what AbandonStrandedReplies reports
 	ackReplies     []store.Reply
 	ackLists       int
+	settled        [][]string // each SettleAcknowledgmentReplies call's IDs; a settled reply is listed no more
+	settleErr      error      // what SettleAcknowledgmentReplies returns, instead of settling
+	settleErrOn    int        // the one SettleAcknowledgmentReplies call, counted from 1, that settleErr fails; 0 fails every call
+	settleCalls    int
 	pendingReplies []store.Reply
 	pendingLists   int
 	staleTurns     map[string]store.TaskTurn
@@ -74,6 +79,19 @@ func (f *fakeRetentionStore) ListAcknowledgmentReplies(_ context.Context) ([]sto
 	f.order = append(f.order, "ListAcknowledgmentReplies")
 	f.ackLists++
 	return append([]store.Reply(nil), f.ackReplies...), nil
+}
+
+func (f *fakeRetentionStore) SettleAcknowledgmentReplies(_ context.Context, ids []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.order = append(f.order, "SettleAcknowledgmentReplies")
+	f.settleCalls++
+	if f.settleErr != nil && (f.settleErrOn == 0 || f.settleErrOn == f.settleCalls) {
+		return f.settleErr
+	}
+	f.settled = append(f.settled, slices.Clone(ids))
+	f.ackReplies = slices.DeleteFunc(f.ackReplies, func(r store.Reply) bool { return slices.Contains(ids, r.ID) })
+	return nil
 }
 
 func (f *fakeRetentionStore) ListPendingAcknowledgmentReplies(_ context.Context) ([]store.Reply, error) {
@@ -265,8 +283,8 @@ func TestRetentionRetriesAcknowledgmentRemovalBeforeDroppingReplies(t *testing.T
 	if attempts != 2 || !slices.Equal(cleared, []string{"reply-1"}) || len(f.abandons) != 1 {
 		t.Fatalf("second cleanup pass: attempts=%d cleared=%v abandons=%v; want removal retry before one abandonment", attempts, cleared, f.abandons)
 	}
-	if want := []string{"ListAcknowledgmentReplies", "ListAcknowledgmentReplies", "AbandonStrandedReplies"}; !slices.Equal(f.order, want) {
-		t.Errorf("retention call order = %v; want %v", f.order, want)
+	if want := []string{"ListAcknowledgmentReplies", "ListAcknowledgmentReplies", "SettleAcknowledgmentReplies", "AbandonStrandedReplies"}; !slices.Equal(f.order, want) {
+		t.Errorf("retention call order = %v; want %v: a removal that failed to queue is not settled", f.order, want)
 	}
 }
 
@@ -296,6 +314,83 @@ func TestRetentionReachesTheAcknowledgmentsOfAWrappedStore(t *testing.T) {
 	if err != nil || reply == nil || reply.ID != "turn-1" {
 		t.Errorf("staleAcknowledgment = %+v, %v; want the reaction of turn-1", reply, err)
 	}
+}
+
+// A removal is queued once: once it is, the reply is settled and is not listed, and queued, again at every tick until its
+// session is deleted. The removals that a pass queued are settled in one call, those queued before a failure too. A settle
+// that fails is logged and does not hold back abandonment: the removals are queued, and the next pass queues them again
+// (which the outbox makes harmless) and settles them then.
+func TestRetentionSettlesQueuedAcknowledgmentRemovals(t *testing.T) {
+	ack := func(id string) store.Reply {
+		return store.Reply{ID: id, Key: store.ConversationKey{Connection: "slack", Channel: "C1", Thread: "1.1"}, MessageRef: "1.1", Acknowledgment: "eyes"}
+	}
+	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	t.Run("a settle that fails", func(t *testing.T) {
+		f := &fakeRetentionStore{ackReplies: []store.Reply{ack("reply-1"), ack("reply-2")}, settleErr: errors.New("disk full")}
+		var queued []string
+		r, err := newRetention(harmless(retentionConfig{Store: f, ClearAcknowledgment: func(_ context.Context, r store.Reply) error {
+			queued = append(queued, r.ID)
+			return nil
+		}, Now: func() time.Time { return sweepNow }, Logger: quiet}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.abandonReplies(t.Context())
+		if !slices.Equal(queued, []string{"reply-1", "reply-2"}) || len(f.abandons) != 1 {
+			t.Fatalf("a pass whose settle fails: queued=%v abandons=%v; want both queued and abandonment run", queued, f.abandons)
+		}
+		f.settleErr = nil
+		for range 2 {
+			r.abandonReplies(t.Context())
+		}
+		if want := []string{"reply-1", "reply-2", "reply-1", "reply-2"}; !slices.Equal(queued, want) {
+			t.Errorf("removals queued over three passes = %v; want %v: queued again only after the failed settle", queued, want)
+		}
+		if want := [][]string{{"reply-1", "reply-2"}}; !slices.EqualFunc(f.settled, want, slices.Equal) {
+			t.Errorf("settles = %v; want %v: one call for the pass", f.settled, want)
+		}
+		if len(f.abandons) != 3 {
+			t.Errorf("abandonments = %d; want one for each pass", len(f.abandons))
+		}
+	})
+	t.Run("a batch that fails", func(t *testing.T) {
+		// More than one settle call's worth: a failed batch leaves the batches after it to be settled, and the warning
+		// counts what is left unsettled, not everything the pass queued.
+		rows := make([]store.Reply, store.MaxReplyIDs+2)
+		for i := range rows {
+			rows[i] = ack(fmt.Sprint("reply-", i))
+		}
+		f := &fakeRetentionStore{ackReplies: rows, settleErr: errors.New("disk full"), settleErrOn: 1}
+		var logs strings.Builder
+		r, err := newRetention(harmless(retentionConfig{Store: f, ClearAcknowledgment: func(context.Context, store.Reply) error { return nil },
+			Now: func() time.Time { return sweepNow }, Logger: slog.New(slog.NewTextHandler(&logs, nil))}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.abandonReplies(t.Context())
+		if f.settleCalls != 2 || len(f.settled) != 1 || len(f.settled[0]) != 2 {
+			t.Fatalf("settle calls = %d, settled = %d batches; want the second batch, of 2, settled after the first failed", f.settleCalls, len(f.settled))
+		}
+		if want := fmt.Sprint("unsettled=", store.MaxReplyIDs); !strings.Contains(logs.String(), want) {
+			t.Errorf("log = %q; want it to count %s", logs.String(), want)
+		}
+	})
+	t.Run("a removal that fails to queue", func(t *testing.T) {
+		f := &fakeRetentionStore{ackReplies: []store.Reply{ack("reply-1"), ack("reply-2"), ack("reply-3")}}
+		r, err := newRetention(harmless(retentionConfig{Store: f, ClearAcknowledgment: func(_ context.Context, r store.Reply) error {
+			if r.ID == "reply-2" {
+				return errors.New("outbox unavailable")
+			}
+			return nil
+		}, Now: func() time.Time { return sweepNow }, Logger: quiet}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.abandonReplies(t.Context())
+		if want := [][]string{{"reply-1"}}; !slices.EqualFunc(f.settled, want, slices.Equal) || len(f.abandons) != 0 {
+			t.Fatalf("settles = %v, abandonments = %d; want the removal queued before the failure settled, and no abandonment", f.settled, len(f.abandons))
+		}
+	})
 }
 
 // The purge deletes everything before now minus the retention, a batch at a time while a batch comes back full, and

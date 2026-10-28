@@ -34,11 +34,20 @@ func (g *Guarded) HasReply(ctx context.Context, id string) (found bool, err erro
 	return found, err
 }
 
+// validReplyIDs is the precondition of a call that takes many reply IDs: none empty, and at most MaxReplyIDs. op names
+// the call in the error, which wraps ErrInvalid.
+func validReplyIDs(op string, ids []string) error {
+	if len(ids) > MaxReplyIDs || slices.Contains(ids, "") {
+		return fmt.Errorf("%s: %d IDs, none empty and at most %d, are required: %w", op, len(ids), MaxReplyIDs, ErrInvalid)
+	}
+	return nil
+}
+
 // HasReplies implements ReplyQueue.
 func (g *Guarded) HasReplies(ctx context.Context, ids []string) (found map[string]bool, err error) {
 	err = g.run(ctx, "agentkourier.store.HasReplies", func(ctx context.Context) error {
-		if len(ids) > MaxReplyIDs || slices.Contains(ids, "") {
-			return fmt.Errorf("has replies: %d IDs, none empty and at most %d, are required: %w", len(ids), MaxReplyIDs, ErrInvalid)
+		if err := validReplyIDs("has replies", ids); err != nil {
+			return err
 		}
 		var err error
 		found, err = g.a.HasReplies(ctx, ids)
@@ -118,6 +127,16 @@ func (g *Guarded) ListAcknowledgmentReplies(ctx context.Context) (replies []Repl
 		return err
 	})
 	return replies, err
+}
+
+// SettleAcknowledgmentReplies implements AcknowledgmentLister.
+func (g *Guarded) SettleAcknowledgmentReplies(ctx context.Context, ids []string) error {
+	return g.run(ctx, "agentkourier.store.SettleAcknowledgmentReplies", func(ctx context.Context) error {
+		if err := validReplyIDs("settle acknowledgment replies", ids); err != nil {
+			return err
+		}
+		return g.a.SettleAcknowledgmentReplies(ctx, ids)
+	})
 }
 
 // ListPendingAcknowledgmentReplies implements PendingAcknowledgmentLister. It

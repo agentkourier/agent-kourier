@@ -119,8 +119,8 @@ func (m *Manager) Submit(ctx context.Context, in Inbound) (Result, error) {
 func queuedID(id string) string { return id + "/queued" }
 
 // AcknowledgmentID is the ID of the notices that put the acknowledgment of the message id on and take it off. The outbox
-// keys the reaction by it, so whoever queues one of them (the intake, the runner, the broker's retention retries) uses
-// this.
+// keys the reaction by it, so whoever queues one of them uses this: the intake puts it on, unacknowledgeReply takes it off
+// for every removal the manager makes, and the broker's retention queues either again.
 func AcknowledgmentID(id string) string { return id + "/acknowledgment" }
 
 // markPending remembers that the turn id may carry the queued reaction (see Manager.marked), and reports

@@ -348,6 +348,11 @@ func (f *fakeAdapter) ClearSessionAcknowledgment(_ context.Context, _ store.Conv
 	return f.err
 }
 
+func (f *fakeAdapter) SettleAcknowledgmentReplies(_ context.Context, _ []string) error {
+	f.record("SettleAcknowledgmentReplies")
+	return f.err
+}
+
 func (f *fakeAdapter) SubmitInteraction(_ context.Context, _ string, _ []byte, _ string, _ time.Time) error {
 	f.record("SubmitInteraction")
 	return f.err

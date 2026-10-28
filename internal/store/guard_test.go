@@ -271,6 +271,10 @@ func hasReplies(ids []string) call {
 	return func(ctx context.Context, s store.Store) error { _, err := s.HasReplies(ctx, ids); return err }
 }
 
+func settleAcknowledgmentReplies(ids []string) call {
+	return func(ctx context.Context, s store.Store) error { return s.SettleAcknowledgmentReplies(ctx, ids) }
+}
+
 func nextReply(k store.ConversationKey) call {
 	return func(ctx context.Context, s store.Store) error { _, err := s.NextReply(ctx, k); return err }
 }
@@ -581,6 +585,11 @@ func specs() []spec {
 			"no time": markReplyDelivered("r1", time.Time{}),
 		}},
 		{"ListAcknowledgmentReplies", func(ctx context.Context, s store.Store) error { _, err := s.ListAcknowledgmentReplies(ctx); return err }, nil},
+		{"SettleAcknowledgmentReplies", settleAcknowledgmentReplies([]string{"r1", "r2"}), map[string]call{
+			"an empty ID among others": settleAcknowledgmentReplies([]string{"r1", "", "r2"}),
+			"only an empty ID":         settleAcknowledgmentReplies([]string{""}),
+			"over MaxReplyIDs":         settleAcknowledgmentReplies(replyIDs(store.MaxReplyIDs + 1)),
+		}},
 		{"ListPendingAcknowledgmentReplies", func(ctx context.Context, s store.Store) error {
 			_, err := s.ListPendingAcknowledgmentReplies(ctx)
 			return err
