@@ -132,7 +132,12 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	if err != nil {
 		return nil, err
 	}
-	mgr, err := session.New(session.Config{Context: runCtx, Store: st, Questions: st, Bindings: bindings, Users: users{platform}, Sink: ix.tap, TextReply: ix.replies.Decide, Logger: log, Audit: auditor, OnTurnEnd: metrics.TurnOutcome, ThreadContext: threads.Section, AnswerWatcher: ix.reopened})
+	// A turn's acknowledgment removal is queued and its reply settled at once, so that retention does not queue it again.
+	var unack func(context.Context, session.Key, string, session.Notice) error
+	if settler, ok := st.(store.AcknowledgmentLister); ok {
+		unack = unacknowledge(sink.QueueNotice, settler.SettleAcknowledgmentReplies)
+	}
+	mgr, err := session.New(session.Config{Context: runCtx, Store: st, Questions: st, Bindings: bindings, Users: users{platform}, Sink: ix.tap, TextReply: ix.replies.Decide, Logger: log, Audit: auditor, OnTurnEnd: metrics.TurnOutcome, ThreadContext: threads.Section, AnswerWatcher: ix.reopened, Unacknowledge: unack})
 	if err != nil {
 		return nil, fmt.Errorf("session manager: %w", err)
 	}
@@ -171,10 +176,10 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	retain, err := newRetention(retentionConfig{Store: st, Interval: cfg.retentionEvery, AuditRetention: cfg.AuditRetention, ThreadTTLs: bindings.ThreadTTLs,
 		Canceller: bindings, Audit: auditor, Holds: mgr.HoldsTask, OnRemoved: metrics.RetentionRemoved, Logger: log,
 		EnsureAcknowledgment: func(ctx context.Context, r store.Reply) error {
-			return sink.QueueNotice(ctx, r.Key, session.Notice{ID: r.ID + "/acknowledgment", Kind: session.NoticeAcknowledged, MessageRef: r.MessageRef, Reaction: r.Acknowledgment})
+			return sink.QueueNotice(ctx, r.Key, session.Notice{ID: session.AcknowledgmentID(r.ID), Kind: session.NoticeAcknowledged, MessageRef: r.MessageRef, Reaction: r.Acknowledgment})
 		},
 		ClearAcknowledgment: func(ctx context.Context, r store.Reply) error {
-			return sink.QueueNotice(ctx, r.Key, session.Notice{ID: r.ID + "/acknowledgment", Kind: session.NoticeUnacknowledged, MessageRef: r.MessageRef, Reaction: r.Acknowledgment})
+			return sink.QueueNotice(ctx, r.Key, session.Notice{ID: session.AcknowledgmentID(r.ID), Kind: session.NoticeUnacknowledged, MessageRef: r.MessageRef, Reaction: r.Acknowledgment})
 		}})
 	if err != nil {
 		return nil, fmt.Errorf("store retention: %w", err)

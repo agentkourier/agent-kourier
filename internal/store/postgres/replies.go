@@ -166,6 +166,19 @@ func (s *adapter) ListAcknowledgmentReplies(ctx context.Context, _ time.Time, _ 
 	return replies, nil
 }
 
+// SettleAcknowledgmentReplies implements store.AcknowledgmentLister: one statement for all the IDs, as an array that the
+// unique index on id serves.
+func (s *adapter) SettleAcknowledgmentReplies(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if _, err := s.exec(ctx, `UPDATE reply_queue SET acknowledgment = '' WHERE id = ANY($1::text[])
+		AND acknowledgment <> '' AND `+store.DeliveredReplies("").Text(Dialect{}), ids); err != nil {
+		return fmt.Errorf("settle acknowledgment replies: %w", err)
+	}
+	return nil
+}
+
 // ListPendingAcknowledgmentReplies implements store.PendingAcknowledgmentLister.
 func (s *adapter) ListPendingAcknowledgmentReplies(ctx context.Context) ([]store.Reply, error) {
 	rows, err := s.pool.Query(ctx, `SELECT id, connection, channel, thread_ts, user_id, message_ts, acknowledgment, enqueued_at

@@ -106,7 +106,7 @@ func (m *Manager) Submit(ctx context.Context, in Inbound) (Result, error) {
 	// that the runner never sends the turn, and takes its reaction off, before the reaction was asked for (the
 	// sink is made to cope with that order too, but this is the cheap half of it).
 	if res.Acknowledgment != "" {
-		m.cfg.Sink.Notice(ctx, in.Key, Notice{ID: acknowledgmentID(in.MessageID), Kind: NoticeAcknowledged, MessageRef: in.MessageRef, Reaction: res.Acknowledgment})
+		m.cfg.Sink.Notice(ctx, in.Key, Notice{ID: AcknowledgmentID(in.MessageID), Kind: NoticeAcknowledged, MessageRef: in.MessageRef, Reaction: res.Acknowledgment})
 	} else if !res.AcknowledgmentConfigured && res.Queued && m.markPending(in.MessageID) {
 		m.cfg.Sink.Notice(ctx, in.Key, Notice{ID: queuedID(in.MessageID), Kind: NoticeQueued, MessageRef: in.MessageRef})
 	}
@@ -118,7 +118,10 @@ func (m *Manager) Submit(ctx context.Context, in Inbound) (Result, error) {
 // takes it off.
 func queuedID(id string) string { return id + "/queued" }
 
-func acknowledgmentID(id string) string { return id + "/acknowledgment" }
+// AcknowledgmentID is the ID of the notices that put the acknowledgment of the message id on and take it off. The outbox
+// keys the reaction by it, so whoever queues one of them uses this: the intake puts it on, unacknowledgeReply takes it off
+// for every removal the manager makes, and the broker's retention queues either again.
+func AcknowledgmentID(id string) string { return id + "/acknowledgment" }
 
 // markPending remembers that the turn id may carry the queued reaction (see Manager.marked), and reports
 // whether the reaction is still wanted: it is while this process has the turn to send (fresh). A turn that was

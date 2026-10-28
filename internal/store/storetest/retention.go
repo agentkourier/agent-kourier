@@ -282,6 +282,70 @@ func (su suite) replyRetention(t *testing.T) {
 		}
 	})
 
+	su.run(t, "a settled acknowledgment is listed for removal no more", func(t *testing.T, s store.Store) {
+		lister, ok := s.(store.AcknowledgmentLister)
+		if !ok {
+			t.Fatal("store does not implement AcknowledgmentLister")
+		}
+		pending, ok := s.(store.PendingAcknowledgmentLister)
+		if !ok {
+			t.Fatal("store does not implement PendingAcknowledgmentLister")
+		}
+		ctx := t.Context()
+		for _, r := range []store.Reply{newReply("settled", key), newReply("unsettled", other), newReply("queued", keyOf("3.3"))} {
+			if _, err := s.EnqueueReply(ctx, r); err != nil {
+				t.Fatalf("enqueue %s: %v", r.ID, err)
+			}
+		}
+		noErr(t, s.MarkReplyDelivered(ctx, "settled", t0.Add(time.Hour)), "deliver settled")
+		noErr(t, s.MarkReplyDelivered(ctx, "unsettled", t0.Add(time.Hour)), "deliver unsettled")
+		listed := func(t *testing.T) []string {
+			t.Helper()
+			got, err := lister.ListAcknowledgmentReplies(ctx, t0.Add(age), age)
+			noErr(t, err, "list acknowledgment replies")
+			ids := make([]string, 0, len(got))
+			for _, r := range got {
+				ids = append(ids, r.ID)
+			}
+			slices.Sort(ids)
+			return ids
+		}
+		if got, want := listed(t), []string{"settled", "unsettled"}; !slices.Equal(got, want) {
+			t.Fatalf("before the settle, acknowledgment replies = %v; want %v", got, want)
+		}
+		// One call settles what it can: an undelivered reply's add may still be needed, and an unknown one is not there.
+		noErr(t, lister.SettleAcknowledgmentReplies(ctx, []string{"settled", "queued", "nope"}), "settle")
+		noErr(t, lister.SettleAcknowledgmentReplies(ctx, []string{"settled", "settled"}), "settle again") // a repeat changes nothing
+		noErr(t, lister.SettleAcknowledgmentReplies(ctx, nil), "settle none")
+		if got, want := listed(t), []string{"unsettled"}; !slices.Equal(got, want) {
+			t.Fatalf("after the settle, acknowledgment replies = %v; want %v: a settled removal is not queued again", got, want)
+		}
+		isErr(t, lister.SettleAcknowledgmentReplies(ctx, []string{"unsettled", ""}), store.ErrInvalid, "settle an empty ID")
+		tooMany := make([]string, store.MaxReplyIDs+1) // none empty, so that only the count refuses it
+		for i := range tooMany {
+			tooMany[i] = fmt.Sprint("absent-", i)
+		}
+		tooMany[len(tooMany)-1] = "unsettled"
+		isErr(t, lister.SettleAcknowledgmentReplies(ctx, tooMany), store.ErrInvalid, "settle more than MaxReplyIDs")
+		if got, want := listed(t), []string{"unsettled"}; !slices.Equal(got, want) {
+			t.Fatalf("after refused settles, acknowledgment replies = %v; want %v: a refused call settles nothing", got, want)
+		}
+		many := make([]string, store.MaxReplyIDs) // more than one statement's worth, which an adapter may chunk
+		for i := range many {
+			many[i] = fmt.Sprint("absent-", i)
+		}
+		many[len(many)-1] = "unsettled"
+		noErr(t, lister.SettleAcknowledgmentReplies(ctx, many), "settle MaxReplyIDs")
+		if got := listed(t); len(got) != 0 {
+			t.Fatalf("after settling the last of MaxReplyIDs, acknowledgment replies = %v; want none", got)
+		}
+		got, err := pending.ListPendingAcknowledgmentReplies(ctx)
+		noErr(t, err, "list pending acknowledgment replies")
+		if len(got) != 1 || got[0].ID != "queued" || got[0].Acknowledgment != "eyes" {
+			t.Fatalf("pending acknowledgment replies = %+v; want the undelivered reply, its acknowledgment kept", got)
+		}
+	})
+
 	su.run(t, "AbandonStrandedReplies refuses arguments that are not legal", func(t *testing.T, s store.Store) {
 		ctx := t.Context()
 		_, err := s.AbandonStrandedReplies(ctx, time.Time{}, age)

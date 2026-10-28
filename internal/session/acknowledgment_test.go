@@ -3,7 +3,10 @@ package session
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -67,6 +70,87 @@ func TestAcknowledgmentLifecycleUsesTheConfiguredReaction(t *testing.T) {
 	}
 }
 
+// With Config.Unacknowledge set, a turn's removal goes through it, named by its source reply, in place of the sink, so
+// that the wiring can settle the reply once the removal is queued. A failure is the hook's to report: the manager logs it
+// and goes on, and the next turn's removal is still handed over.
+func TestAcknowledgmentRemovalGoesThroughUnacknowledge(t *testing.T) {
+	f := newFixture(t)
+	f.ackConfigured, f.ackEnabled, f.ackEmoji = true, true, "eyes"
+	sink := f.live()
+	type removal struct {
+		source string
+		n      Notice
+	}
+	var mu sync.Mutex
+	var got []removal
+	f.m.cfg.Unacknowledge = func(_ context.Context, _ Key, source string, n Notice) error {
+		mu.Lock()
+		defer mu.Unlock()
+		got = append(got, removal{source, n})
+		if len(got) == 1 {
+			return errors.New("outbox unavailable")
+		}
+		return nil
+	}
+	f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+		accepted(h, n)
+		return turn(h, n, a2a.TaskStateCompleted)
+	}
+	first, second := inbound("1"), inbound("2")
+	for _, in := range []Inbound{first, second} {
+		if _, err := f.submit(in); err != nil {
+			t.Fatal(err)
+		}
+		waitFinal(t, sink)
+	}
+	f.retired(t)
+	mu.Lock()
+	defer mu.Unlock()
+	want := []removal{
+		{first.MessageID, Notice{ID: first.MessageID + "/acknowledgment", Kind: NoticeUnacknowledged, MessageRef: first.MessageRef, Reaction: "eyes"}},
+		{second.MessageID, Notice{ID: second.MessageID + "/acknowledgment", Kind: NoticeUnacknowledged, MessageRef: second.MessageRef, Reaction: "eyes"}},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("removals handed to Unacknowledge = %+v; want %+v", got, want)
+	}
+	if n := sink.noticesOf(NoticeUnacknowledged); len(n) != 0 {
+		t.Fatalf("removals on the sink = %+v; want none: Unacknowledge queues them", n)
+	}
+}
+
+// A removal that fails because the manager is closing is not warned about: the shutdown cancelled it, retention queues
+// it, and every turn that ends in the shutdown would otherwise log the same line. One that fails while the manager runs is.
+func TestUnacknowledgeFailureIsWarnedOnlyWhileTheManagerRuns(t *testing.T) {
+	r := store.Reply{ID: "slack:slack:C1:1", Key: key, MessageRef: "1", Acknowledgment: "eyes"}
+	for _, tc := range []struct {
+		name     string
+		closing  bool
+		wantWarn bool
+	}{
+		{name: "running", wantWarn: true},
+		{name: "closing", closing: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			var logs strings.Builder
+			f.m.cfg.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+			f.m.cfg.Unacknowledge = func(ctx context.Context, _ Key, _ string, _ Notice) error {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				return errors.New("outbox unavailable")
+			}
+			if tc.closing {
+				f.m.stop()
+			}
+			f.m.unacknowledgeReply(key, r, r.ID)
+			if got := strings.Contains(logs.String(), "acknowledgment removal did not complete"); got != tc.wantWarn {
+				t.Errorf("warned = %v (log %q); want %v", got, logs.String(), tc.wantWarn)
+			}
+		})
+	}
+}
+
 // Disabling the feature suppresses both the new acknowledgment and the legacy waiting marker. A
 // binding reload therefore cannot leave a new reaction behind for a message it accepted.
 func TestDisabledAcknowledgmentDoesNotMarkAcceptedMessages(t *testing.T) {
@@ -124,6 +208,7 @@ func TestAcknowledgmentIsClearedAtPauseAndRecreatedForTypedAnswer(t *testing.T) 
 		return turn(h, 0, a2a.TaskStateCompleted)
 	}
 	sink := f.live()
+	sources := f.viaUnacknowledge(sink) // the pause and the answer's end both settle through the hook
 	first := inbound("1")
 	if _, err := f.submit(first); err != nil {
 		t.Fatal(err)
@@ -163,6 +248,9 @@ func TestAcknowledgmentIsClearedAtPauseAndRecreatedForTypedAnswer(t *testing.T) 
 	}
 	if got := sink.noticesOf(NoticeUnacknowledged); !sameAcknowledgments(got, wantRemovals) {
 		t.Fatalf("pause and answer removals = %+v; want %+v", got, wantRemovals)
+	}
+	if got, want := sources(), removalSources(wantRemovals); !slices.Equal(got, want) {
+		t.Fatalf("sources handed to Unacknowledge = %v; want %v", got, want)
 	}
 }
 
@@ -245,6 +333,7 @@ func TestConsumedTextReplyWithoutContinuationClearsItsAcknowledgment(t *testing.
 		return TextReplyConsumed, nil // rejected or stale answers are consumed without a continuation
 	})
 	sink := f.live()
+	sources := f.viaUnacknowledge(sink) // the consumed answer is settled through the hook, with no turn of its own
 	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
@@ -264,11 +353,15 @@ func TestConsumedTextReplyWithoutContinuationClearsItsAcknowledgment(t *testing.
 		t.Fatal(err)
 	}
 	f.retired(t)
-	if got := sink.noticesOf(NoticeUnacknowledged); !sameAcknowledgments(got, []Notice{
+	want := []Notice{
 		{ID: inbound("1").MessageID + "/acknowledgment", Kind: NoticeUnacknowledged, MessageRef: "1", Reaction: "eyes"},
 		{ID: inbound("2").MessageID + "/acknowledgment", Kind: NoticeUnacknowledged, MessageRef: "2", Reaction: "eyes"},
-	}) {
+	}
+	if got := sink.noticesOf(NoticeUnacknowledged); !sameAcknowledgments(got, want) {
 		t.Fatalf("consumed text reply removals = %+v; want one for the question and one for the consumed reply", got)
+	}
+	if got, want := sources(), removalSources(want); !slices.Equal(got, want) {
+		t.Fatalf("sources handed to Unacknowledge = %v; want %v", got, want)
 	}
 }
 
@@ -295,6 +388,7 @@ func TestAnswerBusyReparkSettlesTheFailedAnswerAcknowledgment(t *testing.T) {
 		return TextReplyConsumed, f.m.Answer(ctx, k, msg)
 	})
 	sink := f.live()
+	sources := f.viaUnacknowledge(sink) // the failed answer is settled through the hook when its question is parked again
 	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
@@ -327,6 +421,9 @@ func TestAnswerBusyReparkSettlesTheFailedAnswerAcknowledgment(t *testing.T) {
 	}
 	if got := sink.noticesOf(NoticeUnacknowledged); !sameAcknowledgments(got, want) {
 		t.Fatalf("answer retry removals = %+v; want %+v", got, want)
+	}
+	if got, want := sources(), removalSources(want); !slices.Equal(got, want) {
+		t.Fatalf("sources handed to Unacknowledge = %v; want %v", got, want)
 	}
 }
 
@@ -452,6 +549,42 @@ func TestRecoveredPauseClearsAcknowledgmentOwnership(t *testing.T) {
 
 func storeReply(id, ref, reaction string) store.Reply {
 	return store.Reply{ID: id, Key: key, MessageRef: ref, Acknowledgment: reaction}
+}
+
+// viaUnacknowledge routes the manager's acknowledgment removals through Config.Unacknowledge, which hands each one on to
+// sink, as the broker's hook queues it, and returns a func that reports the source replies the hook was handed, sorted. A
+// path that went around the hook would leave its removal on the sink with no source, and one that named the wrong source
+// would not match its notice's ID.
+func (f *fixture) viaUnacknowledge(sink *fakeSink) func() []string {
+	var mu sync.Mutex
+	var sources []string
+	f.m.cfg.Unacknowledge = func(ctx context.Context, key Key, source string, n Notice) error {
+		if n.ID != AcknowledgmentID(source) {
+			f.t.Errorf("Unacknowledge source %q with notice %q; want the notice of that source", source, n.ID)
+		}
+		mu.Lock()
+		sources = append(sources, source)
+		mu.Unlock()
+		sink.Notice(ctx, key, n)
+		return nil
+	}
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		got := slices.Clone(sources)
+		slices.Sort(got)
+		return got
+	}
+}
+
+// removalSources is the sorted source message IDs of the removals want.
+func removalSources(want []Notice) []string {
+	ids := make([]string, len(want))
+	for i, n := range want {
+		ids[i] = strings.TrimSuffix(n.ID, "/acknowledgment")
+	}
+	slices.Sort(ids)
+	return ids
 }
 
 func sameAcknowledgments(got, want []Notice) bool {

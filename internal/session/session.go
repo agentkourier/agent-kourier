@@ -326,6 +326,11 @@ type Config struct {
 	// AnswerWatcher, if set, is told of each answer that was not delivered (see AnswerWatcher). Nil tells no one, and the
 	// manager's notice is the only word of it.
 	AnswerWatcher AnswerWatcher
+	// Unacknowledge, if set, queues the removal of an acknowledgment, the notice n, in place of Sink.Notice, and returns
+	// the error of it; source is the reply whose reaction it is. The broker queues the removal and then settles that
+	// reply (store.AcknowledgmentLister), so that retention does not queue it again. Its error, which says which step
+	// failed, is logged while the manager runs (not once Close has cancelled it), and retention queues the removal of a reply that was not settled. Nil sends the notice to Sink.Notice, and retention settles.
+	Unacknowledge func(ctx context.Context, key Key, source string, n Notice) error
 }
 
 // attempt is a head turn that was sent and not yet taken and recorded. unknown says an earlier

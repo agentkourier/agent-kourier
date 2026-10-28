@@ -30,8 +30,9 @@ type Reply struct {
 	EnqueuedAt    time.Time
 }
 
-// MaxReplyIDs is the most IDs that one HasReplies call may ask about (ErrInvalid above it). It bounds the size of one
-// call, and so of the statement or the chunks of statements that an adapter runs for it, not the answer.
+// MaxReplyIDs is the most IDs that one call that takes many reply IDs (HasReplies, AcknowledgmentLister's
+// SettleAcknowledgmentReplies) may name (ErrInvalid above it). It bounds the size of one call, and so of the statement or
+// the chunks of statements that an adapter runs for it, not the answer; a caller with more makes several calls.
 const MaxReplyIDs = 10000
 
 // ReplyQueue persists per-session FIFO queues of replies. Delivery is
@@ -95,6 +96,12 @@ type ReplyQueue interface {
 // racing a task that is still processing the message.
 type AcknowledgmentLister interface {
 	ListAcknowledgmentReplies(ctx context.Context, now time.Time, age time.Duration) ([]Reply, error)
+	// SettleAcknowledgmentReplies records that the removals of the acknowledgments of the delivered replies ids are
+	// durably queued: it clears their acknowledgment metadata, so neither lister returns them again. Without it every
+	// tombstone would be listed, and its removal queued again, at each retention tick until its session is deleted.
+	// An undelivered reply, whose add may still be needed, and an unknown ID are left alone, and a repeat changes
+	// nothing. ErrInvalid for an empty ID among them or more than MaxReplyIDs.
+	SettleAcknowledgmentReplies(ctx context.Context, ids []string) error
 }
 
 // PendingAcknowledgmentLister is an optional retention extension. It lists replies
