@@ -548,8 +548,10 @@ func (u *Run) resultIn(e agent.ToolResultEvent, now time.Time) {
 // indicator at once, as a tool event does; it shows none of the update's text, since that mode names nothing the agent does.
 // In steps-and-activity an update with a line, where Working… may show (no call with an ID under way), stands for Working…
 // until the next event: it titles the open Working… card, or the card the delay begins, and on a message that is updated it
-// is the line at once, which the next write can take back. It begins no card itself: a card stays in the stream once sent,
-// and kagent 0.9.x repeats its answer in an update just before the text that would end such a card. Being the next event, it
+// is the line at once (idle), which the next write can take back. Which of the two the run shows is the path's, so this
+// holds for a turn that moved from the stream to the update path as well. It begins no card and closes no gap itself: a
+// card stays in the stream once sent, and kagent 0.9.x repeats its answer in an update just before the text that would end
+// such a card; the delay's card, if it comes, is titled with the line while it stands. Being the next event, it
 // ends a call with no ID, which was under way until then, and begins the gap that such a call held off. An update with no
 // line shows nothing there, and the gap runs on: were it to begin the gap again, an agent that sends empty updates more often
 // than the delay would never show Working…. The caller holds u.mu.
@@ -568,9 +570,7 @@ func (u *Run) progressIn(line string, now time.Time) {
 		u.anon = false
 		u.reopenGap(now)
 	}
-	if !u.eligible {
-		u.showWorking()
-	}
+	u.idle = true
 }
 
 // reopenGap begins a gap at now, in which the run waits the delay for something new before it shows that it is working. No

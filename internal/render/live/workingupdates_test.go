@@ -1,7 +1,9 @@
 package live_test
 
 import (
+	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -252,5 +254,27 @@ func TestAProgressLineEndsACallWithNoID(t *testing.T) {
 	e.finish(t, run)
 	if got := cards(t, e.reply()); !strings.Contains(strings.Join(got, "\n"), "s2 Reading the results in_progress") {
 		t.Errorf("cards:\n%s\nwant the delay's card titled with the line", strings.Join(got, "\n"))
+	}
+}
+
+// A turn whose stream the platform refused for good is posted and updated instead, and shows the progress line as the update
+// path does: at once, in place of the line of the call that returned.
+func TestAMovedTurnShowsTheProgressLineAtOnce(t *testing.T) {
+	e := setup(t)
+	e.cfg.Platform = spy{Platform: e.cfg.Platform, caps: e.cfg.Platform.Capabilities(), steps: new(atomic.Int32), streamFail: fmt.Errorf("start: %w", errRefused)}
+	e.live = newRenderer(t, e.cfg)
+	run := e.progressRun(t, sa, "U1")
+	run.Handle(call("c1", "search", nil))
+	e.until(t, "the post", 3*time.Second, func() bool { return strings.Contains(e.said(), "Calling search") })
+	run.Handle(result("c1", map[string]any{"output": "x"}))
+	run.Handle(update("Reading the pod logs"))
+	if spent := e.until(t, "the line", 3*time.Second, func() bool { return strings.Contains(e.said(), "Reading the pod logs") }); spent >= 3*time.Second {
+		t.Fatalf("the line was written after %v; want it at once", spent)
+	}
+	run.Handle(text("a", "Found it."))
+	run.Handle(agent.FinalEvent{})
+	e.finish(t, run)
+	if m := e.reply(); m.Text != "Found it." || strings.Contains(string(m.Blocks), "Reading") {
+		t.Errorf("final message %+v; want the answer alone", m)
 	}
 }
