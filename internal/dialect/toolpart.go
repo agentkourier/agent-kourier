@@ -59,8 +59,8 @@ func DecodeToolPart(part *a2a.Part) (ToolPart, bool) {
 var thoughtKeys = [...]string{"adk_thought", "kagent_thought", "kagent.dev/a2a/thought"}
 
 // IsThought says whether a part is marked as the model's reasoning, the same way on every dialect: its metadata holds one
-// of the thought keys (adk_thought, kagent_thought, kagent.dev/a2a/thought) with the value true. Agent Kourier does not
-// show the model's reasoning (spec D44), so a caller that shows a part's text leaves such a part out.
+// of the thought keys (adk_thought, kagent_thought, kagent.dev/a2a/thought) with the value true. The progress line leaves
+// such a part out, so that it never shows the model's reasoning (spec D44); the answer's text parts are not filtered so.
 func IsThought(part *a2a.Part) bool {
 	if part == nil {
 		return false

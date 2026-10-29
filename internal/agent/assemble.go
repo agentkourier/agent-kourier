@@ -248,7 +248,8 @@ func (a *assembler) progress(m *a2a.Message, changed bool) {
 }
 
 // toldByTools says whether the message of a working update is the agent's and holds a tool part: the update is told by its
-// tool events, and is no ProgressEvent. Any other message's tool parts are not read, so its update is progress like any other.
+// tool events, and is no ProgressEvent. Any other message's tool parts are not read, so its update is progress like any
+// other.
 func toldByTools(m *a2a.Message) bool {
 	if !readable(a2a.TaskStateWorking, m) {
 		return false
