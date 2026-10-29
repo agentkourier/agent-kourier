@@ -14,19 +14,23 @@ import (
 
 func update(s string) agent.ProgressEvent { return agent.ProgressEvent{Text: s} }
 
-// In steps-and-activity, a working update with text shows it at once as the title of a Working… card, until the next event:
-// an update with no text puts Working… back, and the next tool call takes the card over.
-func TestAProgressLineTitlesAWorkingCardAtOnce(t *testing.T) {
+// In steps-and-activity, a working update with text stands for Working… until the next event: the card the delay begins is
+// titled with it, an update with no text puts Working… back, and the next tool call takes the card over.
+func TestAProgressLineTitlesTheWorkingCard(t *testing.T) {
 	e := setup(t)
 	run := e.progressRun(t, sa, "U1")
 	run.Handle(text("a", "Checking."))
 	e.writesReach(t, 1)
 	run.Handle(update("Reading the pod logs"))
-	if spent := e.until(t, "the card", 3*time.Second, func() bool { return len(e.tasks()) == 1 }); spent >= 3*time.Second {
-		t.Fatalf("the card began after %v; want it at once, not at the delay", spent)
+	if spent := e.until(t, "the card", 3*time.Second, func() bool { return len(e.tasks()) == 1 }); spent < 3*time.Second {
+		t.Fatalf("the card began after %v; want the delay, 3 s: a line begins no card of its own", spent)
 	}
 	run.Handle(update(""))
 	e.until(t, "Working… again", 3*time.Second, func() bool { return e.tasks()[0].Title == "Working…" })
+	run.Handle(update("Reading the events"))
+	if spent := e.until(t, "the retitle", 3*time.Second, func() bool { return e.tasks()[0].Title == "Reading the events" }); spent >= 3*time.Second {
+		t.Fatalf("the open card was retitled after %v; want it at the next write", spent)
+	}
 	run.Handle(call("c1", "kubectl_get", map[string]any{"ns": "prod"}))
 	e.until(t, "the claim", 3*time.Second, func() bool { return e.tasks()[0].Title == "kubectl_get" })
 	run.Handle(result("c1", map[string]any{"output": "3 pods"}))
@@ -37,6 +41,7 @@ func TestAProgressLineTitlesAWorkingCardAtOnce(t *testing.T) {
 	wantCards(t, m,
 		"s1 Reading the pod logs in_progress",
 		"s1 Working… in_progress",
+		"s1 Reading the events in_progress",
 		`s1 kubectl_get in_progress [ns="prod"]`,
 		"s1 kubectl_get complete",
 	)
@@ -46,7 +51,26 @@ func TestAProgressLineTitlesAWorkingCardAtOnce(t *testing.T) {
 	e.assertInert(t)
 }
 
-// Text that comes while the progress line titles the card ends the card as any Working… card that text ends.
+// kagent 0.9.x repeats its answer in a working update just before the artifact that holds it. A line that text follows within
+// the delay makes no card, so such a turn shows only its tool steps and its text.
+func TestAProgressLineThatTextFollowsMakesNoCard(t *testing.T) {
+	e := setup(t)
+	run := e.progressRun(t, sa, "U1")
+	run.Handle(call("c1", "k8s_get_resources", nil))
+	e.until(t, "the card", 3*time.Second, func() bool { return len(e.tasks()) == 1 })
+	run.Handle(result("c1", map[string]any{"output": "46"}))
+	run.Handle(update("The cluster has 46 namespaces."))
+	e.elapse(time.Second)
+	run.Handle(text("a", "The cluster has 46 namespaces."))
+	run.Handle(agent.FinalEvent{})
+	e.finish(t, run)
+	if got := cards(t, e.reply()); len(got) != 2 || !strings.HasPrefix(got[0], "s1 k8s_get_resources") || !strings.HasPrefix(got[1], "s1 k8s_get_resources") {
+		t.Errorf("cards:\n%s\nwant the tool's card alone", strings.Join(got, "\n"))
+	}
+}
+
+// Text that comes while the progress line titles the card ends the card as any Working… card that text ends. The card is the
+// delay's.
 func TestTextEndsACardTheProgressLineTitled(t *testing.T) {
 	e := setup(t)
 	run := e.progressRun(t, sa, "U1")

@@ -75,7 +75,7 @@ func (a *assembler) apply(ev a2a.Event) {
 		}
 		changed := e.Status.State != a.state
 		a.setState(e.Status.State)
-		if e.Status.State == a2a.TaskStateWorking && !holdsTool(e.Status.Message) {
+		if e.Status.State == a2a.TaskStateWorking && !toldByTools(e.Status.Message) {
 			a.progress(e.Status.Message, changed)
 		}
 	case *a2a.TaskArtifactUpdateEvent:
@@ -245,10 +245,10 @@ func (a *assembler) progress(m *a2a.Message, changed bool) {
 	a.emit(ProgressEvent{Text: strings.Join(text, "\n")})
 }
 
-// holdsTool says whether a message holds a tool part, whoever sent it: an update that does is told by its tool events,
-// or is a message that is not read for them, and is no ProgressEvent.
-func holdsTool(m *a2a.Message) bool {
-	if m == nil {
+// toldByTools says whether the message of a working update is the agent's and holds a tool part: the update is told by its
+// tool events, and is no ProgressEvent. Any other message's tool parts are not read, so its update is progress like any other.
+func toldByTools(m *a2a.Message) bool {
+	if !readable(a2a.TaskStateWorking, m) {
 		return false
 	}
 	for _, p := range m.Parts {

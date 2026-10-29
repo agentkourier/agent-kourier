@@ -542,10 +542,12 @@ func (u *Run) resultIn(e agent.ToolResultEvent, now time.Time) {
 // progressIn takes a working update (spec D45 (1)), which is activity whether or not anything in it is understood. The
 // activity mode counts it, and begins its indicator at once, as a tool event does; it shows none of the update's text, since
 // that mode names nothing the agent does. In steps-and-activity an update with a line of the agent's ends the call with no ID
-// that was under way until the next event, and shows the line at once where Working… may show (no call under way): it titles
-// the open Working… card, which it begins if none is open, or stands for the line of a message that is updated, until the
-// next event. An update with no line shows nothing there, and the gap runs on: were it to begin the gap again, an agent that
-// sends empty updates more often than the delay would never show Working…. The caller holds u.mu.
+// that was under way until the next event, and, where Working… may show (no call under way), the line stands for Working…
+// until the next event: it titles the open Working… card, or the card the delay begins, and on a message that is updated it
+// is the line at once, which the next write can take back. It begins no card itself: a card stays in the stream once sent,
+// and kagent 0.9.x repeats its answer in an update just before the text that would end such a card. An update with no line
+// shows nothing there, and the gap runs on: were it to begin the gap again, an agent that sends empty updates more often
+// than the delay would never show Working…. The caller holds u.mu.
 func (u *Run) progressIn(e agent.ProgressEvent, now time.Time) {
 	if u.progress == v1alpha1.ProgressActivity {
 		u.updates++
@@ -563,7 +565,9 @@ func (u *Run) progressIn(e agent.ProgressEvent, now time.Time) {
 		return
 	}
 	u.note = line
-	u.showWorking()
+	if !u.eligible {
+		u.showWorking()
+	}
 }
 
 // reopenGap begins a gap at now, in which the run waits the delay for something new before it shows that it is working. No

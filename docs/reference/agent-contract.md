@@ -163,12 +163,13 @@ card lists the extension.
 
 On every dialect, a status update in state `working` whose message holds no tool part is a working update: a sign that
 the agent is at work, whether or not Agent Kourier understands anything in it. The update that makes the task `working`,
-at the start of a turn or after a pause, counts only if its message has text. An update that holds a tool part counts as its tool call or result
-instead, and a task snapshot (`GetTask`, `SubscribeToTask`) holds no working update.
+at the start of a turn or after a pause, counts only if its message has text. An update whose message is the agent's and
+holds a tool part counts as its tool call or result instead. A task snapshot, the one `GetTask` returns or a resubscribe
+opens with, holds no working update; the updates that stream after it do.
 
 When the update's message is the agent's own (role `agent`), its text parts, joined by line breaks, are the agent's
 progress line. The user's message echoed back, as kagent 1.0 sends it when an approval is answered, has none. Agent
-Kourier redacts secrets from the line, puts it on one line and cuts it to 160 characters. The line is untrusted text,
+Kourier redacts secrets from the line, puts it on one line and cuts it to 160 UTF-16 units. The line is untrusted text,
 shown literally, and never part of the answer. What a reply shows of it depends on the Binding's `chat.progress`
 ([Output](../explanation/threads-and-sessions.md#output)): `steps-and-activity`, the default, shows the line in place of
 `Working…` when no tool call is under way, and `activity` counts the updates and shows none of their text.

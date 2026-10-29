@@ -265,13 +265,13 @@ This release reads the status updates an agent sends in state `working` on every
 [Working updates](../reference/agent-contract.md#working-updates) describes. No Binding fails to load for it, and an
 agent that sends no such update sees no change.
 
-- **`steps-and-activity` shows the agent's progress line.** The text of a working update titles the `Working…` card in a
-  chat thread, or replaces the `Working…` line in an alert thread, as soon as it arrives and no tool call is under way,
-  where `Working…` used to wait 3 seconds. Each change of line is one more write to Slack, by default at most one every
-  2 seconds for each reply.
+- **`steps-and-activity` shows the agent's progress line.** When no tool call is under way, the text of a working update
+  titles the `Working…` card of a chat thread while it is open, and replaces the `Working…` line of an alert thread as
+  soon as it arrives, where that line used to wait 3 seconds. Each change of line is one more write to Slack, by default
+  at most one every 2 seconds for each reply. No card is begun for a line.
 - **`activity` counts working updates.** While a turn has had no tool call or result, its card or line counts the
   updates (`Working… 5 updates`), and begins at the first one instead of after 3 seconds.
 - **kagent 0.9.x** repeats its answer in a working update, so in `steps-and-activity` the start of the answer can title
-  the card for a moment before the answer itself.
+  an open card, or be an alert thread's line, for a moment before the answer itself.
 
 `progress: steps` shows no working update.

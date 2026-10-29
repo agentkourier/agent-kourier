@@ -76,7 +76,7 @@ step. It is one of three values:
 | `progress` | Chat thread | Alert thread |
 |---|---|---|
 | `steps` | A card for each tool call. | The line for the latest tool call. |
-| `steps-and-activity` (the default) | The same, and when 3 seconds pass with no new text and no tool call under way, a card titled `Working…` begins. The next tool call takes that card over, so it carries the tool's name and arguments from then on; text instead retitles it `Wrote the answer`, and a tool call after that text retitles it `Wrote an update`. The agent's own progress line, when it sends one, titles the card at once. | The same, and `Working…` as a line of small print once 3 seconds pass with nothing new, in place of the line of a call that returned, until the next text or tool call. The agent's progress line takes the place of `Working…`, at once. |
+| `steps-and-activity` (the default) | The same, and when 3 seconds pass with no new text and no tool call under way, a card titled `Working…` begins. The next tool call takes that card over, so it carries the tool's name and arguments from then on; text instead retitles it `Wrote the answer`, and a tool call after that text retitles it `Wrote an update`. The agent's own progress line, when it sends one, titles the card while it is open. | The same, and `Working…` as a line of small print once 3 seconds pass with nothing new, in place of the line of a call that returned, until the next text or tool call. The agent's progress line takes the place of `Working…`, as soon as it arrives. |
 | `activity` | One card for the whole wait, begun at the first tool call or result or working update, or after 3 seconds, and only before any text. Its title counts the tool calls that have a result, such as `Working… 12 steps, 3 failed`, or, while there has been none, the working updates, such as `Working… 5 updates`. At the first text it becomes `Worked`, with `Took 3 min 26 s, 16 steps (7 failed)`. | One line, `Working… (2 min, 12 steps, 3 failed)`, or `Working… (2 min, 5 updates)`, until the first text. |
 
 The `activity` mode never shows a tool's name or arguments, or the agent's progress line, in the reply's cards and lines; a
@@ -134,18 +134,20 @@ and `activity` shows its card with no step count. When the platform has no step 
 
 Every dialect also reads the agent's working updates: a status update in state `working` that holds no tool part. The
 text of such an update, when the agent wrote one, is its progress line, such as `Reading the pod logs`. Secrets are
-redacted from it, it is put on one line and cut to 160 characters, and it is never part of the answer.
+redacted from it, it is put on one line and cut to 160 UTF-16 units (160 characters of most text), and it is never part
+of the answer.
 
 - `steps` shows no working update.
-- `steps-and-activity` shows a progress line at once when no tool call is under way: as the title of the `Working…` card
-  in a chat thread, beginning one if none is open, or as the line of small print in an alert thread. It stands until the
-  next event: an update with no text puts `Working…` back, a tool call takes the card over, and text ends it as it ends
-  any `Working…` card. An update with no text shows nothing, and `Working…` still comes after 3 seconds.
+- `steps-and-activity` shows a progress line when no tool call is under way. In a chat thread it titles the `Working…`
+  card that is open, or the one that begins after 3 seconds, but begins no card itself, so a line that the answer follows
+  at once leaves no card behind. In an alert thread it is the line of small print, as soon as it arrives. It stands until
+  the next event: an update with no text puts `Working…` back, a tool call takes the card over, and text ends it as it
+  ends any `Working…` card. An update with no text shows nothing, and `Working…` still comes after 3 seconds.
 - `activity` counts each working update and begins its card or line at the first one, and shows the count while the
   turn has had no tool call or result.
 
 kagent 0.9.x repeats its answer in a status update just before the answer itself, so in `steps-and-activity` the start of
-the answer can title the card for a moment before the answer replaces it.
+the answer can title an open card, or be an alert thread's line, for a moment before the answer replaces it.
 
 ## Restarts
 

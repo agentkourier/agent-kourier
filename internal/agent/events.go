@@ -43,8 +43,8 @@ type ToolResultEvent struct {
 // message is the agent's own, its text parts joined by line breaks: the agent's account of what it is doing, which is
 // untrusted and never part of the answer. It is empty for an update with no message, the user's message echoed back, or
 // a message with no text. The update that makes the task working is the change of state, and a ProgressEvent only if it
-// has text. An update that holds a tool part is told as its tool events, and a task snapshot as what it changed: neither
-// is a ProgressEvent.
+// has text. An update whose message is the agent's and holds a tool part is told as its tool events, and a task snapshot
+// (the one a GetTask returns, or a resubscribe opens with) as what it changed: neither is a ProgressEvent.
 type ProgressEvent struct {
 	Text string
 }

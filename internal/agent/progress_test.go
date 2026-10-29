@@ -50,7 +50,7 @@ func TestWorkingUpdatesAreProgress(t *testing.T) {
 		{"an update with a tool call is its tool event", []a2a.Event{working(nil), working(agentSays("m1", callPart(v09, "c1"), textOf("calling")))}, nil},
 		{"an update with a tool result is its tool event", []a2a.Event{working(nil), working(agentSays("m1", resultPart(adk, "c1", okResp)))}, nil},
 		{"a repeated tool part is still a tool part", []a2a.Event{working(nil), working(agentSays("m1", callPart(adk, "c1"))), working(agentSays("m1", callPart(adk, "c1")))}, nil},
-		{"a user's echo with a tool part is no progress", []a2a.Event{working(nil), working(messageOf(a2a.MessageRoleUser, "u1", callPart(adk, "c1")))}, nil},
+		{"a user's echo with a tool part is progress, its part unread", []a2a.Event{working(nil), working(messageOf(a2a.MessageRoleUser, "u1", callPart(adk, "c1")))}, []string{"-"}},
 		{"a pause is no progress", []a2a.Event{working(nil), statusOf(a2a.TaskStateInputRequired, agentSays("m1", textOf("Which one?")))}, nil},
 		{"the end is no progress", []a2a.Event{working(nil), statusOf(a2a.TaskStateCompleted, agentSays("m1", textOf("Done")))}, nil},
 		{"back to working after a pause is the change of state", []a2a.Event{working(nil), statusOf(a2a.TaskStateInputRequired, nil), working(nil)}, nil},
