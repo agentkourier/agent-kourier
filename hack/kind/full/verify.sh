@@ -21,7 +21,7 @@ CTX=kind-agent-kourier-full
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source-path=SCRIPTDIR source=../lib.sh
 . "${HERE}/../lib.sh"
-CURL_IMAGE=curlimages/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac
+CURL_IMAGE=curlimages/curl:8.23.0@sha256:3fb7e13e5d179a845c97d78204f3f1064d1907037f26a3ebf91710571151fd93
 K=(kubectl --context "${CTX}")
 NODE=agent-kourier-full-control-plane
 for tool in kubectl docker jq; do
