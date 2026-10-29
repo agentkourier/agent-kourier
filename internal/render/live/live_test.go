@@ -439,6 +439,8 @@ func TestDeltasInOneWindowAreOneUpdate(t *testing.T) {
 
 func TestFinalTextIsTheLastUpdateAndToolLinesAreDropped(t *testing.T) {
 	e := setup(t)
+	// The status line is the update path's on a platform without steps; on one with steps the updates show cards (listed_test.go).
+	e.spy(t, false, nil)
 	run, _ := e.start(t, v1alpha1.OutputLive, false)
 	run.Handle(text("a", "Looking"))
 	eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })

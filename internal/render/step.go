@@ -54,6 +54,14 @@ func Failed(response any) bool {
 	return false
 }
 
+// EarlierSteps is the line above the steps of a message that shows only the latest of them: how many came before, n of them.
+func EarlierSteps(n int) string {
+	if n == 1 {
+		return "1 earlier step is not shown."
+	}
+	return fmt.Sprintf("%d earlier steps are not shown.", n)
+}
+
 // ApprovalTitle begins the title of the step of a tool call that waits for a person to approve it, which the tool's name
 // ends.
 const ApprovalTitle = "Approval requested: "
