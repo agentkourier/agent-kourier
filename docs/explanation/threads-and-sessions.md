@@ -65,30 +65,38 @@ What a live reply shows of the agent's work depends on where the thread is and o
   call, in the order the calls were made. The card begins when the call arrives and finishes when its result does. Every
   dialect reports the tool calls of an agent that marks them as Google ADK or kagent does; see
   [Tool calls and results](../reference/agent-contract.md#tool-calls-and-results).
-- **An alert thread** has no one to show a stream to, so one message is updated instead. A line of small print names the
-  latest tool call: `Calling name(arguments)` while it is under way, `Ran name(arguments)` once its result has arrived,
-  and `name(arguments) failed` if the result reports a failure. A call that has its result is shown only while the message
-  has no text yet, and the text replaces the line.
+- **An alert thread** has no one to show a stream to, so one message is posted and then updated instead. Its first post
+  has a line of small print that names the latest tool call: `Calling name(arguments)` while it is under way,
+  `Ran name(arguments)` once its result has arrived, and `name(arguments) failed` if the result reports a failure. Every
+  update after it shows a step card for each tool call above the text, in place of the line, as a chat thread does, and
+  the final message keeps them. It shows the latest 20 cards; when there are more, a line above them says how many earlier
+  steps are not shown. On a platform without step cards every write shows the line instead, and a call that has its result
+  is shown only while the message has no text yet: the text replaces the line.
 
 `chat.progress` adds a sign of life for the seconds when the agent says nothing, which is when a model is deciding its next
 step. It is one of three values:
 
 | `progress` | Chat thread | Alert thread |
 |---|---|---|
-| `steps` | A card for each tool call. | The line for the latest tool call. |
-| `steps-and-activity` (the default) | The same, and when 3 seconds pass with no new text and no tool call under way, a card titled `Working…` begins. The next tool call takes that card over, so it carries the tool's name and arguments from then on; text instead retitles it `Wrote the answer`, and a tool call after that text retitles it `Wrote an update`. | The same, and `Working…` as a line of small print once 3 seconds pass with nothing new, in place of the line of a call that returned, until the next text or tool call. |
+| `steps` | A card for each tool call. | The line for the latest tool call in the first post, and a card for each tool call in every update after it. |
+| `steps-and-activity` (the default) | The same, and when 3 seconds pass with no new text and no tool call under way, a card titled `Working…` begins. The next tool call takes that card over, so it carries the tool's name and arguments from then on; text instead retitles it `Wrote the answer`, and a tool call after that text retitles it `Wrote an update`. | The same, and `Working…` once 3 seconds pass with nothing new: a line of small print in place of the line of a call that returned when it is the first post, and otherwise a card, which the next tool call takes over and text retitles, as in a chat thread. |
 | `activity` | One card for the whole wait, begun at the first tool call or result, or after 3 seconds, and only before any text. Its title counts the tool calls that have a result, such as `Working… 12 steps, 3 failed`. At the first text it becomes `Worked`, with `Took 3 min 26 s, 16 steps (7 failed)`. | One line, `Working… (2 min, 12 steps, 3 failed)`, until the first text. |
 
 The `activity` mode never shows a tool's name or arguments in the reply's cards and lines; a tool approval prompt, with
 `interactions.toolApprovals`, still names the tool and shows its arguments. No mode shows the agent's reasoning: Agent Kourier does not read
 it, and the `Working…` title says nothing about what the agent is doing. The 3 second delay is not configurable. The
-`Working…` card or line is written once for a gap, and no other write follows the clock. A gap longer than the delay costs
-at most three writes more than `steps` spends in a chat thread (the card's begin; its end, when no tool call takes it over;
-and its retitle, when text ended it and a tool call follows that text), and one more message update in an alert thread. The `activity` card is written when a result changes a count, at most
+`Working…` card or line is written once for a gap, and no other write follows the clock, save the update that puts an alert
+thread's first post's cards in place of its line. A gap longer than the delay costs at most three writes more than `steps`
+spends in a chat thread (the card's begin; its end, when no tool call takes it over; and its retitle, when text ended it and
+a tool call follows that text), and one more message update in an alert thread. An alert thread whose first post shows a line
+that its cards replace makes one more update for that, once the throttle allows. The `activity` card is written when a result changes a count, at most
 once in a throttle window, and its line's elapsed minutes are refreshed only when an event makes a write.
 
 In an alert thread, a turn that is silent for 3 seconds now posts `Working…` as its message. If the turn then ends with
-nothing to show, or fails, that message is left saying `(no output)`; under `steps` such a turn posted nothing. A chat
+nothing to show, or fails, that message is left saying `(no output)`, or, once an update has shown its `Working…` card, the
+card ended as a chat thread's is; under `steps` such a turn posted nothing. A turn whose
+updates show cards and that ends with no text ends with the cards and nothing under them, its fallback text the last card's
+title. A chat
 thread whose stream was started for a card, and whose platform then refuses cards, is stopped with the same `(no output)`
 when the turn ends empty, and is not left open.
 
@@ -123,14 +131,15 @@ thread may take it off. It clears it when the turn ends, whether the turn finish
 question. It adds no write of its own on a timer. A chat thread never sets it. If Slack answers that the app or workspace cannot use the method, Agent Kourier logs
 that once at info level and sets no status on that connection until it restarts; any other error stops it for that turn only.
 The replies are unaffected. In our testing the status reached only clients
-that were open when it was set, so it adds to the `Working…` line and does not replace it
+that were open when it was set, so it adds to the `Working…` card or line and does not replace it
 ([Configure Slack](../how-to/configure-slack.md#what-the-app-is-allowed-to-do) has what was tested and which scope).
 
 Every dialect reads tool calls the same way, so an agent on the generic `a2a` dialect that marks its tool parts as Google
 ADK or kagent does (`adk_type`, `kagent_type` or `kagent.dev/a2a/part-type`) gets the same cards and lines. An agent that
 marks none has no tool events: `steps` shows nothing until text, `steps-and-activity` shows a `Working…` card in each gap,
 and `activity` shows its card with no step count. When the platform has no step cards, or Slack refuses them for a stream
-(the stream is then plain text), no mode shows a card.
+(the stream is then plain text), no mode shows a card. If Slack refuses an alert thread's update with cards, the update is
+sent again without them, and the reply shows the line from then on.
 
 ## Restarts
 
@@ -140,7 +149,8 @@ a half-written message is replaced with the whole answer and the thread finishes
 keeps the cards the stream would show, before the text: each tool call's, or in the activity modes the `Working…` or
 activity card, kept up to date while the task runs, and a call with no result by the end says
 `No result was reported.`. The same holds when a reply's text changed after it was streamed and the message is
-rewritten. If Slack refuses the cards, the message is written again without them.
+rewritten, and for an alert thread's reply, which is updated with its cards. If Slack refuses the cards, the message is
+written again without them.
 
 ## Lifetime
 

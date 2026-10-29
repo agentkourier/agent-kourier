@@ -64,6 +64,13 @@ func setupBusy(t *testing.T, prepare ...func(*chattest.FakePlatform)) *busyEnv {
 	return &busyEnv{env: e, fake: fake, by: by, at: chat.Target{Channel: "C1", Thread: e.root}}
 }
 
+// noSteps makes the fake a platform without steps, whose updates show the status line as its first post does.
+func noSteps(f *chattest.FakePlatform) {
+	caps := f.Capabilities()
+	caps.Steps = false
+	f.SetCaps(caps)
+}
+
 // start starts an alert-thread turn in the progress mode.
 func (b *busyEnv) start(t *testing.T, mode v1alpha1.ProgressMode) *live.Run {
 	t.Helper()
@@ -110,7 +117,7 @@ func TestTheThreadIsMarkedWhenTheTurnStartsAndClearedWhenItEnds(t *testing.T) {
 // A post in the thread takes the mark off, so each write that the run makes is followed by a mark: and a write that is not
 // made, because the state shows what is already there, is followed by none. No mark comes of a clock alone.
 func TestEachWriteIsFollowedByAMarkAndNothingElseMarks(t *testing.T) {
-	b := setupBusy(t)
+	b := setupBusy(t, noSteps) // with steps the Working… post is followed by the update that shows its card: TestTheMarkIsSetAgainBetweenAPostAndTheUpdateThatShowsItsCards
 	run := b.start(t, sa)
 	b.waitMarks(t, true)
 
@@ -138,6 +145,19 @@ func TestEachWriteIsFollowedByAMarkAndNothingElseMarks(t *testing.T) {
 	if b.fake.Busy(b.at) {
 		t.Error("the thread is still marked after the turn")
 	}
+}
+
+// With steps, a quiet turn's Working… post is followed, a window later, by the update that shows its card: the post may take
+// the mark off, so the mark is set again after it, and again after the update.
+func TestTheMarkIsSetAgainBetweenAPostAndTheUpdateThatShowsItsCards(t *testing.T) {
+	b := setupBusy(t)
+	run := b.start(t, sa)
+	b.waitMarks(t, true)
+	b.elapse(30 * time.Second)
+	b.until(t, "the Working… card", 5*time.Second, func() bool { m := b.fake.Messages(); return len(m) == 1 && m[0].Updates == 1 })
+	b.waitMarks(t, true, true, true) // the start, after the post, after the update
+	run.Handle(agent.FinalEvent{})
+	b.finish(t, run)
 }
 
 // The mark is cleared on every way a turn can end.

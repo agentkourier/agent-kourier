@@ -279,12 +279,25 @@ var scripts = []struct {
 		run.Handle(text("a", "Checking"))
 		e.settle(t, 1) // the post
 		run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "kubectl_get", Args: map[string]any{"namespace": "prod", "resource": "pods", "password": "hunter2", "url": "https://user:s3cr3t@host.test/x"}})
+		e.settle(t, 2) // the update with the call's card, under way
+		run.Handle(agent.ToolResultEvent{CallID: "c1", Name: "kubectl_get"})
+		run.Handle(text("a", "Checking: three pods"))
+		e.settle(t, 3) // the update with the card done
+		run.Handle(agent.ToolCallEvent{CallID: "c2", Name: "search"})
+		run.Handle(text("a", "Checking: three pods, all ready"))
+		run.Handle(agent.FinalEvent{})
+		e.finish(t, run)
+	}},
+	{"tools-with-secrets-on-a-platform-without-steps", func(t *testing.T, e *env) { // every write shows the status line
+		e.spy(t, false, nil)
+		run, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive})
+		run.Handle(text("a", "Checking"))
+		e.settle(t, 1) // the post
+		run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "kubectl_get", Args: map[string]any{"namespace": "prod", "resource": "pods", "password": "hunter2", "url": "https://user:s3cr3t@host.test/x"}})
 		e.settle(t, 2) // the update with the tool line
 		run.Handle(agent.ToolResultEvent{CallID: "c1", Name: "kubectl_get"})
 		run.Handle(text("a", "Checking: three pods"))
 		e.settle(t, 3) // the update without it
-		run.Handle(agent.ToolCallEvent{CallID: "c2", Name: "search"})
-		run.Handle(text("a", "Checking: three pods, all ready"))
 		run.Handle(agent.FinalEvent{})
 		e.finish(t, run)
 	}},

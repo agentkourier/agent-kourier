@@ -97,8 +97,8 @@ make sandbox-alert ALERT=KubePodCrashLooping
 It prints `sent: KubePodCrashLooping firing`. About 30 seconds later the webhook posts
 `[kind] FIRING (1) - KubePodCrashLooping` to the alert channel.
 
-Within seconds a thread opens under that post. The investigation streams into it, with a step card for each tool
-call, and finds the `FATAL: cannot resolve payments-db` line in the `checkout` pod's log.
+Within seconds a thread opens under that post. The investigation is written into its reply as it goes, with a step card
+for each tool call, and finds the `FATAL: cannot resolve payments-db` line in the `checkout` pod's log.
 
 Reply in the thread, without a mention:
 

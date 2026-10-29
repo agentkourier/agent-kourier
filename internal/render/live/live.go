@@ -13,13 +13,16 @@
 // the text it was made: begun when the call is, finished when its result is. A step is only ever moved
 // forward, so nothing has to be taken back, save a call that a pause waits to have approved, which ends as waiting
 // (snapshot). Otherwise, such as in an alert thread, or on a platform that does not
-// stream, the turn posts and updates, and shows the latest tool call as a status line, in the past tense once its result
-// has arrived (render.Turn says when the line is shown). Neither path ever
+// stream, the turn posts and updates. Its first post shows the latest tool call as a status line, in the past tense once
+// its result has arrived (render.Turn says when the line is shown), since the outbox stores no steps; on a platform that has
+// progress steps every update after it shows the tool calls as steps above the text, the latest maxListed of them, in place of
+// the line, as a stream's do, and the final update keeps them. Neither path ever
 // updates a message that is still streaming. Between tool calls the agent is silent and the model is deciding, which
 // can take longer than a person waits, so a turn may show that it is working (Turn.Progress, spec 8.3): once a gap with
-// nothing new passes Config.ActivityDelay, a Working… card begins in the stream, or a Working… line in the message
-// that is updated. The delay is one timer wake of the run, and it is the only write that comes of a clock: every other
-// write follows an event. A turn whose context ends before its final event, as when the agent refuses the send or does
+// nothing new passes Config.ActivityDelay, a Working… card begins in the stream, or in the message that is updated (a
+// Working… line in its first post, or where there are no steps). The delay is one timer wake of the run, and it is the only
+// write that comes of a clock, with the update that puts a first post's steps in place of its line: every other write
+// follows an event. A turn whose context ends before its final event, as when the agent refuses the send or does
 // not take an answer, is ended the way a failed task is: its stream is stopped and its status line goes. One whose task
 // goes on under a later turn (session.ErrTurnContinues) is left for that turn to take over, or to end as this one would
 // have if that turn ends with no final event and nothing of its own. Text is built at the last step, from the raw events
@@ -27,6 +30,7 @@
 package live
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -60,6 +64,10 @@ const maxSteps = 50
 // maxBegins is the most steps one window begins: a platform's rate limit is a few calls a minute, and each step is
 // a call to begin it, with another to finish it. A window that finds more waits for the next.
 const maxBegins = 2
+
+// maxListed is the most steps a message that is updated shows: the latest, under a line that counts the ones before them, so
+// that a long run never crowds the text and the buttons out of the message.
+const maxListed = 20
 
 // Sender posts through the outbox: *outbox.Outbox.
 type Sender interface {
@@ -208,9 +216,11 @@ type Run struct {
 	owner *Renderer // the Renderer that started the run, which keeps the run its turn left (endLeft)
 	// earlier is the run of the same turn that was still rendering it when this one started, if any (Start).
 	earlier *Run
-	// eligible says the turn may show steps: it began as a stream, on a platform that has them. It is set at the
-	// start and never changed, which is why Handle may read it; streaming, which a takeover clears, is the goroutine's.
-	eligible bool
+	// eligible says the turn may show steps: it shows output as it goes, on a platform that has them, as a stream or as a
+	// message that is updated in a mode that names tools (not activity). listed says it is the second, from the start: its
+	// updates show the latest maxListed steps. Both are set at the start and never changed, which is why Handle may read
+	// them; streaming, which a takeover clears, is the goroutine's.
+	eligible, listed bool
 	// progress is the Turn's, reduced to what the run does: steps unless the mode is one that shows activity and the
 	// turn shows output as it goes. timed says the run keeps time: it has an activity mode and something to show it
 	// with (a stream that has steps, or a message that is updated). Both are set at the start and never changed.
@@ -224,8 +234,12 @@ type Run struct {
 	order     []a2a.ArtifactID
 	tool      *agent.ToolCallEvent // the latest call made, if any: the update path's status line is about it
 	toolState chat.ToolState       // how far the latest call has got: under way, or how it ended
-	steps     []stepRec            // the tool calls of a stream, in the order they were made
-	final     bool
+	steps     []stepRec            // the tool calls of a stream, or of a listed turn, in the order they were made
+	// dropped is how many steps a listed turn no longer keeps, the oldest, to keep maxListed; gone is the IDs of their calls,
+	// so that a call reported again is not shown as a new one.
+	dropped int
+	gone    map[string]bool
+	final   bool
 	// paused says the final event was a pause for input, not the end of the task: the reply so far is a question, and no answer to
 	// rate.
 	paused bool
@@ -262,7 +276,7 @@ type Run struct {
 	diverged  bool        // the streamed text is not a prefix of the final text
 	stream    chat.Stream // the stream this turn started
 	streamed  string      // the markdown sent to the stream so far
-	stepsSent []chat.Step // the steps sent to the stream, each as it was last sent
+	stepsSent []chat.Step // the steps sent to the stream, or shown by an update, each as it was last sent
 	stepsOff  bool        // the platform refused a step, or a message with steps, for good: the turn goes on without steps
 	stepFails int         // steps that failed in a row
 	more      bool        // a write left steps to begin, which the next window goes on with
@@ -311,9 +325,13 @@ const (
 // later. The session does this when it follows a task again under the turn whose send has not yet returned.
 func (r *Renderer) Start(ctx context.Context, t Turn) *Run {
 	streaming := t.Mode == v1alpha1.OutputLive && t.Recipient != "" && r.caps.Streams
-	u := &Run{cfg: r.cfg, caps: r.caps, owner: r, turn: t, streaming: streaming, eligible: streaming && r.caps.Steps, wake: make(chan struct{}, 1), done: make(chan struct{}), texts: map[a2a.ArtifactID]string{}, progress: v1alpha1.ProgressSteps}
+	u := &Run{cfg: r.cfg, caps: r.caps, owner: r, turn: t, streaming: streaming, wake: make(chan struct{}, 1), done: make(chan struct{}), texts: map[a2a.ArtifactID]string{}, progress: v1alpha1.ProgressSteps}
 	if t.Mode == v1alpha1.OutputLive && (t.Progress == v1alpha1.ProgressStepsAndActivity || t.Progress == v1alpha1.ProgressActivity) {
 		u.progress = t.Progress
+	}
+	u.eligible = r.caps.Steps && t.Mode == v1alpha1.OutputLive && (streaming || u.progress != v1alpha1.ProgressActivity)
+	if u.listed = u.eligible && !streaming; u.listed {
+		u.gone = map[string]bool{}
 	}
 	if r.caps.Busy && !streaming && u.progress != v1alpha1.ProgressSteps {
 		u.busy = &busyMark{m: r.cfg.Platform, off: &r.busyOff, at: chat.Target{Channel: t.Channel, Thread: t.Thread}, run: u}
@@ -463,22 +481,34 @@ func (u *Run) noteCall(e agent.ToolCallEvent) {
 	u.tool, u.toolState = &e, chat.ToolCalling
 }
 
-// beginStep records a tool call as a step of the stream, once: a call that is reported again is the same step, and
+// beginStep records a tool call as a step, once: a call that is reported again is the same step, and
 // a call with no ID, which no result can name, is a step of its own. A call that comes while the last step is a
 // Working… card that nothing has claimed takes that card over, so a gap and the call that ended it are one card; it
 // costs no step beyond the card. The activity mode shows no step for a call. The caller holds u.mu.
 func (u *Run) beginStep(e agent.ToolCallEvent) {
-	if !u.eligible || u.progress == v1alpha1.ProgressActivity || (e.CallID != "" && u.stepIndex(e.CallID) >= 0) {
+	if !u.eligible || u.progress == v1alpha1.ProgressActivity || (e.CallID != "" && (u.stepIndex(e.CallID) >= 0 || u.gone[e.CallID])) {
 		return
 	}
 	if n := len(u.steps); n > 0 && u.steps[n-1].open() { // a Working… card that is still unclaimed: the call is that card
 		u.steps[n-1].call, u.steps[n-1].kind = e, callStep
 		return
 	}
-	if len(u.steps) >= maxSteps {
+	u.addStep(stepRec{call: e, after: len(u.order)})
+}
+
+// addStep records r as the latest step. A stream shows the first maxSteps and no more. A listed turn keeps the latest
+// maxListed: the oldest makes way, and is counted (dropped), and its call is remembered (gone). The caller holds u.mu.
+func (u *Run) addStep(r stepRec) {
+	switch {
+	case !u.listed && len(u.steps) >= maxSteps:
 		return
+	case u.listed && len(u.steps) >= maxListed:
+		if id := u.steps[0].call.CallID; id != "" {
+			u.gone[id] = true
+		}
+		u.steps, u.dropped = u.steps[1:], u.dropped+1
 	}
-	u.steps = append(u.steps, stepRec{call: e, after: len(u.order)})
+	u.steps = append(u.steps, r)
 }
 
 // endStep finishes the step of a tool call that has its result: done, or failed if the response says so (render.Failed).
@@ -551,7 +581,7 @@ func (u *Run) beginActivity() {
 	}
 	u.begun = true
 	if u.eligible {
-		u.steps = append(u.steps, stepRec{kind: activityStep, after: len(u.order)})
+		u.addStep(stepRec{kind: activityStep, after: len(u.order)})
 	}
 }
 
@@ -571,8 +601,8 @@ func (u *Run) openIdle(seq int, now time.Time) {
 		return
 	}
 	u.idle = true
-	if n := len(u.steps); u.eligible && len(u.steps) < maxSteps && (n == 0 || !u.steps[n-1].open()) {
-		u.steps = append(u.steps, stepRec{kind: workingStep, after: len(u.order)})
+	if n := len(u.steps); u.eligible && (n == 0 || !u.steps[n-1].open()) {
+		u.addStep(stepRec{kind: workingStep, after: len(u.order)})
 	}
 }
 
@@ -749,8 +779,11 @@ func (u *Run) run(ctx context.Context) {
 				u.stale, u.sent = false, "" // the post may be the old message: write once more
 				continue
 			}
-			if u.more { // steps are left to begin: the next window, which the throttle spaces, goes on with them
+			if u.more { // steps are left to begin, or to show in place of a post's line: the next window, which the throttle spaces, goes on with them
 				u.more = false
+				if !v.final { // the post may have taken the mark off, and the next write is a window away; a final's is the last
+					u.busy.set(ctx)
+				}
 				continue
 			}
 			if v.final {
@@ -917,40 +950,56 @@ func (u *Run) want(v view) string {
 	if u.streaming {
 		return v.body + "\x00" + stepsKey(v.steps) + map[bool]string{false: "", true: "\x00final"}[v.final]
 	}
-	key, _ := json.Marshal(u.message(v)) // a message of parts of known kinds always marshals
+	return keyOf(u.message(v))
+}
+
+// keyOf is m as want keys a message.
+func keyOf(m chat.Message) string {
+	key, _ := json.Marshal(m) // a message of parts of known kinds always marshals
 	return string(key)
 }
 
 // message is the message an update writes for v: v's own, after the steps of v while the turn shows them. A stream's
 // steps are the stream's, and a message that replaces the stream must carry them, for a platform may drop the stream's
 // cards when the message is updated, as Slack does (probed 2026-10-21): the update of a stream that diverged, and every
-// update of a stream that this turn took over (carries). No post carries them: what the outbox stores is v.m.
+// update of a stream that this turn took over (carries). A listed turn's updates carry its steps too, under a line that
+// counts the ones it no longer shows. No post carries them: what the outbox stores is v.posted().
 func (u *Run) message(v view) chat.Message {
 	if len(v.steps) == 0 || u.stepsOff {
 		return v.m
 	}
 	m := v.m
-	m.Parts = append([]chat.Part{chat.Steps{Steps: v.steps}}, v.m.Parts...)
+	m.Parts = []chat.Part{chat.Steps{Steps: v.steps}}
+	if v.earlier > 0 {
+		m.Parts = append([]chat.Part{chat.Context{Text: render.EarlierSteps(v.earlier)}}, m.Parts...)
+	}
+	m.Parts = append(m.Parts, v.m.Parts...)
+	if m.Fallback == "" { // an update with no fallback would leave the one the message had, such as a status line, as its text
+		m.Fallback = cmp.Or(v.post.Fallback, v.steps[len(v.steps)-1].Title)
+	}
 	return m
 }
 
 // update replaces the message at ref with the message of v. The steps never cost the reply its text: a message that
 // carries them and that the platform refuses as content it cannot show is sent again at once without them, with a
 // warning, and the turn shows no steps from then on. Today a refusal of that kind is never retried, so without this the
-// steps would take the answer down with them. A final whose steps were all it showed says "(no output)" without them.
+// steps would take the answer down with them. What is sent again is the message as a post shows it (posted): the status
+// line, which the steps stood in for, is back, and a final whose steps were all it showed says "(no output)". A message
+// that shows its steps records them as shown (sentStep), so that the final does not drop a card it showed.
 func (u *Run) update(ctx context.Context, ref chat.Ref, v view) error {
 	carried := len(v.steps) > 0 && !u.stepsOff
 	err := u.cfg.Platform.Update(ctx, ref, chat.Say(u.message(v)))
+	if err == nil && carried {
+		for _, st := range v.steps {
+			u.sentStep(st)
+		}
+	}
 	if err == nil || !carried || !u.cannotShow(err) {
 		return err
 	}
 	u.cfg.Logger.WarnContext(ctx, "live: the platform refused the message with its steps; it is sent again without them", "channel", u.turn.Channel, "err", err)
 	u.stepsOff = true
-	m := v.m
-	if v.final && m.Fallback == "" && len(m.Parts) == 0 {
-		m = render.Nothing()
-	}
-	return u.cfg.Platform.Update(ctx, ref, chat.Say(m))
+	return u.cfg.Platform.Update(ctx, ref, chat.Say(v.posted()))
 }
 
 // cannotShow says whether err is the platform's refusal of a message's content: one it found malformed, too large, or of a
@@ -997,20 +1046,28 @@ func (u *Run) write(ctx context.Context, ref *chat.Ref, v view) (telemetryErr er
 			u.adoptStop = false
 		}
 		err := u.update(ctx, *ref, v)
-		if err == nil {
+		switch {
+		case err != nil:
+		case u.stepsOff && len(v.steps) > 0: // the steps were refused, and the message was sent again as a post shows it
+			u.sent = keyOf(v.posted())
+		default:
 			u.sent = u.want(v)
 		}
 		return err
 	}
 	u.sends++
 	earlier := u.sends == 1 && u.rowMadeBefore(ctx)
-	got, err := u.cfg.Sender.Send(ctx, outbox.Post{Source: u.turn.Source, Role: store.OutboxReply, Channel: u.turn.Channel, Thread: u.turn.Thread, Out: chat.Say(v.m)})
+	posted := v.posted()
+	got, err := u.cfg.Sender.Send(ctx, outbox.Post{Source: u.turn.Source, Role: store.OutboxReply, Channel: u.turn.Channel, Thread: u.turn.Thread, Out: chat.Say(posted)})
 	if err == nil {
 		*ref = got
 		// A Send that follows a failed one, or that finds the turn's row made already (by an earlier attempt, here or in an
 		// earlier process), returns the message that is there, or posts the payload stored first, not necessarily this content.
 		u.stale = u.sends > 1 || earlier
-		u.sent = u.want(v)
+		// The post of a listed turn has its status line where its updates have the steps: the next window, which the throttle
+		// spaces, writes them, the final's included.
+		u.sent = keyOf(posted)
+		u.more = u.more || u.sent != u.want(v)
 	}
 	return err
 }
@@ -1024,22 +1081,35 @@ func (u *Run) rowMadeBefore(ctx context.Context) bool {
 
 // view is what the state shows at one moment.
 type view struct {
-	m    chat.Message // the message of the update path: the text so far, and the latest tool call's status line as render.Turn shows it
-	body string       // the text a stream carries
+	// m is the message of the update path: the text so far, and the latest tool call's status line as render.Turn shows it,
+	// unless the updates carry steps, which say the same. post is m with the line: what the first post shows (posted).
+	m, post chat.Message
+	body    string // the text a stream carries
 	// steps are the steps a stream shows, in the order of the calls, each in the state to show; and those of a turn that took
-	// over a stream, which its updates carry (message).
-	steps []chat.Step
-	pos   []int // where in body each step follows: the text before that place was written before the call
-	final bool
-	rated bool // the final is the task's end, not a pause: the footer belongs on it
-	ok    bool // there is something to show yet
+	// over a stream, or that is listed, which its updates carry (message). earlier is how many a listed turn shows no longer.
+	steps   []chat.Step
+	earlier int
+	pos     []int // where in body each step follows: the text before that place was written before the call
+	final   bool
+	rated   bool // the final is the task's end, not a pause: the footer belongs on it
+	ok      bool // there is something to show yet
+}
+
+// posted is the message the first post of v carries: post, since the outbox stores no steps, or "(no output)" for a final
+// whose steps are all it shows, which the update that follows replaces with them.
+func (v view) posted() chat.Message {
+	if v.post.Fallback == "" && len(v.post.Parts) == 0 {
+		return render.Nothing()
+	}
+	return v.post
 }
 
 // snapshot builds the state: the text so far as the body and, on the update path, the status line of the latest tool
 // call, in the tense of how far it has got (render.Turn says when it is shown), and on the stream path the steps. A
 // state with a status line is writable with no text, so a call that returned replaces the line that said it was under way.
 // Once the turn is final the line is gone, and a step with no result is ended: the turn will not hear of it again. A turn
-// that took over a stream has the steps too, which its updates carry, and no status line, since its cards say the same:
+// that took over a stream, or that is listed, has the steps too, which its updates carry, and no status line in them, since
+// its cards say the same (the first post, which carries no steps, keeps it):
 // steps make it writable with no text, the final included: a pause, or an end, with no text shows the cards and nothing
 // under them, as a stream that stops with steps and no text does. Only a turn with no text and no step is "(no output)".
 //
@@ -1057,18 +1127,19 @@ func (u *Run) snapshot() view {
 	tool, toolState, final, paused, awaiting := u.tool, u.toolState, u.final, u.paused, u.awaiting
 	idle, begun, finished, failed := u.idle, u.begun && !u.texted, u.finished, u.failed
 	var recs []stepRec
+	var dropped int
 	if u.stepsOn() || carries {
-		recs = slices.Clone(u.steps)
+		recs, dropped = slices.Clone(u.steps), u.dropped
 	}
 	u.mu.Unlock()
 	var now time.Time
 	if u.timed {
 		now = u.cfg.Now()
 	}
-	v := view{final: final, rated: final && !paused && !u.cutShort}
+	v := view{final: final, rated: final && !paused && !u.cutShort, earlier: dropped}
 	var shown *agent.ToolCallEvent
-	var status string                       // the update path's indicator that the agent is working
-	if !final && !u.streaming && !carries { // on the stream path a tool call is a step, and has no status line
+	var status string           // the update path's indicator that the agent is working
+	if !final && !u.streaming { // on the stream path a tool call is a step, and has no status line
 		shown = tool
 		switch {
 		case u.progress == v1alpha1.ProgressActivity: // names no tool
@@ -1088,8 +1159,12 @@ func (u *Run) snapshot() view {
 	if v.rated && v.body != "" && len(u.turn.Footer) > 0 { // a turn that ended with no text has no reply to rate, as a stream's stop says (stopFooter)
 		v.m.Parts = append(slices.Clone(v.m.Parts), u.turn.Footer...)
 	}
+	v.post = v.m
+	if carries && (shown != nil || status != "") { // the cards say what the line would: the updates leave it out
+		v.m, v.ok = render.Turn(events, nil, toolState, u.caps)
+	}
 	for i, r := range recs {
-		id := fmt.Sprintf("s%d", i+1)
+		id := fmt.Sprintf("s%d", dropped+i+1) // a step keeps its ID when the ones before it are dropped
 		if _, sent := u.sentOf(id); final && r.kind != callStep && v.body == "" && !sent {
 			continue // a card for time that was never shown is not content of a turn with no text: no stream is made for it
 		}
@@ -1132,7 +1207,9 @@ func (u *Run) stepOf(id string, r stepRec, state chat.StepState, now time.Time, 
 // it is still the stream it began as, and the platform has not refused one.
 func (u *Run) stepsOn() bool { return u.eligible && u.streaming && !u.stepsOff }
 
-// carries says whether the turn's updates carry its steps: it is eligible for them, it took over the stream of an earlier
-// run, which is the message it updates (a platform such as Slack drops a stream's cards from a message it updates), and the
-// platform has not refused a message with them.
-func (u *Run) carries() bool { return u.eligible && u.adopted && !u.streaming && !u.stepsOff }
+// carries says whether the turn's updates carry its steps: it is eligible for them, it is listed or it took over the stream
+// of an earlier run, which is the message it updates (a platform such as Slack drops a stream's cards from a message it
+// updates), and the platform has not refused a message with them.
+func (u *Run) carries() bool {
+	return u.eligible && (u.listed || u.adopted) && !u.streaming && !u.stepsOff
+}

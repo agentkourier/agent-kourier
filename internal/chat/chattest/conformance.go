@@ -307,6 +307,9 @@ func (c *checker) contract() {
 		c.zeroStop()
 		c.stepContract()
 	}
+	if c.caps.Steps {
+		c.messageSteps()
+	}
 	c.busyContract()
 	c.s.Sent() // the contract checks are not text checks
 	_ = c.s.Inert()
@@ -431,6 +434,51 @@ func (c *checker) stepContract() {
 	}
 	if err := st.Step(c.ctx, step); !errors.Is(err, chat.ErrNotStreaming) {
 		c.add(RuleContract, chat.WhereStepTitle, "Step", "after stop", "a step of a stopped stream gave %v, want an error wrapping chat.ErrNotStreaming", err)
+	}
+}
+
+// messageSteps checks a message with a Steps part on a platform that shows steps, not in a stream: a message that is posted,
+// and one that replaces another, as the reply of an alert thread does each time it is updated. Each is taken, and shows its
+// step's title and the text that follows the steps. (A platform with Steps false shows none of them: stepContract.)
+func (c *checker) messageSteps() {
+	out := chat.Say(chat.Message{Fallback: "fallback", Parts: []chat.Part{
+		chat.Steps{Steps: []chat.Step{{ID: "s1", Title: canary + " tool", Detail: "k=v", State: chat.StepDone}}},
+		chat.Body{Markdown: canary + " text"},
+	}})
+	var ref chat.Ref
+	for _, m := range []struct {
+		name string
+		prep func() error
+		do   func() error
+	}{
+		{name: "Post", do: func() error { _, err := c.s.Platform.Post(c.ctx, c.target, out, "tag-msg-steps"); return err }},
+		{name: "Update",
+			prep: func() (err error) {
+				ref, err = c.s.Platform.Post(c.ctx, c.target, chat.Say(chat.Message{Fallback: "seed"}), "tag-msg-steps-seed")
+				return err
+			},
+			do: func() error { return c.s.Platform.Update(c.ctx, ref, out) }},
+	} {
+		if m.prep != nil {
+			if err := m.prep(); err != nil {
+				c.add(RuleContract, chat.WhereStepTitle, m.name, "message steps", "the message to replace was not posted: %v", err)
+				continue
+			}
+		}
+		c.s.Sent()
+		_ = c.s.Inert()
+		if err := m.do(); err != nil {
+			c.add(RuleContract, chat.WhereStepTitle, m.name, "message steps", "a message with steps was refused: %v", err)
+			continue
+		}
+		var step, text bool
+		for _, s := range c.s.Sent() {
+			step = step || strings.Contains(s.Displayed, canary+" tool")
+			text = text || strings.Contains(s.Displayed, canary+" text")
+		}
+		if !step || !text {
+			c.add(RuleContract, chat.WhereStepTitle, m.name, "message steps", "a message with steps showed its step: %t, and its text: %t; want both", step, text)
+		}
 	}
 }
 

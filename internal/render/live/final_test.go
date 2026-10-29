@@ -93,6 +93,8 @@ func TestFinalIsGivenUpOnAtItsOwnDeadline(t *testing.T) {
 
 func TestFinalWithNothingToShowEndsTheRun(t *testing.T) {
 	e := setup(t)
+	// The status line is the update path's on a platform without steps; on one with steps the updates show cards (listed_test.go).
+	e.spy(t, false, nil)
 	// A message stands with a tool status line: it is not left up.
 	run, _ := e.start(t, v1alpha1.OutputLive, false)
 	run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "search"})
@@ -234,6 +236,8 @@ func TestFallbackTextIsCapped(t *testing.T) {
 // block escapes brackets as well, the plain_text tool line and the fallback text do not.
 func TestEachFieldIsEscapedInItsOwnFlavour(t *testing.T) {
 	e := setup(t)
+	// The status line is the update path's on a platform without steps; on one with steps the updates show cards (listed_test.go).
+	e.spy(t, false, nil)
 	run, _ := e.start(t, v1alpha1.OutputLive, false)
 	run.Handle(text("a", "<!channel> [x](https://evil.example) & \x07 end"))
 	eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
