@@ -477,6 +477,8 @@ github.com/sivchari/containedctx v1.0.3 h1:x+etemjbsh2fB5ewm5FeLNi5bUjK0V8n0RB+W
 github.com/sivchari/containedctx v1.0.3/go.mod h1:c1RDvCbnJLtH4lLcYD/GqwiBSSf4F5Qk0xld2rBqzJ4=
 github.com/slack-go/slack v0.30.1 h1:q6FjZssqts6hJ+DRWCnnO2YVUh+E3/UNrC0EIO2xci8=
 github.com/slack-go/slack v0.30.1/go.mod h1:radSmEe8GEgE+aK980ZafMR0AQhiZjADptN5k/gOw34=
+github.com/slack-go/slack v0.31.0 h1:gjep/mWO7igMHh9GU/Yc4jTgDlRkjMZWz99AD6zBuwY=
+github.com/slack-go/slack v0.31.0/go.mod h1:ph5iUlM1bUhqOeRynzryiWfkv6vVElt5JbhXbhtApsI=
 github.com/sonatard/noctx v0.5.1 h1:wklWg9c9ZYugOAk7qG4yP4PBrlQsmSLPTvW1K4PRQMs=
 github.com/sonatard/noctx v0.5.1/go.mod h1:64XdbzFb18XL4LporKXp8poqZtPKbCrqQ402CV+kJas=
 github.com/sourcegraph/go-diff v0.9.0 h1:7xcVsayWHhvxZGrqt1o89vvBApCa4nyCgO7tNxDHJ+Q=
