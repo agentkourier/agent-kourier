@@ -168,7 +168,9 @@ holds a tool part counts as its tool call or result instead. A task snapshot, th
 opens with, holds no working update; the updates that stream after it do.
 
 When the update's message is the agent's own (role `agent`), its text parts, joined by line breaks, are the agent's
-progress line. The user's message echoed back, as kagent 1.0 sends it when an approval is answered, has none. Agent
+progress line. A text part whose metadata holds `adk_thought`, `kagent_thought` or `kagent.dev/a2a/thought` set to
+`true` is the model's reasoning, as Google ADK and kagent mark it, and is left out. The user's message echoed back, as
+kagent 1.0 sends it when an approval is answered, has none. Agent
 Kourier redacts secrets from the line, puts it on one line and cuts it to 160 UTF-16 units. The line is untrusted text,
 shown literally, and never part of the answer. What a reply shows of it depends on the Binding's `chat.progress`
 ([Output](../explanation/threads-and-sessions.md#output)): `steps-and-activity`, the default, shows the line in place of

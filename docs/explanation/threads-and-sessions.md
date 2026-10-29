@@ -84,8 +84,9 @@ tool approval prompt, with `interactions.toolApprovals`, still names the tool an
 it, and the `Working…` title says nothing about what the agent is doing. The 3 second delay is not configurable. The
 `Working…` card or line is written once for a gap, and no other write follows the clock. A gap longer than the delay costs
 at most three writes more than `steps` spends in a chat thread (the card's begin; its end, when no tool call takes it over;
-and its retitle, when text ended it and a tool call follows that text), and one more message update in an alert thread. The `activity` card is written when a result changes a count, at most
-once in a throttle window, and its line's elapsed minutes are refreshed only when an event makes a write.
+and its retitle, when text ended it and a tool call follows that text), and one more message update in an alert thread.
+An agent's progress line (see below) adds a write each time the line changes, at most once in a throttle window. The
+`activity` card is written when a result or a working update changes a count, at most once in a throttle window, and its line's elapsed minutes are refreshed only when an event makes a write.
 
 In an alert thread, a turn that is silent for 3 seconds now posts `Working…` as its message. If the turn then ends with
 nothing to show, or fails, that message is left saying `(no output)`; under `steps` such a turn posted nothing. A chat
@@ -133,7 +134,8 @@ and `activity` shows its card with no step count. When the platform has no step 
 (the stream is then plain text), no mode shows a card.
 
 Every dialect also reads the agent's working updates: a status update in state `working` that holds no tool part. The
-text of such an update, when the agent wrote one, is its progress line, such as `Reading the pod logs`. Secrets are
+text of such an update, when the agent wrote one, is its progress line, such as `Reading the pod logs`. Text that the
+agent's framework marks as the model's reasoning is left out of it. Secrets are
 redacted from it, it is put on one line and cut to 160 UTF-16 units (160 characters of most text), and it is never part
 of the answer.
 

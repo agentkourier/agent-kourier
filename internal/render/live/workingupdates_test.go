@@ -235,3 +235,22 @@ func TestTheStepsModeShowsNoWorkingUpdate(t *testing.T) {
 		})
 	}
 }
+
+// A call with no ID is under way until the next event. A progress line is that event: the gap that the call held off begins,
+// and the card the delay begins carries the line.
+func TestAProgressLineEndsACallWithNoID(t *testing.T) {
+	e := setup(t)
+	run := e.progressRun(t, sa, "U1")
+	run.Handle(call("", "search", nil))
+	e.until(t, "the call's card", 3*time.Second, func() bool { return len(e.tasks()) == 1 })
+	run.Handle(update("Reading the results"))
+	if spent := e.until(t, "the Working… card", 3*time.Second, func() bool { return len(e.tasks()) == 2 }); spent < 3*time.Second {
+		t.Fatalf("the card began after %v; want the delay, 3 s", spent)
+	}
+	run.Handle(text("a", "Found it."))
+	run.Handle(agent.FinalEvent{})
+	e.finish(t, run)
+	if got := cards(t, e.reply()); !strings.Contains(strings.Join(got, "\n"), "s2 Reading the results in_progress") {
+		t.Errorf("cards:\n%s\nwant the delay's card titled with the line", strings.Join(got, "\n"))
+	}
+}

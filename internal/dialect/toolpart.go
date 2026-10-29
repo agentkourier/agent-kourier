@@ -51,3 +51,24 @@ func DecodeToolPart(part *a2a.Part) (ToolPart, bool) {
 	}
 	return ToolPart{Kind: ToolResult, ID: id, Name: name, Result: data["response"]}, true
 }
+
+// thoughtKeys mark a text part as the model's reasoning, not something it says to the reader: Google ADK's A2A converter
+// writes adk_thought (google/adk-python a2a/converters/part_converter.py, read at commit e2dbc0f), kagent 1.0 writes
+// kagent.dev/a2a/thought (kagent go/api/a2a/metadata.go, read at commit cdff41d), and kagent 0.9.x, which reuses ADK's
+// converter with its own prefix as for tool parts, would write kagent_thought (not measured).
+var thoughtKeys = [...]string{"adk_thought", "kagent_thought", "kagent.dev/a2a/thought"}
+
+// IsThought says whether a part is marked as the model's reasoning, the same way on every dialect: its metadata holds one
+// of the thought keys (adk_thought, kagent_thought, kagent.dev/a2a/thought) with the value true. Agent Kourier does not
+// show the model's reasoning (spec D44), so a caller that shows a part's text leaves such a part out.
+func IsThought(part *a2a.Part) bool {
+	if part == nil {
+		return false
+	}
+	for _, key := range thoughtKeys {
+		if thought, _ := part.Metadata[key].(bool); thought {
+			return true
+		}
+	}
+	return false
+}

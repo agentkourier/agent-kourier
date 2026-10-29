@@ -394,6 +394,10 @@ func (u *Run) Handle(ev agent.Event) {
 	if u.timed { // only a run that keeps time reads the clock, which a test may hold
 		now = u.cfg.Now()
 	}
+	var line string // a working update's progress line, redacted before the lock: only steps-and-activity shows one
+	if p, ok := ev.(agent.ProgressEvent); ok && u.timed && u.progress == v1alpha1.ProgressStepsAndActivity {
+		line = render.ProgressLine(p.Text)
+	}
 	u.mu.Lock()
 	u.note = "" // the progress line stands until the next event, whatever it is
 	switch e := ev.(type) {
@@ -426,7 +430,7 @@ func (u *Run) Handle(ev agent.Event) {
 		}
 	case agent.ProgressEvent:
 		if u.timed {
-			u.progressIn(e, now)
+			u.progressIn(line, now)
 		}
 	case agent.FinalEvent:
 		u.final = true
@@ -539,32 +543,31 @@ func (u *Run) resultIn(e agent.ToolResultEvent, now time.Time) {
 	u.reopenGap(now)
 }
 
-// progressIn takes a working update (spec D45 (1)), which is activity whether or not anything in it is understood. The
-// activity mode counts it, and begins its indicator at once, as a tool event does; it shows none of the update's text, since
-// that mode names nothing the agent does. In steps-and-activity an update with a line of the agent's ends the call with no ID
-// that was under way until the next event, and, where Working… may show (no call under way), the line stands for Working…
+// progressIn takes a working update (spec D45 (1)), which is activity whether or not anything in it is understood; line is
+// its progress line (render.ProgressLine), in steps-and-activity only. The activity mode counts the update, and begins its
+// indicator at once, as a tool event does; it shows none of the update's text, since that mode names nothing the agent does.
+// In steps-and-activity an update with a line, where Working… may show (no call with an ID under way), stands for Working…
 // until the next event: it titles the open Working… card, or the card the delay begins, and on a message that is updated it
 // is the line at once, which the next write can take back. It begins no card itself: a card stays in the stream once sent,
-// and kagent 0.9.x repeats its answer in an update just before the text that would end such a card. An update with no line
-// shows nothing there, and the gap runs on: were it to begin the gap again, an agent that sends empty updates more often
+// and kagent 0.9.x repeats its answer in an update just before the text that would end such a card. Being the next event, it
+// ends a call with no ID, which was under way until then, and begins the gap that such a call held off. An update with no
+// line shows nothing there, and the gap runs on: were it to begin the gap again, an agent that sends empty updates more often
 // than the delay would never show Working…. The caller holds u.mu.
-func (u *Run) progressIn(e agent.ProgressEvent, now time.Time) {
+func (u *Run) progressIn(line string, now time.Time) {
 	if u.progress == v1alpha1.ProgressActivity {
 		u.updates++
-		u.anon = false
 		u.beginActivity()
 		u.reopenGap(now)
 		return
 	}
-	line := render.ProgressLine(e.Text)
-	if line == "" || u.final {
-		return
-	}
-	u.anon = false
-	if u.inflight > 0 {
+	if line == "" || u.final || u.inflight > 0 {
 		return
 	}
 	u.note = line
+	if u.anon {
+		u.anon = false
+		u.reopenGap(now)
+	}
 	if !u.eligible {
 		u.showWorking()
 	}

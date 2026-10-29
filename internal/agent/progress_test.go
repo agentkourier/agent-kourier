@@ -27,6 +27,13 @@ func progress(evs []Event) []string {
 
 func textOf(s string) *a2a.Part { return a2a.NewTextPart(s) }
 
+// thought is a text part that key marks as the model's reasoning.
+func thought(key, s string) *a2a.Part {
+	p := a2a.NewTextPart(s)
+	p.Metadata = map[string]any{key: true}
+	return p
+}
+
 // A live working update that holds no tool part is the agent's activity, whether or not anything in it is understood, and the
 // text of the agent's own message is its progress line (spec D45 (1)). The update that makes the task working is the change of
 // state, and progress only if it says something.
@@ -44,6 +51,9 @@ func TestWorkingUpdatesAreProgress(t *testing.T) {
 		{"the agent's text", []a2a.Event{working(nil), working(agentSays("m1", textOf("Reading logs")))}, []string{"Reading logs"}},
 		{"text parts joined by line breaks", []a2a.Event{working(nil), working(agentSays("m1", textOf("one"), textOf("two")))}, []string{"one\ntwo"}},
 		{"a data part that is no tool part is opaque", []a2a.Event{working(nil), working(agentSays("m1", a2a.NewDataPart(map[string]any{"x": 1.0})))}, []string{"-"}},
+		{"the model's reasoning is not read", []a2a.Event{working(nil), working(agentSays("m1", thought("adk_thought", "I should check the pods"), textOf("Reading the pods")))}, []string{"Reading the pods"}},
+		{"an update of reasoning alone has no text", []a2a.Event{working(nil), working(agentSays("m1", thought("kagent_thought", "Private reasoning")))}, []string{"-"}},
+		{"kagent 1.0's reasoning", []a2a.Event{working(nil), working(agentSays("m1", thought("kagent.dev/a2a/thought", "Private reasoning")))}, []string{"-"}},
 		{"text beside an opaque data part", []a2a.Event{working(nil), working(agentSays("m1", a2a.NewDataPart(map[string]any{"x": 1.0}), textOf("ok")))}, []string{"ok"}},
 		{"the user's message echoed back has no text of the agent's", []a2a.Event{working(nil), working(messageOf(a2a.MessageRoleUser, "u1", textOf("yes")))}, []string{"-"}},
 		{"a message with no role has none either", []a2a.Event{working(nil), working(messageOf(a2a.MessageRoleUnspecified, "m1", textOf("hi")))}, []string{"-"}},
