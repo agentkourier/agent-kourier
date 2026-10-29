@@ -149,8 +149,8 @@ a half-written message is replaced with the whole answer and the thread finishes
 keeps the cards the stream would show, before the text: each tool call's, or in the activity modes the `Working…` or
 activity card, kept up to date while the task runs, and a call with no result by the end says
 `No result was reported.`. The same holds when a reply's text changed after it was streamed and the message is
-rewritten, and for an alert thread's reply, which is updated with its cards. If Slack refuses the cards, the message is
-written again without them.
+rewritten, and for an alert thread's reply in the `steps` and `steps-and-activity` modes, which is updated with its
+cards. If Slack refuses the cards, the message is written again without them.
 
 ## Lifetime
 

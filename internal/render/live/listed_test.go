@@ -1,6 +1,8 @@
 package live_test
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -9,12 +11,14 @@ import (
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
@@ -289,5 +293,44 @@ func TestARecoveredAlertThreadReplyUpdatesTheEarlierPostWithItsCards(t *testing.
 	m := e.reply()
 	if got := m.Tasks(); m.Text != "the whole answer" || len(got) != 1 || got[0].Title != "search" || got[0].Status != "complete" {
 		t.Fatalf("message %q with tasks %+v; want the answer under the call's card", m.Text, got)
+	}
+}
+
+// updatesFail is a platform on which every update fails as a write that could be tried again does.
+type updatesFail struct{ chat.Platform }
+
+func (updatesFail) Update(context.Context, chat.Ref, chat.Outgoing) error {
+	return errors.New("connection reset")
+}
+
+// A reply whose final post carried its answer is delivered, though the update that would add its cards never goes through:
+// the alert on failed finals is not for cards.
+func TestAnAlertThreadReplyWhoseCardsCannotBeAddedAfterItsAnswerIsDelivered(t *testing.T) {
+	e := setup(t)
+	e.cfg.Platform = updatesFail{e.cfg.Platform}
+	reg := prometheus.NewRegistry()
+	obs, err := telemetry.New(reg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renderer := newRenderer(t, e.cfg)
+	ctx, cancel := context.WithCancel(telemetry.WithObserver(t.Context(), obs))
+	defer cancel()
+	release := e.hold()
+	run := renderer.Start(ctx, live.Turn{Source: "turn-1", Channel: "C1", Thread: e.root, Mode: v1alpha1.OutputLive})
+	run.Handle(call("c1", "search", nil))
+	run.Handle(result("c1", map[string]any{"items": 1}))
+	run.Handle(text("a", "Found it."))
+	run.Handle(agent.FinalEvent{})
+	release()
+	e.finish(t, run)
+	if m := e.reply(); m.Text != "Found it." {
+		t.Fatalf("reply %q; want the answer, posted", m.Text)
+	}
+	if got := finalOutcomes(t, reg); strings.Join(got, ",") != "delivered" {
+		t.Errorf("final outcomes %v; want delivered", got)
+	}
+	if logs := e.logs.String(); strings.Contains(logs, "level=ERROR") || !strings.Contains(logs, "steps could not be added") {
+		t.Errorf("log:\n%s\nwant a warning that the steps were not added, and no error", logs)
 	}
 }

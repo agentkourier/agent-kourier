@@ -690,6 +690,19 @@ func (u *Run) run(ctx context.Context) {
 	defer func() { u.ref = ref }()
 	var next time.Time
 	fails := 0
+	shown := false // the final text is in the thread: what is left to write only adds its steps
+	// giveUp ends the run on a final write that will not go through. Once the final text is shown it is the steps that were
+	// not added, and the turn was delivered: the alert on failed finals is not for them.
+	giveUp := func(outcome, msg string, args ...any) {
+		args = append([]any{"channel", u.turn.Channel}, args...)
+		if shown {
+			finalOutcome = "delivered"
+			u.cfg.Logger.WarnContext(ctx, "live: the reply's steps could not be added; its text stands", args...)
+			return
+		}
+		finalOutcome = outcome
+		u.cfg.Logger.ErrorContext(ctx, msg, args...)
+	}
 	var gap <-chan time.Time // the delay timer of the open gap, if the turn keeps time
 	gapSeq := 0              // and the gap it is for
 	for {
@@ -713,8 +726,7 @@ func (u *Run) run(ctx context.Context) {
 					continue
 				}
 				if u.isFinal() {
-					finalOutcome = "deadline_exceeded"
-					u.cfg.Logger.ErrorContext(ctx, "live: the final text was not written before its deadline", "channel", u.turn.Channel)
+					giveUp("deadline_exceeded", "live: the final text was not written before its deadline")
 				}
 				return
 			}
@@ -754,8 +766,7 @@ func (u *Run) run(ctx context.Context) {
 			if err != nil {
 				switch verdict := u.cfg.Platform.Classify(chat.OpPost, err); {
 				case errors.Is(err, store.ErrInvalid), errors.Is(err, chat.ErrInvalid), errors.Is(err, outbox.ErrAbandoned): // retrying cannot mend them
-					finalOutcome = "permanent_failure"
-					u.cfg.Logger.ErrorContext(ctx, "live: the message cannot be sent; giving up", "channel", u.turn.Channel, "err", err)
+					giveUp("permanent_failure", "live: the message cannot be sent; giving up", "err", err)
 					return
 				case verdict.RetryAfter > 0:
 					u.cfg.Logger.WarnContext(ctx, "live: the platform rate-limited the message; waiting as it asked", "channel", u.turn.Channel, "retry_after", verdict.RetryAfter)
@@ -764,11 +775,11 @@ func (u *Run) run(ctx context.Context) {
 				}
 				u.cfg.Logger.WarnContext(ctx, "live: writing the message failed; it will be tried again", "channel", u.turn.Channel, "err", err)
 				if fails++; fails >= u.cfg.Attempts {
-					u.cfg.Logger.ErrorContext(ctx, "live: giving up on a message", "channel", u.turn.Channel)
 					if v.final {
-						finalOutcome = "retry_exhausted"
+						giveUp("retry_exhausted", "live: giving up on a message")
 						return
 					}
+					u.cfg.Logger.ErrorContext(ctx, "live: giving up on a message", "channel", u.turn.Channel)
 					fails = 0
 					break
 				}
@@ -779,6 +790,7 @@ func (u *Run) run(ctx context.Context) {
 				u.stale, u.sent = false, "" // the post may be the old message: write once more
 				continue
 			}
+			shown = shown || v.final
 			if u.more { // steps are left to begin, or to show in place of a post's line: the next window, which the throttle spaces, goes on with them
 				u.more = false
 				if !v.final { // the post may have taken the mark off, and the next write is a window away; a final's is the last
