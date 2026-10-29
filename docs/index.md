@@ -41,8 +41,8 @@ and recovery after a restart or failover. Slack is supported today, and other ch
 </div>
 </div>
 
-!!! note "Status: v0.1.4"
-    The current release is `0.1.4`: install the published chart and image with [Install with Helm](how-to/install-with-helm.md).
+!!! note "Status: v0.1.5"
+    The current release is `0.1.5`: install the published chart and image with [Install with Helm](how-to/install-with-helm.md).
     The `v1alpha1` resource format can change before 1.0.
 
 ## What Agent Kourier handles

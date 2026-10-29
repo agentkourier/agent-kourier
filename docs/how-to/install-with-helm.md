@@ -22,8 +22,8 @@ Each release publishes a Helm chart and a container image for `linux/amd64` and 
 
 | Artifact | Reference |
 |---|---|
-| Chart | `oci://ghcr.io/agentkourier/charts/agent-kourier`, version `0.1.4` |
-| Image | `ghcr.io/agentkourier/agent-kourier:v0.1.4` |
+| Chart | `oci://ghcr.io/agentkourier/charts/agent-kourier`, version `0.1.5` |
+| Image | `ghcr.io/agentkourier/agent-kourier:v0.1.5` |
 
 The chart pins the image by digest, so you set no image values to install it. The
 [GitHub Release](https://github.com/agentkourier/agent-kourier/releases) of each version names both digests.
@@ -36,7 +36,7 @@ digest from the GitHub Release and name the workflow's exact identity:
 ```sh
 cosign verify ghcr.io/agentkourier/agent-kourier@sha256:<image digest> \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity https://github.com/agentkourier/agent-kourier/.github/workflows/release.yml@refs/tags/v0.1.4
+  --certificate-identity https://github.com/agentkourier/agent-kourier/.github/workflows/release.yml@refs/tags/v0.1.5
 ```
 
 The chart is `ghcr.io/agentkourier/charts/agent-kourier@sha256:<chart digest>`, checked the same way.
@@ -91,7 +91,7 @@ and `--user` runs it as you, so it can write the file into your directory (the i
 
 ```sh
 docker run --rm -it --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work \
-  ghcr.io/agentkourier/agent-kourier:v0.1.4 init
+  ghcr.io/agentkourier/agent-kourier:v0.1.5 init
 ```
 
 The `helm install` command it prints names the chart version of the image's release. Releases before 0.1.3 do not
@@ -103,7 +103,7 @@ set:
 
 ```sh
 docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work \
-  ghcr.io/agentkourier/agent-kourier:v0.1.4 init --dialect a2a \
+  ghcr.io/agentkourier/agent-kourier:v0.1.5 init --dialect a2a \
   --agent-url http://my-agent.my-namespace.svc.cluster.local:8083/a2a/ \
   --agent-namespace my-namespace --agent-name my-agent --channel C0123456789
 ```
@@ -133,7 +133,7 @@ resources with those four values filled in. The `-f` flags below pass it to Helm
 
 Every field is in the [Binding](../reference/binding.md), [AgentBackend](../reference/agentbackend.md) and
 [ChatConnection](../reference/chatconnection.md) references, and every chart value in [Helm values](../reference/helm-values.md).
-`helm show values oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.4` prints the chart's defaults with their
+`helm show values oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.5` prints the chart's defaults with their
 comments. Keep the file: an upgrade passes it again.
 
 ## Check the values before you install
@@ -145,7 +145,7 @@ writes, with `yq`:
 
 ```sh
 mkdir -p rendered
-helm template agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.4 \
+helm template agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.5 \
   -n agent-kourier -f my-values.yaml --show-only templates/configmap.yaml |
   yq -r '.data[] | "---\n" + .' > rendered/resources.yaml
 ```
@@ -155,7 +155,7 @@ named as `namespace/name`:
 
 ```sh
 docker run --rm -e SLACK_BOT_TOKEN -v "$PWD/rendered:/config:ro" \
-  ghcr.io/agentkourier/agent-kourier:v0.1.4 dry-run --config /config --binding agent-kourier/my-binding
+  ghcr.io/agentkourier/agent-kourier:v0.1.5 dry-run --config /config --binding agent-kourier/my-binding
 ```
 
 An error that starts `agent-kourier dry-run: load /config:` names the file, the resource and the field. The files load
@@ -167,7 +167,7 @@ resources or the Secrets: those errors show only when the pod starts. Reading th
 ## Install the chart
 
 ```sh
-helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.4 \
+helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.5 \
   -n agent-kourier -f my-values.yaml
 ```
 

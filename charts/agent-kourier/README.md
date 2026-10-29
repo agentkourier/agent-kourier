@@ -42,7 +42,7 @@ config:
 Then install the published chart with it:
 
 ```sh
-helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.4 \
+helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.5 \
   -n agent-kourier --create-namespace -f my-values.yaml
 ```
 
@@ -260,7 +260,7 @@ for obj in serviceaccount/agent-kourier role/agent-kourier-secrets rolebinding/a
   kubectl -n agent-kourier annotate --overwrite "$obj" meta.helm.sh/release-name=agent-kourier meta.helm.sh/release-namespace=agent-kourier
   kubectl -n agent-kourier label --overwrite "$obj" app.kubernetes.io/managed-by=Helm
 done
-helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.4 -n agent-kourier -f my-values.yaml
+helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.5 -n agent-kourier -f my-values.yaml
 ```
 
 Or leave the volume out of the release: `--set persistence.existingClaim=agent-kourier-data`, and nothing the chart manages can delete it.

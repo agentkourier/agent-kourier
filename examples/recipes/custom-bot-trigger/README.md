@@ -80,7 +80,7 @@ Post it twice for the "Fired again" note. Post `Pipeline PASSED - web-build` wit
   use `identity.tokenSecretRef` instead: [Create the Binding identity](../../../docs/how-to/create-binding-identity.md).
 - **To run the dry run (step 3): Go and a checkout, or Docker instead of Go.** The dry run is a subcommand of the
   `agent-kourier` binary. Run it with Go at the version in `go.mod`, from a checkout of this repository, as below; or
-  with Docker, using the released image `ghcr.io/agentkourier/agent-kourier:v0.1.4`, whose entrypoint is that binary.
+  with Docker, using the released image `ghcr.io/agentkourier/agent-kourier:v0.1.5`, whose entrypoint is that binary.
   Either way you run it from the checkout, since the command reads this recipe's `kourier/` directory.
 
 ## Files
@@ -128,7 +128,7 @@ evals/
 
     ```sh
     docker run --rm -e SLACK_BOT_TOKEN -v "$PWD/examples/recipes/custom-bot-trigger/kourier:/config:ro" \
-      ghcr.io/agentkourier/agent-kourier:v0.1.4 dry-run --config /config --binding agent-kourier/ci-failures
+      ghcr.io/agentkourier/agent-kourier:v0.1.5 dry-run --config /config --binding agent-kourier/ci-failures
     ```
 
     Each of the bot's posts should come out `matched`, with the state, pipeline and key you expect, `excluded` for a

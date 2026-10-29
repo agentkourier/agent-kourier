@@ -112,7 +112,7 @@ which this repository does not check against your install.
   accepts, and the agent half is not usable as written.**
 - **To run the dry run (step 2.2): Go and a checkout, or Docker instead of Go.** The dry run is a subcommand of the
   `agent-kourier` binary. Run it with Go at the version in `go.mod`, from a checkout of this repository, as below; or
-  with Docker, using the released image `ghcr.io/agentkourier/agent-kourier:v0.1.4`, whose entrypoint is that binary.
+  with Docker, using the released image `ghcr.io/agentkourier/agent-kourier:v0.1.5`, whose entrypoint is that binary.
   Either way you run it from the checkout, since the command reads this recipe's `kourier/` directory.
 
 ## Alerts on the kind full tier
@@ -267,7 +267,7 @@ trial"), `make sandbox-alert` then fires the alert of one of the faults.
 
    ```sh
    docker run --rm -e SLACK_BOT_TOKEN -v "$PWD/examples/recipes/sre-triage/kourier:/config:ro" \
-     ghcr.io/agentkourier/agent-kourier:v0.1.4 dry-run --config /config --binding agent-kourier/sre-triage
+     ghcr.io/agentkourier/agent-kourier:v0.1.5 dry-run --config /config --binding agent-kourier/sre-triage
    ```
 
    Each alert should come out `matched`. If you left `B0REPLACEME` in place, they come out `other_bot` and the `SENDER`
@@ -350,13 +350,13 @@ trial"), `make sandbox-alert` then fires the alert of one of the faults.
 
    ```sh
    helm --kube-context kind-agent-kourier-full upgrade --install agent-kourier-sre-triage oci://ghcr.io/agentkourier/charts/agent-kourier \
-     --version 0.1.4 --namespace agent-kourier -f sre-triage-values.yaml --set replicaCount=0
+     --version 0.1.5 --namespace agent-kourier -f sre-triage-values.yaml --set replicaCount=0
    kubectl --context kind-agent-kourier-full -n agent-kourier delete job first-token --ignore-not-found
    kubectl --context kind-agent-kourier-full -n agent-kourier create job first-token \
      --from=cronjob/agent-kourier-sre-triage-token-refresh
    kubectl --context kind-agent-kourier-full -n agent-kourier wait --for=condition=Complete job/first-token --timeout=120s
    helm --kube-context kind-agent-kourier-full upgrade --install agent-kourier-sre-triage oci://ghcr.io/agentkourier/charts/agent-kourier \
-     --version 0.1.4 --namespace agent-kourier -f sre-triage-values.yaml
+     --version 0.1.5 --namespace agent-kourier -f sre-triage-values.yaml
    ```
 
    The release goes in with no replicas (the chart's kill switch, `replicaCount: 0`), so that Agent Kourier does not
