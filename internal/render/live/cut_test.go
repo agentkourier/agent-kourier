@@ -113,6 +113,9 @@ func TestAnAlertThreadLosesItsLineWhenItsTurnEndsWithNoFinal(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := setup(t)
+			// The status line is the update path's on a platform without steps; on one with steps an update after the post
+			// shows a card in its place, and a post of the text alone would leave no line to wait for (listed_test.go).
+			e.spy(t, false, nil)
 			run, cancel := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Progress: sa, Footer: footer})
 			tc.drive(t, e, run)
 			cancel()

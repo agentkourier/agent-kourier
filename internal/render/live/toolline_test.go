@@ -8,8 +8,9 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/agent"
 )
 
-// The tests below pin the status line of the update path (an alert thread): it names the latest tool call in the
-// tense of how far the call has got, and a call that has returned replaces the line that said it was under way.
+// The tests below pin the status line of the update path (an alert thread) on a platform without steps, where every write
+// shows it: it names the latest tool call in the tense of how far the call has got, and a call that has returned replaces
+// the line that said it was under way. On a platform with steps only the first post shows it (listed_test.go).
 
 // said is the blocks of the thread's last message, which carry the status line.
 func (e *env) said() string { return string(e.reply().Blocks) }
@@ -27,6 +28,8 @@ func (e *env) requests() []string {
 
 func TestACallThatReturnsBeforeTheFirstWriteIsPostedAsRan(t *testing.T) {
 	e := setup(t)
+	// The status line is the update path's on a platform without steps; on one with steps the updates show cards (listed_test.go).
+	e.spy(t, false, nil)
 	release := e.hold() // the first write is not throttled: it must not be made before both events are in
 	run, _ := e.start(t, v1alpha1.OutputLive, false)
 	run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "search", Args: map[string]any{"q": "pods"}})
@@ -52,6 +55,7 @@ func TestAReturnedCallReplacesTheLineThatSaidItWasUnderWay(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := setup(t)
+			e.spy(t, false, nil) // the status line is the update path's on a platform without steps (listed_test.go)
 			run, _ := e.start(t, v1alpha1.OutputLive, false)
 			run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "search", Args: map[string]any{"q": "pods"}})
 			eventually(t, "the post of the line", func() bool {
@@ -84,6 +88,8 @@ func TestAReturnedCallReplacesTheLineThatSaidItWasUnderWay(t *testing.T) {
 
 func TestACallReportedAgainAfterItsResultStaysReturned(t *testing.T) {
 	e := setup(t)
+	// The status line is the update path's on a platform without steps; on one with steps the updates show cards (listed_test.go).
+	e.spy(t, false, nil)
 	release := e.hold()
 	run, _ := e.start(t, v1alpha1.OutputLive, false)
 	call := agent.ToolCallEvent{CallID: "c1", Name: "search"}
@@ -99,6 +105,8 @@ func TestACallReportedAgainAfterItsResultStaysReturned(t *testing.T) {
 
 func TestTheLineFollowsTheLatestOfCallsMadeTogether(t *testing.T) {
 	e := setup(t)
+	// The status line is the update path's on a platform without steps; on one with steps the updates show cards (listed_test.go).
+	e.spy(t, false, nil)
 	run, _ := e.start(t, v1alpha1.OutputLive, false)
 	release := e.hold()
 	run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "first"})
@@ -117,6 +125,8 @@ func TestTheLineFollowsTheLatestOfCallsMadeTogether(t *testing.T) {
 
 func TestAReturnedCallsLineIsReplacedByNoOutputWhenTheTurnEndsWithoutText(t *testing.T) {
 	e := setup(t)
+	// The status line is the update path's on a platform without steps; on one with steps the updates show cards (listed_test.go).
+	e.spy(t, false, nil)
 	run, _ := e.start(t, v1alpha1.OutputLive, false)
 	run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "search"})
 	eventually(t, "the post", func() bool { return strings.Contains(e.said(), "Calling search") })

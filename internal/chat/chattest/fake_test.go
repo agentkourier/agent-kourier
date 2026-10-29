@@ -122,6 +122,36 @@ func TestAStepIsBegunOnceAndThenMovedForward(t *testing.T) {
 	}
 }
 
+// An update that carries steps, as an alert thread's reply does, is recorded with them: the fake keeps the message it was
+// given, steps and all, and shows each step's title.
+func TestAnUpdateWithStepsIsRecordedWithThem(t *testing.T) {
+	f := NewFake()
+	ref, err := f.Post(ctx, tgt, chat.Say(chat.Message{Fallback: "Calling search()"}), "tag")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent := f.Subject().Sent
+	sent()
+	steps := chat.Steps{Steps: []chat.Step{{ID: "s1", Title: "search", Detail: "q=1", State: chat.StepDone}}}
+	if err := f.Update(ctx, ref, chat.Say(chat.Message{Parts: []chat.Part{steps, chat.Body{Markdown: "found it"}}})); err != nil {
+		t.Fatal(err)
+	}
+	m := f.Messages()[0]
+	if m.Updates != 1 || m.Out.Message == nil || len(m.Out.Message.Parts) != 2 {
+		t.Fatalf("message %+v; want it updated once to the message with its steps", m)
+	}
+	if got, ok := m.Out.Message.Parts[0].(chat.Steps); !ok || !slices.Equal(got.Steps, steps.Steps) {
+		t.Errorf("first part %+v; want the steps, as given", m.Out.Message.Parts[0])
+	}
+	var shown []string
+	for _, s := range sent() {
+		shown = append(shown, s.Displayed)
+	}
+	if !slices.Contains(shown, "search") || !slices.Contains(shown, "found it") {
+		t.Errorf("shown %q; want the step's title and the text", shown)
+	}
+}
+
 func TestAPlatformWithNoStepsSaysSoAndShowsNone(t *testing.T) {
 	f := NewFake()
 	f.SetCaps(chat.Caps{Streams: true, MaxText: 4000})

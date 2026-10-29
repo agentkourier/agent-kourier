@@ -959,11 +959,19 @@ making the prefix optional breaks multi-turn context.
   one artifact keyed by the message's `messageId`, and the turn ends with it.
 - Edits are throttled per message (default one edit per 2 seconds, configurable) and
   coalesced. In a chat thread (a stream with progress steps) a tool call is a step, begun when the call is made
-  and finished when its result arrives. Where the message is updated instead, as in an alert thread, the latest
-  tool call is a short status line, which a result moves to the past tense: `Calling name(summary)` while the call
-  is under way, `Ran name(summary)` once its result has arrived, `name(summary) failed` if the result reports a
-  failure (`render.Failed`). A returned call's line is written even when no text has arrived, so a line that
-  said `Calling` is replaced; it is shown only while the turn has no text, and goes when text arrives. A call
+  and finished when its result arrives. Where the message is updated instead, as in an alert thread, its first post
+  shows the latest tool call as a short status line, which a result moves to the past tense: `Calling name(summary)`
+  while the call is under way, `Ran name(summary)` once its result has arrived, `name(summary) failed` if the result
+  reports a failure (`render.Failed`). The outbox stores no `chat.Steps`, so the post cannot carry cards. On a platform
+  with progress steps every update after the post carries a `chat.Steps` part before the text instead of the line: a
+  step per tool call (`render.Step`, the line's redacted, capped name and summary), begun when the call is made and
+  ended or failed when its result arrives, in call order, the final update included. It holds the latest 20 steps;
+  when there are more, a `chat.Context` line above them counts the earlier ones (`k earlier steps are not shown.`), so a
+  long run never crowds out the text or the buttons. An update with no fallback of its own takes the status line while the
+  turn shows one, or else the last step's title, so a stale line is not left as the message's text. A platform that refuses such an update as
+  content it cannot show gets it again without the steps, and the turn shows the line from then on. On a platform
+  without steps every write shows the line: a returned call's line is written even when no text has arrived, so a line
+  that said `Calling` is replaced; it is shown only while the turn has no text, and goes when text arrives. A call
   under way keeps its line beside the text, and the final message has no line.
 - `chat.progress` (D44) chooses what a live reply shows while the agent is silent. kagent emits a tool call only once the
   model has finished writing it, so each card lands already finished, and the seconds the model spends deciding the next
@@ -975,7 +983,8 @@ making the prefix optional breaks multi-turn context.
   spends in a chat thread (each `Step` is its own `chat.appendStream`: the card's begin; its end, when no tool call takes it
   over; and its retitle, when text ended it and a tool call follows that text), and one more `chat.update` in an alert thread. The `activity` mode writes its card when a result
   changes a count, at most once a window (the actual `chat.appendStream` rate tier is unverified). The modes:
-  - `steps`: a card per tool call in a chat thread, the status line above in an alert thread.
+  - `steps`: a card per tool call, in a chat thread and in the updates of an alert thread, whose first post has the
+    status line above.
   - `steps-and-activity` (the default): the same, and a gap longer than the delay adds one `Working…`. In a stream it is a
     card begun in the running state with no detail. The next tool call takes that card over: the card's title becomes the
     tool's, the tool's detail is shown then, and the result finishes it with its status alone (one card; the gap cost the begin).
@@ -983,8 +992,9 @@ making the prefix optional breaks multi-turn context.
     came while it was open, retitled `Wrote an update` when a tool call follows that text, which was then not the answer; at the end of the turn, `Finished` for a completed task, `Waiting for your answer` for a
     pause for input, and `Stopped`, an error and not a tick, for a task that failed, was cancelled or was rejected. A card
     that was never sent when the turn ends with no text is not sent at all: no stream is made for it. A call that arrives
-    before the delay begins its card directly. On the update path `Working…` is a line of small print that replaces the
-    line of a call that returned, shown under the text if there is some; the next text or call replaces it.
+    before the delay begins its card directly. On the update path the updates show the same card; a first post, which
+    carries no steps, shows `Working…` as a line of small print that replaces the line of a call that returned, under the
+    text if there is some, and so does every write on a platform without steps; the next text or call replaces it.
   - `activity`: one card `Working…`, begun at the first tool call or result or at the delay, whichever is first, and only
     if no text has come. No card or line of the reply names a tool or holds an argument (an approval prompt still names the tool, 8.4). Its title carries the counts of the tool calls that
     have a result, `Working… 12 steps, 3 failed`; at the first text, or at the end of a completed task, it is done as
@@ -999,7 +1009,8 @@ making the prefix optional breaks multi-turn context.
   - A turn whose send ends with no final event (the agent refused the send, or did not take an answer, and the thread gets
     the failure notice as a message of its own) ends what it showed as a failed task's: a stream is stopped with an
     unclaimed `Working…` card and the `activity` card as `Stopped`, and a call with no result ended; on the update path the
-    status line goes, and a message with no text says `(no output)`. Neither carries the feedback buttons. A turn that
+    status line goes, the steps its updates carry are ended the same way, and a message with no text and no step says
+    `(no output)`. Neither carries the feedback buttons. A turn that
     showed nothing posts nothing. A turn whose task goes on is not ended: when its stream was lost and the task is followed
     again, its send's outcome is unknown and the turn is looked up and followed or sent again (until the agent takes the
     turn or it ends: a resend that never left, or that the agent refuses as busy or not ready, keeps the outcome unknown,

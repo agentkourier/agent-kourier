@@ -489,6 +489,8 @@ func (e *env) sentLines() string { return strings.Join(e.requests(), "\n") }
 // and text replaces that: the line is Working…, never a stale Ran….
 func TestAnAlertThreadShowsWorkingInAGapAfterACall(t *testing.T) {
 	e := setup(t)
+	// The status line is the update path's on a platform without steps; on one with steps the updates show cards (listed_test.go).
+	e.spy(t, false, nil)
 	run := e.progressRun(t, sa, "")
 	run.Handle(call("c1", "search", map[string]any{"q": "pods"}))
 	e.writesReach(t, 1)
@@ -519,6 +521,8 @@ func TestAnAlertThreadShowsWorkingInAGapAfterACall(t *testing.T) {
 // show leaves no Working… standing.
 func TestAnAlertThreadPostsWorkingWhenTheTurnIsSilent(t *testing.T) {
 	e := setup(t)
+	// The status line is the update path's on a platform without steps; on one with steps the updates show cards (listed_test.go).
+	e.spy(t, false, nil)
 	run := e.progressRun(t, sa, "")
 	if spent := e.until(t, "the post", 6*time.Second, func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 }); spent < 3*time.Second {
 		t.Fatalf("posted after %v; want the delay, 3 s", spent)
@@ -541,6 +545,8 @@ func TestAnAlertThreadPostsWorkingWhenTheTurnIsSilent(t *testing.T) {
 // A call that comes before the delay has its own line, and no Working… is written for the gap before it.
 func TestAnAlertThreadShowsNoWorkingForAShortGap(t *testing.T) {
 	e := setup(t)
+	// The status line is the update path's on a platform without steps; on one with steps the updates show cards (listed_test.go).
+	e.spy(t, false, nil)
 	run := e.progressRun(t, sa, "")
 	run.Handle(text("a", "Looking."))
 	e.writesReach(t, 1)
@@ -591,6 +597,8 @@ func TestTheActivityLineOnAnAlertThreadCountsAndNamesNoTool(t *testing.T) {
 // The steps mode on an alert thread keeps the line of the call that returned for as long as nothing follows it.
 func TestTheStepsModeLeavesTheLineOfAReturnedCallStanding(t *testing.T) {
 	e := setup(t)
+	// The status line is the update path's on a platform without steps; on one with steps the updates show cards (listed_test.go).
+	e.spy(t, false, nil)
 	run := e.progressRun(t, v1alpha1.ProgressSteps, "")
 	run.Handle(call("c1", "search", nil))
 	e.writesReach(t, 1)
@@ -679,9 +687,9 @@ var progressScripts = []struct {
 		run := e.progressRun(t, sa, "")
 		run.Handle(call("c1", "kubectl_get", map[string]any{"namespace": "prod"}))
 		eventually(t, "the line of the call", func() bool { return strings.Contains(e.said(), "Calling kubectl_get") })
-		run.Handle(result("c1", map[string]any{"output": "3 pods"}))
-		e.until(t, "the line of the call that returned", 3*time.Second, func() bool { return strings.Contains(e.said(), "Ran kubectl_get") })
-		e.until(t, "Working…", 8*time.Second, func() bool { return strings.Contains(e.said(), "Working…") })
+		run.Handle(result("c1", map[string]any{"output": "3 pods"})) // the updates show cards in place of the post's line
+		e.until(t, "the card of the call that returned", 3*time.Second, func() bool { got := e.tasks(); return len(got) == 1 && got[0].Status == "complete" })
+		e.until(t, "the Working… card", 8*time.Second, func() bool { got := e.tasks(); return len(got) == 2 && got[1].Title == "Working…" })
 		run.Handle(text("a", "Three pods, all ready."))
 		run.Handle(agent.FinalEvent{})
 		e.finish(t, run)
@@ -855,9 +863,13 @@ func TestACallWithNoIDHasNoWorkingBesideIt(t *testing.T) {
 		run := e.progressRun(t, sa, "")
 		run.Handle(call("", "search", nil))
 		eventually(t, "the line", func() bool { return strings.Contains(e.said(), "Calling search") })
+		e.until(t, "the card that takes the line's place", 3*time.Second, func() bool { return len(e.tasks()) == 1 })
 		e.elapse(time.Minute)
-		if got := e.said(); !strings.Contains(got, "Calling search") || strings.Contains(got, "Working") {
-			t.Errorf("blocks %s; want the line of the call, which has no result to wait for, and no Working…", got)
+		if got := e.said(); strings.Contains(got, "Working") {
+			t.Errorf("blocks %s; want the card of the call, which has no result to wait for, and no Working…", got)
+		}
+		if got := e.tasks(); len(got) != 1 || got[0].Title != "search" || got[0].Status != "in_progress" {
+			t.Errorf("tasks %+v; want the one card of the call, under way", got)
 		}
 		run.Handle(agent.FinalEvent{})
 		e.finish(t, run)
@@ -876,6 +888,8 @@ func TestACallWithNoIDHasNoWorkingBesideIt(t *testing.T) {
 // the call.
 func TestACallReportedAgainDoesNotBringBackItsLine(t *testing.T) {
 	e := setup(t)
+	// The status line is the update path's on a platform without steps; on one with steps the updates show cards (listed_test.go).
+	e.spy(t, false, nil)
 	run := e.progressRun(t, sa, "")
 	run.Handle(call("c1", "search", nil))
 	e.writesReach(t, 1)
