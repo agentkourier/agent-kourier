@@ -4,7 +4,7 @@ For an operator running the Helm chart: at the end, Agent Kourier runs a newer r
 audit log intact, and you know how to roll back.
 
 Each release publishes a signed multi-arch image and a chart whose default image is that image by digest, as
-[Install with Helm](install-with-helm.md#the-release) describes. The current release is `0.1.4`. To run a build that is not
+[Install with Helm](install-with-helm.md#the-release) describes. The current release is `0.1.5`. To run a build that is not
 released, see [Build from source](install-with-helm.md#build-from-source).
 
 ## Upgrade the chart
