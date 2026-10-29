@@ -27,6 +27,7 @@
 package live
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -245,6 +246,9 @@ type Run struct {
 	inflight int             // calls with an ID that have no result yet
 	finished int             // tool calls whose result has arrived
 	failed   int             // and those that report a failure
+	updates  int             // working updates (agent.ProgressEvent): the activity mode counts them while no tool event has come
+	tooled   bool            // a tool call or result has come
+	note     string          // the agent's progress line, which stands for Working… until the next event (steps-and-activity)
 	begun    bool            // the activity mode has begun to show: its card, or its line
 
 	// Below: the goroutine's alone.
@@ -283,8 +287,8 @@ type stepRec struct {
 	// ending is how a card that stands for time ended; NotEnded while it is under way. Only a card under way can be taken over.
 	ending render.Ending
 	// An activity card is ended with what it counted by then, and when.
-	steps, failed int
-	endedAt       time.Time
+	counts  render.Counts
+	endedAt time.Time
 }
 
 // stepKind is what a step stands for. The zero value is a tool call.
@@ -391,6 +395,7 @@ func (u *Run) Handle(ev agent.Event) {
 		now = u.cfg.Now()
 	}
 	u.mu.Lock()
+	u.note = "" // the progress line stands until the next event, whatever it is
 	switch e := ev.(type) {
 	case agent.TextEvent:
 		if _, seen := u.texts[e.ArtifactID]; !seen {
@@ -418,6 +423,10 @@ func (u *Run) Handle(ev agent.Event) {
 		u.endStep(e)
 		if u.timed {
 			u.resultIn(e, now)
+		}
+	case agent.ProgressEvent:
+		if u.timed {
+			u.progressIn(e, now)
 		}
 	case agent.FinalEvent:
 		u.final = true
@@ -508,7 +517,7 @@ func (u *Run) callMade(e agent.ToolCallEvent, now time.Time) {
 		u.inflight++
 		u.anon = false
 	}
-	u.idle = false // the tool's own line takes the place of Working…
+	u.idle, u.tooled = false, true // the tool's own line takes the place of Working…
 	u.followText()
 	u.beginActivity()
 	u.reopenGap(now)
@@ -517,7 +526,7 @@ func (u *Run) callMade(e agent.ToolCallEvent, now time.Time) {
 // resultIn counts the result of a tool call the run knows, once, and ends the call's time as a call under way: a new gap
 // begins if no other call is. The caller holds u.mu.
 func (u *Run) resultIn(e agent.ToolResultEvent, now time.Time) {
-	u.anon = false
+	u.anon, u.tooled = false, true
 	if done, known := u.calls[e.CallID]; known && !done {
 		u.calls[e.CallID] = true
 		u.inflight--
@@ -528,6 +537,33 @@ func (u *Run) resultIn(e agent.ToolResultEvent, now time.Time) {
 	}
 	u.beginActivity()
 	u.reopenGap(now)
+}
+
+// progressIn takes a working update (spec D45 (1)), which is activity whether or not anything in it is understood. The
+// activity mode counts it, and begins its indicator at once, as a tool event does; it shows none of the update's text, since
+// that mode names nothing the agent does. In steps-and-activity an update with a line of the agent's ends the call with no ID
+// that was under way until the next event, and shows the line at once where Working… may show (no call under way): it titles
+// the open Working… card, which it begins if none is open, or stands for the line of a message that is updated, until the
+// next event. An update with no line shows nothing there, and the gap runs on: were it to begin the gap again, an agent that
+// sends empty updates more often than the delay would never show Working…. The caller holds u.mu.
+func (u *Run) progressIn(e agent.ProgressEvent, now time.Time) {
+	if u.progress == v1alpha1.ProgressActivity {
+		u.updates++
+		u.anon = false
+		u.beginActivity()
+		u.reopenGap(now)
+		return
+	}
+	line := render.ProgressLine(e.Text)
+	if line == "" || u.final {
+		return
+	}
+	u.anon = false
+	if u.inflight > 0 {
+		return
+	}
+	u.note = line
+	u.showWorking()
 }
 
 // reopenGap begins a gap at now, in which the run waits the delay for something new before it shows that it is working. No
@@ -570,7 +606,13 @@ func (u *Run) openIdle(seq int, now time.Time) {
 		u.beginActivity()
 		return
 	}
-	u.idle = true
+	u.showWorking()
+}
+
+// showWorking shows that the agent is working, in steps-and-activity: a Working… card, unless one is open already or the
+// platform has no cards, and the line of a message that is updated. The gap is used. The caller holds u.mu.
+func (u *Run) showWorking() {
+	u.gapOpen, u.idle = false, true
 	if n := len(u.steps); u.eligible && len(u.steps) < maxSteps && (n == 0 || !u.steps[n-1].open()) {
 		u.steps = append(u.steps, stepRec{kind: workingStep, after: len(u.order)})
 	}
@@ -589,8 +631,18 @@ func (u *Run) endWorking(now time.Time, e render.Ending) {
 	case workingStep:
 		r.ending = e
 	case activityStep:
-		r.ending, r.steps, r.failed, r.endedAt = e, u.finished, u.failed, now
+		r.ending, r.counts, r.endedAt = e, u.counts(), now
 	}
+}
+
+// counts is what the activity mode shows it counted: the tool calls that have their result and the failures among them, and
+// the working updates while no tool event has come. The caller holds u.mu.
+func (u *Run) counts() render.Counts {
+	c := render.Counts{Steps: u.finished, Failed: u.failed}
+	if !u.tooled {
+		c.Updates = u.updates
+	}
+	return c
 }
 
 // followText makes the text that ended a Working… card an update, now that a tool call follows it: the card said that it
@@ -1055,7 +1107,7 @@ func (u *Run) snapshot() view {
 		events = append(events, agent.TextEvent{ArtifactID: id, Text: u.texts[id]})
 	}
 	tool, toolState, final, paused, awaiting := u.tool, u.toolState, u.final, u.paused, u.awaiting
-	idle, begun, finished, failed := u.idle, u.begun && !u.texted, u.finished, u.failed
+	idle, begun, counts, note := u.idle, u.begun && !u.texted, u.counts(), u.note
 	var recs []stepRec
 	if u.stepsOn() || carries {
 		recs = slices.Clone(u.steps)
@@ -1074,10 +1126,10 @@ func (u *Run) snapshot() view {
 		case u.progress == v1alpha1.ProgressActivity: // names no tool
 			shown = nil
 			if begun {
-				status = render.ActivityLine(now.Sub(u.started), finished, failed)
+				status = render.ActivityLine(now.Sub(u.started), counts)
 			}
-		case idle: // Working… takes the place of the line of a call that has returned
-			shown, status = nil, render.WorkingTitle
+		case idle: // Working…, or the agent's progress line, takes the place of the line of a call that has returned
+			shown, status = nil, cmp.Or(note, render.WorkingTitle)
 		}
 	}
 	v.body = render.Body(events, u.caps.Limit(chat.WhereStream))
@@ -1105,7 +1157,7 @@ func (u *Run) snapshot() view {
 		if r.kind == callStep && r.call.CallID != "" && slices.Contains(awaiting, r.call.CallID) {
 			v.steps = append(v.steps, render.AwaitingApproval(id, r.call))
 		} else {
-			v.steps = append(v.steps, u.stepOf(id, r, state, now, finished, failed))
+			v.steps = append(v.steps, u.stepOf(id, r, state, now, counts, note))
 		}
 		v.pos = append(v.pos, pos)
 	}
@@ -1114,16 +1166,21 @@ func (u *Run) snapshot() view {
 }
 
 // stepOf is the step a record shows in the state given: the call it is, or the card that stands for time. A call with no
-// result at the final is ended with them (state); a card that stands for time has its own ending.
-func (u *Run) stepOf(id string, r stepRec, state chat.StepState, now time.Time, finished, failed int) chat.Step {
+// result at the final is ended with them (state); a card that stands for time has its own ending. A Working… card under way
+// is titled with the agent's progress line, if there is one: only the last card can be under way.
+func (u *Run) stepOf(id string, r stepRec, state chat.StepState, now time.Time, counts render.Counts, note string) chat.Step {
 	switch r.kind {
 	case workingStep:
-		return render.WorkingEnded(id, r.ending)
+		st := render.WorkingEnded(id, r.ending)
+		if r.ending == render.NotEnded && note != "" {
+			st.Title = note
+		}
+		return st
 	case activityStep:
 		if r.ending == render.NotEnded {
-			return render.ActivityStep(id, finished, failed, now.Sub(u.started), r.ending)
+			return render.ActivityStep(id, counts, now.Sub(u.started), r.ending)
 		}
-		return render.ActivityStep(id, r.steps, r.failed, r.endedAt.Sub(u.started), r.ending)
+		return render.ActivityStep(id, r.counts, r.endedAt.Sub(u.started), r.ending)
 	}
 	return render.Step(id, r.call, state)
 }

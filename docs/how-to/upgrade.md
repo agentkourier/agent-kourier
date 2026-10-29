@@ -258,3 +258,20 @@ earlier release answers a pause on that dialect only with a plain text part, so 
   used, and the prompt stays pending until its timeout, when the agent's task is cancelled.
 - **An answer to a question with no choices is sent as plain text**, without the extension's payload. kagent 1.0.0-alpha5
   takes it as an ordinary message, not as the question's answer: in the recorded case the task completed without it.
+
+## Upgrade to the release that shows an agent's working updates
+
+This release reads the status updates an agent sends in state `working` on every dialect, as
+[Working updates](../reference/agent-contract.md#working-updates) describes. No Binding fails to load for it, and an
+agent that sends no such update sees no change.
+
+- **`steps-and-activity` shows the agent's progress line.** The text of a working update titles the `Working…` card in a
+  chat thread, or replaces the `Working…` line in an alert thread, as soon as it arrives and no tool call is under way,
+  where `Working…` used to wait 3 seconds. Each change of line is one more write to Slack, by default at most one every
+  2 seconds for each reply.
+- **`activity` counts working updates.** While a turn has had no tool call or result, its card or line counts the
+  updates (`Working… 5 updates`), and begins at the first one instead of after 3 seconds.
+- **kagent 0.9.x** repeats its answer in a working update, so in `steps-and-activity` the start of the answer can title
+  the card for a moment before the answer itself.
+
+`progress: steps` shows no working update.

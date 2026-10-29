@@ -73,7 +73,11 @@ func (a *assembler) apply(ev a2a.Event) {
 		if readable(e.Status.State, e.Status.Message) {
 			a.messageTools(e.Status.Message)
 		}
+		changed := e.Status.State != a.state
 		a.setState(e.Status.State)
+		if e.Status.State == a2a.TaskStateWorking && !holdsTool(e.Status.Message) {
+			a.progress(e.Status.Message, changed)
+		}
 	case *a2a.TaskArtifactUpdateEvent:
 		a.track(e.TaskID, e.ContextID)
 		a.artifact(e.Artifact, e.Append, false)
@@ -221,6 +225,38 @@ func (a *assembler) messageTools(m *a2a.Message) {
 			a.tool(place, "", tp)
 		}
 	}
+}
+
+// progress delivers a live working update that holds no tool part as the agent's activity (ProgressEvent), with the text
+// of its message if the message is the agent's. changed says the update made the task working: that is the change of
+// state, which StateEvent has told, and it is progress only if it says something.
+func (a *assembler) progress(m *a2a.Message, changed bool) {
+	var text []string
+	if readable(a2a.TaskStateWorking, m) {
+		for _, p := range m.Parts {
+			if t, ok := p.Content.(a2a.Text); ok {
+				text = append(text, string(t))
+			}
+		}
+	}
+	if changed && len(text) == 0 {
+		return
+	}
+	a.emit(ProgressEvent{Text: strings.Join(text, "\n")})
+}
+
+// holdsTool says whether a message holds a tool part, whoever sent it: an update that does is told by its tool events,
+// or is a message that is not read for them, and is no ProgressEvent.
+func holdsTool(m *a2a.Message) bool {
+	if m == nil {
+		return false
+	}
+	for _, p := range m.Parts {
+		if _, ok := dialect.DecodeToolPart(p); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // readable says whether a status message is read for tool parts: the agent's own message while the task works, which
