@@ -79,8 +79,8 @@ This release shows an alert thread's tool calls as step cards, as a chat thread 
   line, and the final message keeps them, so an investigation ends with the trail of what it checked. With
   `steps-and-activity` (the default) a gap of 3 seconds is a `Working…` card, which the next tool call takes over, as in a
   chat thread. The reply shows the latest 20 cards, under a line that counts the earlier ones.
-- **One more update.** A reply whose first post shows a line makes one more update, once the throttle allows, to put the
-  cards in its place.
+- **One more update.** A reply that has cards when its first post is made makes one more update, once the throttle allows,
+  to show them, in place of the post's line if it shows one.
 - **A reply with cards and no text** ends with the cards, and no longer says `(no output)`.
 - **Unchanged:** `progress: activity` (one counting line that names no tool), `output: final`, and a platform without step
   cards, which keeps the line. If Slack refuses an update with cards, it is sent again without them, and the reply shows the

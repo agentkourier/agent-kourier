@@ -85,11 +85,11 @@ step. It is one of three values:
 The `activity` mode never shows a tool's name or arguments in the reply's cards and lines; a tool approval prompt, with
 `interactions.toolApprovals`, still names the tool and shows its arguments. No mode shows the agent's reasoning: Agent Kourier does not read
 it, and the `Working…` title says nothing about what the agent is doing. The 3 second delay is not configurable. The
-`Working…` card or line is written once for a gap, and no other write follows the clock, save the update that puts an alert
-thread's first post's cards in place of its line. A gap longer than the delay costs at most three writes more than `steps`
+`Working…` card or line is written once for a gap, and no other write follows the clock, save the update that shows an alert
+thread's cards after its first post. A gap longer than the delay costs at most three writes more than `steps`
 spends in a chat thread (the card's begin; its end, when no tool call takes it over; and its retitle, when text ended it and
-a tool call follows that text), and one more message update in an alert thread. An alert thread whose first post shows a line
-that its cards replace makes one more update for that, once the throttle allows. The `activity` card is written when a result changes a count, at most
+a tool call follows that text), and one more message update in an alert thread. An alert thread's reply that has cards when its first post
+is made makes one more update to show them, once the throttle allows: the post cannot carry them. The `activity` card is written when a result changes a count, at most
 once in a throttle window, and its line's elapsed minutes are refreshed only when an event makes a write.
 
 In an alert thread, a turn that is silent for 3 seconds now posts `Working…` as its message. If the turn then ends with

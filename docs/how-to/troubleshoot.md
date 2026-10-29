@@ -240,7 +240,8 @@ dialect: a data part whose metadata has `adk_type`, `kagent_type` or `kagent.dev
 without a `name`, shows none; the answer text still renders. The marked part must be in an artifact, or in a status
 update's message from the agent while the task is `working`; see
 [Tool calls and results](../reference/agent-contract.md#tool-calls-and-results). With the default `chat.progress`
-(`steps-and-activity`), a `Working…` card still appears when 3 seconds pass with no new text; see
+(`steps-and-activity`), a `Working…` card (a line in an alert thread's first post) still appears when 3 seconds pass
+with no new text; see
 [Output](../explanation/threads-and-sessions.md#output).
 
 ## An alert thread shows no `is working…` status

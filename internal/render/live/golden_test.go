@@ -301,7 +301,7 @@ var scripts = []struct {
 		run.Handle(agent.FinalEvent{})
 		e.finish(t, run)
 	}},
-	{"a-tool-line-alone-and-no-output", func(t *testing.T, e *env) {
+	{"a-tool-call-alone-ends-as-its-card", func(t *testing.T, e *env) {
 		run, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive})
 		run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "slow_query", Args: map[string]any{"q": "select 1"}})
 		e.settle(t, 1) // the post of the tool line alone

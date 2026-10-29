@@ -967,8 +967,8 @@ making the prefix optional breaks multi-turn context.
   step per tool call (`render.Step`, the line's redacted, capped name and summary), begun when the call is made and
   ended or failed when its result arrives, in call order, the final update included. It holds the latest 20 steps;
   when there are more, a `chat.Context` line above them counts the earlier ones (`k earlier steps are not shown.`), so a
-  long run never crowds out the text or the buttons. An update with no fallback of its own takes the post's, or the
-  last step's title, so the post's line is not left as the message's text. A platform that refuses such an update as
+  long run never crowds out the text or the buttons. An update with no fallback of its own takes the status line while the
+  turn shows one, or else the last step's title, so a stale line is not left as the message's text. A platform that refuses such an update as
   content it cannot show gets it again without the steps, and the turn shows the line from then on. On a platform
   without steps every write shows the line: a returned call's line is written even when no text has arrived, so a line
   that said `Calling` is replaced; it is shown only while the turn has no text, and goes when text arrives. A call

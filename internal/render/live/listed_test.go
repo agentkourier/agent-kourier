@@ -190,6 +190,20 @@ func TestAnAlertThreadReplyKeepsAWorkingCardItShowedWhenItEndsWithNoText(t *test
 	}
 }
 
+// A Working… card that no update showed is not kept when the turn ends with no text: the post said Working… as a line, and
+// the turn ends as no output, as on a platform without steps.
+func TestAnAlertThreadReplyEndsAsNoOutputWhenItsWorkingCardWasNeverShown(t *testing.T) {
+	e := setup(t)
+	run := e.alert(t, v1alpha1.ProgressStepsAndActivity, false)
+	e.until(t, "the Working… post", 6*time.Second, func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+	eventually(t, "the message", func() bool { return e.reply().Text == "Working…" })
+	run.Handle(agent.FinalEvent{}) // before the window of the update that would show the card
+	e.finish(t, run)
+	if m := e.reply(); m.Text != "(no output)" || len(m.Tasks()) != 0 {
+		t.Errorf("message %q with tasks %+v; want no output, and no card", m.Text, m.Tasks())
+	}
+}
+
 // A pause for an approval leaves the call it waits on as a card that says so, as a stream's does.
 func TestAnAlertThreadReplyThatPausesForAnApprovalSaysSoOnTheCard(t *testing.T) {
 	e := setup(t)

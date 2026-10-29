@@ -697,7 +697,7 @@ func (u *Run) run(ctx context.Context) {
 		args = append([]any{"channel", u.turn.Channel}, args...)
 		if shown {
 			finalOutcome = "delivered"
-			u.cfg.Logger.WarnContext(ctx, "live: the reply's steps could not be added; its text stands", args...)
+			u.cfg.Logger.WarnContext(ctx, "live: the steps could not be added to the reply; what was posted stands", args...)
 			return
 		}
 		finalOutcome = outcome
