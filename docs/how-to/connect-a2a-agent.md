@@ -55,7 +55,8 @@ In the Binding's `identity`:
 - An agent's question, when it pauses with `input-required` and text, if the Binding sets `interactions.askUser: true`.
   A single question with no choices also takes a typed reply in the thread.
 - A `Working…` card (a line, in an alert thread) while the agent is silent for 3 seconds, with the default
-  `chat.progress`.
+  `chat.progress`. The text of a status update in state `working` titles that card, or is that line, at once: see
+  [Working updates](../reference/agent-contract.md#working-updates).
 - Tool calls as step cards, when the agent marks its tool parts as Google ADK or kagent does (`adk_type`, `kagent_type`
   or `kagent.dev/a2a/part-type`, set to `function_call` or `function_response`): see
   [Tool calls and results](../reference/agent-contract.md#tool-calls-and-results). Without that marker the calls are

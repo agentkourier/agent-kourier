@@ -6,7 +6,7 @@ package agent
 import "github.com/a2aproject/a2a-go/v2/a2a"
 
 // Event is one thing that happened during a send, in the order it happened. The concrete
-// types are TextEvent, ToolCallEvent, ToolResultEvent, StateEvent, and FinalEvent.
+// types are TextEvent, ToolCallEvent, ToolResultEvent, ProgressEvent, StateEvent, and FinalEvent.
 type Event interface{ isEvent() }
 
 // Handler receives the events of a send. It runs on the goroutine that reads the stream,
@@ -38,6 +38,18 @@ type ToolResultEvent struct {
 	Response   any
 }
 
+// ProgressEvent reports that the agent said it is working, in a status update that holds no tool part (spec D45 (1)):
+// one unit of activity, whether or not anything in it is understood. Text is the text of the update's message when the
+// message is the agent's own, its text parts joined by line breaks, less those marked as the model's reasoning
+// (dialect.IsThought): the agent's account of what it is doing, which is untrusted and never part of the answer. It is
+// empty for an update with no message, the user's message echoed back, or a message with no text. The update that makes
+// the task working is the change of state, and a ProgressEvent only if it has text. An update whose message is the agent's
+// and holds a tool part is told as its tool events, and a task snapshot (the one a GetTask returns, or a resubscribe opens
+// with) as what it changed: neither is a ProgressEvent.
+type ProgressEvent struct {
+	Text string
+}
+
 // StateEvent reports a change of the task's state. A state that repeats is not a change.
 // TaskID is empty when the agent replied with a Message and no task: the turn then has only
 // its ContextID, and its one state is COMPLETED.
@@ -63,5 +75,6 @@ type FinalEvent struct {
 func (TextEvent) isEvent()       {}
 func (ToolCallEvent) isEvent()   {}
 func (ToolResultEvent) isEvent() {}
+func (ProgressEvent) isEvent()   {}
 func (StateEvent) isEvent()      {}
 func (FinalEvent) isEvent()      {}

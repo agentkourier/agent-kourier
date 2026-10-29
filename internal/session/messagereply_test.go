@@ -196,3 +196,14 @@ func TestLifeStartsAgainForEachMessageReply(t *testing.T) {
 		}
 	}
 }
+
+// A live working update is life of the task (R17's age), every time: a snapshot never makes one, so it is always news.
+func TestAWorkingUpdateRenewsLife(t *testing.T) {
+	var l life
+	l.renews(agent.StateEvent{TaskID: "t1", ContextID: "c1", State: a2a.TaskStateWorking})
+	for range 2 {
+		if !l.renews(agent.ProgressEvent{}) {
+			t.Error("a working update was not new life")
+		}
+	}
+}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/redact"
 )
 
 // Step returns the progress step of a tool call in the state given: the tool's name as its title and the redacted summary
@@ -142,25 +143,35 @@ func WorkingEnded(id string, e Ending) chat.Step {
 	return chat.Step{ID: id, Title: title, State: e.endState()}
 }
 
-// ActivityStep is the one card of the activity mode: it counts the tool calls that have their result, and how many of
-// them failed, and names no tool and no argument. The counts are in the title, which a platform replaces; the summary,
-// which is the detail a platform appends, is in the card only once it has ended, so that it is sent once. A card that
-// ended for text or a completed task is Worked; one that a pause closed is Waiting, and one that a task that did not finish
-// closed is Stopped, an error.
-func ActivityStep(id string, steps, failed int, elapsed time.Duration, e Ending) chat.Step {
+// Counts is what the activity mode counts: the tool calls that have their result and the failures among them, and the
+// agent's working updates (agent.ProgressEvent), which a turn counts only while it has had no tool event. Each is left out
+// of what is shown at zero.
+type Counts struct {
+	Steps, Failed, Updates int
+}
+
+// ActivityStep is the one card of the activity mode: it counts the tool calls that have their result, how many of them
+// failed, and the working updates, and names no tool, no argument and nothing the agent said. The counts are in the title,
+// which a platform replaces; the summary, which is the detail a platform appends, is in the card only once it has ended,
+// so that it is sent once. A card that ended for text or a completed task is Worked; one that a pause closed is Waiting,
+// and one that a task that did not finish closed is Stopped, an error.
+func ActivityStep(id string, c Counts, elapsed time.Duration, e Ending) chat.Step {
 	if e == NotEnded {
 		title := WorkingTitle
-		if counts := counted(steps, failed); counts != "" {
+		if counts := counted(c); counts != "" {
 			title += " " + counts
 		}
 		return chat.Step{ID: id, Title: title, State: chat.StepRunning}
 	}
 	summary := "Took " + spoken(elapsed)
-	if steps > 0 {
-		summary += ", " + plural(steps, "step")
-		if failed > 0 {
-			summary += fmt.Sprintf(" (%d failed)", failed)
+	if c.Steps > 0 {
+		summary += ", " + plural(c.Steps, "step")
+		if c.Failed > 0 {
+			summary += fmt.Sprintf(" (%d failed)", c.Failed)
 		}
+	}
+	if c.Updates > 0 {
+		summary += ", " + plural(c.Updates, "update")
 	}
 	title := WorkedTitle
 	switch e {
@@ -174,13 +185,13 @@ func ActivityStep(id string, steps, failed int, elapsed time.Duration, e Ending)
 
 // ActivityLine is the activity mode's status line for a message that is updated: Working… with the whole minutes elapsed
 // and the counts. It is rewritten only when an event makes a write, so the minutes are those of that moment.
-func ActivityLine(elapsed time.Duration, steps, failed int) string {
+func ActivityLine(elapsed time.Duration, c Counts) string {
 	var parts []string
 	if m := int(elapsed / time.Minute); m > 0 {
 		parts = append(parts, fmt.Sprintf("%d min", m))
 	}
-	if c := counted(steps, failed); c != "" {
-		parts = append(parts, c)
+	if counts := counted(c); counts != "" {
+		parts = append(parts, counts)
 	}
 	if len(parts) == 0 {
 		return WorkingTitle
@@ -188,16 +199,28 @@ func ActivityLine(elapsed time.Duration, steps, failed int) string {
 	return WorkingTitle + " (" + strings.Join(parts, ", ") + ")"
 }
 
-// counted is "12 steps, 3 failed": the steps that have their result, and the failures among them, each left out at zero.
-func counted(steps, failed int) string {
+// counted is "12 steps, 3 failed", or "5 updates": the steps that have their result, the failures among them, and the working
+// updates, each left out at zero.
+func counted(c Counts) string {
 	var parts []string
-	if steps > 0 {
-		parts = append(parts, plural(steps, "step"))
+	if c.Steps > 0 {
+		parts = append(parts, plural(c.Steps, "step"))
 	}
-	if failed > 0 {
-		parts = append(parts, fmt.Sprintf("%d failed", failed))
+	if c.Failed > 0 {
+		parts = append(parts, fmt.Sprintf("%d failed", c.Failed))
+	}
+	if c.Updates > 0 {
+		parts = append(parts, plural(c.Updates, "update"))
 	}
 	return strings.Join(parts, ", ")
+}
+
+// ProgressLine is the agent's own progress line, the text of a working update (agent.ProgressEvent), as it titles the
+// Working… card or stands for the Working… line: secrets taken out first (redact.FreeTextLine), then put on one line and
+// capped as a tool's summary is, so that the line is short whatever the agent sent. It is untrusted text, literal like all
+// the rest, and empty when nothing of it shows.
+func ProgressLine(text string) string {
+	return chat.Truncate(chat.Clean(redact.FreeTextLine(text), true), maxToolArgs)
 }
 
 func plural(n int, noun string) string {

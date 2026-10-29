@@ -122,8 +122,8 @@ task; ADK's older converter and kagent 0.9.x put them in status messages.
   restart, is found. The messages before the user's last one are an earlier turn's, and are not read. A pause message in
   the history that holds a marked tool part would show as a step too.
 
-The text of a status message is still not shown. A part is delivered once, and what counts as a repeat depends on where
-the part is:
+The text of a status message is not shown as the answer; a working update's text is the agent's progress line (see
+[Working updates](#working-updates)). A part is delivered once, and what counts as a repeat depends on where the part is:
 
 - In an artifact, a chunk with `append: true` adds parts after the ones already sent, so each is new even though its
   index restarts at 0: ADK's default output is one artifact for a whole run, and each call and result in it is such a
@@ -158,6 +158,26 @@ Each tool call is a step card in a chat thread, finished when its result arrives
 `error` entry that holds something or an `isError` entry that is true. Structured tool approvals are separate: they need
 the pause payload of kagent's human-in-the-loop extension, which `kagent-v1` always reads and `a2a` reads when the agent
 card lists the extension.
+
+### Working updates
+
+On every dialect, a status update in state `working` whose message holds no tool part is a working update: a sign that
+the agent is at work, whether or not Agent Kourier understands anything in it. The update that makes the task `working`,
+at the start of a turn or after a pause, counts only if its message has text. An update whose message is the agent's and
+holds a tool part counts as its tool call or result instead. A task snapshot, the one `GetTask` returns or a resubscribe
+opens with, holds no working update; the updates that stream after it do.
+
+When the update's message is the agent's own (role `agent`), its text parts, joined by line breaks, are the agent's
+progress line. A text part whose metadata holds `adk_thought`, `kagent_thought` or `kagent.dev/a2a/thought` set to
+`true` is the model's reasoning, as Google ADK and kagent mark it, and is left out. The user's message echoed back, as
+kagent 1.0 sends it when an approval is answered, has none. Agent
+Kourier redacts secrets from the line, puts it on one line and cuts it to 160 UTF-16 units. The line is untrusted text,
+shown literally, and never part of the answer. What a reply shows of it depends on the Binding's `chat.progress`
+([Output](../explanation/threads-and-sessions.md#output)): `steps-and-activity`, the default, shows the line in place of
+`Working…` when no tool call is under way, and `activity` counts the updates and shows none of their text.
+
+Send a working update when the agent starts a step it has no tool part for, such as `Reading the pod logs`, and not
+for every token: Agent Kourier writes a reply by default at most once every 2 seconds, and shows the latest line.
 
 ## Task states
 

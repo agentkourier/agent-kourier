@@ -31,7 +31,7 @@ type assembler struct {
 	contextID string
 	state     a2a.TaskState
 	final     *a2a.Task
-	changes   int  // events emitted so far: text, tool, state, and final
+	changes   int  // events emitted so far: text, tool, progress, state, and final
 	replies   bool // a task-less agent Message may be the reply: set for a Send, never for an Answer or a follow
 	unshown   bool // an agent Message came before any task where it cannot be the reply: on an Answer
 	// interaction reads the pause of the task that ends the send (Config.ParseInteraction); nil reads none.
@@ -73,7 +73,11 @@ func (a *assembler) apply(ev a2a.Event) {
 		if readable(e.Status.State, e.Status.Message) {
 			a.messageTools(e.Status.Message)
 		}
+		changed := e.Status.State != a.state
 		a.setState(e.Status.State)
+		if e.Status.State == a2a.TaskStateWorking && !toldByTools(e.Status.Message) {
+			a.progress(e.Status.Message, changed)
+		}
 	case *a2a.TaskArtifactUpdateEvent:
 		a.track(e.TaskID, e.ContextID)
 		a.artifact(e.Artifact, e.Append, false)
@@ -221,6 +225,41 @@ func (a *assembler) messageTools(m *a2a.Message) {
 			a.tool(place, "", tp)
 		}
 	}
+}
+
+// progress delivers a live working update that holds no tool part as the agent's activity (ProgressEvent), with the text
+// of its message if the message is the agent's. A text part marked as the model's reasoning (dialect.IsThought) is not
+// read: ADK's older converter, which kagent 0.9.x uses, sends every part of the run in working updates, its reasoning
+// among them. changed says the update made the task working: that is the change of state, which StateEvent has told, and
+// it is progress only if it says something.
+func (a *assembler) progress(m *a2a.Message, changed bool) {
+	var text []string
+	if readable(a2a.TaskStateWorking, m) {
+		for _, p := range m.Parts {
+			if t, ok := p.Content.(a2a.Text); ok && !dialect.IsThought(p) {
+				text = append(text, string(t))
+			}
+		}
+	}
+	if changed && len(text) == 0 {
+		return
+	}
+	a.emit(ProgressEvent{Text: strings.Join(text, "\n")})
+}
+
+// toldByTools says whether the message of a working update is the agent's and holds a tool part: the update is told by its
+// tool events, and is no ProgressEvent. Any other message's tool parts are not read, so its update is progress like any
+// other.
+func toldByTools(m *a2a.Message) bool {
+	if !readable(a2a.TaskStateWorking, m) {
+		return false
+	}
+	for _, p := range m.Parts {
+		if _, ok := dialect.DecodeToolPart(p); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // readable says whether a status message is read for tool parts: the agent's own message while the task works, which
