@@ -154,6 +154,28 @@ echo-agent-lint: $(ECHO_VENV)/.installed ## Lint the echo-agent recipe with ruff
 echo-agent-image: ## Build the echo agent image, agent-kourier-echo-agent:dev (Docker)
 	docker build -t agent-kourier-echo-agent:dev $(ECHO_AGENT)
 
+# The prompt-agent recipe (examples/recipes/prompt-agent/agent) is Python too, set up like the echo agent's. Its image
+# build proves the Dockerfile and requirements.txt (about 90 hashed packages, for all three provider families) install together.
+.PHONY: prompt-agent-test prompt-agent-lint prompt-agent-image
+PROMPT_AGENT  := examples/recipes/prompt-agent/agent
+PROMPT_PYTHON ?= python3.14
+PROMPT_VENV   := bin/prompt-agent-venv
+
+$(PROMPT_VENV)/.installed: $(PROMPT_AGENT)/requirements-dev.txt
+	$(PROMPT_PYTHON) -m venv --clear $(PROMPT_VENV)
+	$(PROMPT_VENV)/bin/pip install --quiet --disable-pip-version-check --require-hashes -r $(PROMPT_AGENT)/requirements-dev.txt
+	touch $@
+
+prompt-agent-test: $(PROMPT_VENV)/.installed ## Test the prompt-agent recipe's Python agent with pytest (python3.14; PROMPT_PYTHON overrides)
+	cd $(PROMPT_AGENT) && $(CURDIR)/$(PROMPT_VENV)/bin/python -m pytest -q
+
+prompt-agent-lint: $(PROMPT_VENV)/.installed ## Lint the prompt-agent recipe with ruff (check and format check) and audit its pinned runtime packages with pip-audit (needs network)
+	cd $(PROMPT_AGENT) && $(CURDIR)/$(PROMPT_VENV)/bin/ruff check . && $(CURDIR)/$(PROMPT_VENV)/bin/ruff format --check .
+	$(PROMPT_VENV)/bin/pip-audit --disable-pip --require-hashes -r $(PROMPT_AGENT)/requirements.txt
+
+prompt-agent-image: ## Build the prompt agent image, agent-kourier-prompt-agent:dev (Docker)
+	docker build -t agent-kourier-prompt-agent:dev $(PROMPT_AGENT)
+
 .PHONY: e2e-ax-up e2e-ax e2e-ax-down
 e2e-ax-up: ## Bring up AX/Substrate with deterministic ADK scenarios and fake Slack
 	hack/kind/up-ax.sh

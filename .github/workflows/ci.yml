@@ -255,3 +255,36 @@ jobs:
         with:
           path: ${{ steps.pip-env.outputs.cache }}
           key: ${{ steps.pip-cache.outputs.cache-primary-key }}
+
+  # The prompt-agent recipe is Python too (examples/recipes/prompt-agent/agent), and is built and cached the same way as
+  # the echo agent. Its tests start a small MCP server as a subprocess, and call no model.
+  prompt-agent:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: setup-python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - id: pip-env
+        name: Locate the pip cache
+        run: echo "cache=$(python -m pip cache dir)" >>"${GITHUB_OUTPUT}"
+      - id: pip-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pip-env.outputs.cache }}
+          key: pip-prompt-agent-${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('examples/recipes/prompt-agent/agent/requirements*.txt') }}
+          restore-keys: |
+            pip-prompt-agent-${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-
+            pip-prompt-agent-${{ runner.os }}-
+      - run: make prompt-agent-test
+      - run: make prompt-agent-lint
+      - run: make prompt-agent-image
+      - if: ${{ !cancelled() && steps.pip-cache.outcome == 'success' && steps.pip-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pip-env.outputs.cache }}
+          key: ${{ steps.pip-cache.outputs.cache-primary-key }}
