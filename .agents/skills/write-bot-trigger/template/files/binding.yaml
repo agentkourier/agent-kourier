@@ -1,0 +1,15 @@
+# A bot's posts start investigations in a channel, one thread per key. Replace every replace-me and CREPLACEME;
+# the write-bot-trigger skill writes the trigger. Until it does, the Binding has no trigger and answers mentions only.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: { name: replace-me, namespace: agent-kourier }
+spec:
+  agent:
+    backendRef: { name: replace-me }
+    name: replace-me        # the agent's name and namespace: labels on the a2a dialect, selectors on kagent-v1
+    namespace: replace-me
+  identity: { userId: replace-me }
+  chat:
+    connectionRef: { name: slack }
+    channel: CREPLACEME     # the channel's ID (C...), not its name
+    triggers: []            # the skill adds one botMessage trigger here
