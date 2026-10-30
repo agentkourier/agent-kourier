@@ -10,8 +10,8 @@ require (
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/prometheus/client_golang v1.25.0
-	github.com/slack-go/slack v0.31.0
-	github.com/yuin/goldmark v1.8.6
+	github.com/slack-go/slack v0.32.0
+	github.com/yuin/goldmark v1.8.7
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.47.0
 	go.opentelemetry.io/otel/sdk v1.47.0
@@ -19,9 +19,9 @@ require (
 	go.opentelemetry.io/proto/otlp v1.11.1
 	go.uber.org/goleak v1.3.0
 	google.golang.org/protobuf v1.36.12
-	k8s.io/api v0.37.1
-	k8s.io/apimachinery v0.37.1
-	k8s.io/client-go v0.37.1
+	k8s.io/api v0.37.2
+	k8s.io/apimachinery v0.37.2
+	k8s.io/client-go v0.37.2
 	k8s.io/klog/v2 v2.140.0
 	modernc.org/sqlite v1.61.0
 	sigs.k8s.io/json v0.0.0-20260909141634-11ed52e25bc5
