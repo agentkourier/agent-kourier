@@ -1,0 +1,236 @@
+WEBVTT
+
+NOTE
+Narration of the Agent Kourier incident demo (the incident demo repository's film, narration.json).
+Cue times from the build's placement of each line, split at the pauses in its audio.
+
+1
+00:00:00.800 --> 00:00:03.666
+This is a staged outage in a test cluster,
+
+2
+00:00:03.666 --> 00:00:07.310
+handled in Slack by three AI agents and
+one person.
+
+3
+00:00:08.300 --> 00:00:12.795
+Checkout and payments are two teams, each
+with its own channel and agent.
+
+4
+00:00:12.795 --> 00:00:17.385
+They share an incidents channel, which has
+its own agent: an incident commander.
+
+5
+00:00:17.385 --> 00:00:20.590
+Agent Kourier connects each channel to its
+agent,
+
+6
+00:00:20.590 --> 00:00:22.720
+which runs on kagent in Kubernetes.
+
+7
+00:00:23.500 --> 00:00:26.389
+Alertmanager posts alerts in the checkout
+channel.
+
+8
+00:00:26.389 --> 00:00:30.275
+When an agent escalates, a pager bot posts
+in the next channel,
+
+9
+00:00:30.275 --> 00:00:32.060
+and the agent there picks it up.
+
+10
+00:00:33.500 --> 00:00:34.420
+The failure:
+
+11
+00:00:34.420 --> 00:00:40.276
+payments v2.14.0 changes the amount field
+from a whole number of cents to a
+
+12
+00:00:40.276 --> 00:00:40.276
+string.
+
+13
+00:00:40.276 --> 00:00:44.330
+Checkout can't decode the response, so
+every checkout fails.
+
+14
+00:00:45.400 --> 00:00:47.317
+Nobody types a prompt.
+
+15
+00:00:47.317 --> 00:00:51.879
+The agents investigate, escalate, page,
+and propose a rollback.
+
+16
+00:00:51.879 --> 00:00:53.740
+One person approves it.
+
+17
+00:00:54.900 --> 00:00:57.033
+The alert lands in the checkout channel.
+
+18
+00:00:57.033 --> 00:01:00.920
+Agent Kourier opens a thread and hands it
+to checkout's agent.
+
+19
+00:01:01.200 --> 00:01:05.133
+It investigates in the thread. Each tool
+call is a step:
+
+20
+00:01:05.133 --> 00:01:08.420
+resources, logs, metrics, traces.
+
+21
+00:01:09.100 --> 00:01:10.044
+Its finding:
+
+22
+00:01:10.044 --> 00:01:16.080
+payments v2.14.0, rolled out three minutes
+earlier, changed amount to a string.
+
+23
+00:01:16.800 --> 00:01:18.691
+How did it know it was payments?
+
+24
+00:01:18.691 --> 00:01:22.795
+Checkout's own pods were healthy, and
+unchanged for nine hours.
+
+25
+00:01:22.795 --> 00:01:27.225
+Its calls to payments were failing to
+decode, yet payments reported no errors.
+
+26
+00:01:27.225 --> 00:01:29.140
+And payments had just rolled out.
+
+27
+00:01:30.000 --> 00:01:34.049
+To find who owns payments, it looked the
+service up in the service catalog:
+
+28
+00:01:34.049 --> 00:01:37.440
+the Payments team, their channel, and who
+is on call.
+
+29
+00:01:38.400 --> 00:01:41.684
+The escalation tool doesn't take the
+agent's word for it.
+
+30
+00:01:41.684 --> 00:01:44.669
+It re-checks the metrics and the rollout
+itself,
+
+31
+00:01:44.669 --> 00:01:48.490
+and posts to the incidents channel only
+when every check passes.
+
+32
+00:01:49.200 --> 00:01:53.026
+In the incidents channel, the incident
+commander declares the incident,
+
+33
+00:01:53.026 --> 00:01:54.980
+and pages the owning team.
+
+34
+00:01:55.600 --> 00:01:59.078
+The page lands in payments ops, naming the
+on-call engineers,
+
+35
+00:01:59.078 --> 00:02:01.530
+and the payments agent takes it from
+there.
+
+36
+00:02:02.100 --> 00:02:06.440
+It checks the rollout history and the
+metrics, then reads the source.
+
+37
+00:02:07.200 --> 00:02:10.526
+It lists the commits in the v2.14.0
+release,
+
+38
+00:02:10.526 --> 00:02:14.714
+opens the diff of the one that touched the
+response, and reads its pull request.
+
+39
+00:02:14.714 --> 00:02:16.125
+The diff confirms it:
+
+40
+00:02:16.125 --> 00:02:18.640
+amount went from an integer to a string.
+
+41
+00:02:19.300 --> 00:02:25.000
+It proposes a rollback to v2.13.0, and
+asks for approval before running it.
+
+42
+00:02:25.700 --> 00:02:29.133
+Lee, the secondary on-call, approves in
+the thread,
+
+43
+00:02:29.133 --> 00:02:31.100
+and the agent runs the rollback.
+
+44
+00:02:32.300 --> 00:02:35.910
+Errors fall below one percent, and the
+alert resolves.
+
+45
+00:02:36.700 --> 00:02:38.971
+The incident commander writes the summary:
+
+46
+00:02:38.971 --> 00:02:42.090
+the timeline, the cause, and the follow-
+ups.
+
+47
+00:02:45.300 --> 00:02:47.948
+Alert to recovery took about five minutes.
+
+48
+00:02:47.948 --> 00:02:52.530
+The one step a person took was the
+approval. That's a per-tool setting:
+
+49
+00:02:52.530 --> 00:02:55.018
+a team could let the agent roll back on
+its own,
+
+50
+00:02:55.018 --> 00:02:57.320
+and the Binding decides who may approve.
