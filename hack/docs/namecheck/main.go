@@ -47,6 +47,8 @@ var (
 	// fullName is what must come before kourier: "Agent " or "Agent" and a line break in prose, agent-, agentkourier or AGENTKOURIER_ in identifiers.
 	fullName = regexp.MustCompile(`(?i)agent[ \n_-]?$`)
 	allowed  = []string{"courier.db", "courier_audit_purge"}
+	// repos are repository paths whose name has kourier without "agent" before it; a link to one is not prose.
+	repos = []string{"agentkourier/kourier-incident-demo"}
 )
 
 type finding struct {
@@ -95,7 +97,11 @@ func findings(text string) []finding {
 			continue
 		}
 		bad := false
-		for _, m := range kourier.FindAllStringIndex(line, -1) {
+		unrepo := line // the line with each repository path blanked, so its kourier is not a match
+		for _, r := range repos {
+			unrepo = strings.ReplaceAll(unrepo, r, strings.Repeat(" ", len(r)))
+		}
+		for _, m := range kourier.FindAllStringIndex(unrepo, -1) {
 			if start := offsets[i] + m[0]; !fullName.MatchString(text[max(0, start-6):start]) && !pathSegment(line, m[0], m[1]) {
 				bad = true
 			}
