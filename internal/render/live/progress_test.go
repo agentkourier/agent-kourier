@@ -39,7 +39,10 @@ func (e *env) progressRun(t *testing.T, mode v1alpha1.ProgressMode, recipient st
 // until turns the clock in quarter seconds, a moment apart, until cond holds, and returns how much time that took. A run that is
 // slow to act on a timer that fell due arms the next one late, which makes the time longer and never shorter, so a test that
 // asserts a lower bound on it is exact. limit is how long the thing should take: once limit and some lag have passed, the clock
-// stops, and the run is given real time to act on the timers that are due, until the test's own deadline.
+// stops, and the run is given real time to act on the timers that are due, until the test's own deadline. A timer that the run
+// arms after the clock stopped is still turned to: a loaded machine can hold a run in a write, which it ends by arming the
+// timer of its next window, for longer than the clock takes to turn limit and the lag, and the clock would never reach it.
+// The clock is never turned for a timer armed before the stop, so a thing that comes too late still fails the test.
 func (e *env) until(t *testing.T, what string, limit time.Duration, cond func() bool) time.Duration {
 	t.Helper()
 	const lag = 5 * time.Second
@@ -48,7 +51,8 @@ func (e *env) until(t *testing.T, what string, limit time.Duration, cond func() 
 		e.clk.advance(step)
 		time.Sleep(10 * time.Millisecond)
 	}
-	eventually(t, what, func() bool { e.clk.advance(0); return cond() }) // fires what is due, and moves nothing
+	stopped := e.clk.mark()
+	eventually(t, what, func() bool { spent += e.clk.catchUp(stopped); return cond() })
 	return spent
 }
 
@@ -701,13 +705,17 @@ var progressScripts = []struct {
 		eventually(t, "the line", func() bool { return strings.Contains(e.said(), "Working…") })
 		run.Handle(result("c1", map[string]any{"output": "3 pods"}))
 		e.until(t, "one step", 3*time.Second, func() bool { return strings.Contains(e.said(), "Working… (1 step)") })
-		// The second call and its result are one write only if they reach the run while its window is shut. The write of the
-		// first step shut it, and the clock stands still until both are in, so the run cannot write between them, however it is
-		// scheduled. Set the clock first, and the window is open when the call comes: the run may write the call alone, as
-		// (2 min, 1 step). The clock is then set to the time the line should give, which opens the window, and the run writes
-		// both with the minutes of that moment.
+		// The second call and its result are one write only if they reach the run while its window is shut. The window shuts
+		// when the run reads the clock after the write of the first step, which may come well after Slack has that write, and
+		// the clock stands still until both are in, so the run cannot write between them, however it is scheduled. Its timer
+		// is then the only one (the activity mode keeps no gap once the line has begun): once it is pending, the run has read
+		// the clock for it. The clock is then set to the time the line should give, which fires that timer, and the run writes
+		// both with the minutes of that moment. Set the clock before the timer is pending, and the window opens a throttle
+		// after that moment, a time the clock is never turned to; set it before the call, and the run may write the call
+		// alone, as (2 min, 1 step).
 		run.Handle(call("c2", "fetch", nil))
 		run.Handle(result("c2", map[string]any{"error": "call rejected"}))
+		eventually(t, "the run to wait for its window", func() bool { return e.clk.waiting() == 1 })
 		e.advanceTo(started.Add(2*time.Minute + 5*time.Second))
 		eventually(t, "the minutes", func() bool { return strings.Contains(e.said(), "(2 min, 2 steps, 1 failed)") })
 		run.Handle(text("a", "Three pods, all ready."))
