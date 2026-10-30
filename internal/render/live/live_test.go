@@ -40,6 +40,7 @@ type clock struct {
 	mu     sync.Mutex
 	now    time.Time
 	timers []timer
+	made   int           // how many timers After has made
 	gate   chan struct{} // while it is open, Now waits for it to close
 }
 
@@ -47,6 +48,7 @@ type timer struct {
 	at   time.Time
 	ch   chan time.Time
 	long bool // the final text's deadline, which no test waits on
+	n    int  // the order After made it in
 }
 
 func (c *clock) Now() time.Time {
@@ -65,8 +67,32 @@ func (c *clock) After(d time.Duration) <-chan time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	ch := make(chan time.Time, 1)
-	c.timers = append(c.timers, timer{c.now.Add(d), ch, d == 10*time.Minute})
+	c.timers = append(c.timers, timer{c.now.Add(d), ch, d == 10*time.Minute, c.made})
+	c.made++
 	return ch
+}
+
+// mark is how many timers After has made so far: a timer made after it is one that catchUp turns the clock for.
+func (c *clock) mark() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.made
+}
+
+// catchUp turns the clock to the earliest pending timer that After made since mark, and fires what is due by then, and
+// returns how far it turned the clock. With no such timer it fires what is due, and moves nothing.
+func (c *clock) catchUp(mark int) time.Duration {
+	c.mu.Lock()
+	d, found := time.Duration(0), false
+	for _, tm := range c.timers {
+		if left := tm.at.Sub(c.now); tm.n >= mark && !tm.long && (!found || left < d) {
+			d, found = left, true
+		}
+	}
+	c.mu.Unlock()
+	d = max(d, 0)
+	c.advance(d)
+	return d
 }
 
 // due is when the earliest timer fires.
