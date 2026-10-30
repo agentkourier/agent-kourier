@@ -63,7 +63,7 @@ own agent to its own channel with a namespaced Binding, committed next to the ag
 <track kind="captions" src="assets/film/agent-kourier-teaser.en.vtt" srclang="en" label="English" default>
 <a href="https://media.agentkourier.dev/agent-kourier-teaser-16x9.787d2408faec.mp4">Download the teaser (MP4, 20 seconds)</a>.
 </video>
-<figcaption>The teaser, 20 seconds, narrated with captions. <a href="demo/">Watch the full demo</a> (98 seconds).</figcaption>
+<figcaption>The teaser, 20 seconds, narrated with captions. <a href="demo/">Watch the full demo</a> (98 seconds), or <a href="demo/#a-cross-team-incident">a cross-team incident</a> (3 minutes).</figcaption>
 </figure>
 
 <div class="grid cards" markdown>
