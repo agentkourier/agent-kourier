@@ -35,7 +35,7 @@ type assembler struct {
 	changes   int    // events emitted so far: text, tool, progress, state, and final
 	lastID    string // what identifies the working update last read (statusID), or empty
 	lastText  string // and its text: a snapshot sets neither, since it delivers no update
-	opening   bool   // the stream was resubscribed and has yet to say anything new: an update with no ID may be a repeat
+	opening   bool   // the stream was resubscribed and has yet to say anything new: an update like the last is a repeat
 	replies   bool   // a task-less agent Message may be the reply: set for a Send, never for an Answer or a follow
 	unshown   bool   // an agent Message came before any task where it cannot be the reply: on an Answer
 	// interaction reads the pause of the task that ends the send (Config.ParseInteraction); nil reads none.
@@ -80,7 +80,7 @@ func (a *assembler) apply(ev a2a.Event) {
 		}
 		changed := e.Status.State != a.state
 		a.setState(e.Status.State)
-		if e.Status.State == a2a.TaskStateWorking && !toldByTools(e.Status.Message) {
+		if e.Status.State == a2a.TaskStateWorking && workingUpdate(e.Status.Message) {
 			a.progress(e.Status, changed)
 		}
 		a.opening = a.opening && a.changes == before
@@ -237,22 +237,24 @@ func (a *assembler) messageTools(m *a2a.Message) {
 	}
 }
 
-// progress delivers a live working update that holds no tool part as the agent's activity (ProgressEvent), with the text
-// of its message if the message is the agent's. changed says the update made the task working: that is the change of state,
-// which StateEvent has told, and it is progress only if it says something. An update with the ID and the text of the last is
-// a repeat, which a server may send when a stream is resubscribed: it says nothing of the agent, and is no progress, or a
-// stream that always drops after it would renew the reconnects for ever. An update with no ID cannot be told from a live one,
-// so only the one that opens a resubscribed stream is taken for a repeat: at worst one unit of activity is not counted, and
-// the next on the stream is. The comparison is with the last update read, never a snapshot, so that a line sent during a drop,
-// which the snapshot holds and an opening update repeats, is still delivered, once.
+// progress delivers a live working update (see workingUpdate) as the agent's activity (ProgressEvent), with the text of its
+// message if the message is the agent's. changed says the update made the task working: that is the change of state, which
+// StateEvent has told, and it is progress only if it says something. An update that opens a resubscribed stream with the ID and
+// the text of the last is taken for a repeat, which a server may send when a stream is resubscribed: it says nothing of the
+// agent, and is no progress, or a stream that always drops after it would renew the reconnects for ever. Later on a stream an
+// update is live whatever it says, since a server has no cause to repeat itself there: an agent may send the same words with
+// nothing to tell them apart, as a heartbeat. At worst one unit of activity is not counted, and the next on the stream is. The
+// comparison is with the last update read, never a snapshot, so that a line sent during a drop, which the snapshot holds and an
+// opening update repeats, is still delivered, once.
 func (a *assembler) progress(s a2a.TaskStatus, changed bool) {
 	id, said := statusID(s), progressText(s.Message)
-	repeat := !changed && id == a.lastID && said == a.lastText && (id != "" || a.opening)
+	opening := a.opening
+	repeat := !changed && opening && id == a.lastID && said == a.lastText
 	a.lastID, a.lastText, a.opening = id, said, false
 	if repeat || (changed && strings.TrimSpace(said) == "") {
 		return
 	}
-	a.emit(ProgressEvent{ID: id, Text: said})
+	a.emit(ProgressEvent{ID: id, Text: said, Opening: opening})
 }
 
 // statusID is what identifies a status, its timestamp and its message's ID, or empty if it has neither. A repeat has the same;
@@ -290,9 +292,15 @@ func progressText(m *a2a.Message) string {
 	return strings.Join(text, "\n")
 }
 
+// workingUpdate says whether a status in state working, with this message, is a working update. It is not if the message is the
+// user's, echoed back, which says nothing of the agent; if it is the agent's and holds a tool part, which its tool events tell; or
+// if it is a fragment of the model's output (dialect.IsPartial), which the update that ends the fragments says in full.
+func workingUpdate(m *a2a.Message) bool {
+	return m == nil || (m.Role != a2a.MessageRoleUser && !dialect.IsPartial(m) && !toldByTools(m))
+}
+
 // toldByTools says whether the message of a working update is the agent's and holds a tool part: the update is told by its
-// tool events, and is no ProgressEvent. Any other message's tool parts are not read, so its update is progress like any
-// other.
+// tool events, and is no ProgressEvent.
 func toldByTools(m *a2a.Message) bool {
 	if !readable(a2a.TaskStateWorking, m) {
 		return false

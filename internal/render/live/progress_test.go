@@ -50,11 +50,17 @@ func (e *env) until(t *testing.T, what string, limit time.Duration, cond func() 
 }
 
 // atOnce waits for a thing that only the throttle may hold back, and asserts that by how it waits: the clock turns one write
-// window, less than the delay, and stops, so a thing that waits for a timer of the delay never comes and fails the test.
-// until's time says nothing of this: a slow run makes it longer, so it is no upper bound.
+// window, less than the delay, and from then on only for a timer of a write window, so a thing that waits for a timer of the
+// delay never comes and fails the test. A run that a loaded machine holds in a write arms the timer of its next window while
+// the clock turns, for a window from wherever the clock has got to, which is past where the clock stops: that timer is still
+// turned to. until's time says nothing of this: a slow run makes it longer, so it is no upper bound.
 func (e *env) atOnce(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	e.turn(t, what, throttle, cond)
+	for spent := time.Duration(0); !cond() && spent < throttle; spent += step {
+		e.clk.advance(step)
+		time.Sleep(10 * time.Millisecond)
+	}
+	eventually(t, what, func() bool { e.clk.catchUpWindow(); return cond() })
 }
 
 // turn turns the clock as until says, as far as stop, and returns how much time that took.

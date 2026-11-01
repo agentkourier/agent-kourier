@@ -572,27 +572,24 @@ func (u *Run) resultIn(e agent.ToolResultEvent, now time.Time) {
 }
 
 // progressIn takes a working update (spec D45 (1)), which is activity whether or not anything in it is understood; line is
-// its progress line (render.ProgressLine), in steps-and-activity only. The activity mode counts the update, and begins its
-// indicator at once, as a tool event does; it shows none of the update's text, since that mode names nothing the agent does.
-// In steps-and-activity an update with a line, where Working… may show (no call with an ID under way), stands for Working…
+// its progress line (render.ProgressLine), in steps-and-activity only. Being the next event, any update ends a call with no ID,
+// which was under way until then, and begins the gap that such a call held off. Otherwise an update leaves the gap running: were
+// it to begin the gap again, an agent that sends updates more often than the delay would never show that it is working. It
+// begins no card and no line itself either: a card stays once sent, and a server may send an update or two just before the text
+// that would end such a card, as kagent 1.0 does before an approved turn's answer and kagent 0.9.x with the answer itself. The
+// activity mode counts the update, and shows none of its text, since that mode names nothing the agent does. In
+// steps-and-activity an update with a line, where Working… may show (no call with an ID under way), stands for Working…
 // until the next event: it titles the open Working… card, or the card the delay begins, and on a message that is updated it
 // is the line at once (idle) while no card is open, which the next write can take back. Which of the two the run shows is the
-// path's, so this holds for a turn that moved from the stream to the update path as well. It begins no card and closes no gap
-// itself: a card stays once sent, and kagent 0.9.x repeats its answer in an update just before the text that would end
-// such a card; the delay's card, if it comes, is titled with the line while it stands. Being the next event, any update
-// ends a call with no ID, which was under way until then, and begins the gap that such a call held off. Otherwise an update with
-// no line shows nothing there, and the gap runs on: were it to begin the gap again, an agent that sends empty updates more often
-// than the delay would never show Working…. The caller holds u.mu.
+// path's, so this holds for a turn that moved from the stream to the update path as well. The caller holds u.mu.
 func (u *Run) progressIn(line string, now time.Time) {
-	if u.progress == v1alpha1.ProgressActivity {
-		u.updates++
-		u.beginActivity()
-		u.reopenGap(now)
-		return
-	}
 	if u.anon {
 		u.anon = false
 		u.reopenGap(now)
+	}
+	if u.progress == v1alpha1.ProgressActivity {
+		u.updates++
+		return
 	}
 	if line == "" || u.final || u.inflight > 0 {
 		return

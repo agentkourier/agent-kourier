@@ -692,9 +692,9 @@ type life struct {
 
 // renews records e, and reports whether it was new: a first look at a task, a change of state,
 // text that differs from what was held, a tool call or result not seen before, or a live working
-// update (agent.ProgressEvent, which a snapshot never makes) other than the one last seen: a follow reads
-// the task afresh, so a status that a server repeats to each follow comes as an event each time. An update with neither an
-// ID nor text cannot be told from another, and is new. A reply with no task (a Message) is a
+// update (agent.ProgressEvent, which a snapshot never makes), unless it opens a stream and is the one last seen: a follow reads
+// the task afresh, so a status that a server repeats to each follow comes as an event each time. Later on a stream an update is
+// the agent at work, whatever it says. A reply with no task (a Message) is a
 // first look each time, so no reply's text outlives its turn.
 func (l *life) renews(e agent.Event) bool {
 	switch ev := e.(type) {
@@ -720,7 +720,7 @@ func (l *life) renews(e agent.Event) bool {
 		said := ev.ID + "\x00" + ev.Text
 		old := l.said
 		l.said = said
-		return said != old || (ev.ID == "" && ev.Text == "")
+		return !ev.Opening || said != old
 	}
 	return false
 }

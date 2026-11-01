@@ -219,19 +219,23 @@ func TestARepeatedWorkingUpdateIsNoNewLife(t *testing.T) {
 		want bool
 	}{
 		{"a status", agent.ProgressEvent{ID: "m1", Text: "a"}, true},
-		{"that status again", agent.ProgressEvent{ID: "m1", Text: "a"}, false},
-		{"the same text under another ID", agent.ProgressEvent{ID: "m2", Text: "a"}, true},
+		{"that status again, opening a follow", agent.ProgressEvent{ID: "m1", Text: "a", Opening: true}, false},
+		{"that status again, live on the stream", agent.ProgressEvent{ID: "m1", Text: "a"}, true},
+		{"the same text under another ID, opening a follow", agent.ProgressEvent{ID: "m2", Text: "a", Opening: true}, true},
 		{"text with no ID", agent.ProgressEvent{Text: "b"}, true},
-		{"that text again", agent.ProgressEvent{Text: "b"}, false},
+		{"that text again, live: a heartbeat", agent.ProgressEvent{Text: "b"}, true},
+		{"and again", agent.ProgressEvent{Text: "b"}, true},
+		{"that text again, opening a follow", agent.ProgressEvent{Text: "b", Opening: true}, false},
 		{"an update with nothing to tell it by", agent.ProgressEvent{}, true},
 		{"another", agent.ProgressEvent{}, true},
+		{"another, opening a follow", agent.ProgressEvent{Opening: true}, false},
 	} {
 		if got := l.renews(tc.ev); got != tc.want {
 			t.Errorf("%s: renews = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 	l.renews(agent.StateEvent{TaskID: "t2", ContextID: "c1", State: a2a.TaskStateWorking})
-	if !l.renews(agent.ProgressEvent{Text: "b"}) {
+	if !l.renews(agent.ProgressEvent{Text: "b", Opening: true}) {
 		t.Error("the text of an earlier task was not new on a new task")
 	}
 }
