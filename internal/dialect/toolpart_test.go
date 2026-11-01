@@ -163,3 +163,32 @@ func TestDecodeToolPartOnRecordedStreams(t *testing.T) {
 		})
 	}
 }
+
+// A part is the model's reasoning when one of the frameworks' thought keys says true; anything else is not.
+func TestIsThought(t *testing.T) {
+	text := func(meta map[string]any) *a2a.Part {
+		p := a2a.NewTextPart("thinking")
+		p.Metadata = meta
+		return p
+	}
+	for _, tc := range []struct {
+		name string
+		part *a2a.Part
+		want bool
+	}{
+		{"ADK", text(map[string]any{"adk_thought": true}), true},
+		{"kagent 0.9.x", text(map[string]any{"kagent_thought": true}), true},
+		{"kagent 1.0", text(map[string]any{"kagent.dev/a2a/thought": true}), true},
+		{"false", text(map[string]any{"adk_thought": false}), false},
+		{"a string, not a bool", text(map[string]any{"adk_thought": "true"}), false},
+		{"another key", text(map[string]any{"thought": true}), false},
+		{"no metadata", text(nil), false},
+		{"no part", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := dialect.IsThought(tc.part); got != tc.want {
+				t.Errorf("IsThought = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

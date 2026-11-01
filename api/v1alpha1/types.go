@@ -230,9 +230,10 @@ type ChatBinding struct {
 	// Progress chooses what a live reply shows of the agent's work before its text arrives. steps shows a card for each
 	// tool call; an alert thread's first post, which cannot carry cards, shows a status line for the latest call instead,
 	// as every write does on a platform without cards. steps-and-activity shows those, and a Working… card (or line, in
-	// that first post) whenever 3 seconds pass with nothing new. activity shows one Working… card (a line in an alert
-	// thread) that counts the steps and names no tool and no argument. A Binding that sets none gets steps-and-activity.
-	// Output final ignores it.
+	// that first post) whenever 3 seconds pass with nothing new, titled or stood in for by the agent's own progress line.
+	// activity shows one Working… card (a line in an alert thread) that counts the steps, or the agent's working updates
+	// until the first step is counted, and names no tool, no argument and nothing the agent said. A Binding that sets none
+	// gets steps-and-activity. Output final ignores it.
 	// +kubebuilder:validation:Enum=steps;steps-and-activity;activity
 	// +kubebuilder:default=steps-and-activity
 	// +optional

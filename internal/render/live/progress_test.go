@@ -46,8 +46,22 @@ func (e *env) progressRun(t *testing.T, mode v1alpha1.ProgressMode, recipient st
 func (e *env) until(t *testing.T, what string, limit time.Duration, cond func() bool) time.Duration {
 	t.Helper()
 	const lag = 5 * time.Second
+	return e.turn(t, what, limit+lag, cond)
+}
+
+// atOnce waits for a thing that only the throttle may hold back, and asserts that by how it waits: the clock turns one write
+// window, less than the delay, and stops, so a thing that waits for a timer of the delay never comes and fails the test.
+// until's time says nothing of this: a slow run makes it longer, so it is no upper bound.
+func (e *env) atOnce(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	e.turn(t, what, throttle, cond)
+}
+
+// turn turns the clock as until says, as far as stop, and returns how much time that took.
+func (e *env) turn(t *testing.T, what string, stop time.Duration, cond func() bool) time.Duration {
+	t.Helper()
 	var spent time.Duration
-	for ; !cond() && spent < limit+lag; spent += step {
+	for ; !cond() && spent < stop; spent += step {
 		e.clk.advance(step)
 		time.Sleep(10 * time.Millisecond)
 	}

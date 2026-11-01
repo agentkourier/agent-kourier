@@ -94,7 +94,7 @@ func TestACardThatWasSentIsEndedByHowTheTaskEnded(t *testing.T) {
 			u.Handle(agent.ToolCallEvent{CallID: "c1", Name: "search"})
 			clk.t = clk.t.Add(4 * time.Second)
 			u.Handle(agent.ToolResultEvent{CallID: "c1", Response: map[string]any{"output": "x"}})
-			u.sentStep(render.ActivityStep("s1", 0, 0, 0, render.NotEnded))
+			u.sentStep(render.ActivityStep("s1", render.Counts{}, 0, render.NotEnded))
 			u.Handle(tc.final)
 			v := u.snapshot()
 			want := tc.title

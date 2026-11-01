@@ -259,6 +259,8 @@ type Run struct {
 	inflight int             // calls with an ID that have no result yet
 	finished int             // tool calls whose result has arrived
 	failed   int             // and those that report a failure
+	updates  int             // working updates (agent.ProgressEvent): the activity mode counts them until a step is counted
+	note     string          // the agent's progress line, which stands for Working… until the next event (steps-and-activity)
 	begun    bool            // the activity mode has begun to show: its card, or its line
 
 	// Below: the goroutine's alone.
@@ -297,8 +299,8 @@ type stepRec struct {
 	// ending is how a card that stands for time ended; NotEnded while it is under way. Only a card under way can be taken over.
 	ending render.Ending
 	// An activity card is ended with what it counted by then, and when.
-	steps, failed int
-	endedAt       time.Time
+	counts  render.Counts
+	endedAt time.Time
 }
 
 // stepKind is what a step stands for. The zero value is a tool call.
@@ -408,7 +410,12 @@ func (u *Run) Handle(ev agent.Event) {
 	if u.timed { // only a run that keeps time reads the clock, which a test may hold
 		now = u.cfg.Now()
 	}
+	var line string // a working update's progress line, redacted before the lock: only steps-and-activity shows one
+	if p, ok := ev.(agent.ProgressEvent); ok && u.timed && u.progress == v1alpha1.ProgressStepsAndActivity {
+		line = render.ProgressLine(p.Text)
+	}
 	u.mu.Lock()
+	u.note = "" // the progress line stands until the next event, whatever it is
 	switch e := ev.(type) {
 	case agent.TextEvent:
 		if _, seen := u.texts[e.ArtifactID]; !seen {
@@ -436,6 +443,10 @@ func (u *Run) Handle(ev agent.Event) {
 		u.endStep(e)
 		if u.timed {
 			u.resultIn(e, now)
+		}
+	case agent.ProgressEvent:
+		if u.timed {
+			u.progressIn(line, now)
 		}
 	case agent.FinalEvent:
 		u.final = true
@@ -560,6 +571,35 @@ func (u *Run) resultIn(e agent.ToolResultEvent, now time.Time) {
 	u.reopenGap(now)
 }
 
+// progressIn takes a working update (spec D45 (1)), which is activity whether or not anything in it is understood; line is
+// its progress line (render.ProgressLine), in steps-and-activity only. The activity mode counts the update, and begins its
+// indicator at once, as a tool event does; it shows none of the update's text, since that mode names nothing the agent does.
+// In steps-and-activity an update with a line, where Working… may show (no call with an ID under way), stands for Working…
+// until the next event: it titles the open Working… card, or the card the delay begins, and on a message that is updated it
+// is the line at once (idle) while no card is open, which the next write can take back. Which of the two the run shows is the
+// path's, so this holds for a turn that moved from the stream to the update path as well. It begins no card and closes no gap
+// itself: a card stays once sent, and kagent 0.9.x repeats its answer in an update just before the text that would end
+// such a card; the delay's card, if it comes, is titled with the line while it stands. Being the next event, any update
+// ends a call with no ID, which was under way until then, and begins the gap that such a call held off. Otherwise an update with
+// no line shows nothing there, and the gap runs on: were it to begin the gap again, an agent that sends empty updates more often
+// than the delay would never show Working…. The caller holds u.mu.
+func (u *Run) progressIn(line string, now time.Time) {
+	if u.progress == v1alpha1.ProgressActivity {
+		u.updates++
+		u.beginActivity()
+		u.reopenGap(now)
+		return
+	}
+	if u.anon {
+		u.anon = false
+		u.reopenGap(now)
+	}
+	if line == "" || u.final || u.inflight > 0 {
+		return
+	}
+	u.note, u.idle = line, true
+}
+
 // reopenGap begins a gap at now, in which the run waits the delay for something new before it shows that it is working. No
 // gap runs while a call is under way (its own card, or line, is the sign), once the turn is final, or, in the activity
 // mode, once the indicator has begun or the first text has come: the indicator is for the time before the text, it
@@ -619,8 +659,18 @@ func (u *Run) endWorking(now time.Time, e render.Ending) {
 	case workingStep:
 		r.ending = e
 	case activityStep:
-		r.ending, r.steps, r.failed, r.endedAt = e, u.finished, u.failed, now
+		r.ending, r.counts, r.endedAt = e, u.counts(), now
 	}
+}
+
+// counts is what the activity mode shows it counted: the tool calls that have their result and the failures among them, and
+// the working updates until the first of those, so that what it shows never counts backwards. The caller holds u.mu.
+func (u *Run) counts() render.Counts {
+	c := render.Counts{Steps: u.finished, Failed: u.failed}
+	if u.finished == 0 {
+		c.Updates = u.updates
+	}
+	return c
 }
 
 // followText makes the text that ended a Working… card an update, now that a tool call follows it: the card said that it
@@ -1137,7 +1187,7 @@ func (u *Run) snapshot() view {
 		events = append(events, agent.TextEvent{ArtifactID: id, Text: u.texts[id]})
 	}
 	tool, toolState, final, paused, awaiting := u.tool, u.toolState, u.final, u.paused, u.awaiting
-	idle, begun, finished, failed := u.idle, u.begun && !u.texted, u.finished, u.failed
+	idle, begun, counts, note := u.idle, u.begun && !u.texted, u.counts(), u.note
 	var recs []stepRec
 	var dropped int
 	if u.stepsOn() || carries {
@@ -1157,10 +1207,10 @@ func (u *Run) snapshot() view {
 		case u.progress == v1alpha1.ProgressActivity: // names no tool
 			shown = nil
 			if begun {
-				status = render.ActivityLine(now.Sub(u.started), finished, failed)
+				status = render.ActivityLine(now.Sub(u.started), counts)
 			}
-		case idle: // Working… takes the place of the line of a call that has returned
-			shown, status = nil, render.WorkingTitle
+		case idle: // Working…, or the agent's progress line, takes the place of the line of a call that has returned
+			shown, status = nil, cmp.Or(note, render.WorkingTitle)
 		}
 	}
 	v.body = render.Body(events, u.caps.Limit(chat.WhereStream))
@@ -1172,7 +1222,9 @@ func (u *Run) snapshot() view {
 		v.m.Parts = append(slices.Clone(v.m.Parts), u.turn.Footer...)
 	}
 	v.post = v.m
-	if carries && (shown != nil || status != "") { // the cards say what the line would: the updates leave it out
+	// The cards say what the line would, so the updates leave it out; but no card says what stands for Working… until one is
+	// open, and a progress line begins none (progressIn): that line stays, under the cards, until the delay's card has it.
+	if n := len(recs); carries && (shown != nil || status != "") && (!idle || (n > 0 && recs[n-1].open())) {
 		v.m, v.ok = render.Turn(events, nil, toolState, u.caps)
 	}
 	for i, r := range recs {
@@ -1192,7 +1244,7 @@ func (u *Run) snapshot() view {
 		if r.kind == callStep && r.call.CallID != "" && slices.Contains(awaiting, r.call.CallID) {
 			v.steps = append(v.steps, render.AwaitingApproval(id, r.call))
 		} else {
-			v.steps = append(v.steps, u.stepOf(id, r, state, now, finished, failed))
+			v.steps = append(v.steps, u.stepOf(id, r, state, now, counts, note))
 		}
 		v.pos = append(v.pos, pos)
 	}
@@ -1201,16 +1253,21 @@ func (u *Run) snapshot() view {
 }
 
 // stepOf is the step a record shows in the state given: the call it is, or the card that stands for time. A call with no
-// result at the final is ended with them (state); a card that stands for time has its own ending.
-func (u *Run) stepOf(id string, r stepRec, state chat.StepState, now time.Time, finished, failed int) chat.Step {
+// result at the final is ended with them (state); a card that stands for time has its own ending. A Working… card under way
+// is titled with the agent's progress line, if there is one: only the last card can be under way.
+func (u *Run) stepOf(id string, r stepRec, state chat.StepState, now time.Time, counts render.Counts, note string) chat.Step {
 	switch r.kind {
 	case workingStep:
-		return render.WorkingEnded(id, r.ending)
+		st := render.WorkingEnded(id, r.ending)
+		if r.ending == render.NotEnded && note != "" {
+			st.Title = note
+		}
+		return st
 	case activityStep:
 		if r.ending == render.NotEnded {
-			return render.ActivityStep(id, finished, failed, now.Sub(u.started), r.ending)
+			return render.ActivityStep(id, counts, now.Sub(u.started), r.ending)
 		}
-		return render.ActivityStep(id, r.steps, r.failed, r.endedAt.Sub(u.started), r.ending)
+		return render.ActivityStep(id, r.counts, r.endedAt.Sub(u.started), r.ending)
 	}
 	return render.Step(id, r.call, state)
 }

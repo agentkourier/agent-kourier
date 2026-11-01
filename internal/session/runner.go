@@ -687,11 +687,15 @@ type life struct {
 	state a2a.TaskState
 	text  map[a2a.ArtifactID]string
 	tools map[string]bool
+	said  string // the working update last seen: its ID and text
 }
 
 // renews records e, and reports whether it was new: a first look at a task, a change of state,
-// text that differs from what was held, or a tool call or result not seen before. A reply with no
-// task (a Message) is a first look each time, so no reply's text outlives its turn.
+// text that differs from what was held, a tool call or result not seen before, or a live working
+// update (agent.ProgressEvent, which a snapshot never makes) other than the one last seen: a follow reads
+// the task afresh, so a status that a server repeats to each follow comes as an event each time. An update with neither an
+// ID nor text cannot be told from another, and is new. A reply with no task (a Message) is a
+// first look each time, so no reply's text outlives its turn.
 func (l *life) renews(e agent.Event) bool {
 	switch ev := e.(type) {
 	case agent.StateEvent:
@@ -712,6 +716,11 @@ func (l *life) renews(e agent.Event) bool {
 		return l.tool("call " + ev.CallID)
 	case agent.ToolResultEvent:
 		return l.tool("result " + ev.CallID)
+	case agent.ProgressEvent:
+		said := ev.ID + "\x00" + ev.Text
+		old := l.said
+		l.said = said
+		return said != old || (ev.ID == "" && ev.Text == "")
 	}
 	return false
 }

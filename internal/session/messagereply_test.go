@@ -196,3 +196,42 @@ func TestLifeStartsAgainForEachMessageReply(t *testing.T) {
 		}
 	}
 }
+
+// A live working update is life of the task (R17's age), every time: a snapshot never makes one, so it is always news.
+func TestAWorkingUpdateRenewsLife(t *testing.T) {
+	var l life
+	l.renews(agent.StateEvent{TaskID: "t1", ContextID: "c1", State: a2a.TaskStateWorking})
+	for range 2 {
+		if !l.renews(agent.ProgressEvent{}) {
+			t.Error("a working update was not new life")
+		}
+	}
+}
+
+// A follow reads the task with a new assembler, which has not seen the status that the server repeats on every resubscribe.
+// The life is the session's, and spans them: the same status again is no new life, or a wedged task would never reach its age.
+func TestARepeatedWorkingUpdateIsNoNewLife(t *testing.T) {
+	var l life
+	l.renews(agent.StateEvent{TaskID: "t1", ContextID: "c1", State: a2a.TaskStateWorking})
+	for _, tc := range []struct {
+		name string
+		ev   agent.ProgressEvent
+		want bool
+	}{
+		{"a status", agent.ProgressEvent{ID: "m1", Text: "a"}, true},
+		{"that status again", agent.ProgressEvent{ID: "m1", Text: "a"}, false},
+		{"the same text under another ID", agent.ProgressEvent{ID: "m2", Text: "a"}, true},
+		{"text with no ID", agent.ProgressEvent{Text: "b"}, true},
+		{"that text again", agent.ProgressEvent{Text: "b"}, false},
+		{"an update with nothing to tell it by", agent.ProgressEvent{}, true},
+		{"another", agent.ProgressEvent{}, true},
+	} {
+		if got := l.renews(tc.ev); got != tc.want {
+			t.Errorf("%s: renews = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	l.renews(agent.StateEvent{TaskID: "t2", ContextID: "c1", State: a2a.TaskStateWorking})
+	if !l.renews(agent.ProgressEvent{Text: "b"}) {
+		t.Error("the text of an earlier task was not new on a new task")
+	}
+}
