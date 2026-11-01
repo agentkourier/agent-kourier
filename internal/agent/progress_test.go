@@ -1,9 +1,12 @@
 package agent
 
 import (
+	"errors"
+	"io"
 	"net/http"
 	"reflect"
 	"testing"
+	"testing/synctest"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
@@ -127,4 +130,84 @@ func TestKagentApprovalEchoIsProgressWithNoText(t *testing.T) {
 	if p := progress(got); !reflect.DeepEqual(p, []string{"-", "-"}) {
 		t.Errorf("progress = %q, want two with no text", p)
 	}
+}
+
+// A server may open a resubscribe by repeating the status the task already showed. That says nothing new of the agent, so it
+// is no ProgressEvent: it does not renew the reconnects, or a send on a stream that always drops would never give up, and it
+// does not renew the task's age.
+func TestARepeatedStatusOnAResubscribeIsNotProgress(t *testing.T) {
+	said := messageOf(a2a.MessageRoleAgent, "m1", textOf("Reading logs"))
+	for _, tc := range []struct {
+		name string
+		m    *a2a.Message
+	}{
+		{"a status with no message", nil},
+		{"a status with the text the task holds", said},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				send, sub1, sub2 := make(chan item), make(chan item), make(chan item)
+				snap := &a2a.Task{ID: "t1", ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateWorking, Message: tc.m}}
+				m := newMemConn(t, []chan item{send}, []chan item{sub1, sub2}, getResult{task: snap})
+				s := sendAsync(t, memAgent(t, m, func(c *Config) { c.MaxReconnects = 2 }))
+				s.feed(send, item{ev: working()})
+				s.feed(send, item{err: io.ErrUnexpectedEOF})
+				for _, sub := range []chan item{sub1, sub2} {
+					s.feed(sub, item{ev: snap})
+					s.feed(sub, item{ev: statusOf(a2a.TaskStateWorking, tc.m)})
+					s.feed(sub, item{err: io.ErrUnexpectedEOF})
+				}
+				if err := s.result(); !errors.Is(err, ErrStreamLost) {
+					t.Fatalf("err = %v, want the stream lost", err)
+				}
+				if n := countOf(m.calls(), "subscribe t1"); n != 2 {
+					t.Errorf("%d subscribes, want 2, one per reconnect", n)
+				}
+				if p := progress(s.events()); p != nil {
+					t.Errorf("progress = %q, want none", p)
+				}
+			})
+		})
+	}
+}
+
+// Only the update that opens the stream, and repeats what the task shows, is taken for a repeat: the next on the stream is the
+// agent at work, and renews the reconnects.
+func TestAnUpdateAfterTheOpeningOneIsProgress(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		send, sub1, sub2 := make(chan item), make(chan item), make(chan item)
+		m := newMemConn(t, []chan item{send}, []chan item{sub1, sub2}, getResult{task: task(a2a.TaskStateWorking, "")})
+		s := sendAsync(t, memAgent(t, m, func(c *Config) { c.MaxReconnects = 1 }))
+		s.feed(send, item{ev: working()})
+		s.feed(send, item{err: io.ErrUnexpectedEOF})
+		s.feed(sub1, item{ev: working()})
+		s.feed(sub1, item{ev: working()})
+		s.feed(sub1, item{err: io.ErrUnexpectedEOF})
+		s.feed(sub2, item{ev: task(a2a.TaskStateCompleted, "done")})
+		if err := s.result(); err != nil {
+			t.Fatalf("err = %v, want the second stream to finish the task", err)
+		}
+		if p := progress(s.events()); !reflect.DeepEqual(p, []string{"-"}) {
+			t.Errorf("progress = %q, want the one update after the opening one", p)
+		}
+	})
+}
+
+// An update that opens the stream with text the task did not show is news, whichever update it is.
+func TestNewTextThatOpensAResubscribeIsProgress(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		send, sub := make(chan item), make(chan item)
+		m := newMemConn(t, []chan item{send}, []chan item{sub}, getResult{task: task(a2a.TaskStateWorking, "")})
+		s := sendAsync(t, memAgent(t, m, nil))
+		s.feed(send, item{ev: working()})
+		s.feed(send, item{err: io.ErrUnexpectedEOF})
+		s.feed(sub, item{ev: statusOf(a2a.TaskStateWorking, messageOf(a2a.MessageRoleAgent, "m1", textOf("Reading logs")))})
+		s.feed(sub, item{ev: task(a2a.TaskStateCompleted, "done")})
+		if err := s.result(); err != nil {
+			t.Fatal(err)
+		}
+		if p := progress(s.events()); !reflect.DeepEqual(p, []string{"Reading logs"}) {
+			t.Errorf("progress = %q, want the new text", p)
+		}
+	})
 }

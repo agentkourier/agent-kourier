@@ -691,7 +691,7 @@ type life struct {
 
 // renews records e, and reports whether it was new: a first look at a task, a change of state,
 // text that differs from what was held, a tool call or result not seen before, or a live working
-// update (agent.ProgressEvent, which a snapshot never makes). A reply with no task (a Message) is a
+// update (agent.ProgressEvent, which neither a snapshot nor a repeat of its status makes). A reply with no task (a Message) is a
 // first look each time, so no reply's text outlives its turn.
 func (l *life) renews(e agent.Event) bool {
 	switch ev := e.(type) {

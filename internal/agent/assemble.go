@@ -31,9 +31,11 @@ type assembler struct {
 	contextID string
 	state     a2a.TaskState
 	final     *a2a.Task
-	changes   int  // events emitted so far: text, tool, progress, state, and final
-	replies   bool // a task-less agent Message may be the reply: set for a Send, never for an Answer or a follow
-	unshown   bool // an agent Message came before any task where it cannot be the reply: on an Answer
+	changes   int    // events emitted so far: text, tool, progress, state, and final
+	shown     string // the text of the working status last read: the task's, or an update's (progress)
+	opening   bool   // the stream was resubscribed and has yet to say anything: a status it opens with may be a repeat
+	replies   bool   // a task-less agent Message may be the reply: set for a Send, never for an Answer or a follow
+	unshown   bool   // an agent Message came before any task where it cannot be the reply: on an Answer
 	// interaction reads the pause of the task that ends the send (Config.ParseInteraction); nil reads none.
 	interaction func(a2a.Task) (*dialect.Interaction, error)
 }
@@ -65,6 +67,9 @@ func (a *assembler) apply(ev a2a.Event) {
 		}
 		a.snapshot = nil
 		a.setState(e.Status.State)
+		if e.Status.State == a2a.TaskStateWorking {
+			a.shown = progressText(e.Status.Message)
+		}
 		if settled(e.Status.State) && a.final == nil {
 			a.end(e)
 		}
@@ -78,7 +83,9 @@ func (a *assembler) apply(ev a2a.Event) {
 		if e.Status.State == a2a.TaskStateWorking && !toldByTools(e.Status.Message) {
 			a.progress(e.Status.Message, changed)
 		}
+		a.opening = false
 	case *a2a.TaskArtifactUpdateEvent:
+		a.opening = false
 		a.track(e.TaskID, e.ContextID)
 		a.artifact(e.Artifact, e.Append, false)
 	case *a2a.Message:
@@ -228,24 +235,35 @@ func (a *assembler) messageTools(m *a2a.Message) {
 }
 
 // progress delivers a live working update that holds no tool part as the agent's activity (ProgressEvent), with the text
-// of its message if the message is the agent's. A text part marked as the model's reasoning (dialect.IsThought) is not
-// read: ADK's older converter, which kagent 0.9.x uses, sends every part of the run in working updates, its reasoning
-// among them. changed says the update made the task working: that is the change of state, which StateEvent has told, and
-// it is progress only if it says something.
+// of its message if the message is the agent's. changed says the update made the task working: that is the change of state,
+// which StateEvent has told, and it is progress only if it says something. An update that opens a resubscribed stream and
+// says what the task already showed may be the server repeating the task's status, which says nothing of the agent: it is
+// no progress, or a stream that always drops after it would renew the reconnects for ever, and the task's age with them. A
+// live update that it swallows is one unit of activity, and the next on the stream counts.
 func (a *assembler) progress(m *a2a.Message, changed bool) {
-	var text []string
-	if readable(a2a.TaskStateWorking, m) {
-		for _, p := range m.Parts {
-			if t, ok := p.Content.(a2a.Text); ok && !dialect.IsThought(p) {
-				text = append(text, string(t))
-			}
-		}
-	}
-	said := strings.Join(text, "\n")
-	if changed && strings.TrimSpace(said) == "" {
+	said := progressText(m)
+	repeat := a.opening && !changed && said == a.shown
+	a.shown = said
+	if repeat || (changed && strings.TrimSpace(said) == "") {
 		return
 	}
 	a.emit(ProgressEvent{Text: said})
+}
+
+// progressText is the text of a working status's message if the message is the agent's, its text parts joined by line breaks.
+// A text part marked as the model's reasoning (dialect.IsThought) is not read: ADK's older converter, which kagent 0.9.x uses,
+// sends every part of the run in working updates, its reasoning among them.
+func progressText(m *a2a.Message) string {
+	if !readable(a2a.TaskStateWorking, m) {
+		return ""
+	}
+	var text []string
+	for _, p := range m.Parts {
+		if t, ok := p.Content.(a2a.Text); ok && !dialect.IsThought(p) {
+			text = append(text, string(t))
+		}
+	}
+	return strings.Join(text, "\n")
 }
 
 // toldByTools says whether the message of a working update is the agent's and holds a tool part: the update is told by its

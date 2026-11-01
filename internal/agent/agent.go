@@ -184,8 +184,8 @@ func (a *Agent) cancelWedged(ctx context.Context, rejected error, id a2a.TaskID)
 
 // reconnect resumes the task, after err ended its stream, until the task settles. It gives
 // up when MaxReconnects in a row change nothing (the opening snapshot of a resubscribe does
-// not count, and a working update does: the agent is at work), and on an error that is not a
-// lost connection.
+// not count, nor an opening status that repeats it, and a working update after those does: the
+// agent is at work), and on an error that is not a lost connection.
 func (a *Agent) reconnect(ctx context.Context, asm *assembler, err error) error {
 	for failures := 0; err != nil; {
 		if failures++; !dropped(ctx, err) || permanent(err) || failures > a.cfg.MaxReconnects {
@@ -222,6 +222,7 @@ func (a *Agent) resume(ctx context.Context, conn Conn, asm *assembler) error {
 	if asm.final != nil {
 		return nil
 	}
+	asm.opening = true
 	return a.read(ctx, conn, asm, func(ctx context.Context) iter.Seq2[a2a.Event, error] {
 		return conn.SubscribeToTask(ctx, &a2a.SubscribeToTaskRequest{ID: asm.taskID})
 	})

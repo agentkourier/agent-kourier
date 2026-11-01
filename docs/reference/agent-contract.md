@@ -165,7 +165,9 @@ On every dialect, a status update in state `working` whose message holds no tool
 the agent is at work, whether or not Agent Kourier understands anything in it. The update that makes the task `working`,
 at the start of a turn or after a pause, counts only if its message has text. An update whose message is the agent's and
 holds a tool part counts as its tool call or result instead. A task snapshot, the one `GetTask` returns or a resubscribe
-opens with, holds no working update; the updates that stream after it do.
+opens with, holds no working update; the updates that stream after it do, save one that opens the stream and says what the
+task already showed, which is taken for the server repeating the task's status. Such a repeat does not count as the stream
+making progress, so a stream that always drops after it is given up on as one that says nothing is.
 
 When the update's message is the agent's own (role `agent`), its text parts, joined by line breaks, are the agent's
 progress line. A text part whose metadata holds `adk_thought`, `kagent_thought` or `kagent.dev/a2a/thought` set to

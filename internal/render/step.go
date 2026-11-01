@@ -152,7 +152,7 @@ func WorkingEnded(id string, e Ending) chat.Step {
 }
 
 // Counts is what the activity mode counts: the tool calls that have their result and the failures among them, and the
-// agent's working updates (agent.ProgressEvent), which a turn counts only while it has had no tool event. Each is left out
+// agent's working updates (agent.ProgressEvent), which a turn counts only until a step is counted. Each is left out
 // of what is shown at zero.
 type Counts struct {
 	Steps, Failed, Updates int

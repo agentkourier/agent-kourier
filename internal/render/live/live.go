@@ -259,8 +259,7 @@ type Run struct {
 	inflight int             // calls with an ID that have no result yet
 	finished int             // tool calls whose result has arrived
 	failed   int             // and those that report a failure
-	updates  int             // working updates (agent.ProgressEvent): the activity mode counts them while no tool event has come
-	tooled   bool            // a tool call or result has come
+	updates  int             // working updates (agent.ProgressEvent): the activity mode counts them until a step is counted
 	note     string          // the agent's progress line, which stands for Working… until the next event (steps-and-activity)
 	begun    bool            // the activity mode has begun to show: its card, or its line
 
@@ -550,7 +549,7 @@ func (u *Run) callMade(e agent.ToolCallEvent, now time.Time) {
 		u.inflight++
 		u.anon = false
 	}
-	u.idle, u.tooled = false, true // the tool's own line takes the place of Working…
+	u.idle = false // the tool's own line takes the place of Working…
 	u.followText()
 	u.beginActivity()
 	u.reopenGap(now)
@@ -559,7 +558,7 @@ func (u *Run) callMade(e agent.ToolCallEvent, now time.Time) {
 // resultIn counts the result of a tool call the run knows, once, and ends the call's time as a call under way: a new gap
 // begins if no other call is. The caller holds u.mu.
 func (u *Run) resultIn(e agent.ToolResultEvent, now time.Time) {
-	u.anon, u.tooled = false, true
+	u.anon = false
 	if done, known := u.calls[e.CallID]; known && !done {
 		u.calls[e.CallID] = true
 		u.inflight--
@@ -580,9 +579,9 @@ func (u *Run) resultIn(e agent.ToolResultEvent, now time.Time) {
 // is the line at once (idle) while no card is open, which the next write can take back. Which of the two the run shows is the
 // path's, so this holds for a turn that moved from the stream to the update path as well. It begins no card and closes no gap
 // itself: a card stays once sent, and kagent 0.9.x repeats its answer in an update just before the text that would end
-// such a card; the delay's card, if it comes, is titled with the line while it stands. Being the next event, it
-// ends a call with no ID, which was under way until then, and begins the gap that such a call held off. An update with no
-// line shows nothing there, and the gap runs on: were it to begin the gap again, an agent that sends empty updates more often
+// such a card; the delay's card, if it comes, is titled with the line while it stands. Being the next event, any update
+// ends a call with no ID, which was under way until then, and begins the gap that such a call held off. Otherwise an update with
+// no line shows nothing there, and the gap runs on: were it to begin the gap again, an agent that sends empty updates more often
 // than the delay would never show Working…. The caller holds u.mu.
 func (u *Run) progressIn(line string, now time.Time) {
 	if u.progress == v1alpha1.ProgressActivity {
@@ -591,15 +590,14 @@ func (u *Run) progressIn(line string, now time.Time) {
 		u.reopenGap(now)
 		return
 	}
-	if line == "" || u.final || u.inflight > 0 {
-		return
-	}
-	u.note = line
 	if u.anon {
 		u.anon = false
 		u.reopenGap(now)
 	}
-	u.idle = true
+	if line == "" || u.final || u.inflight > 0 {
+		return
+	}
+	u.note, u.idle = line, true
 }
 
 // reopenGap begins a gap at now, in which the run waits the delay for something new before it shows that it is working. No
@@ -666,10 +664,10 @@ func (u *Run) endWorking(now time.Time, e render.Ending) {
 }
 
 // counts is what the activity mode shows it counted: the tool calls that have their result and the failures among them, and
-// the working updates while no tool event has come. The caller holds u.mu.
+// the working updates until the first of those, so that what it shows never counts backwards. The caller holds u.mu.
 func (u *Run) counts() render.Counts {
 	c := render.Counts{Steps: u.finished, Failed: u.failed}
-	if !u.tooled {
+	if u.finished == 0 {
 		c.Updates = u.updates
 	}
 	return c

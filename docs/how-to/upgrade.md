@@ -288,7 +288,7 @@ agent that sends no such update sees no change.
   write, where `Working…` used to wait 3 seconds, so a turn that then ends empty leaves `(no output)` where it might have
   posted nothing. Each change of line is one more write to Slack, by default at most
   one every 2 seconds for each reply. No card is begun for a line.
-- **`activity` counts working updates.** Until the first tool call or result, its card or line counts the updates
+- **`activity` counts working updates.** Until the first tool call has its result, its card or line counts the updates
   (`Working… 5 updates`), and begins at the first one instead of after 3 seconds, if no text has come.
 - **kagent 0.9.x** repeats its answer in a working update, so in `steps-and-activity` the start of the answer can title
   an open card, or be an alert thread's line, for a moment before the answer itself.

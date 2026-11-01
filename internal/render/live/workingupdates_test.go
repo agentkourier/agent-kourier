@@ -210,6 +210,49 @@ func TestAnAlertThreadProgressLineDoesNotOutliveAnEmptyTurn(t *testing.T) {
 	}
 }
 
+// A call with no ID is under way until the next event, and an update with no text is one: the gap that the call held off begins,
+// and Working… comes at the delay. An agent that sends only such updates after the call would otherwise never show it.
+func TestAnEmptyUpdateEndsACallWithNoID(t *testing.T) {
+	e := setup(t)
+	run := e.progressRun(t, sa, "U1")
+	run.Handle(call("", "search", nil))
+	e.until(t, "the call's card", 3*time.Second, func() bool { return len(e.tasks()) == 1 })
+	run.Handle(update(""))
+	if spent := e.until(t, "the Working… card", 3*time.Second, func() bool { return len(e.tasks()) == 2 }); spent < 3*time.Second {
+		t.Fatalf("the card began after %v; want the delay, 3 s", spent)
+	}
+	if got := e.tasks()[1].Title; got != "Working…" {
+		t.Errorf("title %q; want Working…", got)
+	}
+	run.Handle(text("a", "Found it."))
+	run.Handle(agent.FinalEvent{})
+	e.finish(t, run)
+}
+
+// The count of updates stands until a step is counted: a tool call under way, which has no result to count, does not take it
+// back, so the indicator never counts backwards and its summary says what the turn did.
+func TestTheActivityCardKeepsCountingUntilAStepIsCounted(t *testing.T) {
+	e := setup(t)
+	started := e.clk.Now()
+	run := e.progressRun(t, activity, "U1")
+	run.Handle(update(""))
+	run.Handle(update(""))
+	e.until(t, "the updates counted", 3*time.Second, func() bool { return len(e.tasks()) == 1 && e.tasks()[0].Title == "Working… 2 updates" })
+	run.Handle(call("c1", "search", nil))
+	run.Handle(update(""))
+	e.until(t, "the third update", 3*time.Second, func() bool { return e.tasks()[0].Title == "Working… 3 updates" })
+	run.Handle(result("unknown", map[string]any{"output": "x"}))
+	run.Handle(update(""))
+	e.until(t, "the fourth update", 3*time.Second, func() bool { return e.tasks()[0].Title == "Working… 4 updates" })
+	e.elapse(4 * time.Second)
+	took := e.tookSince(started)
+	run.Handle(agent.FinalEvent{})
+	e.finish(t, run)
+	if got := cards(t, e.reply()); !strings.Contains(got[len(got)-1], "[Took "+took+", 4 updates]") {
+		t.Errorf("last card %q; want the summary to count the updates", got[len(got)-1])
+	}
+}
+
 // The activity mode counts working updates while the turn has had no tool event, begins its card at the first, and shows none
 // of their text.
 func TestTheActivityCardCountsWorkingUpdates(t *testing.T) {
@@ -236,7 +279,7 @@ func TestTheActivityCardCountsWorkingUpdates(t *testing.T) {
 	}
 }
 
-// Once a tool event has come the activity mode counts steps, and the updates no longer show.
+// Once a step is counted the activity mode counts steps, and the updates no longer show.
 func TestTheActivityCardCountsStepsOnceThereAreTools(t *testing.T) {
 	e := setup(t)
 	run := e.progressRun(t, activity, "U1")
