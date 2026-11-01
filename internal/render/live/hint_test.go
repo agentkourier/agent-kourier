@@ -86,11 +86,11 @@ func hintScenarios() []hintScenario {
 			h(text("a", "Sign in to continue."))
 			h(ended(a2a.TaskStateAuthRequired))
 		}, shown("Sign in to continue."), false},
-		{"no output, posted", session.SystemUser, v1alpha1.OutputLive, func(t *testing.T, e *env, h agent.Handler) {
+		{"only steps, posted", session.SystemUser, v1alpha1.OutputLive, func(t *testing.T, e *env, h agent.Handler) {
 			h(agent.ToolCallEvent{CallID: "c1", Name: "search"})
 			eventually(t, "the tool line to be posted", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
 			h(agent.FinalEvent{})
-		}, func(e *env) bool { return strings.Contains(e.reply().Text, "(no output)") }, false},
+		}, func(e *env) bool { got := e.reply().Tasks(); return len(got) == 1 && got[0].Status != "in_progress" }, false},
 		{"only steps, streamed", "U1", v1alpha1.OutputLive, func(_ *testing.T, _ *env, h agent.Handler) {
 			h(agent.ToolCallEvent{CallID: "c1", Name: "search"})
 			h(agent.ToolResultEvent{CallID: "c1"})

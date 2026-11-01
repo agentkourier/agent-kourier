@@ -156,10 +156,11 @@ type Button struct {
 	Primary bool   `json:"primary,omitempty"`
 }
 
-// Steps are the progress steps of a reply that a stream showed, such as its tool calls, each in the state to show, in
-// order: a platform shows them as it shows a stream's steps, before the parts that follow. Each step is as Stream.Step
-// takes it (Step), its title and detail literal text on one line, untrusted. It is how a message that replaces a stream
-// keeps the steps the stream showed, which a platform such as Slack drops when it updates the message. A platform without
+// Steps are the progress steps of a reply, such as its tool calls, each in the state to show, in order: a platform shows
+// them as it shows a stream's steps, before the parts that follow. Each step is as Stream.Step takes it (Step), its title
+// and detail literal text on one line, untrusted. It is how a message that replaces a stream keeps the steps the stream
+// showed, which a platform such as Slack drops when it updates the message, and how a reply that is updated and never
+// streams, such as an alert thread's, shows its tool calls. A platform without
 // progress steps (Caps.Steps false) shows nothing of it. Only an update carries it today: no payload the outbox stores
 // has one, so a release that cannot read it never meets one.
 type Steps struct{ Steps []Step }

@@ -36,6 +36,9 @@ func TestFindings(t *testing.T) {
 		{"the word without a slash", "the kourier directory\n", []int{1}},
 		{"a path segment does not excuse a misspelling on the line", "kourier/binding.yaml and then Kourier alone\n", []int{1}},
 		{"a path segment does not excuse courier", "kourier/courier.yaml\n", []int{1}},
+		{"a link to the incident demo repository", "See the [repository](https://github.com/agentkourier/kourier-incident-demo).\n", nil},
+		{"the repository name alone is still the name", "Clone kourier-incident-demo.\n", []int{1}},
+		{"a repository path does not excuse the rest of the line", "agentkourier/kourier-incident-demo and Kourier alone\n", []int{1}},
 		{"a historical block", "a\n<!-- name-check: off -->\nhelm install courier ./chart\n<!-- name-check: on -->\ncourier\n", []int{5}},
 	}
 	for _, tt := range tests {

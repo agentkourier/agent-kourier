@@ -1,0 +1,131 @@
+{
+  "requests": [
+    {
+      "path": "/chat.postMessage",
+      "form": {
+        "blocks": [
+          {
+            "elements": [
+              {
+                "text": "Calling slow_query(q=\"select 1\")",
+                "type": "plain_text"
+              }
+            ],
+            "type": "context"
+          }
+        ],
+        "channel": "C1",
+        "outbox_id": "turn-1/reply",
+        "parse": "none",
+        "text": "Calling slow_query(q=\"select 1\")",
+        "thread_ts": "ROOT",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    },
+    {
+      "path": "/chat.update",
+      "form": {
+        "blocks": [
+          {
+            "details": {
+              "elements": [
+                {
+                  "elements": [
+                    {
+                      "text": "q=\"select 1\"",
+                      "type": "text"
+                    }
+                  ],
+                  "type": "rich_text_section"
+                }
+              ],
+              "type": "rich_text"
+            },
+            "output": {
+              "elements": [
+                {
+                  "elements": [
+                    {
+                      "text": "No result was reported.",
+                      "type": "text"
+                    }
+                  ],
+                  "type": "rich_text_section"
+                }
+              ],
+              "type": "rich_text"
+            },
+            "status": "complete",
+            "task_id": "s1",
+            "title": "slow_query",
+            "type": "task_card"
+          }
+        ],
+        "channel": "C1",
+        "parse": "none",
+        "text": "slow_query",
+        "ts": "TS1",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    }
+  ],
+  "thread": [
+    {
+      "text": "root",
+      "thread": true
+    },
+    {
+      "text": "slow_query",
+      "blocks": [
+        {
+          "details": {
+            "elements": [
+              {
+                "elements": [
+                  {
+                    "text": "q=\"select 1\"",
+                    "type": "text"
+                  }
+                ],
+                "type": "rich_text_section"
+              }
+            ],
+            "type": "rich_text"
+          },
+          "output": {
+            "elements": [
+              {
+                "elements": [
+                  {
+                    "text": "No result was reported.",
+                    "type": "text"
+                  }
+                ],
+                "type": "rich_text_section"
+              }
+            ],
+            "type": "rich_text"
+          },
+          "status": "complete",
+          "task_id": "s1",
+          "title": "slow_query",
+          "type": "task_card"
+        }
+      ],
+      "thread": true,
+      "tasks": [
+        {
+          "id": "s1",
+          "title": "slow_query",
+          "status": "complete",
+          "details": "q=\"select 1\"",
+          "output": "No result was reported."
+        }
+      ],
+      "edited": true,
+      "outbox_id": "turn-1/reply"
+    }
+  ]
+}

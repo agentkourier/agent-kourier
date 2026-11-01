@@ -69,7 +69,8 @@ The Chrome extension's pointer is painted out only where it sat on blank chrome;
 
 ### The copies on the site
 
-The site (`docs/index.md` and `docs/demo/index.md`) plays the 16:9 teaser and demo from the R2 bucket
+The site (`docs/index.md` and `docs/demo/index.md`) plays the 16:9 teaser and demo, and the demo page also plays the
+cross-team incident film, from the R2 bucket
 `agentkourier-media`, public only at `https://media.agentkourier.dev`; `r2.dev` access is off and the bucket has
 no CORS rule. Each render is stored under `<name>.<first 12 hex digits of its SHA-256>.mp4`, so a re-cut gets a
 new URL and never replaces the one a deployed page plays. A zone transform rule sets
@@ -87,6 +88,13 @@ After a re-cut:
    `ffmpeg -i <render> -af silencedetect=noise=-35dB:d=0.25 -f null -`, and replace each poster with the cut's end card
    at 1280x720.
 4. Leave the old objects in the bucket until no deployed page plays them.
+
+The incident film is not built here: it is cut from a recording of the
+[incident demo repository](https://github.com/agentkourier/kourier-incident-demo) with its own narration and frame. Its
+copy on the site follows the same rules: `agent-kourier-incident-16x9.<sha12>.mp4` in the bucket, and
+`agent-kourier-incident.en.vtt` and its poster (the cut's title card, since the cut ends on a bare lockup) in
+`docs/assets/film/`. Its captions are cut into short cues at the pauses in the narration, not timed with silencedetect
+on the render.
 
 ### The copy in the project README
 

@@ -95,3 +95,11 @@ func TestFailedReadsAnErrorOutOfAToolResponse(t *testing.T) {
 		}
 	}
 }
+
+func TestEarlierStepsCountsTheStepsNotShown(t *testing.T) {
+	for n, want := range map[int]string{1: "1 earlier step is not shown.", 5: "5 earlier steps are not shown."} {
+		if got := EarlierSteps(n); got != want {
+			t.Errorf("EarlierSteps(%d) = %q, want %q", n, got, want)
+		}
+	}
+}

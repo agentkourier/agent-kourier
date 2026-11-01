@@ -41,8 +41,8 @@ and recovery after a restart or failover. Slack is supported today, and other ch
 </div>
 </div>
 
-!!! note "Status: v0.1.4"
-    The current release is `0.1.4`: install the published chart and image with [Install with Helm](how-to/install-with-helm.md).
+!!! note "Status: v0.1.6"
+    The current release is `0.1.6`: install the published chart and image with [Install with Helm](how-to/install-with-helm.md).
     The `v1alpha1` resource format can change before 1.0.
 
 ## What Agent Kourier handles
@@ -63,7 +63,7 @@ own agent to its own channel with a namespaced Binding, committed next to the ag
 <track kind="captions" src="assets/film/agent-kourier-teaser.en.vtt" srclang="en" label="English" default>
 <a href="https://media.agentkourier.dev/agent-kourier-teaser-16x9.787d2408faec.mp4">Download the teaser (MP4, 20 seconds)</a>.
 </video>
-<figcaption>The teaser, 20 seconds, narrated with captions. <a href="demo/">Watch the full demo</a> (98 seconds).</figcaption>
+<figcaption>The teaser, 20 seconds, narrated with captions. <a href="demo/">Watch the full demo</a> (98 seconds), or <a href="demo/#a-cross-team-incident">a cross-team incident</a> (3 minutes).</figcaption>
 </figure>
 
 <div class="grid cards" markdown>

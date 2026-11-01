@@ -4,7 +4,7 @@ For an operator running the Helm chart: at the end, Agent Kourier runs a newer r
 audit log intact, and you know how to roll back.
 
 Each release publishes a signed multi-arch image and a chart whose default image is that image by digest, as
-[Install with Helm](install-with-helm.md#the-release) describes. The current release is `0.1.4`. To run a build that is not
+[Install with Helm](install-with-helm.md#the-release) describes. The current release is `0.1.6`. To run a build that is not
 released, see [Build from source](install-with-helm.md#build-from-source).
 
 ## Upgrade the chart
@@ -69,6 +69,24 @@ does not avoid that; stopping every old pod first does. Upgrade once with `repli
 until the old pods have terminated, then upgrade again with `replicaCount` restored. Agent Kourier is down in between;
 if `podDisruptionBudget` is enabled, switch it off or to `maxUnavailable` before scaling to zero (see the chart's
 values).
+
+## Upgrade to the release with step cards in alert threads
+
+This release shows an alert thread's tool calls as step cards, as a chat thread does. No Binding fails to load for it.
+
+- **An alert thread keeps a card for each tool call.** The reply's first post is unchanged: it shows the line of the latest
+  tool call, or `Working…`. Every update after it shows a step card for each tool call above the text, in place of the
+  line, and the final message keeps them, so an investigation ends with the trail of what it checked. With
+  `steps-and-activity` (the default) a gap of 3 seconds is a `Working…` card, which the next tool call takes over, as in a
+  chat thread. The reply shows the latest 20 cards, under a line that counts the earlier ones.
+- **One more update.** A reply that has cards when its first post is made makes one more update, once the throttle allows,
+  to show them, in place of the post's line if it shows one.
+- **A reply with cards and no text** ends with the cards, and no longer says `(no output)`.
+- **Unchanged:** `progress: activity` (one counting line that names no tool), `output: final`, and a platform without step
+  cards, which keeps the line. If Slack refuses an update with cards, it is sent again without them, and the reply shows the
+  line from then on.
+
+See [Output](../explanation/threads-and-sessions.md#output).
 
 ## Upgrade to the release that writes triggers in full
 
@@ -266,9 +284,9 @@ This release reads the status updates an agent sends in state `working` on every
 agent that sends no such update sees no change.
 
 - **`steps-and-activity` shows the agent's progress line.** When no tool call is under way, the text of a working update
-  titles the `Working…` card of a chat thread while it is open, and replaces the `Working…` line of an alert thread as
-  soon as it arrives, where that line used to wait 3 seconds. Each change of line is one more write to Slack, by default
-  at most one every 2 seconds for each reply. No card is begun for a line.
+  titles the `Working…` card while it is open. In an alert thread with no card open it is a line of small print as soon as
+  it arrives, where `Working…` used to wait 3 seconds. Each change of line is one more write to Slack, by default at most
+  one every 2 seconds for each reply. No card is begun for a line.
 - **`activity` counts working updates.** While a turn has had no tool call or result, its card or line counts the
   updates (`Working… 5 updates`), and begins at the first one instead of after 3 seconds.
 - **kagent 0.9.x** repeats its answer in a working update, so in `steps-and-activity` the start of the answer can title

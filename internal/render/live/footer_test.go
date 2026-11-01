@@ -126,6 +126,8 @@ func TestAStreamThatDivergedGetsTheFooterWithTheUpdateThatReplacesIt(t *testing.
 // A turn that ended with nothing to show has no reply to rate, and a tool line left standing is replaced by "(no output)".
 func TestATurnWithNoOutputHasNoFooter(t *testing.T) {
 	e := setup(t)
+	// The status line is the update path's on a platform without steps; on one with steps the updates show cards (listed_test.go).
+	e.spy(t, false, nil)
 	run, _ := e.startFor(t, liveTurn(v1alpha1.OutputLive, ""))
 	run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "search"})
 	eventually(t, "the tool line to be posted", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
