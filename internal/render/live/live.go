@@ -1224,7 +1224,9 @@ func (u *Run) snapshot() view {
 		v.m.Parts = append(slices.Clone(v.m.Parts), u.turn.Footer...)
 	}
 	v.post = v.m
-	if carries && (shown != nil || status != "") { // the cards say what the line would: the updates leave it out
+	// The cards say what the line would, so the updates leave it out; but no card says what stands for Working… until one is
+	// open, and a progress line begins none (progressIn): that line stays, under the cards, until the delay's card has it.
+	if n := len(recs); carries && (shown != nil || status != "") && (!idle || (n > 0 && recs[n-1].open())) {
 		v.m, v.ok = render.Turn(events, nil, toolState, u.caps)
 	}
 	for i, r := range recs {

@@ -153,6 +153,67 @@ func TestAnAlertThreadShowsTheProgressLine(t *testing.T) {
 	}
 }
 
+// On an alert thread whose updates show cards, a progress line still shows at once, as a line under the cards, since it begins
+// no card. The card the delay begins takes the line as its title, and the line goes.
+func TestAnAlertThreadShowsTheProgressLineUnderItsCards(t *testing.T) {
+	e := setup(t)
+	run := e.progressRun(t, sa, "")
+	run.Handle(call("c1", "search", nil))
+	run.Handle(result("c1", map[string]any{"output": "x"}))
+	e.until(t, "the call's card", 3*time.Second, func() bool { return strings.Contains(e.said(), `"task_card"`) })
+	run.Handle(update("Reading the pod logs"))
+	if spent := e.until(t, "the line", 3*time.Second, func() bool { return strings.Contains(e.said(), "Reading the pod logs") }); spent >= 3*time.Second {
+		t.Fatalf("the line was written after %v; want it at once", spent)
+	}
+	got := e.said()
+	if !strings.Contains(got, `"context"`) || strings.Contains(got, "Working…") || strings.Count(got, `"task_card"`) != 1 {
+		t.Fatalf("blocks %s; want the call's card, and the line as small print under it", got)
+	}
+	e.until(t, "the card that takes the line", 5*time.Second, func() bool { return strings.Count(e.said(), `"task_card"`) == 2 })
+	got = e.said()
+	if !strings.Contains(got, "Reading the pod logs") || strings.Contains(got, `"context"`) {
+		t.Fatalf("blocks %s; want the line as the title of the delay's card, and no line", got)
+	}
+	run.Handle(text("a", "The answer."))
+	run.Handle(agent.FinalEvent{})
+	e.finish(t, run)
+	if got := e.said(); strings.Contains(got, "Reading the pod logs") || !strings.Contains(got, "Wrote the answer") {
+		t.Errorf("blocks %s; want the card ended by the text, and the line gone", got)
+	}
+}
+
+// kagent 0.9.x repeats its answer in a working update just before the artifact that holds it. On an alert thread too, a line
+// that text follows within the delay makes no card, so the final message shows the tool's card and the answer.
+func TestAnAlertThreadProgressLineThatTextFollowsMakesNoCard(t *testing.T) {
+	e := setup(t)
+	run := e.progressRun(t, sa, "")
+	run.Handle(call("c1", "k8s_get_resources", nil))
+	run.Handle(result("c1", map[string]any{"output": "46"}))
+	e.until(t, "the call's card", 3*time.Second, func() bool { return strings.Contains(e.said(), `"task_card"`) })
+	run.Handle(update("The cluster has 46 namespaces."))
+	e.elapse(time.Second)
+	run.Handle(text("a", "The cluster has 46 namespaces."))
+	run.Handle(agent.FinalEvent{})
+	e.finish(t, run)
+	got := e.said()
+	if strings.Count(got, `"task_card"`) != 1 || strings.Contains(got, "Wrote the answer") || strings.Contains(got, `"context"`) {
+		t.Errorf("blocks %s; want the tool's card alone, and the answer", got)
+	}
+}
+
+// A turn that ends with nothing but a progress line posted is left saying so, not showing the line as if it still worked.
+func TestAnAlertThreadProgressLineDoesNotOutliveAnEmptyTurn(t *testing.T) {
+	e := setup(t)
+	run := e.progressRun(t, sa, "")
+	run.Handle(update("Reading the pod logs"))
+	e.until(t, "the line", 3*time.Second, func() bool { return e.reply().Text == "Reading the pod logs" })
+	run.Handle(agent.FinalEvent{})
+	e.finish(t, run)
+	if m := e.reply(); strings.Contains(string(m.Blocks), "Reading") || strings.Contains(m.Text, "Reading") {
+		t.Errorf("final message %+v; want the line gone", m)
+	}
+}
+
 // The activity mode counts working updates while the turn has had no tool event, begins its card at the first, and shows none
 // of their text.
 func TestTheActivityCardCountsWorkingUpdates(t *testing.T) {
