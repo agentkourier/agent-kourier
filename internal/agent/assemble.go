@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
@@ -32,8 +33,9 @@ type assembler struct {
 	state     a2a.TaskState
 	final     *a2a.Task
 	changes   int    // events emitted so far: text, tool, progress, state, and final
-	shown     string // the text of the working status last read: the task's, or an update's (progress)
-	opening   bool   // the stream was resubscribed and has yet to say anything: a status it opens with may be a repeat
+	lastID    string // what identifies the working update last read (statusID), or empty
+	lastText  string // and its text: a snapshot sets neither, since it delivers no update
+	opening   bool   // the stream was resubscribed and has yet to say anything new: an update with no ID may be a repeat
 	replies   bool   // a task-less agent Message may be the reply: set for a Send, never for an Answer or a follow
 	unshown   bool   // an agent Message came before any task where it cannot be the reply: on an Answer
 	// interaction reads the pause of the task that ends the send (Config.ParseInteraction); nil reads none.
@@ -55,6 +57,7 @@ func newAssembler(h Handler) *assembler {
 
 // apply folds one event from the agent into the assembler and emits what changed.
 func (a *assembler) apply(ev a2a.Event) {
+	before := a.changes
 	switch e := ev.(type) {
 	case *a2a.Task:
 		a.track(e.ID, e.ContextID)
@@ -67,9 +70,6 @@ func (a *assembler) apply(ev a2a.Event) {
 		}
 		a.snapshot = nil
 		a.setState(e.Status.State)
-		if e.Status.State == a2a.TaskStateWorking {
-			a.shown = progressText(e.Status.Message)
-		}
 		if settled(e.Status.State) && a.final == nil {
 			a.end(e)
 		}
@@ -81,13 +81,13 @@ func (a *assembler) apply(ev a2a.Event) {
 		changed := e.Status.State != a.state
 		a.setState(e.Status.State)
 		if e.Status.State == a2a.TaskStateWorking && !toldByTools(e.Status.Message) {
-			a.progress(e.Status.Message, changed)
+			a.progress(e.Status, changed)
 		}
-		a.opening = false
+		a.opening = a.opening && a.changes == before
 	case *a2a.TaskArtifactUpdateEvent:
-		a.opening = false
 		a.track(e.TaskID, e.ContextID)
 		a.artifact(e.Artifact, e.Append, false)
+		a.opening = a.opening && a.changes == before
 	case *a2a.Message:
 		a.message(e)
 	}
@@ -178,6 +178,9 @@ func (a *assembler) artifact(art *a2a.Artifact, appendMode, snapshot bool) {
 	hasText := false
 	seen := map[[sha256.Size]byte]int{} // how many parts of each saying this chunk has held so far
 	for i, p := range art.Parts {
+		if p == nil { // null on the wire: it says nothing
+			continue
+		}
 		if tp, ok := decodeTool(p); ok {
 			a.artifactTool(art.ID, i, tp, appendMode, seen)
 		} else if t, isText := p.Content.(a2a.Text); isText {
@@ -236,18 +239,36 @@ func (a *assembler) messageTools(m *a2a.Message) {
 
 // progress delivers a live working update that holds no tool part as the agent's activity (ProgressEvent), with the text
 // of its message if the message is the agent's. changed says the update made the task working: that is the change of state,
-// which StateEvent has told, and it is progress only if it says something. An update that opens a resubscribed stream and
-// says what the task already showed may be the server repeating the task's status, which says nothing of the agent: it is
-// no progress, or a stream that always drops after it would renew the reconnects for ever, and the task's age with them. A
-// live update that it swallows is one unit of activity, and the next on the stream counts.
-func (a *assembler) progress(m *a2a.Message, changed bool) {
-	said := progressText(m)
-	repeat := a.opening && !changed && said == a.shown
-	a.shown = said
+// which StateEvent has told, and it is progress only if it says something. An update with the ID and the text of the last is
+// a repeat, which a server may send when a stream is resubscribed: it says nothing of the agent, and is no progress, or a
+// stream that always drops after it would renew the reconnects for ever. An update with no ID cannot be told from a live one,
+// so only the one that opens a resubscribed stream is taken for a repeat: at worst one unit of activity is not counted, and
+// the next on the stream is. The comparison is with the last update read, never a snapshot, so that a line sent during a drop,
+// which the snapshot holds and an opening update repeats, is still delivered, once.
+func (a *assembler) progress(s a2a.TaskStatus, changed bool) {
+	id, said := statusID(s), progressText(s.Message)
+	repeat := !changed && id == a.lastID && said == a.lastText && (id != "" || a.opening)
+	a.lastID, a.lastText, a.opening = id, said, false
 	if repeat || (changed && strings.TrimSpace(said) == "") {
 		return
 	}
-	a.emit(ProgressEvent{Text: said})
+	a.emit(ProgressEvent{ID: id, Text: said})
+}
+
+// statusID is what identifies a status, its timestamp and its message's ID, or empty if it has neither. A repeat has the same;
+// a server that records a new timestamp each time it repeats a status has made it a new one.
+func statusID(s a2a.TaskStatus) string {
+	var at, id string
+	if s.Timestamp != nil {
+		at = s.Timestamp.UTC().Format(time.RFC3339Nano)
+	}
+	if s.Message != nil {
+		id = s.Message.ID
+	}
+	if at == "" && id == "" {
+		return ""
+	}
+	return at + "/" + id
 }
 
 // progressText is the text of a working status's message if the message is the agent's, its text parts joined by line breaks.
@@ -259,6 +280,9 @@ func progressText(m *a2a.Message) string {
 	}
 	var text []string
 	for _, p := range m.Parts {
+		if p == nil { // null on the wire: it says nothing
+			continue
+		}
 		if t, ok := p.Content.(a2a.Text); ok && !dialect.IsThought(p) {
 			text = append(text, string(t))
 		}

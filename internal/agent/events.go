@@ -45,10 +45,14 @@ type ToolResultEvent struct {
 // empty for an update with no message, the user's message echoed back, or a message with no text. The update that makes
 // the task working is the change of state, and a ProgressEvent only if it has text. An update whose message is the agent's
 // and holds a tool part is told as its tool events, and a task snapshot (the one a GetTask returns, or a resubscribe opens
-// with) as what it changed: neither is a ProgressEvent. Nor is an update that opens a resubscribed stream and says what the
-// task already showed, which may be the server repeating the task's status.
+// with) as what it changed: neither is a ProgressEvent. Nor is an update with the timestamp, message ID and text of the one
+// before it, which is the server repeating itself, or, with neither a timestamp nor an ID, one that opens a resubscribed
+// stream and says what the one before it said.
 type ProgressEvent struct {
 	Text string
+	// ID identifies the status across streams and follows, from its timestamp and message ID; empty if it has neither. Nothing
+	// shows it: the session uses it to tell a status repeated to a new follow from a sign of life.
+	ID string
 }
 
 // StateEvent reports a change of the task's state. A state that repeats is not a change.
