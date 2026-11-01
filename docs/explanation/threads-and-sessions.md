@@ -79,12 +79,13 @@ step. It is one of three values:
 | `progress` | Chat thread | Alert thread |
 |---|---|---|
 | `steps` | A card for each tool call. | The line for the latest tool call in the first post, and a card for each tool call in every update after it. |
-| `steps-and-activity` (the default) | The same, and when 3 seconds pass with no new text and no tool call under way, a card titled `Working…` begins. The next tool call takes that card over, so it carries the tool's name and arguments from then on; text instead retitles it `Wrote the answer`, and a tool call after that text retitles it `Wrote an update`. The agent's own progress line, when it sends one, titles the card while it is open. | The same, and `Working…` once 3 seconds pass with nothing new: a line of small print in place of the line of a call that returned when it is the first post, and otherwise a card, which the next tool call takes over and text retitles, as in a chat thread. The agent's progress line titles that card while it is open, and with no card open is a line of small print, as soon as it arrives. |
-| `activity` | One card for the whole wait, begun at the first tool call or result or working update, or after 3 seconds, and only before any text. Its title counts the tool calls that have a result, such as `Working… 12 steps, 3 failed`, or, while there has been none, the working updates, such as `Working… 5 updates`. At the first text it becomes `Worked`, with `Took 3 min 26 s, 16 steps (7 failed)`. | One line, `Working… (2 min, 12 steps, 3 failed)`, or `Working… (2 min, 5 updates)`, until the first text. |
+| `steps-and-activity` (the default) | The same, and when 3 seconds pass with no new text and no tool call under way, a card titled `Working…` begins. The next tool call takes that card over, so it carries the tool's name and arguments from then on; text instead retitles it `Wrote the answer`, and a tool call after that text retitles it `Wrote an update`. The agent's own progress line, when it sends one, titles the card while it is open. | The same, and `Working…` once 3 seconds pass with nothing new: a line of small print in place of the line of a call that returned when it is the first post, and otherwise a card, which the next tool call takes over and text retitles, as in a chat thread. The agent's progress line titles that card while it is open, and with no card open is a line of small print at the next write, with no 3 second wait. |
+| `activity` | One card for the whole wait, begun at the first tool call or result or working update, or after 3 seconds, and only before any text. Its title counts the tool calls that have a result, such as `Working… 12 steps, 3 failed`, or, until the first tool call or result, the working updates, such as `Working… 5 updates`. At the first text it becomes `Worked`, with `Took 3 min 26 s, 16 steps (7 failed)`. | One line, `Working… (2 min, 12 steps, 3 failed)`, or `Working… (2 min, 5 updates)`, until the first text. |
 
 The `activity` mode never shows a tool's name or arguments, or the agent's progress line, in the reply's cards and lines; a
-tool approval prompt, with `interactions.toolApprovals`, still names the tool and shows its arguments. No mode shows the agent's reasoning: Agent Kourier does not read
-it, and the `Working…` title says nothing about what the agent is doing. The 3 second delay is not configurable. The
+tool approval prompt, with `interactions.toolApprovals`, still names the tool and shows its arguments. The `Working…` title
+says nothing about what the agent is doing. A progress line is whatever text the agent sent: text that its framework marks as
+the model's reasoning is left out, and reasoning it does not mark shows as any other line. The 3 second delay is not configurable. The
 `Working…` card or line is written once for a gap, and no other write follows the clock, save the update that shows an alert
 thread's cards after its first post. A gap longer than the delay costs at most three writes more than `steps`
 spends in a chat thread (the card's begin; its end, when no tool call takes it over; and its retitle, when text ended it and
@@ -93,7 +94,8 @@ is made makes one more update to show them, once the throttle allows: the post c
 (see below) adds a write each time the line changes, at most once in a throttle window. The `activity` card is written when a
 result or a working update changes a count, at most once in a throttle window, and its line's elapsed minutes are refreshed only when an event makes a write.
 
-In an alert thread, a turn that is silent for 3 seconds now posts `Working…` as its message. If the turn then ends with
+In an alert thread, a turn that is silent for 3 seconds now posts `Working…` as its message, and a turn that sends a progress
+line, or in the `activity` mode any working update, posts at once. If the turn then ends with
 nothing to show, or fails, that message is left saying `(no output)`, or, once an update has shown its `Working…` card, the
 card ended as a chat thread's is; under `steps` such a turn posted nothing. A turn whose
 updates show cards and that ends with no text ends with the cards and nothing under them, its fallback text the last card's
@@ -151,12 +153,12 @@ of the answer.
 - `steps` shows no working update.
 - `steps-and-activity` shows a progress line when no tool call is under way. It titles the `Working…` card that is open,
   or the one that begins after 3 seconds, but begins no card itself, so a line that the answer follows at once leaves no
-  card behind. In an alert thread, with no card open, it is also a line of small print, as soon as it arrives, under the
+  card behind. In an alert thread, with no card open, it is also a line of small print at the next write, under the
   cards and text, until the card takes it as its title. It stands until the next event: an update with no text puts
   `Working…` back, a tool call takes the card over, and text ends it as it ends any `Working…` card. An update with no
   text shows nothing, and `Working…` still comes after 3 seconds.
-- `activity` counts each working update and begins its card or line at the first one, and shows the count while the
-  turn has had no tool call or result.
+- `activity` counts each working update, begins its card or line at the first one if no text has come, and shows the
+  count until the first tool call or result.
 
 kagent 0.9.x repeats its answer in a status update just before the answer itself, so in `steps-and-activity` the start of
 the answer can title an open card, or be an alert thread's line, for a moment before the answer replaces it.

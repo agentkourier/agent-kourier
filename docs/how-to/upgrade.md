@@ -284,11 +284,12 @@ This release reads the status updates an agent sends in state `working` on every
 agent that sends no such update sees no change.
 
 - **`steps-and-activity` shows the agent's progress line.** When no tool call is under way, the text of a working update
-  titles the `Working…` card while it is open. In an alert thread with no card open it is a line of small print as soon as
-  it arrives, where `Working…` used to wait 3 seconds. Each change of line is one more write to Slack, by default at most
+  titles the `Working…` card while it is open. In an alert thread with no card open it is a line of small print at the next
+  write, where `Working…` used to wait 3 seconds, so a turn that then ends empty leaves `(no output)` where it might have
+  posted nothing. Each change of line is one more write to Slack, by default at most
   one every 2 seconds for each reply. No card is begun for a line.
-- **`activity` counts working updates.** While a turn has had no tool call or result, its card or line counts the
-  updates (`Working… 5 updates`), and begins at the first one instead of after 3 seconds.
+- **`activity` counts working updates.** Until the first tool call or result, its card or line counts the updates
+  (`Working… 5 updates`), and begins at the first one instead of after 3 seconds, if no text has come.
 - **kagent 0.9.x** repeats its answer in a working update, so in `steps-and-activity` the start of the answer can title
   an open card, or be an alert thread's line, for a moment before the answer itself.
 

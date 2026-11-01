@@ -241,10 +241,11 @@ func (a *assembler) progress(m *a2a.Message, changed bool) {
 			}
 		}
 	}
-	if changed && len(text) == 0 {
+	said := strings.Join(text, "\n")
+	if changed && strings.TrimSpace(said) == "" {
 		return
 	}
-	a.emit(ProgressEvent{Text: strings.Join(text, "\n")})
+	a.emit(ProgressEvent{Text: said})
 }
 
 // toldByTools says whether the message of a working update is the agent's and holds a tool part: the update is told by its
@@ -262,11 +263,11 @@ func toldByTools(m *a2a.Message) bool {
 	return false
 }
 
-// readable says whether a status message is read for tool parts: the agent's own message while the task works, which
-// is where kagent 0.9.x and Google ADK's older A2A converter send tool calls and results
+// readable says whether a status message is read for tool parts and for the progress line: the agent's own message while the
+// task works, which is where kagent 0.9.x and Google ADK's older A2A converter send tool calls and results
 // (test/fixtures/kagent/v09-tools). The user's message echoed back in a status update is not the agent's, and the
-// message of a pause or of the end of the turn is the question or the answer, not progress. The message's text is
-// not read: 0.9.x repeats there the answer that its artifact holds.
+// message of a pause or of the end of the turn is the question or the answer, not progress. The message's text is never
+// read as the answer: 0.9.x repeats there the answer that its artifact holds.
 func readable(state a2a.TaskState, m *a2a.Message) bool {
 	return m != nil && m.Role == a2a.MessageRoleAgent && state == a2a.TaskStateWorking
 }

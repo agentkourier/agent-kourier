@@ -9,6 +9,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/render"
 )
 
 // These tests are about the working updates of an agent (agent.ProgressEvent, spec D45 (1)): activity whether or not anything
@@ -30,9 +31,7 @@ func TestAProgressLineTitlesTheWorkingCard(t *testing.T) {
 	run.Handle(update(""))
 	e.until(t, "Working… again", 3*time.Second, func() bool { return e.tasks()[0].Title == "Working…" })
 	run.Handle(update("Reading the events"))
-	if spent := e.until(t, "the retitle", 3*time.Second, func() bool { return e.tasks()[0].Title == "Reading the events" }); spent >= 3*time.Second {
-		t.Fatalf("the open card was retitled after %v; want it at the next write", spent)
-	}
+	e.atOnce(t, "the retitle", func() bool { return e.tasks()[0].Title == "Reading the events" })
 	run.Handle(call("c1", "kubectl_get", map[string]any{"ns": "prod"}))
 	e.until(t, "the claim", 3*time.Second, func() bool { return e.tasks()[0].Title == "kubectl_get" })
 	run.Handle(result("c1", map[string]any{"output": "3 pods"}))
@@ -134,9 +133,7 @@ func TestAnAlertThreadShowsTheProgressLine(t *testing.T) {
 	e := setup(t)
 	run := e.progressRun(t, sa, "")
 	run.Handle(update("Logging in with\npassword=hunter2"))
-	if spent := e.until(t, "the line", 3*time.Second, func() bool { return e.reply().Text == "Logging in with password=[redacted]" }); spent >= 3*time.Second {
-		t.Fatalf("the line was posted after %v; want it at once", spent)
-	}
+	e.atOnce(t, "the line", func() bool { return e.reply().Text == "Logging in with password=[redacted]" })
 	if got := e.said(); !strings.Contains(got, `"context"`) {
 		t.Fatalf("blocks %s; want the line as small print", got)
 	}
@@ -159,12 +156,10 @@ func TestAnAlertThreadShowsTheProgressLineUnderItsCards(t *testing.T) {
 	e := setup(t)
 	run := e.progressRun(t, sa, "")
 	run.Handle(call("c1", "search", nil))
-	run.Handle(result("c1", map[string]any{"output": "x"}))
 	e.until(t, "the call's card", 3*time.Second, func() bool { return strings.Contains(e.said(), `"task_card"`) })
+	run.Handle(result("c1", map[string]any{"output": "x"}))
 	run.Handle(update("Reading the pod logs"))
-	if spent := e.until(t, "the line", 3*time.Second, func() bool { return strings.Contains(e.said(), "Reading the pod logs") }); spent >= 3*time.Second {
-		t.Fatalf("the line was written after %v; want it at once", spent)
-	}
+	e.atOnce(t, "the line", func() bool { return strings.Contains(e.said(), "Reading the pod logs") })
 	got := e.said()
 	if !strings.Contains(got, `"context"`) || strings.Contains(got, "Working…") || strings.Count(got, `"task_card"`) != 1 {
 		t.Fatalf("blocks %s; want the call's card, and the line as small print under it", got)
@@ -188,8 +183,8 @@ func TestAnAlertThreadProgressLineThatTextFollowsMakesNoCard(t *testing.T) {
 	e := setup(t)
 	run := e.progressRun(t, sa, "")
 	run.Handle(call("c1", "k8s_get_resources", nil))
-	run.Handle(result("c1", map[string]any{"output": "46"}))
 	e.until(t, "the call's card", 3*time.Second, func() bool { return strings.Contains(e.said(), `"task_card"`) })
+	run.Handle(result("c1", map[string]any{"output": "46"}))
 	run.Handle(update("The cluster has 46 namespaces."))
 	e.elapse(time.Second)
 	run.Handle(text("a", "The cluster has 46 namespaces."))
@@ -201,7 +196,8 @@ func TestAnAlertThreadProgressLineThatTextFollowsMakesNoCard(t *testing.T) {
 	}
 }
 
-// A turn that ends with nothing but a progress line posted is left saying so, not showing the line as if it still worked.
+// A turn that ends with nothing but a progress line posted is left saying that it has no output, not showing the line as if it
+// still worked. Under steps such a turn posts nothing.
 func TestAnAlertThreadProgressLineDoesNotOutliveAnEmptyTurn(t *testing.T) {
 	e := setup(t)
 	run := e.progressRun(t, sa, "")
@@ -209,8 +205,8 @@ func TestAnAlertThreadProgressLineDoesNotOutliveAnEmptyTurn(t *testing.T) {
 	e.until(t, "the line", 3*time.Second, func() bool { return e.reply().Text == "Reading the pod logs" })
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
-	if m := e.reply(); strings.Contains(string(m.Blocks), "Reading") || strings.Contains(m.Text, "Reading") {
-		t.Errorf("final message %+v; want the line gone", m)
+	if m := e.reply(); strings.Contains(string(m.Blocks), "Reading") || m.Text != render.NoOutput {
+		t.Errorf("final message %+v; want %q, and the line gone", m, render.NoOutput)
 	}
 }
 
@@ -221,9 +217,7 @@ func TestTheActivityCardCountsWorkingUpdates(t *testing.T) {
 	started := e.clk.Now()
 	run := e.progressRun(t, activity, "U1")
 	run.Handle(update("SECRETWORDS"))
-	if spent := e.until(t, "the card", 3*time.Second, func() bool { return len(e.tasks()) == 1 }); spent >= 3*time.Second {
-		t.Fatalf("the card began after %v; want it at the first update, as at a tool event", spent)
-	}
+	e.atOnce(t, "the card", func() bool { return len(e.tasks()) == 1 })
 	e.until(t, "the first update counted", 3*time.Second, func() bool { return e.tasks()[0].Title == "Working… 1 update" })
 	run.Handle(update(""))
 	e.until(t, "the second", 3*time.Second, func() bool { return e.tasks()[0].Title == "Working… 2 updates" })
@@ -329,9 +323,7 @@ func TestAMovedTurnShowsTheProgressLineAtOnce(t *testing.T) {
 	e.until(t, "the post", 3*time.Second, func() bool { return strings.Contains(e.said(), "Calling search") })
 	run.Handle(result("c1", map[string]any{"output": "x"}))
 	run.Handle(update("Reading the pod logs"))
-	if spent := e.until(t, "the line", 3*time.Second, func() bool { return strings.Contains(e.said(), "Reading the pod logs") }); spent >= 3*time.Second {
-		t.Fatalf("the line was written after %v; want it at once", spent)
-	}
+	e.atOnce(t, "the line", func() bool { return strings.Contains(e.said(), "Reading the pod logs") })
 	run.Handle(text("a", "Found it."))
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)

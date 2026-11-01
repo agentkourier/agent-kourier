@@ -46,6 +46,7 @@ func TestWorkingUpdatesAreProgress(t *testing.T) {
 		want []string
 	}{
 		{"the first update, with no message, is the change of state", []a2a.Event{working(nil)}, nil},
+		{"the first update, with text that is empty, says nothing", []a2a.Event{working(agentSays("m0", textOf(" \n")))}, nil},
 		{"each update after it is one unit", []a2a.Event{working(nil), working(nil), working(nil)}, []string{"-", "-"}},
 		{"the first update with text says something", []a2a.Event{working(agentSays("m1", textOf("Looking at the pods")))}, []string{"Looking at the pods"}},
 		{"the agent's text", []a2a.Event{working(nil), working(agentSays("m1", textOf("Reading logs")))}, []string{"Reading logs"}},
