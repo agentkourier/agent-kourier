@@ -651,11 +651,20 @@ func (f *FakePlatform) fits(p chat.Prompt) error {
 	return nil
 }
 
-// Classify implements chat.Platform: a FakeError says what it is, and any other error is transient.
-func (f *FakePlatform) Classify(_ chat.Op, err error) chat.Verdict {
+// Classify implements chat.Platform: a FakeError says what it is, an error of ChannelAccess that wraps chat.ErrChannelNotFound
+// or chat.ErrMissingScope is permanent for OpOther, as the contract of ChannelAccess says, and any other error is transient.
+func (f *FakePlatform) Classify(op chat.Op, err error) chat.Verdict {
 	var fe *FakeError
 	if errors.As(err, &fe) {
 		return fe.Verdict
+	}
+	if op == chat.OpOther {
+		switch {
+		case errors.Is(err, chat.ErrChannelNotFound):
+			return chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonChannelGone, Code: "channel_not_found"}
+		case errors.Is(err, chat.ErrMissingScope):
+			return chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonOther, Code: "missing_scope"}
+		}
 	}
 	return chat.Verdict{Class: chat.Transient}
 }

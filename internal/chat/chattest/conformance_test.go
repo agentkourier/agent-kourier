@@ -846,12 +846,25 @@ type accessLeaks struct {
 	scopePlain       bool // a missing scope is a plain error
 	cancelIsNotFound bool // a cancelled context is reported as a missing channel
 	emptyPlain       bool // an empty channel is a plain error
+	retriesSentinels bool // Classify says Transient for the sentinels, so a caller that follows the contract retries them forever
+	scopeIsFatal     bool // Classify says FatalAuth for a missing scope, which would stop the restart policy for a permission
 }
 
 // wrongAccess is the fake with ChannelAccess answered as leaks says.
 type wrongAccess struct {
 	*FakePlatform
 	leaks accessLeaks
+}
+
+// Classify is the fake's, except as leaks says.
+func (w *wrongAccess) Classify(op chat.Op, err error) chat.Verdict {
+	switch {
+	case w.leaks.retriesSentinels && (errors.Is(err, chat.ErrChannelNotFound) || errors.Is(err, chat.ErrMissingScope)):
+		return chat.Verdict{Class: chat.Transient}
+	case w.leaks.scopeIsFatal && errors.Is(err, chat.ErrMissingScope):
+		return chat.Verdict{Class: chat.FatalAuth}
+	}
+	return w.FakePlatform.Classify(op, err)
 }
 
 func (w *wrongAccess) ChannelAccess(ctx context.Context, channel string) (chat.Access, error) {
@@ -909,15 +922,17 @@ func TestConformanceFindsAChannelAccessThatBreaksTheContract(t *testing.T) {
 		leaks accessLeaks
 		bad   []string // the checks that find it
 	}{
-		"a member that is not":                            {accessLeaks{memberWhenNot: true}, []string{"not joined"}},
-		"a bot that is never a member":                    {accessLeaks{neverMember: true}, []string{"joined"}},
-		"an archived channel not marked":                  {accessLeaks{archivedIgnored: true}, []string{"archived"}},
-		"an unknown channel that is a plain error":        {accessLeaks{unknownPlain: true}, []string{"unknown channel"}},
-		"a missing scope that is a plain error":           {accessLeaks{scopePlain: true}, []string{"missing scope"}},
-		"an Access beside the error of a failed read":     {accessLeaks{accessOnFailure: true}, []string{"unknown channel", "missing scope"}},
-		"a cancelled context taken for a missing channel": {accessLeaks{cancelIsNotFound: true}, []string{"cancelled context"}},
-		"an Access beside the error of a cancelled one":   {accessLeaks{accessOnCancel: true}, []string{"cancelled context"}},
-		"an empty channel not said to be missing":         {accessLeaks{emptyPlain: true}, []string{"no channel"}},
+		"a member that is not":                                {accessLeaks{memberWhenNot: true}, []string{"not joined"}},
+		"a bot that is never a member":                        {accessLeaks{neverMember: true}, []string{"joined"}},
+		"an archived channel not marked":                      {accessLeaks{archivedIgnored: true}, []string{"archived"}},
+		"an unknown channel that is a plain error":            {accessLeaks{unknownPlain: true}, []string{"unknown channel"}},
+		"a missing scope that is a plain error":               {accessLeaks{scopePlain: true}, []string{"missing scope"}},
+		"an Access beside the error of a failed read":         {accessLeaks{accessOnFailure: true}, []string{"unknown channel", "missing scope"}},
+		"a cancelled context taken for a missing channel":     {accessLeaks{cancelIsNotFound: true}, []string{"cancelled context"}},
+		"an Access beside the error of a cancelled one":       {accessLeaks{accessOnCancel: true}, []string{"cancelled context"}},
+		"an empty channel not said to be missing":             {accessLeaks{emptyPlain: true}, []string{"no channel"}},
+		"sentinels that Classify would have retried":          {accessLeaks{retriesSentinels: true}, []string{"no channel", "unknown channel", "missing scope"}},
+		"a missing scope that Classify takes for a bad token": {accessLeaks{scopeIsFatal: true}, []string{"missing scope"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			w := &wrongAccess{FakePlatform: NewFake(), leaks: tc.leaks}

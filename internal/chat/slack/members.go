@@ -89,8 +89,11 @@ func (c *Client) IsChannelMember(ctx context.Context, channel, user string) (tel
 // one: a failed read is no answer.
 //
 // An error wraps chat.ErrChannelNotFound or chat.ErrMissingScope when Slack's code says the read cannot succeed until an
-// operator changes something (channelAccessCode: channel_not_found, missing_scope). Every other error, a timeout, a 5xx, a
-// rate limit, a cancelled context, a token Slack rejects, is not wrapped and may pass on another try.
+// operator changes something (channelAccessCode: channel_not_found, missing_scope), and Platform.Classify(chat.OpOther, err)
+// says Permanent for it, with Slack's code. Every other error is not wrapped. A token Slack rejects is one of them:
+// Classify says FatalAuth for it and retrying will not help, whatever the caller decides to do about it. A timeout, a 5xx, a
+// rate limit and a cancelled context are the rest, and may pass on another try (Classify says Transient, with RetryAfter for
+// a rate limit).
 //
 // The scopes are those of the call as Slack's method page lists them (docs.slack.dev/reference/methods/conversations.info/,
 // read 2026-11-01): channels:read, groups:read, im:read and mpim:read, one for each kind of conversation. The app asks for

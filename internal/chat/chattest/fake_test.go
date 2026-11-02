@@ -308,9 +308,16 @@ func TestChannelAccess(t *testing.T) {
 	f.FailNext("ChannelAccess", errors.New("boom"), fmt.Errorf("scope: %w", chat.ErrMissingScope))
 	if got, err := f.ChannelAccess(ctx, "CJOINED"); got != (chat.Access{}) || err == nil || errors.Is(err, chat.ErrMissingScope) || errors.Is(err, chat.ErrChannelNotFound) {
 		t.Errorf("ChannelAccess with an injected plain failure = %+v, %v; want the zero Access and an unclassified error", got, err)
+	} else if v := f.Classify(chat.OpOther, err); v.Class != chat.Transient {
+		t.Errorf("Classify of the plain failure = %+v, want Transient", v)
 	}
 	if got, err := f.ChannelAccess(ctx, "CJOINED"); got != (chat.Access{}) || !errors.Is(err, chat.ErrMissingScope) {
 		t.Errorf("ChannelAccess with an injected missing scope = %+v, %v; want the zero Access and chat.ErrMissingScope", got, err)
+	} else if v := f.Classify(chat.OpOther, err); v.Class != chat.Permanent || v.Reason == chat.ReasonNone {
+		t.Errorf("Classify of the missing scope = %+v, want Permanent with a reason", v)
+	}
+	if _, err := f.ChannelAccess(ctx, "C404"); f.Classify(chat.OpOther, err) != (chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonChannelGone, Code: "channel_not_found"}) {
+		t.Errorf("Classify of a channel not found = %+v, want Permanent, ReasonChannelGone", f.Classify(chat.OpOther, err))
 	}
 	if got, err := f.ChannelAccess(ctx, "CJOINED"); err != nil || !got.Member {
 		t.Errorf("ChannelAccess after the failures = %+v, %v; want the channel as set", got, err)

@@ -353,12 +353,29 @@ func (c *checker) contract() {
 // accessContract checks what a platform promises of ChannelAccess (see the method): it answers for Agent Kourier's membership
 // and for the archived flag, says ErrChannelNotFound for a channel it does not know and for none, ErrMissingScope for an app
 // that lacks the permission, and leaves the Access zero and the error unclassified when it fails in any other way, a
-// cancelled context included. The states are reached through Subject.Channels, which every subject sets.
+// cancelled context included. Classify(OpOther) agrees with the sentinels: Permanent for both, with ReasonChannelGone for a
+// channel not found, so a caller that does not retry them is not told to by Classify. The states are reached through
+// Subject.Channels, which every subject sets.
 func (c *checker) accessContract(ctx context.Context) {
 	p := c.s.Platform
+	// classified checks that Classify(OpOther) agrees with the sentinel err wraps: Permanent, as the contract says a caller
+	// does not retry it, and for a channel not found the reason ReasonChannelGone.
+	classified := func(cs string, err, sentinel error) {
+		v := p.Classify(chat.OpOther, err)
+		switch {
+		case v.Class != chat.Permanent:
+			c.add(RuleContract, 0, "ChannelAccess", cs, "Classify(OpOther) of %v is %+v, want Permanent: a caller does not retry an error that wraps %v", err, v, sentinel)
+		case errors.Is(sentinel, chat.ErrChannelNotFound) && v.Reason != chat.ReasonChannelGone:
+			c.add(RuleContract, 0, "ChannelAccess", cs, "Classify(OpOther) of %v has the reason %q, want %q", err, v.Reason, chat.ReasonChannelGone)
+		case v.Reason == chat.ReasonNone:
+			c.add(RuleContract, 0, "ChannelAccess", cs, "Classify(OpOther) of %v is Permanent with no reason", err)
+		}
+	}
 	_, err := p.ChannelAccess(ctx, "")
 	if !errors.Is(err, chat.ErrChannelNotFound) {
 		c.add(RuleContract, 0, "ChannelAccess", "no channel", "an empty channel gave %v, want an error wrapping chat.ErrChannelNotFound", err)
+	} else {
+		classified("no channel", err, chat.ErrChannelNotFound)
 	}
 	channelIn := func(st ChannelState) (string, bool) {
 		ch := c.s.Channels(st)
@@ -378,6 +395,7 @@ func (c *checker) accessContract(ctx context.Context) {
 		if a != (chat.Access{}) {
 			c.add(RuleContract, 0, "ChannelAccess", cs, "gave the Access %+v with the error %v, want the zero Access", a, err)
 		}
+		classified(cs, err, want)
 	}
 	for _, tc := range []struct {
 		state ChannelState

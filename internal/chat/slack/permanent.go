@@ -114,6 +114,8 @@ func groupsMisconfiguredCode(err error) string {
 // groupsMisconfiguredCode. The other codes of the method's page (access_denied, team_access_not_granted, no_permission,
 // not_allowed_token_type, enterprise_is_restricted and the like) name no cause an operator could mend, or none that this
 // call is known to meet, and stay unclassified: a caller retries them. It reads the code scrub keeps, through any wrapping.
+// ChannelAccess wraps the sentinel of each of the two codes, and Platform.Classify(OpOther) reads the code back through that
+// wrapping, for the Verdict's Code.
 //
 // From Slack's method page (docs.slack.dev/reference/methods/conversations.info/, read 2026-11-01), which lists both codes,
 // describes channel_not_found as "Value passed for channel was invalid", and does not say which of its codes are permanent;

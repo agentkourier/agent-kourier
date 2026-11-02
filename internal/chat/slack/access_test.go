@@ -95,8 +95,9 @@ func TestChannelAccessWithNoChannelMakesNoCall(t *testing.T) {
 }
 
 // TestChannelAccessSaysWhichFailuresCanNeverSucceed: the two codes of conversations.info that only an operator can mend wrap
-// their sentinels, and everything else does not. A token Slack rejects is Classify's FatalAuth, a rate limit keeps the wait
-// Slack named, and nothing else is either.
+// their sentinels, and everything else does not. Classify(OpOther) says Permanent, with Slack's code, for the two sentinels and
+// for nothing else, so a caller that follows ChannelAccess's doc does not retry them. A token Slack rejects is Classify's
+// FatalAuth, and a rate limit keeps the wait Slack named.
 func TestChannelAccessSaysWhichFailuresCanNeverSucceed(t *testing.T) {
 	slackError := func(code string) string { return `{"ok":false,"error":"` + code + `"}` }
 	for name, tc := range map[string]struct {
@@ -105,11 +106,13 @@ func TestChannelAccessSaysWhichFailuresCanNeverSucceed(t *testing.T) {
 		err    error
 		hang   bool
 		want   error         // the sentinel the error wraps, or nil for neither
+		perm   chat.Reason   // Classify says Permanent, with this Reason and Slack's code in the Verdict, for a sentinel
+		code   string        // the code Classify keeps, with perm
 		fatal  bool          // Classify says FatalAuth: a credential Slack rejects
 		wait   time.Duration // Classify's RetryAfter: the counter's 429 names 7 seconds
 	}{
-		"a channel that is not found":            {status: http.StatusOK, body: slackError("channel_not_found"), want: chat.ErrChannelNotFound},
-		"an app without the scope":               {status: http.StatusOK, body: slackError("missing_scope"), want: chat.ErrMissingScope},
+		"a channel that is not found":            {status: http.StatusOK, body: slackError("channel_not_found"), want: chat.ErrChannelNotFound, perm: chat.ReasonChannelGone, code: "channel_not_found"},
+		"an app without the scope":               {status: http.StatusOK, body: slackError("missing_scope"), want: chat.ErrMissingScope, perm: chat.ReasonOther, code: "missing_scope"},
 		"a rejected token is fatal auth, not us": {status: http.StatusOK, body: slackError("invalid_auth"), fatal: true},
 		"a revoked token":                        {status: http.StatusOK, body: slackError("token_revoked"), fatal: true},
 		"a deactivated account":                  {status: http.StatusOK, body: slackError("account_inactive"), fatal: true},
@@ -137,8 +140,12 @@ func TestChannelAccessSaysWhichFailuresCanNeverSucceed(t *testing.T) {
 					t.Errorf("error %v: wraps %v = %t; want %t", err, sentinel, is, want)
 				}
 			}
-			if v := slack.NewPlatform(c, "ns/conn").Classify(chat.OpOther, err); (v.Class == chat.FatalAuth) != tc.fatal || v.RetryAfter != tc.wait {
+			v := slack.NewPlatform(c, "ns/conn").Classify(chat.OpOther, err)
+			if (v.Class == chat.FatalAuth) != tc.fatal || v.RetryAfter != tc.wait {
 				t.Errorf("Classify = %+v; want FatalAuth %t and RetryAfter %v", v, tc.fatal, tc.wait)
+			}
+			if (v.Class == chat.Permanent) != (tc.perm != chat.ReasonNone) || v.Reason != tc.perm || (tc.perm != chat.ReasonNone && v.Code != tc.code) {
+				t.Errorf("Classify = %+v; want Permanent only for a sentinel, and then with Reason %q and Code %q", v, tc.perm, tc.code)
 			}
 		})
 	}
