@@ -47,8 +47,9 @@ type clock struct {
 type timer struct {
 	at   time.Time
 	ch   chan time.Time
-	long bool // the final text's deadline, which no test waits on
-	n    int  // the order After made it in
+	long bool          // the final text's deadline, which no test waits on
+	n    int           // the order After made it in
+	d    time.Duration // how long it was armed for
 }
 
 func (c *clock) Now() time.Time {
@@ -67,7 +68,7 @@ func (c *clock) After(d time.Duration) <-chan time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	ch := make(chan time.Time, 1)
-	c.timers = append(c.timers, timer{c.now.Add(d), ch, d == 10*time.Minute, c.made})
+	c.timers = append(c.timers, timer{c.now.Add(d), ch, d == 10*time.Minute, c.made, d})
 	c.made++
 	return ch
 }
@@ -93,6 +94,21 @@ func (c *clock) catchUp(mark int) time.Duration {
 	d = max(d, 0)
 	c.advance(d)
 	return d
+}
+
+// catchUpWindow turns the clock to the earliest pending timer armed for no more than a write window, whenever it was armed,
+// and fires what is due by then. With no such timer it fires what is due, and moves nothing. A timer of the delay is longer,
+// so it does not bring the clock to it.
+func (c *clock) catchUpWindow() {
+	c.mu.Lock()
+	d, found := time.Duration(0), false
+	for _, tm := range c.timers {
+		if left := tm.at.Sub(c.now); tm.d <= throttle && (!found || left < d) {
+			d, found = left, true
+		}
+	}
+	c.mu.Unlock()
+	c.advance(max(d, 0))
 }
 
 // due is when the earliest timer fires.

@@ -48,6 +48,7 @@ func New(reg prometheus.Registerer, provider trace.TracerProvider) (*Observer, e
 	}{
 		{"agentkourier_intake_total", "Inbound messages and presses by intake disposition.", []string{"source", "disposition"}},
 		{"agentkourier_thread_unmentioned_total", "Replies in a thread Agent Kourier owns that a mention-only Binding ignored because they did not mention Agent Kourier, by Binding.", []string{"binding"}},
+		{"agentkourier_mentions_total", "What the declared names in a turn's reply came to, by Binding and outcome: made (a message that mentions the person was queued), undeclared (an @name no entry declares, which mentions nobody) and capped (a declared person past the Binding's cap, who is not mentioned).", []string{"binding", "outcome"}},
 		{"agentkourier_thread_context_total", "Thread contexts a mentioned turn of a mention-only Binding asked for, by Binding and outcome (read, empty, cut, failed, unsupported).", []string{"binding", "outcome"}},
 		{"agentkourier_trigger_matched_total", "Bot messages a botMessage trigger matched, by Binding.", []string{"binding"}},
 		{"agentkourier_trigger_unmatched_total", "Bot messages the platform passed on that matched none of the Binding's triggers, by Binding.", []string{"binding"}},

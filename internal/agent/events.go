@@ -42,17 +42,20 @@ type ToolResultEvent struct {
 // one unit of activity, whether or not anything in it is understood. Text is the text of the update's message when the
 // message is the agent's own, its text parts joined by line breaks, less those marked as the model's reasoning
 // (dialect.IsThought): the agent's account of what it is doing, which is untrusted and never part of the answer. It is
-// empty for an update with no message, the user's message echoed back, or a message with no text. The update that makes
-// the task working is the change of state, and a ProgressEvent only if it has text. An update whose message is the agent's
-// and holds a tool part is told as its tool events, and a task snapshot (the one a GetTask returns, or a resubscribe opens
-// with) as what it changed: neither is a ProgressEvent. Nor is an update with the timestamp, message ID and text of the one
-// before it, which is the server repeating itself, or, with neither a timestamp nor an ID, one that opens a resubscribed
-// stream and says what the one before it said.
+// empty for an update with no message or a message with no text. The update that makes the task working is the change of
+// state, and a ProgressEvent only if it has text. An update whose message is the agent's and holds a tool part is told as
+// its tool events, and a task snapshot (the one a GetTask returns, or a resubscribe opens with) as what it changed: neither
+// is a ProgressEvent. Nor is the user's message echoed back, a fragment of the model's output (dialect.IsPartial), or an
+// update that opens a resubscribed stream with the timestamp, message ID and text of the one before it, which is the server
+// repeating itself.
 type ProgressEvent struct {
 	Text string
 	// ID identifies the status across streams and follows, from its timestamp and message ID; empty if it has neither. Nothing
 	// shows it: the session uses it to tell a status repeated to a new follow from a sign of life.
 	ID string
+	// Opening says the update was the first thing a resubscribed stream said, so that it may repeat what the server held. An
+	// update later on a stream, or on the stream of a send, is live.
+	Opening bool
 }
 
 // StateEvent reports a change of the task's state. A state that repeats is not a change.
