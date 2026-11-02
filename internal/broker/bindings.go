@@ -100,8 +100,8 @@ func NewBindings(snaps Snapshots, secrets identity.SecretReader, aud identity.Au
 	}, nil
 }
 
-// Close closes the agent pools, then the idle connections of the dialects' transports, so that
-// no goroutine outlives it. Calls after it fail.
+// Close closes the agent pools, which cancel and wait for the CheckAgent calls in flight, then the idle connections
+// of the dialects' transports, so that no goroutine outlives it. Calls after it fail.
 func (b *Bindings) Close() {
 	for _, k := range b.kits {
 		k.pool.Close()

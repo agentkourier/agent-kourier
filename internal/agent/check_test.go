@@ -19,6 +19,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/generic"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
+	"github.com/agentkourier/agent-kourier/internal/secret"
 )
 
 // countingTransport is a transport that counts its Destroy, so a test can tell that every client a
@@ -352,6 +353,140 @@ func TestCheckIsBoundedByTheConnectTimeout(t *testing.T) {
 	p.cfg.ConnectTimeout = 50 * time.Millisecond
 	returns(t, "Check", func() {
 		if err := p.Check(t.Context(), targetFor(fa, "team/sre", token("t"))); !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("Check = %v, want context.DeadlineExceeded", err)
+		}
+	})
+}
+
+// The reason Check asks for a fresh connection: a turn holds a connection to the front door open, and a card fetch
+// that rode it would pass while the front door took no new connection (an expired certificate, a DNS record that is
+// gone, a NetworkPolicy that blocks new flows). Here the listener stops accepting and the turn's connection stays
+// open: the turn goes on and the probe fails. The dialects' tests count connections, over TLS and HTTP/2 as well.
+func TestCheckFailsWhereATurnsHeldConnectionStillWorks(t *testing.T) {
+	for _, dl := range []struct {
+		name string
+		d    dialect.Dialect
+	}{{"kagent-v1", kagentv1.New(0)}, {"a2a", generic.New(0)}} {
+		t.Run(dl.name, func(t *testing.T) {
+			fa := newFakeAgent(t, liveStream(t))
+			p := NewPool(dl.d, quick)
+			t.Cleanup(p.Close)
+			tg := targetFor(fa, "team/sre", token("t"))
+			ag := p.Agent(tg)
+			if err := ag.Send(t.Context(), message("hi"), nil); err != nil {
+				t.Fatal(err)
+			}
+			if err := p.Check(t.Context(), tg); err != nil {
+				t.Fatalf("Check while the front door is up: %v", err)
+			}
+			_ = fa.Listener.Close() // no new connection from here on; the turn's stays served
+			if err := ag.Send(t.Context(), message("hi"), nil); err != nil {
+				t.Fatalf("Send over the held connection: %v", err)
+			}
+			if err := p.Check(t.Context(), tg); err == nil || errors.Is(err, ErrPoolClosed) {
+				t.Errorf("Check = %v, want a connection error: the probe rode the connection a turn holds", err)
+			}
+			if err := ag.Send(t.Context(), message("hi"), nil); err != nil {
+				t.Errorf("Send after the failed probe: %v", err)
+			}
+		})
+	}
+}
+
+// stuckDialect is a dialect whose Connect says it has begun and then ignores its context until released, as a
+// card fetch stuck in a read does. Cancelling the context does not end it, so only a Close that waits is slower than it.
+type stuckDialect struct {
+	dialect.Dialect
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (d stuckDialect) Connect(ctx context.Context, _ *v1alpha1.AgentBackend, _ v1alpha1.AgentRef, _ dialect.Credentials) (*a2aclient.Client, error) {
+	d.entered <- struct{}{}
+	<-d.release
+	return nil, ctx.Err()
+}
+
+// closeWaitsForCheck runs Check on p while hold has it in flight, calls Close, and shows that Close does not return
+// until release lets the Check go, and that the Check says ErrPoolClosed.
+func closeWaitsForCheck(t *testing.T, p *Pool, tg Target, entered <-chan struct{}, release func()) {
+	t.Helper()
+	checked := make(chan error, 1)
+	go func() { checked <- p.Check(t.Context(), tg) }()
+	returns(t, "Check to start", func() { <-entered })
+	closed := make(chan struct{})
+	go func() { p.Close(); close(closed) }()
+	<-p.bg.Done() // Close has cancelled what the pool's work runs under
+	select {
+	case <-closed:
+		t.Error("Close returned while a Check was in flight")
+	case <-time.After(100 * time.Millisecond): // a Close that does not wait returns within microseconds; the window can hide a bug, never fail a correct Close
+	}
+	release()
+	returns(t, "Close", func() { <-closed })
+	returns(t, "Check", func() {
+		if err := <-checked; !errors.Is(err, ErrPoolClosed) {
+			t.Errorf("Check = %v, want ErrPoolClosed", err)
+		}
+	})
+}
+
+// Close waits for a probe, so no goroutine of it outlives Close, and no card request that carries the token starts after
+// Close has returned.
+func TestCloseWaitsForAProbeInFlight(t *testing.T) {
+	t.Run("on a slow card fetch", func(t *testing.T) {
+		d := stuckDialect{Dialect: kagentv1.New(0), entered: make(chan struct{}, 1), release: make(chan struct{})}
+		p := NewPool(d, quick)
+		closeWaitsForCheck(t, p, targetFor(newFakeAgent(t, liveStream(t)), "team/sre", token("t")), d.entered, func() { close(d.release) })
+	})
+	t.Run("on a slow credential source", func(t *testing.T) {
+		fa, p := newFakeAgent(t, liveStream(t)), NewPool(kagentv1.New(0), quick)
+		entered, release := make(chan struct{}, 1), make(chan struct{})
+		slow := func(context.Context) (dialect.Credentials, error) { // ignores its context, which a source must not
+			entered <- struct{}{}
+			<-release
+			return dialect.Credentials{Token: secret.New("t")}, nil
+		}
+		closeWaitsForCheck(t, p, targetFor(fa, "team/sre", slow), entered, func() { close(release) })
+		if n := fa.count("card"); n != 0 {
+			t.Errorf("%d card fetches, want none: a probe sent the token after Close", n)
+		}
+	})
+}
+
+// A credential source that honors its context is cut short by Close, so Close is bounded by the same context as the connect.
+func TestCloseEndsAProbeWaitingOnTheCredentials(t *testing.T) {
+	fa, p := newFakeAgent(t, liveStream(t)), NewPool(kagentv1.New(0), quick)
+	entered := make(chan struct{}, 1)
+	waits := func(ctx context.Context) (dialect.Credentials, error) {
+		entered <- struct{}{}
+		<-ctx.Done()
+		return dialect.Credentials{}, ctx.Err()
+	}
+	done := make(chan error, 1)
+	go func() { done <- p.Check(t.Context(), targetFor(fa, "team/sre", waits)) }()
+	returns(t, "Check to start", func() { <-entered })
+	returns(t, "Close", p.Close)
+	returns(t, "Check", func() {
+		if err := <-done; !errors.Is(err, ErrPoolClosed) {
+			t.Errorf("Check = %v, want ErrPoolClosed", err)
+		}
+	})
+	if n := fa.count("card"); n != 0 {
+		t.Errorf("%d card fetches, want none", n)
+	}
+}
+
+// The ConnectTimeout bounds the credentials read too, and the error is the timeout's.
+func TestCheckIsBoundedOnTheCredentialsByTheConnectTimeout(t *testing.T) {
+	fa, p := newFakeAgent(t, liveStream(t)), newPool(t)
+	p.cfg.ConnectTimeout = 50 * time.Millisecond
+	waits := func(ctx context.Context) (dialect.Credentials, error) {
+		<-ctx.Done()
+		return dialect.Credentials{}, ctx.Err()
+	}
+	returns(t, "Check", func() {
+		if err := p.Check(t.Context(), targetFor(fa, "team/sre", waits)); !errors.Is(err, context.DeadlineExceeded) {
 			t.Errorf("Check = %v, want context.DeadlineExceeded", err)
 		}
 	})

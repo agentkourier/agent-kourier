@@ -41,6 +41,9 @@ var (
 // cannot be read. The Pool calls it for every operation and stores nothing it returns, so a
 // rotated token (WP-21e) takes effect on the next call. On error the call fails: the
 // identity never falls back to X-User-Id.
+//
+// It must return when ctx ends. Pool.Check passes a context that ends when the Pool closes or
+// ConnectTimeout passes, and Pool.Close waits for the Check, so a function that ignores ctx holds Close.
 type CredentialsFunc func(ctx context.Context) (dialect.Credentials, error)
 
 // Target is one agent as one Binding reaches it.
@@ -80,6 +83,7 @@ type Pool struct {
 	mu      sync.Mutex
 	entries map[poolKey]*entry
 	closed  bool
+	probes  sync.WaitGroup // the Checks in flight; Add only under mu while not closed, so Close's Wait cannot race it
 }
 
 // NewPool returns a Pool that connects through d. cfg applies to every Agent it returns.
@@ -98,14 +102,15 @@ func (p *Pool) Agent(t Target) *Agent {
 	return New(func(ctx context.Context) (Conn, error) { return p.conn(ctx, t) }, cfg)
 }
 
-// Close cancels the connects in flight and closes every client. Calls after it fail
-// with ErrPoolClosed; streams already running end with their own context.
+// Close cancels the connects and the Checks in flight, waits for the Checks to return, and closes every
+// client. Calls after it fail with ErrPoolClosed; streams already running end with their own context.
 func (p *Pool) Close() {
 	p.mu.Lock()
 	p.closed = true
 	entries := slices.Collect(maps.Values(p.entries))
 	p.mu.Unlock()
 	p.stop()
+	p.probes.Wait() // after the lock is released: a Check takes it to finish
 	for _, e := range entries {
 		e.mu.Lock()
 		if e.client != nil {
@@ -128,14 +133,25 @@ func (p *Pool) credentials(ctx context.Context, t Target) (dialect.Credentials, 
 	return creds, nil
 }
 
+// bounded returns ctx ended also by the ConnectTimeout and by the pool closing, and the function that releases it.
+// Close waits for what holds the entry's lock (a connect) and for the Checks, so what they wait on must end with the pool.
+func (p *Pool) bounded(ctx context.Context) (context.Context, func()) {
+	ctx, cancel := context.WithTimeout(ctx, p.cfg.ConnectTimeout)
+	stop := context.AfterFunc(p.bg, cancel)
+	return ctx, func() { stop(); cancel() }
+}
+
 // connect makes a client for t with creds, which fetches the agent card, and refuses an agent whose card does
 // not advertise streaming. A client it refuses is destroyed. The connect ends when the caller's context, the
-// ConnectTimeout, or the pool ends. Close waits for the entry's lock that conn holds across a connect, so it
-// must be able to cut a connect short.
+// ConnectTimeout, or the pool ends.
 func (p *Pool) connect(ctx context.Context, t Target, creds dialect.Credentials) (*a2aclient.Client, error) {
-	ctx, cancel := context.WithTimeout(ctx, p.cfg.ConnectTimeout)
-	defer cancel()
-	defer context.AfterFunc(p.bg, cancel)() //nolint:contextcheck // p.bg is the pool's own lifetime, joined to the caller's on purpose
+	ctx, release := p.bounded(ctx)
+	defer release()
+	return p.open(ctx, t, creds)
+}
+
+// open is connect without the bound: ctx must already end with the pool.
+func (p *Pool) open(ctx context.Context, t Target, creds dialect.Credentials) (*a2aclient.Client, error) {
 	client, err := p.dialect.Connect(ctx, t.Backend, t.Agent, creds)
 	if err != nil {
 		return nil, fmt.Errorf("binding %s: %w", t.Binding, err)
@@ -181,29 +197,56 @@ func (p *Pool) conn(ctx context.Context, t Target) (Conn, error) {
 // The connect is always fresh because conn returns the cached client while the credentials and the
 // URL are unchanged, so a probe through it would stop touching the backend after its first success.
 // Check neither reads nor writes the cached clients, so it cannot disturb a stream or hide an
-// outage behind one. It returns the error of the card fetch as it is, not typed by what a status
+// outage behind one. It also asks the dialect for a new connection (dialect.WithFreshConnection): the card
+// fetch does its own DNS lookup, dial and TLS handshake, so a connection a turn holds open cannot carry
+// it, and a name, certificate or network path that only a new connection needs fails the check.
+// It holds no entry lock while it waits on the network, so it never delays a turn.
+//
+// The credentials read and the connect together end at the ConnectTimeout, when ctx ends, or when the
+// Pool closes. It returns the error of the card fetch as it is, not typed by what a status
 // means to a call: a 403 is a dialect.HTTPStatusError and not ErrCredentialsRejected. It also
 // returns ErrTokenUnreadable, ErrHeaderUnreadable, ErrTokenRequired, ErrStreamingUnsupported,
 // dialect.ErrUnsupportedExtension and dialect.ErrNoJSONRPCInterface, all findable with errors.Is.
-// After Close it returns ErrPoolClosed, whether Close came before the call or cut the connect short;
-// a credentials error that is already decided when Close runs keeps its own type.
+// After Close it returns ErrPoolClosed: at once when Close came before the call, and otherwise when Close
+// cancelled the credentials read or the connect. Close waits for a Check that is in flight, so none outlives it.
+// An error that is not a cancellation keeps its own type, even when Close runs just after it.
 func (p *Pool) Check(ctx context.Context, t Target) error {
-	if p.isClosed() {
+	if !p.beginProbe() {
 		return ErrPoolClosed
 	}
+	defer p.probes.Done()
+	ctx, release := p.bounded(dialect.WithFreshConnection(ctx))
+	defer release()
 	creds, err := p.credentials(ctx, t)
 	if err != nil {
-		return err
+		return p.closedOr(err)
 	}
-	client, err := p.connect(ctx, t, creds)
+	client, err := p.open(ctx, t, creds)
 	if err != nil {
-		if p.isClosed() { // Close cut the connect short; that is the answer
-			return ErrPoolClosed
-		}
-		return err
+		return p.closedOr(err)
 	}
 	_ = client.Destroy()
 	return nil
+}
+
+// beginProbe registers a Check unless the pool is closed. It registers under the lock Close sets closed under, so
+// Close's wait sees every Check that was not refused.
+func (p *Pool) beginProbe() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return false
+	}
+	p.probes.Add(1)
+	return true
+}
+
+// closedOr is ErrPoolClosed for an error that Close's cancellation caused, and err otherwise.
+func (p *Pool) closedOr(err error) error {
+	if errors.Is(err, context.Canceled) && p.isClosed() {
+		return ErrPoolClosed
+	}
+	return err
 }
 
 // entry returns the entry for k, made on first use. It does not look at closed: conn does,
