@@ -89,6 +89,10 @@ var (
 	ErrUnsupportedExtension = errors.New("agent requires an unsupported extension")
 	// ErrNoJSONRPCInterface is what Connect returns for an agent card that lists no JSON-RPC interface.
 	ErrNoJSONRPCInterface = errors.New("agent card lists no JSON-RPC interface")
+	// ErrInvalidAgentCard is what Connect returns when the front door answered the card fetch with a 200 whose body
+	// is not a usable agent card (an SSO login page, say), or with a card whose interfaces name no protocol version
+	// this client speaks. It says the front door answered; a dial failure or a status error is not it.
+	ErrInvalidAgentCard = errors.New("agent card is invalid")
 )
 
 type freshConnectionKey struct{}

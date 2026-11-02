@@ -208,7 +208,9 @@ func (p *Pool) conn(ctx context.Context, t Target) (Conn, error) {
 // Pool closes. It returns the error of the card fetch as it is, not typed by what a status
 // means to a call: a 403 is a dialect.HTTPStatusError and not ErrCredentialsRejected. It also
 // returns ErrTokenUnreadable, ErrHeaderUnreadable, ErrTokenRequired, ErrStreamingUnsupported,
-// dialect.ErrUnsupportedExtension and dialect.ErrNoJSONRPCInterface, all findable with errors.Is.
+// dialect.ErrUnsupportedExtension, dialect.ErrNoJSONRPCInterface and dialect.ErrInvalidAgentCard (the front door
+// answered 200 with a body that is not a usable card), all findable with errors.Is, and *agentcard.ErrStatusNotOK
+// for a 2xx other than 200, findable with errors.As.
 // After Close it returns ErrPoolClosed: at once when Close came before the call, and otherwise when the
 // credentials read or the connect ends in a cancellation once the pool is closed. Close waits for a Check that
 // is in flight, so none outlives it. An error that is not a cancellation keeps its own type, even when Close

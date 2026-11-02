@@ -77,7 +77,8 @@ func (d *Dialect) CloseIdleConnections() {
 
 // cardParser reads an agent card as A2A 1.0 and, when that lists no interface, as A2A 0.3: one
 // `url` and a `preferredTransport`, with no protocolVersion, which is what kagent 0.9.x serves.
-// The 0.3 reader maps it onto the 1.0 shape, so the checks in ConnectEndpoint see one kind of card.
+// The 0.3 reader maps it onto the 1.0 shape, so the checks in ConnectEndpoint see one kind of card. A body neither
+// reader accepts fails with dialect.ErrInvalidAgentCard, which a2a-go's resolver wraps with %w, so errors.Is finds it.
 func cardParser(body []byte) (*a2a.AgentCard, error) {
 	card, err := agentcard.DefaultCardParser(body)
 	if err == nil && len(card.SupportedInterfaces) > 0 {
@@ -90,7 +91,7 @@ func cardParser(body []byte) (*a2a.AgentCard, error) {
 	case err == nil:
 		return card, nil // read as 1.0 but lists no interface: ConnectEndpoint's own check says so
 	}
-	return nil, err
+	return nil, fmt.Errorf("%w: %w", dialect.ErrInvalidAgentCard, err)
 }
 
 // Connect resolves the agent's card through the front door and returns an A2A client for it.
@@ -150,7 +151,9 @@ func (d *Dialect) ConnectEndpoint(ctx context.Context, endpoint string, creds di
 		a2aclient.WithJSONRPCTransport(hc),
 		a2av0.WithJSONRPCTransport(a2av0.JSONRPCTransportConfig{Client: hc}))
 	if err != nil {
-		return nil, fmt.Errorf("create agent client: %w", err)
+		// The transports this client registers (JSON-RPC over hc, for 1.0 and 0.3) are made without I/O and cannot
+		// fail, so a failure is the card's: its interfaces name a protocol version no registered transport speaks.
+		return nil, fmt.Errorf("create agent client: %w: %w", dialect.ErrInvalidAgentCard, err)
 	}
 	return client, nil
 }

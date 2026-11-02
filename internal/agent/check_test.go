@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -575,5 +576,94 @@ func TestChecksRacingCloseFinishOrSayClosedAndNoneStartsAfterIt(t *testing.T) {
 		if late.Load() != 0 || other.Load() != 0 {
 			t.Fatalf("%d credential reads after Close returned, %d Check errors other than ErrPoolClosed; want none", late.Load(), other.Load())
 		}
+	}
+}
+
+// What the front door answers to the card fetch tells a misrouted front door from an unreachable one: a 200 whose body is
+// not a card (an SSO login page) is dialect.ErrInvalidAgentCard, a 2xx other than 200 is a2a-go's ErrStatusNotOK, and a
+// failed dial is neither. Both dialects read the card through the same code.
+func TestCheckTellsAMalformedCardFromAnUnreachableBackend(t *testing.T) {
+	serve := func(status int, contentType, body string) *httptest.Server {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", contentType)
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(body))
+		}))
+		t.Cleanup(srv.Close)
+		return srv
+	}
+	const html = "<!DOCTYPE html><html><body>Sign in to continue</body></html>"
+	const futureVersion = `{"name":"ask","capabilities":{"streaming":true},"supportedInterfaces":[{"url":"http://x","protocolBinding":"JSONRPC","protocolVersion":"9.0"}]}`
+	for _, dl := range []struct {
+		name string
+		d    dialect.Dialect
+		kind v1alpha1.Dialect
+	}{{"kagent-v1", kagentv1.New(0), v1alpha1.DialectKagentV1}, {"a2a", generic.New(0), v1alpha1.DialectA2A}} {
+		for _, tc := range []struct {
+			name        string
+			url         func() string
+			wantInvalid bool
+			wantNotOK   int // the status of the *agentcard.ErrStatusNotOK, 0 for none
+		}{
+			{"HTML page with a 200", func() string { return serve(http.StatusOK, "text/html", html).URL }, true, 0},
+			{"an empty 200", func() string { return serve(http.StatusOK, "application/json", "").URL }, true, 0},
+			{"a card for a protocol version nothing speaks", func() string { return serve(http.StatusOK, "application/json", futureVersion).URL }, true, 0},
+			{"204", func() string { return serve(http.StatusNoContent, "", "").URL }, false, http.StatusNoContent},
+			{"a dial failure", func() string {
+				srv := httptest.NewServer(http.NotFoundHandler())
+				srv.Close()
+				return srv.URL
+			}, false, 0},
+		} {
+			t.Run(dl.name+"/"+tc.name, func(t *testing.T) {
+				p := NewPool(dl.d, quick)
+				t.Cleanup(p.Close)
+				tg := Target{
+					Binding:     "team/sre",
+					Backend:     &v1alpha1.AgentBackend{Spec: v1alpha1.AgentBackendSpec{Dialect: dl.kind, URL: tc.url()}},
+					Agent:       v1alpha1.AgentRef{Name: "ask", Namespace: "kagent"},
+					Credentials: token("t"),
+				}
+				err := p.Check(t.Context(), tg)
+				if err == nil {
+					t.Fatal("Check = nil, want an error")
+				}
+				if got := errors.Is(err, dialect.ErrInvalidAgentCard); got != tc.wantInvalid {
+					t.Errorf("errors.Is(err, ErrInvalidAgentCard) = %v, want %v; err = %v", got, tc.wantInvalid, err)
+				}
+				var notOK *agentcard.ErrStatusNotOK
+				if got := errors.As(err, &notOK); got != (tc.wantNotOK != 0) || got && notOK.StatusCode != tc.wantNotOK {
+					t.Errorf("errors.As(err, *ErrStatusNotOK) = %v, want status %d; err = %v", got, tc.wantNotOK, err)
+				}
+			})
+		}
+	}
+}
+
+// A turn that meets a front door answering with a page instead of a card fails as it did, with the parse error in its
+// text, and the sentinel is the only addition: nothing types it as a rejected credential, a busy agent or a refusal.
+func TestATurnOnAMalformedCardKeepsItsErrorAndItsClassification(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("<html>Sign in</html>"))
+	}))
+	t.Cleanup(srv.Close)
+	p := newPool(t)
+	tg := Target{
+		Binding:     "team/sre",
+		Backend:     &v1alpha1.AgentBackend{Spec: v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectKagentV1, URL: srv.URL}},
+		Agent:       v1alpha1.AgentRef{Name: "ask", Namespace: "kagent"},
+		Credentials: token("t"),
+	}
+	err := p.Agent(tg).Send(t.Context(), message("hi"), nil)
+	if !errors.Is(err, dialect.ErrInvalidAgentCard) || !strings.Contains(err.Error(), "card parsing failed") {
+		t.Fatalf("Send = %v, want the card's parse error, marked ErrInvalidAgentCard", err)
+	}
+	for _, not := range []error{ErrCredentialsRejected, ErrForbidden, ErrBusy} {
+		if errors.Is(err, not) {
+			t.Errorf("Send = %v: typed as %v", err, not)
+		}
+	}
+	if refused(err) || permanent(err) {
+		t.Errorf("Send = %v: counted as a refusal from the backend", err)
 	}
 }
