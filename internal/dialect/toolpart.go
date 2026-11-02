@@ -58,6 +58,20 @@ func DecodeToolPart(part *a2a.Part) (ToolPart, bool) {
 // converter with its own prefix as for tool parts, would write kagent_thought (not measured).
 var thoughtKeys = [...]string{"adk_thought", "kagent_thought", "kagent.dev/a2a/thought"}
 
+// partialKey is where kagent 0.9.x marks a message that holds a fragment of the model's output (`get_kagent_metadata_key("adk_partial")`
+// in `kagent-adk`'s `converters/event_converter.py`, read at tag v0.9.4, not measured on the wire).
+const partialKey = "kagent_adk_partial"
+
+// IsPartial says whether a message is marked as a fragment of the model's output: its metadata holds partialKey with the value
+// true. An agent with streaming on sends one for each piece of the output as it comes, and then the whole in an update of its own.
+func IsPartial(m *a2a.Message) bool {
+	if m == nil {
+		return false
+	}
+	partial, _ := m.Metadata[partialKey].(bool)
+	return partial
+}
+
 // IsThought says whether a part is marked as the model's reasoning, the same way on every dialect: its metadata holds one
 // of the thought keys (adk_thought, kagent_thought, kagent.dev/a2a/thought) with the value true. The progress line leaves
 // such a part out, so that it never shows the model's reasoning (spec D44); the answer's text parts are not filtered so.

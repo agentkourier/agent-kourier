@@ -180,6 +180,38 @@ func TestTriggerRefusedCleansWhatItStores(t *testing.T) {
 	}
 }
 
+// A mention is an event of its own: one row for each person, by the name and user config gives.
+func TestMention(t *testing.T) {
+	ctx := context.Background()
+	w, s := newWriter(t)
+	good := Mention{Turn: "turn-1", Channel: "C1", Thread: "100.1", Name: "sam", User: "U0SAM"}
+	if err := w.Mention(ctx, Actor{Binding: "ns/b"}, good); err != nil {
+		t.Fatalf("Mention: %v", err)
+	}
+	got := rows(t, s)
+	if len(got) != 1 {
+		t.Fatalf("got %d rows, want 1: %+v", len(got), got)
+	}
+	if e := got[0]; e.Kind != store.AuditEvent || e.Binding != "ns/b" || e.Subject != "mention turn=turn-1 channel=C1 thread=100.1" || e.Outcome != "slack_message: mention name=sam user=U0SAM" {
+		t.Errorf("row = %+v", e)
+	}
+	for name, bad := range map[string]struct {
+		a Actor
+		m Mention
+	}{
+		"no Binding": {Actor{}, good},
+		"no turn":    {who, Mention{Channel: "C1", Thread: "1.1", Name: "sam", User: "U0SAM"}},
+		"no channel": {who, Mention{Turn: "t", Thread: "1.1", Name: "sam", User: "U0SAM"}},
+		"no thread":  {who, Mention{Turn: "t", Channel: "C1", Name: "sam", User: "U0SAM"}},
+		"no name":    {who, Mention{Turn: "t", Channel: "C1", Thread: "1.1", User: "U0SAM"}},
+		"no user":    {who, Mention{Turn: "t", Channel: "C1", Thread: "1.1", Name: "sam"}},
+	} {
+		if err := w.Mention(ctx, bad.a, bad.m); !errors.Is(err, store.ErrInvalid) {
+			t.Errorf("%s: Mention = %v, want ErrInvalid", name, err)
+		}
+	}
+}
+
 // A vote is an event of its own: who voted, on which message, and the verdict, by identifiers only. The alert's name is
 // untrusted text from the alert, and is not an identifier of the vote, so it is not a field of the call.
 func TestFeedbackVote(t *testing.T) {

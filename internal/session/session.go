@@ -86,6 +86,11 @@ type Backend struct {
 	// Feedback is the Binding's feedback.enabled: the final message of an answer to a person carries the
 	// useful and not-useful buttons (spec 8.7). An investigation that nobody asked for always does.
 	Feedback bool
+	// Mentions are the people the Binding's chat.mentions declares, and MaxMentions its chat.maxMentionsPerTurn, which the sink
+	// is told of each turn. MentionPrompt is the line a session's first prompt ends with to tell the agent the names, or "".
+	Mentions      []v1alpha1.ChatMention
+	MaxMentions   int
+	MentionPrompt string
 	// AcknowledgmentEnabled adds a temporary reaction to each accepted message. AcknowledgmentEmoji is the
 	// bare platform reaction name kept with the queued reply so a reload cannot change what is removed.
 	AcknowledgmentEnabled bool
@@ -144,6 +149,9 @@ type TurnRef struct {
 	// ThreadReplies is the Binding's chat.threadReplies. In mention the final message of the output tells the thread to mention
 	// Agent Kourier to ask a follow-up (D38); anything else, the empty value too, adds nothing.
 	ThreadReplies v1alpha1.ThreadReplies
+	// Mentions are the people the Binding declares, and MaxMentions the most a turn notifies (Backend.Mentions).
+	Mentions    []v1alpha1.ChatMention
+	MaxMentions int
 }
 
 // NoticeKind is what a Notice tells the thread.
