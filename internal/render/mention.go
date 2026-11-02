@@ -22,7 +22,7 @@ type MentionScan struct {
 	// person has, in the order the text first names them, as far as the cap.
 	Made []v1alpha1.ChatMention
 	// Undeclared counts each "@name" that no entry declares, a typo or a person the model made up, and Capped each declared
-	// name past the cap. Each notifies nobody.
+	// person past the cap. Each notifies nobody.
 	Undeclared, Capped int
 
 	past []string // the users already counted in Capped
@@ -97,11 +97,11 @@ func (scan *MentionScan) line(line string, declared []v1alpha1.ChatMention, limi
 				i += n
 			}
 		case '@':
-			word := mentionWord(line, i)
+			word, end := mentionWord(line, i)
 			if word != "" {
 				scan.name(word, declared, limit)
 			}
-			i += 1 + len(word)
+			i = end
 		default:
 			i++
 		}
@@ -117,10 +117,12 @@ func closingRun(s string, n int) int {
 	return at
 }
 
-// mentionWord is the name of the "@" at line[at], lowercased, or "" if it starts none (see Mentions).
-func mentionWord(line string, at int) string {
+// mentionWord is the name of the "@" at line[at], with A to Z lowered, or "" if it starts none (see Mentions), and where in line
+// to read on. Only A to Z are lowered: a declared name is ASCII, and a letter of another alphabet that lowers into ASCII is not
+// the name it looks like.
+func mentionWord(line string, at int) (word string, next int) {
 	if before, _ := utf8.DecodeLastRuneInString(line[:at]); at > 0 && (isNameRune(before) || strings.ContainsRune("_./@=", before)) {
-		return ""
+		return "", at + 1
 	}
 	end := at + 1
 	for end < len(line) {
@@ -130,14 +132,18 @@ func mentionWord(line string, at int) string {
 		}
 		end += size
 	}
-	word := line[at+1 : end]
-	if word == "" || word[0] == '-' || (word[0] >= '0' && word[0] <= '9') {
-		return ""
+	word = line[at+1 : end]
+	if word == "" || word[0] == '-' || (word[0] >= '0' && word[0] <= '9') || goesOn(line[end:]) {
+		return "", at + 1
 	}
-	if goesOn(line[end:]) {
-		return ""
+	return strings.Map(lowerASCII, word), end
+}
+
+func lowerASCII(r rune) rune {
+	if r >= 'A' && r <= 'Z' {
+		return r + ('a' - 'A')
 	}
-	return strings.ToLower(word)
+	return r
 }
 
 // goesOn says whether what follows a name makes it part of something else (see Mentions).

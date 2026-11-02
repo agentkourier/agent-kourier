@@ -410,10 +410,7 @@ func TestRunNotifiesADeclaredPersonAfterTheReply(t *testing.T) {
 	if got, _ := prompt.Load().(string); !strings.Contains(got, "You may use these names: payments-owner.") || strings.Contains(got, "U0SAM") {
 		t.Errorf("the prompt = %q; want the name and no user ID", got)
 	}
-	eventuallyAudited := time.Now().Add(15 * time.Second)
-	for len(aud.outcomes()) == 0 && time.Now().Before(eventuallyAudited) {
-		time.Sleep(20 * time.Millisecond)
-	}
+	waitUntil(t, "the audit row", func() bool { return len(aud.outcomes()) > 0 })
 	if got := aud.outcomes(); len(got) != 1 || !strings.Contains(got[0], "name=payments-owner user=U0SAM") {
 		t.Errorf("audit rows = %q; want one for the person", got)
 	}

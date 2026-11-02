@@ -51,6 +51,7 @@ func TestMentions(t *testing.T) {
 		{name: "in a span of two backticks", body: "run ``notify @sam`` now, ask @lee", max: 2, made: []string{"lee"}},
 		{name: "after runs that do not match, which the adapter shows as prose", body: "run ``a ` @sam``", max: 2, made: []string{"sam"}},
 		{name: "a name in another alphabet is not the name it starts with", body: "@josé é@sam", max: 2, undeclared: 1},
+		{name: "a letter that grows when lowered does not reach into a span", body: "@Ⱥ`@sam`", max: 2, undeclared: 1},
 		{name: "punctuation of any alphabet ends a name", body: "“@sam”—ask @lee—now", max: 2, made: []string{"sam", "lee"}},
 		{name: "an address", body: "@sam@example.com", max: 2},
 		{name: "a query value", body: "https://x.test/?u=@sam", max: 2},
@@ -140,5 +141,14 @@ func TestAPersonWithTwoNamesIsMentionedOnce(t *testing.T) {
 	}
 	if got := render.Mentions("@lee @kim @payments-owner @billing-owner", declared, 2); got.Capped != 1 {
 		t.Errorf("capped = %d, want 1: both names past the cap are one person", got.Capped)
+	}
+}
+
+// A letter of another alphabet that lowers into ASCII is not the name it looks like: a Kelvin sign is not a k.
+func TestALookalikeLetterIsNotADeclaredName(t *testing.T) {
+	declared := []v1alpha1.ChatMention{{Name: "kim", User: "U0KIM"}, {Name: "i", User: "U0I"}}
+	got := render.Mentions("@\u212Aim @\u0130", declared, 2)
+	if len(got.Made) != 0 || got.Undeclared != 2 {
+		t.Errorf("Made = %v, undeclared %d; want none, undeclared 2", got.Made, got.Undeclared)
 	}
 }
