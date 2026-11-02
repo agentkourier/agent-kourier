@@ -33,47 +33,79 @@ type MentionScan struct {
 // no more of them and none of what goes on as a package scope, a host, an address or a port: a "/", an "@", a "." and a name
 // character, a ":" and a digit. A letter of any alphabet is a letter here, so "@josé" does not name "jos". Code is left out:
 // what is in a fence or a span is quoted, not said, so a log line that holds a name notifies nobody. What is code is read as the
-// Slack adapter writes it (internal/chat/slack/mdtext.go): any fence line opens or closes a block, whatever its marks, a
-// block that never closes runs to the end, and a span closes at the next run of backticks or not at all. A pipe table, which
-// that adapter shows as code, is read as prose: a name in a table is said.
-// A place where the two readings still differ can only notify a declared person or not, within the cap. With nothing
-// declared there is nothing to scan for, and nothing is counted.
+// Slack adapter writes it (internal/chat/slack/mdtext.go): any fence line opens or closes a block, whatever its marks, what
+// follows a closing run is prose, a block that never closes runs to the end, and a span closes at the next run of backticks or not
+// at all. A pipe table, which that adapter shows as code, is read as prose: a name in a table is said. A name that ends where the
+// text was cut (chat.Truncated) may be the start of a longer one, so it is no name.
+// A place where the two readings still differ can only notify a declared person or not, within the cap: the adapter counts its limit
+// in escaped text, so it can cut sooner than body was. With nothing declared there is nothing to scan for, and nothing is counted.
 func Mentions(body string, declared []v1alpha1.ChatMention, limit int) MentionScan {
 	var scan MentionScan
 	if len(declared) == 0 {
 		return scan
 	}
-	code := false
-	for line := range strings.Lines(body) {
-		line = strings.TrimRight(line, "\r\n")
-		marks, rest := fenceLine(line)
-		switch {
-		case marks != "" && !code && closesOnItsLine(rest, marks):
-		case marks != "":
+	code, held := false, body
+	for held != "" {
+		line, _, _ := strings.Cut(held, "\n")
+		after := held[len(line):] // the line break, if any, and the lines after it
+		ch, run, rest := fenceLine(line)
+		if run >= 3 {
+			held = afterFence(code, ch, run, rest, after)
 			code = !code
-		case !code:
+			continue
+		}
+		if !code {
 			scan.line(line, declared, limit)
 		}
+		held = strings.TrimPrefix(after, "\n")
 	}
 	return scan
 }
 
-// fenceLine is the marks of a fence, if line is a fence line (three or more backticks or tildes after its white space), and
-// what follows them. marks is "" if it is not one.
-func fenceLine(line string) (marks, rest string) {
-	s := strings.TrimLeft(line, " \t")
+// fenceLine reads line as the adapter's readFence does: the mark of the run of backticks or tildes after the line's white space,
+// how long the run is, and what follows it. ch is 0 if the line has no such run.
+func fenceLine(line string) (ch byte, run int, rest string) {
+	s := strings.TrimLeftFunc(line, unicode.IsSpace)
 	if s == "" || (s[0] != '`' && s[0] != '~') {
-		return "", ""
+		return 0, 0, s
 	}
-	n := runOf(s, s[0])
-	if n < 3 {
-		return "", ""
-	}
-	return s[:n], s[n:]
+	run = runOf(s, s[0])
+	return s[0], run, s[run:]
 }
 
-// closesOnItsLine says whether what follows an opening fence holds its closing marks: a block of one line.
-func closesOnItsLine(rest, marks string) bool { return strings.Contains(rest, marks) }
+// afterFence is what is left to read after a fence line, with after being the lines that follow it, and it is the adapter's
+// mdText.fence: what follows the fence on its line is read as a line of its own. A fence line closes a block whatever else is on
+// the line, and the rest is prose. One that opens a block drops a single word as its info string, and otherwise the rest is
+// the block's first line, unless it holds a closing run: then it is the block's one line, and a closing fence with what
+// followed the run.
+func afterFence(code bool, ch byte, run int, rest, after string) string {
+	if code {
+		return strings.TrimLeftFunc(rest, unicode.IsSpace) + after
+	}
+	if at, n := closingFence(rest, ch, run); at >= 0 {
+		return strings.TrimSpace(rest[:at]) + "\n```" + rest[at+n:] + after
+	}
+	if !strings.ContainsFunc(strings.TrimSpace(rest), unicode.IsSpace) {
+		return strings.TrimPrefix(after, "\n")
+	}
+	return strings.TrimLeftFunc(rest, unicode.IsSpace) + after
+}
+
+// closingFence is where in s the first run of at least atLeast of c starts, and how long it is, or -1.
+func closingFence(s string, c byte, atLeast int) (at, n int) {
+	for i := 0; i < len(s); {
+		if s[i] != c {
+			i++
+			continue
+		}
+		n := runOf(s[i:], c)
+		if n >= atLeast {
+			return i, n
+		}
+		i += n
+	}
+	return -1, 0
+}
 
 // runOf is how many of c s starts with.
 func runOf(s string, c byte) int {
@@ -150,6 +182,9 @@ func lowerASCII(r rune) rune {
 func goesOn(rest string) bool {
 	if rest == "" {
 		return false
+	}
+	if rest == chat.Truncated {
+		return true
 	}
 	next, _ := utf8.DecodeRuneInString(rest[1:])
 	switch rest[0] {

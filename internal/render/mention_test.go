@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/render"
 )
@@ -64,6 +65,16 @@ func TestMentions(t *testing.T) {
 		{name: "in a fence that never closes", body: "```\n@sam", max: 2},
 		{name: "any fence line closes a block, as the adapter writes it", body: "```\n~~~\n@sam\n", max: 2, made: []string{"sam"}},
 		{name: "a block of one line", body: "``` @sam ```\n@lee", max: 2, made: []string{"lee"}},
+		{name: "prose after the closing run of a block of one line", body: "``` x ``` ask @sam", max: 2, made: []string{"sam"}},
+		{name: "prose after a closing fence", body: "```\nx\n``` ask @sam\n@lee", max: 2, made: []string{"sam", "lee"}},
+		{name: "a closing run that is longer than the opener", body: "``` @lee ````` ask @sam", max: 2, made: []string{"sam"}},
+		{name: "a run of the other mark closes no block of one line", body: "``` @sam ~~~\n@lee", max: 2},
+		{name: "a word after an opener is its info string, whatever it is", body: "```~~~\n@sam", max: 2},
+		{name: "a fence line in the first line of a block closes it", body: "``` ~~~ x\n@sam", max: 2, made: []string{"sam"}},
+		{name: "any white space before an opener", body: "\u00a0```\n@sam\n```\n@lee", max: 2, made: []string{"lee"}},
+		{name: "a name the cut ran into is not the name it starts with", body: "ask @sam" + chat.Truncated, max: 2},
+		{name: "a name before the cut", body: "ask @sam, and more" + chat.Truncated, max: 2, made: []string{"sam"}},
+		{name: "the mark in the middle of the text is only words", body: "@sam" + chat.Truncated + " and more", max: 2, made: []string{"sam"}},
 		{name: "a raw user ID, and markup", body: "ask U0SAM or <@U0SAM> or <!channel> or <!subteam^S1>", max: 2, undeclared: 1},
 		{name: "the name inside markup", body: "<@sam>", max: 2, made: []string{"sam"}},
 	} {
@@ -77,6 +88,18 @@ func TestMentions(t *testing.T) {
 				t.Errorf("Mentions(%q) = made %v, undeclared %d, capped %d; want %v, %d, %d", tc.body, names, got.Undeclared, got.Capped, tc.made, tc.undeclared, tc.capped)
 			}
 		})
+	}
+}
+
+// A cut that falls inside a longer name leaves what looks like a declared one, and that notifies nobody.
+func TestACutInsideANameNotifiesNobody(t *testing.T) {
+	limit := chat.Units("ask @sam" + chat.Truncated)
+	body := render.Body([]agent.TextEvent{{ArtifactID: "a", Text: "ask @samuel about the checkout pods today"}}, limit)
+	if want := "ask @sam" + chat.Truncated; body != want {
+		t.Fatalf("Body = %q, want %q", body, want)
+	}
+	if got := render.Mentions(body, declared, 2); len(got.Made) != 0 || got.Undeclared != 0 {
+		t.Errorf("Mentions(%q) = %+v, want nothing", body, got)
 	}
 }
 

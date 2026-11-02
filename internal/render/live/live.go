@@ -879,8 +879,9 @@ func (u *Run) run(ctx context.Context) {
 // notifyMentions queues the message that notifies the people the turn's final text names, in a row of its own and after the
 // reply, so that it is a new message wherever the reply was streamed or updated: a mention beside a body notifies nobody
 // (chat.Mention). A turn that failed, was stopped or was rejected notifies nobody, as one cut short does: a person who stops a
-// steered agent has decided against what it was saying. A pause counts: its text is a question, which may be for the person it
-// names. A turn rendered again finds the row, and makes neither a second post nor a second record. Only the outbox's delivery
+// steered agent has decided against what it was saying. A pause counts: what the agent wrote before it may be for the person it
+// names. The question itself is not read: it is the task's status message, which the interaction intake posts as a prompt, and is
+// not the turn's text. A turn rendered again finds the row, and makes neither a second post nor a second record. Only the outbox's delivery
 // is retried: a crash before this runs loses the mention, which is a convenience, and never the paging path. A failure is
 // logged, and the reply stands.
 func (u *Run) notifyMentions(ctx context.Context) {

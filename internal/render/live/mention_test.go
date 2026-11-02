@@ -101,6 +101,19 @@ func TestAPauseThatNamesAPersonQueuesAMention(t *testing.T) {
 	}
 }
 
+// The question of a pause is in the task's status message, which the interaction intake posts as a prompt. It is not the turn's
+// text, so a name in it notifies nobody.
+func TestAQuestionInAPauseIsNotRead(t *testing.T) {
+	e := setup(t)
+	run, _ := e.startFor(t, mentionTurn(v1alpha1.OutputLive, ""))
+	question := a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("@sam, may I restart the pod?"))
+	run.Handle(agent.FinalEvent{Task: &a2a.Task{ID: "t1", Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired, Message: question}}})
+	e.finish(t, run)
+	if _, m, ok := e.mentionRow(t); ok {
+		t.Errorf("a row: %+v", m)
+	}
+}
+
 // A turn that failed, was stopped or was rejected shows what it had, and notifies nobody. One that completed does.
 func TestATurnThatEndedBadlyMakesNoMention(t *testing.T) {
 	for _, tc := range []struct {

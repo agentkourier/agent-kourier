@@ -118,9 +118,11 @@ mentions that user.
 - **The agent is told the names.** A session's first prompt ends with a line that lists them. It is not said again: a
   thread that started before you added a name does not get it, and neither does an agent that lost the session and answers in
   a new one. Tell the agent in its own instructions if that matters.
-- **Only the text of a reply or a question counts.** A turn that completes or pauses for an answer mentions the people its
-  final text names. A name in a code span or a fence does not count, though a name in a table does, even where Slack shows the
-  table as code. A name that runs straight into more letters, as in `@samさん`, is a different name and does not count. A turn
+- **Only the text of a reply counts.** A turn that completes or pauses for an answer mentions the people its
+  final text names. A question the agent asks through a pause, which Agent Kourier posts as a prompt, is not read for names, so an
+  agent that wants someone to answer it has to name them in its reply text. A name in a code span or a fence does not count, though a name in a table does, even where Slack shows the
+  table as code. A name that runs straight into more letters, as in `@samさん`, is a different name and does not count, and neither
+  does one that ends where a long reply was cut. A reply long enough to be cut can also notify someone for a name Slack does not show, as Slack's limit counts the text after escaping. A turn
   that was cut short, failed, was stopped or was rejected mentions nobody, and neither does a name
   past `maxMentionsPerTurn`.
 - **One mention for each person.** A person is mentioned once a turn however often the reply names them, and two names for one
