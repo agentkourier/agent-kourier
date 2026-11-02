@@ -33,7 +33,7 @@ type MentionScan struct {
 // name is an "@" that follows no word, path, query value, escape or other "@", then letters, digits and hyphens, in any case, and then
 // no more of them and none of what goes on as a package scope, a host, an address or a port: a "/" and more (slashEnds), an "@", a "."
 // and a name character, a ":" and a digit. "_" and "~" around a name are emphasis, and a "/" between two names only separates them, as in
-// "@sam/@lee". A "/" that goes on makes a path of the rest of the word, and nothing in it is a name. Nothing in what reads as a URL with
+// "@sam/@lee". A "/" that goes on makes a path of what follows (pathEnd), and nothing in it is a name. Nothing in what reads as a URL with
 // "://" in it is a name (endsURL). A ":" before a name is a label otherwise, as in "Owner:@sam". A letter of any alphabet is a letter here, so
 // "@josé" does not name "jos". Code is left out:
 // what is in a fence or a span is quoted, not said, so a log line that holds a name notifies nobody. What is code is read as the
@@ -187,9 +187,10 @@ func mentionWord(line string, at, last int) (word string, next int) {
 	return strings.Map(lowerASCII, word), end
 }
 
-// pathEnd is where in s a path ends: at white space or a backtick, so that a code span after it is still read as one.
+// pathEnd is where in s a path ends: at white space, or at a backtick or a "|", so that a code span or a table's next cell after it
+// is still read as one.
 func pathEnd(s string) int {
-	if at := strings.IndexFunc(s, func(r rune) bool { return unicode.IsSpace(r) || r == '`' }); at >= 0 {
+	if at := strings.IndexFunc(s, func(r rune) bool { return unicode.IsSpace(r) || r == '`' || r == '|' }); at >= 0 {
 		return at
 	}
 	return len(s)
@@ -236,7 +237,8 @@ func goesOn(rest string) bool {
 }
 
 // slashEnds says whether what follows a "/" leaves the name before it whole: nothing, white space, or a second name by the same rule
-// that starts as a declared name can (a to z; api/v1alpha1).
+// that could be declared. Only its characters need checking here, since mentionWord has refused a hyphen or a digit at its start
+// (api/v1alpha1 has the whole pattern).
 // Anything else makes a package scope, a path or a glob, closing marks too: a name with a "/" after it is rare in prose, and a
 // false notification reaches a person.
 func slashEnds(s string) bool {
@@ -249,7 +251,9 @@ func slashEnds(s string) bool {
 		return false
 	}
 	word, _ := mentionWord(s, 0, -1)
-	return word != "" && word[0] >= 'a' && word[0] <= 'z'
+	return word != "" && !strings.ContainsFunc(word, func(r rune) bool {
+		return r != '-' && (r < '0' || r > '9') && (r < 'a' || r > 'z')
+	})
 }
 
 func isNameRune(r rune) bool {
