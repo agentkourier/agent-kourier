@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 )
 
 // versionedSecrets is a SecretResolver that also has versions, like the cluster-backed one.
@@ -78,18 +80,40 @@ func TestRevisionChangesWithConfigFile(t *testing.T) {
 	}
 }
 
+// A Secret is referenced from three places, and a rotation of each must move the revision.
 func TestRevisionChangesWithSecretVersion(t *testing.T) {
-	secrets := newVersionedSecrets()
-	r, _ := loadedReloader(t, secrets)
-	rev := r.Revision(t.Context())
-	secrets.versions["sre/agent-kourier-sre-alerts-oidc"] = "23" // a rotation: same keys, new version, no reload
-	rotated := r.Revision(t.Context())
-	if rotated == rev {
-		t.Error("revision did not change when a Secret's version did")
-	}
-	secrets.versions["sre/agent-kourier-sre-alerts-oidc"] = "22"
-	if got := r.Revision(t.Context()); got != rev {
-		t.Errorf("revision with the old version back = %q, want %q", got, rev)
+	const header = "agent-kourier-system/backend-header"
+	for _, tc := range []struct{ name, secret string }{
+		{"Binding token", "sre/agent-kourier-sre-alerts-oidc"},
+		{"ChatConnection credentials", "agent-kourier-system/slack-main"},
+		{"AgentBackend header", header},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			secrets := newVersionedSecrets()
+			secrets.fakeSecrets[header], secrets.versions[header] = []string{v1alpha1.DefaultSecretKey}, "33"
+			dir := specDir(t)
+			path := filepath.Join(dir, "agentbackend.yaml")
+			body := mustRead(t, path)
+			const empty = "headers: []"
+			if !strings.Contains(body, empty) {
+				t.Fatalf("agentbackend.yaml has no %q to replace", empty)
+			}
+			writeFile(t, path, strings.Replace(body, empty, "headers: [{ name: X-Team, valueSecretRef: { name: backend-header } }]", 1))
+			r := newTestReloader(dir, secrets)
+			mustReload(t, r, true)
+
+			rev := r.Revision(t.Context())
+			old := secrets.versions[tc.secret]
+			secrets.versions[tc.secret] = old + "1" // a rotation: same keys, new version, no reload
+			rotated := r.Revision(t.Context())
+			if rotated == rev {
+				t.Error("revision did not change when the Secret's version did")
+			}
+			secrets.versions[tc.secret] = old
+			if got := r.Revision(t.Context()); got != rev {
+				t.Errorf("revision with the old version back = %q, want %q", got, rev)
+			}
+		})
 	}
 }
 

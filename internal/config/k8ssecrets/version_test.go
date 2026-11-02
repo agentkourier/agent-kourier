@@ -97,7 +97,7 @@ func watchesRegistered(client *fake.Clientset, namespaces ...string) <-chan stru
 
 // TestReloaderRevisionFollowsSecrets runs a Reloader over the informer cache. A rotation that
 // keeps the keys, a deletion and a restore each change the revision without a reload, the
-// revision never holds a value, and reading it makes no API call.
+// revision depends on the version and never on a value, and reading it makes no API call.
 func TestReloaderRevisionFollowsSecrets(t *testing.T) {
 	const system, sre = "agent-kourier-system", "sre"
 	client := fake.NewClientset(
@@ -129,7 +129,7 @@ func TestReloaderRevisionFollowsSecrets(t *testing.T) {
 	secretsAPI := client.CoreV1().Secrets(sre)
 	actions := len(client.Actions())
 	rev := rl.Revision(t.Context())
-	if got := rl.Revision(t.Context()); got != rev || strings.Contains(rev, canary) || len(client.Actions()) != actions {
+	if got := rl.Revision(t.Context()); got != rev || len(client.Actions()) != actions {
 		t.Fatalf("revision = %q then %q, with %d new API calls; want a stable digest and none", rev, got, len(client.Actions())-actions)
 	}
 
@@ -140,9 +140,6 @@ func TestReloaderRevisionFollowsSecrets(t *testing.T) {
 		for {
 			got := rl.Revision(t.Context())
 			if got != prev {
-				if strings.Contains(got, canary) {
-					t.Fatalf("%s: revision holds a Secret value: %q", what, got)
-				}
 				return got
 			}
 			if time.Now().After(deadline) {
@@ -166,5 +163,24 @@ func TestReloaderRevisionFollowsSecrets(t *testing.T) {
 	restored := next("restore", deleted)
 	if restored == rev || restored == rotated {
 		t.Errorf("a restored Secret repeated an earlier revision")
+	}
+
+	// A value that changes under the same resourceVersion (which the API server does not do)
+	// must not move the revision: it is built from the version, so no value can be in it.
+	changed := versioned(sre, "agent-kourier-sre-alerts-oidc", "3", "token")
+	changed.Data["token"] = []byte("another-" + canary)
+	if _, err := secretsAPI.Update(t.Context(), changed, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if v, err := secrets.Value(t.Context(), sre, "agent-kourier-sre-alerts-oidc", "token"); err == nil && strings.HasPrefix(v.Reveal(), "another-") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the cache never took the new value")
+		}
+	}
+	if got := rl.Revision(t.Context()); got != restored {
+		t.Errorf("revision moved with a value under the same version: %q, want %q", got, restored)
 	}
 }

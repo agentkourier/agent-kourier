@@ -24,26 +24,23 @@ type SecretVersioner interface {
 	SecretVersion(ctx context.Context, namespace, name string) (string, error)
 }
 
-// secretKey names a Secret that a snapshot's objects refer to.
-type secretKey struct{ namespace, name string }
-
 // published is what a successful reload hands to readers in one atomic step: the Snapshot, and
 // what Revision needs to describe it. Readers of Current take the Snapshot out and never see
 // the rest, and Revision never sees a fingerprint that belongs to a different Snapshot.
 type published struct {
 	snap        *Snapshot
-	fingerprint string      // of the config files the snapshot was built from
-	secrets     []secretKey // the Secrets the snapshot's objects refer to, sorted and unique
+	fingerprint string     // of the config files the snapshot was built from
+	secrets     []identity // the Secrets the snapshot's objects refer to, sorted and unique
 }
 
 // newPublished returns the published form of snap, built from the config files that
 // fingerprint describes, with the Secrets that refs name.
 func newPublished(snap *Snapshot, fingerprint string, refs []secretRef) *published {
-	keys := make([]secretKey, 0, len(refs))
+	keys := make([]identity, 0, len(refs))
 	for _, ref := range refs {
-		keys = append(keys, secretKey{ref.from.namespace, ref.name})
+		keys = append(keys, identity{"Secret", ref.from.namespace, ref.name})
 	}
-	slices.SortFunc(keys, func(a, b secretKey) int {
+	slices.SortFunc(keys, func(a, b identity) int {
 		return cmp.Or(cmp.Compare(a.namespace, b.namespace), cmp.Compare(a.name, b.name))
 	})
 	return &published{snap: snap, fingerprint: fingerprint, secrets: slices.Compact(keys)}
