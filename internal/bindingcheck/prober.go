@@ -17,6 +17,10 @@ const (
 	defaultConcurrency = 4
 	// jitterFraction is how far the pause between two passes strays from Interval, either way.
 	jitterFraction = 0.1
+	// shutdownGrace is how long a probe that the shutdown cut off waits for its checker to return. A checker that
+	// honors its context unwinds well inside it (broker shutdown steps take 2 to 7 seconds); one that ignores its
+	// context is left behind.
+	shutdownGrace = time.Second
 )
 
 // Target is a Binding to probe and the chat channel it posts to.
@@ -155,10 +159,12 @@ func jittered(interval time.Duration, r float64) time.Duration {
 // last pass's (at the next Tick), and when the jittered Interval since the last pass began has run out. A pass
 // finishes before the next begins, so passes never overlap. Call Run once.
 //
-// Run returns once its loop and its probe workers have ended, with one exception. Go cannot stop a goroutine, so a
-// checker that ignores its context outlives its probe, and Run, until the checker returns. The probe is recorded
-// as Unknown/ProbeTimeout when the Timeout ends and frees its place at once; the target is not probed again while
-// its checker is still running, so at most one goroutine per target is lost, and what it returns late is dropped.
+// When the context ends, Run waits up to a second (shutdownGrace) for each checker still running, so a checker that
+// honors its context has finished when Run returns, unless it takes longer than that to unwind. Go cannot stop a
+// goroutine, so a checker that ignores its context may outlive Run, until it returns. During a run, such a checker's
+// probe is recorded as Unknown/ProbeTimeout when the Timeout ends and frees its place at once; the target is not
+// probed again while its checker is still running, so at most one goroutine per target is lost, and what it returns
+// late is dropped.
 func (p *Prober) Run(ctx context.Context) {
 	var (
 		rev     string
@@ -166,11 +172,9 @@ func (p *Prober) Run(ctx context.Context) {
 		started bool
 	)
 	for {
-		var targets []Target
-		if p.o.Targets != nil {
-			targets = p.o.Targets()
-		}
-		targets, changed := p.sync(targets)
+		// Revision is read before Targets: a reload that lands between the two reads is then seen by Targets
+		// under the old revision, and the next Tick sees the new revision and probes again. In the other order the
+		// new revision would be recorded against the old targets, and nothing would probe until the interval.
 		cur := rev
 		if p.o.Revision != nil {
 			rctx, cancel := context.WithTimeout(ctx, p.o.Timeout)
@@ -179,6 +183,11 @@ func (p *Prober) Run(ctx context.Context) {
 			}
 			cancel()
 		}
+		var targets []Target
+		if p.o.Targets != nil {
+			targets = p.o.Targets()
+		}
+		targets, changed := p.sync(targets)
 		if ctx.Err() != nil {
 			return
 		}
@@ -304,8 +313,6 @@ type probeResult struct {
 	out Outcome
 	// err is the checker's failure, for OnProbeError; it never reaches out.Message.
 	err error
-	// ok is false when ctx ended, since a shutdown is not a result.
-	ok bool
 }
 
 // checked is what a checker goroutine hands back.
@@ -318,7 +325,7 @@ type checked struct {
 // timeout (whatever fn returns after it) and an outcome with no usable status all give Unknown, never True. If the
 // target's previous checker has not returned, fn is not started again and the probe is a timeout at once.
 func (p *Prober) probe(ctx context.Context, key probeKey, fn func(context.Context) (Outcome, error)) probeResult {
-	timedOut := probeResult{ok: ctx.Err() == nil, out: Outcome{Status: Unknown, Reason: ReasonProbeTimeout}}
+	timedOut := probeResult{out: Outcome{Status: Unknown, Reason: ReasonProbeTimeout}}
 	if !p.claim(key) {
 		timedOut.out.Message = "the previous probe has not returned"
 		return timedOut
@@ -341,6 +348,14 @@ func (p *Prober) probe(ctx context.Context, key probeKey, fn func(context.Contex
 	}
 	switch {
 	case ctx.Err() != nil:
+		// A shutdown is not a result, and record drops it. Give a checker that honors its context time to unwind, so
+		// that it has finished when Run returns.
+		if !returned {
+			select {
+			case <-done:
+			case <-time.After(shutdownGrace):
+			}
+		}
 		return probeResult{}
 	case !returned || pctx.Err() != nil || time.Since(began) >= p.o.Timeout:
 		// The clock is read as well as the context: a checker that answers at the instant the deadline passes can
@@ -349,7 +364,7 @@ func (p *Prober) probe(ctx context.Context, key probeKey, fn func(context.Contex
 		return timedOut
 	}
 	failed := func(msg string, err error) probeResult {
-		return probeResult{ok: true, err: err, out: Outcome{Status: Unknown, Reason: ReasonProbeFailed, Message: msg}}
+		return probeResult{err: err, out: Outcome{Status: Unknown, Reason: ReasonProbeFailed, Message: msg}}
 	}
 	switch out := got.out; {
 	case got.err != nil:
@@ -358,11 +373,11 @@ func (p *Prober) probe(ctx context.Context, key probeKey, fn func(context.Contex
 		return failed("the probe reported no usable status", fmt.Errorf("checker reported status %q", out.Status))
 	case out.Reason == "" && out.Status == True:
 		out.Reason = ReasonOK
-		return probeResult{ok: true, out: out}
+		return probeResult{out: out}
 	case out.Reason == "":
 		return failed("the probe reported no reason", fmt.Errorf("checker reported %s with no reason", out.Status))
 	default:
-		return probeResult{ok: true, out: out}
+		return probeResult{out: out}
 	}
 }
 
@@ -394,12 +409,13 @@ func call(ctx context.Context, fn func(context.Context) (Outcome, error)) (out O
 
 // record sets the result as condition t of each of targets and calls the hooks. It records nothing once ctx has ended.
 func (p *Prober) record(ctx context.Context, t ConditionType, targets []Target, res probeResult) {
-	if !res.ok {
+	select {
+	case p.apply <- struct{}{}:
+	case <-ctx.Done():
 		return
 	}
-	p.apply <- struct{}{}
 	defer func() { <-p.apply }()
-	if ctx.Err() != nil {
+	if ctx.Err() != nil { // both could be ready above
 		return
 	}
 	if res.err != nil && p.o.OnProbeError != nil {

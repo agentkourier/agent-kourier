@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -335,6 +336,100 @@ func TestARevisionThatBlocksDoesNotStopTheProbes(t *testing.T) {
 		if agents.count("b") != 2 || blocked.Load() < 3 {
 			t.Errorf("probes = %d, revision calls = %d; want the loop to keep going", agents.count("b"), blocked.Load())
 		}
+	})
+}
+
+func TestARevisionThatBlocksThenAnswersIsTakenOnTheNextTick(t *testing.T) {
+	var state atomic.Int32 // 0 answers r1, 1 blocks, 2 answers r2
+	rev := func(ctx context.Context) string {
+		switch state.Load() {
+		case 0:
+			return "r1"
+		case 1:
+			<-ctx.Done()
+			return "junk from a failed read"
+		}
+		return "r2"
+	}
+	g := &targets{}
+	g.set("r1", Target{"b", "C1"})
+	agents := &fakeAgents{}
+	run(t, Options{Targets: g.Targets, Revision: rev, Agents: agents, Interval: time.Hour}, func(h *harness) {
+		if agents.total() != 1 {
+			t.Fatalf("probes at start = %d, want 1", agents.total())
+		}
+		state.Store(1)
+		h.advance(time.Minute)
+		if agents.total() != 1 {
+			t.Errorf("a Revision call that timed out ran a pass (%d probes): its answer was believed or read as empty", agents.total())
+		}
+		state.Store(2)
+		h.advance(timeout + tick) // the blocked call ends within the timeout, then at most one tick
+		if agents.total() != 2 {
+			t.Errorf("probes after the Revision recovered = %d, want 2", agents.total())
+		}
+	})
+}
+
+func TestAReloadBetweenTheTwoReadsIsProbedAtOnce(t *testing.T) {
+	g := &targets{}
+	g.set("r1", Target{"b", "C1"})
+	var reload atomic.Bool
+	rev := func(ctx context.Context) string {
+		if reload.CompareAndSwap(true, false) {
+			g.set("r2", Target{"b", "C2"}) // the reload lands while the loop reads
+		}
+		return g.Revision(ctx)
+	}
+	chans := &fakeChannels{}
+	run(t, Options{Targets: g.Targets, Revision: rev, Agents: &fakeAgents{}, Channels: chans, Interval: time.Hour}, func(h *harness) {
+		reload.Store(true)
+		h.advance(tick)
+		if chans.count("C2") != 1 {
+			t.Errorf("the channel the reload brought was probed %d times at the next tick, want 1", chans.count("C2"))
+		}
+	})
+}
+
+func TestE1_RunWaitsForAnHonestChecker(t *testing.T) {
+	var entered, finished atomic.Bool
+	g := &targets{}
+	g.set("r1", Target{"b", "C1"})
+	agents := &fakeAgents{fn: func(ctx context.Context, _ string) (Outcome, error) {
+		entered.Store(true)
+		<-ctx.Done()
+		time.Sleep(50 * time.Millisecond) // closing a connection, say
+		finished.Store(true)
+		return Outcome{}, ctx.Err()
+	}}
+	run(t, Options{Targets: g.Targets, Revision: g.Revision, Agents: agents, Timeout: time.Hour}, func(h *harness) {
+		if !entered.Load() {
+			t.Fatal("the checker did not start")
+		}
+		h.cancel()
+		<-h.done // not h.stop: its synctest.Wait would let the checker finish before the assertion
+		if !finished.Load() {
+			t.Error("Run returned while a checker that honors its context was still running")
+		}
+	})
+}
+
+func TestRunDoesNotWaitLongerThanTheGraceForACheckerThatIgnoresItsContext(t *testing.T) {
+	g := &targets{}
+	g.set("r1", Target{"b", "C1"})
+	var gate chan struct{}
+	agents := &fakeAgents{fn: func(context.Context, string) (Outcome, error) { <-gate; return ok(), nil }}
+	runIn(t, func() Options {
+		gate = make(chan struct{})
+		return Options{Targets: g.Targets, Revision: g.Revision, Agents: agents, Timeout: time.Hour}
+	}, func(h *harness) {
+		began := time.Now()
+		h.cancel()
+		<-h.done
+		if waited := time.Since(began); waited != shutdownGrace {
+			t.Errorf("Run waited %v for a checker that ignores its context, want the grace, %v", waited, shutdownGrace)
+		}
+		close(gate)
 	})
 }
 
@@ -935,8 +1030,12 @@ func TestResultsWaitingForTheHookAreDroppedAfterCancel(t *testing.T) {
 		}}
 	}, func(h *harness) {
 		// Three probes have finished; one is in the hook and the other two wait to record.
+		before := runtime.NumGoroutine()
 		h.cancel()
 		synctest.Wait()
+		if left := before - runtime.NumGoroutine(); left != 2 {
+			t.Errorf("%d goroutines left at the cancel, want the 2 that were waiting to record", left)
+		}
 		release <- struct{}{} // BackendReachable of the first
 		release <- struct{}{} // Ready of the first
 		h.stop()
