@@ -910,7 +910,7 @@ func (u *Run) notifyMentions(ctx context.Context) {
 	for _, m := range scan.Made {
 		post := outbox.Post{Source: outbox.MentionSource(u.turn.Source, m.User), Role: store.OutboxNotice, Channel: u.turn.Channel, Thread: u.turn.Thread, Out: chat.Say(render.MentionMessage(m))}
 		if _, err := u.cfg.Sender.Enqueue(ctx, post); err != nil {
-			u.cfg.Logger.WarnContext(ctx, "live: a mention of a turn was not queued", "channel", u.turn.Channel, "name", m.Name, "err", err)
+			u.cfg.Logger.WarnContext(ctx, "live: a mention of a turn was not queued", "outbox_id", outbox.ID(post.Source, post.Role), "channel", u.turn.Channel, "err", err)
 			continue
 		}
 		telemetry.Count(ctx, "agentkourier_mentions_total", u.turn.Binding, "made")

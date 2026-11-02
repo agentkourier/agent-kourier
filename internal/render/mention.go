@@ -31,9 +31,10 @@ type MentionScan struct {
 // Mentions reads body, the text of a turn as it is shown, for the names in declared, and notifies at most limit people, of whom
 // already, the users the turn has mentioned before, are some. They are not named again, and they count towards limit. A
 // name is an "@" that follows no word, path, query value, escape or other "@", then letters, digits and hyphens, in any case, and then
-// no more of them and none of what goes on as a package scope, a host, an address or a port: a "/" and more, an "@", a "." and a name
-// character, a ":" and a digit. "_" and "~" around a name are emphasis, and a "/" between two names only separates them, as in
-// "@sam/@lee". Nothing in what reads as a URL with a scheme is a name (endsURL). A ":" before a name is a label otherwise, as in "Owner:@sam". A letter of any alphabet is a letter here, so
+// no more of them and none of what goes on as a package scope, a host, an address or a port: a "/" and more (slashEnds), an "@", a "."
+// and a name character, a ":" and a digit. "_" and "~" around a name are emphasis, and a "/" between two names only separates them, as in
+// "@sam/@lee". A "/" that goes on makes a path of the rest of the word, and nothing in it is a name. Nothing in what reads as a URL with
+// "://" in it is a name (endsURL). A ":" before a name is a label otherwise, as in "Owner:@sam". A letter of any alphabet is a letter here, so
 // "@josé" does not name "jos". Code is left out:
 // what is in a fence or a span is quoted, not said, so a log line that holds a name notifies nobody. What is code is read as the
 // Slack adapter writes it (internal/chat/slack/mdtext.go): any fence line opens or closes a block, whatever its marks, what
@@ -174,19 +175,33 @@ func mentionWord(line string, at, last int) (word string, next int) {
 		end += size
 	}
 	word = strings.TrimRight(line[at+1:end], "_~")
-	if word == "" || word[0] == '-' || (word[0] >= '0' && word[0] <= '9') || goesOn(line[end:]) {
+	if word == "" || word[0] == '-' || (word[0] >= '0' && word[0] <= '9') {
+		return "", at + 1
+	}
+	if goesOn(line[end:]) {
+		if line[end] == '/' {
+			return "", end + pathEnd(line[end:])
+		}
 		return "", at + 1
 	}
 	return strings.Map(lowerASCII, word), end
 }
 
-// inURL says whether s ends inside a URL with a scheme: whether what follows the last thing that ends a URL holds one.
+// pathEnd is where in s a path ends: at white space or a backtick, so that a code span after it is still read as one.
+func pathEnd(s string) int {
+	if at := strings.IndexFunc(s, func(r rune) bool { return unicode.IsSpace(r) || r == '`' }); at >= 0 {
+		return at
+	}
+	return len(s)
+}
+
+// inURL says whether s ends inside a URL with "://" in it: whether what follows the last thing that ends a URL holds one.
 func inURL(s string) bool {
 	return strings.Contains(s[strings.LastIndexFunc(s, endsURL)+1:], "://")
 }
 
 // endsURL says whether r ends a URL as text is written: white space, a mark a URL cannot hold, a closing bracket as of a markdown
-// link or an aside, or punctuation of another alphabet. A URL can hold a closing bracket, and then what follows it can notify.
+// link or an aside, or non-ASCII punctuation. A URL can hold a closing bracket, and then what follows it can notify.
 func endsURL(r rune) bool {
 	return unicode.IsSpace(r) || strings.ContainsRune("|<>`)]", r) || (r > unicode.MaxASCII && unicode.IsPunct(r))
 }
@@ -220,16 +235,21 @@ func goesOn(rest string) bool {
 	return false
 }
 
-// slashEnds says whether what follows a "/" leaves the name before it whole, where anything else makes a package scope, a path or a
-// glob: nothing, white space, a second name, or closing marks that end the word.
+// slashEnds says whether what follows a "/" leaves the name before it whole: nothing, white space, or a second name by the same rule
+// that starts as a declared name can (a to z; api/v1alpha1).
+// Anything else makes a package scope, a path or a glob, closing marks too: a name with a "/" after it is rare in prose, and a
+// false notification reaches a person.
 func slashEnds(s string) bool {
-	s = strings.TrimLeft(s, "_~")
-	if strings.HasPrefix(strings.TrimLeft(s, "*"), "@") {
+	r, _ := utf8.DecodeRuneInString(s)
+	if s == "" || unicode.IsSpace(r) {
 		return true
 	}
-	s = strings.TrimLeft(s, `)]},;:!?.'"`)
-	r, _ := utf8.DecodeRuneInString(s)
-	return s == "" || unicode.IsSpace(r)
+	s = strings.TrimLeft(s, "_~")
+	if !strings.HasPrefix(s, "@") {
+		return false
+	}
+	word, _ := mentionWord(s, 0, -1)
+	return word != "" && word[0] >= 'a' && word[0] <= 'z'
 }
 
 func isNameRune(r rune) bool {

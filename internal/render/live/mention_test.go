@@ -319,7 +319,7 @@ func (s noEnqueueFor) Enqueue(ctx context.Context, p outbox.Post) (string, error
 	return s.Sender.Enqueue(ctx, p)
 }
 
-// A mention that could not be queued costs only that person: the next one is still tried, and the log says who was missed.
+// A mention that could not be queued costs only that person: the next one is still tried, and the log gives the row that was missed.
 func TestAMentionThatWasNotQueuedLeavesTheOthers(t *testing.T) {
 	e := setup(t)
 	cfg := e.cfg
@@ -335,8 +335,8 @@ func TestAMentionThatWasNotQueuedLeavesTheOthers(t *testing.T) {
 	if _, _, ok := e.mentionRowOf(t, declaredPeople[1]); !ok {
 		t.Error("no row for lee")
 	}
-	if got := e.logs.String(); !strings.Contains(got, "not queued") || !strings.Contains(got, "name=sam") {
-		t.Errorf("logs = %q; want the warning to name sam", got)
+	if got := e.logs.String(); !strings.Contains(got, "not queued") || !strings.Contains(got, "outbox_id=") || !strings.Contains(got, "turn-1/mention/U0SAM") {
+		t.Errorf("logs = %q; want the warning to give sam's row", got)
 	}
 }
 
