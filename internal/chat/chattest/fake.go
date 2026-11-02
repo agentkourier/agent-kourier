@@ -65,8 +65,9 @@ type FakePlatform struct {
 	messages   []*Message
 	byRef      map[chat.Ref]*Message // the index of messages, which find reads
 	ephemerals []Ephemeral
-	members    map[string][]string // channel to users
-	groups     map[string][]string // group ID to users
+	members    map[string][]string    // channel to users
+	groups     map[string][]string    // group ID to users
+	access     map[string]chat.Access // channel to how the fake stands to it, which SetAccess sets
 	users      map[string]chat.User
 	bots       map[string]bool
 	failures   map[string][]error // method to the errors the next calls return
@@ -93,7 +94,7 @@ func NewFake() *FakePlatform {
 			Streams: true, Steps: true, Ephemeral: true, Edits: true, Inputs: true, Busy: true, MaxText: 4000, AckReaction: "hourglass",
 			Limits: map[chat.Where]int{chat.WhereHeader: 150, chat.WhereButton: 75, chat.WhereChoice: 75, chat.WhereHint: 150, chat.WhereBody: 12000, chat.WhereStream: 12000},
 		},
-		byRef: map[chat.Ref]*Message{}, members: map[string][]string{}, groups: map[string][]string{}, users: map[string]chat.User{}, bots: map[string]bool{}, failures: map[string][]error{}, busy: map[[2]string]bool{}, ready: make(chan struct{}),
+		byRef: map[chat.Ref]*Message{}, members: map[string][]string{}, groups: map[string][]string{}, access: map[string]chat.Access{}, users: map[string]chat.User{}, bots: map[string]bool{}, failures: map[string][]error{}, busy: map[[2]string]bool{}, ready: make(chan struct{}),
 	}
 }
 
@@ -141,6 +142,17 @@ func (f *FakePlatform) SetGroup(id string, users ...string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.groups[id] = users
+}
+
+// SetAccess sets how the fake stands to channel, which ChannelAccess reads. A channel the fake was not told of does not
+// exist: ChannelAccess is the zero Access, with an error that wraps chat.ErrChannelNotFound, as a platform's answer for a
+// channel it has never heard of is. FailNext("ChannelAccess", err) injects a failure: wrap chat.ErrMissingScope for the
+// missing permission, and give a plain error for the kind that may pass on a retry. The fake does not tie this to
+// SetMembers, which IsMember reads for people: it has no user of its own.
+func (f *FakePlatform) SetAccess(channel string, a chat.Access) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.access[channel] = a
 }
 
 // Messages returns what is posted, oldest first, as copies.
@@ -567,6 +579,24 @@ func (f *FakePlatform) IsInAnyGroup(_ context.Context, groups []string, user str
 	return false, nil
 }
 
+// ChannelAccess implements chat.Platform: the Access that SetAccess set, and for a channel it was not told of, or for none,
+// an error that wraps chat.ErrChannelNotFound. The context is not read, as in the fake's other reads.
+func (f *FakePlatform) ChannelAccess(_ context.Context, channel string) (chat.Access, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if channel == "" {
+		return chat.Access{}, fmt.Errorf("fake platform: no channel: %w", chat.ErrChannelNotFound)
+	}
+	if err := f.fail("ChannelAccess"); err != nil {
+		return chat.Access{}, err
+	}
+	a, ok := f.access[channel]
+	if !ok {
+		return chat.Access{}, fmt.Errorf("fake platform: no such channel %q: %w", channel, chat.ErrChannelNotFound)
+	}
+	return a, nil
+}
+
 // IsBot implements chat.Platform: a user the fake was not told of is a bot, with an error.
 func (f *FakePlatform) IsBot(_ context.Context, user string) (bool, error) {
 	f.mu.Lock()
@@ -650,9 +680,27 @@ func (f *FakePlatform) Subject() Subject {
 			return s
 		},
 		Inert:         func() error { return nil },
+		Channels:      f.arrangeChannel,
 		ToolApprovals: true,
 		TooLargeTools: &chat.Prompt{ID: "ix-big-tools", Tools: make([]chat.Tool, f.MaxTools+1)},
 	}
+}
+
+// arrangeChannel is Subject.Channels of the fake: the channel it returns is one the fake stands to as state says.
+func (f *FakePlatform) arrangeChannel(state ChannelState) string {
+	channel := "C0" + strings.ToUpper(strings.ReplaceAll(state.String(), " ", ""))
+	switch state {
+	case ChannelJoined:
+		f.SetAccess(channel, chat.Access{Member: true})
+	case ChannelNotJoined:
+		f.SetAccess(channel, chat.Access{})
+	case ChannelArchived:
+		f.SetAccess(channel, chat.Access{Member: true, Archived: true})
+	case ChannelScopeMissing:
+		f.SetAccess(channel, chat.Access{Member: true})
+		f.FailNext("ChannelAccess", fmt.Errorf("fake platform: %w", chat.ErrMissingScope))
+	}
+	return channel // ChannelUnknown is a channel never set
 }
 
 // literal is s as the fake shows it at the place w.

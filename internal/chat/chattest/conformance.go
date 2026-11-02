@@ -65,10 +65,44 @@ type Subject struct {
 	// TooLargeTools, if set and ToolApprovals is, is a prompt of tools too large for the platform: Fits must refuse it
 	// with chat.ErrTooLarge.
 	TooLargeTools *chat.Prompt
+	// Channels, if set, puts the platform in each ChannelState the contract of ChannelAccess names, and returns the channel
+	// that is then in it: Conformance asks ChannelAccess of that channel. It is how an adapter lets the suite reach states
+	// that only its platform can be put in (an archived channel, a missing permission), so an adapter sets it. A subject
+	// that leaves it nil is checked for the empty channel alone. It may change what the platform answers for every channel,
+	// and the suite calls it again before it asks about the next state.
+	Channels func(ChannelState) string
 	// MentionUser is a user ID the platform shows as a mention, in a chat.Mention part, or "" if the platform has
 	// none: then a Mention shows its user as nothing but text. The checks send it, and require exactly one mention
 	// of it and nothing else the platform acts on; every other user ID they send is forged, and must never act.
 	MentionUser string
+}
+
+// ChannelState is a state the platform's channel can be in, as ChannelAccess tells them apart.
+type ChannelState int
+
+// The states Subject.Channels puts the platform in.
+const (
+	ChannelJoined       ChannelState = iota // Agent Kourier is a member of a channel that is not archived
+	ChannelNotJoined                        // a channel that exists, which Agent Kourier is not a member of
+	ChannelArchived                         // an archived channel
+	ChannelUnknown                          // a channel the platform has never heard of (or hides from Agent Kourier)
+	ChannelScopeMissing                     // any channel, asked of an app that lacks the permission to read it
+)
+
+func (s ChannelState) String() string {
+	switch s {
+	case ChannelJoined:
+		return "joined"
+	case ChannelNotJoined:
+		return "not joined"
+	case ChannelArchived:
+		return "archived"
+	case ChannelUnknown:
+		return "unknown channel"
+	case ChannelScopeMissing:
+		return "missing scope"
+	}
+	return fmt.Sprintf("ChannelState(%d)", int(s))
 }
 
 // Concession is a construct of the kinds Kinds that the platform acts on in the text of the place Where
@@ -311,8 +345,81 @@ func (c *checker) contract() {
 		c.messageSteps()
 	}
 	c.busyContract()
+	c.accessContract(c.ctx)
 	c.s.Sent() // the contract checks are not text checks
 	_ = c.s.Inert()
+}
+
+// accessContract checks what a platform promises of ChannelAccess (see the method): it answers for Agent Kourier's membership
+// and for the archived flag, says ErrChannelNotFound for a channel it does not know and for none, ErrMissingScope for an app
+// that lacks the permission, and leaves the Access zero and the error unclassified when it fails in any other way, a
+// cancelled context included. The states are reached through Subject.Channels; without it only the empty channel is checked.
+func (c *checker) accessContract(ctx context.Context) {
+	p := c.s.Platform
+	_, err := p.ChannelAccess(ctx, "")
+	if !errors.Is(err, chat.ErrChannelNotFound) {
+		c.add(RuleContract, 0, "ChannelAccess", "no channel", "an empty channel gave %v, want an error wrapping chat.ErrChannelNotFound", err)
+	}
+	if c.s.Channels == nil {
+		return
+	}
+	channelIn := func(st ChannelState) (string, bool) {
+		ch := c.s.Channels(st)
+		if ch == "" {
+			c.add(RuleSetup, 0, "ChannelAccess", st.String(), "Subject.Channels named no channel for the state")
+		}
+		return ch, ch != ""
+	}
+	// failed checks the error and Access of a call that must fail with want, and with no other sentinel.
+	failed := func(cs string, a chat.Access, err, want error) {
+		for _, sentinel := range []error{chat.ErrChannelNotFound, chat.ErrMissingScope} {
+			if errors.Is(err, sentinel) != errors.Is(want, sentinel) {
+				c.add(RuleContract, 0, "ChannelAccess", cs, "gave %v, want an error that wraps %v and no other of the sentinels of ChannelAccess", err, want)
+				return
+			}
+		}
+		if a != (chat.Access{}) {
+			c.add(RuleContract, 0, "ChannelAccess", cs, "gave the Access %+v with the error %v, want the zero Access", a, err)
+		}
+	}
+	for _, tc := range []struct {
+		state ChannelState
+		ok    func(chat.Access) bool // for a state that is an answer
+		want  string
+		fail  error // for a state that is an error
+	}{
+		{ChannelJoined, func(a chat.Access) bool { return a.Member && !a.Archived }, "a member, not archived", nil},
+		{ChannelNotJoined, func(a chat.Access) bool { return !a.Member && !a.Archived }, "not a member, not archived", nil},
+		{ChannelArchived, func(a chat.Access) bool { return a.Archived }, "archived", nil},
+		{ChannelUnknown, nil, "", chat.ErrChannelNotFound},
+		{ChannelScopeMissing, nil, "", chat.ErrMissingScope},
+	} {
+		ch, ok := channelIn(tc.state)
+		if !ok {
+			continue
+		}
+		a, err := p.ChannelAccess(ctx, ch)
+		switch {
+		case tc.fail != nil:
+			failed(tc.state.String(), a, err, tc.fail)
+		case err != nil:
+			c.add(RuleContract, 0, "ChannelAccess", tc.state.String(), "failed: %v, want %s", err, tc.want)
+		case !tc.ok(a):
+			c.add(RuleContract, 0, "ChannelAccess", tc.state.String(), "gave %+v, want %s", a, tc.want)
+		}
+	}
+	// A cancelled context is not a verdict on the channel: it never says the channel is missing, or the permission is.
+	if ch, ok := channelIn(ChannelJoined); ok {
+		cancelled, cancel := context.WithCancel(ctx)
+		cancel()
+		if a, err := p.ChannelAccess(cancelled, ch); err != nil {
+			if errors.Is(err, chat.ErrChannelNotFound) || errors.Is(err, chat.ErrMissingScope) {
+				c.add(RuleContract, 0, "ChannelAccess", "cancelled context", "gave %v, want an error that wraps neither chat.ErrChannelNotFound nor chat.ErrMissingScope", err)
+			} else if a != (chat.Access{}) {
+				c.add(RuleContract, 0, "ChannelAccess", "cancelled context", "gave the Access %+v with the error %v, want the zero Access", a, err)
+			}
+		}
+	}
 }
 
 // busyContract checks what a platform promises of the busy mark (chat.BusyMarker). A platform whose Caps.Busy is false says

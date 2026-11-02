@@ -273,6 +273,7 @@ func slackSubject(t *testing.T) (chattest.Subject, *slack.Platform) {
 			return out
 		},
 		Inert:    inertRequests(w),
+		Channels: slackChannels(fake),
 		TooLarge: &chat.Prompt{ID: "ix-big", Questions: make([]chat.Question, 60)},
 		// A prompt of tools too large for one message: 30 tools take 62 blocks.
 		ToolApprovals: true,
@@ -302,6 +303,28 @@ func slackSubject(t *testing.T) (chattest.Subject, *slack.Platform) {
 				"it cannot show the blocks, and the adapter sends every message's text as a plain_text block too, which is what is read",
 		}},
 	}, p
+}
+
+// slackChannels puts the fake Slack in each state of a channel the contract of ChannelAccess names: the bot is a member or not
+// of the channel, which is archived or not, Slack has never heard of it, or the app lacks the scope. The bot is the fake's own
+// (fakeslack.WithBot's default user).
+func slackChannels(fake *fakeslack.Server) func(chattest.ChannelState) string {
+	return func(state chattest.ChannelState) string {
+		fake.SetMissingScope("conversations.info", state == chattest.ChannelScopeMissing)
+		switch state {
+		case chattest.ChannelJoined, chattest.ChannelScopeMissing:
+			fake.SetMembers("C0JOINED", "U1", "UFAKEBOT")
+			return "C0JOINED"
+		case chattest.ChannelNotJoined:
+			fake.SetMembers("C0NOTJOINED", "U1")
+			return "C0NOTJOINED"
+		case chattest.ChannelArchived:
+			fake.SetMembers("C0ARCHIVED", "UFAKEBOT")
+			fake.SetArchived("C0ARCHIVED", true)
+			return "C0ARCHIVED"
+		}
+		return "C0UNKNOWN"
+	}
 }
 
 // inertRequests checks that every request was sent with Slack's parsing and unfurling off.

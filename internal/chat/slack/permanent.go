@@ -104,3 +104,33 @@ func groupsMisconfiguredCode(err error) string {
 	}
 	return ""
 }
+
+// channelAccessCode returns the Slack error code in err if it says that conversations.info will fail the same way on every
+// try until an operator changes something, and "" otherwise (including for an error that is not Slack's own). The codes
+// are a channel value Slack does not accept (channel_not_found: there is no such channel, or none the bot may see) and an
+// app installed without the scope the method needs (missing_scope). A rate limit, a server error, a timeout and a
+// cancelled context may pass on another try. A rejected, revoked or missing token (invalid_auth, token_revoked,
+// account_inactive, not_authed) is fatalAuthCode's, the restart policy's, and is not reclassified here, as for
+// groupsMisconfiguredCode. The other codes of the method's page (access_denied, team_access_not_granted, no_permission,
+// not_allowed_token_type, enterprise_is_restricted and the like) name no cause an operator could mend, or none that this
+// call is known to meet, and stay unclassified: a caller retries them. It reads the code scrub keeps, through any wrapping.
+//
+// From Slack's method page (docs.slack.dev/reference/methods/conversations.info/, read 2026-11-01), which lists both codes,
+// describes channel_not_found as "Value passed for channel was invalid", and does not say which of its codes are permanent;
+// that these two are, is this adapter's reading of what the codes name.
+//
+// UNCONFIRMED(BV-3), because the page is silent and no live workspace was asked: what Slack answers for a private channel
+// the bot is not a member of. It may be channel_not_found, as for a channel that does not exist, or the channel with
+// is_member false. The adapter handles both (ChannelAccess reads is_member when Slack answers with the channel), and the
+// first reaches the caller as chat.ErrChannelNotFound, not as a bot that is not in the channel.
+func channelAccessCode(err error) string {
+	var resp slackgo.SlackErrorResponse
+	if !errors.As(err, &resp) {
+		return ""
+	}
+	switch resp.Err {
+	case "channel_not_found", "missing_scope":
+		return resp.Err
+	}
+	return ""
+}

@@ -40,6 +40,61 @@ func (s *Server) SetMembers(channel string, users ...string) {
 	s.members[channel] = members
 }
 
+// SetArchived marks channel archived, or not. It does not register the channel: conversations.info reports
+// channel_not_found until SetMembers has.
+func (s *Server) SetArchived(channel string, archived bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if archived {
+		s.archived[channel] = true
+	} else {
+		delete(s.archived, channel)
+	}
+}
+
+// SetMissingScope makes the Web API method answer missing_scope, as Slack does for a token installed without the scope
+// the method needs, or lets it work again. It models no scope of its own: a test says which method the app lacks one for.
+func (s *Server) SetMissingScope(method string, missing bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if missing {
+		s.noScope[method] = true
+	} else {
+		delete(s.noScope, method)
+	}
+}
+
+func (s *Server) scopeMissing(method string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.noScope[method]
+}
+
+// conversationsInfo implements conversations.info
+// (https://docs.slack.dev/reference/methods/conversations.info/), read for the bot token's own view of a channel.
+// Error code from the docs: channel_not_found, for a channel value that was invalid.
+//
+// UNCONFIRMED(BV-3): what Slack answers for a private channel the bot is not in (channel_not_found, or the channel with
+// is_member false): the page does not say. This fake knows every registered channel, so it answers the second. The page
+// does not describe is_member or is_archived either; both are in slack-go's Channel and in Slack's sample responses.
+// invalid_arguments for a call with no channel is also a guess: the page lists the code among its general ones.
+func (s *Server) conversationsInfo(form url.Values) (response, string) {
+	channel := form.Get("channel")
+	if channel == "" {
+		return nil, "invalid_arguments"
+	}
+	s.mu.Lock()
+	users, ok := s.members[channel]
+	archived := s.archived[channel]
+	s.mu.Unlock()
+	if !ok {
+		return nil, "channel_not_found"
+	}
+	return response{"channel": map[string]any{
+		"id": channel, "is_channel": true, "is_member": slices.Contains(users, s.bot.user), "is_archived": archived,
+	}}, ""
+}
+
 // usersInfo implements users.info
 // (https://docs.slack.dev/reference/methods/users.info/).
 //
