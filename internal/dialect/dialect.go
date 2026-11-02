@@ -91,6 +91,24 @@ var (
 	ErrNoJSONRPCInterface = errors.New("agent card lists no JSON-RPC interface")
 )
 
+type freshConnectionKey struct{}
+
+// WithFreshConnection marks ctx so that a Dialect's Connect sends the requests it makes under ctx on a new
+// connection: a new DNS lookup, dial and TLS handshake, and one that is closed once the response has been read.
+// A pooled keep-alive connection that a stream of a turn holds open would otherwise carry the request and hide
+// a name, certificate or network path that a new connection cannot use (agent.Pool.Check asks for it). The
+// mark affects only requests made under ctx; the clients Connect returns send their later calls under their
+// callers' contexts.
+func WithFreshConnection(ctx context.Context) context.Context {
+	return context.WithValue(ctx, freshConnectionKey{}, true)
+}
+
+// FreshConnection reports whether ctx came from WithFreshConnection.
+func FreshConnection(ctx context.Context) bool {
+	fresh, _ := ctx.Value(freshConnectionKey{}).(bool)
+	return fresh
+}
+
 // Dialect is one backend protocol variant (spec 6.2).
 type Dialect interface {
 	// Endpoint is the URL of the agent's A2A service, on the backend's verifying front door.
@@ -101,7 +119,8 @@ type Dialect interface {
 	// Attribute records the acting user on msg. The Binding identity stays the principal.
 	Attribute(msg *a2a.Message, actor User)
 	// Connect returns an A2A client for the agent that sends the Binding's identity to the
-	// backend's front door and to nowhere else.
+	// backend's front door and to nowhere else. When ctx comes from WithFreshConnection, the requests Connect makes
+	// itself (the card fetch) go on a new connection.
 	Connect(ctx context.Context, backend *v1alpha1.AgentBackend, agent v1alpha1.AgentRef, creds Credentials) (*a2aclient.Client, error)
 	// NotReady reports whether err, an error the agent answered a send with, says the session cannot take
 	// input yet (it is starting, or in a lifecycle operation), as opposed to being busy with a task. A backend

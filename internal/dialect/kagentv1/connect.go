@@ -43,7 +43,7 @@ func New(responseTimeout time.Duration) *Dialect {
 	if responseTimeout <= 0 {
 		responseTimeout = DefaultResponseTimeout
 	}
-	return &Dialect{base: &http.Transport{
+	base := &http.Transport{
 		// No Proxy, on purpose: a nil Proxy dials the front door directly. Honoring
 		// HTTP_PROXY would let an injected environment variable receive the Binding's bearer
 		// token in cleartext.
@@ -52,15 +52,24 @@ func New(responseTimeout time.Duration) *Dialect {
 		ResponseHeaderTimeout: responseTimeout,
 		IdleConnTimeout:       90 * time.Second,
 		ForceAttemptHTTP2:     true,
-	}}
+	}
+	// The same transport without keep-alives, for a request that must open its own connection (see
+	// dialect.WithFreshConnection): every dial, TLS and proxy setting is the shared one's, and it keeps no
+	// connection (HTTP/1 sends Connection: close, HTTP/2 closes the connection once its one request is done).
+	fresh := base.Clone()
+	fresh.DisableKeepAlives = true
+	return &Dialect{base: base, fresh: fresh}
 }
 
 // CloseIdleConnections closes the idle keep-alive connections of the transport that every
 // client of this Dialect shares, and the goroutines that serve them. Call it after the clients
-// are done, at shutdown: an idle connection otherwise lives until its idle timeout.
+// are done, at shutdown: an idle connection otherwise lives until its idle timeout. The transport
+// for fresh connections (dialect.WithFreshConnection) keeps no connection idle, and is closed too.
 func (d *Dialect) CloseIdleConnections() {
-	if c, ok := d.base.(interface{ CloseIdleConnections() }); ok {
-		c.CloseIdleConnections()
+	for _, rt := range []http.RoundTripper{d.base, d.fresh} {
+		if c, ok := rt.(interface{ CloseIdleConnections() }); ok {
+			c.CloseIdleConnections()
+		}
 	}
 }
 
@@ -149,18 +158,20 @@ func (d *Dialect) ConnectEndpoint(ctx context.Context, endpoint string, creds di
 // redirect, which would carry the token to wherever the redirect points.
 func (d *Dialect) httpClient(creds dialect.Credentials, frontDoor *url.URL) *http.Client {
 	return &http.Client{
-		Transport:     authTransport{next: d.base, dialect: d, creds: creds, frontDoor: frontDoor},
+		Transport:     authTransport{next: d.base, fresh: d.fresh, dialect: d, creds: creds, frontDoor: frontDoor},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 }
 
 // authTransport authenticates each request, on a copy, before sending it to the front door,
-// and turns a response that is not 2xx into a dialect.HTTPStatusError.
+// and turns a response that is not 2xx into a dialect.HTTPStatusError. A request whose context
+// came from dialect.WithFreshConnection goes through fresh instead of next; both reach only the front
+// door and follow no redirect, because both checks run before the choice.
 type authTransport struct {
-	next      http.RoundTripper
-	dialect   *Dialect
-	creds     dialect.Credentials
-	frontDoor *url.URL
+	next, fresh http.RoundTripper // fresh is nil for a Dialect that was not built by New: next carries all
+	dialect     *Dialect
+	creds       dialect.Credentials
+	frontDoor   *url.URL
 }
 
 func (t authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -177,7 +188,11 @@ func (t authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err := t.dialect.Authenticate(req, t.creds); err != nil {
 		return refuse(err)
 	}
-	resp, err := telemetry.Transport(t.next, true).RoundTrip(req)
+	next := t.next
+	if t.fresh != nil && dialect.FreshConnection(req.Context()) {
+		next = t.fresh
+	}
+	resp, err := telemetry.Transport(next, true).RoundTrip(req)
 	if err != nil {
 		return nil, err
 	}
