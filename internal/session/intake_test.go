@@ -183,6 +183,9 @@ type fixture struct {
 	output           v1alpha1.OutputMode
 	progress         v1alpha1.ProgressMode
 	threadReplies    v1alpha1.ThreadReplies // the Binding's chat.threadReplies; empty is all
+	mentionPrompt    string                 // the line a session's first prompt ends with; empty is none
+	mentions         []v1alpha1.ChatMention // the Binding's chat.mentions
+	maxMentions      int                    // the Binding's chat.maxMentionsPerTurn
 	ackConfigured    bool
 	ackEnabled       bool
 	ackEmoji         string
@@ -219,7 +222,7 @@ func (f *fixture) Backend(name string) (Backend, error) {
 	if f.real != nil {
 		ag = f.real
 	}
-	b := Backend{AgentName: "kagent/agent-1", Dialect: f.dialect(), ThreadTTL: ttl, Agent: ag, Attribute: f.attr, Platform: f.platform, Rejected: f.reject, Identity: "secret:ns/token", Output: f.output, Progress: f.progress, Feedback: f.feedback, ThreadReplies: f.threadReplies, AcknowledgmentConfigured: f.ackConfigured, AcknowledgmentEnabled: f.ackEnabled, AcknowledgmentEmoji: f.ackEmoji}
+	b := Backend{AgentName: "kagent/agent-1", Dialect: f.dialect(), ThreadTTL: ttl, Agent: ag, Attribute: f.attr, Platform: f.platform, Rejected: f.reject, Identity: "secret:ns/token", Output: f.output, Progress: f.progress, Feedback: f.feedback, ThreadReplies: f.threadReplies, Mentions: f.mentions, MaxMentions: f.maxMentions, MentionPrompt: f.mentionPrompt, AcknowledgmentConfigured: f.ackConfigured, AcknowledgmentEnabled: f.ackEnabled, AcknowledgmentEmoji: f.ackEmoji}
 	if f.noRejected {
 		b.Rejected = nil
 	}

@@ -249,6 +249,25 @@ func (w *Writer) TriggerRefused(ctx context.Context, a Actor, r TriggerRefusal) 
 	return w.append(ctx, store.AuditEvent, a, w.opts.Now(), subj, outcome)
 }
 
+// Mention is one person a turn's reply named, for whom a message that mentions them was queued (spec D48). It holds the declared
+// name and the user config gives it. Text the agent wrote is never in it: a name that mentions nobody is only counted, in a metric.
+type Mention struct {
+	// Turn is the turn whose reply named the person, and Channel and Thread the conversation it is in.
+	Turn, Channel, Thread string
+	// Name is the declared name, and User the person it notifies.
+	Name, User string
+}
+
+// Mention records that a mention of a person was queued, as an event of the chat source. It is a record of something already
+// done: the caller follows its failure as the failure policy says, which is to log and carry on.
+func (w *Writer) Mention(ctx context.Context, a Actor, m Mention) error {
+	if a.Binding == "" || m.Turn == "" || m.Channel == "" || m.Thread == "" || m.Name == "" || m.User == "" {
+		return fail(store.ErrInvalid, "audit mention in %q: a Binding, turn, channel, thread, name and user are required", m.Turn)
+	}
+	subj := "mention turn=" + clean(m.Turn, maxField) + " channel=" + clean(m.Channel, maxField) + " thread=" + clean(m.Thread, maxField)
+	return w.append(ctx, store.AuditEvent, a, w.opts.Now(), subj, string(SourceChat)+": mention name="+clean(m.Name, maxField)+" user="+clean(m.User, maxField))
+}
+
 // FeedbackVote is a person's verdict on a message of an investigation (spec 8.7). It names the message by identifiers and
 // holds the verdict, and nothing else: not the alert's name, which is text out of the alert.
 type FeedbackVote struct {

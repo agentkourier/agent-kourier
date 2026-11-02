@@ -324,6 +324,14 @@ func TestReloaderLoadsOneGeneration(t *testing.T) {
 	if rb, ok := r.Current().Binding("sre", "sre-alerts"); !ok || rb.Backend.Name != "kagent-two" {
 		t.Errorf("Binding = %+v, %v; want the generation that was current when the load ended", rb, ok)
 	}
+	// The retry's fingerprint is the one kept: a poll that finds the directory as the retry
+	// read it rebuilds nothing, so the revision stays.
+	secrets.onRead = nil
+	rev := r.Revision(context.Background())
+	mustReload(t, r, false)
+	if got := r.Revision(context.Background()); got != rev {
+		t.Errorf("revision after a poll that found no change = %q, want %q", got, rev)
+	}
 }
 
 func TestReloaderLoop(t *testing.T) {

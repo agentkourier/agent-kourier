@@ -134,6 +134,11 @@ type Post struct {
 // and the mark. The rating of such a reply names the first source, and finds the row by this one too.
 func RepostedSource(source string) string { return source + "/recovered" }
 
+// MentionSource is the source of the message that notifies user that a turn's reply named them (render.MentionMessage): a notice,
+// in a row of its own for each person. That the row exists says the turn has mentioned the person, whatever became of it: its
+// payload is cleared when it is delivered, so the row's ID is all that lasts.
+func MentionSource(source, user string) string { return source + "/mention/" + user }
+
 // ID returns the outbox ID of a message: deterministic, so a retry of the same event names the
 // same row. An interaction prompt passes its interaction ID as source, so it cannot collide with
 // an agent reply (spec 8.6 step 5).
