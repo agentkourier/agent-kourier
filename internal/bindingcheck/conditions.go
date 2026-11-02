@@ -44,6 +44,7 @@ func (s Status) valid() bool { return s == True || s == False || s == Unknown }
 // Reason says why a condition has its status. The set is closed: a Reason is CamelCase and a person can act on it
 // without reading code. Ready carries the Type and Reason of the condition that holds it back, joined by a colon
 // (for example BackendReachable:AgentNotFound), which metav1.Condition's reason pattern allows and a slash it does not.
+// The Prober holds a checker to the set (see Outcome.Reason).
 type Reason string
 
 // The reasons of the condition table. A reason that applies to more than one condition appears once.
@@ -112,6 +113,24 @@ const (
 	ReasonGroupNotFound Reason = "GroupNotFound"
 )
 
+// reportable reports whether a checker may report r with the status s: r is in the set, it is OK exactly when s is True,
+// and it is not Pending, which says that no probe has finished. It does not tie a reason to a condition.
+func (r Reason) reportable(s Status) bool {
+	switch r {
+	case ReasonOK:
+		return s == True
+	case ReasonProbeFailed, ReasonProbeTimeout,
+		ReasonCredentialsUnreadable, ReasonUnreachable, ReasonCredentialsRejected, ReasonAgentForbidden, ReasonAgentNotFound,
+		ReasonAgentNotReady, ReasonBackendError, ReasonUnexpectedStatus, ReasonInvalidAgentCard, ReasonStreamingUnsupported,
+		ReasonUnsupportedExtension, ReasonNoJSONRPCInterface,
+		ReasonNotInChannel, ReasonChannelNotFound, ReasonChannelArchived, ReasonMissingScope, ReasonChatCredentialsRejected,
+		ReasonChatUnavailable, ReasonChatCredentialsChanged,
+		ReasonGroupNotFound:
+		return s != True
+	}
+	return false
+}
+
 // Condition is one fact about one Binding. Its fields and JSON names are those of metav1.Condition, less
 // ObservedGeneration (file-loaded objects have none) and plus LastProbeTime, which metav1.Condition does not have: a
 // controller that copies a Condition into a status drops LastProbeTime.
@@ -137,7 +156,8 @@ type Outcome struct {
 	// Status is the condition's new status.
 	Status Status
 	// Reason is why. Empty is read as OK for True. For False or Unknown it is a checker fault, and the condition
-	// becomes Unknown with the reason ProbeFailed.
+	// becomes Unknown with the reason ProbeFailed. So is a reason that is not reportable: one outside the set, OK with
+	// False or Unknown, anything but OK with True, or Pending.
 	Reason Reason
 	// Message is a short detail, already redacted: nothing in it may be a token or a Secret value.
 	Message string

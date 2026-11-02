@@ -103,9 +103,10 @@ type Options struct {
 	// Channels probes channels, one probe per Target. Nil means ChannelJoined is not tracked. Targets must hold only
 	// Bindings on the chat connection that Channels answers for (see ChannelChecker).
 	Channels ChannelChecker
-	// Interval is how long after a pass begins the next is due, 5 minutes by default, and not a pause after it ends:
-	// a pass that takes longer than Interval is followed by the next one Tick later. Each wait strays from it by up to
-	// 10% either way, so that many brokers do not probe together.
+	// Interval is how long after a pass begins the next is due, 5 minutes by default, and not a pause after it ends.
+	// Each wait strays from it by up to 10% either way, so that many brokers do not probe together. A pass that outlasts
+	// its wait is followed by the next one Tick after it ends. The loop looks only at each Tick, so a pass can begin up
+	// to a Tick after it is due.
 	Interval time.Duration
 	// Tick is how often the loop looks at Targets and Revision, 5 seconds by default.
 	Tick time.Duration
@@ -479,6 +480,9 @@ func (p *Prober) probe(ctx context.Context, key probeKey, fn func(context.Contex
 		return probeResult{out: out}
 	case out.Reason == "":
 		return failed("the probe reported no reason", fmt.Errorf("checker reported %s with no reason", out.Status))
+	case !out.Reason.reportable(out.Status):
+		// The reason is left out of the error: one outside the set may be free text, such as a checker's error.
+		return failed("the probe reported an unusable reason", fmt.Errorf("checker reported %s with a reason it may not report", out.Status))
 	default:
 		return probeResult{out: out}
 	}

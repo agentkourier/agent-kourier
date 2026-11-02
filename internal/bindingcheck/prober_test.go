@@ -542,11 +542,23 @@ func TestARevisionThatPanicsCountsAsNoChangeAndIsReported(t *testing.T) {
 	agents := &fakeAgents{}
 	var mu sync.Mutex
 	var perrs []ProbeError
-	run(t, Options{Targets: g.Targets, Agents: agents, Revision: func(context.Context) string { panic("revision boom") }, OnProbeError: func(pe ProbeError) {
+	// It answers once, so that a panic's empty answer, if believed, would differ from the last revision.
+	var calls atomic.Int32
+	revision := func(context.Context) string {
+		if calls.Add(1) == 1 {
+			return "r1"
+		}
+		panic("revision boom")
+	}
+	run(t, Options{Targets: g.Targets, Agents: agents, Revision: revision, OnProbeError: func(pe ProbeError) {
 		mu.Lock()
 		defer mu.Unlock()
 		perrs = append(perrs, pe)
 	}}, func(h *harness) {
+		h.advance(3 * tick)
+		if got := agents.total(); got != 1 {
+			t.Errorf("probes after Revision panicked = %d, want the first pass's 1: a panic is no change", got)
+		}
 		h.nextPass(agents.total) // the loop survived and the interval still probes
 		mu.Lock()
 		defer mu.Unlock()
@@ -825,10 +837,15 @@ func TestAnOnTransitionPanicDoesNotSkipTheTransitionsAndBindingsThatFollow(t *te
 
 func TestPassesDoNotOverlap(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"b", "C1"})
+	// "quick" answers at once, so a second pass beside the first would probe it again: "b" alone could not show one, as
+	// its own probe is still running and is not started twice.
+	g.set("r1", Target{"b", "C1"}, Target{"quick", "C2"})
 	var in gauge
 	var gate chan struct{}
-	agents := &fakeAgents{fn: func(context.Context, string) (Outcome, error) {
+	agents := &fakeAgents{fn: func(_ context.Context, b string) (Outcome, error) {
+		if b == "quick" {
+			return ok(), nil
+		}
 		defer in.enter()()
 		<-gate
 		return ok(), nil
@@ -841,15 +858,15 @@ func TestPassesDoNotOverlap(t *testing.T) {
 			t.Fatalf("in flight = %d, want the first probe", in.cur.Load())
 		}
 		// The revision changes and the interval runs out while the pass is still going.
-		g.set("r2", Target{"b", "C1"})
+		g.set("r2", Target{"b", "C1"}, Target{"quick", "C2"})
 		h.advance(2 * interval)
-		if got := agents.total(); got != 1 {
-			t.Fatalf("a second pass began during the first: %d probes", got)
+		if got := agents.count("quick"); got != 1 {
+			t.Fatalf("a second pass began during the first: %d probes of the other Binding", got)
 		}
 		gate <- struct{}{}
 		synctest.Wait()
 		h.advance(tick) // the next tick sees the new revision
-		if got := agents.total(); got != 2 {
+		if got := agents.count("b"); got != 2 {
 			t.Fatalf("probes after the first pass ended = %d, want a second pass", got)
 		}
 		gate <- struct{}{}
@@ -1207,6 +1224,65 @@ func TestALateResultFromAStuckCheckerCannotBringBackAPrunedBinding(t *testing.T)
 	})
 }
 
+func TestACheckerThatReportsAnUnusableReasonIsNotBelieved(t *testing.T) {
+	const leak = "token abc123 rejected"
+	cases := map[string]Outcome{
+		"true with a failure": {Status: True, Reason: ReasonNotInChannel},
+		"false with ok":       {Status: False, Reason: ReasonOK},
+		"unknown with ok":     {Status: Unknown, Reason: ReasonOK},
+		"outside the set":     {Status: False, Reason: Reason(leak)},
+		"pending":             {Status: Unknown, Reason: ReasonPending},
+	}
+	g := &targets{}
+	var ts []Target
+	for b := range cases {
+		ts = append(ts, Target{b, "C1"})
+	}
+	g.set("r1", ts...)
+	agents := &fakeAgents{fn: func(_ context.Context, b string) (Outcome, error) { return cases[b], nil }}
+	var mu sync.Mutex
+	got := map[string]error{}
+	run(t, Options{Targets: g.Targets, Revision: g.Revision, Agents: agents, OnProbeError: func(pe ProbeError) {
+		mu.Lock()
+		defer mu.Unlock()
+		got[pe.Target.Binding] = pe.Err
+	}}, func(h *harness) {
+		mu.Lock()
+		defer mu.Unlock()
+		for b := range cases {
+			conds := h.conds(b)
+			wantCond(t, conds, BackendReachable, Unknown, ReasonProbeFailed)
+			wantCond(t, conds, Ready, Unknown, "BackendReachable:ProbeFailed")
+			if !conds[BackendReachable].LastProbeTime.After(time.Time{}) {
+				t.Errorf("%s: LastProbeTime is zero, but a probe ran", b)
+			}
+			if got[b] == nil {
+				t.Errorf("%s: no ProbeError", b)
+			} else if strings.Contains(got[b].Error(), leak) {
+				t.Errorf("%s: ProbeError %q carries the checker's reason", b, got[b])
+			}
+		}
+	})
+}
+
+func TestEveryReasonACheckerMayReportIsReportable(t *testing.T) {
+	for _, r := range reasonConstants(t) {
+		var want []Status
+		switch r {
+		case ReasonOK:
+			want = []Status{True}
+		case ReasonPending:
+		default:
+			want = []Status{False, Unknown}
+		}
+		for _, s := range []Status{True, False, Unknown} {
+			if got := r.reportable(s); got != slices.Contains(want, s) {
+				t.Errorf("%s.reportable(%s) = %v, want %v", r, s, got, !got)
+			}
+		}
+	}
+}
+
 func TestACheckerThatFailsLeavesTheConditionUnknownAndTheOthersRun(t *testing.T) {
 	g := &targets{}
 	g.set("r1", Target{"errs", "C1"}, Target{"panics", "C2"}, Target{"garbage", "C3"}, Target{"fine", "C4"})
@@ -1219,7 +1295,7 @@ func TestACheckerThatFailsLeavesTheConditionUnknownAndTheOthersRun(t *testing.T)
 		case "panics":
 			panic("secret-token")
 		case "garbage":
-			return Outcome{Status: "Maybe"}, nil
+			return Outcome{Status: "Maybe", Reason: ReasonAgentNotFound}, nil
 		}
 		return ok(), nil
 	}}
