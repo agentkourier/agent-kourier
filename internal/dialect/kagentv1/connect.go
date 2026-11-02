@@ -79,6 +79,8 @@ func (d *Dialect) CloseIdleConnections() {
 // `url` and a `preferredTransport`, with no protocolVersion, which is what kagent 0.9.x serves.
 // The 0.3 reader maps it onto the 1.0 shape, so the checks in ConnectEndpoint see one kind of card. A body neither
 // reader accepts fails with dialect.ErrInvalidAgentCard, which a2a-go's resolver wraps with %w, so errors.Is finds it.
+// So does JSON that both accept but that names no agent and no endpoint, such as a gateway's {"error":"login_required"}:
+// JSON decoding ignores the fields it does not know, so that is not a card with no JSON-RPC interface, but no card.
 func cardParser(body []byte) (*a2a.AgentCard, error) {
 	card, err := agentcard.DefaultCardParser(body)
 	if err == nil && len(card.SupportedInterfaces) > 0 {
@@ -87,11 +89,22 @@ func cardParser(body []byte) (*a2a.AgentCard, error) {
 	legacy, legacyErr := a2av0.NewAgentCardParser()(body)
 	switch {
 	case legacyErr == nil:
-		return legacy, nil
-	case err == nil:
-		return card, nil // read as 1.0 but lists no interface: ConnectEndpoint's own check says so
+		card = legacy
+	case err != nil:
+		return nil, fmt.Errorf("%w: %w", dialect.ErrInvalidAgentCard, err)
 	}
-	return nil, fmt.Errorf("%w: %w", dialect.ErrInvalidAgentCard, err)
+	// card was read as 1.0 with no interface if the 0.3 reader refused it: ConnectEndpoint's own check says so.
+	if !namesAgentOrEndpoint(card) {
+		return nil, fmt.Errorf("%w: it names no agent and no endpoint", dialect.ErrInvalidAgentCard)
+	}
+	return card, nil
+}
+
+// namesAgentOrEndpoint reports whether card has a name or an interface with a URL.
+func namesAgentOrEndpoint(card *a2a.AgentCard) bool {
+	return card.Name != "" || slices.ContainsFunc(card.SupportedInterfaces, func(i *a2a.AgentInterface) bool {
+		return i != nil && i.URL != ""
+	})
 }
 
 // Connect resolves the agent's card through the front door and returns an A2A client for it.
@@ -172,8 +185,8 @@ func (d *Dialect) httpClient(creds dialect.Credentials, frontDoor *url.URL) *htt
 // and turns a response that is not 2xx into a dialect.HTTPStatusError. A request whose context
 // came from dialect.WithFreshConnection goes through fresh instead of next. The same holds on both paths:
 // the host check runs before the choice, so the identity goes only to the front door, and a redirect is not
-// followed, because the client's CheckRedirect stops at the 3xx response, which is then not 2xx and becomes
-// an HTTPStatusError.
+// followed, because a 3xx is such a response: RoundTrip returns the error, so the client never reads a Location.
+// The client's CheckRedirect is the second guard, should this conversion ever change.
 type authTransport struct {
 	next, fresh http.RoundTripper // fresh is nil for a Dialect that was not built by New: next carries all
 	dialect     *Dialect

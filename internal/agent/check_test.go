@@ -608,6 +608,11 @@ func TestCheckTellsAMalformedCardFromAnUnreachableBackend(t *testing.T) {
 			{"HTML page with a 200", func() string { return serve(http.StatusOK, "text/html", html).URL }, true, 0},
 			{"an empty 200", func() string { return serve(http.StatusOK, "application/json", "").URL }, true, 0},
 			{"a card for a protocol version nothing speaks", func() string { return serve(http.StatusOK, "application/json", futureVersion).URL }, true, 0},
+			{"a gateway's JSON error with a 200", func() string { return serve(http.StatusOK, "application/json", `{"error":"login_required"}`).URL }, true, 0},
+			{"a JSON message with a 200", func() string { return serve(http.StatusOK, "application/json", `{"message":"Unauthorized"}`).URL }, true, 0},
+			{"an empty JSON object", func() string { return serve(http.StatusOK, "application/json", `{}`).URL }, true, 0},
+			{"a JSON null", func() string { return serve(http.StatusOK, "application/json", `null`).URL }, true, 0},
+			{"a named card with no interface", func() string { return serve(http.StatusOK, "application/json", `{"name":"ask"}`).URL }, false, 0},
 			{"204", func() string { return serve(http.StatusNoContent, "", "").URL }, false, http.StatusNoContent},
 			{"a dial failure", func() string {
 				srv := httptest.NewServer(http.NotFoundHandler())
