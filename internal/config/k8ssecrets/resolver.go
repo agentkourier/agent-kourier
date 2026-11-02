@@ -22,8 +22,9 @@
 // The cache holds each Secret's name, type, data and resourceVersion (which SecretVersion
 // returns), and nothing else: the informer's transform drops annotations such as
 // last-applied-configuration, which can hold a second copy of the values. Only Opaque
-// Secrets (or an empty type) keep their values, so that Value costs no API call; every other type (a Helm release, a service account token, TLS
-// keys, a docker config) keeps key names only, and Value refuses it. Keys returns names only.
+// Secrets (or an empty type) keep their values, so that Value costs no API call; every other
+// type (a Helm release, a service account token, TLS keys, a docker config) keeps key names
+// only, and Value refuses it. Keys returns names only.
 // Value returns a secret.Value, which no formatting path can print, built from a copy of the
 // bytes, so a Secret's rotation never changes a Value already read.
 //
