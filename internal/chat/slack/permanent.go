@@ -112,8 +112,11 @@ func groupsMisconfiguredCode(err error) string {
 // cancelled context may pass on another try. A rejected, revoked or missing token (invalid_auth, token_revoked,
 // account_inactive, not_authed) is fatalAuthCode's, the restart policy's, and is not reclassified here, as for
 // groupsMisconfiguredCode. The other codes of the method's page (access_denied, team_access_not_granted, no_permission,
-// not_allowed_token_type, enterprise_is_restricted and the like) name no cause an operator could mend, or none that this
-// call is known to meet, and stay unclassified: a caller retries them. It reads the code scrub keeps, through any wrapping.
+// not_allowed_token_type, enterprise_is_restricted and the like) stay unclassified, and a caller retries them, because no
+// live workspace has shown this call meeting them. That is not because they are transient: groupsMisconfiguredCode treats
+// no_permission, not_allowed_token_type and enterprise_is_restricted as permanent for its method, and if conversations.info
+// answers one of them on every try, a caller retries for as long as that lasts. It reads the code scrub keeps, through any
+// wrapping.
 // ChannelAccess wraps the sentinel of each of the two codes, and Platform.Classify(OpOther) reads the code back through that
 // wrapping, for the Verdict's Code.
 //
