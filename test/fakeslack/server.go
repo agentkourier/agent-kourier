@@ -90,6 +90,11 @@
 //     cap (999), and use invalid_ts_oldest and invalid_ts_latest; the oldest
 //     and latest window applies to replies but not the parent.
 //   - conversations.members reuses history's invalid_limit, default and cap.
+//   - conversations.info (people.go): a channel is known when SetMembers registered it, as for conversations.members; is_member
+//     is whether the bot's user is among its members; only channel_not_found is faked, for an unregistered channel, and
+//     what Slack answers for a private channel the bot is not in is not known (the fake says it is known, with is_member
+//     false); the channel object holds only id, is_channel, is_member and is_archived. Scopes are not modelled
+//     beyond SetMissingScope, which makes one method answer missing_scope.
 //   - usergroups.users.list (people.go): invalid_arguments for a missing usergroup, which
 //     Slack's page lists only among its general codes; no disabled groups, with include_disabled
 //     and team_id ignored; and plan_upgrade_required never being said.
@@ -144,6 +149,9 @@ type Server struct {
 	channels map[string][]*Message // messages per channel in ts order, guarded by mu
 	users    map[string]User       // guarded by mu
 	members  map[string][]string   // guarded by mu
+	archived map[string]bool       // channels SetArchived marked archived, guarded by mu
+
+	noScope map[string]bool // methods SetMissingScope makes answer missing_scope, guarded by mu
 
 	usergroups map[string][]string // user group ID to its members, guarded by mu
 
@@ -209,6 +217,8 @@ func NewHandler(opts ...Option) *Server {
 		channels:  map[string][]*Message{},
 		users:     map[string]User{},
 		members:   map[string][]string{},
+		archived:  map[string]bool{},
+		noScope:   map[string]bool{},
 
 		usergroups: map[string][]string{},
 
@@ -298,6 +308,9 @@ func (s *Server) dispatch(r *http.Request) (response, string) {
 	if code := authenticate(r, tokenPrefix(method)); code != "" {
 		return nil, code
 	}
+	if s.scopeMissing(method) {
+		return nil, "missing_scope"
+	}
 	switch method {
 	case "apps.connections.open":
 		return s.connectionsOpen(r)
@@ -329,6 +342,8 @@ func (s *Server) dispatch(r *http.Request) (response, string) {
 		return s.usersInfo(r.Form)
 	case "conversations.members":
 		return s.conversationsMembers(r.Form)
+	case "conversations.info":
+		return s.conversationsInfo(r.Form)
 	case "usergroups.users.list":
 		return s.usergroupsUsersList(r.Form)
 	default:

@@ -96,6 +96,10 @@ func (idleSlack) IsInAnyUserGroup(context.Context, []string, string) (bool, erro
 	return false, nil
 }
 
+func (idleSlack) ChannelAccess(context.Context, string) (chat.Access, error) {
+	return chat.Access{}, nil
+}
+
 func (idleSlack) SetThreadStatus(context.Context, string, string, string) error { return nil }
 
 // ThreadBetween says the idle Slack reads no thread, so a turn goes on without the thread's context.
