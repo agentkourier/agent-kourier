@@ -36,7 +36,13 @@ func mentionTurn(mode v1alpha1.OutputMode, recipient string) live.Turn {
 // mentionRow is the row of turn-1's mentions, and whether there is one.
 func (e *env) mentionRow(t *testing.T) (store.OutboxEntry, chat.Message, bool) {
 	t.Helper()
-	row, err := e.store.GetOutbox(t.Context(), outbox.ID(outbox.MentionSource("turn-1"), store.OutboxNotice))
+	return e.mentionRowAt(t, 0)
+}
+
+// mentionRowAt is the nth row of turn-1's mentions, and whether there is one.
+func (e *env) mentionRowAt(t *testing.T, n int) (store.OutboxEntry, chat.Message, bool) {
+	t.Helper()
+	row, err := e.store.GetOutbox(t.Context(), outbox.ID(outbox.MentionSource("turn-1", n), store.OutboxNotice))
 	if errors.Is(err, store.ErrNotFound) {
 		return row, chat.Message{}, false
 	}
@@ -111,6 +117,41 @@ func TestAQuestionInAPauseIsNotRead(t *testing.T) {
 	e.finish(t, run)
 	if _, m, ok := e.mentionRow(t); ok {
 		t.Errorf("a row: %+v", m)
+	}
+}
+
+// A task that paused and ran on under the same turn has its later text read too: a row of its own for whoever is new, within the
+// cap for the whole turn, and nothing more when it is rendered again.
+func TestATurnThatRunsOnAfterAPauseMentionsOnlyWhoIsNew(t *testing.T) {
+	e := setup(t)
+	aud := &mentionAudit{}
+	cfg := e.cfg
+	cfg.Audit = aud
+	e.live = newRenderer(t, cfg)
+	end := func(t *testing.T, say string, state a2a.TaskState) {
+		t.Helper()
+		turn := mentionTurn(v1alpha1.OutputLive, "")
+		turn.Recovered = state != a2a.TaskStateInputRequired
+		run, _ := e.startFor(t, turn)
+		run.Handle(text("a", say))
+		run.Handle(agent.FinalEvent{Task: &a2a.Task{ID: "t1", Status: a2a.TaskStatus{State: state}}})
+		e.finish(t, run)
+	}
+	end(t, "@sam, may I restart the pod?", a2a.TaskStateInputRequired)
+	end(t, "Restarted. @sam and @lee own it, and @kim was told.", a2a.TaskStateCompleted)
+	end(t, "Restarted. @sam and @lee own it, and @kim was told.", a2a.TaskStateCompleted)
+
+	if _, m, ok := e.mentionRowAt(t, 0); !ok || !reflect.DeepEqual(m, render.MentionMessage(declaredPeople[:1])) {
+		t.Errorf("the first row = %+v, %v; want sam alone", m, ok)
+	}
+	if _, m, ok := e.mentionRowAt(t, 1); !ok || !reflect.DeepEqual(m, render.MentionMessage(declaredPeople[1:2])) {
+		t.Errorf("the second row = %+v, %v; want lee alone", m, ok)
+	}
+	if _, m, ok := e.mentionRowAt(t, 2); ok {
+		t.Errorf("a third row: %+v", m)
+	}
+	if len(aud.rows) != 2 {
+		t.Errorf("audit rows = %+v, want sam and lee, once each", aud.rows)
 	}
 }
 

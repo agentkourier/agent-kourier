@@ -205,9 +205,10 @@ func TestBindingValidate(t *testing.T) {
 				o.Spec.Chat.Mentions = append(o.Spec.Chat.Mentions, ChatMention{Name: fmt.Sprintf("p%d", i), User: "U0123456789"})
 			}
 		}, "spec.chat.mentions: has 51 items, maximum is 50"},
-		{"the most mentions a turn may make ok", func(o *Binding) { o.Spec.Chat.MaxMentionsPerTurn = 10 }, ""},
-		{"too many mentions a turn", func(o *Binding) { o.Spec.Chat.MaxMentionsPerTurn = 11 }, "spec.chat.maxMentionsPerTurn: 11 is out of range, must be from 1 to 10"},
-		{"a negative cap on mentions", func(o *Binding) { o.Spec.Chat.MaxMentionsPerTurn = -1 }, "spec.chat.maxMentionsPerTurn: -1 is out of range, must be from 1 to 10"},
+		{"the most mentions a turn may make ok", func(o *Binding) { o.Spec.Chat.MaxMentionsPerTurn = new(10) }, ""},
+		{"too many mentions a turn", func(o *Binding) { o.Spec.Chat.MaxMentionsPerTurn = new(11) }, "spec.chat.maxMentionsPerTurn: 11 is out of range, must be from 1 to 10"},
+		{"a negative cap on mentions", func(o *Binding) { o.Spec.Chat.MaxMentionsPerTurn = new(-1) }, "spec.chat.maxMentionsPerTurn: -1 is out of range, must be from 1 to 10"},
+		{"a cap of no mentions", func(o *Binding) { o.Spec.Chat.MaxMentionsPerTurn = new(0) }, "spec.chat.maxMentionsPerTurn: 0 is out of range, must be from 1 to 10"},
 		{"bad progress", func(o *Binding) { o.Spec.Chat.Progress = "spinner" },
 			`spec.chat.progress: unsupported value "spinner", must be one of steps, steps-and-activity, activity`},
 		{"progress wrong case", func(o *Binding) { o.Spec.Chat.Progress = "Steps" },

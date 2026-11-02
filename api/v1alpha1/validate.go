@@ -228,7 +228,7 @@ func (b *Binding) Validate() error {
 	}
 	p.triggers("spec.chat.triggers", s.Chat.Triggers)
 	p.mentions("spec.chat.mentions", s.Chat.Mentions)
-	if n := s.Chat.MaxMentionsPerTurn; n < 1 || n > 10 {
+	if n := s.Chat.MentionCap(); n < 1 || n > 10 {
 		p.add("spec.chat.maxMentionsPerTurn", "%d is out of range, must be from 1 to 10", n)
 	}
 	p.interactions("spec.interactions", s.Interactions)

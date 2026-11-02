@@ -25,25 +25,29 @@ type MentionScan struct {
 	// person past the cap. Each notifies nobody.
 	Undeclared, Capped int
 
-	past []string // the users already counted in Capped
+	past []string // the users not to count again: those mentioned before, and those past the cap
 }
 
-// Mentions reads body, the text of a turn as it is shown, for the names in declared, and notifies at most limit people. A
-// name is an "@" that follows no word, path, query value or other "@", then letters, digits and hyphens, in any case, and then
+// Mentions reads body, the text of a turn as it is shown, for the names in declared, and notifies at most limit people, of whom
+// already, the users the turn has mentioned before, are some. They are not named again, and they count towards limit. A
+// name is an "@" that follows no word, path, query value, escape or other "@", then letters, digits and hyphens, in any case, and then
 // no more of them and none of what goes on as a package scope, a host, an address or a port: a "/", an "@", a "." and a name
-// character, a ":" and a digit. A letter of any alphabet is a letter here, so "@josé" does not name "jos". Code is left out:
+// character, a ":" and a digit. "_" and "~" around a name are emphasis, and a "/" between two names only separates them, as in
+// "@sam/@lee". A ":" before a name is a label, as in "Owner:@sam", though it is also in a URL. A letter of any alphabet is a letter here, so
+// "@josé" does not name "jos". Code is left out:
 // what is in a fence or a span is quoted, not said, so a log line that holds a name notifies nobody. What is code is read as the
 // Slack adapter writes it (internal/chat/slack/mdtext.go): any fence line opens or closes a block, whatever its marks, what
 // follows a closing run is prose, a block that never closes runs to the end, and a span closes at the next run of backticks or not
 // at all. A pipe table, which that adapter shows as code, is read as prose: a name in a table is said. A name that ends where the
-// text was cut (chat.Truncated) may be the start of a longer one, so it is no name.
+// text was cut (chat.Truncated), or in a "." or ":" just before it, may be the start of something longer, so it is no name.
 // A place where the two readings still differ can only notify a declared person or not, within the cap: the adapter counts its limit
 // in escaped text, so it can cut sooner than body was. With nothing declared there is nothing to scan for, and nothing is counted.
-func Mentions(body string, declared []v1alpha1.ChatMention, limit int) MentionScan {
-	var scan MentionScan
+func Mentions(body string, declared []v1alpha1.ChatMention, limit int, already ...string) MentionScan {
+	scan := MentionScan{past: slices.Clone(already)}
 	if len(declared) == 0 {
 		return scan
 	}
+	limit -= len(already)
 	code, held := false, body
 	for held != "" {
 		line, _, _ := strings.Cut(held, "\n")
@@ -119,6 +123,7 @@ func runOf(s string, c byte) int {
 // line reads one line of prose: a run of backticks whose next run on the line is the same length is a code span, and is
 // skipped.
 func (scan *MentionScan) line(line string, declared []v1alpha1.ChatMention, limit int) {
+	last := -1 // where the last name ended
 	for i := 0; i < len(line); {
 		switch line[i] {
 		case '`':
@@ -129,9 +134,10 @@ func (scan *MentionScan) line(line string, declared []v1alpha1.ChatMention, limi
 				i += n
 			}
 		case '@':
-			word, end := mentionWord(line, i)
+			word, end := mentionWord(line, i, last)
 			if word != "" {
 				scan.name(word, declared, limit)
+				last = end
 			}
 			i = end
 		default:
@@ -150,10 +156,13 @@ func closingRun(s string, n int) int {
 }
 
 // mentionWord is the name of the "@" at line[at], with A to Z lowered, or "" if it starts none (see Mentions), and where in line
-// to read on. Only A to Z are lowered: a declared name is ASCII, and a letter of another alphabet that lowers into ASCII is not
-// the name it looks like.
-func mentionWord(line string, at int) (word string, next int) {
-	if before, _ := utf8.DecodeLastRuneInString(line[:at]); at > 0 && (isNameRune(before) || strings.ContainsRune("_./@=", before)) {
+// to read on. last is where the name before it ended. Only A to Z are lowered: a declared name is ASCII, and a letter of another
+// alphabet that lowers into ASCII is not the name it looks like.
+func mentionWord(line string, at, last int) (word string, next int) {
+	before := strings.TrimRight(line[:at], "_~")
+	r, _ := utf8.DecodeLastRuneInString(before)
+	between := r == '/' && at-1 == last
+	if before != "" && !between && (isNameRune(r) || strings.ContainsRune(`./@=?&#%+\`, r)) {
 		return "", at + 1
 	}
 	end := at + 1
@@ -164,7 +173,7 @@ func mentionWord(line string, at int) (word string, next int) {
 		}
 		end += size
 	}
-	word = line[at+1 : end]
+	word = strings.TrimRight(line[at+1:end], "_")
 	if word == "" || word[0] == '-' || (word[0] >= '0' && word[0] <= '9') || goesOn(line[end:]) {
 		return "", at + 1
 	}
@@ -183,12 +192,14 @@ func goesOn(rest string) bool {
 	if rest == "" {
 		return false
 	}
-	if rest == chat.Truncated {
+	if strings.TrimLeft(rest, ".:") == chat.Truncated {
 		return true
 	}
 	next, _ := utf8.DecodeRuneInString(rest[1:])
 	switch rest[0] {
-	case '/', '@':
+	case '/':
+		return next != '@'
+	case '@':
 		return true
 	case '.':
 		return len(rest) > 1 && isNameRune(next)

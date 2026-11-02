@@ -113,8 +113,9 @@ Some limits come from this design and are not promises about the future:
 - **A mention never goes inline.** The body stays literal text, and the mention follows it in a message of its own. In a
   test against Slack, a mention in a message's context line did not register as a mention when that message also had a body, so
   a separate message is the form that works on every output path.
-- **A mention is not a page.** It is one convenience post, at most once for a turn. It can be lost in a crash, Slack accepts a
-  stale user ID with no error, and an outage of Agent Kourier sends nothing. Declare lasting owners, not a rota, and keep paging in your
+- **A mention is not a page.** It is a convenience post, at most once for each person in a turn. It can be lost in a crash, Slack accepts a
+  stale user ID with no error, and an outage of Agent Kourier sends nothing. A crash just after a mention is queued, or a timeout
+  while it is recorded, can leave it with no audit row, and the row is not written later. Declare lasting owners, not a rota, and keep paging in your
   paging tool.
 
 ## The paging path

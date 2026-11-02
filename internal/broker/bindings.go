@@ -161,7 +161,7 @@ func (b *Bindings) Backend(name string) (session.Backend, error) {
 		Feedback:                 rb.Binding.Spec.Feedback.Enabled,
 		ThreadReplies:            rb.Binding.Spec.Chat.ThreadReplies,
 		Mentions:                 rb.Binding.Spec.Chat.Mentions,
-		MaxMentions:              rb.Binding.Spec.Chat.MaxMentionsPerTurn,
+		MaxMentions:              rb.Binding.Spec.Chat.MentionCap(),
 		MentionPrompt:            render.MentionPrompt(rb.Binding.Spec.Chat.Mentions),
 		AcknowledgmentEnabled:    ackEnabled,
 		AcknowledgmentEmoji:      ackEmoji,

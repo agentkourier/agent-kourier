@@ -881,9 +881,11 @@ func (u *Run) run(ctx context.Context) {
 // (chat.Mention). A turn that failed, was stopped or was rejected notifies nobody, as one cut short does: a person who stops a
 // steered agent has decided against what it was saying. A pause counts: what the agent wrote before it may be for the person it
 // names. The question itself is not read: it is the task's status message, which the interaction intake posts as a prompt, and is
-// not the turn's text. A turn rendered again finds the row, and makes neither a second post nor a second record. Only the outbox's delivery
-// is retried: a crash before this runs loses the mention, which is a convenience, and never the paging path. A failure is
-// logged, and the reply stands.
+// not the turn's text. A turn that already made a row mentions nobody twice, and those people count towards the cap: rendered again
+// it posts and records nothing, and a task that paused and ran on under the same turn gets one more row for whoever its later text
+// names first. Only the outbox's delivery is retried: a crash before this runs loses the mention, which is a convenience, and never
+// the paging path, and a crash after the row is queued, or a timeout, can leave it with no audit row, since a row found is not
+// recorded again. A failure is logged, and the reply stands.
 func (u *Run) notifyMentions(ctx context.Context) {
 	u.mu.Lock()
 	endedBadly := u.endedBadly
@@ -893,7 +895,12 @@ func (u *Run) notifyMentions(ctx context.Context) {
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), u.cfg.WriteTimeout)
 	defer cancel()
-	scan := render.Mentions(u.snapshot().body, u.turn.Mentions, u.turn.MaxMentions)
+	already, source, err := u.mentioned(ctx)
+	if err != nil {
+		u.cfg.Logger.WarnContext(ctx, "live: the mentions of a turn were not queued", "channel", u.turn.Channel, "err", err)
+		return
+	}
+	scan := render.Mentions(u.snapshot().body, u.turn.Mentions, u.turn.MaxMentions, already...)
 	for range scan.Undeclared {
 		telemetry.Count(ctx, "agentkourier_mentions_total", u.turn.Binding, "undeclared")
 	}
@@ -901,13 +908,6 @@ func (u *Run) notifyMentions(ctx context.Context) {
 		telemetry.Count(ctx, "agentkourier_mentions_total", u.turn.Binding, "capped")
 	}
 	if len(scan.Made) == 0 {
-		return
-	}
-	source := outbox.MentionSource(u.turn.Source)
-	if _, err := u.cfg.Store.GetOutbox(ctx, outbox.ID(source, store.OutboxNotice)); !errors.Is(err, store.ErrNotFound) {
-		if err != nil {
-			u.cfg.Logger.WarnContext(ctx, "live: the mentions of a turn were not queued", "channel", u.turn.Channel, "err", err)
-		}
 		return
 	}
 	post := outbox.Post{Source: source, Role: store.OutboxNotice, Channel: u.turn.Channel, Thread: u.turn.Thread, Out: chat.Say(render.MentionMessage(scan.Made))}
@@ -923,6 +923,32 @@ func (u *Run) notifyMentions(ctx context.Context) {
 		rec := audit.Mention{Turn: u.turn.Source, Channel: u.turn.Channel, Thread: u.turn.Thread, Name: m.Name, User: m.User}
 		if err := u.cfg.Audit.Mention(ctx, audit.Actor{Binding: u.turn.Binding}, rec); err != nil {
 			u.cfg.Logger.WarnContext(ctx, "live: a mention was not audited", "channel", u.turn.Channel, "err", err)
+		}
+	}
+}
+
+// mentioned is the users the rows of this turn's mentions name, and the source of the next row.
+func (u *Run) mentioned(ctx context.Context) (users []string, next string, err error) {
+	for n := 0; ; n++ {
+		source := outbox.MentionSource(u.turn.Source, n)
+		row, err := u.cfg.Store.GetOutbox(ctx, outbox.ID(source, store.OutboxNotice))
+		if errors.Is(err, store.ErrNotFound) {
+			return users, source, nil
+		}
+		if err != nil {
+			return nil, "", fmt.Errorf("read the mentions of the turn: %w", err)
+		}
+		out, err := outbox.Decode(row.Payload)
+		if err != nil {
+			return nil, "", fmt.Errorf("read the row %s: %w", source, err)
+		}
+		if out.Message == nil {
+			return nil, "", fmt.Errorf("read the row %s: it holds no message", source)
+		}
+		for _, part := range out.Message.Parts {
+			if m, ok := part.(chat.Mention); ok {
+				users = append(users, m.User)
+			}
 		}
 	}
 }

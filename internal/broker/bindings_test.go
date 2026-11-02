@@ -403,7 +403,7 @@ func TestBackendCarriesTheBindingsMentions(t *testing.T) {
 	snap = snapshot(t, f.url, v1alpha1.DialectKagentV1, time.Hour)
 	rb, _ := snap.Binding("sre", "oncall")
 	rb.Binding.Spec.Chat.Mentions = people
-	rb.Binding.Spec.Chat.MaxMentionsPerTurn = 3
+	rb.Binding.Spec.Chat.MaxMentionsPerTurn = new(3)
 	f.snaps.p.Store(snap)
 
 	be, err := f.b.Backend("sre/oncall")

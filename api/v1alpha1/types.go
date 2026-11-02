@@ -262,11 +262,20 @@ type ChatBinding struct {
 	// +optional
 	Mentions []ChatMention `json:"mentions,omitempty"`
 	// MaxMentionsPerTurn is the most people one turn mentions, at most 10; the people after them are not mentioned. It defaults to 2.
+	// 0 is refused: to notify nobody, leave mentions empty.
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=10
 	// +kubebuilder:default=2
 	// +optional
-	MaxMentionsPerTurn int `json:"maxMentionsPerTurn"`
+	MaxMentionsPerTurn *int `json:"maxMentionsPerTurn,omitempty"`
+}
+
+// MentionCap is the most people one turn mentions: MaxMentionsPerTurn, or its default if it is not set.
+func (c ChatBinding) MentionCap() int {
+	if c.MaxMentionsPerTurn == nil {
+		return DefaultMaxMentionsPerTurn
+	}
+	return *c.MaxMentionsPerTurn
 }
 
 // ChatMention is one person an agent may notify.
@@ -374,8 +383,8 @@ func (b *Binding) Default() {
 		enabled := true
 		b.Spec.Chat.Acknowledgment.Enabled = &enabled
 	}
-	if b.Spec.Chat.MaxMentionsPerTurn == 0 {
-		b.Spec.Chat.MaxMentionsPerTurn = DefaultMaxMentionsPerTurn
+	if b.Spec.Chat.MaxMentionsPerTurn == nil {
+		b.Spec.Chat.MaxMentionsPerTurn = new(DefaultMaxMentionsPerTurn)
 	}
 	b.Spec.Chat.defaultTriggers()
 	if b.Spec.Interactions.Timeout.Duration == 0 {

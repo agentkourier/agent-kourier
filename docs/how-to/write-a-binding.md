@@ -115,6 +115,8 @@ spec:
 When a turn's reply says `@payments-owner`, Agent Kourier posts one more message in the thread, after the reply, that
 mentions that user.
 
+`maxMentionsPerTurn` must be from 1 to 10, and 0 is refused at load. To notify nobody, leave `mentions` out.
+
 - **The agent is told the names.** A session's first prompt ends with a line that lists them. It is not said again: a
   thread that started before you added a name does not get it, and neither does an agent that lost the session and answers in
   a new one. Tell the agent in its own instructions if that matters.
@@ -122,11 +124,14 @@ mentions that user.
   final text names. A question the agent asks through a pause, which Agent Kourier posts as a prompt, is not read for names, so an
   agent that wants someone to answer it has to name them in its reply text. A name in a code span or a fence does not count, though a name in a table does, even where Slack shows the
   table as code. A name that runs straight into more letters, as in `@samさん`, is a different name and does not count, and neither
-  does one that ends where a long reply was cut. A reply long enough to be cut can also notify someone for a name Slack does not show, as Slack's limit counts the text after escaping. A turn
+  does one that ends where a long reply was cut. `_@sam_` and `~~@sam~~` count, and `@sam/@lee` names both people. `@sam@lee` reads as an
+  address and names nobody, as does a name straight after a word, `/`, `.`, `=`, `?`, `&`, `#`, `%`, `+` or `\`, and neither is counted as `undeclared`. A name after a `:`
+  counts, so that `Owner:@sam` does, even inside a URL. A reply long enough to be cut can also notify someone for a name Slack does not show, as Slack's limit counts the text after escaping. A turn
   that was cut short, failed, was stopped or was rejected mentions nobody, and neither does a name
   past `maxMentionsPerTurn`.
 - **One mention for each person.** A person is mentioned once a turn however often the reply names them, and two names for one
-  user are one person.
+  user are one person. A task that pauses can run on under the same turn, for example when it is answered outside Slack: its later text
+  mentions only people the turn has not mentioned yet, in another message, and `maxMentionsPerTurn` holds across both.
 - **Declare lasting owners, not a rota.** `user` is a fixed ID, so when a person moves on, it goes stale. Slack accepted a mention of an ID that does not
   exist with no error, so nothing tells you. Agent Kourier is not a paging tool, and user groups cannot be declared.
 - **Keep the person in the channel.** Agent Kourier has not been tested with a mention of someone who is not a member of it.

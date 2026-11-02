@@ -75,6 +75,21 @@ func TestMentions(t *testing.T) {
 		{name: "a name the cut ran into is not the name it starts with", body: "ask @sam" + chat.Truncated, max: 2},
 		{name: "a name before the cut", body: "ask @sam, and more" + chat.Truncated, max: 2, made: []string{"sam"}},
 		{name: "the mark in the middle of the text is only words", body: "@sam" + chat.Truncated + " and more", max: 2, made: []string{"sam"}},
+		{name: "two names with a slash between them", body: "cc @sam/@lee", max: 2, made: []string{"sam", "lee"}},
+		{name: "a slash and a name after a path", body: "x/@sam/@lee", max: 2},
+		{name: "two names run together read as an address", body: "cc @sam@lee", max: 2},
+		{name: "underscore emphasis around more than the name", body: "_cc @sam_", max: 2, made: []string{"sam"}},
+		{name: "underscore emphasis of the name", body: "_@sam_ and __@lee__", max: 2, made: []string{"sam", "lee"}},
+		{name: "tilde emphasis of the name", body: "~~@sam~~", max: 2, made: []string{"sam"}},
+		{name: "an underscore inside a word", body: "@sam_foo", max: 2, undeclared: 1},
+		{name: "an underscore after a word", body: "foo_@sam foo~@sam", max: 2},
+		{name: "a URL's query, fragment and path", body: "x.test/?@sam ?a=1&@sam /~@sam /#@sam a+@sam 5%@sam", max: 2},
+		{name: "an escaped at sign", body: `\@sam`, max: 2},
+		{name: "a label with a colon", body: "Owner:@sam", max: 2, made: []string{"sam"}},
+		{name: "a host the cut ran into", body: "see @sam." + chat.Truncated, max: 2},
+		{name: "a port the cut ran into", body: "see @sam:" + chat.Truncated, max: 2},
+		{name: "a word with an underscore the cut ran into", body: "see @sam_" + chat.Truncated, max: 2},
+		{name: "a comma before the cut", body: "see @sam," + chat.Truncated, max: 2, made: []string{"sam"}},
 		{name: "a raw user ID, and markup", body: "ask U0SAM or <@U0SAM> or <!channel> or <!subteam^S1>", max: 2, undeclared: 1},
 		{name: "the name inside markup", body: "<@sam>", max: 2, made: []string{"sam"}},
 	} {
@@ -100,6 +115,14 @@ func TestACutInsideANameNotifiesNobody(t *testing.T) {
 	}
 	if got := render.Mentions(body, declared, 2); len(got.Made) != 0 || got.Undeclared != 0 {
 		t.Errorf("Mentions(%q) = %+v, want nothing", body, got)
+	}
+}
+
+// A turn that has mentioned people does not name them again, and they count towards the cap.
+func TestMentionsAfterOthers(t *testing.T) {
+	got := render.Mentions("@sam @lee @payments-owner", declared, 2, "U0SAM")
+	if len(got.Made) != 1 || got.Made[0].Name != "lee" || got.Capped != 1 {
+		t.Errorf("Mentions = %+v, want lee, and payments-owner capped", got)
 	}
 }
 
