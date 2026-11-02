@@ -167,6 +167,11 @@ func (s *failingSender) Send(context.Context, outbox.Post) (chat.Ref, error) {
 	return chat.Ref{}, s.err
 }
 
+func (s *failingSender) Enqueue(context.Context, outbox.Post) (string, error) {
+	s.calls++
+	return "", s.err
+}
+
 func TestPermanentErrorEndsTheRunAtOnce(t *testing.T) {
 	for name, permanent := range map[string]error{"invalid": store.ErrInvalid, "abandoned": outbox.ErrAbandoned} {
 		t.Run(name, func(t *testing.T) {

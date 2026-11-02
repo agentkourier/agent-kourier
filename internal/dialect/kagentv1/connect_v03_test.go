@@ -112,7 +112,7 @@ func TestConnectSpeaksA2AV03(t *testing.T) {
 func TestConnectRejectsAnA2AV03CardWithoutJSONRPC(t *testing.T) {
 	fd := newFrontDoor(t, false, v03Card("GRPC"), v03Agent("unused"))
 	_, err := New(0).Connect(t.Context(), fd.backend(), agent, dialect.Credentials{Token: secret.New(canary)})
-	if err == nil || !strings.Contains(err.Error(), "no JSON-RPC interface") {
+	if !errors.Is(err, dialect.ErrNoJSONRPCInterface) || !strings.Contains(err.Error(), "no JSON-RPC interface") {
 		t.Fatalf("Connect error = %v, want %q", err, "agent card lists no JSON-RPC interface")
 	}
 }

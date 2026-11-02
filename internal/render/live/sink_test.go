@@ -293,6 +293,8 @@ func TestTheSameNoticeIsOneRowAndOnePost(t *testing.T) {
 // blocker is a Sender that waits for release, as Slack may.
 type blocker struct{ release chan struct{} }
 
+func (b *blocker) Enqueue(context.Context, outbox.Post) (string, error) { return "", nil }
+
 func (b *blocker) Send(ctx context.Context, _ outbox.Post) (chat.Ref, error) {
 	select {
 	case <-b.release:

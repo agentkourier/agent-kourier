@@ -282,7 +282,8 @@ func slackSubject(t *testing.T) (chattest.Subject, *slack.Platform) {
 		// Slack makes a bare URL in text and in markdown into a link that shows its own address, and no escape
 		// stops it: a backslash before a colon is shown as a backslash, and Slack has no escape for mrkdwn. The
 		// link goes where the text says and nowhere else, and every request is inert (no unfurl, so Slack does
-		// not fetch it). UNCONFIRMED(WP-04): whether a plain_text object does the same.
+		// not fetch it). A URL of a message in the workspace is Slack's own reference to the message. A plain_text
+		// object makes no link (docs/spikes/slack-mention-probe.md).
 		AllowAutolink: true,
 		Concessions: []chattest.Concession{{
 			Where: chat.WhereToolArgs, Kinds: []chattest.Kind{chattest.KindCode},

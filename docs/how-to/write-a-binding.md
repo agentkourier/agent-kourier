@@ -94,7 +94,52 @@ already holds the channel.
   default) or `activity`. The default adds a `Working…` card when 3 seconds pass with nothing new; `activity` shows one
   card (a line in an alert thread) that counts the steps and names no tool; `steps` is the cards and lines alone. See
   [Output](../explanation/threads-and-sessions.md#output).
+- **Let the agent notify people:** declare them under `chat.mentions`, each with the `name` the agent writes and the
+  `user` ID it stands for. See [Let the agent notify people](#let-the-agent-notify-people).
 - **Change the processing reaction:** set `chat.acknowledgment.emoji` to a bare Slack reaction name. The reaction is removed when
   the turn ends; a question removes it before the thread waits for an answer, and the answer gets its own reaction.
 
 Every field, with its default, is in the [Binding reference](../reference/binding.md).
+
+## Let the agent notify people
+
+```yaml
+spec:
+  chat:
+    mentions:
+      - name: payments-owner
+        user: U0123456789
+    maxMentionsPerTurn: 2
+```
+
+When a turn's reply says `@payments-owner`, Agent Kourier posts one more message in the thread, after the reply, that
+mentions that user. Each person named gets a message of their own.
+
+`maxMentionsPerTurn` must be from 1 to 10, and 0 is refused at load. To notify nobody, leave `mentions` out.
+
+- **The agent is told the names.** A session's first prompt ends with a line that lists them. It is not said again: a
+  thread that started before you added a name does not get it, and neither does an agent that lost the session and answers in
+  a new one. Tell the agent in its own instructions if that matters.
+- **Only the text of a reply counts.** A turn that completes or pauses for an answer mentions the people its
+  final text names. A question the agent asks through a pause, which Agent Kourier posts as a prompt, is not read for names, so an
+  agent that wants someone to answer it has to name them in its reply text. A name in a code span or a fence does not count, though a name in a table does, even where Slack shows the
+  table as code. A name that runs straight into more letters, as in `@samさん`, is a different name and does not count, and neither
+  does one that ends where a long reply was cut. `_@sam_` and `~~@sam~~` count, and `@sam/@lee` names both people. `@sam@lee` reads as an
+  address and names nobody, as does a name straight after a word, `/`, `.`, `=`, `?`, `&`, `#`, `%`, `+` or `\`, and neither is counted as `undeclared`. A name in a URL with a scheme, such as `https://`, does not count either, though one in a URL without a scheme can, after a `,` or a `(`. A name after a `:`
+  otherwise counts, so that `Owner:@sam` does. A reply long enough to be cut can also notify someone for a name Slack does not show, as Slack's limit counts the text after escaping. A turn
+  that was cut short, failed, was stopped or was rejected mentions nobody, and neither does a name
+  past `maxMentionsPerTurn`. Nor does a turn whose last write to Slack failed for good, even if a stream had already shown the name.
+- **One mention for each person.** A person is mentioned once a turn however often the reply names them, and two names for one
+  user are one person. A task that pauses can run on under the same turn, for example when it is answered outside Slack: its later text
+  mentions only people the turn has not mentioned yet, and `maxMentionsPerTurn` holds across both. A mention Agent Kourier gave up on posting still counts, and is not tried again.
+  Only people still in `mentions` are counted, so changing the list in between can take the turn over the cap, and a name given a new `user` notifies that user.
+- **Declare lasting owners, not a rota.** `user` is a fixed ID, so when a person moves on, it goes stale. Slack accepted a mention of an ID that does not
+  exist with no error, so nothing tells you. Agent Kourier is not a paging tool, and user groups cannot be declared.
+- **Keep the person in the channel.** Agent Kourier has not been tested with a mention of someone who is not a member of it.
+
+A name the Binding does not declare notifies nobody, and `agentkourier_mentions_total` counts it as `undeclared`, which is
+how to spot a typo or a name the model made up. [Security](../explanation/security.md#hostile-text) has what hostile text
+can do with this, and what an agent is never allowed to do.
+
+To link to a Slack message, the agent writes the message's URL in its reply. Slack shows it as its own reference to that
+message, so this needs no setting.

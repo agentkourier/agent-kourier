@@ -78,6 +78,8 @@ ChatBinding places the Binding in a channel.
 | `threadReplies` | string | No | `all` | ThreadReplies defaults to all: any person's reply in a thread Agent Kourier owns is a turn. With mention, only a reply that mentions Agent Kourier is a turn, whether a mention or a trigger started the thread; the next mentioned turn carries the other replies as context. A typed answer to a pending question that takes text replies needs no mention. One of `all`, `mention`. |
 | `acknowledgment` | [ChatAcknowledgment](#chatacknowledgment) | No | None | Acknowledgment controls the temporary reaction Agent Kourier adds to an accepted message while it is being processed. It defaults to enabled with the platform's own reaction (Slack: hourglass_flowing_sand). |
 | `triggers` | [][Trigger](#trigger) | No | `[{type: mention}]` | Triggers decide which events in the channel start or continue a turn. Empty means [{type: mention}]: a mention starts a session. A list that names triggers is the whole list. |
+| `mentions` | [][ChatMention](#chatmention) | No | None | Mentions are the people an agent may notify, by writing `@name` in its reply. Agent Kourier then posts a message in the thread that mentions each one named, one message for each. A name not listed here notifies nobody, and an agent can never supply a user ID. Empty means no mentions, and nothing is added to the prompt. At most 50. |
+| `maxMentionsPerTurn` | integer | No | `2` | MaxMentionsPerTurn is the most people one turn mentions, at most 10; the people after them are not mentioned. It defaults to 2. 0 is refused: to notify nobody, leave mentions empty. Minimum 1. |
 
 ## ChatAcknowledgment
 
@@ -150,6 +152,15 @@ RateLimit allows MaxRuns agent runs per window and MaxConcurrent at once.
 | `maxRuns` | integer | Yes | None | Minimum 1. |
 | `per` | duration | Yes | None | Per is the window length. |
 | `maxConcurrent` | integer | Yes | None | Minimum 1. |
+
+## ChatMention
+
+ChatMention is one person an agent may notify.
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | string | Yes | None | Name is what the agent writes, after an `@`: lowercase letters, digits and `-`, starting with a letter, at most 63 characters. `here`, `channel` and `everyone` are refused. Pattern `^[a-z][a-z0-9-]{0,62}$`. |
+| `user` | string | Yes | None | User is the platform's user ID of the person (Slack: `U…` or `W…`). It comes only from here, never from the agent. Pattern `^[UW][A-Z0-9]{2,20}$`. |
 
 ## Interactions
 
