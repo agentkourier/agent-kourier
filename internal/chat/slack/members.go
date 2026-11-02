@@ -95,11 +95,13 @@ func (c *Client) IsChannelMember(ctx context.Context, channel, user string) (tel
 // The scopes are those of the call as Slack's method page lists them (docs.slack.dev/reference/methods/conversations.info/,
 // read 2026-11-01): channels:read, groups:read, im:read and mpim:read, one for each kind of conversation. The app asks for
 // channels:read and groups:read, which are IsChannelMember's, and is not asked about a direct message, which a Binding does
-// not name. The page does not describe is_member or is_archived.
+// not name. On that page, neither field is described in prose; its public-channel example response shows
+// is_archived (false) and no is_member, and it has no private-channel example. Both are in slack-go v0.33.0's Channel type
+// (channels.go, conversation.go).
 //
-// UNCONFIRMED(BV-3): that is_member is the bot's own membership for a bot token (the page is silent; slack-go decodes it
-// from the channel object), that it is true for an archived channel the bot was in, and what Slack answers for a private
-// channel the bot is not in (channelAccessCode).
+// UNCONFIRMED(BV-3): that Slack sends is_member to a bot token at all (the page's example has none, and an absent flag
+// reads as false here), that it is the bot's own membership, that it is true for an archived channel the bot was in, and what
+// Slack answers for a private channel the bot is not in (channelAccessCode).
 func (c *Client) ChannelAccess(ctx context.Context, channel string) (telemetryResult0 chat.Access, telemetryErr error) {
 	if channel == "" {
 		return chat.Access{}, fmt.Errorf("slack channel access: no channel: %w", chat.ErrChannelNotFound)

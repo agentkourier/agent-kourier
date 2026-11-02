@@ -41,7 +41,8 @@ func (s *Server) SetMembers(channel string, users ...string) {
 }
 
 // SetArchived marks channel archived, or not. It does not register the channel: conversations.info reports
-// channel_not_found until SetMembers has.
+// channel_not_found until SetMembers has. Only conversations.info reads the mark: the fake's chat.postMessage and its other
+// methods still accept a post to an archived channel.
 func (s *Server) SetArchived(channel string, archived bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -75,8 +76,11 @@ func (s *Server) scopeMissing(method string) bool {
 // Error code from the docs: channel_not_found, for a channel value that was invalid.
 //
 // UNCONFIRMED(BV-3): what Slack answers for a private channel the bot is not in (channel_not_found, or the channel with
-// is_member false): the page does not say. This fake knows every registered channel, so it answers the second. The page
-// does not describe is_member or is_archived either; both are in slack-go's Channel and in Slack's sample responses.
+// is_member false): the page does not say. This fake knows every registered channel, so it answers the second. On the
+// page (read 2026-11-01), neither field is described in prose; its public-channel example response shows
+// is_archived (false) and no is_member, and it has no private-channel example. Both are in slack-go v0.33.0's Channel type
+// (channels.go, conversation.go).
+// That Slack sends is_member to a bot token at all is unconfirmed too: the page's example has none.
 // invalid_arguments for a call with no channel is also a guess: the page lists the code among its general ones.
 func (s *Server) conversationsInfo(form url.Values) (response, string) {
 	channel := form.Get("channel")

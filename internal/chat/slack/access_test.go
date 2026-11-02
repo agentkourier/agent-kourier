@@ -95,7 +95,8 @@ func TestChannelAccessWithNoChannelMakesNoCall(t *testing.T) {
 }
 
 // TestChannelAccessSaysWhichFailuresCanNeverSucceed: the two codes of conversations.info that only an operator can mend wrap
-// their sentinels, and everything else, a rejected token included, does not.
+// their sentinels, and everything else does not. A token Slack rejects is Classify's FatalAuth, a rate limit keeps the wait
+// Slack named, and nothing else is either.
 func TestChannelAccessSaysWhichFailuresCanNeverSucceed(t *testing.T) {
 	slackError := func(code string) string { return `{"ok":false,"error":"` + code + `"}` }
 	for name, tc := range map[string]struct {
@@ -103,16 +104,19 @@ func TestChannelAccessSaysWhichFailuresCanNeverSucceed(t *testing.T) {
 		body   string
 		err    error
 		hang   bool
-		want   error // the sentinel the error wraps, or nil for neither
+		want   error         // the sentinel the error wraps, or nil for neither
+		fatal  bool          // Classify says FatalAuth: a credential Slack rejects
+		wait   time.Duration // Classify's RetryAfter: the counter's 429 names 7 seconds
 	}{
 		"a channel that is not found":            {status: http.StatusOK, body: slackError("channel_not_found"), want: chat.ErrChannelNotFound},
 		"an app without the scope":               {status: http.StatusOK, body: slackError("missing_scope"), want: chat.ErrMissingScope},
-		"a rejected token is fatal auth, not us": {status: http.StatusOK, body: slackError("invalid_auth")},
-		"a revoked token":                        {status: http.StatusOK, body: slackError("token_revoked")},
-		"no token":                               {status: http.StatusOK, body: slackError("not_authed")},
+		"a rejected token is fatal auth, not us": {status: http.StatusOK, body: slackError("invalid_auth"), fatal: true},
+		"a revoked token":                        {status: http.StatusOK, body: slackError("token_revoked"), fatal: true},
+		"a deactivated account":                  {status: http.StatusOK, body: slackError("account_inactive"), fatal: true},
+		"no token":                               {status: http.StatusOK, body: slackError("not_authed"), fatal: true},
 		"access denied names no cause":           {status: http.StatusOK, body: slackError("access_denied")},
 		"a workspace the token cannot reach":     {status: http.StatusOK, body: slackError("team_access_not_granted")},
-		"a rate limit as a 429":                  {status: http.StatusTooManyRequests},
+		"a rate limit as a 429":                  {status: http.StatusTooManyRequests, wait: 7 * time.Second},
 		"a rate limit as a code":                 {status: http.StatusOK, body: slackError("ratelimited")},
 		"a 500":                                  {status: http.StatusInternalServerError, body: "oops"},
 		"a 502":                                  {status: http.StatusBadGateway, body: "bad gateway"},
@@ -132,6 +136,9 @@ func TestChannelAccessSaysWhichFailuresCanNeverSucceed(t *testing.T) {
 				if is, want := errors.Is(err, sentinel), errors.Is(tc.want, sentinel); is != want {
 					t.Errorf("error %v: wraps %v = %t; want %t", err, sentinel, is, want)
 				}
+			}
+			if v := slack.NewPlatform(c, "ns/conn").Classify(chat.OpOther, err); (v.Class == chat.FatalAuth) != tc.fatal || v.RetryAfter != tc.wait {
+				t.Errorf("Classify = %+v; want FatalAuth %t and RetryAfter %v", v, tc.fatal, tc.wait)
 			}
 		})
 	}

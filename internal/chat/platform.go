@@ -253,9 +253,11 @@ type Platform interface {
 	// does not grow with the channel. An error leaves the Access zero, which is not an answer: the caller treats an error
 	// as "unknown", never as "not a member". An error wraps ErrChannelNotFound when the platform says there is no such
 	// channel for Agent Kourier to see, and ErrMissingScope when the platform refuses the read for want of a permission
-	// the app was installed without; the caller checks them with errors.Is and does not retry. Any other error (a
-	// timeout, a server error, a rate limit, a cancelled context, a credential the platform rejects, which Run reports as
-	// FatalAuth) may pass on another try and stays unclassified. An empty channel is ErrChannelNotFound with no call.
+	// the app was installed without; the caller checks them with errors.Is and does not retry. A credential the platform
+	// rejects wraps neither: Classify(OpOther, err) says FatalAuth for it, and ChannelAccess itself stops nothing, so
+	// the caller decides what a rejected credential means.
+	// Any other error (a timeout, a server error, a rate limit, a cancelled context) may pass on another try and stays
+	// unclassified. An empty channel is ErrChannelNotFound with no call.
 	ChannelAccess(ctx context.Context, channel string) (Access, error)
 	// IsBot says whether user is a bot. It fails closed: a user it cannot read is a bot, with the error.
 	IsBot(ctx context.Context, user string) (bool, error)

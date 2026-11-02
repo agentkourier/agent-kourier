@@ -365,6 +365,7 @@ func (m *markupPlatform) subject() Subject {
 			}
 			return nil
 		},
+		Channels:      m.arrangeChannel,
 		TooLarge:      &chat.Prompt{ID: "ix-big", Questions: make([]chat.Question, 500)},
 		ToolApprovals: !m.leaks.undeclaredTools,
 		TooLargeTools: &chat.Prompt{ID: "ix-big-tools", Tools: make([]chat.Tool, 500)},
@@ -837,6 +838,9 @@ func TestEachPlaceOfAToolApprovalPutsItsTextWhereItsNameSays(t *testing.T) {
 // accessLeaks are the ways wrongAccess answers ChannelAccess wrongly, one at a time. Each is a way a real adapter fails.
 type accessLeaks struct {
 	memberWhenNot    bool // says Member for a channel the app is not in
+	neverMember      bool // never says Member, even for a channel the app is in
+	accessOnFailure  bool // gives an Access beside the error of a failed read, which is no answer
+	accessOnCancel   bool // gives an Access beside the error of a cancelled context
 	archivedIgnored  bool // never says Archived
 	unknownPlain     bool // an unknown channel is a plain error, which a caller would retry
 	scopePlain       bool // a missing scope is a plain error
@@ -854,6 +858,9 @@ func (w *wrongAccess) ChannelAccess(ctx context.Context, channel string) (chat.A
 	if w.leaks.cancelIsNotFound && ctx.Err() != nil {
 		return chat.Access{}, fmt.Errorf("gone: %w", chat.ErrChannelNotFound)
 	}
+	if w.leaks.accessOnCancel && ctx.Err() != nil {
+		return chat.Access{Member: true}, ctx.Err()
+	}
 	if w.leaks.emptyPlain && channel == "" {
 		return chat.Access{}, errors.New("no channel")
 	}
@@ -865,6 +872,12 @@ func (w *wrongAccess) ChannelAccess(ctx context.Context, channel string) (chat.A
 		return chat.Access{}, errors.New(err.Error())
 	}
 	if w.leaks.memberWhenNot && err == nil {
+		a.Member = true
+	}
+	if w.leaks.neverMember {
+		a.Member = false
+	}
+	if w.leaks.accessOnFailure && err != nil && channel != "" {
 		a.Member = true
 	}
 	if w.leaks.archivedIgnored {
@@ -894,14 +907,17 @@ func TestConformanceFindsAChannelAccessThatBreaksTheContract(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		leaks accessLeaks
-		bad   string // the state whose check finds it
+		bad   []string // the checks that find it
 	}{
-		"a member that is not":                            {accessLeaks{memberWhenNot: true}, "not joined"},
-		"an archived channel not marked":                  {accessLeaks{archivedIgnored: true}, "archived"},
-		"an unknown channel that is a plain error":        {accessLeaks{unknownPlain: true}, "unknown channel"},
-		"a missing scope that is a plain error":           {accessLeaks{scopePlain: true}, "missing scope"},
-		"a cancelled context taken for a missing channel": {accessLeaks{cancelIsNotFound: true}, "cancelled context"},
-		"an empty channel not said to be missing":         {accessLeaks{emptyPlain: true}, "no channel"},
+		"a member that is not":                            {accessLeaks{memberWhenNot: true}, []string{"not joined"}},
+		"a bot that is never a member":                    {accessLeaks{neverMember: true}, []string{"joined"}},
+		"an archived channel not marked":                  {accessLeaks{archivedIgnored: true}, []string{"archived"}},
+		"an unknown channel that is a plain error":        {accessLeaks{unknownPlain: true}, []string{"unknown channel"}},
+		"a missing scope that is a plain error":           {accessLeaks{scopePlain: true}, []string{"missing scope"}},
+		"an Access beside the error of a failed read":     {accessLeaks{accessOnFailure: true}, []string{"unknown channel", "missing scope"}},
+		"a cancelled context taken for a missing channel": {accessLeaks{cancelIsNotFound: true}, []string{"cancelled context"}},
+		"an Access beside the error of a cancelled one":   {accessLeaks{accessOnCancel: true}, []string{"cancelled context"}},
+		"an empty channel not said to be missing":         {accessLeaks{emptyPlain: true}, []string{"no channel"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			w := &wrongAccess{FakePlatform: NewFake(), leaks: tc.leaks}
@@ -916,34 +932,21 @@ func TestConformanceFindsAChannelAccessThatBreaksTheContract(t *testing.T) {
 					found = append(found, v.Case)
 				}
 			}
-			if !slices.Equal(found, []string{tc.bad}) {
+			if !slices.Equal(found, tc.bad) {
 				t.Errorf("ChannelAccess violations in %v, want only %q", found, tc.bad)
 			}
 		})
 	}
 }
 
-// A subject that arranges no channels is not held to the states, which it cannot be put in; every subject is held to the
-// answer for no channel.
-func TestConformanceWithoutChannelsChecksOnlyTheEmptyChannel(t *testing.T) {
+// Channels is required, like Sent and Inert: a subject without it would pass with the states of ChannelAccess unchecked.
+func TestConformanceRefusesASubjectWithoutChannels(t *testing.T) {
 	t.Parallel()
-	f := NewFake()
-	s := f.Subject()
+	s := NewFake().Subject()
 	s.Channels = nil
-	if vs := CheckWith(t.Context(), s, Options{Short: true}); len(vs) != 0 {
-		t.Fatalf("violations: %v", vs)
-	}
-	w := &wrongAccess{FakePlatform: NewFake(), leaks: accessLeaks{emptyPlain: true}}
-	s = w.Subject()
-	s.Platform, s.Channels = w, nil
-	var found []string
-	for _, v := range CheckWith(t.Context(), s, Options{Short: true}) {
-		if v.Method == "ChannelAccess" {
-			found = append(found, v.Case)
-		}
-	}
-	if !slices.Equal(found, []string{"no channel"}) {
-		t.Errorf("ChannelAccess violations %v, want only the empty channel", found)
+	vs := Check(t.Context(), s)
+	if len(vs) != 1 || vs[0].Rule != RuleSetup || !strings.Contains(vs[0].Detail, "Channels") {
+		t.Errorf("Check of a subject with no Channels = %v, want one setup violation that names Channels", vs)
 	}
 }
 

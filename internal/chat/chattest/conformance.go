@@ -65,11 +65,11 @@ type Subject struct {
 	// TooLargeTools, if set and ToolApprovals is, is a prompt of tools too large for the platform: Fits must refuse it
 	// with chat.ErrTooLarge.
 	TooLargeTools *chat.Prompt
-	// Channels, if set, puts the platform in each ChannelState the contract of ChannelAccess names, and returns the channel
-	// that is then in it: Conformance asks ChannelAccess of that channel. It is how an adapter lets the suite reach states
-	// that only its platform can be put in (an archived channel, a missing permission), so an adapter sets it. A subject
-	// that leaves it nil is checked for the empty channel alone. It may change what the platform answers for every channel,
-	// and the suite calls it again before it asks about the next state.
+	// Channels puts the platform in each ChannelState the contract of ChannelAccess names, and returns the channel that is then
+	// in it: Conformance asks ChannelAccess of that channel. It is how an adapter lets the suite reach states that only its
+	// platform can be put in (an archived channel, a missing permission). It is required: a Subject without it is a setup
+	// violation, so that a new adapter cannot pass with ChannelAccess unchecked. It may change what the platform answers for
+	// every channel, and the suite calls it again before it asks about the next state.
 	Channels func(ChannelState) string
 	// MentionUser is a user ID the platform shows as a mention, in a chat.Mention part, or "" if the platform has
 	// none: then a Mention shows its user as nothing but text. The checks send it, and require exactly one mention
@@ -229,8 +229,8 @@ func ConformanceSharded(t *testing.T, shards int, newSubject func(t *testing.T) 
 
 // checkShard runs the checks of some places, and the contract if asked.
 func checkShard(ctx context.Context, s Subject, opts Options, places []placement, contract bool) []Violation {
-	if s.Platform == nil || s.Sent == nil || s.Inert == nil {
-		return []Violation{{Rule: RuleSetup, Case: "subject", Detail: "Platform, Sent and Inert are all required"}}
+	if s.Platform == nil || s.Sent == nil || s.Inert == nil || s.Channels == nil {
+		return []Violation{{Rule: RuleSetup, Case: "subject", Detail: "Platform, Sent, Inert and Channels are all required"}}
 	}
 	for _, cc := range s.Concessions {
 		if cc.Why == "" || len(cc.Kinds) == 0 {
@@ -353,15 +353,12 @@ func (c *checker) contract() {
 // accessContract checks what a platform promises of ChannelAccess (see the method): it answers for Agent Kourier's membership
 // and for the archived flag, says ErrChannelNotFound for a channel it does not know and for none, ErrMissingScope for an app
 // that lacks the permission, and leaves the Access zero and the error unclassified when it fails in any other way, a
-// cancelled context included. The states are reached through Subject.Channels; without it only the empty channel is checked.
+// cancelled context included. The states are reached through Subject.Channels, which every subject sets.
 func (c *checker) accessContract(ctx context.Context) {
 	p := c.s.Platform
 	_, err := p.ChannelAccess(ctx, "")
 	if !errors.Is(err, chat.ErrChannelNotFound) {
 		c.add(RuleContract, 0, "ChannelAccess", "no channel", "an empty channel gave %v, want an error wrapping chat.ErrChannelNotFound", err)
-	}
-	if c.s.Channels == nil {
-		return
 	}
 	channelIn := func(st ChannelState) (string, bool) {
 		ch := c.s.Channels(st)
