@@ -372,19 +372,6 @@ func (c *checker) accessContract(ctx context.Context) {
 			c.add(RuleContract, 0, "ChannelAccess", cs, "Classify(OpOther) of %v is Permanent with no reason", err)
 		}
 	}
-	_, err := p.ChannelAccess(ctx, "")
-	if !errors.Is(err, chat.ErrChannelNotFound) {
-		c.add(RuleContract, 0, "ChannelAccess", "no channel", "an empty channel gave %v, want an error wrapping chat.ErrChannelNotFound", err)
-	} else {
-		classified("no channel", err, chat.ErrChannelNotFound)
-	}
-	channelIn := func(st ChannelState) (string, bool) {
-		ch := c.s.Channels(st)
-		if ch == "" {
-			c.add(RuleSetup, 0, "ChannelAccess", st.String(), "Subject.Channels named no channel for the state")
-		}
-		return ch, ch != ""
-	}
 	// failed checks the error and Access of a call that must fail with want, and with no other sentinel.
 	failed := func(cs string, a chat.Access, err, want error) {
 		for _, sentinel := range []error{chat.ErrChannelNotFound, chat.ErrMissingScope} {
@@ -397,6 +384,15 @@ func (c *checker) accessContract(ctx context.Context) {
 			c.add(RuleContract, 0, "ChannelAccess", cs, "gave the Access %+v with the error %v, want the zero Access", a, err)
 		}
 		classified(cs, err, want)
+	}
+	a, err := p.ChannelAccess(ctx, "")
+	failed("no channel", a, err, chat.ErrChannelNotFound)
+	channelIn := func(st ChannelState) (string, bool) {
+		ch := c.s.Channels(st)
+		if ch == "" {
+			c.add(RuleSetup, 0, "ChannelAccess", st.String(), "Subject.Channels named no channel for the state")
+		}
+		return ch, ch != ""
 	}
 	for _, tc := range []struct {
 		state ChannelState
