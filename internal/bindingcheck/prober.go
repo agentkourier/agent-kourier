@@ -2,6 +2,7 @@ package bindingcheck
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"runtime/debug"
@@ -47,8 +48,8 @@ type ChannelChecker interface {
 	CheckChannel(ctx context.Context, channel string) (Outcome, error)
 }
 
-// PanicError is the error OnProbeError gets for a checker that panicked. For a panic of one of the other callbacks
-// in Options it is wrapped in the error (find it with errors.As).
+// PanicError is the error OnProbeError gets for a checker that panicked. For a panic of Targets, Revision,
+// OnTransition or OnPrune it is wrapped in the error (find it with errors.As).
 type PanicError struct {
 	// Value is what was passed to panic. It may hold anything the panicking code had in hand, so redact it.
 	Value any
@@ -63,13 +64,15 @@ func (e *PanicError) Error() string { return fmt.Sprintf("panic: %v", e.Value) }
 // error, panicked, or reported an outcome with no usable status or reason. The condition is then Unknown/ProbeFailed
 // and its Message says nothing of Err. The others are failures of the caller's own code, which leave no condition
 // behind: Condition is empty and Targets nil when Targets, Revision or OnPrune panicked or Revision did not answer
-// in time (Targets is reported on every Tick it panics, Revision for every call that fails); Condition and Targets
-// name the probe whose result was being recorded when OnTransition panicked.
+// in time or ended its goroutine (Targets is reported on every Tick it panics, Revision for every call that fails).
+// When OnTransition panicked, Condition is the condition the probe was setting and Targets is the one Binding whose
+// transition it was.
 type ProbeError struct {
-	// Condition is the condition the probe was setting.
+	// Condition is the condition the probe was setting. It is empty when the failure is not a probe's, as above.
 	Condition ConditionType
-	// Targets are the Bindings it was setting it for: one for BackendReachable, every Binding of the channel for
-	// ChannelJoined.
+	// Targets are the Bindings the probe was setting it for: one for BackendReachable, every Binding of the channel
+	// for ChannelJoined. For an OnTransition panic it is the one Binding whose transition it was; for the other
+	// failures that are not a probe's it is nil.
 	Targets []Target
 	// Err is the failure. For a panic it is or wraps a *PanicError.
 	Err error
@@ -87,7 +90,8 @@ type Options struct {
 	// its own under the Timeout, and must honor its context. When a read fails it should return a marker that
 	// differs from any revision it returns on success and is the same on every call while the failure lasts: the
 	// next pass then reports the failure, and the recovery is another change that runs another pass. A call that
-	// panics or outlasts the Timeout counts as no change and is reported to OnProbeError. While a call that outlasted
+	// panics, ends its goroutine (runtime.Goexit) or outlasts the Timeout counts as no change and is reported to
+	// OnProbeError. While a call that outlasted
 	// the Timeout has not returned, Revision is not called again and each Tick counts as no change (unreported), so
 	// a Revision that ignores its context loses one goroutine, and what it returns late is dropped. Nil means the
 	// config is never revised.
@@ -205,6 +209,10 @@ func (p *Prober) Run(ctx context.Context) {
 		var changed bool
 		if got, ok := p.listTargets(); ok {
 			targets, changed = p.sync(got)
+		} else {
+			// The revision cannot be probed against targets that are not known to be current. Leave it unseen, so
+			// that the first Tick where Targets answers sees the change and probes.
+			cur = rev
 		}
 		if ctx.Err() != nil {
 			return
@@ -252,8 +260,8 @@ func (p *Prober) revision(ctx context.Context) (string, bool) {
 	p.started.Go(func() {
 		var res result
 		defer func() { p.revisionBusy.Store(false); done <- res }()
-		rev, err := call(rctx, func(c context.Context) (string, error) { return p.o.Revision(c), nil })
-		res = result{rev, true, err}
+		res.err = guard(func() { res.rev = p.o.Revision(rctx) })
+		res.ok = true
 	})
 	var (
 		res      result
@@ -269,7 +277,9 @@ func (p *Prober) revision(ctx context.Context) (string, bool) {
 		p.fail(ProbeError{Err: fmt.Errorf("calling Revision: %w", res.err)})
 	case !returned || rctx.Err() != nil:
 		p.fail(ProbeError{Err: fmt.Errorf("revision did not answer within %s", p.o.Timeout)})
-	case res.ok:
+	case !res.ok:
+		p.fail(ProbeError{Err: errors.New("revision ended its goroutine without returning")})
+	default:
 		return res.rev, true
 	}
 	return "", false
@@ -439,7 +449,9 @@ func (p *Prober) probe(ctx context.Context, key probeKey, fn func(context.Contex
 		// frees its target and answers; the zero answer has no usable status and is a failed probe.
 		var got checked
 		defer func() { p.release(key); done <- got }()
-		got.out, got.err = call(pctx, fn)
+		if err := guard(func() { got.out, got.err = fn(pctx) }); err != nil {
+			got.out, got.err = Outcome{}, err
+		}
 	})
 
 	var got checked
@@ -490,15 +502,6 @@ func (p *Prober) release(key probeKey) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	delete(p.running, key)
-}
-
-// call runs fn and turns a panic into a *PanicError.
-func call[T any](ctx context.Context, fn func(context.Context) (T, error)) (out T, err error) {
-	if perr := guard(func() { out, err = fn(ctx) }); perr != nil {
-		var zero T
-		return zero, perr
-	}
-	return out, err
 }
 
 // guard runs fn and returns the panic it raised, if any, as a *PanicError.

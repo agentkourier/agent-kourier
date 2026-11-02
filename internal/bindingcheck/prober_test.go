@@ -655,6 +655,174 @@ func TestAHookThatPanicsCannotStopTheProberAndOnProbeErrorDoesNotRecurse(t *test
 	})
 }
 
+// errorLog collects what OnProbeError is given.
+type errorLog struct {
+	mu   sync.Mutex
+	errs []ProbeError
+}
+
+func (l *errorLog) add(pe ProbeError) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.errs = append(l.errs, pe)
+}
+
+func (l *errorLog) all() []ProbeError {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.errs)
+}
+
+func TestARevisionThatEndsItsGoroutineIsReportedNotBelievedAndCalledAgain(t *testing.T) {
+	g := &targets{}
+	g.set("r1", Target{"a", "C1"})
+	var calls atomic.Int32
+	rev := func(context.Context) string {
+		if calls.Add(1) == 2 {
+			runtime.Goexit() // what a test fake's t.Fatal does
+		}
+		return "r1"
+	}
+	agents := &fakeAgents{}
+	var log errorLog
+	run(t, Options{Targets: g.Targets, Revision: rev, Agents: agents, OnProbeError: log.add}, func(h *harness) {
+		h.advance(3 * tick) // the Goexit call, then two calls that answer r1
+		if calls.Load() < 4 {
+			t.Errorf("Revision calls = %d, want the loop to call it again after the Goexit", calls.Load())
+		}
+		if agents.total() != 1 {
+			t.Errorf("probes = %d, want 1: the Goexit's empty answer was believed as a new revision", agents.total())
+		}
+		if errs := log.all(); len(errs) != 1 || errs[0].Err == nil || errs[0].Condition != "" || len(errs[0].Targets) != 0 {
+			t.Errorf("OnProbeError calls = %+v, want one for the Revision call that ended", errs)
+		}
+	})
+}
+
+func TestARevisionInFlightAtShutdownIsNotAFailure(t *testing.T) {
+	g := &targets{}
+	g.set("r1", Target{"a", "C1"})
+	var log errorLog
+	run(t, Options{Targets: g.Targets, Agents: &fakeAgents{}, Revision: func(ctx context.Context) string {
+		<-ctx.Done()
+		return "junk"
+	}, OnProbeError: log.add}, func(h *harness) {
+		h.stop()
+		if errs := log.all(); len(errs) != 0 {
+			t.Errorf("OnProbeError calls = %+v for a Revision call cut off by the shutdown", errs)
+		}
+	})
+}
+
+func TestARevisionThatTimesOutIsReportedOncePerCall(t *testing.T) {
+	g := &targets{}
+	g.set("r1", Target{"a", "C1"})
+	var log errorLog
+	run(t, Options{Targets: g.Targets, Agents: &fakeAgents{}, Revision: func(ctx context.Context) string {
+		<-ctx.Done()
+		return "junk"
+	}, OnProbeError: log.add}, func(h *harness) {
+		h.advance(timeout)
+		errs := log.all()
+		if len(errs) != 1 || errs[0].Err == nil || errs[0].Condition != "" || len(errs[0].Targets) != 0 {
+			t.Errorf("OnProbeError calls = %+v, want one for the Revision call that timed out", errs)
+		}
+	})
+}
+
+func TestATargetsThatPanicsDoesNotConsumeANewRevision(t *testing.T) {
+	g := &targets{}
+	g.set("r1", Target{"b", "C1"})
+	var broken atomic.Bool
+	agents, chans := &fakeAgents{}, &fakeChannels{}
+	run(t, Options{Agents: agents, Channels: chans, Revision: g.Revision, Targets: func() []Target {
+		if broken.Load() {
+			panic("targets boom")
+		}
+		return g.Targets()
+	}}, func(h *harness) {
+		broken.Store(true)
+		g.set("r2", Target{"b", "C2"}) // the Binding moves while Targets is down
+		h.advance(3 * tick)
+		if agents.total() != 1 {
+			t.Fatalf("probes while Targets panicked = %d, want 1: no pass runs for a revision that cannot be probed", agents.total())
+		}
+		broken.Store(false)
+		h.advance(tick)
+		if chans.count("C2") != 1 {
+			t.Errorf("the new channel was probed %d times at the first tick after Targets recovered, want 1", chans.count("C2"))
+		}
+	})
+}
+
+func TestATargetsThatPanicsOnTheFirstTickProbesAtTheNextTickItWorks(t *testing.T) {
+	g := &targets{}
+	g.set("r1", Target{"a", "C1"})
+	var broken atomic.Bool
+	broken.Store(true)
+	agents := &fakeAgents{}
+	run(t, Options{Agents: agents, Revision: g.Revision, Targets: func() []Target {
+		if broken.Load() {
+			panic("targets boom")
+		}
+		return g.Targets()
+	}}, func(h *harness) {
+		if agents.total() != 0 || len(h.p.State().Snapshot()) != 0 {
+			t.Fatalf("probes = %d, Bindings = %d, want an empty pass", agents.total(), len(h.p.State().Snapshot()))
+		}
+		broken.Store(false)
+		h.advance(tick)
+		if agents.count("a") != 1 {
+			t.Errorf("probes at the first working tick = %d, want 1: the Binding is new", agents.count("a"))
+		}
+		wantCond(t, h.conds("a"), BackendReachable, True, ReasonOK)
+	})
+}
+
+func TestAnOnPrunePanicIsReported(t *testing.T) {
+	g := &targets{}
+	g.set("r1", Target{"a", "C1"}, Target{"b", "C2"})
+	var log errorLog
+	run(t, Options{Targets: g.Targets, Revision: g.Revision, Agents: &fakeAgents{}, OnPrune: func([]string) { panic("prune boom") }, OnProbeError: log.add}, func(h *harness) {
+		g.set("r2", Target{"a", "C1"})
+		h.advance(tick)
+		errs := log.all()
+		var panicked *PanicError
+		if len(errs) != 1 || !errors.As(errs[0].Err, &panicked) || panicked.Value != "prune boom" || errs[0].Condition != "" || len(errs[0].Targets) != 0 {
+			t.Errorf("OnProbeError calls = %+v, want one PanicError for OnPrune", errs)
+		}
+	})
+}
+
+func TestAnOnTransitionPanicDoesNotSkipTheOtherBindingsOfASharedChannel(t *testing.T) {
+	g := &targets{}
+	g.set("r1", Target{"a", "C1"}, Target{"b", "C1"}, Target{"c", "C1"})
+	var log errorLog
+	var transitions atomic.Int32
+	run(t, Options{Targets: g.Targets, Revision: g.Revision, Channels: &fakeChannels{}, OnProbeError: log.add, OnTransition: func(Transition) {
+		transitions.Add(1)
+		panic("transition boom")
+	}}, func(h *harness) {
+		for _, b := range []string{"a", "b", "c"} {
+			wantCond(t, h.conds(b), ChannelJoined, True, ReasonOK)
+			wantCond(t, h.conds(b), Ready, True, ReasonOK)
+		}
+		// Each Binding changes ChannelJoined and Ready, and every change is announced although the first panicked.
+		if transitions.Load() != 6 {
+			t.Errorf("OnTransition calls = %d, want 6", transitions.Load())
+		}
+		reported := map[string]bool{}
+		for _, pe := range log.all() {
+			if len(pe.Targets) == 1 {
+				reported[pe.Targets[0].Binding] = true
+			}
+		}
+		if len(reported) != 3 {
+			t.Errorf("OnTransition panics reported for %v, want a, b and c", reported)
+		}
+	})
+}
+
 func TestPassesDoNotOverlap(t *testing.T) {
 	g := &targets{}
 	g.set("r1", Target{"b", "C1"})
