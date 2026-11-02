@@ -73,20 +73,23 @@ func (c *clock) After(d time.Duration) <-chan time.Time {
 	return ch
 }
 
-// mark is how many timers After has made so far: a timer made after it is one that catchUp turns the clock for.
+// mark is how many timers After has made so far: catchUp is told which timers to turn the clock for by two of these.
 func (c *clock) mark() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.made
 }
 
-// catchUp turns the clock to the earliest pending timer that After made since mark, and fires what is due by then, and
-// returns how far it turned the clock. With no such timer it fires what is due, and moves nothing.
-func (c *clock) catchUp(mark int) time.Duration {
+// catchUp turns the clock to the earliest pending timer that a turn of the clock could not reach, and fires what is due by
+// then, and returns how far it turned the clock: a timer After made since stopped, and a write window it made since began.
+// A longer timer made between the two is left alone, and so is any timer made before began: the turn had its chance at those.
+// With no such timer it fires what is due, and moves nothing.
+func (c *clock) catchUp(began, stopped int) time.Duration {
 	c.mu.Lock()
 	d, found := time.Duration(0), false
 	for _, tm := range c.timers {
-		if left := tm.at.Sub(c.now); tm.n >= mark && !tm.long && (!found || left < d) {
+		late := tm.n >= stopped || (tm.n >= began && tm.d <= throttle)
+		if left := tm.at.Sub(c.now); late && !tm.long && (!found || left < d) {
 			d, found = left, true
 		}
 	}
@@ -96,21 +99,6 @@ func (c *clock) catchUp(mark int) time.Duration {
 	return d
 }
 
-// catchUpWindow turns the clock to the earliest pending timer armed for no more than a write window, whenever it was armed,
-// and fires what is due by then. With no such timer it fires what is due, and moves nothing. A timer of the delay is longer,
-// so it does not bring the clock to it.
-func (c *clock) catchUpWindow() {
-	c.mu.Lock()
-	d, found := time.Duration(0), false
-	for _, tm := range c.timers {
-		if left := tm.at.Sub(c.now); tm.d <= throttle && (!found || left < d) {
-			d, found = left, true
-		}
-	}
-	c.mu.Unlock()
-	c.advance(max(d, 0))
-}
-
 // due is when the earliest timer fires.
 func (c *clock) due() time.Time {
 	c.mu.Lock()
@@ -118,6 +106,20 @@ func (c *clock) due() time.Time {
 	var earliest time.Time
 	for _, tm := range c.timers {
 		if !tm.long && (earliest.IsZero() || tm.at.Before(earliest)) {
+			earliest = tm.at
+		}
+	}
+	return earliest
+}
+
+// dueForAtOnce is when the earliest timer fires that atOnce turns the clock to: one due by by, and, if whole is set, one armed for
+// a whole write window, whenever that falls due. It is the zero time if there is none.
+func (c *clock) dueForAtOnce(by time.Time, whole bool) time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var earliest time.Time
+	for _, tm := range c.timers {
+		if !tm.long && (!tm.at.After(by) || (whole && tm.d == throttle)) && (earliest.IsZero() || tm.at.Before(earliest)) {
 			earliest = tm.at
 		}
 	}
@@ -150,6 +152,62 @@ func (c *clock) advance(d time.Duration) {
 		}
 	}
 	c.timers = keep
+}
+
+// catchUp reaches the window a slow run armed while the clock was turning, which falls due past where the clock stopped, and
+// a timer of any length armed after the stop. It leaves the delay armed during the turn, or a thing that comes too late would
+// pass until.
+func TestCatchUpTurnsOnlyForATimerTheTurnCouldNotReach(t *testing.T) {
+	c := &clock{now: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)}
+	began := c.mark()
+	c.advance(step)
+	delay := c.After(3 * time.Second)
+	window := c.After(throttle)
+	c.advance(throttle - step)
+	stopped := c.mark()
+	if d := c.catchUp(began, stopped); d != step {
+		t.Fatalf("catchUp turned the clock %v; want %v, to the window", d, step)
+	}
+	if len(window) != 1 {
+		t.Error("the window armed during the turn did not fire")
+	}
+	if d := c.catchUp(began, stopped); d != 0 {
+		t.Errorf("catchUp turned the clock %v for the delay armed during the turn; want none", d)
+	}
+	if len(delay) != 0 {
+		t.Error("the delay armed during the turn fired")
+	}
+	after := c.After(5 * time.Second)
+	if d := c.catchUp(began, stopped); d != 5*time.Second {
+		t.Errorf("catchUp turned the clock %v; want 5s, to the timer armed after the stop", d)
+	}
+	if len(after) != 1 {
+		t.Error("the timer armed after the stop did not fire")
+	}
+}
+
+// atOnce turns to a timer due within its window, and to a whole write window armed late while it is told to, and never to what
+// is left of the delay.
+func TestDueForAtOnceLeavesTheDelay(t *testing.T) {
+	start := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	c := &clock{now: start}
+	by := start.Add(throttle)
+	c.After(3 * time.Second)
+	if got := c.dueForAtOnce(by, true); !got.IsZero() {
+		t.Errorf("due %v with only the delay pending; want none", got)
+	}
+	c.advance(time.Second)
+	c.After(throttle)
+	if got, want := c.dueForAtOnce(by, true), start.Add(time.Second+throttle); !got.Equal(want) {
+		t.Errorf("due %v; want the window armed late, %v", got, want)
+	}
+	if got := c.dueForAtOnce(by, false); !got.IsZero() {
+		t.Errorf("due %v once the next request is made; want none", got)
+	}
+	c.After(time.Second)
+	if got := c.dueForAtOnce(by, false); !got.Equal(by) {
+		t.Errorf("due %v; want the timer due by the window's end, %v", got, by)
+	}
 }
 
 // recorder is the HTTP transport of the Slack client: it keeps every request's form, and fails

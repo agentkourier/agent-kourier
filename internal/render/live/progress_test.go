@@ -40,40 +40,49 @@ func (e *env) progressRun(t *testing.T, mode v1alpha1.ProgressMode, recipient st
 // slow to act on a timer that fell due arms the next one late, which makes the time longer and never shorter, so a test that
 // asserts a lower bound on it is exact. limit is how long the thing should take: once limit and some lag have passed, the clock
 // stops, and the run is given real time to act on the timers that are due, until the test's own deadline. A timer that the run
-// arms after the clock stopped is still turned to: a loaded machine can hold a run in a write, which it ends by arming the
-// timer of its next window, for longer than the clock takes to turn limit and the lag, and the clock would never reach it.
-// The clock is never turned for a timer armed before the stop, so a thing that comes too late still fails the test.
+// arms after the clock stopped is still turned to, and so is a write window that it armed while the clock was turning: a loaded
+// machine can hold a run in a write, which it ends by arming the timer of its next window, and a window armed less than its own
+// length before the stop, or after it, falls due past where the clock stopped. The clock is not turned for a longer timer armed
+// during the turn, nor for any timer armed before it, so a thing that comes too late still fails the test.
 func (e *env) until(t *testing.T, what string, limit time.Duration, cond func() bool) time.Duration {
 	t.Helper()
 	const lag = 5 * time.Second
-	return e.turn(t, what, limit+lag, cond)
-}
-
-// atOnce waits for a thing that only the throttle may hold back, and asserts that by how it waits: the clock turns one write
-// window, less than the delay, and from then on only for a timer of a write window, so a thing that waits for a timer of the
-// delay never comes and fails the test. A run that a loaded machine holds in a write arms the timer of its next window while
-// the clock turns, for a window from wherever the clock has got to, which is past where the clock stops: that timer is still
-// turned to. until's time says nothing of this: a slow run makes it longer, so it is no upper bound.
-func (e *env) atOnce(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	for spent := time.Duration(0); !cond() && spent < throttle; spent += step {
-		e.clk.advance(step)
-		time.Sleep(10 * time.Millisecond)
-	}
-	eventually(t, what, func() bool { e.clk.catchUpWindow(); return cond() })
-}
-
-// turn turns the clock as until says, as far as stop, and returns how much time that took.
-func (e *env) turn(t *testing.T, what string, stop time.Duration, cond func() bool) time.Duration {
-	t.Helper()
 	var spent time.Duration
-	for ; !cond() && spent < stop; spent += step {
+	began := e.clk.mark()
+	for ; !cond() && spent < limit+lag; spent += step {
 		e.clk.advance(step)
 		time.Sleep(10 * time.Millisecond)
 	}
 	stopped := e.clk.mark()
-	eventually(t, what, func() bool { spent += e.clk.catchUp(stopped); return cond() })
+	eventually(t, what, func() bool {
+		if cond() { // a window is owed nothing once the thing has come: turning for it would move the clock under the test's next step
+			return true
+		}
+		spent += e.clk.catchUp(began, stopped)
+		return false
+	})
 	return spent
+}
+
+// atOnce waits for a thing that only the throttle may hold back, and asserts that by how it waits: the clock stands until the run
+// waits on a timer that falls due within one write window, less than the delay, and turns only to that. A write already under way
+// when atOnce began is waited for as well: the run arms the window after it from the time the clock shows when it returns, which a
+// timer the run left behind can have moved, so until the next request, a whole write window is turned to however late it falls due.
+// That request is the one the thing should come with, so a thing that waits for a timer of the delay never comes and fails the
+// test. until's time says nothing of this: a slow run makes it longer, so it is no upper bound.
+func (e *env) atOnce(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	by := e.clk.Now().Add(throttle)
+	writes := e.writes()
+	eventually(t, what, func() bool {
+		if cond() {
+			return true
+		}
+		if due := e.clk.dueForAtOnce(by, e.writes() == writes); !due.IsZero() {
+			e.clk.advance(max(due.Sub(e.clk.Now()), 0))
+		}
+		return false
+	})
 }
 
 // elapse turns the clock d without waiting for anything, and gives the run a moment to act on a timer that fell due.
