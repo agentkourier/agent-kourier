@@ -1,0 +1,129 @@
+// Package bindingcheck computes and keeps the per-Binding conditions that say whether a Binding that loaded can
+// also be served: whether its agent backend answers, whether the bot is in its channel, and whether its approver
+// groups can be read.
+//
+// The package does no I/O of its own and knows neither the agent client nor a chat platform. A Prober calls the
+// AgentChecker and ChannelChecker it is given, and records what they report in a State. The conditions are shaped
+// like metav1.Condition so that a later controller can copy them into a status unchanged.
+package bindingcheck
+
+import "time"
+
+// ConditionType names one fact about a Binding.
+type ConditionType string
+
+// The condition types. Ready is derived by State from the others and is never set by a caller.
+const (
+	// BackendReachable is True when a fresh fetch of the agent card succeeded and the card is one the broker can use.
+	BackendReachable ConditionType = "BackendReachable"
+	// ChannelJoined is True when the bot is a member of the Binding's channel, which exists and is not archived.
+	ChannelJoined ConditionType = "ChannelJoined"
+	// ApproversReadable is True when every approver group the Binding names can be read. It applies only to a Binding
+	// that asks for tool approvals from groups, so a State holds it only for those.
+	ApproversReadable ConditionType = "ApproversReadable"
+	// Ready is True when every other condition the Binding has is True.
+	Ready ConditionType = "Ready"
+)
+
+// Status is the value of a condition.
+type Status string
+
+// The statuses, spelled as metav1.ConditionStatus spells them.
+const (
+	// True means the condition holds.
+	True Status = "True"
+	// False means the condition was checked and does not hold.
+	False Status = "False"
+	// Unknown means the condition could not be determined: not probed yet, or the probe could not tell.
+	Unknown Status = "Unknown"
+)
+
+// valid reports whether s is one of the three statuses.
+func (s Status) valid() bool { return s == True || s == False || s == Unknown }
+
+// Reason says why a condition has its status. The set is closed: a Reason is CamelCase and a person can act on it
+// without reading code. Ready carries the Type and Reason of the condition that holds it back, joined by a slash
+// (for example BackendReachable/AgentNotFound).
+type Reason string
+
+// The reasons of the condition table. A reason that applies to more than one condition appears once.
+const (
+	// ReasonPending is the reason of a condition whose first probe has not finished.
+	ReasonPending Reason = "Pending"
+	// ReasonOK is the reason of a condition that is True.
+	ReasonOK Reason = "OK"
+
+	// ReasonProbeFailed is the reason of an Unknown condition whose checker returned an error, panicked, or reported
+	// no usable outcome. Checkers that can tell what is wrong report it as an Outcome with its own reason instead.
+	ReasonProbeFailed Reason = "ProbeFailed"
+	// ReasonProbeTimeout is the reason of an Unknown condition whose probe did not finish within the probe timeout.
+	ReasonProbeTimeout Reason = "ProbeTimeout"
+
+	// ReasonCredentialsUnreadable is a BackendReachable reason: the Binding's token Secret cannot be read.
+	ReasonCredentialsUnreadable Reason = "CredentialsUnreadable"
+	// ReasonTokenRequired is a BackendReachable reason: the backend needs a token and the Binding has none.
+	ReasonTokenRequired Reason = "TokenRequired"
+	// ReasonUnreachable is a BackendReachable reason: the backend did not answer (dial, TLS or timeout).
+	ReasonUnreachable Reason = "Unreachable"
+	// ReasonCredentialsRejected is a BackendReachable reason: the backend answered 401.
+	ReasonCredentialsRejected Reason = "CredentialsRejected"
+	// ReasonAgentForbidden is a BackendReachable reason: the backend answered 403, so the agent is not found or not
+	// permitted for this identity.
+	ReasonAgentForbidden Reason = "AgentForbidden"
+	// ReasonAgentNotFound is a BackendReachable reason: the backend answered 404.
+	ReasonAgentNotFound Reason = "AgentNotFound"
+	// ReasonAgentNotReady is a BackendReachable reason: the backend answered 409.
+	ReasonAgentNotReady Reason = "AgentNotReady"
+	// ReasonBackendError is a BackendReachable reason: the backend answered 5xx, or 2xx other than 200.
+	ReasonBackendError Reason = "BackendError"
+	// ReasonStreamingUnsupported is a BackendReachable reason: the agent card does not advertise streaming.
+	ReasonStreamingUnsupported Reason = "StreamingUnsupported"
+	// ReasonUnsupportedExtension is a BackendReachable reason: the card requires an extension the broker does not speak.
+	ReasonUnsupportedExtension Reason = "UnsupportedExtension"
+	// ReasonNoJSONRPCInterface is a BackendReachable reason: the card lists no JSON-RPC interface.
+	ReasonNoJSONRPCInterface Reason = "NoJSONRPCInterface"
+
+	// ReasonNotInChannel is a ChannelJoined reason: the bot is not a member of the channel.
+	ReasonNotInChannel Reason = "NotInChannel"
+	// ReasonChannelNotFound is a ChannelJoined reason: the channel does not exist or the bot cannot see it.
+	ReasonChannelNotFound Reason = "ChannelNotFound"
+	// ReasonChannelArchived is a ChannelJoined reason: the channel is archived.
+	ReasonChannelArchived Reason = "ChannelArchived"
+	// ReasonMissingScope is a ChannelJoined or ApproversReadable reason: the chat token lacks the scope for the read.
+	ReasonMissingScope Reason = "MissingScope"
+	// ReasonChatUnavailable is an Unknown ChannelJoined reason: the chat platform rate-limited or failed the read.
+	ReasonChatUnavailable Reason = "ChatUnavailable"
+	// ReasonChatCredentialsChanged is an Unknown ChannelJoined reason: the chat credentials changed after the
+	// connection started, so a restart is needed before they are used.
+	ReasonChatCredentialsChanged Reason = "ChatCredentialsChanged"
+
+	// ReasonGroupNotFound is an ApproversReadable reason: a named approver group does not exist.
+	ReasonGroupNotFound Reason = "GroupNotFound"
+)
+
+// Condition is one fact about one Binding. Its fields and JSON names are those of metav1.Condition, less
+// ObservedGeneration, which file-loaded objects do not have.
+type Condition struct {
+	// Type is which fact this is.
+	Type ConditionType `json:"type"`
+	// Status is True, False or Unknown.
+	Status Status `json:"status"`
+	// Reason is why the condition has this status.
+	Reason Reason `json:"reason"`
+	// Message is a short, redacted detail. It is for people and is not part of the closed set.
+	Message string `json:"message,omitempty"`
+	// LastTransitionTime is when Status last changed. A change of Reason or Message alone does not move it.
+	LastTransitionTime time.Time `json:"lastTransitionTime"`
+	// LastProbeTime is when the condition was last set from a probe, whether or not anything changed.
+	LastProbeTime time.Time `json:"lastProbeTime"`
+}
+
+// Outcome is what a checker reports for one probe.
+type Outcome struct {
+	// Status is the condition's new status.
+	Status Status
+	// Reason is why. Empty is read as OK for True, and as ProbeFailed otherwise.
+	Reason Reason
+	// Message is a short detail, already redacted: nothing in it may be a token or a Secret value.
+	Message string
+}
