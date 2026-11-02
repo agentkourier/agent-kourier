@@ -17,7 +17,7 @@ const (
 	defaultTick        = 5 * time.Second
 	defaultTimeout     = 10 * time.Second
 	defaultConcurrency = 4
-	// jitterFraction is how far the pause between two passes strays from Interval, either way.
+	// jitterFraction is how far the time from one pass's start to the next's strays from Interval, either way.
 	jitterFraction = 0.1
 	// shutdownGrace is how long Run, once its context has ended, waits in all for the checkers and the Revision call
 	// that are still running. A checker that honors its context unwinds well inside it (broker shutdown steps take 2
@@ -103,8 +103,9 @@ type Options struct {
 	// Channels probes channels, one probe per Target. Nil means ChannelJoined is not tracked. Targets must hold only
 	// Bindings on the chat connection that Channels answers for (see ChannelChecker).
 	Channels ChannelChecker
-	// Interval is the pause between passes, 5 minutes by default. Each pause strays from it by up to 10% either
-	// way, so that many brokers do not probe together.
+	// Interval is how long after a pass begins the next is due, 5 minutes by default, and not a pause after it ends:
+	// a pass that takes longer than Interval is followed by the next one Tick later. Each wait strays from it by up to
+	// 10% either way, so that many brokers do not probe together.
 	Interval time.Duration
 	// Tick is how often the loop looks at Targets and Revision, 5 seconds by default.
 	Tick time.Duration
