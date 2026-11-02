@@ -219,14 +219,17 @@ func TestRevisionDescribesTheLastGoodSnapshotAfterAFailedReload(t *testing.T) {
 	if got := r.Revision(t.Context()); got != rev {
 		t.Errorf("revision after a failed reload = %q, want %q", got, rev)
 	}
+	// A reload interrupted on a good edit leaves the revision and does not use up the edit: the next one still loads it.
+	writeFile(t, path, good+"\n# fixed differently\n")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_ = r.reload(ctx, true)
+	if err := r.reload(ctx, false); !errors.Is(err, context.Canceled) {
+		t.Fatalf("interrupted reload = %v, want context.Canceled", err)
+	}
 	if got := r.Revision(t.Context()); got != rev {
 		t.Errorf("revision after an interrupted reload = %q, want %q", got, rev)
 	}
 
-	writeFile(t, path, good+"\n# fixed differently\n")
 	mustReload(t, r, false)
 	if got := r.Revision(t.Context()); got == rev {
 		t.Error("revision did not change once a good edit loaded")
