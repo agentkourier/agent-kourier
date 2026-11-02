@@ -86,8 +86,9 @@ Hostile text can still steer a model, so two things are worth knowing about what
 - **A declared person can be notified.** If the Binding sets `chat.mentions`, a reply that writes `@name` for a declared
   name makes Agent Kourier post a message that mentions that person and nobody else. Hostile alert text can steer the model
   into naming one, or the model can repeat a name quoted from an alert, and that notifies a real person. The set of people
-  is fixed in config, and `chat.maxMentionsPerTurn` caps how many one turn notifies. A Binding with no `chat.mentions` has
-  none of this.
+  is fixed in config, and `chat.maxMentionsPerTurn` caps how many one turn notifies. That cap is per turn and nothing here limits mentions across
+  turns, so an alert that keeps firing can notify the same person once for each turn its trigger's limits allow. A Binding with no
+  `chat.mentions` has none of this.
 - **A bare URL in a reply is a link.** Slack makes a bare URL into a link, and no escape in its text stops it, so a
   steered model can post a clickable URL on any host. The link shows its own address, it cannot be masked behind other
   text, and nothing unfurls it, so Slack does not fetch it. A person still has to choose to click it. A URL of a message in

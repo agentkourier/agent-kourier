@@ -33,7 +33,7 @@ type MentionScan struct {
 // name is an "@" that follows no word, path, query value, escape or other "@", then letters, digits and hyphens, in any case, and then
 // no more of them and none of what goes on as a package scope, a host, an address or a port: a "/" and more, an "@", a "." and a name
 // character, a ":" and a digit. "_" and "~" around a name are emphasis, and a "/" between two names only separates them, as in
-// "@sam/@lee". Nothing in a URL is a name. A ":" before a name is a label otherwise, as in "Owner:@sam". A letter of any alphabet is a letter here, so
+// "@sam/@lee". Nothing in a URL with a scheme is a name. A ":" before a name is a label otherwise, as in "Owner:@sam". A letter of any alphabet is a letter here, so
 // "@josé" does not name "jos". Code is left out:
 // what is in a fence or a span is quoted, not said, so a log line that holds a name notifies nobody. What is code is read as the
 // Slack adapter writes it (internal/chat/slack/mdtext.go): any fence line opens or closes a block, whatever its marks, what
@@ -180,9 +180,15 @@ func mentionWord(line string, at, last int) (word string, next int) {
 	return strings.Map(lowerASCII, word), end
 }
 
-// inURL says whether the last word of s holds a scheme, so that what follows s is in a URL.
+// inURL says whether s ends inside a URL with a scheme: whether what follows the last thing that ends a URL holds one.
 func inURL(s string) bool {
-	return strings.Contains(s[strings.LastIndexFunc(s, unicode.IsSpace)+1:], "://")
+	return strings.Contains(s[strings.LastIndexFunc(s, endsURL)+1:], "://")
+}
+
+// endsURL says whether r ends a URL as text is written: white space, a mark a URL cannot hold, a closing bracket as of a markdown
+// link or an aside, or punctuation of another alphabet. A URL can hold a closing bracket, and then what follows it can notify.
+func endsURL(r rune) bool {
+	return unicode.IsSpace(r) || strings.ContainsRune("|<>`)]", r) || (r > unicode.MaxASCII && unicode.IsPunct(r))
 }
 
 func lowerASCII(r rune) rune {
@@ -202,10 +208,10 @@ func goesOn(rest string) bool {
 	}
 	next, _ := utf8.DecodeRuneInString(rest[1:])
 	switch rest[0] {
-	case '/': // a package scope or a path, unless nothing follows it or it separates two names
+	case '/': // a package scope or a path, unless nothing follows it, or white space or punctuation does, as the "@" of a second name
 		after := strings.TrimLeft(rest[1:], "_~")
 		r, _ := utf8.DecodeRuneInString(after)
-		return after != "" && r != '@' && !unicode.IsSpace(r)
+		return after != "" && !unicode.IsSpace(r) && !unicode.IsPunct(r)
 	case '@':
 		return true
 	case '.':
