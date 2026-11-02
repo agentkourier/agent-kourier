@@ -7,11 +7,13 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
@@ -70,6 +72,60 @@ func TestSecretVersionErrors(t *testing.T) {
 				t.Errorf("error contains a Secret value: %v", err)
 			}
 		})
+	}
+}
+
+// While the list and watch fail, the cache keeps its last contents: a Secret rotated meanwhile
+// moves neither SecretVersion nor Value, and the failure is in the log. This is what the
+// Revision and SecretVersion docs say; if the cache ever starts reporting the failure, they and
+// this test change together.
+func TestSecretVersionStaysWhileTheWatchFails(t *testing.T) {
+	client := fake.NewClientset(versioned("sre", "creds", "1", "token"))
+	var failing atomic.Bool
+	client.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if failing.Load() {
+			return true, nil, errors.New("connection refused")
+		}
+		return false, nil, nil
+	})
+	held := watch.NewFake() // the one watch the informer gets before the failure; the test ends it
+	client.PrependWatchReactor("secrets", func(k8stesting.Action) (bool, watch.Interface, error) {
+		if failing.Load() {
+			return true, nil, errors.New("connection refused")
+		}
+		return true, held, nil
+	})
+	logs := &logBuffer{}
+	r := New(client, []string{"sre"}, WithLogger(slog.New(slog.NewTextHandler(logs, nil))))
+	t.Cleanup(r.Stop)
+	if err := r.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	failures := func() int { return strings.Count(logs.String(), "secret informer cannot list or watch") }
+	waitFor := func(what string, done func() bool) {
+		t.Helper()
+		for deadline := time.Now().Add(10 * time.Second); !done(); time.Sleep(10 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s never happened; log: %q", what, logs.String())
+			}
+		}
+	}
+
+	failing.Store(true)
+	held.Stop()
+	waitFor("the first failure in the log", func() bool { return failures() > 0 })
+	if _, err := client.CoreV1().Secrets("sre").Update(t.Context(), versioned("sre", "creds", "2", "token"), metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	// Every later list and watch fails too, so nothing can carry the update into the cache.
+	if got, err := r.SecretVersion(t.Context(), "sre", "creds"); err != nil || got != "1" {
+		t.Errorf("SecretVersion = %q, %v; want the version cached before the failure", got, err)
+	}
+	if v, err := r.Value(t.Context(), "sre", "creds", "token"); err != nil || v.Reveal() != canary+"1" {
+		t.Errorf("Value = %v; want the value cached before the failure", err)
+	}
+	if strings.Contains(logs.String(), canary) {
+		t.Errorf("log %q holds a Secret value", logs.String())
 	}
 }
 

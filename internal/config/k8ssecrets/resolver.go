@@ -208,7 +208,8 @@ func (r *Resolver) Stop() {
 
 // get returns the cached Secret. It wraps config.ErrSecretNotFound when the Secret does not
 // exist, ErrNamespaceNotWatched when namespace is not one of the watched namespaces,
-// ErrNotSynced while that namespace's cache has not synced, and ErrStopped after Stop.
+// ErrNotSynced while that namespace's cache has not synced, and ErrStopped after Stop. A cache
+// that has synced is served as it is, whether or not its list or watch is failing now.
 func (r *Resolver) get(namespace, name string) (*corev1.Secret, error) {
 	w, ok := r.namespaces[namespace]
 	switch {
@@ -241,6 +242,11 @@ func (r *Resolver) Keys(_ context.Context, namespace, name string) ([]string, er
 // SecretVersion returns the resourceVersion of the cached Secret, which the API server changes on
 // every write to the Secret, including a new value under the same keys. It reads the cache and
 // makes no API call, and it fails as get does.
+//
+// The cache is as current as its last good list or watch. While one is failing the version stays
+// where it was, as do the values Value and Keys return, and a Secret rotated meanwhile is not
+// seen until the list or watch succeeds again. Each failure is logged as a warning (see failed);
+// SecretVersion does not report it.
 func (r *Resolver) SecretVersion(_ context.Context, namespace, name string) (string, error) {
 	s, err := r.get(namespace, name)
 	if err != nil {
