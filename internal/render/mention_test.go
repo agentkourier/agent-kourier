@@ -1,0 +1,144 @@
+package render_test
+
+import (
+	"reflect"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/render"
+)
+
+var declared = []v1alpha1.ChatMention{
+	{Name: "payments-owner", User: "U0PAYMENTS"},
+	{Name: "sam", User: "U0SAM"},
+	{Name: "lee", User: "U0LEE"},
+}
+
+func TestMentions(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		max        int
+		made       []string // the names, in order
+		undeclared int
+		capped     int
+	}{
+		{name: "no text", body: "", max: 2},
+		{name: "no mention", body: "the checkout pods are crash looping", max: 2},
+		{name: "a declared name", body: "ask @sam about it", max: 2, made: []string{"sam"}},
+		{name: "at the start, and before punctuation", body: "@sam, then @lee.", max: 2, made: []string{"sam", "lee"}},
+		{name: "a name with a hyphen", body: "@payments-owner owns this", max: 2, made: []string{"payments-owner"}},
+		{name: "in another case", body: "@Payments-Owner owns this", max: 2, made: []string{"payments-owner"}},
+		{name: "in parentheses and emphasis", body: "(@sam) and *@lee*", max: 2, made: []string{"sam", "lee"}},
+		{name: "named twice is one mention", body: "@sam and again @sam and @SAM", max: 2, made: []string{"sam"}},
+		{name: "in order of first appearance", body: "@lee then @sam", max: 2, made: []string{"lee", "sam"}},
+		{name: "past the cap", body: "@sam @lee @payments-owner", max: 2, made: []string{"sam", "lee"}, capped: 1},
+		{name: "named twice past the cap counts once", body: "@sam @lee @payments-owner @payments-owner", max: 2, made: []string{"sam", "lee"}, capped: 1},
+		{name: "an undeclared name", body: "ask @nobody about it", max: 2, undeclared: 1},
+		{name: "an undeclared name twice", body: "@nobody @nobody", max: 2, undeclared: 2},
+		{name: "a longer name that starts with a declared one", body: "@sam-2 and @samuel", max: 2, undeclared: 2},
+		{name: "a broadcast word is never declared", body: "@here @channel @everyone", max: 2, undeclared: 3},
+		{name: "an email address", body: "mail sam@sam or a.b@lee", max: 2},
+		{name: "a package scope", body: "bump @sam/thing", max: 2},
+		{name: "a host", body: "see @sam.example.com", max: 2},
+		{name: "after a word or a path", body: "x@sam /@sam -@sam", max: 2},
+		{name: "two at signs", body: "@@sam", max: 2},
+		{name: "an at sign alone", body: "@ sam, and @", max: 2},
+		{name: "not a name", body: "@1 @-sam", max: 2},
+		{name: "in a code span", body: "run `notify @sam` now", max: 2},
+		{name: "in a span of two backticks", body: "run ``notify @sam`` now, ask @lee", max: 2, made: []string{"lee"}},
+		{name: "after runs that do not match, which the adapter shows as prose", body: "run ``a ` @sam``", max: 2, made: []string{"sam"}},
+		{name: "a name in another alphabet is not the name it starts with", body: "@josé é@sam", max: 2, undeclared: 1},
+		{name: "punctuation of any alphabet ends a name", body: "“@sam”—ask @lee—now", max: 2, made: []string{"sam", "lee"}},
+		{name: "an address", body: "@sam@example.com", max: 2},
+		{name: "a query value", body: "https://x.test/?u=@sam", max: 2},
+		{name: "a port", body: "@sam:8080", max: 2},
+		{name: "a colon that ends a clause", body: "@sam: look at this", max: 2, made: []string{"sam"}},
+		{name: "a backtick that opens no span", body: "a ` b @sam", max: 2, made: []string{"sam"}},
+		{name: "in a fence", body: "```\n@sam\n```\nask @lee", max: 2, made: []string{"lee"}},
+		{name: "in a tilde fence", body: "~~~\n@sam\n~~~\nask @lee", max: 2, made: []string{"lee"}},
+		{name: "in an indented fence", body: "  ```\n  @sam\n  ```\n@lee", max: 2, made: []string{"lee"}},
+		{name: "in a fence that never closes", body: "```\n@sam", max: 2},
+		{name: "any fence line closes a block, as the adapter writes it", body: "```\n~~~\n@sam\n", max: 2, made: []string{"sam"}},
+		{name: "a block of one line", body: "``` @sam ```\n@lee", max: 2, made: []string{"lee"}},
+		{name: "a raw user ID, and markup", body: "ask U0SAM or <@U0SAM> or <!channel> or <!subteam^S1>", max: 2, undeclared: 1},
+		{name: "the name inside markup", body: "<@sam>", max: 2, made: []string{"sam"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := render.Mentions(tc.body, declared, tc.max)
+			var names []string
+			for _, m := range got.Made {
+				names = append(names, m.Name)
+			}
+			if !reflect.DeepEqual(names, tc.made) || got.Undeclared != tc.undeclared || got.Capped != tc.capped {
+				t.Errorf("Mentions(%q) = made %v, undeclared %d, capped %d; want %v, %d, %d", tc.body, names, got.Undeclared, got.Capped, tc.made, tc.undeclared, tc.capped)
+			}
+		})
+	}
+}
+
+// A Binding that declares no one has nothing to scan for, whatever the text says: it counts nothing either.
+func TestMentionsWithNoneDeclared(t *testing.T) {
+	if got := render.Mentions("@sam @here", nil, 2); len(got.Made) != 0 || got.Undeclared != 0 || got.Capped != 0 {
+		t.Errorf("Mentions with none declared = %+v, want nothing", got)
+	}
+}
+
+// The user of a mention is the one config gives, whatever the case of the name in the text.
+func TestMentionsTakesTheUserFromConfig(t *testing.T) {
+	got := render.Mentions("@SAM", declared, 2)
+	if len(got.Made) != 1 || got.Made[0] != (v1alpha1.ChatMention{Name: "sam", User: "U0SAM"}) {
+		t.Errorf("Made = %+v, want the declared entry", got.Made)
+	}
+}
+
+// The message of a mention holds nothing of the agent's: only its own words, and names and users from config. It is
+// made of mentions alone, since a platform may not notify anyone of a mention beside a body (chat.Mention).
+func TestMentionMessage(t *testing.T) {
+	m := render.MentionMessage([]v1alpha1.ChatMention{{Name: "sam", User: "U0SAM"}, {Name: "lee", User: "U0LEE"}})
+	if err := m.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	want := []chat.Part{
+		chat.Mention{User: "U0SAM", Text: "was named as sam in the reply above."},
+		chat.Mention{User: "U0LEE", Text: "was named as lee in the reply above."},
+	}
+	if !reflect.DeepEqual(m.Parts, want) {
+		t.Errorf("Parts = %+v, want %+v", m.Parts, want)
+	}
+	if m.Fallback != "The agent named sam, lee in this thread." {
+		t.Errorf("Fallback = %q", m.Fallback)
+	}
+}
+
+func TestMentionPrompt(t *testing.T) {
+	if got := render.MentionPrompt(nil); got != "" {
+		t.Errorf("MentionPrompt(nil) = %q, want nothing: a Binding with no mentions adds nothing to a prompt", got)
+	}
+	got := render.MentionPrompt(declared)
+	for _, want := range []string{"@name", "payments-owner, sam, lee", "No other name notifies anyone"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("MentionPrompt = %q, want it to say %q", got, want)
+		}
+	}
+	for _, leak := range []string{"U0SAM", "U0PAYMENTS"} { // the agent has no use for an ID, and never supplies one
+		if strings.Contains(got, leak) {
+			t.Errorf("MentionPrompt = %q, which holds the user ID %s", got, leak)
+		}
+	}
+}
+
+// One person with two names is one person: mentioned once, and one place of the cap, under the name the text used first.
+func TestAPersonWithTwoNamesIsMentionedOnce(t *testing.T) {
+	declared := []v1alpha1.ChatMention{{Name: "payments-owner", User: "U0SAM"}, {Name: "billing-owner", User: "U0SAM"}, {Name: "lee", User: "U0LEE"}, {Name: "kim", User: "U0KIM"}}
+	got := render.Mentions("@billing-owner @payments-owner @lee", declared, 2)
+	want := []v1alpha1.ChatMention{{Name: "billing-owner", User: "U0SAM"}, {Name: "lee", User: "U0LEE"}}
+	if !slices.Equal(got.Made, want) || got.Capped != 0 {
+		t.Errorf("Made = %v, capped %d; want %v, capped 0", got.Made, got.Capped, want)
+	}
+	if got := render.Mentions("@lee @kim @payments-owner @billing-owner", declared, 2); got.Capped != 1 {
+		t.Errorf("capped = %d, want 1: both names past the cap are one person", got.Capped)
+	}
+}

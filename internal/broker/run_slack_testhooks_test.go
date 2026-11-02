@@ -339,6 +339,86 @@ func TestRunPostsTheAgentsAnswerThroughItsOwnRenderer(t *testing.T) {
 	w.waitFor(t, "the agent's answer", func(m fakeslack.Message) bool { return strings.Contains(m.Text, "the answer") && !m.Streaming })
 }
 
+// mentionAudit is a store that keeps the audit rows of mentions.
+type mentionAudit struct {
+	store.Audit
+	mu   sync.Mutex
+	rows []store.AuditEntry
+}
+
+func (a *mentionAudit) AppendAudit(ctx context.Context, e store.AuditEntry) error {
+	if strings.HasPrefix(e.Subject, "mention ") {
+		a.mu.Lock()
+		a.rows = append(a.rows, e)
+		a.mu.Unlock()
+	}
+	return a.Audit.AppendAudit(ctx, e)
+}
+
+func (a *mentionAudit) outcomes() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]string, len(a.rows))
+	for i, e := range a.rows {
+		out[i] = e.Outcome
+	}
+	return out
+}
+
+// A reply that names a person the Binding declares reaches Slack as written, and is followed in the thread by a message of
+// context lines that mention the person, through Run's own renderer and outbox, and the audit log says so. The prompt told
+// the agent the name.
+func TestRunNotifiesADeclaredPersonAfterTheReply(t *testing.T) {
+	w := newSlackWorld(t, "xoxb-fake-bot")
+	w.cfg.sink = nil
+	binding := filepath.Join(w.cfg.ConfigDir, "binding.yaml")
+	raw, err := os.ReadFile(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withMentions := strings.Replace(string(raw), "\n  chat:\n", "\n  chat:\n    mentions:\n      - { name: payments-owner, user: U0SAM }\n", 1)
+	if withMentions == string(raw) {
+		t.Fatal("the example Binding has no chat block to add mentions to")
+	}
+	if err := os.WriteFile(binding, []byte(withMentions), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var prompt atomic.Value
+	w.stub.Agent("kagent", "k8s-agent").Reply(func(p string) []stubagent.Step {
+		prompt.Store(p)
+		return []stubagent.Step{stubagent.Text("ask @payments-owner, not @here")}
+	})
+	aud := &mentionAudit{}
+	w.cfg.auditStore = func(s store.Audit) store.Audit { aud.Audit = s; return aud }
+	r := start(t, w.cfg)
+
+	w.mention(t, r)
+
+	note := w.waitFor(t, "the mention", func(m fakeslack.Message) bool { return strings.Contains(string(m.Blocks), "@U0SAM") })
+	if strings.Contains(note.Text, "@U0SAM") || strings.Contains(string(note.Blocks), `"type":"markdown"`) || strings.Contains(string(note.Blocks), `"type":"rich_text"`) {
+		t.Errorf("the mention = %q, blocks %s; want context lines, and no token in its text", note.Text, note.Blocks)
+	}
+	thread := w.fake.Thread("C0123456789", note.ThreadTS)
+	if at := slices.IndexFunc(thread, func(m fakeslack.Message) bool { return strings.Contains(m.Text, "ask @payments-owner") }); at < 0 || thread[len(thread)-1].TS != note.TS {
+		t.Errorf("thread = %+v; want the reply, and the mention last", thread)
+	}
+	for _, m := range thread {
+		if m.TS != note.TS && strings.Contains(string(m.Blocks)+m.Text, "@U0SAM") {
+			t.Errorf("another message holds the token: %+v", m)
+		}
+	}
+	if got, _ := prompt.Load().(string); !strings.Contains(got, "You may use these names: payments-owner.") || strings.Contains(got, "U0SAM") {
+		t.Errorf("the prompt = %q; want the name and no user ID", got)
+	}
+	eventuallyAudited := time.Now().Add(15 * time.Second)
+	for len(aud.outcomes()) == 0 && time.Now().Before(eventuallyAudited) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := aud.outcomes(); len(got) != 1 || !strings.Contains(got[0], "name=payments-owner user=U0SAM") {
+		t.Errorf("audit rows = %q; want one for the person", got)
+	}
+}
+
 // A thread that has expired is told so by the notice the intake raises, which Run connects to the same
 // sink as the turns' output: here the notice is what the test's sink is handed.
 func TestRunConnectsTheIntakesNoticesToTheSink(t *testing.T) {

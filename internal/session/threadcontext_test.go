@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -369,5 +370,77 @@ func TestThreadContextWaitsForTheStore(t *testing.T) {
 	}
 	if got := sink.noticesOf(NoticeRetrying); len(got) != 0 {
 		t.Errorf("notices = %+v; want none: the agent was never called, so the thread is not told it cannot be reached", got)
+	}
+}
+
+const mentionLine = "To notify someone in this thread, write @name."
+
+// A session's first prompt ends with the line that tells the agent the names, after the attribution, the person's text and
+// anything else on it. The agent keeps the line from there, so a later turn does not say it again.
+func TestTheFirstPromptOfASessionTellsTheAgentTheNames(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.mentionPrompt = mentionLine
+	f.attr, f.platform = (&kagentv1.Dialect{}).Attribute, dialect.Platform{ID: "slack", Name: "Slack"}
+	if _, err := f.submit(inbound("1700.10")); err != nil {
+		t.Fatal(err)
+	}
+	waitFinal(t, sink)
+	if got, want := f.sentText(t, 0), "[Slack: U1]\nhello\n\n"+mentionLine; got != want {
+		t.Errorf("first turn = %q, want %q", got, want)
+	}
+	if _, err := f.submit(inbound("1700.50")); err != nil {
+		t.Fatal(err)
+	}
+	waitFinal(t, sink)
+	if got := f.sentText(t, 1); strings.Contains(got, mentionLine) {
+		t.Errorf("second turn = %q; the agent has been told", got)
+	}
+}
+
+// An alert's first prompt, which no person wrote, tells the agent the names too: it is what most mentions come of.
+func TestTheFirstPromptOfAnAlertTellsTheAgentTheNames(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.mentionPrompt = mentionLine
+	in := inbound("1700.10")
+	in.UserID = "" // an alert's prompt, which no Slack user wrote
+	if _, err := f.submit(in); err != nil {
+		t.Fatal(err)
+	}
+	waitFinal(t, sink)
+	if got := f.sentText(t, 0); !strings.HasSuffix(got, "hello\n\n"+mentionLine) {
+		t.Errorf("first turn = %q; want the alert's text, then the line", got)
+	}
+}
+
+// A Binding that declares nobody adds nothing to any prompt.
+func TestABindingWithNoMentionsAddsNothingToAPrompt(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	if _, err := f.submit(inbound("1700.10")); err != nil {
+		t.Fatal(err)
+	}
+	waitFinal(t, sink)
+	if got := f.sentText(t, 0); got != "hello" {
+		t.Errorf("first turn = %q, want the person's text alone", got)
+	}
+}
+
+// The renderer is told the Binding's people on every turn.
+func TestTurnRefCarriesTheBindingsPeople(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	people := []v1alpha1.ChatMention{{Name: "sam", User: "U0SAM"}}
+	f.mentions, f.maxMentions = people, 2
+	if _, err := f.submit(inbound("1700.10")); err != nil {
+		t.Fatal(err)
+	}
+	waitFinal(t, sink)
+	sink.mu.Lock()
+	ref := sink.refs[len(sink.refs)-1]
+	sink.mu.Unlock()
+	if !slices.Equal(ref.Mentions, people) || ref.MaxMentions != 2 {
+		t.Errorf("TurnRef = %+v, want the Binding's people and cap", ref)
 	}
 }

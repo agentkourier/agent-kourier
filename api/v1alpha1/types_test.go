@@ -70,6 +70,16 @@ func TestToolApprovalFieldsDecode(t *testing.T) {
 	}
 }
 
+func TestDefaultMaxMentionsPerTurn(t *testing.T) {
+	for _, tc := range []struct{ in, want int }{{0, DefaultMaxMentionsPerTurn}, {1, 1}, {10, 10}} {
+		b := &Binding{Spec: BindingSpec{Chat: ChatBinding{MaxMentionsPerTurn: tc.in}}}
+		b.Default()
+		if got := b.Spec.Chat.MaxMentionsPerTurn; got != tc.want {
+			t.Errorf("MaxMentionsPerTurn %d after Default = %d, want %d", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestDefaultThreadReplies(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

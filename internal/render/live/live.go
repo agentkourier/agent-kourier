@@ -50,6 +50,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render"
@@ -72,11 +73,19 @@ const maxListed = 20
 // Sender posts through the outbox: *outbox.Outbox.
 type Sender interface {
 	Send(ctx context.Context, p outbox.Post) (chat.Ref, error)
+	Enqueue(ctx context.Context, p outbox.Post) (string, error)
+}
+
+// MentionAuditor records each person a turn's reply notified: *audit.Writer.
+type MentionAuditor interface {
+	Mention(ctx context.Context, a audit.Actor, m audit.Mention) error
 }
 
 // Config configures a Renderer. Sender, Platform and Store are required: New refuses a Config without them.
 type Config struct {
 	Sender Sender
+	// Audit records the mentions a turn makes. Nil records none.
+	Audit MentionAuditor
 	// Platform edits a message, runs a stream, and says what the platform can do (Capabilities) and what an
 	// error means (Classify). A turn streams only if Capabilities say Streams.
 	Platform chat.Platform
@@ -201,6 +210,12 @@ type Turn struct {
 	// at all to a turn that ended with nothing to show, or with a question for the person to answer. The renderer does not look
 	// into it.
 	Footer []chat.Part
+	// Binding is the name of the turn's Binding, namespace/name, which the record of a mention names.
+	Binding string
+	// Mentions are the people the Binding declares, and MaxMentions the most a turn notifies. A turn that ended with text
+	// that names one posts a message of its own for them, after the reply (notifyMentions). Empty means none.
+	Mentions    []v1alpha1.ChatMention
+	MaxMentions int
 }
 
 // Run is the rendering of one turn.
@@ -243,6 +258,8 @@ type Run struct {
 	// paused says the final event was a pause for input, not the end of the task: the reply so far is a question, and no answer to
 	// rate.
 	paused bool
+	// endedBadly says the final event's task failed, was cancelled or was rejected: what it shows is no reply, so it notifies nobody.
+	endedBadly bool
 	// awaiting is the call IDs of the tool calls that the pause asks a person to approve (FinalEvent.AwaitingApproval):
 	// their steps end as waiting, not as how the call went so far.
 	awaiting []string
@@ -451,6 +468,7 @@ func (u *Run) Handle(ev agent.Event) {
 	case agent.FinalEvent:
 		u.final = true
 		u.paused = e.Task != nil && (e.Task.Status.State == a2a.TaskStateInputRequired || e.Task.Status.State == a2a.TaskStateAuthRequired)
+		u.endedBadly = endingOf(e.Task) == render.EndedFailed
 		if u.paused {
 			u.awaiting = e.AwaitingApproval
 		}
@@ -722,6 +740,9 @@ func (u *Run) run(ctx context.Context) {
 		if u.cutShort && finalOutcome == "delivered" { // no final came: what was written ends the turn, and is no output delivered
 			finalOutcome = "cancelled"
 		}
+		if finalOutcome == "delivered" {
+			u.notifyMentions(ctx)
+		}
 		if finalOp != nil {
 			trace.SpanFromContext(finalCtx).SetAttributes(attribute.Int("agentkourier.render.attempts", writes))
 			telemetry.Count(ctx, "agentkourier_render_final_total", finalOutcome)
@@ -851,6 +872,56 @@ func (u *Run) run(ctx context.Context) {
 			}
 			u.busy.set(ctx) // a post in the thread may have taken the mark off; this rides the write just made and adds none
 			break
+		}
+	}
+}
+
+// notifyMentions queues the message that notifies the people the turn's final text names, in a row of its own and after the
+// reply, so that it is a new message wherever the reply was streamed or updated: a mention beside a body notifies nobody
+// (chat.Mention). A turn that failed, was stopped or was rejected notifies nobody, as one cut short does: a person who stops a
+// steered agent has decided against what it was saying. A pause counts: its text is a question, which may be for the person it
+// names. A turn rendered again finds the row, and makes neither a second post nor a second record. Only the outbox's delivery
+// is retried: a crash before this runs loses the mention, which is a convenience, and never the paging path. A failure is
+// logged, and the reply stands.
+func (u *Run) notifyMentions(ctx context.Context) {
+	u.mu.Lock()
+	endedBadly := u.endedBadly
+	u.mu.Unlock()
+	if endedBadly || len(u.turn.Mentions) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), u.cfg.WriteTimeout)
+	defer cancel()
+	scan := render.Mentions(u.snapshot().body, u.turn.Mentions, u.turn.MaxMentions)
+	for range scan.Undeclared {
+		telemetry.Count(ctx, "agentkourier_mentions_total", u.turn.Binding, "undeclared")
+	}
+	for range scan.Capped {
+		telemetry.Count(ctx, "agentkourier_mentions_total", u.turn.Binding, "capped")
+	}
+	if len(scan.Made) == 0 {
+		return
+	}
+	source := outbox.MentionSource(u.turn.Source)
+	if _, err := u.cfg.Store.GetOutbox(ctx, outbox.ID(source, store.OutboxNotice)); !errors.Is(err, store.ErrNotFound) {
+		if err != nil {
+			u.cfg.Logger.WarnContext(ctx, "live: the mentions of a turn were not queued", "channel", u.turn.Channel, "err", err)
+		}
+		return
+	}
+	post := outbox.Post{Source: source, Role: store.OutboxNotice, Channel: u.turn.Channel, Thread: u.turn.Thread, Out: chat.Say(render.MentionMessage(scan.Made))}
+	if _, err := u.cfg.Sender.Enqueue(ctx, post); err != nil {
+		u.cfg.Logger.WarnContext(ctx, "live: the mentions of a turn were not queued", "channel", u.turn.Channel, "err", err)
+		return
+	}
+	for _, m := range scan.Made {
+		telemetry.Count(ctx, "agentkourier_mentions_total", u.turn.Binding, "made")
+		if u.cfg.Audit == nil {
+			continue
+		}
+		rec := audit.Mention{Turn: u.turn.Source, Channel: u.turn.Channel, Thread: u.turn.Thread, Name: m.Name, User: m.User}
+		if err := u.cfg.Audit.Mention(ctx, audit.Actor{Binding: u.turn.Binding}, rec); err != nil {
+			u.cfg.Logger.WarnContext(ctx, "live: a mention was not audited", "channel", u.turn.Channel, "err", err)
 		}
 	}
 }

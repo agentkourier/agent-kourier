@@ -536,7 +536,7 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 	t := &tstate{key: key, c: c, r: r, sess: sess, b: backend}
 	send := func(ctx context.Context, h agent.Handler) error {
 		// Only a send carries the thread's context: the turn that is followed was sent before, with its own.
-		msg := m.message(m.withThreadContext(ctx, c, r, sess.Binding, backend), sess, backend)
+		msg := m.message(withMentionPrompt(m.withThreadContext(ctx, c, r, sess.Binding, backend), sess, backend), sess, backend)
 		if err := testhooks.BeforeSend(ctx, msg.ID); err != nil {
 			return err
 		}
@@ -643,6 +643,16 @@ func (m *Manager) withThreadContext(ctx context.Context, c *convo, r store.Reply
 	}
 	if c.window.section != "" {
 		r.Text += "\n\n" + c.window.section
+	}
+	return r
+}
+
+// withMentionPrompt returns the turn r with the line that tells the agent the names it may mention after everything else, on
+// a session's first turn (one text part, as R18 has it): the agent keeps it from there, so the later turns do not say it
+// again. It is Agent Kourier's own text, after any untrusted block. A Binding that declares nobody has no line.
+func withMentionPrompt(r store.Reply, sess store.Session, b Backend) store.Reply {
+	if b.MentionPrompt != "" && sess.ContextID == "" {
+		r.Text += "\n\n" + b.MentionPrompt
 	}
 	return r
 }
@@ -781,7 +791,7 @@ func (t *tstate) outputTurn() store.TaskTurn {
 // after a lost stream, or looked up or sent again after a send of unknown outcome, continues the message it had.
 func (t *tstate) sinkRef() TurnRef {
 	shown := t.outputTurn()
-	return TurnRef{Key: t.key, Binding: t.sess.Binding, MessageID: shown.ID, UserID: shown.User, Output: t.b.Output, Progress: t.b.Progress, Recovered: t.recovered || t.follow || t.takes, Restarted: t.recovered, Feedback: feedbackOf(shown.User, t.b), ThreadReplies: t.b.ThreadReplies}
+	return TurnRef{Key: t.key, Binding: t.sess.Binding, MessageID: shown.ID, UserID: shown.User, Output: t.b.Output, Progress: t.b.Progress, Recovered: t.recovered || t.follow || t.takes, Restarted: t.recovered, Feedback: feedbackOf(shown.User, t.b), ThreadReplies: t.b.ThreadReplies, Mentions: t.b.Mentions, MaxMentions: t.b.MaxMentions}
 }
 
 // feedbackOf is the feedback buttons the final message of a turn written by user carries (TurnRef.Feedback).

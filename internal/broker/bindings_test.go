@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +24,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/secret"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/test/stubagent"
@@ -385,6 +387,34 @@ func TestBackendCarriesThreadReplies(t *testing.T) {
 		if err != nil || be.ThreadReplies != mode {
 			t.Errorf("Backend with threadReplies %q = ThreadReplies %q, %v; want the Binding's", mode, be.ThreadReplies, err)
 		}
+	}
+}
+
+// The people a Binding declares reach the session, with the line that tells the agent their names. A Binding with none adds nothing to the prompt.
+func TestBackendCarriesTheBindingsMentions(t *testing.T) {
+	f := newFixture(t)
+	snap := snapshot(t, f.url, v1alpha1.DialectKagentV1, time.Hour)
+	f.snaps.p.Store(snap)
+	if be, err := f.b.Backend("sre/oncall"); err != nil || len(be.Mentions) != 0 || be.MentionPrompt != "" {
+		t.Errorf("Backend with no mentions = %v, prompt %q, %v; want none and no prompt", be.Mentions, be.MentionPrompt, err)
+	}
+
+	people := []v1alpha1.ChatMention{{Name: "payments-owner", User: "U0SAM"}}
+	snap = snapshot(t, f.url, v1alpha1.DialectKagentV1, time.Hour)
+	rb, _ := snap.Binding("sre", "oncall")
+	rb.Binding.Spec.Chat.Mentions = people
+	rb.Binding.Spec.Chat.MaxMentionsPerTurn = 3
+	f.snaps.p.Store(snap)
+
+	be, err := f.b.Backend("sre/oncall")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(be.Mentions, people) || be.MaxMentions != 3 {
+		t.Errorf("Backend = %v, at most %d; want the Binding's %v, at most 3", be.Mentions, be.MaxMentions, people)
+	}
+	if be.MentionPrompt != render.MentionPrompt(people) {
+		t.Errorf("MentionPrompt = %q, want what render.MentionPrompt makes of the Binding's people", be.MentionPrompt)
 	}
 }
 

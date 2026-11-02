@@ -181,6 +181,33 @@ func TestBindingValidate(t *testing.T) {
 		{"steps-and-activity progress ok", func(o *Binding) { o.Spec.Chat.Progress = ProgressStepsAndActivity }, ""},
 		{"activity progress ok", func(o *Binding) { o.Spec.Chat.Progress = ProgressActivity }, ""},
 		{"activity progress with final output ok: output final ignores it", func(o *Binding) { o.Spec.Chat.Output, o.Spec.Chat.Progress = OutputFinal, ProgressActivity }, ""},
+		{"a mention ok", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "payments-owner", User: "U0123456789"}} }, ""},
+		{"a W user ID ok", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "W0123456789"}} }, ""},
+		{"mention with a name of capitals", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "Sam", User: "U0123456789"}} },
+			`spec.chat.mentions[0].name: invalid name "Sam": use lowercase letters, digits and '-', starting with a letter, at most 63 characters`},
+		{"mention with no name", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{User: "U0123456789"}} }, "spec.chat.mentions[0].name: required"},
+		{"mention named here", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "here", User: "U0123456789"}} },
+			`spec.chat.mentions[0].name: "here" is reserved: a broadcast cannot be declared`},
+		{"mention named channel", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "channel", User: "U0123456789"}} },
+			`spec.chat.mentions[0].name: "channel" is reserved: a broadcast cannot be declared`},
+		{"mention named everyone", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "everyone", User: "U0123456789"}} },
+			`spec.chat.mentions[0].name: "everyone" is reserved: a broadcast cannot be declared`},
+		{"mention with no user", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "sam"}} }, "spec.chat.mentions[0].user: required"},
+		{"mention of a user group", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "oncall", User: "S0123456789"}} },
+			`spec.chat.mentions[0].user: invalid user ID "S0123456789": must be a user ID such as U0123456789`},
+		{"mention with user markup", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "<@U0123456789>"}} },
+			`spec.chat.mentions[0].user: invalid user ID "<@U0123456789>": must be a user ID such as U0123456789`},
+		{"mention declared twice", func(o *Binding) {
+			o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "U0123456789"}, {Name: "sam", User: "U9876543210"}}
+		}, "spec.chat.mentions[1].name: duplicate of index 0"},
+		{"too many mentions", func(o *Binding) {
+			for i := range 51 {
+				o.Spec.Chat.Mentions = append(o.Spec.Chat.Mentions, ChatMention{Name: fmt.Sprintf("p%d", i), User: "U0123456789"})
+			}
+		}, "spec.chat.mentions: has 51 items, maximum is 50"},
+		{"the most mentions a turn may make ok", func(o *Binding) { o.Spec.Chat.MaxMentionsPerTurn = 10 }, ""},
+		{"too many mentions a turn", func(o *Binding) { o.Spec.Chat.MaxMentionsPerTurn = 11 }, "spec.chat.maxMentionsPerTurn: 11 is out of range, must be from 1 to 10"},
+		{"a negative cap on mentions", func(o *Binding) { o.Spec.Chat.MaxMentionsPerTurn = -1 }, "spec.chat.maxMentionsPerTurn: -1 is out of range, must be from 1 to 10"},
 		{"bad progress", func(o *Binding) { o.Spec.Chat.Progress = "spinner" },
 			`spec.chat.progress: unsupported value "spinner", must be one of steps, steps-and-activity, activity`},
 		{"progress wrong case", func(o *Binding) { o.Spec.Chat.Progress = "Steps" },
