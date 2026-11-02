@@ -81,8 +81,9 @@ func (d *Dialect) CloseIdleConnections() {
 // reader accepts fails with dialect.ErrInvalidAgentCard, which a2a-go's resolver wraps with %w, so errors.Is finds it.
 // So does JSON that both accept but that names no agent and no endpoint, such as a gateway's {"error":"login_required"}:
 // JSON decoding ignores the fields it does not know, so that is not a card with no JSON-RPC interface, but no card.
-// The test is that narrow: other JSON with a name and no interface, such as {"name":"UnauthorizedError"}, passes here,
-// and ConnectEndpoint then reports dialect.ErrNoJSONRPCInterface.
+// The test is that narrow: a body that lists any interface returns before it, and other JSON with a name, such as
+// {"name":"UnauthorizedError"}, passes it. ConnectEndpoint then reports dialect.ErrNoJSONRPCInterface unless an interface
+// is JSON-RPC.
 func cardParser(body []byte) (*a2a.AgentCard, error) {
 	card, err := agentcard.DefaultCardParser(body)
 	if err == nil && len(card.SupportedInterfaces) > 0 {
