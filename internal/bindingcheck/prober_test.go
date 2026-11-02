@@ -391,7 +391,7 @@ func TestAReloadBetweenTheTwoReadsIsProbedAtOnce(t *testing.T) {
 	})
 }
 
-func TestE1_RunWaitsForAnHonestChecker(t *testing.T) {
+func TestRunWaitsForACheckerThatHonorsItsContext(t *testing.T) {
 	var entered, finished atomic.Bool
 	g := &targets{}
 	g.set("r1", Target{"b", "C1"})
