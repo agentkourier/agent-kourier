@@ -15,8 +15,9 @@
 //     are text there, and an adapter must show them as text. There is no field in which a caller can put a
 //     platform's markup (no Blocks, no Native, no raw JSON), so nothing can bypass an adapter's escaping.
 //  2. Body.Markdown is the one rich field, and it is untrusted too: a CommonMark subset in which an
-//     adapter may allow emphasis, code and lists, and must not allow a mention, a broadcast, a link, an
-//     image, raw HTML or a date, whatever the platform's own syntax for them is.
+//     adapter may allow emphasis, code and lists, and must not allow a mention, a broadcast, a masked link, an
+//     image, raw HTML or a date, whatever the platform's own syntax for them is. A bare URL may be a link that
+//     shows its own address, where a platform has no way to stop it (chattest's AllowAutolink), and is never fetched.
 //  3. Each adapter neutralises markup for its own platform, and makes what it sends inert: no parse, no
 //     unfurl, no link names, no hidden or reordering characters (Clean), every field cut at the platform's
 //     limit (Caps.Limit) with Truncated, and a single-line field on one line.

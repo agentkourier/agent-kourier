@@ -21,6 +21,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/identity"
 	"github.com/agentkourier/agent-kourier/internal/interact"
+	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/session"
 )
 
@@ -159,6 +160,9 @@ func (b *Bindings) Backend(name string) (session.Backend, error) {
 		Progress:                 rb.Binding.Spec.Chat.Progress,
 		Feedback:                 rb.Binding.Spec.Feedback.Enabled,
 		ThreadReplies:            rb.Binding.Spec.Chat.ThreadReplies,
+		Mentions:                 rb.Binding.Spec.Chat.Mentions,
+		MaxMentions:              rb.Binding.Spec.Chat.MentionCap(),
+		MentionPrompt:            render.MentionPrompt(rb.Binding.Spec.Chat.Mentions),
 		AcknowledgmentEnabled:    ackEnabled,
 		AcknowledgmentEmoji:      ackEmoji,
 		AcknowledgmentConfigured: true,
