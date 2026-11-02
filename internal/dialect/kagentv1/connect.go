@@ -119,14 +119,14 @@ func (d *Dialect) ConnectEndpoint(ctx context.Context, endpoint string, creds di
 	}
 	for _, ext := range card.Capabilities.Extensions {
 		if ext.Required && !slices.Contains(extensions, ext.URI) {
-			return nil, errors.New("agent requires an unsupported extension")
+			return nil, dialect.ErrUnsupportedExtension
 		}
 	}
 	card.SupportedInterfaces = slices.DeleteFunc(card.SupportedInterfaces, func(i *a2a.AgentInterface) bool {
 		return i == nil || i.ProtocolBinding != a2a.TransportProtocolJSONRPC
 	})
 	if len(card.SupportedInterfaces) == 0 {
-		return nil, errors.New("agent card lists no JSON-RPC interface")
+		return nil, dialect.ErrNoJSONRPCInterface
 	}
 	for _, i := range card.SupportedInterfaces {
 		i.URL = endpoint

@@ -116,15 +116,45 @@ func (p *Pool) Close() {
 	}
 }
 
+// credentials resolves t's credentials, and refuses a Target that requires a token when they carry none.
+func (p *Pool) credentials(ctx context.Context, t Target) (dialect.Credentials, error) {
+	creds, err := t.Credentials(ctx)
+	if err != nil {
+		return dialect.Credentials{}, fmt.Errorf("resolve credentials of binding %s: %w", t.Binding, err)
+	}
+	if t.TokenRequired && creds.Token.IsEmpty() {
+		return dialect.Credentials{}, fmt.Errorf("binding %s: %w", t.Binding, ErrTokenRequired)
+	}
+	return creds, nil
+}
+
+// connect makes a client for t with creds, which fetches the agent card, and refuses an agent whose card does
+// not advertise streaming. A client it refuses is destroyed. The connect ends when the caller's context, the
+// ConnectTimeout, or the pool ends. Close waits for the entry's lock that conn holds across a connect, so it
+// must be able to cut a connect short.
+func (p *Pool) connect(ctx context.Context, t Target, creds dialect.Credentials) (*a2aclient.Client, error) {
+	ctx, cancel := context.WithTimeout(ctx, p.cfg.ConnectTimeout)
+	defer cancel()
+	defer context.AfterFunc(p.bg, cancel)() //nolint:contextcheck // p.bg is the pool's own lifetime, joined to the caller's on purpose
+	client, err := p.dialect.Connect(ctx, t.Backend, t.Agent, creds)
+	if err != nil {
+		return nil, fmt.Errorf("binding %s: %w", t.Binding, err)
+	}
+	// WP-01d measured kagent 1.0.0-alpha5's card: capabilities.streaming is true
+	// (test/fixtures/kagent/card/test-agent.card.json).
+	if !client.Card().Capabilities.Streaming {
+		_ = client.Destroy()
+		return nil, fmt.Errorf("agent %s/%s: %w", t.Agent.Namespace, t.Agent.Name, ErrStreamingUnsupported)
+	}
+	return client, nil
+}
+
 // conn resolves the credentials, then returns the cached client if they and the backend URL
 // are unchanged, or connects a new one.
 func (p *Pool) conn(ctx context.Context, t Target) (Conn, error) {
-	creds, err := t.Credentials(ctx)
+	creds, err := p.credentials(ctx, t)
 	if err != nil {
-		return nil, fmt.Errorf("resolve credentials of binding %s: %w", t.Binding, err)
-	}
-	if t.TokenRequired && creds.Token.IsEmpty() {
-		return nil, fmt.Errorf("binding %s: %w", t.Binding, ErrTokenRequired)
+		return nil, err
 	}
 	e := p.entry(poolKey{t.Binding, t.Agent})
 	seal := p.seal(t.Backend.Spec.URL, creds)
@@ -136,22 +166,43 @@ func (p *Pool) conn(ctx context.Context, t Target) (Conn, error) {
 	if e.client != nil && e.seal == seal {
 		return e.client, nil
 	}
-	// Close waits for the entry's lock, so it must be able to cut short a connect a caller
-	// started: the connect ends when the caller's context, the timeout, or the pool ends.
-	ctx, cancel := context.WithTimeout(ctx, p.cfg.ConnectTimeout)
-	defer cancel()
-	defer context.AfterFunc(p.bg, cancel)() //nolint:contextcheck // p.bg is the pool's own lifetime, joined to the caller's on purpose
-	client, err := p.dialect.Connect(ctx, t.Backend, t.Agent, creds)
+	client, err := p.connect(ctx, t, creds)
 	if err != nil {
-		return nil, fmt.Errorf("binding %s: %w", t.Binding, err)
-	}
-	// WP-01d measured kagent 1.0.0-alpha5's card: capabilities.streaming is true
-	// (test/fixtures/kagent/card/test-agent.card.json).
-	if !client.Card().Capabilities.Streaming {
-		return nil, fmt.Errorf("agent %s/%s: %w", t.Agent.Namespace, t.Agent.Name, ErrStreamingUnsupported)
+		return nil, err
 	}
 	e.client, e.seal = client, seal // a replaced client is left to finish the streams it carries
 	return client, nil
+}
+
+// Check reports whether t's agent can be reached now: it resolves the credentials as a call does,
+// connects afresh, which fetches the agent card, applies the check that the card advertises
+// streaming, and destroys the client. It sends the agent no message.
+//
+// The connect is always fresh because conn returns the cached client while the credentials and the
+// URL are unchanged, so a probe through it would stop touching the backend after its first success.
+// Check neither reads nor writes the cached clients, so it cannot disturb a stream or hide an
+// outage behind one. It returns the error of the card fetch as it is, not typed by what a status
+// means to a call: a 403 is a dialect.HTTPStatusError and not ErrCredentialsRejected. It also
+// returns ErrTokenUnreadable, ErrHeaderUnreadable, ErrTokenRequired, ErrStreamingUnsupported,
+// dialect.ErrUnsupportedExtension and dialect.ErrNoJSONRPCInterface, all findable with errors.Is,
+// and ErrPoolClosed after Close.
+func (p *Pool) Check(ctx context.Context, t Target) error {
+	if p.isClosed() {
+		return ErrPoolClosed
+	}
+	creds, err := p.credentials(ctx, t)
+	if err != nil {
+		return err
+	}
+	client, err := p.connect(ctx, t, creds)
+	if err != nil {
+		if p.isClosed() { // Close cut the connect short; that is the answer
+			return ErrPoolClosed
+		}
+		return err
+	}
+	_ = client.Destroy()
+	return nil
 }
 
 // entry returns the entry for k, made on first use. It does not look at closed: conn does,

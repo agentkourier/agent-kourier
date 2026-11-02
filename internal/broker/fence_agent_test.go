@@ -230,12 +230,13 @@ func TestRunWithSQLiteDoesNotFenceTheAgent(t *testing.T) {
 }
 
 // Nothing builds the Bindings that hand out an agent but leaderHalf.start, which fences them with an election, and nothing
-// reaches the pool's agents but Bindings.Backend, which wraps them: so that no call to the agent that the leader half makes
+// reaches the pool's agents but Bindings.Backend, which wraps them (CheckAgent also uses the pool, for a card fetch that sends
+// the agent nothing and hands out no agent, so there is nothing to fence): so that no call to the agent that the leader half makes
 // goes round the fence. One scan of the non-test code of internal/ and cmd/, whole files (a package-level func literal is
 // scanned too): a call of NewBindings (broker.NewBindings under whatever name the file imports the package by) from anywhere
 // but leaderHalf.start; a call of agent.New or agent.NewPool (under whatever name the file imports the agent package by)
 // from anywhere but NewBindings; and, in this package, any use of the pool field (a copy, p := k.pool, is a use too) outside
-// NewBindings, Close and Backend. A second builder or a second use of the pool would be an unfenced agent; this fails until
+// NewBindings, Close, Backend and CheckAgent. A second builder or a second use of the pool would be an unfenced agent; this fails until
 // the new one is decided on.
 func TestOnlyTheLeaderHalfBuildsTheBindingsAndOnlyBackendHandsOutTheAgent(t *testing.T) {
 	const (
@@ -274,8 +275,8 @@ func TestOnlyTheLeaderHalfBuildsTheBindingsAndOnlyBackendHandsOutTheAgent(t *tes
 				ast.Inspect(decl, func(n ast.Node) bool {
 					switch n := n.(type) {
 					case *ast.SelectorExpr:
-						if inBroker && n.Sel.Name == "pool" && where != "internal/broker/bindings.go:NewBindings" && where != "internal/broker/bindings.go:Close" && where != "internal/broker/bindings.go:Backend" {
-							t.Errorf("%s: uses a pool; only NewBindings, Close and Bindings.Backend may, because Backend wraps the agent in the fence", fset.Position(n.Pos()))
+						if inBroker && n.Sel.Name == "pool" && where != "internal/broker/bindings.go:NewBindings" && where != "internal/broker/bindings.go:Close" && where != "internal/broker/bindings.go:Backend" && where != "internal/broker/bindings.go:CheckAgent" {
+							t.Errorf("%s: uses a pool; only NewBindings, Close, Bindings.Backend and Bindings.CheckAgent may, because Backend wraps the agent in the fence and CheckAgent hands none out", fset.Position(n.Pos()))
 						}
 					case *ast.CallExpr:
 						var name, pkg string

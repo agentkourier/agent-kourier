@@ -83,6 +83,14 @@ func (e *HTTPStatusError) Error() string {
 	return fmt.Sprintf("HTTP %d %s", e.Code, http.StatusText(e.Code))
 }
 
+var (
+	// ErrUnsupportedExtension is what Connect returns for an agent card that requires an extension
+	// the dialect does not speak.
+	ErrUnsupportedExtension = errors.New("agent requires an unsupported extension")
+	// ErrNoJSONRPCInterface is what Connect returns for an agent card that lists no JSON-RPC interface.
+	ErrNoJSONRPCInterface = errors.New("agent card lists no JSON-RPC interface")
+)
+
 // Dialect is one backend protocol variant (spec 6.2).
 type Dialect interface {
 	// Endpoint is the URL of the agent's A2A service, on the backend's verifying front door.
