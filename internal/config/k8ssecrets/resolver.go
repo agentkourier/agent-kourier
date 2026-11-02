@@ -78,7 +78,10 @@ var (
 	ErrAccessDenied = errors.New("the API server denied access to Secrets")
 )
 
-var _ config.SecretResolver = (*Resolver)(nil)
+var (
+	_ config.SecretResolver  = (*Resolver)(nil)
+	_ config.SecretVersioner = (*Resolver)(nil)
+)
 
 // watched is the informer for one namespace.
 type watched struct {
@@ -232,6 +235,17 @@ func (r *Resolver) Keys(_ context.Context, namespace, name string) ([]string, er
 		return nil, err
 	}
 	return slices.Sorted(maps.Keys(s.Data)), nil
+}
+
+// SecretVersion returns the resourceVersion of the cached Secret, which the API server changes on
+// every write to the Secret, including a new value under the same keys. It reads the cache and
+// makes no API call, and it fails as get does.
+func (r *Resolver) SecretVersion(_ context.Context, namespace, name string) (string, error) {
+	s, err := r.get(namespace, name)
+	if err != nil {
+		return "", err
+	}
+	return s.ResourceVersion, nil
 }
 
 // Value returns the value of key in the Secret from the cache; an empty key means
