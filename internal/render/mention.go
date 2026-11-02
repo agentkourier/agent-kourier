@@ -33,13 +33,13 @@ type MentionScan struct {
 // name is an "@" that follows no word, path, query value, escape or other "@", then letters, digits and hyphens, in any case, and then
 // no more of them and none of what goes on as a package scope, a host, an address or a port: a "/" and more, an "@", a "." and a name
 // character, a ":" and a digit. "_" and "~" around a name are emphasis, and a "/" between two names only separates them, as in
-// "@sam/@lee". Nothing in a URL with a scheme is a name. A ":" before a name is a label otherwise, as in "Owner:@sam". A letter of any alphabet is a letter here, so
+// "@sam/@lee". Nothing in what reads as a URL with a scheme is a name (endsURL). A ":" before a name is a label otherwise, as in "Owner:@sam". A letter of any alphabet is a letter here, so
 // "@josé" does not name "jos". Code is left out:
 // what is in a fence or a span is quoted, not said, so a log line that holds a name notifies nobody. What is code is read as the
 // Slack adapter writes it (internal/chat/slack/mdtext.go): any fence line opens or closes a block, whatever its marks, what
 // follows a closing run is prose, a block that never closes runs to the end, and a span closes at the next run of backticks or not
 // at all. A pipe table, which that adapter shows as code, is read as prose: a name in a table is said. A name that ends where the
-// text was cut (chat.Truncated), or in a "." or ":" just before it, may be the start of something longer, so it is no name.
+// text was cut (chat.Truncated), or in a ".", ":" or "/" just before it, may be the start of something longer, so it is no name.
 // A place where the two readings still differ can only notify a declared person or not, within the cap: the adapter counts its limit
 // in escaped text, so it can cut sooner than body was. With nothing declared there is nothing to scan for, and nothing is counted.
 func Mentions(body string, declared []v1alpha1.ChatMention, limit int, already ...string) MentionScan {
@@ -203,15 +203,13 @@ func goesOn(rest string) bool {
 	if rest == "" {
 		return false
 	}
-	if strings.TrimLeft(rest, ".:") == chat.Truncated {
+	if strings.TrimLeft(rest, ".:/") == chat.Truncated {
 		return true
 	}
 	next, _ := utf8.DecodeRuneInString(rest[1:])
 	switch rest[0] {
-	case '/': // a package scope or a path, unless nothing follows it, or white space or punctuation does, as the "@" of a second name
-		after := strings.TrimLeft(rest[1:], "_~")
-		r, _ := utf8.DecodeRuneInString(after)
-		return after != "" && !unicode.IsSpace(r) && !unicode.IsPunct(r)
+	case '/':
+		return !slashEnds(rest[1:])
 	case '@':
 		return true
 	case '.':
@@ -220,6 +218,18 @@ func goesOn(rest string) bool {
 		return len(rest) > 1 && next >= '0' && next <= '9'
 	}
 	return false
+}
+
+// slashEnds says whether what follows a "/" leaves the name before it whole, where anything else makes a package scope, a path or a
+// glob: nothing, white space, a second name, or closing marks that end the word.
+func slashEnds(s string) bool {
+	s = strings.TrimLeft(s, "_~")
+	if strings.HasPrefix(strings.TrimLeft(s, "*"), "@") {
+		return true
+	}
+	s = strings.TrimLeft(s, `)]},;:!?.'"`)
+	r, _ := utf8.DecodeRuneInString(s)
+	return s == "" || unicode.IsSpace(r)
 }
 
 func isNameRune(r rune) bool {
