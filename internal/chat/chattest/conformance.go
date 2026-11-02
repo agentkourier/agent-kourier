@@ -352,10 +352,11 @@ func (c *checker) contract() {
 
 // accessContract checks what a platform promises of ChannelAccess (see the method): it answers for Agent Kourier's membership
 // and for the archived flag, says ErrChannelNotFound for a channel it does not know and for none, ErrMissingScope for an app
-// that lacks the permission, and leaves the Access zero and the error unclassified when it fails in any other way, a
-// cancelled context included. Classify(OpOther) agrees with the sentinels: Permanent for both, with ReasonChannelGone for a
-// channel not found, so a caller that does not retry them is not told to by Classify. The states are reached through
-// Subject.Channels, which every subject sets.
+// that lacks the permission, and leaves the Access zero on those errors. A cancelled context, the one other failure the suite
+// can force on every platform, wraps neither sentinel and leaves the Access zero if it fails the call. The suite does not ask
+// Classify about it, or check other failures. Classify(OpOther) agrees with the sentinels: Permanent for both, with
+// ReasonChannelGone for a channel not found, so a caller that does not retry them is not told to by Classify. The states are
+// reached through Subject.Channels, which every subject sets.
 func (c *checker) accessContract(ctx context.Context) {
 	p := c.s.Platform
 	// classified checks that Classify(OpOther) agrees with the sentinel err wraps: Permanent, as the contract says a caller
