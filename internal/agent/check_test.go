@@ -600,25 +600,26 @@ func TestCheckTellsAMalformedCardFromAnUnreachableBackend(t *testing.T) {
 		kind v1alpha1.Dialect
 	}{{"kagent-v1", kagentv1.New(0), v1alpha1.DialectKagentV1}, {"a2a", generic.New(0), v1alpha1.DialectA2A}} {
 		for _, tc := range []struct {
-			name        string
-			url         func() string
-			wantInvalid bool
-			wantNotOK   int // the status of the *agentcard.ErrStatusNotOK, 0 for none
+			name      string
+			url       func() string
+			want      error // the sentinel of the two below that err wraps, nil for neither
+			wantNotOK int   // the status of the *agentcard.ErrStatusNotOK, 0 for none
 		}{
-			{"HTML page with a 200", func() string { return serve(http.StatusOK, "text/html", html).URL }, true, 0},
-			{"an empty 200", func() string { return serve(http.StatusOK, "application/json", "").URL }, true, 0},
-			{"a card for a protocol version nothing speaks", func() string { return serve(http.StatusOK, "application/json", futureVersion).URL }, true, 0},
-			{"a gateway's JSON error with a 200", func() string { return serve(http.StatusOK, "application/json", `{"error":"login_required"}`).URL }, true, 0},
-			{"a JSON message with a 200", func() string { return serve(http.StatusOK, "application/json", `{"message":"Unauthorized"}`).URL }, true, 0},
-			{"an empty JSON object", func() string { return serve(http.StatusOK, "application/json", `{}`).URL }, true, 0},
-			{"a JSON null", func() string { return serve(http.StatusOK, "application/json", `null`).URL }, true, 0},
-			{"a named card with no interface", func() string { return serve(http.StatusOK, "application/json", `{"name":"ask"}`).URL }, false, 0},
-			{"204", func() string { return serve(http.StatusNoContent, "", "").URL }, false, http.StatusNoContent},
+			{"HTML page with a 200", func() string { return serve(http.StatusOK, "text/html", html).URL }, dialect.ErrInvalidAgentCard, 0},
+			{"an empty 200", func() string { return serve(http.StatusOK, "application/json", "").URL }, dialect.ErrInvalidAgentCard, 0},
+			{"a card for a protocol version nothing speaks", func() string { return serve(http.StatusOK, "application/json", futureVersion).URL }, dialect.ErrInvalidAgentCard, 0},
+			{"a gateway's JSON error with a 200", func() string { return serve(http.StatusOK, "application/json", `{"error":"login_required"}`).URL }, dialect.ErrInvalidAgentCard, 0},
+			{"a JSON message with a 200", func() string { return serve(http.StatusOK, "application/json", `{"message":"Unauthorized"}`).URL }, dialect.ErrInvalidAgentCard, 0},
+			{"an empty JSON object", func() string { return serve(http.StatusOK, "application/json", `{}`).URL }, dialect.ErrInvalidAgentCard, 0},
+			{"a JSON null", func() string { return serve(http.StatusOK, "application/json", `null`).URL }, dialect.ErrInvalidAgentCard, 0},
+			{"a named card with no interface", func() string { return serve(http.StatusOK, "application/json", `{"name":"ask"}`).URL }, dialect.ErrNoJSONRPCInterface, 0},
+			{"a named card the 0.3 reader refuses", func() string { return serve(http.StatusOK, "application/json", `{"name":"ask","url":123}`).URL }, dialect.ErrNoJSONRPCInterface, 0},
+			{"204", func() string { return serve(http.StatusNoContent, "", "").URL }, nil, http.StatusNoContent},
 			{"a dial failure", func() string {
 				srv := httptest.NewServer(http.NotFoundHandler())
 				srv.Close()
 				return srv.URL
-			}, false, 0},
+			}, nil, 0},
 		} {
 			t.Run(dl.name+"/"+tc.name, func(t *testing.T) {
 				p := NewPool(dl.d, quick)
@@ -633,8 +634,10 @@ func TestCheckTellsAMalformedCardFromAnUnreachableBackend(t *testing.T) {
 				if err == nil {
 					t.Fatal("Check = nil, want an error")
 				}
-				if got := errors.Is(err, dialect.ErrInvalidAgentCard); got != tc.wantInvalid {
-					t.Errorf("errors.Is(err, ErrInvalidAgentCard) = %v, want %v; err = %v", got, tc.wantInvalid, err)
+				for _, sentinel := range []error{dialect.ErrInvalidAgentCard, dialect.ErrNoJSONRPCInterface} {
+					if got, want := errors.Is(err, sentinel), errors.Is(tc.want, sentinel); got != want {
+						t.Errorf("errors.Is(err, %q) = %v, want %v; err = %v", sentinel, got, want, err)
+					}
 				}
 				var notOK *agentcard.ErrStatusNotOK
 				if got := errors.As(err, &notOK); got != (tc.wantNotOK != 0) || got && notOK.StatusCode != tc.wantNotOK {
@@ -642,6 +645,27 @@ func TestCheckTellsAMalformedCardFromAnUnreachableBackend(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// An A2A 0.3 card names its endpoint in url, and the 0.3 reader maps that onto an interface: with no name it is still a card.
+func TestCheckAcceptsAnA2AV03CardWithNoName(t *testing.T) {
+	const card = `{"url":"http://x","preferredTransport":"JSONRPC","capabilities":{"streaming":true}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(card))
+	}))
+	t.Cleanup(srv.Close)
+	p := NewPool(kagentv1.New(0), quick)
+	t.Cleanup(p.Close)
+	tg := Target{
+		Binding:     "team/sre",
+		Backend:     &v1alpha1.AgentBackend{Spec: v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectKagentV1, URL: srv.URL}},
+		Agent:       v1alpha1.AgentRef{Name: "ask", Namespace: "kagent"},
+		Credentials: token("t"),
+	}
+	if err := p.Check(t.Context(), tg); err != nil {
+		t.Errorf("Check = %v, want nil", err)
 	}
 }
 
