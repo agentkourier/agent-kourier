@@ -27,7 +27,8 @@ const (
 
 // Target is a Binding to probe and the chat channel it posts to.
 type Target struct {
-	// Binding is the Binding's name, the key of its conditions.
+	// Binding is the Binding's key, namespace/name, which is the key of its conditions. The bare name is not enough:
+	// two Bindings of one name in two namespaces are two Bindings, and the checkers look the Binding up by this key.
 	Binding string
 	// Channel is the chat channel the Binding is bound to.
 	Channel string
@@ -35,13 +36,16 @@ type Target struct {
 
 // AgentChecker probes the agent backend of a Binding. It sets BackendReachable.
 type AgentChecker interface {
-	// CheckAgent reports whether binding's backend can be used. It must honor ctx, which ends at the probe timeout.
-	// An error means the probe could not tell and leaves the condition Unknown; a checker that can classify a
-	// failure returns it as an Outcome with a nil error.
+	// CheckAgent reports whether binding's backend can be used. binding is the Target's key, namespace/name. It must
+	// honor ctx, which ends at the probe timeout. An error means the probe could not tell and leaves the condition
+	// Unknown; a checker that can classify a failure returns it as an Outcome with a nil error.
 	CheckAgent(ctx context.Context, binding string) (Outcome, error)
 }
 
-// ChannelChecker probes a chat channel. It sets ChannelJoined for every Binding bound to that channel.
+// ChannelChecker probes a chat channel. It sets ChannelJoined for the Binding whose Target names the channel; each
+// Target is probed on its own, even when several name one channel. A ChannelChecker answers for one bot, so Targets
+// must hold only Bindings on that bot's chat connection: for a Binding on another connection its answer is the wrong
+// bot's, and a True it gives would be false.
 type ChannelChecker interface {
 	// CheckChannel reports whether the bot is in channel. It must honor ctx, which ends at the probe timeout. An
 	// error means the probe could not tell and leaves the condition Unknown.
@@ -63,17 +67,15 @@ func (e *PanicError) Error() string { return fmt.Sprintf("panic: %v", e.Value) }
 // ProbeError is a failure the Prober reports to OnProbeError. Most are probes whose checker failed: it returned an
 // error, panicked, or reported an outcome with no usable status or reason. The condition is then Unknown/ProbeFailed
 // and its Message says nothing of Err. The others are failures of the caller's own code, which leave no condition
-// behind: Condition is empty and Targets nil when Targets, Revision or OnPrune panicked or Revision did not answer
-// in time or ended its goroutine (Targets is reported on every Tick it panics, Revision for every call that fails).
-// When OnTransition panicked, Condition is the condition the probe was setting and Targets is the one Binding whose
-// transition it was.
+// behind: Condition is empty and Target the zero Target when Targets, Revision or OnPrune panicked or Revision did
+// not answer in time or ended its goroutine (Targets is reported on every Tick it panics, Revision for every call
+// that fails). When OnTransition panicked, Condition and Target are the probe whose result was being recorded, which
+// is the Binding whose transition it was.
 type ProbeError struct {
 	// Condition is the condition the probe was setting. It is empty when the failure is not a probe's, as above.
 	Condition ConditionType
-	// Targets are the Bindings the probe was setting it for: one for BackendReachable, every Binding of the channel
-	// for ChannelJoined. For an OnTransition panic it is the one Binding whose transition it was; for the other
-	// failures that are not a probe's it is nil.
-	Targets []Target
+	// Target is the Binding the probe was setting it for. It is the zero Target for a failure that is not a probe's.
+	Target Target
 	// Err is the failure. For a panic it is or wraps a *PanicError.
 	Err error
 }
@@ -98,7 +100,8 @@ type Options struct {
 	Revision func(ctx context.Context) string
 	// Agents probes backends. Nil means BackendReachable is not tracked.
 	Agents AgentChecker
-	// Channels probes channels. Nil means ChannelJoined is not tracked.
+	// Channels probes channels, one probe per Target. Nil means ChannelJoined is not tracked. Targets must hold only
+	// Bindings on the chat connection that Channels answers for (see ChannelChecker).
 	Channels ChannelChecker
 	// Interval is the pause between passes, 5 minutes by default. Each pause strays from it by up to 10% either
 	// way, so that many brokers do not probe together.
@@ -122,7 +125,7 @@ type Options struct {
 	// in the error reaches a Message, so the hook is where a failure is seen; it should redact before it logs. A
 	// panic of this hook is recovered and dropped, not reported.
 	OnProbeError func(ProbeError)
-	// OnPrune is called on Run's goroutine with the names of the Bindings pruned from the State, when there are any.
+	// OnPrune is called on Run's goroutine with the keys (namespace/name) of the Bindings pruned from the State, when there are any.
 	// Every OnTransition call for a Binding comes before the OnPrune call that names it, and none follows it. It
 	// must not block, for the reason given at OnTransition, and a panic is recovered and reported to OnProbeError.
 	OnPrune func(names []string)
@@ -148,7 +151,7 @@ type Prober struct {
 	known map[string]bool // Bindings seen at the last Tick; owned by Run's goroutine
 }
 
-// probeKey identifies a probe: a condition type and an agent's Binding or a channel.
+// probeKey identifies a probe: a condition type and a Binding's key.
 type probeKey struct {
 	cond ConditionType
 	name string
@@ -306,15 +309,15 @@ func (p *Prober) fail(pe ProbeError) {
 	}
 }
 
-// hook runs one of the caller's hooks (name says which) and reports its panic to OnProbeError for cond and targets.
-func (p *Prober) hook(name string, cond ConditionType, targets []Target, fn func()) {
+// hook runs one of the caller's hooks (name says which) and reports its panic to OnProbeError for cond and target.
+func (p *Prober) hook(name string, cond ConditionType, target Target, fn func()) {
 	if err := guard(fn); err != nil {
-		p.fail(ProbeError{Condition: cond, Targets: targets, Err: fmt.Errorf("calling %s: %w", name, err)})
+		p.fail(ProbeError{Condition: cond, Target: target, Err: fmt.Errorf("calling %s: %w", name, err)})
 	}
 }
 
 // sync brings the State in line with targets and reports whether a Binding is new since the last call. It drops
-// repeated Binding names, marks a new Binding's conditions Pending, and prunes the Bindings that are gone.
+// repeated Binding keys, marks a new Binding's conditions Pending, and prunes the Bindings that are gone.
 func (p *Prober) sync(targets []Target) ([]Target, bool) {
 	var (
 		changed bool
@@ -342,7 +345,7 @@ func (p *Prober) sync(targets []Target) ([]Target, bool) {
 		}
 	}
 	if gone := p.state.Prune(names); len(gone) > 0 && p.o.OnPrune != nil {
-		p.hook("OnPrune", "", nil, func() { p.o.OnPrune(gone) })
+		p.hook("OnPrune", "", Target{}, func() { p.o.OnPrune(gone) })
 	}
 	return kept, changed
 }
@@ -355,32 +358,24 @@ func (p *Prober) pending(t ConditionType, tracked bool) Condition {
 	return Condition{Type: t, Status: Unknown, Reason: ReasonPending}
 }
 
-// pass probes every target once, p.o.Concurrency at a time, and returns when all the probes have ended. The channel
-// of Bindings that share one is probed once. Agent and channel probes alternate, so backends that hang do not hold
-// every channel probe back.
+// pass probes every target once, p.o.Concurrency at a time, and returns when all the probes have ended. Each target
+// gets its own agent probe and its own channel probe, even when targets share a channel. Agent and channel probes
+// alternate, so backends that hang do not hold every channel probe back.
 func (p *Prober) pass(ctx context.Context, targets []Target) {
 	var agentJobs, channelJobs []func(context.Context)
 	if p.o.Agents != nil {
 		for _, t := range targets {
 			agentJobs = append(agentJobs, func(ctx context.Context) {
 				res := p.probe(ctx, probeKey{BackendReachable, t.Binding}, func(c context.Context) (Outcome, error) { return p.o.Agents.CheckAgent(c, t.Binding) })
-				p.record(ctx, BackendReachable, []Target{t}, res)
+				p.record(ctx, BackendReachable, t, res)
 			})
 		}
 	}
 	if p.o.Channels != nil {
-		var order []string
-		byChannel := map[string][]Target{}
 		for _, t := range targets {
-			if _, ok := byChannel[t.Channel]; !ok {
-				order = append(order, t.Channel)
-			}
-			byChannel[t.Channel] = append(byChannel[t.Channel], t)
-		}
-		for _, ch := range order {
 			channelJobs = append(channelJobs, func(ctx context.Context) {
-				res := p.probe(ctx, probeKey{ChannelJoined, ch}, func(c context.Context) (Outcome, error) { return p.o.Channels.CheckChannel(c, ch) })
-				p.record(ctx, ChannelJoined, byChannel[ch], res)
+				res := p.probe(ctx, probeKey{ChannelJoined, t.Binding}, func(c context.Context) (Outcome, error) { return p.o.Channels.CheckChannel(c, t.Channel) })
+				p.record(ctx, ChannelJoined, t, res)
 			})
 		}
 	}
@@ -515,8 +510,8 @@ func guard(fn func()) (err error) {
 	return nil
 }
 
-// record sets the result as condition t of each of targets and calls the hooks. It records nothing once ctx has ended.
-func (p *Prober) record(ctx context.Context, t ConditionType, targets []Target, res probeResult) {
+// record sets the result as condition t of target and calls the hooks. It records nothing once ctx has ended.
+func (p *Prober) record(ctx context.Context, t ConditionType, target Target, res probeResult) {
 	select {
 	case p.apply <- struct{}{}:
 	case <-ctx.Done():
@@ -527,14 +522,12 @@ func (p *Prober) record(ctx context.Context, t ConditionType, targets []Target, 
 		return
 	}
 	if res.err != nil {
-		p.fail(ProbeError{Condition: t, Targets: targets, Err: res.err})
+		p.fail(ProbeError{Condition: t, Target: target, Err: res.err})
 	}
 	at := time.Now()
-	for _, tg := range targets {
-		for _, tr := range p.state.Set(tg.Binding, at, Condition{Type: t, Status: res.out.Status, Reason: res.out.Reason, Message: res.out.Message}) {
-			if p.o.OnTransition != nil {
-				p.hook("OnTransition", t, []Target{tg}, func() { p.o.OnTransition(tr) })
-			}
+	for _, tr := range p.state.Set(target.Binding, at, Condition{Type: t, Status: res.out.Status, Reason: res.out.Reason, Message: res.out.Message}) {
+		if p.o.OnTransition != nil {
+			p.hook("OnTransition", t, target, func() { p.o.OnTransition(tr) })
 		}
 	}
 }

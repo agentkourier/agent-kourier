@@ -12,7 +12,7 @@ var probed = []ConditionType{BackendReachable, ChannelJoined, ApproversReadable}
 
 // Transition is a change of one condition of one Binding: of its status, or of its reason.
 type Transition struct {
-	// Binding is the Binding's name.
+	// Binding is the Binding's key, namespace/name.
 	Binding string
 	// Old is the condition before the change. It is the zero Condition (empty Status) when the condition is new.
 	Old Condition
@@ -20,7 +20,7 @@ type Transition struct {
 	New Condition
 }
 
-// State holds the conditions of each Binding. It is safe for concurrent use. The zero value is not ready; use NewState.
+// State holds the conditions of each Binding, keyed by namespace/name. It is safe for concurrent use. The zero value is not ready; use NewState.
 type State struct {
 	mu       sync.RWMutex
 	bindings map[string]map[ConditionType]Condition // every condition of a Binding, Ready included
@@ -31,7 +31,7 @@ func NewState() *State {
 	return &State{bindings: map[string]map[ConditionType]Condition{}}
 }
 
-// Set records conds for binding, probed at at, and recomputes the Binding's Ready condition. A condition's
+// Set records conds for binding (its namespace/name key), probed at at, and recomputes the Binding's Ready condition. A condition's
 // LastProbeTime becomes at (the zero time for a Pending one, since no probe ran), and its LastTransitionTime becomes
 // at only when its Status differs from the one it replaces (or it is new). Times in conds are ignored, and so is any
 // condition whose Type is Ready or not one of the three probed types. A Status that is not True, False or Unknown is stored as Unknown.
@@ -130,7 +130,7 @@ func (s *State) Snapshot() map[string][]Condition {
 	return out
 }
 
-// Prune drops every Binding whose name is not in keep, and returns the names it dropped, sorted. The Prober passes
+// Prune drops every Binding whose key (namespace/name) is not in keep, and returns the keys it dropped, sorted. The Prober passes
 // them to its OnPrune hook.
 func (s *State) Prune(keep []string) []string {
 	s.mu.Lock()

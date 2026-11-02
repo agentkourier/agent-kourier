@@ -551,7 +551,7 @@ func TestARevisionThatPanicsCountsAsNoChangeAndIsReported(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		var panicked *PanicError
-		if len(perrs) == 0 || !errors.As(perrs[0].Err, &panicked) || panicked.Value != "revision boom" || perrs[0].Condition != "" || len(perrs[0].Targets) != 0 {
+		if len(perrs) == 0 || !errors.As(perrs[0].Err, &panicked) || panicked.Value != "revision boom" || perrs[0].Condition != "" || perrs[0].Target != (Target{}) {
 			t.Errorf("OnProbeError calls = %+v, want a PanicError for Revision with no condition or targets", perrs)
 		}
 	})
@@ -645,7 +645,7 @@ func TestAHookThatPanicsCannotStopTheProberAndOnProbeErrorDoesNotRecurse(t *test
 		var fromTransition bool
 		for _, pe := range perrs {
 			var panicked *PanicError
-			if errors.As(pe.Err, &panicked) && panicked.Value == "hook boom" && pe.Condition == BackendReachable && len(pe.Targets) == 1 {
+			if errors.As(pe.Err, &panicked) && panicked.Value == "hook boom" && pe.Condition == BackendReachable && pe.Target == (Target{"a", "C1"}) {
 				fromTransition = true
 			}
 		}
@@ -693,7 +693,7 @@ func TestARevisionThatEndsItsGoroutineIsReportedNotBelievedAndCalledAgain(t *tes
 		if agents.total() != 1 {
 			t.Errorf("probes = %d, want 1: the Goexit's empty answer was believed as a new revision", agents.total())
 		}
-		if errs := log.all(); len(errs) != 1 || errs[0].Err == nil || errs[0].Condition != "" || len(errs[0].Targets) != 0 {
+		if errs := log.all(); len(errs) != 1 || errs[0].Err == nil || errs[0].Condition != "" || errs[0].Target != (Target{}) {
 			t.Errorf("OnProbeError calls = %+v, want one for the Revision call that ended", errs)
 		}
 	})
@@ -724,7 +724,7 @@ func TestARevisionThatTimesOutIsReportedOncePerCall(t *testing.T) {
 	}, OnProbeError: log.add}, func(h *harness) {
 		h.advance(timeout)
 		errs := log.all()
-		if len(errs) != 1 || errs[0].Err == nil || errs[0].Condition != "" || len(errs[0].Targets) != 0 {
+		if len(errs) != 1 || errs[0].Err == nil || errs[0].Condition != "" || errs[0].Target != (Target{}) {
 			t.Errorf("OnProbeError calls = %+v, want one for the Revision call that timed out", errs)
 		}
 	})
@@ -788,13 +788,13 @@ func TestAnOnPrunePanicIsReported(t *testing.T) {
 		h.advance(tick)
 		errs := log.all()
 		var panicked *PanicError
-		if len(errs) != 1 || !errors.As(errs[0].Err, &panicked) || panicked.Value != "prune boom" || errs[0].Condition != "" || len(errs[0].Targets) != 0 {
+		if len(errs) != 1 || !errors.As(errs[0].Err, &panicked) || panicked.Value != "prune boom" || errs[0].Condition != "" || errs[0].Target != (Target{}) {
 			t.Errorf("OnProbeError calls = %+v, want one PanicError for OnPrune", errs)
 		}
 	})
 }
 
-func TestAnOnTransitionPanicDoesNotSkipTheOtherBindingsOfASharedChannel(t *testing.T) {
+func TestAnOnTransitionPanicDoesNotSkipTheTransitionsAndBindingsThatFollow(t *testing.T) {
 	g := &targets{}
 	g.set("r1", Target{"a", "C1"}, Target{"b", "C1"}, Target{"c", "C1"})
 	var log errorLog
@@ -813,8 +813,8 @@ func TestAnOnTransitionPanicDoesNotSkipTheOtherBindingsOfASharedChannel(t *testi
 		}
 		reported := map[string]bool{}
 		for _, pe := range log.all() {
-			if len(pe.Targets) == 1 {
-				reported[pe.Targets[0].Binding] = true
+			if pe.Target != (Target{}) {
+				reported[pe.Target.Binding] = true
 			}
 		}
 		if len(reported) != 3 {
@@ -893,28 +893,64 @@ func TestConcurrencyLimitHolds(t *testing.T) {
 	})
 }
 
-func TestChannelProbesAreDeduplicatedByChannel(t *testing.T) {
+func TestTargetsThatNameOneChannelEachGetTheirOwnProbeAndResult(t *testing.T) {
 	g := &targets{}
 	g.set("r1", Target{"a", "C1"}, Target{"b", "C1"}, Target{"c", "C1"}, Target{"d", "C2"})
 	agents := &fakeAgents{}
-	chans := &fakeChannels{fn: func(_ context.Context, ch string) (Outcome, error) {
-		if ch == "C1" {
-			return Outcome{Status: False, Reason: ReasonNotInChannel, Message: "not a member"}, nil
-		}
-		return ok(), nil
+	var n atomic.Int32
+	chans := &fakeChannels{fn: func(context.Context, string) (Outcome, error) {
+		return Outcome{Status: False, Reason: ReasonNotInChannel, Message: fmt.Sprintf("answer %d", n.Add(1))}, nil
 	}}
 	run(t, Options{Targets: g.Targets, Revision: g.Revision, Agents: agents, Channels: chans}, func(h *harness) {
-		if chans.count("C1") != 1 || chans.count("C2") != 1 {
-			t.Errorf("channel probes C1=%d C2=%d, want 1 each", chans.count("C1"), chans.count("C2"))
+		if chans.count("C1") != 3 || chans.count("C2") != 1 {
+			t.Errorf("channel probes C1=%d C2=%d, want one per Target (3 and 1)", chans.count("C1"), chans.count("C2"))
 		}
 		if agents.total() != 4 {
 			t.Errorf("agent probes = %d, want one per Binding (4)", agents.total())
 		}
-		for _, b := range []string{"a", "b", "c"} {
+		messages := map[string]bool{}
+		for _, b := range []string{"a", "b", "c", "d"} {
 			wantCond(t, h.conds(b), ChannelJoined, False, ReasonNotInChannel)
 			wantCond(t, h.conds(b), Ready, False, "ChannelJoined:NotInChannel")
+			messages[h.conds(b)[ChannelJoined].Message] = true
 		}
-		wantCond(t, h.conds("d"), ChannelJoined, True, ReasonOK)
+		if len(messages) != 4 {
+			t.Errorf("recorded %d distinct answers, want 4: each Binding records its own probe's result", len(messages))
+		}
+	})
+}
+
+func TestBindingsOfOneNameInTwoNamespacesAreKeptApart(t *testing.T) {
+	g := &targets{}
+	g.set("r1", Target{"sre/alerts", "C1"}, Target{"platform/alerts", "C2"})
+	agents := &fakeAgents{fn: func(_ context.Context, b string) (Outcome, error) {
+		if b == "platform/alerts" {
+			return Outcome{Status: False, Reason: ReasonAgentNotFound}, nil
+		}
+		return ok(), nil
+	}}
+	var mu sync.Mutex
+	var pruned []string
+	run(t, Options{Targets: g.Targets, Revision: g.Revision, Agents: agents, OnPrune: func(names []string) {
+		mu.Lock()
+		defer mu.Unlock()
+		pruned = append(pruned, names...)
+	}}, func(h *harness) {
+		if agents.count("sre/alerts") != 1 || agents.count("platform/alerts") != 1 {
+			t.Errorf("probes sre/alerts=%d platform/alerts=%d, want 1 each, under the full keys", agents.count("sre/alerts"), agents.count("platform/alerts"))
+		}
+		if n := len(h.p.State().Snapshot()); n != 2 {
+			t.Fatalf("State holds %d Bindings, want 2", n)
+		}
+		wantCond(t, h.conds("sre/alerts"), BackendReachable, True, ReasonOK)
+		wantCond(t, h.conds("platform/alerts"), BackendReachable, False, ReasonAgentNotFound)
+		g.set("r2", Target{"sre/alerts", "C1"}) // only the platform Binding leaves
+		h.advance(tick)
+		mu.Lock()
+		defer mu.Unlock()
+		if !slices.Equal(pruned, []string{"platform/alerts"}) || h.p.State().Snapshot()["sre/alerts"] == nil {
+			t.Errorf("pruned %v, sre/alerts present %v; want only platform/alerts gone", pruned, h.p.State().Snapshot()["sre/alerts"] != nil)
+		}
 	})
 }
 
@@ -1218,21 +1254,21 @@ func TestACheckerThatFailsLeavesTheConditionUnknownAndTheOthersRun(t *testing.T)
 		for _, pe := range perrs {
 			if pe.Condition == ChannelJoined {
 				channelErrs++
-				if len(pe.Targets) != 1 || pe.Err == nil || pe.Err.Error() != "slack down" {
+				if pe.Target.Binding == "" || pe.Err == nil || pe.Err.Error() != "slack down" {
 					t.Errorf("channel ProbeError = %+v", pe)
 				}
 				continue
 			}
-			if len(pe.Targets) != 1 || pe.Condition != BackendReachable {
-				t.Errorf("ProbeError = %+v, want one BackendReachable target", pe)
+			if pe.Target.Binding == "" || pe.Condition != BackendReachable {
+				t.Errorf("ProbeError = %+v, want a BackendReachable target", pe)
 				continue
 			}
-			byBinding[pe.Targets[0].Binding] = pe
+			byBinding[pe.Target.Binding] = pe
 		}
 		if channelErrs != 4 {
 			t.Errorf("channel ProbeErrors = %d, want 4", channelErrs)
 		}
-		if pe := byBinding["errs"]; !errors.Is(pe.Err, cause) || pe.Targets[0].Channel != "C1" {
+		if pe := byBinding["errs"]; !errors.Is(pe.Err, cause) || pe.Target.Channel != "C1" {
 			t.Errorf("errs ProbeError = %+v, want the checker's error and the Binding's channel", pe)
 		}
 		var panicked *PanicError

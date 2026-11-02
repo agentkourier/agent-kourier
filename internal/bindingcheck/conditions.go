@@ -59,13 +59,13 @@ const (
 	// ReasonProbeTimeout is the reason of an Unknown condition whose probe did not finish within the probe timeout.
 	ReasonProbeTimeout Reason = "ProbeTimeout"
 
-	// ReasonCredentialsUnreadable is a BackendReachable reason: the Binding's token Secret cannot be read.
+	// ReasonCredentialsUnreadable is a BackendReachable reason: the Binding's token Secret or a Secret behind one of
+	// the backend's headers cannot be read.
 	ReasonCredentialsUnreadable Reason = "CredentialsUnreadable"
-	// ReasonTokenRequired is a BackendReachable reason: the backend needs a token and the Binding has none.
-	ReasonTokenRequired Reason = "TokenRequired"
 	// ReasonUnreachable is a BackendReachable reason: the backend did not answer (dial, TLS or timeout).
 	ReasonUnreachable Reason = "Unreachable"
-	// ReasonCredentialsRejected is a BackendReachable reason: the backend answered 401.
+	// ReasonCredentialsRejected is a BackendReachable reason: the backend answered 401, either because it rejected
+	// the Binding's token or because the Binding has none and the backend needs one.
 	ReasonCredentialsRejected Reason = "CredentialsRejected"
 	// ReasonAgentForbidden is a BackendReachable reason: the backend answered 403, so the agent is not found or not
 	// permitted for this identity.
@@ -76,6 +76,12 @@ const (
 	ReasonAgentNotReady Reason = "AgentNotReady"
 	// ReasonBackendError is a BackendReachable reason: the backend answered 5xx, or 2xx other than 200.
 	ReasonBackendError Reason = "BackendError"
+	// ReasonUnexpectedStatus is a BackendReachable reason: the backend answered a status no other reason names, a
+	// 3xx (often a redirect to a login page) or a 4xx other than 401, 403, 404 and 409.
+	ReasonUnexpectedStatus Reason = "UnexpectedStatus"
+	// ReasonInvalidAgentCard is a BackendReachable reason: the backend answered 200 with a body that is not a usable
+	// agent card, such as an SSO page.
+	ReasonInvalidAgentCard Reason = "InvalidAgentCard"
 	// ReasonStreamingUnsupported is a BackendReachable reason: the agent card does not advertise streaming.
 	ReasonStreamingUnsupported Reason = "StreamingUnsupported"
 	// ReasonUnsupportedExtension is a BackendReachable reason: the card requires an extension the broker does not speak.
@@ -91,10 +97,15 @@ const (
 	ReasonChannelArchived Reason = "ChannelArchived"
 	// ReasonMissingScope is a ChannelJoined or ApproversReadable reason: the chat token lacks the scope for the read.
 	ReasonMissingScope Reason = "MissingScope"
+	// ReasonChatCredentialsRejected is a False ChannelJoined reason: the chat platform rejected the bot's token, so
+	// reading the channel cannot work until an operator replaces it.
+	ReasonChatCredentialsRejected Reason = "ChatCredentialsRejected"
 	// ReasonChatUnavailable is an Unknown ChannelJoined reason: the chat platform rate-limited or failed the read.
 	ReasonChatUnavailable Reason = "ChatUnavailable"
 	// ReasonChatCredentialsChanged is an Unknown ChannelJoined reason: the chat credentials changed after the
-	// connection started, so a restart is needed before they are used.
+	// connection started, so a restart is needed before they are used. It is the changed-but-not-yet-restarted case,
+	// not the rejected one (ReasonChatCredentialsRejected), where the platform has refused the token the connection
+	// is using.
 	ReasonChatCredentialsChanged Reason = "ChatCredentialsChanged"
 
 	// ReasonGroupNotFound is an ApproversReadable reason: a named approver group does not exist.
