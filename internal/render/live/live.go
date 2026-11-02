@@ -213,7 +213,7 @@ type Turn struct {
 	// Binding is the name of the turn's Binding, namespace/name, which the record of a mention names.
 	Binding string
 	// Mentions are the people the Binding declares, and MaxMentions the most a turn notifies. A turn that ended with text
-	// that names one posts a message of its own for them, after the reply (notifyMentions). Empty means none.
+	// that names one posts a message of its own for each, after the reply (notifyMentions). Empty means none.
 	Mentions    []v1alpha1.ChatMention
 	MaxMentions int
 }
@@ -876,16 +876,16 @@ func (u *Run) run(ctx context.Context) {
 	}
 }
 
-// notifyMentions queues the message that notifies the people the turn's final text names, in a row of its own and after the
-// reply, so that it is a new message wherever the reply was streamed or updated: a mention beside a body notifies nobody
+// notifyMentions queues the messages that notify the people the turn's final text names, one for each in a row of its own and
+// after the reply, so that each is a new message wherever the reply was streamed or updated: a mention beside a body notifies nobody
 // (chat.Mention). A turn that failed, was stopped or was rejected notifies nobody, as one cut short does: a person who stops a
 // steered agent has decided against what it was saying. A pause counts: what the agent wrote before it may be for the person it
 // names. The question itself is not read: it is the task's status message, which the interaction intake posts as a prompt, and is
-// not the turn's text. A turn that already made a row mentions nobody twice, and those people count towards the cap: rendered again
-// it posts and records nothing, and a task that paused and ran on under the same turn gets one more row for whoever its later text
-// names first. Only the outbox's delivery is retried: a crash before this runs loses the mention, which is a convenience, and never
-// the paging path, and a crash after the row is queued, or a timeout, can leave it with no audit row, since a row found is not
-// recorded again. A failure is logged, and the reply stands.
+// not the turn's text. A person with a row is not mentioned again, and counts towards the cap: rendered again a turn posts and
+// records nothing, and a task that paused and ran on under the same turn gets rows only for whoever its later text names first.
+// Only the outbox's delivery is retried: a crash before this runs loses the mention, which is a convenience, and never the paging
+// path, and a crash after a row is queued, or a timeout, can leave it with no audit row, since a row found is not recorded again.
+// A failure is logged, and the reply stands.
 func (u *Run) notifyMentions(ctx context.Context) {
 	u.mu.Lock()
 	endedBadly := u.endedBadly
@@ -895,7 +895,7 @@ func (u *Run) notifyMentions(ctx context.Context) {
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), u.cfg.WriteTimeout)
 	defer cancel()
-	already, source, err := u.mentioned(ctx)
+	already, err := u.mentioned(ctx)
 	if err != nil {
 		u.cfg.Logger.WarnContext(ctx, "live: the mentions of a turn were not queued", "channel", u.turn.Channel, "err", err)
 		return
@@ -907,15 +907,12 @@ func (u *Run) notifyMentions(ctx context.Context) {
 	for range scan.Capped {
 		telemetry.Count(ctx, "agentkourier_mentions_total", u.turn.Binding, "capped")
 	}
-	if len(scan.Made) == 0 {
-		return
-	}
-	post := outbox.Post{Source: source, Role: store.OutboxNotice, Channel: u.turn.Channel, Thread: u.turn.Thread, Out: chat.Say(render.MentionMessage(scan.Made))}
-	if _, err := u.cfg.Sender.Enqueue(ctx, post); err != nil {
-		u.cfg.Logger.WarnContext(ctx, "live: the mentions of a turn were not queued", "channel", u.turn.Channel, "err", err)
-		return
-	}
 	for _, m := range scan.Made {
+		post := outbox.Post{Source: outbox.MentionSource(u.turn.Source, m.User), Role: store.OutboxNotice, Channel: u.turn.Channel, Thread: u.turn.Thread, Out: chat.Say(render.MentionMessage(m))}
+		if _, err := u.cfg.Sender.Enqueue(ctx, post); err != nil {
+			u.cfg.Logger.WarnContext(ctx, "live: the mentions of a turn were not queued", "channel", u.turn.Channel, "err", err)
+			return
+		}
 		telemetry.Count(ctx, "agentkourier_mentions_total", u.turn.Binding, "made")
 		if u.cfg.Audit == nil {
 			continue
@@ -927,30 +924,23 @@ func (u *Run) notifyMentions(ctx context.Context) {
 	}
 }
 
-// mentioned is the users the rows of this turn's mentions name, and the source of the next row.
-func (u *Run) mentioned(ctx context.Context) (users []string, next string, err error) {
-	for n := 0; ; n++ {
-		source := outbox.MentionSource(u.turn.Source, n)
-		row, err := u.cfg.Store.GetOutbox(ctx, outbox.ID(source, store.OutboxNotice))
-		if errors.Is(err, store.ErrNotFound) {
-			return users, source, nil
+// mentioned is the declared users the turn has a row for: pending, delivered or abandoned, each of which has had its one try.
+func (u *Run) mentioned(ctx context.Context) ([]string, error) {
+	var users []string
+	for _, m := range u.turn.Mentions {
+		if slices.Contains(users, m.User) {
+			continue
 		}
-		if err != nil {
-			return nil, "", fmt.Errorf("read the mentions of the turn: %w", err)
-		}
-		out, err := outbox.Decode(row.Payload)
-		if err != nil {
-			return nil, "", fmt.Errorf("read the row %s: %w", source, err)
-		}
-		if out.Message == nil {
-			return nil, "", fmt.Errorf("read the row %s: it holds no message", source)
-		}
-		for _, part := range out.Message.Parts {
-			if m, ok := part.(chat.Mention); ok {
-				users = append(users, m.User)
-			}
+		_, err := u.cfg.Store.GetOutbox(ctx, outbox.ID(outbox.MentionSource(u.turn.Source, m.User), store.OutboxNotice))
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+		case err != nil:
+			return nil, fmt.Errorf("read the mentions of the turn: %w", err)
+		default:
+			users = append(users, m.User)
 		}
 	}
+	return users, nil
 }
 
 // cut ends a turn whose context ended before its final event, and says whether the run has a write to make for it. The send

@@ -256,8 +256,8 @@ type ChatBinding struct {
 	// +doc:default=`[{type: mention}]`
 	// +optional
 	Triggers []Trigger `json:"triggers,omitempty"`
-	// Mentions are the people an agent may notify, by writing `@name` in its reply. Agent Kourier then posts a message of its
-	// own in the thread that mentions each one named. A name not listed here notifies nobody, and an agent can never supply
+	// Mentions are the people an agent may notify, by writing `@name` in its reply. Agent Kourier then posts a message in the
+	// thread that mentions each one named, one message for each. A name not listed here notifies nobody, and an agent can never supply
 	// a user ID. Empty means no mentions, and nothing is added to the prompt. At most 50.
 	// +optional
 	Mentions []ChatMention `json:"mentions,omitempty"`

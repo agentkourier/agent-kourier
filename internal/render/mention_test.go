@@ -90,6 +90,15 @@ func TestMentions(t *testing.T) {
 		{name: "a port the cut ran into", body: "see @sam:" + chat.Truncated, max: 2},
 		{name: "a word with an underscore the cut ran into", body: "see @sam_" + chat.Truncated, max: 2},
 		{name: "a comma before the cut", body: "see @sam," + chat.Truncated, max: 2, made: []string{"sam"}},
+		{name: "a tilde does not hide what goes on", body: "@sam~/path @sam~.example.com @sam~:8080", max: 2},
+		{name: "a tilde before the cut", body: "see @sam~" + chat.Truncated, max: 2},
+		{name: "in a URL, after any separator", body: "https://x.test/?o=a,@sam https://x.test/(@sam) https://x.test/a;@sam https://x.test/a:@sam", max: 2},
+		{name: "after a URL", body: "https://x.test/a @sam", max: 2, made: []string{"sam"}},
+		{name: "a slash and no name after it", body: "@sam/", max: 2, made: []string{"sam"}},
+		{name: "a slash and a space", body: "@sam/ @lee", max: 2, made: []string{"sam", "lee"}},
+		{name: "emphasis on each of two names", body: "_@sam_/_@lee_", max: 2, made: []string{"sam", "lee"}},
+		{name: "strikethrough on each of two names", body: "~~@sam~~/~~@lee~~", max: 2, made: []string{"sam", "lee"}},
+		{name: "emphasis on the second of two names", body: "@sam/_@lee_", max: 2, made: []string{"sam", "lee"}},
 		{name: "a raw user ID, and markup", body: "ask U0SAM or <@U0SAM> or <!channel> or <!subteam^S1>", max: 2, undeclared: 1},
 		{name: "the name inside markup", body: "<@sam>", max: 2, made: []string{"sam"}},
 	} {
@@ -144,18 +153,15 @@ func TestMentionsTakesTheUserFromConfig(t *testing.T) {
 // The message of a mention holds nothing of the agent's: only its own words, and names and users from config. It is
 // made of mentions alone, since a platform may not notify anyone of a mention beside a body (chat.Mention).
 func TestMentionMessage(t *testing.T) {
-	m := render.MentionMessage([]v1alpha1.ChatMention{{Name: "sam", User: "U0SAM"}, {Name: "lee", User: "U0LEE"}})
+	m := render.MentionMessage(v1alpha1.ChatMention{Name: "sam", User: "U0SAM"})
 	if err := m.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	want := []chat.Part{
-		chat.Mention{User: "U0SAM", Text: "was named as sam in the reply above."},
-		chat.Mention{User: "U0LEE", Text: "was named as lee in the reply above."},
-	}
+	want := []chat.Part{chat.Mention{User: "U0SAM", Text: "was named as sam in the reply above."}}
 	if !reflect.DeepEqual(m.Parts, want) {
 		t.Errorf("Parts = %+v, want %+v", m.Parts, want)
 	}
-	if m.Fallback != "The agent named sam, lee in this thread." {
+	if m.Fallback != "The agent named sam in this thread." {
 		t.Errorf("Fallback = %q", m.Fallback)
 	}
 }

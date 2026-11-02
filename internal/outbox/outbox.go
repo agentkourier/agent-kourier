@@ -34,7 +34,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"sync"
 	"time"
 
@@ -135,15 +134,10 @@ type Post struct {
 // and the mark. The rating of such a reply names the first source, and finds the row by this one too.
 func RepostedSource(source string) string { return source + "/recovered" }
 
-// MentionSource is the source of the nth message, from 0, that notifies the people a turn's reply named (render.MentionMessage):
-// a notice, in a row of its own, so that a turn rendered again finds the rows it made. A turn has more than one only if its task
-// paused and ran on under the same turn, and its later text named someone new.
-func MentionSource(source string, n int) string {
-	if n == 0 {
-		return source + "/mention"
-	}
-	return source + "/mention/" + strconv.Itoa(n)
-}
+// MentionSource is the source of the message that notifies user that a turn's reply named them (render.MentionMessage): a notice,
+// in a row of its own for each person. That the row exists says the turn has mentioned the person, whatever became of it: its
+// payload is cleared when it is delivered, so the row's ID is all that lasts.
+func MentionSource(source, user string) string { return source + "/mention/" + user }
 
 // ID returns the outbox ID of a message: deterministic, so a retry of the same event names the
 // same row. An interaction prompt passes its interaction ID as source, so it cannot collide with
@@ -465,9 +459,9 @@ func orOther(r chat.Reason) chat.Reason {
 	return r
 }
 
-// Decode reads the payload of a row as the message it holds. A payload that is not a message of this version is
+// decode reads the payload of a row as the message it holds. A payload that is not a message of this version is
 // an error, such as a legacy Slack payload (Text and Blocks, with no version), which is not migrated.
-func Decode(payload string) (chat.Outgoing, error) {
+func decode(payload string) (chat.Outgoing, error) {
 	var out chat.Outgoing
 	if err := json.Unmarshal([]byte(payload), &out); err != nil {
 		return chat.Outgoing{}, err
@@ -511,7 +505,7 @@ func (o *Outbox) deliver(ctx context.Context, id string, lookup bool) (telemetry
 	if row.Payload == "" {
 		return chat.Ref{}, fmt.Errorf("deliver %s: the row has no payload: %w", id, store.ErrInvalid)
 	}
-	out, err := Decode(row.Payload)
+	out, err := decode(row.Payload)
 	if err != nil {
 		return chat.Ref{}, o.abandon(ctx, row, AbandonInvalid, "", fmt.Errorf("deliver %s: payload: %w", id, err))
 	}

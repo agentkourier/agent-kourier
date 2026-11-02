@@ -33,27 +33,35 @@ func mentionTurn(mode v1alpha1.OutputMode, recipient string) live.Turn {
 	return live.Turn{Mode: mode, Recipient: recipient, Binding: "ns/b", Mentions: declaredPeople, MaxMentions: 2}
 }
 
-// mentionRow is the row of turn-1's mentions, and whether there is one.
-func (e *env) mentionRow(t *testing.T) (store.OutboxEntry, chat.Message, bool) {
+// mentionRowOf is the row of turn-1's mention of the person, and whether there is one. The message is empty once it is delivered.
+func (e *env) mentionRowOf(t *testing.T, m v1alpha1.ChatMention) (store.OutboxEntry, chat.Message, bool) {
 	t.Helper()
-	return e.mentionRowAt(t, 0)
-}
-
-// mentionRowAt is the nth row of turn-1's mentions, and whether there is one.
-func (e *env) mentionRowAt(t *testing.T, n int) (store.OutboxEntry, chat.Message, bool) {
-	t.Helper()
-	row, err := e.store.GetOutbox(t.Context(), outbox.ID(outbox.MentionSource("turn-1", n), store.OutboxNotice))
+	row, err := e.store.GetOutbox(t.Context(), outbox.ID(outbox.MentionSource("turn-1", m.User), store.OutboxNotice))
 	if errors.Is(err, store.ErrNotFound) {
 		return row, chat.Message{}, false
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
+	if row.Payload == "" {
+		return row, chat.Message{}, true
+	}
 	var out chat.Outgoing
 	if err := json.Unmarshal([]byte(row.Payload), &out); err != nil || out.Message == nil {
 		t.Fatalf("the row's payload %q: %v", row.Payload, err)
 	}
 	return row, *out.Message, true
+}
+
+// mentionRow is the row of turn-1's mention of the first declared person who has one, and whether there is one.
+func (e *env) mentionRow(t *testing.T) (store.OutboxEntry, chat.Message, bool) {
+	t.Helper()
+	for _, p := range declaredPeople {
+		if row, m, ok := e.mentionRowOf(t, p); ok {
+			return row, m, true
+		}
+	}
+	return store.OutboxEntry{}, chat.Message{}, false
 }
 
 // A reply that names a declared person makes one message that mentions the person, on every path a reply can take, and the
@@ -81,7 +89,7 @@ func TestAReplyThatNamesAPersonQueuesAMention(t *testing.T) {
 			if row.Role != store.OutboxNotice || row.Channel != "C1" || row.Thread != e.root {
 				t.Errorf("row = %+v; want a notice in the thread", row)
 			}
-			if want := render.MentionMessage(declaredPeople[:1]); !reflect.DeepEqual(m, want) {
+			if want := render.MentionMessage(declaredPeople[0]); !reflect.DeepEqual(m, want) {
 				t.Errorf("message = %+v, want %+v", m, want)
 			}
 			if got := e.reply().Text; !strings.Contains(got, "ask @sam about the rollout") {
@@ -102,7 +110,7 @@ func TestAPauseThatNamesAPersonQueuesAMention(t *testing.T) {
 	if !ok {
 		t.Fatal("no row for the mention")
 	}
-	if want := render.MentionMessage(declaredPeople[:1]); !reflect.DeepEqual(m, want) {
+	if want := render.MentionMessage(declaredPeople[0]); !reflect.DeepEqual(m, want) {
 		t.Errorf("message = %+v, want %+v", m, want)
 	}
 }
@@ -120,8 +128,9 @@ func TestAQuestionInAPauseIsNotRead(t *testing.T) {
 	}
 }
 
-// A task that paused and ran on under the same turn has its later text read too: a row of its own for whoever is new, within the
-// cap for the whole turn, and nothing more when it is rendered again.
+// A task that paused and ran on under the same turn has its later text read too: a row for whoever is new, within the cap for the
+// whole turn, and nothing more when it is rendered again. The first mention is delivered by then, as it is in production, which
+// clears its payload, and the row still counts.
 func TestATurnThatRunsOnAfterAPauseMentionsOnlyWhoIsNew(t *testing.T) {
 	e := setup(t)
 	aud := &mentionAudit{}
@@ -136,22 +145,56 @@ func TestATurnThatRunsOnAfterAPauseMentionsOnlyWhoIsNew(t *testing.T) {
 		run.Handle(text("a", say))
 		run.Handle(agent.FinalEvent{Task: &a2a.Task{ID: "t1", Status: a2a.TaskStatus{State: state}}})
 		e.finish(t, run)
+		if err := e.ob.Reconcile(t.Context()); err != nil {
+			t.Fatalf("Reconcile = %v", err)
+		}
 	}
 	end(t, "@sam, may I restart the pod?", a2a.TaskStateInputRequired)
+	sam, lee, kim := declaredPeople[0], declaredPeople[1], declaredPeople[2]
+	if row, _, ok := e.mentionRowOf(t, sam); !ok || row.MessageRef == "" || row.Payload != "" {
+		t.Fatalf("sam's row = %+v, %v; want it delivered and its payload cleared", row, ok)
+	}
 	end(t, "Restarted. @sam and @lee own it, and @kim was told.", a2a.TaskStateCompleted)
 	end(t, "Restarted. @sam and @lee own it, and @kim was told.", a2a.TaskStateCompleted)
 
-	if _, m, ok := e.mentionRowAt(t, 0); !ok || !reflect.DeepEqual(m, render.MentionMessage(declaredPeople[:1])) {
-		t.Errorf("the first row = %+v, %v; want sam alone", m, ok)
+	if _, _, ok := e.mentionRowOf(t, lee); !ok {
+		t.Error("no row for lee")
 	}
-	if _, m, ok := e.mentionRowAt(t, 1); !ok || !reflect.DeepEqual(m, render.MentionMessage(declaredPeople[1:2])) {
-		t.Errorf("the second row = %+v, %v; want lee alone", m, ok)
+	if _, m, ok := e.mentionRowOf(t, kim); ok {
+		t.Errorf("a row past the cap: %+v", m)
 	}
-	if _, m, ok := e.mentionRowAt(t, 2); ok {
-		t.Errorf("a third row: %+v", m)
-	}
-	if len(aud.rows) != 2 {
+	if len(aud.rows) != 2 || aud.rows[0].Name != "sam" || aud.rows[1].Name != "lee" {
 		t.Errorf("audit rows = %+v, want sam and lee, once each", aud.rows)
+	}
+	if strings.Contains(e.logs.String(), "were not queued") {
+		t.Errorf("logs = %q", e.logs.String())
+	}
+}
+
+// A row that was given up on had its one try, so the person is not mentioned again and still counts towards the cap.
+func TestAnAbandonedMentionIsNotMadeAgain(t *testing.T) {
+	e := setup(t)
+	for i, say := range []string{"ask @sam", "ask @sam and @lee and @kim"} {
+		turn := mentionTurn(v1alpha1.OutputLive, "")
+		turn.Recovered = i > 0
+		run, _ := e.startFor(t, turn)
+		run.Handle(text("a", say))
+		run.Handle(agent.FinalEvent{})
+		e.finish(t, run)
+		if i == 0 {
+			if _, err := e.store.AbandonOutbox(t.Context(), outbox.ID(outbox.MentionSource("turn-1", "U0SAM"), store.OutboxNotice), e.cfg.Now()); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if row, _, ok := e.mentionRowOf(t, declaredPeople[0]); !ok || row.AbandonedAt.IsZero() {
+		t.Errorf("sam's row = %+v, %v; want it left abandoned", row, ok)
+	}
+	if _, _, ok := e.mentionRowOf(t, declaredPeople[1]); !ok {
+		t.Error("no row for lee")
+	}
+	if _, _, ok := e.mentionRowOf(t, declaredPeople[2]); ok {
+		t.Error("a row for kim, past the cap")
 	}
 }
 
@@ -305,9 +348,13 @@ func TestTheMentionsOfATurnStopAtTheCap(t *testing.T) {
 	run.Handle(text("a", "@kim @sam @lee"))
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
-	_, m, ok := e.mentionRow(t)
-	if want := render.MentionMessage([]v1alpha1.ChatMention{declaredPeople[2], declaredPeople[0]}); !ok || !reflect.DeepEqual(m, want) {
-		t.Errorf("message = %+v, want %+v", m, want)
+	for _, p := range []v1alpha1.ChatMention{declaredPeople[2], declaredPeople[0]} {
+		if _, m, ok := e.mentionRowOf(t, p); !ok || !reflect.DeepEqual(m, render.MentionMessage(p)) {
+			t.Errorf("the message for %s = %+v, %v", p.Name, m, ok)
+		}
+	}
+	if _, m, ok := e.mentionRowOf(t, declaredPeople[1]); ok {
+		t.Errorf("a row past the cap: %+v", m)
 	}
 }
 

@@ -84,7 +84,7 @@ Alert messages, other bots' messages, people's replies and agent output are all 
 Hostile text can still steer a model, so two things are worth knowing about what a reply can do.
 
 - **A declared person can be notified.** If the Binding sets `chat.mentions`, a reply that writes `@name` for a declared
-  name makes Agent Kourier post a message of its own that mentions that person. Hostile alert text can steer the model
+  name makes Agent Kourier post a message that mentions that person and nobody else. Hostile alert text can steer the model
   into naming one, or the model can repeat a name quoted from an alert, and that notifies a real person. The set of people
   is fixed in config, and `chat.maxMentionsPerTurn` caps how many one turn notifies. A Binding with no `chat.mentions` has
   none of this.
@@ -110,7 +110,7 @@ These are refused on purpose. None of them can be configured, and a request to a
 
 Some limits come from this design and are not promises about the future:
 
-- **A mention never goes inline.** The body stays literal text, and the mention follows it in a message of its own. In a
+- **A mention never goes inline.** The body stays literal text, and each mention follows it in a message of its own. In a
   test against Slack, a mention in a message's context line did not register as a mention when that message also had a body, so
   a separate message is the form that works on every output path.
 - **A mention is not a page.** It is a convenience post, at most once for each person in a turn. It can be lost in a crash, Slack accepts a

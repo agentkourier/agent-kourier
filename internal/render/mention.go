@@ -11,7 +11,7 @@ import (
 )
 
 // A model picks who to notify only from what config allows: it writes "@name" in its reply, and if the Binding declares the
-// name, Agent Kourier posts a message of its own that mentions the person config names (spec D48). The reply itself is not
+// name, Agent Kourier posts a message for that person that mentions the user config names (spec D48). The reply itself is not
 // changed, so no stream has anything to hold back or take back, and "@name" stays literal text there. A raw user ID or a
 // platform's markup in the reply is escaped by the adapter as ever. No broadcast, user group or ID can come of this: what can be
 // declared is checked at load (api/v1alpha1), and the only user in a mention is the one config gives.
@@ -31,9 +31,9 @@ type MentionScan struct {
 // Mentions reads body, the text of a turn as it is shown, for the names in declared, and notifies at most limit people, of whom
 // already, the users the turn has mentioned before, are some. They are not named again, and they count towards limit. A
 // name is an "@" that follows no word, path, query value, escape or other "@", then letters, digits and hyphens, in any case, and then
-// no more of them and none of what goes on as a package scope, a host, an address or a port: a "/", an "@", a "." and a name
+// no more of them and none of what goes on as a package scope, a host, an address or a port: a "/" and more, an "@", a "." and a name
 // character, a ":" and a digit. "_" and "~" around a name are emphasis, and a "/" between two names only separates them, as in
-// "@sam/@lee". A ":" before a name is a label, as in "Owner:@sam", though it is also in a URL. A letter of any alphabet is a letter here, so
+// "@sam/@lee". Nothing in a URL is a name. A ":" before a name is a label otherwise, as in "Owner:@sam". A letter of any alphabet is a letter here, so
 // "@josé" does not name "jos". Code is left out:
 // what is in a fence or a span is quoted, not said, so a log line that holds a name notifies nobody. What is code is read as the
 // Slack adapter writes it (internal/chat/slack/mdtext.go): any fence line opens or closes a block, whatever its marks, what
@@ -161,23 +161,28 @@ func closingRun(s string, n int) int {
 func mentionWord(line string, at, last int) (word string, next int) {
 	before := strings.TrimRight(line[:at], "_~")
 	r, _ := utf8.DecodeLastRuneInString(before)
-	between := r == '/' && at-1 == last
-	if before != "" && !between && (isNameRune(r) || strings.ContainsRune(`./@=?&#%+\`, r)) {
+	between := r == '/' && len(before)-1 == last
+	if before != "" && !between && (isNameRune(r) || strings.ContainsRune(`./@=?&#%+\`, r) || inURL(before)) {
 		return "", at + 1
 	}
 	end := at + 1
 	for end < len(line) {
 		r, size := utf8.DecodeRuneInString(line[end:])
-		if !isNameRune(r) && r != '_' {
+		if !isNameRune(r) && r != '_' && r != '~' {
 			break
 		}
 		end += size
 	}
-	word = strings.TrimRight(line[at+1:end], "_")
+	word = strings.TrimRight(line[at+1:end], "_~")
 	if word == "" || word[0] == '-' || (word[0] >= '0' && word[0] <= '9') || goesOn(line[end:]) {
 		return "", at + 1
 	}
 	return strings.Map(lowerASCII, word), end
+}
+
+// inURL says whether the last word of s holds a scheme, so that what follows s is in a URL.
+func inURL(s string) bool {
+	return strings.Contains(s[strings.LastIndexFunc(s, unicode.IsSpace)+1:], "://")
 }
 
 func lowerASCII(r rune) rune {
@@ -197,8 +202,10 @@ func goesOn(rest string) bool {
 	}
 	next, _ := utf8.DecodeRuneInString(rest[1:])
 	switch rest[0] {
-	case '/':
-		return next != '@'
+	case '/': // a package scope or a path, unless nothing follows it or it separates two names
+		after := strings.TrimLeft(rest[1:], "_~")
+		r, _ := utf8.DecodeRuneInString(after)
+		return after != "" && r != '@' && !unicode.IsSpace(r)
 	case '@':
 		return true
 	case '.':
@@ -232,16 +239,13 @@ func (scan *MentionScan) name(word string, declared []v1alpha1.ChatMention, limi
 	scan.Made = append(scan.Made, declared[at])
 }
 
-// MentionMessage is the message that notifies the people made: one line for each. It holds no text of the agent's, and only
-// mentions, because a platform may not notify anyone of a mention beside a body (chat.Mention).
-func MentionMessage(made []v1alpha1.ChatMention) chat.Message {
-	parts := make([]chat.Part, len(made))
-	names := make([]string, len(made))
-	for i, m := range made {
-		parts[i] = chat.Mention{User: m.User, Text: "was named as " + m.Name + " in the reply above."}
-		names[i] = m.Name
+// MentionMessage is the message that notifies the person made. It holds no text of the agent's, and only a mention, because a
+// platform may not notify anyone of a mention beside a body (chat.Mention).
+func MentionMessage(m v1alpha1.ChatMention) chat.Message {
+	return chat.Message{
+		Fallback: "The agent named " + m.Name + " in this thread.",
+		Parts:    []chat.Part{chat.Mention{User: m.User, Text: "was named as " + m.Name + " in the reply above."}},
 	}
-	return chat.Message{Fallback: "The agent named " + strings.Join(names, ", ") + " in this thread.", Parts: parts}
 }
 
 // MentionPrompt is the line a session's first prompt ends with on a Binding that declares people, which tells the agent the
