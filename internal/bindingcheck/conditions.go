@@ -42,8 +42,8 @@ const (
 func (s Status) valid() bool { return s == True || s == False || s == Unknown }
 
 // Reason says why a condition has its status. The set is closed: a Reason is CamelCase and a person can act on it
-// without reading code. Ready carries the Type and Reason of the condition that holds it back, joined by a slash
-// (for example BackendReachable/AgentNotFound).
+// without reading code. Ready carries the Type and Reason of the condition that holds it back, joined by a colon
+// (for example BackendReachable:AgentNotFound), which metav1.Condition's reason pattern allows and a slash it does not.
 type Reason string
 
 // The reasons of the condition table. A reason that applies to more than one condition appears once.
@@ -102,7 +102,8 @@ const (
 )
 
 // Condition is one fact about one Binding. Its fields and JSON names are those of metav1.Condition, less
-// ObservedGeneration, which file-loaded objects do not have.
+// ObservedGeneration (file-loaded objects have none) and plus LastProbeTime, which metav1.Condition does not have: a
+// controller that copies a Condition into a status drops LastProbeTime.
 type Condition struct {
 	// Type is which fact this is.
 	Type ConditionType `json:"type"`
@@ -111,10 +112,12 @@ type Condition struct {
 	// Reason is why the condition has this status.
 	Reason Reason `json:"reason"`
 	// Message is a short, redacted detail. It is for people and is not part of the closed set.
-	Message string `json:"message,omitempty"`
+	Message string `json:"message"`
 	// LastTransitionTime is when Status last changed. A change of Reason or Message alone does not move it.
 	LastTransitionTime time.Time `json:"lastTransitionTime"`
-	// LastProbeTime is when the condition was last set from a probe, whether or not anything changed.
+	// LastProbeTime is when the condition was last set from a probe, whether or not anything changed. It is the zero
+	// time while the condition is Pending, because no probe has run, and Ready's is the latest of the conditions it
+	// derives from.
 	LastProbeTime time.Time `json:"lastProbeTime"`
 }
 
@@ -122,7 +125,8 @@ type Condition struct {
 type Outcome struct {
 	// Status is the condition's new status.
 	Status Status
-	// Reason is why. Empty is read as OK for True, and as ProbeFailed otherwise.
+	// Reason is why. Empty is read as OK for True. For False or Unknown it is a checker fault, and the condition
+	// becomes Unknown with the reason ProbeFailed.
 	Reason Reason
 	// Message is a short detail, already redacted: nothing in it may be a token or a Secret value.
 	Message string

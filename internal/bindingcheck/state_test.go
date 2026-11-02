@@ -2,6 +2,11 @@ package bindingcheck
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"regexp"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -91,12 +96,12 @@ func TestReadyIsDerived(t *testing.T) {
 		{"all true", []Condition{cond(be, True, ReasonOK), cond(ch, True, ReasonOK)}, True, ReasonOK},
 		{"one condition, true", []Condition{cond(ch, True, ReasonOK)}, True, ReasonOK},
 		{"optional approvers true", []Condition{cond(be, True, ReasonOK), cond(ch, True, ReasonOK), cond(ap, True, ReasonOK)}, True, ReasonOK},
-		{"first failing wins", []Condition{cond(be, False, ReasonAgentNotFound), cond(ch, False, ReasonNotInChannel)}, False, "BackendReachable/AgentNotFound"},
-		{"second failing", []Condition{cond(be, True, ReasonOK), cond(ch, False, ReasonNotInChannel)}, False, "ChannelJoined/NotInChannel"},
-		{"approvers failing", []Condition{cond(be, True, ReasonOK), cond(ch, True, ReasonOK), cond(ap, False, ReasonGroupNotFound)}, False, "ApproversReadable/GroupNotFound"},
-		{"false beats unknown", []Condition{cond(be, Unknown, ReasonPending), cond(ch, False, ReasonChannelArchived)}, False, "ChannelJoined/ChannelArchived"},
-		{"pending is unknown", []Condition{cond(be, True, ReasonOK), cond(ch, Unknown, ReasonPending)}, Unknown, "ChannelJoined/Pending"},
-		{"unknown names the first unknown", []Condition{cond(be, Unknown, ReasonProbeTimeout), cond(ch, Unknown, ReasonPending)}, Unknown, "BackendReachable/ProbeTimeout"},
+		{"first failing wins", []Condition{cond(be, False, ReasonAgentNotFound), cond(ch, False, ReasonNotInChannel)}, False, "BackendReachable:AgentNotFound"},
+		{"second failing", []Condition{cond(be, True, ReasonOK), cond(ch, False, ReasonNotInChannel)}, False, "ChannelJoined:NotInChannel"},
+		{"approvers failing", []Condition{cond(be, True, ReasonOK), cond(ch, True, ReasonOK), cond(ap, False, ReasonGroupNotFound)}, False, "ApproversReadable:GroupNotFound"},
+		{"false beats unknown", []Condition{cond(be, Unknown, ReasonPending), cond(ch, False, ReasonChannelArchived)}, False, "ChannelJoined:ChannelArchived"},
+		{"pending is unknown", []Condition{cond(be, True, ReasonOK), cond(ch, Unknown, ReasonPending)}, Unknown, "ChannelJoined:Pending"},
+		{"unknown names the first unknown", []Condition{cond(be, Unknown, ReasonProbeTimeout), cond(ch, Unknown, ReasonPending)}, Unknown, "BackendReachable:ProbeTimeout"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -209,4 +214,92 @@ func TestStateIsSafeForConcurrentUse(*testing.T) {
 		})
 	}
 	wg.Wait()
+}
+
+func TestAPendingConditionHasNoProbeTimeAndReadyTakesTheLatest(t *testing.T) {
+	s := NewState()
+	s.Set("b", t0, cond(BackendReachable, Unknown, ReasonPending), cond(ChannelJoined, Unknown, ReasonPending))
+	for _, c := range s.Snapshot()["b"] {
+		if !c.LastProbeTime.IsZero() {
+			t.Errorf("%s is Pending and has LastProbeTime %v", c.Type, c.LastProbeTime)
+		}
+		if !c.LastTransitionTime.Equal(t0) {
+			t.Errorf("%s LastTransitionTime = %v, want %v", c.Type, c.LastTransitionTime, t0)
+		}
+	}
+
+	t1 := t0.Add(time.Minute)
+	s.Set("b", t1, cond(BackendReachable, True, ReasonOK))
+	got := s.Snapshot()["b"]
+	if c := find(t, got, BackendReachable); !c.LastProbeTime.Equal(t1) {
+		t.Errorf("probed condition LastProbeTime = %v, want %v", c.LastProbeTime, t1)
+	}
+	if c := find(t, got, ChannelJoined); !c.LastProbeTime.IsZero() {
+		t.Errorf("still-Pending condition LastProbeTime = %v, want zero", c.LastProbeTime)
+	}
+	if c := find(t, got, Ready); !c.LastProbeTime.Equal(t1) {
+		t.Errorf("Ready LastProbeTime = %v, want the latest probe %v", c.LastProbeTime, t1)
+	}
+}
+
+// reasonConstants returns the value of every constant of type Reason that conditions.go declares, read from the
+// source so that a reason added later is covered without a change here.
+func reasonConstants(t *testing.T) []Reason {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), "conditions.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []Reason
+	for _, d := range f.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+		for _, sp := range gd.Specs {
+			vs := sp.(*ast.ValueSpec)
+			if id, ok := vs.Type.(*ast.Ident); !ok || id.Name != "Reason" {
+				continue
+			}
+			for _, v := range vs.Values {
+				lit, ok := v.(*ast.BasicLit)
+				if !ok {
+					t.Fatalf("Reason constant %v is not a string literal", vs.Names)
+				}
+				s, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				out = append(out, Reason(s))
+			}
+		}
+	}
+	if len(out) < 20 {
+		t.Fatalf("found only %d Reason constants; the parser lost some", len(out))
+	}
+	return out
+}
+
+// metav1.Condition's Reason must match this pattern (its kubebuilder validation), or the apiserver rejects the status.
+var reasonPattern = regexp.MustCompile(`^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$`)
+
+func TestEveryReasonAndEveryReadyReasonMatchTheMetav1Pattern(t *testing.T) {
+	reasons := reasonConstants(t)
+	for _, r := range reasons {
+		if !reasonPattern.MatchString(string(r)) {
+			t.Errorf("Reason %q does not match %s", r, reasonPattern)
+		}
+	}
+	for _, typ := range probed {
+		for _, r := range reasons {
+			for _, st := range []Status{False, Unknown} {
+				s := NewState()
+				s.Set("b", t0, cond(typ, st, r))
+				got := find(t, s.Snapshot()["b"], Ready)
+				if got.Status != st || !reasonPattern.MatchString(string(got.Reason)) {
+					t.Errorf("Ready from %s %s/%s = %s/%q, want status %s and a matching reason", typ, st, r, got.Status, got.Reason, st)
+				}
+			}
+		}
+	}
 }

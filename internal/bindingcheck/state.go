@@ -32,9 +32,9 @@ func NewState() *State {
 }
 
 // Set records conds for binding, probed at at, and recomputes the Binding's Ready condition. A condition's
-// LastProbeTime becomes at, and its LastTransitionTime becomes at only when its Status differs from the one it
-// replaces (or it is new). Times in conds are ignored, and so is any condition whose Type is Ready or not one of
-// the three probed types. A Status that is not True, False or Unknown is stored as Unknown.
+// LastProbeTime becomes at (the zero time for a Pending one, since no probe ran), and its LastTransitionTime becomes
+// at only when its Status differs from the one it replaces (or it is new). Times in conds are ignored, and so is any
+// condition whose Type is Ready or not one of the three probed types. A Status that is not True, False or Unknown is stored as Unknown.
 //
 // It returns the transitions: one for each condition, Ready included, whose status or reason changed. A change of
 // Message alone is stored and is not a transition.
@@ -43,12 +43,9 @@ func (s *State) Set(binding string, at time.Time, conds ...Condition) []Transiti
 	defer s.mu.Unlock()
 	cur := s.bindings[binding]
 	var out []Transition
-	set := func(c Condition) {
-		if !c.Status.valid() {
-			c.Status = Unknown
-		}
+	store := func(c Condition) {
 		old, had := cur[c.Type]
-		c.LastProbeTime, c.LastTransitionTime = at, at
+		c.LastTransitionTime = at
 		if had && old.Status == c.Status {
 			c.LastTransitionTime = old.LastTransitionTime
 		}
@@ -65,37 +62,54 @@ func (s *State) Set(binding string, at time.Time, conds ...Condition) []Transiti
 			cur = map[ConditionType]Condition{}
 			s.bindings[binding] = cur
 		}
-		set(c)
+		if !c.Status.valid() {
+			c.Status = Unknown
+		}
+		c.LastProbeTime = at
+		if c.Reason == ReasonPending {
+			c.LastProbeTime = time.Time{} // no probe has run
+		}
+		store(c)
 	}
 	if cur != nil {
-		set(derive(cur))
+		store(derive(cur))
 	}
 	return out
 }
 
 // derive computes the Ready condition from the probed conditions in cur. Ready is False when any is False, True when
 // all are, and Unknown otherwise; when it is not True it names the first condition that holds it back, False before
-// Unknown. Its times are filled by the caller.
+// Unknown. Its LastProbeTime is the latest of theirs; the caller sets its LastTransitionTime.
 func derive(cur map[ConditionType]Condition) Condition {
-	var unknown *Condition
+	var first, unknown *Condition
+	var probedAt time.Time
 	for _, t := range probed {
 		c, ok := cur[t]
+		if !ok {
+			continue
+		}
+		if c.LastProbeTime.After(probedAt) {
+			probedAt = c.LastProbeTime
+		}
 		switch {
-		case !ok || c.Status == True:
-		case c.Status == False:
-			return heldBack(c, False)
-		case unknown == nil:
+		case c.Status == True:
+		case c.Status == False && first == nil:
+			first = &c
+		case c.Status == Unknown && unknown == nil:
 			unknown = &c
 		}
 	}
-	if unknown != nil {
-		return heldBack(*unknown, Unknown)
+	r := Condition{Type: Ready, Status: True, Reason: ReasonOK, LastProbeTime: probedAt}
+	switch {
+	case first != nil:
+		r.Status = False
+	case unknown != nil:
+		r.Status, first = Unknown, unknown
+	default:
+		return r
 	}
-	return Condition{Type: Ready, Status: True, Reason: ReasonOK}
-}
-
-func heldBack(c Condition, status Status) Condition {
-	return Condition{Type: Ready, Status: status, Reason: Reason(string(c.Type) + "/" + string(c.Reason)), Message: c.Message}
+	r.Reason, r.Message = Reason(string(first.Type)+":"+string(first.Reason)), first.Message
+	return r
 }
 
 // Snapshot returns a copy of every Binding's conditions: the probed ones in a fixed order (BackendReachable,
@@ -116,8 +130,8 @@ func (s *State) Snapshot() map[string][]Condition {
 	return out
 }
 
-// Prune drops every Binding whose name is not in keep, and returns the names it dropped, sorted. A caller that keeps
-// per-Binding series elsewhere (metrics) deletes them for the names returned.
+// Prune drops every Binding whose name is not in keep, and returns the names it dropped, sorted. The Prober passes
+// them to its OnPrune hook.
 func (s *State) Prune(keep []string) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
