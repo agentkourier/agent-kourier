@@ -428,7 +428,7 @@ type checked struct {
 }
 
 // probe runs fn in a goroutine of its own and waits for it for at most the probe timeout. An error, a panic, a
-// timeout (whatever fn returns after it) and an outcome with no usable status all give Unknown, never True. If the
+// timeout (whatever fn returns after it) and an outcome with no usable status or reason all give Unknown, never True. If the
 // target's previous checker has not returned, fn is not started again and the probe is a timeout at once. Run, not
 // probe, waits for the goroutine at shutdown.
 func (p *Prober) probe(ctx context.Context, key probeKey, fn func(context.Context) (Outcome, error)) probeResult {
@@ -474,14 +474,14 @@ func (p *Prober) probe(ctx context.Context, key probeKey, fn func(context.Contex
 	case got.err != nil:
 		return failed("the probe could not tell", got.err)
 	case !out.Status.valid():
-		return failed("the probe reported no usable status", fmt.Errorf("checker reported status %q", out.Status))
+		// The value is left out of the error, as for a reason below: it may be free text, such as a checker's error.
+		return failed("the probe reported no usable status", errors.New("checker reported a status outside the three"))
 	case out.Reason == "" && out.Status == True:
 		out.Reason = ReasonOK
 		return probeResult{out: out}
 	case out.Reason == "":
 		return failed("the probe reported no reason", fmt.Errorf("checker reported %s with no reason", out.Status))
 	case !out.Reason.reportable(out.Status):
-		// The reason is left out of the error: one outside the set may be free text, such as a checker's error.
 		return failed("the probe reported an unusable reason", fmt.Errorf("checker reported %s with a reason it may not report", out.Status))
 	default:
 		return probeResult{out: out}

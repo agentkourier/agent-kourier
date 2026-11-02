@@ -1232,6 +1232,11 @@ func TestACheckerThatReportsAnUnusableReasonIsNotBelieved(t *testing.T) {
 		"unknown with ok":     {Status: Unknown, Reason: ReasonOK},
 		"outside the set":     {Status: False, Reason: Reason(leak)},
 		"pending":             {Status: Unknown, Reason: ReasonPending},
+		"a probe timeout":     {Status: False, Reason: ReasonProbeTimeout},
+		"a probe failure":     {Status: Unknown, Reason: ReasonProbeFailed},
+		"unavailable false":   {Status: False, Reason: ReasonChatUnavailable},
+		"rejected unknown":    {Status: Unknown, Reason: ReasonChatCredentialsRejected},
+		"text as a status":    {Status: Status(leak), Reason: ReasonAgentNotFound},
 	}
 	g := &targets{}
 	var ts []Target
@@ -1256,10 +1261,15 @@ func TestACheckerThatReportsAnUnusableReasonIsNotBelieved(t *testing.T) {
 			if !conds[BackendReachable].LastProbeTime.After(time.Time{}) {
 				t.Errorf("%s: LastProbeTime is zero, but a probe ran", b)
 			}
+			for _, typ := range []ConditionType{BackendReachable, Ready} {
+				if strings.Contains(conds[typ].Message, leak) {
+					t.Errorf("%s: %s message %q carries the checker's text", b, typ, conds[typ].Message)
+				}
+			}
 			if got[b] == nil {
 				t.Errorf("%s: no ProbeError", b)
 			} else if strings.Contains(got[b].Error(), leak) {
-				t.Errorf("%s: ProbeError %q carries the checker's reason", b, got[b])
+				t.Errorf("%s: ProbeError %q carries the checker's text", b, got[b])
 			}
 		}
 	})
@@ -1271,7 +1281,11 @@ func TestEveryReasonACheckerMayReportIsReportable(t *testing.T) {
 		switch r {
 		case ReasonOK:
 			want = []Status{True}
-		case ReasonPending:
+		case ReasonPending, ReasonProbeFailed, ReasonProbeTimeout:
+		case ReasonChatCredentialsRejected:
+			want = []Status{False}
+		case ReasonChatUnavailable, ReasonChatCredentialsChanged:
+			want = []Status{Unknown}
 		default:
 			want = []Status{False, Unknown}
 		}

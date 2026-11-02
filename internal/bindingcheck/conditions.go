@@ -55,9 +55,11 @@ const (
 	ReasonOK Reason = "OK"
 
 	// ReasonProbeFailed is the reason of an Unknown condition whose checker returned an error, panicked, or reported
-	// no usable outcome. Checkers that can tell what is wrong report it as an Outcome with its own reason instead.
+	// no usable outcome. Only the Prober reports it. Checkers that can tell what is wrong report it as an Outcome with
+	// its own reason instead.
 	ReasonProbeFailed Reason = "ProbeFailed"
-	// ReasonProbeTimeout is the reason of an Unknown condition whose probe did not finish within the probe timeout.
+	// ReasonProbeTimeout is the reason of an Unknown condition whose probe did not finish within the probe timeout. Only
+	// the Prober reports it.
 	ReasonProbeTimeout Reason = "ProbeTimeout"
 
 	// ReasonCredentialsUnreadable is a BackendReachable reason: the Binding's token Secret or a Secret behind one of
@@ -113,18 +115,22 @@ const (
 	ReasonGroupNotFound Reason = "GroupNotFound"
 )
 
-// reportable reports whether a checker may report r with the status s: r is in the set, it is OK exactly when s is True,
-// and it is not Pending, which says that no probe has finished. It does not tie a reason to a condition.
+// reportable reports whether a checker may report r with the status s. OK goes only with True. A reason whose comment
+// fixes its status goes only with that status, and any other failure reason with False or Unknown, as the checker can
+// tell. Pending, ProbeFailed and ProbeTimeout are the Prober's own, and a reason outside the set is nobody's. It does not
+// tie a reason to a condition.
 func (r Reason) reportable(s Status) bool {
 	switch r {
 	case ReasonOK:
 		return s == True
-	case ReasonProbeFailed, ReasonProbeTimeout,
-		ReasonCredentialsUnreadable, ReasonUnreachable, ReasonCredentialsRejected, ReasonAgentForbidden, ReasonAgentNotFound,
+	case ReasonChatCredentialsRejected:
+		return s == False
+	case ReasonChatUnavailable, ReasonChatCredentialsChanged:
+		return s == Unknown
+	case ReasonCredentialsUnreadable, ReasonUnreachable, ReasonCredentialsRejected, ReasonAgentForbidden, ReasonAgentNotFound,
 		ReasonAgentNotReady, ReasonBackendError, ReasonUnexpectedStatus, ReasonInvalidAgentCard, ReasonStreamingUnsupported,
 		ReasonUnsupportedExtension, ReasonNoJSONRPCInterface,
-		ReasonNotInChannel, ReasonChannelNotFound, ReasonChannelArchived, ReasonMissingScope, ReasonChatCredentialsRejected,
-		ReasonChatUnavailable, ReasonChatCredentialsChanged,
+		ReasonNotInChannel, ReasonChannelNotFound, ReasonChannelArchived, ReasonMissingScope,
 		ReasonGroupNotFound:
 		return s != True
 	}
@@ -157,7 +163,8 @@ type Outcome struct {
 	Status Status
 	// Reason is why. Empty is read as OK for True. For False or Unknown it is a checker fault, and the condition
 	// becomes Unknown with the reason ProbeFailed. So is a reason that is not reportable: one outside the set, OK with
-	// False or Unknown, anything but OK with True, or Pending.
+	// False or Unknown, anything but OK with True, a reason with a status its comment rules out, or one of the Prober's
+	// own (Pending, ProbeFailed and ProbeTimeout). A checker that gives up on a slow backend reports Unreachable.
 	Reason Reason
 	// Message is a short detail, already redacted: nothing in it may be a token or a Secret value.
 	Message string
