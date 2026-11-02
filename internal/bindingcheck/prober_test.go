@@ -433,6 +433,228 @@ func TestRunDoesNotWaitLongerThanTheGraceForACheckerThatIgnoresItsContext(t *tes
 	})
 }
 
+func TestRunWaitsForACheckerThatOutlastedItsProbesTimeout(t *testing.T) {
+	var entered, finished atomic.Bool
+	g := &targets{}
+	g.set("r1", Target{"b", "C1"})
+	agents := &fakeAgents{fn: func(ctx context.Context, _ string) (Outcome, error) {
+		entered.Store(true)
+		<-ctx.Done()                       // the probe's timeout
+		time.Sleep(500 * time.Millisecond) // unwinding takes a while, but inside the grace
+		finished.Store(true)
+		return Outcome{}, ctx.Err()
+	}}
+	run(t, Options{Targets: g.Targets, Revision: g.Revision, Agents: agents}, func(h *harness) {
+		if !entered.Load() {
+			t.Fatal("the checker did not start")
+		}
+		h.advance(timeout + 100*time.Millisecond) // the probe has timed out and returned; its checker is unwinding
+		wantCond(t, h.conds("b"), BackendReachable, Unknown, ReasonProbeTimeout)
+		if finished.Load() {
+			t.Fatal("the checker finished before the shutdown; the test proves nothing")
+		}
+		h.cancel()
+		<-h.done
+		if !finished.Load() {
+			t.Error("Run returned while a checker that honors its context was still unwinding after its probe timed out")
+		}
+	})
+}
+
+func TestRunWaitsOnceForCheckersThatIgnoreTheirContextEvenAfterTheirProbesTimedOut(t *testing.T) {
+	g := &targets{}
+	g.set("r1", Target{"a", "C1"}, Target{"b", "C2"})
+	var gate chan struct{}
+	agents := &fakeAgents{fn: func(context.Context, string) (Outcome, error) { <-gate; return ok(), nil }}
+	runIn(t, func() Options {
+		gate = make(chan struct{})
+		return Options{Targets: g.Targets, Revision: g.Revision, Agents: agents}
+	}, func(h *harness) {
+		h.advance(timeout)
+		wantCond(t, h.conds("a"), BackendReachable, Unknown, ReasonProbeTimeout)
+		began := time.Now()
+		h.cancel()
+		<-h.done
+		if waited := time.Since(began); waited != shutdownGrace {
+			t.Errorf("Run waited %v for two checkers that ignore their contexts, want one grace, %v", waited, shutdownGrace)
+		}
+		close(gate)
+	})
+}
+
+func TestAGoexitInACheckerFreesItsTargetForTheNextPass(t *testing.T) {
+	g := &targets{}
+	g.set("r1", Target{"b", "C1"})
+	var exits atomic.Int32
+	agents := &fakeAgents{fn: func(context.Context, string) (Outcome, error) {
+		if exits.Add(1) == 1 {
+			runtime.Goexit() // what a test fake's t.Fatal does
+		}
+		return ok(), nil
+	}}
+	run(t, Options{Targets: g.Targets, Revision: g.Revision, Agents: agents}, func(h *harness) {
+		wantCond(t, h.conds("b"), BackendReachable, Unknown, ReasonProbeFailed)
+		h.nextPass(agents.total)
+		wantCond(t, h.conds("b"), BackendReachable, True, ReasonOK)
+	})
+}
+
+func TestARevisionThatIgnoresItsContextIsNotCalledAgainAndDoesNotStopTheProbes(t *testing.T) {
+	g := &targets{}
+	g.set("r1", Target{"a", "C1"})
+	var gate chan struct{}
+	var calls atomic.Int32
+	agents := &fakeAgents{}
+	runIn(t, func() Options {
+		gate = make(chan struct{})
+		return Options{Targets: g.Targets, Agents: agents, Revision: func(context.Context) string {
+			calls.Add(1)
+			<-gate
+			return "late"
+		}}
+	}, func(h *harness) {
+		h.advance(timeout)
+		if agents.count("a") != 1 {
+			t.Fatalf("probes after the Revision call timed out = %d, want 1", agents.count("a"))
+		}
+		g.set("r2", Target{"a", "C1"}, Target{"b", "C2"})
+		h.advance(tick)
+		if agents.count("b") != 1 {
+			t.Errorf("a Binding added while Revision is stuck was probed %d times at the next tick, want 1", agents.count("b"))
+		}
+		h.advance(time.Minute)
+		if calls.Load() != 1 {
+			t.Errorf("Revision was called %d times, want 1: a stuck call must not be followed by another", calls.Load())
+		}
+		began := time.Now()
+		h.cancel()
+		<-h.done
+		if waited := time.Since(began); waited != shutdownGrace {
+			t.Errorf("Run waited %v for a Revision call that ignores its context, want the grace, %v", waited, shutdownGrace)
+		}
+		close(gate)
+	})
+}
+
+func TestARevisionThatPanicsCountsAsNoChangeAndIsReported(t *testing.T) {
+	g := &targets{}
+	g.set("r1", Target{"a", "C1"})
+	agents := &fakeAgents{}
+	var mu sync.Mutex
+	var perrs []ProbeError
+	run(t, Options{Targets: g.Targets, Agents: agents, Revision: func(context.Context) string { panic("revision boom") }, OnProbeError: func(pe ProbeError) {
+		mu.Lock()
+		defer mu.Unlock()
+		perrs = append(perrs, pe)
+	}}, func(h *harness) {
+		h.nextPass(agents.total) // the loop survived and the interval still probes
+		mu.Lock()
+		defer mu.Unlock()
+		var panicked *PanicError
+		if len(perrs) == 0 || !errors.As(perrs[0].Err, &panicked) || panicked.Value != "revision boom" || perrs[0].Condition != "" || len(perrs[0].Targets) != 0 {
+			t.Errorf("OnProbeError calls = %+v, want a PanicError for Revision with no condition or targets", perrs)
+		}
+	})
+}
+
+func TestATargetsThatPanicsKeepsTheLastTargetsAndPrunesNothing(t *testing.T) {
+	g := &targets{}
+	g.set("r1", Target{"a", "C1"}, Target{"b", "C2"})
+	var broken atomic.Bool
+	agents := &fakeAgents{}
+	var mu sync.Mutex
+	var pruned [][]string
+	var perrs []ProbeError
+	run(t, Options{Agents: agents, Revision: g.Revision, Targets: func() []Target {
+		if broken.Load() {
+			panic("targets boom")
+		}
+		return g.Targets()
+	}, OnPrune: func(names []string) {
+		mu.Lock()
+		defer mu.Unlock()
+		pruned = append(pruned, names)
+	}, OnProbeError: func(pe ProbeError) {
+		mu.Lock()
+		defer mu.Unlock()
+		perrs = append(perrs, pe)
+	}}, func(h *harness) {
+		broken.Store(true)
+		h.advance(2 * tick)
+		if n := len(h.p.State().Snapshot()); n != 2 {
+			t.Fatalf("Bindings after Targets panicked = %d, want 2: a panic must not read as no targets", n)
+		}
+		before := agents.count("b")
+		h.nextPass(agents.total) // the last good targets are still probed
+		if agents.count("b") != before+1 {
+			t.Errorf("b was probed %d more times, want 1", agents.count("b")-before)
+		}
+		mu.Lock()
+		if len(pruned) != 0 {
+			t.Errorf("OnPrune = %v while Targets panicked", pruned)
+		}
+		var panicked *PanicError
+		if len(perrs) == 0 || !errors.As(perrs[0].Err, &panicked) || panicked.Value != "targets boom" {
+			t.Errorf("OnProbeError calls = %+v, want a PanicError for Targets", perrs)
+		}
+		mu.Unlock()
+
+		broken.Store(false) // recovered: an honest change prunes again
+		g.set("r2", Target{"a", "C1"})
+		h.advance(tick)
+		mu.Lock()
+		defer mu.Unlock()
+		if len(pruned) != 1 || !slices.Equal(pruned[0], []string{"b"}) {
+			t.Errorf("OnPrune after Targets recovered = %v, want [[b]]", pruned)
+		}
+	})
+}
+
+func TestAHookThatPanicsCannotStopTheProberAndOnProbeErrorDoesNotRecurse(t *testing.T) {
+	g := &targets{}
+	g.set("r1", Target{"a", "C1"}, Target{"b", "C2"})
+	agents := &fakeAgents{fn: func(_ context.Context, b string) (Outcome, error) {
+		if b == "b" {
+			return Outcome{}, errors.New("down")
+		}
+		return ok(), nil
+	}}
+	var mu sync.Mutex
+	var perrs []ProbeError
+	run(t, Options{Targets: g.Targets, Revision: g.Revision, Agents: agents,
+		OnTransition: func(Transition) { panic("hook boom") },
+		OnPrune:      func([]string) { panic("hook boom") },
+		OnProbeError: func(pe ProbeError) {
+			mu.Lock()
+			perrs = append(perrs, pe)
+			mu.Unlock()
+			panic("hook boom")
+		},
+	}, func(h *harness) {
+		wantCond(t, h.conds("a"), BackendReachable, True, ReasonOK)
+		wantCond(t, h.conds("a"), Ready, True, ReasonOK)
+		wantCond(t, h.conds("b"), BackendReachable, Unknown, ReasonProbeFailed)
+		g.set("r2", Target{"a", "C1"})
+		h.advance(tick)
+		if snap := h.p.State().Snapshot(); len(snap) != 1 {
+			t.Errorf("after the prune hook panicked: %+v", snap)
+		}
+		h.nextPass(agents.total)
+		mu.Lock()
+		defer mu.Unlock()
+		var fromTransition bool
+		for _, pe := range perrs {
+			var panicked *PanicError
+			if errors.As(pe.Err, &panicked) && panicked.Value == "hook boom" && pe.Condition == BackendReachable && len(pe.Targets) == 1 {
+				fromTransition = true
+			}
+		}
+		if !fromTransition {
+			t.Errorf("OnProbeError calls = %+v, want one reporting the panic of OnTransition", perrs)
+		}
+	})
+}
+
 func TestPassesDoNotOverlap(t *testing.T) {
 	g := &targets{}
 	g.set("r1", Target{"b", "C1"})
