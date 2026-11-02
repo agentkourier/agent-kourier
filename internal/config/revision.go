@@ -13,9 +13,9 @@ import (
 
 // SecretVersioner is an optional interface of a SecretResolver: it reports a version of a
 // Secret that changes whenever the resolver learns that the Secret did, even if its keys do not
-// (a rotated value). The
-// version is opaque and compared only for equality. Reloader.Revision uses it when the resolver
-// has it; one that does not, such as PresentSecrets, leaves Secrets out of the revision.
+// (a rotated value). The version is opaque and compared only for equality. Reloader.Revision
+// uses it when the resolver has it; one that does not, such as PresentSecrets, leaves Secrets
+// out of the revision.
 //
 // Like Keys, it must never return a value, not in its result and not in its errors.
 type SecretVersioner interface {
@@ -69,8 +69,8 @@ func newPublished(snap *Snapshot, fingerprint string, refs []secretRef) *publish
 // Read Revision before Current, never after. They are separate loads, and a reload or a Secret
 // update can land between them. Revision first can pair an older revision with newer state, so
 // the next Revision differs and the state is checked again. Current first can pair a newer
-// revision with older state, and a caller that records the revision it checked would never
-// check the newer state.
+// revision with older state, and a caller that records the revision it checked sees no change,
+// so nothing the revision does prompts it to check the newer state.
 //
 // Revision makes no API call when the resolver reads a cache, as the cluster-backed one does.
 // The digest is computed from Secret names and versions, never a value. It is safe to call from
