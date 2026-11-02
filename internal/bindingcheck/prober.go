@@ -191,8 +191,8 @@ func jittered(interval time.Duration, r float64) time.Duration {
 // returns, whether or not its probe had timed out, unless it takes longer than that to unwind. Go cannot stop a
 // goroutine, so a checker that ignores its context may outlive Run, until it returns. During a run, such a checker's
 // probe is recorded as Unknown/ProbeTimeout when the Timeout ends and frees its place at once; the target is not
-// probed again while its checker is still running, so at most one goroutine per target is lost, and what it returns
-// late is dropped.
+// probed again for that condition while its checker is still running, even if the Binding has moved to another channel,
+// so at most one goroutine per condition of a target is lost, two for a target, and what it returns late is dropped.
 func (p *Prober) Run(ctx context.Context) {
 	defer p.waitForGoroutines()
 	var (
