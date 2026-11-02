@@ -31,7 +31,8 @@ const (
 // Dialect implements dialect.Dialect for kagent 1.0. Build it with New to use Connect; the
 // zero value serves Endpoint, Authenticate, and Attribute. It is safe for concurrent use.
 type Dialect struct {
-	base http.RoundTripper // shared by every client, so connections are pooled per host
+	base  http.RoundTripper // shared by every client, so connections are pooled per host
+	fresh http.RoundTripper // base without keep-alives, for requests under dialect.WithFreshConnection
 }
 
 var _ dialect.Dialect = (*Dialect)(nil)
