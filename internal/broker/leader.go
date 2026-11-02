@@ -107,7 +107,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	// The renderer posts a turn's first message through the outbox and edits or streams it through the
 	// chat platform (the Slack adapter over the client); a notice is only queued on the outbox, off Slack's
 	// acknowledgement path.
-	renderer, err := live.New(live.Config{Sender: ob, Platform: platform, Store: st, Logger: log})
+	renderer, err := live.New(live.Config{Sender: ob, Audit: auditor, Platform: platform, Store: st, Logger: log})
 	if err != nil {
 		return nil, err
 	}

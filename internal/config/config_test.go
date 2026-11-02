@@ -193,6 +193,15 @@ func TestLoadKeepsAnExplicitNoDailyCap(t *testing.T) {
 	}
 }
 
+// A cap of 0 says something a Binding cannot mean, so it is refused and not read as unset, which would notify people.
+func TestLoadRefusesACapOfNoMentions(t *testing.T) {
+	binding := strings.Replace(bindingDoc, "channel: C0123456789 }", "channel: C0123456789, maxMentionsPerTurn: 0 }", 1)
+	_, err := Load(context.Background(), write(t, map[string]string{"a.yaml": backendDoc, "c.yaml": connectionDoc, "b.yaml": binding}))
+	if want := "spec.chat.maxMentionsPerTurn: 0 is out of range, must be from 1 to 10"; err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("Load = %v, want %q", err, want)
+	}
+}
+
 func TestLoadRejectsBadTriggers(t *testing.T) {
 	const who = "b.yaml#1 Binding sre/sre-alerts: "
 	const hint = "see the example in how-to/investigate-alertmanager-alerts (https://agentkourier.dev/how-to/investigate-alertmanager-alerts/)"

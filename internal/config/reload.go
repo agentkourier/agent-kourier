@@ -53,7 +53,7 @@ type Reloader struct {
 	log          *slog.Logger
 	onError      func(error)
 
-	snap   atomic.Pointer[Snapshot]
+	snap   atomic.Pointer[published] // the Snapshot with what Revision needs, replaced as one
 	status atomic.Pointer[Status]
 	wg     sync.WaitGroup
 
@@ -83,7 +83,12 @@ func NewReloader(cfg ReloaderConfig) *Reloader {
 
 // Current returns the latest good snapshot, or nil before Start has succeeded. It is
 // read-only, like everything a Snapshot returns.
-func (r *Reloader) Current() *Snapshot { return r.snap.Load() }
+func (r *Reloader) Current() *Snapshot {
+	if p := r.snap.Load(); p != nil {
+		return p.snap
+	}
+	return nil
+}
 
 // Status returns the health of the Reloader.
 func (r *Reloader) Status() Status { return *r.status.Load() }
@@ -122,7 +127,7 @@ func (r *Reloader) reload(ctx context.Context, force bool) error {
 			return nil
 		}
 	}
-	snap, fp, err := r.build(ctx)
+	pub, fp, err := r.build(ctx)
 	if err != nil && (ctx.Err() != nil || errors.Is(err, errConfigMoving)) {
 		r.log.Info("config reload interrupted", "error", err)
 		return err
@@ -143,9 +148,9 @@ func (r *Reloader) reload(ctx context.Context, force bool) error {
 			r.log.Info("config reloaded")
 		}
 		st.Stale, st.LastSuccess, r.failures = false, r.lastAttempt, 0
-		r.snap.Store(snap)
+		r.snap.Store(pub)
 		if warnPolicies {
-			r.warnToolApprovalPolicies(snap)
+			r.warnToolApprovalPolicies(pub.snap)
 		}
 	}
 	r.status.Store(&st)
@@ -170,16 +175,20 @@ func (r *Reloader) warnToolApprovalPolicies(snap *Snapshot) {
 // build loads and resolves the config from one generation of the directory. If the
 // generation changes while it works, it goes again, once. If it changes again, neither result
 // is trusted and build returns errConfigMoving.
-func (r *Reloader) build(ctx context.Context) (snap *Snapshot, fp string, err error) {
+func (r *Reloader) build(ctx context.Context) (pub *published, fp string, err error) {
 	for range 2 {
 		root, gen := generation(r.dir)
-		fp = fingerprint(root, gen)
+		fp, pub = fingerprint(root, gen), nil
 		var set *Set
 		if set, err = Load(ctx, root); err == nil {
-			snap, err = Resolve(ctx, set, r.secrets)
+			refs := set.secretRefs() // before Resolve, which takes the set
+			var snap *Snapshot
+			if snap, err = Resolve(ctx, set, r.secrets); err == nil {
+				pub = newPublished(snap, fp, refs)
+			}
 		}
 		if _, now := generation(r.dir); now == gen {
-			return snap, fp, err
+			return pub, fp, err
 		}
 	}
 	return nil, "", errConfigMoving

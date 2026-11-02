@@ -99,7 +99,11 @@ func TestEmptyUpdatesDoNotHoldWorkingOff(t *testing.T) {
 	if n := len(e.tasks()); n != 0 {
 		t.Fatalf("%d cards after 2 s of empty updates; want none before the delay", n)
 	}
-	e.until(t, "the Working… card", 2*time.Second, func() bool { return len(e.tasks()) == 1 })
+	for range 4 {
+		e.elapse(time.Second)
+		run.Handle(update(""))
+	}
+	e.atOnce(t, "the Working… card", func() bool { return len(e.tasks()) == 1 })
 	run.Handle(text("b", "Done."))
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
@@ -253,15 +257,69 @@ func TestTheActivityCardKeepsCountingUntilAStepIsCounted(t *testing.T) {
 	}
 }
 
-// The activity mode counts working updates while the turn has had no tool event, begins its card at the first, and shows none
-// of their text.
+// A working update begins no activity card: a server may send one or two just before the answer, as kagent 1.0 does on an
+// approved turn, and a card stays once sent. A turn whose text comes within the delay shows no card, whatever came before it.
+func TestAnActivityTurnThatTextFollowsMakesNoCard(t *testing.T) {
+	e := setup(t)
+	run := e.progressRun(t, activity, "U1")
+	run.Handle(update(""))
+	run.Handle(update("The answer."))
+	e.elapse(time.Second)
+	run.Handle(text("a", "The answer."))
+	run.Handle(agent.FinalEvent{})
+	e.finish(t, run)
+	if got := cards(t, e.reply()); len(got) != 0 {
+		t.Errorf("cards:\n%s\nwant none", strings.Join(got, "\n"))
+	}
+}
+
+// The same on an alert thread: an update does not post the turn's line, so a turn that the text follows has none.
+func TestAnActivityLineThatTextFollowsIsNotPosted(t *testing.T) {
+	e := setup(t)
+	run := e.progressRun(t, activity, "")
+	run.Handle(update(""))
+	run.Handle(update(""))
+	e.elapse(time.Second)
+	if got := e.requests(); len(got) != 0 {
+		t.Fatalf("requests a second after two updates: %q; want none before the delay", got)
+	}
+	run.Handle(text("a", "The answer."))
+	run.Handle(agent.FinalEvent{})
+	e.finish(t, run)
+	if strings.Contains(e.wire(), "Working") {
+		t.Errorf("a request shows that the turn was working:\n%s", e.wire())
+	}
+}
+
+// Updates more often than the delay do not hold the activity card off: the gap runs from the start of the turn, so the card comes
+// while they go on, and no window after the last of them. Were an update to begin the gap again, the card would wait for them to
+// stop.
+func TestUpdatesDoNotHoldTheActivityCardOff(t *testing.T) {
+	e := setup(t)
+	run := e.progressRun(t, activity, "U1")
+	for range 2 {
+		e.elapse(time.Second)
+		run.Handle(update(""))
+	}
+	if n := len(e.tasks()); n != 0 {
+		t.Fatalf("%d cards after 2 s of updates; want none before the delay", n)
+	}
+	for range 4 {
+		e.elapse(time.Second)
+		run.Handle(update(""))
+	}
+	e.atOnce(t, "the card", func() bool { return len(e.tasks()) == 1 })
+	run.Handle(agent.FinalEvent{})
+	e.finish(t, run)
+}
+
+// The activity mode counts working updates while the turn has had no tool event, and shows none of their text.
 func TestTheActivityCardCountsWorkingUpdates(t *testing.T) {
 	e := setup(t)
 	started := e.clk.Now()
 	run := e.progressRun(t, activity, "U1")
 	run.Handle(update("SECRETWORDS"))
-	e.atOnce(t, "the card", func() bool { return len(e.tasks()) == 1 })
-	e.until(t, "the first update counted", 3*time.Second, func() bool { return e.tasks()[0].Title == "Working… 1 update" })
+	e.until(t, "the first update counted", 4*time.Second, func() bool { return len(e.tasks()) == 1 && e.tasks()[0].Title == "Working… 1 update" })
 	run.Handle(update(""))
 	e.until(t, "the second", 3*time.Second, func() bool { return e.tasks()[0].Title == "Working… 2 updates" })
 	e.elapse(4 * time.Second)
@@ -284,7 +342,7 @@ func TestTheActivityCardCountsStepsOnceThereAreTools(t *testing.T) {
 	e := setup(t)
 	run := e.progressRun(t, activity, "U1")
 	run.Handle(update(""))
-	e.until(t, "the update counted", 3*time.Second, func() bool { return len(e.tasks()) == 1 && e.tasks()[0].Title == "Working… 1 update" })
+	e.until(t, "the update counted", 4*time.Second, func() bool { return len(e.tasks()) == 1 && e.tasks()[0].Title == "Working… 1 update" })
 	run.Handle(call("c1", "search", nil))
 	run.Handle(result("c1", map[string]any{"output": "x"}))
 	run.Handle(update(""))

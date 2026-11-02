@@ -1,6 +1,7 @@
 package generic_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -385,5 +386,35 @@ func TestAnswersByTheExtensionItWasReadThrough(t *testing.T) {
 				t.Errorf("answer %+v carries the HITL payload: %v; want %v", msg, hitl, tc.hitl)
 			}
 		})
+	}
+}
+
+// The a2a dialect reaches the same fresh-connection path as kagent-v1: with a connection held open and the front door
+// taking no new ones, a connect of a turn works and a fresh one fails.
+func TestConnectOnAFreshConnectionDoesNotRideAHeldOne(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		card := a2a.AgentCard{Name: "sre", Version: "1", Capabilities: a2a.AgentCapabilities{Streaming: true}, SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface("http://card.invalid/a2a", a2a.TransportProtocolJSONRPC)}}
+		_ = json.NewEncoder(w).Encode(card)
+	}))
+	defer srv.Close()
+	d := generic.New(time.Second)
+	defer d.CloseIdleConnections()
+	backend := &v1alpha1.AgentBackend{Spec: v1alpha1.AgentBackendSpec{URL: srv.URL + "/a2a"}}
+	connect := func(ctx context.Context) error {
+		client, err := d.Connect(ctx, backend, v1alpha1.AgentRef{Name: "logical", Namespace: "logical"}, dialect.Credentials{Token: secret.New("token")})
+		if err == nil {
+			_ = client.Destroy()
+		}
+		return err
+	}
+	if err := connect(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	_ = srv.Listener.Close() // no new connection from here on; the one the first connect left pooled stays served
+	if err := connect(t.Context()); err != nil {
+		t.Errorf("a turn's connect with the connection held: %v", err)
+	}
+	if err := connect(dialect.WithFreshConnection(t.Context())); err == nil {
+		t.Error("a fresh connect succeeded though the front door takes no new connection: it rode the held one")
 	}
 }

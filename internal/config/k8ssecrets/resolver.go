@@ -19,11 +19,12 @@
 //
 // # Values
 //
-// The cache holds each Secret's name, type and data, and nothing else: the informer's
-// transform drops annotations such as last-applied-configuration, which can hold a second
-// copy of the values. Only Opaque Secrets (or an empty type) keep their values, so that
-// Value costs no API call; every other type (a Helm release, a service account token, TLS
-// keys, a docker config) keeps key names only, and Value refuses it. Keys returns names only.
+// The cache holds each Secret's name, type, data and resourceVersion (which SecretVersion
+// returns), and nothing else: the informer's transform drops annotations such as
+// last-applied-configuration, which can hold a second copy of the values. Only Opaque
+// Secrets (or an empty type) keep their values, so that Value costs no API call; every other
+// type (a Helm release, a service account token, TLS keys, a docker config) keeps key names
+// only, and Value refuses it. Keys returns names only.
 // Value returns a secret.Value, which no formatting path can print, built from a copy of the
 // bytes, so a Secret's rotation never changes a Value already read.
 //
@@ -78,7 +79,10 @@ var (
 	ErrAccessDenied = errors.New("the API server denied access to Secrets")
 )
 
-var _ config.SecretResolver = (*Resolver)(nil)
+var (
+	_ config.SecretResolver  = (*Resolver)(nil)
+	_ config.SecretVersioner = (*Resolver)(nil)
+)
 
 // watched is the informer for one namespace.
 type watched struct {
@@ -204,7 +208,8 @@ func (r *Resolver) Stop() {
 
 // get returns the cached Secret. It wraps config.ErrSecretNotFound when the Secret does not
 // exist, ErrNamespaceNotWatched when namespace is not one of the watched namespaces,
-// ErrNotSynced while that namespace's cache has not synced, and ErrStopped after Stop.
+// ErrNotSynced while that namespace's cache has not synced, and ErrStopped after Stop. A cache
+// that has synced is served as it is, whether or not its list or watch is failing now.
 func (r *Resolver) get(namespace, name string) (*corev1.Secret, error) {
 	w, ok := r.namespaces[namespace]
 	switch {
@@ -232,6 +237,22 @@ func (r *Resolver) Keys(_ context.Context, namespace, name string) ([]string, er
 		return nil, err
 	}
 	return slices.Sorted(maps.Keys(s.Data)), nil
+}
+
+// SecretVersion returns the resourceVersion of the cached Secret, which the API server changes on
+// every write to the Secret, including a new value under the same keys. It reads the cache and
+// makes no API call, and it fails as get does.
+//
+// The cache is as current as its last good list or watch. While one is failing the version stays
+// where it was, as do the values Value and Keys return, and a Secret rotated meanwhile is not
+// seen until the list or watch succeeds again. Each failure is logged as a warning (see failed);
+// SecretVersion does not report it.
+func (r *Resolver) SecretVersion(_ context.Context, namespace, name string) (string, error) {
+	s, err := r.get(namespace, name)
+	if err != nil {
+		return "", err
+	}
+	return s.ResourceVersion, nil
 }
 
 // Value returns the value of key in the Secret from the cache; an empty key means

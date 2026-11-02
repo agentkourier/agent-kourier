@@ -192,3 +192,25 @@ func TestIsThought(t *testing.T) {
 		})
 	}
 }
+
+// A message is a fragment only when the marker is true: kagent 0.9.x writes null there on a whole message.
+func TestIsPartial(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		m    *a2a.Message
+		want bool
+	}{
+		{"no message", nil, false},
+		{"no metadata", &a2a.Message{}, false},
+		{"marked", &a2a.Message{Metadata: map[string]any{"kagent_adk_partial": true}}, true},
+		{"null, as recorded on a whole message", &a2a.Message{Metadata: map[string]any{"kagent_adk_partial": nil}}, false},
+		{"false", &a2a.Message{Metadata: map[string]any{"kagent_adk_partial": false}}, false},
+		{"not a bool", &a2a.Message{Metadata: map[string]any{"kagent_adk_partial": "true"}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := dialect.IsPartial(tc.m); got != tc.want {
+				t.Errorf("IsPartial = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

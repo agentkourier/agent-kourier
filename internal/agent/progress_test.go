@@ -61,12 +61,15 @@ func TestWorkingUpdatesAreProgress(t *testing.T) {
 		{"an update of reasoning alone has no text", []a2a.Event{working(nil), working(agentSays("m1", thought("kagent_thought", "Private reasoning")))}, []string{"-"}},
 		{"kagent 1.0's reasoning", []a2a.Event{working(nil), working(agentSays("m1", thought("kagent.dev/a2a/thought", "Private reasoning")))}, []string{"-"}},
 		{"text beside an opaque data part", []a2a.Event{working(nil), working(agentSays("m1", a2a.NewDataPart(map[string]any{"x": 1.0}), textOf("ok")))}, []string{"ok"}},
-		{"the user's message echoed back has no text of the agent's", []a2a.Event{working(nil), working(messageOf(a2a.MessageRoleUser, "u1", textOf("yes")))}, []string{"-"}},
+		{"the user's message echoed back says nothing of the agent", []a2a.Event{working(nil), working(messageOf(a2a.MessageRoleUser, "u1", textOf("yes")))}, nil},
 		{"a message with no role has none either", []a2a.Event{working(nil), working(messageOf(a2a.MessageRoleUnspecified, "m1", textOf("hi")))}, []string{"-"}},
 		{"an update with a tool call is its tool event", []a2a.Event{working(nil), working(agentSays("m1", callPart(v09, "c1"), textOf("calling")))}, nil},
 		{"an update with a tool result is its tool event", []a2a.Event{working(nil), working(agentSays("m1", resultPart(adk, "c1", okResp)))}, nil},
 		{"a repeated tool part is still a tool part", []a2a.Event{working(nil), working(agentSays("m1", callPart(adk, "c1"))), working(agentSays("m1", callPart(adk, "c1")))}, nil},
-		{"a user's echo with a tool part is progress, its part unread", []a2a.Event{working(nil), working(messageOf(a2a.MessageRoleUser, "u1", callPart(adk, "c1")))}, []string{"-"}},
+		{"a user's echo with a tool part is nothing, its part unread", []a2a.Event{working(nil), working(messageOf(a2a.MessageRoleUser, "u1", callPart(adk, "c1")))}, nil},
+		{"a fragment of the model's output is no progress", []a2a.Event{working(nil), working(fragment("m1", true, " the clu"))}, nil},
+		{"the update that ends the fragments is", []a2a.Event{working(nil), working(fragment("m1", true, " the clu")), working(fragment("m2", nil, "the cluster"))}, []string{"the cluster"}},
+		{"a false marker is no fragment", []a2a.Event{working(nil), working(fragment("m1", false, "the cluster"))}, []string{"the cluster"}},
 		{"a pause is no progress", []a2a.Event{working(nil), statusOf(a2a.TaskStateInputRequired, agentSays("m1", textOf("Which one?")))}, nil},
 		{"the end is no progress", []a2a.Event{working(nil), statusOf(a2a.TaskStateCompleted, agentSays("m1", textOf("Done")))}, nil},
 		{"back to working after a pause is the change of state", []a2a.Event{working(nil), statusOf(a2a.TaskStateInputRequired, nil), working(nil)}, nil},
@@ -125,13 +128,82 @@ func TestKagent09TurnHasOneProgressUpdate(t *testing.T) {
 	}
 }
 
-// kagent 1.0's approving turn (test/fixtures/kagent/approval/02-approve) echoes the user's answer in a working update: activity,
-// with no text, as is the empty update after it.
-func TestKagentApprovalEchoIsProgressWithNoText(t *testing.T) {
+// kagent 1.0's approving turn (test/fixtures/kagent/approval/02-approve) echoes the user's answer in a working update, which is
+// no progress, and the empty update after it is one unit.
+func TestKagentApprovalEchoIsNoProgress(t *testing.T) {
 	_, got := run(fixtureEvents(t, "approval/02-approve.response.sse"))
-	if p := progress(got); !reflect.DeepEqual(p, []string{"-", "-"}) {
-		t.Errorf("progress = %q, want two with no text", p)
+	if p := progress(got); !reflect.DeepEqual(p, []string{"-"}) {
+		t.Errorf("progress = %q, want one with no text", p)
 	}
+}
+
+// fragment is an agent's message holding text, marked as kagent 0.9.x marks each message of its output: partial is the value of
+// the marker, nil when the message is whole, as test/fixtures/kagent/v09-tools records it.
+func fragment(id string, partial any, text string) *a2a.Message {
+	m := messageOf(a2a.MessageRoleAgent, id, textOf(text))
+	m.Metadata = map[string]any{"kagent_adk_partial": partial}
+	return m
+}
+
+// Later on a stream an update is the agent at work, even with the same words and nothing to tell them apart: a heartbeat renews
+// the reconnects and the task's age. Only what opens a resubscribed stream may be the server repeating itself, and the session
+// is told which it was, so that it can compare it with what it saw before a follow.
+func TestOnlyWhatOpensAResubscribeIsOpening(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		send, sub := make(chan item), make(chan item)
+		m := newMemConn(t, []chan item{send}, []chan item{sub}, getResult{task: task(a2a.TaskStateWorking, "")})
+		s := sendAsync(t, memAgent(t, m, nil))
+		says := func(text string) item {
+			return item{ev: statusOf(a2a.TaskStateWorking, messageOf(a2a.MessageRoleAgent, "m1", textOf(text)))}
+		}
+		s.feed(send, item{ev: working()})
+		s.feed(send, says("Still working"))
+		s.feed(send, says("Still working"))
+		s.feed(send, item{err: io.ErrUnexpectedEOF})
+		s.feed(sub, says("Still working")) // the repeat
+		s.feed(sub, says("Still working"))
+		s.feed(sub, says("Reading logs"))
+		s.feed(sub, item{ev: task(a2a.TaskStateCompleted, "done")})
+		if err := s.result(); err != nil {
+			t.Fatalf("err = %v", err)
+		}
+		var got []ProgressEvent
+		for _, e := range s.events() {
+			if p, ok := e.(ProgressEvent); ok {
+				got = append(got, ProgressEvent{Text: p.Text, Opening: p.Opening})
+			}
+		}
+		want := []ProgressEvent{{Text: "Still working"}, {Text: "Still working"}, {Text: "Still working"}, {Text: "Reading logs"}}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("progress = %+v, want %+v", got, want)
+		}
+	})
+}
+
+// What opens a follow's stream has no earlier update to be compared with here, so it is delivered, and told as opening.
+func TestWhatOpensAFollowIsOpening(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		sub := make(chan item)
+		m := newMemConn(t, nil, []chan item{sub}, getResult{task: task(a2a.TaskStateWorking, "")})
+		f := followAsync(t, memAgent(t, m, nil))
+		says := statusOf(a2a.TaskStateWorking, messageOf(a2a.MessageRoleAgent, "m1", textOf("Still working")))
+		for _, ev := range []a2a.Event{says, says, task(a2a.TaskStateCompleted, "done")} {
+			sub <- item{ev: ev}
+		}
+		if err := f.result(); err != nil {
+			t.Fatalf("err = %v", err)
+		}
+		var got []ProgressEvent
+		for _, e := range *f.got {
+			if p, ok := e.(ProgressEvent); ok {
+				got = append(got, ProgressEvent{Text: p.Text, Opening: p.Opening})
+			}
+		}
+		want := []ProgressEvent{{Text: "Still working", Opening: true}, {Text: "Still working"}}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("progress = %+v, want %+v", got, want)
+		}
+	})
 }
 
 // A server may open a resubscribe by repeating the status it last sent. That says nothing new of the agent, so it is no
@@ -248,8 +320,8 @@ func TestAStatusIsToldByItsIdentity(t *testing.T) {
 		evs  []a2a.Event
 		want []string
 	}{
-		{"the same message", []a2a.Event{working(), status(nil, agentSays("m1", "a")), status(nil, agentSays("m1", "a"))}, []string{"a"}},
-		{"the same timestamp", []a2a.Event{working(), status(&at, nil), status(&at, nil)}, []string{"-"}},
+		{"the same message, live", []a2a.Event{working(), status(nil, agentSays("m1", "a")), status(nil, agentSays("m1", "a"))}, []string{"a", "a"}},
+		{"the same timestamp, live", []a2a.Event{working(), status(&at, nil), status(&at, nil)}, []string{"-", "-"}},
 		{"another timestamp", []a2a.Event{working(), status(&at, nil), status(&later, nil)}, []string{"-", "-"}},
 		{"another message", []a2a.Event{working(), status(nil, agentSays("m1", "a")), status(nil, agentSays("m2", "a"))}, []string{"a", "a"}},
 		{"the same ID with other text", []a2a.Event{working(), status(nil, agentSays("m1", "a")), status(nil, agentSays("m1", "b"))}, []string{"a", "b"}},
