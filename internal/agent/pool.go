@@ -184,8 +184,9 @@ func (p *Pool) conn(ctx context.Context, t Target) (Conn, error) {
 // outage behind one. It returns the error of the card fetch as it is, not typed by what a status
 // means to a call: a 403 is a dialect.HTTPStatusError and not ErrCredentialsRejected. It also
 // returns ErrTokenUnreadable, ErrHeaderUnreadable, ErrTokenRequired, ErrStreamingUnsupported,
-// dialect.ErrUnsupportedExtension and dialect.ErrNoJSONRPCInterface, all findable with errors.Is,
-// and ErrPoolClosed after Close.
+// dialect.ErrUnsupportedExtension and dialect.ErrNoJSONRPCInterface, all findable with errors.Is.
+// After Close it returns ErrPoolClosed, whether Close came before the call or cut the connect short;
+// a credentials error that is already decided when Close runs keeps its own type.
 func (p *Pool) Check(ctx context.Context, t Target) error {
 	if p.isClosed() {
 		return ErrPoolClosed

@@ -17,6 +17,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/dialect/generic"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 )
 
@@ -149,40 +150,89 @@ func TestCheckFailsOnCredentialsWithoutAConnect(t *testing.T) {
 }
 
 // A required extension Agent Kourier does not speak, and a card with no JSON-RPC interface, are
-// told apart by sentinels from the dialect.
+// told apart by sentinels from the dialect, whichever of the two dialects connects.
 func TestCheckTellsAnUnusableCardApart(t *testing.T) {
-	for _, tc := range []struct {
+	for _, dl := range []struct {
 		name string
-		card a2a.AgentCard
-		want error
-	}{
-		{"required extension", func() a2a.AgentCard {
-			c := a2a.AgentCard{Name: "ask", SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface("http://x", a2a.TransportProtocolJSONRPC)}}
-			c.Capabilities.Streaming = true
-			c.Capabilities.Extensions = []a2a.AgentExtension{{URI: "https://example.test/extensions/other/v1", Required: true}}
-			return c
-		}(), dialect.ErrUnsupportedExtension},
-		{"no JSON-RPC interface", func() a2a.AgentCard {
-			c := a2a.AgentCard{Name: "ask", SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface("http://x", a2a.TransportProtocolGRPC)}}
-			c.Capabilities.Streaming = true
-			return c
-		}(), dialect.ErrNoJSONRPCInterface},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				_ = json.NewEncoder(w).Encode(tc.card)
-			}))
-			t.Cleanup(srv.Close)
-			tg := Target{
-				Binding:     "team/sre",
-				Backend:     &v1alpha1.AgentBackend{Spec: v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectKagentV1, URL: srv.URL}},
-				Agent:       v1alpha1.AgentRef{Name: "ask", Namespace: "kagent"},
-				Credentials: token("t"),
-			}
-			if err := newPool(t).Check(t.Context(), tg); !errors.Is(err, tc.want) {
-				t.Errorf("err = %v, want %v", err, tc.want)
-			}
-		})
+		d    dialect.Dialect
+		kind v1alpha1.Dialect
+	}{{"kagent-v1", kagentv1.New(0), v1alpha1.DialectKagentV1}, {"a2a", generic.New(0), v1alpha1.DialectA2A}} {
+		for _, tc := range []struct {
+			name string
+			card a2a.AgentCard
+			want error
+		}{
+			{"required extension", func() a2a.AgentCard {
+				c := a2a.AgentCard{Name: "ask", SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface("http://x", a2a.TransportProtocolJSONRPC)}}
+				c.Capabilities.Streaming = true
+				c.Capabilities.Extensions = []a2a.AgentExtension{{URI: "https://example.test/extensions/other/v1", Required: true}}
+				return c
+			}(), dialect.ErrUnsupportedExtension},
+			{"no JSON-RPC interface", func() a2a.AgentCard {
+				c := a2a.AgentCard{Name: "ask", SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface("http://x", a2a.TransportProtocolGRPC)}}
+				c.Capabilities.Streaming = true
+				return c
+			}(), dialect.ErrNoJSONRPCInterface},
+		} {
+			t.Run(dl.name+"/"+tc.name, func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					_ = json.NewEncoder(w).Encode(tc.card)
+				}))
+				t.Cleanup(srv.Close)
+				p := NewPool(dl.d, quick)
+				t.Cleanup(p.Close)
+				tg := Target{
+					Binding:     "team/sre",
+					Backend:     &v1alpha1.AgentBackend{Spec: v1alpha1.AgentBackendSpec{Dialect: dl.kind, URL: srv.URL}},
+					Agent:       v1alpha1.AgentRef{Name: "ask", Namespace: "kagent"},
+					Credentials: token("t"),
+				}
+				if err := p.Check(t.Context(), tg); !errors.Is(err, tc.want) {
+					t.Errorf("err = %v, want %v", err, tc.want)
+				}
+			})
+		}
+	}
+}
+
+// A probe sends the agent no message: the one request it makes is the card fetch.
+func TestCheckSendsOnlyTheCardFetch(t *testing.T) {
+	fa, p := newFakeAgent(t, liveStream(t)), newPool(t)
+	if err := p.Check(t.Context(), targetFor(fa, "team/sre", token("t"))); err != nil {
+		t.Fatal(err)
+	}
+	fa.mu.Lock()
+	defer fa.mu.Unlock()
+	if len(fa.calls) != 1 || fa.calls[0].Method != "card" {
+		t.Errorf("the agent got %d requests, want the one card fetch", len(fa.calls))
+	}
+}
+
+// A probe that waits on a slow backend holds nothing a turn needs: a turn on the cached client goes on.
+func TestASlowProbeDoesNotStallATurn(t *testing.T) {
+	fa, p := newFakeAgent(t, liveStream(t)), newPool(t)
+	tg := targetFor(fa, "team/sre", token("t"))
+	ag := p.Agent(tg)
+	if err := ag.Send(t.Context(), message("hi"), nil); err != nil {
+		t.Fatal(err)
+	}
+	gate := make(chan struct{})
+	fa.mu.Lock()
+	fa.cardGate = gate // the probe's card never comes until the gate closes
+	fa.mu.Unlock()
+	done := make(chan error, 1)
+	go func() { done <- p.Check(t.Context(), tg) }()
+	for fa.count("card") < 2 {
+		time.Sleep(time.Millisecond)
+	}
+	returns(t, "Send", func() {
+		if err := ag.Send(t.Context(), message("hi"), nil); err != nil {
+			t.Errorf("Send while a probe waits: %v", err)
+		}
+	})
+	close(gate)
+	if err := <-done; err != nil {
+		t.Errorf("Check: %v", err)
 	}
 }
 
@@ -263,11 +313,17 @@ func TestCheckFetchesTheCardEveryCallAndDestroysItsClient(t *testing.T) {
 	}
 }
 
+// After Close the probe neither reads the credentials nor connects.
 func TestCheckAfterCloseFailsWithoutAConnect(t *testing.T) {
 	fa, p := newFakeAgent(t, liveStream(t)), NewPool(kagentv1.New(0), quick)
 	p.Close()
-	if err := p.Check(t.Context(), targetFor(fa, "team/sre", token("t"))); !errors.Is(err, ErrPoolClosed) || fa.count("card") != 0 {
-		t.Errorf("err = %v, card fetches = %d; want ErrPoolClosed and none", err, fa.count("card"))
+	var lookups atomic.Int32
+	tg := targetFor(fa, "team/sre", func(context.Context) (dialect.Credentials, error) {
+		lookups.Add(1)
+		return dialect.Credentials{}, nil
+	})
+	if err := p.Check(t.Context(), tg); !errors.Is(err, ErrPoolClosed) || fa.count("card") != 0 || lookups.Load() != 0 {
+		t.Errorf("err = %v, card fetches = %d, credential lookups = %d; want ErrPoolClosed and none", err, fa.count("card"), lookups.Load())
 	}
 }
 

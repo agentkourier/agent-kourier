@@ -132,7 +132,7 @@ func TestCheckAgentIsNotFenced(t *testing.T) {
 	if err := b.CheckAgent(t.Context(), "sre/oncall"); err != nil {
 		t.Errorf("CheckAgent past the renew deadline = %v, want nil", err)
 	}
-	if agentStub.other.Load() == 0 || len(stops) != 0 {
-		t.Errorf("%d requests reached the agent, fail-stops %v; want the probe to reach it and stop nothing", agentStub.other.Load(), stops)
+	if agentStub.other.Load() == 0 || agentStub.sends.Load() != 0 || len(stops) != 0 {
+		t.Errorf("%d requests and %d sends reached the agent, fail-stops %v; want the probe to reach it, send nothing and stop nothing", agentStub.other.Load(), agentStub.sends.Load(), stops)
 	}
 }
