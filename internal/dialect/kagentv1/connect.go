@@ -56,6 +56,8 @@ func New(responseTimeout time.Duration) *Dialect {
 	// The same transport without keep-alives, for a request that must open its own connection (see
 	// dialect.WithFreshConnection): every dial, TLS and proxy setting is the shared one's, and it keeps no
 	// connection (HTTP/1 sends Connection: close, HTTP/2 closes the connection once its one request is done).
+	// One narrow case under HTTP/2: a request cancelled just after its TLS handshake can leave an unused connection
+	// in this transport, which the next fresh request to that host and port rides until the idle timeout.
 	fresh := base.Clone()
 	fresh.DisableKeepAlives = true
 	return &Dialect{base: base, fresh: fresh}
@@ -165,8 +167,10 @@ func (d *Dialect) httpClient(creds dialect.Credentials, frontDoor *url.URL) *htt
 
 // authTransport authenticates each request, on a copy, before sending it to the front door,
 // and turns a response that is not 2xx into a dialect.HTTPStatusError. A request whose context
-// came from dialect.WithFreshConnection goes through fresh instead of next; both reach only the front
-// door and follow no redirect, because both checks run before the choice.
+// came from dialect.WithFreshConnection goes through fresh instead of next. The same holds on both paths:
+// the host check runs before the choice, so the identity goes only to the front door, and a redirect is not
+// followed, because the client's CheckRedirect stops at the 3xx response, which is then not 2xx and becomes
+// an HTTPStatusError.
 type authTransport struct {
 	next, fresh http.RoundTripper // fresh is nil for a Dialect that was not built by New: next carries all
 	dialect     *Dialect

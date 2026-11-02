@@ -98,7 +98,8 @@ type freshConnectionKey struct{}
 // A pooled keep-alive connection that a stream of a turn holds open would otherwise carry the request and hide
 // a name, certificate or network path that a new connection cannot use (agent.Pool.Check asks for it). The
 // mark affects only requests made under ctx; the clients Connect returns send their later calls under their
-// callers' contexts.
+// callers' contexts. One narrow case under HTTP/2: a request cancelled just after its TLS handshake can leave an
+// unused connection behind, which the next fresh request to that host and port rides until the idle timeout.
 func WithFreshConnection(ctx context.Context) context.Context {
 	return context.WithValue(ctx, freshConnectionKey{}, true)
 }

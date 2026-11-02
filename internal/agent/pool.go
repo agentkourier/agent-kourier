@@ -199,7 +199,9 @@ func (p *Pool) conn(ctx context.Context, t Target) (Conn, error) {
 // Check neither reads nor writes the cached clients, so it cannot disturb a stream or hide an
 // outage behind one. It also asks the dialect for a new connection (dialect.WithFreshConnection): the card
 // fetch does its own DNS lookup, dial and TLS handshake, so a connection a turn holds open cannot carry
-// it, and a name, certificate or network path that only a new connection needs fails the check.
+// it, and a name, certificate or network path that only a new connection needs fails the check. The one
+// narrow exception is under HTTP/2: a probe cancelled just after its TLS handshake can leave an unused
+// connection that the next probe to that host and port rides, until the idle timeout.
 // It holds no entry lock while it waits on the network, so it never delays a turn.
 //
 // The credentials read and the connect together end at the ConnectTimeout, when ctx ends, or when the
@@ -207,9 +209,10 @@ func (p *Pool) conn(ctx context.Context, t Target) (Conn, error) {
 // means to a call: a 403 is a dialect.HTTPStatusError and not ErrCredentialsRejected. It also
 // returns ErrTokenUnreadable, ErrHeaderUnreadable, ErrTokenRequired, ErrStreamingUnsupported,
 // dialect.ErrUnsupportedExtension and dialect.ErrNoJSONRPCInterface, all findable with errors.Is.
-// After Close it returns ErrPoolClosed: at once when Close came before the call, and otherwise when Close
-// cancelled the credentials read or the connect. Close waits for a Check that is in flight, so none outlives it.
-// An error that is not a cancellation keeps its own type, even when Close runs just after it.
+// After Close it returns ErrPoolClosed: at once when Close came before the call, and otherwise when the
+// credentials read or the connect ends in a cancellation once the pool is closed. Close waits for a Check that
+// is in flight, so none outlives it. An error that is not a cancellation keeps its own type, even when Close
+// runs just after it.
 func (p *Pool) Check(ctx context.Context, t Target) error {
 	if !p.beginProbe() {
 		return ErrPoolClosed
@@ -241,7 +244,8 @@ func (p *Pool) beginProbe() bool {
 	return true
 }
 
-// closedOr is ErrPoolClosed for an error that Close's cancellation caused, and err otherwise.
+// closedOr is ErrPoolClosed when err is a cancellation and the pool is closed, whoever cancelled: Close has run,
+// so that is the answer either way. Any other error is returned as it is.
 func (p *Pool) closedOr(err error) error {
 	if errors.Is(err, context.Canceled) && p.isClosed() {
 		return ErrPoolClosed

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -490,4 +491,89 @@ func TestCheckIsBoundedOnTheCredentialsByTheConnectTimeout(t *testing.T) {
 			t.Errorf("Check = %v, want context.DeadlineExceeded", err)
 		}
 	})
+}
+
+// A credentials error that is decided keeps its type when Close runs while the Check is still in flight: only a
+// cancellation reads as ErrPoolClosed.
+func TestCheckKeepsADecidedCredentialsErrorWhenCloseRuns(t *testing.T) {
+	fa, p := newFakeAgent(t, liveStream(t)), NewPool(kagentv1.New(0), quick)
+	entered := make(chan struct{}, 1)
+	failsAfterClose := func(context.Context) (dialect.Credentials, error) {
+		entered <- struct{}{}
+		<-p.bg.Done() // Close is running; the source answers with its own error, not the context's
+		return dialect.Credentials{}, fmt.Errorf("%w: secret not found", ErrTokenUnreadable)
+	}
+	done := make(chan error, 1)
+	go func() { done <- p.Check(t.Context(), targetFor(fa, "team/sre", failsAfterClose)) }()
+	returns(t, "Check to start", func() { <-entered })
+	returns(t, "Close", p.Close)
+	returns(t, "Check", func() {
+		if err := <-done; !errors.Is(err, ErrTokenUnreadable) || errors.Is(err, ErrPoolClosed) {
+			t.Errorf("Check = %v, want ErrTokenUnreadable and not ErrPoolClosed", err)
+		}
+	})
+}
+
+// waitingDialect is a dialect whose Connect says it has begun and then waits for its context, as a card fetch does.
+type waitingDialect struct {
+	dialect.Dialect
+	entered chan struct{}
+}
+
+func (d waitingDialect) Connect(ctx context.Context, _ *v1alpha1.AgentBackend, _ v1alpha1.AgentRef, _ dialect.Credentials) (*a2aclient.Client, error) {
+	d.entered <- struct{}{}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// A caller that cancels its own Check on an open pool gets its cancellation, not ErrPoolClosed.
+func TestCheckCancelledByItsCallerOnAnOpenPoolSaysCanceled(t *testing.T) {
+	d := waitingDialect{Dialect: kagentv1.New(0), entered: make(chan struct{}, 1)}
+	p := NewPool(d, quick)
+	t.Cleanup(p.Close)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- p.Check(ctx, targetFor(newFakeAgent(t, liveStream(t)), "team/sre", token("t"))) }()
+	returns(t, "Check to start", func() { <-d.entered })
+	cancel()
+	returns(t, "Check", func() {
+		if err := <-done; !errors.Is(err, context.Canceled) || errors.Is(err, ErrPoolClosed) {
+			t.Errorf("Check = %v, want context.Canceled and not ErrPoolClosed", err)
+		}
+	})
+}
+
+// Checks racing Close either finish or say ErrPoolClosed, and none reads the credentials after Close has returned: a Check
+// registers under the lock Close closes under, so Close's wait sees it. Without that, -race reports the
+// WaitGroup's Add racing its Wait, or a Check reads the credentials late.
+func TestChecksRacingCloseFinishOrSayClosedAndNoneStartsAfterIt(t *testing.T) {
+	fa := newFakeAgent(t, liveStream(t))
+	for range 100 {
+		p := NewPool(kagentv1.New(0), quick)
+		var closed atomic.Bool
+		var late, other atomic.Int32
+		tg := targetFor(fa, "team/sre", func(ctx context.Context) (dialect.Credentials, error) {
+			if closed.Load() {
+				late.Add(1)
+			}
+			return token("t")(ctx)
+		})
+		var checks sync.WaitGroup
+		for range 6 {
+			checks.Go(func() {
+				for range 3 {
+					if err := p.Check(context.Background(), tg); err != nil && !errors.Is(err, ErrPoolClosed) {
+						other.Add(1)
+					}
+				}
+			})
+		}
+		p.Close()
+		closed.Store(true)
+		p.Close() // twice is allowed
+		checks.Wait()
+		if late.Load() != 0 || other.Load() != 0 {
+			t.Fatalf("%d credential reads after Close returned, %d Check errors other than ErrPoolClosed; want none", late.Load(), other.Load())
+		}
+	}
 }
