@@ -19,7 +19,7 @@ const recoveredPrefix = "task:"
 // SystemUser is the user a turn is filed under when nobody wrote it (an alert's first
 // prompt): the store requires one. The value is stored (reply_queue.user_id, sessions.turn_user), so a change of it
 // needs a migration that rewrites those columns (0024 moved courier:system to this).
-const SystemUser = "agent-kourier:system"
+const SystemUser = store.SystemUser
 
 // Disposition says what Submit did with a turn.
 type Disposition string

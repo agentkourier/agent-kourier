@@ -1,6 +1,7 @@
 package slack
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/slack-go/slack/slackevents"
@@ -97,6 +98,52 @@ func TestDecodeABotsMessageWithTheTokenIsNotMentioned(t *testing.T) {
 }
 
 // An edit never makes a mention: an edited app_mention and a message_changed are dropped, as they were.
+// What a bot's mention says may be outside its text: an attachment, or the section or context block that holds the token. These
+// are decoded from the event's JSON, as Socket Mode delivers it.
+func TestDecodeABotsAppMentionKeepsWhatThePostHolds(t *testing.T) {
+	for _, tt := range []struct {
+		name, event string
+		want        BotPost
+	}{
+		{
+			"an attachment",
+			`{"bot_id":"B1","channel":"C1","ts":"2.2","text":"<@UME> alert","attachments":[{"title":"FIRING","title_link":"https://x.example/a","text":"p99 is high","fallback":"fb","footer":"am"}]}`,
+			BotPost{ID: "B1", Title: "FIRING", TitleLink: "https://x.example/a", Text: "p99 is high", Fallback: "fb", Footer: "am"},
+		},
+		{
+			"a section block",
+			`{"bot_id":"B1","channel":"C1","ts":"2.2","text":"look","blocks":[{"type":"section","text":{"type":"mrkdwn","text":"<@UME> check the card service"},"fields":[{"type":"mrkdwn","text":"sev 2"}]}]}`,
+			BotPost{ID: "B1", Text: "<@UME> check the card service\nsev 2"},
+		},
+		{
+			"a context block",
+			`{"bot_id":"B1","channel":"C1","ts":"2.2","text":"look","blocks":[{"type":"context","elements":[{"type":"mrkdwn","text":"<@UME>"},{"type":"plain_text","text":"was named"},{"type":"image","image_url":"https://x.example/i.png","alt_text":"i"}]}]}`,
+			BotPost{ID: "B1", Text: "<@UME>\nwas named"},
+		},
+		{
+			"an attachment's text comes before the blocks'",
+			`{"bot_id":"B1","channel":"C1","ts":"2.2","attachments":[{"text":"from the attachment"}],"blocks":[{"type":"section","text":{"type":"mrkdwn","text":"from the block"}}]}`,
+			BotPost{ID: "B1", Text: "from the attachment"},
+		},
+		{
+			"a rich_text block, whose words are the top-level text",
+			`{"bot_id":"B1","channel":"C1","ts":"2.2","text":"<@UME> hi","blocks":[{"type":"rich_text","elements":[]}]}`,
+			BotPost{ID: "B1"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var ev slackevents.AppMentionEvent
+			if err := json.Unmarshal([]byte(tt.event), &ev); err != nil {
+				t.Fatal(err)
+			}
+			m, v := decode(self{user: "UME", bot: "BME"}, &ev)
+			if v != forward || m.Bot != tt.want {
+				t.Errorf("decode = %+v, %v; want Bot %+v", m.Bot, v, tt.want)
+			}
+		})
+	}
+}
+
 func TestDecodeAnEditIsDroppedWhateverItHolds(t *testing.T) {
 	me := self{user: "UME", bot: "BME"}
 	for name, ev := range map[string]any{

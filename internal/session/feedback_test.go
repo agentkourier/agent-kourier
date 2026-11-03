@@ -27,6 +27,7 @@ func TestTurnRefSaysWhichFeedbackTheFinalMessageCarries(t *testing.T) {
 			f.feedback = tc.feedback
 			in := inbound("1")
 			in.UserID = tc.user
+			in.MessageRef = in.Key.Thread // an alert's prompt is the message that opens its thread
 			if _, err := f.submit(in); err != nil {
 				t.Fatal(err)
 			}
@@ -35,6 +36,35 @@ func TestTurnRefSaysWhichFeedbackTheFinalMessageCarries(t *testing.T) {
 			defer sink.mu.Unlock()
 			if len(sink.refs) != 1 || sink.refs[0].Feedback != tc.want {
 				t.Errorf("turn refs = %+v; want one with feedback %q", sink.refs, tc.want)
+			}
+		})
+	}
+}
+
+// A turn nobody wrote is an investigation only when it opened a thread that no bot's mention made: a bot's mention is answered like
+// a person's, in whichever thread, by a live turn and by one found again after a restart alike.
+func TestFeedbackOfATurnNobodyWrote(t *testing.T) {
+	alert, mention := store.Origin{Source: "botMessage"}, store.Origin{Source: store.OriginBotMention}
+	k := Key{Connection: "c", Channel: "C1", Thread: "1.1"}
+	for _, tc := range []struct {
+		name     string
+		ref      string
+		origin   store.Origin
+		feedback bool
+		want     store.FeedbackKind
+	}{
+		{"an alert's first prompt", "1.1", alert, false, store.FeedbackInvestigation},
+		{"an alert's first prompt recorded with no message", "", alert, false, store.FeedbackInvestigation},
+		{"a mention that opened its thread, without feedback", "1.1", mention, false, ""},
+		{"a mention that opened its thread, with feedback", "1.1", mention, true, store.FeedbackAnswer},
+		{"a mention in an alert's thread, without feedback", "2.2", alert, false, ""},
+		{"a mention in a person's thread, without feedback", "2.2", store.Origin{}, false, ""},
+		{"a mention in a person's thread, with feedback", "2.2", store.Origin{}, true, store.FeedbackAnswer},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := feedbackOf(store.TaskTurn{User: SystemUser, MessageRef: tc.ref}, k, tc.origin, Backend{Feedback: tc.feedback})
+			if got != tc.want {
+				t.Errorf("feedbackOf = %q; want %q", got, tc.want)
 			}
 		})
 	}

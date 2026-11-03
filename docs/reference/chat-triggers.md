@@ -39,8 +39,9 @@ Set `chat.botMentions: none` to turn it off. A Binding whose list leaves out the
 | | |
 |---|---|
 | Where the turn goes | The thread that holds the mention, or a new thread for a mention outside one. A new session if Agent Kourier does not own the thread. |
-| Limits | Fixed, and across every bot on the Binding: 3 turns in any 30 minutes, 1 at a time, 20 in any 24 hours. They count mentions, including those in a thread Agent Kourier already owns. |
-| The prompt | Fixed, with the post's text and the thread so far as untrusted data: what opened the thread and every author's messages since, except Agent Kourier's own and what were already turns. A later mention gets what came since the previous turn. |
+| Limits | Fixed, and across every bot on the Binding: 3 turns in any 30 minutes, 1 at a time, 20 in any 24 hours. They count mentions, including those in a thread Agent Kourier already owns. "1 at a time" lasts while the mention's own turn is queued or running: a later turn in its thread does not hold it. A mention whose session takes no turn does not count. |
+| The prompt | Fixed, with the post and the thread so far as untrusted data. The post is its text, its first attachment's fields and, if that attachment has no text, the words of its section and context blocks. The thread is what opened it and every author's messages since, except Agent Kourier's own and what were already turns, at most 50: what opened it stays, with the newest. A message of the thread shows its text and its first attachment's fields, not its blocks. A later mention gets what came since the previous turn. |
+| Rating buttons | As on an answer to a person: only with `feedback.enabled`, and counted as an answer. |
 | A limit is reached | No turn and nothing in the thread. Counted, audited, and in the digest line of its window. |
 
 These are never taken as a mention:
@@ -51,7 +52,7 @@ These are never taken as a mention:
 - Any bot's mention in a channel shared with another workspace.
 
 A session past its `threadTTL`, or whose Binding has left the config, takes no turn from a bot, with no note. A bot's turn never answers a
-pending question; it stays a turn of its own. [Let another agent start yours](../how-to/any-bot-trigger.md#let-another-agent-start-yours) has what
+pending question; it stays a turn of its own, queued until the pause ends, and the question still times out at its deadline. [Let another agent start yours](../how-to/any-bot-trigger.md#let-another-agent-start-yours) has what
 this does not bound.
 
 ## `botMessage` fields

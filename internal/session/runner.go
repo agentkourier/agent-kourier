@@ -792,15 +792,18 @@ func (t *tstate) outputTurn() store.TaskTurn {
 // after a lost stream, or looked up or sent again after a send of unknown outcome, continues the message it had.
 func (t *tstate) sinkRef() TurnRef {
 	shown := t.outputTurn()
-	return TurnRef{Key: t.key, Binding: t.sess.Binding, MessageID: shown.ID, UserID: shown.User, Output: t.b.Output, Progress: t.b.Progress, Recovered: t.recovered || t.follow || t.takes, Restarted: t.recovered, Feedback: feedbackOf(shown.User, t.b), ThreadReplies: t.b.ThreadReplies, Mentions: t.b.Mentions, MaxMentions: t.b.MaxMentions}
+	return TurnRef{Key: t.key, Binding: t.sess.Binding, MessageID: shown.ID, UserID: shown.User, Output: t.b.Output, Progress: t.b.Progress, Recovered: t.recovered || t.follow || t.takes, Restarted: t.recovered, Feedback: feedbackOf(shown, t.key, t.sess.Origin, t.b), ThreadReplies: t.b.ThreadReplies, Mentions: t.b.Mentions, MaxMentions: t.b.MaxMentions}
 }
 
-// feedbackOf is the feedback buttons the final message of a turn written by user carries (TurnRef.Feedback).
-func feedbackOf(user string, b Backend) store.FeedbackKind {
+// feedbackOf is the feedback buttons the final message of a turn carries (TurnRef.Feedback): an investigation's always, and an
+// answer's on a Binding with feedback.enabled. A turn nobody wrote is an investigation when it opened its session's thread. A bot's
+// mention is also nobody's, but it is a question put by another agent, whichever thread it is in: it is answered like a person's,
+// which the recorded turn and the session can tell after a restart too.
+func feedbackOf(turn store.TaskTurn, key Key, origin store.Origin, b Backend) store.FeedbackKind {
 	switch {
-	case user == SystemUser:
+	case turn.User == SystemUser && origin.Source != store.OriginBotMention && (turn.MessageRef == "" || turn.MessageRef == key.Thread):
 		return store.FeedbackInvestigation
-	case user != "" && b.Feedback:
+	case turn.User != "" && b.Feedback:
 		return store.FeedbackAnswer
 	}
 	return ""

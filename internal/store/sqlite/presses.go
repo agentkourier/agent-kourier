@@ -89,9 +89,9 @@ func (s *adapter) PendingPresses(ctx context.Context, interactionID string, befo
 		OR EXISTS (SELECT 1 FROM interactions i JOIN reply_queue r
 		ON r.connection = i.connection AND r.channel = i.channel AND r.thread_ts = i.thread_ts
 		WHERE i.id = ? AND i.text_replies = 1 AND i.state = 'pending' AND i.message_ref <> ''
-		AND r.interaction_id = '' AND r.delivered_at IS NULL AND r.enqueued_at >= i.created_at
+		AND r.interaction_id = '' AND r.user_id <> ? AND r.delivered_at IS NULL AND r.enqueued_at >= i.created_at
 		AND r.enqueued_at <= ?)`,
-		interactionID, ts(before), interactionID, ts(before), interactionID, ts(before)).Scan(&found)
+		interactionID, ts(before), interactionID, ts(before), interactionID, store.SystemUser, ts(before)).Scan(&found)
 	if err != nil {
 		return false, fmt.Errorf("pending presses of %s: %w", interactionID, err)
 	}

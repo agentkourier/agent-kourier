@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"strconv"
@@ -41,14 +42,28 @@ func (in *Intake) admit(ctx context.Context, m TriggerMatch) (store.TriggerLimit
 	}
 	run := store.TriggerRun{
 		Binding: m.Binding, Trigger: m.Index, At: m.Received,
-		Key:           store.ConversationKey{Connection: in.conn, Channel: m.Message.At.Channel, Thread: m.Message.At.ID},
-		SessionThread: m.Message.At.Thread,
+		Key: store.ConversationKey{Connection: in.conn, Channel: m.Message.At.Channel, Thread: m.Message.At.ID},
+	}
+	if m.Mention {
+		run.SessionThread = cmp.Or(m.Message.At.Thread, m.Message.At.ID)
 	}
 	adm, err := in.cfg.TriggerRuns.AdmitTriggerRun(ctx, run, limits)
 	if err != nil {
 		return "", fmt.Errorf("check the limits of trigger %d of %s for %s: %w", m.Index, m.Binding, m.MessageID, err)
 	}
 	return adm.Limit, nil
+}
+
+// forget gives a start's place in the limits back: it took no turn, and posted nothing that a storm of them could multiply.
+func (in *Intake) forget(ctx context.Context, m TriggerMatch) error {
+	if in.cfg.TriggerRuns == nil {
+		return nil
+	}
+	key := store.ConversationKey{Connection: in.conn, Channel: m.Message.At.Channel, Thread: m.Message.At.ID}
+	if err := in.cfg.TriggerRuns.ForgetTriggerRun(ctx, key); err != nil {
+		return fmt.Errorf("forget the start of %s: %w", m.MessageID, err)
+	}
+	return nil
 }
 
 // stopThread is what a limit does to a fire that reserved a thread: it gives the reservation back and counts the

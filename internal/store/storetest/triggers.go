@@ -468,6 +468,18 @@ func running(t *testing.T, s store.Store, ts string, at time.Time) {
 	}
 }
 
+// turnOf makes the session of a thread's active task the turn of message.
+func turnOf(t *testing.T, s store.Store, thread, message string, at time.Time) {
+	t.Helper()
+	key := runOf(thread, at).Key
+	if err := s.UpsertSession(t.Context(), store.Session{Key: key, Binding: tBinding, LastActivity: at}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetSessionTask(t.Context(), key, "ctx-"+thread, "task-"+thread, store.TaskTurn{ID: "turn-" + message, User: "U1", MessageRef: message}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // inThread is the run of a message ts that is a turn of the session of thread: a start in a thread that the message did not open.
 func inThread(ts, thread string, at time.Time) store.TriggerRun {
 	r := runOf(ts, at)
@@ -491,7 +503,7 @@ func (su suite) triggerRuns(t *testing.T) {
 		}
 	})
 
-	su.run(t, "a start in a thread is running while the thread's session is", func(t *testing.T, s store.Store) {
+	su.run(t, "a start in a thread is running while its own turn is", func(t *testing.T, s store.Store) {
 		lim := store.TriggerRunLimits{MaxConcurrent: 1, DigestWindow: time.Hour}
 		if got := admit(t, s, inThread("100.2", "100.1", t0), lim); !got.Admitted {
 			t.Fatalf("the first start = %+v; want admitted", got)
@@ -499,9 +511,51 @@ func (su suite) triggerRuns(t *testing.T) {
 		if got := admit(t, s, inThread("100.3", "100.1", t0), lim); !got.Admitted {
 			t.Fatalf("with no task yet, a second start = %+v; want admitted", got)
 		}
-		running(t, s, "100.1", t0)
+		turnOf(t, s, "100.1", "100.2", t0)
 		if got := admit(t, s, inThread("200.2", "200.1", t0), lim); got.Admitted || got.Limit != store.LimitConcurrent {
-			t.Errorf("another thread's start while the session of the first runs = %+v; want the concurrency limit, found through SessionThread", got)
+			t.Errorf("another thread's start while the first's turn runs = %+v; want the concurrency limit, found through SessionThread", got)
+		}
+	})
+
+	su.run(t, "a later turn of a mention's session does not hold the mention's place", func(t *testing.T, s store.Store) {
+		lim := store.TriggerRunLimits{MaxConcurrent: 1, DigestWindow: time.Hour}
+		if got := admit(t, s, inThread("100.2", "100.1", t0), lim); !got.Admitted {
+			t.Fatalf("the mention = %+v; want admitted", got)
+		}
+		turnOf(t, s, "100.1", "100.9", t0) // a person's reply is the session's task now
+		queued := store.Reply{ID: "person-queued", Key: runOf("100.1", t0).Key, UserID: "U1", MessageRef: "100.8", Text: "and another", EnqueuedAt: t0}
+		if _, err := s.EnqueueReply(t.Context(), queued); err != nil {
+			t.Fatal(err)
+		}
+		if got := admit(t, s, inThread("200.2", "200.1", t0), lim); !got.Admitted {
+			t.Errorf("a mention in another thread = %+v; want admitted: the first mention's own turn has ended", got)
+		}
+	})
+
+	su.run(t, "a start that took no turn gives its place back", func(t *testing.T, s store.Store) {
+		lim := store.TriggerRunLimits{MaxRuns: 1, Per: time.Hour, DigestWindow: time.Hour}
+		first := inThread("100.2", "100.1", t0)
+		if got := admit(t, s, first, lim); !got.Admitted {
+			t.Fatalf("the first start = %+v; want admitted", got)
+		}
+		if err := s.ForgetTriggerRun(t.Context(), first.Key); err != nil {
+			t.Fatal(err)
+		}
+		second := inThread("100.3", "100.1", t0)
+		if got := admit(t, s, second, lim); !got.Admitted {
+			t.Fatalf("a start after it was forgotten = %+v; want admitted", got)
+		}
+		if got := admit(t, s, inThread("100.4", "100.1", t0), lim); got.Admitted || got.Limit != store.LimitRate {
+			t.Fatalf("a third start = %+v; want the rate limit", got)
+		}
+		if err := s.ForgetTriggerRun(t.Context(), runOf("100.4", t0).Key); err != nil { // stopped, so it stays for its digest
+			t.Fatal(err)
+		}
+		if ds, err := s.ListTriggerDigests(t.Context(), t0.Add(2*time.Hour)); err != nil || len(ds) != 1 || ds[0].Counts[store.LimitRate] != 1 {
+			t.Errorf("digests = %+v, %v; want the stopped start, which forgetting leaves alone", ds, err)
+		}
+		if err := s.ForgetTriggerRun(t.Context(), runOf("999.9", t0).Key); err != nil {
+			t.Errorf("forgetting a message with no start = %v; want nothing", err)
 		}
 	})
 

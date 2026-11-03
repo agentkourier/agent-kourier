@@ -825,13 +825,19 @@ func TestThreadContextLimits(t *testing.T) {
 // rootedReader is a windowReader that also knows what opened the thread.
 type rootedReader struct {
 	*windowReader
-	root chat.HistoryMessage
-	err  error
-	read int
+	root   chat.HistoryMessage
+	err    error
+	script []error // what each read of the root says first, then err
+	read   int
 }
 
 func (r *rootedReader) ThreadRoot(context.Context, chat.Target) (chat.HistoryMessage, error) {
 	r.read++
+	if len(r.script) > 0 {
+		err := r.script[0]
+		r.script = r.script[1:]
+		return r.root, err
+	}
 	return r.root, r.err
 }
 
@@ -878,6 +884,74 @@ func TestThreadContextOfAWholeThread(t *testing.T) {
 	}
 	if c := w.win.reads(); len(c) != 1 || c[0].after != "" || c[0].before != "100.000900" {
 		t.Errorf("reads = %+v; want one, from the start up to the mention", c)
+	}
+}
+
+// A bot's post shows its text and what its structured part holds; the fallback, which only summarises them, shows when there is nothing else.
+func TestThreadTextOfABotsPost(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		m    chat.Inbound
+		want string
+	}{
+		{"a person's", chat.Inbound{Text: "hello"}, "hello"},
+		{"text and an attachment", chat.Inbound{Text: "[FIRING:1] HighLatency", Bot: &chat.BotMessage{Title: "HighLatency", Link: "https://x.example/a", Body: "runbook: restart", Footer: "am", Fallback: "fb"}}, "[FIRING:1] HighLatency\nHighLatency\nhttps://x.example/a\nrunbook: restart\nam"},
+		{"an attachment alone", chat.Inbound{Bot: &chat.BotMessage{Title: "FIRING", Body: "p99"}}, "FIRING\np99"},
+		{"a fallback alone", chat.Inbound{Bot: &chat.BotMessage{Fallback: "fb"}}, "fb"},
+		{"nothing", chat.Inbound{Bot: &chat.BotMessage{}}, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := threadText(tt.m); got != tt.want {
+				t.Errorf("threadText = %q; want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// In a long thread what opened it stays, with the newest messages, and the block counts what it left out.
+func TestThreadContextOfAWholeThreadKeepsItsRootInALongThread(t *testing.T) {
+	w := newTCWorld(t)
+	for i := range 60 {
+		w.win.window = append(w.win.window, msg(i+2, "U1", fmt.Sprintf("message-%02d", i)))
+	}
+	r := &rootedReader{windowReader: w.win, root: botPost(1, "", chat.BotMessage{ID: "B0ALERTS", Title: "FIRING - Latency"}, "")}
+
+	got := w.build(r).Section(w.ctx, tcKey, tcBinding, "", "100.000900", true)
+
+	if !strings.Contains(got, "FIRING - Latency") || !strings.Contains(got, "message-59") {
+		t.Errorf("the section lacks the root or the newest message:\n%s", got)
+	}
+	if strings.Contains(got, "message-10<") || !strings.Contains(got, "message-11") {
+		t.Errorf("want the 49 newest after the root:\n%s", got)
+	}
+	if !strings.Contains(got, "11 earlier messages left out.") {
+		t.Errorf("the section does not count what it left out:\n%s", got)
+	}
+
+	// A root that is no longer shown because it was a turn pins nothing: the oldest message shown may be cut like any other.
+	w = newTCWorld(t)
+	w.win.window = append(w.win.window, msg(2, "U1", "a reply"))
+	root := msg(1, "U2", "the root, which was a turn")
+	w.turns.ids[idOf(root)] = true
+	if got := w.build(&rootedReader{windowReader: w.win, root: root}).Section(w.ctx, tcKey, tcBinding, "", "100.000900", true); strings.Contains(got, "the root") || !strings.Contains(got, "a reply") {
+		t.Errorf("a root that was a turn is shown:\n%s", got)
+	}
+}
+
+// The read of the root waits out a short rate limit, as the read of the window does, so the window it has read is not lost.
+func TestThreadContextWaitsOutARateLimitOnTheRoot(t *testing.T) {
+	limited := &chattest.FakeError{Verdict: chat.Verdict{Class: chat.Transient, RetryAfter: 2 * time.Second}, Msg: "rate limited"}
+	w := newTCWorld(t)
+	w.win.window = []chat.HistoryMessage{msg(3, "U1", "go on")}
+	r := &rootedReader{windowReader: w.win, root: msg(1, "U2", "what opened it"), script: []error{limited}}
+
+	got := w.build(r).Section(w.ctx, tcKey, tcBinding, "", "100.000900", true)
+
+	if !strings.Contains(got, "what opened it") || !strings.Contains(got, "go on") || r.read != 2 {
+		t.Errorf("%d reads of the root, section:\n%s", r.read, got)
+	}
+	if fmt.Sprint(w.waited()) != fmt.Sprint([]time.Duration{2 * time.Second}) || len(w.win.reads()) != 1 {
+		t.Errorf("waited %v with %d reads of the window; want one wait of 2s and one read", w.waited(), len(w.win.reads()))
 	}
 }
 

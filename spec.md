@@ -686,7 +686,7 @@ Slack sends where a mention registers, including a token only in a context or se
 hands it on only if the intake says the Binding takes it. Its `limits` are fixed: 3 turns in any 30 minutes, 1 at a time and 20 in any 24
 hours, per Binding, counted by message and under the mention trigger's index. Its first prompt is fixed, and the turn carries the thread so far
 in an untrusted block (below `chat.threadReplies`' context, by the same path), whatever `chat.threadReplies` says. A session past its `threadTTL`, or
-whose Binding has left the config, takes no turn from a bot, with no note. Its decisions are `started`, `limited` and `not_started`, as for a trigger's.
+whose Binding has left the config, takes no turn from a bot, with no note, and its start is forgotten: it posted nothing for the limits to hold back, and must not stop a mention in a live thread. Its decisions are `started`, `limited` and `not_started`, as for a trigger's. "1 at a time" counts a mention while its own turn is queued or is the session's task, not a later turn of its session. The post the turn carries is its text, its first attachment's fields and, if that has no text, the words of its section and context blocks; the thread block keeps what opened the thread, with the newest messages, and reads attachments and not blocks. A bot's turn queued during a pause is no answer, so it neither answers the question nor holds it back from its timeout.
 
 What a matched bot message does to its thread, for a trigger with `thread.by: key`. The key is
 hashed (with the connection, channel and the sender's ID, not its kind; D42) and the store holds that hash, one row per key with
@@ -1309,7 +1309,7 @@ this with an outbox:
 ### 8.7 Feedback
 
 - The final message of every investigation that a trigger started carries Useful and Not useful buttons;
-  the final message of an answer to a person carries them when the Binding has `feedback.enabled`. A message that ends
+  the final message of an answer to a person, or to a bot's mention (D49), carries them when the Binding has `feedback.enabled`. A message that ends
   on a question to a person (input-required or auth-required) carries none; the answer that follows does.
 - A vote counts only from a member of the bound channel and never from a bot, and only for the message that was
   pressed (its turn, channel and thread must match Agent Kourier's record of that post). A person has one vote on each
@@ -1335,7 +1335,7 @@ this with an outbox:
 | `outbox` | outbox ID | Intended Slack posts and their resulting message refs (8.6) |
 | `sessions` | conversation key | `contextId`, current task ID, binding, generic origin source and subject, agent at creation, last activity (expires at `threadTTL`; deleted 90 days later, with its replies, interactions, presses and outbox rows) |
 | `trigger_threads` | binding, key hash | The thread of each key of a Binding's chat triggers (8.2): its thread, when it opened, was last seen and closed, and when its cooldown ends. The key is stored only as a hash. Swept hourly |
-| `trigger_runs` | connection, channel, alert or mention ts (`session_thread_ts` holds the thread of a mention in one, since D49) | The starts of a Binding's chat triggers (8.2): one row for each alert message that started an investigation or that a limit stopped, with the window of the digest it belongs to. Kept 24 hours |
+| `trigger_runs` | connection, channel, alert or mention ts (`session_thread_ts` holds the session's thread on a mention's row and only there, since D49) | The starts of a Binding's chat triggers (8.2): one row for each alert message that started an investigation or that a limit stopped, with the window of the digest it belongs to. Kept 24 hours |
 | `interactions` | interaction ID | Kind, request, state, answer, decider, timestamps. The request is stored normalized (invisible characters deleted) and with the agent's secrets redacted (hint, question text, tool arguments), except a question's choices; request and answer are cleared 25 hours after the decision (7 days for an answer not yet delivered to the session). The row stays until its session is deleted (below). |
 | `reply_queue` | session, sequence | Thread replies waiting for the active task to finish. Text is cleared on delivery; a reply undelivered for 30 days whose session has no active task is dropped, text cleared. |
 | `feedback` | session, turn, Slack user | Verdict, kind (investigation or answer), alert name, agent, binding, timestamps. Kept (not deleted with its session) |
@@ -1770,4 +1770,5 @@ fixed prompt, and that the turn carries the thread (D49). The issue proposed an 
 | D36 | A bot's message also counts as a mention; the limits, not this row, stop two bots answering each other |
 | 8.2 trigger table and "how a bot message reaches the triggers" | A row for a bot's mention, and a paragraph on it; a bot's message event is never a mention |
 | Section 9, `trigger_runs` | The key may be a mention's ts, and `session_thread_ts` names its thread |
+| 8.2, what a mention's limits count, and 8.7 | A mention counts as running for its own turn alone; one that took no turn is forgotten; its turn is rated as an answer, not an investigation |
 | Section 10, bot message authenticity, and R2 | Name the mention path |

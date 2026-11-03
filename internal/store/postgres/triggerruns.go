@@ -16,12 +16,13 @@ const day = 24 * time.Hour
 
 // runningStartsQuery is the statement that counts the admitted starts of a trigger since a time whose investigation is
 // still going: its session has an active task, or it has a turn that is queued and not yet delivered, which is a start
-// that was taken and has not begun. A run counts once however many of its turns are queued.
+// that was taken and has not begun. A run counts once however many of its turns are queued. A bot's mention (a run with a
+// session_thread_ts) is running only while its own turn is: a later turn of its session, which a person may have asked for, is not its.
 func runningStartsQuery() string {
 	return `SELECT COUNT(*) FROM trigger_runs r
 	WHERE r.binding = $1 AND r.trigger_index = $2 AND r.limited = '' AND r.at > $3
-	AND (EXISTS (SELECT 1 FROM sessions s WHERE s.connection = r.connection AND s.channel = r.channel AND s.thread_ts = COALESCE(NULLIF(r.session_thread_ts, ''), r.thread_ts) AND s.task_id <> '')
-	  OR EXISTS (SELECT 1 FROM reply_queue q WHERE q.connection = r.connection AND q.channel = r.channel AND q.thread_ts = COALESCE(NULLIF(r.session_thread_ts, ''), r.thread_ts) AND ` + store.UndeliveredReplies("q").Text(Dialect{}) + `))`
+	AND (EXISTS (SELECT 1 FROM sessions s WHERE s.connection = r.connection AND s.channel = r.channel AND s.thread_ts = COALESCE(NULLIF(r.session_thread_ts, ''), r.thread_ts) AND s.task_id <> '' AND (r.session_thread_ts = '' OR s.turn_message_ts = r.thread_ts))
+	  OR EXISTS (SELECT 1 FROM reply_queue q WHERE q.connection = r.connection AND q.channel = r.channel AND q.thread_ts = COALESCE(NULLIF(r.session_thread_ts, ''), r.thread_ts) AND (r.session_thread_ts = '' OR q.message_ts = r.thread_ts) AND ` + store.UndeliveredReplies("q").Text(Dialect{}) + `))`
 }
 
 // startsSince counts the admitted starts of a trigger after a time. Its arguments are the Binding, the trigger and the time.
@@ -162,6 +163,14 @@ func (s *adapter) ListTriggerDigests(ctx context.Context, now time.Time) ([]stor
 		return nil, fmt.Errorf("list trigger digests: %w", err)
 	}
 	return out, nil
+}
+
+// ForgetTriggerRun implements store.TriggerRuns.
+func (s *adapter) ForgetTriggerRun(ctx context.Context, key store.ConversationKey) error {
+	if _, err := s.exec(ctx, `DELETE FROM trigger_runs WHERE connection = $1 AND channel = $2 AND thread_ts = $3 AND limited = ''`, key.Connection, key.Channel, key.Thread); err != nil {
+		return fmt.Errorf("forget the trigger run of %s: %w", key.Thread, err)
+	}
+	return nil
 }
 
 // MarkTriggerDigested implements store.TriggerRuns.

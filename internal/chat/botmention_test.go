@@ -79,6 +79,24 @@ func TestABotsMentionStartsOneTurnInItsThread(t *testing.T) {
 	}
 }
 
+// A mention whose session takes no turn gives its place in the limits back: three of them in a dead thread leave the rate limit
+// free for a mention in a live one. A refused prompt keeps its place (TestARefusedStartCountsAgainstTheLimits).
+func TestAMentionThatTookNoTurnDoesNotUseTheLimits(t *testing.T) {
+	h := newLimited(t)
+	h.hookErr = fmt.Errorf("bot mention: %w", chat.ErrNoTurnTaken)
+	for i := range 5 {
+		if err := h.in.Message(h.ctx, botMentionOf(fmt.Sprintf("5.%d", i+1), "4.4")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := h.got(); len(got) != 5 {
+		t.Errorf("OnStart was asked %d times; want all 5, none of them limited", len(got))
+	}
+	if ds := h.digests(t); len(ds) != 0 {
+		t.Errorf("digests = %+v; want none", ds)
+	}
+}
+
 // A mention from a bot the Binding does not take starts nothing, whatever the adapter let through.
 func TestTheIntakeAsksAgainWhetherItTakesTheMention(t *testing.T) {
 	h := newLimited(t, v1alpha1.Trigger{Type: v1alpha1.TriggerMention})

@@ -23,7 +23,7 @@ import (
 const botMessageSource = string(v1alpha1.TriggerBotMessage)
 
 // botMentionSource is the source a bot's mention reports. It is no alert, so feedback attributes no alert to it.
-const botMentionSource = "botMention"
+const botMentionSource = store.OriginBotMention
 
 // triggerAuditor is what the starter needs of the audit log: *audit.Writer.
 type triggerAuditor interface {
@@ -100,7 +100,7 @@ func newTriggerStarter(cfg triggerStarterConfig) (*triggerStarter, error) {
 //
 // A bot's mention (m.Mention) is a turn of the thread the mention is in, whose session may exist already, and it carries that
 // thread. A session past its threadTTL or whose Binding left the config takes no turn, and that will not pass, so it is
-// ErrNotStarted with no note: the bot asked, and a note answers no one.
+// ErrNoTurnTaken with no note: the bot asked, and a note answers no one.
 func (s *triggerStarter) OnStart(ctx context.Context, m chat.TriggerMatch) error {
 	at := m.Message.At
 	source := botMessageSource
@@ -135,7 +135,7 @@ func (s *triggerStarter) OnStart(ctx context.Context, m chat.TriggerMatch) error
 		return fmt.Errorf("start the investigation of %s: %w", id, err)
 	case m.Mention && !res.Admission.Queues():
 		s.log.InfoContext(ctx, "chat: a bot's mention took no turn; the thread cannot be continued", "binding", m.Binding, "channel", at.Channel, "message", at.ID, "disposition", res.Disposition)
-		return fmt.Errorf("bot mention of %s: %w", id, chat.ErrNotStarted)
+		return fmt.Errorf("bot mention of %s: %w", id, chat.ErrNoTurnTaken)
 	case res.Disposition != session.Created && res.Disposition != session.Accepted:
 		return fmt.Errorf("start the investigation of %s: the session manager did not take it (%s)", id, res.Disposition)
 	}

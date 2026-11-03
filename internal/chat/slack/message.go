@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 
+	slackgo "github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 )
 
@@ -112,8 +113,8 @@ const (
 //     content, for Run to ask the Sink whether a trigger names the bot. A message of Agent Kourier's own, by user ID
 //     or by bot ID, is never forwarded (ownPost): two bots would answer each other without end. A bot's message
 //     of another subtype and one with no content are dropped.
-//   - A bot's mention is its app_mention, which is Mentioned, with only the bot's ID and the message's text: Slack sends it
-//     where a mention registers, whether the token is in the text or only in the blocks, so it is what says so
+//   - A bot's mention is its app_mention, which is Mentioned, with what the post holds (mentionPost): Slack sends it where a
+//     mention registers, whether the token is in the text or only in the blocks, so it is what says so
 //     (docs/spikes/slack-mention-probe.md). It is forwarded for Run to ask the Sink, and Agent Kourier's own is an ownPost. Its
 //     message event is the bot's message above, and never Mentioned.
 //   - Edits, deletions and other subtypes, whoever they are of, are dropped: a bot's edit is no new alert.
@@ -126,7 +127,7 @@ func decode(me self, inner any) (Message, verdict) {
 			return Message{}, dropped
 		}
 		if e.BotID != "" {
-			m := Message{Channel: e.Channel, TS: e.TimeStamp, ThreadTS: e.ThreadTimeStamp, User: e.User, Text: e.Text, Mentioned: true, Bot: BotPost{ID: e.BotID}}
+			m := Message{Channel: e.Channel, TS: e.TimeStamp, ThreadTS: e.ThreadTimeStamp, User: e.User, Text: e.Text, Mentioned: true, Bot: mentionPost(e)}
 			if (me.user != "" && e.User == me.user) || (me.bot != "" && e.BotID == me.bot) {
 				return m, ownPost
 			}
@@ -182,11 +183,57 @@ func (me self) mentionedIn(text string) bool {
 // botPost flattens e's first legacy attachment into the fields a trigger reads. A message with no
 // attachment, as an app's own post is, has only its bot ID, and its text is the message's.
 func botPost(e *slackevents.MessageEvent) BotPost {
-	b := BotPost{ID: e.BotID}
-	if e.Message == nil || len(e.Message.Attachments) == 0 {
+	if e.Message == nil {
+		return BotPost{ID: e.BotID}
+	}
+	return postOf(e.BotID, e.Message.Attachments)
+}
+
+// postOf is the BotPost of a bot's message with these attachments: the first's fields.
+func postOf(id string, attachments []slackgo.Attachment) BotPost {
+	b := BotPost{ID: id}
+	if len(attachments) == 0 {
 		return b
 	}
-	a := e.Message.Attachments[0]
+	a := attachments[0]
 	b.Title, b.TitleLink, b.Fallback, b.Footer, b.Text = a.Title, a.TitleLink, a.Fallback, a.Footer, a.Text
 	return b
+}
+
+// mentionPost is the BotPost of a bot's app_mention. A mention can register with the token only in a section or a context block
+// and with top-level text that is a mere fallback, so when the attachment has no text of its own, the words of those blocks are
+// the post's body: no trigger's regex reads a mention, so this changes what no bot message trigger matches.
+func mentionPost(e *slackevents.AppMentionEvent) BotPost {
+	b := postOf(e.BotID, e.Attachments)
+	if b.Text == "" {
+		b.Text = blockWords(e.Blocks)
+	}
+	return b
+}
+
+// blockWords is the text of a post's section and context blocks, a line for each piece. A rich_text or a markdown block is left
+// out: with one in a post the mention comes from top-level text, which the message has already.
+func blockWords(blocks slackgo.Blocks) string {
+	var lines []string
+	add := func(t *slackgo.TextBlockObject) {
+		if t != nil && t.Text != "" {
+			lines = append(lines, t.Text)
+		}
+	}
+	for _, block := range blocks.BlockSet {
+		switch b := block.(type) {
+		case *slackgo.SectionBlock:
+			add(b.Text)
+			for _, f := range b.Fields {
+				add(f)
+			}
+		case *slackgo.ContextBlock:
+			for _, el := range b.ContextElements.Elements {
+				if t, ok := el.(*slackgo.TextBlockObject); ok {
+					add(t)
+				}
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
 }

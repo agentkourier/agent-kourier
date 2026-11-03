@@ -5,6 +5,10 @@ import (
 	"time"
 )
 
+// SystemUser is the user a turn is filed under when nobody wrote it (an alert's first prompt, a bot's mention). The value is
+// stored (reply_queue.user_id, sessions.turn_user), so a change of it needs a migration that rewrites those columns.
+const SystemUser = "agent-kourier:system"
+
 // Reply is a thread reply waiting for its session's active task to finish
 // (spec 8.2, D21).
 type Reply struct {

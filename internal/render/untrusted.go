@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
 	"strings"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
@@ -119,6 +120,9 @@ type oldestPolicy struct {
 	Noun leftOutNoun
 	// MaxItems caps how many items the block shows; 0 means no cap.
 	MaxItems int
+	// Pinned is how many of the first items stay whatever else is left out, and count towards MaxItems: what opened a thread
+	// says what the rest are about, and it is the oldest of them. The last line counts what lies between them and what is shown.
+	Pinned int
 	// Dropped is how many items the caller left out before the block, older than the first of Items; they are counted in
 	// the last line.
 	Dropped int
@@ -388,9 +392,14 @@ func (b untrustedBlock) render() (section string, leftOut int) {
 			r, _ := it.render(math.MaxInt / 4) // an item is bounded by its caps alone
 			all = append(all, r)
 		}
-		first := 0 // the older ones are cut by count
+		pinned := min(max(o.Pinned, 0), len(all))
+		room := b.MaxUnits - frame
+		for _, r := range all[:pinned] {
+			room -= chat.Units(r.text)
+		}
+		first := pinned // the older ones are cut by count
 		if o.MaxItems > 0 {
-			first = max(len(all)-o.MaxItems, 0)
+			first = max(len(all)-o.MaxItems+pinned, pinned)
 		}
 		// keep returns where the newest items that fit in room begin, never before first.
 		keep := func(room int) int {
@@ -401,12 +410,12 @@ func (b untrustedBlock) render() (section string, leftOut int) {
 			}
 			return i
 		}
-		start := keep(b.MaxUnits - frame)
-		if dropped+start > 0 { // the last line is there: its room is taken, for the most that it can count
-			start = keep(b.MaxUnits - frame - chat.Units(o.Noun.line(dropped+len(all))+"\n"))
+		start := keep(room)
+		if dropped+start-pinned > 0 { // the last line is there: its room is taken, for the most that it can count
+			start = keep(room - chat.Units(o.Noun.line(dropped+len(all))+"\n"))
 		}
-		shown = all[start:]
-		leftOut = dropped + start
+		shown = slices.Concat(all[:pinned], all[start:])
+		leftOut = dropped + start - pinned
 		if leftOut > 0 {
 			last = o.Noun.line(leftOut) + "\n"
 		}

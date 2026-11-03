@@ -89,7 +89,7 @@ already holds the channel.
   [Investigate Alertmanager alerts](investigate-alertmanager-alerts.md) for a worked trigger, or
   [Start investigations from any bot's messages](any-bot-trigger.md) for another tool's bot.
 - **Keep threads around for less than 90 days:** set `session.threadTTL`, for example `720h`.
-- **Rating buttons on answers:** set `feedback.enabled: true`. Investigations that a trigger started always carry them.
+- **Rating buttons on answers:** set `feedback.enabled: true`. Investigations that a trigger started always carry them. A turn that another bot's mention started counts as an answer.
 - **Choose what a live reply shows while the agent works:** set `chat.progress` to `steps`, `steps-and-activity` (the
   default) or `activity`. The default adds a `Working…` card when 3 seconds pass with nothing new; `activity` shows one
   card (a line in an alert thread) that counts the steps and names no tool; `steps` is the cards and lines alone. See
