@@ -195,5 +195,7 @@ first turn names no person; it is filed under the system user. See [Chat trigger
 ## Another agent's mention
 
 Another bot's mention is a turn of the thread it is in, filed under the system user too. It can start a session in a thread Agent Kourier does not
-own, or continue one it does, and it carries what the thread holds, because the post that mentions says nothing of what was asked. See
+own, or continue one it does, and it carries what the thread holds, because the post that mentions says nothing of what was asked. A session it
+starts takes a person's reply only if it mentions Agent Kourier, whatever `chat.threadReplies` says: the thread was people's before another agent
+named this one in it. A thread Agent Kourier already owned keeps its Binding's rule. See
 [A bot's mention](../reference/chat-triggers.md#a-bots-mention).

@@ -227,11 +227,6 @@ func (f *fakeAdapter) MarkReplyDelivered(_ context.Context, _ string, _ time.Tim
 	return f.err
 }
 
-func (f *fakeAdapter) ForgetTriggerRun(_ context.Context, _ store.ConversationKey) error {
-	f.record("ForgetTriggerRun")
-	return f.err
-}
-
 func (f *fakeAdapter) MarkTriggerDigested(_ context.Context, _ string, _ int, _ time.Time) error {
 	f.record("MarkTriggerDigested")
 	return f.err

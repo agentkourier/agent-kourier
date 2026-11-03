@@ -391,3 +391,20 @@ func TestThreadBetweenSendsNoBoundForAnEmptyOne(t *testing.T) {
 		t.Errorf("read asked for %v; want no oldest, no latest and inclusive 0", f)
 	}
 }
+
+// The read from a thread's start is one read, and it leads with what opened the thread, which the limit neither counts nor cuts.
+func TestThreadFromStartLeadsWithTheParentInOneRead(t *testing.T) {
+	th := newThread(t)
+	r := th.reply(3)
+	before := th.count.calls("conversations.replies")
+	got, dropped, err := th.c.ThreadFromStart(t.Context(), threadConn, "C1", th.root, r[2], 1)
+	if want := []string{th.root, r[1]}; err != nil || dropped != 1 || !slices.Equal(tsOf(got), want) {
+		t.Fatalf("ThreadFromStart = %v, %d, %v; want %v and 1 left out", tsOf(got), dropped, err, want)
+	}
+	if !got[0].Own {
+		t.Errorf("the parent = %+v; want it decoded as any message of the thread, here Agent Kourier's own", got[0])
+	}
+	if n := th.count.calls("conversations.replies") - before; n != 2 { // pages of 2: the parent and a reply, then the next reply
+		t.Errorf("%d pages; want the window's 2 and no read of the parent alone", n)
+	}
+}

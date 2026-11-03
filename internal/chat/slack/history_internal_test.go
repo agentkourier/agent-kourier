@@ -60,3 +60,38 @@ func inboundEqual(a, b chat.Inbound) bool {
 	}
 	return ab == nil || *ab == *bb
 }
+
+// A bot's post in a thread says what its blocks say when its attachment says nothing, and a post it has already said that in, in its
+// text or its attachment, is as it was. What decodes a channel's history for a trigger reads no blocks.
+func TestThreadMessageReadsTheBlocksOfABotsPost(t *testing.T) {
+	me := self{user: "UME", bot: "BME"}
+	section := slackgo.Blocks{BlockSet: []slackgo.Block{slackgo.NewSectionBlock(slackgo.NewTextBlockObject("mrkdwn", "p99 is high", false, false), nil, nil)}}
+	post := func(text string, a []slackgo.Attachment) slackgo.Message {
+		return slackgo.Message{Msg: slackgo.Msg{BotID: "B1", SubType: "bot_message", Timestamp: "1.2", Text: text, Attachments: a, Blocks: section}}
+	}
+	for _, tc := range []struct {
+		name string
+		msg  slackgo.Message
+		want string
+	}{
+		{"blocks alone", post("", nil), "p99 is high"},
+		{"blocks and a fallback", post("an alert fired", nil), "p99 is high"},
+		{"blocks that repeat the text", post("p99 is high", nil), ""},
+		{"an attachment that says something", post("", []slackgo.Attachment{{Text: "t"}}), "t"},
+		{"an attachment that says nothing", post("", []slackgo.Attachment{{Title: "FIRING"}}), "p99 is high"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := threadMessage(me, "ns/c", "C1", tc.msg)
+			if got.Ignored || got.Message.Bot == nil || got.Message.Bot.Body != tc.want {
+				t.Errorf("message = %+v (bot %+v); want a body of %q", got.Message, got.Message.Bot, tc.want)
+			}
+			if h := historyMessage(me, "ns/c", "C1", tc.msg); h.Message.Bot != nil && h.Message.Bot.Body == "p99 is high" {
+				t.Errorf("the history read the blocks: %+v", h.Message.Bot)
+			}
+		})
+	}
+	person := slackgo.Message{Msg: slackgo.Msg{User: "U1", Text: "hi", Timestamp: "1.3", Blocks: section}}
+	if got := threadMessage(me, "ns/c", "C1", person); got.Message.Text != "hi" || got.Message.Bot != nil {
+		t.Errorf("a person's message = %+v; want its text", got.Message)
+	}
+}

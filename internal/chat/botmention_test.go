@@ -2,6 +2,7 @@ package chat_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -79,23 +80,56 @@ func TestABotsMentionStartsOneTurnInItsThread(t *testing.T) {
 	}
 }
 
-// A mention whose session takes no turn gives its place in the limits back: three of them in a dead thread leave the rate limit
-// free for a mention in a live one. A refused prompt keeps its place (TestARefusedStartCountsAgainstTheLimits).
-func TestAMentionThatTookNoTurnDoesNotUseTheLimits(t *testing.T) {
+// A mention whose session takes no turn is decided before the limits: three in a dead thread use up nothing, and with the limits full
+// one is not reported as stopped, in the audit log or in a digest, for it could never have started. A mention in a live thread is
+// not affected.
+func TestAMentionWhoseSessionTakesNoTurnTouchesNoLimit(t *testing.T) {
 	h := newLimited(t)
-	h.hookErr = fmt.Errorf("bot mention: %w", chat.ErrNoTurnTaken)
+	var stopped []store.TriggerLimit
+	h.cfg.OnMentionLimited = func(_ context.Context, _ chat.TriggerMatch, l store.TriggerLimit) { stopped = append(stopped, l) }
+	var asked []string
+	h.cfg.TakesBotMention = func(_ context.Context, m chat.TriggerMatch) (bool, error) {
+		asked = append(asked, m.Message.At.Thread)
+		return m.Message.At.Thread != "4.4", nil // 4.4 is the dead one
+	}
+	h.in = chat.NewIntake(h.cfg)
 	for i := range 5 {
 		if err := h.in.Message(h.ctx, botMentionOf(fmt.Sprintf("5.%d", i+1), "4.4")); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if got := h.got(); len(got) != 5 {
-		t.Errorf("OnStart was asked %d times; want all 5, none of them limited", len(got))
+	if got := h.got(); len(got) != 0 {
+		t.Errorf("OnStart was asked %d times for a dead thread; want none", len(got))
 	}
+	if len(asked) != 5 || asked[0] != "4.4" {
+		t.Errorf("asked about %q; want the five mentions' thread", asked)
+	}
+	for i := range 3 { // the limits are all still there for a live thread
+		if err := h.in.Message(h.ctx, botMentionOf(fmt.Sprintf("6.%d", i+1), "7.7")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := h.got(); len(got) != 3 {
+		t.Errorf("OnStart was asked %d times for a live thread; want the 3 of the rate limit", len(got))
+	}
+	if err := h.in.Message(h.ctx, botMentionOf("5.9", "4.4")); err != nil { // the limits are full now
+		t.Fatal(err)
+	}
+	if len(stopped) != 0 {
+		t.Errorf("stopped = %v; a mention that could not start is not one a limit stopped", stopped)
+	}
+	h.clk.advance(time.Hour)
 	if ds := h.digests(t); len(ds) != 0 {
 		t.Errorf("digests = %+v; want none", ds)
 	}
+	h.cfg.TakesBotMention = func(context.Context, chat.TriggerMatch) (bool, error) { return false, errBoomTakes }
+	h.in = chat.NewIntake(h.cfg)
+	if err := h.in.Message(h.ctx, botMentionOf("8.1", "4.4")); !errors.Is(err, errBoomTakes) {
+		t.Errorf("a store that cannot say = %v; want the event's error, so that it is delivered again", err)
+	}
 }
+
+var errBoomTakes = errors.New("store unavailable")
 
 // A mention from a bot the Binding does not take starts nothing, whatever the adapter let through.
 func TestTheIntakeAsksAgainWhetherItTakesTheMention(t *testing.T) {

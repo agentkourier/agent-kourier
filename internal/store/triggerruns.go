@@ -39,7 +39,7 @@ type TriggerRun struct {
 	Key ConversationKey
 	// SessionThread is the thread of the session that a bot's mention is a turn of, whether or not the mention opened it. Empty
 	// means Key.Thread and a start that owns its session. Rate and daily count messages by Key; concurrency finds the session by
-	// this, and counts a mention only while its own turn is queued or is the session's task.
+	// this, and counts a mention only while its own turn is queued or began the session's task (TaskTurn.Mention).
 	SessionThread string
 	// At is when the start was decided. The windows of the limits end here.
 	At time.Time
@@ -91,11 +91,8 @@ type TriggerRuns interface {
 	// The limits count the starts of the Binding's trigger. Rate and daily count the starts in the window before
 	// run.At: they slide. Concurrent counts the admitted starts whose session has an active task or an undelivered
 	// turn, which is how a start that was queued and has not begun is a running investigation too. A run with a
-	// SessionThread counts only for its own turn (TriggerRun.SessionThread).
+	// SessionThread counts only for its own turn, and one without counts for none of a mention's (TriggerRun.SessionThread).
 	AdmitTriggerRun(ctx context.Context, run TriggerRun, limits TriggerRunLimits) (TriggerAdmission, error)
-	// ForgetTriggerRun deletes the admitted start of the message key, which gives its place in the limits back: the start took no
-	// turn and will not. A stopped start stays for its digest. It does nothing for a message with no admitted start.
-	ForgetTriggerRun(ctx context.Context, key ConversationKey) error
 	// ListTriggerDigests returns the windows of stopped starts that ended at or before now and have not been
 	// digested, oldest first, with their counts by limit.
 	ListTriggerDigests(ctx context.Context, now time.Time) ([]TriggerDigest, error)

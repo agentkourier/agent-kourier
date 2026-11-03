@@ -240,9 +240,9 @@ func (p *recordingPlatform) ThreadBetween(context.Context, chat.Target, string, 
 	p.note("ThreadBetween")
 	return nil, 0, nil
 }
-func (p *recordingPlatform) ThreadRoot(context.Context, chat.Target) (chat.HistoryMessage, error) {
-	p.note("ThreadRoot")
-	return chat.HistoryMessage{}, nil
+func (p *recordingPlatform) ThreadFromStart(context.Context, chat.Target, string, int) ([]chat.HistoryMessage, int, error) {
+	p.note("ThreadFromStart")
+	return nil, 0, nil
 }
 func (p *recordingPlatform) MarkBusy(context.Context, chat.Target, bool) error {
 	p.note("MarkBusy")
@@ -268,7 +268,7 @@ func (s *recordingStream) Stop(context.Context, string, chat.Message, string) er
 var (
 	chatPlatformWrites = map[string]bool{"Post": true, "Update": true, "Stream": true, "Ephemeral": true, "React": true, "Unreact": true, "MarkBusy": true}
 	chatPlatformReads  = map[string]bool{"Run": true, "Find": true, "RefAt": true, "StreamAt": true, "IsMember": true, "IsInAnyGroup": true, "ChannelAccess": true, "IsBot": true,
-		"ResolveUser": true, "Fits": true, "Classify": true, "Capabilities": true, "Permalink": true, "ThreadBetween": true, "ThreadRoot": true}
+		"ResolveUser": true, "Fits": true, "Classify": true, "Capabilities": true, "Permalink": true, "ThreadBetween": true, "ThreadFromStart": true}
 	chatStreamWrites = map[string]bool{"Append": true, "Step": true, "Stop": true}
 	chatStreamReads  = map[string]bool{"Ref": true}
 )

@@ -191,7 +191,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	// mention takes. The threads of the keys are in the store; the permalink comes from what the platform learned when it
 	// connected, since the start runs on the acknowledgement path and may call neither Slack nor the agent.
 	starter, err := newTriggerStarter(triggerStarterConfig{
-		Conn: connName, Submit: mgr, Notice: sink.QueueNotice, Audit: auditor, Link: platform.Permalink, Log: log,
+		Conn: connName, Submit: mgr, Takes: mgr.Takes, Notice: sink.QueueNotice, Audit: auditor, Link: platform.Permalink, Log: log,
 	})
 	if err != nil {
 		return nil, err

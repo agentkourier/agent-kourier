@@ -70,6 +70,11 @@ type IntakeConfig struct {
 	// OnMentionLimited, if set, is told of a bot's mention that a limit stopped, for the audit log. It is a record of
 	// something decided, so it returns nothing, and it does local writes only.
 	OnMentionLimited func(ctx context.Context, m TriggerMatch, limit store.TriggerLimit)
+	// TakesBotMention, if set, says whether the session would take a bot's mention as a turn now, reading only. It is asked before
+	// the mention meets the limits: a mention that a session past its threadTTL, or whose Binding left the config, will not take
+	// posts nothing and queues nothing, so it is not_started, with no count against the limits and no report that they stopped
+	// it. Its error is the event's: the platform delivers it again.
+	TakesBotMention func(ctx context.Context, m TriggerMatch) (bool, error)
 	// TurnQueued, if set, says whether the turn with this ID (the MessageID of the message that started it) was
 	// durably taken: queued or already sent. It closes the window between OnStart queueing a turn and the
 	// thread being marked started (a failed write, a crash, an event Slack never delivered again): a later fire
@@ -314,7 +319,12 @@ func (in *Intake) AcceptsBot(channel, botID string) bool {
 	if !ok {
 		return false
 	}
-	return slices.ContainsFunc(rb.Binding.Spec.Chat.Triggers, func(t v1alpha1.Trigger) bool {
+	return botMessageTriggerNames(rb.Binding.Spec.Chat.Triggers, botID)
+}
+
+// botMessageTriggerNames says whether a botMessage trigger of triggers names the bot botID.
+func botMessageTriggerNames(triggers []v1alpha1.Trigger, botID string) bool {
+	return slices.ContainsFunc(triggers, func(t v1alpha1.Trigger) bool {
 		return t.Type == v1alpha1.TriggerBotMessage && t.From != nil && t.From.ID == botID
 	})
 }

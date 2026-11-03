@@ -208,8 +208,8 @@ func (p fencedPlatform) Unreact(ctx context.Context, r chat.Ref, name string) er
 	return p.Platform.Unreact(ctx, r, name)
 }
 
-// MarkBusy marks a thread, a write to the chat, so it is checked. Permalink and ThreadBetween build a link and read a
-// thread, which change nothing, so they pass through unchecked.
+// MarkBusy marks a thread, a write to the chat, so it is checked. Permalink, ThreadBetween and ThreadFromStart build a link and
+// read a thread, which change nothing, so they pass through unchecked.
 func (p fencedPlatform) MarkBusy(ctx context.Context, t chat.Target, busy bool) error {
 	if err := p.fence.allow("MarkBusy"); err != nil {
 		return err

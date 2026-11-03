@@ -64,11 +64,6 @@ const (
 // logs its own reason. Any other error of OnStart is transient: it is returned, and the redelivery asks again.
 var ErrNotStarted = errors.New("chat: the trigger's turn was not started")
 
-// ErrNoTurnTaken is ErrNotStarted for a bot's mention whose session takes no turn: its thread is past its threadTTL, or its
-// Binding left the config. It posted nothing and queued nothing, so, unlike a refused prompt's note, there is nothing for the
-// limits to hold back, and the Intake gives its place in them back: it must not stop a mention in a thread that is alive.
-var ErrNoTurnTaken = fmt.Errorf("the session takes no turn: %w", ErrNotStarted)
-
 // reservationGrace is how long a thread that reserved its key, and whose turn has not started, is left to start
 // before a later message of the key may take the key over. A turn that is starting takes milliseconds, and a
 // failed one is asked for again by its redelivery within seconds, so a minute tells the two apart.
@@ -255,12 +250,6 @@ func (in *Intake) unthreaded(ctx context.Context, m TriggerMatch, closing bool) 
 		return out, nil
 	}
 	err := in.start(ctx, m)
-	if errors.Is(err, ErrNoTurnTaken) {
-		if ferr := in.forget(ctx, m); ferr != nil {
-			out.decision = ""
-			return out, ferr
-		}
-	}
 	if errors.Is(err, ErrNotStarted) {
 		out.decision, err = DecisionNotStarted, nil
 	}

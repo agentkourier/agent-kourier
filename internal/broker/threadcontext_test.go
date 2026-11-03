@@ -84,8 +84,8 @@ func (noReads) ThreadBetween(context.Context, chat.Target, string, string, int) 
 	return nil, 0, chat.ErrNoThreadReads
 }
 
-func (noReads) ThreadRoot(context.Context, chat.Target) (chat.HistoryMessage, error) {
-	return chat.HistoryMessage{}, chat.ErrNoThreadReads
+func (noReads) ThreadFromStart(context.Context, chat.Target, string, int) ([]chat.HistoryMessage, int, error) {
+	return nil, 0, chat.ErrNoThreadReads
 }
 
 // turnSet is a reply queue that knows which messages were turns. It counts the lookups: eligible asks once for the whole
@@ -822,23 +822,24 @@ func TestThreadContextLimits(t *testing.T) {
 	}
 }
 
-// rootedReader is a windowReader that also knows what opened the thread.
+// rootedReader is a windowReader that also knows what opened the thread, and reads it with the window, in one call.
 type rootedReader struct {
 	*windowReader
-	root   chat.HistoryMessage
-	err    error
-	script []error // what each read of the root says first, then err
-	read   int
+	root chat.HistoryMessage
 }
 
-func (r *rootedReader) ThreadRoot(context.Context, chat.Target) (chat.HistoryMessage, error) {
-	r.read++
-	if len(r.script) > 0 {
-		err := r.script[0]
-		r.script = r.script[1:]
-		return r.root, err
+func (r *rootedReader) ThreadFromStart(ctx context.Context, t chat.Target, before string, limit int) ([]chat.HistoryMessage, int, error) {
+	msgs, dropped, err := r.ThreadBetween(ctx, t, "", before, limit)
+	if err != nil {
+		return nil, 0, err
 	}
-	return r.root, r.err
+	return append([]chat.HistoryMessage{r.root}, msgs...), dropped, nil
+}
+
+// opener is m as the message that opened the thread.
+func opener(m chat.HistoryMessage) chat.HistoryMessage {
+	m.Message.At.ID = tcThread
+	return m
 }
 
 // botPost is a message of the thread by a bot, with a user or, as a webhook's, without one.
@@ -914,7 +915,7 @@ func TestThreadContextOfAWholeThreadKeepsItsRootInALongThread(t *testing.T) {
 	for i := range 60 {
 		w.win.window = append(w.win.window, msg(i+2, "U1", fmt.Sprintf("message-%02d", i)))
 	}
-	r := &rootedReader{windowReader: w.win, root: botPost(1, "", chat.BotMessage{ID: "B0ALERTS", Title: "FIRING - Latency"}, "")}
+	r := &rootedReader{windowReader: w.win, root: opener(botPost(1, "", chat.BotMessage{ID: "B0ALERTS", Title: "FIRING - Latency"}, ""))}
 
 	got := w.build(r).Section(w.ctx, tcKey, tcBinding, "", "100.000900", true)
 
@@ -931,46 +932,47 @@ func TestThreadContextOfAWholeThreadKeepsItsRootInALongThread(t *testing.T) {
 	// A root that is no longer shown because it was a turn pins nothing: the oldest message shown may be cut like any other.
 	w = newTCWorld(t)
 	w.win.window = append(w.win.window, msg(2, "U1", "a reply"))
-	root := msg(1, "U2", "the root, which was a turn")
+	root := opener(msg(1, "U2", "the root, which was a turn"))
 	w.turns.ids[idOf(root)] = true
 	if got := w.build(&rootedReader{windowReader: w.win, root: root}).Section(w.ctx, tcKey, tcBinding, "", "100.000900", true); strings.Contains(got, "the root") || !strings.Contains(got, "a reply") {
 		t.Errorf("a root that was a turn is shown:\n%s", got)
 	}
 }
 
-// The read of the root waits out a short rate limit, as the read of the window does, so the window it has read is not lost.
-func TestThreadContextWaitsOutARateLimitOnTheRoot(t *testing.T) {
+// The read from the thread's start waits out a short rate limit, as any read of it does.
+func TestThreadContextWaitsOutARateLimitOnTheWholeThread(t *testing.T) {
 	limited := &chattest.FakeError{Verdict: chat.Verdict{Class: chat.Transient, RetryAfter: 2 * time.Second}, Msg: "rate limited"}
 	w := newTCWorld(t)
 	w.win.window = []chat.HistoryMessage{msg(3, "U1", "go on")}
-	r := &rootedReader{windowReader: w.win, root: msg(1, "U2", "what opened it"), script: []error{limited}}
+	w.win.script = []error{limited}
+	r := &rootedReader{windowReader: w.win, root: msg(1, "U2", "what opened it")}
 
 	got := w.build(r).Section(w.ctx, tcKey, tcBinding, "", "100.000900", true)
 
-	if !strings.Contains(got, "what opened it") || !strings.Contains(got, "go on") || r.read != 2 {
-		t.Errorf("%d reads of the root, section:\n%s", r.read, got)
+	if !strings.Contains(got, "what opened it") || !strings.Contains(got, "go on") {
+		t.Errorf("section:\n%s", got)
 	}
-	if fmt.Sprint(w.waited()) != fmt.Sprint([]time.Duration{2 * time.Second}) || len(w.win.reads()) != 1 {
-		t.Errorf("waited %v with %d reads of the window; want one wait of 2s and one read", w.waited(), len(w.win.reads()))
+	if fmt.Sprint(w.waited()) != fmt.Sprint([]time.Duration{2 * time.Second}) || len(w.win.reads()) != 2 {
+		t.Errorf("waited %v with %d reads; want one wait of 2s and two reads", w.waited(), len(w.win.reads()))
 	}
 }
 
 // A later turn has seen the thread's start: it reads from the previous turn and leaves the root alone. A mention that opens its own
-// thread has nothing before it and reads nothing. A root that cannot be read costs the turn the block, and it says so.
+// thread has nothing before it and reads nothing. A thread that cannot be read costs the turn the block, and it says so.
 func TestThreadContextOfAWholeThreadReadsOnlyWhatItNeeds(t *testing.T) {
 	w := newTCWorld(t)
 	w.win.window = []chat.HistoryMessage{msg(3, "U1", "go on")}
 	r := &rootedReader{windowReader: w.win, root: msg(1, "U2", "what opened it")}
 	tc := w.build(r)
-	if got := tc.Section(w.ctx, tcKey, tcBinding, "100.000100", "100.000900", true); !strings.Contains(got, "go on") || strings.Contains(got, "what opened it") || r.read != 0 {
-		t.Errorf("a later turn: root reads %d, section:\n%s", r.read, got)
+	if got := tc.Section(w.ctx, tcKey, tcBinding, "100.000100", "100.000900", true); !strings.Contains(got, "go on") || strings.Contains(got, "what opened it") {
+		t.Errorf("a later turn: section:\n%s", got)
 	}
 	reads := len(w.win.reads())
 	if got := tc.Section(w.ctx, tcKey, tcBinding, "", tcThread, true); got != "" || len(w.win.reads()) != reads {
 		t.Errorf("a mention that opens its thread = %q, %d reads; want nothing and no read", got, len(w.win.reads())-reads)
 	}
-	r.err = errors.New("TOPSECRET no such thread")
+	w.win.script = []error{errors.New("TOPSECRET no such thread")}
 	if got := tc.Section(w.ctx, tcKey, tcBinding, "", "100.000900", true); got != threadReadFailed {
-		t.Errorf("a root that cannot be read = %q; want the fixed line", got)
+		t.Errorf("a thread that cannot be read = %q; want the fixed line", got)
 	}
 }

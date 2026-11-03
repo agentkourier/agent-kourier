@@ -720,6 +720,14 @@ func TestThreadMessagesKeepsWhatIsPinned(t *testing.T) {
 			t.Errorf("left %d of:\n%s", left, got)
 		}
 	})
+	t.Run("a pinned message that cleans to nothing pins no other", func(t *testing.T) {
+		in := entries(MaxThreadReplies+1, 1)
+		in[0].Text = "\u200b"
+		got, left := ThreadMessagesCounted(in, 1, 0)
+		if left != 1 || strings.Contains(got, "m000 ") || !strings.Contains(got, "m001 ") {
+			t.Errorf("left %d of:\n%s", left, got)
+		}
+	})
 	t.Run("more pinned than there are", func(t *testing.T) {
 		if got, left := ThreadMessagesCounted([]ThreadReply{{UserID: "U1", Text: "only"}}, 3, 0); left != 0 || !strings.Contains(got, "only") {
 			t.Errorf("left %d of:\n%s", left, got)

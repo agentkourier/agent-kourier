@@ -107,9 +107,9 @@ func (idleSlack) ThreadBetween(context.Context, string, string, string, string, 
 	return nil, 0, chat.ErrNoThreadReads
 }
 
-// ThreadRoot says the idle Slack reads no thread.
-func (idleSlack) ThreadRoot(context.Context, string, string, string) (chat.HistoryMessage, error) {
-	return chat.HistoryMessage{}, chat.ErrNoThreadReads
+// ThreadFromStart says the idle Slack reads no thread.
+func (idleSlack) ThreadFromStart(context.Context, string, string, string, string, int) ([]chat.HistoryMessage, int, error) {
+	return nil, 0, chat.ErrNoThreadReads
 }
 
 // WorkspaceURL is "", the address of a Slack that never connected, so the Platform makes no permalinks.

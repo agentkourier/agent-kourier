@@ -54,18 +54,6 @@ func (in *Intake) admit(ctx context.Context, m TriggerMatch) (store.TriggerLimit
 	return adm.Limit, nil
 }
 
-// forget gives a start's place in the limits back: it took no turn, and posted nothing that a storm of them could multiply.
-func (in *Intake) forget(ctx context.Context, m TriggerMatch) error {
-	if in.cfg.TriggerRuns == nil {
-		return nil
-	}
-	key := store.ConversationKey{Connection: in.conn, Channel: m.Message.At.Channel, Thread: m.Message.At.ID}
-	if err := in.cfg.TriggerRuns.ForgetTriggerRun(ctx, key); err != nil {
-		return fmt.Errorf("forget the start of %s: %w", m.MessageID, err)
-	}
-	return nil
-}
-
 // stopThread is what a limit does to a fire that reserved a thread: it gives the reservation back and counts the
 // decision. The key is as if it had not fired, so the next fire of it may start when there is capacity; and nothing
 // is posted, since a note per alert is what a storm must not do (D26). If the release fails the decision is left

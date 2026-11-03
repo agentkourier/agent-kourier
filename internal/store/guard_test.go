@@ -312,10 +312,6 @@ func listTriggerDigests(now time.Time) call {
 	return func(ctx context.Context, s store.Store) error { _, err := s.ListTriggerDigests(ctx, now); return err }
 }
 
-func forgetTriggerRun(k store.ConversationKey) call {
-	return func(ctx context.Context, s store.Store) error { return s.ForgetTriggerRun(ctx, k) }
-}
-
 func markTriggerDigested(binding string, trigger int, start time.Time) call {
 	return func(ctx context.Context, s store.Store) error {
 		return s.MarkTriggerDigested(ctx, binding, trigger, start)
@@ -617,9 +613,6 @@ func specs() []spec {
 		{"ListTriggerDigests", listTriggerDigests(t0), map[string]call{
 			"no now":       listTriggerDigests(time.Time{}),
 			"now at epoch": listTriggerDigests(epoc),
-		}},
-		{"ForgetTriggerRun", forgetTriggerRun(store.ConversationKey{Connection: "c", Channel: "C", Thread: "1.1"}), map[string]call{
-			"no key": forgetTriggerRun(store.ConversationKey{}),
 		}},
 		{"MarkTriggerDigested", markTriggerDigested("ns/b", 0, t0), map[string]call{
 			"no Binding":       markTriggerDigested("", 0, t0),

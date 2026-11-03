@@ -36,6 +36,8 @@ type triggerStarterConfig struct {
 	// Conn is the ChatConnection as it appears in keys and message IDs: namespace/name.
 	Conn   string
 	Submit chat.Submitter
+	// Takes says whether a turn would be queued, writing nothing (session.Manager.Takes).
+	Takes func(ctx context.Context, in session.Inbound) (bool, error)
 	// Notice queues a note in a thread (live.Sink.QueueNotice); its error means the note was not written.
 	Notice func(ctx context.Context, key session.Key, n session.Notice) error
 	Audit  triggerAuditor
@@ -55,6 +57,7 @@ type triggerStarterConfig struct {
 type triggerStarter struct {
 	conn   string
 	submit chat.Submitter
+	takes  func(ctx context.Context, in session.Inbound) (bool, error)
 	notice func(ctx context.Context, key session.Key, n session.Notice) error
 	audit  triggerAuditor
 	link   func(chat.Ref) (string, bool)
@@ -68,6 +71,8 @@ func newTriggerStarter(cfg triggerStarterConfig) (*triggerStarter, error) {
 		return nil, errors.New("broker: Conn is required for the trigger start")
 	case cfg.Submit == nil:
 		return nil, errors.New("broker: Submit is required for the trigger start: it is how a turn is queued")
+	case cfg.Takes == nil:
+		return nil, errors.New("broker: Takes is required for the trigger start: a bot's mention asks it before the limits")
 	case cfg.Notice == nil:
 		return nil, errors.New("broker: Notice is required for the trigger start: it is how a refused start is told to the thread")
 	case cfg.Audit == nil:
@@ -77,7 +82,7 @@ func newTriggerStarter(cfg triggerStarterConfig) (*triggerStarter, error) {
 	case cfg.Log == nil:
 		return nil, errors.New("broker: Log is required for the trigger start")
 	}
-	return &triggerStarter{conn: cfg.Conn, submit: cfg.Submit, notice: cfg.Notice, audit: cfg.Audit, link: cfg.Link, log: cfg.Log}, nil
+	return &triggerStarter{conn: cfg.Conn, submit: cfg.Submit, takes: cfg.Takes, notice: cfg.Notice, audit: cfg.Audit, link: cfg.Link, log: cfg.Log}, nil
 }
 
 // OnStart implements IntakeConfig.OnStart.
@@ -99,8 +104,8 @@ func newTriggerStarter(cfg triggerStarterConfig) (*triggerStarter, error) {
 // platform delivers the event again, and the redelivery asks again, which is idempotent by the alert's message ID.
 //
 // A bot's mention (m.Mention) is a turn of the thread the mention is in, whose session may exist already, and it carries that
-// thread. A session past its threadTTL or whose Binding left the config takes no turn, and that will not pass, so it is
-// ErrNoTurnTaken with no note: the bot asked, and a note answers no one.
+// thread. The Intake asked already whether its session takes a turn (chat.IntakeConfig.TakesBotMention); one that stopped since
+// is ErrNotStarted with no note: the bot asked, and a note answers no one.
 func (s *triggerStarter) OnStart(ctx context.Context, m chat.TriggerMatch) error {
 	at := m.Message.At
 	source := botMessageSource
@@ -135,11 +140,16 @@ func (s *triggerStarter) OnStart(ctx context.Context, m chat.TriggerMatch) error
 		return fmt.Errorf("start the investigation of %s: %w", id, err)
 	case m.Mention && !res.Admission.Queues():
 		s.log.InfoContext(ctx, "chat: a bot's mention took no turn; the thread cannot be continued", "binding", m.Binding, "channel", at.Channel, "message", at.ID, "disposition", res.Disposition)
-		return fmt.Errorf("bot mention of %s: %w", id, chat.ErrNoTurnTaken)
+		return fmt.Errorf("bot mention of %s: %w", id, chat.ErrNotStarted)
 	case res.Disposition != session.Created && res.Disposition != session.Accepted:
 		return fmt.Errorf("start the investigation of %s: the session manager did not take it (%s)", id, res.Disposition)
 	}
 	return nil
+}
+
+// TakesBotMention says whether the session of a bot's mention would take it as a turn (chat.IntakeConfig.TakesBotMention).
+func (s *triggerStarter) TakesBotMention(ctx context.Context, m chat.TriggerMatch) (bool, error) {
+	return s.takes(ctx, session.Inbound{Key: s.keyOf(m), Binding: m.Binding, Create: true, WholeThread: true})
 }
 
 // keyOf is the session a match is a turn of: an alert's own thread, or the thread a bot's mention is in.

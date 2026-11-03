@@ -11,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
@@ -46,21 +47,21 @@ func botMentionLimits() v1alpha1.TriggerLimits {
 // trigger of it names the bot: that bot's posts are read by the trigger, and neither their second event nor a token an
 // alert's text carries wakes the agent another way. A channel with no Binding, and an empty ID, accept none.
 func (in *Intake) AcceptsBotMention(channel, botID string) bool {
+	_, ok := in.mentionBinding(channel, botID)
+	return ok
+}
+
+// mentionBinding is the Binding that takes a mention by the bot botID in channel, if one does.
+func (in *Intake) mentionBinding(channel, botID string) (config.ResolvedBinding, bool) {
 	snap := in.cfg.Snapshot()
 	if snap == nil || botID == "" {
-		return false
+		return config.ResolvedBinding{}, false
 	}
 	rb, ok := snap.BindingForChannel(in.cfg.Connection.Namespace, in.cfg.Connection.Name, channel)
-	if !ok || rb.Binding.Spec.Chat.BotMentions == v1alpha1.BotMentionsNone {
-		return false
+	if !ok || rb.Binding.Spec.Chat.BotMentions == v1alpha1.BotMentionsNone || !mentionTriggerIn(rb.Binding.Spec.Chat.Triggers) {
+		return config.ResolvedBinding{}, false
 	}
-	triggers := rb.Binding.Spec.Chat.Triggers
-	if !mentionTriggerIn(triggers) {
-		return false
-	}
-	return !slices.ContainsFunc(triggers, func(t v1alpha1.Trigger) bool {
-		return t.Type == v1alpha1.TriggerBotMessage && t.From != nil && t.From.ID == botID
-	})
+	return rb, !botMessageTriggerNames(rb.Binding.Spec.Chat.Triggers, botID)
 }
 
 // mentionTriggerIn says whether triggers take mentions: an empty list is the mention trigger.
@@ -76,10 +77,7 @@ func mentionTriggerIndex(triggers []v1alpha1.Trigger) int {
 // and then decides it as a trigger's match with no thread rules, so the limits, the counts and OnStart are the ones a
 // botMessage trigger has. Its place among the triggers is the mention trigger's, which is what the counts name.
 func (in *Intake) botMention(ctx context.Context, m Inbound) (disposition string, err error) {
-	if !in.AcceptsBotMention(m.At.Channel, m.Bot.ID) {
-		return "ignored", nil
-	}
-	rb, ok := in.cfg.Snapshot().BindingForChannel(in.cfg.Connection.Namespace, in.cfg.Connection.Name, m.At.Channel)
+	rb, ok := in.mentionBinding(m.At.Channel, m.Bot.ID)
 	if !ok {
 		return "ignored", nil
 	}
@@ -88,7 +86,7 @@ func (in *Intake) botMention(ctx context.Context, m Inbound) (disposition string
 	index := max(mentionTriggerIndex(rb.Binding.Spec.Chat.Triggers), 0)
 	match := TriggerMatch{Binding: name, Index: index, Limits: botMentionLimits(), PromptTemplate: BotMentionPrompt, MessageID: in.messageID(m), Received: in.now(), Message: m, Mention: true}
 	in.log.InfoContext(ctx, "chat: a bot mentioned Agent Kourier", "binding", name, "channel", m.At.Channel, "message", m.At.ID, "thread", m.At.Thread, "bot", m.Bot.ID, "kind", m.Bot.Kind)
-	out, err := in.decide(ctx, match)
+	out, err := in.decideMention(ctx, match)
 	if out.decision != "" {
 		telemetry.Count(ctx, "agentkourier_trigger_decisions_total", name, string(out.decision))
 		in.log.InfoContext(ctx, "chat: bot mention decided", "binding", name, "decision", out.decision, "channel", m.At.Channel, "message", m.At.ID, "thread", m.At.Thread)
@@ -98,4 +96,18 @@ func (in *Intake) botMention(ctx context.Context, m Inbound) (disposition string
 	}
 	telemetry.Count(ctx, "agentkourier_trigger_matched_total", name)
 	return "trigger_matched", nil
+}
+
+// decideMention decides a mention, once the session it would be a turn of has said that it takes one: a thread past its threadTTL
+// never will, so a mention there is not_started with no place taken in the limits, and no limit can be said to have stopped it.
+func (in *Intake) decideMention(ctx context.Context, m TriggerMatch) (decided, error) {
+	if in.cfg.TakesBotMention != nil {
+		switch takes, err := in.cfg.TakesBotMention(ctx, m); {
+		case err != nil:
+			return decided{}, fmt.Errorf("ask whether the session takes the turn: %w", err)
+		case !takes:
+			return decided{decision: DecisionNotStarted}, nil
+		}
+	}
+	return in.decide(ctx, m)
 }

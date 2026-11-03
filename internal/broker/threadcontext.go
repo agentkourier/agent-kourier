@@ -98,31 +98,20 @@ func (t *threadContext) build(ctx context.Context, key session.Key, binding, aft
 		return "", threadEmpty
 	}
 	target := chat.Target{Conn: key.Connection, Channel: key.Channel, Thread: key.Thread}
-	msgs, dropped, err := t.read(ctx, target, after, before)
+	fromStart := whole && after == "" // the first turn of the thread: what opened it is no reply, and may be what it is all about
+	msgs, dropped, err := t.read(ctx, target, after, before, fromStart)
 	switch {
 	case errors.Is(err, chat.ErrNoThreadReads):
 		return "", t.unsupported(ctx, binding)
 	case err != nil:
 		return t.failed(ctx, binding, "read the thread", err)
 	}
-	var root *chat.HistoryMessage
-	if whole && after == "" { // the first turn of the thread: what opened it is no reply, and may be what it is all about
-		first, err := t.root(ctx, target)
-		switch {
-		case errors.Is(err, chat.ErrNoThreadReads):
-			return "", t.unsupported(ctx, binding)
-		case err != nil:
-			return t.failed(ctx, binding, "read the thread's first message", err)
-		}
-		root = &first
-		msgs = append([]chat.HistoryMessage{first}, msgs...)
-	}
 	people, err := t.eligible(ctx, msgs, whole)
 	if err != nil {
 		return t.failed(ctx, binding, "ask which messages were turns", err)
 	}
 	pinned := 0
-	if root != nil && len(people) > 0 && people[0].Message.At.ID == root.Message.At.ID {
+	if fromStart && len(people) > 0 && people[0].Message.At.ID == key.Thread {
 		pinned = 1 // what opened the thread stays, whatever else is left out
 	}
 	if over := len(people) - render.MaxThreadReplies; over > 0 { // the older ones are cut whatever their names; do not look them up
@@ -143,41 +132,30 @@ func (t *threadContext) build(ctx context.Context, key session.Key, binding, aft
 	return section, threadRead
 }
 
-// read reads the window (again).
-func (t *threadContext) read(ctx context.Context, target chat.Target, after, before string) (msgs []chat.HistoryMessage, dropped int, err error) {
-	err = t.again(ctx, func() (err error) {
-		msgs, dropped, err = t.platform.ThreadBetween(ctx, target, after, before, threadFetchLimit)
-		return err
-	})
-	return msgs, dropped, err
-}
-
-// root reads the message that opened the thread (again).
-func (t *threadContext) root(ctx context.Context, target chat.Target) (msg chat.HistoryMessage, err error) {
-	err = t.again(ctx, func() (err error) {
-		msg, err = t.platform.ThreadRoot(ctx, target)
-		return err
-	})
-	return msg, err
-}
-
-// again makes a read, and once more if the platform said to wait a few seconds: a rate limit that asks for up to
-// threadRateWaitMax is waited out once; any other error, a longer wait, or a second refusal is the caller's to do without.
-func (t *threadContext) again(ctx context.Context, read func() error) error {
-	err := read()
+// read reads the window, from the thread's start if fromStart says so, and once more if the platform said to wait a few seconds: a
+// rate limit that asks for up to threadRateWaitMax is waited out once; any other error, a longer wait, or a second refusal is the
+// caller's to do without.
+func (t *threadContext) read(ctx context.Context, target chat.Target, after, before string, fromStart bool) ([]chat.HistoryMessage, int, error) {
+	once := func() ([]chat.HistoryMessage, int, error) {
+		if fromStart {
+			return t.platform.ThreadFromStart(ctx, target, before, threadFetchLimit)
+		}
+		return t.platform.ThreadBetween(ctx, target, after, before, threadFetchLimit)
+	}
+	msgs, dropped, err := once()
 	if err == nil || errors.Is(err, chat.ErrNoThreadReads) || errors.Is(err, chat.ErrThreadTooLong) {
-		return err
+		return msgs, dropped, err
 	}
 	wait := t.platform.Classify(chat.OpOther, err).RetryAfter
 	if wait <= 0 || wait > threadRateWaitMax {
-		return err
+		return msgs, dropped, err
 	}
 	select {
 	case <-t.after(wait):
 	case <-ctx.Done():
-		return ctx.Err()
+		return nil, 0, ctx.Err()
 	}
-	return read()
+	return once()
 }
 
 // eligible returns the replies of msgs that the context shows, oldest first: a person's message that the adapter would

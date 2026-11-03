@@ -64,7 +64,7 @@ type API interface {
 	IsBot(ctx context.Context, user string) (bool, error)
 	ResolveUser(ctx context.Context, id string) (dialect.User, error)
 	ThreadBetween(ctx context.Context, conn, channel, threadTS, after, before string, limit int) ([]chat.HistoryMessage, int, error)
-	ThreadRoot(ctx context.Context, conn, channel, threadTS string) (chat.HistoryMessage, error)
+	ThreadFromStart(ctx context.Context, conn, channel, threadTS, before string, limit int) ([]chat.HistoryMessage, int, error)
 	SetThreadStatus(ctx context.Context, channel, threadTS, status string) error
 	WorkspaceURL() string
 }
@@ -183,9 +183,10 @@ func (p *Platform) ThreadBetween(ctx context.Context, t chat.Target, after, befo
 	return p.c.ThreadBetween(ctx, p.conn, t.Channel, t.Thread, after, before, limit)
 }
 
-// ThreadRoot reads the message that opened the thread t.Thread.
-func (p *Platform) ThreadRoot(ctx context.Context, t chat.Target) (chat.HistoryMessage, error) {
-	return p.c.ThreadRoot(ctx, p.conn, t.Channel, t.Thread)
+// ThreadFromStart implements chat.ThreadReader over the Client's (Client.ThreadFromStart). A target that names no thread is
+// chat.ErrInvalid.
+func (p *Platform) ThreadFromStart(ctx context.Context, t chat.Target, before string, limit int) ([]chat.HistoryMessage, int, error) {
+	return p.c.ThreadFromStart(ctx, p.conn, t.Channel, t.Thread, before, limit)
 }
 
 // Update replaces the message at r with o. Slack takes the blocks again with every update, so an update

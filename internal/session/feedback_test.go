@@ -1,6 +1,7 @@
 package session
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
@@ -27,7 +28,6 @@ func TestTurnRefSaysWhichFeedbackTheFinalMessageCarries(t *testing.T) {
 			f.feedback = tc.feedback
 			in := inbound("1")
 			in.UserID = tc.user
-			in.MessageRef = in.Key.Thread // an alert's prompt is the message that opens its thread
 			if _, err := f.submit(in); err != nil {
 				t.Fatal(err)
 			}
@@ -41,29 +41,24 @@ func TestTurnRefSaysWhichFeedbackTheFinalMessageCarries(t *testing.T) {
 	}
 }
 
-// A turn nobody wrote is an investigation only when it opened a thread that no bot's mention made: a bot's mention is answered like
-// a person's, in whichever thread, by a live turn and by one found again after a restart alike.
+// A turn nobody wrote is an investigation unless a bot's mention began its task: a mention is answered like a person's, in whichever
+// thread, and through an answer that a person typed.
 func TestFeedbackOfATurnNobodyWrote(t *testing.T) {
-	alert, mention := store.Origin{Source: "botMessage"}, store.Origin{Source: store.OriginBotMention}
-	k := Key{Connection: "c", Channel: "C1", Thread: "1.1"}
 	for _, tc := range []struct {
 		name     string
-		ref      string
-		origin   store.Origin
+		turn     store.TaskTurn
 		feedback bool
 		want     store.FeedbackKind
 	}{
-		{"an alert's first prompt", "1.1", alert, false, store.FeedbackInvestigation},
-		{"an alert's first prompt recorded with no message", "", alert, false, store.FeedbackInvestigation},
-		{"a mention that opened its thread, without feedback", "1.1", mention, false, ""},
-		{"a mention that opened its thread, with feedback", "1.1", mention, true, store.FeedbackAnswer},
-		{"a mention in an alert's thread, without feedback", "2.2", alert, false, ""},
-		{"a mention in a person's thread, without feedback", "2.2", store.Origin{}, false, ""},
-		{"a mention in a person's thread, with feedback", "2.2", store.Origin{}, true, store.FeedbackAnswer},
+		{"an alert's first prompt", store.TaskTurn{User: SystemUser, MessageRef: "1.1"}, false, store.FeedbackInvestigation},
+		{"an alert's first prompt recorded with no message", store.TaskTurn{User: SystemUser}, false, store.FeedbackInvestigation},
+		{"a mention, without feedback", store.TaskTurn{User: SystemUser, MessageRef: "1.1", Mention: "1.1"}, false, ""},
+		{"a mention, with feedback", store.TaskTurn{User: SystemUser, MessageRef: "1.1", Mention: "1.1"}, true, store.FeedbackAnswer},
+		{"a mention in a thread it did not open, without feedback", store.TaskTurn{User: SystemUser, MessageRef: "2.2", Mention: "2.2"}, false, ""},
+		{"a mention that a person answered, with feedback", store.TaskTurn{User: "U1", MessageRef: "2.3", Mention: "2.2"}, true, store.FeedbackAnswer},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := feedbackOf(store.TaskTurn{User: SystemUser, MessageRef: tc.ref}, k, tc.origin, Backend{Feedback: tc.feedback})
-			if got != tc.want {
+			if got := feedbackOf(tc.turn, Backend{Feedback: tc.feedback}); got != tc.want {
 				t.Errorf("feedbackOf = %q; want %q", got, tc.want)
 			}
 		})
@@ -99,11 +94,13 @@ func TestRecoveredTurnCarriesTheFeedbackOfItsRecordedTurn(t *testing.T) {
 	}{
 		{"an alert's first prompt", SystemUser, store.FeedbackInvestigation},
 		{"a person's turn on a Binding with feedback", "U1", store.FeedbackAnswer},
+		{"a bot's mention on a Binding with feedback", SystemUser + "|mention", store.FeedbackAnswer},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, sink := restarted(t)
 			f.feedback = true
-			recordedTurn(t, f, store.TaskTurn{ID: inbound("1").MessageID, User: tc.user})
+			user, mention, _ := strings.Cut(tc.user, "|")
+			recordedTurn(t, f, store.TaskTurn{ID: inbound("1").MessageID, User: user, Mention: mention})
 			f.recover(t)
 			waitFinal(t, sink)
 			sink.mu.Lock()

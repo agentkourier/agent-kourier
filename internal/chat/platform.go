@@ -100,9 +100,10 @@ type ThreadReader interface {
 	// of the whole window. Check ErrThreadTooLong and ErrNoThreadReads with errors.Is before Classify, which does not
 	// know them; any other error classifies as the platform's (Classify, OpOther), a rate limit with its RetryAfter.
 	ThreadBetween(ctx context.Context, t Target, after, before string, limit int) (msgs []HistoryMessage, dropped int, err error)
-	// ThreadRoot returns the message that opened the thread t.Thread, decoded as ThreadBetween's are, for a turn that carries
-	// the thread from its start. A platform that cannot read a thread says ErrNoThreadReads.
-	ThreadRoot(ctx context.Context, t Target) (HistoryMessage, error)
+	// ThreadFromStart is ThreadBetween with no lower bound, for a turn that carries the thread from its start, and with the message
+	// that opened the thread first, which limit does not count or cut. A thread whose first message the platform no longer has
+	// starts with its first reply.
+	ThreadFromStart(ctx context.Context, t Target, before string, limit int) (msgs []HistoryMessage, dropped int, err error)
 }
 
 // Sink receives what Platform.Run decodes.

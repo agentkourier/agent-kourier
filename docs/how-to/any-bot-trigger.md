@@ -105,7 +105,9 @@ To have one agent call another:
    two Bindings on one app cannot do this.
 2. Give the target a Binding for the channel the mention will be in, and invite its bot there.
 3. On the source's Binding, declare the target's bot user under `chat.mentions`, so that its agent can write `@name`.
-4. Set `chat.threadReplies: mention` on both Bindings. Once both own a thread, a person's reply is otherwise a turn for each.
+4. Set `chat.threadReplies: mention` on a Binding whose thread the other agent may be mentioned in. A session that a bot's mention began takes only a
+   person's mention whatever the Binding says, but a thread its Binding already owned keeps the Binding's rule, so with `all` a person's reply is a
+   turn there and also for any other agent that owns the thread that way.
 
 Know what this does not bound:
 

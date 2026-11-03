@@ -497,24 +497,25 @@ func (f *FakePlatform) BusyCalls() []BusyCall {
 	return slices.Clone(f.busyCalls)
 }
 
-// ThreadRoot implements chat.ThreadReader: the message said or posted whose ID is the thread's.
-func (f *FakePlatform) ThreadRoot(_ context.Context, t chat.Target) (chat.HistoryMessage, error) {
+// ThreadFromStart implements chat.ThreadReader: the message said or posted whose ID is the thread's, and then ThreadBetween's window.
+func (f *FakePlatform) ThreadFromStart(ctx context.Context, t chat.Target, before string, limit int) ([]chat.HistoryMessage, int, error) {
+	msgs, dropped, err := f.ThreadBetween(ctx, t, "", before, limit)
+	if err != nil {
+		return nil, 0, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.fail("ThreadRoot"); err != nil {
-		return chat.HistoryMessage{}, err
-	}
 	for _, m := range f.said {
 		if m.At.Channel == t.Channel && m.At.ID == t.Thread {
-			return chat.HistoryMessage{Message: m}, nil
+			return append([]chat.HistoryMessage{{Message: m}}, msgs...), dropped, nil
 		}
 	}
 	for _, m := range f.messages {
 		if m.Ref.Channel == t.Channel && m.Ref.ID == t.Thread {
-			return chat.HistoryMessage{Message: chat.Inbound{At: m.Ref, Text: m.Out.Message.Fallback}, Own: true}, nil
+			return append([]chat.HistoryMessage{{Message: chat.Inbound{At: m.Ref, Text: m.Out.Message.Fallback}, Own: true}}, msgs...), dropped, nil
 		}
 	}
-	return chat.HistoryMessage{}, fmt.Errorf("fake platform: no thread root %s", t.Thread)
+	return msgs, dropped, nil
 }
 
 // ThreadBetween implements chat.ThreadReader over what the fake holds of the thread: what was posted in it (Agent Kourier's own,

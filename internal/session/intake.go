@@ -180,24 +180,46 @@ func (m *Manager) queue(ctx context.Context, in Inbound) (Result, error) {
 	return res, nil
 }
 
-// admit gathers the facts of the reply (the session, its Binding, expiry and, if the decision needs it, the pending
-// question), classifies the reply (ReplyFacts.Classify) and carries the admission out (carryOut).
+// admit classifies the reply by its facts (replyFacts, ReplyFacts.Classify) and carries the admission out (carryOut).
 func (m *Manager) admit(ctx context.Context, in Inbound, now time.Time) (Result, string, error) {
+	f, binding, err := m.replyFacts(ctx, in, now)
+	if err != nil {
+		return Result{}, "", err
+	}
+	return m.carryOut(ctx, in, f.Owned, binding, f.Classify(), now)
+}
+
+// Takes says whether Submit would queue in now, a turn or an answer, and writes nothing. It races what Submit does after it, so it
+// is an estimate that tells the caller what it need not start, and Submit still decides.
+func (m *Manager) Takes(ctx context.Context, in Inbound) (bool, error) {
+	f, _, err := m.replyFacts(ctx, in, m.cfg.Now())
+	if err != nil {
+		return false, err
+	}
+	return f.Classify().Queues(), nil
+}
+
+// replyFacts gathers the facts of the reply: the session, its Binding and expiry and, if the decision needs it, the pending question.
+// It returns the session's Binding too, empty where no session is. It only reads.
+func (m *Manager) replyFacts(ctx context.Context, in Inbound, now time.Time) (ReplyFacts, string, error) {
 	f := ReplyFacts{Create: in.Create, Mentioned: in.Mentioned, ChannelMode: in.ChannelThreadReplies}
 	binding := ""
 	sess, err := m.cfg.Store.GetSession(ctx, in.Key, readAll, now)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 	case err != nil:
-		return Result{}, "", fmt.Errorf("read session %+v: %w", in.Key, err)
+		return ReplyFacts{}, "", fmt.Errorf("read session %+v: %w", in.Key, err)
 	default:
 		f.Owned, f.TaskID, binding = true, sess.TaskID, sess.Binding
-		backend, err := m.cfg.Bindings.Backend(sess.Binding)
+		backend, err := m.sessionBackend(sess)
 		if errors.Is(err, ErrUnknownBinding) { // expiry cannot be judged without it, so old or not
 			f.BindingGone = true
+			if startedByBotMention(sess) {
+				f.ChannelMode = v1alpha1.ThreadRepliesMention
+			}
 			break
 		} else if err != nil {
-			return Result{}, "", fmt.Errorf("session %+v: Binding %q: %w", in.Key, sess.Binding, err)
+			return ReplyFacts{}, "", fmt.Errorf("session %+v: Binding %q: %w", in.Key, sess.Binding, err)
 		}
 		f.Mode, f.Dialect = backend.ThreadReplies, backend.Dialect
 		// The store owns the expiry rule: ask it again, with the session's own threadTTL.
@@ -205,19 +227,35 @@ func (m *Manager) admit(ctx context.Context, in Inbound, now time.Time) (Result,
 		case errors.Is(err, store.ErrExpired):
 			f.Expired = true
 		case err != nil:
-			return Result{}, "", fmt.Errorf("read session %+v: %w", in.Key, err)
+			return ReplyFacts{}, "", fmt.Errorf("read session %+v: %w", in.Key, err)
 		}
 	}
 	if f.NeedsQuestion() {
 		switch q, err := m.cfg.Questions.PendingTextQuestion(ctx, in.Key); {
 		case errors.Is(err, store.ErrNotFound):
 		case err != nil:
-			return Result{}, "", fmt.Errorf("read the pending question of %+v: %w", in.Key, err)
+			return ReplyFacts{}, "", fmt.Errorf("read the pending question of %+v: %w", in.Key, err)
 		default:
 			f.Question = &PendingQuestion{ID: q.ID, TaskID: q.TaskID, Posted: q.MessageRef != ""}
 		}
 	}
-	return m.carryOut(ctx, in, f.Owned, binding, f.Classify(), now)
+	return f, binding, nil
+}
+
+// sessionBackend is the Backend that a session goes by: its Binding's, but a session a bot's mention began takes only people's
+// mentions, whatever the Binding says. People were talking in that thread, and another agent's mention must not make every word
+// they write from then on a prompt.
+func (m *Manager) sessionBackend(sess store.Session) (Backend, error) {
+	backend, err := m.cfg.Bindings.Backend(sess.Binding)
+	if err == nil && startedByBotMention(sess) {
+		backend.ThreadReplies = v1alpha1.ThreadRepliesMention
+	}
+	return backend, err
+}
+
+// startedByBotMention says a bot's mention made the session, which its origin keeps for the session's life.
+func startedByBotMention(sess store.Session) bool {
+	return sess.Origin.Source == store.OriginBotMention
 }
 
 // carryOut does what the admission decided: for a turn it writes the row of a new thread or touches a live one; for an

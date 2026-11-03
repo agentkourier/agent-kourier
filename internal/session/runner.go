@@ -493,7 +493,7 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 	if err != nil {
 		return idle, fmt.Errorf("read session: %w", err)
 	}
-	backend, err := m.cfg.Bindings.Backend(sess.Binding)
+	backend, err := m.sessionBackend(sess)
 	if errors.Is(err, ErrUnknownBinding) { // it left the config since the turn was queued: no retry loop
 		t := &tstate{key: key, c: c, r: r, sess: sess}
 		m.notice(t, NoticeBindingGone, "")
@@ -784,7 +784,11 @@ func (t *tstate) outputTurn() store.TaskTurn {
 	if ackEmoji == "" {
 		ackID = ""
 	}
-	return store.TaskTurn{ID: cmp.Or(t.nid, t.began.ID, t.r.ID), User: cmp.Or(ack.UserID, t.r.UserID, t.began.User), MessageRef: cmp.Or(ack.MessageRef, t.r.MessageRef, t.began.MessageRef), Acknowledgment: ackEmoji, AcknowledgmentID: ackID}
+	mention := t.began.Mention // an answer leaves it: the task is still the mention's, whoever's message the turn names now
+	if t.r.WholeThread {
+		mention = cmp.Or(mention, t.r.MessageRef)
+	}
+	return store.TaskTurn{ID: cmp.Or(t.nid, t.began.ID, t.r.ID), User: cmp.Or(ack.UserID, t.r.UserID, t.began.User), MessageRef: cmp.Or(ack.MessageRef, t.r.MessageRef, t.began.MessageRef), Acknowledgment: ackEmoji, AcknowledgmentID: ackID, Mention: mention}
 }
 
 // sinkRef is the TurnRef the sink is given for this attempt. An answer's output is a message of its own, named after the
@@ -792,16 +796,15 @@ func (t *tstate) outputTurn() store.TaskTurn {
 // after a lost stream, or looked up or sent again after a send of unknown outcome, continues the message it had.
 func (t *tstate) sinkRef() TurnRef {
 	shown := t.outputTurn()
-	return TurnRef{Key: t.key, Binding: t.sess.Binding, MessageID: shown.ID, UserID: shown.User, Output: t.b.Output, Progress: t.b.Progress, Recovered: t.recovered || t.follow || t.takes, Restarted: t.recovered, Feedback: feedbackOf(shown, t.key, t.sess.Origin, t.b), ThreadReplies: t.b.ThreadReplies, Mentions: t.b.Mentions, MaxMentions: t.b.MaxMentions}
+	return TurnRef{Key: t.key, Binding: t.sess.Binding, MessageID: shown.ID, UserID: shown.User, Output: t.b.Output, Progress: t.b.Progress, Recovered: t.recovered || t.follow || t.takes, Restarted: t.recovered, Feedback: feedbackOf(shown, t.b), ThreadReplies: t.b.ThreadReplies, Mentions: t.b.Mentions, MaxMentions: t.b.MaxMentions}
 }
 
 // feedbackOf is the feedback buttons the final message of a turn carries (TurnRef.Feedback): an investigation's always, and an
-// answer's on a Binding with feedback.enabled. A turn nobody wrote is an investigation when it opened its session's thread. A bot's
-// mention is also nobody's, but it is a question put by another agent, whichever thread it is in: it is answered like a person's,
-// which the recorded turn and the session can tell after a restart too.
-func feedbackOf(turn store.TaskTurn, key Key, origin store.Origin, b Backend) store.FeedbackKind {
+// answer's on a Binding with feedback.enabled. A turn nobody wrote is an investigation. A bot's mention is also nobody's, but it is a
+// question put by another agent: it is answered like a person's, which the recorded turn can tell after a restart too.
+func feedbackOf(turn store.TaskTurn, b Backend) store.FeedbackKind {
 	switch {
-	case turn.User == SystemUser && origin.Source != store.OriginBotMention && (turn.MessageRef == "" || turn.MessageRef == key.Thread):
+	case turn.User == SystemUser && turn.Mention == "":
 		return store.FeedbackInvestigation
 	case turn.User != "" && b.Feedback:
 		return store.FeedbackAnswer

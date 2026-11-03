@@ -32,16 +32,6 @@ func (g *Guarded) ListTriggerDigests(ctx context.Context, now time.Time) (digest
 	return digests, err
 }
 
-// ForgetTriggerRun implements TriggerRuns.
-func (g *Guarded) ForgetTriggerRun(ctx context.Context, key ConversationKey) error {
-	return g.run(ctx, "agentkourier.store.ForgetTriggerRun", func(ctx context.Context) error {
-		if key.Connection == "" || key.Channel == "" || key.Thread == "" {
-			return fmt.Errorf("forget trigger run: the key is required: %w", ErrInvalid)
-		}
-		return g.a.ForgetTriggerRun(ctx, key)
-	})
-}
-
 // MarkTriggerDigested implements TriggerRuns.
 func (g *Guarded) MarkTriggerDigested(ctx context.Context, binding string, trigger int, start time.Time) error {
 	return g.run(ctx, "agentkourier.store.MarkTriggerDigested", func(ctx context.Context) error {

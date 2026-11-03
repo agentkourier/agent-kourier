@@ -88,7 +88,7 @@ func newStarter(t *testing.T) *starter {
 	s := &starter{sub: &startSubmitter{}, notes: &startNotes{}, aud: &startAudit{}, logs: &bytes.Buffer{}, tel: telemetrytest.New(t)}
 	var err error
 	s.triggerStarter, err = newTriggerStarter(triggerStarterConfig{
-		Conn: startConn, Submit: s.sub, Notice: s.notes.take, Audit: s.aud,
+		Conn: startConn, Submit: s.sub, Takes: alwaysTakes, Notice: s.notes.take, Audit: s.aud,
 		Link: func(r chat.Ref) (string, bool) {
 			return "https://example.slack.com/archives/" + r.Channel + "/p" + strings.Replace(r.ID, ".", "", 1), true
 		},
@@ -99,6 +99,9 @@ func newStarter(t *testing.T) *starter {
 	}
 	return s
 }
+
+// alwaysTakes is the Takes of a session that takes any turn.
+func alwaysTakes(context.Context, session.Inbound) (bool, error) { return true, nil }
 
 // firing is the match of a kind-firing alert with the Alertmanager trigger: what the Intake hands the starter.
 func firing(t *testing.T) chat.TriggerMatch {
@@ -253,7 +256,7 @@ func TestOnStartWithoutAPermalinkHasAnEmptyLink(t *testing.T) {
 // render nothing, queue nothing, tell no thread or audit no refusal.
 func TestNewTriggerStarterNamesTheFieldThatIsMissing(t *testing.T) {
 	full := triggerStarterConfig{
-		Conn: startConn, Submit: &startSubmitter{}, Notice: (&startNotes{}).take, Audit: &startAudit{}, Link: noPermalink, Log: slog.Default(),
+		Conn: startConn, Submit: &startSubmitter{}, Takes: alwaysTakes, Notice: (&startNotes{}).take, Audit: &startAudit{}, Link: noPermalink, Log: slog.Default(),
 	}
 	for _, tc := range []struct {
 		field string
@@ -261,6 +264,7 @@ func TestNewTriggerStarterNamesTheFieldThatIsMissing(t *testing.T) {
 	}{
 		{"Conn", func(c *triggerStarterConfig) { c.Conn = "" }},
 		{"Submit", func(c *triggerStarterConfig) { c.Submit = nil }},
+		{"Takes", func(c *triggerStarterConfig) { c.Takes = nil }},
 		{"Notice", func(c *triggerStarterConfig) { c.Notice = nil }},
 		{"Audit", func(c *triggerStarterConfig) { c.Audit = nil }},
 		{"Link", func(c *triggerStarterConfig) { c.Link = nil }},
@@ -595,5 +599,22 @@ func TestAMentionALimitStoppedIsAudited(t *testing.T) {
 	s.MentionLimited(s.tel.Ctx, mentioned(), store.LimitRate)
 	if len(s.aud.got) != 1 || s.aud.got[0].Ref != "botMention" || s.aud.got[0].Reason != "limit_rate" || s.aud.got[0].MessageID != mentioned().MessageID || s.aud.who[0].Binding != startBinding {
 		t.Errorf("audited %+v by %+v; want one refusal of the mention by the rate limit", s.aud.got, s.aud.who)
+	}
+}
+
+// The session of a mention is asked about the thread that holds the mention, as a start, with what the turn would be.
+func TestTakesBotMentionAsksAboutTheThreadOfTheMention(t *testing.T) {
+	var asked session.Inbound
+	s, err := newTriggerStarter(triggerStarterConfig{
+		Conn: startConn, Submit: &startSubmitter{}, Notice: (&startNotes{}).take, Audit: &startAudit{}, Link: noPermalink, Log: slog.Default(),
+		Takes: func(_ context.Context, in session.Inbound) (bool, error) { asked = in; return false, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := mentioned()
+	got, err := s.TakesBotMention(t.Context(), m)
+	if want := (session.Key{Connection: startConn, Channel: m.Message.At.Channel, Thread: m.Message.At.Thread}); err != nil || got || asked.Key != want || !asked.Create || asked.Binding != m.Binding {
+		t.Errorf("TakesBotMention = %v, %v after asking %+v; want false, and a start in thread %+v", got, err, asked, want)
 	}
 }

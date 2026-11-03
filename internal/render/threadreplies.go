@@ -75,7 +75,7 @@ func ThreadRepliesCounted(entries []ThreadReply, dropped int) (section string, l
 
 // ThreadMessagesCounted is ThreadRepliesCounted for a turn that carries the thread: entries are what people and other bots wrote
 // in it, from its start or since the previous turn, up to the message that mentioned Agent Kourier. The first pinned of them stay
-// whatever else is left out (oldestPolicy.Pinned): the message that opened the thread, on its first turn.
+// whatever else is left out (untrustedItem.Pinned): the message that opened the thread, on its first turn.
 func ThreadMessagesCounted(entries []ThreadReply, pinned, dropped int) (section string, leftOut int) {
 	return threadBlock("Messages that people and other bots wrote in this thread before the mention, leaving out any already sent to you "+
 		"(in each, the id is who wrote it, by the platform's ID, and the from is only the name they go by),",
@@ -86,13 +86,14 @@ func threadBlock(opening string, noun leftOutNoun, entries []ThreadReply, pinned
 	items := make([]untrustedItem, len(entries))
 	for i, r := range entries {
 		items[i] = threadItem(r)
+		items[i].Pinned = i < pinned
 	}
 	return untrustedBlock{
 		Opening:       opening,
 		Plural:        true,
 		Order:         "oldest first",
 		TagPrefix:     threadTagPrefix,
-		Oldest:        &oldestPolicy{Noun: noun, MaxItems: MaxThreadReplies, Pinned: pinned, Dropped: dropped},
+		Oldest:        &oldestPolicy{Noun: noun, MaxItems: MaxThreadReplies, Dropped: dropped},
 		MaxUnits:      MaxThreadBlockUnits,
 		OmitWhenEmpty: true,
 		Items:         items,
