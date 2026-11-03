@@ -40,16 +40,16 @@ echo "== agent-kourier: ready"
 # holds no token or Secret value, and its pod's events.
 agentkourier_fail() {
   echo "FAIL: $1" >&2
-  "${K[@]}" -n agent-kourier get pods -l app.kubernetes.io/name=agent-kourier -o wide >&2 || true
+  "${K[@]}" -n agent-kourier get pods -l "${TIER_AGENTKOURIER_PODS}" -o wide >&2 || true
   "${K[@]}" -n agent-kourier logs deploy/agent-kourier --tail=60 >&2 || true
-  "${K[@]}" -n agent-kourier describe pods -l app.kubernetes.io/name=agent-kourier 2>&1 | sed -n '/^Events:/,$p' >&2 || true
+  "${K[@]}" -n agent-kourier describe pods -l "${TIER_AGENTKOURIER_PODS}" 2>&1 | sed -n '/^Events:/,$p' >&2 || true
   exit 1
 }
 "${K[@]}" -n agent-kourier rollout status deploy/agent-kourier --timeout=180s || agentkourier_fail "agent-kourier's rollout did not finish"
 # A pod that is shutting down does not count: on Postgres the Deployment rolls with a surge, and the old pod, which hands its Lease over as it
 # stops, may still be listed (Terminating) when the rollout has finished.
 want=$("${K[@]}" -n agent-kourier get deploy/agent-kourier -o 'jsonpath={.spec.replicas}')
-pods=$("${K[@]}" -n agent-kourier get pods -l app.kubernetes.io/name=agent-kourier -o json | jq -r '[.items[] | select(.metadata.deletionTimestamp == null) | .metadata.name] | join(" ")')
+pods=$("${K[@]}" -n agent-kourier get pods -l "${TIER_AGENTKOURIER_PODS}" -o json | jq -r '[.items[] | select(.metadata.deletionTimestamp == null) | .metadata.name] | join(" ")')
 [ "$(wc -w <<<"${pods}")" -eq "${want}" ] || agentkourier_fail "want ${want} Agent Kourier pod(s), have: ${pods:-none}"
 echo "ok: ${want} Agent Kourier pod(s), ${pods}, rolled out"
 for pod in ${pods}; do
