@@ -67,10 +67,6 @@ type (
 		Channel  string `json:"channel"`
 		Archived bool   `json:"archived"`
 	}
-	missingScopeReq struct {
-		Method  string `json:"method"`
-		Missing bool   `json:"missing"`
-	}
 )
 
 // MessageView is a Message as the control surface shows it: the Slack shape
@@ -161,13 +157,6 @@ func (s *Server) newControlRoutes() controlRoutes {
 			return nil, invalid("fakeslack: an archived channel needs a channel")
 		}
 		s.SetArchived(q.Channel, q.Archived)
-		return struct{}{}, nil
-	}))
-	mux.HandleFunc("POST /_control/missing-scope", post(func(q missingScopeReq) (any, error) {
-		if q.Method == "" {
-			return nil, invalid("fakeslack: a missing scope needs the method that answers it")
-		}
-		s.SetMissingScope(q.Method, q.Missing)
 		return struct{}{}, nil
 	}))
 	mux.HandleFunc("GET /_control/connections", func(w http.ResponseWriter, _ *http.Request) {

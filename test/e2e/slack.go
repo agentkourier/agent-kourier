@@ -125,12 +125,6 @@ func (s *Slack) SetArchived(ctx context.Context, channel string, archived bool) 
 	return s.c.do(ctx, http.MethodPost, "/_control/archived", map[string]any{"channel": channel, "archived": archived}, nil)
 }
 
-// SetMissingScope makes the Web API method (conversations.info, say) answer missing_scope, as Slack does for an app installed without
-// the scope the method needs, or lets it work again. It applies to every channel and every caller of the method.
-func (s *Slack) SetMissingScope(ctx context.Context, method string, missing bool) error {
-	return s.c.do(ctx, http.MethodPost, "/_control/missing-scope", map[string]any{"method": method, "missing": missing}, nil)
-}
-
 // SetUserGroup registers a Slack user group and replaces its membership.
 func (s *Slack) SetUserGroup(ctx context.Context, group string, users ...string) error {
 	return s.c.do(ctx, http.MethodPost, "/_control/usergroups", map[string]any{"usergroup": group, "users": users}, nil)

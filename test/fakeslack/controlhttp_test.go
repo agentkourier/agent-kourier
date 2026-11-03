@@ -156,9 +156,8 @@ func TestControlSetsUpAndInspects(t *testing.T) {
 	}
 }
 
-// The control surface sets what conversations.info reports, as the Go methods do: a channel archived, and a method whose scope the app
-// lacks, each undone by a call that says so.
-func TestControlArchivesAChannelAndTakesAScopeAway(t *testing.T) {
+// The control surface archives a channel for conversations.info, as the Go method does, and a call that says so puts it back.
+func TestControlArchivesAChannel(t *testing.T) {
 	fake, _ := connected(t)
 	api := slack.New(testToken, slack.OptionAPIURL(fake.URL()+"/"))
 	if s := control(t, fake, "POST", "/_control/members", map[string]any{"channel": "C1", "users": []string{"UFAKEBOT"}}, nil); s != 200 {
@@ -183,22 +182,6 @@ func TestControlArchivesAChannelAndTakesAScopeAway(t *testing.T) {
 	if archived, err := info(); err != nil || archived {
 		t.Errorf("conversations.info after unarchiving = %t, %v; want not archived", archived, err)
 	}
-
-	if s := control(t, fake, "POST", "/_control/missing-scope", map[string]any{"method": "conversations.info", "missing": true}, nil); s != 200 {
-		t.Fatalf("missing-scope status = %d", s)
-	}
-	if _, err := info(); err == nil || err.Error() != "missing_scope" {
-		t.Errorf("conversations.info without the scope = %v; want missing_scope", err)
-	}
-	if _, _, err := api.GetUsersInConversation(&slack.GetUsersInConversationParameters{ChannelID: "C1"}); err != nil {
-		t.Errorf("conversations.members = %v; the scope is missing for conversations.info alone", err)
-	}
-	if s := control(t, fake, "POST", "/_control/missing-scope", map[string]any{"method": "conversations.info", "missing": false}, nil); s != 200 {
-		t.Fatalf("scope back status = %d", s)
-	}
-	if _, err := info(); err != nil {
-		t.Errorf("conversations.info with the scope back = %v", err)
-	}
 }
 
 func TestControlMapsErrorsToStatuses(t *testing.T) {
@@ -220,8 +203,6 @@ func TestControlMapsErrorsToStatuses(t *testing.T) {
 		{"members without a channel", "/_control/members", `{"users": ["U1"]}`, 400},
 		{"user group without an id", "/_control/usergroups", `{"users": ["U1"]}`, 400},
 		{"archived without a channel", "/_control/archived", `{"archived": true}`, 400},
-		{"missing scope without a method", "/_control/missing-scope", `{"missing": true}`, 400},
-		{"missing scope with a field of another endpoint", "/_control/missing-scope", `{"method": "conversations.info", "channel": "C1"}`, 400},
 		{"dm without text", "/_control/dm", `{"user": "U1"}`, 400},
 		{"mention without a channel", "/_control/mention", map[string]string{"user": "U1", "text": mentionText}, 400},
 		{"submit an option the select does not offer", "/_control/submit", map[string]any{"user": "U1", "message_ts": ask, "action_id": "submit",
