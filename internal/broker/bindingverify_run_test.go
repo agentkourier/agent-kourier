@@ -107,7 +107,7 @@ func TestRunReportsTheConditionsOfTheBindingsAsMetricsAndLogLines(t *testing.T) 
 	if n := countOf(out, "level=WARN", "a condition is false", "binding="+verifiedBinding, "reason=ChannelArchived"); n != 1 {
 		t.Errorf("%d warnings that %s's channel is archived; want one\n%s", n, verifiedBinding, out)
 	}
-	if n := countOf(out, "level=INFO", "true again", "binding="+verifiedBinding, "condition=ChannelJoined"); n != 1 {
+	if n := countOf(out, "level=INFO", "is now true", "binding="+verifiedBinding, "condition=ChannelJoined"); n != 1 {
 		t.Errorf("%d notices that %s's channel is joined again; want one\n%s", n, verifiedBinding, out)
 	}
 	if n := countOf(out, "level=WARN", "binding verification", "binding="+verifiedBinding) - 1; n != 0 {

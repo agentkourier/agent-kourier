@@ -501,9 +501,10 @@ func TestChannelCheckerReportsTheCauseOfAFailedReadThroughTheRealSlackClient(t *
 	}
 }
 
-// A request that got no answer says why in the Message, without the request's URL: a name that does not resolve, a refused connection,
-// a certificate that is not trusted and a scheme that is not http read differently. The wrong scheme is tried against the real client.
-func TestAgentCheckerSaysWhyTheBackendDidNotAnswerWithoutItsURL(t *testing.T) {
+// A request for the agent card that failed says why in the Message, without the request's URL: a name that does not resolve, a refused
+// connection, a certificate that is not trusted and a server that speaks the wrong protocol read differently. A scheme that is not http
+// never reaches the client (the API's validation and the dialect refuse it), which the last subtest pins through a real Bindings.
+func TestAgentCheckerSaysWhyTheCardRequestFailedWithoutItsURL(t *testing.T) {
 	const secretURL = "http://backend.internal/agents/ns/name?token=SECRET-IN-URL"
 	for _, tc := range []struct {
 		name  string

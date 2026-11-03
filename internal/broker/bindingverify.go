@@ -192,9 +192,10 @@ type channelChecker struct {
 
 var _ bindingcheck.ChannelChecker = channelChecker{}
 
-// CheckChannel implements bindingcheck.ChannelChecker. It makes no call when the connection's credentials Secret holds other tokens
-// than the broker is using (ChatCredentialsChanged): the bot the broker holds is then not the one the Secret names, and what it
-// sees is not a finding about the channel. A call the Prober's context ended is no verdict and comes back as an error; the
+// CheckChannel implements bindingcheck.ChannelChecker. It makes no call when the connection's credentials Secret differs in any key
+// from the tokens the broker is using (ChatCredentialsChanged, or ChatCredentialsUnusable if it is gone or empty): the connection is
+// then not running on what the Secret holds, so the read is withheld on any difference, even in a key the call does not use (the app
+// token), and what the bot sees is not offered as a finding about the channel. A call the Prober's context ended is no verdict and comes back as an error; the
 // deadline of the checker's own bound is a chat platform that does not answer, Unknown/ChatUnavailable.
 func (c channelChecker) CheckChannel(ctx context.Context, channel string) (bindingcheck.Outcome, error) {
 	cctx, cancel := context.WithTimeout(ctx, c.timeout)
@@ -356,7 +357,7 @@ func (l bindingLog) transition(tr bindingcheck.Transition) {
 	case c.Status == bindingcheck.Unknown:
 		l.log.Info("binding verification: a condition is unknown", attrs...)
 	case c.Status == bindingcheck.True && tr.Old.Status != bindingcheck.True && tr.Old.Reason != bindingcheck.ReasonPending:
-		l.log.Info("binding verification: a condition is true again", append(attrs, "was", string(tr.Old.Reason))...)
+		l.log.Info("binding verification: a condition is now true", append(attrs, "was", string(tr.Old.Reason))...)
 	}
 }
 
