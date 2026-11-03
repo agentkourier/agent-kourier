@@ -55,9 +55,20 @@ names or error text.
 
 ## Binding verification
 
-The leader probes each Binding of the connection it serves, when it starts, when the config or a Secret it refers to changes, and every 5 minutes (with up to 10% jitter) after a pass begins. A probe fetches the agent's card on a new connection and reads the Binding's channel as the bot (`conversations.info` on Slack); it sends the agent no message and posts nothing. A probe is not retried: one failure, or one result that is not yet known (a rate limit, a timeout), holds `agentkourier_binding_ready` at 0 until the next pass, about 5 minutes later unless the config or a Secret changes first. A rule that should ignore a result that is not yet known uses `status="false"` of `agentkourier_binding_condition` and not `agentkourier_binding_ready`. A standby exports none of these series. A Binding has no series until its first probe ends, and its series are deleted when a reload removes it.
+The leader probes each Binding of the connection it serves, when it starts, when the config or a Secret it refers to changes, and every 5 minutes (with up to 10% jitter) after a pass begins. A change triggers a pass at most once every 30 seconds: one that comes sooner waits, and the pass for it, which sees the last change, runs when the 30 seconds are over. A probe fetches the agent's card on a new connection and reads the Binding's channel as the bot (`conversations.info` on Slack); it sends the agent no message and posts nothing. A standby exports none of these series.
 
-The reason for a result is not a label; it is in the log line of the change: a WARN `a condition is false` for a condition that went false, a WARN `a condition is unknown` for `ChatCredentialsChanged` (the chat credentials Secret holds other tokens than the ones in use, or is gone or empty; restart Agent Kourier), an INFO `a condition is unknown` for any other result that is not yet known, and an INFO `a condition is true again`. A probe whose check could not tell leaves the condition unknown with no such line: its line is `a probe failed`, with the error. A Binding that a reload removed during a pass has no line.
+A Binding has `agentkourier_binding_condition` series for a condition once its first probe has ended, and its `Ready` series, with `agentkourier_binding_ready`, once every first probe has ended or one has found it not ready; a rule on `agentkourier_binding_ready == 0` does not fire for a Binding whose other probe is still in flight. Its series are deleted when a reload removes it.
+
+A probe is not retried. One failure holds `agentkourier_binding_ready` at 0 until the next pass, which begins 4.5 to 5.5 minutes after the last one began (and up to one 5-second tick later). That includes a single 5xx, 409 or refused connection, as an agent in the middle of a rollout gives, which reads `false`, and a result that is not yet known (a rate limit, a timeout), which reads `unknown`. `status="false"` of `agentkourier_binding_condition` leaves the results that are not yet known out, but not the transient failures, so an alert on either should use a `for:` longer than one interval, over 5.5 minutes.
+
+The reason for a result is not a label; it is in the log line of the change:
+
+- a WARN `a condition is false` for a condition that went false;
+- a WARN `a condition is unknown` for `ChatCredentialsChanged` (the chat credentials Secret holds other tokens than the ones in use: restart Agent Kourier) and for `ChatCredentialsUnusable` (the Secret, or a key of it, is gone or empty, or the Secret is of a type that is never read: the connection keeps the tokens it read, and a restart fails until the Secret is mended);
+- an INFO `a condition is unknown` for any other result that is not yet known, with the platform's own words when it answered with an error (for Slack, its code, such as `no_permission`), and the cause when a request got no answer;
+- an INFO `a condition is true again`.
+
+A probe whose check could not tell leaves the condition unknown with no such line: its line is `a probe failed`, with the error, and a failure of the prober itself has its own line, `the prober failed`. A Binding that a reload removed during a pass has no line.
 
 | Metric | Type | Labels | Definition |
 |---|---|---|---|
