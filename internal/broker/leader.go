@@ -8,6 +8,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/internal/session"
@@ -186,6 +187,18 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	if err != nil {
 		return nil, err
 	}
+	// The verification of the Bindings: whether each one's backend answers and its channel has the bot in it, probed on a schedule
+	// and reported as metrics and log lines only. It sends the agent nothing, posts nothing and changes no readiness. It reads
+	// through the Bindings' pools, the platform and the Secrets, so it stops with the interactions' loops, before all of them.
+	var versions config.SecretVersioner
+	if boot.Secrets != nil {
+		versions = boot.Secrets
+	}
+	prober := verification{
+		Bindings: bindings, Platform: platform, Snaps: boot.Reloader, Revision: boot.Reloader.Revision, Conn: conn,
+		Versions: versions, Metrics: metrics, Log: log, Interval: cfg.probeEvery, Tick: cfg.probeTick,
+	}.newProber()
+	stops.add("binding-verification", startLoop(runCtx, func(c context.Context) error { prober.Run(c); return nil }))
 
 	// A match of a botMessage trigger that starts a turn becomes a session through the manager's intake, the path a
 	// mention takes. The threads of the keys are in the store; the permalink comes from what the platform learned when it

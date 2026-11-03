@@ -2,10 +2,13 @@ package broker
 
 import (
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/bindingcheck"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/session"
@@ -172,5 +175,113 @@ func TestEveryAbandonReasonHasItsOwnLabel(t *testing.T) {
 		if got := samples(t, m); !slices.Contains(got, "agentkourier_outbox_abandoned_total{reason=other} 1") || strings.Contains(strings.Join(got, "\n"), code) {
 			t.Errorf("code %q: samples = %v; want it counted as other, and never as a label", code, got)
 		}
+	}
+}
+
+// transition is a change of one condition of one Binding to status, for the metric hooks.
+func transition(binding string, t bindingcheck.ConditionType, status bindingcheck.Status) bindingcheck.Transition {
+	return bindingcheck.Transition{Binding: binding, New: bindingcheck.Condition{Type: t, Status: status, Reason: bindingcheck.ReasonOK}}
+}
+
+// seriesOf is the samples of the registry whose name starts with prefix.
+func seriesOf(t *testing.T, m *Metrics, prefix string) []string {
+	t.Helper()
+	var out []string
+	for _, s := range samples(t, m) {
+		if strings.HasPrefix(s, prefix) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// A condition's status is three series, one at 1 and the others at 0, and Ready also sets the 0 or 1 gauge: 1 for True, and 0 for False and for
+// Unknown, which is not a yes.
+func TestBindingConditionSetsTheStatusSeriesAndReadyIsOneOnlyForTrue(t *testing.T) {
+	const b = "sre/sre-alerts"
+	for _, tc := range []struct {
+		status bindingcheck.Status
+		ready  string
+	}{{bindingcheck.True, "1"}, {bindingcheck.False, "0"}, {bindingcheck.Unknown, "0"}} {
+		t.Run(string(tc.status), func(t *testing.T) {
+			m := mustMetrics(t, nil)
+			m.BindingCondition(transition(b, bindingcheck.Ready, tc.status))
+			got := seriesOf(t, m, "agentkourier_binding_")
+			want := []string{"agentkourier_binding_ready{binding=" + b + "} " + tc.ready}
+			for _, s := range []string{"true", "false", "unknown"} {
+				v := "0"
+				if s == strings.ToLower(string(tc.status)) {
+					v = "1"
+				}
+				want = append(want, "agentkourier_binding_condition{binding="+b+",condition=Ready,status="+s+"} "+v)
+			}
+			slices.Sort(got)
+			slices.Sort(want)
+			if !slices.Equal(got, want) {
+				t.Errorf("series = %v; want %v", got, want)
+			}
+		})
+	}
+}
+
+// A condition that is not Ready leaves the ready gauge alone, and a later transition replaces what an earlier one set.
+func TestBindingConditionOfAnotherTypeLeavesReadyAloneAndALaterTransitionReplaces(t *testing.T) {
+	const b = "sre/sre-alerts"
+	m := mustMetrics(t, nil)
+	m.BindingCondition(transition(b, bindingcheck.BackendReachable, bindingcheck.False))
+	if got := seriesOf(t, m, "agentkourier_binding_ready"); len(got) != 0 {
+		t.Errorf("a BackendReachable transition set %v; Ready alone sets the ready gauge", got)
+	}
+	m.BindingCondition(transition(b, bindingcheck.BackendReachable, bindingcheck.True))
+	got := seriesOf(t, m, "agentkourier_binding_condition")
+	for _, want := range []string{
+		"agentkourier_binding_condition{binding=sre/sre-alerts,condition=BackendReachable,status=true} 1",
+		"agentkourier_binding_condition{binding=sre/sre-alerts,condition=BackendReachable,status=false} 0",
+	} {
+		if !slices.Contains(got, want) {
+			t.Errorf("series = %v; want %q", got, want)
+		}
+	}
+}
+
+// Pruning a Binding deletes all of its series, the ready gauge and every condition's, and no other Binding's.
+func TestBindingsPrunedDeletesTheSeriesOfThoseBindingsOnly(t *testing.T) {
+	m := mustMetrics(t, nil)
+	for _, b := range []string{"a/one", "a/two"} {
+		for _, c := range []bindingcheck.ConditionType{bindingcheck.BackendReachable, bindingcheck.ChannelJoined, bindingcheck.ApproversReadable, bindingcheck.Ready} {
+			m.BindingCondition(transition(b, c, bindingcheck.False))
+		}
+	}
+	m.BindingsPruned([]string{"a/one"})
+	got := strings.Join(seriesOf(t, m, "agentkourier_binding_"), "\n")
+	if strings.Contains(got, "a/one") {
+		t.Errorf("series after the prune:\n%s\nwant none of a/one's", got)
+	}
+	if !strings.Contains(got, "agentkourier_binding_ready{binding=a/two} 0") || strings.Count(got, "a/two") != 13 {
+		t.Errorf("series after the prune:\n%s\nwant all 13 of a/two's (4 conditions of 3 statuses, and the ready gauge)", got)
+	}
+}
+
+// A probe's duration lands in the histogram of its condition, and a label outside the closed set is one series, "other".
+func TestBindingProbedObservesTheDurationByCondition(t *testing.T) {
+	m := mustMetrics(t, nil)
+	m.BindingProbed(bindingcheck.BackendReachable, 50*time.Millisecond)
+	m.BindingProbed(bindingcheck.ChannelJoined, time.Second)
+	m.BindingProbed("a condition an adapter made up", time.Second)
+	fams, err := m.reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]uint64{}
+	for _, f := range fams {
+		if f.GetName() != "agentkourier_binding_probe_duration_seconds" {
+			continue
+		}
+		for _, s := range f.GetMetric() {
+			counts[s.GetLabel()[0].GetValue()] = s.GetHistogram().GetSampleCount()
+		}
+	}
+	if want := map[string]uint64{"BackendReachable": 1, "ChannelJoined": 1, "other": 1}; !maps.Equal(counts, want) {
+		t.Errorf("observations by condition = %v; want %v", counts, want)
 	}
 }

@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -192,6 +194,82 @@ func TestChooseConnectionReadsTheTokensOfTheOneConnection(t *testing.T) {
 	if strings.Contains(fmt.Sprintf("%v %+v", got, got), "xoxb-fake-bot") {
 		t.Error("the connection prints a token")
 	}
+}
+
+// versioned is a reader whose Secret has a version, and which can rotate the Secret as the first value is read: an update that lands
+// between the read of the version and the read of the values.
+type versioned struct {
+	*reader
+	version     atomic.Int64
+	rotateOnGet bool
+	versionErr  error
+}
+
+func (v *versioned) Value(ctx context.Context, ns, name, key string) (secret.Value, error) {
+	if v.rotateOnGet {
+		v.version.Add(1)
+	}
+	return v.reader.Value(ctx, ns, name, key)
+}
+
+func (v *versioned) SecretVersion(context.Context, string, string) (string, error) {
+	if v.versionErr != nil {
+		return "", v.versionErr
+	}
+	return strconv.FormatInt(v.version.Load(), 10), nil
+}
+
+// ChooseConnection says which Secret the tokens came from and the version it had, so that a later change of it is told against the
+// version the tokens were read under. A reader that keeps no versions, or cannot give one now, leaves the version empty and the
+// connection is chosen all the same.
+func TestChooseConnectionRecordsTheVersionOfTheCredentialsSecret(t *testing.T) {
+	vals := func() *reader {
+		return &reader{vals: map[string]string{"platform/creds-slack/botToken": "xoxb-fake-bot", "platform/creds-slack/appToken": "xapp-fake-app"}}
+	}
+	t.Run("a reader with versions", func(t *testing.T) {
+		v := &versioned{reader: vals()}
+		v.version.Store(7)
+		got, err := ChooseConnection(t.Context(), slackConnections(t, "platform/slack"), v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := (SecretVersion{Namespace: "platform", Name: "creds-slack", Version: "7"}); got.CredentialsSecret != want {
+			t.Errorf("CredentialsSecret = %+v; want %+v", got.CredentialsSecret, want)
+		}
+	})
+	t.Run("a rotation while the values are read is not hidden", func(t *testing.T) {
+		v := &versioned{reader: vals(), rotateOnGet: true}
+		v.version.Store(7)
+		got, err := ChooseConnection(t.Context(), slackConnections(t, "platform/slack"), v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.CredentialsSecret.Version != "7" {
+			t.Fatalf("baseline version = %q; want the version before the values were read, 7", got.CredentialsSecret.Version)
+		}
+		watch := credentialsWatch{baseline: got.CredentialsSecret, versions: v}
+		if !watch.changed(t.Context()) {
+			t.Error("the Secret rotated while the tokens were read, and the watch does not see it")
+		}
+	})
+	t.Run("a reader without versions", func(t *testing.T) {
+		got, err := ChooseConnection(t.Context(), slackConnections(t, "platform/slack"), vals())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := (SecretVersion{Namespace: "platform", Name: "creds-slack"}); got.CredentialsSecret != want {
+			t.Errorf("CredentialsSecret = %+v; want %+v, with no version", got.CredentialsSecret, want)
+		}
+	})
+	t.Run("a version that cannot be read", func(t *testing.T) {
+		got, err := ChooseConnection(t.Context(), slackConnections(t, "platform/slack"), &versioned{reader: vals(), versionErr: errors.New("cache not synced")})
+		if err != nil {
+			t.Fatalf("ChooseConnection = %v; a version that cannot be read must not fail the choice", err)
+		}
+		if got.CredentialsSecret.Version != "" {
+			t.Errorf("version = %q; want none", got.CredentialsSecret.Version)
+		}
+	})
 }
 
 func TestChooseConnectionNeedsExactlyOne(t *testing.T) {

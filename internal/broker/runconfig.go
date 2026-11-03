@@ -70,6 +70,9 @@ type RunConfig struct {
 	// digestEvery is how often the digest lines of stopped alerts are looked for (15 seconds if zero): a seam for this
 	// package's tests, which cannot wait for it.
 	digestEvery time.Duration
+	// probeEvery and probeTick are how often the verification of the Bindings probes (5 minutes) and looks for a change of the config
+	// (5 seconds) if zero: a seam for this package's tests, which cannot wait for them.
+	probeEvery, probeTick time.Duration
 	// shutdownTrace is told as each shutdown step begins, so a test can see the order and act in between.
 	shutdownTrace func(step string)
 	// stopTrace is told the name of each stop of the interactions' step as it begins, so a test can see
