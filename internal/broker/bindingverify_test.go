@@ -419,10 +419,10 @@ func TestChannelCheckerAgainstTheFakePlatform(t *testing.T) {
 	}
 }
 
-// The Message of Unknown/ChatUnavailable says which of three it was, with the platform's own words when it answered, through the real
-// Slack client and its Classify: the code of an answer that is an error (no_permission is an answer, not a silence) is in the Message and
-// in the log line, a call that got no answer says so, and no token is in either. A Message that changes between passes is not a
-// transition, so a code that changes adds no line.
+// The Message of Unknown/ChatUnavailable, through the real Slack client and its Classify: a rate limit and a deadline are said so, and
+// every other failure is "the read failed" with its cause, which is the platform's code when it answered (no_permission) and the
+// transport's error when it did not (connection refused), since the client drops the difference. The cause is in the Message and in the
+// log line and no token is in either. A Message that changes between passes is not a transition, so a cause that changes adds no line.
 func TestChannelCheckerSaysWhatSlackAnsweredOrThatItDidNotAnswer(t *testing.T) {
 	const bot, app = "xoxb-TESTTOKEN-123456", "xapp-TESTTOKEN-654321"
 	var answer atomic.Value
@@ -452,11 +452,11 @@ func TestChannelCheckerSaysWhatSlackAnsweredOrThatItDidNotAnswer(t *testing.T) {
 		status  bindingcheck.Status
 		message string // a substring
 	}{
-		{"no_permission", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, "answered the read with an error: slack conversations.info: no_permission"},
-		{"access_denied", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, "answered the read with an error: slack conversations.info: access_denied"},
-		{"http500", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, "answered the read with an error"},
+		{"no_permission", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, "read failed: slack conversations.info: no_permission"},
+		{"access_denied", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, "read failed: slack conversations.info: access_denied"},
+		{"http500", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, "read failed"},
 		{"ratelimit", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, "rate-limited"},
-		{"hang", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, "did not answer the read"},
+		{"hang", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, "did not answer the read in time"},
 		{"invalid_auth", bindingcheck.ReasonChatCredentialsRejected, bindingcheck.False, "rejected the bot's token"},
 		{"channel_not_found", bindingcheck.ReasonChannelNotFound, bindingcheck.False, "does not exist"},
 	} {
@@ -471,6 +471,16 @@ func TestChannelCheckerSaysWhatSlackAnsweredOrThatItDidNotAnswer(t *testing.T) {
 			}
 		}
 		outs = append(outs, out)
+	}
+
+	// A port nobody listens on: the cause is the refusal, in a Message that claims neither that Slack answered nor that it did not.
+	refused := httptest.NewServer(http.NotFoundHandler())
+	refusedURL := refused.URL
+	refused.Close()
+	closed := channelChecker{platform: slack.NewPlatform(slack.New(slack.Config{BotToken: secret.New(bot), AppToken: secret.New(app), APIURL: refusedURL + "/", Logger: slog.New(slog.DiscardHandler)}), "ns/conn"), timeout: 2 * time.Second}
+	if out, err := closed.CheckChannel(t.Context(), "C1"); err != nil || out.Status != bindingcheck.Unknown || out.Reason != bindingcheck.ReasonChatUnavailable ||
+		!strings.Contains(out.Message, "read failed") || !strings.Contains(out.Message, "connection refused") || strings.Contains(out.Message, "answered") || strings.Contains(out.Message, bot) {
+		t.Errorf("a closed port: CheckChannel = %+v, %v; want Unknown/ChatUnavailable, \"read failed\" and \"connection refused\", and no claim that Slack answered", out, err)
 	}
 
 	// The code is in the log line of the transition, and no token is.
@@ -651,6 +661,12 @@ func TestVerificationReadsTheCredentialsSecretTheCurrentConfigNames(t *testing.T
 // sre/other-bot (on slack-b) name the same channel, C1, which Resolve allows on two connections.
 func twoConnections(t *testing.T, without ...string) *config.Snapshot {
 	t.Helper()
+	return twoConnectionsMoved(t, nil, without...)
+}
+
+// twoConnectionsMoved is twoConnections with the Bindings of moved ("namespace/name" to a connection) on that connection instead.
+func twoConnectionsMoved(t *testing.T, moved map[string]string, without ...string) *config.Snapshot {
+	t.Helper()
 	be := v1alpha1.AgentBackend{ObjectMeta: metav1.ObjectMeta{Namespace: "platform", Name: "kagent"}, Spec: v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectA2A, URL: "http://x", AllowedNamespaces: []string{"sre", "ops"}}}
 	conn := func(name string) v1alpha1.ChatConnection {
 		return v1alpha1.ChatConnection{ObjectMeta: metav1.ObjectMeta{Namespace: "platform", Name: name},
@@ -668,6 +684,9 @@ func twoConnections(t *testing.T, without ...string) *config.Snapshot {
 		binding("sre", "other-bot", "slack-b", "C1"), // the same channel, another ChatConnection
 		binding("ops", "also-other", "slack-b", "C3"),
 	} {
+		if to, ok := moved[b.Namespace+"/"+b.Name]; ok {
+			b.Spec.Chat.ConnectionRef.Name = to
+		}
 		if !slices.Contains(without, b.Namespace+"/"+b.Name) {
 			set.Bindings = append(set.Bindings, b)
 		}
@@ -778,6 +797,35 @@ func TestTheBrokersProberProbesTheServedConnectionAndPrunesWhatAReloadRemoves(t 
 	}
 	if !slices.Contains(samples(t, m), "agentkourier_binding_ready{binding=sre/oncall} 1") {
 		t.Errorf("the series of sre/oncall went with ops/oncall's: %v", seriesOf(t, m, "agentkourier_binding_"))
+	}
+}
+
+// A reload that removes a Binding, or moves it to another ChatConnection than the one served, ends its verification, and its series go:
+// an alert on them resolves without a word. Each such Binding gets one INFO line saying so, and a Binding still served gets none.
+func TestABindingTheReloadRemovedOrMovedAwayGetsALineWhenItsVerificationStops(t *testing.T) {
+	current := &snaps{}
+	current.p.Store(twoConnections(t))
+	var buf logBuffer
+	p := verification{
+		Bindings: probeFunc(func(context.Context, string) error { return nil }), Platform: &accessFake{access: chat.Access{Member: true}}, Snaps: current,
+		Revision: func(context.Context) string { return fmt.Sprint(current.p.Load()) },
+		Conn:     Connection{Ref: v1alpha1.ObjectRef{Namespace: "platform", Name: "slack-a"}},
+		Metrics:  mustMetrics(t, nil), Log: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})),
+		Interval: time.Hour, Tick: 5 * time.Millisecond, MinRevisionGap: time.Millisecond,
+	}.newProber()
+	runProber(t, p)
+	waitSettled(t, p, 2)
+	if got := buf.String(); strings.Contains(got, "stopped verifying") {
+		t.Fatalf("a line of stopped verification while both Bindings are served:\n%s", got)
+	}
+
+	// ops/oncall moves to slack-b and sre/oncall is removed.
+	current.p.Store(twoConnectionsMoved(t, map[string]string{"ops/oncall": "slack-b"}, "sre/oncall"))
+	eventually(t, 10*time.Second, "the lines of the stopped verifications", func() bool { return strings.Count(buf.String(), "stopped verifying") == 2 })
+	for _, b := range []string{"sre/oncall", "ops/oncall"} {
+		if n := countOf(buf.String(), "level=INFO", "stopped verifying a Binding", "binding="+b); n != 1 {
+			t.Errorf("%d lines that the verification of %s stopped; want one\n%s", n, b, buf.String())
+		}
 	}
 }
 
@@ -996,7 +1044,7 @@ func waitSettled(t *testing.T, p *bindingcheck.Prober, n int) map[string]map[bin
 			got[b] = map[bindingcheck.ConditionType]bindingcheck.Condition{}
 			for _, c := range conds {
 				got[b][c.Type] = c
-				pending = pending || c.Reason == bindingcheck.ReasonPending || (c.Type == bindingcheck.Ready && c.Status == bindingcheck.Unknown && strings.HasSuffix(string(c.Reason), ":Pending"))
+				pending = pending || c.Pending()
 			}
 		}
 		if len(got) == n && !pending {

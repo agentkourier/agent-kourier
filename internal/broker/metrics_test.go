@@ -304,7 +304,8 @@ func TestBindingReadyHasNoSeriesWhileItIsStillPendingInEitherProbeOrder(t *testi
 		{"channel first, then backend", bindingcheck.ChannelJoined, bindingcheck.BackendReachable, bindingcheck.True, bindingcheck.True, "", "1", 1},
 		{"backend first, false", bindingcheck.BackendReachable, bindingcheck.ChannelJoined, bindingcheck.False, bindingcheck.True, "0", "0", 2},
 		{"channel first, false", bindingcheck.ChannelJoined, bindingcheck.BackendReachable, bindingcheck.False, bindingcheck.True, "0", "0", 2},
-		{"channel first, unknown: not yet known is not a pending Ready", bindingcheck.ChannelJoined, bindingcheck.BackendReachable, bindingcheck.Unknown, bindingcheck.True, "", "0", 1},
+		{"backend first, unknown: still hidden, as in the other order", bindingcheck.BackendReachable, bindingcheck.ChannelJoined, bindingcheck.Unknown, bindingcheck.True, "", "0", 2},
+		{"channel first, unknown: hidden too", bindingcheck.ChannelJoined, bindingcheck.BackendReachable, bindingcheck.Unknown, bindingcheck.True, "", "0", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			release := make(chan struct{})

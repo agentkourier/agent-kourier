@@ -101,29 +101,16 @@ func TestRunReportsTheConditionsOfTheBindingsAsMetricsAndLogLines(t *testing.T) 
 	r.waitMoreProbes("ChannelJoined", 6) // several more probes: a probe that finds what it found before is not logged again
 
 	out := logs.String()
-	count := func(parts ...string) int {
-		n := 0
-		for _, line := range strings.Split(out, "\n") {
-			ok := true
-			for _, p := range parts {
-				ok = ok && strings.Contains(line, p)
-			}
-			if ok {
-				n++
-			}
-		}
-		return n
-	}
-	if n := count("level=WARN", "a condition is false", "binding="+unverifiedBinding, "condition=ChannelJoined", "reason=NotInChannel"); n != 1 {
+	if n := countOf(out, "level=WARN", "a condition is false", "binding="+unverifiedBinding, "condition=ChannelJoined", "reason=NotInChannel"); n != 1 {
 		t.Errorf("%d warnings that %s is not in its channel; want one\n%s", n, unverifiedBinding, out)
 	}
-	if n := count("level=WARN", "a condition is false", "binding="+verifiedBinding, "reason=ChannelArchived"); n != 1 {
+	if n := countOf(out, "level=WARN", "a condition is false", "binding="+verifiedBinding, "reason=ChannelArchived"); n != 1 {
 		t.Errorf("%d warnings that %s's channel is archived; want one\n%s", n, verifiedBinding, out)
 	}
-	if n := count("level=INFO", "true again", "binding="+verifiedBinding, "condition=ChannelJoined"); n != 1 {
+	if n := countOf(out, "level=INFO", "true again", "binding="+verifiedBinding, "condition=ChannelJoined"); n != 1 {
 		t.Errorf("%d notices that %s's channel is joined again; want one\n%s", n, verifiedBinding, out)
 	}
-	if n := count("level=WARN", "binding verification", "binding="+verifiedBinding) - 1; n != 0 {
+	if n := countOf(out, "level=WARN", "binding verification", "binding="+verifiedBinding) - 1; n != 0 {
 		t.Errorf("%s was warned of more than for its archived channel\n%s", verifiedBinding, out)
 	}
 	if strings.Contains(out, "xoxb-fake-bot") {

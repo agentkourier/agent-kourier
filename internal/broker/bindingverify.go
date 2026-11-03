@@ -88,7 +88,9 @@ func (a agentChecker) CheckAgent(ctx context.Context, binding string) (bindingch
 
 // classifyAgent says what the error of a card fetch (agent.Pool.Check) means for BackendReachable. It is False when the answer
 // says a turn would fail now, and Unknown for the statuses that say nothing of the agent (408, 425 and 429). The Message names
-// the class and a status code, never the error's text, which can quote a response. It reports false for an error it cannot place,
+// the class and a status code, and never the text of a status error or a card, which can quote a response. A
+// request that got no answer carries its cause too, as telemetry.LogText gives the error under the *url.Error (so not the URL): that is
+// what tells a name that does not resolve from a refused connection. It reports false for an error it cannot place,
 // which the Prober records as a probe that could not tell.
 func classifyAgent(err error) (bindingcheck.Outcome, bool) {
 	fail := func(r bindingcheck.Reason, msg string) (bindingcheck.Outcome, bool) {
@@ -214,10 +216,12 @@ func (c channelChecker) CheckChannel(ctx context.Context, channel string) (bindi
 }
 
 // classifyError says what an error of ChannelAccess means for ChannelJoined: the two sentinels are False, a credential the platform
-// rejects is False/ChatCredentialsRejected, and anything else is Unknown/ChatUnavailable, whose Message says which of three it was:
-// a rate limit, a call that got no answer (a timeout, a connection that failed), or an answer that was an error, with the platform's
-// own words (its code, such as no_permission) through telemetry.LogText. A Message that changes is not a transition, so a code that
-// changes between passes adds no log line.
+// rejects is False/ChatCredentialsRejected, and anything else is Unknown/ChatUnavailable. Its Message is a rate limit, a deadline that
+// passed ("did not answer in time"), or, for everything else, "the read failed" with the cause through telemetry.LogText and no claim
+// about whether the platform answered: the Slack client's scrub keeps a deadline and a cancel as causes but drops other transport
+// causes, so a refused connection and an answer that is an error cannot be told apart here, and the cause in the text says which it
+// was (a code such as no_permission, or connection refused). A Message that changes is not a transition, so a cause that changes
+// between passes adds no log line.
 func (c channelChecker) classifyError(err error) bindingcheck.Outcome {
 	switch {
 	case errors.Is(err, chat.ErrChannelNotFound):
@@ -236,10 +240,10 @@ func (c channelChecker) classifyError(err error) bindingcheck.Outcome {
 			Message: "the chat platform rejected the bot's token: replace it and restart Agent Kourier"}
 	case v.RetryAfter > 0:
 		return unavailable("the chat platform rate-limited the read")
-	case didNotAnswer(err), errors.Is(err, context.Canceled):
-		return unavailable("the chat platform did not answer the read: " + telemetry.LogText(err))
+	case errors.Is(err, context.DeadlineExceeded):
+		return unavailable("the chat platform did not answer the read in time")
 	}
-	return unavailable("the chat platform answered the read with an error: " + telemetry.LogText(err))
+	return unavailable("the chat platform read failed: " + telemetry.LogText(err))
 }
 
 // credentialsChange is what credentialsWatch found.
@@ -364,6 +368,15 @@ func (l bindingLog) probeError(pe bindingcheck.ProbeError) {
 	l.log.Warn("binding verification: a probe failed", append([]any{"binding", pe.Target.Binding, "condition", string(pe.Condition)}, attrs...)...)
 }
 
+// pruned is bindingcheck.Options.OnPrune: the line for each Binding the Prober stops verifying because it left the Targets, which is
+// because a reload removed it or moved it to another ChatConnection than the one served. Its series go with it, so an alert on them
+// would resolve without a word; this line is the word.
+func (l bindingLog) pruned(names []string) {
+	for _, name := range names {
+		l.log.Info("binding verification: stopped verifying a Binding: the config removed it, or moved it to another ChatConnection than the one served", "binding", name)
+	}
+}
+
 // verification is what the verification of Bindings is built from.
 type verification struct {
 	// Bindings fetches agent cards (Bindings.CheckAgent), Platform reads the channel as the bot of Conn, and Snaps and Revision
@@ -447,6 +460,6 @@ func (v verification) newProber() *bindingcheck.Prober {
 		Interval: v.Interval, Tick: v.Tick, Timeout: timeout, MinRevisionGap: cmp.Or(v.MinRevisionGap, minRevisionGap),
 		OnTransition: func(tr bindingcheck.Transition) { v.Metrics.BindingCondition(tr); l.transition(tr) },
 		OnProbeError: l.probeError,
-		OnPrune:      v.Metrics.BindingsPruned,
+		OnPrune:      func(names []string) { v.Metrics.BindingsPruned(names); l.pruned(names) },
 	})
 }

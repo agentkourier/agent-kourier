@@ -200,12 +200,13 @@ func (m *Metrics) Takeover() { m.takeovers.Inc() }
 // for True and 0 for False and Unknown. The reason is not a label: a reason that flaps would make series come and go, and
 // it is in the log line of the transition.
 //
-// A Ready that is still Pending (no condition is False, and one has not ended its first probe) gets no series of its own and
-// no ready gauge: the Binding is not known to be unready, only not yet known, and a rule on == 0 would fire after every restart for
-// the length of the slower probe. Its other conditions' series are exported as they end. Ready never becomes Pending again, so a
-// Binding's Ready series come with its first result that is False or its last first probe.
+// A Ready that is still Pending (no condition is False, and a first probe has not ended: bindingcheck names a Pending condition
+// before any other Unknown, so the order in which the probes end does not matter) gets no series of its own and no ready gauge: the
+// Binding is not known to be unready, only not yet known, and a rule on == 0 would fire after every restart for the length of the slower
+// probe. A Binding that a first result has already found False has the series at once, with 0, which is true. The other conditions'
+// series are exported as they end. Ready never becomes Pending again.
 func (m *Metrics) BindingCondition(tr bindingcheck.Transition) {
-	if tr.New.Type == bindingcheck.Ready && strings.HasSuffix(string(tr.New.Reason), ":"+string(bindingcheck.ReasonPending)) {
+	if tr.New.Type == bindingcheck.Ready && tr.New.Pending() {
 		return
 	}
 	for _, s := range [...]bindingcheck.Status{bindingcheck.True, bindingcheck.False, bindingcheck.Unknown} {
