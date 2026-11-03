@@ -18,7 +18,9 @@ type Message struct {
 	Text     string // verbatim, with any mention of the bot in it
 	// ChannelType is "channel", "group" (private) and so on; empty on an app_mention, which has none.
 	ChannelType string
-	Mentioned   bool // the message mentions the bot; always true for an app_mention, and never for a bot's message
+	// Mentioned says the message mentions the bot: always for an app_mention, whoever posted it. A bot's message event is
+	// never Mentioned, whatever its text says: its mention arrives as an app_mention of its own.
+	Mentioned bool
 	// Bot is set if a bot posted the message.
 	Bot BotPost
 }
@@ -73,6 +75,13 @@ func botSubtype(s string) bool {
 	return s == "" || s == "bot_message"
 }
 
+// BotMentionFilter is an optional interface of a Sink: whether it takes a bot's mention of Agent Kourier, asked per channel.
+// A Sink without it is given none, so that Run fails closed.
+type BotMentionFilter interface {
+	// AcceptsBotMention says whether the Sink takes a mention by the bot botID in channel.
+	AcceptsBotMention(channel, botID string) bool
+}
+
 // userToken is a user mention as Slack writes it into a message's text: <@UID>, or <@UID|label>. The label is
 // whatever lies up to the first ">", a "|" included. Slack escapes "<" and ">" in what people type, so a raw token
 // is always Slack's own, whether or not it stands in a quote or in code; neither character is allowed inside one, so
@@ -102,15 +111,28 @@ const (
 //   - A bot's message (a message event with a bot_id and no subtype or bot_message) is forwarded with its
 //     content, for Run to ask the Sink whether a trigger names the bot. A message of Agent Kourier's own, by user ID
 //     or by bot ID, is never forwarded (ownPost): two bots would answer each other without end. A bot's message
-//     of another subtype, one with no content, and an app_mention by a bot are dropped.
+//     of another subtype and one with no content are dropped.
+//   - A bot's mention is its app_mention, which is Mentioned, with only the bot's ID and the message's text: Slack sends it
+//     where a mention registers, whether the token is in the text or only in the blocks, so it is what says so
+//     (docs/spikes/slack-mention-probe.md). It is forwarded for Run to ask the Sink, and Agent Kourier's own is an ownPost. Its
+//     message event is the bot's message above, and never Mentioned.
 //   - Edits, deletions and other subtypes, whoever they are of, are dropped: a bot's edit is no new alert.
 //   - Direct messages are dropped (Phase 4), and anything lacking a channel or ts.
 func decode(me self, inner any) (Message, verdict) {
 	switch e := inner.(type) {
 	case *slackevents.AppMentionEvent:
 		// An edit that adds a mention arrives as an app_mention with edited set; edits are ignored.
-		// UNCONFIRMED(WP-04): that Slack sends it so.
-		if e.Edited != nil || e.BotID != "" || e.User == me.user || e.User == "" || e.Channel == "" || e.TimeStamp == "" || e.Text == "" {
+		if e.Edited != nil || e.Channel == "" || e.TimeStamp == "" {
+			return Message{}, dropped
+		}
+		if e.BotID != "" {
+			m := Message{Channel: e.Channel, TS: e.TimeStamp, ThreadTS: e.ThreadTimeStamp, User: e.User, Text: e.Text, Mentioned: true, Bot: BotPost{ID: e.BotID}}
+			if (me.user != "" && e.User == me.user) || (me.bot != "" && e.BotID == me.bot) {
+				return m, ownPost
+			}
+			return m, forward
+		}
+		if e.User == me.user || e.User == "" || e.Text == "" {
 			return Message{}, dropped
 		}
 		return Message{Channel: e.Channel, TS: e.TimeStamp, ThreadTS: e.ThreadTimeStamp, User: e.User, Text: e.Text, Mentioned: true}, forward

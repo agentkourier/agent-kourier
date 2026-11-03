@@ -20,8 +20,8 @@ type Inbound struct {
 	Text string
 	// Mentioned says the message mentions Agent Kourier. Direct says it is in a conversation of its own with
 	// Agent Kourier, a direct message, where no mention is needed. The adapter decides both, so the routing
-	// that uses them knows nothing of a platform's syntax. A bot's message is never Mentioned: only a
-	// person's mention starts a session (D36).
+	// that uses them knows nothing of a platform's syntax. A bot's message is Mentioned only when the
+	// platform says the bot mentioned Agent Kourier; its other event of the same post is not (D36).
 	Mentioned, Direct bool
 	// Bot is set when a bot posted the message, and only then. A platform forwards a bot's message only
 	// if the Sink takes it (BotFilter), and never Agent Kourier's own.
@@ -100,6 +100,9 @@ type ThreadReader interface {
 	// of the whole window. Check ErrThreadTooLong and ErrNoThreadReads with errors.Is before Classify, which does not
 	// know them; any other error classifies as the platform's (Classify, OpOther), a rate limit with its RetryAfter.
 	ThreadBetween(ctx context.Context, t Target, after, before string, limit int) (msgs []HistoryMessage, dropped int, err error)
+	// ThreadRoot returns the message that opened the thread t.Thread, decoded as ThreadBetween's are, for a turn that carries
+	// the thread from its start. A platform that cannot read a thread says ErrNoThreadReads.
+	ThreadRoot(ctx context.Context, t Target) (HistoryMessage, error)
 }
 
 // Sink receives what Platform.Run decodes.
@@ -120,6 +123,14 @@ type BotFilter interface {
 	// AcceptsBot says whether a botMessage trigger of the Binding that owns channel names botID. It is a first cut by ID
 	// alone, so that a sender no trigger can match is dropped at the adapter: the trigger's own match also holds the kind.
 	AcceptsBot(channel, botID string) bool
+}
+
+// BotMentionFilter is an optional interface of a Sink that takes bots' mentions. A platform asks it before it forwards
+// one, and a Sink that does not implement it is given none: a platform fails closed. Agent Kourier's own mention is never
+// forwarded, whatever the answer.
+type BotMentionFilter interface {
+	// AcceptsBotMention says whether a mention by the bot botID in channel is to be taken.
+	AcceptsBotMention(channel, botID string) bool
 }
 
 // Stream is a message that grows while an agent writes it. The markdown that Append and Stop take is

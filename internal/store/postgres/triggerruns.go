@@ -20,8 +20,8 @@ const day = 24 * time.Hour
 func runningStartsQuery() string {
 	return `SELECT COUNT(*) FROM trigger_runs r
 	WHERE r.binding = $1 AND r.trigger_index = $2 AND r.limited = '' AND r.at > $3
-	AND (EXISTS (SELECT 1 FROM sessions s WHERE s.connection = r.connection AND s.channel = r.channel AND s.thread_ts = r.thread_ts AND s.task_id <> '')
-	  OR EXISTS (SELECT 1 FROM reply_queue q WHERE q.connection = r.connection AND q.channel = r.channel AND q.thread_ts = r.thread_ts AND ` + store.UndeliveredReplies("q").Text(Dialect{}) + `))`
+	AND (EXISTS (SELECT 1 FROM sessions s WHERE s.connection = r.connection AND s.channel = r.channel AND s.thread_ts = COALESCE(NULLIF(r.session_thread_ts, ''), r.thread_ts) AND s.task_id <> '')
+	  OR EXISTS (SELECT 1 FROM reply_queue q WHERE q.connection = r.connection AND q.channel = r.channel AND q.thread_ts = COALESCE(NULLIF(r.session_thread_ts, ''), r.thread_ts) AND ` + store.UndeliveredReplies("q").Text(Dialect{}) + `))`
 }
 
 // startsSince counts the admitted starts of a trigger after a time. Its arguments are the Binding, the trigger and the time.
@@ -113,10 +113,10 @@ func reachedLimit(ctx context.Context, tx pgx.Tx, run store.TriggerRun, limits s
 
 // recordStart records the start, over a row of the message that was stopped before.
 func recordStart(ctx context.Context, tx pgx.Tx, run store.TriggerRun) error {
-	_, err := tx.Exec(ctx, `INSERT INTO trigger_runs (connection, channel, thread_ts, binding, trigger_index, at) VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT (connection, channel, thread_ts) DO UPDATE SET binding = EXCLUDED.binding, trigger_index = EXCLUDED.trigger_index,
+	_, err := tx.Exec(ctx, `INSERT INTO trigger_runs (connection, channel, thread_ts, session_thread_ts, binding, trigger_index, at) VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (connection, channel, thread_ts) DO UPDATE SET session_thread_ts = EXCLUDED.session_thread_ts, binding = EXCLUDED.binding, trigger_index = EXCLUDED.trigger_index,
 			at = EXCLUDED.at, limited = '', window_start = NULL, window_end = NULL, digested = false`,
-		run.Key.Connection, run.Key.Channel, run.Key.Thread, run.Binding, run.Trigger, run.At)
+		run.Key.Connection, run.Key.Channel, run.Key.Thread, run.SessionThread, run.Binding, run.Trigger, run.At)
 	return err
 }
 
@@ -128,9 +128,9 @@ func recordStopped(ctx context.Context, tx pgx.Tx, run store.TriggerRun, limit s
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO trigger_runs (connection, channel, thread_ts, binding, trigger_index, at, limited, window_start, window_end)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-		run.Key.Connection, run.Key.Channel, run.Key.Thread, run.Binding, run.Trigger, run.At, string(limit), start, end)
+	_, err = tx.Exec(ctx, `INSERT INTO trigger_runs (connection, channel, thread_ts, session_thread_ts, binding, trigger_index, at, limited, window_start, window_end)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		run.Key.Connection, run.Key.Channel, run.Key.Thread, run.SessionThread, run.Binding, run.Trigger, run.At, string(limit), start, end)
 	return err
 }
 

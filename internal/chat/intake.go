@@ -67,6 +67,9 @@ type IntakeConfig struct {
 	// the key takes over after a minute; until then the key's messages are notes in a thread with no
 	// investigation.
 	OnStart func(ctx context.Context, m TriggerMatch) error
+	// OnMentionLimited, if set, is told of a bot's mention that a limit stopped, for the audit log. It is a record of
+	// something decided, so it returns nothing, and it does local writes only.
+	OnMentionLimited func(ctx context.Context, m TriggerMatch, limit store.TriggerLimit)
 	// TurnQueued, if set, says whether the turn with this ID (the MessageID of the message that started it) was
 	// durably taken: queued or already sent. It closes the window between OnStart queueing a turn and the
 	// thread being marked started (a failed write, a crash, an event Slack never delivered again): a later fire
@@ -100,8 +103,9 @@ type Intake struct {
 }
 
 var (
-	_ Sink      = (*Intake)(nil)
-	_ BotFilter = (*Intake)(nil)
+	_ Sink             = (*Intake)(nil)
+	_ BotFilter        = (*Intake)(nil)
+	_ BotMentionFilter = (*Intake)(nil)
 )
 
 // NewIntake returns an Intake over cfg.
@@ -117,10 +121,10 @@ func NewIntake(cfg IntakeConfig) *Intake {
 //     Unmentioned then, and it is ignored. It says NotOwned if Agent Kourier does not own the thread, and
 //     that too is ignored.
 //   - A message outside a thread that does not start one is ignored without asking.
-//   - A bot's message (m.Bot set) is never a mention and is never submitted: it is tried against the
-//     botMessage triggers of its channel's Binding, in order (botMessage). A match is decided (see
-//     TriggerDecision) and may be handed to IntakeConfig.OnStart; a message no trigger matches is ignored
-//     and counted.
+//   - A bot's message (m.Bot set) is never submitted here: it is tried against the botMessage triggers of its
+//     channel's Binding, in order (botMessage). A match is decided (see TriggerDecision) and may be handed to
+//     IntakeConfig.OnStart; a message no trigger matches is ignored and counted.
+//   - A bot's mention (m.Bot set and m.Mentioned) goes to IntakeConfig.OnStart too, within fixed limits (botMention).
 //
 // It returns an error only when Submit failed in a way a retry may cure, so the platform leaves the
 // event unacknowledged. An invalid turn is logged and dropped; no retry could mend it.
@@ -148,7 +152,11 @@ func (in *Intake) Message(ctx context.Context, m Inbound) (telemetryErr error) {
 		return nil
 	}
 	if m.Bot != nil {
-		d, err := in.botMessage(ctx, m)
+		take := in.botMessage
+		if m.Mentioned {
+			take = in.botMention
+		}
+		d, err := take(ctx, m)
 		if err != nil {
 			return err
 		}

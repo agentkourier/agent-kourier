@@ -468,7 +468,43 @@ func running(t *testing.T, s store.Store, ts string, at time.Time) {
 	}
 }
 
+// inThread is the run of a message ts that is a turn of the session of thread: a start in a thread that the message did not open.
+func inThread(ts, thread string, at time.Time) store.TriggerRun {
+	r := runOf(ts, at)
+	r.SessionThread = thread
+	return r
+}
+
 func (su suite) triggerRuns(t *testing.T) {
+	su.run(t, "each message in one thread is a start of its own", func(t *testing.T, s store.Store) {
+		lim := store.TriggerRunLimits{MaxRuns: 2, Per: time.Hour, DigestWindow: time.Hour}
+		for _, ts := range []string{"100.2", "100.3"} {
+			if got := admit(t, s, inThread(ts, "100.1", t0), lim); !got.Admitted {
+				t.Fatalf("message %s of the thread = %+v; want admitted", ts, got)
+			}
+		}
+		if got := admit(t, s, inThread("100.4", "100.1", t0), lim); got.Admitted || got.Limit != store.LimitRate {
+			t.Errorf("a third message of the thread = %+v; want the rate limit: the limits count messages and not threads", got)
+		}
+		if got := admit(t, s, inThread("100.2", "100.1", t0), lim); !got.Admitted {
+			t.Errorf("asking again for an admitted message = %+v; want admitted, and not counted twice", got)
+		}
+	})
+
+	su.run(t, "a start in a thread is running while the thread's session is", func(t *testing.T, s store.Store) {
+		lim := store.TriggerRunLimits{MaxConcurrent: 1, DigestWindow: time.Hour}
+		if got := admit(t, s, inThread("100.2", "100.1", t0), lim); !got.Admitted {
+			t.Fatalf("the first start = %+v; want admitted", got)
+		}
+		if got := admit(t, s, inThread("100.3", "100.1", t0), lim); !got.Admitted {
+			t.Fatalf("with no task yet, a second start = %+v; want admitted", got)
+		}
+		running(t, s, "100.1", t0)
+		if got := admit(t, s, inThread("200.2", "200.1", t0), lim); got.Admitted || got.Limit != store.LimitConcurrent {
+			t.Errorf("another thread's start while the session of the first runs = %+v; want the concurrency limit, found through SessionThread", got)
+		}
+	})
+
 	su.run(t, "a start under the limits is admitted", func(t *testing.T, s store.Store) {
 		if got := admit(t, s, runOf("100.1", t0), runLimits); !got.Admitted || got.Limit != "" {
 			t.Errorf("the first start = %+v; want admitted", got)

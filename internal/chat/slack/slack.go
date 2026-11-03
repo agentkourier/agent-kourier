@@ -163,7 +163,11 @@ func (c *Client) handle(ctx context.Context, smc *socketmode.Client, me self, si
 	switch ev.Type {
 	case socketmode.EventTypeEventsAPI:
 		if outer, ok := ev.Data.(slackevents.EventsAPIEvent); ok {
-			if m, v := decode(me, outer.InnerEvent.Data); c.takes(ctx, sink, m, v) {
+			m, v := decode(me, outer.InnerEvent.Data)
+			if v == forward && m.Mentioned && m.Bot.ID != "" && outer.IsExtSharedChannel {
+				v = dropped // a bot of another workspace may have posted it: a channel shared across workspaces fails closed
+			}
+			if c.takes(ctx, sink, m, v) {
 				if err := sink.Message(ctx, m); err != nil {
 					c.log.WarnContext(ctx, "slack: message not taken; left unacknowledged for Slack to send again",
 						"channel", m.Channel, "ts", m.TS, "err", err)
@@ -202,6 +206,10 @@ func (c *Client) handle(ctx context.Context, smc *socketmode.Client, me self, si
 func (c *Client) takes(ctx context.Context, sink Sink, m Message, v verdict) bool {
 	if v == dropped {
 		return false
+	}
+	if m.Mentioned && m.Bot.ID != "" {
+		filter, filters := sink.(BotMentionFilter)
+		return v != ownPost && filters && filter.AcceptsBotMention(m.Channel, m.Bot.ID)
 	}
 	filter, filters := sink.(BotFilter)
 	named := m.Bot.ID != "" && filters && filter.AcceptsBot(m.Channel, m.Bot.ID)

@@ -41,7 +41,8 @@ func (in *Intake) admit(ctx context.Context, m TriggerMatch) (store.TriggerLimit
 	}
 	run := store.TriggerRun{
 		Binding: m.Binding, Trigger: m.Index, At: m.Received,
-		Key: store.ConversationKey{Connection: in.conn, Channel: m.Message.At.Channel, Thread: m.Message.At.ID},
+		Key:           store.ConversationKey{Connection: in.conn, Channel: m.Message.At.Channel, Thread: m.Message.At.ID},
+		SessionThread: m.Message.At.Thread,
 	}
 	adm, err := in.cfg.TriggerRuns.AdmitTriggerRun(ctx, run, limits)
 	if err != nil {

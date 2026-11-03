@@ -63,6 +63,6 @@ func newIntakeConfig(p intakeParts) (chat.IntakeConfig, error) {
 	return chat.IntakeConfig{
 		Connection: p.conn, Snapshot: p.snapshot, Submitter: p.submitter, Logger: p.log,
 		Interactions: p.interactions, Notice: p.notice,
-		TriggerThreads: p.threads, TriggerRuns: p.runs, OnStart: p.starter.OnStart, TurnQueued: p.replies.HasReply,
+		TriggerThreads: p.threads, TriggerRuns: p.runs, OnStart: p.starter.OnStart, OnMentionLimited: p.starter.MentionLimited, TurnQueued: p.replies.HasReply,
 	}, nil
 }

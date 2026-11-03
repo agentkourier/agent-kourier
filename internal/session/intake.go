@@ -64,6 +64,8 @@ type Inbound struct {
 	// (the default mode, all). It is read only when the session's own Binding has left the config, and then it
 	// decides whether a reply that does not mention Agent Kourier is answered with the Binding-gone notice (spec 8.2).
 	ChannelThreadReplies v1alpha1.ThreadReplies
+	// WholeThread says the turn carries what the thread holds, every author's, since the previous turn (store.Reply.WholeThread).
+	WholeThread bool
 	// Origin identifies the bounded source and subject the thread is started for. Like Binding it is used only to
 	// create a session; a follow-up never replaces the session's origin.
 	Origin store.Origin
@@ -155,7 +157,7 @@ func (m *Manager) queue(ctx context.Context, in Inbound) (Result, error) {
 	}
 	// A duplicate, or a turn already delivered, is not queued again, and still wakes the runner.
 	parent, state := telemetry.Capture(ctx)
-	enqueued, err := m.cfg.Store.EnqueueReply(ctx, store.Reply{ID: in.MessageID, Key: in.Key, UserID: user, MessageRef: in.MessageRef, Acknowledgment: res.Acknowledgment, InteractionID: pin, Text: in.Text, EnqueuedAt: now, TraceParent: parent, TraceState: state})
+	enqueued, err := m.cfg.Store.EnqueueReply(ctx, store.Reply{ID: in.MessageID, Key: in.Key, UserID: user, MessageRef: in.MessageRef, Acknowledgment: res.Acknowledgment, InteractionID: pin, WholeThread: in.WholeThread, Text: in.Text, EnqueuedAt: now, TraceParent: parent, TraceState: state})
 	if err != nil {
 		return Result{}, fmt.Errorf("queue turn %s: %w", in.MessageID, err)
 	}

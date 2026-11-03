@@ -93,3 +93,33 @@ Tune the regexes until the lines read right, then load the Binding.
 After it is live, `agentkourier_trigger_matched_total` and `agentkourier_trigger_unmatched_total` count the bot's
 messages the trigger took and turned away, and `agentkourier_trigger_decisions_total` what each did to its thread.
 Every field and decision is in [Chat triggers](../reference/chat-triggers.md).
+
+## Let another agent start yours
+
+No trigger is needed for this. A bot's mention of Agent Kourier starts a turn in the thread that holds it, on any Binding with a `mention`
+trigger, unless the Binding sets `chat.botMentions: none`. [Chat triggers](../reference/chat-triggers.md#a-bots-mention) has the rules and the limits.
+
+To have one agent call another:
+
+1. Run them as separate Slack apps. Agent Kourier never reads its own posts, and a channel belongs to at most one Binding per connection, so
+   two Bindings on one app cannot do this.
+2. Give the target a Binding for the channel the mention will be in, and invite its bot there.
+3. On the source's Binding, declare the target's bot user under `chat.mentions`, so that its agent can write `@name`.
+4. Set `chat.threadReplies: mention` on both Bindings. Once both own a thread, a person's reply is otherwise a turn for each.
+
+Know what this does not bound:
+
+- **It accepts any bot.** Any bot or incoming webhook that can post in the channel can start your agent, and a post with a mention token in its text
+  or in a section or context block is enough. In a channel full of integrations, set `chat.botMentions: none`. A bot a `botMessage` trigger names
+  is left to that trigger.
+- **There is no hop limit.** If two agents can each mention the other, only the limits stop them, and people see the bots trade messages until
+  then.
+- **The source hears nothing back.** A mention counts as made once it is posted, even if the target stopped it at a limit, or does not exist.
+- **The receiving agent decides what to trust.** The model alone decides to write a name, so a crafted alert can get one agent to mention another. The first
+  prompt tells the agent to check before it acts, and the thread reaches it as untrusted data. Give an agent that can take a consequential step
+  a tool with its own check, and do not let it act on the mention alone.
+- **The agent is told only what the thread holds.** There is no field for a job: put what the agent should do in its own instructions.
+- **Same thread only.** This starts no thread in another channel.
+
+A [dry run](tune-triggers.md) replays history, which has no mention events, so it does not show these. A Binding that took no bots' mentions before takes them after an upgrade; set `chat.botMentions: none` first if it should not.
+

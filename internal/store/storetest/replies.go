@@ -244,6 +244,31 @@ func (su suite) replyQueue(t *testing.T) {
 
 	// The context window of a mentioned turn starts at the previous turn's message (spec 8.2, D38), so the previous row
 	// is the session's own, whatever state it is in.
+	su.run(t, "a turn keeps whether it carries the whole thread", func(t *testing.T, s store.Store) {
+		ctx := t.Context()
+		plain, whole := newReply("w1", key), newReply("w2", key)
+		whole.WholeThread = true
+		for _, r := range []store.Reply{plain, whole} {
+			_, err := s.EnqueueReply(ctx, r)
+			noErr(t, err, "enqueue "+r.ID)
+		}
+		first, err := s.NextReply(ctx, key)
+		noErr(t, err, "NextReply")
+		if first.ID != "w1" || first.WholeThread {
+			t.Errorf("the plain turn = %+v; want w1 without WholeThread", first)
+		}
+		second, err := s.NextReplyAfter(ctx, key, first.Sequence)
+		noErr(t, err, "NextReplyAfter")
+		if second.ID != "w2" || !second.WholeThread {
+			t.Errorf("the marked turn = %+v; want w2 with WholeThread", second)
+		}
+		prev, err := s.PreviousReply(ctx, key, second.Sequence+1)
+		noErr(t, err, "PreviousReply")
+		if prev.ID != "w2" || !prev.WholeThread {
+			t.Errorf("PreviousReply = %+v; want w2 with WholeThread", prev)
+		}
+	})
+
 	su.run(t, "PreviousReply is the session's row just below a sequence, delivered rows and pinned ones included", func(t *testing.T, s store.Store) {
 		ctx := t.Context()
 		other := keyOf("2.2")

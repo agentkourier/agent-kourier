@@ -243,6 +243,9 @@ func (in *Intake) unthreaded(ctx context.Context, m TriggerMatch, closing bool) 
 		return out, err
 	} else if limit != "" {
 		in.countLimited(ctx, m, limit)
+		if m.Mention && in.cfg.OnMentionLimited != nil {
+			in.cfg.OnMentionLimited(ctx, m, limit)
+		}
 		out.decision = DecisionLimited
 		return out, nil
 	}

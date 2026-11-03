@@ -87,14 +87,14 @@ func newThreadContext(cfg threadContextConfig) (*threadContext, error) {
 // Section is session.Config.ThreadContext: the section of the replies in the thread key between the messages after and
 // before (both exclusive) for a mentioned turn of binding, or the fixed line that says they could not be read, or "". It
 // never fails, and it logs no content (DP-2): a failure is counted and logged by Binding and error alone.
-func (t *threadContext) Section(ctx context.Context, key session.Key, binding, after, before string) string {
-	section, outcome := t.build(ctx, key, binding, after, before)
+func (t *threadContext) Section(ctx context.Context, key session.Key, binding, after, before string, whole bool) string {
+	section, outcome := t.build(ctx, key, binding, after, before, whole)
 	telemetry.Count(ctx, "agentkourier_thread_context_total", binding, outcome)
 	return section
 }
 
-func (t *threadContext) build(ctx context.Context, key session.Key, binding, after, before string) (section, outcome string) {
-	if after == before { // nothing lies between a message and itself; an inverted window is the platform's to say (chat.ThreadReader)
+func (t *threadContext) build(ctx context.Context, key session.Key, binding, after, before string, whole bool) (section, outcome string) {
+	if after == before || (whole && key.Thread == before) { // a mention that opens its own thread has nothing before it; and nothing lies between a message and itself; an inverted window is the platform's to say (chat.ThreadReader)
 		return "", threadEmpty
 	}
 	target := chat.Target{Conn: key.Connection, Channel: key.Channel, Thread: key.Thread}
@@ -105,14 +105,28 @@ func (t *threadContext) build(ctx context.Context, key session.Key, binding, aft
 	case err != nil:
 		return t.failed(ctx, binding, "read the thread", err)
 	}
-	people, err := t.eligible(ctx, msgs)
+	if whole && after == "" { // the first turn of the thread: what opened it is no reply, and may be what it is all about
+		root, err := t.platform.ThreadRoot(ctx, target)
+		switch {
+		case errors.Is(err, chat.ErrNoThreadReads):
+			return "", t.unsupported(ctx, binding)
+		case err != nil:
+			return t.failed(ctx, binding, "read the thread's first message", err)
+		}
+		msgs = append([]chat.HistoryMessage{root}, msgs...)
+	}
+	people, err := t.eligible(ctx, msgs, whole)
 	if err != nil {
 		return t.failed(ctx, binding, "ask which messages were turns", err)
 	}
 	if over := len(people) - render.MaxThreadReplies; over > 0 { // the older ones are cut whatever their names; do not look them up
 		dropped, people = dropped+over, people[over:]
 	}
-	section, leftOut := render.ThreadRepliesCounted(t.named(ctx, people), dropped)
+	counted := render.ThreadRepliesCounted
+	if whole {
+		counted = render.ThreadMessagesCounted
+	}
+	section, leftOut := counted(t.named(ctx, people), dropped)
 	switch {
 	case section == "":
 		return "", threadEmpty
@@ -145,12 +159,14 @@ func (t *threadContext) read(ctx context.Context, target chat.Target, after, bef
 // forward, which is not Agent Kourier's own (its answers and notes), not a bot's (D36), has a user, has text once normalized (a
 // reply of zero-width characters is blank to the block, and must not take one of its newest fifty places or cost a lookup)
 // and was not itself a turn or an answer (the reply queue holds it, queued or delivered), so the agent is not told what it
-// has already been sent. The checks that need no lookup come first, and the reply queue is asked once, about what is left.
-func (t *threadContext) eligible(ctx context.Context, msgs []chat.HistoryMessage) ([]chat.HistoryMessage, error) {
+// has already been sent. With whole, a bot's message counts too (threadText), and Agent Kourier's own still does not. The checks
+// that need no lookup come first, and the reply queue is asked once, about what is left.
+func (t *threadContext) eligible(ctx context.Context, msgs []chat.HistoryMessage, whole bool) ([]chat.HistoryMessage, error) {
 	var people []chat.HistoryMessage
 	var ids []string
 	for _, m := range msgs {
-		if m.Own || m.Ignored || m.Message.Bot != nil || m.Message.User == "" || strings.TrimSpace(redact.Normalize(m.Message.Text)) == "" {
+		bot := m.Message.Bot != nil
+		if m.Own || m.Ignored || (!whole && (bot || m.Message.User == "")) || strings.TrimSpace(redact.Normalize(threadText(m.Message))) == "" {
 			continue
 		}
 		people = append(people, m)
@@ -172,6 +188,20 @@ func (t *threadContext) eligible(ctx context.Context, msgs []chat.HistoryMessage
 	return out, nil
 }
 
+// threadText is what a message of the thread said: its text, or, for a bot's post with none, what its structured part holds.
+func threadText(m chat.Inbound) string {
+	if m.Text != "" || m.Bot == nil {
+		return m.Text
+	}
+	var parts []string
+	for _, s := range []string{m.Bot.Title, m.Bot.Body, m.Bot.Fallback} {
+		if s != "" {
+			parts = append(parts, s)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
 // named returns msgs as the replies the render shows, with the names the platform gives their authors (its user cache
 // answers a person who wrote more than once). A name that cannot be had is left out: the reply shows the ID alone.
 func (t *threadContext) named(ctx context.Context, msgs []chat.HistoryMessage) []render.ThreadReply {
@@ -179,6 +209,10 @@ func (t *threadContext) named(ctx context.Context, msgs []chat.HistoryMessage) [
 	out := make([]render.ThreadReply, len(msgs))
 	for i, m := range msgs {
 		id := m.Message.User
+		if id == "" && m.Message.Bot != nil { // a webhook's post has no user: its bot is who wrote it
+			out[i] = render.ThreadReply{UserID: m.Message.Bot.ID, Text: threadText(m.Message)}
+			continue
+		}
 		name, ok := names[id]
 		if !ok {
 			if u, err := t.platform.ResolveUser(ctx, id); err == nil {
@@ -186,7 +220,7 @@ func (t *threadContext) named(ctx context.Context, msgs []chat.HistoryMessage) [
 			}
 			names[id] = name
 		}
-		out[i] = render.ThreadReply{UserID: id, Name: name, Text: m.Message.Text}
+		out[i] = render.ThreadReply{UserID: id, Name: name, Text: threadText(m.Message)}
 	}
 	return out
 }

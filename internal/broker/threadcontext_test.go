@@ -84,6 +84,10 @@ func (noReads) ThreadBetween(context.Context, chat.Target, string, string, int) 
 	return nil, 0, chat.ErrNoThreadReads
 }
 
+func (noReads) ThreadRoot(context.Context, chat.Target) (chat.HistoryMessage, error) {
+	return chat.HistoryMessage{}, chat.ErrNoThreadReads
+}
+
 // turnSet is a reply queue that knows which messages were turns. It counts the lookups: eligible asks once for the whole
 // window, by HasReplies (the interface it is held to has no other lookup).
 type turnSet struct {
@@ -193,7 +197,7 @@ func (w *tcWorld) section() string { return w.sectionOf(w.build(w.win)) }
 
 func (w *tcWorld) sectionOf(tc *threadContext) string {
 	w.t.Helper()
-	return tc.Section(w.ctx, tcKey, tcBinding, "100.000100", "100.000900")
+	return tc.Section(w.ctx, tcKey, tcBinding, "100.000100", "100.000900", false)
 }
 
 // outcomes returns every count of agentkourier_thread_context_total by its binding and outcome.
@@ -542,7 +546,7 @@ func TestThreadContextSectionIsTheRendersBlock(t *testing.T) {
 func TestThreadContextOfAWindowWithNothingInItIsNothing(t *testing.T) {
 	t.Run("the same message on both sides asks nothing", func(t *testing.T) {
 		w := newTCWorld(t)
-		if got := w.build(w.win).Section(w.ctx, tcKey, tcBinding, "100.000500", "100.000500"); got != "" {
+		if got := w.build(w.win).Section(w.ctx, tcKey, tcBinding, "100.000500", "100.000500", false); got != "" {
 			t.Errorf("section = %q, want none", got)
 		}
 		if c := w.win.reads(); len(c) != 0 {
@@ -560,10 +564,10 @@ func TestThreadContextOfAWindowWithNothingInItIsNothing(t *testing.T) {
 			t.Fatal(err)
 		}
 		// The control: the same bounds the right way round read it.
-		if got := w.build(w.fake).Section(w.ctx, tcKey, tcBinding, "100.000100", "100.000900"); !sameTexts(shownTexts(got), []string{"between the bounds"}) {
+		if got := w.build(w.fake).Section(w.ctx, tcKey, tcBinding, "100.000100", "100.000900", false); !sameTexts(shownTexts(got), []string{"between the bounds"}) {
 			t.Fatalf("control section = %q, want the message between the bounds", got)
 		}
-		if got := w.build(w.fake).Section(w.ctx, tcKey, tcBinding, "100.000900", "100.000100"); got != "" {
+		if got := w.build(w.fake).Section(w.ctx, tcKey, tcBinding, "100.000900", "100.000100", false); got != "" {
 			t.Errorf("section = %q, want none for an inverted window", got)
 		}
 		if o := w.outcomes(); o[tcBinding+" read"] != 1 || o[tcBinding+" empty"] != 1 || len(o) != 2 {
@@ -605,7 +609,7 @@ func TestThreadContextOverTheFakePlatform(t *testing.T) {
 		}
 	}
 
-	got := w.build(w.fake).Section(w.ctx, tcKey, tcBinding, "0.000001", "100.001000")
+	got := w.build(w.fake).Section(w.ctx, tcKey, tcBinding, "0.000001", "100.001000", false)
 
 	if want := []string{"first, from a person", "last, from a person"}; !sameTexts(shownTexts(got), want) {
 		t.Errorf("the section shows %v, want %v:\n%s", shownTexts(got), want, got)
@@ -628,7 +632,7 @@ func TestThreadContextOnAPlatformThatCannotReadAThread(t *testing.T) {
 					t.Fatalf("section = %q, want none: the turn goes with its own message alone", got)
 				}
 			}
-			tc.Section(w.ctx, tcKey, "ns/other", "100.000100", "100.000900")
+			tc.Section(w.ctx, tcKey, "ns/other", "100.000100", "100.000900", false)
 
 			if o := w.outcomes(); o[tcBinding+" unsupported"] != 3 || o["ns/other unsupported"] != 1 || len(o) != 2 {
 				t.Errorf("outcomes = %v, want unsupported counted for every turn", o)
@@ -772,7 +776,7 @@ func TestThreadContextWaitsOutARateLimitOnce(t *testing.T) {
 			Platform: w.win, Replies: w.turns, Logger: slog.New(slog.NewTextHandler(w.logs, nil)),
 			After: func(time.Duration) <-chan time.Time { cancel(); return make(chan time.Time) }, // never fires
 		})
-		if got := tc.Section(ctx, tcKey, tcBinding, "100.000100", "100.000900"); got != threadReadFailed {
+		if got := tc.Section(ctx, tcKey, tcBinding, "100.000100", "100.000900", false); got != threadReadFailed {
 			t.Errorf("section = %q, want the fixed line", got)
 		}
 		if n := len(w.win.reads()); n != 1 {
@@ -815,5 +819,84 @@ func TestThreadContextLimits(t *testing.T) {
 	}
 	if threadFetchLimit != 1000 {
 		t.Errorf("threadFetchLimit = %d, want 1000, the most the Slack adapter reads of a window", threadFetchLimit)
+	}
+}
+
+// rootedReader is a windowReader that also knows what opened the thread.
+type rootedReader struct {
+	*windowReader
+	root chat.HistoryMessage
+	err  error
+	read int
+}
+
+func (r *rootedReader) ThreadRoot(context.Context, chat.Target) (chat.HistoryMessage, error) {
+	r.read++
+	return r.root, r.err
+}
+
+// botPost is a message of the thread by a bot, with a user or, as a webhook's, without one.
+func botPost(seq int, user string, bot chat.BotMessage, text string) chat.HistoryMessage {
+	m := msg(seq, user, text)
+	m.Message.Bot = &bot
+	return m
+}
+
+// A turn that carries the thread shows what opened it and what people and other bots wrote after, oldest first, each by who wrote
+// it. Agent Kourier's own posts, and messages that were already turns, stay out. An alert's post, with no text of its own, shows
+// its structured part.
+func TestThreadContextOfAWholeThread(t *testing.T) {
+	w := newTCWorld(t)
+	own := msg(4, "UME", "my own answer")
+	own.Own = true
+	turn := msg(5, "U2", "a turn before this one")
+	w.turns.ids[idOf(turn)] = true
+	w.win.window = []chat.HistoryMessage{
+		botPost(2, "U3", chat.BotMessage{ID: "B0AGENT"}, "the card service looks fine, payments next"),
+		msg(3, "U1", "go on"), own, turn,
+		botPost(6, "", chat.BotMessage{ID: "B0WEBHOOK"}, "a webhook's line"),
+	}
+	r := &rootedReader{windowReader: w.win, root: botPost(1, "", chat.BotMessage{ID: "B0ALERTS", Title: "FIRING - Latency", Body: "p99 is high"}, "")}
+
+	got := w.build(r).Section(w.ctx, tcKey, tcBinding, "", "100.000900", true)
+
+	for _, want := range []string{"<id>B0ALERTS</id>", "FIRING - Latency\np99 is high", "the card service looks fine, payments next", "<from>Linus</from>", "go on", "<from>Ada</from>", "<id>B0WEBHOOK</id>", "a webhook's line"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the section lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Index(got, "FIRING - Latency") > strings.Index(got, "the card service") {
+		t.Errorf("what opened the thread is not first:\n%s", got)
+	}
+	for _, not := range []string{"my own answer", "a turn before this one"} {
+		if strings.Contains(got, not) {
+			t.Errorf("the section holds %q:\n%s", not, got)
+		}
+	}
+	if !strings.HasPrefix(got, "Messages that people and other bots wrote") {
+		t.Errorf("the section is not the whole thread's block:\n%s", got)
+	}
+	if c := w.win.reads(); len(c) != 1 || c[0].after != "" || c[0].before != "100.000900" {
+		t.Errorf("reads = %+v; want one, from the start up to the mention", c)
+	}
+}
+
+// A later turn has seen the thread's start: it reads from the previous turn and leaves the root alone. A mention that opens its own
+// thread has nothing before it and reads nothing. A root that cannot be read costs the turn the block, and it says so.
+func TestThreadContextOfAWholeThreadReadsOnlyWhatItNeeds(t *testing.T) {
+	w := newTCWorld(t)
+	w.win.window = []chat.HistoryMessage{msg(3, "U1", "go on")}
+	r := &rootedReader{windowReader: w.win, root: msg(1, "U2", "what opened it")}
+	tc := w.build(r)
+	if got := tc.Section(w.ctx, tcKey, tcBinding, "100.000100", "100.000900", true); !strings.Contains(got, "go on") || strings.Contains(got, "what opened it") || r.read != 0 {
+		t.Errorf("a later turn: root reads %d, section:\n%s", r.read, got)
+	}
+	reads := len(w.win.reads())
+	if got := tc.Section(w.ctx, tcKey, tcBinding, "", tcThread, true); got != "" || len(w.win.reads()) != reads {
+		t.Errorf("a mention that opens its thread = %q, %d reads; want nothing and no read", got, len(w.win.reads())-reads)
+	}
+	r.err = errors.New("TOPSECRET no such thread")
+	if got := tc.Section(w.ctx, tcKey, tcBinding, "", "100.000900", true); got != threadReadFailed {
+		t.Errorf("a root that cannot be read = %q; want the fixed line", got)
 	}
 }

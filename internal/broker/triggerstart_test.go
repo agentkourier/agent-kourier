@@ -41,7 +41,7 @@ func (s *startSubmitter) Submit(_ context.Context, in session.Inbound) (session.
 	defer s.mu.Unlock()
 	s.got = append(s.got, in)
 	if s.res.Disposition == "" && s.err == nil {
-		return session.Result{Disposition: session.Created}, nil
+		return session.Result{Disposition: session.Created, Admission: session.Admission{Kind: session.AdmitTurn}}, nil
 	}
 	return s.res, s.err
 }
@@ -521,4 +521,79 @@ func untrustedTag(t *testing.T, prompt string) string {
 		t.Fatalf("the block's tag is untrusted-data-%s; want a 12 digit hash", hash)
 	}
 	return "untrusted-data-" + hash
+}
+
+// mentioned is the match of a bot's mention in a thread: what the Intake hands the starter.
+func mentioned() chat.TriggerMatch {
+	return chat.TriggerMatch{
+		Binding: startBinding, PromptTemplate: chat.BotMentionPrompt, Mention: true, MessageID: "slack:" + startConn + ":C0123456789:2.2",
+		Received: time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC),
+		Message: chat.Inbound{
+			At:   chat.Ref{Platform: "slack", Conn: startConn, Channel: "C0123456789", Thread: "1.1", ID: "2.2"},
+			User: "UBOT", Text: "The agent named probe in this thread.", Mentioned: true, Bot: &chat.BotMessage{ID: "B0123456789"},
+		},
+	}
+}
+
+// A bot's mention is a turn of the thread it is in, with the fixed prompt, marked to carry the thread, and with what the post
+// said in the untrusted block. It names no user: the bot is no person, and the turn is filed as nobody's.
+func TestOnStartOfABotsMentionIsATurnOfItsThread(t *testing.T) {
+	s := newStarter(t)
+	if err := s.OnStart(s.tel.Ctx, mentioned()); err != nil {
+		t.Fatalf("OnStart = %v", err)
+	}
+	if len(s.sub.got) != 1 {
+		t.Fatalf("%d turns submitted; want 1", len(s.sub.got))
+	}
+	in := s.sub.got[0]
+	if want := (session.Key{Connection: startConn, Channel: "C0123456789", Thread: "1.1"}); in.Key != want || in.MessageRef != "2.2" || !in.Create || !in.WholeThread || in.UserID != "" {
+		t.Errorf("submitted %+v; want a turn of the thread %+v for the message 2.2, marked WholeThread, with no user", in, want)
+	}
+	if want := (store.Origin{Source: "botMention"}); in.Origin != want {
+		t.Errorf("Origin = %+v; want %+v, which feedback attributes to no alert", in.Origin, want)
+	}
+	if !strings.HasPrefix(in.Text, "Another agent mentioned you in a thread of channel C0123456789: https://") {
+		t.Errorf("the turn starts %q; want the fixed prompt with the channel and the link", firstLine(in.Text))
+	}
+	tag := untrustedTag(t, in.Text)
+	if before, _, _ := strings.Cut(in.Text, "<"+tag+">"); strings.Contains(before, "The agent named probe") {
+		t.Errorf("the post's text is outside the untrusted block:\n%s", in.Text)
+	}
+	if !strings.Contains(in.Text, "The agent named probe in this thread.") {
+		t.Errorf("the turn lacks the post's text:\n%s", in.Text)
+	}
+}
+
+// A mention at the top level opens its own thread.
+func TestOnStartOfATopLevelBotMentionOpensItsThread(t *testing.T) {
+	s := newStarter(t)
+	m := mentioned()
+	m.Message.At.Thread = ""
+	if err := s.OnStart(s.tel.Ctx, m); err != nil {
+		t.Fatalf("OnStart = %v", err)
+	}
+	if got := s.sub.got[0].Key.Thread; got != "2.2" {
+		t.Errorf("thread = %q; want the mention's own message", got)
+	}
+}
+
+// A thread that cannot be continued takes no turn from a bot, and nothing will change that: no retry, and no note in the thread.
+func TestOnStartOfABotsMentionInAThreadThatCannotContinue(t *testing.T) {
+	s := newStarter(t)
+	s.sub.res = session.Result{Disposition: session.Expired, Admission: session.Admission{Kind: session.AdmitNotice, Notice: session.NoticeExpired}}
+	if err := s.OnStart(s.tel.Ctx, mentioned()); !errors.Is(err, chat.ErrNotStarted) {
+		t.Fatalf("OnStart = %v; want ErrNotStarted", err)
+	}
+	if len(s.notes.got) != 0 {
+		t.Errorf("notes = %+v; want none", s.notes.got)
+	}
+}
+
+// A mention that a limit stopped is audited, by message and limit and with nothing the post said.
+func TestAMentionALimitStoppedIsAudited(t *testing.T) {
+	s := newStarter(t)
+	s.MentionLimited(s.tel.Ctx, mentioned(), store.LimitRate)
+	if len(s.aud.got) != 1 || s.aud.got[0].Ref != "botMention" || s.aud.got[0].Reason != "limit_rate" || s.aud.got[0].MessageID != mentioned().MessageID || s.aud.who[0].Binding != startBinding {
+		t.Errorf("audited %+v by %+v; want one refusal of the mention by the rate limit", s.aud.got, s.aud.who)
+	}
 }

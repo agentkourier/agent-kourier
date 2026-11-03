@@ -94,6 +94,8 @@ already holds the channel.
   default) or `activity`. The default adds a `Working…` card when 3 seconds pass with nothing new; `activity` shows one
   card (a line in an alert thread) that counts the steps and names no tool; `steps` is the cards and lines alone. See
   [Output](../explanation/threads-and-sessions.md#output).
+- **Turn off other bots' mentions:** any bot or webhook in the channel can start a turn by mentioning Agent Kourier. Set
+  `chat.botMentions: none` to stop that. See [A bot's mention](../reference/chat-triggers.md#a-bots-mention).
 - **Let the agent notify people:** declare them under `chat.mentions`, each with the `name` the agent writes and the
   `user` ID it stands for. See [Let the agent notify people](#let-the-agent-notify-people).
 - **Change the processing reaction:** set `chat.acknowledgment.emoji` to a bare Slack reaction name. The reaction is removed when

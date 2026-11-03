@@ -64,6 +64,7 @@ type API interface {
 	IsBot(ctx context.Context, user string) (bool, error)
 	ResolveUser(ctx context.Context, id string) (dialect.User, error)
 	ThreadBetween(ctx context.Context, conn, channel, threadTS, after, before string, limit int) ([]chat.HistoryMessage, int, error)
+	ThreadRoot(ctx context.Context, conn, channel, threadTS string) (chat.HistoryMessage, error)
 	SetThreadStatus(ctx context.Context, channel, threadTS, status string) error
 	WorkspaceURL() string
 }
@@ -139,7 +140,16 @@ func (in inbound) AcceptsBot(channel, botID string) bool {
 	return ok && f.AcceptsBot(channel, botID)
 }
 
-var _ BotFilter = inbound{}
+// AcceptsBotMention is BotMentionFilter: the neutral sink's answer, and no if it gives none (chat.BotMentionFilter).
+func (in inbound) AcceptsBotMention(channel, botID string) bool {
+	f, ok := in.sink.(chat.BotMentionFilter)
+	return ok && f.AcceptsBotMention(channel, botID)
+}
+
+var (
+	_ BotFilter        = inbound{}
+	_ BotMentionFilter = inbound{}
+)
 
 func (in inbound) Interaction(ctx context.Context, i Interaction) error {
 	return in.sink.Interaction(ctx, in.p.interaction(i))
@@ -171,6 +181,11 @@ func (p *Platform) Find(ctx context.Context, t chat.Target, tag string, since ti
 // chat.ErrInvalid.
 func (p *Platform) ThreadBetween(ctx context.Context, t chat.Target, after, before string, limit int) ([]chat.HistoryMessage, int, error) {
 	return p.c.ThreadBetween(ctx, p.conn, t.Channel, t.Thread, after, before, limit)
+}
+
+// ThreadRoot reads the message that opened the thread t.Thread.
+func (p *Platform) ThreadRoot(ctx context.Context, t chat.Target) (chat.HistoryMessage, error) {
+	return p.c.ThreadRoot(ctx, p.conn, t.Channel, t.Thread)
 }
 
 // Update replaces the message at r with o. Slack takes the blocks again with every update, so an update

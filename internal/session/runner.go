@@ -604,10 +604,11 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 	return m.drive(t, send)
 }
 
-// wantsThreadContext reports whether the turn r takes the thread's context (Config.ThreadContext): a person's turn, in
-// a Binding with chat.threadReplies: mention. A reply that was admitted as an answer to a question is no turn (Queued).
+// wantsThreadContext reports whether the turn r takes the thread's context (Config.ThreadContext): a turn marked to carry the
+// whole thread, or a person's turn in a Binding with chat.threadReplies: mention. A reply that was admitted as an answer to a
+// question is no turn (Queued).
 func (m *Manager) wantsThreadContext(r store.Reply, b Backend) bool {
-	return b.ThreadReplies == v1alpha1.ThreadRepliesMention && r.UserID != SystemUser && Queued(r).Kind == AdmitTurn
+	return Queued(r).Kind == AdmitTurn && (r.WholeThread || (b.ThreadReplies == v1alpha1.ThreadRepliesMention && r.UserID != SystemUser))
 }
 
 // readWindow finds where the window of the turn r opens, which is the message of the row before it in the session's
@@ -621,8 +622,8 @@ func (m *Manager) readWindow(ctx context.Context, c *convo, r store.Reply, b Bac
 	}
 	prev, err := m.cfg.Store.PreviousReply(ctx, r.Key, r.Sequence)
 	switch {
-	case errors.Is(err, store.ErrNotFound): // the first turn of the thread: nothing came before it
-		c.window = windowText{id: r.ID, none: true}
+	case errors.Is(err, store.ErrNotFound): // the first turn of the thread: no turn came before it
+		c.window = windowText{id: r.ID, none: !r.WholeThread} // a turn that carries the thread has all of it to read
 	case err != nil:
 		return fmt.Errorf("read the turn before %s: %w", r.ID, err)
 	default:
@@ -639,7 +640,7 @@ func (m *Manager) withThreadContext(ctx context.Context, c *convo, r store.Reply
 		return r
 	}
 	if !c.window.asked {
-		c.window.section, c.window.asked = m.cfg.ThreadContext(ctx, r.Key, binding, c.window.after, r.MessageRef), true
+		c.window.section, c.window.asked = m.cfg.ThreadContext(ctx, r.Key, binding, c.window.after, r.MessageRef, r.WholeThread), true
 	}
 	if c.window.section != "" {
 		r.Text += "\n\n" + c.window.section

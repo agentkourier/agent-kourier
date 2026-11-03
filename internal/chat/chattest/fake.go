@@ -497,6 +497,26 @@ func (f *FakePlatform) BusyCalls() []BusyCall {
 	return slices.Clone(f.busyCalls)
 }
 
+// ThreadRoot implements chat.ThreadReader: the message said or posted whose ID is the thread's.
+func (f *FakePlatform) ThreadRoot(_ context.Context, t chat.Target) (chat.HistoryMessage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.fail("ThreadRoot"); err != nil {
+		return chat.HistoryMessage{}, err
+	}
+	for _, m := range f.said {
+		if m.At.Channel == t.Channel && m.At.ID == t.Thread {
+			return chat.HistoryMessage{Message: m}, nil
+		}
+	}
+	for _, m := range f.messages {
+		if m.Ref.Channel == t.Channel && m.Ref.ID == t.Thread {
+			return chat.HistoryMessage{Message: chat.Inbound{At: m.Ref, Text: m.Out.Message.Fallback}, Own: true}, nil
+		}
+	}
+	return chat.HistoryMessage{}, fmt.Errorf("fake platform: no thread root %s", t.Thread)
+}
+
 // ThreadBetween implements chat.ThreadReader over what the fake holds of the thread: what was posted in it (Agent Kourier's own,
 // Own) and what Say delivered to it, by their IDs, which it compares as a platform's timestamps ("seconds.fraction"; the
 // IDs of its own posts are "n.000"). The window is exclusive on both sides, an empty bound is none, and the thread's root is

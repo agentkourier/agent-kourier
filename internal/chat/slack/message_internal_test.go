@@ -117,3 +117,36 @@ func TestDecodeAnAppMentionIsAlwaysMentioned(t *testing.T) {
 		t.Errorf("got verdict %v Mentioned %v, want forward and mentioned", v, m.Mentioned)
 	}
 }
+
+// A bot's mention is its app_mention, as Slack sent it to a second app in the probe: the post's text may hold no token, because
+// the mention is in a context block, and a webhook's has no user (docs/spikes/slack-mention-probe.md).
+func TestDecodeABotsAppMention(t *testing.T) {
+	me := self{user: "UME", bot: "BME"}
+	const fallback = "The agent named probe in this thread."
+	tests := []struct {
+		name string
+		ev   *slackevents.AppMentionEvent
+		want verdict
+	}{
+		{"an app's post, in a thread, the token only in its blocks", &slackevents.AppMentionEvent{BotID: "B1", User: "UBOT", Channel: "C1", TimeStamp: "2.2", ThreadTimeStamp: "1.1", Text: fallback}, forward},
+		{"at the top level", &slackevents.AppMentionEvent{BotID: "B1", User: "UBOT", Channel: "C1", TimeStamp: "2.2", Text: fallback}, forward},
+		{"a webhook's post, which has no user", &slackevents.AppMentionEvent{BotID: "B1", Channel: "C1", TimeStamp: "2.2", Text: "<@UME> hi"}, forward},
+		{"a post with no text", &slackevents.AppMentionEvent{BotID: "B1", User: "UBOT", Channel: "C1", TimeStamp: "2.2"}, forward},
+		{"Agent Kourier's own, by bot ID", &slackevents.AppMentionEvent{BotID: "BME", User: "UOTHER", Channel: "C1", TimeStamp: "2.2", Text: fallback}, ownPost},
+		{"Agent Kourier's own, by user ID", &slackevents.AppMentionEvent{BotID: "B1", User: "UME", Channel: "C1", TimeStamp: "2.2", Text: fallback}, ownPost},
+		{"an edit that adds the mention", &slackevents.AppMentionEvent{BotID: "B1", User: "UBOT", Channel: "C1", TimeStamp: "2.2", Text: fallback, Edited: &slackevents.Edited{User: "UBOT", TimeStamp: "3.3"}}, dropped},
+		{"no channel", &slackevents.AppMentionEvent{BotID: "B1", User: "UBOT", TimeStamp: "2.2", Text: fallback}, dropped},
+		{"no ts", &slackevents.AppMentionEvent{BotID: "B1", User: "UBOT", Channel: "C1", Text: fallback}, dropped},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, v := decode(me, tt.ev)
+			if v != tt.want {
+				t.Fatalf("verdict = %v; want %v", v, tt.want)
+			}
+			if v == forward && (!m.Mentioned || m.Bot.ID != "B1" || m.TS != tt.ev.TimeStamp || m.ThreadTS != tt.ev.ThreadTimeStamp || m.Text != tt.ev.Text || m.User != tt.ev.User) {
+				t.Errorf("message = %+v; want it Mentioned, from B1, as the event has it", m)
+			}
+		})
+	}
+}

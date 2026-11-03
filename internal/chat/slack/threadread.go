@@ -77,3 +77,31 @@ func (c *Client) ThreadBetween(ctx context.Context, conn, channel, threadTS, aft
 	}
 	return msgs, dropped, nil
 }
+
+// ThreadRoot reads the message that opened the thread threadTS in channel, decoded by historyMessage as ThreadBetween's are:
+// one page of one message of conversations.replies, which leads with the parent, plus auth.test. A thread whose parent
+// Slack does not return is an error.
+func (c *Client) ThreadRoot(ctx context.Context, conn, channel, threadTS string) (msg chat.HistoryMessage, err error) {
+	if threadTS == "" {
+		return chat.HistoryMessage{}, fmt.Errorf("slack thread root: %w: a thread to read", chat.ErrInvalid)
+	}
+	ctx, op := telemetry.Start(ctx, "agentkourier.chat.ThreadRoot")
+	defer func() { finishChat(ctx, op, "ThreadRoot", err) }()
+	auth, err := c.api.AuthTestContext(ctx)
+	if err != nil {
+		return chat.HistoryMessage{}, c.scrub("auth.test", err)
+	}
+	if auth.UserID == "" {
+		return chat.HistoryMessage{}, errors.New("slack auth.test: no bot user ID")
+	}
+	msgs, _, _, err := c.api.GetConversationRepliesContext(ctx, &slackgo.GetConversationRepliesParameters{ChannelID: channel, Timestamp: threadTS, Limit: 1})
+	if err != nil {
+		return chat.HistoryMessage{}, c.scrub("conversations.replies", err)
+	}
+	for _, m := range msgs {
+		if m.Timestamp == threadTS {
+			return historyMessage(self{user: auth.UserID, bot: auth.BotID}, conn, channel, m), nil
+		}
+	}
+	return chat.HistoryMessage{}, fmt.Errorf("slack thread root in %s: the parent of %s did not come back", channel, threadTS)
+}

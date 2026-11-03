@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -20,6 +21,9 @@ import (
 // botMessageSource is the source every trigger start reports: the prompt view's Source and the session's origin
 // source.
 const botMessageSource = string(v1alpha1.TriggerBotMessage)
+
+// botMentionSource is the source a bot's mention reports. It is no alert, so feedback attributes no alert to it.
+const botMentionSource = "botMention"
 
 // triggerAuditor is what the starter needs of the audit log: *audit.Writer.
 type triggerAuditor interface {
@@ -93,10 +97,18 @@ func newTriggerStarter(cfg triggerStarterConfig) (*triggerStarter, error) {
 //
 // An error that does not wrap it, from the manager or from queueing the note, means the start was not taken: the
 // platform delivers the event again, and the redelivery asks again, which is idempotent by the alert's message ID.
+//
+// A bot's mention (m.Mention) is a turn of the thread the mention is in, whose session may exist already, and it carries that
+// thread. A session past its threadTTL or whose Binding left the config takes no turn, and that will not pass, so it is
+// ErrNotStarted with no note: the bot asked, and a note answers no one.
 func (s *triggerStarter) OnStart(ctx context.Context, m chat.TriggerMatch) error {
 	at := m.Message.At
+	source := botMessageSource
+	if m.Mention {
+		source = botMentionSource
+	}
 	view := v1alpha1.PromptView{
-		Channel: at.Channel, State: m.Fields["state"], Key: m.Fields["key"], Source: botMessageSource, Fields: m.Fields,
+		Channel: at.Channel, State: m.Fields["state"], Key: m.Fields["key"], Source: source, Fields: m.Fields,
 	}
 	if link, ok := s.link(at); ok {
 		view.Link = link
@@ -113,18 +125,38 @@ func (s *triggerStarter) OnStart(ctx context.Context, m chat.TriggerMatch) error
 	}
 	id := m.MessageID
 	res, err := s.submit.Submit(ctx, session.Inbound{
-		Key:       session.Key{Connection: s.conn, Channel: at.Channel, Thread: at.ID},
+		Key:       s.keyOf(m),
 		Binding:   m.Binding,
-		MessageID: id, MessageRef: at.ID, Text: text, Create: true,
-		Origin: store.Origin{Source: botMessageSource, Subject: feedback.AlertName(m.Fields["alertname"])},
+		MessageID: id, MessageRef: at.ID, Text: text, Create: true, WholeThread: m.Mention,
+		Origin: store.Origin{Source: source, Subject: feedback.AlertName(m.Fields["alertname"])},
 	})
 	switch {
 	case err != nil:
 		return fmt.Errorf("start the investigation of %s: %w", id, err)
+	case m.Mention && !res.Admission.Queues():
+		s.log.InfoContext(ctx, "chat: a bot's mention took no turn; the thread cannot be continued", "binding", m.Binding, "channel", at.Channel, "message", at.ID, "disposition", res.Disposition)
+		return fmt.Errorf("bot mention of %s: %w", id, chat.ErrNotStarted)
 	case res.Disposition != session.Created && res.Disposition != session.Accepted:
 		return fmt.Errorf("start the investigation of %s: the session manager did not take it (%s)", id, res.Disposition)
 	}
 	return nil
+}
+
+// keyOf is the session a match is a turn of: an alert's own thread, or the thread a bot's mention is in.
+func (s *triggerStarter) keyOf(m chat.TriggerMatch) session.Key {
+	thread := m.Message.At.ID
+	if m.Mention {
+		thread = cmp.Or(m.Message.At.Thread, thread)
+	}
+	return session.Key{Connection: s.conn, Channel: m.Message.At.Channel, Thread: thread}
+}
+
+// MentionLimited records that a limit stopped a bot's mention (chat.IntakeConfig.OnMentionLimited). Its failure is logged and
+// counted by the Writer, and undoes nothing.
+func (s *triggerStarter) MentionLimited(ctx context.Context, m chat.TriggerMatch, limit store.TriggerLimit) {
+	if err := s.audit.TriggerRefused(ctx, audit.Actor{Binding: m.Binding}, audit.TriggerRefusal{MessageID: m.MessageID, Trigger: m.Index, Ref: botMentionSource, Reason: "limit_" + string(limit)}); err != nil {
+		s.log.WarnContext(ctx, "chat: a bot's mention that a limit stopped was not audited", "binding", m.Binding, "channel", m.Message.At.Channel, "message", m.Message.At.ID, "error", err)
+	}
 }
 
 // refuse is the visible half of a refused start: the note in the alert's thread, the audit entry and the count. The
@@ -140,7 +172,7 @@ func (s *triggerStarter) refuse(ctx context.Context, m chat.TriggerMatch, cause 
 		ref, reason, length, detail = refused.Ref, refused.Reason.Code(), refused.Len, "."+refused.Ref+" failed the prompt check."
 	}
 	id := m.MessageID
-	key := session.Key{Connection: s.conn, Channel: at.Channel, Thread: at.ID}
+	key := s.keyOf(m)
 	n := session.Notice{ID: id + "/" + string(session.NoticeTriggerRefused), Kind: session.NoticeTriggerRefused, MessageRef: at.ID, Detail: detail}
 	if err := s.notice(ctx, key, n); err != nil {
 		return fmt.Errorf("note the refused start of %s: %w", id, err)

@@ -252,7 +252,7 @@ type Sink interface {
 // cannot read a thread, or the deployment does not want it to. It adds no text, but the runner still reads where the
 // window opens (one Store.PreviousReply per mentioned turn of a mention-only Binding) before it asks the hook, and a store
 // that fails there holds the turn back like any other store failure of the runner.
-func NoThreadContext(context.Context, Key, string, string, string) string { return "" }
+func NoThreadContext(context.Context, Key, string, string, string, bool) string { return "" }
 
 // TextReplyOutcome says what the interaction module did with a queued reply.
 type TextReplyOutcome uint8
@@ -313,8 +313,9 @@ type Config struct {
 	// mentions enqueued against ts order), and the hook returns "" for it. It never fails, and it may do I/O, so it
 	// is called off every lock. The
 	// runner calls it once for each turn it sends, in the send of a turn only: never for a task that is followed
-	// again, found again or recovered. NoThreadContext adds nothing.
-	ThreadContext func(ctx context.Context, key Key, binding, after, before string) string
+	// again, found again or recovered. NoThreadContext adds nothing. whole says the turn is one that carries what the thread
+	// holds, every author's (store.Reply.WholeThread), and after is empty on the thread's first turn: from its root.
+	ThreadContext func(ctx context.Context, key Key, binding, after, before string, whole bool) string
 	// After waits for a duration, and defaults to time.After. A test injects a clock.
 	After func(time.Duration) <-chan time.Time
 	// RetryBase and RetryMax are the first pause before a resend, which doubles up to RetryMax.

@@ -26,8 +26,11 @@ type Reply struct {
 	Acknowledgment string
 	// InteractionID pins a text reply to its first question across recovery.
 	InteractionID string
-	Text          string
-	EnqueuedAt    time.Time
+	// WholeThread says the turn carries what the thread holds, every author's, since the session's previous turn: a bot's
+	// mention, whose own message says nothing of what was asked.
+	WholeThread bool
+	Text        string
+	EnqueuedAt  time.Time
 }
 
 // MaxReplyIDs is the most IDs that one call that takes many reply IDs (HasReplies, AcknowledgmentLister's
