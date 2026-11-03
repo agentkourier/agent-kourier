@@ -1,7 +1,9 @@
 package broker
 
 import (
+	"cmp"
 	"context"
+	"crypto/subtle"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -18,20 +20,22 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/identity"
+	"github.com/agentkourier/agent-kourier/internal/secret"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
-// The bounds of the verification of Bindings. The Prober cuts a probe at bindingProbeTimeout and calls it
-// Unknown/ProbeTimeout, which says nothing of the backend. Each adapter bounds its own call a little earlier, so that a backend
-// or a chat platform that does not answer is reported as what it is (Unreachable, ChatUnavailable) and not as a probe that ran
-// out of time. The chat bound is its own and not interact.PressAuthzTimeout, which bounds the Slack client's call underneath it
-// and is tuned for a press: retuning that must not move this.
-const (
-	bindingProbeTimeout = 10 * time.Second
-	agentProbeTimeout   = bindingProbeTimeout * 4 / 5
-	channelProbeTimeout = bindingProbeTimeout * 4 / 5
-)
+// bindingProbeTimeout is how long the Prober gives one probe. The Prober cuts a probe at that bound and calls it
+// Unknown/ProbeTimeout, which says nothing of the backend, so each adapter bounds its own call a little earlier (innerBound), and a
+// backend or a chat platform that does not answer is reported as what it is (Unreachable, ChatUnavailable).
+const bindingProbeTimeout = 10 * time.Second
+
+// innerBound is the bound of an adapter's own call, given the Prober's timeout: four fifths of it. The chat bound is its own and
+// not interact.PressAuthzTimeout, which the Slack client puts on the call underneath (members.go: ChannelAccess), so the bound that
+// takes effect is the lesser of the two (10s in production, which is the greater); retuning the press bound moves the probe's only
+// if it is lowered below this one.
+func innerBound(outer time.Duration) time.Duration { return outer * 4 / 5 }
 
 // agentProbe is what the agent checker needs of Bindings: (*Bindings).CheckAgent, a card fetch that sends the agent nothing.
 type agentProbe interface {
@@ -50,7 +54,7 @@ type agentChecker struct {
 var _ bindingcheck.AgentChecker = agentChecker{}
 
 // CheckAgent implements bindingcheck.AgentChecker. A check the Prober's context ended is no verdict on the backend and comes
-// back as an error, as does an error classifyAgent cannot place; the deadline of the checker's own bound is a backend that does
+// back as an error, as does an error classifyAgent cannot place and a credentials read that the checker's own bound cut short; the deadline of the checker's own bound is a backend that does
 // not answer, Unreachable. A Binding the config no longer has (a reload removed it during the pass) is no result either: the
 // error says so and the Prober prunes the Binding at its next Tick.
 func (a agentChecker) CheckAgent(ctx context.Context, binding string) (bindingcheck.Outcome, error) {
@@ -68,6 +72,10 @@ func (a agentChecker) CheckAgent(ctx context.Context, binding string) (bindingch
 	}
 	if ctx.Err() != nil {
 		return bindingcheck.Outcome{}, fmt.Errorf("the probe ended before the backend answered: %w", err)
+	}
+	if cctx.Err() != nil && (errors.Is(err, agent.ErrTokenUnreadable) || errors.Is(err, agent.ErrHeaderUnreadable)) {
+		// A read of a Secret that the checker's own bound cut short did not find the Secret unreadable.
+		return bindingcheck.Outcome{}, fmt.Errorf("the credentials were not read before the checker's bound passed: %w", err)
 	}
 	if out, ok := classifyAgent(err); ok {
 		return out, nil
@@ -164,8 +172,8 @@ type channelChecker struct {
 
 var _ bindingcheck.ChannelChecker = channelChecker{}
 
-// CheckChannel implements bindingcheck.ChannelChecker. It makes no call when the connection's credentials Secret has changed
-// since the broker read it (ChatCredentialsChanged): the bot the broker holds is then not the one the Secret names, and what it
+// CheckChannel implements bindingcheck.ChannelChecker. It makes no call when the connection's credentials Secret holds other tokens
+// than the broker is using (ChatCredentialsChanged): the bot the broker holds is then not the one the Secret names, and what it
 // sees is not a finding about the channel. A call the Prober's context ended is no verdict and comes back as an error; the
 // deadline of the checker's own bound is a chat platform that does not answer, Unknown/ChatUnavailable.
 func (c channelChecker) CheckChannel(ctx context.Context, channel string) (bindingcheck.Outcome, error) {
@@ -177,9 +185,13 @@ func (c channelChecker) CheckChannel(ctx context.Context, channel string) (bindi
 	}()
 	cctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	if c.creds.changed(cctx) {
+	switch c.creds.check(cctx) {
+	case credentialsChanged:
 		return bindingcheck.Outcome{Status: bindingcheck.Unknown, Reason: bindingcheck.ReasonChatCredentialsChanged,
-			Message: "the chat credentials Secret changed after the connection started: restart Agent Kourier to use the new ones"}, nil
+			Message: "the chat credentials changed after the connection started: restart Agent Kourier to use the new ones"}, nil
+	case credentialsGone:
+		return bindingcheck.Outcome{Status: bindingcheck.Unknown, Reason: bindingcheck.ReasonChatCredentialsChanged,
+			Message: "the chat credentials Secret, or a key of it, is gone or empty: the connection still uses the tokens it read, and a restart fails until the Secret is restored"}, nil
 	}
 	access, err := c.platform.ChannelAccess(cctx, channel)
 	if err != nil {
@@ -219,27 +231,51 @@ func (c channelChecker) classifyError(err error) bindingcheck.Outcome {
 	return bindingcheck.Outcome{Status: bindingcheck.Unknown, Reason: bindingcheck.ReasonChatUnavailable, Message: "the chat platform did not answer the read"}
 }
 
-// credentialsWatch tells whether the Secret that holds the connection's credentials has changed since the broker read them.
+// credentialsChange is what credentialsWatch found.
+type credentialsChange int
+
+const (
+	credentialsSame    credentialsChange = iota // the tokens are the ones in use, or the check could not tell
+	credentialsChanged                          // the Secret holds other tokens than the connection is using
+	credentialsGone                             // the Secret, or one of the keys, is gone or empty
+)
+
+// credentialsWatch tells whether the Secret that holds the connection's credentials holds other tokens than the connection is
+// using. The baseline is Connection.Credentials, which is what the chat platform was built with, and the Secrets are read at the
+// probe, from the cache of the Secrets' reader, so a write that leaves the tokens alone (an annotation, a label) is no change, and no
+// call is made to the chat platform. A value is compared and never kept, shown or returned.
 type credentialsWatch struct {
-	baseline SecretVersion
-	versions config.SecretVersioner // nil when the Secrets' reader keeps no versions
+	baseline map[string]secret.Value
+	secrets  identity.SecretReader // nil: no change is ever told
+	// where says which Secret the connection's credentials are in now, by the current config: false when the config no longer has the
+	// connection, which the check cannot tell anything of.
+	where func() (namespace, name string, ok bool)
 }
 
-// changed reports whether the credentials Secret has a version other than the one ChooseConnection read the tokens under, or is
-// gone. It is false when the baseline is unknown, and when the version cannot be read for another reason: it cannot tell then,
-// and the channel probe goes on.
-func (w credentialsWatch) changed(ctx context.Context) bool {
-	if w.versions == nil || w.baseline.Version == "" {
-		return false
+// check compares the tokens in the Secret now with the baseline. A Secret that does not exist, or a key that is missing or empty, is
+// credentialsGone; a token that differs is credentialsChanged. Any other failure to read a key, and no baseline, means it cannot tell
+// for that key, which is no change.
+func (w credentialsWatch) check(ctx context.Context) credentialsChange {
+	if w.secrets == nil || w.where == nil || len(w.baseline) == 0 {
+		return credentialsSame
 	}
-	v, err := w.versions.SecretVersion(ctx, w.baseline.Namespace, w.baseline.Name)
-	switch {
-	case err == nil:
-		return v != w.baseline.Version
-	case errors.Is(err, config.ErrSecretNotFound):
-		return true
+	namespace, name, ok := w.where()
+	if !ok {
+		return credentialsSame
 	}
-	return false
+	found := credentialsSame
+	for key, was := range w.baseline {
+		now, err := w.secrets.Value(ctx, namespace, name, key)
+		switch {
+		case err == nil && !now.IsEmpty():
+			if subtle.ConstantTimeCompare([]byte(now.Reveal()), []byte(was.Reveal())) != 1 {
+				found = max(found, credentialsChanged)
+			}
+		case err == nil, errors.Is(err, secret.ErrKeyNotFound), errors.Is(err, secret.ErrEmptyValue), errors.Is(err, config.ErrSecretNotFound):
+			found = credentialsGone
+		}
+	}
+	return found
 }
 
 // bindingTargets lists the Bindings to probe: those of snap whose ChatConnection is conn, the one this process serves. The
@@ -262,29 +298,39 @@ func bindingTargets(snap *config.Snapshot, conn v1alpha1.ObjectRef) []bindingche
 	return out
 }
 
-// bindingLog is the log of the verification of Bindings: one line when a condition goes False or comes back, and one for a probe
-// that failed. It writes nothing for a probe that found what it found before.
+// bindingLog is the log of the verification of Bindings: one line when a condition changes to False, Unknown or True again, and one for
+// a probe whose checker could not tell. It writes nothing for a probe that found what it found before.
 type bindingLog struct{ log *slog.Logger }
 
-// transition is bindingcheck.Options.OnTransition. A condition that is False is a WARN, and one that is True again after it was
-// not (False, or Unknown after a failed probe) an INFO. Unknown is not logged, nor is a Binding's first result, nor Ready, which
-// holds back what the line for the condition that causes it says.
+// transition is bindingcheck.Options.OnTransition, with a line for every change of a condition to a status and reason that
+// has not been told:
+//   - False is a WARN, and so is Unknown/ChatCredentialsChanged, which asks for a restart;
+//   - any other Unknown is an INFO, a Binding's first result included;
+//   - True after a condition that was not True (and was not Pending) is an INFO.
+//
+// Nothing is logged for Ready, which holds back what the line for the condition that causes it says; for Pending, which is no
+// result; and for Unknown/ProbeFailed, which probeError logs with the error that caused it.
 func (l bindingLog) transition(tr bindingcheck.Transition) {
 	c := tr.New
-	if c.Type == bindingcheck.Ready {
+	if c.Type == bindingcheck.Ready || c.Reason == bindingcheck.ReasonPending || c.Reason == bindingcheck.ReasonProbeFailed {
 		return
 	}
 	attrs := []any{"binding", tr.Binding, "condition", string(c.Type), "status", string(c.Status), "reason", string(c.Reason), "detail", telemetry.LogText(c.Message)}
 	switch {
 	case c.Status == bindingcheck.False:
 		l.log.Warn("binding verification: a condition is false", attrs...)
+	case c.Status == bindingcheck.Unknown && c.Reason == bindingcheck.ReasonChatCredentialsChanged:
+		l.log.Warn("binding verification: a condition is unknown", attrs...)
+	case c.Status == bindingcheck.Unknown:
+		l.log.Info("binding verification: a condition is unknown", attrs...)
 	case c.Status == bindingcheck.True && tr.Old.Status != "" && tr.Old.Status != bindingcheck.True && tr.Old.Reason != bindingcheck.ReasonPending:
 		l.log.Info("binding verification: a condition is true again", append(attrs, "was", string(tr.Old.Reason))...)
 	}
 }
 
-// probeError is bindingcheck.Options.OnProbeError. The error is the checker's own and may quote a response, so it goes in as
-// telemetry.LogText. A Binding the config no longer has is not a failure: the Prober prunes it at its next Tick.
+// probeError is bindingcheck.Options.OnProbeError: the line for a probe whose checker could not tell, which leaves the condition
+// Unknown/ProbeFailed. The error is the checker's own and may quote a response, so it goes in as telemetry.LogText. A Binding the
+// config no longer has is not a failure and has no line: the Prober prunes it at its next Tick.
 func (l bindingLog) probeError(pe bindingcheck.ProbeError) {
 	if errors.Is(pe.Err, session.ErrUnknownBinding) {
 		return
@@ -300,19 +346,38 @@ type verification struct {
 	Platform channelReader
 	Snaps    Snapshots
 	Revision func(context.Context) string
-	// Conn is the ChatConnection this process serves: the Bindings on any other are not probed, because Platform is Conn's bot.
-	Conn Connection
-	// Versions reads the version of a Secret, to tell a changed credentials Secret from the one Conn was read from. Nil: none is told.
-	Versions config.SecretVersioner
-	Metrics  *Metrics
-	Log      *slog.Logger
+	// Conn is the ChatConnection this process serves: the Bindings on any other are not probed, because Platform is Conn's bot. Its
+	// Credentials are the tokens Platform was built with, which Secrets is read against to tell a changed Secret.
+	Conn    Connection
+	Secrets identity.SecretReader // nil: a change of the chat credentials is not told
+	Metrics *Metrics
+	Log     *slog.Logger
+	// Timeout is how long the Prober gives one probe (bindingProbeTimeout if zero). The adapters bound their own calls by innerBound
+	// of it, so a backend or chat platform that does not answer is Unreachable or ChatUnavailable and not ProbeTimeout.
+	Timeout time.Duration
 	// Interval and Tick are the Prober's. Zero takes its defaults (5 minutes, 5 seconds); a test passes less.
 	Interval, Tick time.Duration
+}
+
+// credentialsSecret is where the connection's credentials are in the current config: the Secret its ChatConnection names, in its
+// namespace. A reload that names another Secret is a change the connection does not see until a restart.
+func (v verification) credentialsSecret() (namespace, name string, ok bool) {
+	snap := v.Snaps.Current()
+	if snap == nil {
+		return "", "", false
+	}
+	for _, c := range snap.ChatConnections() {
+		if c.Namespace == v.Conn.Ref.Namespace && c.Name == v.Conn.Ref.Name {
+			return c.Namespace, c.Spec.CredentialsSecretRef.Name, true
+		}
+	}
+	return "", "", false
 }
 
 // newProber returns the Prober of the verification: its State is the conditions of the Bindings, which the hooks report as
 // metrics and log lines and nothing else, and it writes nothing else. It is the leader half's to run and to stop (leaderHalf.start).
 func (v verification) newProber() *bindingcheck.Prober {
+	timeout := cmp.Or(v.Timeout, bindingProbeTimeout)
 	probed := func(cond bindingcheck.ConditionType) func(time.Duration) {
 		return func(d time.Duration) { v.Metrics.BindingProbed(cond, d) }
 	}
@@ -320,12 +385,12 @@ func (v verification) newProber() *bindingcheck.Prober {
 	return bindingcheck.NewProber(bindingcheck.Options{
 		Targets:  func() []bindingcheck.Target { return bindingTargets(v.Snaps.Current(), v.Conn.Ref) },
 		Revision: v.Revision,
-		Agents:   agentChecker{bindings: v.Bindings, timeout: agentProbeTimeout, observe: probed(bindingcheck.BackendReachable)},
+		Agents:   agentChecker{bindings: v.Bindings, timeout: innerBound(timeout), observe: probed(bindingcheck.BackendReachable)},
 		Channels: channelChecker{
-			platform: v.Platform, timeout: channelProbeTimeout, observe: probed(bindingcheck.ChannelJoined),
-			creds: credentialsWatch{baseline: v.Conn.CredentialsSecret, versions: v.Versions},
+			platform: v.Platform, timeout: innerBound(timeout), observe: probed(bindingcheck.ChannelJoined),
+			creds: credentialsWatch{baseline: v.Conn.Credentials, secrets: v.Secrets, where: v.credentialsSecret},
 		},
-		Interval: v.Interval, Tick: v.Tick, Timeout: bindingProbeTimeout,
+		Interval: v.Interval, Tick: v.Tick, Timeout: timeout,
 		OnTransition: func(tr bindingcheck.Transition) { v.Metrics.BindingCondition(tr); l.transition(tr) },
 		OnProbeError: l.probeError,
 		OnPrune:      v.Metrics.BindingsPruned,

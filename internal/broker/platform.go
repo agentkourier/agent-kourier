@@ -24,16 +24,6 @@ type Connection struct {
 	// Platform is ChatConnection.spec.platform, which chooses the adapter (newPlatform).
 	Platform    string
 	Credentials map[string]secret.Value
-	// CredentialsSecret is the Secret the credentials were read from, and its version as it was just before they were read, which
-	// is what a later change of the Secret is told against (the verification of Bindings reports it as ChatCredentialsChanged). Its
-	// Version is empty when the Secrets' reader keeps none (config.SecretVersioner), or could not give it.
-	CredentialsSecret SecretVersion
-}
-
-// SecretVersion is a Secret and the version the Secrets' reader gave it at a moment (config.SecretVersioner). The version is opaque
-// and compared only for equality.
-type SecretVersion struct {
-	Namespace, Name, Version string
 }
 
 // platformSpec is what the broker knows of a platform: the keys of its credentials Secret that it reads, and the name

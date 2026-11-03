@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -30,6 +29,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/secret"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/test/stubagent"
 )
@@ -432,68 +432,122 @@ func TestChannelCheckerAgainstTheFakePlatform(t *testing.T) {
 	}
 }
 
-// versions is a config.SecretVersioner whose versions the test changes.
-type versions struct {
-	mu  sync.Mutex
-	v   map[string]string
-	err error
+// tokens is the baseline of the credentials tests: what the connection is using.
+func tokens(bot, app string) map[string]secret.Value {
+	return map[string]secret.Value{"botToken": secret.New(bot), "appToken": secret.New(app)}
 }
 
-func (s *versions) SecretVersion(_ context.Context, namespace, name string) (string, error) {
+// secretStore is an identity.SecretReader of one Secret whose values the test changes, and which can fail.
+type secretStore struct {
+	mu      sync.Mutex
+	vals    map[string]string // by key; a key that is not here is missing from the Secret
+	missing bool              // the Secret itself is gone
+	err     error             // every read fails with it
+	reads   []string          // namespace/name of each read
+}
+
+func (s *secretStore) Value(_ context.Context, ns, name, key string) (secret.Value, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.err != nil {
-		return "", s.err
+	s.reads = append(s.reads, ns+"/"+name)
+	switch v, ok := s.vals[key]; {
+	case s.err != nil:
+		return secret.Value{}, s.err
+	case s.missing:
+		return secret.Value{}, fmt.Errorf("%s/%s: %w", ns, name, config.ErrSecretNotFound)
+	case !ok:
+		return secret.Value{}, fmt.Errorf("key %s: %w", key, secret.ErrKeyNotFound)
+	default:
+		return secret.New(v), nil
 	}
-	v, ok := s.v[namespace+"/"+name]
-	if !ok {
-		return "", fmt.Errorf("%s/%s: %w", namespace, name, config.ErrSecretNotFound)
-	}
-	return v, nil
 }
 
-// A credentials Secret that moved from the version the tokens were read under is Unknown/ChatCredentialsChanged, and the chat platform is not asked:
-// the answer of a bot the Secret no longer names is not about the channel. One that has not moved is probed as usual.
-func TestChannelCheckerReportsCredentialsChangedWithoutCallingThePlatform(t *testing.T) {
-	base := SecretVersion{Namespace: "agent-kourier-system", Name: "slack-main", Version: "7"}
+// The chat credentials are compared by value, at the probe: a token other than the one in use is Unknown/ChatCredentialsChanged, a
+// Secret or key that is gone or empty is the same reason with a message of its own, and in either the chat platform is not asked: what
+// a bot the Secret no longer names sees is not about the channel. A write that leaves the tokens alone is no change, and a read that
+// fails for another reason cannot tell, so the probe goes on. No value reaches a message.
+func TestChannelCheckerComparesTheChatCredentialsByValueWithoutCallingThePlatform(t *testing.T) {
+	const bot, app, canary = "xoxb-in-use", "xapp-in-use", "xoxb-NEW-CANARY"
+	same := func() map[string]string { return map[string]string{"botToken": bot, "appToken": app} }
 	for _, tc := range []struct {
 		name    string
-		current map[string]string
-		err     error
-		base    SecretVersion
+		store   *secretStore
+		change  string // a substring of the message, or "" for no change
 		changed bool
 	}{
-		{"rotated", map[string]string{"agent-kourier-system/slack-main": "8"}, nil, base, true},
-		{"unchanged", map[string]string{"agent-kourier-system/slack-main": "7"}, nil, base, false},
-		{"deleted", map[string]string{}, nil, base, true},
-		{"unreadable for another reason: it cannot tell", map[string]string{}, errors.New("cache not synced"), base, false},
-		{"no baseline, the reader keeps no versions", map[string]string{"agent-kourier-system/slack-main": "8"}, nil, SecretVersion{Namespace: "agent-kourier-system", Name: "slack-main"}, false},
+		{"the bot token rotated", &secretStore{vals: map[string]string{"botToken": canary, "appToken": app}}, "changed after the connection started", true},
+		{"the app token rotated", &secretStore{vals: map[string]string{"botToken": bot, "appToken": canary}}, "changed after the connection started", true},
+		{"the same tokens", &secretStore{vals: same()}, "", false},
+		{"the Secret is gone", &secretStore{missing: true}, "gone or empty", true},
+		{"a key is missing", &secretStore{vals: map[string]string{"botToken": bot}}, "gone or empty", true},
+		{"a key is empty", &secretStore{vals: map[string]string{"botToken": bot, "appToken": ""}}, "gone or empty", true},
+		{"a read that fails for another reason cannot tell", &secretStore{vals: same(), err: errors.New("cache not synced " + canary)}, "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := &accessFake{access: chat.Access{Member: true}}
-			c := channelChecker{platform: f, timeout: time.Second, creds: credentialsWatch{baseline: tc.base, versions: &versions{v: tc.current, err: tc.err}}}
+			c := channelChecker{platform: f, timeout: time.Second, creds: credentialsWatch{
+				baseline: tokens(bot, app), secrets: tc.store,
+				where: func() (string, string, bool) { return "agent-kourier-system", "slack-main", true },
+			}}
 			out, err := c.CheckChannel(t.Context(), "C1")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if tc.changed {
-				if out.Status != bindingcheck.Unknown || out.Reason != bindingcheck.ReasonChatCredentialsChanged || f.count() != 0 {
-					t.Errorf("CheckChannel = %+v after %d platform calls; want Unknown/ChatCredentialsChanged and none", out, f.count())
+			for _, secretText := range []string{bot, app, canary} {
+				if strings.Contains(out.Message, secretText) {
+					t.Errorf("the message %q holds a token", out.Message)
+				}
+			}
+			if !tc.changed {
+				if out.Status != bindingcheck.True || f.count() != 1 {
+					t.Errorf("CheckChannel = %+v after %d platform calls; want True and one", out, f.count())
 				}
 				return
 			}
-			if out.Status != bindingcheck.True || f.count() != 1 {
-				t.Errorf("CheckChannel = %+v after %d platform calls; want True and one", out, f.count())
+			if out.Status != bindingcheck.Unknown || out.Reason != bindingcheck.ReasonChatCredentialsChanged || f.count() != 0 || !strings.Contains(out.Message, tc.change) {
+				t.Errorf("CheckChannel = %+v after %d platform calls; want Unknown/ChatCredentialsChanged, a message with %q, and none", out, f.count(), tc.change)
 			}
 		})
 	}
-	t.Run("a reader that keeps no versions", func(t *testing.T) {
-		f := &accessFake{access: chat.Access{Member: true}}
-		out, err := channelChecker{platform: f, timeout: time.Second, creds: credentialsWatch{baseline: base}}.CheckChannel(t.Context(), "C1")
-		if err != nil || out.Status != bindingcheck.True {
-			t.Errorf("CheckChannel = %+v, %v; want True", out, err)
+}
+
+// Nothing to compare, or nothing to compare with, is no change: no reader, no baseline, a connection the config no longer has.
+func TestCredentialsWatchTellsNothingWithoutAReaderABaselineOrAConnection(t *testing.T) {
+	store := &secretStore{vals: map[string]string{"botToken": "other", "appToken": "other"}}
+	where := func() (string, string, bool) { return "ns", "name", true }
+	gone := func() (string, string, bool) { return "", "", false }
+	for name, w := range map[string]credentialsWatch{
+		"no reader":     {baseline: tokens("a", "b"), where: where},
+		"no baseline":   {secrets: store, where: where},
+		"no where":      {baseline: tokens("a", "b"), secrets: store},
+		"no connection": {baseline: tokens("a", "b"), secrets: store, where: gone},
+	} {
+		if got := w.check(t.Context()); got != credentialsSame {
+			t.Errorf("%s: check = %d; want no change", name, got)
 		}
-	})
+	}
+	if len(store.reads) != 0 {
+		t.Errorf("the Secret was read %d times; want none", len(store.reads))
+	}
+}
+
+// The Secret read is the one the current config names for the connection, in the connection's namespace: a reload that points the
+// ChatConnection at another Secret is a change.
+func TestVerificationReadsTheCredentialsSecretTheCurrentConfigNames(t *testing.T) {
+	current := &snaps{}
+	current.p.Store(twoConnections(t))
+	v := verification{Snaps: current, Conn: Connection{Ref: v1alpha1.ObjectRef{Namespace: "platform", Name: "slack-a"}}}
+	if ns, name, ok := v.credentialsSecret(); !ok || ns != "platform" || name != "slack-a" {
+		t.Errorf("credentialsSecret = %q, %q, %t; want platform, slack-a", ns, name, ok)
+	}
+	v.Conn.Ref.Name = "slack-nope"
+	if _, _, ok := v.credentialsSecret(); ok {
+		t.Error("credentialsSecret found a connection the config does not have")
+	}
+	current.p.Store(nil)
+	if _, _, ok := v.credentialsSecret(); ok {
+		t.Error("credentialsSecret found a Secret before the first load")
+	}
 }
 
 // twoConnections is a config of two ChatConnections, slack-a and slack-b, with two Bindings on each; sre/oncall (on slack-a) and
@@ -550,6 +604,26 @@ func TestBindingTargetsAreTheServedConnectionsBindingsOnly(t *testing.T) {
 	}
 }
 
+// meanProbeSeconds is the mean of the observations of agentkourier_binding_probe_duration_seconds for condition, and how many there are.
+func meanProbeSeconds(t *testing.T, m *Metrics, condition bindingcheck.ConditionType) (mean float64, n uint64) {
+	t.Helper()
+	fams, err := m.reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range fams {
+		if f.GetName() != "agentkourier_binding_probe_duration_seconds" {
+			continue
+		}
+		for _, s := range f.GetMetric() {
+			if s.GetLabel()[0].GetValue() == string(condition) && s.GetHistogram().GetSampleCount() > 0 {
+				return s.GetHistogram().GetSampleSum() / float64(s.GetHistogram().GetSampleCount()), s.GetHistogram().GetSampleCount()
+			}
+		}
+	}
+	return 0, 0
+}
+
 // The Prober the broker builds, with everything wired: it probes the served connection's Bindings with that connection's bot and no
 // other's (the channel the two connections share is asked about once, for the Binding that is on the served one), reports what it finds
 // as metrics, and deletes the series of a Binding that a reload removes, once the Binding is gone from the targets.
@@ -559,7 +633,7 @@ func TestTheBrokersProberProbesTheServedConnectionAndPrunesWhatAReloadRemoves(t 
 	slk := &accessFake{access: chat.Access{Member: true}}
 	m := mustMetrics(t, nil)
 	p := verification{
-		Bindings: probeFunc(func(context.Context, string) error { return nil }), Platform: slk, Snaps: current,
+		Bindings: probeFunc(func(context.Context, string) error { time.Sleep(40 * time.Millisecond); return nil }), Platform: slk, Snaps: current,
 		Revision: func(context.Context) string { return fmt.Sprint(current.p.Load()) },
 		Conn:     Connection{Ref: v1alpha1.ObjectRef{Namespace: "platform", Name: "slack-a"}},
 		Metrics:  m, Log: slog.New(slog.DiscardHandler), Interval: time.Hour, Tick: 5 * time.Millisecond,
@@ -587,8 +661,12 @@ func TestTheBrokersProberProbesTheServedConnectionAndPrunesWhatAReloadRemoves(t 
 			}
 		}
 	}
-	if !slices.ContainsFunc(samples(t, m), func(s string) bool { return strings.HasPrefix(s, "agentkourier_binding_probe_duration_seconds") }) {
-		t.Error("no probe was timed")
+	// Each probe is timed under its own condition: the backend's checks took the 40 ms the fake backend waited, the chat's took no time.
+	if mean, n := meanProbeSeconds(t, m, bindingcheck.BackendReachable); n == 0 || mean < 0.04 {
+		t.Errorf("BackendReachable probes: %d observed, mean %.4fs; want some, of at least 40 ms", n, mean)
+	}
+	if mean, n := meanProbeSeconds(t, m, bindingcheck.ChannelJoined); n == 0 || mean >= 0.02 {
+		t.Errorf("ChannelJoined probes: %d observed, mean %.4fs; want some, of under 20 ms", n, mean)
 	}
 	if strings.Contains(strings.Join(samples(t, m), "\n"), "other-bot") || strings.Contains(strings.Join(samples(t, m), "\n"), "also-other") {
 		t.Errorf("series for a Binding on the other connection: %v", seriesOf(t, m, "agentkourier_binding_"))
@@ -606,27 +684,46 @@ func TestTheBrokersProberProbesTheServedConnectionAndPrunesWhatAReloadRemoves(t 
 	}
 }
 
-// The probe's reach is the card fetch and the channel read, and nothing that sends the agent a message or writes to the chat: the two
-// interfaces it is given have exactly those methods, so a method added to either (to run a turn, or to post) fails here and is decided on.
-func TestTheVerificationIsGivenOnlyReadsOfTheAgentAndTheChat(t *testing.T) {
-	names := func(typ reflect.Type) []string {
-		var out []string
-		for i := range typ.NumMethod() {
-			out = append(out, typ.Method(i).Name)
+// A backend that never answers and a chat platform that never answers are cut by the adapters' own bounds, which the verification derives
+// from the Prober's timeout (innerBound): they are reported as what they are, False/Unreachable and Unknown/ChatUnavailable, and not as
+// the Prober's own Unknown/ProbeTimeout, which says nothing of either. Were the adapters given the Prober's timeout itself, the Prober
+// would cut the probe first.
+func TestTheBrokersProberReportsAHungBackendAndAHungChatAsWhatTheyAreAndNotAsProbeTimeout(t *testing.T) {
+	current := &snaps{}
+	current.p.Store(twoConnections(t, "ops/oncall"))
+	hungBackend := probeFunc(func(ctx context.Context, _ string) error { <-ctx.Done(); return fmt.Errorf("card: %w", ctx.Err()) })
+	p := verification{
+		Bindings: hungBackend, Platform: &accessFake{wait: true}, Snaps: current, Revision: func(context.Context) string { return "r" },
+		Conn:    Connection{Ref: v1alpha1.ObjectRef{Namespace: "platform", Name: "slack-a"}},
+		Metrics: mustMetrics(t, nil), Log: slog.New(slog.DiscardHandler), Timeout: 300 * time.Millisecond, Interval: time.Hour, Tick: 5 * time.Millisecond,
+	}.newProber()
+	runProber(t, p)
+	conds := waitSettled(t, p, 1)["sre/oncall"]
+	if c := conds[bindingcheck.BackendReachable]; c.Status != bindingcheck.False || c.Reason != bindingcheck.ReasonUnreachable {
+		t.Errorf("BackendReachable is %s/%s; want False/Unreachable", c.Status, c.Reason)
+	}
+	if c := conds[bindingcheck.ChannelJoined]; c.Status != bindingcheck.Unknown || c.Reason != bindingcheck.ReasonChatUnavailable {
+		t.Errorf("ChannelJoined is %s/%s; want Unknown/ChatUnavailable", c.Status, c.Reason)
+	}
+}
+
+// A token read that the checker's own bound cut short did not find the Secret unreadable: it is no verdict, where a read that failed by
+// itself is False/CredentialsUnreadable.
+func TestAgentCheckerCredentialsReadCutByItsOwnBoundIsNoVerdict(t *testing.T) {
+	for _, sentinel := range []error{agent.ErrTokenUnreadable, agent.ErrHeaderUnreadable} {
+		cut := probeFunc(func(ctx context.Context, _ string) error {
+			<-ctx.Done()
+			return fmt.Errorf("%w: %w", sentinel, ctx.Err())
+		})
+		out, err := agentChecker{bindings: cut, timeout: 20 * time.Millisecond}.CheckAgent(t.Context(), "sre/oncall")
+		if err == nil || out != (bindingcheck.Outcome{}) || !errors.Is(err, sentinel) {
+			t.Errorf("%v cut by the bound: CheckAgent = %+v, %v; want an error and no outcome", sentinel, out, err)
 		}
-		return out
-	}
-	if got := names(reflect.TypeFor[agentProbe]()); !slices.Equal(got, []string{"CheckAgent"}) {
-		t.Errorf("agentProbe has the methods %v; want CheckAgent alone, which sends the agent nothing", got)
-	}
-	if got := names(reflect.TypeFor[channelReader]()); !slices.Equal(got, []string{"ChannelAccess", "Classify"}) {
-		t.Errorf("channelReader has the methods %v; want ChannelAccess and Classify, which post nothing", got)
-	}
-	if got := names(reflect.TypeFor[config.SecretVersioner]()); !slices.Equal(got, []string{"SecretVersion"}) {
-		t.Errorf("SecretVersioner has the methods %v; want SecretVersion alone", got)
-	}
-	if agentProbeTimeout >= bindingProbeTimeout || channelProbeTimeout >= bindingProbeTimeout {
-		t.Errorf("the adapters' bounds %s and %s must be shorter than the Prober's %s, or ProbeTimeout is what a dead backend reports", agentProbeTimeout, channelProbeTimeout, bindingProbeTimeout)
+		failed := probeFunc(func(context.Context, string) error { return fmt.Errorf("%w: no key", sentinel) })
+		out, err = agentChecker{bindings: failed, timeout: time.Second}.CheckAgent(t.Context(), "sre/oncall")
+		if err != nil || out.Reason != bindingcheck.ReasonCredentialsUnreadable {
+			t.Errorf("%v failed by itself: CheckAgent = %+v, %v; want False/CredentialsUnreadable", sentinel, out, err)
+		}
 	}
 }
 
@@ -646,8 +743,9 @@ func tr(oldStatus bindingcheck.Status, oldReason bindingcheck.Reason, newStatus 
 	return t
 }
 
-// A condition that goes False is a WARN, one that is True again is an INFO, and the rest are silent: a first result, a move to Unknown, a
-// condition that is True from Pending, and Ready, whose reason shifts as the conditions of a first pass arrive.
+// A condition that goes False is a WARN, so is Unknown/ChatCredentialsChanged, any other Unknown is an INFO (a first result too), and
+// one that is True again is an INFO. Silent: a first result that is True, Pending, Unknown/ProbeFailed (probeError logs it with its
+// error), and Ready, whose reason shifts as the conditions of a first pass arrive.
 func TestTransitionLogsFalseAsWarnAndRecoveryAsInfoAndNothingElse(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -660,8 +758,13 @@ func TestTransitionLogsFalseAsWarnAndRecoveryAsInfoAndNothingElse(t *testing.T) 
 		{"false to true", tr(bindingcheck.False, bindingcheck.ReasonAgentNotFound, bindingcheck.True, bindingcheck.ReasonOK), "level=INFO"},
 		{"unknown after a probe to true", tr(bindingcheck.Unknown, bindingcheck.ReasonProbeFailed, bindingcheck.True, bindingcheck.ReasonOK), "level=INFO"},
 		{"first result is true", tr(bindingcheck.Unknown, bindingcheck.ReasonPending, bindingcheck.True, bindingcheck.ReasonOK), ""},
-		{"true to unknown", tr(bindingcheck.True, bindingcheck.ReasonOK, bindingcheck.Unknown, bindingcheck.ReasonProbeTimeout), ""},
-		{"unknown to unknown", tr(bindingcheck.Unknown, bindingcheck.ReasonPending, bindingcheck.Unknown, bindingcheck.ReasonUnexpectedStatus), ""},
+		{"true to unknown", tr(bindingcheck.True, bindingcheck.ReasonOK, bindingcheck.Unknown, bindingcheck.ReasonProbeTimeout), "level=INFO"},
+		{"a first result that is unknown", tr(bindingcheck.Unknown, bindingcheck.ReasonPending, bindingcheck.Unknown, bindingcheck.ReasonUnexpectedStatus), "level=INFO"},
+		{"unknown to another unknown", tr(bindingcheck.Unknown, bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, bindingcheck.ReasonProbeTimeout), "level=INFO"},
+		{"chat credentials changed", tr(bindingcheck.True, bindingcheck.ReasonOK, bindingcheck.Unknown, bindingcheck.ReasonChatCredentialsChanged), "level=WARN"},
+		{"a first result that is chat credentials changed", tr(bindingcheck.Unknown, bindingcheck.ReasonPending, bindingcheck.Unknown, bindingcheck.ReasonChatCredentialsChanged), "level=WARN"},
+		{"true to a probe that could not tell", tr(bindingcheck.True, bindingcheck.ReasonOK, bindingcheck.Unknown, bindingcheck.ReasonProbeFailed), ""},
+		{"a first result that is a probe that could not tell", tr(bindingcheck.Unknown, bindingcheck.ReasonPending, bindingcheck.Unknown, bindingcheck.ReasonProbeFailed), ""},
 		{"a condition seen for the first time", tr("", "", bindingcheck.Unknown, bindingcheck.ReasonPending), ""},
 		{"Ready going false", func() bindingcheck.Transition {
 			t := tr(bindingcheck.True, bindingcheck.ReasonOK, bindingcheck.False, "BackendReachable:AgentNotFound")

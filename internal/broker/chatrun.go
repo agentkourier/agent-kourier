@@ -90,8 +90,7 @@ func RunPlatform(ctx context.Context, runner PlatformRunner, sink chat.Sink, p R
 // ChooseConnection returns the only ChatConnection of snap, with the keys of its credentials Secret that its
 // platform needs (platformKeys) read through secrets. v1 serves exactly one, because the outbox has no
 // connection column (Phase 4), and only a platform that has an adapter (Slack, in Socket Mode). Anything else is an
-// error wrapping ErrWiring. The Connection also says which version the credentials Secret had when the tokens were read, if the
-// Secrets' reader keeps versions. The tokens are those of the snapshot at the call: Run reads them at start, and again when the
+// error wrapping ErrWiring. The tokens are those of the snapshot at the call: Run reads them at start, and again when the
 // leader half starts, since a standby may lead long after it started. A change of the connection or of its Secret applies
 // to a running leader on restart, which the stale flag shows.
 func ChooseConnection(ctx context.Context, snap *config.Snapshot, secrets identity.SecretReader) (Connection, error) {
@@ -111,14 +110,6 @@ func ChooseConnection(ctx context.Context, snap *config.Snapshot, secrets identi
 	spec, ok := platformFor(c.Spec.Platform)
 	if !ok {
 		return Connection{}, fmt.Errorf("%w: ChatConnection %s is %q, and v1 serves Slack in Socket Mode", ErrWiring, name, c.Spec.Platform)
-	}
-	// The version is read before the values: a Secret rotated in between then has a newer version than the baseline, which shows
-	// it, where read the other way round the baseline would be the new version over the old values and hide it.
-	credSecret := SecretVersion{Namespace: c.Namespace, Name: c.Spec.CredentialsSecretRef.Name}
-	if vs, ok := secrets.(config.SecretVersioner); ok {
-		if version, err := vs.SecretVersion(ctx, credSecret.Namespace, credSecret.Name); err == nil {
-			credSecret.Version = version
-		}
 	}
 	read := func(key string) (secret.Value, error) {
 		v, err := secrets.Value(ctx, c.Namespace, c.Spec.CredentialsSecretRef.Name, key)
@@ -144,5 +135,5 @@ func ChooseConnection(ctx context.Context, snap *config.Snapshot, secrets identi
 		}
 		creds[key] = v
 	}
-	return Connection{Ref: v1alpha1.ObjectRef{Namespace: c.Namespace, Name: c.Name}, Platform: c.Spec.Platform, Credentials: creds, CredentialsSecret: credSecret}, nil
+	return Connection{Ref: v1alpha1.ObjectRef{Namespace: c.Namespace, Name: c.Name}, Platform: c.Spec.Platform, Credentials: creds}, nil
 }

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,7 +15,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
@@ -98,7 +98,7 @@ func TestRunReportsTheConditionsOfTheBindingsAsMetricsAndLogLines(t *testing.T) 
 	r.waitMetric(`agentkourier_binding_condition{binding="` + verifiedBinding + `",condition="ChannelJoined",status="false"} 1`)
 	slk.set(verifiedChannel, chat.Access{Member: true})
 	r.waitMetric(`agentkourier_binding_ready{binding="` + verifiedBinding + `"} 1`)
-	time.Sleep(200 * time.Millisecond) // several more probes: a probe that finds what it found before is not logged again
+	r.waitMoreProbes("ChannelJoined", 6) // several more probes: a probe that finds what it found before is not logged again
 
 	out := logs.String()
 	count := func(parts ...string) int {
@@ -159,38 +159,112 @@ func TestRunOnlyTheLeaderProbesTheBindings(t *testing.T) {
 	}
 }
 
-// credentialsCluster is cluster() with a resourceVersion on the chat credentials Secret, which the fake API server does not set itself.
-func credentialsCluster(version string) *fake.Clientset {
-	conn := slackSecret(version)
-	return fake.NewClientset(conn, secretOf("sre", "agent-kourier-sre-alerts-oidc", "token"))
+// probeCount is the number of probes of the condition that the leader has timed (the count of agentkourier_binding_probe_duration_seconds), which
+// rises with every probe whatever it finds.
+func (r *running) probeCount(condition string) float64 {
+	r.t.Helper()
+	_, body := r.get("/metrics")
+	prefix := `agentkourier_binding_probe_duration_seconds_count{condition="` + condition + `"} `
+	for _, line := range strings.Split(body, "\n") {
+		if v, ok := strings.CutPrefix(line, prefix); ok {
+			n, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+			if err != nil {
+				r.t.Fatalf("the probe count %q: %v", line, err)
+			}
+			return n
+		}
+	}
+	return 0
 }
 
-func slackSecret(version string) *corev1.Secret {
-	s := secretOf("agent-kourier-system", "slack-main", "botToken", "appToken")
-	s.ResourceVersion = version
+// waitMoreProbes waits until n more probes of the condition have ended than had when it was called, which is the signal that the
+// probes went on for long enough for the test to look at what they left.
+func (r *running) waitMoreProbes(condition string, n float64) {
+	r.t.Helper()
+	base := r.probeCount(condition)
+	eventually(r.t, 20*time.Second, "the leader did not make "+strconv.FormatFloat(n, 'f', 0, 64)+" more probes of "+condition, func() bool {
+		return r.probeCount(condition) >= base+n
+	})
+}
+
+// The chat credentials Secret as the broker's tokens were read from it, with its tokens changed to bot and app and any annotations.
+func slackSecret(version, bot string, annotations map[string]string) *corev1.Secret {
+	s := secretOf("agent-kourier-system", "slack-main")
+	s.Data = map[string][]byte{"botToken": []byte(bot), "appToken": []byte("xapp-fake-app")}
+	s.ResourceVersion, s.Annotations = version, annotations
 	return s
 }
 
-// A Secret of the chat credentials that changes after the broker read the tokens is told of: the channel probe says
-// Unknown/ChatCredentialsChanged and stops calling Slack, since the tokens the broker holds are no longer the Secret's, and a restart is
-// what picks the new ones up. The baseline is the version the tokens were read under, taken from the cluster by Run itself.
-func TestRunTellsOfChatCredentialsThatChangedAfterTheTokensWereRead(t *testing.T) {
-	c, slk, _ := verifyWorld(t)
-	client := credentialsCluster("1")
+// Tokens in the chat credentials Secret that differ from the ones the broker is using are told of: the channel probe says
+// Unknown/ChatCredentialsChanged, with a WARN, and stops calling Slack, since the bot the broker holds is no longer the Secret's, and a
+// restart is what picks the new ones up. A write to the Secret that leaves the tokens alone (a new resourceVersion, an annotation) is no
+// change: the Binding stays ready, though the write moves the config's revision and so makes the leader probe at once. No token, old or
+// new, reaches the log or /metrics.
+func TestRunTellsOfChatTokensThatChangedAndNotOfAWriteThatLeavesThemAlone(t *testing.T) {
+	const old, rotated = "xoxb-fake-bot", "xoxb-ROTATED-CANARY"
+	c, slk, logs := verifyWorld(t)
+	client := slackCluster(old)
 	c.Client = client
 	r := start(t, c)
-	r.waitMetric(`agentkourier_binding_condition{binding="` + verifiedBinding + `",condition="ChannelJoined",status="true"} 1`)
+	r.waitMetric(`agentkourier_binding_ready{binding="` + verifiedBinding + `"} 1`)
+	secrets := client.CoreV1().Secrets("agent-kourier-system")
 
-	if _, err := client.CoreV1().Secrets("agent-kourier-system").Update(t.Context(), slackSecret("2"), metav1.UpdateOptions{}); err != nil {
-		t.Fatal(err)
+	// A write that leaves the tokens alone moves the revision, so the leader probes at once, and finds nothing wrong.
+	r.waitMoreProbes("ChannelJoined", 1)
+	update := func(s *corev1.Secret) {
+		t.Helper()
+		if _, err := secrets.Update(t.Context(), s, metav1.UpdateOptions{}); err != nil {
+			t.Fatal(err)
+		}
 	}
+	before := slk.calls.Load()
+	update(slackSecret("2", old, map[string]string{"owner": "someone"}))
+	eventually(t, 10*time.Second, "the leader did not probe again after the write", func() bool { return slk.calls.Load() > before })
+	r.waitMoreProbes("ChannelJoined", 3)
+	if !strings.Contains(metricsOf(r), `agentkourier_binding_ready{binding="`+verifiedBinding+`"} 1`) {
+		t.Errorf("%s is not ready after a write that left the tokens alone", verifiedBinding)
+	}
+
+	update(slackSecret("3", rotated, nil))
 	r.waitMetric(`agentkourier_binding_condition{binding="` + verifiedBinding + `",condition="ChannelJoined",status="unknown"} 1`)
 	r.waitMetric(`agentkourier_binding_ready{binding="` + verifiedBinding + `"} 0`)
-	before := slk.calls.Load()
-	time.Sleep(200 * time.Millisecond)
-	if after := slk.calls.Load(); after != before {
-		t.Errorf("Slack was asked %d more times after the credentials changed; want none", after-before)
+	calls := slk.calls.Load()
+	r.waitMoreProbes("ChannelJoined", 5)
+	if after := slk.calls.Load(); after != calls {
+		t.Errorf("Slack was asked %d more times after the tokens changed; want none", after-calls)
 	}
+
+	out := logs.String()
+	if n := countOf(out, "level=WARN", "a condition is unknown", "binding="+verifiedBinding, "reason=ChatCredentialsChanged"); n != 1 {
+		t.Errorf("%d warnings that the chat credentials changed; want one\n%s", n, out)
+	}
+	for _, text := range []string{old, rotated, "xapp-fake-app"} {
+		if strings.Contains(out, text) || strings.Contains(metricsOf(r), text) {
+			t.Errorf("the log or /metrics holds a token (%q...)", text[:8])
+		}
+	}
+}
+
+// metricsOf is the body of /metrics.
+func metricsOf(r *running) string {
+	r.t.Helper()
+	_, body := r.get("/metrics")
+	return body
+}
+
+// countOf counts the lines of text that hold every one of parts.
+func countOf(text string, parts ...string) int {
+	n := 0
+	for _, line := range strings.Split(text, "\n") {
+		ok := true
+		for _, p := range parts {
+			ok = ok && strings.Contains(line, p)
+		}
+		if ok {
+			n++
+		}
+	}
+	return n
 }
 
 // The verification stops with the interactions' loops, before the manager, the drain, the pool and the resolver: after the resolver stops

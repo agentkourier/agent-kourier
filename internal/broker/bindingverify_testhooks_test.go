@@ -3,15 +3,21 @@
 package broker
 
 import (
+	"encoding/json"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/agentkourier/agent-kourier/test/stubagent"
 )
 
 // The verification against the real Slack client and the fake Slack behind it: the bot a member of the Binding's channel is joined, a
 // channel the fake has never heard of is not found, and an archived channel and an app without the scope are told apart on the next
-// probe, each warned of with its own reason. When the channel is mended the Binding is ready again.
+// probe, each warned of with its own reason. When the channel is mended the Binding is ready again. Throughout, the probes post nothing and
+// run no turn: no message lands in either channel, no turn begins, and the stub agent is sent no message.
 func TestRunTellsAnArchivedChannelAndAMissingScopeApartThroughTheFakeSlack(t *testing.T) {
 	w := newSlackWorld(t, "xoxb-fake-bot")
 	logs := &logBuffer{}
@@ -32,6 +38,29 @@ func TestRunTellsAnArchivedChannelAndAMissingScopeApartThroughTheFakeSlack(t *te
 	r.waitMetric(`agentkourier_binding_ready{binding="` + verifiedBinding + `"} 0`)
 	w.fake.SetMissingScope("conversations.info", false)
 	r.waitMetric(`agentkourier_binding_ready{binding="` + verifiedBinding + `"} 1`)
+
+	// The probes only read: after several more of them nothing was posted to either channel, no turn began, and the agent was sent no message.
+	r.waitMoreProbes("ChannelJoined", 6)
+	r.waitMoreProbes("BackendReachable", 6)
+	for _, channel := range []string{verifiedChannel, "G0123456789"} {
+		if msgs := w.fake.Messages(channel); len(msgs) != 0 {
+			t.Errorf("%d messages in %s; want none: a probe posts nothing", len(msgs), channel)
+		}
+	}
+	w.sink.mu.Lock()
+	turnsStarted := len(w.sink.outputs)
+	w.sink.mu.Unlock()
+	rec := httptest.NewRecorder()
+	if !w.stub.ServeSendControl(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/_control/send-gate", http.NoBody)) {
+		t.Fatal("the stub agent's send state route was not handled")
+	}
+	var state stubagent.SendGateState
+	if err := json.Unmarshal(rec.Body.Bytes(), &state); err != nil {
+		t.Fatal(err)
+	}
+	if turnsStarted != 0 || len(state.Sends) != 0 {
+		t.Errorf("%d turns began and the agent was sent %d messages; want none: a probe runs no turn", turnsStarted, len(state.Sends))
+	}
 
 	out := logs.String()
 	for _, want := range []string{
