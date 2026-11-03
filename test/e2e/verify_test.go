@@ -75,8 +75,12 @@ func TestVerify_BindingsThatCannotBeServedAreNotReadyAndTheLeaderSaysWhy(t *test
 		return verifySeries{"agentkourier_binding_ready", map[string]string{"binding": binding}, want}
 	}
 	// One deadline for all the waits, so that a verification that is broken ends the case in two minutes and not in twelve times that.
-	waits, stopWaiting := context.WithTimeout(s.ctx, 2*time.Minute)
+	// Each wait is given what is left as its own timeout, and its context a margin beyond it, so that the wait times out first and
+	// reports the last error it saw, where a context that ends with it would hide that behind the context's error.
+	deadline := time.Now().Add(2 * time.Minute)
+	waits, stopWaiting := context.WithDeadline(s.ctx, deadline.Add(30*time.Second))
 	defer stopWaiting()
+	left := func() time.Duration { return max(time.Until(deadline), time.Second) }
 	for _, v := range []verifySeries{
 		ready("agent-kourier/fast-verify-ready", 1),
 		cond("agent-kourier/fast-verify-ready", "BackendReachable", "true", 1),
@@ -95,19 +99,39 @@ func TestVerify_BindingsThatCannotBeServedAreNotReadyAndTheLeaderSaysWhy(t *test
 		cond("agent-kourier/fast-verify-archived", "BackendReachable", "true", 1),
 	} {
 		desc := v.name + " " + v.labels["binding"] + " " + v.labels["condition"] + " " + v.labels["status"]
-		if err := Wait(waits, 2*time.Minute, desc, func(ctx context.Context) (bool, error) { return s.holds(ctx, v) }); err != nil {
+		if err := Wait(waits, left(), desc, func(ctx context.Context) (bool, error) { return s.holds(ctx, v) }); err != nil {
 			t.Error(err)
 		}
 	}
 
-	// The same probe says why in the log, once for each Binding that is not ready, and says nothing of the one that is.
-	logs := s.agentKourierLogs()
-	for binding, reason := range map[string]string{
+	// The same probe says why in the log, once for each Binding that is not ready, and says nothing of the one that is. The metric is set
+	// before the line is written and the container's log reaches the API asynchronously, so the lines are waited for, inside the same deadline.
+	reasons := map[string]string{
 		"agent-kourier/fast-verify-no-agent":   "AgentNotFound",
 		"agent-kourier/fast-verify-not-joined": "NotInChannel",
 		"agent-kourier/fast-verify-archived":   "ChannelArchived",
-	} {
-		if n := countLines(logs, `"binding":"`+binding+`"`, `"reason":"`+reason+`"`, `"msg":"binding verification: a condition is false"`); n != 1 {
+	}
+	falseLine := func(logs, binding, reason string) int {
+		return countLines(logs, `"binding":"`+binding+`"`, `"reason":"`+reason+`"`, `"msg":"binding verification: a condition is false"`)
+	}
+	var logs string
+	err := Wait(waits, left(), "the log lines that the Bindings are false", func(context.Context) (bool, error) {
+		var err error
+		if logs, err = s.agentKourierLogs(); err != nil {
+			return false, err
+		}
+		for binding, reason := range reasons {
+			if falseLine(logs, binding, reason) == 0 {
+				return false, nil
+			}
+		}
+		return true, nil
+	})
+	if err != nil {
+		t.Error(err)
+	}
+	for binding, reason := range reasons {
+		if n := falseLine(logs, binding, reason); n != 1 {
 			t.Errorf("%d log lines that %s is false for %s; want one", n, binding, reason)
 		}
 	}
@@ -129,11 +153,10 @@ func TestVerify_BindingsThatCannotBeServedAreNotReadyAndTheLeaderSaysWhy(t *test
 }
 
 // agentKourierLogs is the tail of the log of every Agent Kourier pod, which is where a standby has nothing of the work.
-func (s *scenario) agentKourierLogs() string {
-	s.t.Helper()
+func (s *scenario) agentKourierLogs() (string, error) {
 	pods, err := s.pods.List(s.ctx, kube.AgentKourierNamespace, agentKourierPods)
 	if err != nil {
-		s.t.Fatal(err)
+		return "", err
 	}
 	var all strings.Builder
 	for _, p := range pods {
@@ -142,11 +165,11 @@ func (s *scenario) agentKourierLogs() string {
 		}
 		out, err := s.pods.Logs(s.ctx, kube.AgentKourierNamespace, p.Name, agentKourierContainer, false, 3000)
 		if err != nil {
-			s.t.Fatal(err)
+			return "", err
 		}
 		all.WriteString(out)
 	}
-	return all.String()
+	return all.String(), nil
 }
 
 // countLines counts the lines of text that hold every one of parts.
