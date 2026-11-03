@@ -115,9 +115,9 @@ func TestVerify_BindingsThatCannotBeServedAreNotReadyAndTheLeaderSaysWhy(t *test
 		return countLines(logs, `"binding":"`+binding+`"`, `"reason":"`+reason+`"`, `"msg":"binding verification: a condition is false"`)
 	}
 	var logs string
-	err := Wait(waits, left(), "the log lines that the Bindings are false", func(context.Context) (bool, error) {
+	err := Wait(waits, left(), "the log lines that the Bindings are false", func(ctx context.Context) (bool, error) {
 		var err error
-		if logs, err = s.agentKourierLogs(); err != nil {
+		if logs, err = s.agentKourierLogs(ctx); err != nil {
 			return false, err
 		}
 		for binding, reason := range reasons {
@@ -152,9 +152,10 @@ func TestVerify_BindingsThatCannotBeServedAreNotReadyAndTheLeaderSaysWhy(t *test
 	}
 }
 
-// agentKourierLogs is the tail of the log of every Agent Kourier pod, which is where a standby has nothing of the work.
-func (s *scenario) agentKourierLogs() (string, error) {
-	pods, err := s.pods.List(s.ctx, kube.AgentKourierNamespace, agentKourierPods)
+// agentKourierLogs is the tail of the log of every Agent Kourier pod, which is where a standby has nothing of the work. The calls end
+// with ctx, so that a log stream that hangs ends with the wait that asked.
+func (s *scenario) agentKourierLogs(ctx context.Context) (string, error) {
+	pods, err := s.pods.List(ctx, kube.AgentKourierNamespace, agentKourierPods)
 	if err != nil {
 		return "", err
 	}
@@ -163,7 +164,7 @@ func (s *scenario) agentKourierLogs() (string, error) {
 		if p.DeletionTimestamp != nil { // the pod a restart replaced: its log is an earlier run's
 			continue
 		}
-		out, err := s.pods.Logs(s.ctx, kube.AgentKourierNamespace, p.Name, agentKourierContainer, false, 3000)
+		out, err := s.pods.Logs(ctx, kube.AgentKourierNamespace, p.Name, agentKourierContainer, false, 3000)
 		if err != nil {
 			return "", err
 		}
