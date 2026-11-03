@@ -102,7 +102,7 @@ type ThreadReader interface {
 	ThreadBetween(ctx context.Context, t Target, after, before string, limit int) (msgs []HistoryMessage, dropped int, err error)
 	// ThreadFromStart is ThreadBetween with no lower bound, for a turn that carries the thread from its start, and with the message
 	// that opened the thread first, which limit does not count or cut. A thread whose first message the platform no longer has
-	// starts with its first reply.
+	// starts with its first reply. ErrThreadTooLong may come with what opened the thread, and nothing else.
 	ThreadFromStart(ctx context.Context, t Target, before string, limit int) (msgs []HistoryMessage, dropped int, err error)
 }
 

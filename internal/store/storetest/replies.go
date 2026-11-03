@@ -267,6 +267,15 @@ func (su suite) replyQueue(t *testing.T) {
 		if prev.ID != "w2" || !prev.WholeThread {
 			t.Errorf("PreviousReply = %+v; want w2 with WholeThread", prev)
 		}
+		_, err = s.EnqueueReply(ctx, newReply("w3", key)) // a plain turn after the marked one
+		noErr(t, err, "enqueue w3")
+		got, err := s.PreviousWholeReply(ctx, key, 1<<62)
+		noErr(t, err, "PreviousWholeReply")
+		if got.ID != "w2" || got.MessageRef != whole.MessageRef {
+			t.Errorf("PreviousWholeReply = %+v; want w2, past the plain turn after it", got)
+		}
+		_, err = s.PreviousWholeReply(ctx, key, second.Sequence)
+		isErr(t, err, store.ErrNotFound, "PreviousWholeReply with only a plain turn below")
 	})
 
 	su.run(t, "PreviousReply is the session's row just below a sequence, delivered rows and pinned ones included", func(t *testing.T, s store.Store) {

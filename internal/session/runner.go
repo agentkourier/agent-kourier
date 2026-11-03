@@ -612,7 +612,8 @@ func (m *Manager) wantsThreadContext(r store.Reply, b Backend) bool {
 }
 
 // readWindow finds where the window of the turn r opens, which is the message of the row before it in the session's
-// queue, delivered or not, and keeps it for the turn. It is read from stored rows, so it is the same on every attempt,
+// queue, delivered or not, and keeps it for the turn. A turn that carries the thread reads back to the last that did: a turn
+// between them carried no bot's post. It is read from stored rows, so it is the same on every attempt,
 // after a restart and after a failover. A turn with no row before it has no window. It runs before the turn is sent,
 // where a store that fails waits like any other failure of the runner: the turn is never sent without its context,
 // which it could not be sent again with, and nothing tells the thread the agent cannot be reached.
@@ -620,9 +621,13 @@ func (m *Manager) readWindow(ctx context.Context, c *convo, r store.Reply, b Bac
 	if !m.wantsThreadContext(r, b) || c.window.id == r.ID {
 		return nil
 	}
-	prev, err := m.cfg.Store.PreviousReply(ctx, r.Key, r.Sequence)
+	previous := m.cfg.Store.PreviousReply
+	if r.WholeThread {
+		previous = m.cfg.Store.PreviousWholeReply
+	}
+	prev, err := previous(ctx, r.Key, r.Sequence)
 	switch {
-	case errors.Is(err, store.ErrNotFound): // the first turn of the thread: no turn came before it
+	case errors.Is(err, store.ErrNotFound): // no turn came before it, or none that carried the thread
 		c.window = windowText{id: r.ID, none: !r.WholeThread} // a turn that carries the thread has all of it to read
 	case err != nil:
 		return fmt.Errorf("read the turn before %s: %w", r.ID, err)

@@ -100,11 +100,24 @@ func (s *adapter) nextReplyAfter(ctx context.Context, key store.ConversationKey,
 const previousReplyQuery = `SELECT id, sequence, user_id, message_ts, acknowledgment, text, enqueued_at, interaction_id, whole_thread, trace_parent, trace_state FROM reply_queue
 	WHERE connection = ? AND channel = ? AND thread_ts = ? AND sequence < ? ORDER BY sequence DESC LIMIT 1`
 
+// previousWholeReplyQuery is previousReplyQuery among the rows marked whole_thread, on the same seek.
+const previousWholeReplyQuery = `SELECT id, sequence, user_id, message_ts, acknowledgment, text, enqueued_at, interaction_id, whole_thread, trace_parent, trace_state FROM reply_queue
+	WHERE connection = ? AND channel = ? AND thread_ts = ? AND sequence < ? AND whole_thread = 1 ORDER BY sequence DESC LIMIT 1`
+
 // PreviousReply implements store.ReplyQueue.
 func (s *adapter) PreviousReply(ctx context.Context, key store.ConversationKey, sequence int64) (store.Reply, error) {
+	return s.previousRow(ctx, previousReplyQuery, key, sequence)
+}
+
+// PreviousWholeReply implements store.ReplyQueue.
+func (s *adapter) PreviousWholeReply(ctx context.Context, key store.ConversationKey, sequence int64) (store.Reply, error) {
+	return s.previousRow(ctx, previousWholeReplyQuery, key, sequence)
+}
+
+func (s *adapter) previousRow(ctx context.Context, query string, key store.ConversationKey, sequence int64) (store.Reply, error) {
 	r := store.Reply{Key: key}
 	var enqueued int64
-	err := s.read.QueryRowContext(ctx, previousReplyQuery, key.Connection, key.Channel, key.Thread, sequence).Scan(&r.ID, &r.Sequence, &r.UserID, &r.MessageRef, &r.Acknowledgment, &r.Text, &enqueued, &r.InteractionID, &r.WholeThread, &r.TraceParent, &r.TraceState)
+	err := s.read.QueryRowContext(ctx, query, key.Connection, key.Channel, key.Thread, sequence).Scan(&r.ID, &r.Sequence, &r.UserID, &r.MessageRef, &r.Acknowledgment, &r.Text, &enqueued, &r.InteractionID, &r.WholeThread, &r.TraceParent, &r.TraceState)
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.Reply{}, fmt.Errorf("previous reply %+v below %d: %w", key, sequence, store.ErrNotFound)
 	}

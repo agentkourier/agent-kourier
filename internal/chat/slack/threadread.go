@@ -41,13 +41,14 @@ func (c *Client) ThreadBetween(ctx context.Context, conn, channel, threadTS, aft
 }
 
 // ThreadFromStart is ThreadBetween with no lower bound, and with the message that opened the thread first if Slack returned it,
-// which limit does not count or cut. It is the one read: conversations.replies leads with the parent.
+// which limit does not count or cut. It is the one read: conversations.replies leads with the parent. A thread too long to read
+// still has what opened it, which comes back with the error.
 func (c *Client) ThreadFromStart(ctx context.Context, conn, channel, threadTS, before string, limit int) (msgs []chat.HistoryMessage, dropped int, err error) {
 	root, msgs, dropped, err := c.readThread(ctx, conn, channel, threadTS, "", before, limit)
-	if err != nil || root == nil {
+	if root == nil {
 		return msgs, dropped, err
 	}
-	return append([]chat.HistoryMessage{*root}, msgs...), dropped, nil
+	return append([]chat.HistoryMessage{*root}, msgs...), dropped, err
 }
 
 // readThread is the read of ThreadBetween and ThreadFromStart: root is the parent, if a page held it.
@@ -85,7 +86,7 @@ func (c *Client) readThread(ctx context.Context, conn, channel, threadTS, after,
 		return nil, nil, 0, err
 	}
 	if more {
-		return nil, nil, 0, fmt.Errorf("slack thread read in %s: %w: more than %d pages of replies", channel, chat.ErrThreadTooLong, maxThreadPages)
+		return root, nil, 0, fmt.Errorf("slack thread read in %s: %w: more than %d pages of replies", channel, chat.ErrThreadTooLong, maxThreadPages)
 	}
 	slices.SortStableFunc(raw, func(a, b slackgo.Message) int { return compareTS(a.Timestamp, b.Timestamp) })
 	if over := len(raw) - limit; over > 0 {
@@ -98,12 +99,16 @@ func (c *Client) readThread(ctx context.Context, conn, channel, threadTS, after,
 	return root, msgs, dropped, nil
 }
 
-// threadMessage is a message of a thread, decoded by historyMessage. A bot's post may hold what it says in section and context blocks
-// alone, so when its attachment has no text of its own, those words are its body, as they are in the post of a mention (mentionPost).
+// threadMessage is a message of a thread, decoded by historyMessage. A bot's post may hold what it says in its blocks, so when its
+// attachment has no text of its own, what they say past its text is its body, as in the post of a mention (mentionPost). A bot's
+// broadcast or file share is a post of the thread too, which a live event of it, with no trigger to read it, is not.
 // This is for reading a thread: what a trigger matches, and what the dry run shows of a channel, stay the attachment's.
 func threadMessage(me self, conn, channel string, m slackgo.Message) chat.HistoryMessage {
+	if m.BotID != "" && keptSubtype(m.SubType) {
+		m.SubType = ""
+	}
 	if m.BotID != "" && (len(m.Attachments) == 0 || m.Attachments[0].Text == "") {
-		if words := blockWords(m.Blocks); words != "" && words != m.Text {
+		if words := blockWords(m.Blocks); saysMore(m.Text, words) {
 			attachments := slices.Clone(m.Attachments)
 			if len(attachments) == 0 {
 				attachments = make([]slackgo.Attachment, 1)

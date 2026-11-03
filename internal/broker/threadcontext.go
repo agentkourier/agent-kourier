@@ -98,12 +98,13 @@ func (t *threadContext) build(ctx context.Context, key session.Key, binding, aft
 		return "", threadEmpty
 	}
 	target := chat.Target{Conn: key.Connection, Channel: key.Channel, Thread: key.Thread}
-	fromStart := whole && after == "" // the first turn of the thread: what opened it is no reply, and may be what it is all about
+	fromStart := whole && after == "" // no turn has carried the thread: what opened it is no reply, and may be what it is all about
 	msgs, dropped, err := t.read(ctx, target, after, before, fromStart)
+	tooLong := errors.Is(err, chat.ErrThreadTooLong) && fromStart && len(msgs) > 0 // what opened it came back with the error
 	switch {
 	case errors.Is(err, chat.ErrNoThreadReads):
 		return "", t.unsupported(ctx, binding)
-	case err != nil:
+	case err != nil && !tooLong:
 		return t.failed(ctx, binding, "read the thread", err)
 	}
 	people, err := t.eligible(ctx, msgs, whole)
@@ -122,6 +123,10 @@ func (t *threadContext) build(ctx context.Context, key session.Key, binding, aft
 		section, leftOut = render.ThreadMessagesCounted(t.named(ctx, people), pinned, dropped)
 	} else {
 		section, leftOut = render.ThreadRepliesCounted(t.named(ctx, people), dropped)
+	}
+	if tooLong { // the line says the rest is missing
+		line, failed := t.failed(ctx, binding, "read the thread", err)
+		return strings.TrimPrefix(section+"\n\n"+line, "\n\n"), failed
 	}
 	switch {
 	case section == "":

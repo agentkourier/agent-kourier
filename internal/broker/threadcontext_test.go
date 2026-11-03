@@ -939,6 +939,31 @@ func TestThreadContextOfAWholeThreadKeepsItsRootInALongThread(t *testing.T) {
 	}
 }
 
+// tooLongReader is a platform whose thread is too long to read, of which only what opened it comes back.
+type tooLongReader struct {
+	*windowReader
+	root chat.HistoryMessage
+}
+
+func (r *tooLongReader) ThreadFromStart(context.Context, chat.Target, string, int) ([]chat.HistoryMessage, int, error) {
+	return []chat.HistoryMessage{r.root}, 0, fmt.Errorf("slack thread read in C1: %w: more than 5 pages", chat.ErrThreadTooLong)
+}
+
+// What opened a thread too long to read still goes with the turn, with the line that says the rest could not be read; and if it was
+// a turn itself the line goes alone.
+func TestThreadContextOfAThreadTooLongKeepsWhatOpenedIt(t *testing.T) {
+	w := newTCWorld(t)
+	root := opener(botPost(1, "", chat.BotMessage{ID: "B0ALERTS", Title: "FIRING - Latency"}, ""))
+	got := w.build(&tooLongReader{windowReader: w.win, root: root}).Section(w.ctx, tcKey, tcBinding, "", "100.000900", true)
+	if !strings.Contains(got, "FIRING - Latency") || !strings.HasSuffix(got, "\n\n"+threadReadFailed) {
+		t.Errorf("the section lacks what opened the thread, or the line after it:\n%s", got)
+	}
+	w.turns.ids[idOf(root)] = true
+	if got := w.build(&tooLongReader{windowReader: w.win, root: root}).Section(w.ctx, tcKey, tcBinding, "", "100.000900", true); got != threadReadFailed {
+		t.Errorf("the section of a root that was a turn = %q; want the line alone", got)
+	}
+}
+
 // The read from the thread's start waits out a short rate limit, as any read of it does.
 func TestThreadContextWaitsOutARateLimitOnTheWholeThread(t *testing.T) {
 	limited := &chattest.FakeError{Verdict: chat.Verdict{Class: chat.Transient, RetryAfter: 2 * time.Second}, Msg: "rate limited"}

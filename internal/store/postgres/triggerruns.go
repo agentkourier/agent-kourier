@@ -75,7 +75,7 @@ func (s *adapter) AdmitTriggerRun(ctx context.Context, run store.TriggerRun, lim
 			admission = store.TriggerAdmission{Admitted: true}
 			return recordStart(ctx, tx, run)
 		}
-		admission = store.TriggerAdmission{Limit: limit}
+		admission = store.TriggerAdmission{Limit: limit, Again: stoppedBefore}
 		if stoppedBefore {
 			return nil // its row and window stand
 		}

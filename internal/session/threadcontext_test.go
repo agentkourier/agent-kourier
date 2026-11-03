@@ -331,6 +331,36 @@ func TestThreadContextIsNotAskedWhenATaskIsFollowed(t *testing.T) {
 	})
 }
 
+// A bot's mention reads back past a person's turn to the last turn that carried the thread, and from the thread's start if none did:
+// a person's turn carried no bot's post. The person's turn itself still asks only for what came since the turn before it.
+func TestAWholeThreadTurnReadsBackPastAPlainTurn(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.threadReplies = v1alpha1.ThreadRepliesMention
+	hook := &threadHook{section: threadSection}
+	f.m.cfg.ThreadContext = hook.fn
+	turn := func(ref string, whole bool) {
+		t.Helper()
+		in := inbound(ref)
+		in.Mentioned = true
+		if whole {
+			in.UserID, in.WholeThread = "", true
+		}
+		if _, err := f.submit(in); err != nil {
+			t.Fatal(err)
+		}
+		waitFinal(t, sink)
+	}
+	turn("1700.10", false)
+	turn("1700.20", true)
+	turn("1700.30", false)
+	turn("1700.40", true)
+	want := []windowCall{{key, "ns/b1", "", "1700.20", true}, {key, "ns/b1", "1700.20", "1700.30", false}, {key, "ns/b1", "1700.20", "1700.40", true}}
+	if got := hook.seen(); !slices.Equal(got, want) {
+		t.Errorf("hook calls = %+v; want %+v", got, want)
+	}
+}
+
 // failingPrevious fails PreviousReply once, with a store error.
 type failingPrevious struct {
 	Store

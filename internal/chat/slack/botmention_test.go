@@ -96,3 +96,30 @@ func TestABotsMentionInASharedChannelIsDropped(t *testing.T) {
 		t.Errorf("the sink took %+v; want nothing", msgs)
 	}
 }
+
+// A mention written from another team fails closed with no flag on the channel, and one that names the team it was delivered for
+// does not.
+func TestABotsMentionFromAnotherTeamIsDropped(t *testing.T) {
+	for _, tc := range []struct {
+		name, field, team string
+		taken             int
+	}{
+		{"source_team of another", "source_team", "TOTHER", 0},
+		{"user_team of another", "user_team", "TOTHER", 0},
+		{"its own team", "source_team", "TFAKE", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake, sk := startMentions(t)
+			ev := botMentionEvent(webhookBot)
+			ev[tc.field] = tc.team
+			id, err := fake.SendEnvelope("events_api", map[string]any{"type": "event_callback", "team_id": "TFAKE", "event_id": fmt.Sprint("Ev", ev["event_ts"]), "event": ev})
+			if err != nil {
+				t.Fatal(err)
+			}
+			waitAck(t, fake, id)
+			if msgs := sk.messages(); len(msgs) != tc.taken {
+				t.Errorf("the sink took %+v; want %d", msgs, tc.taken)
+			}
+		})
+	}
+}

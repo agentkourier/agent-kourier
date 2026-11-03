@@ -143,6 +143,29 @@ func TestTheIntakeAsksAgainWhetherItTakesTheMention(t *testing.T) {
 	}
 }
 
+// A mention stopped before a restart and delivered again after it was counted and audited the first time, and is not again.
+func TestARedeliveredStoppedMentionIsToldOnce(t *testing.T) {
+	h := newLimited(t)
+	var stopped []store.TriggerLimit
+	h.cfg.OnMentionLimited = func(_ context.Context, _ chat.TriggerMatch, l store.TriggerLimit) { stopped = append(stopped, l) }
+	h.in = chat.NewIntake(h.cfg)
+	for i := range 4 {
+		if err := h.in.Message(h.ctx, botMentionOf(fmt.Sprintf("5.%d", i+1), "4.4")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.in = chat.NewIntake(h.cfg) // what remembers a message for the process is gone, and the store is not
+	if err := h.in.Message(h.ctx, botMentionOf("5.4", "4.4")); err != nil {
+		t.Fatal(err)
+	}
+	if len(stopped) != 1 {
+		t.Errorf("stopped = %v; want the one, once", stopped)
+	}
+	if got := h.limitedCount(t, "0"); got["rate"] != 1 {
+		t.Errorf("agentkourier_trigger_limited_total = %v; want 1", got)
+	}
+}
+
 // A burst in one thread is held to the fixed limits, whether or not the mentions share a thread, because the limits count
 // messages: two bots trading mentions in one thread cannot pass them. Every stopped mention is told to the audit hook.
 func TestABurstOfMentionsIsHeldToTheLimits(t *testing.T) {

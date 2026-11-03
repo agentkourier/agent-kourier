@@ -710,11 +710,11 @@ func (su suite) triggerRuns(t *testing.T) {
 	su.run(t, "a stopped message is checked afresh when asked for again", func(t *testing.T, s store.Store) {
 		lim := store.TriggerRunLimits{MaxRuns: 1, Per: time.Minute, DigestWindow: time.Minute}
 		admit(t, s, runOf("1.1", t0), lim)
-		if got := admit(t, s, runOf("1.2", t0.Add(time.Second)), lim); got.Admitted {
-			t.Fatalf("the second = %+v; want stopped", got)
+		if got := admit(t, s, runOf("1.2", t0.Add(time.Second)), lim); got.Admitted || got.Again {
+			t.Fatalf("the second = %+v; want stopped, for the first time", got)
 		}
-		if got := admit(t, s, runOf("1.2", t0.Add(time.Second)), lim); got.Admitted || got.Limit != store.LimitRate {
-			t.Errorf("the same stopped message again = %+v; want stopped, rate", got)
+		if got := admit(t, s, runOf("1.2", t0.Add(time.Second)), lim); got.Admitted || got.Limit != store.LimitRate || !got.Again {
+			t.Errorf("the same stopped message again = %+v; want stopped, rate, again", got)
 		}
 		if got := admit(t, s, runOf("1.2", t0.Add(2*time.Minute)), lim); !got.Admitted {
 			t.Fatalf("the stopped message once the window has passed = %+v; want admitted", got)

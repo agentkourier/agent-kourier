@@ -143,8 +143,8 @@ type TurnRef struct {
 	// follow continues the same output message but must keep the original pause retry window.
 	Restarted bool
 	// Feedback says which feedback buttons the final message of the output carries (spec 8.7): none for the
-	// zero value, those of an investigation for a turn that nobody wrote (an alert's first prompt: its user is
-	// SystemUser), and those of an answer for a person's turn on a Binding with feedback.enabled.
+	// zero value, those of an investigation for an alert's first prompt (nobody wrote it: its user is SystemUser),
+	// and those of an answer for a person's turn or a bot's mention on a Binding with feedback.enabled.
 	Feedback store.FeedbackKind
 	// ThreadReplies is the Binding's chat.threadReplies. In mention the final message of the output tells the thread to mention
 	// Agent Kourier to ask a follow-up (D38); anything else, the empty value too, adds nothing.
@@ -250,7 +250,7 @@ type Sink interface {
 
 // NoThreadContext is the ThreadContext of a manager whose mentioned turns carry their own message alone: the platform
 // cannot read a thread, or the deployment does not want it to. It adds no text, but the runner still reads where the
-// window opens (one Store.PreviousReply per mentioned turn of a mention-only Binding) before it asks the hook, and a store
+// window opens (one store read per mentioned turn of a mention-only Binding, or per bot's mention) before it asks the hook, and a store
 // that fails there holds the turn back like any other store failure of the runner.
 func NoThreadContext(context.Context, Key, string, string, string, bool) string { return "" }
 

@@ -1,9 +1,12 @@
 package slack
 
 import (
+	"cmp"
 	"context"
+	"html"
 	"regexp"
 	"strings"
+	"unicode"
 
 	slackgo "github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
@@ -90,6 +93,12 @@ type BotMentionFilter interface {
 // group 1 is the ID, and mentionedIn compares it whole, so that U1 is not found in <@U12>.
 var userToken = regexp.MustCompile(`<@([^<>|]+)(?:\|[^<>]*)?>`)
 
+// slackToken is a user, channel or special token in a message's text, and slackLink a link, with its label if it has one.
+var (
+	slackToken = regexp.MustCompile(`<[@#!][^<>]*>`)
+	slackLink  = regexp.MustCompile(`<(?:[^<>|]*\|)?([^<>]*)>`)
+)
+
 // self is who Agent Kourier is on the workspace, from auth.test: the user ID its posts carry, and the bot ID.
 type self struct{ user, bot string }
 
@@ -155,7 +164,7 @@ func decode(me self, inner any) (Message, verdict) {
 			case !m.Bot.content() && m.Text == "":
 				return Message{}, dropped
 			}
-			return m, forward // Mentioned stays false: a bot's mention starts nothing
+			return m, forward // Mentioned stays false: a bot's mention arrives as its own app_mention event
 		case !keptSubtype(e.SubType) || e.BotID != "" || isOwn || m.User == "" || m.Text == "":
 			return Message{}, dropped
 		}
@@ -200,19 +209,20 @@ func postOf(id string, attachments []slackgo.Attachment) BotPost {
 	return b
 }
 
-// mentionPost is the BotPost of a bot's app_mention. A mention can register with the token only in a section or a context block
-// and with top-level text that is a mere fallback, so when the attachment has no text of its own, the words of those blocks are
-// the post's body: no trigger's regex reads a mention, so this changes what no bot message trigger matches.
+// mentionPost is the BotPost of a bot's app_mention. Top-level text can be a mere fallback, whether the token registered from a
+// section or a context block or the words are in a markdown block, so when the attachment has no text of its own, what the blocks
+// say past the text is the post's body: no trigger's regex reads a mention, so this changes what no bot message trigger matches.
 func mentionPost(e *slackevents.AppMentionEvent) BotPost {
 	b := postOf(e.BotID, e.Attachments)
-	if b.Text == "" {
-		b.Text = blockWords(e.Blocks)
+	if words := blockWords(e.Blocks); b.Text == "" && saysMore(e.Text, words) {
+		b.Text = words
 	}
 	return b
 }
 
-// blockWords is the text of a post's section and context blocks, a line for each piece. A rich_text or a markdown block is left
-// out: with one in a post the mention comes from top-level text, which the message has already.
+// blockWords is the words of a post's blocks, a line for each piece: its section, context and header blocks, and its rich_text and
+// markdown blocks, a markdown block being what Slack stores as rich_text with the post's text left as the fallback it was. People,
+// channels and emoji in rich_text are left out: they are no words of a report, and text holds them if it needs them.
 func blockWords(blocks slackgo.Blocks) string {
 	var lines []string
 	add := func(t *slackgo.TextBlockObject) {
@@ -233,7 +243,67 @@ func blockWords(blocks slackgo.Blocks) string {
 					add(t)
 				}
 			}
+		case *slackgo.HeaderBlock:
+			add(b.Text)
+		case *slackgo.MarkdownBlock:
+			if b.Text != "" {
+				lines = append(lines, b.Text)
+			}
+		case *slackgo.RichTextBlock:
+			for _, el := range b.Elements {
+				lines = append(lines, richTextLines(el)...)
+			}
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// richTextLines is the words of a rich_text element, a line for each section of it.
+func richTextLines(el slackgo.RichTextElement) []string {
+	var inline []slackgo.RichTextSectionElement
+	switch e := el.(type) {
+	case *slackgo.RichTextSection:
+		inline = e.Elements
+	case *slackgo.RichTextQuote:
+		inline = e.Elements
+	case *slackgo.RichTextPreformatted:
+		inline = e.Elements
+	case *slackgo.RichTextList:
+		var lines []string
+		for _, item := range e.Elements {
+			lines = append(lines, richTextLines(item)...)
+		}
+		return lines
+	}
+	var line strings.Builder
+	for _, piece := range inline {
+		switch p := piece.(type) {
+		case *slackgo.RichTextSectionTextElement:
+			line.WriteString(p.Text)
+		case *slackgo.RichTextSectionLinkElement:
+			line.WriteString(cmp.Or(p.Text, p.URL))
+		}
+	}
+	if s := strings.TrimRight(line.String(), "\n"); s != "" {
+		return []string{s}
+	}
+	return nil
+}
+
+// saysMore says whether a post's block words hold anything its text does not. Slack fills text from a section block and makes a
+// rich_text block from plain text, so words often repeat it, in other markup: only the letters and digits are compared.
+func saysMore(text, words string) bool {
+	return words != "" && !strings.Contains(plainWords(text), plainWords(words))
+}
+
+// plainWords is the letters and digits of s, as a person reads it: a link by its label, and with no user, channel or special token.
+func plainWords(s string) string {
+	s = slackToken.ReplaceAllString(s, "")
+	s = slackLink.ReplaceAllString(s, "$1")
+	return strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return r
+		}
+		return -1
+	}, html.UnescapeString(s))
 }

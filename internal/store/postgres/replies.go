@@ -97,10 +97,19 @@ func (s *adapter) nextReplyAfter(ctx context.Context, key store.ConversationKey,
 
 // PreviousReply implements store.ReplyQueue.
 func (s *adapter) PreviousReply(ctx context.Context, key store.ConversationKey, sequence int64) (store.Reply, error) {
+	return s.previousRow(ctx, "", key, sequence)
+}
+
+// PreviousWholeReply implements store.ReplyQueue.
+func (s *adapter) PreviousWholeReply(ctx context.Context, key store.ConversationKey, sequence int64) (store.Reply, error) {
+	return s.previousRow(ctx, " AND whole_thread", key, sequence)
+}
+
+func (s *adapter) previousRow(ctx context.Context, filter string, key store.ConversationKey, sequence int64) (store.Reply, error) {
 	r := store.Reply{Key: key}
 	var enqueued time.Time
 	err := s.pool.QueryRow(ctx, `SELECT id, sequence, user_id, message_ts, acknowledgment, text, enqueued_at, interaction_id, whole_thread, trace_parent, trace_state FROM reply_queue
-		WHERE connection = $1 AND channel = $2 AND thread_ts = $3 AND sequence < $4 ORDER BY sequence DESC LIMIT 1`,
+		WHERE connection = $1 AND channel = $2 AND thread_ts = $3 AND sequence < $4`+filter+` ORDER BY sequence DESC LIMIT 1`,
 		key.Connection, key.Channel, key.Thread, sequence).Scan(&r.ID, &r.Sequence, &r.UserID, &r.MessageRef, &r.Acknowledgment, &r.Text, &enqueued, &r.InteractionID, &r.WholeThread, &r.TraceParent, &r.TraceState)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.Reply{}, fmt.Errorf("previous reply %+v below %d: %w", key, sequence, store.ErrNotFound)

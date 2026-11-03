@@ -392,6 +392,16 @@ func TestThreadBetweenSendsNoBoundForAnEmptyOne(t *testing.T) {
 	}
 }
 
+// A thread too long to read still has what opened it, and the error says the rest could not be read.
+func TestThreadFromStartKeepsTheParentOfAThreadTooLong(t *testing.T) {
+	th := newThread(t)
+	th.reply(20)
+	got, dropped, err := th.c.ThreadFromStart(t.Context(), threadConn, "C1", th.root, "", 100)
+	if !errors.Is(err, chat.ErrThreadTooLong) || dropped != 0 || !slices.Equal(tsOf(got), []string{th.root}) {
+		t.Errorf("ThreadFromStart = %v, %d, %v; want the parent alone and an error wrapping ErrThreadTooLong", tsOf(got), dropped, err)
+	}
+}
+
 // The read from a thread's start is one read, and it leads with what opened the thread, which the limit neither counts nor cuts.
 func TestThreadFromStartLeadsWithTheParentInOneRead(t *testing.T) {
 	th := newThread(t)

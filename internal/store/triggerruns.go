@@ -62,6 +62,8 @@ type TriggerAdmission struct {
 	Admitted bool
 	// Limit is the limit that stopped the start, empty if it was admitted.
 	Limit TriggerLimit
+	// Again says that this message was stopped before: its row and its window stand, and it is told and counted once.
+	Again bool
 }
 
 // TriggerDigest is one window of starts that limits stopped, and the count of them by limit: what a digest line says
@@ -85,7 +87,7 @@ type TriggerRuns interface {
 	// limits against the starts the trigger made before, and if none is reached records the start, and otherwise
 	// records that it was stopped, for the digest. A start is one row per message, so asking again for a message
 	// that was admitted already is admitted again without being counted twice. A message that was stopped is checked
-	// afresh: capacity may have come back. A stopped message already recorded keeps its row and window. Binding,
+	// afresh: capacity may have come back. A stopped message already recorded keeps its row and window, and says Again. Binding,
 	// Key and At are required, and At after the Unix epoch (ErrInvalid otherwise).
 	//
 	// The limits count the starts of the Binding's trigger. Rate and daily count the starts in the window before

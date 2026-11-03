@@ -239,12 +239,15 @@ func (in *Intake) unthreaded(ctx context.Context, m TriggerMatch, closing bool) 
 				"binding", m.Binding, "trigger", m.Index, "channel", m.Message.At.Channel, "message", m.Message.At.ID)
 		}
 	}
-	if limit, err := in.admit(ctx, m); err != nil {
+	switch adm, err := in.admit(ctx, m); {
+	case err != nil:
 		return out, err
-	} else if limit != "" {
-		in.countLimited(ctx, m, limit)
-		if m.Mention && in.cfg.OnMentionLimited != nil {
-			in.cfg.OnMentionLimited(ctx, m, limit)
+	case adm.Limit != "":
+		if !adm.Again { // a redelivery that lost what remembers it was counted and told then
+			in.countLimited(ctx, m, adm.Limit)
+			if m.Mention && in.cfg.OnMentionLimited != nil {
+				in.cfg.OnMentionLimited(ctx, m, adm.Limit)
+			}
 		}
 		out.decision = DecisionLimited
 		return out, nil
@@ -271,10 +274,10 @@ func (in *Intake) start(ctx context.Context, m TriggerMatch) error {
 // stays counted against the rate and daily limits, because the refusal still posts a note, so a storm of refusals
 // is held to the limits too.
 func (in *Intake) startThread(ctx context.Context, m TriggerMatch, hash string, out decided) (decided, error) {
-	if limit, err := in.admit(ctx, m); err != nil {
+	if adm, err := in.admit(ctx, m); err != nil {
 		return out, err
-	} else if limit != "" {
-		return in.stopThread(ctx, m, hash, out, limit)
+	} else if adm.Limit != "" {
+		return in.stopThread(ctx, m, hash, out, adm)
 	}
 	switch err := in.start(ctx, m); {
 	case errors.Is(err, ErrNotStarted):
