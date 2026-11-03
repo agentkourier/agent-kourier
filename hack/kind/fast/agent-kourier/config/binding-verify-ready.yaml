@@ -1,0 +1,18 @@
+# Binding verification: a Binding that can be served. The stub has its agent, and the test puts the bot in its channel, so it is ready.
+# A channel of its own on the fake Slack; the identity token is the same Secret as fast-chat's. The channel and the agent are pinned
+# by test/kindmanifests and test/e2e/scenarios.go.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: fast-verify-ready, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {namespace: agent-kourier, name: agents}
+    namespace: kagent
+    name: test-agent
+  identity:
+    userId: agent-kourier-fast
+    tokenSecretRef: {name: agent-kourier-agent-token}
+  chat:
+    connectionRef: {namespace: agent-kourier, name: slack-fast}
+    channel: CVFYREADY
+    output: live

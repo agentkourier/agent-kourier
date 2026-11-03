@@ -1,0 +1,18 @@
+# Binding verification: a Binding whose agent the stub does not have, so its card is a 404 and BackendReachable is false (AgentNotFound). The bot is in its channel.
+# A channel of its own on the fake Slack; the identity token is the same Secret as fast-chat's. The channel and the agent are pinned
+# by test/kindmanifests and test/e2e/scenarios.go.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: fast-verify-no-agent, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {namespace: agent-kourier, name: agents}
+    namespace: kagent
+    name: verify-no-such-agent
+  identity:
+    userId: agent-kourier-fast
+    tokenSecretRef: {name: agent-kourier-agent-token}
+  chat:
+    connectionRef: {namespace: agent-kourier, name: slack-fast}
+    channel: CVFYNOAGENT
+    output: live

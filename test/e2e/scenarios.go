@@ -105,3 +105,16 @@ const (
 	// BotS16 is the bot ID S16's alerts are posted as.
 	BotS16 = "B0S16ALERT1"
 )
+
+// The channels of the verification scenario (hack/kind/fast/agent-kourier/config/binding-verify-*.yaml), the fast tier only: each is a Binding
+// that shows one condition of its verification, and test/kindmanifests pins the pairing.
+const (
+	// ChannelVerifyReady is the channel of a Binding that can be served: the stub has its agent and the bot is in the channel.
+	ChannelVerifyReady = "CVFYREADY"
+	// ChannelVerifyNoAgent is the channel of a Binding whose agent the stub does not have, with the bot in the channel.
+	ChannelVerifyNoAgent = "CVFYNOAGENT"
+	// ChannelVerifyNotJoined is the channel of a Binding whose channel the fake Slack knows and the bot is not in.
+	ChannelVerifyNotJoined = "CVFYNOTJOIN"
+	// ChannelVerifyArchived is the channel of a Binding whose channel is archived, with the bot in it.
+	ChannelVerifyArchived = "CVFYARCHIVED"
+)

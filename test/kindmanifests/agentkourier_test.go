@@ -79,8 +79,8 @@ func TestShippedConfigLoadsAndResolves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(set.Bindings) != 25 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 6 {
-		t.Fatalf("Load = %d Bindings, %d connections and %d backends; want a Binding for the smoke test and one for each of fourteen scenarios, three for S16's cases, five for the a2a dialect against the plain pod and two against hitlagent, one connection, and the backend of the kagent-v1 Bindings and five of the a2a ones (a2aDir)",
+	if len(set.Bindings) != 29 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 6 {
+		t.Fatalf("Load = %d Bindings, %d connections and %d backends; want a Binding for the smoke test and one for each of fourteen scenarios, three for S16's cases, four for the verification of Bindings, five for the a2a dialect against the plain pod and two against hitlagent, one connection, and the backend of the kagent-v1 Bindings and five of the a2a ones (a2aDir)",
 			len(set.Bindings), len(set.ChatConnections), len(set.AgentBackends))
 	}
 	snap, err := config.Resolve(t.Context(), set, upFastSecrets)
@@ -176,6 +176,10 @@ func TestScenarioBindings(t *testing.T) {
 		{"S16", e2e.ChannelS16, "scenario-gated", false, false, v1alpha1.OutputLive},
 		{"S16b", e2e.ChannelS16B, "test-agent", false, false, v1alpha1.OutputFinal},
 		{"S16c", e2e.ChannelS16C, "scenario-gated", false, false, v1alpha1.OutputLive},
+		{"verification: ready", e2e.ChannelVerifyReady, "test-agent", false, false, v1alpha1.OutputLive},
+		{"verification: no such agent", e2e.ChannelVerifyNoAgent, "verify-no-such-agent", false, false, v1alpha1.OutputLive},
+		{"verification: not joined", e2e.ChannelVerifyNotJoined, "test-agent", false, false, v1alpha1.OutputLive},
+		{"verification: archived", e2e.ChannelVerifyArchived, "test-agent", false, false, v1alpha1.OutputLive},
 		{"S1 over a2a", e2e.ChannelA2AS1, "scenario-gated", false, false, v1alpha1.OutputLive},
 		{"context over a2a", e2e.ChannelA2AMemory, "scenario-memory", false, false, v1alpha1.OutputLive},
 		{"S4 over a2a", e2e.ChannelA2AS4, "scenario-gated", false, false, v1alpha1.OutputLive},
