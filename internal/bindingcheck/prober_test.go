@@ -355,20 +355,54 @@ func TestRevisionChangesInsideTheMinimumGapGiveOnePassWhenTheGapEndsAndNeverLose
 	})
 }
 
-// A pass the Interval calls for is not held back by the gap, and a new Binding is probed at the next Tick whatever the gap.
-func TestTheMinimumGapDoesNotHoldBackTheIntervalOrANewBinding(t *testing.T) {
+// A pass the Interval calls for is not held back by the gap, however long the gap.
+func TestTheMinimumGapDoesNotHoldBackTheInterval(t *testing.T) {
 	g := &targets{}
 	g.set("r0", Target{"a", "C1"})
 	agents := &fakeAgents{}
 	run(t, Options{Targets: g.Targets, Revision: g.Revision, Agents: agents, MinRevisionGap: 10 * time.Minute, Interval: time.Minute}, func(h *harness) {
 		h.advance(2 * time.Minute) // past the Interval, inside the gap
 		if got := agents.count("a"); got < 2 {
-			t.Errorf("%d probes after two intervals; want at least 2: the gap is for revisions", got)
+			t.Errorf("%d probes after two intervals; want at least 2: the gap is for changes", got)
 		}
-		g.set("r0", Target{"a", "C1"}, Target{"b", "C2"}) // a new Binding, the revision unchanged
+	})
+}
+
+// A Binding that appears in Targets is a change like any other: inside the gap it waits, its conditions Pending, and is probed when the
+// gap ends, not lost (the appearance is reported once, and is kept until a pass runs). Pruning is not held up by the gap, and a Binding
+// that leaves Targets does not call for a pass.
+func TestANewBindingInsideTheMinimumGapWaitsPendingAndIsProbedWhenItEnds(t *testing.T) {
+	const gap = 30 * time.Second
+	g := &targets{}
+	g.set("r0", Target{"a", "C1"}, Target{"gone", "C9"})
+	agents := &fakeAgents{}
+	var pruned []string
+	run(t, Options{Targets: g.Targets, Revision: g.Revision, Agents: agents, MinRevisionGap: gap, Interval: time.Hour,
+		OnPrune: func(names []string) { pruned = append(pruned, names...) }}, func(h *harness) {
+		if got := agents.count("a"); got != 1 {
+			t.Fatalf("the first pass made %d probes of a; want 1", got)
+		}
 		h.advance(tick)
+		g.set("r0", Target{"a", "C1"}, Target{"b", "C2"}) // b appears, the revision unchanged; gone leaves
+		h.advance(tick)
+		wantCond(t, h.conds("b"), BackendReachable, Unknown, ReasonPending)
+		if got := agents.count("b"); got != 0 {
+			t.Fatalf("the new Binding was probed %d times inside the gap; want 0", got)
+		}
+		if !slices.Equal(pruned, []string{"gone"}) {
+			t.Errorf("pruned %v inside the gap; want [gone]: pruning is not held up", pruned)
+		}
+		if got := agents.count("a"); got != 1 {
+			t.Errorf("%d probes of a inside the gap; want 1: a Binding that left needs no pass", got)
+		}
+		h.advance(gap) // the gap since the first pass is over; the appearance, reported once, is still kept
 		if got := agents.count("b"); got != 1 {
-			t.Errorf("the new Binding was probed %d times at the next Tick; want 1", got)
+			t.Errorf("the new Binding was probed %d times when the gap ended; want 1", got)
+		}
+		wantCond(t, h.conds("b"), BackendReachable, True, ReasonOK)
+		h.advance(gap)
+		if got := agents.count("b"); got != 1 {
+			t.Errorf("the new Binding was probed %d times with nothing changed; want 1", got)
 		}
 	})
 }
