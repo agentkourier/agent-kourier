@@ -111,6 +111,11 @@ const (
 	// is using.
 	ReasonChatCredentialsChanged Reason = "ChatCredentialsChanged"
 
+	// ReasonChatCredentialsUnusable is an Unknown ChannelJoined reason: the Secret that holds the chat credentials, or a key of it, is
+	// gone or empty, or the Secret is of a type that is never read. The connection still uses the tokens it read, and a restart
+	// fails until the Secret is mended, which tells it from ReasonChatCredentialsChanged, where a restart is what is wanted.
+	ReasonChatCredentialsUnusable Reason = "ChatCredentialsUnusable"
+
 	// ReasonGroupNotFound is an ApproversReadable reason: a named approver group does not exist.
 	ReasonGroupNotFound Reason = "GroupNotFound"
 )
@@ -125,7 +130,7 @@ func (r Reason) reportable(s Status) bool {
 		return s == True
 	case ReasonChatCredentialsRejected:
 		return s == False
-	case ReasonChatUnavailable, ReasonChatCredentialsChanged:
+	case ReasonChatUnavailable, ReasonChatCredentialsChanged, ReasonChatCredentialsUnusable:
 		return s == Unknown
 	case ReasonCredentialsUnreadable, ReasonUnreachable, ReasonCredentialsRejected, ReasonAgentForbidden, ReasonAgentNotFound,
 		ReasonAgentNotReady, ReasonBackendError, ReasonUnexpectedStatus, ReasonInvalidAgentCard, ReasonStreamingUnsupported,

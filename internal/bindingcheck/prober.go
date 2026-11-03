@@ -103,6 +103,13 @@ type Options struct {
 	// Channels probes channels, one probe per Target. Nil means ChannelJoined is not tracked. Targets must hold only
 	// Bindings on the chat connection that Channels answers for (see ChannelChecker).
 	Channels ChannelChecker
+	// MinRevisionGap is the least time between the start of a pass and the start of one that only a change of Revision
+	// calls for. A change that comes inside the gap is not lost: it waits, and the pass runs at the first Tick after the gap,
+	// for whatever the Revision is then, so a Revision that changes many times in the gap gives one pass, which sees the last.
+	// It does not hold back the first pass, a pass the Interval calls for, or one for a Binding that is new (its Pending
+	// conditions are due a result). It exists so that a Revision that moves for no cause the probes can see, such as a Secret
+	// written to again and again, cannot make the Prober probe every Binding at every Tick. Zero means no gap.
+	MinRevisionGap time.Duration
 	// Interval is how long after a pass begins the next is due, 5 minutes by default, and not a pause after it ends.
 	// Each wait strays from it by up to 10% either way, so that many brokers do not probe together. A pass that outlasts
 	// its wait is followed by the next one Tick after it ends. The loop looks only at each Tick, so a pass can begin up
@@ -185,7 +192,8 @@ func jittered(interval time.Duration, r float64) time.Duration {
 }
 
 // Run probes until ctx ends. A pass runs at once, when a Binding appears in Targets or the Revision differs from the
-// last pass's (at the next Tick), and when the jittered Interval since the last pass began has run out. A pass
+// last pass's (at the next Tick, and not within MinRevisionGap of the start of the last pass: the pass then waits for the
+// gap to end), and when the jittered Interval since the last pass began has run out. A pass
 // finishes before the next begins, so passes never overlap. Call Run once.
 //
 // When the context ends, Run waits for the checkers and the Revision call it started that are still running, up to
@@ -198,10 +206,11 @@ func jittered(interval time.Duration, r float64) time.Duration {
 func (p *Prober) Run(ctx context.Context) {
 	defer p.waitForGoroutines()
 	var (
-		rev     string
-		nextAt  time.Time
-		started bool
-		targets []Target // the last good Targets, deduplicated
+		rev      string
+		nextAt   time.Time
+		started  bool
+		lastPass time.Time // when the last pass began
+		targets  []Target  // the last good Targets, deduplicated
 	)
 	for {
 		// Revision is read before Targets: a reload that lands between the two reads is then seen by Targets
@@ -222,8 +231,8 @@ func (p *Prober) Run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if began := time.Now(); !started || changed || cur != rev || !began.Before(nextAt) {
-			started, rev = true, cur
+		if began := time.Now(); !started || changed || !began.Before(nextAt) || (cur != rev && !began.Before(lastPass.Add(p.o.MinRevisionGap))) {
+			started, rev, lastPass = true, cur, began
 			p.pass(ctx, targets)
 			nextAt = began.Add(jittered(p.o.Interval, rand.Float64())) //nolint:gosec // jitter spreads probes; it is not a secret
 		}
