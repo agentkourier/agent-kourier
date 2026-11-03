@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	// authzTimeout is the default bound of IsChannelMember (as a whole, every page of it), of IsInAnyUserGroup (as a whole, every group of it) and of IsBot:
+	// authzTimeout is the default bound of IsChannelMember (as a whole, every page of it), of IsInAnyUserGroup (as a whole, every group of it), of ChannelAccess and of IsBot:
 	// a press waits on the answers, and the caller's context may have no deadline. Config.AuthzTimeout
 	// changes it, for a caller that is not on Slack's 3 second acknowledgement path.
 	authzTimeout = 2 * time.Second
@@ -80,6 +80,51 @@ func (c *Client) IsChannelMember(ctx context.Context, channel, user string) (tel
 		}
 		cursor = next
 	}
+}
+
+// ChannelAccess reports how the bot stands to channel, from one conversations.info call: is_member for the bot token's own
+// membership and is_archived. It reads nothing else, so it does not page the members of a big channel as IsChannelMember
+// does, and it changes nothing. Nothing is cached. It is bounded like IsChannelMember (2 seconds, or Config.AuthzTimeout).
+// An empty channel is chat.ErrChannelNotFound with no call. The error holds no token, and the Access is zero whenever there is
+// one: a failed read is no answer.
+//
+// An error wraps chat.ErrChannelNotFound or chat.ErrMissingScope when Slack's code says the read cannot succeed until an
+// operator changes something (channelAccessCode: channel_not_found, missing_scope), and Platform.Classify(chat.OpOther, err)
+// says Permanent for it, with Slack's code. Every other error is not wrapped. A token Slack rejects is one of them:
+// Classify says FatalAuth for it and retrying will not help, whatever the caller decides to do about it. A timeout, a 5xx, a
+// rate limit and a cancelled context are the rest, and may pass on another try (Classify says Transient, with RetryAfter for
+// a rate limit).
+//
+// The scopes are those of the call as Slack's method page lists them (docs.slack.dev/reference/methods/conversations.info/,
+// read 2026-11-01): channels:read, groups:read, im:read and mpim:read, one for each kind of conversation. The app asks for
+// channels:read and groups:read, which are IsChannelMember's, and is not asked about a direct message, which a Binding does
+// not name. On that page, neither field is described in prose; its public-channel example response shows
+// is_archived (false) and no is_member, and it has no private-channel example. Both are in slack-go v0.33.0's Channel type
+// (channels.go, conversation.go).
+//
+// UNCONFIRMED(BV-3): that Slack sends is_member to a bot token at all (the page's example has none, and an absent flag
+// reads as false here), that it is the bot's own membership, that it is true for an archived channel the bot was in, and what
+// Slack answers for a private channel the bot is not in (channelAccessCode).
+func (c *Client) ChannelAccess(ctx context.Context, channel string) (telemetryResult0 chat.Access, telemetryErr error) {
+	if channel == "" {
+		return chat.Access{}, fmt.Errorf("slack channel access: no channel: %w", chat.ErrChannelNotFound)
+	}
+	ctx, op := telemetry.Start(ctx, "agentkourier.chat.ChannelAccess")
+	defer func() { finishChat(ctx, op, "ChannelAccess", telemetryErr) }()
+	ctx, cancel := context.WithTimeout(ctx, c.authz)
+	defer cancel()
+	info, err := c.api.GetConversationInfoContext(ctx, &slackgo.GetConversationInfoInput{ChannelID: channel})
+	if err != nil {
+		err = c.scrub("conversations.info", err)
+		switch channelAccessCode(err) {
+		case "channel_not_found":
+			err = fmt.Errorf("%w: %w", chat.ErrChannelNotFound, err)
+		case "missing_scope":
+			err = fmt.Errorf("%w: %w", chat.ErrMissingScope, err)
+		}
+		return chat.Access{}, err
+	}
+	return chat.Access{Member: info.IsMember, Archived: info.IsArchived}, nil
 }
 
 // IsInAnyUserGroup reports whether user is a member of at least one of the user groups, whose IDs are Slack's

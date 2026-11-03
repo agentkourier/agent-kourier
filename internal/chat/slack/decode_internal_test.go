@@ -99,6 +99,9 @@ func TestClassifyMapsTheCodesToNeutralReasonsAndKeepsTheRawCode(t *testing.T) {
 		{"a post's permanent code is not a reaction's", chat.OpReact, slackError("msg_too_long"), chat.Verdict{Class: chat.Transient}},
 		{"a reaction's permanent code is not a post's", chat.OpPost, slackError("thread_locked"), chat.Verdict{Class: chat.Transient}},
 		{"another operation has no permanent code", chat.OpOther, slackError("channel_not_found"), chat.Verdict{Class: chat.Transient}},
+		{"a channel ChannelAccess could not find", chat.OpOther, fmt.Errorf("%w: %w", chat.ErrChannelNotFound, slackError("channel_not_found")), chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonChannelGone, Code: "channel_not_found"}},
+		{"no channel to ask ChannelAccess about", chat.OpOther, fmt.Errorf("slack channel access: no channel: %w", chat.ErrChannelNotFound), chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonChannelGone}},
+		{"an app ChannelAccess found without the scope", chat.OpOther, fmt.Errorf("%w: %w", chat.ErrMissingScope, slackError("missing_scope")), chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonOther, Code: "missing_scope"}},
 		{"an error that is not Slack's", chat.OpPost, errTimeout, chat.Verdict{Class: chat.Transient}},
 		{"no error", chat.OpPost, nil, chat.Verdict{Class: chat.Transient}},
 	} {

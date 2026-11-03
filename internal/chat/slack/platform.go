@@ -60,6 +60,7 @@ type API interface {
 	Unreact(ctx context.Context, channel, ts, name string) error
 	IsChannelMember(ctx context.Context, channel, user string) (bool, error)
 	IsInAnyUserGroup(ctx context.Context, groups []string, user string) (bool, error)
+	ChannelAccess(ctx context.Context, channel string) (chat.Access, error)
 	IsBot(ctx context.Context, user string) (bool, error)
 	ResolveUser(ctx context.Context, id string) (dialect.User, error)
 	ThreadBetween(ctx context.Context, conn, channel, threadTS, after, before string, limit int) ([]chat.HistoryMessage, int, error)
@@ -468,6 +469,11 @@ func (p *Platform) IsInAnyGroup(ctx context.Context, groups []string, user strin
 	return p.c.IsInAnyUserGroup(ctx, groups, user)
 }
 
+// ChannelAccess says whether the bot is in channel and whether channel is archived, from one conversations.info call.
+func (p *Platform) ChannelAccess(ctx context.Context, channel string) (chat.Access, error) {
+	return p.c.ChannelAccess(ctx, channel)
+}
+
 // IsBot says whether user is a bot; it fails closed.
 func (p *Platform) IsBot(ctx context.Context, user string) (bool, error) {
 	return p.c.IsBot(ctx, user)
@@ -494,7 +500,9 @@ func (p *Platform) Capabilities() chat.Caps { return caps }
 
 // Classify says what an error of the Client means for a retry: a rejected credential is fatal, the codes
 // that say the same call will never work are permanent, with the reason in neutral terms and Slack's own
-// code beside it, and anything else, a rate limit, a server error or a timeout, may pass.
+// code beside it, and anything else, a rate limit, a server error or a timeout, may pass. For OpOther the permanent
+// errors are those of ChannelAccess that wrap chat.ErrChannelNotFound or chat.ErrMissingScope, and only those: Slack's raw
+// code in an error that wraps neither is not read as permanent.
 func (p *Platform) Classify(op chat.Op, err error) chat.Verdict {
 	if code := fatalAuthCode(err); code != "" {
 		return chat.Verdict{Class: chat.FatalAuth, Code: code}
@@ -507,6 +515,14 @@ func (p *Platform) Classify(op chat.Op, err error) chat.Verdict {
 	case chat.OpReact:
 		if code := reactionPermanentCode(err); code != "" {
 			return chat.Verdict{Class: chat.Permanent, Reason: reactionReason[code], Code: code}
+		}
+	case chat.OpOther:
+		// The code is Slack's own, and is empty for an error that never reached Slack (an empty channel).
+		switch {
+		case errors.Is(err, chat.ErrChannelNotFound):
+			return chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonChannelGone, Code: channelAccessCode(err)}
+		case errors.Is(err, chat.ErrMissingScope):
+			return chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonOther, Code: channelAccessCode(err)}
 		}
 	}
 	v := chat.Verdict{Class: chat.Transient}

@@ -166,7 +166,7 @@ func TestATurnThatRunsOnAfterAPauseMentionsOnlyWhoIsNew(t *testing.T) {
 	if len(aud.rows) != 2 || aud.rows[0].Name != "sam" || aud.rows[1].Name != "lee" {
 		t.Errorf("audit rows = %+v, want sam and lee, once each", aud.rows)
 	}
-	if strings.Contains(e.logs.String(), "were not queued") {
+	if strings.Contains(e.logs.String(), "not queued") {
 		t.Errorf("logs = %q", e.logs.String())
 	}
 }
@@ -301,8 +301,42 @@ func TestAMentionThatWasNotQueuedIsNotRecorded(t *testing.T) {
 	if len(aud.rows) != 0 {
 		t.Errorf("audit rows = %+v, want none", aud.rows)
 	}
-	if !strings.Contains(e.logs.String(), "were not queued") {
+	if !strings.Contains(e.logs.String(), "was not queued") {
 		t.Errorf("logs = %q", e.logs.String())
+	}
+}
+
+// noEnqueueFor is a Sender that cannot queue the row of one source.
+type noEnqueueFor struct {
+	live.Sender
+	source string
+}
+
+func (s noEnqueueFor) Enqueue(ctx context.Context, p outbox.Post) (string, error) {
+	if p.Source == s.source {
+		return "", errors.New("the store is down")
+	}
+	return s.Sender.Enqueue(ctx, p)
+}
+
+// A mention that could not be queued costs only that person: the next one is still tried, and the log gives the row that was missed.
+func TestAMentionThatWasNotQueuedLeavesTheOthers(t *testing.T) {
+	e := setup(t)
+	cfg := e.cfg
+	cfg.Sender = noEnqueueFor{e.ob, outbox.MentionSource("turn-1", "U0SAM")}
+	e.live = newRenderer(t, cfg)
+	run, _ := e.startFor(t, mentionTurn(v1alpha1.OutputLive, ""))
+	run.Handle(text("a", "ask @sam and @lee"))
+	run.Handle(agent.FinalEvent{})
+	e.finish(t, run)
+	if _, m, ok := e.mentionRowOf(t, declaredPeople[0]); ok {
+		t.Errorf("a row for sam: %+v", m)
+	}
+	if _, _, ok := e.mentionRowOf(t, declaredPeople[1]); !ok {
+		t.Error("no row for lee")
+	}
+	if got := e.logs.String(); !strings.Contains(got, "not queued") || !strings.Contains(got, "outbox_id=") || !strings.Contains(got, "turn-1/mention/U0SAM") {
+		t.Errorf("logs = %q; want the warning to give sam's row", got)
 	}
 }
 

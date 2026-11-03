@@ -37,13 +37,14 @@ func TestChatErrorsAreNotExported(t *testing.T) {
 	_, errPost := c.Post(ctx, "C1", "", slack.Content{Text: "private-message-text"}, "ob-1")
 	errAppend := c.AppendStream(ctx, "C1", "1.0", "private-stream-text", slack.ChunksMode)
 	errStep := c.AppendStep(ctx, "C1", "1.0", slack.TaskUpdate{ID: "s1", Title: "private-step-title", Status: "in_progress"})
-	for _, err := range []error{errPost, errAppend, errStep} {
+	_, errAccess := c.ChannelAccess(ctx, "C1")
+	for _, err := range []error{errPost, errAppend, errStep, errAccess} {
 		if err == nil || !strings.Contains(err.Error(), canary) {
 			t.Fatalf("err = %v; want the failure, which holds the code the test must keep out of telemetry", err)
 		}
 	}
 	h.RequireNone(t, canary, botToken, appToken, "private-message-text", "private-stream-text", "private-step-title")
-	for _, op := range []string{"Post", "AppendStream", "AppendStep"} {
+	for _, op := range []string{"Post", "AppendStream", "AppendStep", "ChannelAccess"} {
 		if h.Counter(t, "agentkourier_chat_api_calls_total", map[string]string{"operation": op, "outcome": "api_error"}) != 1 {
 			t.Errorf("%s was not counted once as an api_error", op)
 		}

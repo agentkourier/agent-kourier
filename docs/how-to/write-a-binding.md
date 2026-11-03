@@ -118,17 +118,17 @@ mentions that user. Each person named gets a message of their own.
 `maxMentionsPerTurn` must be from 1 to 10, and 0 is refused at load. To notify nobody, leave `mentions` out.
 
 - **The agent is told the names.** A session's first prompt ends with a line that lists them. It is not said again: a
-  thread that started before you added a name does not get it, and neither does an agent that lost the session and answers in
-  a new one. Tell the agent in its own instructions if that matters.
+  thread that started before you added a name does not get it, and neither does an agent that opens a new session of its own and answers in
+  it. A first turn that fails once the agent has started on it still counts as the first, and an agent that did not keep the line is not told again. The line goes out again on any turn that finds no context recorded for the session: for example after the agent answers that it no longer has the task, as Agent Kourier then resets the session, and on every turn of an agent that replies with no context ID. Tell the agent in its own instructions if that matters.
 - **Only the text of a reply counts.** A turn that completes or pauses for an answer mentions the people its
   final text names. A question the agent asks through a pause, which Agent Kourier posts as a prompt, is not read for names, so an
   agent that wants someone to answer it has to name them in its reply text. A name in a code span or a fence does not count, though a name in a table does, even where Slack shows the
-  table as code. A name that runs straight into more letters, as in `@samさん`, is a different name and does not count, and neither
-  does one that ends where a long reply was cut. `_@sam_` and `~~@sam~~` count, and `@sam/@lee` names both people. `@sam@lee` reads as an
-  address and names nobody, as does a name straight after a word, `/`, `.`, `=`, `?`, `&`, `#`, `%`, `+` or `\`, and neither is counted as `undeclared`. A name in a URL with a scheme, such as `https://`, does not count either, though one in a URL without a scheme can, after a `,` or a `(`. A name after a `:`
-  otherwise counts, so that `Owner:@sam` does. A reply long enough to be cut can also notify someone for a name Slack does not show, as Slack's limit counts the text after escaping. A turn
+  table as code. A fence line has only white space before its marks, so a fence opened after a list marker or a `>` is not code in what Agent Kourier sends to Slack, or here: a name under it counts, and a closing line with no marker of its own opens a block that hides what follows. A name that runs straight into more letters, as in `@samさん`, is a different name and does not count, and neither
+  does one that ends where a long reply was cut. `_@sam_` and `~~@sam~~` count, and `@sam/@lee` names both people. A `/` after a name otherwise leaves it a name only before white space or the end of the line: `@sam/x`, `cd @sam/..` and `(@sam/)` read as paths, name nobody and are not counted as `undeclared`. Nothing else up to the next white space, `|` or backtick is a name either, so `@acme/x,@sam` names nobody. `@sam@lee` reads as an
+  address and names nobody, as does a name straight after a word, `/`, `.`, `=`, `?`, `&`, `#`, `%`, `+` or `\`, and neither is counted as `undeclared`. A name after a `:`
+  otherwise counts, so that `Owner:@sam` does. A name after a URL with `://` in it counts only once something ends the URL: white space, `|`, `<`, `>`, a backtick, `)`, `]` or non-ASCII punctuation, such as `—` or `。`. So `https://x.test,@sam` names nobody and is not counted as `undeclared`, while a `)` or `]` in the URL itself can let a name in it count. In a URL with no `://`, such as `mailto:x,@sam`, a name can count after most punctuation. A reply long enough to be cut can also notify someone for a name Slack does not show, as Slack's limit counts the text after escaping. A turn
   that was cut short, failed, was stopped or was rejected mentions nobody, and neither does a name
-  past `maxMentionsPerTurn`. Nor does a turn whose last write to Slack failed for good, even if a stream had already shown the name.
+  past `maxMentionsPerTurn`. Nor does a turn whose final text could not be written, even if a stream had already shown the name.
 - **One mention for each person.** A person is mentioned once a turn however often the reply names them, and two names for one
   user are one person. A task that pauses can run on under the same turn, for example when it is answered outside Slack: its later text
   mentions only people the turn has not mentioned yet, and `maxMentionsPerTurn` holds across both. A mention Agent Kourier gave up on posting still counts, and is not tried again.

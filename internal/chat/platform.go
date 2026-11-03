@@ -172,7 +172,28 @@ var (
 	// the press at once instead of retrying. An error that does not wrap it may pass on another try (a timeout, a server
 	// error, a rate limit), and a cancelled context is never wrapped in it.
 	ErrGroupsMisconfigured = errors.New("chat: the approver groups cannot be read until the platform's configuration is fixed")
+	// ErrChannelNotFound is wrapped by the error of a ChannelAccess for a channel the platform says is not there, or
+	// is not there for Agent Kourier: it never existed, it was deleted, or (on a platform that hides a private
+	// conversation from a member who is not in it) it is private and Agent Kourier is not in it. A caller checks it with
+	// errors.Is and does not retry: the same channel is as missing on the next try, until an operator changes the
+	// Binding or invites the bot. An error that does not wrap it may pass on another try, and a cancelled context is
+	// never wrapped in it.
+	ErrChannelNotFound = errors.New("chat: the platform has no such channel, or none that Agent Kourier can see")
+	// ErrMissingScope is wrapped by the error of a ChannelAccess that the platform refuses because the app was installed
+	// without the permission the read needs (Slack: missing_scope). A caller checks it with errors.Is and does not retry:
+	// only an operator who adds the permission and reinstalls the app mends it. An error that does not wrap it may pass
+	// on another try, and a cancelled context is never wrapped in it.
+	ErrMissingScope = errors.New("chat: the app lacks a permission the platform needs for this read")
 )
+
+// Access is how Agent Kourier stands to one conversation, as Platform.ChannelAccess reads it.
+type Access struct {
+	// Member says Agent Kourier is in the conversation. It is the platform's own flag, and independent of Archived: a
+	// platform may say true for an archived conversation that Agent Kourier was in when it was archived.
+	Member bool
+	// Archived says the platform has archived the conversation.
+	Archived bool
+}
 
 // Platform is a chat platform: Slack today. An adapter implements it, and nothing else in Agent Kourier names
 // the platform it adapts. Every method is safe for concurrent use.
@@ -226,6 +247,21 @@ type Platform interface {
 	// ever "yes". An empty groups, or an empty user, is false with no error and no call: what no groups
 	// means is the caller's to decide, and it asks only when groups are configured.
 	IsInAnyGroup(ctx context.Context, groups []string, user string) (bool, error)
+	// ChannelAccess says how Agent Kourier itself stands to the conversation channel, read at the call and never cached:
+	// whether it is a member (Access.Member) and whether the conversation is archived (Access.Archived). It reads
+	// nothing else and posts nothing, and it does not page through the members of the channel to answer, so its cost
+	// does not grow with the channel. An error leaves the Access zero, which is not an answer: the caller treats an error
+	// as "unknown", never as "not a member". An error wraps ErrChannelNotFound when the platform says there is no such
+	// channel for Agent Kourier to see, and ErrMissingScope when the platform refuses the read for want of a permission
+	// the app was installed without; the caller checks them with errors.Is and does not retry. Classify agrees: for
+	// OpOther it says Permanent for an error that wraps either, with ReasonChannelGone for ErrChannelNotFound and the
+	// platform's own code, when it has one, in Verdict.Code, so a caller that asks Classify instead of errors.Is does not retry them
+	// either. A credential the platform rejects wraps neither: Classify(OpOther, err) says FatalAuth for it, and
+	// ChannelAccess itself stops nothing, so the caller decides what a rejected credential means.
+	// Any other error (a timeout, a server error, a rate limit, a cancelled context) may pass on another try and stays
+	// unclassified: Classify says Transient for it, with RetryAfter for a rate limit. An empty channel is
+	// ErrChannelNotFound with no call.
+	ChannelAccess(ctx context.Context, channel string) (Access, error)
 	// IsBot says whether user is a bot. It fails closed: a user it cannot read is a bot, with the error.
 	IsBot(ctx context.Context, user string) (bool, error)
 	// ResolveUser returns the user with the platform's ID id.
