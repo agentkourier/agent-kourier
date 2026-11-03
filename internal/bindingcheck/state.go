@@ -2,6 +2,7 @@ package bindingcheck
 
 import (
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -78,10 +79,12 @@ func (s *State) Set(binding string, at time.Time, conds ...Condition) []Transiti
 }
 
 // derive computes the Ready condition from the probed conditions in cur. Ready is False when any is False, True when
-// all are, and Unknown otherwise; when it is not True it names the first condition that holds it back, False before
-// Unknown. Its LastProbeTime is the latest of theirs; the caller sets its LastTransitionTime.
+// all are, and Unknown otherwise; when it is not True it names the first condition that holds it back: a False one before any
+// Unknown, and for Unknown a Pending one before any other Unknown, so that Ready stays Pending (see Condition.Pending) for as long
+// as a first probe has not ended, whatever the ones that have ended found, and the order in which the probes end does not change what
+// Ready says. Its LastProbeTime is the latest of theirs; the caller sets its LastTransitionTime.
 func derive(cur map[ConditionType]Condition) Condition {
-	var first, unknown *Condition
+	var first, pending, unknown *Condition
 	var probedAt time.Time
 	for _, t := range probed {
 		c, ok := cur[t]
@@ -95,6 +98,8 @@ func derive(cur map[ConditionType]Condition) Condition {
 		case c.Status == True:
 		case c.Status == False && first == nil:
 			first = &c
+		case c.Status == Unknown && c.Reason == ReasonPending && pending == nil:
+			pending = &c
 		case c.Status == Unknown && unknown == nil:
 			unknown = &c
 		}
@@ -103,6 +108,8 @@ func derive(cur map[ConditionType]Condition) Condition {
 	switch {
 	case first != nil:
 		r.Status = False
+	case pending != nil:
+		r.Status, first = Unknown, pending
 	case unknown != nil:
 		r.Status, first = Unknown, unknown
 	default:
@@ -110,6 +117,13 @@ func derive(cur map[ConditionType]Condition) Condition {
 	}
 	r.Reason, r.Message = Reason(string(first.Type)+":"+string(first.Reason)), first.Message
 	return r
+}
+
+// Pending reports whether c is a condition whose first probe has not ended, or a Ready that is Unknown because one such condition
+// is: Unknown with the reason Pending, or with Pending after a colon, which is how Ready names the condition that holds it back. It
+// is the one place the format of Ready's reason is read.
+func (c Condition) Pending() bool {
+	return c.Status == Unknown && (c.Reason == ReasonPending || strings.HasSuffix(string(c.Reason), ":"+string(ReasonPending)))
 }
 
 // Snapshot returns a copy of every Binding's conditions: the probed ones in a fixed order (BackendReachable,

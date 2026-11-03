@@ -132,10 +132,15 @@ Every Slack call Agent Kourier makes, and the scope in the manifest that allows 
 | `assistant.threads.setStatus` | `assistant:write` (`chat:write` may also do; see below) |
 | `conversations.history`, `conversations.replies` | `channels:history`, `groups:history` |
 | `conversations.members` | `channels:read`, `groups:read` |
+| `conversations.info`, made by the leader to [verify each Binding](troubleshoot.md#a-binding-is-not-ready) | `channels:read`, `groups:read` |
 | `conversations.list`, made only by `agent-kourier init`, to find the ID of a channel given by name | `channels:read`, `groups:read` |
 | `usergroups.users.list` | `usergroups:read` when a Binding sets `interactions.approverGroups` |
 | Events `app_mention`, `message.channels`, `message.groups` | `app_mentions:read`, `channels:history`, `groups:history` |
 | Socket Mode | the app-level token, `connections:write` |
+
+The leader calls `conversations.info` once for each Binding's channel on each pass of [Binding verification](../reference/metrics.md#binding-verification). An app without the scope reads `False/MissingScope` on `ChannelJoined`; the call only reports, and turns still run.
+
+Agent Kourier reads `botToken` and `appToken` when it starts. A new token written to the Secret is not used until a restart, and until then `ChannelJoined` reads `Unknown/ChatCredentialsChanged` and the probe does not call Slack.
 
 While an agent investigates an alert thread, Agent Kourier calls `assistant.threads.setStatus`, which shows Slack's assistant
 status (`is working…`) in the thread. It does this only when `chat.progress` is not `steps` and `output` is `live`, and
