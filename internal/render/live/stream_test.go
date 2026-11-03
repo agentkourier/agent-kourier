@@ -14,6 +14,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
+	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -341,6 +342,18 @@ func (e *env) postedByUpdate(t *testing.T) {
 	eventually(t, "the post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
 	cancel()
 	<-first.Done()
+}
+
+// postedLine is postedByUpdate for a message that holds a tool's status line and no text, which the process that posted it
+// leaves up when it stops: a run that was cut would replace the line.
+func (e *env) postedLine(t *testing.T) {
+	t.Helper()
+	first, end := e.startCause(t, live.Turn{Mode: v1alpha1.OutputLive})
+	first.Handle(call("c0", "search", nil))
+	eventually(t, "the post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+	end(session.ErrTurnContinues)
+	<-first.Done()
+	e.live = newRenderer(t, e.cfg)
 }
 
 // TestRecoveredTurnTakesOverAMessageThatWasNeverAStream: the row's ts is of a message the update path

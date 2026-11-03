@@ -85,6 +85,7 @@ func TestClassifyMapsTheCodesToNeutralReasonsAndKeepsTheRawCode(t *testing.T) {
 		{"text too long", chat.OpPost, slackError("msg_too_long"), chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonTooLong, Code: "msg_too_long"}},
 		{"blocks Slack refuses", chat.OpPost, slackError("invalid_blocks"), chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonInvalidContent, Code: "invalid_blocks"}},
 		{"blocks in a form Slack refuses", chat.OpPost, slackError("invalid_blocks_format"), chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonInvalidContent, Code: "invalid_blocks_format"}},
+		{"an update that would take a message's text away", chat.OpPost, slackError("block_mismatch"), chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonOther, Code: "block_mismatch"}},
 		{"a reaction on a message that is gone", chat.OpReact, slackError("message_not_found"), chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonChannelGone, Code: "message_not_found"}},
 		{"a reaction that is no emoji", chat.OpReact, slackError("invalid_name"), chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonInvalidContent, Code: "invalid_name"}},
 		{"a thread that is locked", chat.OpReact, slackError("thread_locked"), chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonOther, Code: "thread_locked"}},

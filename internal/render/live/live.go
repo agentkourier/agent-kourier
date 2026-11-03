@@ -298,6 +298,7 @@ type Run struct {
 	stepsSent []chat.Step // the steps sent to the stream, or shown by an update, each as it was last sent
 	stepsOff  bool        // the platform refused a step, or a message with steps, for good: the turn goes on without steps
 	stepFails int         // steps that failed in a row
+	holdsText bool        // the platform refused an update with no text (ErrWouldDropText): the message stands until there is some
 	more      bool        // a write left steps to begin, which the next window goes on with
 	// cutShort says the turn's context ended before its final event, and the run is ending what the turn showed (see cut).
 	cutShort bool
@@ -807,6 +808,10 @@ func (u *Run) run(ctx context.Context) {
 					finalOutcome = "empty_output"
 					return
 				}
+				if u.holdsText { // its text says more than "(no output)" would, and no line of this run's is up on it
+					finalOutcome = "empty_output"
+					return
+				}
 				// But a message stands: do not leave its tool line up. Nothing was shown, so there is nothing to rate (Turn.Footer).
 				v.m, v.body, v.ok, v.rated = render.Nothing(), render.NoOutput, true, false
 			}
@@ -1133,7 +1138,15 @@ func (u *Run) message(v view) chat.Message {
 // steps would take the answer down with them. What is sent again is the message as a post shows it (posted): the status
 // line, which the steps stood in for, is back, and a final whose steps were all it showed says "(no output)". A message
 // that shows its steps records them as shown (sentStep), so that the final does not drop a card it showed.
+//
+// A message may hold text this run does not have, an earlier attempt's or the placeholder it left, and a platform may refuse to
+// put cards or a status line in its place (ErrWouldDropText). No retry mends that, and text comes first: the message stands
+// as it is, the write is done, and no update is tried until the turn has text, which the platform takes. The turn's cards are
+// not shown until then. Each run finds this out once, by one refused call.
 func (u *Run) update(ctx context.Context, ref chat.Ref, v view) error {
+	if u.holdsText && v.body == "" {
+		return nil
+	}
 	carried := len(v.steps) > 0 && !u.stepsOff
 	err := u.cfg.Platform.Update(ctx, ref, chat.Say(u.message(v)))
 	if err == nil && carried {
@@ -1141,12 +1154,17 @@ func (u *Run) update(ctx context.Context, ref chat.Ref, v view) error {
 			u.sentStep(st)
 		}
 	}
-	if err == nil || !carried || !u.cannotShow(err) {
-		return err
+	if err != nil && carried && u.cannotShow(err) {
+		u.cfg.Logger.WarnContext(ctx, "live: the platform refused the message with its steps; it is sent again without them", "channel", u.turn.Channel, "err", err)
+		u.stepsOff = true
+		err = u.cfg.Platform.Update(ctx, ref, chat.Say(v.posted()))
 	}
-	u.cfg.Logger.WarnContext(ctx, "live: the platform refused the message with its steps; it is sent again without them", "channel", u.turn.Channel, "err", err)
-	u.stepsOff = true
-	return u.cfg.Platform.Update(ctx, ref, chat.Say(v.posted()))
+	if errors.Is(err, chat.ErrWouldDropText) {
+		u.cfg.Logger.InfoContext(ctx, "live: the message holds text that an update with none would take away; it stands until the turn has text", "channel", u.turn.Channel)
+		u.holdsText = true
+		return nil
+	}
+	return err
 }
 
 // cannotShow says whether err is the platform's refusal of a message's content: one it found malformed, too large, or of a
@@ -1243,10 +1261,11 @@ type view struct {
 }
 
 // posted is the message the first post of v carries: post, since the outbox stores no steps, or "(no output)" for a final
-// whose steps are all it shows, which the update that follows replaces with them.
+// whose steps are all it shows, which the update that follows replaces with them. That placeholder is a fallback and no Body,
+// because a platform may not let a message that holds only text be replaced by cards (ErrWouldDropText).
 func (v view) posted() chat.Message {
 	if v.post.Fallback == "" && len(v.post.Parts) == 0 {
-		return render.Nothing()
+		return chat.Message{Fallback: render.NoOutput}
 	}
 	return v.post
 }

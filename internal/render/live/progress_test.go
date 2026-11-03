@@ -934,7 +934,8 @@ func TestACallReportedAgainDoesNotBringBackItsLine(t *testing.T) {
 
 // The modes go on after a stream turn is taken over by the update path (a recovered turn that finds a message that was never a
 // stream): the message shows a Working… card in a gap, and the activity mode its card, as the stream would have. A turn that
-// took over a stream carries its steps in its updates, and no status line beside them.
+// took over a stream carries its steps in its updates, and no status line beside them. The activity card has no text beside
+// it, so that message holds a line and no text: a message of text alone stands until the turn has text (keepstext_test.go).
 func TestTheProgressModesGoOnAfterTheTurnMovesToTheUpdatePath(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -943,7 +944,11 @@ func TestTheProgressModesGoOnAfterTheTurnMovesToTheUpdatePath(t *testing.T) {
 	}{{"steps-and-activity", sa, "Working…"}, {"activity", activity, "Working… 1 step"}} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := setup(t)
-			e.postedByUpdate(t)
+			if tc.mode == activity {
+				e.postedLine(t)
+			} else {
+				e.postedByUpdate(t)
+			}
 			again, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1", Recovered: true, Progress: tc.mode})
 			if tc.mode == activity {
 				again.Handle(call("c1", "search", nil))
@@ -972,8 +977,8 @@ func TestTheProgressModesGoOnAfterTheTurnMovesToTheUpdatePath(t *testing.T) {
 
 // A turn that moves from the stream to the update path and ends with no text follows the rule of a turn that never streamed:
 // where there is no message nothing is posted, and where a message stands it is updated to what the turn shows, which for a
-// turn that took the message over is the cards of its steps, with no "(no output)" under them. It is never a write of a
-// message with no parts, which would fail for good.
+// turn that took the message over is the cards of its steps, with no "(no output)" under them, unless the text the message
+// holds keeps them out (keepstext_test.go). It is never a write of a message with no parts, which would fail for good.
 func TestAMovedTurnThatEndsWithNothingToShowDoesNotWriteAnEmptyMessage(t *testing.T) {
 	// The first write is made with all the events: the call, its result and the final.
 	events := func(run *live.Run) {
@@ -1004,7 +1009,7 @@ func TestAMovedTurnThatEndsWithNothingToShowDoesNotWriteAnEmptyMessage(t *testin
 	})
 	t.Run("a message stands: it shows the step, and nothing under it", func(t *testing.T) {
 		e := setup(t)
-		e.postedByUpdate(t)
+		e.postedLine(t)
 		release := e.hold()
 		t.Cleanup(release)
 		again, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1", Recovered: true})

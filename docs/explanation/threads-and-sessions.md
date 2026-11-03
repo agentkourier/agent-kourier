@@ -110,7 +110,10 @@ answer` when the agent asks a question, and `Stopped`, shown as an error, when t
 rejected, or when the request failed before the task ended, as when the agent did not take an answer. The failure notice
 is then a message of its own, and the reply's stream is stopped, not left running. A lost connection to the agent, or a
 restart of Agent Kourier, is not such a failure: the task is followed again, and the reply it had is taken over and
-updated, to `(no output)` if the task has nothing to show. Nor is a request that may have reached the agent but got no
+updated, to `(no output)` if the task has nothing to show. Slack refuses an update with no text on a reply that holds only text,
+so a turn that takes such a reply over shows no card or `Working…` on it until the turn has text: the reply stays as it is, and
+once Slack has refused, a turn that ends with no text leaves it so. A reply with a card beside its text takes that update,
+and shows the cards in place of the text until the turn has some. Nor is a request that may have reached the agent but got no
 answer, such as one cut off by a timeout: the reply stays as it is while the request is looked up and followed, or sent
 again, and that attempt takes the reply over. If following the task again is refused, or finds it gone or wedged, or the
 request is given up on before the agent is known to have it, the reply is ended as a failed request's is, and keeps the

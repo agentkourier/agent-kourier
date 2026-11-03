@@ -30,7 +30,7 @@ The reading that fits, which Slack does not document: with a rich_text or markdo
 own (A) and not beside a `chat.Body` (N1).
 
 Replacing a markdown message or a stopped stream by chat.update with blocks that drop the original (a section in place of its body)
-was refused with `block_mismatch`, which is why H2 and K2 keep it.
+was refused with `block_mismatch`, which is why H2 and K2 keep it. `slack-block-mismatch.md` has the whole rule.
 
 A mention of a user ID that does not exist posted `ok` with no error, so a stale ID in a Binding is not reported by Slack.
 
