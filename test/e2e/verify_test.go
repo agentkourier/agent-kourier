@@ -40,9 +40,8 @@ func (s *scenario) holds(ctx context.Context, v verifySeries) (bool, error) {
 // probe is made when Agent Kourier starts, so the scenario sets up the fake Slack and then restarts it, as the next probe is five
 // minutes off.
 //
-// The fast tier only. The Bindings are loaded on the full tier too (lib.sh's deploy_agentkourier gives it the fast tier's config), but the
-// assertions rest on what the stub agent answers (a 404 card for an agent it does not have; kagent's front door answers 403), which the
-// full tier does not run.
+// The fast tier only: the assertions rest on what the stub agent answers (a 404 card for an agent it does not have; kagent's front door
+// answers 403), which the full tier does not run, and up-full.sh does not load the Bindings.
 func TestVerify_BindingsThatCannotBeServedAreNotReadyAndTheLeaderSaysWhy(t *testing.T) {
 	s := newScenario(t)
 	if s.env.Tier != "fast" {

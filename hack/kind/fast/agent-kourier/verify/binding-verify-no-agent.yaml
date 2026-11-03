@@ -1,18 +1,18 @@
-# Binding verification: a Binding whose channel the fake Slack knows but the bot is not in, so ChannelJoined is false (NotInChannel). The agent is the stub's.
+# Binding verification: a Binding whose agent the stub does not have, so its card is a 404 and BackendReachable is false (AgentNotFound). The bot is in its channel.
 # A channel of its own on the fake Slack; the identity token is the same Secret as fast-chat's. The channel and the agent are pinned
-# by test/kindmanifests and test/e2e/scenarios.go.
+# by test/kindmanifests and test/e2e/scenarios.go. The fast tier only: up-fast.sh gives this directory to deploy_agentkourier, and up-full.sh does not.
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
-metadata: {name: fast-verify-not-joined, namespace: agent-kourier}
+metadata: {name: fast-verify-no-agent, namespace: agent-kourier}
 spec:
   agent:
     backendRef: {namespace: agent-kourier, name: agents}
     namespace: kagent
-    name: test-agent
+    name: verify-no-such-agent
   identity:
     userId: agent-kourier-fast
     tokenSecretRef: {name: agent-kourier-agent-token}
   chat:
     connectionRef: {namespace: agent-kourier, name: slack-fast}
-    channel: CVFYNOTJOIN
+    channel: CVFYNOAGENT
     output: live

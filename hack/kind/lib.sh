@@ -297,23 +297,25 @@ install_agentkourier() {
   "${K[@]}" -n agent-kourier rollout restart deploy/agent-kourier >/dev/null
 }
 
-# deploy_agentkourier AGENTBACKEND [EXTRA_CONFIG_DIR]: Agent Kourier's namespace, fake Slack Secret, config and chart, which the fast and full tiers share.
+# deploy_agentkourier AGENTBACKEND [EXTRA_CONFIG_DIR...]: Agent Kourier's namespace, fake Slack Secret, config and chart, which the fast and full tiers share.
 # AGENTKOURIER_VALUES is the values file (the fast tier's by default) and the array AGENTKOURIER_HELM_ARGS, if the caller set it, holds more helm
 # arguments. The config is the fast tier's Bindings and ChatConnection (fast/agent-kourier/config), with AGENTBACKEND, a file, in place of the fast
-# tier's AgentBackend: the Bindings name it `agents` in both tiers. EXTRA_CONFIG_DIR, if given, adds the YAML files of a directory: the fast
-# tier passes the Bindings that reach the stub agent through the a2a dialect, which the full tier, with no stub, must not load.
+# tier's AgentBackend: the Bindings name it `agents` in both tiers. Each EXTRA_CONFIG_DIR adds the YAML files of a directory: the fast tier
+# passes the Bindings that reach the stub agent through the a2a dialect and those that verification checks against the stub, which the full
+# tier, with no stub, must not load.
 # The Secrets are fake constants made here and never committed, and the agent token (Secret agent-kourier-agent-token) is the caller's to
 # make: it differs by tier. Needs HERE, ROOT, K, H.
 deploy_agentkourier() {
-  local config
+  local config dir
   refuse_while_sandbox_up
   config=$(mktemp -d)
   trap 'rm -rf "${config}"; trap - RETURN' RETURN # the scratch directory goes however this ends
   cp "${HERE}"/fast/agent-kourier/config/*.yaml "${config}"
   cp "$1" "${config}/agentbackend.yaml"
-  if [ -n "${2:-}" ]; then
-    cp "$2"/*.yaml "${config}"
-  fi
+  shift
+  for dir in "$@"; do
+    cp "${dir}"/*.yaml "${config}"
+  done
   "${K[@]}" create namespace agent-kourier --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
   "${K[@]}" -n agent-kourier create secret generic slack-fast --from-literal=botToken=xoxb-fake-test-token \
     --from-literal=appToken=xapp-fake-test-token --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null

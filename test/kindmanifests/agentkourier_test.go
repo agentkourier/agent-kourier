@@ -49,12 +49,16 @@ const agentKourierDir = "../../hack/kind/fast/agent-kourier/"
 // front door (spec D32, R4).
 const a2aDir = "../../hack/kind/fast/agent-kourier/a2a"
 
+// verifyDir is the fast tier's other extra config: the Bindings of the verification scenario, whose assertions rest on the stub agent's
+// answers. up-fast.sh gives it to deploy_agentkourier, and up-full.sh does not.
+const verifyDir = "../../hack/kind/fast/agent-kourier/verify"
+
 // fastConfig returns a directory holding the config the fast tier deploys, assembled as up-fast.sh does through deploy_agentkourier: the
-// files of agentKourierDir/config, then the extra config of a2aDir.
+// files of agentKourierDir/config, then the extra config of a2aDir and verifyDir.
 func fastConfig(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	for _, glob := range []string{agentKourierDir + "config/*.yaml", a2aDir + "/*.yaml"} {
+	for _, glob := range []string{agentKourierDir + "config/*.yaml", a2aDir + "/*.yaml", verifyDir + "/*.yaml"} {
 		files, err := filepath.Glob(glob)
 		if err != nil || len(files) == 0 {
 			t.Fatalf("no files match %s: %v", glob, err)
@@ -257,11 +261,12 @@ func TestA2ABindingsReachTheStubAgentByItsExactURL(t *testing.T) {
 	}
 }
 
-// TestTheA2AFilesAreForTheFastTierOnly: the AgentBackends and Bindings that reach the stub agent through the a2a dialect are in a2aDir,
-// beside the fast tier's config and not in it. up-fast.sh gives that directory to deploy_agentkourier, which copies it in; up-full.sh does not,
+// TestTheStubOnlyFilesAreForTheFastTierOnly: the AgentBackends and Bindings that reach the stub agent through the a2a dialect are in a2aDir, and
+// the Bindings of the verification scenario in verifyDir, beside the fast tier's config and not in it. up-fast.sh gives those directories to
+// deploy_agentkourier, which copies them in; up-full.sh does not,
 // so the full tier, where the stub is not, is left with its one AgentBackend, the front door. The full tier adds its approval Bindings
 // from full/agent-kourier/config (TestFullTierConfig uses the same file selection as up-full.sh).
-func TestTheA2AFilesAreForTheFastTierOnly(t *testing.T) {
+func TestTheStubOnlyFilesAreForTheFastTierOnly(t *testing.T) {
 	read := func(file string) string {
 		raw, err := os.ReadFile("../../hack/kind/" + file)
 		if err != nil {
@@ -269,19 +274,22 @@ func TestTheA2AFilesAreForTheFastTierOnly(t *testing.T) {
 		}
 		return string(raw)
 	}
-	if !strings.Contains(read("up-fast.sh"), `deploy_agentkourier "${FAST}/agent-kourier/config/agentbackend.yaml" "${FAST}/agent-kourier/a2a"`) {
-		t.Error("up-fast.sh does not give fast/agent-kourier/a2a to deploy_agentkourier as its extra config")
+	if !strings.Contains(read("up-fast.sh"), `deploy_agentkourier "${FAST}/agent-kourier/config/agentbackend.yaml" "${FAST}/agent-kourier/a2a" "${FAST}/agent-kourier/verify"`) {
+		t.Error("up-fast.sh does not give fast/agent-kourier/a2a and fast/agent-kourier/verify to deploy_agentkourier as its extra config")
 	}
 	full := read("up-full.sh")
-	if !strings.Contains(full, "\ndeploy_agentkourier \"${FULL}/agent-kourier/agentbackend.yaml\" \"${FULL}/agent-kourier/config\"\n") || strings.Contains(full, "agent-kourier/a2a") {
-		t.Error("up-full.sh's deploy_agentkourier call is not the front door's AgentBackend plus full-tier config, or it names the a2a directory")
+	if !strings.Contains(full, "\ndeploy_agentkourier \"${FULL}/agent-kourier/agentbackend.yaml\" \"${FULL}/agent-kourier/config\"\n") || strings.Contains(full, "agent-kourier/a2a") || strings.Contains(full, "agent-kourier/verify") {
+		t.Error("up-full.sh's deploy_agentkourier call is not the front door's AgentBackend plus full-tier config, or it names the a2a or verify directory")
 	}
 	lib := read("lib.sh")
-	if !strings.Contains(lib, `cp "${HERE}"/fast/agent-kourier/config/*.yaml "${config}"`) || !strings.Contains(lib, "if [ -n \"${2:-}\" ]; then\n    cp \"$2\"/*.yaml \"${config}\"") {
+	if !strings.Contains(lib, `cp "${HERE}"/fast/agent-kourier/config/*.yaml "${config}"`) || !strings.Contains(lib, "shift\n  for dir in \"$@\"; do\n    cp \"${dir}\"/*.yaml \"${config}\"") {
 		t.Error("lib.sh's deploy_agentkourier does not copy the fast config, and the extra config only when it is given one")
 	}
 	if files, _ := filepath.Glob(agentKourierDir + "config/*a2a*.yaml"); len(files) != 0 {
 		t.Errorf("%v are in the fast tier's config, which the full tier copies; they belong in %s", files, a2aDir)
+	}
+	if files, _ := filepath.Glob(agentKourierDir + "config/*verify*.yaml"); len(files) != 0 {
+		t.Errorf("%v are in the fast tier's config, which the full tier copies; they belong in %s", files, verifyDir)
 	}
 }
 

@@ -105,8 +105,9 @@ func (c *Client) IsChannelMember(ctx context.Context, channel, user string) (tel
 // Measured against real Slack with a bot token (2026-11-03): is_member is true for a channel the bot is in, and not true for a
 // live channel another bot is active in and it is not, so it is the bot's own membership. An absent flag still reads as false here.
 //
-// UNCONFIRMED(BV-3): that it is true for an archived channel the bot was in, and what Slack answers for a private channel the
-// bot is not in (channelAccessCode).
+// UNCONFIRMED(BV-3): that it is true for an archived channel the bot was in, that it is sent for a private channel the bot is in
+// (absent, a joined private channel would read as not joined), and what Slack answers for a private channel the bot is not in
+// (channelAccessCode).
 func (c *Client) ChannelAccess(ctx context.Context, channel string) (telemetryResult0 chat.Access, telemetryErr error) {
 	if channel == "" {
 		return chat.Access{}, fmt.Errorf("slack channel access: no channel: %w", chat.ErrChannelNotFound)

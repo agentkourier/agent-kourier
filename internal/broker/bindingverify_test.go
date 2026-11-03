@@ -83,7 +83,7 @@ func TestClassifyAgentSaysWhatEachAnswerMeans(t *testing.T) {
 		{"dial failure, no client around it", wrap(dial), want{bindingcheck.False, bindingcheck.ReasonUnreachable}},
 		{"DNS failure", wrap(&url.Error{Op: "Get", URL: "http://backend", Err: &net.DNSError{Err: "no such host", Name: "backend", IsNotFound: true}}), want{bindingcheck.False, bindingcheck.ReasonUnreachable}},
 		{"TLS certificate not trusted", wrap(&url.Error{Op: "Get", URL: "https://backend", Err: &tls.CertificateVerificationError{Err: x509.UnknownAuthorityError{}}}), want{bindingcheck.False, bindingcheck.ReasonUnreachable}},
-		{"TLS spoken to a plain server", wrap(tls.RecordHeaderError{Msg: "first record does not look like a TLS handshake"}), want{bindingcheck.False, bindingcheck.ReasonUnreachable}},
+		{"TLS spoken to a plain server", wrap(&url.Error{Op: "Get", URL: "https://backend", Err: tls.RecordHeaderError{Msg: "first record does not look like a TLS handshake"}}), want{bindingcheck.False, bindingcheck.ReasonUnreachable}},
 		{"connection cut mid-answer", wrap(io.ErrUnexpectedEOF), want{bindingcheck.False, bindingcheck.ReasonUnreachable}},
 		{"connection closed before an answer", wrap(io.EOF), want{bindingcheck.False, bindingcheck.ReasonUnreachable}},
 		{"deadline passed", wrap(context.DeadlineExceeded), want{bindingcheck.False, bindingcheck.ReasonUnreachable}},
@@ -256,6 +256,26 @@ func TestAgentCheckerAgainstARealBackend(t *testing.T) {
 		closed := srv.URL
 		srv.Close()
 		f.snaps.p.Store(snapshot(t, closed, v1alpha1.DialectKagentV1, time.Hour))
+		out, err := agentChecker{bindings: f.b, timeout: 5 * time.Second}.CheckAgent(t.Context(), "sre/oncall")
+		if err != nil || out.Status != bindingcheck.False || out.Reason != bindingcheck.ReasonUnreachable {
+			t.Errorf("CheckAgent = %+v, %v; want False/Unreachable", out, err)
+		}
+	})
+	t.Run("a certificate that is not trusted", func(t *testing.T) {
+		f := newFixture(t)
+		srv := httptest.NewTLSServer(http.NotFoundHandler())
+		t.Cleanup(srv.Close)
+		f.snaps.p.Store(snapshot(t, srv.URL, v1alpha1.DialectKagentV1, time.Hour))
+		out, err := agentChecker{bindings: f.b, timeout: 5 * time.Second}.CheckAgent(t.Context(), "sre/oncall")
+		if err != nil || out.Status != bindingcheck.False || out.Reason != bindingcheck.ReasonUnreachable || !strings.Contains(out.Message, "certificate") {
+			t.Errorf("CheckAgent = %+v, %v; want False/Unreachable and a Message that names the certificate", out, err)
+		}
+	})
+	t.Run("TLS spoken to a plain server", func(t *testing.T) {
+		f := newFixture(t)
+		srv := httptest.NewServer(http.NotFoundHandler())
+		t.Cleanup(srv.Close)
+		f.snaps.p.Store(snapshot(t, "https"+strings.TrimPrefix(srv.URL, "http"), v1alpha1.DialectKagentV1, time.Hour))
 		out, err := agentChecker{bindings: f.b, timeout: 5 * time.Second}.CheckAgent(t.Context(), "sre/oncall")
 		if err != nil || out.Status != bindingcheck.False || out.Reason != bindingcheck.ReasonUnreachable {
 			t.Errorf("CheckAgent = %+v, %v; want False/Unreachable", out, err)

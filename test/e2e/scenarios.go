@@ -106,7 +106,7 @@ const (
 	BotS16 = "B0S16ALERT1"
 )
 
-// The channels of the verification scenario (hack/kind/fast/agent-kourier/config/binding-verify-*.yaml), the fast tier only: each is a Binding
+// The channels of the verification scenario (hack/kind/fast/agent-kourier/verify/binding-verify-*.yaml), the fast tier only: each is a Binding
 // that shows one condition of its verification, and test/kindmanifests pins the pairing.
 const (
 	// ChannelVerifyReady is the channel of a Binding that can be served: the stub has its agent and the bot is in the channel.

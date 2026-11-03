@@ -1,6 +1,6 @@
 # Binding verification: a Binding whose channel is archived, so ChannelJoined is false (ChannelArchived). The bot is in it and the agent is the stub's.
 # A channel of its own on the fake Slack; the identity token is the same Secret as fast-chat's. The channel and the agent are pinned
-# by test/kindmanifests and test/e2e/scenarios.go.
+# by test/kindmanifests and test/e2e/scenarios.go. The fast tier only: up-fast.sh gives this directory to deploy_agentkourier, and up-full.sh does not.
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata: {name: fast-verify-archived, namespace: agent-kourier}

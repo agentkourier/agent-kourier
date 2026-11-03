@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"crypto/subtle"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -89,8 +88,10 @@ func (a agentChecker) CheckAgent(ctx context.Context, binding string) (bindingch
 // request that failed carries its cause too, as telemetry.LogText gives the error under the *url.Error (so not the URL): that is
 // what tells a name that does not resolve from a refused connection or a certificate that is not trusted, and the Message claims no more
 // than that the request failed (a server that answers plain HTTP to an https request is a cause, not a silence), unless a deadline
-// passed, when it says the backend did not answer in time. It reports false for an error it cannot place,
-// which the Prober records as a probe that could not tell.
+// passed, when it says the backend did not answer in time. A deadline is False although a turn's connect waits longer (the pool's
+// ConnectTimeout, 30s, against the probe's 8s): a backend that never answers, as behind a firewall, must not stay Unknown, so one that
+// is only slower than the probe's bound reads False too. It reports false for an error it cannot place, which the Prober records as a
+// probe that could not tell.
 func classifyAgent(err error) (bindingcheck.Outcome, bool) {
 	fail := func(r bindingcheck.Reason, msg string) (bindingcheck.Outcome, bool) {
 		return bindingcheck.Outcome{Status: bindingcheck.False, Reason: r, Message: msg}, true
@@ -145,18 +146,13 @@ func classifyStatus(code int) bindingcheck.Outcome {
 }
 
 // requestFailed reports whether err is the failure of the request for the card itself: a dial, DNS, TLS or read that failed, or a
-// deadline that passed. A net.Error covers the *url.Error of the HTTP client, a *net.OpError, a *net.DNSError and
-// context.DeadlineExceeded; the two TLS errors and an end of the stream are not net.Errors. (A scheme that is not http never gets this
+// deadline that passed. A net.Error covers the *url.Error of the HTTP client, which holds a TLS failure too, a *net.OpError, a
+// *net.DNSError and context.DeadlineExceeded; an end of the stream is not a net.Error. (A scheme that is not http never gets this
 // far: the API's validation and the dialect refuse the URL first.) A status the backend answered with is found before this is asked,
 // since the HTTP client wraps that in a *url.Error too.
 func requestFailed(err error) bool {
-	var (
-		netErr net.Error
-		cert   *tls.CertificateVerificationError
-		record tls.RecordHeaderError
-	)
-	return errors.As(err, &netErr) || errors.As(err, &cert) || errors.As(err, &record) ||
-		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+	var netErr net.Error
+	return errors.As(err, &netErr) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 // timedOut reports whether err is a deadline that passed: a context deadline, or a network error that says it timed out.
@@ -326,7 +322,7 @@ func bindingTargets(snap *config.Snapshot, conn v1alpha1.ObjectRef) []bindingche
 	return out
 }
 
-// bindingLog is the log of the verification of Bindings: one line when a condition changes to False, to Unknown, or from one of those to True, one for a
+// bindingLog is the log of the verification of Bindings: one line when a condition changes to False or Unknown, or to True after a result that was not True, one for a
 // Binding that stops being verified, and one for each probe whose checker could not tell. A probe that finds what it found before adds
 // no line of the first kinds; the last is warned of at every probe, since the condition stays Unknown/ProbeFailed with no change to report.
 type bindingLog struct{ log *slog.Logger }
