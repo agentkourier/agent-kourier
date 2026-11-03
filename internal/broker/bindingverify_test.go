@@ -957,7 +957,7 @@ func tr(oldStatus bindingcheck.Status, oldReason bindingcheck.Reason, newStatus 
 }
 
 // A condition that goes False is a WARN, so is Unknown/ChatCredentialsChanged, any other Unknown is an INFO (a first result too), and
-// one that is True again is an INFO. Silent: a first result that is True, Pending, Unknown/ProbeFailed (probeError logs it with its
+// one that is True after a result that was not is an INFO. Silent: a first result that is True, Pending, Unknown/ProbeFailed (probeError logs it with its
 // error), and Ready, whose reason shifts as the conditions of a first pass arrive.
 func TestTransitionLogsFalseAsWarnAndRecoveryAsInfoAndNothingElse(t *testing.T) {
 	for _, tc := range []struct {

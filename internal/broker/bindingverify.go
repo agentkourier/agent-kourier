@@ -326,7 +326,7 @@ func bindingTargets(snap *config.Snapshot, conn v1alpha1.ObjectRef) []bindingche
 	return out
 }
 
-// bindingLog is the log of the verification of Bindings: one line when a condition changes to False, Unknown or True again, one for a
+// bindingLog is the log of the verification of Bindings: one line when a condition changes to False, to Unknown, or from one of those to True, one for a
 // Binding that stops being verified, and one for each probe whose checker could not tell. A probe that finds what it found before adds
 // no line of the first kinds; the last is warned of at every probe, since the condition stays Unknown/ProbeFailed with no change to report.
 type bindingLog struct{ log *slog.Logger }
