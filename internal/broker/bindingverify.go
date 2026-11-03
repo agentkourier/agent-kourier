@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/url"
+	"slices"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
@@ -217,7 +219,7 @@ func (c channelChecker) CheckChannel(ctx context.Context, channel string) (bindi
 
 // classifyError says what an error of ChannelAccess means for ChannelJoined: the two sentinels are False, a credential the platform
 // rejects is False/ChatCredentialsRejected, and anything else is Unknown/ChatUnavailable. Its Message is a rate limit, a deadline that
-// passed ("did not answer in time"), or, for everything else, "the read failed" with the cause through telemetry.LogText and no claim
+// passed ("did not answer in time"), or, for everything else, "the chat platform read failed: " and the cause through telemetry.LogText and no claim
 // about whether the platform answered: the Slack client's scrub keeps a deadline and a cancel as causes but drops other transport
 // causes, so a refused connection and an answer that is an error cannot be told apart here, and the cause in the text says which it
 // was (a code such as no_permission, or connection refused). A Message that changes is not a transition, so a cause that changes
@@ -281,7 +283,8 @@ func (w credentialsWatch) check(ctx context.Context) credentialsChange {
 		return credentialsSame
 	}
 	found := credentialsSame
-	for key, was := range w.baseline {
+	for _, key := range slices.Sorted(maps.Keys(w.baseline)) { // in order, so that the outcome never depends on map order
+		was := w.baseline[key]
 		now, err := w.secrets.Value(ctx, namespace, name, key)
 		switch {
 		case err == nil && !now.IsEmpty():
@@ -316,8 +319,9 @@ func bindingTargets(snap *config.Snapshot, conn v1alpha1.ObjectRef) []bindingche
 	return out
 }
 
-// bindingLog is the log of the verification of Bindings: one line when a condition changes to False, Unknown or True again, and one for
-// a probe whose checker could not tell. It writes nothing for a probe that found what it found before.
+// bindingLog is the log of the verification of Bindings: one line when a condition changes to False, Unknown or True again, one for a
+// Binding that stops being verified, and one for each probe whose checker could not tell. A probe that finds what it found before adds
+// no line of the first kinds; the last is warned of at every probe, since the condition stays Unknown/ProbeFailed with no change to report.
 type bindingLog struct{ log *slog.Logger }
 
 // transition is bindingcheck.Options.OnTransition, with a line for every change of a condition to a status and reason that
@@ -327,11 +331,12 @@ type bindingLog struct{ log *slog.Logger }
 //   - any other Unknown is an INFO, a Binding's first result included;
 //   - True after a condition that was not True (and was not Pending) is an INFO.
 //
-// Nothing is logged for Ready, which holds back what the line for the condition that causes it says; for Pending, which is no
-// result; and for Unknown/ProbeFailed, which probeError logs with the error that caused it.
+// Nothing is logged for Ready, which holds back what the line for the condition that causes it says, and for Unknown/ProbeFailed,
+// which probeError logs with the error that caused it. The Prober reports no transition for Pending (a Binding's conditions are
+// stored Pending when it is first seen), so every transition here has an Old condition and a result for New.
 func (l bindingLog) transition(tr bindingcheck.Transition) {
 	c := tr.New
-	if c.Type == bindingcheck.Ready || c.Reason == bindingcheck.ReasonPending || c.Reason == bindingcheck.ReasonProbeFailed {
+	if c.Type == bindingcheck.Ready || c.Reason == bindingcheck.ReasonProbeFailed {
 		return
 	}
 	attrs := []any{"binding", tr.Binding, "condition", string(c.Type), "status", string(c.Status), "reason", string(c.Reason), "detail", telemetry.LogText(c.Message)}
@@ -342,7 +347,7 @@ func (l bindingLog) transition(tr bindingcheck.Transition) {
 		l.log.Warn("binding verification: a condition is unknown", attrs...)
 	case c.Status == bindingcheck.Unknown:
 		l.log.Info("binding verification: a condition is unknown", attrs...)
-	case c.Status == bindingcheck.True && tr.Old.Status != "" && tr.Old.Status != bindingcheck.True && tr.Old.Reason != bindingcheck.ReasonPending:
+	case c.Status == bindingcheck.True && tr.Old.Status != bindingcheck.True && tr.Old.Reason != bindingcheck.ReasonPending:
 		l.log.Info("binding verification: a condition is true again", append(attrs, "was", string(tr.Old.Reason))...)
 	}
 }
@@ -422,10 +427,12 @@ type (
 	channelFunc func(ctx context.Context, channel string) (bindingcheck.Outcome, error)
 )
 
+// CheckAgent implements bindingcheck.AgentChecker.
 func (f agentFunc) CheckAgent(ctx context.Context, binding string) (bindingcheck.Outcome, error) {
 	return f(ctx, binding)
 }
 
+// CheckChannel implements bindingcheck.ChannelChecker.
 func (f channelFunc) CheckChannel(ctx context.Context, channel string) (bindingcheck.Outcome, error) {
 	return f(ctx, channel)
 }

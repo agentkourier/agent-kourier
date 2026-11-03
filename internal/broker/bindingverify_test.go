@@ -423,7 +423,7 @@ func TestChannelCheckerAgainstTheFakePlatform(t *testing.T) {
 // every other failure is "the read failed" with its cause, which is the platform's code when it answered (no_permission) and the
 // transport's error when it did not (connection refused), since the client drops the difference. The cause is in the Message and in the
 // log line and no token is in either. A Message that changes between passes is not a transition, so a cause that changes adds no line.
-func TestChannelCheckerSaysWhatSlackAnsweredOrThatItDidNotAnswer(t *testing.T) {
+func TestChannelCheckerReportsTheCauseOfAFailedReadThroughTheRealSlackClient(t *testing.T) {
 	const bot, app = "xoxb-TESTTOKEN-123456", "xapp-TESTTOKEN-654321"
 	var answer atomic.Value
 	release := make(chan struct{})
@@ -584,6 +584,8 @@ func TestChannelCheckerComparesTheChatCredentialsByValueWithoutCallingThePlatfor
 		{"the bot token rotated", &secretStore{vals: map[string]string{"botToken": canary, "appToken": app}}, "changed after the connection started", bindingcheck.ReasonChatCredentialsChanged, true},
 		{"the app token rotated", &secretStore{vals: map[string]string{"botToken": bot, "appToken": canary}}, "changed after the connection started", bindingcheck.ReasonChatCredentialsChanged, true},
 		{"the same tokens", &secretStore{vals: same()}, "", "", false},
+		{"the app token missing, then the bot token rotated: unusable wins over the later change", &secretStore{vals: map[string]string{"botToken": canary}}, "gone or empty", bindingcheck.ReasonChatCredentialsUnusable, true},
+		{"the app token rotated, then the bot token missing", &secretStore{vals: map[string]string{"appToken": canary}}, "gone or empty", bindingcheck.ReasonChatCredentialsUnusable, true},
 		{"the Secret is of a type that is never read", &secretStore{err: fmt.Errorf("secret ns/n key %q of type %q: %w", "botToken", "kubernetes.io/tls", secret.ErrUnsupportedType)}, "never read", bindingcheck.ReasonChatCredentialsUnusable, true},
 		{"the Secret is gone", &secretStore{missing: true}, "gone or empty", bindingcheck.ReasonChatCredentialsUnusable, true},
 		{"a key is missing", &secretStore{vals: map[string]string{"botToken": bot}}, "gone or empty", bindingcheck.ReasonChatCredentialsUnusable, true},
@@ -969,7 +971,6 @@ func TestTransitionLogsFalseAsWarnAndRecoveryAsInfoAndNothingElse(t *testing.T) 
 		{"true to unusable", tr(bindingcheck.True, bindingcheck.ReasonOK, bindingcheck.Unknown, bindingcheck.ReasonChatCredentialsUnusable), "level=WARN"},
 		{"true to a probe that could not tell", tr(bindingcheck.True, bindingcheck.ReasonOK, bindingcheck.Unknown, bindingcheck.ReasonProbeFailed), ""},
 		{"a first result that is a probe that could not tell", tr(bindingcheck.Unknown, bindingcheck.ReasonPending, bindingcheck.Unknown, bindingcheck.ReasonProbeFailed), ""},
-		{"a condition seen for the first time", tr("", "", bindingcheck.Unknown, bindingcheck.ReasonPending), ""},
 		{"Ready going false", func() bindingcheck.Transition {
 			t := tr(bindingcheck.True, bindingcheck.ReasonOK, bindingcheck.False, "BackendReachable:AgentNotFound")
 			t.New.Type = bindingcheck.Ready
