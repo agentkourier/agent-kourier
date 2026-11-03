@@ -65,7 +65,8 @@ const (
 	// ReasonCredentialsUnreadable is a BackendReachable reason: the Binding's token Secret or a Secret behind one of
 	// the backend's headers cannot be read.
 	ReasonCredentialsUnreadable Reason = "CredentialsUnreadable"
-	// ReasonUnreachable is a BackendReachable reason: the backend did not answer (dial, TLS or timeout).
+	// ReasonUnreachable is a BackendReachable reason: the request for the agent card failed (a name that does not resolve, a refused
+	// connection, a TLS handshake that failed, a connection that dropped) or the backend did not answer in time.
 	ReasonUnreachable Reason = "Unreachable"
 	// ReasonCredentialsRejected is a BackendReachable reason: the backend answered 401, either because it rejected
 	// the Binding's token or because the Binding has none and the backend needs one.

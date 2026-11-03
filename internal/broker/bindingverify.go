@@ -9,10 +9,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
 	"net"
 	"net/url"
-	"slices"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
@@ -61,8 +59,9 @@ type agentChecker struct {
 var _ bindingcheck.AgentChecker = agentChecker{}
 
 // CheckAgent implements bindingcheck.AgentChecker. A check the Prober's context ended is no verdict on the backend and comes
-// back as an error, as does an error classifyAgent cannot place and a credentials read that the checker's own bound cut short; the deadline of the checker's own bound is a backend that does
-// not answer, Unreachable. A Binding the config no longer has (a reload removed it during the pass) is no result either: the
+// back as an error, as does an error classifyAgent cannot place; the deadline of the checker's own bound is a backend that does
+// not answer, Unreachable. (The Secrets are read from a cache that ignores its context, so a bound cannot cut a credentials read short;
+// a token source that mints a token over the network would have to revisit that.) A Binding the config no longer has (a reload removed it during the pass) is no result either: the
 // error says so and the Prober prunes the Binding at its next Tick.
 func (a agentChecker) CheckAgent(ctx context.Context, binding string) (bindingcheck.Outcome, error) {
 	cctx, cancel := context.WithTimeout(ctx, a.timeout)
@@ -73,10 +72,6 @@ func (a agentChecker) CheckAgent(ctx context.Context, binding string) (bindingch
 	}
 	if ctx.Err() != nil {
 		return bindingcheck.Outcome{}, fmt.Errorf("the probe ended before the backend answered: %w", err)
-	}
-	if cctx.Err() != nil && (errors.Is(err, agent.ErrTokenUnreadable) || errors.Is(err, agent.ErrHeaderUnreadable)) {
-		// A read of a Secret that the checker's own bound cut short did not find the Secret unreadable.
-		return bindingcheck.Outcome{}, fmt.Errorf("the credentials were not read before the checker's bound passed: %w", err)
 	}
 	if out, ok := classifyAgent(err); ok {
 		return out, nil
@@ -91,8 +86,10 @@ func (a agentChecker) CheckAgent(ctx context.Context, binding string) (bindingch
 // classifyAgent says what the error of a card fetch (agent.Pool.Check) means for BackendReachable. It is False when the answer
 // says a turn would fail now, and Unknown for the statuses that say nothing of the agent (408, 425 and 429). The Message names
 // the class and a status code, and never the text of a status error or a card, which can quote a response. A
-// request that got no answer carries its cause too, as telemetry.LogText gives the error under the *url.Error (so not the URL): that is
-// what tells a name that does not resolve from a refused connection. It reports false for an error it cannot place,
+// request that failed carries its cause too, as telemetry.LogText gives the error under the *url.Error (so not the URL): that is
+// what tells a name that does not resolve from a refused connection or a certificate that is not trusted, and the Message claims no more
+// than that the request failed (a server that answers plain HTTP to an https request is a cause, not a silence), unless a deadline
+// passed, when it says the backend did not answer in time. It reports false for an error it cannot place,
 // which the Prober records as a probe that could not tell.
 func classifyAgent(err error) (bindingcheck.Outcome, bool) {
 	fail := func(r bindingcheck.Reason, msg string) (bindingcheck.Outcome, bool) {
@@ -115,8 +112,11 @@ func classifyAgent(err error) (bindingcheck.Outcome, bool) {
 		return fail(bindingcheck.ReasonNoJSONRPCInterface, "the agent card lists no JSON-RPC interface")
 	case errors.Is(err, dialect.ErrInvalidAgentCard):
 		return fail(bindingcheck.ReasonInvalidAgentCard, "the backend answered 200 with something that is not an agent card")
-	case didNotAnswer(err):
-		return fail(bindingcheck.ReasonUnreachable, "the backend did not answer: "+causeText(err))
+	case requestFailed(err):
+		if timedOut(err) {
+			return fail(bindingcheck.ReasonUnreachable, "the backend did not answer in time")
+		}
+		return fail(bindingcheck.ReasonUnreachable, "the request for the agent card failed: "+causeText(err))
 	}
 	return bindingcheck.Outcome{}, false
 }
@@ -144,11 +144,12 @@ func classifyStatus(code int) bindingcheck.Outcome {
 	return out
 }
 
-// didNotAnswer reports whether err is a failure to get an answer: a dial, DNS, TLS or read that failed, or a deadline that
-// passed. A net.Error covers the *url.Error of the HTTP client, a *net.OpError, a *net.DNSError and context.DeadlineExceeded; the
-// two TLS errors and an end of the stream are not net.Errors. A status the backend answered with is found before this is asked,
+// requestFailed reports whether err is the failure of the request for the card itself: a dial, DNS, TLS or read that failed, or a
+// deadline that passed. A net.Error covers the *url.Error of the HTTP client, a *net.OpError, a *net.DNSError and
+// context.DeadlineExceeded; the two TLS errors and an end of the stream are not net.Errors. (A scheme that is not http never gets this
+// far: the API's validation and the dialect refuse the URL first.) A status the backend answered with is found before this is asked,
 // since the HTTP client wraps that in a *url.Error too.
-func didNotAnswer(err error) bool {
+func requestFailed(err error) bool {
 	var (
 		netErr net.Error
 		cert   *tls.CertificateVerificationError
@@ -158,9 +159,15 @@ func didNotAnswer(err error) bool {
 		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
-// causeText is the text of why a request got no answer, as a Message may carry it: the error the HTTP client wrapped, not the
+// timedOut reports whether err is a deadline that passed: a context deadline, or a network error that says it timed out.
+func timedOut(err error) bool {
+	var netErr net.Error
+	return errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout())
+}
+
+// causeText is the text of why a request failed, as a Message may carry it: the error the HTTP client wrapped, not the
 // *url.Error around it, whose text is the request's URL, and through telemetry.LogText, which redacts and cuts it. It is what tells
-// a name that does not resolve, a refused connection, a certificate that is not trusted and a scheme that is not http apart.
+// a name that does not resolve, a refused connection and a certificate that is not trusted apart.
 func causeText(err error) string {
 	var urlErr *url.Error
 	if errors.As(err, &urlErr) {
@@ -283,8 +290,7 @@ func (w credentialsWatch) check(ctx context.Context) credentialsChange {
 		return credentialsSame
 	}
 	found := credentialsSame
-	for _, key := range slices.Sorted(maps.Keys(w.baseline)) { // in order, so that the outcome never depends on map order
-		was := w.baseline[key]
+	for key, was := range w.baseline { // in any order: the worst finding wins (max, and unusable is the largest)
 		now, err := w.secrets.Value(ctx, namespace, name, key)
 		switch {
 		case err == nil && !now.IsEmpty():
@@ -332,8 +338,10 @@ type bindingLog struct{ log *slog.Logger }
 //   - True after a condition that was not True (and was not Pending) is an INFO.
 //
 // Nothing is logged for Ready, which holds back what the line for the condition that causes it says, and for Unknown/ProbeFailed,
-// which probeError logs with the error that caused it. The Prober reports no transition for Pending (a Binding's conditions are
-// stored Pending when it is first seen), so every transition here has an Old condition and a result for New.
+// which probeError logs with the error that caused it. The Prober reports no transition for the Pending a Binding's probed conditions
+// are stored with when it is first seen, so each probed condition's transition here has an Old condition and a result for New. A Ready
+// can move from one Pending reason to another (the backend probe ends first, and Ready is Pending on the channel instead): a consumer of
+// transitions that reads Ready tells that with Condition.Pending, and this one never logs Ready.
 func (l bindingLog) transition(tr bindingcheck.Transition) {
 	c := tr.New
 	if c.Type == bindingcheck.Ready || c.Reason == bindingcheck.ReasonProbeFailed {

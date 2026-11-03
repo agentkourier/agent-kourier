@@ -190,33 +190,39 @@ func slackSecret(version, bot string, annotations map[string]string) *corev1.Sec
 func TestRunTellsOfChatTokensThatChangedAndNotOfAWriteThatLeavesThemAlone(t *testing.T) {
 	const old, rotated = "xoxb-fake-bot", "xoxb-ROTATED-CANARY"
 	c, slk, logs := verifyWorld(t)
+	c.probeEvery = time.Hour
 	client := slackCluster(old)
 	c.Client = client
 	r := start(t, c)
 	r.waitMetric(`agentkourier_binding_ready{binding="` + verifiedBinding + `"} 1`)
 	secrets := client.CoreV1().Secrets("agent-kourier-system")
 
-	// A write that leaves the tokens alone moves the revision, so the leader probes at once, and finds nothing wrong.
-	r.waitMoreProbes("ChannelJoined", 1)
+	// The probes are an hour apart here, so that only the config's revision can make the leader probe again (the first pass came at
+	// start). A write that leaves the tokens alone moves the revision, so the leader probes again at once, and finds nothing wrong. Two
+	// such writes, so that the first one's pass has certainly been recorded when the second one's has begun.
 	update := func(s *corev1.Secret) {
 		t.Helper()
 		if _, err := secrets.Update(t.Context(), s, metav1.UpdateOptions{}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	before := slk.calls.Load()
-	update(slackSecret("2", old, map[string]string{"owner": "someone"}))
-	eventually(t, 10*time.Second, "the leader did not probe again after the write", func() bool { return slk.calls.Load() > before })
-	r.waitMoreProbes("ChannelJoined", 3)
+	for rv, note := range []string{"first", "second"} {
+		before := slk.calls.Load()
+		update(slackSecret(strconv.Itoa(rv+2), old, map[string]string{"owner": note}))
+		eventually(t, 10*time.Second, "the leader did not probe again after a write to the Secret", func() bool { return slk.calls.Load() > before })
+	}
 	if !strings.Contains(metricsOf(r), `agentkourier_binding_ready{binding="`+verifiedBinding+`"} 1`) {
 		t.Errorf("%s is not ready after a write that left the tokens alone", verifiedBinding)
 	}
 
-	update(slackSecret("3", rotated, nil))
+	update(slackSecret("4", rotated, nil))
 	r.waitMetric(`agentkourier_binding_condition{binding="` + verifiedBinding + `",condition="ChannelJoined",status="unknown"} 1`)
 	r.waitMetric(`agentkourier_binding_ready{binding="` + verifiedBinding + `"} 0`)
-	calls := slk.calls.Load()
-	r.waitMoreProbes("ChannelJoined", 5)
+	// Another write moves the revision again. The example config has two Bindings, so a pass is two probes of the channel: when two
+	// more are counted, the pass this write calls for, which Slack is not asked for, has run.
+	calls, probes := slk.calls.Load(), r.probeCount("ChannelJoined")
+	update(slackSecret("5", rotated, map[string]string{"owner": "again"}))
+	eventually(t, 10*time.Second, "the leader did not probe again", func() bool { return r.probeCount("ChannelJoined") >= probes+2 })
 	if after := slk.calls.Load(); after != calls {
 		t.Errorf("Slack was asked %d more times after the tokens changed; want none", after-calls)
 	}

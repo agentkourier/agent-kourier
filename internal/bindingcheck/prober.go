@@ -125,8 +125,10 @@ type Options struct {
 	// Concurrency is how many probes run at once, 4 by default.
 	Concurrency int
 	// OnTransition is called for each change of a condition's status or reason, Ready included (filter on
-	// Transition.New.Type), and never for a probe that changed neither. A new Binding's Pending conditions are not
-	// transitions. Calls are serialized with each other and with OnProbeError, run on a probe's goroutine and hold
+	// Transition.New.Type), and never for a probe that changed neither. The Pending a new Binding's probed conditions are stored
+	// with is not a transition, but Ready's can be: when the first probes end one at a time, Ready moves from being Pending on one
+	// condition to being Pending on the next, so a consumer that treats Ready as unknown only once it has a result tests
+	// Condition.Pending. Calls are serialized with each other and with OnProbeError, run on a probe's goroutine and hold
 	// up the other probes' results while they run, so the hook must be quick and must not wait on the Prober. The
 	// Prober does not bound a hook, so one that blocks stops probing and delays shutdown. A hook that panics is
 	// recovered and the panic is reported to OnProbeError; the State is already updated.

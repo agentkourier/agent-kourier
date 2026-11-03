@@ -73,9 +73,9 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 		takeovers: prometheus.NewCounter(prometheus.CounterOpts{Name: "agentkourier_leader_takeovers_total",
 			Help: "Times this replica took the leadership: it won the lease and was given the next epoch."}),
 		bindingCond: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_binding_condition",
-			Help: "1 for the status a Binding's condition has (true, false or unknown) and 0 for the other two, by Binding and condition. Only the leader reports it. A condition has series once its first probe has ended; Ready has them once every first probe of the Binding has ended or one found it not ready."}, []string{"binding", "condition", "status"}),
+			Help: "1 for the status a Binding's condition has (true, false or unknown) and 0 for the other two, by Binding and condition. Only the leader reports it. A condition has series once its first probe has ended; Ready has them once every first probe of the Binding has ended or one found it false."}, []string{"binding", "condition", "status"}),
 		bindingReady: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_binding_ready",
-			Help: "1 while every condition of the Binding is true, 0 while one is false or not yet known, by Binding. Only the leader reports it. A Binding has the series once every first probe of it has ended or one found it not ready."}, []string{"binding"}),
+			Help: "1 while every condition of the Binding is true, 0 while one is false or not yet known, by Binding. Only the leader reports it. A Binding has the series once every first probe of it has ended or one found it false."}, []string{"binding"}),
 		probeDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "agentkourier_binding_probe_duration_seconds",
 			Help: "How long a probe of a Binding took, by condition: the time the checker took, whatever it found.", Buckets: prometheus.DefBuckets}, []string{"condition"}),
 	}

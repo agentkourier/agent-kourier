@@ -420,7 +420,7 @@ func TestChannelCheckerAgainstTheFakePlatform(t *testing.T) {
 }
 
 // The Message of Unknown/ChatUnavailable, through the real Slack client and its Classify: a rate limit and a deadline are said so, and
-// every other failure is "the read failed" with its cause, which is the platform's code when it answered (no_permission) and the
+// every other failure is "the chat platform read failed" with its cause, which is the platform's code when it answered (no_permission) and the
 // transport's error when it did not (connection refused), since the client drops the difference. The cause is in the Message and in the
 // log line and no token is in either. A Message that changes between passes is not a transition, so a cause that changes adds no line.
 func TestChannelCheckerReportsTheCauseOfAFailedReadThroughTheRealSlackClient(t *testing.T) {
@@ -514,6 +514,7 @@ func TestAgentCheckerSaysWhyTheBackendDidNotAnswerWithoutItsURL(t *testing.T) {
 		{"refused", &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connect: connection refused")}, "connection refused"},
 		{"TLS", &tls.CertificateVerificationError{Err: x509.UnknownAuthorityError{}}, "unknown authority"},
 		{"scheme", errors.New(`unsupported protocol scheme "ftp"`), "unsupported protocol scheme"},
+		{"https at a plain server", errors.New("http: server gave HTTP response to HTTPS client"), "server gave HTTP response to HTTPS client"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out, ok := classifyAgent(fmt.Errorf("binding sre/oncall: %w", &url.Error{Op: "Get", URL: secretURL, Err: tc.cause}))
@@ -523,8 +524,18 @@ func TestAgentCheckerSaysWhyTheBackendDidNotAnswerWithoutItsURL(t *testing.T) {
 			if strings.Contains(out.Message, "SECRET-IN-URL") || strings.Contains(out.Message, "/agents/") {
 				t.Errorf("the message %q holds the request's URL", out.Message)
 			}
+			if !strings.Contains(out.Message, "the request for the agent card failed") || strings.Contains(out.Message, "did not answer") {
+				t.Errorf("the message %q; want it to say the request failed and claim nothing of an answer", out.Message)
+			}
 		})
 	}
+	// A deadline is said so.
+	t.Run("a deadline", func(t *testing.T) {
+		out, ok := classifyAgent(fmt.Errorf("binding sre/oncall: %w", &url.Error{Op: "Get", URL: secretURL, Err: context.DeadlineExceeded}))
+		if !ok || out.Reason != bindingcheck.ReasonUnreachable || !strings.Contains(out.Message, "did not answer in time") || strings.Contains(out.Message, "SECRET-IN-URL") {
+			t.Errorf("classifyAgent = %+v, %t; want Unreachable, \"did not answer in time\" and no URL", out, ok)
+		}
+	})
 	// A scheme that is not http never reaches the HTTP client: the API's validation refuses the URL at load, and the dialect refuses it
 	// again before it dials. The probe then has an error it cannot place, which is a probe that could not tell, not Unreachable.
 	t.Run("a scheme the dialect refuses before it dials", func(t *testing.T) {
@@ -568,7 +579,7 @@ func (s *secretStore) Value(_ context.Context, ns, name, key string) (secret.Val
 }
 
 // The chat credentials are compared by value, at the probe: a token other than the one in use is Unknown/ChatCredentialsChanged, a
-// Secret or key that is gone or empty is the same reason with a message of its own, and in either the chat platform is not asked: what
+// Secret or key that is gone, empty or of a type that is never read is Unknown/ChatCredentialsUnusable, and in either the chat platform is not asked: what
 // a bot the Secret no longer names sees is not about the channel. A write that leaves the tokens alone is no change, and a read that
 // fails for another reason cannot tell, so the probe goes on. No value reaches a message.
 func TestChannelCheckerComparesTheChatCredentialsByValueWithoutCallingThePlatform(t *testing.T) {
@@ -584,8 +595,8 @@ func TestChannelCheckerComparesTheChatCredentialsByValueWithoutCallingThePlatfor
 		{"the bot token rotated", &secretStore{vals: map[string]string{"botToken": canary, "appToken": app}}, "changed after the connection started", bindingcheck.ReasonChatCredentialsChanged, true},
 		{"the app token rotated", &secretStore{vals: map[string]string{"botToken": bot, "appToken": canary}}, "changed after the connection started", bindingcheck.ReasonChatCredentialsChanged, true},
 		{"the same tokens", &secretStore{vals: same()}, "", "", false},
-		{"the app token missing, then the bot token rotated: unusable wins over the later change", &secretStore{vals: map[string]string{"botToken": canary}}, "gone or empty", bindingcheck.ReasonChatCredentialsUnusable, true},
-		{"the app token rotated, then the bot token missing", &secretStore{vals: map[string]string{"appToken": canary}}, "gone or empty", bindingcheck.ReasonChatCredentialsUnusable, true},
+		{"the app token missing and the bot token rotated: unusable wins over changed", &secretStore{vals: map[string]string{"botToken": canary}}, "gone or empty", bindingcheck.ReasonChatCredentialsUnusable, true},
+		{"the app token rotated and the bot token missing: unusable wins over changed", &secretStore{vals: map[string]string{"appToken": canary}}, "gone or empty", bindingcheck.ReasonChatCredentialsUnusable, true},
 		{"the Secret is of a type that is never read", &secretStore{err: fmt.Errorf("secret ns/n key %q of type %q: %w", "botToken", "kubernetes.io/tls", secret.ErrUnsupportedType)}, "never read", bindingcheck.ReasonChatCredentialsUnusable, true},
 		{"the Secret is gone", &secretStore{missing: true}, "gone or empty", bindingcheck.ReasonChatCredentialsUnusable, true},
 		{"a key is missing", &secretStore{vals: map[string]string{"botToken": bot}}, "gone or empty", bindingcheck.ReasonChatCredentialsUnusable, true},
@@ -649,6 +660,24 @@ func TestVerificationReadsTheCredentialsSecretTheCurrentConfigNames(t *testing.T
 	if ns, name, ok := v.credentialsSecret(); !ok || ns != "platform" || name != "slack-a" {
 		t.Errorf("credentialsSecret = %q, %q, %t; want platform, slack-a", ns, name, ok)
 	}
+	// A ChatConnection of the same name in another namespace is another connection, with its own Secret.
+	same := func(ns string) v1alpha1.ChatConnection {
+		return v1alpha1.ChatConnection{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "slack-a"},
+			Spec: v1alpha1.ChatConnectionSpec{Platform: "slack", CredentialsSecretRef: v1alpha1.SecretRef{Name: "creds-in-" + ns}}}
+	}
+	snap, err := config.Resolve(t.Context(), &config.Set{ChatConnections: []v1alpha1.ChatConnection{same("other"), same("platform")}}, keys{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.p.Store(snap)
+	for _, ns := range []string{"platform", "other"} {
+		v.Conn.Ref.Namespace = ns
+		if got, name, ok := v.credentialsSecret(); !ok || got != ns || name != "creds-in-"+ns {
+			t.Errorf("credentialsSecret of slack-a in %s = %q, %q, %t; want %s, creds-in-%s", ns, got, name, ok, ns, ns)
+		}
+	}
+	v.Conn.Ref.Namespace = "platform"
+	current.p.Store(twoConnections(t))
 	v.Conn.Ref.Name = "slack-nope"
 	if _, _, ok := v.credentialsSecret(); ok {
 		t.Error("credentialsSecret found a connection the config does not have")
@@ -872,26 +901,6 @@ func TestTheBrokersProberReportsAHungBackendAndAHungChatAsWhatTheyAreAndNotAsPro
 	}
 	if c := conds[bindingcheck.ChannelJoined]; c.Status != bindingcheck.Unknown || c.Reason != bindingcheck.ReasonChatUnavailable {
 		t.Errorf("ChannelJoined is %s/%s; want Unknown/ChatUnavailable", c.Status, c.Reason)
-	}
-}
-
-// A token read that the checker's own bound cut short did not find the Secret unreadable: it is no verdict, where a read that failed by
-// itself is False/CredentialsUnreadable.
-func TestAgentCheckerCredentialsReadCutByItsOwnBoundIsNoVerdict(t *testing.T) {
-	for _, sentinel := range []error{agent.ErrTokenUnreadable, agent.ErrHeaderUnreadable} {
-		cut := probeFunc(func(ctx context.Context, _ string) error {
-			<-ctx.Done()
-			return fmt.Errorf("%w: %w", sentinel, ctx.Err())
-		})
-		out, err := agentChecker{bindings: cut, timeout: 20 * time.Millisecond}.CheckAgent(t.Context(), "sre/oncall")
-		if err == nil || out != (bindingcheck.Outcome{}) || !errors.Is(err, sentinel) {
-			t.Errorf("%v cut by the bound: CheckAgent = %+v, %v; want an error and no outcome", sentinel, out, err)
-		}
-		failed := probeFunc(func(context.Context, string) error { return fmt.Errorf("%w: no key", sentinel) })
-		out, err = agentChecker{bindings: failed, timeout: time.Second}.CheckAgent(t.Context(), "sre/oncall")
-		if err != nil || out.Reason != bindingcheck.ReasonCredentialsUnreadable {
-			t.Errorf("%v failed by itself: CheckAgent = %+v, %v; want False/CredentialsUnreadable", sentinel, out, err)
-		}
 	}
 }
 
