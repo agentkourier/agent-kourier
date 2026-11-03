@@ -41,3 +41,13 @@ of text. Attempt 1 had no event and 15 s, attempt 2 a tool call and 8 s, attempt
 | 1 | 5 `block_mismatch`, 2 s apart, then `live: giving up on a message` | 1 `block_mismatch` |
 | 2 | 4 `block_mismatch`, 2 s apart | 1 `block_mismatch` |
 | 3 | passes | passes |
+
+A later run, measured the same way, after the writer stopped writing `(no output)` as text:
+
+| Sequence | Updates | Message afterwards |
+|---|---|---|
+| Alert thread, cut 5 s in, after its `Working…` | passes | `(no output)`, one `section` |
+| Next attempt's `Working…` on it, 6 s later | passes, none refused | one `task_card` |
+| That attempt's answer | passes | `task_card`, `rich_text` |
+| Stopped stream of text, then a final with nothing | 1 `block_mismatch` | the same text, one `rich_text` |
+| The same, then a final with a tool's card | 1 `block_mismatch` | the same text, one `rich_text` |

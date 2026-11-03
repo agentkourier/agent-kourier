@@ -237,8 +237,8 @@ func TestTurnCutsTheBodyAtTheCapsAndTheFallbackAtMaxFallback(t *testing.T) {
 
 func TestNothingSaysNoOutput(t *testing.T) {
 	m := Nothing()
-	if b, ok := m.Parts[0].(chat.Body); len(m.Parts) != 1 || !ok || b.Markdown != NoOutput || m.Fallback != NoOutput {
-		t.Errorf("Nothing = %+v; want a body saying %q", m, NoOutput)
+	if len(m.Parts) != 0 || m.Fallback != NoOutput {
+		t.Errorf("Nothing = %+v; want the fallback %q and no parts, so that it holds no text of the agent's", m, NoOutput)
 	}
 }
 

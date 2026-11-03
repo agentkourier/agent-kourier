@@ -289,10 +289,14 @@ func (u *Run) writeMoved(ctx context.Context, ref *chat.Ref) error {
 		case ref.ID == "":
 			return errNothingToShow
 		}
-		v.m, v.body, v.ok = render.Nothing(), render.NoOutput, true
+		v.m, v.ok = render.Nothing(), true
 	}
 	return u.write(ctx, ref, v)
 }
 
 // errNothingToShow is what a write says when the turn ended with nothing to show and there is no message to leave.
 var errNothingToShow = errors.New("live: the turn ended with nothing to show")
+
+// errMessageStands is what a write says when the platform refused to put content with no text in the place of what the message
+// holds (update). It is no failed write: the run does not try it again.
+var errMessageStands = errors.New("live: the message stands until the turn has text")

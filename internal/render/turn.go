@@ -156,9 +156,11 @@ func WithStatus(m chat.Message, line string) chat.Message {
 }
 
 // Nothing is the message of a turn that ended with nothing to show: it is there so that a tool status line is not
-// left standing as if the agent were still at work.
+// left standing as if the agent were still at work. It is a fallback and no Body, because it is no text of the agent's: a platform
+// that keeps a message's text from being replaced with no text (chat.ErrWouldDropText) must let a later attempt's cards replace
+// this, and must not let this replace text an earlier attempt wrote.
 func Nothing() chat.Message {
-	return chat.Message{Fallback: NoOutput, Parts: []chat.Part{chat.Body{Markdown: NoOutput}}}
+	return chat.Message{Fallback: NoOutput}
 }
 
 // Notice is the message of a notice: fixed wording that Agent Kourier wrote, and, if there is one, a short detail, which

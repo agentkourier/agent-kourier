@@ -978,7 +978,7 @@ func TestTheProgressModesGoOnAfterTheTurnMovesToTheUpdatePath(t *testing.T) {
 // A turn that moves from the stream to the update path and ends with no text follows the rule of a turn that never streamed:
 // where there is no message nothing is posted, and where a message stands it is updated to what the turn shows, which for a
 // turn that took the message over is the cards of its steps, with no "(no output)" under them, unless the text the message
-// holds keeps them out (keepstext_test.go). It is never a write of a message with no parts, which would fail for good.
+// holds keeps them out (keepstext_test.go). It is never a write of an empty message, which would fail for good.
 func TestAMovedTurnThatEndsWithNothingToShowDoesNotWriteAnEmptyMessage(t *testing.T) {
 	// The first write is made with all the events: the call, its result and the final.
 	events := func(run *live.Run) {

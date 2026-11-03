@@ -298,7 +298,7 @@ type Run struct {
 	stepsSent []chat.Step // the steps sent to the stream, or shown by an update, each as it was last sent
 	stepsOff  bool        // the platform refused a step, or a message with steps, for good: the turn goes on without steps
 	stepFails int         // steps that failed in a row
-	holdsText bool        // the platform refused an update with no text (ErrWouldDropText): the message stands until there is some
+	holdsText bool        // the platform refused an update with no text (ErrWouldDropText): no update is made until there is some
 	more      bool        // a write left steps to begin, which the next window goes on with
 	// cutShort says the turn's context ended before its final event, and the run is ending what the turn showed (see cut).
 	cutShort bool
@@ -738,7 +738,7 @@ func (u *Run) run(ctx context.Context) {
 		if finalOp == nil && u.isFinal() {
 			finalCtx, finalOp = telemetry.Start(context.WithoutCancel(ctx), "agentkourier.render.finalize", attribute.String("agentkourier.render.mode", string(u.turn.Mode)), attribute.String("agentkourier.turn.id", u.turn.Source))
 		}
-		if u.cutShort && finalOutcome == "delivered" { // no final came: what was written ends the turn, and is no output delivered
+		if u.cutShort && (finalOutcome == "delivered" || finalOutcome == "empty_output") { // no final came: what was written ends the turn, and is no output delivered
 			finalOutcome = "cancelled"
 		}
 		if finalOutcome == "delivered" {
@@ -799,7 +799,14 @@ func (u *Run) run(ctx context.Context) {
 				}
 				return
 			}
-			v := u.snapshot()     // after the wait, so that what is sent is the latest
+			v := u.snapshot() // after the wait, so that what is sent is the latest
+			if u.holdsText && v.body == "" {
+				if !v.final {
+					break
+				}
+				finalOutcome = "empty_output" // nothing of this turn's was written
+				return
+			}
 			if !v.ok && v.final { // the turn ended with nothing to show
 				// A stream that was started stands as a message too, though ref is the update path's alone: it was started for a step
 				// that the platform then refused, and is empty. It is stopped with the text of a turn with no output, as the update
@@ -808,12 +815,11 @@ func (u *Run) run(ctx context.Context) {
 					finalOutcome = "empty_output"
 					return
 				}
-				if u.holdsText { // its text says more than "(no output)" would, and no line of this run's is up on it
-					finalOutcome = "empty_output"
-					return
-				}
 				// But a message stands: do not leave its tool line up. Nothing was shown, so there is nothing to rate (Turn.Footer).
-				v.m, v.body, v.ok, v.rated = render.Nothing(), render.NoOutput, true, false
+				v.m, v.ok, v.rated = render.Nothing(), true, false
+				if u.streaming { // a stream's text is its body. A message's body stays empty: the placeholder is no text of the turn's
+					v.body = render.NoOutput
+				}
 			}
 			if !v.ok || (u.turn.Mode == v1alpha1.OutputFinal && !v.final) {
 				break
@@ -831,6 +837,9 @@ func (u *Run) run(ctx context.Context) {
 				writeCtx = finalCtx
 			}
 			err := u.write(writeCtx, &ref, v)
+			if errors.Is(err, errMessageStands) { // the next pass sees holdsText, and waits for text or ends the turn
+				continue
+			}
 			next = u.cfg.Now().Add(u.cfg.Throttle)
 			if errors.Is(err, errNothingToShow) { // a turn that moved to the update path, and ended with nothing to post
 				finalOutcome = "empty_output"
@@ -1139,14 +1148,12 @@ func (u *Run) message(v view) chat.Message {
 // line, which the steps stood in for, is back, and a final whose steps were all it showed says "(no output)". A message
 // that shows its steps records them as shown (sentStep), so that the final does not drop a card it showed.
 //
-// A message may hold text this run does not have, an earlier attempt's or the placeholder it left, and a platform may refuse to
-// put cards or a status line in its place (ErrWouldDropText). No retry mends that, and text comes first: the message stands
-// as it is, the write is done, and no update is tried until the turn has text, which the platform takes. The turn's cards are
-// not shown until then. Each run finds this out once, by one refused call.
+// A message may hold text this run does not have, an earlier attempt's or its placeholder, and a platform may refuse to put
+// cards or a status line in its place (ErrWouldDropText). No retry mends that, and text comes first: the run makes no more
+// updates until the turn has text, which the platform takes, and shows its cards then. Each run finds this out once, by one
+// refused call, and says so with errMessageStands. An update with text that is refused has lost the reply, and is a failed
+// write like any other.
 func (u *Run) update(ctx context.Context, ref chat.Ref, v view) error {
-	if u.holdsText && v.body == "" {
-		return nil
-	}
 	carried := len(v.steps) > 0 && !u.stepsOff
 	err := u.cfg.Platform.Update(ctx, ref, chat.Say(u.message(v)))
 	if err == nil && carried {
@@ -1159,10 +1166,13 @@ func (u *Run) update(ctx context.Context, ref chat.Ref, v view) error {
 		u.stepsOff = true
 		err = u.cfg.Platform.Update(ctx, ref, chat.Say(v.posted()))
 	}
-	if errors.Is(err, chat.ErrWouldDropText) {
+	switch {
+	case errors.Is(err, chat.ErrWouldDropText) && v.body == "":
 		u.cfg.Logger.InfoContext(ctx, "live: the message holds text that an update with none would take away; it stands until the turn has text", "channel", u.turn.Channel)
 		u.holdsText = true
-		return nil
+		return errMessageStands
+	case err == nil && v.body != "":
+		u.holdsText = false // the text is now this run's own, and the next update is the platform's to judge again
 	}
 	return err
 }
@@ -1192,7 +1202,7 @@ func (u *Run) write(ctx context.Context, ref *chat.Ref, v view) (telemetryErr er
 	ctx, op := telemetry.Start(ctx, "agentkourier.render.write", attribute.Bool("agentkourier.render.final", v.final), attribute.Bool("agentkourier.render.streaming", u.streaming))
 	defer func() {
 		spanErr := telemetryErr
-		if errors.Is(spanErr, errNothingToShow) { // a turn with nothing to post is a normal end, not a failed write
+		if errors.Is(spanErr, errNothingToShow) || errors.Is(spanErr, errMessageStands) { // a normal end or wait, not a failed write
 			spanErr = nil
 		}
 		op.Finish(spanErr)
@@ -1261,11 +1271,10 @@ type view struct {
 }
 
 // posted is the message the first post of v carries: post, since the outbox stores no steps, or "(no output)" for a final
-// whose steps are all it shows, which the update that follows replaces with them. That placeholder is a fallback and no Body,
-// because a platform may not let a message that holds only text be replaced by cards (ErrWouldDropText).
+// whose steps are all it shows, which the update that follows replaces with them.
 func (v view) posted() chat.Message {
 	if v.post.Fallback == "" && len(v.post.Parts) == 0 {
-		return chat.Message{Fallback: render.NoOutput}
+		return render.Nothing()
 	}
 	return v.post
 }

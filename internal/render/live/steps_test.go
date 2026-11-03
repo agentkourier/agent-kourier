@@ -683,7 +683,7 @@ func TestAnUpdateRefusedWithItsStepsIsSentAgainWithout(t *testing.T) {
 }
 
 // A turn that took over a stream and ends with its cards and no text shows nothing once the platform refuses the cards: the
-// update sent again without them says "(no output)", as a turn that showed nothing does, and is never a message with no parts.
+// update sent again without them says "(no output)", as a turn that showed nothing does, and is never a message with no text.
 func TestAFinalWithNoTextRefusedWithItsStepsSaysThereWasNoOutput(t *testing.T) {
 	e := setup(t)
 	e.leftOpen(t, "", chat.Step{ID: "s1", Title: "search", State: chat.StepRunning})
@@ -706,6 +706,30 @@ func TestAFinalWithNoTextRefusedWithItsStepsSaysThereWasNoOutput(t *testing.T) {
 	}
 	if l := e.logs.String(); strings.Contains(l, "cannot be sent") || strings.Contains(l, "no text and no parts") {
 		t.Errorf("a write of an empty message was tried:\n%s", l)
+	}
+}
+
+// The update that follows a refusal of the cards is the post's own message, the one the run then compares with the final: it is
+// made once, and no second update writes the placeholder again.
+func TestAFinalRefusedWithItsStepsMakesOneUpdate(t *testing.T) {
+	e := setup(t)
+	e.postedLine(t)
+	before := len(e.rec.sent("/chat.update"))
+	refused := new(atomic.Int32)
+	e.cfg.Platform = refusesSteps{Platform: e.cfg.Platform, refused: refused}
+	e.live = newRenderer(t, e.cfg)
+	release := e.hold()
+	t.Cleanup(release)
+	again, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recovered: true})
+	again.Handle(call("c1", "search", nil))
+	again.Handle(agent.FinalEvent{})
+	release()
+	e.finish(t, again)
+	if n := len(e.rec.sent("/chat.update")) - before; n != 1 || refused.Load() != 1 {
+		t.Errorf("%d updates after %d refused; want one after one", n, refused.Load())
+	}
+	if m := e.reply(); m.Text != "(no output)" || strings.Contains(string(m.Blocks), "markdown") {
+		t.Errorf("message %+v, blocks %s; want the placeholder, and no text block", m, m.Blocks)
 	}
 }
 
