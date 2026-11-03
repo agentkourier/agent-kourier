@@ -8,7 +8,6 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat"
-	"github.com/agentkourier/agent-kourier/internal/identity"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/internal/session"
@@ -187,13 +186,9 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	// and reported as metrics and log lines only. It sends the agent nothing, posts nothing and changes no readiness. It reads
 	// through the Bindings' pools, the platform and the Secrets, so it stops in the interactions' step, before the manager, the drain, the pool
 	// and the resolver. Added before the interactions start, it stops after their tap, worker and sweeper, with the store's loops.
-	var secrets identity.SecretReader
-	if boot.Secrets != nil {
-		secrets = boot.Secrets
-	}
 	prober := verification{
 		Bindings: bindings, Platform: platform, Snaps: boot.Reloader, Revision: boot.Reloader.Revision, Conn: conn,
-		Secrets: secrets, Metrics: metrics, Log: log, Interval: cfg.probeEvery, Tick: cfg.probeTick,
+		Secrets: boot.Secrets, Metrics: metrics, Log: log, Interval: cfg.probeEvery, Tick: cfg.probeTick, MinRevisionGap: cfg.probeGap,
 	}.newProber()
 	stops.add("binding-verification", startLoop(runCtx, func(c context.Context) error { prober.Run(c); return nil }))
 

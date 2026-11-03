@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"context"
 	"errors"
 	"maps"
 	"slices"
@@ -262,12 +263,11 @@ func TestBindingsPrunedDeletesTheSeriesOfThoseBindingsOnly(t *testing.T) {
 	}
 }
 
-// A probe's duration lands in the histogram of its condition, and a label outside the closed set is one series, "other".
+// A probe's duration lands in the histogram of its condition.
 func TestBindingProbedObservesTheDurationByCondition(t *testing.T) {
 	m := mustMetrics(t, nil)
 	m.BindingProbed(bindingcheck.BackendReachable, 50*time.Millisecond)
 	m.BindingProbed(bindingcheck.ChannelJoined, time.Second)
-	m.BindingProbed("a condition an adapter made up", time.Second)
 	fams, err := m.reg.Gather()
 	if err != nil {
 		t.Fatal(err)
@@ -281,7 +281,90 @@ func TestBindingProbedObservesTheDurationByCondition(t *testing.T) {
 			counts[s.GetLabel()[0].GetValue()] = s.GetHistogram().GetSampleCount()
 		}
 	}
-	if want := map[string]uint64{"BackendReachable": 1, "ChannelJoined": 1, "other": 1}; !maps.Equal(counts, want) {
+	if want := map[string]uint64{"BackendReachable": 1, "ChannelJoined": 1}; !maps.Equal(counts, want) {
 		t.Errorf("observations by condition = %v; want %v", counts, want)
+	}
+}
+
+// A Ready that is still Pending is exported nowhere: not as the ready gauge and not as a Ready condition, so a rule on == 0 does not fire
+// for the length of the slower first probe. The conditions that have ended are exported as they end. Whichever probe ends first, the Ready
+// series come with the second, and a probe that finds the Binding not ready sets them at once, with the other still in flight.
+func TestBindingReadyHasNoSeriesWhileItIsStillPendingInEitherProbeOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		first        bindingcheck.ConditionType
+		second       bindingcheck.ConditionType
+		firstStatus  bindingcheck.Status
+		secondStatus bindingcheck.Status
+		readyAfter   string // the ready gauge after the first probe: "" for none
+		readyEnd     string
+		hooks        int // OnTransition calls the first result causes: its condition's, and Ready's if Ready changes
+	}{
+		{"backend first, then channel", bindingcheck.BackendReachable, bindingcheck.ChannelJoined, bindingcheck.True, bindingcheck.True, "", "1", 2},
+		{"channel first, then backend", bindingcheck.ChannelJoined, bindingcheck.BackendReachable, bindingcheck.True, bindingcheck.True, "", "1", 1},
+		{"backend first, false", bindingcheck.BackendReachable, bindingcheck.ChannelJoined, bindingcheck.False, bindingcheck.True, "0", "0", 2},
+		{"channel first, false", bindingcheck.ChannelJoined, bindingcheck.BackendReachable, bindingcheck.False, bindingcheck.True, "0", "0", 2},
+		{"channel first, unknown: not yet known is not a pending Ready", bindingcheck.ChannelJoined, bindingcheck.BackendReachable, bindingcheck.Unknown, bindingcheck.True, "", "0", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			release := make(chan struct{})
+			m := mustMetrics(t, nil)
+			seen := make(chan struct{}, 8)
+			outcome := func(s bindingcheck.Status) bindingcheck.Outcome {
+				switch s {
+				case bindingcheck.True:
+					return bindingcheck.Outcome{Status: s, Reason: bindingcheck.ReasonOK}
+				case bindingcheck.False:
+					return bindingcheck.Outcome{Status: s, Reason: bindingcheck.ReasonAgentNotFound}
+				}
+				return bindingcheck.Outcome{Status: s, Reason: bindingcheck.ReasonChatUnavailable}
+			}
+			status := map[bindingcheck.ConditionType]bindingcheck.Status{tc.first: tc.firstStatus, tc.second: tc.secondStatus}
+			p := bindingcheck.NewProber(bindingcheck.Options{
+				Targets: func() []bindingcheck.Target { return []bindingcheck.Target{{Binding: "sre/oncall", Channel: "C1"}} },
+				Agents: agentFunc(func(_ context.Context, _ string) (bindingcheck.Outcome, error) {
+					if tc.first != bindingcheck.BackendReachable {
+						<-release
+					}
+					return outcome(status[bindingcheck.BackendReachable]), nil
+				}),
+				Channels: channelFunc(func(_ context.Context, _ string) (bindingcheck.Outcome, error) {
+					if tc.first != bindingcheck.ChannelJoined {
+						<-release
+					}
+					out := outcome(status[bindingcheck.ChannelJoined])
+					if out.Status == bindingcheck.False {
+						out.Reason = bindingcheck.ReasonNotInChannel
+					}
+					return out, nil
+				}),
+				Tick: 5 * time.Millisecond, Interval: time.Hour, Concurrency: 2,
+				OnTransition: func(tr bindingcheck.Transition) {
+					m.BindingCondition(tr)
+					seen <- struct{}{}
+				},
+			})
+			runProber(t, p)
+			for range tc.hooks {
+				<-seen
+			}
+			ready := func() string {
+				for _, s := range seriesOf(t, m, "agentkourier_binding_ready") {
+					return s[len(s)-1:]
+				}
+				return ""
+			}
+			if got := ready(); got != tc.readyAfter {
+				t.Errorf("ready gauge with %s ended and %s in flight = %q; want %q", tc.first, tc.second, got, tc.readyAfter)
+			}
+			if tc.readyAfter == "" && slices.ContainsFunc(seriesOf(t, m, "agentkourier_binding_condition"), func(s string) bool { return strings.Contains(s, "condition=Ready") }) {
+				t.Errorf("a Ready condition series exists while Ready is pending: %v", seriesOf(t, m, "agentkourier_binding_condition"))
+			}
+			if !slices.ContainsFunc(seriesOf(t, m, "agentkourier_binding_condition"), func(s string) bool { return strings.Contains(s, "condition="+string(tc.first)+",") }) {
+				t.Errorf("no series for the %s that ended: %v", tc.first, seriesOf(t, m, "agentkourier_binding_condition"))
+			}
+			close(release)
+			eventually(t, 10*time.Second, "the second probe's Ready series", func() bool { return ready() == tc.readyEnd })
+		})
 	}
 }

@@ -22,7 +22,7 @@ func TestRunTellsAnArchivedChannelAndAMissingScopeApartThroughTheFakeSlack(t *te
 	w := newSlackWorld(t, "xoxb-fake-bot")
 	logs := &logBuffer{}
 	w.cfg.Logger = slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	w.cfg.probeEvery, w.cfg.probeTick = 40*time.Millisecond, 10*time.Millisecond
+	w.cfg.probeEvery, w.cfg.probeTick, w.cfg.probeGap = 40*time.Millisecond, 10*time.Millisecond, time.Millisecond
 	w.fake.SetMembers(verifiedChannel, "UFAKEBOT") // the fake's own bot is in the channel; the other Binding's channel is unknown to it
 	r := start(t, w.cfg)
 

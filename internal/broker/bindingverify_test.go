@@ -27,6 +27,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/bindingcheck"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
+	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/secret"
@@ -137,17 +138,12 @@ type probeFunc func(ctx context.Context, binding string) error
 
 func (f probeFunc) CheckAgent(ctx context.Context, binding string) error { return f(ctx, binding) }
 
-// A check that finds nothing wrong is True, and every check is timed.
-func TestAgentCheckerReportsTrueAndObservesTheDuration(t *testing.T) {
-	var observed []time.Duration
-	c := agentChecker{bindings: probeFunc(func(context.Context, string) error { return nil }), timeout: time.Second,
-		observe: func(d time.Duration) { observed = append(observed, d) }}
+// A check that finds nothing wrong is True.
+func TestAgentCheckerReportsTrue(t *testing.T) {
+	c := agentChecker{bindings: probeFunc(func(context.Context, string) error { return nil }), timeout: time.Second}
 	out, err := c.CheckAgent(t.Context(), "sre/oncall")
 	if err != nil || out.Status != bindingcheck.True || out.Reason != bindingcheck.ReasonOK {
 		t.Errorf("CheckAgent = %+v, %v; want True/OK", out, err)
-	}
-	if len(observed) != 1 {
-		t.Errorf("observed %d durations; want 1", len(observed))
 	}
 }
 
@@ -374,8 +370,8 @@ func TestChannelCheckerSaysWhatTheAccessAndTheErrorMean(t *testing.T) {
 			if out.Message == "" && out.Status != bindingcheck.True {
 				t.Error("the outcome has no message")
 			}
-			if strings.Contains(out.Message, "slack:") {
-				t.Errorf("the message %q holds the error's text", out.Message)
+			if strings.Contains(out.Message, "xoxb-") {
+				t.Errorf("the message %q holds a token", out.Message)
 			}
 		})
 	}
@@ -394,15 +390,6 @@ func TestChannelCheckerDeadlines(t *testing.T) {
 	out, err = channelChecker{platform: f, timeout: time.Minute}.CheckChannel(ctx, "C1")
 	if err == nil || out != (bindingcheck.Outcome{}) {
 		t.Errorf("CheckChannel past the Prober's = %+v, %v; want an error and no outcome", out, err)
-	}
-}
-
-// The checker times each check.
-func TestChannelCheckerObservesTheDuration(t *testing.T) {
-	var n int
-	c := channelChecker{platform: &accessFake{access: chat.Access{Member: true}}, timeout: time.Second, observe: func(time.Duration) { n++ }}
-	if _, err := c.CheckChannel(t.Context(), "C1"); err != nil || n != 1 {
-		t.Errorf("CheckChannel = %v and observed %d times; want nil and once", err, n)
 	}
 }
 
@@ -430,6 +417,114 @@ func TestChannelCheckerAgainstTheFakePlatform(t *testing.T) {
 	if out, err := c.CheckChannel(t.Context(), "CIN"); err != nil || out.Status != bindingcheck.False || out.Reason != bindingcheck.ReasonMissingScope {
 		t.Errorf("CheckChannel without the scope = %+v, %v; want False/MissingScope", out, err)
 	}
+}
+
+// The Message of Unknown/ChatUnavailable says which of three it was, with the platform's own words when it answered, through the real
+// Slack client and its Classify: the code of an answer that is an error (no_permission is an answer, not a silence) is in the Message and
+// in the log line, a call that got no answer says so, and no token is in either. A Message that changes between passes is not a
+// transition, so a code that changes adds no line.
+func TestChannelCheckerSaysWhatSlackAnsweredOrThatItDidNotAnswer(t *testing.T) {
+	const bot, app = "xoxb-TESTTOKEN-123456", "xapp-TESTTOKEN-654321"
+	var answer atomic.Value
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		switch a, _ := answer.Load().(string); a {
+		case "hang":
+			<-release
+		case "ratelimit":
+			w.Header().Set("Retry-After", "30")
+			w.WriteHeader(http.StatusTooManyRequests)
+		case "http500":
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"ok":false,"error":"`+a+`"}`)
+		}
+	}))
+	t.Cleanup(func() { close(release); srv.Close() })
+	client := slack.New(slack.Config{BotToken: secret.New(bot), AppToken: secret.New(app), APIURL: srv.URL + "/", Logger: slog.New(slog.DiscardHandler)})
+	c := channelChecker{platform: slack.NewPlatform(client, "ns/conn"), timeout: 300 * time.Millisecond}
+
+	var outs []bindingcheck.Outcome
+	for _, tc := range []struct {
+		answer  string
+		reason  bindingcheck.Reason
+		status  bindingcheck.Status
+		message string // a substring
+	}{
+		{"no_permission", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, "answered the read with an error: slack conversations.info: no_permission"},
+		{"access_denied", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, "answered the read with an error: slack conversations.info: access_denied"},
+		{"http500", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, "answered the read with an error"},
+		{"ratelimit", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, "rate-limited"},
+		{"hang", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, "did not answer the read"},
+		{"invalid_auth", bindingcheck.ReasonChatCredentialsRejected, bindingcheck.False, "rejected the bot's token"},
+		{"channel_not_found", bindingcheck.ReasonChannelNotFound, bindingcheck.False, "does not exist"},
+	} {
+		answer.Store(tc.answer)
+		out, err := c.CheckChannel(t.Context(), "C1")
+		if err != nil || out.Status != tc.status || out.Reason != tc.reason || !strings.Contains(out.Message, tc.message) {
+			t.Errorf("%s: CheckChannel = %+v, %v; want %s/%s with %q in the message", tc.answer, out, err, tc.status, tc.reason, tc.message)
+		}
+		for _, token := range []string{bot, app, "TESTTOKEN"} {
+			if strings.Contains(out.Message, token) {
+				t.Errorf("%s: the message %q holds a token", tc.answer, out.Message)
+			}
+		}
+		outs = append(outs, out)
+	}
+
+	// The code is in the log line of the transition, and no token is.
+	line := logLines(func(l bindingLog) {
+		l.transition(bindingcheck.Transition{Binding: "sre/oncall", Old: bindingcheck.Condition{Type: bindingcheck.ChannelJoined, Status: bindingcheck.Unknown, Reason: bindingcheck.ReasonPending},
+			New: bindingcheck.Condition{Type: bindingcheck.ChannelJoined, Status: outs[0].Status, Reason: outs[0].Reason, Message: outs[0].Message}})
+	})
+	if !strings.Contains(line, "no_permission") || !strings.Contains(line, "level=INFO") || strings.Contains(line, "TESTTOKEN") {
+		t.Errorf("log line %q; want an INFO with the code no_permission and no token", line)
+	}
+
+	// no_permission, then access_denied: the Message changes, the status and reason do not, so State reports no transition and nothing is logged.
+	st := bindingcheck.NewState()
+	now := time.Now()
+	st.Set("sre/oncall", now, bindingcheck.Condition{Type: bindingcheck.ChannelJoined, Status: outs[0].Status, Reason: outs[0].Reason, Message: outs[0].Message})
+	if trs := st.Set("sre/oncall", now.Add(time.Minute), bindingcheck.Condition{Type: bindingcheck.ChannelJoined, Status: outs[1].Status, Reason: outs[1].Reason, Message: outs[1].Message}); len(trs) != 0 {
+		t.Errorf("a changed code was a transition: %+v", trs)
+	}
+}
+
+// A request that got no answer says why in the Message, without the request's URL: a name that does not resolve, a refused connection,
+// a certificate that is not trusted and a scheme that is not http read differently. The wrong scheme is tried against the real client.
+func TestAgentCheckerSaysWhyTheBackendDidNotAnswerWithoutItsURL(t *testing.T) {
+	const secretURL = "http://backend.internal/agents/ns/name?token=SECRET-IN-URL"
+	for _, tc := range []struct {
+		name  string
+		cause error
+		want  string
+	}{
+		{"DNS", &net.DNSError{Err: "no such host", Name: "backend.internal", IsNotFound: true}, "no such host"},
+		{"refused", &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connect: connection refused")}, "connection refused"},
+		{"TLS", &tls.CertificateVerificationError{Err: x509.UnknownAuthorityError{}}, "unknown authority"},
+		{"scheme", errors.New(`unsupported protocol scheme "ftp"`), "unsupported protocol scheme"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, ok := classifyAgent(fmt.Errorf("binding sre/oncall: %w", &url.Error{Op: "Get", URL: secretURL, Err: tc.cause}))
+			if !ok || out.Reason != bindingcheck.ReasonUnreachable || out.Status != bindingcheck.False || !strings.Contains(out.Message, tc.want) {
+				t.Fatalf("classifyAgent = %+v, %t; want False/Unreachable with %q", out, ok, tc.want)
+			}
+			if strings.Contains(out.Message, "SECRET-IN-URL") || strings.Contains(out.Message, "/agents/") {
+				t.Errorf("the message %q holds the request's URL", out.Message)
+			}
+		})
+	}
+	// A scheme that is not http never reaches the HTTP client: the API's validation refuses the URL at load, and the dialect refuses it
+	// again before it dials. The probe then has an error it cannot place, which is a probe that could not tell, not Unreachable.
+	t.Run("a scheme the dialect refuses before it dials", func(t *testing.T) {
+		f := newFixture(t)
+		f.snaps.p.Store(snapshot(t, "ftp://127.0.0.1:1/", v1alpha1.DialectKagentV1, time.Hour))
+		out, err := agentChecker{bindings: f.b, timeout: 5 * time.Second}.CheckAgent(t.Context(), "sre/oncall")
+		if err == nil || out != (bindingcheck.Outcome{}) {
+			t.Errorf("CheckAgent = %+v, %v; want an error and no outcome", out, err)
+		}
+	})
 }
 
 // tokens is the baseline of the credentials tests: what the connection is using.
@@ -473,15 +568,17 @@ func TestChannelCheckerComparesTheChatCredentialsByValueWithoutCallingThePlatfor
 		name    string
 		store   *secretStore
 		change  string // a substring of the message, or "" for no change
+		reason  bindingcheck.Reason
 		changed bool
 	}{
-		{"the bot token rotated", &secretStore{vals: map[string]string{"botToken": canary, "appToken": app}}, "changed after the connection started", true},
-		{"the app token rotated", &secretStore{vals: map[string]string{"botToken": bot, "appToken": canary}}, "changed after the connection started", true},
-		{"the same tokens", &secretStore{vals: same()}, "", false},
-		{"the Secret is gone", &secretStore{missing: true}, "gone or empty", true},
-		{"a key is missing", &secretStore{vals: map[string]string{"botToken": bot}}, "gone or empty", true},
-		{"a key is empty", &secretStore{vals: map[string]string{"botToken": bot, "appToken": ""}}, "gone or empty", true},
-		{"a read that fails for another reason cannot tell", &secretStore{vals: same(), err: errors.New("cache not synced " + canary)}, "", false},
+		{"the bot token rotated", &secretStore{vals: map[string]string{"botToken": canary, "appToken": app}}, "changed after the connection started", bindingcheck.ReasonChatCredentialsChanged, true},
+		{"the app token rotated", &secretStore{vals: map[string]string{"botToken": bot, "appToken": canary}}, "changed after the connection started", bindingcheck.ReasonChatCredentialsChanged, true},
+		{"the same tokens", &secretStore{vals: same()}, "", "", false},
+		{"the Secret is of a type that is never read", &secretStore{err: fmt.Errorf("secret ns/n key %q of type %q: %w", "botToken", "kubernetes.io/tls", secret.ErrUnsupportedType)}, "never read", bindingcheck.ReasonChatCredentialsUnusable, true},
+		{"the Secret is gone", &secretStore{missing: true}, "gone or empty", bindingcheck.ReasonChatCredentialsUnusable, true},
+		{"a key is missing", &secretStore{vals: map[string]string{"botToken": bot}}, "gone or empty", bindingcheck.ReasonChatCredentialsUnusable, true},
+		{"a key is empty", &secretStore{vals: map[string]string{"botToken": bot, "appToken": ""}}, "gone or empty", bindingcheck.ReasonChatCredentialsUnusable, true},
+		{"a read that fails for another reason cannot tell", &secretStore{vals: same(), err: errors.New("cache not synced " + canary)}, "", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := &accessFake{access: chat.Access{Member: true}}
@@ -504,8 +601,8 @@ func TestChannelCheckerComparesTheChatCredentialsByValueWithoutCallingThePlatfor
 				}
 				return
 			}
-			if out.Status != bindingcheck.Unknown || out.Reason != bindingcheck.ReasonChatCredentialsChanged || f.count() != 0 || !strings.Contains(out.Message, tc.change) {
-				t.Errorf("CheckChannel = %+v after %d platform calls; want Unknown/ChatCredentialsChanged, a message with %q, and none", out, f.count(), tc.change)
+			if out.Status != bindingcheck.Unknown || out.Reason != tc.reason || f.count() != 0 || !strings.Contains(out.Message, tc.change) {
+				t.Errorf("CheckChannel = %+v after %d platform calls; want Unknown/%s, a message with %q, and none", out, f.count(), tc.reason, tc.change)
 			}
 		})
 	}
@@ -636,7 +733,7 @@ func TestTheBrokersProberProbesTheServedConnectionAndPrunesWhatAReloadRemoves(t 
 		Bindings: probeFunc(func(context.Context, string) error { time.Sleep(40 * time.Millisecond); return nil }), Platform: slk, Snaps: current,
 		Revision: func(context.Context) string { return fmt.Sprint(current.p.Load()) },
 		Conn:     Connection{Ref: v1alpha1.ObjectRef{Namespace: "platform", Name: "slack-a"}},
-		Metrics:  m, Log: slog.New(slog.DiscardHandler), Interval: time.Hour, Tick: 5 * time.Millisecond,
+		Metrics:  m, Log: slog.New(slog.DiscardHandler), Interval: time.Hour, Tick: 5 * time.Millisecond, MinRevisionGap: time.Millisecond,
 	}.newProber()
 	runProber(t, p)
 	got := waitSettled(t, p, 2)
@@ -684,6 +781,27 @@ func TestTheBrokersProberProbesTheServedConnectionAndPrunesWhatAReloadRemoves(t 
 	}
 }
 
+// The broker's Prober does not probe every Binding at each change of the revision: with no gap passed in, a revision that changes at
+// every Tick, a Secret written to again and again, gives the first pass and no more inside minRevisionGap.
+func TestTheBrokersProberHoldsRevisionPassesToTheMinimumGap(t *testing.T) {
+	current := &snaps{}
+	current.p.Store(twoConnections(t, "ops/oncall"))
+	var calls, revision atomic.Int64
+	p := verification{
+		Bindings: probeFunc(func(context.Context, string) error { calls.Add(1); return nil }), Platform: &accessFake{access: chat.Access{Member: true}},
+		Snaps: current, Revision: func(context.Context) string { return fmt.Sprint(revision.Add(1)) },
+		Conn:    Connection{Ref: v1alpha1.ObjectRef{Namespace: "platform", Name: "slack-a"}},
+		Metrics: mustMetrics(t, nil), Log: slog.New(slog.DiscardHandler), Interval: time.Hour, Tick: 2 * time.Millisecond,
+	}.newProber()
+	runProber(t, p)
+	waitSettled(t, p, 1)
+	before := revision.Load()
+	eventually(t, 10*time.Second, "the revision did not move 50 times", func() bool { return revision.Load() >= before+50 })
+	if got := calls.Load(); got != 1 {
+		t.Errorf("%d backend probes while the revision changed at every Tick; want 1: the pass for a change waits %s", got, minRevisionGap)
+	}
+}
+
 // A backend that never answers and a chat platform that never answers are cut by the adapters' own bounds, which the verification derives
 // from the Prober's timeout (innerBound): they are reported as what they are, False/Unreachable and Unknown/ChatUnavailable, and not as
 // the Prober's own Unknown/ProbeTimeout, which says nothing of either. Were the adapters given the Prober's timeout itself, the Prober
@@ -727,6 +845,41 @@ func TestAgentCheckerCredentialsReadCutByItsOwnBoundIsNoVerdict(t *testing.T) {
 	}
 }
 
+// A failure that is not a probe's (Targets or Revision panicked or timed out, OnPrune panicked) has no Binding and no condition, and has a
+// line of its own and not "a probe failed" with empty fields; a panic's stack is in the line of either, redacted and cut.
+func TestProbeErrorGivesAFailureWithNoBindingItsOwnLineAndLogsAPanicsStack(t *testing.T) {
+	stack := []byte("goroutine 7 [running]:\nruntime/debug.Stack()\ngithub.com/agentkourier/agent-kourier/internal/broker.listTargets()\n\tfile.go:12 +0x1")
+	panicked := fmt.Errorf("calling Targets: %w", &bindingcheck.PanicError{Value: "boom Bearer abc.def.ghi", Stack: stack})
+
+	out := logLines(func(l bindingLog) { l.probeError(bindingcheck.ProbeError{Err: panicked}) })
+	for _, want := range []string{"level=WARN", "the prober failed", "calling Targets", "stack=", "runtime/debug.Stack()", "listTargets"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log line %q lacks %q", out, want)
+		}
+	}
+	for _, bad := range []string{"a probe failed", "binding=", "condition=", "abc.def.ghi"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("log line %q holds %q", out, bad)
+		}
+	}
+
+	out = logLines(func(l bindingLog) {
+		l.probeError(bindingcheck.ProbeError{Condition: bindingcheck.ChannelJoined, Target: bindingcheck.Target{Binding: "sre/oncall"}, Err: panicked})
+	})
+	for _, want := range []string{"a probe failed", "binding=sre/oncall", "condition=ChannelJoined", "stack="} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log line %q lacks %q", out, want)
+		}
+	}
+
+	out = logLines(func(l bindingLog) {
+		l.probeError(bindingcheck.ProbeError{Err: errors.New("revision did not answer within 10s")})
+	})
+	if !strings.Contains(out, "the prober failed") || strings.Contains(out, "stack=") {
+		t.Errorf("log line %q; want the prober's own line and no stack for an error that is no panic", out)
+	}
+}
+
 // logLines runs fn with a logger that keeps every level and returns what it wrote.
 func logLines(fn func(bindingLog)) string {
 	var buf logBuffer
@@ -763,6 +916,9 @@ func TestTransitionLogsFalseAsWarnAndRecoveryAsInfoAndNothingElse(t *testing.T) 
 		{"unknown to another unknown", tr(bindingcheck.Unknown, bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, bindingcheck.ReasonProbeTimeout), "level=INFO"},
 		{"chat credentials changed", tr(bindingcheck.True, bindingcheck.ReasonOK, bindingcheck.Unknown, bindingcheck.ReasonChatCredentialsChanged), "level=WARN"},
 		{"a first result that is chat credentials changed", tr(bindingcheck.Unknown, bindingcheck.ReasonPending, bindingcheck.Unknown, bindingcheck.ReasonChatCredentialsChanged), "level=WARN"},
+		{"changed to unusable", tr(bindingcheck.Unknown, bindingcheck.ReasonChatCredentialsChanged, bindingcheck.Unknown, bindingcheck.ReasonChatCredentialsUnusable), "level=WARN"},
+		{"unusable to changed", tr(bindingcheck.Unknown, bindingcheck.ReasonChatCredentialsUnusable, bindingcheck.Unknown, bindingcheck.ReasonChatCredentialsChanged), "level=WARN"},
+		{"true to unusable", tr(bindingcheck.True, bindingcheck.ReasonOK, bindingcheck.Unknown, bindingcheck.ReasonChatCredentialsUnusable), "level=WARN"},
 		{"true to a probe that could not tell", tr(bindingcheck.True, bindingcheck.ReasonOK, bindingcheck.Unknown, bindingcheck.ReasonProbeFailed), ""},
 		{"a first result that is a probe that could not tell", tr(bindingcheck.Unknown, bindingcheck.ReasonPending, bindingcheck.Unknown, bindingcheck.ReasonProbeFailed), ""},
 		{"a condition seen for the first time", tr("", "", bindingcheck.Unknown, bindingcheck.ReasonPending), ""},

@@ -73,9 +73,9 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 		takeovers: prometheus.NewCounter(prometheus.CounterOpts{Name: "agentkourier_leader_takeovers_total",
 			Help: "Times this replica took the leadership: it won the lease and was given the next epoch."}),
 		bindingCond: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_binding_condition",
-			Help: "1 for the status a Binding's condition has (true, false or unknown) and 0 for the other two, by Binding and condition. Only the leader reports it, and a Binding has no series until its first probe ends."}, []string{"binding", "condition", "status"}),
+			Help: "1 for the status a Binding's condition has (true, false or unknown) and 0 for the other two, by Binding and condition. Only the leader reports it. A condition has series once its first probe has ended; Ready has them once every first probe of the Binding has ended or one found it not ready."}, []string{"binding", "condition", "status"}),
 		bindingReady: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_binding_ready",
-			Help: "1 while every condition of the Binding is true, 0 while one is false or not yet known, by Binding. Only the leader reports it, and a Binding has no series until its first probe ends."}, []string{"binding"}),
+			Help: "1 while every condition of the Binding is true, 0 while one is false or not yet known, by Binding. Only the leader reports it. A Binding has the series once every first probe of it has ended or one found it not ready."}, []string{"binding"}),
 		probeDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "agentkourier_binding_probe_duration_seconds",
 			Help: "How long a probe of a Binding took, by condition: the time the checker took, whatever it found.", Buckets: prometheus.DefBuckets}, []string{"condition"}),
 	}
@@ -195,28 +195,25 @@ func (m *Metrics) Leader(leading bool) {
 // Takeover counts a leadership taken: the lease won and the epoch bumped.
 func (m *Metrics) Takeover() { m.takeovers.Inc() }
 
-// conditionLabel is t if it is one of the condition types a Binding has, and "other" for anything else, so that no checker
-// can grow the series.
-func conditionLabel(t bindingcheck.ConditionType) string {
-	switch t {
-	case bindingcheck.BackendReachable, bindingcheck.ChannelJoined, bindingcheck.ApproversReadable, bindingcheck.Ready:
-		return string(t)
-	}
-	return otherLabel
-}
-
 // BindingCondition records a condition of a Binding that changed: bindingcheck.Options.OnTransition. The condition's series
 // say its new status (1 for it, 0 for the other two), and a change of Ready also sets agentkourier_binding_ready, which is 1
 // for True and 0 for False and Unknown. The reason is not a label: a reason that flaps would make series come and go, and
 // it is in the log line of the transition.
+//
+// A Ready that is still Pending (no condition is False, and one has not ended its first probe) gets no series of its own and
+// no ready gauge: the Binding is not known to be unready, only not yet known, and a rule on == 0 would fire after every restart for
+// the length of the slower probe. Its other conditions' series are exported as they end. Ready never becomes Pending again, so a
+// Binding's Ready series come with its first result that is False or its last first probe.
 func (m *Metrics) BindingCondition(tr bindingcheck.Transition) {
-	cond := conditionLabel(tr.New.Type)
+	if tr.New.Type == bindingcheck.Ready && strings.HasSuffix(string(tr.New.Reason), ":"+string(bindingcheck.ReasonPending)) {
+		return
+	}
 	for _, s := range [...]bindingcheck.Status{bindingcheck.True, bindingcheck.False, bindingcheck.Unknown} {
 		v := 0.0
 		if tr.New.Status == s {
 			v = 1
 		}
-		m.bindingCond.WithLabelValues(tr.Binding, cond, strings.ToLower(string(s))).Set(v)
+		m.bindingCond.WithLabelValues(tr.Binding, string(tr.New.Type), strings.ToLower(string(s))).Set(v)
 	}
 	if tr.New.Type == bindingcheck.Ready {
 		v := 0.0
@@ -238,7 +235,7 @@ func (m *Metrics) BindingsPruned(names []string) {
 
 // BindingProbed observes how long a probe of a condition took.
 func (m *Metrics) BindingProbed(cond bindingcheck.ConditionType, d time.Duration) {
-	m.probeDuration.WithLabelValues(conditionLabel(cond)).Observe(d.Seconds())
+	m.probeDuration.WithLabelValues(string(cond)).Observe(d.Seconds())
 }
 
 // Handler serves the registry in the Prometheus text format.

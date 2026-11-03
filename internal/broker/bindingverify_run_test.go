@@ -72,7 +72,7 @@ func verifyWorld(t *testing.T) (RunConfig, *accessSlack, *logBuffer) {
 	c.newSlack = func(slack.Config) slackAPI { return slk }
 	logs := &logBuffer{}
 	c.Logger = slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	c.probeEvery, c.probeTick = 40*time.Millisecond, 10*time.Millisecond
+	c.probeEvery, c.probeTick, c.probeGap = 40*time.Millisecond, 10*time.Millisecond, time.Millisecond
 	return c, slk, logs
 }
 
@@ -233,6 +233,14 @@ func TestRunTellsOfChatTokensThatChangedAndNotOfAWriteThatLeavesThemAlone(t *tes
 	if after := slk.calls.Load(); after != calls {
 		t.Errorf("Slack was asked %d more times after the tokens changed; want none", after-calls)
 	}
+
+	// The Secret deleted: a restart would now fail, which is a reason of its own and a second line.
+	if err := secrets.Delete(t.Context(), "slack-main", metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, 10*time.Second, "the unusable credentials were not told of", func() bool {
+		return countOf(logs.String(), "level=WARN", "binding="+verifiedBinding, "reason=ChatCredentialsUnusable") == 1
+	})
 
 	out := logs.String()
 	if n := countOf(out, "level=WARN", "a condition is unknown", "binding="+verifiedBinding, "reason=ChatCredentialsChanged"); n != 1 {
