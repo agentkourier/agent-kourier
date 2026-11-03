@@ -77,6 +77,8 @@ ending in `.yaml`, and ask them to list your namespace in `rbac.secretNamespaces
 Mention the bot in the channel. A thread opens and the agent answers in it. If nothing happens, see
 [Troubleshoot an install](troubleshoot.md#the-mention-gets-no-reply-and-the-log-shows-no-session-turn-started).
 
+The leader also checks the Binding by itself, within about 30 seconds of the reload or when a pass already running ends: `agentkourier_binding_ready{binding="<namespace>/<name>"}` is 1 when the agent's card can be fetched and the bot is in the channel. If it is 0, see [A Binding is not ready](troubleshoot.md#a-binding-is-not-ready).
+
 One channel takes one Binding. A second Binding for the same channel on the same connection makes the whole
 config fail to load: a reload keeps the last good config, and a fresh start fails. The error names the Binding that
 already holds the channel.

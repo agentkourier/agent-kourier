@@ -133,7 +133,7 @@ How Bedrock works here, from kagent 1.0.0-alpha5's source and CRDs, and what the
 | `reactions.add`, `reactions.remove` | `reactions:write` |
 | `assistant.threads.setStatus` | `assistant:write`, the scope with which we have seen the status of an alert thread render while an agent works (slack-go says `chat:write` may also do, unverified) |
 | `conversations.history`, `conversations.replies` | `channels:history`, `groups:history` |
-| `conversations.members` | `channels:read`, `groups:read` |
+| `conversations.members`, `conversations.info` | `channels:read`, `groups:read` |
 | `usergroups.users.list` | `usergroups:read` when a Binding sets `interactions.approverGroups` |
 | events `app_mention`, `message.channels`, `message.groups` | `app_mentions:read`, `channels:history`, `groups:history` |
 | Socket Mode | the app-level token, `connections:write` |

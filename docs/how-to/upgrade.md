@@ -70,6 +70,14 @@ until the old pods have terminated, then upgrade again with `replicaCount` resto
 if `podDisruptionBudget` is enabled, switch it off or to `maxUnavailable` before scaling to zero (see the chart's
 values).
 
+## Upgrade to the release that verifies Bindings
+
+This release has the leader check each Binding and report the result. No Binding fails to load for it, and it changes nothing about turns or `/readyz`.
+
+- **New metrics and log lines.** See [Binding verification](../reference/metrics.md#binding-verification). To alert on it, see [Alert on what matters](export-telemetry.md#alert-on-what-matters).
+- **New calls.** On each pass, the leader fetches each Binding's agent card and calls Slack's `conversations.info` for its channel. The scopes are `channels:read` and `groups:read`, which the manifest already asks for. An app without them reads `False/MissingScope`, and nothing else changes.
+- **New log lines on the first start.** A Binding that was already broken logs a WARN. See [A Binding is not ready](troubleshoot.md#a-binding-is-not-ready).
+
 ## Upgrade to the release with step cards in alert threads
 
 This release shows an alert thread's tool calls as step cards, as a chat thread does. No Binding fails to load for it.

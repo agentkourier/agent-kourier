@@ -250,7 +250,8 @@ func tapHandOffAlive() bool {
 
 // A pause the intake cannot take up is in the tap's hands, retrying, when the shutdown comes. The tap is
 // stopped first in the interactions' step, so that the intake is handed no more and nothing is left
-// retrying, then the worker and the rest in the reverse order of their start, and no goroutine is left
+// retrying, then the worker and the rest in the reverse order of their start (the verification of the Bindings, started before the
+// interactions, among the loops that stop after them), and no goroutine is left
 // (the package's goleak).
 func TestRunStopsTheTapFirstWithAPauseInFlight(t *testing.T) {
 	w := askWorld(t)
@@ -280,7 +281,7 @@ func TestRunStopsTheTapFirstWithAPauseInFlight(t *testing.T) {
 	if !aliveAtStep.Load() {
 		t.Error("no hand-off was in flight when the interactions' step began (the control: the scan finds it)")
 	}
-	if want := "tap,worker,sweeper,replacer,backstop,retention,store-retention,trigger-digest,trigger-threads"; notes.got() != want {
+	if want := "tap,worker,sweeper,replacer,backstop,retention,binding-verification,store-retention,trigger-digest,trigger-threads"; notes.got() != want {
 		t.Errorf("the interactions stopped as %s, want %s", notes.got(), want)
 	}
 	if tapHandOffAlive() {
