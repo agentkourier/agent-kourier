@@ -213,6 +213,45 @@ func TestSlackSetsUpUsersAndMembers(t *testing.T) {
 	}
 }
 
+// The control client archives a channel and takes a method's scope away, and puts both back, as conversations.info shows.
+func TestSlackArchivesAChannelAndTakesAScopeAway(t *testing.T) {
+	f, ctx := newFixture(t), t.Context()
+	if err := f.sl.SetMembers(ctx, "C1", "UFAKEBOT"); err != nil {
+		t.Fatal(err)
+	}
+	info := func() (*slack.Channel, error) {
+		return f.bot.GetConversationInfo(&slack.GetConversationInfoInput{ChannelID: "C1"})
+	}
+	if err := f.sl.SetArchived(ctx, "C1", true); err != nil {
+		t.Fatal(err)
+	}
+	if ch, err := info(); err != nil || !ch.IsArchived || !ch.IsMember {
+		t.Errorf("conversations.info = %+v, %v; want an archived channel the bot is in", ch, err)
+	}
+	if err := f.sl.SetArchived(ctx, "C1", false); err != nil {
+		t.Fatal(err)
+	}
+	if ch, err := info(); err != nil || ch.IsArchived {
+		t.Errorf("conversations.info = %+v, %v; want the channel not archived", ch, err)
+	}
+	if err := f.sl.SetMissingScope(ctx, "conversations.info", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := info(); err == nil || err.Error() != "missing_scope" {
+		t.Errorf("conversations.info without the scope = %v; want missing_scope", err)
+	}
+	if err := f.sl.SetMissingScope(ctx, "conversations.info", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := info(); err != nil {
+		t.Errorf("conversations.info with the scope back = %v", err)
+	}
+	var se *StatusError
+	if err := f.sl.SetArchived(ctx, "", true); !errors.As(err, &se) || se.Status != http.StatusBadRequest {
+		t.Errorf("SetArchived with no channel = %v; want a 400", err)
+	}
+}
+
 func TestSlackShowsAStreamingMessage(t *testing.T) {
 	f, ctx := newFixture(t), t.Context()
 	root := f.post(t, slack.MsgOptionText("question", false))
