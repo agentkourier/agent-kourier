@@ -108,7 +108,7 @@ type Options struct {
 	// the gap is not lost: it waits, and the pass runs at the first Tick after the gap, for whatever the Revision and the Targets are
 	// then, so many changes in the gap give one pass, which sees the last. A new Binding's conditions are Pending until that pass. It
 	// does not hold back the first pass or a pass the Interval calls for, and it does not hold back pruning, which happens at every
-	// Tick (a Binding that leaves Targets is no change that needs a pass). It exists so that a Revision that moves for no cause the
+	// Tick, and so waits for a pass that is running to end (a Binding that leaves Targets is no change that needs a pass). It exists so that a Revision that moves for no cause the
 	// probes can see, such as a Secret written to again and again, cannot make the Prober probe every Binding at every Tick. Zero
 	// means no gap.
 	MinRevisionGap time.Duration

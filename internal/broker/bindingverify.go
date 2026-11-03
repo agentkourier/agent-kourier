@@ -60,8 +60,9 @@ var _ bindingcheck.AgentChecker = agentChecker{}
 // CheckAgent implements bindingcheck.AgentChecker. A check the Prober's context ended is no verdict on the backend and comes
 // back as an error, as does an error classifyAgent cannot place; the deadline of the checker's own bound is a backend that does
 // not answer, Unreachable. (The Secrets are read from a cache that ignores its context, so a bound cannot cut a credentials read short;
-// a token source that mints a token over the network would have to revisit that.) A Binding the config no longer has (a reload removed it during the pass) is no result either: the
-// error says so and the Prober prunes the Binding at its next Tick.
+// a token source that mints a token over the network would have to revisit that.) A Binding the config no longer has (a reload removed it
+// during the pass) comes back as an error too, so until the pass ends it reads Unknown/ProbeFailed with no line of its own (probeError), and
+// the Prober prunes it at the first Tick after the pass.
 func (a agentChecker) CheckAgent(ctx context.Context, binding string) (bindingcheck.Outcome, error) {
 	cctx, cancel := context.WithTimeout(ctx, a.timeout)
 	defer cancel()
@@ -359,7 +360,7 @@ func (l bindingLog) transition(tr bindingcheck.Transition) {
 
 // probeError is bindingcheck.Options.OnProbeError: the line for a probe whose checker could not tell, which leaves the condition
 // Unknown/ProbeFailed. The error is the checker's own and may quote a response, so it goes in as telemetry.LogText. A Binding the
-// config no longer has is not a failure and has no line: the Prober prunes it at its next Tick. A failure with no Binding and no
+// config no longer has is not a failure and has no line: the Prober prunes it at the first Tick after the pass. A failure with no Binding and no
 // condition is not a probe's but the Prober's own (Targets, Revision or OnPrune failed or panicked), and has a line of its own. A
 // panic's stack is logged too, cut and redacted as LogText does.
 func (l bindingLog) probeError(pe bindingcheck.ProbeError) {
