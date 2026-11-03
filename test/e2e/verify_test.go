@@ -32,7 +32,7 @@ func (s *scenario) holds(ctx context.Context, v verifySeries) (bool, error) {
 	return got == v.want, err
 }
 
-// TestBV_BindingsThatCannotBeServedAreNotReadyAndTheLeaderSaysWhy: the leader probes each Binding of its connection and shows the result
+// TestVerify_BindingsThatCannotBeServedAreNotReadyAndTheLeaderSaysWhy: the leader probes each Binding of its connection and shows the result
 // as metrics and log lines, while /readyz stays the process's. Four Bindings, each in a channel of its own: one that can be served, one
 // whose agent the stub does not have (the card is a 404: BackendReachable is false, the channel is joined), one whose channel the bot is
 // not in, and one whose channel is archived (ChannelJoined is false, the agent answers). The probes post nothing: no message lands in
@@ -43,7 +43,7 @@ func (s *scenario) holds(ctx context.Context, v verifySeries) (bool, error) {
 // The fast tier only. The Bindings are loaded on the full tier too (lib.sh's deploy_agentkourier gives it the fast tier's config), but the
 // assertions rest on what the stub agent answers (a 404 card for an agent it does not have; kagent's front door answers 403), which the
 // full tier does not run.
-func TestBV_BindingsThatCannotBeServedAreNotReadyAndTheLeaderSaysWhy(t *testing.T) {
+func TestVerify_BindingsThatCannotBeServedAreNotReadyAndTheLeaderSaysWhy(t *testing.T) {
 	s := newScenario(t)
 	if s.env.Tier != "fast" {
 		t.Skipf("the assertions rest on the stub agent's answers, such as a 404 card for an agent it does not have; the %s tier has no stub", s.env.Tier)
@@ -74,6 +74,9 @@ func TestBV_BindingsThatCannotBeServedAreNotReadyAndTheLeaderSaysWhy(t *testing.
 	ready := func(binding string, want float64) verifySeries {
 		return verifySeries{"agentkourier_binding_ready", map[string]string{"binding": binding}, want}
 	}
+	// One deadline for all the waits, so that a verification that is broken ends the case in two minutes and not in twelve times that.
+	waits, stopWaiting := context.WithTimeout(s.ctx, 2*time.Minute)
+	defer stopWaiting()
 	for _, v := range []verifySeries{
 		ready("agent-kourier/fast-verify-ready", 1),
 		cond("agent-kourier/fast-verify-ready", "BackendReachable", "true", 1),
@@ -92,7 +95,7 @@ func TestBV_BindingsThatCannotBeServedAreNotReadyAndTheLeaderSaysWhy(t *testing.
 		cond("agent-kourier/fast-verify-archived", "BackendReachable", "true", 1),
 	} {
 		desc := v.name + " " + v.labels["binding"] + " " + v.labels["condition"] + " " + v.labels["status"]
-		if err := Wait(s.ctx, 2*time.Minute, desc, func(ctx context.Context) (bool, error) { return s.holds(ctx, v) }); err != nil {
+		if err := Wait(waits, 2*time.Minute, desc, func(ctx context.Context) (bool, error) { return s.holds(ctx, v) }); err != nil {
 			t.Error(err)
 		}
 	}

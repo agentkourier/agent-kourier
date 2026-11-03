@@ -285,9 +285,12 @@ func TestTheA2AFilesAreForTheFastTierOnly(t *testing.T) {
 	}
 }
 
-// TestTheRunnerJobRunsTheA2AContextTest: the Job runs the tests its -test.run pattern selects, and a test whose name matches none of its
-// alternatives is silently never run. The context test of the a2a dialect is named TestA2A_..., apart from the S-scenarios.
-func TestTheRunnerJobRunsTheA2AContextTest(t *testing.T) {
+// TestTheRunnerJobRunsEveryE2ETest: the Job runs the tests its -test.run pattern selects, and a test whose name matches none of its
+// alternatives is silently never run (a run with E2E_RUN, which replaces the pattern, still runs it, so it can pass alone and be
+// missed by the Job). Every test function of the e2e-tagged files of test/e2e, TestMain apart, must match the pattern, so a family
+// of tests added without its alternative fails here; and the families are named once, so that dropping an alternative whose tests
+// are all gone from the files is caught too.
+func TestTheRunnerJobRunsEveryE2ETest(t *testing.T) {
 	var job batchv1.Job
 	load(t, "../../hack/kind/e2e/runner.yaml", "Job", &job)
 	var pattern string
@@ -300,7 +303,35 @@ func TestTheRunnerJobRunsTheA2AContextTest(t *testing.T) {
 	if err != nil || pattern == "" {
 		t.Fatalf("the Job's -test.run pattern is %q (%v); want a regular expression", pattern, err)
 	}
-	for _, name := range []string{"TestA2A_APlainPodThatRestartedAnswersAThreadFromAFreshContext", "TestS1_AReplyStreamsIntoANewThreadOverTheA2ADialect", "TestS19_AnApprovalRunsTheToolOverTheA2ADialect", "TestS19_AContractOnlyAgentsApprovalRunsTheToolOverTheA2ADialect"} {
+	files, err := filepath.Glob("../e2e/*_test.go")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no e2e test files: %v", err)
+	}
+	funcName := regexp.MustCompile(`(?m)^func (Test\w+)\(`)
+	seen := 0
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(string(raw), "//go:build e2e") { // the others are unit tests of the harness, which make test runs
+			continue
+		}
+		for _, m := range funcName.FindAllStringSubmatch(string(raw), -1) {
+			if m[1] == "TestMain" {
+				continue
+			}
+			seen++
+			if !re.MatchString(m[1]) {
+				t.Errorf("the Job's pattern %q does not select %s (%s), so the Job would never run it", pattern, m[1], filepath.Base(f))
+			}
+		}
+	}
+	if seen < 20 {
+		t.Errorf("found %d e2e tests; the scan is not looking at them", seen)
+	}
+	// Each family the files hold has a test the pattern selects, named here: a family that is dropped from the pattern fails even if the scan misses it.
+	for _, name := range []string{"TestSmoke", "TestFault_X", "TestS1_X", "TestAX_X", "TestA2A_APlainPodThatRestartedAnswersAThreadFromAFreshContext", "TestVerify_BindingsThatCannotBeServedAreNotReadyAndTheLeaderSaysWhy"} {
 		if !re.MatchString(name) {
 			t.Errorf("the Job's pattern %q does not select %s, so it would never run", pattern, name)
 		}
