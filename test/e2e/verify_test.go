@@ -32,18 +32,21 @@ func (s *scenario) holds(ctx context.Context, v verifySeries) (bool, error) {
 	return got == v.want, err
 }
 
-// TestBV_BindingsThatCannotBeServedAreNotReadyAndTheLeaderSaysWhy: the leader probes each Binding of its connection without sending the agent
-// a message or posting, and shows the result as metrics and log lines, while /readyz stays the process's. Four Bindings, each in a
-// channel of its own: one that can be served, one whose agent the stub does not have (the card is a 404: BackendReachable is false, the
-// channel is joined), one whose channel the bot is not in, and one whose channel is archived (ChannelJoined is false, the agent
-// answers). A probe is made when Agent Kourier starts, so the scenario sets up the fake Slack and then restarts it, as the next probe
-// is five minutes off.
+// TestBV_BindingsThatCannotBeServedAreNotReadyAndTheLeaderSaysWhy: the leader probes each Binding of its connection and shows the result
+// as metrics and log lines, while /readyz stays the process's. Four Bindings, each in a channel of its own: one that can be served, one
+// whose agent the stub does not have (the card is a 404: BackendReachable is false, the channel is joined), one whose channel the bot is
+// not in, and one whose channel is archived (ChannelJoined is false, the agent answers). The probes post nothing: no message lands in
+// any of the four channels (that they run no turn and send the agent no message is asserted by the broker's own tests, not here). A
+// probe is made when Agent Kourier starts, so the scenario sets up the fake Slack and then restarts it, as the next probe is five
+// minutes off.
 //
-// The fast tier only: the full tier's config has none of these Bindings.
+// The fast tier only. The Bindings are loaded on the full tier too (lib.sh's deploy_agentkourier gives it the fast tier's config), but the
+// assertions rest on what the stub agent answers (a 404 card for an agent it does not have; kagent's front door answers 403), which the
+// full tier does not run.
 func TestBV_BindingsThatCannotBeServedAreNotReadyAndTheLeaderSaysWhy(t *testing.T) {
 	s := newScenario(t)
 	if s.env.Tier != "fast" {
-		t.Skipf("the verification Bindings are the fast tier's; the %s tier has none", s.env.Tier)
+		t.Skipf("the assertions rest on the stub agent's answers, such as a 404 card for an agent it does not have; the %s tier has no stub", s.env.Tier)
 	}
 	for channel, members := range map[string][]string{
 		ChannelVerifyReady: {fakeBot}, ChannelVerifyNoAgent: {fakeBot}, ChannelVerifyNotJoined: {"UVFYOTHER"}, ChannelVerifyArchived: {fakeBot},
@@ -107,6 +110,13 @@ func TestBV_BindingsThatCannotBeServedAreNotReadyAndTheLeaderSaysWhy(t *testing.
 	}
 	if n := countLines(logs, `"binding":"agent-kourier/fast-verify-ready"`, `"msg":"binding verification: a condition is false"`); n != 0 {
 		t.Errorf("%d log lines that the Binding that can be served is false; want none", n)
+	}
+
+	// The probes only read: nothing was posted to any of the channels.
+	for _, channel := range []string{ChannelVerifyReady, ChannelVerifyNoAgent, ChannelVerifyNotJoined, ChannelVerifyArchived} {
+		if msgs, err := s.slack.Messages(s.ctx, channel); err != nil || len(msgs) != 0 {
+			t.Errorf("%d messages in %s (%v); want none: a probe posts nothing", len(msgs), channel, err)
+		}
 	}
 
 	// A Binding that is not ready changes nothing about readiness: the process is as ready as before.
