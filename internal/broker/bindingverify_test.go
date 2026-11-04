@@ -267,8 +267,8 @@ func TestAgentCheckerAgainstARealBackend(t *testing.T) {
 		t.Cleanup(srv.Close)
 		f.snaps.p.Store(snapshot(t, srv.URL, v1alpha1.DialectKagentV1, time.Hour))
 		out, err := agentChecker{bindings: f.b, timeout: 5 * time.Second}.CheckAgent(t.Context(), "sre/oncall")
-		if err != nil || out.Status != bindingcheck.False || out.Reason != bindingcheck.ReasonUnreachable || !strings.Contains(out.Message, "certificate") {
-			t.Errorf("CheckAgent = %+v, %v; want False/Unreachable and a Message that names the certificate", out, err)
+		if err != nil || out.Status != bindingcheck.False || out.Reason != bindingcheck.ReasonUnreachable || !strings.Contains(out.Cause, "certificate") || strings.Contains(out.Message, "certificate") {
+			t.Errorf("CheckAgent = %+v, %v; want False/Unreachable, the certificate in the Cause for the log and not in the Message", out, err)
 		}
 	})
 	t.Run("TLS spoken to a plain server", func(t *testing.T) {
@@ -470,24 +470,28 @@ func TestChannelCheckerReportsTheCauseOfAFailedReadThroughTheRealSlackClient(t *
 		answer  string
 		reason  bindingcheck.Reason
 		status  bindingcheck.Status
-		message string // a substring
+		message string // a substring of the Message, which reaches the status
+		cause   string // a substring of the Cause, which is for the log
 	}{
-		{"no_permission", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, "read failed: slack conversations.info: no_permission"},
-		{"access_denied", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, "read failed: slack conversations.info: access_denied"},
-		{"http500", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, "read failed"},
-		{"ratelimit", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, "rate-limited"},
-		{"hang", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, "did not answer the read in time"},
-		{"invalid_auth", bindingcheck.ReasonChatCredentialsRejected, bindingcheck.False, "rejected the bot's token"},
-		{"channel_not_found", bindingcheck.ReasonChannelNotFound, bindingcheck.False, "does not exist"},
+		{"no_permission", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, msgChatReadFailed, "slack conversations.info: no_permission"},
+		{"access_denied", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, msgChatReadFailed, "slack conversations.info: access_denied"},
+		{"http500", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, "read failed", ""},
+		{"ratelimit", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, "rate-limited", ""},
+		{"hang", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, "did not answer the read in time", ""},
+		{"invalid_auth", bindingcheck.ReasonChatCredentialsRejected, bindingcheck.False, "rejected the bot's token", ""},
+		{"channel_not_found", bindingcheck.ReasonChannelNotFound, bindingcheck.False, "does not exist", ""},
 	} {
 		answer.Store(tc.answer)
 		out, err := c.CheckChannel(t.Context(), "C1")
-		if err != nil || out.Status != tc.status || out.Reason != tc.reason || !strings.Contains(out.Message, tc.message) {
-			t.Errorf("%s: CheckChannel = %+v, %v; want %s/%s with %q in the message", tc.answer, out, err, tc.status, tc.reason, tc.message)
+		if err != nil || out.Status != tc.status || out.Reason != tc.reason || !strings.Contains(out.Message, tc.message) || !strings.Contains(out.Cause, tc.cause) {
+			t.Errorf("%s: CheckChannel = %+v, %v; want %s/%s with %q in the message and %q in the cause", tc.answer, out, err, tc.status, tc.reason, tc.message, tc.cause)
+		}
+		if tc.cause != "" && (strings.Contains(out.Message, tc.cause) || strings.Contains(out.Message, "no_permission")) {
+			t.Errorf("%s: the message %q holds the cause, which reaches a status", tc.answer, out.Message)
 		}
 		for _, token := range []string{bot, app, "TESTTOKEN"} {
-			if strings.Contains(out.Message, token) {
-				t.Errorf("%s: the message %q holds a token", tc.answer, out.Message)
+			if strings.Contains(out.Message, token) || strings.Contains(out.Cause, token) {
+				t.Errorf("%s: the message %q or the cause %q holds a token", tc.answer, out.Message, out.Cause)
 			}
 		}
 		outs = append(outs, out)
@@ -499,16 +503,16 @@ func TestChannelCheckerReportsTheCauseOfAFailedReadThroughTheRealSlackClient(t *
 	refused.Close()
 	closed := channelChecker{platform: slack.NewPlatform(slack.New(slack.Config{BotToken: secret.New(bot), AppToken: secret.New(app), APIURL: refusedURL + "/", Logger: slog.New(slog.DiscardHandler)}), "ns/conn"), timeout: 2 * time.Second}
 	if out, err := closed.CheckChannel(t.Context(), "C1"); err != nil || out.Status != bindingcheck.Unknown || out.Reason != bindingcheck.ReasonChatUnavailable ||
-		!strings.Contains(out.Message, "read failed") || !strings.Contains(out.Message, "connection refused") || strings.Contains(out.Message, "answered") || strings.Contains(out.Message, bot) {
-		t.Errorf("a closed port: CheckChannel = %+v, %v; want Unknown/ChatUnavailable, \"read failed\" and \"connection refused\", and no claim that Slack answered", out, err)
+		!strings.Contains(out.Message, "read failed") || !strings.Contains(out.Cause, "connection refused") || strings.Contains(out.Message, "127.0.0.1") || strings.Contains(out.Message, "answered") || strings.Contains(out.Cause, bot) {
+		t.Errorf("a closed port: CheckChannel = %+v, %v; want Unknown/ChatUnavailable, \"read failed\" with the address and \"connection refused\" in the cause only, and no claim that Slack answered", out, err)
 	}
 
 	// The code is in the log line of the transition, and no token is.
 	line := logLines(func(l bindingLog) {
 		l.transition(bindingcheck.Transition{Binding: "sre/oncall", Old: bindingcheck.Condition{Type: bindingcheck.ChannelJoined, Status: bindingcheck.Unknown, Reason: bindingcheck.ReasonPending},
-			New: bindingcheck.Condition{Type: bindingcheck.ChannelJoined, Status: outs[0].Status, Reason: outs[0].Reason, Message: outs[0].Message}})
+			New: bindingcheck.Condition{Type: bindingcheck.ChannelJoined, Status: outs[0].Status, Reason: outs[0].Reason, Message: outs[0].Message, Cause: outs[0].Cause}})
 	})
-	if !strings.Contains(line, "no_permission") || !strings.Contains(line, "level=INFO") || strings.Contains(line, "TESTTOKEN") {
+	if !strings.Contains(line, "cause=") || !strings.Contains(line, "no_permission") || !strings.Contains(line, "level=INFO") || strings.Contains(line, "TESTTOKEN") {
 		t.Errorf("log line %q; want an INFO with the code no_permission and no token", line)
 	}
 
@@ -516,7 +520,7 @@ func TestChannelCheckerReportsTheCauseOfAFailedReadThroughTheRealSlackClient(t *
 	st := bindingcheck.NewState()
 	now := time.Now()
 	st.Set("sre/oncall", now, bindingcheck.Condition{Type: bindingcheck.ChannelJoined, Status: outs[0].Status, Reason: outs[0].Reason, Message: outs[0].Message})
-	if trs := st.Set("sre/oncall", now.Add(time.Minute), bindingcheck.Condition{Type: bindingcheck.ChannelJoined, Status: outs[1].Status, Reason: outs[1].Reason, Message: outs[1].Message}); len(trs) != 0 {
+	if trs := st.Set("sre/oncall", now.Add(time.Minute), bindingcheck.Condition{Type: bindingcheck.ChannelJoined, Status: outs[1].Status, Reason: outs[1].Reason, Message: outs[1].Message, Cause: outs[1].Cause}); len(trs) != 0 {
 		t.Errorf("a changed code was a transition: %+v", trs)
 	}
 }
@@ -539,14 +543,14 @@ func TestAgentCheckerSaysWhyTheCardRequestFailedWithoutItsURL(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out, ok := classifyAgent(fmt.Errorf("binding sre/oncall: %w", &url.Error{Op: "Get", URL: secretURL, Err: tc.cause}))
-			if !ok || out.Reason != bindingcheck.ReasonUnreachable || out.Status != bindingcheck.False || !strings.Contains(out.Message, tc.want) {
-				t.Fatalf("classifyAgent = %+v, %t; want False/Unreachable with %q", out, ok, tc.want)
+			if !ok || out.Reason != bindingcheck.ReasonUnreachable || out.Status != bindingcheck.False || !strings.Contains(out.Cause, tc.want) {
+				t.Fatalf("classifyAgent = %+v, %t; want False/Unreachable with %q in the Cause, for the log", out, ok, tc.want)
 			}
-			if strings.Contains(out.Message, "SECRET-IN-URL") || strings.Contains(out.Message, "/agents/") {
-				t.Errorf("the message %q holds the request's URL", out.Message)
+			if strings.Contains(out.Message+out.Cause, "SECRET-IN-URL") || strings.Contains(out.Message+out.Cause, "/agents/") {
+				t.Errorf("the message %q or the cause %q holds the request's URL", out.Message, out.Cause)
 			}
-			if !strings.Contains(out.Message, "the request for the agent card failed") || strings.Contains(out.Message, "did not answer") {
-				t.Errorf("the message %q; want it to say the request failed and claim nothing of an answer", out.Message)
+			if out.Message != msgCardRequestFailed {
+				t.Errorf("the message %q; want the one sentence for the reason, which claims nothing of an answer and nothing of the cause", out.Message)
 			}
 		})
 	}
@@ -1255,5 +1259,53 @@ func TestABindingRemovedDuringAPassIsNeverFalseAndIsPruned(t *testing.T) {
 	}
 	if got := buf.String(); got != "" {
 		t.Errorf("logged %q for a Binding that was removed; want nothing", got)
+	}
+}
+
+// What a failed card request puts in the Message, which reaches the status of a Binding that its owner reads, is one sentence whatever the
+// error: a transport error names the host of the backend (which may be in another team's namespace), the broker's own address and an
+// ephemeral port. The cause is in the Cause, for the log, and two failures that differ only in a port give one Message.
+func TestAFailedCardRequestPutsNothingOfTheErrorInTheMessage(t *testing.T) {
+	for name, cause := range map[string]error{
+		"DNS":   &net.DNSError{Err: "no such host", Name: "agent.team-b.svc.cluster.local", IsNotFound: true},
+		"reset": &net.OpError{Op: "read", Net: "tcp", Source: &net.TCPAddr{IP: net.ParseIP("10.1.2.3"), Port: 48122}, Addr: &net.TCPAddr{IP: net.ParseIP("10.0.0.5"), Port: 8080}, Err: errors.New("read: connection reset by peer")},
+		"x509":  errors.New("x509: certificate is valid for internal.team-b.example, not agent.team-b.svc"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			out, ok := classifyAgent(fmt.Errorf("binding team-a/oncall: %w", &url.Error{Op: "Get", URL: "http://agent.team-b.svc:8080/", Err: cause}))
+			if !ok || out.Message != msgCardRequestFailed {
+				t.Fatalf("classifyAgent = %+v, %t; want the one sentence", out, ok)
+			}
+			for _, leak := range []string{"team-b", "10.1.2.3", "10.0.0.5", "48122", "8080"} {
+				if strings.Contains(out.Message, leak) {
+					t.Errorf("the message %q holds %q", out.Message, leak)
+				}
+			}
+			if out.Cause == "" {
+				t.Error("the cause is empty: the log would not say why")
+			}
+		})
+	}
+	reset := func(port int) bindingcheck.Outcome {
+		out, _ := classifyAgent(&url.Error{Op: "Get", URL: "http://agent/", Err: &net.OpError{Op: "read", Net: "tcp", Source: &net.TCPAddr{IP: net.ParseIP("10.1.2.3"), Port: port}, Err: errors.New("connection reset by peer")}})
+		return out
+	}
+	if a, b := reset(48122), reset(50001); a.Message != b.Message || a.Cause == b.Cause {
+		t.Errorf("two resets on other ports: messages %q and %q, causes %q and %q; want one message and two causes", a.Message, b.Message, a.Cause, b.Cause)
+	}
+}
+
+// The sentence a status carries for a failed request or read sends a tenant to the operator, and names no class of cause: a class (a
+// name that does not resolve, a connection refused, a certificate not trusted) would let a tenant probe which internal hosts answer.
+func TestTheSentenceOfAFailedProbeSendsTheTenantToTheOperatorAndNamesNoClass(t *testing.T) {
+	for _, msg := range []string{msgCardRequestFailed, msgChatReadFailed} {
+		if !strings.HasSuffix(msg, "the operator's log has the cause") {
+			t.Errorf("%q does not send the reader to the operator's log", msg)
+		}
+		for _, class := range []string{"resolve", "refused", "certificate", "timed out", "reset", "TLS", "DNS", "no such host", "unreachable"} {
+			if strings.Contains(strings.ToLower(msg), strings.ToLower(class)) {
+				t.Errorf("%q names a class of cause (%q)", msg, class)
+			}
+		}
 	}
 }

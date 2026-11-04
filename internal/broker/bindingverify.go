@@ -42,6 +42,16 @@ const minRevisionGap = 30 * time.Second
 // does not follow the press bound.
 func innerBound(outer time.Duration) time.Duration { return outer * 4 / 5 }
 
+// The one sentence of a request or a read that failed, whatever the cause: it reaches the status of a Binding, which its owner reads
+// and may not be allowed to read the broker's log, so it says only that the cause is there. It hides the cause and the address, and no
+// more: a status still tells whether the backend answered (and with which status code), whether it did not answer in time, and whether
+// the request failed some other way. It names no further class of cause (a name that does not resolve, a refused connection, a
+// certificate that is not trusted), which would let a tenant tell more of which internal hosts answer.
+const (
+	msgCardRequestFailed = "the request for the agent card failed; the operator's log has the cause"
+	msgChatReadFailed    = "the chat platform read failed; the operator's log has the cause"
+)
+
 // agentProbe is what the agent checker needs of Bindings: (*Bindings).CheckAgent, a card fetch that sends the agent nothing.
 type agentProbe interface {
 	CheckAgent(ctx context.Context, binding string) error
@@ -86,8 +96,10 @@ func (a agentChecker) CheckAgent(ctx context.Context, binding string) (bindingch
 // classifyAgent says what the error of a card fetch (agent.Pool.Check) means for BackendReachable. It is False when the answer
 // says a turn would fail now, and Unknown for the statuses that say nothing of the agent (408, 425 and 429). The Message names
 // the class and a status code, and never the text of a status error or a card, which can quote a response. A
-// request that failed carries its cause too, as telemetry.LogText gives the error under the *url.Error (so not the URL): that is
-// what tells a name that does not resolve from a refused connection or a certificate that is not trusted, and the Message claims no more
+// request that failed has its cause in Outcome.Cause, for the log only, as telemetry.LogText gives the error under the *url.Error (so
+// not the URL): that is what tells a name that does not resolve from a refused connection or a certificate that is not trusted. The
+// Message is one sentence, whatever the cause, because it reaches the Binding's status, which its owner reads, and a transport error names
+// hosts of other namespaces, the broker's own address and an ephemeral port that a pass later would change. It claims no more
 // than that the request failed (a server that answers plain HTTP to an https request is a cause, not a silence), unless a deadline
 // passed, when it says the backend did not answer in time. A deadline is False although a turn's connect waits longer (the pool's
 // ConnectTimeout, 30s, against the probe's 8s): a backend that never answers, as behind a firewall, must not stay Unknown, so one that
@@ -118,7 +130,9 @@ func classifyAgent(err error) (bindingcheck.Outcome, bool) {
 		if timedOut(err) {
 			return fail(bindingcheck.ReasonUnreachable, "the backend did not answer in time")
 		}
-		return fail(bindingcheck.ReasonUnreachable, "the request for the agent card failed: "+causeText(err))
+		out, ok := fail(bindingcheck.ReasonUnreachable, msgCardRequestFailed)
+		out.Cause = causeText(err)
+		return out, ok
 	}
 	return bindingcheck.Outcome{}, false
 }
@@ -162,7 +176,7 @@ func timedOut(err error) bool {
 	return errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout())
 }
 
-// causeText is the text of why a request failed, as a Message may carry it: the error the HTTP client wrapped, not the
+// causeText is the text of why a request failed, as an Outcome's Cause carries it: the error the HTTP client wrapped, not the
 // *url.Error around it, whose text is the request's URL, and through telemetry.LogText, which redacts and cuts it. It is what tells
 // a name that does not resolve, a refused connection and a certificate that is not trusted apart.
 func causeText(err error) string {
@@ -224,11 +238,11 @@ func (c channelChecker) CheckChannel(ctx context.Context, channel string) (bindi
 
 // classifyError says what an error of ChannelAccess means for ChannelJoined: the two sentinels are False, a credential the platform
 // rejects is False/ChatCredentialsRejected, and anything else is Unknown/ChatUnavailable. Its Message is a rate limit, a deadline that
-// passed ("did not answer in time"), or, for everything else, "the chat platform read failed: " and the cause through telemetry.LogText and no claim
-// about whether the platform answered: the Slack client's scrub keeps a deadline and a cancel as causes but drops other transport
-// causes, so a refused connection and an answer that is an error cannot be told apart here, and the cause in the text says which it
-// was (a code such as no_permission, or connection refused). A Message that changes is not a transition, so a cause that changes
-// between passes adds no log line.
+// passed ("did not answer in time"), or, for everything else, "the chat platform read failed" with the cause through telemetry.LogText in
+// Outcome.Cause, for the log, and no claim about whether the platform answered: the Slack client's scrub keeps a deadline and a cancel as
+// causes but drops other transport causes, so a refused connection and an answer that is an error cannot be told apart here, and the cause
+// says which it was (a code such as no_permission, or connection refused). The Message is one sentence because it reaches a status. A
+// Cause that changes is not a transition, so a cause that changes between passes adds no log line.
 func (c channelChecker) classifyError(err error) bindingcheck.Outcome {
 	switch {
 	case errors.Is(err, chat.ErrChannelNotFound):
@@ -250,7 +264,9 @@ func (c channelChecker) classifyError(err error) bindingcheck.Outcome {
 	case errors.Is(err, context.DeadlineExceeded):
 		return unavailable("the chat platform did not answer the read in time")
 	}
-	return unavailable("the chat platform read failed: " + telemetry.LogText(err))
+	out := unavailable(msgChatReadFailed)
+	out.Cause = telemetry.LogText(err)
+	return out
 }
 
 // credentialsChange is what credentialsWatch found.
@@ -316,8 +332,10 @@ func bindingTargets(snap *config.Snapshot, conn v1alpha1.ObjectRef) []bindingche
 			continue
 		}
 		out = append(out, bindingcheck.Target{
-			Binding: v1alpha1.NamespacedName(rb.Binding.Namespace, rb.Binding.Name),
-			Channel: rb.Binding.Spec.Chat.Channel,
+			Binding:    v1alpha1.NamespacedName(rb.Binding.Namespace, rb.Binding.Name),
+			Channel:    rb.Binding.Spec.Chat.Channel,
+			Generation: rb.Binding.Generation,
+			UID:        string(rb.Binding.UID),
 		})
 	}
 	return out
@@ -346,6 +364,9 @@ func (l bindingLog) transition(tr bindingcheck.Transition) {
 		return
 	}
 	attrs := []any{"binding", tr.Binding, "condition", string(c.Type), "status", string(c.Status), "reason", string(c.Reason), "detail", telemetry.LogText(c.Message)}
+	if c.Cause != "" { // what the Message leaves out of the status: the line is for an operator
+		attrs = append(attrs, "cause", telemetry.LogText(c.Cause))
+	}
 	switch {
 	case c.Status == bindingcheck.False:
 		l.log.Warn("binding verification: a condition is false", attrs...)
@@ -410,6 +431,10 @@ type verification struct {
 	// MinRevisionGap is the Prober's: the least time between a pass and one that only a change of the config or of a Secret calls
 	// for. Zero takes minRevisionGap.
 	MinRevisionGap time.Duration
+	// Status, when set, is told that something moved: each transition, and the end of each pass, which moves the conditions'
+	// observed generation although nothing transitions. It is set with the crds config source and nil with files, which the
+	// verification then serves exactly as it did.
+	Status *statusWriter
 }
 
 // credentialsSecret is where the connection's credentials are in the current config: the Secret its ChatConnection names, in its
@@ -450,8 +475,17 @@ func (v verification) timed(cond bindingcheck.ConditionType, check func() (bindi
 	return check()
 }
 
+// notifyStatus tells the status writer, if there is one, that the Prober's findings moved. It must be quick: it is a hook of the
+// Prober, called with the results held up.
+func (v verification) notifyStatus() {
+	if v.Status != nil {
+		v.Status.notify()
+	}
+}
+
 // newProber returns the Prober of the verification: its State is the conditions of the Bindings, which the hooks report as
-// metrics and log lines and nothing else, and it writes nothing else. It is the leader half's to run and to stop (leaderHalf.start).
+// metrics and log lines and, with the crds config source, tell the status writer of (Status), which reads the State and writes the
+// status; the Prober writes nothing itself. It is the leader half's to run and to stop (leaderHalf.start).
 // Revision changes call for a pass at most once every minRevisionGap.
 func (v verification) newProber() *bindingcheck.Prober {
 	timeout := cmp.Or(v.Timeout, bindingProbeTimeout)
@@ -471,7 +505,8 @@ func (v verification) newProber() *bindingcheck.Prober {
 			return v.timed(bindingcheck.ChannelJoined, func() (bindingcheck.Outcome, error) { return channels.CheckChannel(ctx, channel) })
 		}),
 		Interval: v.Interval, Tick: v.Tick, Timeout: timeout, MinRevisionGap: cmp.Or(v.MinRevisionGap, minRevisionGap),
-		OnTransition: func(tr bindingcheck.Transition) { v.Metrics.BindingCondition(tr); l.transition(tr) },
+		OnTransition: func(tr bindingcheck.Transition) { v.Metrics.BindingCondition(tr); l.transition(tr); v.notifyStatus() },
+		OnPass:       v.notifyStatus,
 		OnProbeError: l.probeError,
 		OnPrune:      func(names []string) { v.Metrics.BindingsPruned(names); l.pruned(names) },
 	})

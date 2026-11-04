@@ -24,7 +24,8 @@ func crStartConfig(t *testing.T, edit func([]*unstructured.Unstructured)) RunCon
 	t.Helper()
 	c := startConfig(t)
 	c.ConfigSource, c.ConfigDir, c.ChatConnection = SourceCRDs, "", testConnection
-	c.Dynamic = crCluster(t, edit)
+	dyn := crCluster(t, edit)
+	c.Dynamic, c.StatusClient = dyn, newStatusClusterOn(dyn).dyn // a cluster that takes the applies of a status, which a leader writes
 	return c
 }
 

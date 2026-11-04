@@ -35,6 +35,14 @@ type RunConfig struct {
 	ChatConnection v1alpha1.ObjectRef
 	// Dynamic reads the custom resources with SourceCRDs. Nil means InClusterDynamicClient.
 	Dynamic dynamic.Interface
+	// statusWarnings is the counter of the WarningHandler of a StatusClient that a test gives, which feeds it itself: nil makes
+	// Run's own, which only the client Run makes feeds. A seam for this package's tests, so that the counter's wiring to the
+	// writer can be seen.
+	statusWarnings *warningCounter
+	// StatusClient writes Binding.status with SourceCRDs, from the leader only. Nil means InClusterStatusClient, which has a
+	// rate limiter of its own and counts the Warnings of the API server instead of logging them. With SourceFiles it is never
+	// used, and no client is made for it.
+	StatusClient dynamic.Interface
 	// LeaseClient is the client of the leader election, used with a store that fences. Nil means InClusterLeaseClient, a
 	// client with a rate limiter of its own, when Client is nil too, and Client when a test gave one.
 	LeaseClient kubernetes.Interface
@@ -247,7 +255,7 @@ func InClusterLeaseClient() (kubernetes.Interface, error) {
 
 // InClusterDynamicClient returns the dynamic client that reads the custom resources, for the same cluster and by the same
 // credentials as InClusterClient, with a rest.Config and so a rate limiter of its own: three informers list and watch, and
-// the status writer will have its own, so that neither delays the leader's Lease renewals. Outside a cluster the error wraps
+// the status writer has its own (InClusterStatusClient), so that neither delays the leader's Lease renewals. Outside a cluster the error wraps
 // ErrWiring and rest.ErrNotInCluster.
 func InClusterDynamicClient() (dynamic.Interface, error) {
 	cfg, err := inClusterConfig()
@@ -259,6 +267,33 @@ func InClusterDynamicClient() (dynamic.Interface, error) {
 		return nil, fmt.Errorf("in-cluster dynamic client: %w", err)
 	}
 	return client, nil
+}
+
+// The rate limit of the status writer's client. A burst of status writes (every Binding at a takeover) must neither wait behind
+// the informers' lists nor delay a Lease renewal, so it has a limiter of its own; client-go's default is 5 and 10.
+const statusQPS, statusBurst = 20, 40
+
+// InClusterStatusClient returns the dynamic client that writes Binding.status, for the same cluster and by the same credentials as
+// InClusterClient, with a rate limiter of its own, and with warnings as its WarningHandler: a write to a status runs every rule of
+// the CRD's schema, those of the spec included, and the API server answers a Warning for each that the stored spec breaks, which
+// client-go would log on every write. Outside a cluster the error wraps ErrWiring and rest.ErrNotInCluster.
+func InClusterStatusClient(warnings rest.WarningHandler) (dynamic.Interface, error) {
+	cfg, err := inClusterConfig()
+	if err != nil {
+		return nil, err
+	}
+	client, err := dynamic.NewForConfig(forStatus(cfg, warnings))
+	if err != nil {
+		return nil, fmt.Errorf("in-cluster status client: %w", err)
+	}
+	return client, nil
+}
+
+// forStatus returns a copy of cfg for the status client: its own rate limit, and warnings for the API server's Warning headers.
+func forStatus(cfg *rest.Config, warnings rest.WarningHandler) *rest.Config {
+	c := withLimits(cfg, statusQPS, statusBurst)
+	c.WarningHandler = warnings
+	return c
 }
 
 // inClusterConfig is the one way to a rest.Config: the pod's own ServiceAccount. Each call returns a new one, so that each

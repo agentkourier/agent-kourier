@@ -514,8 +514,13 @@ func TestNothingIsReadBeforeTheCachesSync(t *testing.T) {
 	if _, fp, err := src.Set(t.Context()); !errors.Is(err, crsource.ErrNotSynced) || !strings.HasPrefix(fp, "!") {
 		t.Errorf("Set = fingerprint %q, error %v; want ErrNotSynced and a fingerprint that says so", fp, err)
 	}
+	ns := find(corpus(t), "sre-alerts").GetNamespace()
+	if _, ok, err := src.BindingStatus(ns, "sre-alerts"); ok || !errors.Is(err, crsource.ErrNotSynced) {
+		t.Errorf("BindingStatus before the Binding informer synced = found %v, error %v; want ErrNotSynced: an empty cache is no status", ok, err)
+	}
 	once.Do(func() { close(release) })
 	until(t, func() {}, func() bool { _, _, err := src.Set(t.Context()); return err == nil })
+	until(t, func() {}, func() bool { _, ok, err := src.BindingStatus(ns, "sre-alerts"); return err == nil && ok })
 }
 
 // After Stop, Set fails rather than serve a cache that no longer updates.

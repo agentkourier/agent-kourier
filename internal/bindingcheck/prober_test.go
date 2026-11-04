@@ -230,7 +230,7 @@ func TestNewProberDefaults(t *testing.T) {
 
 func TestPassesKeepToTheJitteredInterval(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"b", "C1"})
+	g.set("r1", Target{Binding: "b", Channel: "C1"})
 	var mu sync.Mutex
 	var starts []time.Time
 	agents := &fakeAgents{fn: func(context.Context, string) (Outcome, error) {
@@ -262,7 +262,7 @@ func TestPassesKeepToTheJitteredInterval(t *testing.T) {
 
 func TestProbesAtStartAndOnTheInterval(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"b", "C1"})
+	g.set("r1", Target{Binding: "b", Channel: "C1"})
 	agents, chans := &fakeAgents{}, &fakeChannels{}
 	run(t, Options{Targets: g.Targets, Revision: g.Revision, Agents: agents, Channels: chans}, func(h *harness) {
 		if agents.count("b") != 1 || chans.count("C1") != 1 {
@@ -289,7 +289,7 @@ func TestProbesAtStartAndOnTheInterval(t *testing.T) {
 
 func TestUnchangedRevisionDoesNotProbeEarlyAndChangedOneDoesAtTheNextTick(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"b", "C1"})
+	g.set("r1", Target{Binding: "b", Channel: "C1"})
 	agents := &fakeAgents{}
 	run(t, Options{Targets: g.Targets, Revision: g.Revision, Agents: agents}, func(h *harness) {
 		h.advance(3 * tick)
@@ -297,7 +297,7 @@ func TestUnchangedRevisionDoesNotProbeEarlyAndChangedOneDoesAtTheNextTick(t *tes
 			t.Fatalf("probes with an unchanged revision = %d, want 1", got)
 		}
 
-		g.set("r2", Target{"b", "C1"})
+		g.set("r2", Target{Binding: "b", Channel: "C1"})
 		synctest.Wait()
 		if got := agents.count("b"); got != 1 {
 			t.Fatalf("the probe ran before the tick: %d", got)
@@ -319,7 +319,7 @@ func TestUnchangedRevisionDoesNotProbeEarlyAndChangedOneDoesAtTheNextTick(t *tes
 func TestRevisionChangesInsideTheMinimumGapGiveOnePassWhenTheGapEndsAndNeverLoseTheLast(t *testing.T) {
 	const gap = 30 * time.Second
 	g := &targets{}
-	g.set("r0", Target{"b", "C1"})
+	g.set("r0", Target{Binding: "b", Channel: "C1"})
 	agents := &fakeAgents{}
 	run(t, Options{Targets: g.Targets, Revision: g.Revision, Agents: agents, MinRevisionGap: gap, Interval: time.Hour}, func(h *harness) {
 		if got := agents.count("b"); got != 1 {
@@ -327,7 +327,7 @@ func TestRevisionChangesInsideTheMinimumGapGiveOnePassWhenTheGapEndsAndNeverLose
 		}
 		// Many changes in the gap, a Tick apart.
 		for i := 1; i <= 4; i++ {
-			g.set(fmt.Sprintf("r%d", i), Target{"b", "C1"})
+			g.set(fmt.Sprintf("r%d", i), Target{Binding: "b", Channel: "C1"})
 			h.advance(tick)
 		}
 		if got := agents.count("b"); got != 1 {
@@ -338,12 +338,12 @@ func TestRevisionChangesInsideTheMinimumGapGiveOnePassWhenTheGapEndsAndNeverLose
 			t.Fatalf("%d probes after the gap; want 2: one pass for all the changes", got)
 		}
 		// A change just inside the next gap waits, and a later one in it replaces it: the pass at the end of the gap is for the last.
-		g.set("r5", Target{"b", "C1"})
+		g.set("r5", Target{Binding: "b", Channel: "C1"})
 		h.advance(tick)
 		if got := agents.count("b"); got != 2 {
 			t.Fatalf("%d probes inside the gap; want 2", got)
 		}
-		g.set("r6", Target{"b", "C1"})
+		g.set("r6", Target{Binding: "b", Channel: "C1"})
 		h.advance(gap)
 		if got := agents.count("b"); got != 3 {
 			t.Errorf("%d probes after the second gap; want 3: the last change must still be probed", got)
@@ -358,7 +358,7 @@ func TestRevisionChangesInsideTheMinimumGapGiveOnePassWhenTheGapEndsAndNeverLose
 // A pass the Interval calls for is not held back by the gap, however long the gap.
 func TestTheMinimumGapDoesNotHoldBackTheInterval(t *testing.T) {
 	g := &targets{}
-	g.set("r0", Target{"a", "C1"})
+	g.set("r0", Target{Binding: "a", Channel: "C1"})
 	agents := &fakeAgents{}
 	run(t, Options{Targets: g.Targets, Revision: g.Revision, Agents: agents, MinRevisionGap: 10 * time.Minute, Interval: time.Minute}, func(h *harness) {
 		h.advance(2 * time.Minute) // past the Interval, inside the gap
@@ -374,7 +374,7 @@ func TestTheMinimumGapDoesNotHoldBackTheInterval(t *testing.T) {
 func TestANewBindingInsideTheMinimumGapWaitsPendingAndIsProbedWhenItEnds(t *testing.T) {
 	const gap = 30 * time.Second
 	g := &targets{}
-	g.set("r0", Target{"a", "C1"}, Target{"gone", "C9"})
+	g.set("r0", Target{Binding: "a", Channel: "C1"}, Target{Binding: "gone", Channel: "C9"})
 	agents := &fakeAgents{}
 	var pruned []string
 	run(t, Options{Targets: g.Targets, Revision: g.Revision, Agents: agents, MinRevisionGap: gap, Interval: time.Hour,
@@ -383,7 +383,7 @@ func TestANewBindingInsideTheMinimumGapWaitsPendingAndIsProbedWhenItEnds(t *test
 			t.Fatalf("the first pass made %d probes of a; want 1", got)
 		}
 		h.advance(tick)
-		g.set("r0", Target{"a", "C1"}, Target{"b", "C2"}) // b appears, the revision unchanged; gone leaves
+		g.set("r0", Target{Binding: "a", Channel: "C1"}, Target{Binding: "b", Channel: "C2"}) // b appears, the revision unchanged; gone leaves
 		h.advance(tick)
 		wantCond(t, h.conds("b"), BackendReachable, Unknown, ReasonPending)
 		if got := agents.count("b"); got != 0 {
@@ -409,7 +409,7 @@ func TestANewBindingInsideTheMinimumGapWaitsPendingAndIsProbedWhenItEnds(t *test
 
 func TestARevisionThatBlocksDoesNotStopTheProbes(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"b", "C1"})
+	g.set("r1", Target{Binding: "b", Channel: "C1"})
 	agents := &fakeAgents{}
 	var blocked atomic.Int32
 	rev := func(ctx context.Context) string {
@@ -446,7 +446,7 @@ func TestARevisionThatBlocksThenAnswersIsTakenOnTheNextTick(t *testing.T) {
 		return "r2"
 	}
 	g := &targets{}
-	g.set("r1", Target{"b", "C1"})
+	g.set("r1", Target{Binding: "b", Channel: "C1"})
 	agents := &fakeAgents{}
 	run(t, Options{Targets: g.Targets, Revision: rev, Agents: agents, Interval: time.Hour}, func(h *harness) {
 		if agents.total() != 1 {
@@ -467,11 +467,11 @@ func TestARevisionThatBlocksThenAnswersIsTakenOnTheNextTick(t *testing.T) {
 
 func TestAReloadBetweenTheTwoReadsIsProbedAtOnce(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"b", "C1"})
+	g.set("r1", Target{Binding: "b", Channel: "C1"})
 	var reload atomic.Bool
 	rev := func(ctx context.Context) string {
 		if reload.CompareAndSwap(true, false) {
-			g.set("r2", Target{"b", "C2"}) // the reload lands while the loop reads
+			g.set("r2", Target{Binding: "b", Channel: "C2"}) // the reload lands while the loop reads
 		}
 		return g.Revision(ctx)
 	}
@@ -488,7 +488,7 @@ func TestAReloadBetweenTheTwoReadsIsProbedAtOnce(t *testing.T) {
 func TestRunWaitsForACheckerThatHonorsItsContext(t *testing.T) {
 	var entered, finished atomic.Bool
 	g := &targets{}
-	g.set("r1", Target{"b", "C1"})
+	g.set("r1", Target{Binding: "b", Channel: "C1"})
 	agents := &fakeAgents{fn: func(ctx context.Context, _ string) (Outcome, error) {
 		entered.Store(true)
 		<-ctx.Done()
@@ -510,7 +510,7 @@ func TestRunWaitsForACheckerThatHonorsItsContext(t *testing.T) {
 
 func TestRunDoesNotWaitLongerThanTheGraceForACheckerThatIgnoresItsContext(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"b", "C1"})
+	g.set("r1", Target{Binding: "b", Channel: "C1"})
 	var gate chan struct{}
 	agents := &fakeAgents{fn: func(context.Context, string) (Outcome, error) { <-gate; return ok(), nil }}
 	runIn(t, func() Options {
@@ -530,7 +530,7 @@ func TestRunDoesNotWaitLongerThanTheGraceForACheckerThatIgnoresItsContext(t *tes
 func TestRunWaitsForACheckerThatOutlastedItsProbesTimeout(t *testing.T) {
 	var entered, finished atomic.Bool
 	g := &targets{}
-	g.set("r1", Target{"b", "C1"})
+	g.set("r1", Target{Binding: "b", Channel: "C1"})
 	agents := &fakeAgents{fn: func(ctx context.Context, _ string) (Outcome, error) {
 		entered.Store(true)
 		<-ctx.Done()                       // the probe's timeout
@@ -557,7 +557,7 @@ func TestRunWaitsForACheckerThatOutlastedItsProbesTimeout(t *testing.T) {
 
 func TestRunWaitsOnceForCheckersThatIgnoreTheirContextEvenAfterTheirProbesTimedOut(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"a", "C1"}, Target{"b", "C2"})
+	g.set("r1", Target{Binding: "a", Channel: "C1"}, Target{Binding: "b", Channel: "C2"})
 	var gate chan struct{}
 	agents := &fakeAgents{fn: func(context.Context, string) (Outcome, error) { <-gate; return ok(), nil }}
 	runIn(t, func() Options {
@@ -578,7 +578,7 @@ func TestRunWaitsOnceForCheckersThatIgnoreTheirContextEvenAfterTheirProbesTimedO
 
 func TestAGoexitInACheckerFreesItsTargetForTheNextPass(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"b", "C1"})
+	g.set("r1", Target{Binding: "b", Channel: "C1"})
 	var exits atomic.Int32
 	agents := &fakeAgents{fn: func(context.Context, string) (Outcome, error) {
 		if exits.Add(1) == 1 {
@@ -595,7 +595,7 @@ func TestAGoexitInACheckerFreesItsTargetForTheNextPass(t *testing.T) {
 
 func TestARevisionThatIgnoresItsContextIsNotCalledAgainAndDoesNotStopTheProbes(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"a", "C1"})
+	g.set("r1", Target{Binding: "a", Channel: "C1"})
 	var gate chan struct{}
 	var calls atomic.Int32
 	agents := &fakeAgents{}
@@ -611,7 +611,7 @@ func TestARevisionThatIgnoresItsContextIsNotCalledAgainAndDoesNotStopTheProbes(t
 		if agents.count("a") != 1 {
 			t.Fatalf("probes after the Revision call timed out = %d, want 1", agents.count("a"))
 		}
-		g.set("r2", Target{"a", "C1"}, Target{"b", "C2"})
+		g.set("r2", Target{Binding: "a", Channel: "C1"}, Target{Binding: "b", Channel: "C2"})
 		h.advance(tick)
 		if agents.count("b") != 1 {
 			t.Errorf("a Binding added while Revision is stuck was probed %d times at the next tick, want 1", agents.count("b"))
@@ -632,7 +632,7 @@ func TestARevisionThatIgnoresItsContextIsNotCalledAgainAndDoesNotStopTheProbes(t
 
 func TestARevisionThatPanicsCountsAsNoChangeAndIsReported(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"a", "C1"})
+	g.set("r1", Target{Binding: "a", Channel: "C1"})
 	agents := &fakeAgents{}
 	var mu sync.Mutex
 	var perrs []ProbeError
@@ -665,7 +665,7 @@ func TestARevisionThatPanicsCountsAsNoChangeAndIsReported(t *testing.T) {
 
 func TestATargetsThatPanicsKeepsTheLastTargetsAndPrunesNothing(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"a", "C1"}, Target{"b", "C2"})
+	g.set("r1", Target{Binding: "a", Channel: "C1"}, Target{Binding: "b", Channel: "C2"})
 	var broken atomic.Bool
 	agents := &fakeAgents{}
 	var mu sync.Mutex
@@ -706,7 +706,7 @@ func TestATargetsThatPanicsKeepsTheLastTargetsAndPrunesNothing(t *testing.T) {
 		mu.Unlock()
 
 		broken.Store(false) // recovered: an honest change prunes again
-		g.set("r2", Target{"a", "C1"})
+		g.set("r2", Target{Binding: "a", Channel: "C1"})
 		h.advance(tick)
 		mu.Lock()
 		defer mu.Unlock()
@@ -718,7 +718,7 @@ func TestATargetsThatPanicsKeepsTheLastTargetsAndPrunesNothing(t *testing.T) {
 
 func TestAHookThatPanicsCannotStopTheProberAndOnProbeErrorDoesNotRecurse(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"a", "C1"}, Target{"b", "C2"})
+	g.set("r1", Target{Binding: "a", Channel: "C1"}, Target{Binding: "b", Channel: "C2"})
 	agents := &fakeAgents{fn: func(_ context.Context, b string) (Outcome, error) {
 		if b == "b" {
 			return Outcome{}, errors.New("down")
@@ -740,7 +740,7 @@ func TestAHookThatPanicsCannotStopTheProberAndOnProbeErrorDoesNotRecurse(t *test
 		wantCond(t, h.conds("a"), BackendReachable, True, ReasonOK)
 		wantCond(t, h.conds("a"), Ready, True, ReasonOK)
 		wantCond(t, h.conds("b"), BackendReachable, Unknown, ReasonProbeFailed)
-		g.set("r2", Target{"a", "C1"})
+		g.set("r2", Target{Binding: "a", Channel: "C1"})
 		h.advance(tick)
 		if snap := h.p.State().Snapshot(); len(snap) != 1 {
 			t.Errorf("after the prune hook panicked: %+v", snap)
@@ -751,7 +751,7 @@ func TestAHookThatPanicsCannotStopTheProberAndOnProbeErrorDoesNotRecurse(t *test
 		var fromTransition bool
 		for _, pe := range perrs {
 			var panicked *PanicError
-			if errors.As(pe.Err, &panicked) && panicked.Value == "hook boom" && pe.Condition == BackendReachable && pe.Target == (Target{"a", "C1"}) {
+			if errors.As(pe.Err, &panicked) && panicked.Value == "hook boom" && pe.Condition == BackendReachable && pe.Target == (Target{Binding: "a", Channel: "C1"}) {
 				fromTransition = true
 			}
 		}
@@ -781,7 +781,7 @@ func (l *errorLog) all() []ProbeError {
 
 func TestARevisionThatEndsItsGoroutineIsReportedNotBelievedAndCalledAgain(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"a", "C1"})
+	g.set("r1", Target{Binding: "a", Channel: "C1"})
 	var calls atomic.Int32
 	rev := func(context.Context) string {
 		if calls.Add(1) == 2 {
@@ -807,7 +807,7 @@ func TestARevisionThatEndsItsGoroutineIsReportedNotBelievedAndCalledAgain(t *tes
 
 func TestARevisionInFlightAtShutdownIsNotAFailure(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"a", "C1"})
+	g.set("r1", Target{Binding: "a", Channel: "C1"})
 	var log errorLog
 	run(t, Options{Targets: g.Targets, Agents: &fakeAgents{}, Revision: func(ctx context.Context) string {
 		<-ctx.Done()
@@ -822,7 +822,7 @@ func TestARevisionInFlightAtShutdownIsNotAFailure(t *testing.T) {
 
 func TestARevisionThatTimesOutIsReportedOncePerCall(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"a", "C1"})
+	g.set("r1", Target{Binding: "a", Channel: "C1"})
 	var log errorLog
 	run(t, Options{Targets: g.Targets, Agents: &fakeAgents{}, Revision: func(ctx context.Context) string {
 		<-ctx.Done()
@@ -838,7 +838,7 @@ func TestARevisionThatTimesOutIsReportedOncePerCall(t *testing.T) {
 
 func TestATargetsThatPanicsDoesNotConsumeANewRevision(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"b", "C1"})
+	g.set("r1", Target{Binding: "b", Channel: "C1"})
 	var broken atomic.Bool
 	agents, chans := &fakeAgents{}, &fakeChannels{}
 	run(t, Options{Agents: agents, Channels: chans, Revision: g.Revision, Targets: func() []Target {
@@ -848,7 +848,7 @@ func TestATargetsThatPanicsDoesNotConsumeANewRevision(t *testing.T) {
 		return g.Targets()
 	}}, func(h *harness) {
 		broken.Store(true)
-		g.set("r2", Target{"b", "C2"}) // the Binding moves while Targets is down
+		g.set("r2", Target{Binding: "b", Channel: "C2"}) // the Binding moves while Targets is down
 		h.advance(3 * tick)
 		if agents.total() != 1 {
 			t.Fatalf("probes while Targets panicked = %d, want 1: no pass runs for a revision that cannot be probed", agents.total())
@@ -863,7 +863,7 @@ func TestATargetsThatPanicsDoesNotConsumeANewRevision(t *testing.T) {
 
 func TestATargetsThatPanicsOnTheFirstTickProbesAtTheNextTickItWorks(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"a", "C1"})
+	g.set("r1", Target{Binding: "a", Channel: "C1"})
 	var broken atomic.Bool
 	broken.Store(true)
 	agents := &fakeAgents{}
@@ -887,10 +887,10 @@ func TestATargetsThatPanicsOnTheFirstTickProbesAtTheNextTickItWorks(t *testing.T
 
 func TestAnOnPrunePanicIsReported(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"a", "C1"}, Target{"b", "C2"})
+	g.set("r1", Target{Binding: "a", Channel: "C1"}, Target{Binding: "b", Channel: "C2"})
 	var log errorLog
 	run(t, Options{Targets: g.Targets, Revision: g.Revision, Agents: &fakeAgents{}, OnPrune: func([]string) { panic("prune boom") }, OnProbeError: log.add}, func(h *harness) {
-		g.set("r2", Target{"a", "C1"})
+		g.set("r2", Target{Binding: "a", Channel: "C1"})
 		h.advance(tick)
 		errs := log.all()
 		var panicked *PanicError
@@ -902,7 +902,7 @@ func TestAnOnPrunePanicIsReported(t *testing.T) {
 
 func TestAnOnTransitionPanicDoesNotSkipTheTransitionsAndBindingsThatFollow(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"a", "C1"}, Target{"b", "C1"}, Target{"c", "C1"})
+	g.set("r1", Target{Binding: "a", Channel: "C1"}, Target{Binding: "b", Channel: "C1"}, Target{Binding: "c", Channel: "C1"})
 	var log errorLog
 	var transitions atomic.Int32
 	run(t, Options{Targets: g.Targets, Revision: g.Revision, Channels: &fakeChannels{}, OnProbeError: log.add, OnTransition: func(Transition) {
@@ -933,7 +933,7 @@ func TestPassesDoNotOverlap(t *testing.T) {
 	g := &targets{}
 	// "quick" answers at once, so a second pass beside the first would probe it again: "b" alone could not show one, as
 	// its own probe is still running and is not started twice.
-	g.set("r1", Target{"b", "C1"}, Target{"quick", "C2"})
+	g.set("r1", Target{Binding: "b", Channel: "C1"}, Target{Binding: "quick", Channel: "C2"})
 	var in gauge
 	var gate chan struct{}
 	agents := &fakeAgents{fn: func(_ context.Context, b string) (Outcome, error) {
@@ -952,7 +952,7 @@ func TestPassesDoNotOverlap(t *testing.T) {
 			t.Fatalf("in flight = %d, want the first probe", in.cur.Load())
 		}
 		// The revision changes and the interval runs out while the pass is still going.
-		g.set("r2", Target{"b", "C1"}, Target{"quick", "C2"})
+		g.set("r2", Target{Binding: "b", Channel: "C1"}, Target{Binding: "quick", Channel: "C2"})
 		h.advance(2 * interval)
 		if got := agents.count("quick"); got != 1 {
 			t.Fatalf("a second pass began during the first: %d probes of the other Binding", got)
@@ -975,7 +975,7 @@ func TestConcurrencyLimitHolds(t *testing.T) {
 	g := &targets{}
 	var ts []Target
 	for i := range 8 {
-		ts = append(ts, Target{fmt.Sprintf("b%d", i), fmt.Sprintf("C%d", i)})
+		ts = append(ts, Target{Binding: fmt.Sprintf("b%d", i), Channel: fmt.Sprintf("C%d", i)})
 	}
 	g.set("r1", ts...)
 	var in gauge
@@ -1006,7 +1006,7 @@ func TestConcurrencyLimitHolds(t *testing.T) {
 
 func TestTargetsThatNameOneChannelEachGetTheirOwnProbeAndResult(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"a", "C1"}, Target{"b", "C1"}, Target{"c", "C1"}, Target{"d", "C2"})
+	g.set("r1", Target{Binding: "a", Channel: "C1"}, Target{Binding: "b", Channel: "C1"}, Target{Binding: "c", Channel: "C1"}, Target{Binding: "d", Channel: "C2"})
 	agents := &fakeAgents{}
 	var n atomic.Int32
 	chans := &fakeChannels{fn: func(context.Context, string) (Outcome, error) {
@@ -1033,7 +1033,7 @@ func TestTargetsThatNameOneChannelEachGetTheirOwnProbeAndResult(t *testing.T) {
 
 func TestBindingsOfOneNameInTwoNamespacesAreKeptApart(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"sre/alerts", "C1"}, Target{"platform/alerts", "C2"})
+	g.set("r1", Target{Binding: "sre/alerts", Channel: "C1"}, Target{Binding: "platform/alerts", Channel: "C2"})
 	agents := &fakeAgents{fn: func(_ context.Context, b string) (Outcome, error) {
 		if b == "platform/alerts" {
 			return Outcome{Status: False, Reason: ReasonAgentNotFound}, nil
@@ -1055,7 +1055,7 @@ func TestBindingsOfOneNameInTwoNamespacesAreKeptApart(t *testing.T) {
 		}
 		wantCond(t, h.conds("sre/alerts"), BackendReachable, True, ReasonOK)
 		wantCond(t, h.conds("platform/alerts"), BackendReachable, False, ReasonAgentNotFound)
-		g.set("r2", Target{"sre/alerts", "C1"}) // only the platform Binding leaves
+		g.set("r2", Target{Binding: "sre/alerts", Channel: "C1"}) // only the platform Binding leaves
 		h.advance(tick)
 		mu.Lock()
 		defer mu.Unlock()
@@ -1069,7 +1069,7 @@ func TestAgentAndChannelProbesAlternateSoHangingBackendsDoNotHoldChannelsBack(t 
 	g := &targets{}
 	var ts []Target
 	for i := range 4 {
-		ts = append(ts, Target{fmt.Sprintf("b%d", i), fmt.Sprintf("C%d", i)})
+		ts = append(ts, Target{Binding: fmt.Sprintf("b%d", i), Channel: fmt.Sprintf("C%d", i)})
 	}
 	g.set("r1", ts...)
 	agents := &fakeAgents{fn: func(ctx context.Context, _ string) (Outcome, error) {
@@ -1094,7 +1094,7 @@ func TestAgentAndChannelProbesAlternateSoHangingBackendsDoNotHoldChannelsBack(t 
 
 func TestANewBindingIsPendingUntilItsFirstProbeFinishes(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"b", "C1"})
+	g.set("r1", Target{Binding: "b", Channel: "C1"})
 	var gate chan struct{}
 	agents := &fakeAgents{fn: func(context.Context, string) (Outcome, error) { <-gate; return ok(), nil }}
 	runIn(t, func() Options {
@@ -1117,10 +1117,10 @@ func TestANewBindingIsPendingUntilItsFirstProbeFinishes(t *testing.T) {
 
 func TestABindingAddedLaterIsProbedAtTheNextTick(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"a", "C1"})
+	g.set("r1", Target{Binding: "a", Channel: "C1"})
 	agents, chans := &fakeAgents{}, &fakeChannels{}
 	run(t, Options{Targets: g.Targets, Revision: g.Revision, Agents: agents, Channels: chans}, func(h *harness) {
-		g.set("r1", Target{"a", "C1"}, Target{"b", "C2"}) // same revision: only the Targets changed
+		g.set("r1", Target{Binding: "a", Channel: "C1"}, Target{Binding: "b", Channel: "C2"}) // same revision: only the Targets changed
 		h.advance(tick)
 		wantCond(t, h.conds("b"), Ready, True, ReasonOK)
 		if agents.count("b") != 1 || agents.count("a") != 2 {
@@ -1131,7 +1131,7 @@ func TestABindingAddedLaterIsProbedAtTheNextTick(t *testing.T) {
 
 func TestAChangedChannelIsProbedWhenTheRevisionChanges(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"b", "C1"})
+	g.set("r1", Target{Binding: "b", Channel: "C1"})
 	chans := &fakeChannels{fn: func(_ context.Context, ch string) (Outcome, error) {
 		if ch == "C2" {
 			return Outcome{Status: False, Reason: ReasonChannelNotFound}, nil
@@ -1140,7 +1140,7 @@ func TestAChangedChannelIsProbedWhenTheRevisionChanges(t *testing.T) {
 	}}
 	run(t, Options{Targets: g.Targets, Revision: g.Revision, Agents: &fakeAgents{}, Channels: chans}, func(h *harness) {
 		wantCond(t, h.conds("b"), ChannelJoined, True, ReasonOK)
-		g.set("r2", Target{"b", "C2"})
+		g.set("r2", Target{Binding: "b", Channel: "C2"})
 		h.advance(tick)
 		if chans.count("C2") != 1 {
 			t.Fatalf("the new channel was probed %d times, want 1", chans.count("C2"))
@@ -1151,7 +1151,7 @@ func TestAChangedChannelIsProbedWhenTheRevisionChanges(t *testing.T) {
 
 func TestOnlyTheCheckersGivenAreTracked(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"b", "C1"})
+	g.set("r1", Target{Binding: "b", Channel: "C1"})
 	run(t, Options{Targets: g.Targets, Revision: g.Revision, Channels: &fakeChannels{}}, func(h *harness) {
 		c := h.conds("b")
 		if _, found := c[BackendReachable]; found {
@@ -1164,7 +1164,7 @@ func TestOnlyTheCheckersGivenAreTracked(t *testing.T) {
 
 func TestAProbeThatTimesOutLeavesTheConditionUnknown(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"slow", "C1"}, Target{"fast", "C2"})
+	g.set("r1", Target{Binding: "slow", Channel: "C1"}, Target{Binding: "fast", Channel: "C2"})
 	var hang atomic.Bool
 	hang.Store(true)
 	agents := &fakeAgents{fn: func(ctx context.Context, b string) (Outcome, error) {
@@ -1195,7 +1195,7 @@ func TestAProbeThatTimesOutLeavesTheConditionUnknown(t *testing.T) {
 
 func TestACheckerThatAnswersTrueAfterItsContextEndedIsUnknown(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"b", "C1"})
+	g.set("r1", Target{Binding: "b", Channel: "C1"})
 	agents := &fakeAgents{fn: func(ctx context.Context, _ string) (Outcome, error) {
 		<-ctx.Done()
 		return ok(), nil // late, and not to be believed
@@ -1208,7 +1208,7 @@ func TestACheckerThatAnswersTrueAfterItsContextEndedIsUnknown(t *testing.T) {
 
 func TestACheckerThatIgnoresItsContextDoesNotStopTheProber(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"stuck", "C1"}, Target{"fine", "C2"})
+	g.set("r1", Target{Binding: "stuck", Channel: "C1"}, Target{Binding: "fine", Channel: "C2"})
 	var gate chan struct{}
 	var hang atomic.Bool
 	agents := &fakeAgents{fn: func(_ context.Context, b string) (Outcome, error) {
@@ -1267,7 +1267,7 @@ func TestACheckerThatIgnoresItsContextDoesNotStopTheProber(t *testing.T) {
 
 func TestALateResultFromAStuckCheckerCannotBringBackAPrunedBinding(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"stuck", "C1"}, Target{"fine", "C2"})
+	g.set("r1", Target{Binding: "stuck", Channel: "C1"}, Target{Binding: "fine", Channel: "C2"})
 	var gate chan struct{}
 	agents := &fakeAgents{fn: func(_ context.Context, b string) (Outcome, error) {
 		if b == "stuck" {
@@ -1293,7 +1293,7 @@ func TestALateResultFromAStuckCheckerCannotBringBackAPrunedBinding(t *testing.T)
 		h.advance(timeout)
 		wantCond(t, h.conds("stuck"), BackendReachable, Unknown, ReasonProbeTimeout)
 
-		g.set("r2", Target{"fine", "C2"})
+		g.set("r2", Target{Binding: "fine", Channel: "C2"})
 		h.advance(tick)
 		if _, found := h.p.State().Snapshot()["stuck"]; found {
 			t.Fatal("the Binding that left Targets is still in the State")
@@ -1335,7 +1335,7 @@ func TestACheckerThatReportsAnUnusableReasonIsNotBelieved(t *testing.T) {
 	g := &targets{}
 	var ts []Target
 	for b := range cases {
-		ts = append(ts, Target{b, "C1"})
+		ts = append(ts, Target{Binding: b, Channel: "C1"})
 	}
 	g.set("r1", ts...)
 	agents := &fakeAgents{fn: func(_ context.Context, b string) (Outcome, error) { return cases[b], nil }}
@@ -1393,7 +1393,7 @@ func TestEveryReasonACheckerMayReportIsReportable(t *testing.T) {
 
 func TestACheckerThatFailsLeavesTheConditionUnknownAndTheOthersRun(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"errs", "C1"}, Target{"panics", "C2"}, Target{"garbage", "C3"}, Target{"fine", "C4"})
+	g.set("r1", Target{Binding: "errs", Channel: "C1"}, Target{Binding: "panics", Channel: "C2"}, Target{Binding: "garbage", Channel: "C3"}, Target{Binding: "fine", Channel: "C4"})
 	cause := errors.New("token abc123 rejected")
 	agents := &fakeAgents{fn: func(_ context.Context, b string) (Outcome, error) {
 		switch b {
@@ -1470,7 +1470,7 @@ func TestACheckerThatFailsLeavesTheConditionUnknownAndTheOthersRun(t *testing.T)
 
 func TestAnOutcomeWithNoReasonIsTrueOrAFault(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"a", "C1"}, Target{"b", "C1"}, Target{"c", "C1"})
+	g.set("r1", Target{Binding: "a", Channel: "C1"}, Target{Binding: "b", Channel: "C1"}, Target{Binding: "c", Channel: "C1"})
 	agents := &fakeAgents{fn: func(_ context.Context, b string) (Outcome, error) {
 		return Outcome{Status: map[string]Status{"a": True, "b": False, "c": Unknown}[b]}, nil
 	}}
@@ -1487,7 +1487,7 @@ func TestAnOutcomeWithNoReasonIsTrueOrAFault(t *testing.T) {
 
 func TestPruneDropsABindingThatLeftTargetsAndSilencesItsHook(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"keep", "C1"}, Target{"gone", "C2"})
+	g.set("r1", Target{Binding: "keep", Channel: "C1"}, Target{Binding: "gone", Channel: "C2"})
 	var mu sync.Mutex
 	var events []string
 	var flip atomic.Bool
@@ -1514,7 +1514,7 @@ func TestPruneDropsABindingThatLeftTargetsAndSilencesItsHook(t *testing.T) {
 			t.Fatalf("snapshot = %+v", h.p.State().Snapshot())
 		}
 		flip.Store(true) // were "gone" still probed, its condition would now change
-		g.set("r2", Target{"keep", "C1"})
+		g.set("r2", Target{Binding: "keep", Channel: "C1"})
 		h.advance(tick)
 		if snap := h.p.State().Snapshot(); len(snap) != 1 || snap["keep"] == nil {
 			t.Fatalf("after the Binding left Targets: %+v", snap)
@@ -1543,7 +1543,7 @@ func TestPruneDropsABindingThatLeftTargetsAndSilencesItsHook(t *testing.T) {
 
 func TestOnTransitionFiresOnlyOnAChangeOfStatusOrReason(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"b", "C1"})
+	g.set("r1", Target{Binding: "b", Channel: "C1"})
 	var mu sync.Mutex
 	var events []string
 	var step atomic.Int32
@@ -1603,7 +1603,7 @@ func TestOnTransitionFiresOnlyOnAChangeOfStatusOrReason(t *testing.T) {
 
 func TestHookCallsAreSerializedAcrossBindings(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"a", "C1"}, Target{"b", "C2"}, Target{"c", "C3"})
+	g.set("r1", Target{Binding: "a", Channel: "C1"}, Target{Binding: "b", Channel: "C2"}, Target{Binding: "c", Channel: "C3"})
 	var in gauge
 	var release chan struct{}
 	runIn(t, func() Options {
@@ -1629,7 +1629,7 @@ func TestHookCallsAreSerializedAcrossBindings(t *testing.T) {
 
 func TestResultsWaitingForTheHookAreDroppedAfterCancel(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"a", "C1"}, Target{"b", "C2"}, Target{"c", "C3"})
+	g.set("r1", Target{Binding: "a", Channel: "C1"}, Target{Binding: "b", Channel: "C2"}, Target{Binding: "c", Channel: "C3"})
 	var hooks atomic.Int32
 	var release chan struct{}
 	runIn(t, func() Options {
@@ -1666,7 +1666,7 @@ func TestResultsWaitingForTheHookAreDroppedAfterCancel(t *testing.T) {
 
 func TestACheckerThatAnswersAtTheDeadlineIsUnknown(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"b", "C1"})
+	g.set("r1", Target{Binding: "b", Channel: "C1"})
 	agents := &fakeAgents{fn: func(context.Context, string) (Outcome, error) {
 		time.Sleep(timeout) // wakes at the very instant the probe's deadline passes
 		return ok(), nil
@@ -1679,7 +1679,7 @@ func TestACheckerThatAnswersAtTheDeadlineIsUnknown(t *testing.T) {
 
 func TestShutdownRecordsNothingForProbesStillInFlight(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"a", "C1"}, Target{"b", "C2"})
+	g.set("r1", Target{Binding: "a", Channel: "C1"}, Target{Binding: "b", Channel: "C2"})
 	var hooks atomic.Int32
 	started := &fakeAgents{fn: func(ctx context.Context, _ string) (Outcome, error) {
 		<-ctx.Done()
@@ -1709,7 +1709,7 @@ func TestNoProbeStartsAfterCancel(t *testing.T) {
 	g := &targets{}
 	var ts []Target
 	for i := range 5 {
-		ts = append(ts, Target{fmt.Sprintf("b%d", i), fmt.Sprintf("C%d", i)})
+		ts = append(ts, Target{Binding: fmt.Sprintf("b%d", i), Channel: fmt.Sprintf("C%d", i)})
 	}
 	g.set("r1", ts...)
 	agents := &fakeAgents{fn: func(ctx context.Context, _ string) (Outcome, error) {
@@ -1729,7 +1729,7 @@ func TestNoProbeStartsAfterCancel(t *testing.T) {
 
 func TestRunReturnsOnCancelWhenIdleAndLeavesNoGoroutine(t *testing.T) {
 	g := &targets{}
-	g.set("r1", Target{"a", "C1"})
+	g.set("r1", Target{Binding: "a", Channel: "C1"})
 	// The bubble fails the test if a goroutine of the Prober outlives the body.
 	run(t, Options{Targets: g.Targets, Revision: g.Revision, Agents: &fakeAgents{}, Channels: &fakeChannels{}}, func(h *harness) {
 		h.advance(tick)

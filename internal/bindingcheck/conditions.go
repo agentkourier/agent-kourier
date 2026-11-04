@@ -143,9 +143,9 @@ func (r Reason) reportable(s Status) bool {
 	return false
 }
 
-// Condition is one fact about one Binding. Its fields and JSON names are those of metav1.Condition, less
-// ObservedGeneration (file-loaded objects have none) and plus LastProbeTime, which metav1.Condition does not have: a
-// controller that copies a Condition into a status drops LastProbeTime.
+// Condition is one fact about one Binding. Its fields and JSON names are those of metav1.Condition, plus LastProbeTime, which
+// metav1.Condition does not have: whoever copies a Condition into a status drops LastProbeTime. ObservedGeneration is zero for
+// a Binding that was read from a file, which has no generation.
 type Condition struct {
 	// Type is which fact this is.
 	Type ConditionType `json:"type"`
@@ -153,8 +153,19 @@ type Condition struct {
 	Status Status `json:"status"`
 	// Reason is why the condition has this status.
 	Reason Reason `json:"reason"`
-	// Message is a short, redacted detail. It is for people and is not part of the closed set.
+	// Message is a short, redacted detail. It is for people and is not part of the closed set. It is what a status and a
+	// metric may carry, so it holds no text that came from outside: the reason's own sentence.
 	Message string `json:"message"`
+	// Cause is what the checker found behind the Message, for the log only (Outcome.Cause). It is never copied into a status.
+	Cause string `json:"-"`
+	// UID is the UID of the Binding object that the probe was made for (Target.UID), empty for one read from a file. Ready's
+	// is the common UID of the conditions it is derived from, or empty if they differ. Not part of a status.
+	UID string `json:"-"`
+	// ObservedGeneration is the generation of the Binding that the probe behind this condition was made for: the Target's
+	// Generation when the pass began, so an edit during the pass is not claimed as seen. It moves with every probe, whether or
+	// not the status or reason changed. A Pending condition has the Target's generation when the Binding was first seen. Ready's is
+	// the oldest of the conditions it is derived from.
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// LastTransitionTime is when Status last changed. A change of Reason or Message alone does not move it.
 	LastTransitionTime time.Time `json:"lastTransitionTime"`
 	// LastProbeTime is when the condition was last set from a probe, whether or not anything changed. It is the zero
@@ -172,6 +183,11 @@ type Outcome struct {
 	// False or Unknown, anything but OK with True, a reason with a status its comment rules out, or one of the Prober's
 	// own (Pending, ProbeFailed and ProbeTimeout). A checker that gives up on a slow backend reports Unreachable.
 	Reason Reason
-	// Message is a short detail, already redacted: nothing in it may be a token or a Secret value.
+	// Message is a short detail, already redacted: nothing in it may be a token or a Secret value. It reaches the status of
+	// the Binding, which its owner reads, so it names no host, address, port or other text of the namespaces it is probing:
+	// the same sentence for the same reason, which also lets a probe that finds the same twice be no change.
 	Message string
+	// Cause is the detail that Message leaves out, such as the error of a failed request. It is for the log, which an operator
+	// reads, and is redacted like Message. It is not stored in a status or counted.
+	Cause string
 }
