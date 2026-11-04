@@ -18,6 +18,11 @@
 //	                                                text of want before its first ": "
 //	# cluster: skip because ...                     optional: not sent to an apiserver, with the reason
 //
+// The invariant is about the fields of a resource's spec, which the markers copy. An apiserver validates an object's metadata
+// as well (a label or annotation it does not like, an ownerReference), and may refuse what the broker, which reads only
+// the name and namespace, accepts. That is the apiserver's rule and not a marker, so it is outside the invariant, and
+// the corpus has no entry for it.
+//
 // "schema: accepts" is a rule only the broker enforces. It is how this package says which rules the CRD does not copy
 // (yet), so the day a marker or CEL rule starts to refuse an entry, the test fails until the flag follows it.
 package crdcorpus
@@ -32,7 +37,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -147,12 +151,17 @@ func Problems(err error) []error {
 	return []error{err}
 }
 
-// placeholder matches the marker a template leaves for a script to fill in, such as __SLACK_CHANNEL_ID__.
-var placeholder = regexp.MustCompile(`__[A-Z][A-Z0-9_]*__`)
+// templates are the two files, by path under the repository's root, that are not resources yet: the sandbox tier's script
+// fills a placeholder in each (__SLACK_CHANNEL_ID__, __ALERT_CHANNEL_ID__) with the channel's ID. They are named, and not
+// found by their text, so that a placeholder anywhere else is a channel the broker refuses, which fails the test, and a
+// comment that mentions one cannot drop a real file from the corpus.
+var templates = []string{
+	"hack/kind/sandbox/agent-kourier/config/binding.yaml",
+	"hack/kind/sandbox/agent-kourier/alert-trial/alert-binding.yaml",
+}
 
 // validRoots are the directories, under the repository's root, that hold the valid half: every v1alpha1 resource in
-// them is an entry. The recipe directories hold only what the recipes' own tests load. A file with a placeholder in it
-// (the sandbox tier's, which its script fills in) is a template, not a resource, and is left out.
+// them is an entry, but the templates. The recipe directories hold only what the recipes' own tests load.
 var validRoots = []string{
 	"api/v1alpha1/testdata",
 	"examples",
@@ -181,7 +190,7 @@ func Valid(root string) ([]Entry, error) {
 			if err != nil {
 				return err
 			}
-			if placeholder.Match(data) {
+			if slices.Contains(templates, filepath.ToSlash(rel)) {
 				return nil
 			}
 			docs, err := splitDocuments(data)

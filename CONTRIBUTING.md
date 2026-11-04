@@ -74,8 +74,9 @@ not a required check yet. If you change the store or a migration, run it locally
 
 `ci` also runs `crd-corpus` (`make crd-corpus`): a throwaway kind cluster with only the CRDs from
 `charts/agent-kourier/files/crds`, to which `test/crdcorpus` sends the corpus of valid and invalid objects as server-side
-dry-run creates. It fails if the generated schema refuses an object that `Default` and `Validate` accept, or if an
-entry's `# schema:` flag no longer says what the schema does with it. It is not a required check yet. If you change an
+dry-run creates. It fails if the generated schema refuses an object that `Default` and `Validate` accept, if an
+entry's `# schema:` flag no longer says what the schema does with it or its refusal names another field, or if the
+corpus has lost an entry or an entry reports more than one problem. It is not a required check yet. If you change an
 API type, a marker or a rule of `api/v1alpha1/validate.go`, run `make crds` and then `make crd-corpus` locally; it
 needs Docker, `kind` and `kubectl` (or `CRD_CORPUS_KUBECONFIG`, a kubeconfig for a local cluster you made), and takes
 a minute or two once the node image is pulled. A new field or rule gets an entry in `test/crdcorpus/testdata/invalid`.

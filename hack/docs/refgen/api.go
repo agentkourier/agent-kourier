@@ -186,7 +186,7 @@ func (p *apiPackage) row(rootKind bool, f *ast.Field) (string, string, bool) {
 	desc := escapeText(description(f.Doc), true)
 	var extra []string
 	if v, ok := marker(ms, "+kubebuilder:validation:Enum="); ok {
-		// An empty value, written "" in the marker, is the field's default (Default fills it), not one more choice.
+		// An empty value, written "" in the marker, is the field unset (Default fills it, or Validate reads it as unset), not one more choice.
 		extra = append(extra, "One of "+codeList(slices.DeleteFunc(strings.Split(v, ";"), func(e string) bool { return e == `""` }))+".")
 	}
 	if keys := p.mapKeys(f.Type); len(keys) > 0 {

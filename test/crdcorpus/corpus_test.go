@@ -44,7 +44,7 @@ func TestEveryInvalidEntryIsRefusedByTheBroker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var refuses int
+	var refuses, unsent int
 	for _, e := range entries {
 		err := Broker(t.Context(), e)
 		switch {
@@ -60,6 +60,9 @@ func TestEveryInvalidEntryIsRefusedByTheBroker(t *testing.T) {
 		if e.SchemaRefuses {
 			refuses++
 		}
+		if e.SkipCluster != "" {
+			unsent++
+		}
 	}
 	valid, err := Valid(root(t))
 	if err != nil {
@@ -68,5 +71,5 @@ func TestEveryInvalidEntryIsRefusedByTheBroker(t *testing.T) {
 	if err := CheckSize(valid, entries); err != nil {
 		t.Error(err)
 	}
-	t.Logf("%d invalid entries, %d of which the schema refuses and %d only the broker", len(entries), refuses, len(entries)-refuses)
+	t.Logf("%d invalid entries, %d of which the schema refuses, %d only the broker, and %d are not sent to an apiserver", len(entries), refuses, len(entries)-refuses-unsent, unsent)
 }

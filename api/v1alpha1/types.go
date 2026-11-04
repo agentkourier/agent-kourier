@@ -8,10 +8,11 @@ import (
 
 // Enumerations. Each type's values are also listed in its field's Enum marker.
 //
-// A field that Default fills from "" (output, progress, threadReplies, botMentions, from.kind, thread.by) lists "" in its
-// Enum marker too, and the emoji pattern accepts it: an object that says `output: ""` is one the broker accepts, so the
-// schema must not refuse it (D50: nothing the schema refuses may be accepted by the broker). A field that Validate
-// refuses when it is empty (dialect, platform, trigger type, extract field) does not.
+// A field that Default fills from "" (output, progress, threadReplies, botMentions, from.kind), and thread.by, which
+// Validate reads as unset when empty, list "" in their Enum marker too, and the emoji pattern accepts it: an object that
+// says `output: ""` is one the broker accepts, so the schema must not refuse it (D50: nothing the schema refuses may be
+// accepted by the broker). A field that Validate refuses when it is empty (dialect, platform, trigger type, extract
+// field) does not.
 type (
 	// Dialect selects how Agent Kourier speaks to an agent backend.
 	Dialect string

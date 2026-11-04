@@ -222,42 +222,70 @@ func TestSchemaEmojiMatchesTheBrokersRule(t *testing.T) {
 }
 
 // TestSchemaEnumsListTheEmptyValueExactlyWhereTheBrokerAcceptsIt holds the enums to the invariant for a field written as
-// "": Default fills it, so the broker accepts it, and the schema must too; where Validate refuses "", the enum must not
-// list it, or a fast-fail is lost. Every enum of the schema is in the table, so a new one must be put in it.
+// "": where the broker accepts it, the schema must too, and where it refuses it, the enum must not list it, or a
+// fast-fail is lost. The broker is asked: each row sets the field to "" in a valid object and runs Default and
+// Validate, so the answer is the code's and not a column kept by hand. Default fills five of these from "" (output,
+// progress, threadReplies, botMentions, from.kind); Validate reads an empty thread.by as unset. Every enum of the
+// schema has a row, so a new one must be put in the table.
 func TestSchemaEnumsListTheEmptyValueExactlyWhereTheBrokerAcceptsIt(t *testing.T) {
 	bindings, backends, conns := crdSchema(t, "bindings"), crdSchema(t, "agentbackends"), crdSchema(t, "chatconnections")
 	trigger := "spec.chat.triggers[]"
-	for _, tc := range []struct {
-		node  schema
-		name  string
-		empty bool // Default fills it, so the broker accepts ""
+	binding := func(set func(*Binding)) func(*testing.T) error {
+		return func(t *testing.T) error {
+			o := load[Binding](t, "binding.yaml")
+			set(o)
+			o.Default()
+			return o.Validate()
+		}
+	}
+	rows := []struct {
+		node   schema
+		name   string
+		broker func(*testing.T) error // the broker's answer for the field written as ""
 	}{
-		{bindings.at(t, "spec.chat.output"), "output", true},
-		{bindings.at(t, "spec.chat.progress"), "progress", true},
-		{bindings.at(t, "spec.chat.threadReplies"), "threadReplies", true},
-		{bindings.at(t, "spec.chat.botMentions"), "botMentions", true},
-		{bindings.at(t, trigger+".from.kind"), "from.kind", true},
-		{bindings.at(t, trigger+".thread.by"), "thread.by", true},
-		{backends.at(t, "spec.dialect"), "dialect", false},
-		{conns.at(t, "spec.platform"), "platform", false},
-		{bindings.at(t, trigger+".type"), "trigger type", false},
-		{bindings.at(t, trigger+".extract.{}.field"), "extract field", false},
-	} {
+		{bindings.at(t, "spec.chat.output"), "output", binding(func(o *Binding) { o.Spec.Chat.Output = "" })},
+		{bindings.at(t, "spec.chat.progress"), "progress", binding(func(o *Binding) { o.Spec.Chat.Progress = "" })},
+		{bindings.at(t, "spec.chat.threadReplies"), "threadReplies", binding(func(o *Binding) { o.Spec.Chat.ThreadReplies = "" })},
+		{bindings.at(t, "spec.chat.botMentions"), "botMentions", binding(func(o *Binding) { o.Spec.Chat.BotMentions = "" })},
+		{bindings.at(t, trigger+".from.kind"), "from.kind", binding(func(o *Binding) { bot(o).From.Kind = "" })},
+		// An empty by with a cooldown or closeWhen is refused for them, so the rest of the thread is cleared: the field alone is the question.
+		{bindings.at(t, trigger+".thread.by"), "thread.by", binding(func(o *Binding) { bot(o).Thread = TriggerThread{By: ""} })},
+		{backends.at(t, "spec.dialect"), "dialect", func(t *testing.T) error {
+			o := load[AgentBackend](t, "agentbackend.yaml")
+			o.Spec.Dialect = ""
+			o.Default()
+			return o.Validate()
+		}},
+		{conns.at(t, "spec.platform"), "platform", func(t *testing.T) error {
+			o := load[ChatConnection](t, "chatconnection.yaml")
+			o.Spec.Platform = ""
+			o.Default()
+			return o.Validate()
+		}},
+		{bindings.at(t, trigger+".type"), "trigger type", binding(func(o *Binding) { bot(o).Type = "" })},
+		{bindings.at(t, trigger+".extract.{}.field"), "extract field", binding(func(o *Binding) {
+			e := bot(o).Extract["state"]
+			e.Field = ""
+			bot(o).Extract["state"] = e
+		})},
+	}
+	for _, tc := range rows {
+		// The fixtures are valid, so the problem a refusal reports is the one the "" made.
+		accepts := tc.broker(t) == nil
 		enum, _ := tc.node["enum"].([]any)
 		if len(enum) == 0 {
 			t.Errorf("%s has no enum", tc.name)
 		}
-		if got := slices.Contains(enum, any("")); got != tc.empty {
-			t.Errorf("%s: the enum lists \"\" = %t, want %t (the broker accepts \"\" = %t)", tc.name, got, tc.empty, tc.empty)
+		if got := slices.Contains(enum, any("")); got != accepts {
+			t.Errorf("%s: the enum lists \"\" = %t, but the broker accepts \"\" = %t", tc.name, got, accepts)
 		}
 	}
-	// And the table is whole: count the enums in the three schemas.
 	var n int
 	for _, sc := range []schema{bindings, backends, conns} {
 		n += countEnums(sc)
 	}
-	if n != 10 {
-		t.Errorf("the schemas have %d enums and the table 10: put the new one in it", n)
+	if n != len(rows) {
+		t.Errorf("the schemas have %d enums and the table %d rows: put the new one in it", n, len(rows))
 	}
 }
 

@@ -169,8 +169,8 @@ func TestTheSchemaNeverRefusesWhatTheBrokerAccepts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// This job does not run the unit test, so it holds the corpus to its size itself: a half that was emptied would
-	// pass every loop below.
+	// The job runs the unit tests of this package too, but this test holds the corpus to its size itself, so that it
+	// cannot pass on a half that was emptied: every loop below would succeed on nothing.
 	if err := CheckSize(valid, invalid); err != nil {
 		t.Fatal(err)
 	}
