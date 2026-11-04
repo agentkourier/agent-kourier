@@ -490,6 +490,7 @@ func TestAnswerThatCannotBeSentLeavesThePauseOpen(t *testing.T) {
 	for name, cause := range map[string]error{
 		"agent unreachable":   fmt.Errorf("%w: down", agent.ErrNotSent),
 		"credentials refused": fmt.Errorf("%w: %w", agent.ErrNotSent, agent.ErrCredentialsRejected),
+		"card answered 403":   fmt.Errorf("%w: connect to agent: %w", agent.ErrNotSent, agent.ErrAgentForbidden),
 	} {
 		t.Run(name, func(t *testing.T) {
 			f, sink := pausedFirst(t, func(*a2a.Message, agent.Handler) error { return cause })
@@ -589,6 +590,7 @@ func TestFailedStopIsClassified(t *testing.T) {
 		{"the agent no longer knows it", a2a.NewError(a2a.ErrTaskNotFound, "gone"), true, nil, NoticeSessionGone, 1, 0, 1},
 		{"credentials refused", fmt.Errorf("%w: rejected", agent.ErrCredentialsRejected), false, agent.ErrCredentialsRejected, "", 0, 1, 1},
 		{"identity refused", fmt.Errorf("send: %w", agent.ErrForbidden), false, agent.ErrForbidden, "", 1, 0, 1},
+		{"card answered 403", fmt.Errorf("connect to agent: %w", agent.ErrAgentForbidden), false, agent.ErrAgentForbidden, "", 1, 0, 1},
 		{"it may pass, and does not", errors.New("agent unreachable"), false, nil, "", 1, 0, 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

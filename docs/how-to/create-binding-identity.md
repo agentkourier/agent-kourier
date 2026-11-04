@@ -206,4 +206,4 @@ namespace. They hold different credentials and serve different purposes.
 
 Mention the bot in the bound channel. A successful agent reply checks that the configured identity can reach the
 backend. If the front door rejects the token, check the issuer, audience, expiry and account permissions; see
-[troubleshooting](troubleshoot.md#http-401-or-http-403-at-the-card-fetch).
+[troubleshooting](troubleshoot.md#http-401-at-the-card-fetch).

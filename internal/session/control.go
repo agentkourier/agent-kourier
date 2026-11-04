@@ -77,7 +77,7 @@ const (
 	cancelGone                          // the agent no longer knows the task (-32001)
 	cancelEnded                         // the task ended in the meantime (-32002)
 	cancelCredentials                   // the front door refused the credentials
-	cancelForbidden                     // the agent refused the identity (-31403)
+	cancelForbidden                     // the agent refused the identity (-31403), or its card was answered 403
 	cancelTransient                     // anything else: it may pass
 )
 
@@ -91,7 +91,7 @@ func classifyCancel(err error) cancelKind {
 		return cancelEnded
 	case errors.Is(err, agent.ErrCredentialsRejected):
 		return cancelCredentials
-	case errors.Is(err, agent.ErrForbidden):
+	case errors.Is(err, agent.ErrForbidden), errors.Is(err, agent.ErrAgentForbidden):
 		return cancelForbidden
 	}
 	return cancelTransient

@@ -26,10 +26,23 @@ var (
 	// A 408, 429 or 503 must be retried with backoff, no sooner than the RetryAfter of the
 	// dialect.HTTPStatusError in the chain.
 	ErrNotSent = errors.New("agent: the message was not sent")
-	// ErrCredentialsRejected is joined to an error whose HTTP status is 401 or 403: the front
-	// door refused the Binding's credentials, so the caller re-mints the token (WP-21e).
-	// Before any event it comes with ErrNotSent, and the send can be retried after re-minting.
+	// ErrCredentialsRejected is joined to an error whose HTTP status is 401, or 403 on an A2A
+	// call (not the card fetch; see ErrAgentForbidden): the front door refused the Binding's
+	// credentials, so the caller re-mints the token (WP-21e). Before any event it comes with
+	// ErrNotSent, and the send can be retried after re-minting. A 403 on a call is read this way
+	// because the call goes out on a client whose card fetch these credentials passed, so the
+	// agent existed and accepted them; and kagent refuses a call in the JSON-RPC body
+	// (-31403, ErrForbidden; inferred from its code, not measured for every method), so a 403
+	// status there is taken as a front door judging the credentials.
 	ErrCredentialsRejected = errors.New("agent: the backend refused the credentials")
+	// ErrAgentForbidden is joined to an error whose HTTP status is 403 at the card fetch, which
+	// is where the Pool connects: the agent does not exist, or does not permit this identity.
+	// kagent 1.0 answers both with 403 on purpose (measured: an unknown agent or namespace gets
+	// 403 through the front door, not 404), so a misspelt agent name lands here. It is not a
+	// refused credential: re-minting the token would not change it, and the credential
+	// rejection's audit row and metric would point at the token. The same credentials get the
+	// same answer. Before any event it comes with ErrNotSent.
+	ErrAgentForbidden = errors.New("agent: the agent was not found, or does not permit this identity")
 	// ErrOutcomeUnknown means the stream was lost, or the backend failed with a 5xx status,
 	// before the agent named a task, so the agent may or may not have accepted the message. Resending the same messageId WITHOUT a
 	// contextId is deduplicated by kagent (WP-02, measured). One WITH a contextId is not
@@ -133,8 +146,19 @@ func typed(err error, answer bool) error {
 		return fmt.Errorf("%w: %w", ErrForbidden, err)
 	case answer && errors.Is(err, a2a.ErrInternalError):
 		return fmt.Errorf("%w: %w", ErrAnswerRejected, err)
+	case errors.Is(err, ErrAgentForbidden): // a card 403 (cardError), typed again on its way out
+		return err
 	case httpStatus(err) == http.StatusUnauthorized || httpStatus(err) == http.StatusForbidden:
 		return fmt.Errorf("%w: %w", ErrCredentialsRejected, err)
+	}
+	return err
+}
+
+// cardError types an error from fetching the agent card: a 403 there is ErrAgentForbidden, and
+// typed leaves it so. Any other status is typed as on a call, by typed.
+func cardError(err error) error {
+	if httpStatus(err) == http.StatusForbidden {
+		return fmt.Errorf("%w: %w", ErrAgentForbidden, err)
 	}
 	return err
 }

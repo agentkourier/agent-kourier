@@ -189,12 +189,34 @@ Agent Kourier follows no redirects, because a redirect could carry the Binding's
 somewhere else. Write the slash on the AgentBackend's `url`. The `a2a` dialect sends to the
 URL exactly as written.
 
-### `HTTP 401` or `HTTP 403` at the card fetch
+### `HTTP 401` at the card fetch
 
-The front door refused the Binding's token. The turn is not retried: the thread gets "This request failed, and I won't
+The front door refused the Binding's token. A send is not retried: the thread gets "This request failed, and I won't
 try it again" with the detail that the agent's front door refused the Binding's credentials, the log's
 `session turn failed` line carries the reason, and `agentkourier_credential_rejections_total` counts it. Check the Secret named by `identity.tokenSecretRef`
-and the front door's own configuration.
+and the front door's own configuration. An HTTP 403 on an A2A call, after the card was fetched, is handled the same way.
+
+A lookup before a resend goes differently: it is not counted, the Secret is not read again, and the lookup is retried. The
+thread says "I can't reach the agent right now, and I'm trying again", and the turn fails as unreachable after 15 minutes.
+
+### `HTTP 403` at the card fetch
+
+The agent does not exist, or does not permit the Binding's identity. kagent 1.0.0-alpha5 answers both with 403, so a
+misspelt `agent.name` or `agent.namespace` in the Binding gets this status; kagent 0.9.x answers an unknown agent with 404.
+A send is not retried: the thread gets "This request failed, and I won't try it again" with the detail that the agent was
+not found, or does not permit the Binding's identity, and the log's `session turn failed` line carries the reason. Other
+requests go differently:
+
+- An answer by a button leaves the pause open, and the thread is told the answer could not be delivered.
+- A typed answer to a question on the `a2a` dialect waits and is tried again, with nothing said in the thread.
+- A task already under way is not followed again, and the thread is told the agent refused to continue it. After a restart
+  with a reply queued behind that task, recovery asks about the reply first and keeps asking, with nothing said in the thread.
+- A lookup before a resend is retried, because the agent may already have the turn. The thread says "I can't reach the agent
+  right now, and I'm trying again", and the turn fails as unreachable after 15 minutes. A turn held behind a task of the
+  session, or one this process knows the agent took and did not record, is retried with no limit.
+
+None of these is counted as a rejected credential. Check the Binding's `agent.name` and
+`agent.namespace`, then the rules that let the Binding's identity use the agent, in kagent and in the front door.
 
 ### The host does not resolve, or the connection times out
 
@@ -239,8 +261,8 @@ One failed probe holds the Binding at 0 until the next pass, up to about 5.5 min
 |---|---|---|---|
 | `CredentialsUnreadable` | false | The Binding's token, or a Secret behind a header of the backend, cannot be read. | Check the Secret named by `identity.tokenSecretRef` or the header's `valueSecretRef`. It must exist, be type `Opaque` and have the key, and the value must not be empty or hold a control character, such as the trailing newline of `--from-file`. |
 | `Unreachable` | false | The request for the card failed, or the backend did not answer within 8 seconds. `detail` has the cause. | See [The host does not resolve](#the-host-does-not-resolve-or-the-connection-times-out). A backend that takes longer than 8 seconds to serve its card reads this too, although a turn's connect waits up to 30 seconds. |
-| `CredentialsRejected` | false | The backend answered 401. It rejected the token, or the Binding has none and the backend needs one. | See [`HTTP 401` or `HTTP 403`](#http-401-or-http-403-at-the-card-fetch). |
-| `AgentForbidden` | false | The backend answered 403: the agent is not found, or not permitted for this identity. kagent's front door answers this for an agent that does not exist. | Check `agent.namespace` and `agent.name`, then what the identity may reach. |
+| `CredentialsRejected` | false | The backend answered 401. It rejected the token, or the Binding has none and the backend needs one. | See [`HTTP 401`](#http-401-at-the-card-fetch). |
+| `AgentForbidden` | false | The backend answered 403: the agent is not found, or not permitted for this identity. kagent's front door answers this for an agent that does not exist. | See [`HTTP 403`](#http-403-at-the-card-fetch). |
 | `AgentNotFound` | false | The backend answered 404. | Check `agent.namespace` and `agent.name`, and the AgentBackend's `url`. |
 | `AgentNotReady` | false | The backend answered 409. kagent's code answers this for an agent that is not ready (read from its code, not measured). | Check the agent's pod. |
 | `BackendError` | false | The backend answered 5xx, or a 2xx other than 200. | Check the logs of the agent and the front door. |
