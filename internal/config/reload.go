@@ -160,7 +160,7 @@ func (r *Reloader) reload(ctx context.Context, force bool) error {
 		st.Stale, st.LastSuccess, r.failures = false, r.lastAttempt, 0
 		r.snap.Store(pub)
 		if w, ok := r.secrets.(SecretWatcher); ok {
-			w.Retain(pub.secrets) // after the store: the new snapshot's Secrets are followed, and the old one's are not needed
+			w.Retain(pub.secrets) // after the store, so that whoever finds a Secret dropped finds the snapshot that dropped it; a reader that still holds the old snapshot follows its Secrets again itself
 		}
 		if warnPolicies {
 			r.warnToolApprovalPolicies(pub.snap)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -84,7 +85,6 @@ func TestValueOfAnUnfollowedSecretReportsDenialAndTimeout(t *testing.T) {
 // Secrets that a failed reload asked for are let go by the next reload: a run of failed reloads leaves the informers of the
 // last one, not of each. What a successful reload retained, and what is pinned, stays.
 func TestFailedReloadsDoNotAccumulateInformers(t *testing.T) {
-	before := goleak.IgnoreCurrent()
 	client := newAPI(t, secret("agent-kourier", "pg"), secret("sre", "kept"))
 	r := New(client, WithPinned(sn("agent-kourier", "pg")), WithLogger(slog.New(slog.DiscardHandler)))
 	t.Cleanup(r.Stop)
@@ -95,6 +95,7 @@ func TestFailedReloadsDoNotAccumulateInformers(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.Retain([]config.SecretName{sn("sre", "kept")}) // a good snapshot
+	base := goleak.IgnoreCurrent()                   // the pinned and the retained informers are up
 
 	for _, n := range []string{"bad1", "bad2", "bad3", "bad4", "bad5"} { // five failed reloads, each with a new Secret
 		if err := r.Watch(t.Context(), []config.SecretName{sn("sre", "kept"), sn("sre", n)}); err != nil {
@@ -107,9 +108,12 @@ func TestFailedReloadsDoNotAccumulateInformers(t *testing.T) {
 		t.Errorf("informers = %v, want %v: the pinned and retained Secrets and the latest reload's", got, want)
 	}
 
-	r.Retain(nil)
-	r.Stop()
-	goleak.VerifyNone(t, before)
+	// The informers that were let go must have ended, not only left the map: after a reload that names the retained
+	// Secret alone, nothing runs beyond the pinned and retained ones. Stop is not called first, as it would end them all.
+	if err := r.Watch(t.Context(), []config.SecretName{sn("sre", "kept")}); err != nil {
+		t.Fatal(err)
+	}
+	goleak.VerifyNone(t, base)
 }
 
 // An informer that Value started for a holder lasts until the next Watch that does not name the Secret. A holder that still
@@ -218,5 +222,167 @@ func TestAPinnedSecretTheConfigAlsoNamesStaysPinned(t *testing.T) {
 
 	if _, err := r.Keys(t.Context(), "agent-kourier", "pg"); err != nil {
 		t.Errorf("the pinned Secret after the config dropped it: Keys = %v", err)
+	}
+}
+
+// What the last good snapshot reads stays readable through a reload that fails: the failed config repoints a Secret, so its
+// names omit the retained one, and Watch must not let it go. Revision and the turns that hold the snapshot read it.
+func TestAFailedReloadKeepsTheLastGoodSnapshotsSecrets(t *testing.T) {
+	client := newAPI(t, secret("sre", "old"), secret("sre", "repointed"))
+	r := follow(t, client, sn("sre", "old"))
+	r.Retain([]config.SecretName{sn("sre", "old")}) // the good snapshot
+
+	if err := r.Watch(t.Context(), []config.SecretName{sn("sre", "repointed")}); err != nil { // a failed reload repoints it
+		t.Fatal(err)
+	}
+
+	if _, err := r.Keys(t.Context(), "sre", "old"); err != nil {
+		t.Errorf("Keys of the last good snapshot's Secret after a failed reload = %v", err)
+	}
+	if _, err := r.SecretVersion(t.Context(), "sre", "old"); err != nil {
+		t.Errorf("SecretVersion of the last good snapshot's Secret after a failed reload = %v", err)
+	}
+}
+
+// listDelay makes the list of one Secret answer after d.
+func listDelay(client *api, secretName string, d time.Duration) {
+	client.PrependReactor("list", "secrets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.(k8stesting.ListAction).GetListRestrictions().Fields.String() == "metadata.name="+secretName {
+			time.Sleep(d)
+		}
+		return false, nil, nil
+	})
+}
+
+// When an agent restarts, every turn of a Binding reconnects together and reads the same Secret: the first read follows it,
+// and the others find a cache that has not synced. They wait for it as the first does and read the value.
+func TestValueReadsWhileAnotherReadWaitsForTheSameCache(t *testing.T) {
+	client := newAPI(t, secret("sre", "late"))
+	listDelay(client, "late", 400*time.Millisecond)
+	r := New(client, WithLogger(slog.New(slog.DiscardHandler)))
+	t.Cleanup(r.Stop)
+
+	type result struct {
+		v     string
+		err   error
+		after time.Duration
+	}
+	results := make(chan result, 2)
+	begin := time.Now()
+	read := func() {
+		v, err := r.Value(t.Context(), "sre", "late", "token")
+		results <- result{v.Reveal(), err, time.Since(begin)}
+	}
+	go read()
+	time.Sleep(100 * time.Millisecond) // the first read has followed the Secret, and its cache has not synced
+	go read()
+
+	for range 2 {
+		got := <-results
+		if got.err != nil || got.v != canary || got.after > 5*time.Second {
+			t.Errorf("a read while the cache syncs = %q, %v after %s; want the value, in well under the 10 s wait", got.v, got.err, got.after)
+		}
+	}
+}
+
+// A reload that releases an informer that a Value is still waiting for must not fail the Value: it follows the Secret again.
+func TestValueFollowsAgainWhenTheInformerItWaitsForIsReleased(t *testing.T) {
+	client := newAPI(t, secret("sre", "held"), secret("sre", "other"))
+	gate, listed := make(chan struct{}), make(chan struct{}, 1)
+	var first atomic.Bool
+	client.PrependReactor("list", "secrets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.(k8stesting.ListAction).GetListRestrictions().Fields.String() == "metadata.name=held" && first.CompareAndSwap(false, true) {
+			listed <- struct{}{}
+			<-gate // the first list hangs until the test lets it go
+		}
+		return false, nil, nil
+	})
+	r := New(client, WithLogger(slog.New(slog.DiscardHandler)))
+	t.Cleanup(r.Stop)
+
+	type result struct {
+		v   string
+		err error
+	}
+	got := make(chan result, 1)
+	begin := time.Now()
+	go func() {
+		v, err := r.Value(t.Context(), "sre", "held", "token")
+		got <- result{v.Reveal(), err}
+	}()
+	<-listed
+	time.AfterFunc(300*time.Millisecond, func() { close(gate) }) // the hung list ends after the release has begun
+	// A forced recheck: a Watch that does not name the Secret stops the informer the Value is waiting for.
+	if err := r.Watch(t.Context(), []config.SecretName{sn("sre", "other")}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case res := <-got:
+		if res.err != nil || res.v != canary {
+			t.Errorf("Value = %q, %v; want it to follow the Secret again and read it", res.v, res.err)
+		}
+		if took := time.Since(begin); took > 5*time.Second {
+			t.Errorf("Value took %s, want well under the 10 s wait", took)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("Value did not return")
+	}
+}
+
+// The wait is bounded by the resolver, not only by the caller's context: Rejected calls Value with a context that has no
+// deadline, and a cache that never syncs must not hold it for ever.
+func TestValueWaitIsBoundedWhateverTheContext(t *testing.T) {
+	client := newAPI(t, secret("sre", "never"))
+	client.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("connection refused")
+	})
+	r := New(client, WithLogger(slog.New(slog.DiscardHandler)), WithOnDemandWait(100*time.Millisecond))
+	t.Cleanup(r.Stop)
+	done := make(chan error, 1)
+	go func() { _, err := r.Value(context.Background(), "sre", "never", "token"); done <- err }()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrNotSynced) {
+			t.Errorf("Value = %v, want ErrNotSynced once the wait ends", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Value with a context without a deadline did not return after the on-demand wait")
+	}
+}
+
+// Stop ends a Value that waits, at once, and so does a denial; neither waits out the bound.
+func TestValueEndsAtOnceOnStopAndOnDenial(t *testing.T) {
+	client := newAPI(t, secret("sre", "never"), secret("sre", "private"))
+	client.PrependReactor("list", "secrets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		switch a.(k8stesting.ListAction).GetListRestrictions().Fields.String() {
+		case "metadata.name=never":
+			return true, nil, errors.New("connection refused")
+		case "metadata.name=private":
+			return true, nil, denied()
+		}
+		return false, nil, nil
+	})
+	r := New(client, WithLogger(slog.New(slog.DiscardHandler))) // the default 10 s wait
+	t.Cleanup(r.Stop)
+
+	begin := time.Now()
+	if _, err := r.Value(context.Background(), "sre", "private", "token"); !errors.Is(err, ErrAccessDenied) || time.Since(begin) > 3*time.Second {
+		t.Errorf("Value of a denied Secret = %v after %s, want ErrAccessDenied at once", err, time.Since(begin))
+	}
+
+	done := make(chan error, 1)
+	go func() { _, err := r.Value(context.Background(), "sre", "never", "token"); done <- err }()
+	time.Sleep(100 * time.Millisecond)
+	stopped := time.Now()
+	r.Stop()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrStopped) || time.Since(stopped) > 3*time.Second {
+			t.Errorf("Value across Stop = %v after %s, want ErrStopped at once", err, time.Since(stopped))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Value did not return after Stop")
 	}
 }

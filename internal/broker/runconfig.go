@@ -157,8 +157,9 @@ func InClusterClient() (kubernetes.Interface, error) {
 	// client-go's default is 5 requests a second with a burst of 10, shared by every request of this client. Each followed
 	// Secret is an informer that lists once (on a server without streamed lists), and relists after a watch expires, and
 	// the leader's Lease renewals go through the same limiter, so a hundred Secrets would take about 18 s to list and could
-	// hold a renewal past the renew deadline. These are the same client's requests, not a load on the API server: a
-	// steady state is one watch per Secret.
+	// hold a renewal past the renew deadline. The higher limit lets a client send up to 50 requests a second, and on a
+	// server without streamed lists that is up to 50 lists a second when the API server restarts and every informer lists
+	// again (the burst of 100 lets the first hundred go at once). In a steady state it is one watch per Secret.
 	cfg.QPS, cfg.Burst = 50, 100
 	client, err := kubernetes.NewForConfig(cfg)
 	if err != nil {

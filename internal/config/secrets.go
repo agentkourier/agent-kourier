@@ -85,16 +85,25 @@ func secretNames(refs []secretRef) []SecretName {
 func (s *Set) SecretNames() []SecretName { return secretNames(s.secretRefs()) }
 
 // SecretWatcher is an optional interface of a SecretResolver that follows Secrets one by one, as the cluster-backed one
-// does. The Reloader calls it around each reload, so that a resolver reads exactly the Secrets the config refers to: it
-// holds nothing else, and a Secret that a reload adds is readable without a restart.
+// does. The Reloader calls it around each reload, so that a Secret that a reload adds is readable without a restart and
+// the resolver holds the Secrets of the config and what it was told to keep, and little else.
+//
+// A resolver may also follow a Secret of its own accord, for a reader that still holds an older snapshot's Binding and
+// reads a Secret that a reload has dropped (the cluster-backed one does, in Value). Such a Secret is followed until the
+// next Watch or Retain that does not name it. So "the Secrets of the config" is what a reload asks for, not a promise
+// that nothing else is readable.
 type SecretWatcher interface {
-	// Watch starts following each of names that is not followed yet, and waits until each is readable or ctx ends. The
-	// error says which is not and why. Resolve reports the same Secrets through Keys, so a caller that is about to
-	// resolve may ignore it. The Secrets stay followed after ctx ends.
+	// Watch first stops following every Secret that is not in names, was not kept by the latest Retain and is not one the
+	// resolver keeps itself: what an earlier Watch started for a config that never became a snapshot, and what a reader
+	// followed on its own. It then starts following each of names that is not followed yet, and waits until each is
+	// readable or ctx ends. The error says which is not and why. Resolve reports the same Secrets through Keys, so a caller
+	// that is about to resolve may ignore it. The Secrets of names stay followed after ctx ends, and after a Watch that
+	// failed, until a later Watch or Retain leaves them out.
 	Watch(ctx context.Context, names []SecretName) error
 	// Retain keeps following exactly names (and whatever the resolver was told to keep itself) and stops following the
 	// rest. The Reloader calls it with the Secrets of each snapshot it publishes, and never after a failed reload, so
-	// the Secrets of the last good snapshot stay readable.
+	// the Secrets of the last good snapshot stay readable: a Watch that follows a failed reload's names does not stop
+	// them either.
 	Retain(names []SecretName)
 }
 

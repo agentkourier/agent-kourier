@@ -14,10 +14,14 @@
 // A turn holds the Binding of the snapshot it began under, for as long as it runs, and reads that
 // Binding's Secrets through Value. A reload that drops one of them from the config does not cut
 // the turn off: Value follows a Secret that is not followed, waits for its cache (at most
-// onDemandWait) and reads it. That informer lasts until the next Watch that does not name the
-// Secret, or the next Retain that does not, so a holder that still reads it later follows it again.
-// Keys and SecretVersion do not: they answer ErrNotWatched and make no API call, because the
-// Reloader asks only about Secrets it has just named.
+// the on-demand wait, 10 s unless WithOnDemandWait sets it) and reads it, and a Value that finds
+// the cache of a Secret that another read is waiting for waits for it too. That informer lasts
+// until the next Watch that does not name the Secret, or the next Retain that does not, so a
+// holder that still reads it later follows it again. This needs a live API: if the Secret was
+// dropped and the Role is then revoked, or the API server is out, a turn that still reads it gets
+// an error, where an informer per namespace would have served its cache. Keys and SecretVersion
+// do not follow: they answer ErrNotWatched and make no API call, because the Reloader asks only
+// about Secrets it has just named.
 //
 // # RBAC
 //
@@ -85,8 +89,9 @@ import (
 	secretval "github.com/agentkourier/agent-kourier/internal/secret"
 )
 
-// onDemandWait bounds the wait of a Value for the cache of a Secret that it had to follow.
-const onDemandWait = 10 * time.Second
+// defaultOnDemandWait bounds the wait of a Value for the cache of a Secret that it had to follow, or that another
+// read was waiting for.
+const defaultOnDemandWait = 10 * time.Second
 
 // syncPoll is how often a wait looks at whether its caches have synced, as client-go's own wait does.
 const syncPoll = 20 * time.Millisecond
@@ -122,6 +127,7 @@ type entry struct {
 	name     config.SecretName
 	factory  informers.SharedInformerFactory
 	stop     context.CancelFunc // ends the informer; Shutdown then waits for its goroutines
+	ended    <-chan struct{}    // closed once the informer is told to end: by Retain, by Watch, or by Stop
 	lister   corelisters.SecretLister
 	synced   cache.InformerSynced
 	pinned   bool  // followed until Stop, whatever the config says
@@ -138,6 +144,7 @@ type Resolver struct {
 	client kubernetes.Interface
 	log    *slog.Logger
 	pins   []config.SecretName
+	wait   time.Duration // the bound of a Value's wait for a cache
 
 	mu      sync.Mutex
 	started bool
@@ -150,6 +157,10 @@ type Option func(*Resolver)
 // WithLogger sets where a failed list or watch is reported. The default is slog.Default().
 func WithLogger(l *slog.Logger) Option { return func(r *Resolver) { r.log = l } }
 
+// WithOnDemandWait sets how long a Value waits for the cache of a Secret that it had to follow, or that another read was
+// waiting for, when its ctx has no earlier deadline. The default is 10 s.
+func WithOnDemandWait(d time.Duration) Option { return func(r *Resolver) { r.wait = d } }
+
 // WithPinned names Secrets that Start follows and that stay followed until Stop, whatever Retain
 // is given: the ones that Agent Kourier itself reads and no resource of the config refers to,
 // such as the Postgres DSN's.
@@ -160,7 +171,7 @@ func WithPinned(names ...config.SecretName) Option {
 // New returns a Resolver that follows Secrets through client. It follows none until Start (the
 // pinned ones) and Watch (the config's).
 func New(client kubernetes.Interface, opts ...Option) *Resolver {
-	r := &Resolver{client: client, log: slog.Default(), entries: map[config.SecretName]*entry{}}
+	r := &Resolver{client: client, log: slog.Default(), wait: defaultOnDemandWait, entries: map[config.SecretName]*entry{}}
 	for _, o := range opts {
 		o(r)
 	}
@@ -199,7 +210,7 @@ func (r *Resolver) newEntry(n config.SecretName) *entry {
 		informers.WithTransform(trim))
 	secrets := f.Core().V1().Secrets()
 	ctx, stop := context.WithCancel(r.ctx)
-	e := &entry{name: n, factory: f, stop: stop, lister: secrets.Lister(), synced: secrets.Informer().HasSynced}
+	e := &entry{name: n, factory: f, stop: stop, ended: ctx.Done(), lister: secrets.Lister(), synced: secrets.Informer().HasSynced}
 	// The handler replaces client-go's, which logs through klog. The only error is an
 	// informer that has started, and this one has not.
 	_ = secrets.Informer().SetWatchErrorHandler(func(_ *cache.Reflector, err error) { r.failed(e, err) })
@@ -257,7 +268,8 @@ func (r *Resolver) Watch(ctx context.Context, names []config.SecretName) error {
 }
 
 // await waits until every one of es has synced. It returns early when one that has not is denied,
-// when ctx ends, and when the Resolver is stopped.
+// when ctx ends, when the Resolver is stopped, and when one that has not synced was let go (Retain or
+// Watch stopped its informer, which an on-demand read can meet): the error then wraps ErrNotWatched.
 func (r *Resolver) await(ctx context.Context, es []*entry) error {
 	t := time.NewTicker(syncPoll)
 	defer t.Stop()
@@ -274,6 +286,15 @@ func (r *Resolver) await(ctx context.Context, es []*entry) error {
 		for _, e := range unsynced {
 			if cause := r.denial(e); cause != nil {
 				return fmt.Errorf("secret caches not synced for %s: %w: %w", listNames(unsynced), ErrAccessDenied, cause)
+			}
+		}
+		if r.ctx.Err() == nil {
+			for _, e := range unsynced {
+				select {
+				case <-e.ended:
+					return fmt.Errorf("secret %s: %w", e.name, ErrNotWatched)
+				default:
+				}
 			}
 		}
 		select {
@@ -429,16 +450,27 @@ func (r *Resolver) get(namespace, name string) (*corev1.Secret, error) {
 	return s, nil
 }
 
-// getFollowing follows the Secret, waits for its cache and reads it as get does.
-func (r *Resolver) getFollowing(ctx context.Context, namespace, name string) (*corev1.Secret, error) {
-	es, err := r.follow([]config.SecretName{{Namespace: namespace, Name: name}}, false)
-	if err != nil {
-		return nil, fmt.Errorf("secret %s/%s: %w", namespace, name, err)
-	}
-	ctx, cancel := context.WithTimeout(ctx, onDemandWait)
+// getWaiting reads the Secret as get does, but for a Secret that is not followed or whose cache has not synced it follows
+// the Secret and waits for the cache, and tries again if the informer was let go meanwhile, until the cache can be read,
+// ctx or the on-demand wait ends, or the Resolver stops. A denial is returned at once, as is ErrStopped. It waits in
+// await, which looks at the caches every syncPoll and not more often, so it does not spin.
+func (r *Resolver) getWaiting(ctx context.Context, namespace, name string) (*corev1.Secret, error) {
+	ctx, cancel := context.WithTimeout(ctx, r.wait)
 	defer cancel()
-	_ = r.await(ctx, es) // get says why the Secret cannot be read, if it cannot
-	return r.get(namespace, name)
+	n := config.SecretName{Namespace: namespace, Name: name}
+	for {
+		s, err := r.get(namespace, name)
+		if !errors.Is(err, ErrNotWatched) && !errors.Is(err, ErrNotSynced) {
+			return s, err
+		}
+		es, ferr := r.follow([]config.SecretName{n}, false)
+		if ferr != nil {
+			return nil, fmt.Errorf("secret %s/%s: %w", namespace, name, ferr)
+		}
+		if aerr := r.await(ctx, es); aerr != nil && !errors.Is(aerr, ErrNotWatched) {
+			return r.get(namespace, name) // get says why the Secret cannot be read: not synced, or denied
+		}
+	}
 }
 
 // Keys returns the sorted key names of the Secret from the cache. It makes no API call, and it
@@ -474,17 +506,18 @@ func (r *Resolver) SecretVersion(_ context.Context, namespace, name string) (str
 // Secret and key (and the type), never the value.
 //
 // A Secret that is not followed is followed now, for a holder of a Binding that a reload has since
-// dropped (see the package comment): Value waits for its cache, at most onDemandWait or until ctx
-// ends, and then reads it, so a Value of such a Secret makes API calls. If the cache has not synced
-// by then, or access was denied, it fails as get does.
+// dropped (see the package comment): Value waits for its cache, at most the on-demand wait or until
+// ctx ends, and then reads it, so a Value of such a Secret makes API calls and needs a live API
+// server and a Role that still grants it. If the Role was revoked meanwhile, or the API server is
+// out, the read fails (ErrAccessDenied, or ErrNotSynced once the wait ends), where a cache of the
+// whole namespace would have served what it held. A Value of a Secret whose cache another read is
+// waiting for waits for it too. If the cache has not synced by then, or access was denied, it
+// fails as get does.
 func (r *Resolver) Value(ctx context.Context, namespace, name, key string) (secretval.Value, error) {
 	if key == "" {
 		key = v1alpha1.DefaultSecretKey
 	}
-	s, err := r.get(namespace, name)
-	if errors.Is(err, ErrNotWatched) {
-		s, err = r.getFollowing(ctx, namespace, name)
-	}
+	s, err := r.getWaiting(ctx, namespace, name)
 	if err != nil {
 		return secretval.Value{}, fmt.Errorf("read key %q: %w", key, err)
 	}
