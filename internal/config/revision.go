@@ -1,13 +1,11 @@
 package config
 
 import (
-	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 )
 
@@ -30,21 +28,14 @@ type SecretVersioner interface {
 // the rest, and Revision never sees a fingerprint that belongs to a different Snapshot.
 type published struct {
 	snap        *Snapshot
-	fingerprint string     // of the config files the snapshot was built from
-	secrets     []identity // the Secrets the snapshot's objects refer to, sorted and unique
+	fingerprint string       // of the config files the snapshot was built from
+	secrets     []SecretName // the Secrets the snapshot's objects refer to, sorted and unique
 }
 
 // newPublished returns the published form of snap, built from the config files that
 // fingerprint describes, with the Secrets that refs name.
 func newPublished(snap *Snapshot, fingerprint string, refs []secretRef) *published {
-	keys := make([]identity, 0, len(refs))
-	for _, ref := range refs {
-		keys = append(keys, identity{"Secret", ref.from.namespace, ref.name})
-	}
-	slices.SortFunc(keys, func(a, b identity) int {
-		return cmp.Or(cmp.Compare(a.namespace, b.namespace), cmp.Compare(a.name, b.name))
-	})
-	return &published{snap: snap, fingerprint: fingerprint, secrets: slices.Compact(keys)}
+	return &published{snap: snap, fingerprint: fingerprint, secrets: secretNames(refs)}
 }
 
 // Revision returns an opaque digest of what the current snapshot was built from: the
@@ -84,14 +75,14 @@ func (r *Reloader) Revision(ctx context.Context) string {
 		if v, ok := r.secrets.(SecretVersioner); ok {
 			for _, k := range p.secrets {
 				state := "missing"
-				version, err := v.SecretVersion(ctx, k.namespace, k.name)
+				version, err := v.SecretVersion(ctx, k.Namespace, k.Name)
 				switch {
 				case err == nil:
 					state = fmt.Sprintf("version %q", version)
 				case !errors.Is(err, ErrSecretNotFound):
 					state = "unreadable"
 				}
-				fmt.Fprintf(&b, "secret %q %q %s\n", k.namespace, k.name, state)
+				fmt.Fprintf(&b, "secret %q %q %s\n", k.Namespace, k.Name, state)
 			}
 		}
 	}

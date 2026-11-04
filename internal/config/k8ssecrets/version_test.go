@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"os"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,7 +14,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
-	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/agentkourier/agent-kourier/internal/config"
@@ -34,7 +32,7 @@ func versioned(namespace, name, version string, keys ...string) *corev1.Secret {
 }
 
 func TestSecretVersion(t *testing.T) {
-	r := start(t, fake.NewClientset(versioned("sre", "creds", "41", "token")))
+	r := follow(t, newAPI(t, versioned("sre", "creds", "41", "token")), sn("sre", "creds"))
 	got, err := r.SecretVersion(context.Background(), "sre", "creds")
 	if err != nil || got != "41" {
 		t.Fatalf("SecretVersion = %q, %v; want the cached resourceVersion", got, err)
@@ -42,12 +40,9 @@ func TestSecretVersion(t *testing.T) {
 }
 
 func TestSecretVersionErrors(t *testing.T) {
-	r := start(t, fake.NewClientset(versioned("sre", "creds", "41", "token")))
-	unstarted := New(fake.NewClientset(versioned("sre", "creds", "41", "token")), []string{"sre"})
-	stopped := New(fake.NewClientset(versioned("sre", "creds", "41", "token")), []string{"sre"})
-	if err := stopped.Start(t.Context()); err != nil {
-		t.Fatal(err)
-	}
+	client := newAPI(t, versioned("sre", "creds", "41", "token"), versioned("sre", "other", "7", "token"))
+	r := follow(t, client, sn("sre", "creds"), sn("sre", "absent"))
+	stopped := follow(t, client, sn("sre", "creds"))
 	stopped.Stop()
 	tests := []struct {
 		name      string
@@ -57,9 +52,9 @@ func TestSecretVersionErrors(t *testing.T) {
 		want      error
 		notWant   error
 	}{
-		{"missing Secret", r, "sre", "absent", config.ErrSecretNotFound, ErrNamespaceNotWatched},
-		{"unwatched namespace", r, "kube-system", "creds", ErrNamespaceNotWatched, config.ErrSecretNotFound},
-		{"cache not synced", unstarted, "sre", "creds", ErrNotSynced, config.ErrSecretNotFound},
+		{"missing Secret", r, "sre", "absent", config.ErrSecretNotFound, ErrNotWatched},
+		{"a Secret that exists but is not followed", r, "sre", "other", ErrNotWatched, config.ErrSecretNotFound},
+		{"cache not synced", unsynced(t), "sre", "creds", ErrNotSynced, config.ErrSecretNotFound},
 		{"stopped", stopped, "sre", "creds", ErrStopped, config.ErrSecretNotFound},
 	}
 	for _, tc := range tests {
@@ -80,7 +75,7 @@ func TestSecretVersionErrors(t *testing.T) {
 // Revision and SecretVersion docs say; if the cache ever starts reporting the failure, they and
 // this test change together.
 func TestSecretVersionStaysWhileTheWatchFails(t *testing.T) {
-	client := fake.NewClientset(versioned("sre", "creds", "1", "token"))
+	client := newAPI(t, versioned("sre", "creds", "1", "token"))
 	var failing atomic.Bool
 	client.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
 		if failing.Load() {
@@ -96,9 +91,9 @@ func TestSecretVersionStaysWhileTheWatchFails(t *testing.T) {
 		return true, held, nil
 	})
 	logs := &logBuffer{}
-	r := New(client, []string{"sre"}, WithLogger(slog.New(slog.NewTextHandler(logs, nil))))
+	r := New(client, WithLogger(slog.New(slog.NewTextHandler(logs, nil))))
 	t.Cleanup(r.Stop)
-	if err := r.Start(t.Context()); err != nil {
+	if err := r.Watch(t.Context(), []config.SecretName{sn("sre", "creds")}); err != nil {
 		t.Fatal(err)
 	}
 	failures := func() int { return strings.Count(logs.String(), "secret informer cannot list or watch") }
@@ -129,48 +124,17 @@ func TestSecretVersionStaysWhileTheWatchFails(t *testing.T) {
 	}
 }
 
-// watchesRegistered closes the returned channel once the fake clientset has a watch on Secrets
-// in every one of namespaces. The fake tracker drops events for a watch that does not exist yet.
-func watchesRegistered(client *fake.Clientset, namespaces ...string) <-chan struct{} {
-	registered, mu, pending := make(chan struct{}), sync.Mutex{}, map[string]bool{}
-	for _, ns := range namespaces {
-		pending[ns] = true
-	}
-	client.PrependWatchReactor("secrets", func(a k8stesting.Action) (bool, watch.Interface, error) {
-		w, err := client.Tracker().Watch(a.GetResource(), a.GetNamespace())
-		mu.Lock()
-		defer mu.Unlock()
-		if pending[a.GetNamespace()] {
-			delete(pending, a.GetNamespace())
-			if len(pending) == 0 {
-				close(registered)
-			}
-		}
-		return true, w, err
-	})
-	return registered
-}
-
 // TestReloaderRevisionFollowsSecrets runs a Reloader over the informer cache. A rotation that
 // keeps the keys, a deletion and a restore each change the revision without a reload, the
 // revision depends on the version and never on a value, and reading it makes no API call.
 func TestReloaderRevisionFollowsSecrets(t *testing.T) {
 	const system, sre = "agent-kourier-system", "sre"
-	client := fake.NewClientset(
+	client := newAPI(t,
 		versioned(system, "slack-main", "1", "botToken", "appToken"),
 		versioned(sre, "agent-kourier-sre-alerts-oidc", "1", "token"),
 	)
-	registered := watchesRegistered(client, system, sre)
-	secrets := New(client, []string{system, sre}, WithLogger(slog.New(slog.DiscardHandler)))
-	if err := secrets.Start(t.Context()); err != nil {
-		t.Fatal(err)
-	}
+	secrets := New(client, WithLogger(slog.New(slog.DiscardHandler)))
 	t.Cleanup(secrets.Stop)
-	select {
-	case <-registered:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the informers never started their watches")
-	}
 
 	dir := t.TempDir()
 	if err := os.CopyFS(dir, os.DirFS("../../../api/v1alpha1/testdata")); err != nil {
@@ -181,6 +145,8 @@ func TestReloaderRevisionFollowsSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(rl.Wait)
+	// The Reloader asked for the Secrets of the config, and the fake tracker drops events for a watch that does not exist yet.
+	client.watching(t, sn(system, "slack-main"), sn(sre, "agent-kourier-sre-alerts-oidc"))
 
 	secretsAPI := client.CoreV1().Secrets(sre)
 	actions := len(client.Actions())

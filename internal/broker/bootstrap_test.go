@@ -18,6 +18,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
+	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/config/k8ssecrets"
 )
 
@@ -54,9 +55,9 @@ func options(dir string) BootstrapOptions {
 	}
 }
 
-// The example config needs agent-kourier-system and sre. Starting with those derived, and only those,
-// loads it: a missing namespace would fail the first load with ErrNamespaceNotWatched.
-func TestBootstrapWatchesTheNamespacesTheConfigNames(t *testing.T) {
+// The example config refers to a Secret in agent-kourier-system and one in sre. Starting with those, and only those,
+// loads it: a Secret that was not followed would fail the first load with ErrNotWatched.
+func TestBootstrapFollowsTheSecretsTheConfigNames(t *testing.T) {
 	c, err := Bootstrap(t.Context(), cluster(), options(configDir(t)))
 	if err != nil {
 		t.Fatal(err)
@@ -112,21 +113,12 @@ func TestBootstrapFailsAtTheFirstDenialAndNamesIt(t *testing.T) {
 	}
 }
 
-// A reload cannot watch a namespace it did not start with (no hot rebuild, WP-35 ruling 6), so a
-// Binding added in a new namespace fails the reload. The last good snapshot stays in force, the
-// reloader is marked stale for the health endpoint, and the hook counts the error once.
-func TestReloadThatAddsAnUnwatchedNamespaceKeepsTheSnapshot(t *testing.T) {
-	dir := configDir(t)
-	failures := make(chan error, 8)
-	opts := options(dir)
-	opts.OnReloadError = func(err error) { failures <- err }
-	c, err := Bootstrap(t.Context(), cluster(), opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(c.Stop)
-	before := c.Reloader.Current()
-
+// addPayments writes the Binding of a team whose Secret is in a namespace that the config did not refer to at start. The
+// file appears whole. A plain WriteFile truncates first, and the reloader, polling every 5 ms, can load the empty file (a
+// good reload, which replaces the snapshot with an equal one, so "the snapshot is unchanged" would be false) or see the file
+// change twice (two failures). A ConfigMap mount, which is how the config arrives, is replaced atomically too.
+func addPayments(t *testing.T, dir string) {
+	t.Helper()
 	added := `apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata: { name: pay, namespace: payments }
@@ -135,10 +127,6 @@ spec:
   identity: { tokenSecretRef: { name: pay-token } }
   chat: { connectionRef: { namespace: agent-kourier-system, name: slack-main }, channel: C0PAYMENTS01 }
 `
-	// The file appears whole. A plain WriteFile truncates first, and the reloader, polling every
-	// 5 ms, can load the empty file (a good reload, which replaces the snapshot with an equal one,
-	// so "the snapshot is unchanged" would be false) or see the file change twice (two failures).
-	// A ConfigMap mount, which is how the config arrives, is replaced atomically too.
 	staging := filepath.Join(dir, ".payments.yaml.tmp") // a dot name is not a config file
 	if err := os.WriteFile(staging, []byte(added), 0o600); err != nil {
 		t.Fatal(err)
@@ -146,13 +134,83 @@ spec:
 	if err := os.Rename(staging, filepath.Join(dir, "payments.yaml")); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// A reload that refers to a Secret in a namespace that the config did not name at start is served: the resolver follows the
+// new Secret, and the Binding is live with no restart. The Secret that the reload no longer refers to is let go, and
+// readiness holds throughout.
+func TestReloadThatAddsASecretInANewNamespaceNeedsNoRestart(t *testing.T) {
+	dir := configDir(t)
+	client := cluster()
+	if _, err := client.CoreV1().Secrets("payments").Create(t.Context(), secretOf("payments", "pay-token", "token"), metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	opts := options(dir)
+	opts.OnReloadError = func(err error) { t.Errorf("a reload failed: %v", err) }
+	c, err := Bootstrap(t.Context(), client, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.Stop)
+	if _, err := c.Secrets.Keys(t.Context(), "payments", "pay-token"); !errors.Is(err, k8ssecrets.ErrNotWatched) {
+		t.Fatalf("before the reload: Keys of the new namespace's Secret = %v, want ErrNotWatched", err)
+	}
+
+	addPayments(t, dir)
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, ok := c.Reloader.Current().Binding("payments", "pay"); ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the Binding of the new namespace never went live; stale %t", c.Stale())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if c.Stale() {
+		t.Error("the reloader is stale after a good reload")
+	}
+	if keys, err := c.Secrets.Keys(t.Context(), "payments", "pay-token"); err != nil || len(keys) != 1 {
+		t.Errorf("Keys of the new Secret = %v, %v; want its key", keys, err)
+	}
+	for _, check := range c.Checks() {
+		if err := check.Fn(t.Context()); err != nil {
+			t.Errorf("%s is not ready after the reload: %v", check.Name, err)
+		}
+	}
+}
+
+// A reload that refers to a Secret that Agent Kourier may not read fails: the last good snapshot stays in force, the
+// reloader is marked stale for the health endpoint, the hook counts the error once, and the error says that access was
+// denied. Readiness is not affected: the broker still serves the config it has.
+func TestReloadThatAddsAForbiddenSecretKeepsTheSnapshot(t *testing.T) {
+	dir := configDir(t)
+	client := cluster()
+	client.PrependReactor("list", "secrets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.(k8stesting.ListAction).GetListRestrictions().Fields.String() != "metadata.name=pay-token" {
+			return false, nil, nil
+		}
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "pay-token", errors.New("RBAC: no list"))
+	})
+	failures := make(chan error, 8)
+	opts := options(dir)
+	opts.OnReloadError = func(err error) { failures <- err }
+	c, err := Bootstrap(t.Context(), client, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.Stop)
+	before := c.Reloader.Current()
+
+	addPayments(t, dir)
 
 	select {
 	case err := <-failures:
-		if !errors.Is(err, k8ssecrets.ErrNamespaceNotWatched) {
-			t.Errorf("reload failed with %v, want ErrNamespaceNotWatched", err)
+		if !errors.Is(err, k8ssecrets.ErrAccessDenied) || !apierrors.IsForbidden(err) || !strings.Contains(err.Error(), "payments/pay-token") {
+			t.Errorf("reload failed with %v, want ErrAccessDenied wrapping the answer and naming payments/pay-token", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("the reload never failed")
 	}
 	if c.Reloader.Current() != before {
@@ -161,6 +219,14 @@ spec:
 	if !c.Stale() {
 		t.Error("the reloader is not stale after a failed reload")
 	}
+	for _, check := range c.Checks() {
+		if err := check.Fn(t.Context()); err != nil {
+			t.Errorf("%s is not ready after a failed reload: %v", check.Name, err)
+		}
+	}
+	if _, err := c.Secrets.Keys(t.Context(), "sre", "agent-kourier-sre-alerts-oidc"); err != nil {
+		t.Errorf("a Secret of the last good snapshot is no longer readable: %v", err)
+	}
 	select {
 	case err := <-failures:
 		t.Errorf("a second failure was counted: %v", err)
@@ -168,29 +234,59 @@ spec:
 	}
 }
 
-// A Secret that no resource of the config refers to, such as the Postgres DSN's, is read through the same caches once its
-// namespace is asked for; otherwise the namespace is not watched.
-func TestBootstrapWatchesTheExtraNamespaces(t *testing.T) {
+// A Secret that no resource of the config refers to, such as the Postgres DSN's, is read through the same caches once it is
+// asked for; otherwise it is not followed.
+func TestBootstrapFollowsTheExtraSecrets(t *testing.T) {
 	client := cluster()
 	if _, err := client.CoreV1().Secrets("agent-kourier").Create(t.Context(), secretOf("agent-kourier", "agent-kourier-pg", "dsn"), metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	for name, extra := range map[string][]string{"asked": {"agent-kourier", "sre"}, "not asked": nil} {
+	for name, extra := range map[string][]config.SecretName{"asked": {{Namespace: "agent-kourier", Name: "agent-kourier-pg"}}, "not asked": nil} {
 		t.Run(name, func(t *testing.T) {
 			o := options(configDir(t))
-			o.ExtraNamespaces = extra
+			o.ExtraSecrets = extra
 			c, err := Bootstrap(t.Context(), client, o)
 			if err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(c.Stop)
-			_, err = c.Secrets.Value(t.Context(), "agent-kourier", "agent-kourier-pg", "dsn")
-			if (extra != nil) != (err == nil) || (extra == nil && !errors.Is(err, k8ssecrets.ErrNamespaceNotWatched)) {
-				t.Errorf("Value of the extra namespace's Secret = %v, with extra namespaces %v", err, extra)
-			}
-			if extra != nil && len(c.namespaces) != 3 { // agent-kourier-system and sre from the config, Agent Kourier; sre once
-				t.Errorf("namespaces = %v, want the config's two and the extra one, each once", c.namespaces)
+			// Keys never follows a Secret, so it tells whether the Secret was followed from the start.
+			_, err = c.Secrets.Keys(t.Context(), "agent-kourier", "agent-kourier-pg")
+			if (extra != nil) != (err == nil) || (extra == nil && !errors.Is(err, k8ssecrets.ErrNotWatched)) {
+				t.Errorf("Keys of the extra Secret = %v, with extra Secrets %v", err, extra)
 			}
 		})
+	}
+}
+
+// The Secret of the Postgres DSN stays readable through every reload, though no config names it.
+func TestExtraSecretsSurviveAReload(t *testing.T) {
+	dir := configDir(t)
+	client := cluster()
+	for _, s := range []*corev1.Secret{secretOf("agent-kourier", "agent-kourier-pg", "dsn"), secretOf("payments", "pay-token", "token")} {
+		if _, err := client.CoreV1().Secrets(s.Namespace).Create(t.Context(), s, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	o := options(dir)
+	o.ExtraSecrets = []config.SecretName{{Namespace: "agent-kourier", Name: "agent-kourier-pg"}}
+	c, err := Bootstrap(t.Context(), client, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.Stop)
+
+	addPayments(t, dir)
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if _, ok := c.Reloader.Current().Binding("payments", "pay"); ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the reload never published the Binding")
+		}
+	}
+
+	if _, err := c.Secrets.Value(t.Context(), "agent-kourier", "agent-kourier-pg", "dsn"); err != nil {
+		t.Errorf("the DSN's Secret after a reload: %v", err)
 	}
 }
