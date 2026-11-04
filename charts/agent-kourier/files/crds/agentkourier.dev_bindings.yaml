@@ -14,7 +14,7 @@ spec:
     listKind: BindingList
     plural: bindings
     shortNames:
-    - akb
+    - akbinding
     singular: binding
   scope: Namespaced
   versions:

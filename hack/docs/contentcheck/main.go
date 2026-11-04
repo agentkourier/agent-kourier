@@ -2,7 +2,8 @@
 // the validation of 2026-10-11 found internal planning IDs, removed field names and workspace identifiers in pages that
 // the site and the repository publish, and nothing would have noticed them coming back.
 //
-// It reads the public sources: README.md, charts/agent-kourier/README.md, charts/agent-kourier/values.yaml (all of it,
+// It reads the public sources: README.md, charts/agent-kourier/README.md, the generated CRDs under
+// charts/agent-kourier/files/crds, charts/agent-kourier/values.yaml (all of it,
 // not only its comments: the comments feed docs/reference/helm-values.md and the values are the defaults the page
 // shows), every README.md and every YAML file under examples/recipes (the recipes' pages and their resources and evals,
 // at any depth; their code is not scanned yet), every text file under docs/ except the directories that mkdocs.yml's exclude_docs names (the brand kit and the

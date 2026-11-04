@@ -173,7 +173,7 @@ type ChatConnectionSpec struct {
 // Owned by an application team.
 //
 // +kubebuilder:object:root=true
-// +kubebuilder:resource:scope=Namespaced,shortName=akb,categories=agentkourier
+// +kubebuilder:resource:scope=Namespaced,shortName=akbinding,categories=agentkourier
 type Binding struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitzero"`
