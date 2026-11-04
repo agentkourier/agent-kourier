@@ -100,7 +100,7 @@ e2e-full-down: ## Tear down the full E2E tier only
 e2e-down: ## Tear down all E2E tiers
 	hack/kind/down.sh
 
-e2e-crs-scenarios: ## The custom resource scenarios that need kubectl or Helm: unknown fields, kubectl get, a stored-invalid Binding, kubectl wait (the fast tier up on E2E_CONFIG_SOURCE=crds; CRS_STATUS_WRITER=1 with the status writer)
+e2e-crs-scenarios: ## The custom resource scenarios that need kubectl or Helm: unknown fields, kubectl get, a stored-invalid Binding, kubectl wait (the fast tier up on E2E_CONFIG_SOURCE=crds)
 	hack/kind/crs-scenarios.sh
 
 e2e-crs-migration: ## Move the fast tier between the ConfigMap and the custom resources with Helm, and back, with a session in flight (the tier up on Postgres, two replicas, files)

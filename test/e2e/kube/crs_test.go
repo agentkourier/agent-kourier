@@ -5,12 +5,15 @@ import (
 	"slices"
 	"testing"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
+	k2ktesting "k8s.io/client-go/testing"
 )
 
 func testBinding(namespace, name string) *unstructured.Unstructured {
@@ -23,8 +26,51 @@ func testBinding(namespace, name string) *unstructured.Unstructured {
 }
 
 func testCRs(objs ...runtime.Object) *CRs {
-	scheme := runtime.NewScheme()
-	return newCRs(dynamicfake.NewSimpleDynamicClient(scheme, objs...), fake.NewSimpleClientset())
+	return newCRs(testDynamic(objs...), fake.NewSimpleClientset())
+}
+
+func testDynamic(objs ...runtime.Object) *dynamicfake.FakeDynamicClient {
+	kinds := map[schema.GroupVersionResource]string{BindingGVR: "BindingList", AgentBackendGVR: "AgentBackendList"}
+	return dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), kinds, objs...)
+}
+
+// TestCRsReplaceReadsAgainOnAConflict: the status writer updates a Binding too, so an update can find the object changed under it. Replace goes on with
+// what is there then, and gives up with the Conflict only when it never stops.
+func TestCRsReplaceReadsAgainOnAConflict(t *testing.T) {
+	dyn := testDynamic()
+	c := newCRs(dyn, fake.NewSimpleClientset())
+	ctx := t.Context()
+	if _, err := c.Create(ctx, BindingGVR, testBinding(TeamNamespace, "x")); err != nil {
+		t.Fatal(err)
+	}
+	conflicts := 1
+	dyn.PrependReactor("update", "bindings", func(k2ktesting.Action) (bool, runtime.Object, error) {
+		if conflicts > 0 {
+			conflicts--
+			return true, nil, apierrors.NewConflict(BindingGVR.GroupResource(), "x", errors.New("the object has been modified"))
+		}
+		return false, nil, nil
+	})
+	if _, err := c.Replace(ctx, BindingGVR, testBinding(TeamNamespace, "x")); err != nil {
+		t.Errorf("Replace after one conflict = %v, want it to succeed", err)
+	}
+	conflicts = 1000
+	if _, err := c.Replace(ctx, BindingGVR, testBinding(TeamNamespace, "x")); !apierrors.IsConflict(errors.Unwrap(err)) && !apierrors.IsConflict(err) {
+		t.Errorf("Replace under endless conflicts = %v, want the Conflict", err)
+	}
+}
+
+// TestCRsPurgeDeletesWhatIsThere: every object of the resource in the team namespace goes, whoever made it, and none in another.
+func TestCRsPurgeDeletesWhatIsThere(t *testing.T) {
+	c := testCRs(testBinding(TeamNamespace, "a"), testBinding(TeamNamespace, "b"), testBinding("agent-kourier", "keep"))
+	ctx := t.Context()
+	if err := c.Purge(ctx, BindingGVR); err != nil {
+		t.Fatal(err)
+	}
+	left, err := c.dyn.Resource(BindingGVR).Namespace(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+	if err != nil || len(left.Items) != 1 || left.Items[0].GetName() != "keep" {
+		t.Errorf("left after Purge = %v, %v; want only agent-kourier/keep", left.Items, err)
+	}
 }
 
 // TestCRsWriteOnlyInTheTeamNamespace: the runner's Role allows writes in one namespace, and the helper refuses the others before it asks, so that a

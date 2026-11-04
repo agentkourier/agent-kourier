@@ -7,16 +7,15 @@
 #  unknown-fields  Spec decision 3: the API server prunes a field that the schema does not have, so a removed field does not "fail strict decoding" as it
 #                  does in a file. What each client does with a Binding that has one: kubectl apply (the default, and server-side), with --validate=warn
 #                  and with --validate=false; kubectl create and patch; and Helm, upgrading the release with a Binding of its own values that has one.
-#                  Argo CD is not run: there is none in the tier. What Argo does is left to the Flatcar validation, with the Argo version that the
-#                  cluster runs.
+#                  Argo CD is not run here: there is none in the tier. What Argo does is left to the Flatcar validation, with the Argo version that
+#                  the cluster runs.
 #  kubectl-get     What `kubectl get` shows: the short names, the category, the columns READY and REASON, and that `kubectl get bindings` is not it.
 #  stored-invalid  A Binding stored before a tightening of the schema: it is made under a CRD with a rule left out, and the rule is put back. A
 #                  server-side apply to its status subresource, which is what the status writer does, is accepted on this node (Kubernetes 1.37), with a warning for a CEL
-#                  rule and none for a schema pattern, and with CRS_STATUS_WRITER=1 the leader writes Accepted=False on it.
+#                  rule and none for a schema pattern, and the leader writes Accepted=False on it.
 #  wait            `kubectl wait --for=condition=Ready` on a Binding that was deleted and made again: it returns when the new object is Ready, not
-#                  at once on the old one's status. Needs the status writer: CRS_STATUS_WRITER=1.
+#                  at once on the old one's status; and it times out on one whose backend is dead.
 #
-# CRS_STATUS_WRITER=1 says the broker writes Binding status (the status writer); it is 0 by default, and the parts that need it are then reported as skipped.
 # Every kubectl and helm call names --context kind-agent-kourier-fast, as the tier's scripts do; assert_context aborts unless that is the local kind cluster.
 # shellcheck disable=SC2015 # "A && pass || fail": pass and fail only print, so C running after a true A is harmless
 set -euo pipefail
@@ -29,7 +28,6 @@ use_tier fast
 CTX=kind-${CLUSTER}
 K=(kubectl --context "${CTX}")
 H=(helm --kube-context "${CTX}")
-STATUS_WRITER=${CRS_STATUS_WRITER:-0}
 FAILED=0
 
 for tool in kubectl helm jq; do
@@ -59,10 +57,21 @@ contains() { case $1 in *"$2"*) return 0 ;; *) return 1 ;; esac; } # TEXT PART
   die "the tier is on the ConfigMap route: bring it up on custom resources with E2E_CONFIG_SOURCE=crds make e2e-fast-up"
 
 WORK=$(mktemp -d)
+RESTORE_PATH=
+RESTORE_VALUE=
 cleanup() {
+  local rc=$?
   "${K[@]}" -n agent-kourier delete akbinding ck11-unknown ck11-stored-invalid --ignore-not-found >/dev/null 2>&1 || true
-  [ -z "${CRD_BACKUP:-}" ] || [ ! -s "${CRD_BACKUP}" ] || "${K[@]}" replace -f "${CRD_BACKUP}" >/dev/null 2>&1 || true
+  # A rule left out of the CRD by a case that did not get to put it back goes back now; a restore that fails is said, and fails the run.
+  if [ -n "${RESTORE_PATH:-}" ]; then
+    "${K[@]}" patch crd bindings.agentkourier.dev --type json -p "[{\"op\":\"add\",\"path\":\"${RESTORE_PATH}\",\"value\":${RESTORE_VALUE}}]" >/dev/null ||
+      {
+        echo "FAIL: the CRD bindings.agentkourier.dev could not be put back (the rule at ${RESTORE_PATH} is left out): restore it from charts/agent-kourier/files/crds" >&2
+        rc=1
+      }
+  fi
   rm -rf "${WORK}"
+  exit "${rc}"
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
@@ -147,7 +156,8 @@ unknown_fields() {
 
   # Helm: a chart-rendered Binding with an unknown field, in the values of the release (config.bindings), as a team that keeps its Bindings in
   # the chart's values would write it. The release is the tier's, upgraded with its own values and one more Binding, and put back after.
-  local values
+  local values original=${WORK}/helm-values.json
+  "${H[@]}" get values agent-kourier --namespace agent-kourier -o json >"${original}" # the values the release has now, to put back exactly (a map merges, and null leaves a mark)
   values=$(jq -nc '{"ck11-unknown": {spec: {agent: {backendRef: {name: "agents"}, namespace: "kagent", name: "test-agent"}, identity: {userId: "ck11", tokenSecretRef: {name: "agent-kourier-agent-token"}}, chat: {connectionRef: {name: "slack-fast"}, channel: "CCRUNKNOWN", output: "live", bogusField: "x"}}}}')
   if out=$("${H[@]}" upgrade agent-kourier "${ROOT}/charts/agent-kourier" --namespace agent-kourier --reuse-values --force-conflicts --set-json "config.bindings=${values}" 2>&1); then
     if [ "$(stored bogusField)" = absent ] && [ -n "$("${K[@]}" -n agent-kourier get akbinding ck11-unknown --ignore-not-found -o name)" ]; then
@@ -157,13 +167,17 @@ unknown_fields() {
       fail "helm upgrade: accepted, but the stored Binding is missing or has bogusField"
     fi
   else
-    note "helm upgrade: refused a rendered Binding with an unknown field: ${out//$'\n'/ | }"
-    pass "helm upgrade: nothing stored with the field"
+    note "helm upgrade: refused a rendered Binding with an unknown field (Helm 4's default, server-side apply; not measured with another way to apply): ${out//$'\n'/ | }"
+    if [ -z "$("${K[@]}" -n agent-kourier get akbinding ck11-unknown --ignore-not-found -o name)" ]; then
+      pass "helm upgrade: refused, and no Binding ck11-unknown is in the cluster"
+    else
+      fail "helm upgrade: refused, but a Binding ck11-unknown is in the cluster"
+    fi
   fi
-  "${H[@]}" upgrade agent-kourier "${ROOT}/charts/agent-kourier" --namespace agent-kourier --reuse-values --force-conflicts --set-json 'config.bindings=null' >/dev/null 2>&1 ||
-    "${H[@]}" upgrade agent-kourier "${ROOT}/charts/agent-kourier" --namespace agent-kourier --reuse-values --force-conflicts --set-json 'config.bindings={}' >/dev/null
+  "${H[@]}" upgrade agent-kourier "${ROOT}/charts/agent-kourier" --namespace agent-kourier --reset-values -f "${original}" --force-conflicts >/dev/null ||
+    fail "helm: the release could not be put back to the values it had"
   check "helm: the rendered Binding is gone after the values go back" test -z "$("${K[@]}" -n agent-kourier get akbinding ck11-unknown --ignore-not-found -o name)"
-  skip "Argo CD: none in the tier; what Argo does with an unknown field (it applies with kubectl's own validation or server-side, by its sync options) is left to the Flatcar validation"
+  skip "Argo CD: not run here, there is none in the tier; what Argo does with an unknown field (it applies with kubectl's own validation or server-side, by its sync options) is left to the Flatcar validation"
 }
 
 kubectl_get() {
@@ -179,13 +193,10 @@ ${out}"
     contains "${out%%$'\n'*}" "${col}" && pass "kubectl get akbinding has the column ${col}" || fail "kubectl get akbinding has no column ${col}"
   done
   if out=$("${K[@]}" get bindings -A 2>&1); then fail "kubectl get bindings -A answered: that is the core resource, which must not be what the docs say to type"; else pass "kubectl get bindings -A fails (the core resource of that name): ${out##*$'\n'}"; fi
-  if [ "${STATUS_WRITER}" = 1 ]; then
-    local ready
-    ready=$("${K[@]}" -n agent-kourier get akbinding fast-chat -o 'jsonpath={.status.conditions[?(@.type=="Ready")].status}')
-    check "fast-chat has a Ready condition (status written by the leader)" test -n "${ready}"
-  else
-    skip "READY and REASON values: they are the status writer's (CRS_STATUS_WRITER=1)"
-  fi
+  local ready
+  ready=$("${K[@]}" -n agent-kourier get akbinding fast-chat -o 'jsonpath={.status.conditions[?(@.type=="Ready")].status}')
+  check "fast-chat has a Ready condition (status written by the leader)" test -n "${ready}"
+  check "kubectl get akbinding shows a value in READY, not an empty column" test -n "$("${K[@]}" -n agent-kourier get akbinding fast-chat --no-headers | awk '{print $2}' | grep -E '^(True|False|Unknown)$' || true)"
 }
 
 # stored_case TITLE SCHEMA_PATH BINDING_YAML EXPECT_WARNING: a Binding is stored under a CRD that has the rule at SCHEMA_PATH (a JSON pointer into the CRD) left
@@ -194,10 +205,9 @@ ${out}"
 # 1.30.13, 1.31.0 and 1.32.x). EXPECT_WARNING says whether this kind of rule is held to answer a Warning (1) or whether what is seen is only reported (0).
 stored_case() {
   local title=$1 path=$2 yaml=$3 expect=$4 crd=bindings.agentkourier.dev saved out node
-  CRD_BACKUP=${WORK}/crd-backup.json
-  "${K[@]}" get crd ${crd} -o json >"${CRD_BACKUP}"
-  saved=$(jq -c --arg p "${path}" 'getpath($p | ltrimstr("/") | split("/") | map(tonumber? // .))' "${CRD_BACKUP}")
+  saved=$("${K[@]}" get crd ${crd} -o json | jq -c --arg p "${path}" 'getpath($p | ltrimstr("/") | split("/") | map(tonumber? // .))')
   [ -n "${saved}" ] && [ "${saved}" != null ] || die "the CRD has nothing at ${path} to leave out"
+  RESTORE_PATH=${path} RESTORE_VALUE=${saved} # cleanup puts it back if this case dies before it does
   "${K[@]}" patch crd ${crd} --type json -p "[{\"op\":\"remove\",\"path\":\"${path}\"}]" >/dev/null
   # The CRD handler learns of the new schema within a second or so: retry the create until it takes.
   local made=
@@ -210,8 +220,9 @@ stored_case() {
   done
   [ -n "${made}" ] || die "${title}: the Binding was never accepted under the looser schema"
   pass "${title}: the Binding was stored under a schema without the rule"
-  "${K[@]}" patch crd ${crd} --type json -p "[{\"op\":\"add\",\"path\":\"${path}\",\"value\":${saved}}]" >/dev/null
-  CRD_BACKUP=
+  "${K[@]}" patch crd ${crd} --type json -p "[{\"op\":\"add\",\"path\":\"${path}\",\"value\":${saved}}]" >/dev/null || die "${title}: the rule at ${path} could not be put back"
+  RESTORE_PATH=''
+  RESTORE_VALUE=''
   local refused=
   for _ in $(seq 20); do
     if ! "${K[@]}" apply --dry-run=server -f - >/dev/null 2>&1 <<<"${yaml//ck11-stored-invalid/ck11-stored-invalid-new}"; then
@@ -244,18 +255,14 @@ EOF
   else
     fail "${title}: a server-side apply to the status of the stored-invalid Binding was refused on ${node}: ${out}"
   fi
-  if [ "${STATUS_WRITER}" = 1 ]; then
-    local reason=
-    for _ in $(seq 90); do
-      reason=$("${K[@]}" -n agent-kourier get akbinding ck11-stored-invalid -o 'jsonpath={.status.conditions[?(@.type=="Accepted")].reason}' 2>/dev/null || true)
-      [ "${reason}" = InvalidSpec ] && ! contains "$("${K[@]}" -n agent-kourier get akbinding ck11-stored-invalid -o 'jsonpath={.status.conditions[?(@.type=="Accepted")].message}')" "ck11 probe" && break
-      sleep 2
-    done
-    [ "${reason}" = InvalidSpec ] && pass "${title}: the leader wrote Accepted=False/InvalidSpec on it" || fail "${title}: the leader wrote no Accepted=False/InvalidSpec on it (reason: ${reason:-none})"
-    "${K[@]}" -n agent-kourier get akbinding ck11-stored-invalid -o 'jsonpath={range .status.conditions[*]}{.type}={.status}/{.reason}: {.message}{"\n"}{end}' | cut -c1-300 || true
-  else
-    skip "${title}: the leader's own write of Accepted on it: the status writer's (CRS_STATUS_WRITER=1)"
-  fi
+  local reason=
+  for _ in $(seq 90); do
+    reason=$("${K[@]}" -n agent-kourier get akbinding ck11-stored-invalid -o 'jsonpath={.status.conditions[?(@.type=="Accepted")].reason}' 2>/dev/null || true)
+    [ "${reason}" = InvalidSpec ] && ! contains "$("${K[@]}" -n agent-kourier get akbinding ck11-stored-invalid -o 'jsonpath={.status.conditions[?(@.type=="Accepted")].message}')" "ck11 probe" && break
+    sleep 2
+  done
+  [ "${reason}" = InvalidSpec ] && pass "${title}: the leader wrote Accepted=False/InvalidSpec on it" || fail "${title}: the leader wrote no Accepted=False/InvalidSpec on it (reason: ${reason:-none})"
+  "${K[@]}" -n agent-kourier get akbinding ck11-stored-invalid -o 'jsonpath={range .status.conditions[*]}{.type}={.status}/{.reason}: {.message}{"\n"}{end}' | cut -c1-300 || true
   "${K[@]}" -n agent-kourier delete akbinding ck11-stored-invalid --ignore-not-found >/dev/null
 }
 
@@ -270,10 +277,6 @@ stored_invalid() {
 
 wait_ready() {
   echo "== kubectl wait on a Binding that was made again"
-  if [ "${STATUS_WRITER}" != 1 ]; then
-    skip "kubectl wait --for=condition=Ready needs the status writer (CRS_STATUS_WRITER=1)"
-    return
-  fi
   # fast-verify-ready is the tier's Binding that can be served: the bot is in its channel (the verification scenario puts it there; this does too).
   local name=fast-verify-ready saved=${WORK}/saved.yaml pod=crs-members-${RANDOM}
   "${K[@]}" -n agent-kourier get akbinding "${name}" -o json | jq 'del(.status, .metadata.uid, .metadata.resourceVersion, .metadata.generation, .metadata.creationTimestamp, .metadata.managedFields)' >"${saved}"

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -90,7 +91,13 @@ func (c *crScenario) newTeam(prefix string) *team {
 	c.t.Helper()
 	tm := &team{crScenario: c, prefix: prefix, secret: prefix + "-token", backend: prefix + "-agents"}
 	c.t.Cleanup(tm.remove)
-	tm.remove() // whatever an earlier run of this case left
+	// Whatever an earlier run left, under these names or any other: a run killed by its timeout leaves its Bindings, and one of the same name fails the Create.
+	for _, gvr := range []schema.GroupVersionResource{kube.BindingGVR, kube.AgentBackendGVR} {
+		if err := c.crs.Purge(context.WithoutCancel(c.ctx), gvr); err != nil {
+			c.t.Fatal(err)
+		}
+	}
+	tm.remove()
 	enc := base64.RawURLEncoding
 	token := enc.EncodeToString([]byte(`{"alg":"none"}`)) + "." + enc.EncodeToString([]byte(`{"email":"e2e-team@example.test"}`)) + "."
 	if err := c.crs.CreateSecret(c.ctx, tm.secret, map[string]string{"token": token}); err != nil {
@@ -167,14 +174,12 @@ func (tm *team) addBinding(name, channel, agent string) *unstructured.Unstructur
 // or the API server's refusal.
 func (tm *team) rewrite(name string, spec map[string]any) (*unstructured.Unstructured, error) {
 	tm.t.Helper()
-	live, err := tm.crs.Get(tm.ctx, kube.BindingGVR, kube.TeamNamespace, name)
-	if err != nil {
-		tm.t.Fatal(err)
-	}
-	next := live.DeepCopy()
-	next.Object["spec"] = spec
-	delete(next.Object, "status")
-	return tm.crs.Replace(tm.ctx, kube.BindingGVR, next)
+	next := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "agentkourier.dev/v1alpha1", "kind": "Binding",
+		"metadata": map[string]any{"name": name, "namespace": kube.TeamNamespace},
+		"spec":     spec,
+	}}
+	return tm.crs.Replace(tm.ctx, kube.BindingGVR, next) // against whatever is there now, as the status writer may have changed it since a read
 }
 
 // mustRewrite is rewrite for a change the API server must accept.
@@ -219,7 +224,7 @@ func (c *crScenario) answeredBy(channel, want string, within time.Duration) {
 		if strings.Contains(got, want) {
 			return
 		}
-		time.Sleep(3 * time.Second)
+		time.Sleep(3 * time.Second) // the next attempt: the Binding being replaced may answer until the change is seen
 	}
 	c.t.Fatalf("the Binding in %s answered %q, want it to say %q within %s", channel, got, want, within)
 }
@@ -249,7 +254,9 @@ func (c *crScenario) waitRejections(reason string, want float64) {
 // TestCR_ABindingInANewNamespaceServesWithNoRestart: a team makes a namespace's first Binding: its token Secret, the Role and RoleBinding that let Agent
 // Kourier list and watch that Secret by name (the tier grants no namespace as a whole on this route), an AgentBackend and the Binding. Agent Kourier is
 // not restarted: the same containers run before and after, and the Binding answers a mention in its channel with its agent's text. The namespace e2e-team
-// is empty when the tier comes up, so no informer of Agent Kourier has ever been asked about a Secret in it.
+// is empty when the tier comes up, and nothing the tier is configured with is in it. In a run of the whole suite the other cases have made Secrets here
+// before, so an informer of Agent Kourier may have been asked about a Secret of this namespace: what this case shows is the Binding's own Secret, which
+// is new, read with no restart.
 func TestCR_ABindingInANewNamespaceServesWithNoRestart(t *testing.T) {
 	c := newCRScenario(t)
 	before, err := c.reps.All(c.ctx)
@@ -291,8 +298,10 @@ func TestCR_AnInvalidUpdateKeepsTheLastGoodGeneration(t *testing.T) {
 	bad := tm.bindingSpec(ChannelCRInvalid, crAgentInvest)
 	bad["chat"].(map[string]any)["triggers"] = []any{map[string]any{"type": "mention"}, map[string]any{"type": "mention"}}
 	stored, err := tm.rewrite(tm.prefix, bad)
-	if err != nil {
+	if apierrors.IsInvalid(err) {
 		t.Fatalf("%v: the API server must accept a duplicate trigger, which the schema cannot say; if it refuses now, this scenario needs another rule that only the broker has", err)
+	} else if err != nil {
+		t.Fatal(err)
 	}
 	if kept, _, _ := unstructured.NestedSlice(stored.Object, "spec", "chat", "triggers"); len(kept) != 2 {
 		t.Fatalf("the stored Binding has %d triggers, want the 2 written: the API server pruned a field, so the update is not the one this scenario means", len(kept))
@@ -304,6 +313,25 @@ func TestCR_AnInvalidUpdateKeepsTheLastGoodGeneration(t *testing.T) {
 	// The last good generation still serves: test-agent's text, never the new agent's.
 	if got := c.answered(ChannelCRInvalid, time.Minute); !strings.Contains(got, crAnswer) || strings.Contains(got, crAnswerAlert) {
 		t.Fatalf("the Binding answered %q while its generation %d was refused; want generation %d's %q", got, stored.GetGeneration(), good.GetGeneration(), crAnswer)
+	}
+
+	// What the Binding says of it: not accepted, at the generation that was refused, and the message names the generation that is served.
+	err = Wait(c.ctx, statusWithin, "the status to say that the new generation is refused and the old one served", func(ctx context.Context) (bool, error) {
+		obj, err := c.crs.Get(ctx, kube.BindingGVR, kube.TeamNamespace, tm.prefix)
+		if err != nil {
+			return false, err
+		}
+		acc, ok := condition(obj, "Accepted")
+		if !ok || acc["status"] != "False" || acc["reason"] != "InvalidSpec" || acc["observedGeneration"] != stored.GetGeneration() {
+			return false, nil
+		}
+		if msg := fmt.Sprint(acc["message"]); !strings.Contains(msg, fmt.Sprintf("serving generation %d", good.GetGeneration())) {
+			return false, fmt.Errorf("Accepted says %q; want it to name the generation served, %d", msg, good.GetGeneration())
+		}
+		return true, nil
+	})
+	if err != nil {
+		t.Error(err)
 	}
 
 	fixed := tm.mustRewrite(tm.prefix, tm.bindingSpec(ChannelCRInvalid, crAgentInvest))

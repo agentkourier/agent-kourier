@@ -140,12 +140,24 @@ func TestTheTiersRefuseASourceTheyDoNotKnow(t *testing.T) {
 	if err == nil || !strings.Contains(out, "E2E_CONFIG_SOURCE must be files or crds") || len(calls) != 0 {
 		t.Errorf("deploy_agentkourier with an unknown source = %v, %d calls\n%s\nwant it to refuse before it touches the cluster", err, len(calls), out)
 	}
+	// The scripts are run with stubs of every tool they would use first on PATH, and the stubs say when they are called: a script that did not refuse
+	// the value would go on to make a kind cluster, which `make test` must never do.
+	bin, logs := t.TempDir(), t.TempDir()
+	for _, tool := range []string{"kind", "docker", "kubectl", "helm", "go", "curl", "openssl", "jq"} {
+		stub := "#!/bin/sh\necho \"$(basename \"$0\") $*\" >> \"$STUB_LOG/called\"\nexit 99\n"
+		if err := os.WriteFile(filepath.Join(bin, tool), []byte(stub), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for _, script := range []string{"up-fast.sh", "up-full.sh"} {
 		cmd := exec.CommandContext(t.Context(), "bash", "../../hack/kind/"+script)
-		cmd.Env = append(os.Environ(), "E2E_CONFIG_SOURCE=configmap")
+		cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "STUB_LOG="+logs, "E2E_CONFIG_SOURCE=configmap")
 		raw, err := cmd.CombinedOutput()
 		if err == nil || !strings.Contains(string(raw), "E2E_CONFIG_SOURCE must be files or crds") {
 			t.Errorf("%s with E2E_CONFIG_SOURCE=configmap = %v\n%s\nwant it to refuse the value", script, err, raw)
+		}
+		if called := readLog(t, logs, "called"); called != "" {
+			t.Errorf("%s called %q before it refused the value; want no tool called", script, called)
 		}
 	}
 }

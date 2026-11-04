@@ -15,6 +15,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/util/retry"
 )
 
 // TeamNamespace is the namespace where the scenarios of the custom resources route play a team (hack/kind/e2e/runner.yaml gives the runner a Role
@@ -96,22 +97,41 @@ func (c *CRs) Create(ctx context.Context, gvr schema.GroupVersionResource, obj *
 }
 
 // Replace puts obj in place of the object of its name, which must be in [TeamNamespace]: what a team's `kubectl apply` of an edited file does, and
-// like it, against whatever is there now. It returns the object as stored, so its generation says whether the change counted as one.
+// like it, against whatever is there now. The status writer updates the same object, so a write that finds it changed under it (a Conflict) reads it
+// again and goes on. It returns the object as stored, so its generation says whether the change counted as one.
 func (c *CRs) Replace(ctx context.Context, gvr schema.GroupVersionResource, obj *unstructured.Unstructured) (*unstructured.Unstructured, error) {
 	if obj.GetNamespace() != TeamNamespace {
 		return nil, fmt.Errorf("%w: %s", ErrWriteRefused, obj.GetNamespace())
 	}
-	live, err := c.Get(ctx, gvr, obj.GetNamespace(), obj.GetName())
+	var got *unstructured.Unstructured
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		live, err := c.dyn.Resource(gvr).Namespace(TeamNamespace).Get(ctx, obj.GetName(), metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		next := obj.DeepCopy()
+		next.SetResourceVersion(live.GetResourceVersion())
+		got, err = c.dyn.Resource(gvr).Namespace(TeamNamespace).Update(ctx, next, metav1.UpdateOptions{})
+		return err
+	})
 	if err != nil {
-		return nil, err
-	}
-	next := obj.DeepCopy()
-	next.SetResourceVersion(live.GetResourceVersion())
-	got, err := c.dyn.Resource(gvr).Namespace(TeamNamespace).Update(ctx, next, metav1.UpdateOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("update %s %s/%s: %w", gvr.Resource, obj.GetNamespace(), obj.GetName(), err)
+		return nil, fmt.Errorf("replace %s %s/%s: %w", gvr.Resource, obj.GetNamespace(), obj.GetName(), err)
 	}
 	return got, nil
+}
+
+// Purge deletes every object of the resource in [TeamNamespace], whoever made it: the start of a case that finds what a run killed by its timeout left.
+func (c *CRs) Purge(ctx context.Context, gvr schema.GroupVersionResource) error {
+	list, err := c.dyn.Resource(gvr).Namespace(TeamNamespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("list %s in %s: %w", gvr.Resource, TeamNamespace, err)
+	}
+	for i := range list.Items {
+		if err := c.Delete(ctx, gvr, TeamNamespace, list.Items[i].GetName()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Delete removes the object of that name in [TeamNamespace]; one that is not there is not an error, so that a scenario cleans up whatever it got to.

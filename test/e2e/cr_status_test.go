@@ -113,7 +113,7 @@ func TestCR_StatusShowsInKubectlGet(t *testing.T) {
 	}
 
 	// A younger Binding on the channel of status-ready is not served, and says so.
-	time.Sleep(3 * time.Second)
+	time.Sleep(3 * time.Second) // creationTimestamp has a resolution of a second: the younger must be younger by it, or the names decide
 	tm.addBinding("status-conflict", ChannelCRStatusJoined, crAgentInvest)
 	c.waitRow("status-conflict", map[string]string{"Ready": "False", "Reason": "Accepted:ChannelConflict"})
 	loser, err := c.crs.Get(c.ctx, kube.BindingGVR, kube.TeamNamespace, "status-conflict")
@@ -189,6 +189,22 @@ func TestCR_FailoverDoesNotBlankStatus(t *testing.T) {
 			return false, fmt.Errorf("Ready is %v since %v; it was True since %v", now["status"], now["lastTransitionTime"], was["lastTransitionTime"])
 		}
 		return true, nil
+	})
+	if err != nil {
+		t.Error(err)
+	}
+
+	// Not blanked is not the same as written: a new leader that never wrote status again would pass the above. An edit that moves no condition
+	// (the output of the Binding) must show in the status as the new generation, written by the new leader.
+	spec := tm.bindingSpec(ChannelCRFailover, crAgentAnswer)
+	spec["chat"].(map[string]any)["output"] = "final"
+	edited := tm.mustRewrite("failover", spec)
+	err = Wait(c.ctx, statusWithin, fmt.Sprintf("the new leader to write observedGeneration %d", edited.GetGeneration()), func(ctx context.Context) (bool, error) {
+		cond, err := readyOf(ctx)
+		if err != nil {
+			return false, err
+		}
+		return cond["observedGeneration"] == edited.GetGeneration() && cond["status"] == "True", nil
 	})
 	if err != nil {
 		t.Error(err)

@@ -102,33 +102,50 @@ func TestRunnerRoles(t *testing.T) {
 	}
 }
 
-// TestRunnerCRRoles pins what the custom resources scenarios may do. In Agent Kourier's namespace the runner only reads the three kinds: no Secret, and no
-// write. In the team namespace it makes Bindings and AgentBackends, and Secrets, Roles and RoleBindings (the RBAC a team adds), reads no Secret (it has no
-// get), and nothing else, in no other namespace.
+// TestRunnerCRRoles pins what the custom resources scenarios may do, which is all in the team namespace. It makes Bindings and AgentBackends, Roles and
+// RoleBindings (the RBAC a team adds) and Secrets. A Secret can be created without a name, and then only the named ones of the scenarios can be listed,
+// watched or deleted: it has no get, and a list or watch of the namespace's Secrets is forbidden, so it cannot read the others. Nothing is granted in
+// another namespace.
 func TestRunnerCRRoles(t *testing.T) {
 	roles := runnerRolesByName(t)
-	crs, ok := roles["agent-kourier/e2e-runner-crs"]
-	if !ok {
-		t.Fatal("the manifest has no Role e2e-runner-crs in agent-kourier")
-	}
-	if got := grants([]rbacv1.Role{crs}); len(got) != 6 || !got["bindings:get"] || !got["bindings:list"] || !got["agentbackends:get"] || !got["agentbackends:list"] || !got["chatconnections:get"] || !got["chatconnections:list"] {
-		t.Errorf("Role e2e-runner-crs in agent-kourier grants %v, want get and list of the three kinds only", got)
-	}
 	team, ok := roles[TeamNamespace+"/e2e-runner-team"]
 	if !ok {
 		t.Fatalf("the manifest has no Role e2e-runner-team in %s", TeamNamespace)
 	}
 	got := grants([]rbacv1.Role{team})
-	if got["secrets:get"] || got["secrets:update"] || got["secrets:patch"] {
-		t.Errorf("Role e2e-runner-team grants %v: it must never read or change a Secret, only make, delete, list and watch", got)
-	}
-	for _, want := range []string{"bindings:create", "bindings:update", "bindings:delete", "agentbackends:create", "secrets:create", "secrets:delete", "secrets:list", "secrets:watch", "roles:create", "rolebindings:create", "roles:delete", "rolebindings:delete"} {
+	for _, want := range []string{"bindings:get", "bindings:list", "bindings:create", "bindings:update", "bindings:delete", "agentbackends:list", "agentbackends:create", "agentbackends:delete", "secrets:create", "secrets:delete", "secrets:list", "secrets:watch", "roles:create", "rolebindings:create", "roles:delete", "rolebindings:delete"} {
 		if !got[want] {
 			t.Errorf("Role e2e-runner-team lacks %s", want)
 		}
 	}
-	// Four Roles in all: the two of the doubles and Agent Kourier, and these two. A Role in another namespace would let the runner write there.
-	if len(roles) != 4 {
-		t.Errorf("the manifest has %d Roles, want 4 (e2e, agent-kourier twice, %s)", len(roles), TeamNamespace)
+	for _, never := range []string{"secrets:get", "secrets:update", "secrets:patch", "bindings:patch", "bindings:watch", "roles:get"} {
+		if got[never] {
+			t.Errorf("Role e2e-runner-team grants %s, which no scenario uses (and a Secret must never be read or changed)", never)
+		}
+	}
+	// The Secrets the scenarios make are the only ones that it may list, watch or delete: every rule on secrets other than create names them.
+	names := map[string]bool{}
+	for _, rule := range team.Rules {
+		if !slices.Contains(rule.Resources, "secrets") {
+			continue
+		}
+		if slices.Equal(rule.Verbs, []string{"create"}) && len(rule.ResourceNames) == 0 {
+			continue
+		}
+		if len(rule.ResourceNames) == 0 {
+			t.Errorf("rule %v on secrets names none: it would let the runner list or delete every Secret of the namespace", rule.Verbs)
+		}
+		for _, n := range rule.ResourceNames {
+			names[n] = true
+		}
+	}
+	for _, want := range []string{"newns-token", "invalid-token", "conflict-token", "status-token", "failover-token"} {
+		if !names[want] {
+			t.Errorf("the Secret %s of a scenario is not named in Role e2e-runner-team", want)
+		}
+	}
+	// Three Roles in all: the two of the doubles and Agent Kourier, and this one. A Role in another namespace would let the runner write there.
+	if len(roles) != 3 {
+		t.Errorf("the manifest has %d Roles, want 3 (e2e, agent-kourier, %s)", len(roles), TeamNamespace)
 	}
 }
