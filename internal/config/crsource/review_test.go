@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -196,15 +197,32 @@ func TestStaleWhileAnInformerFails(t *testing.T) {
 	}
 }
 
-// reflectors counts the goroutines of informers that are running now.
-func reflectors() int {
+// running counts the goroutines of the source that are running now: its informers' reflectors and its probe.
+func running() (reflectors, probes int) {
 	buf := make([]byte, 1<<20)
 	buf = buf[:runtime.Stack(buf, true)]
-	return strings.Count(string(buf), "tools/cache.(*Reflector).ListAndWatch")
+	return strings.Count(string(buf), "tools/cache.(*Reflector).ListAndWatch"), strings.Count(string(buf), "crsource.(*Source).probeLoop")
 }
 
-// Stop returns when the informers' goroutines are gone, not when they are on their way: checked at once, not by a check
-// that retries.
+// Stop returns when the informers' and the probe's goroutines are gone, not when they are on their way: checked at once, not
+// by a check that retries. The probe's goroutine is made slow to end, which is the only way to tell that Stop waited for it.
+func TestStopWaitsForTheProbe(t *testing.T) {
+	src, err := crsource.New(crsource.Options{Client: newCluster(t, corpus(t)...).client, Connection: own})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ended atomic.Bool
+	src.SetProbeExitHookForTest(func() { time.Sleep(200 * time.Millisecond); ended.Store(true) })
+	if err := src.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	src.Stop()
+	if !ended.Load() {
+		t.Error("Stop returned while the probe's goroutine was still ending")
+	}
+}
+
+// The same for what a count of goroutines can show.
 func TestStopWaitsForTheInformers(t *testing.T) {
 	for range 10 {
 		src, err := crsource.New(crsource.Options{Client: newCluster(t, corpus(t)...).client, Connection: own})
@@ -214,75 +232,79 @@ func TestStopWaitsForTheInformers(t *testing.T) {
 		if err := src.Start(t.Context()); err != nil {
 			t.Fatal(err)
 		}
-		if reflectors() == 0 {
-			t.Fatal("no informer is running after Start, so this test proves nothing")
+		if r, p := running(); r == 0 || p == 0 {
+			t.Fatalf("%d informers and %d probes run after Start, so this test proves nothing", r, p)
 		}
 		src.Stop()
-		if n := reflectors(); n != 0 {
-			t.Fatalf("%d informers still run when Stop has returned", n)
+		if r, p := running(); r != 0 || p != 0 {
+			t.Fatalf("%d informers and %d probes still run when Stop has returned", r, p)
 		}
 	}
 }
 
-// The probe sees an outage that no informer reports: a list that is refused fails, and the source is stale from then until a
-// list passes, with no clock to wait out.
+// The probe sees an outage that no informer reports: a list that is refused, or that the API server now forbids, fails, and
+// the source is stale from then until a list passes, with no clock to wait out.
 func TestStaleWhileTheAPIRefusesTheConnection(t *testing.T) {
-	leakCheck(t)
-	c := newCluster(t, corpus(t)...)
-	var mu sync.Mutex
-	down := false
-	c.client.PrependReactor("list", "chatconnections", func(clienttesting.Action) (bool, apiruntime.Object, error) {
-		mu.Lock()
-		defer mu.Unlock()
-		if down {
-			return true, nil, errors.New(`Get "https://10.96.0.1:443/apis/agentkourier.dev/v1alpha1/chatconnections?limit=1": dial tcp 10.96.0.1:443: connect: connection refused`)
-		}
-		return false, nil, nil
-	})
-	src, err := crsource.New(crsource.Options{Client: c.client, Connection: own})
-	if err != nil {
-		t.Fatal(err)
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"connection refused", errors.New(`Get "https://10.96.0.1:443/apis/agentkourier.dev/v1alpha1/chatconnections?limit=1": dial tcp 10.96.0.1:443: connect: connection refused`), "connection refused"},
+		{"forbidden", apierrors.NewForbidden(connections.GroupResource(), "", errors.New("RBAC revoked")), "forbidden"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			leakCheck(t)
+			c := newCluster(t, corpus(t)...)
+			var mu sync.Mutex
+			down := false
+			c.client.PrependReactor("list", "chatconnections", func(clienttesting.Action) (bool, apiruntime.Object, error) {
+				mu.Lock()
+				defer mu.Unlock()
+				if down {
+					return true, nil, tc.err
+				}
+				return false, nil, nil
+			})
+			src, err := crsource.New(crsource.Options{Client: c.client, Connection: own})
+			if err != nil {
+				t.Fatal(err)
+			}
+			src.SetProbeForTest(20*time.Millisecond, time.Second)
+			t.Cleanup(src.Stop)
+			if err := src.Start(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			time.Sleep(100 * time.Millisecond) // a few probes pass
+			if err := src.Stale(); err != nil {
+				t.Fatalf("Stale = %v while the API answers", err)
+			}
+			mu.Lock()
+			down = true
+			mu.Unlock()
+			until(t, func() {}, func() bool { return src.Stale() != nil })
+			if err := src.Stale(); !strings.Contains(err.Error(), "chatconnections.agentkourier.dev") || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("Stale = %v; want it to name the resource and say %q", err, tc.want)
+			}
+			if s, _ := set(t, src); len(s.Bindings) != 2 {
+				t.Errorf("the cache was not kept during the outage: %d Bindings", len(s.Bindings))
+			}
+			mu.Lock()
+			down = false
+			mu.Unlock()
+			until(t, func() {}, func() bool { return src.Stale() == nil })
+		})
 	}
-	src.SetProbeForTest(20*time.Millisecond, time.Second)
-	t.Cleanup(src.Stop)
-	if err := src.Start(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(100 * time.Millisecond)
-	if err := src.Stale(); err != nil {
-		t.Fatalf("Stale = %v while the API answers", err)
-	}
-	mu.Lock()
-	down = true
-	mu.Unlock()
-	until(t, func() {}, func() bool { return src.Stale() != nil })
-	if err := src.Stale(); !strings.Contains(err.Error(), "chatconnections.agentkourier.dev") || !strings.Contains(err.Error(), "connection refused") {
-		t.Errorf("Stale = %v; want it to name the resource and the refusal", err)
-	}
-	if s, _ := set(t, src); len(s.Bindings) != 2 {
-		t.Errorf("the cache was not kept during the outage: %d Bindings", len(s.Bindings))
-	}
-	mu.Lock()
-	down = false
-	mu.Unlock()
-	until(t, func() {}, func() bool { return src.Stale() == nil })
 }
 
-// A list that is never answered fails the probe at its timeout, and neither holds up the other kinds nor Stop.
+// A list that is never answered fails the probe at its timeout, and Stop is not held up by it.
 func TestStaleWhileTheAPIDoesNotAnswerAndStopIsNotHeldUp(t *testing.T) {
 	leakCheck(t)
 	c := newCluster(t, corpus(t)...)
 	release := make(chan struct{})
-	var mu sync.Mutex
-	hang, hung := false, 0
+	var hang atomic.Bool
 	c.client.PrependReactor("list", "bindings", func(clienttesting.Action) (bool, apiruntime.Object, error) {
-		mu.Lock()
-		h := hang
-		if h {
-			hung++
-		}
-		mu.Unlock()
-		if h {
+		if hang.Load() {
 			<-release // a client that ignores its context, as the fake does
 		}
 		return false, nil, nil
@@ -297,9 +319,7 @@ func TestStaleWhileTheAPIDoesNotAnswerAndStopIsNotHeldUp(t *testing.T) {
 	if err := src.Start(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	mu.Lock()
-	hang = true
-	mu.Unlock()
+	hang.Store(true)
 	until(t, func() {}, func() bool { return src.Stale() != nil })
 	if err := src.Stale(); !strings.Contains(err.Error(), "no answer in 50ms") || !strings.Contains(err.Error(), "bindings.agentkourier.dev") {
 		t.Errorf("Stale = %v; want it to say that bindings did not answer in 50ms", err)
@@ -310,6 +330,69 @@ func TestStaleWhileTheAPIDoesNotAnswerAndStopIsNotHeldUp(t *testing.T) {
 	case <-stopped:
 	case <-time.After(5 * time.Second):
 		t.Fatal("Stop is held up by a list that is never answered")
+	}
+	once.Do(func() { close(release) })
+}
+
+// logSink is a log destination that the source's goroutines and the test share.
+type logSink struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *logSink) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *logSink) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+// Stop while a list of the probe is in flight is no outage: the list ends because the source did, and neither a warning nor
+// a stale source is left behind.
+func TestStopDuringAProbeRecordsNoOutage(t *testing.T) {
+	leakCheck(t)
+	c := newCluster(t, corpus(t)...)
+	release := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	var hang atomic.Bool
+	c.client.PrependReactor("list", "bindings", func(clienttesting.Action) (bool, apiruntime.Object, error) {
+		if hang.Load() {
+			select {
+			case entered <- struct{}{}:
+			default:
+			}
+			<-release
+		}
+		return false, nil, nil
+	})
+	logs := &logSink{}
+	src, err := crsource.New(crsource.Options{Client: c.client, Connection: own, Logger: slog.New(slog.NewTextHandler(logs, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src.SetProbeForTest(20*time.Millisecond, 30*time.Second)
+	var once sync.Once
+	t.Cleanup(func() { once.Do(func() { close(release) }); src.Stop() })
+	if err := src.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	hang.Store(true)
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the probe never listed")
+	}
+	src.Stop() // the list is in flight, and has 30 s to run
+	if err := src.Stale(); err != nil {
+		t.Errorf("Stale after Stop = %v; want nil: the list was cut short by Stop, and is no outage", err)
+	}
+	if strings.Contains(logs.String(), "does not answer") {
+		t.Errorf("Stop made the probe warn of an outage:\n%s", logs.String())
 	}
 	once.Do(func() { close(release) })
 }
@@ -372,7 +455,7 @@ func TestABindingWhoseConnectionBecomesAnotherBrokersAndIsEditedInvalidIsLeftOut
 	_ = unstructured.SetNestedField(late.Object, "slack-later", "spec", "chat", "connectionRef", "name")
 	c := newCluster(t, append(objs, late)...)
 	src := c.start(t)
-	s, fp := set(t, src)
+	s, _ := set(t, src)
 	if got := bindingNames(s); len(got) != 3 {
 		t.Fatalf("Bindings = %v; want late served, its connection being none that exists", got)
 	}
@@ -382,8 +465,11 @@ func TestABindingWhoseConnectionBecomesAnotherBrokersAndIsEditedInvalidIsLeftOut
 	bad := late.DeepCopy()
 	bad.SetGeneration(2)
 	_ = unstructured.SetNestedField(bad.Object, "#general", "spec", "chat", "channel")
-	until(t, func() { c.apply(later); c.apply(bad) }, func() bool { return src.Fingerprint(t.Context()) != fp })
-	time.Sleep(300 * time.Millisecond) // both are in the cache before the next read
+	// Both are in the informers' caches before the next read, which is what puts the last good generation and the new
+	// connection in one read: a read between them would let the Binding go on the connection alone.
+	until(t, func() { c.apply(later); c.apply(bad) }, func() bool {
+		return src.CachedGenerationForTest("Binding", "sre", "late") == 2 && src.CachedGenerationForTest("ChatConnection", "agent-kourier-system", "slack-later") >= 0
+	})
 	s, _ = set(t, src)
 	if got := bindingNames(s); len(got) != 2 || len(s.Invalid) != 0 {
 		t.Errorf("Bindings %v, Invalid %+v; want late left out and not reported", got, s.Invalid)

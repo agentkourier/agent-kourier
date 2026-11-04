@@ -140,6 +140,7 @@ type Source struct {
 	now      func() time.Time
 
 	probeEvery, probeTimeout time.Duration
+	probeExited              func()         // a test's hook, called as the probe's goroutine ends
 	wg                       sync.WaitGroup // the probe
 }
 
@@ -243,6 +244,9 @@ const staleAfter = 90 * time.Second
 // answered. A list is what a refused connection, a timeout and a throttled request all fail, which the informers' own error
 // handler is never told of.
 func (s *Source) probeLoop(ctx context.Context, gvrs []schema.GroupVersionResource) {
+	if s.probeExited != nil {
+		defer s.probeExited()
+	}
 	t := time.NewTicker(s.probeEvery)
 	defer t.Stop()
 	for {
@@ -257,6 +261,9 @@ func (s *Source) probeLoop(ctx context.Context, gvrs []schema.GroupVersionResour
 				failed = fmt.Errorf("%s.%s: %w", gvr.Resource, gvr.Group, err)
 				break // one that fails is enough, and the others would each wait out the timeout
 			}
+		}
+		if ctx.Err() != nil { // stopped while a list was in flight: that is no outage, and nothing is left to say it
+			return
 		}
 		s.errMu.Lock()
 		if failed != nil && s.probeErr == nil {
