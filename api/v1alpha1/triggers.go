@@ -59,8 +59,30 @@ func messageFields() []MessageField {
 	return []MessageField{FieldText, FieldTitle, FieldLink, FieldFallback, FieldFooter, FieldBody}
 }
 
+// The CEL rules on a trigger copy rules of Validate and refuse nothing that Validate accepts. A rule that forbids a field
+// is gated on the type mention, and one that requires a field on the type botMessage; the thread rules (by key, closeWhen
+// keys, the ranges) hold for either type, since Validate refuses those fields on a mention trigger anyway. A value that
+// Validate reads as unset counts as unset here: a missing field, an empty list or map, a zero duration (CEL's duration()
+// parses as time.ParseDuration does: spec D50). A field absent from the object is read with has(), since the apiserver
+// checks the object as it was written, before Default. (Not in the doc comment below, which the reference pages print,
+// while no CRD ships.)
+
 // Trigger is one way an event in the bound channel starts or continues a turn.
 // Triggers are tried in order and the first that matches handles the event.
+//
+// +kubebuilder:validation:XValidation:rule="self.type != 'mention' || !has(self.from)",message="not allowed with type: mention",fieldPath=".from"
+// +kubebuilder:validation:XValidation:rule="self.type != 'mention' || !has(self.match) || size(self.match) == 0",message="not allowed with type: mention",fieldPath=".match"
+// +kubebuilder:validation:XValidation:rule="self.type != 'mention' || !has(self.exclude) || size(self.exclude) == 0",message="not allowed with type: mention",fieldPath=".exclude"
+// +kubebuilder:validation:XValidation:rule="self.type != 'mention' || !has(self.extract) || size(self.extract) == 0",message="not allowed with type: mention",fieldPath=".extract"
+// +kubebuilder:validation:XValidation:rule=`self.type != 'mention' || !has(self.thread) || !((has(self.thread.by) && self.thread.by != "") || (has(self.thread.cooldown) && duration(self.thread.cooldown) != duration('0s')) || (has(self.thread.maxIdle) && duration(self.thread.maxIdle) != duration('0s')) || (has(self.thread.closeWhen) && size(self.thread.closeWhen) > 0))`,message="not allowed with type: mention",fieldPath=".thread"
+// +kubebuilder:validation:XValidation:rule=`self.type != 'mention' || !has(self.promptTemplate) || self.promptTemplate == ""`,message="not allowed with type: mention",fieldPath=".promptTemplate"
+// +kubebuilder:validation:XValidation:rule="self.type != 'mention' || !has(self.limits) || !(has(self.limits.rateLimit) || has(self.limits.maxRunsPerDay))",message="not allowed with type: mention",fieldPath=".limits"
+// +kubebuilder:validation:XValidation:rule="self.type != 'botMessage' || has(self.from)",message="required with type: botMessage",fieldPath=".from.id"
+// +kubebuilder:validation:XValidation:rule=`self.type != 'botMessage' || (has(self.promptTemplate) && self.promptTemplate != "")`,message="required with type: botMessage",fieldPath=".promptTemplate"
+// +kubebuilder:validation:XValidation:rule="self.type != 'botMessage' || (has(self.limits) && has(self.limits.rateLimit))",message="required with type: botMessage: set maxRuns, per and maxConcurrent",fieldPath=".limits.rateLimit"
+// +kubebuilder:validation:XValidation:rule="self.type != 'botMessage' || (has(self.limits) && has(self.limits.maxRunsPerDay))",message="required with type: botMessage: set the cap for a day, or 0 for no cap",fieldPath=".limits.maxRunsPerDay"
+// +kubebuilder:validation:XValidation:rule="!(has(self.thread) && has(self.thread.by) && self.thread.by == 'key') || (has(self.extract) && 'key' in self.extract)",message=`thread.by: key requires an extract named "key"`,fieldPath=".thread.by"
+// +kubebuilder:validation:XValidation:rule="!has(self.thread) || !has(self.thread.closeWhen) || self.thread.closeWhen.all(k, has(self.extract) && k in self.extract)",message="every key must be the name of an entry of extract",fieldPath=".thread.closeWhen"
 type Trigger struct {
 	// Type is mention, a person @mentioning Agent Kourier, or botMessage, a message a bot posts.
 	// A mention trigger takes no other field. The key is type, not on: YAML 1.1 reads a bare
@@ -71,13 +93,21 @@ type Trigger struct {
 	From *BotSource `json:"from,omitempty"`
 	// Match maps a message field to a regex it must match. Every entry must match.
 	// +kubebuilder:validation:MaxProperties=6
+	// +kubebuilder:validation:XValidation:rule="self.all(k, k in ['text', 'title', 'link', 'fallback', 'footer', 'body'])",message="unsupported message field, must be one of text, title, link, fallback, footer, body"
+	// +kubebuilder:validation:XValidation:rule="self.all(k, size(self[k]) > 0)",message="a regular expression is required"
+	// +kubebuilder:validation:XValidation:rule="self.all(k, size(self[k]) <= 512)",message="a regular expression is longer than the 512 byte limit"
 	Match map[MessageField]string `json:"match,omitempty"`
 	// Exclude maps a message field to a regex; a message matching any entry is ignored.
 	// +kubebuilder:validation:MaxProperties=6
+	// +kubebuilder:validation:XValidation:rule="self.all(k, k in ['text', 'title', 'link', 'fallback', 'footer', 'body'])",message="unsupported message field, must be one of text, title, link, fallback, footer, body"
+	// +kubebuilder:validation:XValidation:rule="self.all(k, size(self[k]) > 0)",message="a regular expression is required"
+	// +kubebuilder:validation:XValidation:rule="self.all(k, size(self[k]) <= 512)",message="a regular expression is longer than the 512 byte limit"
 	Exclude map[MessageField]string `json:"exclude,omitempty"`
 	// Extract names the values to pull out of a message. A message in which one of these
 	// regexes does not match does not match the trigger. At most 32.
 	// +kubebuilder:validation:MaxProperties=32
+	// +kubebuilder:validation:XValidation:rule="self.all(k, k.matches('^[a-z][A-Za-z0-9_]*$'))",message="invalid extract name: it must start with a lower-case letter and use only letters, digits and '_', so a template can read .Fields.<name>"
+	// +kubebuilder:validation:XValidation:rule="self.all(k, self[k].regex.contains('(?P<' + k + '>') || self[k].regex.contains('(?<' + k + '>'))",message="every regex must have a named group (?P<name>...) that is the entry's name, and supplies the value"
 	Extract map[string]Extract `json:"extract,omitempty"`
 	// Thread ties messages that share an extracted key to one thread.
 	// +optional
@@ -112,17 +142,25 @@ type Extract struct {
 	// Field is the message field the regex runs on.
 	// +kubebuilder:validation:Enum=text;title;link;fallback;footer;body
 	Field MessageField `json:"field"`
-	// The generated CRD schema counts characters and Agent Kourier counts bytes, so a regex of multibyte characters can
-	// pass the schema and still be refused when Agent Kourier reads it. (Not in the doc comment below, which the
-	// reference pages print, while no CRD ships.)
+	// The schema's maxLength counts characters and Agent Kourier counts bytes, so maxLength is never the stricter of the two,
+	// and the CEL rule counts bytes, as Validate does, to refuse a regex of multibyte characters that is over the limit
+	// in bytes. (Not in the doc comment below, which the reference pages print, while no CRD ships.)
 
 	// Regex is a Go (RE2) regular expression of at most 512 bytes.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=512
+	// +kubebuilder:validation:XValidation:rule="size(bytes(self)) <= 512",message="regular expression is longer than the 512 byte limit"
 	Regex string `json:"regex"`
 }
 
 // TriggerThread decides which thread a message joins and when it closes the thread.
+//
+// +kubebuilder:validation:XValidation:rule=`(has(self.by) && self.by != "") || !has(self.cooldown) || duration(self.cooldown) == duration('0s')`,message="requires thread.by",fieldPath=".cooldown"
+// +kubebuilder:validation:XValidation:rule=`(has(self.by) && self.by != "") || !has(self.maxIdle) || duration(self.maxIdle) == duration('0s')`,message="requires thread.by",fieldPath=".maxIdle"
+// +kubebuilder:validation:XValidation:rule=`(has(self.by) && self.by != "") || !has(self.closeWhen) || size(self.closeWhen) == 0`,message="requires thread.by",fieldPath=".closeWhen"
+// +kubebuilder:validation:XValidation:rule=`!(has(self.by) && self.by != "") || (has(self.cooldown) && duration(self.cooldown) != duration('0s'))`,message="required with thread.by",fieldPath=".cooldown"
+// +kubebuilder:validation:XValidation:rule="!has(self.cooldown) || duration(self.cooldown) == duration('0s') || (duration(self.cooldown) >= duration('1m') && duration(self.cooldown) <= duration('168h'))",message="is out of range, must be between 1m and 168h",fieldPath=".cooldown"
+// +kubebuilder:validation:XValidation:rule="!has(self.maxIdle) || duration(self.maxIdle) == duration('0s') || (duration(self.maxIdle) >= (has(self.cooldown) ? duration(self.cooldown) + duration(self.cooldown) : duration('0s')) && duration(self.maxIdle) <= duration('720h'))",message="is out of range, must be between twice the cooldown and 720h",fieldPath=".maxIdle"
 type TriggerThread struct {
 	// By is key: messages with the same extracted "key" share a thread.
 	// +kubebuilder:validation:Enum=key;""
@@ -152,6 +190,7 @@ type TriggerThread struct {
 	// note and starts no turn. Every entry must equal. It names only extracted fields, so it holds at most as many
 	// entries as extract does, 32.
 	// +kubebuilder:validation:MaxProperties=32
+	// +kubebuilder:validation:XValidation:rule="self.all(k, size(self[k]) > 0)",message="the value that closes the thread is required"
 	// +optional
 	CloseWhen map[string]string `json:"closeWhen,omitempty"`
 }

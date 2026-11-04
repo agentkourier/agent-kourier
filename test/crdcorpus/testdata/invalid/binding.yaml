@@ -225,7 +225,7 @@ spec:
 ---
 # rule: binding/spec.identity: neither userId nor tokenSecretRef
 # want: spec.identity: set userId, tokenSecretRef, or both
-# schema: accepts
+# schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata:
@@ -558,7 +558,7 @@ spec:
 ---
 # rule: binding/spec.chat.mentions[].name: reserved, here
 # want: spec.chat.mentions[0].name: "here" is reserved
-# schema: accepts
+# schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata:
@@ -578,7 +578,7 @@ spec:
 ---
 # rule: binding/spec.chat.mentions[].name: reserved, channel
 # want: spec.chat.mentions[0].name: "channel" is reserved
-# schema: accepts
+# schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata:
@@ -598,7 +598,7 @@ spec:
 ---
 # rule: binding/spec.chat.mentions[].name: reserved, everyone
 # want: spec.chat.mentions[0].name: "everyone" is reserved
-# schema: accepts
+# schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata:
@@ -758,7 +758,7 @@ spec:
 ---
 # rule: binding/spec.interactions.approverGroups: needs toolApprovals
 # want: spec.interactions.approverGroups: requires spec.interactions.toolApprovals: true
-# schema: accepts
+# schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata:
@@ -867,7 +867,7 @@ spec:
 ---
 # rule: binding/spec.interactions.timeout: negative
 # want: spec.interactions.timeout: must be positive
-# schema: accepts
+# schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata:
@@ -910,7 +910,7 @@ spec:
 ---
 # rule: binding/spec.session.threadTTL: negative
 # want: spec.session.threadTTL: must be positive
-# schema: accepts
+# schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata:
@@ -1017,6 +1017,7 @@ spec:
 # want: status: a file may not set it, remove it
 # field: status
 # schema: accepts
+# broker-only: a rule of the file loader and not of Validate: a Binding on the CR route carries a status that the schema must accept
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata:

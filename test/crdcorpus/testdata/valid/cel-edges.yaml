@@ -1,0 +1,369 @@
+# AgentBackend.spec.url that the broker accepts: an upper-case scheme, which url.Parse lowers.
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: cel-url-0, namespace: sre}
+spec:
+  dialect: a2a
+  url: "HTTP://KAGENT.kagent:8083/Path"
+---
+# AgentBackend.spec.url that the broker accepts: a fragment right after the host, where CEL's url() throws.
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: cel-url-1, namespace: sre}
+spec:
+  dialect: a2a
+  url: "http://kagent#fragment"
+---
+# AgentBackend.spec.url that the broker accepts: an @ in the query, which is not userinfo.
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: cel-url-2, namespace: sre}
+spec:
+  dialect: a2a
+  url: "http://kagent?next=a@b"
+---
+# AgentBackend.spec.url that the broker accepts: an @ in the path, which is not userinfo.
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: cel-url-3, namespace: sre}
+spec:
+  dialect: a2a
+  url: "http://kagent/path@segment"
+---
+# AgentBackend.spec.url that the broker accepts: an @ in the fragment, which is not userinfo.
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: cel-url-4, namespace: sre}
+spec:
+  dialect: a2a
+  url: "http://kagent#a@b"
+---
+# AgentBackend.spec.url that the broker accepts: a host that is only a port, which is not empty to url.Parse and is to CEL's getHostname().
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: cel-url-5, namespace: sre}
+spec:
+  dialect: a2a
+  url: "http://:8083"
+---
+# AgentBackend.spec.url that the broker accepts: an IPv6 literal.
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: cel-url-6, namespace: sre}
+spec:
+  dialect: a2a
+  url: "https://[::1]:8443/x"
+---
+# AgentBackend.spec.url that the broker accepts: a space in the path, which only the host may not have.
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: cel-url-7, namespace: sre}
+spec:
+  dialect: a2a
+  url: "http://kagent/a b"
+---
+# AgentBackend.spec.url that the broker accepts: every punctuation character that a host may have.
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: cel-url-8, namespace: sre}
+spec:
+  dialect: a2a
+  url: "http://a!$&'()*+,;=b/"
+---
+# AgentBackend.spec.url that the broker accepts: a non-ASCII host.
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: cel-url-9, namespace: sre}
+spec:
+  dialect: a2a
+  url: "http://bücher.example/"
+---
+# AgentBackend.spec.url that the broker accepts: a trailing dot and percent escapes in the path.
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: cel-url-10, namespace: sre}
+spec:
+  dialect: a2a
+  url: "http://kagent./%41%20"
+---
+# AgentBackend.spec.url that the broker accepts: a control character after the fragment mark, which url.Parse cuts off before it checks.
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: cel-url-11, namespace: sre}
+spec:
+  dialect: a2a
+  url: "http://kagent#\t"
+---
+# AgentBackend.spec.url that the broker accepts: a fragment that ends in a newline, as a YAML block scalar makes.
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: cel-url-12, namespace: sre}
+spec:
+  dialect: a2a
+  url: "http://kagent/p?q=1#frag\n"
+---
+# AgentBackend.spec.url that the broker accepts: the URL of every other example, with a port.
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: cel-url-13, namespace: sre}
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+---
+# Header names that are not reserved though they look it, a name of exactly 256 bytes in 128 characters, and each way to set exactly one of value and valueSecretRef (value empty counts as unset).
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: cel-headers, namespace: sre}
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {"name": "X-Authorization", "value": "v"}
+    - {"name": "Authorization-Token", "value": "v"}
+    - {"name": "Authorization ", "value": "v"}
+    - {"name": "Cookies", "value": "v"}
+    - {"name": "X-User-Id-2", "value": "v"}
+    - {"name": "Proxy-Authorisation", "value": "v"}
+    - {"name": "X-Share-Token2", "value": "v"}
+    - {"name": "X-Kagent-Insecure-Runtime-Identity-2", "value": "v"}
+    - {"name": "Authorizatıon", "value": "v"}
+    - {"name": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé", "value": "v"}
+    - {"name": "X-Value-Empty-Secret", "value": "", "valueSecretRef": {"name": "s"}}
+    - {"name": "X-Secret-Only", "valueSecretRef": {"name": "s", "key": "k"}}
+    - {"name": "X-Value-Only", "value": "v"}
+---
+# Binding identity, userId alone.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: cel-identity-0, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: k8s-agent, namespace: kagent}
+  identity: {userId: u}
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+---
+# Binding identity, tokenSecretRef alone.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: cel-identity-1, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: k8s-agent, namespace: kagent}
+  identity: {tokenSecretRef: {name: s}}
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+---
+# Binding identity, an empty userId with tokenSecretRef.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: cel-identity-2, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: k8s-agent, namespace: kagent}
+  identity: {userId: "", tokenSecretRef: {name: s}}
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+---
+# Binding identity, both.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: cel-identity-3, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: k8s-agent, namespace: kagent}
+  identity: {userId: u, tokenSecretRef: {name: s}}
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+---
+# Binding timeout and threadTTL: a negative zero, which is zero and so the default.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: cel-durations-0, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: k8s-agent, namespace: kagent}
+  identity: {userId: u}
+  chat: {connectionRef: {name: slack}, channel: C0123456789}
+  interactions: {timeout: "-0"}
+  session: {threadTTL: "-0s"}
+---
+# Binding timeout and threadTTL: a bare zero, which is the default.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: cel-durations-1, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: k8s-agent, namespace: kagent}
+  identity: {userId: u}
+  chat: {connectionRef: {name: slack}, channel: C0123456789}
+  interactions: {timeout: "0"}
+  session: {threadTTL: "+0"}
+---
+# Binding timeout and threadTTL: a negative value that ParseDuration truncates to zero, and one microsecond.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: cel-durations-2, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: k8s-agent, namespace: kagent}
+  identity: {userId: u}
+  chat: {connectionRef: {name: slack}, channel: C0123456789}
+  interactions: {timeout: "-0.0000000001ns"}
+  session: {threadTTL: "1µs"}
+---
+# Binding timeout and threadTTL: two units, and the default written out.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: cel-durations-3, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: k8s-agent, namespace: kagent}
+  identity: {userId: u}
+  chat: {connectionRef: {name: slack}, channel: C0123456789}
+  interactions: {timeout: "1h30m"}
+  session: {threadTTL: "2160h"}
+---
+# Binding interactions: approverGroups with toolApprovals.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: cel-approvers-0, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: k8s-agent, namespace: kagent}
+  identity: {userId: u}
+  chat: {connectionRef: {name: slack}, channel: C0123456789}
+  interactions: {toolApprovals: true, approverGroups: [S0123456789]}
+---
+# Binding interactions: an empty approverGroups without toolApprovals.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: cel-approvers-1, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: k8s-agent, namespace: kagent}
+  identity: {userId: u}
+  chat: {connectionRef: {name: slack}, channel: C0123456789}
+  interactions: {toolApprovals: false, approverGroups: []}
+---
+# Binding interactions: an empty approverGroups and toolApprovals left out.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: cel-approvers-2, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: k8s-agent, namespace: kagent}
+  identity: {userId: u}
+  chat: {connectionRef: {name: slack}, channel: C0123456789}
+  interactions: {approverGroups: []}
+---
+# Binding interactions: no approverGroups at all.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: cel-approvers-3, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: k8s-agent, namespace: kagent}
+  identity: {userId: u}
+  chat: {connectionRef: {name: slack}, channel: C0123456789}
+  interactions: {askUser: true}
+---
+# Mention names that contain a broadcast word without being one.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: cel-mentions, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: k8s-agent, namespace: kagent}
+  identity: {userId: u}
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    mentions: [{name: hereby, user: U0123456789}, {name: channel-2, user: U0123456789}, {name: everyone1, user: U0123456789}, {name: here1, user: U0123456789}, {name: chann, user: U0123456789}, {name: a-here, user: U0123456789}]
+---
+# Trigger: every optional field of a mention trigger written out empty, which the broker reads as unset.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: cel-mention-0, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: k8s-agent, namespace: kagent}
+  identity: {userId: u}
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers: [{type: mention, match: {}, exclude: {}, extract: {}, thread: {}, limits: {}, promptTemplate: ""}]
+---
+# Trigger: a mention trigger whose thread is all zero values, which the broker reads as unset.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: cel-mention-1, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: k8s-agent, namespace: kagent}
+  identity: {userId: u}
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers: [{type: mention, thread: {by: "", cooldown: "0s", maxIdle: "0", closeWhen: {}}}]
+---
+# Trigger: a mention trigger whose thread durations are signed zeros, which the broker reads as unset.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: cel-mention-2, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: k8s-agent, namespace: kagent}
+  identity: {userId: u}
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers: [{type: mention, thread: {cooldown: "-0", maxIdle: "+0s"}}]
+---
+# botMessage triggers with the rate window and the thread cooldown and maxIdle at the edges of their ranges, a maxIdle of exactly twice the cooldown, and a thread that is all zeros.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: cel-triggers-limits-thread, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: k8s-agent, namespace: kagent}
+  identity: {userId: u}
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - {type: botMessage, from: {id: B0000000000}, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}, promptTemplate: "x"}
+      - {type: botMessage, from: {id: B0000000001}, limits: {rateLimit: {maxRuns: 1, per: 24h, maxConcurrent: 1}, maxRunsPerDay: 0}, promptTemplate: "x"}
+      - {type: botMessage, from: {id: B0000000002}, limits: {rateLimit: {maxRuns: 1, per: 1440m, maxConcurrent: 1}, maxRunsPerDay: 0}, promptTemplate: "x"}
+      - {type: botMessage, from: {id: B0000000003}, limits: {rateLimit: {maxRuns: 1, per: 86400s, maxConcurrent: 1}, maxRunsPerDay: 0}, promptTemplate: "x"}
+      - {type: botMessage, from: {id: B0000000004}, limits: {rateLimit: {maxRuns: 1, per: 10000ms, maxConcurrent: 1}, maxRunsPerDay: 0}, promptTemplate: "x"}
+      - {type: botMessage, from: {id: B0000000005}, limits: {rateLimit: {maxRuns: 1, per: 1m, maxConcurrent: 1}, maxRunsPerDay: 0}, promptTemplate: "x"}
+      - {type: botMessage, from: {id: B0000000006}, limits: {rateLimit: {maxRuns: 1, per: 0.5h, maxConcurrent: 1}, maxRunsPerDay: 0}, promptTemplate: "x"}
+      - {type: botMessage, from: {id: B0000000007}, limits: {rateLimit: {maxRuns: 1, per: +1h, maxConcurrent: 1}, maxRunsPerDay: 0}, promptTemplate: "x"}
+      - {type: botMessage, from: {id: B0000000008}, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}, promptTemplate: "x", extract: {key: {field: title, regex: "(?P<key>.+)"}, state: {field: text, regex: "(?<state>FIRING|RESOLVED)"}}, thread: {by: key, cooldown: "1m", closeWhen: {state: RESOLVED}}}
+      - {type: botMessage, from: {id: B0000000009}, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}, promptTemplate: "x", extract: {key: {field: title, regex: "(?P<key>.+)"}, state: {field: text, regex: "(?<state>FIRING|RESOLVED)"}}, thread: {by: key, cooldown: "168h", closeWhen: {state: RESOLVED}}}
+      - {type: botMessage, from: {id: B0000000010}, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}, promptTemplate: "x", extract: {key: {field: title, regex: "(?P<key>.+)"}, state: {field: text, regex: "(?<state>FIRING|RESOLVED)"}}, thread: {by: key, cooldown: "10080m", closeWhen: {state: RESOLVED}}}
+      - {type: botMessage, from: {id: B0000000011}, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}, promptTemplate: "x", extract: {key: {field: title, regex: "(?P<key>.+)"}, state: {field: text, regex: "(?<state>FIRING|RESOLVED)"}}, thread: {by: key, cooldown: "1m", maxIdle: "2m", closeWhen: {state: RESOLVED}}}
+      - {type: botMessage, from: {id: B0000000012}, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}, promptTemplate: "x", extract: {key: {field: title, regex: "(?P<key>.+)"}, state: {field: text, regex: "(?<state>FIRING|RESOLVED)"}}, thread: {by: key, cooldown: "2h", maxIdle: "4h", closeWhen: {state: RESOLVED}}}
+      - {type: botMessage, from: {id: B0000000013}, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}, promptTemplate: "x", extract: {key: {field: title, regex: "(?P<key>.+)"}, state: {field: text, regex: "(?<state>FIRING|RESOLVED)"}}, thread: {by: key, cooldown: "168h", maxIdle: "720h", closeWhen: {state: RESOLVED}}}
+      - {type: botMessage, from: {id: B0000000014}, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}, promptTemplate: "x", extract: {key: {field: title, regex: "(?P<key>.+)"}, state: {field: text, regex: "(?<state>FIRING|RESOLVED)"}}, thread: {by: key, cooldown: "1h", maxIdle: "720h", closeWhen: {state: RESOLVED}}}
+      - {type: botMessage, from: {id: B0000000015}, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}, promptTemplate: "x", extract: {key: {field: title, regex: "(?P<key>.+)"}, state: {field: text, regex: "(?<state>FIRING|RESOLVED)"}}, thread: {by: key, cooldown: "1m", maxIdle: "120s", closeWhen: {state: RESOLVED}}}
+      - {type: botMessage, from: {id: B0000000016}, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}, promptTemplate: "x", thread: {by: "", cooldown: "0s", maxIdle: "0", closeWhen: {}}}
+      - {type: botMessage, from: {id: B0000000017}, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}, promptTemplate: "x", thread: {}}
+---
+# botMessage triggers with all six message fields in match (512 characters each) and exclude (256 characters and 512 bytes each), extract names at the edges of their grammar with each way to write a named group, and an extract regex of exactly 512 bytes in 261 characters.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: cel-triggers-regex, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: k8s-agent, namespace: kagent}
+  identity: {userId: u}
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: botMessage, from: {id: B0000000100}, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}, promptTemplate: "x", match: {text: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", title: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", link: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", fallback: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", footer: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", body: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, exclude: {text: "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé", title: "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé", link: "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé", fallback: "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé", footer: "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé", body: "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"}}
+      - {type: botMessage, from: {id: B0000000101}, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}, promptTemplate: "x", extract: {a: {field: text, regex: "(?P<a>x)"}, aB_9: {field: link, regex: "(?<aB_9>x)"}, x1_y: {field: body, regex: "[(](?P<x1_y>x)"}, state: {field: footer, regex: "(?:(?P<state>x))|y"}}}
+      - {type: botMessage, from: {id: B0000000102}, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}, promptTemplate: "x", extract: {key: {field: fallback, regex: "(?P<key>aééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé)"}}, thread: {by: key, cooldown: 1h}}
+      - {type: botMessage, from: {id: B0000000103}, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}, promptTemplate: "x", extract: {key: {field: text, regex: "(?P<key>a)(?P<other>b)"}}}
+---
+# A thread keyed by an extract named key, closed by two other extracts.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: cel-triggers-closewhen, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: k8s-agent, namespace: kagent}
+  identity: {userId: u}
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: botMessage, from: {id: B0000000200}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}, extract: {key: {field: title, regex: "(?P<key>.+)"}, state: {field: text, regex: "(?P<state>.+)"}, kind: {field: body, regex: "(?P<kind>.+)"}}, thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED, kind: resolved}}}

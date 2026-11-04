@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Run the CRD corpus test (make crd-corpus): a kind cluster with only the three CRDs, no images and no Agent Kourier,
-# against which test/crdcorpus sends every entry of its corpus as a server-side dry-run create and holds the schema to
-# the invariant of spec D50 (2): every object the schema refuses, the broker refuses too, and every valid object passes
-# both. Nothing is stored but the Namespaces the entries need, so the cluster is thrown away after.
+# against which test/crdcorpus sends every entry of its corpus, and thousands of variations that it generates, as
+# server-side dry-run creates and holds the schema, with its CEL rules, to the invariant of spec D50 (2): every object
+# the schema refuses, the broker refuses too, and every valid object passes both. Nothing is stored but the Namespaces
+# the entries need, so the cluster is thrown away after.
 #
 # Without arguments the script makes a cluster named agent-kourier-crds (CRD_CORPUS_CLUSTER overrides it) from lib.sh's
 # pinned node image, applies charts/agent-kourier/files/crds to it, runs the test, and deletes the cluster. It is

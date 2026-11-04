@@ -75,6 +75,13 @@ spec:
                       maxLength: 256
                       minLength: 1
                       type: string
+                      x-kubernetes-validations:
+                      - message: is longer than the 256 byte limit
+                        rule: size(bytes(self)) <= 256
+                      - message: header is reserved for the Binding identity
+                        rule: '!(self.lowerAscii() in [''authorization'', ''proxy-authorization'',
+                          ''cookie'', ''x-user-id'', ''x-agent-name'', ''x-share-token'',
+                          ''x-kagent-insecure-runtime-identity''])'
                     value:
                       type: string
                     valueSecretRef:
@@ -102,6 +109,9 @@ spec:
                   required:
                   - name
                   type: object
+                  x-kubernetes-validations:
+                  - message: set exactly one of value and valueSecretRef
+                    rule: (has(self.value) && self.value != "") != has(self.valueSecretRef)
                 maxItems: 32
                 type: array
               url:
@@ -110,6 +120,16 @@ spec:
                   The a2a card must be served at URL + "/.well-known/agent-card.json", as AX does.
                 minLength: 1
                 type: string
+                x-kubernetes-validations:
+                - message: must be an http or https URL with a host
+                  rule: self.matches('(?i)^https?://[^/?#]')
+                - message: must not contain credentials; identity comes from the Binding
+                  rule: '!self.matches(''(?i)^https?://[^/?#]*@'')'
+                - message: 'invalid URL: must not contain control characters'
+                  rule: '!self.matches(r''^[^#]*[\x00-\x1f\x7f]'')'
+                - message: 'invalid URL: the host must not contain a space, backslash,
+                    caret, backtick, brace or bar'
+                  rule: '!self.matches(r''(?i)^https?://[^/?#]*[ \\^\x60{|}]'')'
             required:
             - dialect
             - url

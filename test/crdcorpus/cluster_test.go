@@ -132,8 +132,10 @@ func schemaRefuses(ctx context.Context, c dynamic.Interface, e Entry) (refused b
 	return false, "", err
 }
 
-// mapKey matches a map key in an apiserver's field path, extract[state], which the corpus writes as extract.state.
-var mapKey = regexp.MustCompile(`\[([^\]0-9][^\]]*)\]`)
+// mapKey matches a map key in an apiserver's field path, extract[state], which the corpus writes as extract.state. A
+// key has no bracket in it, so the "[" that opens the list of several errors, which an apiserver prints as
+// "[spec.a[0].b: ..., spec.c: ...]", is not read as a key.
+var mapKey = regexp.MustCompile(`\[([^\]\[0-9][^\]\[]*)\]`)
 
 // namesField says whether the apiserver's refusal names the field, as the corpus writes it, or the list item it is in:
 // a list that is a set or a map is refused at the item, as approverGroups[1], and the item's own field is not named.
@@ -217,7 +219,7 @@ func TestTheSchemaNeverRefusesWhatTheBrokerAccepts(t *testing.T) {
 					t.Errorf("the schema accepts this entry, which is marked 'schema: refuses'")
 				}
 				if !refused {
-					brokerOnly = append(brokerOnly, e.Name)
+					brokerOnly = append(brokerOnly, e.Name+": "+e.BrokerOnly)
 				}
 			})
 		}
@@ -231,5 +233,51 @@ func TestTheSchemaNeverRefusesWhatTheBrokerAccepts(t *testing.T) {
 	}
 	t.Logf("%d of %d valid entries pass the schema. Of %d invalid entries, the schema refuses %d, the broker alone refuses %d, and %d are not sent to an apiserver.",
 		len(valid)-validRefused, len(valid), len(invalid), len(invalid)-len(brokerOnly)-skipped, len(brokerOnly), skipped)
-	t.Logf("what only the broker refuses, the work of the CEL rules to come:\n  %s", strings.Join(brokerOnly, "\n  "))
+	t.Logf("what only the broker refuses, and why the CRD leaves it to the broker:\n  %s", strings.Join(brokerOnly, "\n  "))
+}
+
+// TestTheSchemaNeverRefusesWhatTheBrokerAcceptsOnVariations is the invariant again, on objects that a generator makes
+// (see Variations) and not on the ones the corpus lists: whatever the broker accepts, the schema, with its CEL rules,
+// accepts. It is the check on a rule that is stricter than the broker's by a case that nobody listed. It also counts
+// the variations that the schema refuses, so that a rule that stopped firing would be seen.
+func TestTheSchemaNeverRefusesWhatTheBrokerAcceptsOnVariations(t *testing.T) {
+	ctx := t.Context()
+	entries, err := Variations(VariationSeed, VariationCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := client(t)
+	requireCRDs(ctx, t, c)
+	ensureNamespaces(ctx, t, c, entries)
+
+	var brokerAccepts, brokerRefuses, bothRefuse, violations int
+	for _, e := range entries {
+		refused, reason, err := schemaRefuses(ctx, c, e)
+		if err != nil {
+			t.Fatalf("%s: dry-run create failed for a reason that is not the schema's: %v", e.Name, err)
+		}
+		if Broker(ctx, e) == nil {
+			brokerAccepts++
+			if refused {
+				violations++
+				if violations <= 20 {
+					y, _ := e.YAML()
+					t.Errorf("the schema refuses an object the broker accepts: %s\n%s\n%s", e.Name, reason, y)
+				}
+			}
+			continue
+		}
+		brokerRefuses++
+		if refused {
+			bothRefuse++
+		}
+	}
+	t.Logf("%d variations: the broker accepts %d and refuses %d, the schema refuses %d of those it refuses, and %d of those it accepts (violations of the invariant)",
+		len(entries), brokerAccepts, brokerRefuses, bothRefuse, violations)
+	if brokerAccepts < 1000 {
+		t.Errorf("only %d variations are accepted by the broker, so this test proves little", brokerAccepts)
+	}
+	if bothRefuse*4 < brokerRefuses {
+		t.Errorf("the schema refuses only %d of the %d variations that the broker refuses: the generator no longer reaches the rules", bothRefuse, brokerRefuses)
+	}
 }
