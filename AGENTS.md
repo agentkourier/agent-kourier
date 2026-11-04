@@ -69,7 +69,7 @@ golangci-lint runs as `go tool golangci-lint`, never a global install.
 - The fast and full tiers run on either config source. `E2E_CONFIG_SOURCE=files` (the default) is the ConfigMap route. `E2E_CONFIG_SOURCE=crds make e2e-fast-up`
   (or `e2e-full-up`) follows the move the chart README gives: the CRDs first, with the release still on the ConfigMap route, then the same config files applied
   as custom resources and the release upgraded with `hack/kind/crds-values.yaml`. It is an environment variable, as `E2E_STORE` and `E2E_REPLICAS` are, since
-  a target for each combination would be eight. Running the bring-up again with the other value moves the tier over in place, and back (the custom
+  a target for each combination would be six. Running the bring-up again with the other value moves the tier over in place, and back (the custom
   resources stay in the cluster, unread, on the way back); `e2e-run.sh` reads the source from the Deployment, so a run is of the tier as it is. The same suite runs on
   both; the `CR_` tests are about the custom resources and skip on the ConfigMap route. Run `make e2e-fast` on each source before a change to
   `internal/config`, the chart or `hack/kind`, and on a Postgres tier with two replicas (`E2E_STORE=postgres E2E_REPLICAS=2`) for the failover scenarios.
