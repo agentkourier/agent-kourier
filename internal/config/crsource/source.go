@@ -27,9 +27,21 @@
 // # RBAC
 //
 // The ServiceAccount needs list and watch on bindings, agentbackends and chatconnections of agentkourier.dev, in every
-// namespace (a ClusterRole), and nothing else for this source; it never issues a get. Start lists each kind once before it
-// starts the informers, so that a missing CRD or a missing right is a clear error at start and not an informer that retries
-// for ever.
+// namespace (a ClusterRole), and nothing else for this source; it never issues a get. Start lists each kind once and opens
+// and closes a watch on it before it starts the informers, so that a missing CRD or a missing right is a clear error at
+// start and not an informer that retries for ever.
+//
+// # Staleness
+//
+// The caches are kept while the API server cannot be reached, which is right: an outage is not every object removed. Stale
+// says that they may lag. Two things feed it. A probe lists one object of each kind every 30 s, with a 10 s timeout, and
+// is the only thing that sees an outage: client-go's reflector retries a refused or throttled watch without telling anyone,
+// and turns a timeout or an end of stream into an empty watch, so a cut connection reaches no handler. The probe's verdict
+// is exact: it is stale from the first failed probe to the first good one. The informers' own error handler adds what does
+// reach it, a list or watch the API server answers with an error status such as forbidden after a Role is revoked, for 90 s
+// after the report. The probe is three small lists per 30 s on the source's own client, so it shares that client's rate
+// limiter with the three informers: 0.1 requests a second, against the limit of 5 that client-go gives a client that sets
+// none.
 package crsource
 
 import (
@@ -121,10 +133,14 @@ type Source struct {
 	good    map[key]goodObject
 	started bool
 
-	errMu   sync.Mutex
-	lastErr error     // the latest failure of a list or watch of an informer
-	errAt   time.Time // when it was reported
-	now     func() time.Time
+	errMu    sync.Mutex
+	lastErr  error     // the latest failure of a list or watch of an informer, from its error handler
+	errAt    time.Time // when it was reported
+	probeErr error     // the latest probe's failure, nil once a probe passes
+	now      func() time.Time
+
+	probeEvery, probeTimeout time.Duration
+	wg                       sync.WaitGroup // the probe
 }
 
 // New returns a Source that has read nothing. It refuses Options without a Client or a Connection.
@@ -138,6 +154,7 @@ func New(opts Options) (*Source, error) {
 	s := &Source{
 		client: opts.Client, log: cmp.Or(opts.Logger, slog.Default()), good: map[key]goodObject{},
 		own: key{config.KindChatConnection, opts.Connection.Namespace, opts.Connection.Name}, now: time.Now,
+		probeEvery: probeEvery, probeTimeout: probeTimeout,
 	}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	return s, nil
@@ -177,6 +194,7 @@ func (s *Source) Start(ctx context.Context) error {
 	s.factory = factory
 	s.mu.Unlock()
 	factory.Start(s.ctx.Done())
+	s.wg.Go(func() { s.probeLoop(s.ctx, gvrs[:]) })
 	syncStop := make(chan struct{})
 	stop := context.AfterFunc(ctx, func() { close(syncStop) })
 	defer stop()
@@ -186,8 +204,8 @@ func (s *Source) Start(ctx context.Context) error {
 	return nil
 }
 
-// probe lists one resource, a page of one, and opens a watch on it and closes it, to tell the three things that go wrong at
-// start apart, whichever of the two the ServiceAccount may not do.
+// probe lists one resource, a page of one, and opens a watch on it and closes it, at start, to tell the three things that go
+// wrong then apart, whichever of the two the ServiceAccount may not do.
 func (s *Source) probe(ctx context.Context, gvr schema.GroupVersionResource) error {
 	_, err := s.client.Resource(gvr).List(ctx, metav1.ListOptions{Limit: 1})
 	if err == nil {
@@ -203,31 +221,92 @@ func (s *Source) probe(ctx context.Context, gvr schema.GroupVersionResource) err
 	case apierrors.IsNotFound(err):
 		return fmt.Errorf("%w: the API server does not serve %s.%s %s; install the CRDs of Agent Kourier first: %w", ErrCRDsAbsent, gvr.Resource, gvr.Group, gvr.Version, err)
 	case apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err):
-		return fmt.Errorf("%w: list %s.%s: the ServiceAccount needs list and watch on it in every namespace: %w", ErrAccessDenied, gvr.Resource, gvr.Group, err)
+		return fmt.Errorf("%w: %s.%s: the ServiceAccount needs list and watch on it in every namespace: %w", ErrAccessDenied, gvr.Resource, gvr.Group, err)
 	}
-	return fmt.Errorf("list %s.%s: %w", gvr.Resource, gvr.Group, err)
+	return fmt.Errorf("list or watch %s.%s: %w", gvr.Resource, gvr.Group, err)
 }
 
-// staleAfter is how long after an informer reports a failed list or watch the source says it is stale. The reflector tries
-// again with a backoff that tops out at 30 s and reports each failure, so a failure that goes on is seen again well inside
-// it, and one that has cleared stops being said after it.
+// The probe's pace: a list of one object of each kind every probeEvery, each bounded by probeTimeout.
+const (
+	probeEvery   = 30 * time.Second
+	probeTimeout = 10 * time.Second
+)
+
+// staleAfter is how long after an informer's error handler reports a failure the source says it is stale. The handler is
+// called for what the API server answers with an error status (a denied list or watch), by a reflector that backs off
+// exponentially to about 30 s, and with jitter the gap between two reports is up to about a minute, so a failure that goes
+// on is seen again inside the window, and one that has cleared stops being said after it. An outage is not one of those: the
+// probe sees it.
 const staleAfter = 90 * time.Second
 
-// Stale returns why the cache may lag the cluster, or nil: the latest failure of a list or watch of an informer, for
-// staleAfter after it was reported. The cache is kept while the cluster cannot be reached, which is right (an outage is not
-// every object removed), and this is how a Reloader says so. It implements config.StaleSource.
+// probeLoop lists one object of each kind every probeEvery, until the source is stopped, and records whether the API server
+// answered. A list is what a refused connection, a timeout and a throttled request all fail, which the informers' own error
+// handler is never told of.
+func (s *Source) probeLoop(ctx context.Context, gvrs []schema.GroupVersionResource) {
+	t := time.NewTicker(s.probeEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		var failed error
+		for _, gvr := range gvrs {
+			if err := s.listOne(ctx, gvr); err != nil {
+				failed = fmt.Errorf("%s.%s: %w", gvr.Resource, gvr.Group, err)
+				break // one that fails is enough, and the others would each wait out the timeout
+			}
+		}
+		s.errMu.Lock()
+		if failed != nil && s.probeErr == nil {
+			s.log.Warn("the API server does not answer the custom resource probe; the cache is kept and may lag", "error", failed)
+		} else if failed == nil && s.probeErr != nil {
+			s.log.Info("the API server answers the custom resource probe again")
+		}
+		s.probeErr = failed
+		s.errMu.Unlock()
+	}
+}
+
+// listOne lists a page of one object of gvr, and gives up after probeTimeout. The call runs on a goroutine of its own and the
+// wait is on the clock and the source's end, so that a client that ignores its context cannot hold the probe or Stop.
+func (s *Source) listOne(parent context.Context, gvr schema.GroupVersionResource) error {
+	ctx, cancel := context.WithTimeout(parent, s.probeTimeout)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.client.Resource(gvr).List(ctx, metav1.ListOptions{Limit: 1})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return fmt.Errorf("no answer in %s: %w", s.probeTimeout, context.Cause(ctx))
+	}
+}
+
+// Stale returns why the cache may lag the cluster, or nil. It is the latest probe's failure, from that probe until the first
+// that passes, or else the latest failure that an informer's error handler reported, for staleAfter after it was reported.
+// The cache is kept while the cluster cannot be reached, which is right (an outage is not every object removed), and this is
+// how a Reloader says so. It implements config.StaleSource.
 func (s *Source) Stale() error {
 	s.errMu.Lock()
 	defer s.errMu.Unlock()
+	if s.probeErr != nil {
+		return s.probeErr
+	}
 	if s.lastErr != nil && s.now().Sub(s.errAt) < staleAfter {
 		return s.lastErr
 	}
 	return nil
 }
 
-// Stop ends the informers and waits for their goroutines to exit. Set reports ErrStopped afterwards.
+// Stop ends the informers and the probe and waits for their goroutines to exit. Set reports ErrStopped afterwards.
 func (s *Source) Stop() {
 	s.cancel()
+	s.wg.Wait()
 	s.mu.Lock()
 	factory := s.factory
 	s.mu.Unlock()

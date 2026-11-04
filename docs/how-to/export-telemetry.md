@@ -44,7 +44,7 @@ agentkourier_chat_connected == 0
 # A Binding's token was refused
 increase(agentkourier_credential_rejections_total[15m]) > 0
 
-# The running config lags the files: the last reload failed
+# The running config may lag its source: the last reload failed, or the source cannot be reached
 agentkourier_config_stale == 1
 
 # A Binding cannot be served. One failed probe holds this until the next pass, so give the rule a `for: 10m`

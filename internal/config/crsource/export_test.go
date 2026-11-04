@@ -8,3 +8,8 @@ func (s *Source) SetClockForTest(now func() time.Time) {
 	defer s.errMu.Unlock()
 	s.now = now
 }
+
+// SetProbeForTest sets the pace and the timeout of the probe, before Start.
+func (s *Source) SetProbeForTest(every, timeout time.Duration) {
+	s.probeEvery, s.probeTimeout = every, timeout
+}

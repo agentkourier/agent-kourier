@@ -1,7 +1,9 @@
 package crsource_test
 
 import (
+	"context"
 	"errors"
+	"log/slog"
 	"runtime"
 	"strings"
 	"sync"
@@ -10,6 +12,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	apiruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 	clienttesting "k8s.io/client-go/testing"
 
@@ -220,3 +223,215 @@ func TestStopWaitsForTheInformers(t *testing.T) {
 		}
 	}
 }
+
+// The probe sees an outage that no informer reports: a list that is refused fails, and the source is stale from then until a
+// list passes, with no clock to wait out.
+func TestStaleWhileTheAPIRefusesTheConnection(t *testing.T) {
+	leakCheck(t)
+	c := newCluster(t, corpus(t)...)
+	var mu sync.Mutex
+	down := false
+	c.client.PrependReactor("list", "chatconnections", func(clienttesting.Action) (bool, apiruntime.Object, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if down {
+			return true, nil, errors.New(`Get "https://10.96.0.1:443/apis/agentkourier.dev/v1alpha1/chatconnections?limit=1": dial tcp 10.96.0.1:443: connect: connection refused`)
+		}
+		return false, nil, nil
+	})
+	src, err := crsource.New(crsource.Options{Client: c.client, Connection: own})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src.SetProbeForTest(20*time.Millisecond, time.Second)
+	t.Cleanup(src.Stop)
+	if err := src.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if err := src.Stale(); err != nil {
+		t.Fatalf("Stale = %v while the API answers", err)
+	}
+	mu.Lock()
+	down = true
+	mu.Unlock()
+	until(t, func() {}, func() bool { return src.Stale() != nil })
+	if err := src.Stale(); !strings.Contains(err.Error(), "chatconnections.agentkourier.dev") || !strings.Contains(err.Error(), "connection refused") {
+		t.Errorf("Stale = %v; want it to name the resource and the refusal", err)
+	}
+	if s, _ := set(t, src); len(s.Bindings) != 2 {
+		t.Errorf("the cache was not kept during the outage: %d Bindings", len(s.Bindings))
+	}
+	mu.Lock()
+	down = false
+	mu.Unlock()
+	until(t, func() {}, func() bool { return src.Stale() == nil })
+}
+
+// A list that is never answered fails the probe at its timeout, and neither holds up the other kinds nor Stop.
+func TestStaleWhileTheAPIDoesNotAnswerAndStopIsNotHeldUp(t *testing.T) {
+	leakCheck(t)
+	c := newCluster(t, corpus(t)...)
+	release := make(chan struct{})
+	var mu sync.Mutex
+	hang, hung := false, 0
+	c.client.PrependReactor("list", "bindings", func(clienttesting.Action) (bool, apiruntime.Object, error) {
+		mu.Lock()
+		h := hang
+		if h {
+			hung++
+		}
+		mu.Unlock()
+		if h {
+			<-release // a client that ignores its context, as the fake does
+		}
+		return false, nil, nil
+	})
+	src, err := crsource.New(crsource.Options{Client: c.client, Connection: own})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src.SetProbeForTest(20*time.Millisecond, 50*time.Millisecond)
+	var once sync.Once
+	t.Cleanup(func() { once.Do(func() { close(release) }); src.Stop() })
+	if err := src.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	hang = true
+	mu.Unlock()
+	until(t, func() {}, func() bool { return src.Stale() != nil })
+	if err := src.Stale(); !strings.Contains(err.Error(), "no answer in 50ms") || !strings.Contains(err.Error(), "bindings.agentkourier.dev") {
+		t.Errorf("Stale = %v; want it to say that bindings did not answer in 50ms", err)
+	}
+	stopped := make(chan struct{})
+	go func() { src.Stop(); close(stopped) }()
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop is held up by a list that is never answered")
+	}
+	once.Do(func() { close(release) })
+}
+
+// The start's watch is closed: it was only to see whether the Role allows one.
+func TestStartClosesTheWatchItOpenedToProbe(t *testing.T) {
+	leakCheck(t)
+	c := newCluster(t, corpus(t)...)
+	var mu sync.Mutex
+	var fakes []*watch.FakeWatcher
+	c.client.PrependWatchReactor("agentbackends", func(clienttesting.Action) (bool, watch.Interface, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if len(fakes) > 0 { // the informer's own
+			return false, nil, nil
+		}
+		fw := watch.NewFake()
+		fakes = append(fakes, fw)
+		return true, fw, nil
+	})
+	c.start(t)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(fakes) != 1 || !fakes[0].IsStopped() {
+		t.Errorf("%d probe watches opened, stopped %v; want one, stopped", len(fakes), len(fakes) == 1 && fakes[0].IsStopped())
+	}
+}
+
+// A valid edit that moves a served Binding onto another broker's connection is that broker's now, and this one lets it go
+// without a word: no Invalid, and no routing.
+func TestAValidEditOntoAnotherBrokersConnectionLetsTheBindingGo(t *testing.T) {
+	leakCheck(t)
+	objs := corpus(t)
+	other := find(objs, "slack-main")
+	other.SetName("slack-other")
+	other.SetUID("uid-other")
+	c := newCluster(t, append(objs, other)...)
+	src := c.start(t)
+	_, fp := set(t, src)
+	moved := find(objs, "sre-alerts")
+	moved.SetGeneration(2)
+	_ = unstructured.SetNestedField(moved.Object, "slack-other", "spec", "chat", "connectionRef", "name")
+	until(t, func() { c.apply(moved) }, func() bool { return src.Fingerprint(t.Context()) != fp })
+	s, _ := set(t, src)
+	if got := bindingNames(s); len(got) != 1 || got[0] != "sre/chat-only" || len(s.Invalid) != 0 {
+		t.Errorf("Bindings %v, Invalid %+v; want only chat-only and nothing reported", got, s.Invalid)
+	}
+}
+
+// A Binding on a connection that does not exist is served here, as one that someone must report. When that connection appears
+// as another broker's, and the Binding is edited invalid in the same breath, the last good generation says it was ours and
+// the connection now says it is not: it is left out, and not reported.
+func TestABindingWhoseConnectionBecomesAnotherBrokersAndIsEditedInvalidIsLeftOut(t *testing.T) {
+	leakCheck(t)
+	objs := corpus(t)
+	late := find(objs, "chat-only")
+	late.SetName("late")
+	late.SetUID("uid-late")
+	_ = unstructured.SetNestedField(late.Object, "C0999999990", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(late.Object, "slack-later", "spec", "chat", "connectionRef", "name")
+	c := newCluster(t, append(objs, late)...)
+	src := c.start(t)
+	s, fp := set(t, src)
+	if got := bindingNames(s); len(got) != 3 {
+		t.Fatalf("Bindings = %v; want late served, its connection being none that exists", got)
+	}
+	later := find(objs, "slack-main")
+	later.SetName("slack-later")
+	later.SetUID("uid-later")
+	bad := late.DeepCopy()
+	bad.SetGeneration(2)
+	_ = unstructured.SetNestedField(bad.Object, "#general", "spec", "chat", "channel")
+	until(t, func() { c.apply(later); c.apply(bad) }, func() bool { return src.Fingerprint(t.Context()) != fp })
+	time.Sleep(300 * time.Millisecond) // both are in the cache before the next read
+	s, _ = set(t, src)
+	if got := bindingNames(s); len(got) != 2 || len(s.Invalid) != 0 {
+		t.Errorf("Bindings %v, Invalid %+v; want late left out and not reported", got, s.Invalid)
+	}
+}
+
+// The namespaces that a refused object allows are read from the raw object, which could not be decoded: through the
+// Reloader, a Binding that it allows is told the object is rejected, and one that it does not allow is told what a valid
+// object would tell it.
+func TestAllowedNamespacesOfARefusedObjectAreReadFromTheRawObject(t *testing.T) {
+	leakCheck(t)
+	objs := corpus(t)
+	refused := find(objs, "kagent-pilot")
+	refused.SetName("refused")
+	refused.SetUID("uid-refused")
+	_ = unstructured.SetNestedField(refused.Object, "ftp://internal.example/?token=s3cret", "spec", "url")
+	_ = unstructured.SetNestedStringSlice(refused.Object, []string{"sre"}, "spec", "allowedNamespaces")
+	allowed := find(objs, "chat-only")
+	allowed.SetName("allowed")
+	allowed.SetUID("uid-allowed")
+	_ = unstructured.SetNestedField(allowed.Object, "C0999999991", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(allowed.Object, "refused", "spec", "agent", "backendRef", "name")
+	denied := find(objs, "chat-only")
+	denied.SetNamespace("payments")
+	denied.SetName("denied")
+	denied.SetUID("uid-denied")
+	_ = unstructured.SetNestedField(denied.Object, "C0999999992", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(denied.Object, "refused", "spec", "agent", "backendRef", "name")
+	src := newCluster(t, append(objs, refused, allowed, denied)...).start(t)
+
+	r := config.NewReloader(config.ReloaderConfig{Source: src, Secrets: noSecrets{}, PollInterval: time.Hour, Logger: slog.New(slog.DiscardHandler), PerObject: true})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	if err := r.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]config.RejectionReason{}
+	for _, rej := range r.Report().Rejections {
+		got[rej.Name] = rej.Reason
+		if strings.Contains(rej.Message, "s3cret") {
+			t.Errorf("%s: %s quotes the owner's text", rej.Name, rej.Message)
+		}
+	}
+	if got["allowed"] != config.ReasonBackendRejected || got["denied"] != config.ReasonNamespaceNotAllowed {
+		t.Errorf("reasons = %v; want allowed BackendRejected and denied NamespaceNotAllowed", got)
+	}
+}
+
+type noSecrets struct{}
+
+func (noSecrets) Keys(context.Context, string, string) ([]string, error) { return nil, nil }

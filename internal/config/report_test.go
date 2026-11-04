@@ -393,3 +393,17 @@ func TestAnInvalidBackendThatDoesNotAllowABindingAnswersAsAValidOneDoes(t *testi
 		t.Errorf("rejections for a refused backend:\n%+v\nwant those of a valid one:\n%+v", got, want)
 	}
 }
+
+// An object that was made again starts at generation 1 once more: the message does not say that generation 1 is refused and
+// generation 1 served as if they were one.
+func TestDescribeOfAnObjectMadeAgainAtTheSameGeneration(t *testing.T) {
+	inv := Invalid{Kind: KindChatConnection, Namespace: "ns", Name: "c", Generation: 1, Served: 1, Message: "spec.platform: unsupported"}
+	want := "ChatConnection ns/c generation 1 is invalid, serving the last good object, which was at generation 1 too: spec.platform: unsupported"
+	if got := inv.describe(true, true); got != want {
+		t.Errorf("describe = %q; want %q", got, want)
+	}
+	inv.Served = 2
+	if got := inv.describe(false, true); got != "ChatConnection ns/c generation 1 is invalid, serving generation 2" {
+		t.Errorf("describe of a different generation = %q", got)
+	}
+}

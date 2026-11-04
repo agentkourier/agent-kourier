@@ -5,14 +5,19 @@ import (
 	"testing"
 )
 
-// The message about a URL that is refused leaves out what a token rides in: the query and the fragment, as it leaves out a
-// password. The verdict is the same with or without them.
-func TestInvalidURLMessageLeavesOutTheQueryAndFragment(t *testing.T) {
+// The message about a URL that is refused shows the scheme and the host, which is what a person needs to fix it, and nothing
+// else: not a password, a query, a fragment, a path or an opaque part, in which a token may ride. The verdict is the same with
+// or without them.
+func TestInvalidURLMessageShowsOnlyTheSchemeAndHost(t *testing.T) {
+	const tail = `: must be an http or https URL with a host`
 	for _, tc := range []struct{ name, url, want string }{
-		{"a query", "ftp://internal.example/path?token=s3cret", `spec.url: invalid URL "ftp://internal.example/path": must be an http or https URL with a host`},
-		{"a fragment", "ftp://internal.example/path#access_token=s3cret", `spec.url: invalid URL "ftp://internal.example/path": must be an http or https URL with a host`},
-		{"a bare question mark", "ftp://internal.example/?", `spec.url: invalid URL "ftp://internal.example/": must be an http or https URL with a host`},
-		{"no host", "http:///path?token=s3cret", `spec.url: invalid URL "http:///path": must be an http or https URL with a host`},
+		{"a query", "ftp://internal.example/path?token=s3cret", `spec.url: invalid URL "ftp://internal.example"` + tail},
+		{"a fragment", "ftp://internal.example/path#access_token=s3cret", `spec.url: invalid URL "ftp://internal.example"` + tail},
+		{"a token in the path", "ftp://internal.example/s3cret/x", `spec.url: invalid URL "ftp://internal.example"` + tail},
+		{"a bare question mark", "ftp://internal.example/?", `spec.url: invalid URL "ftp://internal.example"` + tail},
+		{"an opaque part", "kagent:s3cret", `spec.url: invalid URL "kagent:"` + tail},
+		{"no host", "http:///path?token=s3cret", `spec.url: invalid URL "http:"` + tail},
+		{"no scheme and no host", "s3cret", `spec.url: invalid URL ""` + tail},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := load[AgentBackend](t, "agentbackend.yaml")

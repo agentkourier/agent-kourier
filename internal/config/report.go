@@ -51,6 +51,9 @@ func (i Invalid) describe(withMessage, serving bool) string {
 		fmt.Fprintf(&b, " generation %d is invalid", i.Generation)
 	}
 	switch {
+	case i.Served > 0 && serving && i.Served == i.Generation:
+		// A recreated object starts at generation 1 again, and the one before it was at 1 too.
+		fmt.Fprintf(&b, ", serving the last good object, which was at generation %d too", i.Served)
 	case i.Served > 0 && serving:
 		fmt.Fprintf(&b, ", serving generation %d", i.Served)
 	case i.Served > 0:

@@ -96,7 +96,7 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 	}
 	m.ConfigReport(config.Report{})
 	staleGauge := prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "agentkourier_config_stale",
-		Help: "1 while the latest config reload failed, so the running config lags the files."}, func() float64 {
+		Help: "1 before the first config load, and while the running config may lag its source: the latest reload failed, or the source says it cannot be reached."}, func() float64 {
 		if stale != nil && stale() {
 			return 1
 		}
