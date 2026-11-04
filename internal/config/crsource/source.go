@@ -26,9 +26,10 @@
 //
 // # RBAC
 //
-// The ServiceAccount needs get, list and watch on bindings, agentbackends and chatconnections of agentkourier.dev, in every
-// namespace (a ClusterRole), and nothing else for this source. Start lists each kind once before it starts the informers,
-// so that a missing CRD or a missing right is a clear error at start and not an informer that retries for ever.
+// The ServiceAccount needs list and watch on bindings, agentbackends and chatconnections of agentkourier.dev, in every
+// namespace (a ClusterRole), and nothing else for this source; it never issues a get. Start lists each kind once before it
+// starts the informers, so that a missing CRD or a missing right is a clear error at start and not an informer that retries
+// for ever.
 package crsource
 
 import (
@@ -181,7 +182,7 @@ func (s *Source) probe(ctx context.Context, gvr schema.GroupVersionResource) err
 	case apierrors.IsNotFound(err):
 		return fmt.Errorf("%w: the API server does not serve %s.%s %s; install the CRDs of Agent Kourier first: %w", ErrCRDsAbsent, gvr.Resource, gvr.Group, gvr.Version, err)
 	case apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err):
-		return fmt.Errorf("%w: list %s.%s: the ServiceAccount needs get, list and watch on it in every namespace: %w", ErrAccessDenied, gvr.Resource, gvr.Group, err)
+		return fmt.Errorf("%w: list %s.%s: the ServiceAccount needs list and watch on it in every namespace: %w", ErrAccessDenied, gvr.Resource, gvr.Group, err)
 	}
 	return fmt.Errorf("list %s.%s: %w", gvr.Resource, gvr.Group, err)
 }

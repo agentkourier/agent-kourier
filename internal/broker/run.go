@@ -20,12 +20,12 @@ import (
 
 // Run starts the broker and runs until ctx ends or something fails. It returns nil after a clean stop
 // (ctx ended, even while it was still starting), and otherwise an error: one wrapping ErrWiring is a usage error, one wrapping
-// k8ssecrets.ErrAccessDenied is missing RBAC, and any other is a failure of a dependency. cmd/agent-kourier
+// k8ssecrets.ErrAccessDenied or crsource.ErrAccessDenied is missing RBAC, and any other is a failure of a dependency. cmd/agent-kourier
 // maps them to exit codes.
 //
 // The order is klog (before anything uses client-go, so even its first line is capped and routed),
 // the Kubernetes client, the health server (so that /healthz answers from here on), Bootstrap (the
-// config and the Secret caches), the one ChatConnection, the store (SQLite, or Postgres with its DSN read from
+// config, from files or, with cfg.ConfigSource crds, from the custom resources of the cluster, and the Secret caches), the one ChatConnection, the store (SQLite, or Postgres with its DSN read from
 // a Secret: cfg.Store), and then readiness: /readyz says 503 "starting" until the last of those is done. The
 // connection comes before the store, so a config that v1 cannot serve leaves no database behind. That is what every
 // replica runs, a standby included (spec 11).

@@ -57,7 +57,8 @@ func (i Invalid) describe() string {
 
 // Report is what a Reloader knows about the config it serves besides the Snapshot: the objects it refused and the
 // Bindings that are not served or are served from an older generation. The status writer and the metrics read it. The
-// Snapshot is the one the report was made with, so the two are consistent. A Reloader that reads files reports none.
+// Snapshot is the one the report was made with, so the two are consistent. A Reloader that reads files reports none. A Report is shared by every
+// caller: treat it as read-only.
 type Report struct {
 	// Snapshot is the routing table the other fields describe, nil before the first load.
 	Snapshot *Snapshot
