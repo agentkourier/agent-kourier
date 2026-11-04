@@ -286,3 +286,21 @@ func TestRunRefusesAFencingStoreWithoutAnElection(t *testing.T) {
 		t.Errorf("Run = %v; want an ErrWiring about the election", err)
 	}
 }
+
+// The Lease is held through the election's own client, and only through it: the client that the Secret informers use never
+// sees the Lease, which is how a burst of their lists cannot delay a renewal.
+func TestRunTakesTheLeaseThroughItsOwnClient(t *testing.T) {
+	secrets, lease := cluster(), fake.NewClientset()
+	c, a := electionConfig(t, secrets, &fakeFence{}, "pod-a_1")
+	c.LeaseClient = lease
+	a.running = start(t, c)
+	eventually(t, 10*time.Second, "the replica did not take the lease through its own client", func() bool {
+		l, err := lease.CoordinationV1().Leases(testElection.Namespace).Get(t.Context(), testElection.Name, metav1.GetOptions{})
+		return err == nil && l.Spec.HolderIdentity != nil && *l.Spec.HolderIdentity == "pod-a_1"
+	})
+	for _, act := range secrets.Actions() {
+		if act.GetResource().Resource == "leases" {
+			t.Errorf("the Secrets' client was asked for a Lease: %v", act)
+		}
+	}
+}

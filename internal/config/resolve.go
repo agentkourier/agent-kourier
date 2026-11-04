@@ -125,6 +125,13 @@ const (
 	ReasonBackendRejected RejectionReason = "BackendRejected"
 	// ReasonChannelConflict: another Binding owns the channel on the connection.
 	ReasonChannelConflict RejectionReason = "ChannelConflict"
+	// ReasonInvalidSpec: the Binding does not pass Default and Validate. ResolvePartial never gives it, since a Set holds
+	// only objects that passed; a source that fails one object at a time does (see Report).
+	ReasonInvalidSpec RejectionReason = "InvalidSpec"
+	// ReasonConnectionRejected: the ChatConnection is itself invalid, and has no good generation to serve in its place or
+	// is served from an older one. Like ReasonInvalidSpec it comes from a source that fails one object at a time, where
+	// ResolvePartial sees an object left out and says it is not found.
+	ReasonConnectionRejected RejectionReason = "ConnectionRejected"
 )
 
 // Rejection says why one Binding is not in the Snapshot that ResolvePartial returned. A Binding has one for each of its
@@ -137,6 +144,11 @@ type Rejection struct {
 	// Message names the field and what is wrong with it, as a problem that Resolve returns does after the object's
 	// location, for example "spec.chat.channel: C0123456789 on ChatConnection ns/conn is already bound by Binding ns/other".
 	Message string
+	// Generation is the metadata.generation of the rejected Binding, and Served the generation of it that the Snapshot
+	// serves, zero when it is left out. ResolvePartial leaves both zero, since it knows no generation: a Reloader of a source
+	// that fails one object at a time fills them in (Report). A Rejection with Served set means the Binding runs, from an
+	// older generation of itself or with an older generation of an object it names, and says why that is not the whole truth.
+	Generation, Served int64
 }
 
 // ResolvePartial checks the references between the objects of set as Resolve does, and builds a Snapshot of what is

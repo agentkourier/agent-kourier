@@ -170,7 +170,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	// left on sessions that have been expired for good, those sessions with what belongs to them, and audit entries past
 	// the operator's retention, if one is set. It writes to the store and the audit, and asks an agent to cancel a stale
 	// task, a call that is bounded and that its context ends, so it stops with the other loops.
-	retain, err := newRetention(retentionConfig{Store: st, Interval: cfg.retentionEvery, AuditRetention: cfg.AuditRetention, ThreadTTLs: bindings.ThreadTTLs,
+	retain, err := newRetention(retentionConfig{Store: st, Interval: cfg.retentionEvery, AuditRetention: cfg.AuditRetention, ThreadTTLsAndUnserved: bindings.ThreadTTLsAndUnserved,
 		Canceller: bindings, Audit: auditor, Holds: mgr.HoldsTask, OnRemoved: metrics.RetentionRemoved, Logger: log,
 		EnsureAcknowledgment: func(ctx context.Context, r store.Reply) error {
 			return sink.QueueNotice(ctx, r.Key, session.Notice{ID: session.AcknowledgmentID(r.ID), Kind: session.NoticeAcknowledged, MessageRef: r.MessageRef, Reaction: r.Acknowledgment})

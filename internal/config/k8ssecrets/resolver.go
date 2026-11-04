@@ -226,10 +226,15 @@ func (r *Resolver) failed(e *entry, err error) {
 func (r *Resolver) denial(e *entry) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if err := e.cause; err != nil && (apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err)) {
-		return err
+	if forbidden(e.cause) {
+		return e.cause
 	}
 	return nil
+}
+
+// forbidden reports whether err is the API server's answer of forbidden or unauthorized.
+func forbidden(err error) bool {
+	return err != nil && (apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err))
 }
 
 // Start follows the pinned Secrets and waits until their caches have synced, so a read of one
@@ -380,7 +385,10 @@ func stopAll(es []*entry) {
 // Ready returns nil while the Secrets that Agent Kourier depends on are readable: the pinned ones
 // and those of the latest published snapshot. Otherwise it returns an error wrapping ErrNotSynced
 // (the Resolver has not started, or one of them has not synced) or ErrStopped. A Secret that a
-// reload is waiting for does not count until a snapshot refers to it.
+// reload is waiting for does not count until a snapshot refers to it. A retained Secret that the API server denied and that
+// never synced does not count either: where a denied Secret is fatal (a pinned one, or the config of files, which a reload
+// does not publish with one the Role does not grant) it never gets here, and with the custom resource source it is a
+// Binding's, which reports its credentials as unreadable while the rest keep serving. A pinned Secret always counts.
 func (r *Resolver) Ready() error {
 	if r.ctx.Err() != nil {
 		return ErrStopped
@@ -392,7 +400,7 @@ func (r *Resolver) Ready() error {
 	}
 	var unsynced []*entry
 	for _, e := range r.entries {
-		if (e.pinned || e.retained) && !e.synced() {
+		if (e.pinned || e.retained) && !e.synced() && (e.pinned || !forbidden(e.cause)) {
 			unsynced = append(unsynced, e)
 		}
 	}

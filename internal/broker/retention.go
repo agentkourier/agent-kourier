@@ -115,6 +115,11 @@ type retentionConfig struct {
 	// ThreadTTLs returns the threadTTL of each Binding of the config by "namespace/name", and false while no config
 	// is loaded: Bindings.ThreadTTLs. A session is deleted SessionGrace after its Binding's threadTTL.
 	ThreadTTLs func() (map[string]time.Duration, bool)
+	// ThreadTTLsAndUnserved, when set, is used in place of ThreadTTLs: it returns the same, and with it the "namespace/name"
+	// of each Binding that exists and is not in the config (Bindings.ThreadTTLsAndUnserved), both from one snapshot, so that a
+	// reload between two reads cannot leave a Binding in neither. The sessions of an unserved Binding are skipped, not
+	// expired: its threadTTL is not known, and it is not a Binding that was deleted.
+	ThreadTTLsAndUnserved func() (ttls map[string]time.Duration, unserved []string, ok bool)
 	// SessionGrace is how long past its threadTTL a session is kept (default defaultSessionGrace).
 	SessionGrace time.Duration
 	// SessionBatch is how many sessions each purge call deletes (default 100), and MaxSessionBatches how many calls one
@@ -160,7 +165,7 @@ func newRetention(cfg retentionConfig) (*retention, error) {
 		return nil, errors.New("broker: a Store is required for retention")
 	case cfg.Holds == nil: // a stale task is cancelled and cleared only where the runners that may hold it are asked
 		return nil, errors.New("broker: Holds is required for retention: a task a runner holds must not be cleared from under it")
-	case cfg.ThreadTTLs == nil:
+	case cfg.ThreadTTLs == nil && cfg.ThreadTTLsAndUnserved == nil:
 		return nil, errors.New("broker: ThreadTTLs is required for retention: without it no session is deleted and no stale task is ended")
 	case cfg.Canceller == nil:
 		return nil, errors.New("broker: Canceller is required for retention: a stale task is cancelled at its agent")
@@ -298,19 +303,43 @@ func (r *retention) clearAcknowledgments(ctx context.Context, rows []store.Reply
 	return err
 }
 
+// neverPast is a horizon that no session is past: the store compares a session's last activity with it, and nothing is
+// before the epoch. It is how the sessions of a Binding that exists and is not served are skipped.
+var neverPast = time.Unix(0, 0).UTC()
+
 // sessionHorizons is when each Binding's sessions are past deleting: its threadTTL and the grace after now. A session
 // whose Binding is not in the config has no threadTTL to go by, and is held to the longest that any Binding has, and to no
 // less than the default: a Binding that is missing for a while (a config that lost it, and is mended) must not have its
 // sessions deleted on a shorter reckoning than it would have kept them by.
-func (r *retention) sessionHorizons(ttls map[string]time.Duration, now time.Time) store.SessionHorizons {
-	h := store.SessionHorizons{ByBinding: make(map[string]time.Time, len(ttls))}
+//
+// A Binding that is in the cluster and is not served (unserved: rejected, with no good generation) is not missing: its
+// threadTTL is as unknown as that of a deleted one, but a Binding with a longer one than the rest would lose its sessions
+// to the shorter reckoning of Otherwise, so its sessions are skipped (neverPast) until it is served. With none unserved, as
+// with files, the horizons are the same as without the argument.
+func (r *retention) sessionHorizons(ttls map[string]time.Duration, unserved []string, now time.Time) store.SessionHorizons {
+	h := store.SessionHorizons{ByBinding: make(map[string]time.Time, len(ttls)+len(unserved))}
 	longest := v1alpha1.DefaultThreadTTL
 	for name, ttl := range ttls {
 		h.ByBinding[name] = now.Add(-ttl - r.cfg.SessionGrace)
 		longest = max(longest, ttl)
 	}
 	h.Otherwise = now.Add(-longest - r.cfg.SessionGrace)
+	for _, name := range unserved {
+		if _, served := ttls[name]; !served {
+			h.ByBinding[name] = neverPast
+		}
+	}
 	return h
+}
+
+// known returns the threadTTL of each Binding of the config, the Bindings that exist and are not served (none, as with
+// files, unless the config says so), and false while no config is loaded.
+func (r *retention) known() (ttls map[string]time.Duration, unserved []string, ok bool) {
+	if r.cfg.ThreadTTLsAndUnserved != nil {
+		return r.cfg.ThreadTTLsAndUnserved()
+	}
+	ttls, ok = r.cfg.ThreadTTLs()
+	return ttls, nil, ok
 }
 
 // endStaleTasks ends the tasks that sessions past their horizon still record: only a crash after a session expired leaves
@@ -321,12 +350,12 @@ func (r *retention) sessionHorizons(ttls map[string]time.Duration, now time.Time
 // its horizon and still records that task. A session inside its horizon is never listed. It does nothing before a config is
 // loaded.
 func (r *retention) endStaleTasks(ctx context.Context) {
-	ttls, ok := r.cfg.ThreadTTLs()
+	ttls, unserved, ok := r.known()
 	if !ok {
 		return
 	}
 	now := r.cfg.Now()
-	h := r.sessionHorizons(ttls, now)
+	h := r.sessionHorizons(ttls, unserved, now)
 	var tally staleTally
 	tried := map[store.ConversationKey]bool{} // a session whose ending failed is not tried again in this tick
 	down := map[string]bool{}                 // Bindings whose agent did not answer in this tick: not asked again
@@ -486,11 +515,11 @@ func (r *retention) auditStale(ctx context.Context, t store.StaleTask, c staleCa
 // (a session with a task, a pending interaction, or anything undelivered is never due, however old; the store decides).
 // It does nothing before a config is loaded.
 func (r *retention) purgeSessions(ctx context.Context) {
-	ttls, ok := r.cfg.ThreadTTLs()
+	ttls, unserved, ok := r.known()
 	if !ok {
 		return
 	}
-	h := r.sessionHorizons(ttls, r.cfg.Now())
+	h := r.sessionHorizons(ttls, unserved, r.cfg.Now())
 	var total store.PurgedSessions
 	for range r.cfg.MaxSessionBatches {
 		got, err := r.cfg.Store.PurgeExpiredSessions(ctx, h, r.cfg.SessionBatch)

@@ -5,7 +5,12 @@
 // reads Slack with a bot token from a file or SLACK_BOT_TOKEN, and init (initcmd.go), which writes a first-install
 // Helm values file, checks it, and prints the commands to install with it:
 //
-//	AGENTKOURIER_CONFIG_DIR     the resource files (default /etc/agent-kourier)
+//	AGENTKOURIER_CONFIG_SOURCE  files (the default) or crds: where the resources are read from. files reads the directory
+//	                       below, all or nothing. crds reads Binding, AgentBackend and ChatConnection from the cluster, one
+//	                       object at a time, and ignores the directory
+//	AGENTKOURIER_CONFIG_DIR     with files, the resource files (default /etc/agent-kourier)
+//	AGENTKOURIER_CHAT_CONNECTION   with crds, required: namespace/name of the one ChatConnection this broker serves. With
+//	                       files it is refused, since the directory must hold exactly one ChatConnection
 //	AGENTKOURIER_DB_PATH        the SQLite file, on the volume (default /data/agent-kourier.db)
 //	AGENTKOURIER_STORE          sqlite (the default, one replica) or postgres
 //	AGENTKOURIER_POSTGRES_DSN_SECRET   with postgres, where the DSN is: namespace/name/key of a Secret, read through the
@@ -27,7 +32,8 @@
 //	                       least 24h, such as 8760h, after which an entry is purged
 //
 // It exits 0 after a signal, 1 when Slack rejects the tokens, 2 for a wrong config or wiring (or an
-// unreadable variable), 3 when RBAC denies it the Secrets, 4 for any other failure, and 5 when it was the leader and
+// unreadable variable; with crds, also CRDs that are not installed and an own ChatConnection that is missing or invalid), 3
+// when RBAC denies it the Secrets, or with crds the custom resources, 4 for any other failure, and 5 when it was the leader and
 // lost the lease, met a stale epoch, or had a chat write or an agent call refused because its lease was past the renew deadline
 // (spec D37): it ends at once, and Kubernetes restarts it as a standby.
 package main
@@ -52,7 +58,9 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/broker"
+	"github.com/agentkourier/agent-kourier/internal/config/crsource"
 	"github.com/agentkourier/agent-kourier/internal/config/k8ssecrets"
 )
 
@@ -64,7 +72,7 @@ const (
 	exitOK        = 0
 	exitSlackAuth = 1 // Slack rejected the tokens: a restart would be rejected again
 	exitUsage     = 2 // the config, the wiring or an environment variable is wrong
-	exitRBAC      = 3 // the API server denied access to Secrets
+	exitRBAC      = 3 // the API server denied access to Secrets or, with crds, to the custom resources
 	exitFailure   = 4 // anything else: a dependency failed
 )
 
@@ -79,7 +87,7 @@ func exitCode(err error) int {
 		return exitOK
 	case errors.Is(err, broker.ErrSlackAuth):
 		return exitSlackAuth
-	case errors.Is(err, k8ssecrets.ErrAccessDenied):
+	case errors.Is(err, k8ssecrets.ErrAccessDenied), errors.Is(err, crsource.ErrAccessDenied):
 		return exitRBAC
 	case errors.Is(err, broker.ErrWiring):
 		return exitUsage
@@ -90,6 +98,8 @@ func exitCode(err error) int {
 // envConfig is what the environment says.
 type envConfig struct {
 	configDir, dbPath, listen string
+	configSource              broker.ConfigSource
+	chatConnection            v1alpha1.ObjectRef // with crds only
 	store                     broker.StoreConfig
 	election                  broker.ElectionConfig // with postgres only; its Identity is the pod's name, made unique by run
 	syncTimeout               time.Duration
@@ -113,6 +123,9 @@ func loadEnv(getenv func(string) string) (envConfig, error) {
 		return fmt.Errorf("%w: %s is %q, want %s: %w", broker.ErrWiring, key, getenv(key), want, err)
 	}
 	var err error
+	if c.configSource, c.chatConnection, err = loadSourceEnv(getenv); err != nil {
+		return c, err
+	}
 	if c.syncTimeout, err = time.ParseDuration(get("AGENTKOURIER_SYNC_TIMEOUT", "30s")); err != nil || c.syncTimeout <= 0 {
 		return c, bad("AGENTKOURIER_SYNC_TIMEOUT", "a positive duration such as 30s", errors.Join(err, errors.New("not positive")))
 	}
@@ -141,6 +154,37 @@ func loadEnv(getenv func(string) string) (envConfig, error) {
 		return c, fmt.Errorf("%w: %w", broker.ErrWiring, err)
 	}
 	return c, nil
+}
+
+// loadSourceEnv reads the variables that choose where the resources are read from. The source is files unless the variable says crds,
+// and any other value is refused: there is no fallback. The one connection the broker serves is required with crds, where a
+// cluster may hold the connections of several brokers, and refused with files, whose directory must hold exactly one: ignoring
+// it would serve the one connection the person did not name.
+func loadSourceEnv(getenv func(string) string) (broker.ConfigSource, v1alpha1.ObjectRef, error) {
+	var conn v1alpha1.ObjectRef
+	source := broker.ConfigSource(strings.ToLower(getenv("AGENTKOURIER_CONFIG_SOURCE")))
+	if source == "" {
+		source = broker.SourceFiles
+	}
+	ref := getenv("AGENTKOURIER_CHAT_CONNECTION")
+	switch source {
+	case broker.SourceFiles:
+		if ref != "" {
+			return "", conn, fmt.Errorf("%w: AGENTKOURIER_CHAT_CONNECTION is set with AGENTKOURIER_CONFIG_SOURCE=files, which serves the one ChatConnection of its directory: unset it", broker.ErrWiring)
+		}
+	case broker.SourceCRDs:
+		if ref == "" {
+			return "", conn, fmt.Errorf("%w: AGENTKOURIER_CHAT_CONNECTION is required with AGENTKOURIER_CONFIG_SOURCE=crds: set it to namespace/name of the ChatConnection this broker serves", broker.ErrWiring)
+		}
+		ns, name, ok := strings.Cut(ref, "/")
+		if !ok || ns == "" || name == "" || strings.Contains(name, "/") {
+			return "", conn, fmt.Errorf("%w: AGENTKOURIER_CHAT_CONNECTION is %q, want namespace/name", broker.ErrWiring, ref)
+		}
+		conn = v1alpha1.ObjectRef{Namespace: ns, Name: name}
+	default:
+		return "", conn, fmt.Errorf("%w: AGENTKOURIER_CONFIG_SOURCE is %q, want files or crds", broker.ErrWiring, getenv("AGENTKOURIER_CONFIG_SOURCE"))
+	}
+	return source, conn, nil
 }
 
 // loadStoreEnv reads the store's variables. The DSN is a secret and its variable holds only where it is, but a person may put the DSN
@@ -278,7 +322,7 @@ func run(args []string, ver string, stdout, stderr io.Writer, getenv func(string
 		}
 	}
 	cfg := broker.RunConfig{
-		ConfigDir: env.configDir, DBPath: env.dbPath, Store: env.store, Election: env.election, Listener: ln, SyncTimeout: env.syncTimeout, KlogVerbosity: env.klogV, Logger: log, Telemetry: env.telemetry, ServiceVersion: ver, AuditRetention: env.auditRetention,
+		ConfigSource: env.configSource, ChatConnection: env.chatConnection, ConfigDir: env.configDir, DBPath: env.dbPath, Store: env.store, Election: env.election, Listener: ln, SyncTimeout: env.syncTimeout, KlogVerbosity: env.klogV, Logger: log, Telemetry: env.telemetry, ServiceVersion: ver, AuditRetention: env.auditRetention,
 	}
 	applyTestHooks(log)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

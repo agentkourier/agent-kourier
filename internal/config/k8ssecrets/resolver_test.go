@@ -587,6 +587,61 @@ func TestReady(t *testing.T) {
 	}
 }
 
+// A retained Secret that the API server denies, and that never synced, does not make the broker unready: with the custom
+// resource source it is a Binding's, and that Binding says its credentials are unreadable, where the rest keep serving. A
+// pinned one still does, and so does one that is merely not synced.
+func TestReadyIgnoresARetainedSecretThatIsDenied(t *testing.T) {
+	client := newAPI(t, secret("agent-kourier", "pg"), secret("sre", "creds"), secret("sre", "private"), secret("sre", "slow"))
+	client.PrependReactor("list", "secrets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		switch a.(k8stesting.ListAction).GetListRestrictions().Fields.String() {
+		case "metadata.name=private":
+			return true, nil, denied()
+		case "metadata.name=slow":
+			return true, nil, errors.New("connection refused")
+		}
+		return false, nil, nil
+	})
+	r := New(client, WithPinned(sn("agent-kourier", "pg")), WithLogger(slog.New(slog.DiscardHandler)))
+	t.Cleanup(r.Stop)
+	if err := r.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	names := []config.SecretName{sn("sre", "creds"), sn("sre", "private")}
+	if err := r.Watch(t.Context(), names); !errors.Is(err, ErrAccessDenied) {
+		t.Fatalf("Watch = %v, want ErrAccessDenied", err)
+	}
+	r.Retain(names)
+	if err := r.Ready(); err != nil {
+		t.Errorf("Ready with a retained Secret that is denied = %v, want nil", err)
+	}
+	if _, err := r.Keys(t.Context(), "sre", "private"); !errors.Is(err, ErrAccessDenied) {
+		t.Errorf("Keys of the denied Secret = %v; it must still say it is denied", err)
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	_ = r.Watch(ctx, []config.SecretName{sn("sre", "slow")})
+	r.Retain([]config.SecretName{sn("sre", "private"), sn("sre", "slow")})
+	if err := r.Ready(); !errors.Is(err, ErrNotSynced) || !strings.Contains(err.Error(), "sre/slow") || strings.Contains(err.Error(), "sre/private") {
+		t.Errorf("Ready with a retained Secret that is only slow = %v, want ErrNotSynced naming sre/slow alone", err)
+	}
+}
+
+// A pinned Secret that the API server denies still makes the broker unready, where a retained one does not: it is Agent
+// Kourier's own (the Postgres DSN), and nothing reports it for anyone else.
+func TestReadyCountsAPinnedSecretThatIsDenied(t *testing.T) {
+	client := newAPI(t, secret("agent-kourier", "pg"))
+	client.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, denied() })
+	r := New(client, WithPinned(sn("agent-kourier", "pg")), WithLogger(slog.New(slog.DiscardHandler)))
+	t.Cleanup(r.Stop)
+	if err := r.Start(t.Context()); !errors.Is(err, ErrAccessDenied) {
+		t.Fatalf("Start = %v, want ErrAccessDenied", err)
+	}
+	if err := r.Ready(); !errors.Is(err, ErrNotSynced) || !strings.Contains(err.Error(), "agent-kourier/pg") {
+		t.Errorf("Ready with a pinned Secret that is denied = %v, want ErrNotSynced naming it", err)
+	}
+}
+
 // A Secret that does not sync in time is named, with the cause, and stays followed: the next Watch finds it synced once
 // the cause passes.
 func TestWatchNamesTheUnsyncedSecretAndItsCause(t *testing.T) {

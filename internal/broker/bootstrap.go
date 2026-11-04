@@ -6,11 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/config"
+	"github.com/agentkourier/agent-kourier/internal/config/crsource"
 	"github.com/agentkourier/agent-kourier/internal/config/k8ssecrets"
 )
 
@@ -31,8 +35,20 @@ type BootstrapOptions struct {
 	PollInterval, SecretsInterval, SecretsWait time.Duration
 	// OnReloadError is called for each failed reload, for a metric; see config.ReloaderConfig.
 	OnReloadError func(error)
+	// OnReport is called with the report of each published snapshot, for a metric; see config.ReloaderConfig.
+	OnReport func(config.Report)
 	// Logger receives the reloader's and the resolver's reports. It defaults to slog.Default().
 	Logger *slog.Logger
+	// CRDs, when set, makes Bootstrap read the custom resources of the cluster in place of Dir, which is then ignored.
+	CRDs *CRDSource
+}
+
+// CRDSource says where the custom resources are read, and which ChatConnection this broker serves.
+type CRDSource struct {
+	// Client reads the three resources: InClusterDynamicClient's.
+	Client dynamic.Interface
+	// Connection is the one ChatConnection this broker serves (AGENTKOURIER_CHAT_CONNECTION).
+	Connection v1alpha1.ObjectRef
 }
 
 // Config is the loaded config and the Secrets it reads: a Reloader whose snapshots are checked
@@ -42,6 +58,8 @@ type Config struct {
 	Reloader *config.Reloader
 	// Secrets is the resolver the Reloader checks against, and the identity package reads through.
 	Secrets *k8ssecrets.Resolver
+
+	stopSource func() // ends the informers of the custom resources, when the Reloader reads them
 }
 
 // Stale reports whether the latest reload failed, so the current snapshot lags the config on
@@ -58,7 +76,12 @@ func (c *Config) Checks() []Check {
 // shut down in this order: cancel that context, wait for the reloader (Reloader.Wait), then Stop.
 // Stopped the other way round, the reloader's next check finds every Secret unreadable, fails the
 // reload and calls OnReloadError, which a metric would count as a real failure.
-func (c *Config) Stop() { c.Secrets.Stop() }
+func (c *Config) Stop() {
+	if c.stopSource != nil {
+		c.stopSource()
+	}
+	c.Secrets.Stop()
+}
 
 // Bootstrap loads the config once to learn which Secrets it refers to, starts a resolver that
 // follows those and opts.ExtraSecrets and waits for their caches (an error names the cause, so a
@@ -66,10 +89,15 @@ func (c *Config) Stop() { c.Secrets.Stop() }
 // the Reloader over it, which follows the Secrets of each later config. The Reloader runs until
 // ctx ends. On failure nothing is left running. A config that does not load because the operator
 // must fix it (config.ErrInvalid) gives an error wrapping ErrWiring, since a restart would find it again.
+//
+// With opts.CRDs it reads the custom resources instead (bootstrapCRDs).
 func Bootstrap(ctx context.Context, client kubernetes.Interface, opts BootstrapOptions) (*Config, error) {
 	log := opts.Logger
 	if log == nil {
 		log = slog.Default()
+	}
+	if opts.CRDs != nil {
+		return bootstrapCRDs(ctx, client, opts, log)
 	}
 	set, err := config.Load(ctx, opts.Dir)
 	if err != nil {
@@ -89,13 +117,80 @@ func Bootstrap(ctx context.Context, client kubernetes.Interface, opts BootstrapO
 	}
 	rl := config.NewReloader(config.ReloaderConfig{
 		Dir: opts.Dir, Secrets: secrets, PollInterval: opts.PollInterval, SecretsInterval: opts.SecretsInterval, SecretsWait: opts.SecretsWait,
-		Logger: log, OnError: opts.OnReloadError,
+		Logger: log, OnError: opts.OnReloadError, OnReport: opts.OnReport,
 	})
 	if err := rl.Start(ctx); err != nil {
 		secrets.Stop()
 		return nil, wiring(err)
 	}
 	return &Config{Reloader: rl, Secrets: secrets}, nil
+}
+
+// bootstrapCRDs is Bootstrap for the custom resources, which fail one object at a time. It starts the resolver (the pinned
+// Secrets), then the informers of the three kinds, and reads the objects once, to find the Secret of the broker's own
+// connection and follow it first: an own connection that is missing or invalid, and an own Secret that cannot be read, stop
+// the start. The Secrets of the Bindings and backends are not waited for here: the Reloader follows them and does not fail
+// for one that is missing or denied, which the prober reports for the Binding it belongs to. The error of each failure that
+// is the operator's to fix wraps ErrWiring (a CRD that is not installed, an own connection that is not usable) or
+// k8ssecrets.ErrAccessDenied or crsource.ErrAccessDenied (RBAC). On failure nothing is left running.
+func bootstrapCRDs(ctx context.Context, client kubernetes.Interface, opts BootstrapOptions, log *slog.Logger) (*Config, error) {
+	src, err := crsource.New(crsource.Options{Client: opts.CRDs.Client, Connection: opts.CRDs.Connection, Logger: log})
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrWiring, err)
+	}
+	secrets := k8ssecrets.New(client, k8ssecrets.WithLogger(log), k8ssecrets.WithPinned(opts.ExtraSecrets...))
+	failed := func() { src.Stop(); secrets.Stop() }
+	syncCtx, cancel := context.WithTimeout(ctx, cmp.Or(opts.SyncTimeout, defaultSyncTimeout))
+	defer cancel()
+	if err := secrets.Start(syncCtx); err != nil {
+		failed()
+		return nil, fmt.Errorf("start the secret resolver: %w", err)
+	}
+	if err := src.Start(syncCtx); err != nil {
+		failed()
+		if errors.Is(err, crsource.ErrCRDsAbsent) {
+			err = fmt.Errorf("%w: %w", ErrWiring, err)
+		}
+		return nil, fmt.Errorf("start the custom resource source: %w", err)
+	}
+	set, _, err := src.Set(syncCtx)
+	if err != nil {
+		failed()
+		return nil, fmt.Errorf("read the custom resources: %w", err)
+	}
+	conn, err := ownConnection(set, opts.CRDs.Connection)
+	if err != nil {
+		failed()
+		return nil, err
+	}
+	if err := secrets.Watch(syncCtx, []config.SecretName{{Namespace: conn.Namespace, Name: conn.Spec.CredentialsSecretRef.Name}}); err != nil {
+		failed()
+		return nil, fmt.Errorf("start the secret resolver: %w", err)
+	}
+	rl := config.NewReloader(config.ReloaderConfig{
+		Source: src, Secrets: secrets, PollInterval: opts.PollInterval, SecretsInterval: opts.SecretsInterval, SecretsWait: opts.SecretsWait,
+		Logger: log, OnError: opts.OnReloadError, OnReport: opts.OnReport, PerObject: true, FirstLoadWait: cmp.Or(opts.SyncTimeout, defaultSyncTimeout),
+	})
+	if err := rl.Start(ctx); err != nil {
+		failed()
+		return nil, wiring(err)
+	}
+	return &Config{Reloader: rl, Secrets: secrets, stopSource: src.Stop}, nil
+}
+
+// ownConnection returns the broker's own ChatConnection of set, or an error wrapping ErrWiring that says whether it does not
+// exist or does not pass Default and Validate, and why.
+func ownConnection(set *config.Set, own v1alpha1.ObjectRef) (v1alpha1.ChatConnection, error) {
+	name := v1alpha1.NamespacedName(own.Namespace, own.Name)
+	if i := slices.IndexFunc(set.ChatConnections, func(c v1alpha1.ChatConnection) bool { return c.Namespace == own.Namespace && c.Name == own.Name }); i >= 0 {
+		return set.ChatConnections[i], nil
+	}
+	for _, inv := range set.Invalid {
+		if inv.Kind == config.KindChatConnection && inv.Namespace == own.Namespace && inv.Name == own.Name {
+			return v1alpha1.ChatConnection{}, fmt.Errorf("%w: ChatConnection %s is invalid, and a broker does not start without its own connection: %s", ErrWiring, name, inv.Message)
+		}
+	}
+	return v1alpha1.ChatConnection{}, fmt.Errorf("%w: ChatConnection %s was not found: AGENTKOURIER_CHAT_CONNECTION names the one connection this broker serves, and it must exist", ErrWiring, name)
 }
 
 // wiring wraps ErrWiring around err when the config is at fault, and returns other errors as they are.

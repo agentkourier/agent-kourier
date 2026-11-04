@@ -30,6 +30,13 @@ type Source interface {
 	Fingerprint(ctx context.Context) string
 }
 
+// StaleSource is an optional interface of a Source whose view of the world can lag without a read failing: an informer cache
+// keeps its contents while the API server cannot be reached. Stale returns why it may lag, or nil. A Reloader reports it as
+// Status.Stale, and clears it when the source does. A directory has no such state.
+type StaleSource interface {
+	Stale() error
+}
+
 // dirSource is the Source of a config directory, read as Load does. It holds no state.
 type dirSource struct{ dir string }
 

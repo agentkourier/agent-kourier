@@ -20,12 +20,12 @@ import (
 
 // Run starts the broker and runs until ctx ends or something fails. It returns nil after a clean stop
 // (ctx ended, even while it was still starting), and otherwise an error: one wrapping ErrWiring is a usage error, one wrapping
-// k8ssecrets.ErrAccessDenied is missing RBAC, and any other is a failure of a dependency. cmd/agent-kourier
+// k8ssecrets.ErrAccessDenied or crsource.ErrAccessDenied is missing RBAC, and any other is a failure of a dependency. cmd/agent-kourier
 // maps them to exit codes.
 //
 // The order is klog (before anything uses client-go, so even its first line is capped and routed),
 // the Kubernetes client, the health server (so that /healthz answers from here on), Bootstrap (the
-// config and the Secret caches), the one ChatConnection, the store (SQLite, or Postgres with its DSN read from
+// config, from files or, with cfg.ConfigSource crds, from the custom resources of the cluster, and the Secret caches), the one ChatConnection, the store (SQLite, or Postgres with its DSN read from
 // a Secret: cfg.Store), and then readiness: /readyz says 503 "starting" until the last of those is done. The
 // connection comes before the store, so a config that v1 cannot serve leaves no database behind. That is what every
 // replica runs, a standby included (spec 11).
@@ -79,6 +79,26 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 			return err
 		}
 	}
+	var crds *CRDSource // the custom resources are read only when the config source says so
+	if cfg.source() == SourceCRDs {
+		dyn := cfg.Dynamic
+		if dyn == nil {
+			if dyn, err = InClusterDynamicClient(); err != nil {
+				return err
+			}
+		}
+		crds = &CRDSource{Client: dyn, Connection: cfg.ChatConnection}
+	}
+	// The election has a client of its own, so that the informers' lists cannot queue a renewal of the Lease behind them.
+	leaseClient := cfg.LeaseClient
+	if leaseClient == nil && cfg.Client == nil && cfg.Store.kind() == StorePostgres {
+		if leaseClient, err = InClusterLeaseClient(); err != nil {
+			return err
+		}
+	}
+	if leaseClient == nil {
+		leaseClient = client
+	}
 	// runCtx is the broker's own: a signal ends ctx, and the shutdown then stops the parts in order, one
 	// step at a time, where a context derived from ctx would stop them all at once. Until startup has
 	// finished, though, a signal does cancel it, so that a slow Bootstrap, Reconcile or Recover cannot
@@ -128,6 +148,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	}
 	boot, err := Bootstrap(runCtx, client, BootstrapOptions{
 		Dir: cfg.ConfigDir, ExtraSecrets: extraSecrets, SyncTimeout: cfg.SyncTimeout, PollInterval: cfg.reloadPoll, Logger: log, OnReloadError: metrics.ReloadError,
+		OnReport: metrics.ConfigReport, CRDs: crds,
 	})
 	if err != nil {
 		return fmt.Errorf("bootstrap: %w", err)
@@ -230,7 +251,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	if fenced == nil {
 		go runLeader()
 	} else {
-		cand, err = startCandidacy(ctx, client, cfg.Election, log, lease, candidacyCallbacks{
+		cand, err = startCandidacy(ctx, leaseClient, cfg.Election, log, lease, candidacyCallbacks{
 			gained: func(context.Context) { runLeader() },
 			lost:   func() { fail.now(leaseLostReason) },
 		})
