@@ -72,6 +72,15 @@ fixed or suppressed.
 against a throwaway Postgres container; in `test` and `test-testhooks`, which have no database, those tests skip. It is
 not a required check yet. If you change the store or a migration, run it locally; it needs Docker.
 
+`ci` also runs `crd-corpus` (`make crd-corpus`): a throwaway kind cluster with only the CRDs from
+`charts/agent-kourier/files/crds`, to which `test/crdcorpus` sends the corpus of valid and invalid objects as server-side
+dry-run creates. It fails if the generated schema refuses an object that `Default` and `Validate` accept, if an
+entry's `# schema:` flag no longer says what the schema does with it or its refusal names another field, or if the
+corpus has lost an entry or an entry reports more than one problem. It is not a required check yet. If you change an
+API type, a marker or a rule of `api/v1alpha1/validate.go`, run `make crds` and then `make crd-corpus` locally; it
+needs Docker, `kind` and `kubectl` (or `CRD_CORPUS_KUBECONFIG`, a kubeconfig for a local cluster you made), and takes
+a minute or two once the node image is pulled. A new field or rule gets an entry in `test/crdcorpus/testdata/invalid`.
+
 The `docs` workflow (`build`, the strict site build, and `links`, an external link check) runs only
 when a pull request touches the documentation sources, and its checks are not required; keep them
 green anyway.

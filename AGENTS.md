@@ -40,7 +40,7 @@ internal/testhooks      test-only hooks, compiled in under the testhooks build t
 charts/agent-kourier    Helm chart
 examples/ax             reference A2A agent for Google AX (separate module)
 docs/                   the documentation site (mkdocs; docs/brand is the brand kit and is not published)
-test/{fakeslack,stubagent,e2e,fixtures,kindmanifests,chart,...}
+test/{fakeslack,stubagent,e2e,fixtures,kindmanifests,chart,crdcorpus,...}
 hack/kind/              kind tier scripts (fast, full, ax, sandbox)
 hack/{docs,release,postgres}  doc generators, release scripts, Postgres test helpers
 ```
@@ -55,6 +55,11 @@ golangci-lint runs as `go tool golangci-lint`, never a global install.
   `controller-gen` (pinned as a `tool` in `go.mod`, run as `go tool controller-gen`). Run it after changing an API type or marker and commit the
   result: `TestCommittedCRDsMatchGeneration` in `make test` fails when the committed files differ from what generation produces. The
   production binary does not link controller-tools.
+- `make crd-corpus` holds the CRD schemas to the broker's validation: it applies only the CRDs to a throwaway kind cluster
+  (`hack/kind/crd-corpus.sh`; `CRD_CORPUS_KUBECONFIG` uses a local cluster you made instead) and `test/crdcorpus` sends each corpus entry to it
+  as a server-side dry-run create. A new API field or validation rule gets a marker where the schema can copy it and an entry in
+  `test/crdcorpus/testdata/invalid` with its `# schema: refuses` or `# schema: accepts` flag. The CI job `crd-corpus` runs it. A bound in the
+  schema is a cap in `Validate` too (`maxTriggers`, `maxExtract`, `maxHeaders`, `maxHeaderNameLen`), so lowering one can refuse a config that loads today.
 - `make e2e-fast-up` / `e2e-full-up` / `e2e-ax-up` bring up the kind tiers (`hack/kind/`); `e2e-fast-down`,
   `e2e-full-down`, `e2e-ax-down` and `e2e-down` (all) tear them down. `e2e-fast` / `e2e-full` / `e2e-ax` run the E2E tests in that tier
   as an in-cluster Job (`hack/kind/e2e-run.sh`).

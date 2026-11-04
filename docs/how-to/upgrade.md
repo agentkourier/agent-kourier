@@ -302,3 +302,26 @@ agent that sends no such update sees no change.
   an open card, or be an alert thread's line, for a moment before the answer itself.
 
 `progress: steps` shows no working update.
+
+## Upgrade to the release that bounds triggers, extract entries and headers
+
+Agent Kourier bounded none of these before. This release refuses a config that holds more than the bounds below, and
+loads a config within them as before. Nothing else about a Binding or an AgentBackend changes. No example, recipe or
+kind tier config in this repository has more than two triggers, three `extract` entries or one header, or a header name of
+more than 16 characters, so the bounds are far above what they use.
+
+| Where | Bound | The error |
+|---|---|---|
+| `spec.chat.triggers` of a Binding | 50 triggers | `spec.chat.triggers: has 51 items, maximum is 50` |
+| `extract` of a `botMessage` trigger | 32 entries | `spec.chat.triggers[1].extract: has 33 entries, maximum is 32` |
+| `spec.headers` of an AgentBackend | 32 headers | `spec.headers: has 33 items, maximum is 32` |
+| The `name` of a header | 256 bytes | `spec.headers[0].name: is 257 bytes, longer than the 256 byte limit` |
+
+A config over a bound is an invalid config, and the broker treats it as it treats the Binding that does not load in
+[the release that writes triggers in full](#upgrade-to-the-release-that-writes-triggers-in-full): at start-up it exits
+with [code 2](../reference/cli.md#exit-codes) and names the field, so the upgraded pod never becomes Ready, and on a
+reload it keeps its last good config. To find one before you upgrade, run `agent-kourier dry-run` of the new release
+against your config, as in [Check the values before you install](install-with-helm.md#check-the-values-before-you-install).
+It loads the files before it reads a token, so it reports the error without one.
+
+An earlier release has none of these four bounds, so after a [rollback](#roll-back) a config over one loads again.

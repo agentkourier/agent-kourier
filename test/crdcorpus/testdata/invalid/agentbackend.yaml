@@ -1,0 +1,445 @@
+# rule: agentbackend/spec.dialect: unsupported
+# want: spec.dialect: unsupported value "foo"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: foo
+  url: "http://kagent.kagent:8083/"
+---
+# rule: agentbackend/spec.url: required
+# want: spec.url: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: ""
+---
+# rule: agentbackend/spec.url: not parseable
+# want: spec.url: must be an http or https URL with a host
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://exa mple.com"
+---
+# rule: agentbackend/spec.url: credentials in the URL
+# want: spec.url: must not contain credentials
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://user:pw@kagent"
+---
+# rule: agentbackend/spec.url: scheme is not http or https
+# want: spec.url: invalid URL "ftp://kagent"
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "ftp://kagent"
+---
+# rule: agentbackend/spec.url: no host
+# want: spec.url: invalid URL "http:"
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://"
+---
+# rule: agentbackend/spec.headers[].name: required
+# want: spec.headers[0].name: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: "", value: v}
+---
+# rule: agentbackend/spec.headers[].name: reserved, Authorization
+# want: is reserved for the Binding identity
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: Authorization, value: v}
+---
+# rule: agentbackend/spec.headers[].name: reserved, proxy-authorization
+# want: is reserved for the Binding identity
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: proxy-authorization, value: v}
+---
+# rule: agentbackend/spec.headers[].name: reserved, COOKIE
+# want: is reserved for the Binding identity
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: COOKIE, value: v}
+---
+# rule: agentbackend/spec.headers[].name: reserved, X-User-Id
+# want: is reserved for the Binding identity
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: X-User-Id, value: v}
+---
+# rule: agentbackend/spec.headers[].name: reserved, x-agent-name
+# want: is reserved for the Binding identity
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: x-agent-name, value: v}
+---
+# rule: agentbackend/spec.headers[].name: reserved, X-Share-Token
+# want: is reserved for the Binding identity
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: X-Share-Token, value: v}
+---
+# rule: agentbackend/spec.headers[].name: reserved, X-Kagent-Insecure-Runtime-Identity
+# want: is reserved for the Binding identity
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: X-Kagent-Insecure-Runtime-Identity, value: v}
+---
+# rule: agentbackend/spec.headers[]: neither value nor valueSecretRef
+# want: spec.headers[0]: set exactly one of value and valueSecretRef
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: X-A}
+---
+# rule: agentbackend/spec.headers[]: both value and valueSecretRef
+# want: spec.headers[0]: set exactly one of value and valueSecretRef
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: X-A, value: v, valueSecretRef: {name: s}}
+---
+# rule: agentbackend/spec.headers[].valueSecretRef.name: missing
+# want: spec.headers[0].valueSecretRef.name: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: X-A, valueSecretRef: {key: k}}
+---
+# rule: agentbackend/spec.headers[].valueSecretRef.name: empty
+# want: spec.headers[0].valueSecretRef.name: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: X-A, valueSecretRef: {name: ""}}
+---
+# rule: agentbackend/spec.headers[].valueSecretRef.name: invalid
+# want: spec.headers[0].valueSecretRef.name: invalid name
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: X-A, valueSecretRef: {name: Bad_Name}}
+---
+# rule: agentbackend/spec.headers[].valueSecretRef.name: over 253 characters
+# want: spec.headers[0].valueSecretRef.name: invalid name
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - name: X-A
+      valueSecretRef:
+        name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+---
+# rule: agentbackend/spec.headers[].valueSecretRef.key: invalid
+# want: spec.headers[0].valueSecretRef.key: invalid key
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: X-A, valueSecretRef: {name: s, key: a/b}}
+---
+# rule: agentbackend/spec.headers[].valueSecretRef.key: dot dot
+# want: spec.headers[0].valueSecretRef.key: invalid key
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: X-A, valueSecretRef: {name: s, key: ".."}}
+---
+# rule: agentbackend/spec.allowedNamespaces[]: empty
+# want: spec.allowedNamespaces[0]: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  allowedNamespaces:
+    - ""
+---
+# rule: agentbackend/spec.allowedNamespaces[]: invalid
+# want: spec.allowedNamespaces[1]: invalid namespace
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  allowedNamespaces:
+    - sre
+    - Not_A_Namespace
+---
+# rule: agentbackend/spec.allowedNamespaces[]: over 63 characters
+# want: spec.allowedNamespaces[0]: invalid namespace
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  allowedNamespaces:
+    - aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+---
+# rule: agentbackend/spec.allowedNamespaces[]: a dotted name is a subdomain, not a label
+# want: spec.allowedNamespaces[0]: invalid namespace
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  allowedNamespaces:
+    - a.b
+---
+# rule: agentbackend/spec.headers: over the cap of 32
+# want: spec.headers: has 33 items, maximum is 32
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: X-H-0, value: v}
+    - {name: X-H-1, value: v}
+    - {name: X-H-2, value: v}
+    - {name: X-H-3, value: v}
+    - {name: X-H-4, value: v}
+    - {name: X-H-5, value: v}
+    - {name: X-H-6, value: v}
+    - {name: X-H-7, value: v}
+    - {name: X-H-8, value: v}
+    - {name: X-H-9, value: v}
+    - {name: X-H-10, value: v}
+    - {name: X-H-11, value: v}
+    - {name: X-H-12, value: v}
+    - {name: X-H-13, value: v}
+    - {name: X-H-14, value: v}
+    - {name: X-H-15, value: v}
+    - {name: X-H-16, value: v}
+    - {name: X-H-17, value: v}
+    - {name: X-H-18, value: v}
+    - {name: X-H-19, value: v}
+    - {name: X-H-20, value: v}
+    - {name: X-H-21, value: v}
+    - {name: X-H-22, value: v}
+    - {name: X-H-23, value: v}
+    - {name: X-H-24, value: v}
+    - {name: X-H-25, value: v}
+    - {name: X-H-26, value: v}
+    - {name: X-H-27, value: v}
+    - {name: X-H-28, value: v}
+    - {name: X-H-29, value: v}
+    - {name: X-H-30, value: v}
+    - {name: X-H-31, value: v}
+    - {name: X-H-32, value: v}
+---
+# rule: agentbackend/spec.headers[].name: over the cap of 256 bytes
+# want: spec.headers[0].name: is 257 bytes, longer than the 256 byte limit
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - name: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+      value: v
+---
+# rule: agentbackend/spec.headers[].name: under 256 characters but over 256 bytes
+# want: spec.headers[0].name: is 400 bytes, longer than the 256 byte limit
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - name: "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+      value: v
+---
+# rule: agentbackend/status: the kind has none
+# want: status: unknown field
+# field: status
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+status:
+  ready: true

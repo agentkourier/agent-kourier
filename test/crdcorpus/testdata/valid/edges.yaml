@@ -1,0 +1,465 @@
+# The longest names and the keys the grammar allows: a 253-character dotted Secret name, a 256-character header name, 32 headers, 63-character and one-character namespace labels, a key with a leading dot and an explicit empty key.
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: edges
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - name: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+      value: v
+    - name: X-Dotted
+      valueSecretRef:
+        name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        key: ".hidden"
+    - {name: X-Empty-Key, valueSecretRef: {name: a.b-c.d, key: ""}}
+    - {name: X-Dash-Key, valueSecretRef: {name: s, key: tok_en-1.v2}}
+    - {name: X-H-0, value: v}
+    - {name: X-H-1, value: v}
+    - {name: X-H-2, value: v}
+    - {name: X-H-3, value: v}
+    - {name: X-H-4, value: v}
+    - {name: X-H-5, value: v}
+    - {name: X-H-6, value: v}
+    - {name: X-H-7, value: v}
+    - {name: X-H-8, value: v}
+    - {name: X-H-9, value: v}
+    - {name: X-H-10, value: v}
+    - {name: X-H-11, value: v}
+    - {name: X-H-12, value: v}
+    - {name: X-H-13, value: v}
+    - {name: X-H-14, value: v}
+    - {name: X-H-15, value: v}
+    - {name: X-H-16, value: v}
+    - {name: X-H-17, value: v}
+    - {name: X-H-18, value: v}
+    - {name: X-H-19, value: v}
+    - {name: X-H-20, value: v}
+    - {name: X-H-21, value: v}
+    - {name: X-H-22, value: v}
+    - {name: X-H-23, value: v}
+    - {name: X-H-24, value: v}
+    - {name: X-H-25, value: v}
+    - {name: X-H-26, value: v}
+    - {name: X-H-27, value: v}
+  allowedNamespaces:
+    - aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-b
+    - a
+    - "0"
+    - a-b
+    - 9z
+---
+# A ChatConnection whose Secret name is the longest allowed, with the allowed namespaces at their edges.
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: edges
+  namespace: sre
+spec:
+  platform: slack
+  credentialsSecretRef:
+    name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  allowedNamespaces:
+    - aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-b
+    - a
+    - 0-0
+---
+# A Binding that writes the optional values out as empty strings, which the broker reads as unset, and names things at the edges: a 63-character agent namespace, a 253-character dotted Secret name, 50 mentions and 10 approver groups.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: edges
+  namespace: sre
+spec:
+  agent:
+    backendRef:
+      name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      namespace: ""
+    name: k8s-agent
+    namespace: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-b
+  identity:
+    userId: u
+    tokenSecretRef:
+      name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      key: ""
+  chat:
+    connectionRef: {name: slack, namespace: ""}
+    channel: C0123456789
+    mentions: [{name: p0, user: U0123456789}, {name: p1, user: U0123456789}, {name: p2, user: U0123456789}, {name: p3, user: U0123456789}, {name: p4, user: U0123456789}, {name: p5, user: U0123456789}, {name: p6, user: U0123456789}, {name: p7, user: U0123456789}, {name: p8, user: U0123456789}, {name: p9, user: U0123456789}, {name: p10, user: U0123456789}, {name: p11, user: U0123456789}, {name: p12, user: U0123456789}, {name: p13, user: U0123456789}, {name: p14, user: U0123456789}, {name: p15, user: U0123456789}, {name: p16, user: U0123456789}, {name: p17, user: U0123456789}, {name: p18, user: U0123456789}, {name: p19, user: U0123456789}, {name: p20, user: U0123456789}, {name: p21, user: U0123456789}, {name: p22, user: U0123456789}, {name: p23, user: U0123456789}, {name: p24, user: U0123456789}, {name: p25, user: U0123456789}, {name: p26, user: U0123456789}, {name: p27, user: U0123456789}, {name: p28, user: U0123456789}, {name: p29, user: U0123456789}, {name: p30, user: U0123456789}, {name: p31, user: U0123456789}, {name: p32, user: U0123456789}, {name: p33, user: U0123456789}, {name: p34, user: U0123456789}, {name: p35, user: U0123456789}, {name: p36, user: U0123456789}, {name: p37, user: U0123456789}, {name: p38, user: U0123456789}, {name: p39, user: U0123456789}, {name: p40, user: U0123456789}, {name: p41, user: U0123456789}, {name: p42, user: U0123456789}, {name: p43, user: U0123456789}, {name: p44, user: U0123456789}, {name: p45, user: U0123456789}, {name: p46, user: U0123456789}, {name: p47, user: U0123456789}, {name: p48, user: U0123456789}, {name: p49, user: U0123456789}]
+  interactions:
+    toolApprovals: true
+    approverGroups:
+      - S0000000000
+      - S0000000001
+      - S0000000002
+      - S0000000003
+      - S0000000004
+      - S0000000005
+      - S0000000006
+      - S0000000007
+      - S0000000008
+      - S0000000009
+---
+# A Binding with a key written in the shortest and longest allowed forms, and a mention name of 63 characters.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: edges-key
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    tokenSecretRef: {name: s, key: k}
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    mentions:
+      - {name: abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, user: WAAAAAAAAAAAAAAAAAAAA}
+---
+# The most triggers: one mention trigger and 49 botMessage triggers of distinct senders, each with the least a botMessage trigger needs.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: edges-triggers
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers: [{type: mention}, {type: botMessage, from: {id: B0000000001}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000002}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000003}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000004}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000005}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000006}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000007}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000008}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000009}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000010}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000011}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000012}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000013}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000014}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000015}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000016}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000017}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000018}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000019}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000020}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000021}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000022}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000023}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000024}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000025}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000026}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000027}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000028}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000029}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000030}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000031}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000032}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000033}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000034}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000035}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000036}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000037}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000038}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000039}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000040}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000041}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000042}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000043}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000044}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000045}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000046}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000047}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000048}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000049}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}]
+---
+# The most extract entries and as many closeWhen entries, and regexes of exactly 512 characters.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: edges-extract
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match:
+          text: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          title: b
+          link: c
+          fallback: d
+          footer: e
+          body: f
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+          e0: {field: text, regex: "(?P<e0>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)"}
+          e1: {field: text, regex: "(?P<e1>x)"}
+          e2: {field: text, regex: "(?P<e2>x)"}
+          e3: {field: text, regex: "(?P<e3>x)"}
+          e4: {field: text, regex: "(?P<e4>x)"}
+          e5: {field: text, regex: "(?P<e5>x)"}
+          e6: {field: text, regex: "(?P<e6>x)"}
+          e7: {field: text, regex: "(?P<e7>x)"}
+          e8: {field: text, regex: "(?P<e8>x)"}
+          e9: {field: text, regex: "(?P<e9>x)"}
+          e10: {field: text, regex: "(?P<e10>x)"}
+          e11: {field: text, regex: "(?P<e11>x)"}
+          e12: {field: text, regex: "(?P<e12>x)"}
+          e13: {field: text, regex: "(?P<e13>x)"}
+          e14: {field: text, regex: "(?P<e14>x)"}
+          e15: {field: text, regex: "(?P<e15>x)"}
+          e16: {field: text, regex: "(?P<e16>x)"}
+          e17: {field: text, regex: "(?P<e17>x)"}
+          e18: {field: text, regex: "(?P<e18>x)"}
+          e19: {field: text, regex: "(?P<e19>x)"}
+          e20: {field: text, regex: "(?P<e20>x)"}
+          e21: {field: text, regex: "(?P<e21>x)"}
+          e22: {field: text, regex: "(?P<e22>x)"}
+          e23: {field: text, regex: "(?P<e23>x)"}
+          e24: {field: text, regex: "(?P<e24>x)"}
+          e25: {field: text, regex: "(?P<e25>x)"}
+          e26: {field: text, regex: "(?P<e26>x)"}
+          e27: {field: text, regex: "(?P<e27>x)"}
+          e28: {field: text, regex: "(?P<e28>x)"}
+          e29: {field: text, regex: "(?P<e29>x)"}
+        thread:
+          by: key
+          cooldown: 2h
+          closeWhen:
+            state: RESOLVED
+            key: k
+            e0: v
+            e1: v
+            e2: v
+            e3: v
+            e4: v
+            e5: v
+            e6: v
+            e7: v
+            e8: v
+            e9: v
+            e10: v
+            e11: v
+            e12: v
+            e13: v
+            e14: v
+            e15: v
+            e16: v
+            e17: v
+            e18: v
+            e19: v
+            e20: v
+            e21: v
+            e22: v
+            e23: v
+            e24: v
+            e25: v
+            e26: v
+            e27: v
+            e28: v
+            e29: v
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+        exclude: {text: xx, title: yy, link: zz, fallback: ww, footer: vv, body: uu}
+---
+# Every spelling of a duration that time.ParseDuration reads, one in each trigger: units of every size, a sign, a fraction without a leading digit, and two units in one value. The micro sign is U+00B5 in one and U+03BC in the other.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: edges-durations
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0000000000}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: ".5h", closeWhen: {state: RESOLVED}, maxIdle: 1h}
+        limits: {rateLimit: {maxRuns: 5, per: 10s, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+      - type: botMessage
+        from: {id: B0000000001}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 5.h, closeWhen: {state: RESOLVED}, maxIdle: "+10h"}
+        limits: {rateLimit: {maxRuns: 5, per: 10000ms, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+      - type: botMessage
+        from: {id: B0000000002}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 1.5h, closeWhen: {state: RESOLVED}, maxIdle: 3h}
+        limits: {rateLimit: {maxRuns: 5, per: 10000000us, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+      - type: botMessage
+        from: {id: B0000000003}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 1h30m, closeWhen: {state: RESOLVED}, maxIdle: 3h}
+        limits: {rateLimit: {maxRuns: 5, per: "10000000µs", maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+      - type: botMessage
+        from: {id: B0000000004}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 90m, closeWhen: {state: RESOLVED}, maxIdle: 3h}
+        limits: {rateLimit: {maxRuns: 5, per: "10000000μs", maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+      - type: botMessage
+        from: {id: B0000000005}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: "+2h", closeWhen: {state: RESOLVED}, maxIdle: 4h0m0s}
+        limits: {rateLimit: {maxRuns: 5, per: 10000000000ns, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+      - type: botMessage
+        from: {id: B0000000006}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 1m, closeWhen: {state: RESOLVED}, maxIdle: 2m}
+        limits: {rateLimit: {maxRuns: 5, per: 0.5h, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+      - type: botMessage
+        from: {id: B0000000007}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 168h, closeWhen: {state: RESOLVED}, maxIdle: 336h}
+        limits: {rateLimit: {maxRuns: 5, per: 1h, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+  interactions:
+    timeout: 1h30m
+  session:
+    threadTTL: "+90m"
+---
+# Durations, the other half: a threadTTL and a timeout of every unit.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: edges-timeout
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+  interactions:
+    timeout: 1500ms
+  session:
+    threadTTL: 2160h
+---
+# A Binding that writes out empty the seven values Default fills or Validate tests only when set: output, progress, threadReplies, botMentions, acknowledgment.emoji, from.kind and thread.by. The broker accepts every one, so the schema must.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: edges-empty
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    output: ""
+    progress: ""
+    threadReplies: ""
+    botMentions: ""
+    acknowledgment: {emoji: ""}
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789, kind: ""}
+        promptTemplate: x
+        limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}
+        thread: {by: ""}
+---
+# A zero duration, which the broker reads as unset and defaults: a bare 0, and 0s.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: edges-zero
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+  interactions:
+    timeout: "0"
+  session:
+    threadTTL: 0s
+---
+# Explicit nulls, which the broker's decoder reads as unset.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: edges-null
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+    tokenSecretRef: null
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    output: null
+    triggers: null
+    mentions: null
+    acknowledgment: null
+    maxMentionsPerTurn: null
+  interactions:
+    approverGroups: null
+  session: null
+---
+# Explicit nulls on the leaves, which the broker's decoder reads as unset: the seven values of the empty-string Binding, and the optional strings.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: edges-null-leaves
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent, namespace: null}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: null
+    tokenSecretRef: {name: s, key: null}
+  chat:
+    connectionRef: {name: slack, namespace: null}
+    channel: C0123456789
+    output: null
+    progress: null
+    threadReplies: null
+    botMentions: null
+    acknowledgment: {emoji: null, enabled: null}
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789, kind: null}
+        promptTemplate: x
+        limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}
+        thread: {by: null, closeWhen: null}
+        match: null
+        exclude: null
+        extract: null

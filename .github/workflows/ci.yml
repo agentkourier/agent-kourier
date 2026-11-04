@@ -2,7 +2,8 @@
 # test-race, test-testhooks and test-scripts in turn; here they are jobs of their own, which run side by side,
 # because the two race passes alone outlast one job's budget on a runner of this size. make test-postgres, which make
 # test does not run, is a job of its own too. Nothing is retried or skipped. The kind tiers (make e2e-fast and the
-# others) are not here; RELEASING.md says what they would need.
+# others) are not here; RELEASING.md says what they would need. The one job that uses kind is crd-corpus, whose cluster
+# has only the CRDs.
 name: ci
 
 on:
@@ -195,6 +196,53 @@ jobs:
             go-test-postgres-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-
             go-test-postgres-${{ runner.os }}-
       - run: make test-postgres
+      - if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-env.outputs.modcache }}
+            ${{ steps.go-env.outputs.gocache }}
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
+
+  # The CRDs' schemas are a fast-fail copy of the broker's validation, and the invariant is that nothing the schema refuses is
+  # accepted by the broker (spec D50). This job holds them to it: a kind cluster with only the three CRDs, no image and no
+  # Agent Kourier, to which test/crdcorpus sends each entry of its corpus as a server-side dry-run create (make crd-corpus,
+  # hack/kind/crd-corpus.sh). kind and kubectl are the pinned, checksummed binaries of hack/ci/install-kind-tools.sh
+  # (which installs helm and jq with them), and the node image is the one the kind tiers use, by digest. The runner's
+  # Docker runs kind. Not yet observed on a runner: on a laptop the cluster is up in 20 seconds and the corpus runs in
+  # 3, so the rest is the build of client-go on a cold cache. 20 is a guess to tighten after the first run. It is not a
+  # required check; to make it one the owner adds `crd-corpus` from `ci` to the `main` ruleset, with the same change to
+  # CI_REQUIRED_JOBS in hack/release/check-ci.sh (RELEASING.md).
+  crd-corpus:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: setup-go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - id: go-env
+        name: Locate the Go caches
+        run: |
+          echo "modcache=$(go env GOMODCACHE)" >>"${GITHUB_OUTPUT}"
+          echo "gocache=$(go env GOCACHE)" >>"${GITHUB_OUTPUT}"
+      - id: go-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-env.outputs.modcache }}
+            ${{ steps.go-env.outputs.gocache }}
+          key: go-crd-corpus-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-crd-corpus-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-
+            go-crd-corpus-${{ runner.os }}-
+      # It puts the tools in $RUNNER_TEMP/bin and on the path of the steps after it, and fails on a checksum that is not the pin.
+      - run: hack/ci/install-kind-tools.sh
+      - run: make crd-corpus
       - if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

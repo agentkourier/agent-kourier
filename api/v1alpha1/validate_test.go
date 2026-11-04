@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,6 +92,15 @@ func TestValidateJoinsAllProblems(t *testing.T) {
 	}
 }
 
+// headers returns n valid headers with distinct names.
+func headers(n int) []Header {
+	hs := make([]Header, n)
+	for i := range hs {
+		hs[i] = Header{Name: fmt.Sprintf("X-Header-%d", i), Value: "v"}
+	}
+	return hs
+}
+
 func TestAgentBackendValidate(t *testing.T) {
 	hdr := func(o *AgentBackend, h Header) { o.Spec.Headers = []Header{h} }
 	runMutations[AgentBackend](t, "agentbackend.yaml", []mutation[AgentBackend]{
@@ -140,6 +150,12 @@ func TestAgentBackendValidate(t *testing.T) {
 		{"bad allowed namespace", func(o *AgentBackend) { o.Spec.AllowedNamespaces = []string{"sre", "Not_A_Namespace"} },
 			badNamespace("spec.allowedNamespaces[1]", "Not_A_Namespace")},
 		{"empty allowed namespace", func(o *AgentBackend) { o.Spec.AllowedNamespaces = []string{""} }, "spec.allowedNamespaces[0]: required"},
+		{"the most headers ok", func(o *AgentBackend) { o.Spec.Headers = headers(maxHeaders) }, ""},
+		{"too many headers", func(o *AgentBackend) { o.Spec.Headers = headers(maxHeaders + 1) },
+			fmt.Sprintf("spec.headers: has %d items, maximum is %d", maxHeaders+1, maxHeaders)},
+		{"a header name at the length cap ok", func(o *AgentBackend) { hdr(o, Header{Name: strings.Repeat("x", maxHeaderNameLen), Value: "v"}) }, ""},
+		{"a header name over the length cap", func(o *AgentBackend) { hdr(o, Header{Name: strings.Repeat("x", maxHeaderNameLen+1), Value: "v"}) },
+			fmt.Sprintf("spec.headers[0].name: is %d bytes, longer than the %d byte limit", maxHeaderNameLen+1, maxHeaderNameLen)},
 	})
 }
 

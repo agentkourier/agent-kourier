@@ -72,8 +72,15 @@ spec:
                         description: |-
                           Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a
                           letter or digit.
+                        maxLength: 253
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                         type: string
                       namespace:
+                        description: |-
+                          Namespace is a DNS-1123 label: at most 63 lowercase letters, digits or '-', starting and ending with a letter or
+                          digit.
+                        maxLength: 63
+                        pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$
                         type: string
                     required:
                     - name
@@ -86,6 +93,8 @@ spec:
                     description: |-
                       Namespace is the agent's namespace on the backend: a DNS-1123 label of at most 63 lowercase letters, digits or
                       '-', starting and ending with a letter or digit.
+                    maxLength: 63
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                     type: string
                 required:
                 - backendRef
@@ -105,7 +114,7 @@ spec:
                           Emoji is the reaction name without colons. Left empty, the platform's own acknowledgment reaction is used
                           (Slack: hourglass_flowing_sand). The API fills in no default, so a stored Binding does not carry one platform's
                           reaction.
-                        pattern: ^(?:[a-z0-9][a-z0-9+_-]*|[+-][a-z0-9][a-z0-9+_-]*)$
+                        pattern: ^(?:[a-z0-9][a-z0-9+_-]*|[+-][a-z0-9][a-z0-9+_-]*)?$
                         type: string
                       enabled:
                         default: true
@@ -124,6 +133,7 @@ spec:
                     enum:
                     - any
                     - none
+                    - ""
                     type: string
                   channel:
                     description: 'Channel is the platform''s channel ID, not its name
@@ -141,8 +151,15 @@ spec:
                         description: |-
                           Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a
                           letter or digit.
+                        maxLength: 253
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                         type: string
                       namespace:
+                        description: |-
+                          Namespace is a DNS-1123 label: at most 63 lowercase letters, digits or '-', starting and ending with a letter or
+                          digit.
+                        maxLength: 63
+                        pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$
                         type: string
                     required:
                     - name
@@ -179,13 +196,18 @@ spec:
                       - name
                       - user
                       type: object
+                    maxItems: 50
                     type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
                   output:
                     default: live
                     description: Output defaults to live.
                     enum:
                     - live
                     - final
+                    - ""
                     type: string
                   progress:
                     default: steps-and-activity
@@ -201,6 +223,7 @@ spec:
                     - steps
                     - steps-and-activity
                     - activity
+                    - ""
                     type: string
                   threadReplies:
                     default: all
@@ -212,11 +235,12 @@ spec:
                     enum:
                     - all
                     - mention
+                    - ""
                     type: string
                   triggers:
                     description: |-
                       Triggers decide which events in the channel start or continue a turn. Empty means
-                      [{type: mention}]: a mention starts a session. A list that names triggers is the whole list.
+                      [{type: mention}]: a mention starts a session. A list that names triggers is the whole list. At most 50.
                     items:
                       description: |-
                         Trigger is one way an event in the bound channel starts or continues a turn.
@@ -227,6 +251,7 @@ spec:
                             type: string
                           description: Exclude maps a message field to a regex; a
                             message matching any entry is ignored.
+                          maxProperties: 6
                           type: object
                         extract:
                           additionalProperties:
@@ -248,6 +273,8 @@ spec:
                               regex:
                                 description: Regex is a Go (RE2) regular expression
                                   of at most 512 bytes.
+                                maxLength: 512
+                                minLength: 1
                                 type: string
                             required:
                             - field
@@ -255,7 +282,8 @@ spec:
                             type: object
                           description: |-
                             Extract names the values to pull out of a message. A message in which one of these
-                            regexes does not match does not match the trigger.
+                            regexes does not match does not match the trigger. At most 32.
+                          maxProperties: 32
                           type: object
                         from:
                           description: From names the sender a botMessage trigger
@@ -274,6 +302,7 @@ spec:
                                 bot exists today, and it is the default.
                               enum:
                               - bot
+                              - ""
                               type: string
                           required:
                           - id
@@ -305,6 +334,7 @@ spec:
                                   type: integer
                                 per:
                                   description: Per is the window length.
+                                  pattern: ^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$
                                   type: string
                               required:
                               - maxConcurrent
@@ -317,6 +347,7 @@ spec:
                             type: string
                           description: Match maps a message field to a regex it must
                             match. Every entry must match.
+                          maxProperties: 6
                           type: object
                         promptTemplate:
                           description: |-
@@ -332,18 +363,22 @@ spec:
                                 "key" share a thread.'
                               enum:
                               - key
+                              - ""
                               type: string
                             closeWhen:
                               additionalProperties:
                                 type: string
                               description: |-
                                 CloseWhen maps an extracted field to the value that closes the thread: Agent Kourier posts a
-                                note and starts no turn. Every entry must equal.
+                                note and starts no turn. Every entry must equal. It names only extracted fields, so it holds at most as many
+                                entries as extract does, 32.
+                              maxProperties: 32
                               type: object
                             cooldown:
                               description: |-
                                 Cooldown is how long after a turn the same key starts no new turn. Required with by,
                                 and between 1m and 168h.
+                              pattern: ^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$
                               type: string
                             maxIdle:
                               description: |-
@@ -356,6 +391,7 @@ spec:
                                 starts a second investigation for it. Twice the cooldown covers that only for a 4h cooldown
                                 against Alertmanager's 4h repeat_interval; a longer repeat_interval needs a maxIdle set
                                 above it.
+                              pattern: ^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$
                               type: string
                           type: object
                         type:
@@ -370,6 +406,7 @@ spec:
                       required:
                       - type
                       type: object
+                    maxItems: 50
                     type: array
                 required:
                 - channel
@@ -398,13 +435,17 @@ spec:
                       key:
                         default: token
                         description: |-
-                          Key selects the entry of the Secret. It defaults to "token". It consists of alphanumeric characters,
-                          '-', '_' or '.'.
+                          Key selects the entry of the Secret. It defaults to "token". It consists of at most 253 alphanumeric characters,
+                          '-', '_' or '.', and is neither "." nor "..", nor does it start with "..".
+                        maxLength: 253
+                        pattern: ^(\.?[-_a-zA-Z0-9][-._a-zA-Z0-9]*)?$
                         type: string
                       name:
                         description: |-
                           Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a
                           letter or digit.
+                        maxLength: 253
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                         type: string
                     required:
                     - name
@@ -423,9 +464,11 @@ spec:
                       An empty list allows any non-bot channel member. At most 10 groups may be named. Group IDs start with S and contain
                       uppercase letters and digits; duplicates and empty entries are refused.
                     items:
+                      pattern: ^S[A-Z0-9]+$
                       type: string
                     maxItems: 10
                     type: array
+                    x-kubernetes-list-type: set
                   askUser:
                     default: false
                     description: AskUser lets the agent ask questions in the thread.
@@ -435,6 +478,7 @@ spec:
                     default: 30m
                     description: Timeout is how long a pause waits for an answer.
                       Defaults to 30m.
+                    pattern: ^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$
                     type: string
                   toolApprovals:
                     default: false
@@ -450,6 +494,7 @@ spec:
                     description: |-
                       ThreadTTL is how long a thread keeps its session after its last activity. Defaults to 2160h
                       (90 days).
+                    pattern: ^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$
                     type: string
                 type: object
             required:
