@@ -98,32 +98,34 @@ func TestResolveStopsWhenCanceled(t *testing.T) {
 	}
 }
 
-// readNamespaces records the namespace of every Secret Resolve asks about.
-type readNamespaces struct{ seen map[string]bool }
+// readNames records every Secret Resolve asks about.
+type readNames struct{ seen map[SecretName]bool }
 
-func (r *readNamespaces) Keys(_ context.Context, namespace, _ string) ([]string, error) {
-	r.seen[namespace] = true
+func (r *readNames) Keys(_ context.Context, namespace, name string) ([]string, error) {
+	r.seen[SecretName{namespace, name}] = true
 	return []string{"token", "botToken", "appToken", "value"}, nil
 }
 
-// SecretNamespaces and the checks Resolve makes walk the same references, so a namespace that
-// Resolve reads is always one the resolver was told to watch.
-func TestSecretNamespacesAreTheNamespacesResolveReads(t *testing.T) {
+// SecretNames and the checks Resolve makes walk the same references, so a Secret that Resolve
+// reads is always one the resolver was told to follow.
+func TestSecretNamesAreTheSecretsResolveReads(t *testing.T) {
 	set := specSet(t)
 	set.AgentBackends[0].Spec.Headers = []v1alpha1.Header{{Name: "X-Team", ValueSecretRef: &v1alpha1.SecretKeyRef{Name: "team", Key: "value"}}}
-	want := set.SecretNamespaces()
-	reads := &readNamespaces{seen: map[string]bool{}}
+	want := set.SecretNames()
+	reads := &readNames{seen: map[SecretName]bool{}}
 	if _, err := Resolve(context.Background(), set, reads); err != nil {
 		t.Fatal(err)
 	}
-	if got := slices.Sorted(maps.Keys(reads.seen)); !slices.Equal(got, want) || len(want) < 2 {
-		t.Errorf("Resolve read namespaces %v, SecretNamespaces says %v", got, want)
+	got := slices.SortedFunc(maps.Keys(reads.seen), func(a, b SecretName) int { return strings.Compare(a.String(), b.String()) })
+	if !slices.Equal(got, want) || len(want) < 3 {
+		t.Errorf("Resolve read %v, SecretNames says %v", got, want)
 	}
 }
 
-// Only an object that refers to a Secret needs its namespace watched: every ChatConnection does,
-// a backend does for a header Secret, a Binding for its token.
-func TestSecretNamespaces(t *testing.T) {
+// Only an object that refers to a Secret names one: every ChatConnection does, a backend does for
+// a header Secret, a Binding for its token. Each Secret is in the namespace of the object that
+// names it, and one named twice is listed once.
+func TestSecretNames(t *testing.T) {
 	ref := &v1alpha1.SecretKeyRef{Name: "s"}
 	meta := func(ns string) metav1.ObjectMeta { return metav1.ObjectMeta{Namespace: ns, Name: "x"} }
 	set := &Set{
@@ -131,15 +133,18 @@ func TestSecretNamespaces(t *testing.T) {
 			{ObjectMeta: meta("be-secret"), Spec: v1alpha1.AgentBackendSpec{Headers: []v1alpha1.Header{{Name: "A", ValueSecretRef: ref}}}},
 			{ObjectMeta: meta("be-plain"), Spec: v1alpha1.AgentBackendSpec{Headers: []v1alpha1.Header{{Name: "A", Value: "v"}}}},
 		},
-		ChatConnections: []v1alpha1.ChatConnection{{ObjectMeta: meta("conn")}},
+		ChatConnections: []v1alpha1.ChatConnection{{ObjectMeta: meta("conn"), Spec: v1alpha1.ChatConnectionSpec{CredentialsSecretRef: v1alpha1.SecretRef{Name: "creds"}}}},
 		Bindings: []v1alpha1.Binding{
 			{ObjectMeta: meta("b-token"), Spec: v1alpha1.BindingSpec{Identity: v1alpha1.Identity{TokenSecretRef: ref}}},
 			{ObjectMeta: meta("b-none"), Spec: v1alpha1.BindingSpec{Identity: v1alpha1.Identity{UserID: "u"}}},
 			{ObjectMeta: meta("conn")}, // a namespace named twice is listed once
 		},
 	}
-	if got, want := set.SecretNamespaces(), []string{"b-token", "be-secret", "conn"}; !slices.Equal(got, want) {
-		t.Errorf("SecretNamespaces = %v, want %v", got, want)
+	set.Bindings = append(set.Bindings, v1alpha1.Binding{ObjectMeta: meta("b-token"), Spec: v1alpha1.BindingSpec{Identity: v1alpha1.Identity{TokenSecretRef: &v1alpha1.SecretKeyRef{Name: "a"}}}})
+	set.Bindings = append(set.Bindings, v1alpha1.Binding{ObjectMeta: meta("b-token"), Spec: v1alpha1.BindingSpec{Identity: v1alpha1.Identity{TokenSecretRef: ref}}}) // "s" again
+	want := []SecretName{{"b-token", "a"}, {"b-token", "s"}, {"be-secret", "s"}, {"conn", "creds"}}
+	if got := set.SecretNames(); !slices.Equal(got, want) {
+		t.Errorf("SecretNames = %v, want %v", got, want)
 	}
 }
 

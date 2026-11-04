@@ -24,6 +24,10 @@ type ReloaderConfig struct {
 	// SecretsInterval is how often the config is resolved again even if the source did not change,
 	// because Secrets change on their own. It defaults to 1m.
 	SecretsInterval time.Duration
+	// SecretsWait bounds how long a reload waits for the Secrets that it newly refers to to become readable, when Secrets
+	// is a SecretWatcher. A Secret that is not readable by then fails the reload, which is tried again at the next
+	// recheck (SecretsInterval) or when the files change. It defaults to 10s.
+	SecretsWait time.Duration
 	// Logger receives reload problems. It defaults to slog.Default().
 	Logger *slog.Logger
 	// OnError is called with the error of each failed reload that Status.Errors counts, for a
@@ -49,6 +53,7 @@ type Reloader struct {
 	secrets      SecretResolver
 	poll         time.Duration
 	secretsEvery time.Duration
+	secretsWait  time.Duration
 	log          *slog.Logger
 	onError      func(error)
 
@@ -78,6 +83,7 @@ func NewReloader(cfg ReloaderConfig) *Reloader {
 		secrets:      cfg.Secrets,
 		poll:         cmp.Or(cfg.PollInterval, 10*time.Second),
 		secretsEvery: cmp.Or(cfg.SecretsInterval, time.Minute),
+		secretsWait:  cmp.Or(cfg.SecretsWait, 10*time.Second),
 		log:          cmp.Or(cfg.Logger, slog.Default()),
 		onError:      cfg.OnError,
 	}
@@ -153,6 +159,9 @@ func (r *Reloader) reload(ctx context.Context, force bool) error {
 		}
 		st.Stale, st.LastSuccess, r.failures = false, r.lastAttempt, 0
 		r.snap.Store(pub)
+		if w, ok := r.secrets.(SecretWatcher); ok {
+			w.Retain(pub.secrets) // after the store, so that whoever finds a Secret dropped finds the snapshot that dropped it; a reader that still holds the old snapshot follows its Secrets again itself
+		}
 		if warnPolicies {
 			r.warnToolApprovalPolicies(pub.snap)
 		}
@@ -186,6 +195,7 @@ func (r *Reloader) build(ctx context.Context) (pub *published, fp string, err er
 		pub = nil
 		if err == nil {
 			refs := set.secretRefs() // before Resolve, which takes the set
+			r.watchSecrets(ctx, refs)
 			var snap *Snapshot
 			if snap, err = Resolve(ctx, set, r.secrets); err == nil {
 				pub = newPublished(snap, fp, refs)
@@ -196,4 +206,17 @@ func (r *Reloader) build(ctx context.Context) (pub *published, fp string, err er
 		}
 	}
 	return nil, "", errConfigMoving
+}
+
+// watchSecrets has a SecretWatcher follow the Secrets that refs name, and waits a bounded time for each to be readable.
+// It ignores the answer: Resolve asks for each of the Secrets next and reports every one that is not readable, with its
+// cause, in the error of the reload.
+func (r *Reloader) watchSecrets(ctx context.Context, refs []secretRef) {
+	w, ok := r.secrets.(SecretWatcher)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, r.secretsWait)
+	defer cancel()
+	_ = w.Watch(ctx, secretNames(refs))
 }

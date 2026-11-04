@@ -11,6 +11,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/postgres"
@@ -121,12 +122,12 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	}()
 	sd.add(stepHealth, func(c context.Context) { stopServing(); waitFor(c, servedDone) })
 
-	var extraNamespaces []string // the Postgres DSN's Secret is Agent Kourier's own, so no resource of the config names its namespace
+	var extraSecrets []config.SecretName // the Postgres DSN's Secret is Agent Kourier's own, so no resource of the config names it
 	if cfg.Store.kind() == StorePostgres {
-		extraNamespaces = append(extraNamespaces, cfg.Store.PostgresDSN.Namespace)
+		extraSecrets = append(extraSecrets, config.SecretName{Namespace: cfg.Store.PostgresDSN.Namespace, Name: cfg.Store.PostgresDSN.Name})
 	}
 	boot, err := Bootstrap(runCtx, client, BootstrapOptions{
-		Dir: cfg.ConfigDir, ExtraNamespaces: extraNamespaces, SyncTimeout: cfg.SyncTimeout, PollInterval: cfg.reloadPoll, Logger: log, OnReloadError: metrics.ReloadError,
+		Dir: cfg.ConfigDir, ExtraSecrets: extraSecrets, SyncTimeout: cfg.SyncTimeout, PollInterval: cfg.reloadPoll, Logger: log, OnReloadError: metrics.ReloadError,
 	})
 	if err != nil {
 		return fmt.Errorf("bootstrap: %w", err)

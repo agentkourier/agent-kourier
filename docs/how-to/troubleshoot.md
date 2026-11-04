@@ -87,15 +87,25 @@ A misspelt field, or a Secret that is missing or lacks a key, also exits 2, with
 
 ## The pod exits with code 3
 
-The API server refused the pod access to Secrets. The pod reads the Secrets its config names
-through an informer, and a `forbidden` or `unauthorized` answer ends the start at once with
-`the API server denied access to Secrets` and exit code 3.
+The API server refused the pod access to Secrets. The pod reads each Secret its config names
+through an informer of its own, and a `forbidden` or `unauthorized` answer ends the start at once with
+`the API server denied access to Secrets` and exit code 3. The same answer for a Secret that a later
+config change names does not stop the pod: that reload fails with the same message, the log says
+`config reload failed; keeping the last good snapshot`, and the last good config stays in force.
 
 Check the grant as the pod's ServiceAccount:
 
 ```sh
 kubectl auth can-i list secrets -n agent-kourier --as system:serviceaccount:agent-kourier:<serviceaccount>
 kubectl auth can-i watch secrets -n agent-kourier --as system:serviceaccount:agent-kourier:<serviceaccount>
+```
+
+A Role that names its Secrets (`resourceNames`, which you can write yourself with `rbac.create: false`) answers `no` to
+those two. Ask about one Secret instead:
+
+```sh
+kubectl auth can-i list secrets/<secret-name> -n agent-kourier --as system:serviceaccount:agent-kourier:<serviceaccount>
+kubectl auth can-i watch secrets/<secret-name> -n agent-kourier --as system:serviceaccount:agent-kourier:<serviceaccount>
 ```
 
 The chart grants `list` and `watch` in each namespace that holds a Secret the config names, and `rbac.secretNamespaces`
@@ -130,10 +140,10 @@ against `kubectl -n agent-kourier get secret`.
 ## The pod exits with code 4 and never becomes ready
 
 ```
-agent-kourier: bootstrap: start the secret resolver: secret caches not synced for namespaces ["agent-kourier"]: context deadline exceeded
+agent-kourier: bootstrap: start the secret resolver: secret caches not synced for [agent-kourier/slack-main]: context deadline exceeded
 ```
 
-The pod cannot reach the Kubernetes API server, so the informer never syncs and the wait ends
+The list names the Secrets whose caches did not sync. The pod cannot reach the Kubernetes API server, so the informers never sync and the wait ends
 at its deadline. A refused grant looks different. It exits 3.
 
 The usual cause is the NetworkPolicy, on Cilium. The chart asks for the control plane's address

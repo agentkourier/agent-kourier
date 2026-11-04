@@ -44,7 +44,7 @@ type StoreConfig struct {
 	// Kind is StoreSQLite (also what the empty Kind means) or StorePostgres.
 	Kind StoreKind
 	// PostgresDSN is the Secret key that holds the Postgres DSN: required with StorePostgres, and refused with
-	// SQLite. The DSN is read through the same Secret caches as the config's Secrets, so its namespace is watched.
+	// SQLite. The DSN is read through the same Secret caches as the config's Secrets, so Run asks for that Secret to be followed.
 	PostgresDSN SecretKey
 	// PostgresRoleTimeouts says that the database role sets the idle-in-transaction and statement timeouts, so Agent Kourier
 	// sends none: for a connection pooler in transaction mode, which refuses them as startup parameters.

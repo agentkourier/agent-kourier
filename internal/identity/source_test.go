@@ -24,6 +24,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/audit"
+	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/config/k8ssecrets"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/secret"
@@ -276,9 +277,9 @@ func TestRotationIsPickedUpWithoutRestart(t *testing.T) {
 	}
 	client := fake.NewClientset(sec("old-token", "old-key"))
 	registered := watchRegistered(client)
-	r := k8ssecrets.New(client, []string{"sre"})
+	r := k8ssecrets.New(client)
 	t.Cleanup(r.Stop)
-	if err := r.Start(t.Context()); err != nil {
+	if err := r.Watch(t.Context(), []config.SecretName{{Namespace: "sre", Name: "creds"}}); err != nil {
 		t.Fatal(err)
 	}
 	<-registered
