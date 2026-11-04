@@ -139,7 +139,7 @@ type Header struct {
 // ChatConnection is a workspace connection. Owned by the platform team.
 //
 // +kubebuilder:object:root=true
-// +kubebuilder:resource:scope=Namespaced,shortName=akconn,categories=agentkourier
+// +kubebuilder:resource:scope=Namespaced,shortName=akconnection,categories=agentkourier
 type ChatConnection struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitzero"`

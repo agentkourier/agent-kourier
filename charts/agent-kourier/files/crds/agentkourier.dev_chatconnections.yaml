@@ -14,7 +14,7 @@ spec:
     listKind: ChatConnectionList
     plural: chatconnections
     shortNames:
-    - akconn
+    - akconnection
     singular: chatconnection
   scope: Namespaced
   versions:
