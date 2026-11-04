@@ -82,6 +82,31 @@ func TestValueOfAnUnfollowedSecretReportsDenialAndTimeout(t *testing.T) {
 	}
 }
 
+// When the caller's context ends during the wait, the cancellation stays in the error beside ErrNotSynced, so that a caller
+// that tells a closed pool from an unreadable Secret by the context (Pool.Check) can.
+func TestValueKeepsTheCallersCancellation(t *testing.T) {
+	client := newAPI(t, secret("sre", "never"))
+	client.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("connection refused")
+	})
+	r := New(client, WithLogger(slog.New(slog.DiscardHandler))) // the default 10 s wait, which must not be what ends it
+	t.Cleanup(r.Stop)
+
+	canceled, cancel := context.WithCancel(t.Context())
+	time.AfterFunc(100*time.Millisecond, cancel)
+	begin := time.Now()
+	_, err := r.Value(canceled, "sre", "never", "token")
+	if !errors.Is(err, ErrNotSynced) || !errors.Is(err, context.Canceled) || time.Since(begin) > 5*time.Second {
+		t.Errorf("Value after the caller cancelled = %v after %s, want ErrNotSynced wrapping context.Canceled, promptly", err, time.Since(begin))
+	}
+
+	expiring, stop := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer stop()
+	if _, err := r.Value(expiring, "sre", "never", "token"); !errors.Is(err, ErrNotSynced) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Value after the caller's deadline = %v, want ErrNotSynced wrapping context.DeadlineExceeded", err)
+	}
+}
+
 // Secrets that a failed reload asked for are let go by the next reload: a run of failed reloads leaves the informers of the
 // last one, not of each. What a successful reload retained, and what is pinned, stays.
 func TestFailedReloadsDoNotAccumulateInformers(t *testing.T) {
@@ -337,15 +362,16 @@ func TestValueWaitIsBoundedWhateverTheContext(t *testing.T) {
 	client.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, errors.New("connection refused")
 	})
-	r := New(client, WithLogger(slog.New(slog.DiscardHandler)), WithOnDemandWait(100*time.Millisecond))
+	r := New(client, WithLogger(slog.New(slog.DiscardHandler)))
+	r.wait = 100 * time.Millisecond
 	t.Cleanup(r.Stop)
 	done := make(chan error, 1)
 	go func() { _, err := r.Value(context.Background(), "sre", "never", "token"); done <- err }()
 
 	select {
 	case err := <-done:
-		if !errors.Is(err, ErrNotSynced) {
-			t.Errorf("Value = %v, want ErrNotSynced once the wait ends", err)
+		if !errors.Is(err, ErrNotSynced) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			t.Errorf("Value = %v, want ErrNotSynced alone once the wait's own bound ends", err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Value with a context without a deadline did not return after the on-demand wait")

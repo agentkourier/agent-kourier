@@ -26,8 +26,9 @@ type BootstrapOptions struct {
 	ExtraSecrets []config.SecretName
 	// SyncTimeout bounds the wait for the Secret caches to sync; zero means 30 s.
 	SyncTimeout time.Duration
-	// PollInterval and SecretsInterval are the reloader's; zero means its defaults.
-	PollInterval, SecretsInterval time.Duration
+	// PollInterval, SecretsInterval and SecretsWait are the reloader's; zero means its defaults. SecretsWait bounds the
+	// wait of each later reload for the Secrets it adds, which is not SyncTimeout's: that bounds the first.
+	PollInterval, SecretsInterval, SecretsWait time.Duration
 	// OnReloadError is called for each failed reload, for a metric; see config.ReloaderConfig.
 	OnReloadError func(error)
 	// Logger receives the reloader's and the resolver's reports. It defaults to slog.Default().
@@ -87,7 +88,7 @@ func Bootstrap(ctx context.Context, client kubernetes.Interface, opts BootstrapO
 		return nil, fmt.Errorf("start the secret resolver: %w", err)
 	}
 	rl := config.NewReloader(config.ReloaderConfig{
-		Dir: opts.Dir, Secrets: secrets, PollInterval: opts.PollInterval, SecretsInterval: opts.SecretsInterval,
+		Dir: opts.Dir, Secrets: secrets, PollInterval: opts.PollInterval, SecretsInterval: opts.SecretsInterval, SecretsWait: opts.SecretsWait,
 		Logger: log, OnError: opts.OnReloadError,
 	})
 	if err := rl.Start(ctx); err != nil {

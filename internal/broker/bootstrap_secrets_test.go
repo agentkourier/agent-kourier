@@ -51,20 +51,19 @@ func TestBootstrapWaitsForTheConfigsSecretsForTheSyncTimeout(t *testing.T) {
 	}
 }
 
-// A SyncTimeout longer than the Reloader's wait for Secrets is honoured at start: a Secret that syncs after 11 s is read.
+// The wait at start is SyncTimeout's, not the Reloader's SecretsWait: a Secret that syncs after the Reloader's wait has
+// ended, but within SyncTimeout, is read, and Bootstrap succeeds.
 func TestBootstrapHonoursASyncTimeoutLongerThanTheReloadersWait(t *testing.T) {
-	if testing.Short() {
-		t.Skip("waits 11 s for a Secret")
-	}
 	client := cluster()
 	client.PrependReactor("list", "secrets", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		if listOf(a) == "metadata.name=slack-main" {
-			time.Sleep(11 * time.Second)
+			time.Sleep(300 * time.Millisecond)
 		}
 		return false, nil, nil
 	})
 	opts := options(configDir(t))
-	opts.SyncTimeout = 30 * time.Second
+	opts.SecretsWait = 50 * time.Millisecond
+	opts.SyncTimeout = 5 * time.Second
 
 	c, err := Bootstrap(t.Context(), client, opts)
 

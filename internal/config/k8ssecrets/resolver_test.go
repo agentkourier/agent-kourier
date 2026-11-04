@@ -164,7 +164,8 @@ func unsynced(t *testing.T) *Resolver {
 	client.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, errors.New("connection refused")
 	})
-	r := New(client, WithLogger(slog.New(slog.DiscardHandler)), WithOnDemandWait(50*time.Millisecond)) // a Value waits this long for the cache that never syncs
+	r := New(client, WithLogger(slog.New(slog.DiscardHandler)))
+	r.wait = 50 * time.Millisecond // a Value waits this long for the cache that never syncs
 	t.Cleanup(r.Stop)
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()

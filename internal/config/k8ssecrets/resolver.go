@@ -14,7 +14,7 @@
 // A turn holds the Binding of the snapshot it began under, for as long as it runs, and reads that
 // Binding's Secrets through Value. A reload that drops one of them from the config does not cut
 // the turn off: Value follows a Secret that is not followed, waits for its cache (at most
-// the on-demand wait, 10 s unless WithOnDemandWait sets it) and reads it, and a Value that finds
+// the on-demand wait, 10 s) and reads it, and a Value that finds
 // the cache of a Secret that another read is waiting for waits for it too. That informer lasts
 // until the next Watch that does not name the Secret, or the next Retain that does not, so a
 // holder that still reads it later follows it again. This needs a live API: if the Secret was
@@ -156,10 +156,6 @@ type Option func(*Resolver)
 
 // WithLogger sets where a failed list or watch is reported. The default is slog.Default().
 func WithLogger(l *slog.Logger) Option { return func(r *Resolver) { r.log = l } }
-
-// WithOnDemandWait sets how long a Value waits for the cache of a Secret that it had to follow, or that another read was
-// waiting for, when its ctx has no earlier deadline. The default is 10 s.
-func WithOnDemandWait(d time.Duration) Option { return func(r *Resolver) { r.wait = d } }
 
 // WithPinned names Secrets that Start follows and that stay followed until Stop, whatever Retain
 // is given: the ones that Agent Kourier itself reads and no resource of the config refers to,
@@ -454,8 +450,8 @@ func (r *Resolver) get(namespace, name string) (*corev1.Secret, error) {
 // the Secret and waits for the cache, and tries again if the informer was let go meanwhile, until the cache can be read,
 // ctx or the on-demand wait ends, or the Resolver stops. A denial is returned at once, as is ErrStopped. It waits in
 // await, which looks at the caches every syncPoll and not more often, so it does not spin.
-func (r *Resolver) getWaiting(ctx context.Context, namespace, name string) (*corev1.Secret, error) {
-	ctx, cancel := context.WithTimeout(ctx, r.wait)
+func (r *Resolver) getWaiting(parent context.Context, namespace, name string) (*corev1.Secret, error) {
+	ctx, cancel := context.WithTimeout(parent, r.wait)
 	defer cancel()
 	n := config.SecretName{Namespace: namespace, Name: name}
 	for {
@@ -468,7 +464,13 @@ func (r *Resolver) getWaiting(ctx context.Context, namespace, name string) (*cor
 			return nil, fmt.Errorf("secret %s/%s: %w", namespace, name, ferr)
 		}
 		if aerr := r.await(ctx, es); aerr != nil && !errors.Is(aerr, ErrNotWatched) {
-			return r.get(namespace, name) // get says why the Secret cannot be read: not synced, or denied
+			s, err = r.get(namespace, name) // get says why the Secret cannot be read: not synced, or denied
+			if err != nil && parent.Err() != nil && (errors.Is(err, ErrNotSynced) || errors.Is(err, ErrNotWatched)) {
+				// The caller's context ended, not only the on-demand wait: keep that visible, as Pool.Check needs it to tell
+				// a closed pool from a Secret that could not be read. The wait's own timeout reads as ErrNotSynced alone.
+				err = fmt.Errorf("%w: %w", err, context.Cause(parent))
+			}
+			return s, err
 		}
 	}
 }
