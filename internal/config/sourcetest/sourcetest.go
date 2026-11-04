@@ -7,6 +7,11 @@
 // ChatConnection that the source is to serve. The corpora are the API's examples and each recipe's, and the suite compares what
 // each source reads with what Load makes of the same documents, and what resolving them does, strictly (as the file route
 // does) and object by object (as the custom resources do), for the cross-object rules too.
+//
+// The custom resource source runs the suite over a fake dynamic client, which has no schema. An API server with the CRDs refuses
+// most of the invalid cases at apply, by a marker or a CEL rule, and only what the schema cannot say (a rule that stays
+// broker-only) reaches the broker; test/crdcorpus is what says which is which. The suite asks of the source what it does with
+// an object that reached it, whatever let it through.
 package sourcetest
 
 import (
