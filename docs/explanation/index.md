@@ -23,6 +23,12 @@ built that way, and what it deliberately does not do.
 
     Why one protocol to every agent, what A2A gives the broker, and what it does not.
 
+-   **[Choose a config route](config-routes.md)**
+
+    ---
+
+    Files or custom resources: how they differ when something is wrong, what is checked where, and who holds a channel.
+
 -   **[Threads and sessions](threads-and-sessions.md)**
 
     ---

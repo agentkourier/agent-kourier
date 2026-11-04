@@ -99,6 +99,14 @@ connections, so a second connection would send a share of them to a replica that
 `agentkourier_leader` is 1 on the leader and 0 on the standby, and `agentkourier_leader_takeovers_total` counts the times
 a replica took the leadership.
 
+**With custom resources** (`config.source: crds`) both replicas read the three kinds from the cluster, so the standby can take over with the
+config the leader has. Only the leader writes `Binding.status`, so with no leader the statuses stay as they were last written, and are
+not marked stale. A new leader starts every probed condition at `Pending` and does not write that over a good status of the generation it serves, so a
+failover does not blank what `kubectl get akbinding` shows. The last good generation of an invalid object is held in memory by each replica, which
+is why a replica that starts during an invalid generation serves nothing for that object: see
+[What the custom resource route does not promise](config-routes.md#what-the-custom-resource-route-does-not-promise). With SQLite there is one replica,
+no election, and it writes the status itself.
+
 ## A takeover is a restart
 
 On taking the Lease, a replica runs the leader's half of the start-up exactly as a start-up after a crash runs it. The

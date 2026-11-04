@@ -55,7 +55,8 @@ spec:
 
 ## Load it
 
-The broker reads its resources from files, usually a ConfigMap. With the Helm chart, add the Binding under
+The broker reads its resources from files, usually a ConfigMap, or, if the platform team chose it, from custom resources
+(see [Choose a config route](../explanation/config-routes.md)). Ask which. With the Helm chart, add the Binding under
 `config.bindings`, keyed by its name, with its namespace:
 
 ```yaml
@@ -72,16 +73,42 @@ Then `helm upgrade`. By default (`config.rollOnChange`) the chart rolls the pod 
 If the platform team manages its own ConfigMap (`config.existingConfigMap`), add the Binding's YAML there as a file
 ending in `.yaml`, and ask them to list your namespace in `rbac.secretNamespaces` so the broker may read your Secret.
 
+**With custom resources**, the platform team's chart values may render the Binding as above, or you apply it yourself in your own
+namespace, where it is a `Binding` object:
+
+```sh
+kubectl apply --dry-run=server -f binding.yaml   # the schema and CEL rules of the CRD, with nothing stored
+kubectl apply -f binding.yaml
+```
+
+It needs three things from the platform team: your namespace in the `allowedNamespaces` of the ChatConnection (and of the
+AgentBackend, if it is in another namespace), and, for your token Secret, a Role that names it and a RoleBinding to the broker's
+ServiceAccount ([the how-to](migrate-config-source.md#let-a-team-add-its-own-binding) has both). Until they are made the status says
+`NamespaceNotAllowed` or `CredentialsUnreadable`.
+
 ## Check it
 
 Mention the bot in the channel. A thread opens and the agent answers in it. If nothing happens, see
 [Troubleshoot an install](troubleshoot.md#the-mention-gets-no-reply-and-the-log-shows-no-session-turn-started).
 
+With custom resources, read the Binding's status first:
+
+```sh
+kubectl -n payments get akbinding payments-assistant
+kubectl -n payments wait --for=condition=Ready akbinding/payments-assistant --timeout=120s
+```
+
+`READY` is `True` when the broker accepted the Binding and its checks passed. A reason in `REASON` says what to fix: see
+[Binding status](../reference/binding-status.md) and [A Binding is not accepted](troubleshoot.md#a-binding-is-not-accepted). Never type
+`kubectl get bindings`: that is a core Kubernetes resource, not this one.
+
 The leader also checks the Binding by itself, within about 30 seconds of the reload or when a pass already running ends: `agentkourier_binding_ready{binding="<namespace>/<name>"}` is 1 when the agent's card can be fetched and the bot is in the channel. If it is 0, see [A Binding is not ready](troubleshoot.md#a-binding-is-not-ready).
 
-One channel takes one Binding. A second Binding for the same channel on the same connection makes the whole
-config fail to load: a reload keeps the last good config, and a fresh start fails. The error names the Binding that
-already holds the channel.
+One channel takes one Binding, on both routes, and what happens to a second one differs. With files, a second Binding for the same
+channel on the same connection makes the whole config fail to load: a reload keeps the last good config, and a fresh start fails. The error names the
+Binding that already holds the channel. With custom resources the older Binding, by creation time, holds the channel, and the second one is not served and
+says `ChannelConflict`; the rest carry on. Age alone decides, so an older Binding that you edit onto a younger one's channel displaces it
+([Who holds a channel](../explanation/config-routes.md#who-holds-a-channel)).
 
 ## Variations
 

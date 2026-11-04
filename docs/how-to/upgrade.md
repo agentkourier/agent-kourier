@@ -139,8 +139,9 @@ b.yaml#1 Binding sre/sre-alerts: spec.chat.triggers[0].promptTemplate: required
 A trigger that did not use a preset reports only some of these. One that still has a `match`, `exclude` or `extract` on
 `titleLink` or `attachmentText` also reports `unsupported message field`, and the error lists the field names that exist.
 
-**What the broker does with a Binding that does not load.** One Binding that fails fails the whole config, so none of
-them is served.
+**What the broker does with a Binding that does not load.** With the files route (the default, and the only one in this section's
+releases), one Binding that fails fails the whole config, so none of them is served. With custom resources only that Binding is left out: see
+[Choose a config route](../explanation/config-routes.md#what-a-bad-object-does).
 
 - *At start-up*, the broker does not start. It prints the error to stderr and exits with
   [code 2](../reference/cli.md#exit-codes), and the pod never becomes Ready. With SQLite (the default) the Deployment's strategy is `Recreate`, so the old pod is already gone when the
@@ -325,3 +326,22 @@ against your config, as in [Check the values before you install](install-with-he
 It loads the files before it reads a token, so it reports the error without one.
 
 An earlier release has none of these four bounds, so after a [rollback](#roll-back) a config over one loads again.
+
+## Upgrade to the release that serves custom resources
+
+This release can read `Binding`, `AgentBackend` and `ChatConnection` from custom resources instead of files. Nothing changes until you ask:
+the default `config.source: files` renders the objects it always has, and the pod's template does not move. Release 0.1.6 has none of it.
+
+- **New values.** `config.source` (`files` or `crds`), `config.chatConnection`, `crds.install` and `rbac.secretNames`. To move, see
+  [Move the config between a ConfigMap and custom resources](migrate-config-source.md). The route needs Kubernetes 1.33 or later, and only the
+  route: the files route has no minimum.
+- **`--reuse-values` from 0.1.6 works.** The chart reads the values it adds as unset when the old values lack them (measured: a release made
+  by the chart of 0.1.6 upgraded to this one with `--reuse-values`, on the files route, and its pod ran).
+- **A reload can add a Secret in a namespace the broker was not watching, with no restart.** The broker follows each Secret the config names
+  with an informer of its own, so a new namespace works as long as its Role grants `list` and `watch` on the Secret. A Secret it may not read fails the
+  reload, and the last good config stays, as before.
+- **New bounds on triggers, extract entries and headers** apply on both routes: see
+  [the release that bounds them](#upgrade-to-the-release-that-bounds-triggers-extract-entries-and-headers), which also shows the check to run before you upgrade.
+
+After you move to custom resources, rolling back to a release without them leaves the CRDs and every custom resource in the cluster, unread. Move back
+to the files route first, as in [Move back to the ConfigMap](migrate-config-source.md#move-back-to-the-configmap), then roll the chart back.

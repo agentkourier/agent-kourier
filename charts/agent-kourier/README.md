@@ -160,6 +160,9 @@ anything:
 
 Install the CRDs from one release only.
 
+The documentation has the same move as a how-to, with the checks to run and the grant a team makes for its own Secrets:
+[Move the config between a ConfigMap and custom resources](https://agentkourier.dev/how-to/migrate-config-source/).
+
 **What the route grants.** With `rbac.create`, a ClusterRole `<fullname>-<namespace>-crs`, bound to the ServiceAccount:
 
 | Rule | Why |

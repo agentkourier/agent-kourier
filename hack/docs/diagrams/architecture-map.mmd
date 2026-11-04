@@ -6,7 +6,7 @@ flowchart TB
     Slack["People in Slack<br/>Messages, thread replies, question answers"]
 
     subgraph K8s["Kubernetes"]
-        Files["Mounted configuration YAML<br/>ConfigMap"]
+        Files["Configuration<br/>Mounted YAML (ConfigMap) or custom resources"]
         Secrets["Kubernetes Secrets<br/>Slack credentials + Binding identity"]
 
         subgraph Broker["Agent Kourier broker · one active ChatConnection per process"]

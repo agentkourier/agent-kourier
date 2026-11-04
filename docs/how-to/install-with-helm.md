@@ -164,6 +164,11 @@ it reads the Binding's channel, and it exits 1 if Slack rejects the token. It do
 resources or the Secrets: those errors show only when the pod starts. Reading the rest of its output is in
 [Tune triggers with a dry run](tune-triggers.md).
 
+This checks the files of the default route. With custom resources (`config.source: crds`) the chart renders no ConfigMap and the
+resources are objects: check each against the CRDs' schema with `kubectl apply --dry-run=server -f <file>`, which names the field of a
+refusal. The checks that only the broker makes show afterwards, in the Binding's status
+([Move the config between a ConfigMap and custom resources](migrate-config-source.md)).
+
 ## Install the chart
 
 ```sh
@@ -173,6 +178,10 @@ helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --ver
 
 The defaults run one replica with SQLite on a 1 GiB volume. For Postgres and a standby, see
 [Run two replicas (high availability)](high-availability.md).
+
+The defaults also read the resources from a ConfigMap. The chart can instead install custom resource definitions and have the broker read the resources
+from the cluster, so that other teams write their own Bindings: [Choose a config route](../explanation/config-routes.md) says when that is worth it, and
+[Move the config between a ConfigMap and custom resources](migrate-config-source.md) does it on a running install.
 
 If the nodes may pull only from your own registry, copy the image there by digest and pass
 `--set image.repository=<registry>/<repo>/agent-kourier`. The chart keeps its pinned digest, so the copy must have the

@@ -137,6 +137,7 @@ nav:
       - Configure Slack: how-to/configure-slack.md
       - Create the Binding identity: how-to/create-binding-identity.md
       - Write a Binding: how-to/write-a-binding.md
+      - Move the config between a ConfigMap and custom resources: how-to/migrate-config-source.md
       - Investigate Alertmanager alerts: how-to/investigate-alertmanager-alerts.md
       - Start investigations from any bot's messages: how-to/any-bot-trigger.md
       - Tune triggers with a dry run: how-to/tune-triggers.md
@@ -156,6 +157,7 @@ nav:
       - Binding: reference/binding.md
       - AgentBackend: reference/agentbackend.md
       - ChatConnection: reference/chatconnection.md
+      - Binding status: reference/binding-status.md
       - Agent contract: reference/agent-contract.md
       - Helm values: reference/helm-values.md
       - Command line and environment: reference/cli.md
@@ -169,6 +171,7 @@ nav:
       - Architecture: explanation/architecture.md
       - Why a broker: explanation/why-a-broker.md
       - Why A2A: explanation/why-a2a.md
+      - Choose a config route: explanation/config-routes.md
       - Threads and sessions: explanation/threads-and-sessions.md
       - Delivery guarantees: explanation/delivery.md
       - High availability and failover: explanation/high-availability.md

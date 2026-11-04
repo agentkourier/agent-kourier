@@ -57,7 +57,8 @@ extraEnv: []
 # manage (one key per file, each ending .yaml). Not both. A config with one bad resource is not loaded: all or nothing. With crds it reads
 # Binding, AgentBackend and ChatConnection custom resources of the cluster with informers. The resources below, if you give any, are rendered as
 # custom resources and not as a ConfigMap; other teams may make their own, and one bad resource does not stop the others. That needs Kubernetes
-# 1.33 or later, the CRDs (crds.install below, or yours) installed BEFORE the release that sets it, and config.chatConnection. The pod then
+# 1.33 or later, the CRDs (crds.install below, or yours) installed BEFORE the release that sets it, and a ChatConnection for the broker to
+# serve (config.chatConnection below, or the only one of chatConnections). The pod then
 # mounts no ConfigMap, and a config change does not roll it. The two routes are never merged and there is no fallback: with files, custom
 # resources in the cluster are ignored.
 #

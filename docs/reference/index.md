@@ -15,6 +15,9 @@ files, usually a mounted ConfigMap; the Helm chart can instead install them as c
 | [AgentBackend](agentbackend.md) | The agent endpoint, its dialect, and the namespaces allowed to use it | Platform team |
 | [ChatConnection](chatconnection.md) | The chat platform connection and its Secret | Platform team |
 
+With custom resources a Binding also has a status, which [Binding status](binding-status.md) describes: its conditions, their reasons and what
+`observedGeneration` says.
+
 ## Agents
 
 - [Agent contract](agent-contract.md): what an agent must do beyond speaking A2A: methods, message shape, replies,

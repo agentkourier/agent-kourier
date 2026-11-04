@@ -122,8 +122,9 @@ The resources below look like Kubernetes objects, and by default they are **conf
 `AGENTKOURIER_CONFIG_DIR`, usually through a mounted ConfigMap. GitOps can manage the
 ConfigMap, Secrets, and Deployment. The Helm chart can instead install the CRDs and have the broker read the
 resources from the cluster as custom resources (`config.source: crds`, which needs Kubernetes 1.33 or later; see
-the [chart README](charts/agent-kourier/README.md)). There is no controller: the broker reads them with informers.
-The two routes are never merged.
+the [chart README](charts/agent-kourier/README.md) and [how to move a running install](docs/how-to/migrate-config-source.md)).
+There is no controller: the broker reads them with informers, and the leader writes each Binding's status. The two routes are
+never merged.
 
 For example, this configuration connects a payments agent hosted by kagent to a
 Slack channel through shared infrastructure:

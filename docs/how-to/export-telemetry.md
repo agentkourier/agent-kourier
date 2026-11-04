@@ -50,6 +50,13 @@ agentkourier_config_stale == 1
 # A Binding cannot be served. One failed probe holds this until the next pass, so give the rule a `for: 10m`
 agentkourier_binding_ready == 0
 
+# With custom resources: a Binding, or an object it uses, was refused, so what runs is not what was written (or nothing runs for it)
+sum(agentkourier_config_binding_rejections) > 0
+sum(agentkourier_config_invalid_objects) > 0
+
+# With custom resources: the CRDs and the image come from different chart releases
+agentkourier_crd_schema_state{state="mismatch"} == 1
+
 # Stalled inbound or outbound work
 agentkourier_reply_queue_oldest_age_seconds > 300
 agentkourier_outbox_oldest_age_seconds > 300
