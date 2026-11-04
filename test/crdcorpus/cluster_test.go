@@ -6,6 +6,7 @@ import (
 	"context"
 	"net/url"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -131,6 +132,23 @@ func schemaRefuses(ctx context.Context, c dynamic.Interface, e Entry) (refused b
 	return false, "", err
 }
 
+// mapKey matches a map key in an apiserver's field path, extract[state], which the corpus writes as extract.state.
+var mapKey = regexp.MustCompile(`\[([^\]0-9][^\]]*)\]`)
+
+// namesField says whether the apiserver's refusal names the field, as the corpus writes it, or the list item it is in:
+// a list that is a set or a map is refused at the item, as approverGroups[1], and the item's own field is not named.
+func namesField(refusal, field string) bool {
+	if field == "" {
+		return false
+	}
+	refusal = mapKey.ReplaceAllString(refusal, ".$1")
+	if strings.Contains(refusal, field) {
+		return true
+	}
+	item, _, ok := strings.Cut(field, "].")
+	return ok && strings.Contains(refusal, item+"]")
+}
+
 // TestTheSchemaNeverRefusesWhatTheBrokerAccepts is the invariant of D50(2), run against an apiserver that has the
 // CRDs: every object the schema refuses, the broker refuses too, and every valid object passes both. The valid half is
 // what the broker accepts (TestEveryValidEntryIsAcceptedByTheBroker), so the schema must accept all of it; the
@@ -149,6 +167,11 @@ func TestTheSchemaNeverRefusesWhatTheBrokerAccepts(t *testing.T) {
 	}
 	invalid, err := Invalid(root)
 	if err != nil {
+		t.Fatal(err)
+	}
+	// This job does not run the unit test, so it holds the corpus to its size itself: a half that was emptied would
+	// pass every loop below.
+	if err := CheckSize(valid, invalid); err != nil {
 		t.Fatal(err)
 	}
 	c := client(t)
@@ -188,6 +211,8 @@ func TestTheSchemaNeverRefusesWhatTheBrokerAccepts(t *testing.T) {
 				switch {
 				case refused && !e.SchemaRefuses:
 					t.Errorf("the schema refuses this entry, which is marked 'schema: accepts': %s", reason)
+				case refused && !namesField(reason, e.Field):
+					t.Errorf("the schema refuses this entry, but not at %q, the field of its rule (add a '# field:' line if the apiserver names another): %s", e.Field, reason)
 				case !refused && e.SchemaRefuses:
 					t.Errorf("the schema accepts this entry, which is marked 'schema: refuses'")
 				}

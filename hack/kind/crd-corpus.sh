@@ -33,11 +33,14 @@ TMP=$(mktemp -d)
 CREATED=
 cleanup() {
   if [ -n "${CREATED}" ] && [ "${CRD_CORPUS_KEEP:-}" != 1 ]; then
-    kind delete cluster --name "${CORPUS_CLUSTER}" >/dev/null 2>&1 || echo "warning: could not delete kind cluster ${CORPUS_CLUSTER}" >&2
+    kind delete cluster --name "${CORPUS_CLUSTER}" --kubeconfig "${TMP}/kubeconfig" >/dev/null 2>&1 || echo "warning: could not delete kind cluster ${CORPUS_CLUSTER}" >&2
   fi
   rm -rf "${TMP}"
 }
 trap cleanup EXIT
+# An interrupt ends the script through its EXIT trap, so the cluster is deleted then too.
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 if [ -n "${CRD_CORPUS_KUBECONFIG:-}" ]; then
   KUBECONFIG_FILE=${CRD_CORPUS_KUBECONFIG}
@@ -53,6 +56,9 @@ else
     echo "==> reusing kind cluster ${CORPUS_CLUSTER}"
   else
     echo "==> kind cluster ${CORPUS_CLUSTER}"
+    # Set before the create, not after: an interrupt during it can leave the cluster half made, and the next run would
+    # reuse it and never delete it. Deleting a cluster that was never made does nothing.
+    CREATED=1
     kind create cluster --name "${CORPUS_CLUSTER}" --image "${NODE_IMAGE}" --kubeconfig "${KUBECONFIG_FILE}" --wait 120s --config - <<EOF
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
@@ -64,7 +70,6 @@ nodes:
     labels:
       ${CORPUS_OWNER%%=*}: ${CORPUS_OWNER#*=}
 EOF
-    CREATED=1
   fi
 fi
 
@@ -84,5 +89,7 @@ echo "==> corpus test"
 cd "${ROOT}"
 # -v is for the test's own summary (what the schema refuses, and what only the broker does); the line of each of the
 # few hundred entries that passed is dropped. A failure still prints its lines, and pipefail keeps go test's status.
-CRD_CORPUS_KUBECONFIG=${KUBECONFIG_FILE} go test -tags crdcorpus -count=1 -timeout 10m -v ./test/crdcorpus/ \
-  -run TestTheSchemaNeverRefusesWhatTheBrokerAccepts | awk '!/^ *--- PASS|^=== (RUN|PAUSE|CONT)/'
+# There is no -run: a name that matches no test makes go test exit 0, so a renamed test would leave this green having
+# sent nothing. The package has the cluster test and the unit tests, which need no cluster.
+CRD_CORPUS_KUBECONFIG=${KUBECONFIG_FILE} go test -tags crdcorpus -count=1 -timeout 10m -v ./test/crdcorpus/ |
+  awk '!/^ *--- PASS|^=== (RUN|PAUSE|CONT)/'

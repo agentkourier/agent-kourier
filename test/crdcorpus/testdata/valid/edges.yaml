@@ -354,3 +354,112 @@ spec:
     timeout: 1500ms
   session:
     threadTTL: 2160h
+---
+# A Binding that writes out empty the seven values Default fills or Validate tests only when set: output, progress, threadReplies, botMentions, acknowledgment.emoji, from.kind and thread.by. The broker accepts every one, so the schema must.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: edges-empty
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    output: ""
+    progress: ""
+    threadReplies: ""
+    botMentions: ""
+    acknowledgment: {emoji: ""}
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789, kind: ""}
+        promptTemplate: x
+        limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}
+        thread: {by: ""}
+---
+# A zero duration, which the broker reads as unset and defaults: a bare 0, and 0s.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: edges-zero
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+  interactions:
+    timeout: "0"
+  session:
+    threadTTL: 0s
+---
+# Explicit nulls, which the broker's decoder reads as unset.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: edges-null
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+    tokenSecretRef: null
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    output: null
+    triggers: null
+    mentions: null
+    acknowledgment: null
+    maxMentionsPerTurn: null
+  interactions:
+    approverGroups: null
+  session: null
+---
+# Explicit nulls on the leaves, which the broker's decoder reads as unset: the seven values of the empty-string Binding, and the optional strings.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: edges-null-leaves
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent, namespace: null}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: null
+    tokenSecretRef: {name: s, key: null}
+  chat:
+    connectionRef: {name: slack, namespace: null}
+    channel: C0123456789
+    output: null
+    progress: null
+    threadReplies: null
+    botMentions: null
+    acknowledgment: {emoji: null, enabled: null}
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789, kind: null}
+        promptTemplate: x
+        limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}
+        thread: {by: null, closeWhen: null}
+        match: null
+        exclude: null
+        extract: null

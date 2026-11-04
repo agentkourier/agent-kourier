@@ -1281,6 +1281,7 @@ spec:
 ---
 # rule: trigger/spec.chat.triggers[].thread.cooldown: not a duration
 # want: invalid duration "banana"
+# field: spec.chat.triggers[1].thread.cooldown
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
@@ -1371,6 +1372,7 @@ spec:
 ---
 # rule: trigger/spec.chat.triggers[].thread.maxIdle: not a duration
 # want: in duration "1 day"
+# field: spec.chat.triggers[1].thread.maxIdle
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
@@ -1461,6 +1463,7 @@ spec:
 ---
 # rule: trigger/spec.chat.triggers[].thread.closeWhen: over the cap of 32, one key not extracted
 # want: spec.chat.triggers[1].thread.closeWhen.e30: not an extracted field
+# field: spec.chat.triggers[1].thread.closeWhen
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
@@ -1737,6 +1740,7 @@ spec:
 ---
 # rule: trigger/spec.chat.triggers[].limits.rateLimit.per: no unit
 # want: missing unit in duration "30"
+# field: spec.chat.triggers[1].limits.rateLimit.per
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding

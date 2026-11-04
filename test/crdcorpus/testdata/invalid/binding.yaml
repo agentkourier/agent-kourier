@@ -888,6 +888,7 @@ spec:
 ---
 # rule: binding/spec.interactions.timeout: not a duration
 # want: invalid duration "banana"
+# field: spec.interactions.timeout
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
@@ -930,6 +931,7 @@ spec:
 ---
 # rule: binding/spec.session.threadTTL: no unit
 # want: missing unit in duration "30"
+# field: spec.session.threadTTL
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
@@ -948,3 +950,65 @@ spec:
     channel: C0123456789
   session:
     threadTTL: "30"
+---
+# rule: binding/decoder: a field the type does not have, at the top
+# want: bogus: unknown field
+# field: bogus
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+bogus: 1
+---
+# rule: binding/decoder: a field the type does not have, in the spec
+# want: spec.chat.chanel: unknown field
+# field: spec.chat.chanel
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    chanel: C0123456789
+---
+# rule: binding/decoder: a value of the wrong type
+# want: cannot unmarshal number into Go struct field
+# field: spec.chat.channel
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: 5

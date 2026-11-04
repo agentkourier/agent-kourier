@@ -306,9 +306,9 @@ agent that sends no such update sees no change.
 ## Upgrade to the release that bounds triggers, extract entries and headers
 
 Agent Kourier bounded none of these before. This release refuses a config that holds more than the bounds below, and
-loads a config within them as before. Nothing else about a Binding or an AgentBackend changes. No config in this
-repository's examples or test fixtures has more than two triggers, three `extract` entries or one header, or a header
-name of more than 16 characters, so the bounds are far above what they use.
+loads a config within them as before. Nothing else about a Binding or an AgentBackend changes. No example, recipe or
+kind tier config in this repository has more than two triggers, three `extract` entries or one header, or a header name of
+more than 16 characters, so the bounds are far above what they use.
 
 | Where | Bound | The error |
 |---|---|---|
@@ -324,4 +324,4 @@ reload it keeps its last good config. To find one before you upgrade, run `agent
 against your config, as in [Check the values before you install](install-with-helm.md#check-the-values-before-you-install).
 It loads the files before it reads a token, so it reports the error without one.
 
-An earlier release loads a config of any size, so after a [rollback](#roll-back) a config over a bound loads again.
+An earlier release has none of these four bounds, so after a [rollback](#roll-back) a config over one loads again.

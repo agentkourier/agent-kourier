@@ -52,14 +52,21 @@ func TestEveryInvalidEntryIsRefusedByTheBroker(t *testing.T) {
 			t.Errorf("%s: the broker accepts an invalid entry", e.Name)
 		case !strings.Contains(err.Error(), e.Want):
 			t.Errorf("%s: the broker's refusal does not contain %q:\n%v", e.Name, e.Want, err)
+		case len(Problems(err)) != 1:
+			// An entry shows one rule. With two problems it would still be refused after its rule were gone, and the
+			// schema's refusal could not be tied to the rule.
+			t.Errorf("%s: the broker reports %d problems, want exactly the one this entry is for:\n%v", e.Name, len(Problems(err)), err)
 		}
 		if e.SchemaRefuses {
 			refuses++
 		}
 	}
-	// The count of rules is the plan's, grown by the caps and the cases that one rule has several branches of.
-	if len(entries) < 120 {
-		t.Errorf("%d invalid entries; a rule has lost its entry", len(entries))
+	valid, err := Valid(root(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckSize(valid, entries); err != nil {
+		t.Error(err)
 	}
 	t.Logf("%d invalid entries, %d of which the schema refuses and %d only the broker", len(entries), refuses, len(entries)-refuses)
 }

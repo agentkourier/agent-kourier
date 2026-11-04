@@ -14,6 +14,8 @@
 //	# rule: binding/spec.chat.channel: required     what the entry shows; unique
 //	# want: spec.chat.channel: required             text the broker's refusal must contain
 //	# schema: refuses                               or "accepts": what the apiserver's schema does with it
+//	# field: spec.chat.channel                      optional: the field the schema's refusal must name; by default the
+//	                                                text of want before its first ": "
 //	# cluster: skip because ...                     optional: not sent to an apiserver, with the reason
 //
 // "schema: accepts" is a rule only the broker enforces. It is how this package says which rules the CRD does not copy
@@ -30,6 +32,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -57,6 +60,9 @@ type Entry struct {
 	Want string
 	// SchemaRefuses says whether the CRD's schema refuses the object.
 	SchemaRefuses bool
+	// Field is the field that the schema's refusal must name, when it refuses: the entry's "# field:" line, or the text
+	// of Want before its first ": ". It is empty if neither says.
+	Field string
 	// SkipCluster, if set, is why the entry is not sent to an apiserver.
 	SkipCluster string
 }
@@ -108,15 +114,49 @@ func Root() (string, error) {
 	}
 }
 
+// InvalidEntries is how many entries the invalid half has. Both tests hold the corpus to it, so an entry cannot be
+// dropped, or added, without this changing in the same commit.
+const InvalidEntries = 150
+
+// MinValidEntries is the fewest valid entries the valid half may have: the repository's resources change, so this is a
+// floor and not a count. It is under what the roots hold today (see TestEveryValidEntryIsAcceptedByTheBroker), and
+// over what a glob that stopped matching would leave.
+const MinValidEntries = 90
+
+// CheckSize reports a corpus that is smaller than it must be, which a test would otherwise pass on: a renamed
+// directory or a deleted entry empties the half a test runs over, and the loop over it still succeeds.
+func CheckSize(valid, invalid []Entry) error {
+	if len(invalid) != InvalidEntries {
+		return fmt.Errorf("crdcorpus: %d invalid entries, want %d (InvalidEntries): an entry was dropped or added without the count", len(invalid), InvalidEntries)
+	}
+	if len(valid) < MinValidEntries {
+		return fmt.Errorf("crdcorpus: %d valid entries, want at least %d (MinValidEntries)", len(valid), MinValidEntries)
+	}
+	return nil
+}
+
+// Problems splits the refusal of Broker into its problems, one for each rule the object breaks.
+func Problems(err error) []error {
+	var j interface{ Unwrap() []error }
+	if errors.As(err, &j) {
+		return j.Unwrap()
+	}
+	if err == nil {
+		return nil
+	}
+	return []error{err}
+}
+
+// placeholder matches the marker a template leaves for a script to fill in, such as __SLACK_CHANNEL_ID__.
+var placeholder = regexp.MustCompile(`__[A-Z][A-Z0-9_]*__`)
+
 // validRoots are the directories, under the repository's root, that hold the valid half: every v1alpha1 resource in
-// them is an entry. The recipe directories hold only what the recipes' own tests load. The sandbox tier's files are
-// left out: they are templates with a placeholder for the channel ID, which its script fills in.
+// them is an entry. The recipe directories hold only what the recipes' own tests load. A file with a placeholder in it
+// (the sandbox tier's, which its script fills in) is a template, not a resource, and is left out.
 var validRoots = []string{
 	"api/v1alpha1/testdata",
 	"examples",
-	"hack/kind/fast",
-	"hack/kind/full",
-	"hack/kind/ax",
+	"hack/kind",
 	"test/recipes/testdata/valid",
 	"test/recipes/testdata/evals-pass",
 	"test/crdcorpus/testdata/valid",
@@ -140,6 +180,9 @@ func Valid(root string) ([]Entry, error) {
 			data, err := os.ReadFile(path) //nolint:gosec // path comes from walking this repository's own corpus directories
 			if err != nil {
 				return err
+			}
+			if placeholder.Match(data) {
+				return nil
 			}
 			docs, err := splitDocuments(data)
 			if err != nil {
@@ -254,7 +297,7 @@ func newEntry(name string, obj map[string]any) Entry {
 
 // parseInvalid reads one document of an invalid file: the comment header, then the object.
 func parseInvalid(doc []byte) (Entry, error) {
-	var rule, want, schema, skip string
+	var rule, want, schema, skip, field string
 	for line := range strings.SplitSeq(string(doc), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -263,7 +306,7 @@ func parseInvalid(doc []byte) (Entry, error) {
 		if !strings.HasPrefix(line, "#") {
 			break
 		}
-		for key, dst := range map[string]*string{"# rule: ": &rule, "# want: ": &want, "# schema: ": &schema, "# cluster: ": &skip} {
+		for key, dst := range map[string]*string{"# rule: ": &rule, "# want: ": &want, "# schema: ": &schema, "# cluster: ": &skip, "# field: ": &field} {
 			if v, ok := strings.CutPrefix(line, key); ok {
 				*dst = v
 			}
@@ -278,6 +321,12 @@ func parseInvalid(doc []byte) (Entry, error) {
 	}
 	e := newEntry(rule, obj)
 	e.Want = want
+	e.Field = field
+	if e.Field == "" {
+		if path, _, ok := strings.Cut(want, ": "); ok && !strings.ContainsAny(path, " \"") {
+			e.Field = path
+		}
+	}
 	switch {
 	case rule == "":
 		return Entry{}, errors.New("no '# rule:' line")
