@@ -1,4 +1,4 @@
-{{- if not .Values.config.existingConfigMap }}
+{{- if and (not .Values.config.existingConfigMap) (not (include "agentkourier.crMode" .)) }}
 apiVersion: v1
 kind: ConfigMap
 metadata:

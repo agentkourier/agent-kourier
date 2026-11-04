@@ -112,7 +112,9 @@ can route its channels to different agents and backends. The store is SQLite wit
 one replica, or Postgres with one or two replicas (two are active and passive) (see
 [High availability](high-availability.md)); the broker is never active-active.
 
-Live Agent Kourier CRDs and a reconciliation controller are planned. Agent Kourier does not
+The Helm chart can install the three kinds as CRDs and have the broker read them from the cluster
+(`config.source: crds`) instead of from files; there is no reconciliation controller, since the broker watches them
+itself. Agent Kourier does not
 deploy an agent when it loads an `AgentBackend` or `Binding`: the runtime's own
 manifests, operator, or deployment tooling handle that lifecycle.
 

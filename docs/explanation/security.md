@@ -62,7 +62,9 @@ never falls back to `userId` when the token cannot be read.
 Secrets are read from Kubernetes Secrets by reference, through the API, and never written to logs, the audit table or
 resource status. A Secret's value is held in a type whose every formatting path redacts. The chart grants list and
 watch on Secrets only in the namespaces that hold a Secret the chart's config values name, plus `rbac.secretNamespaces`
-and the release namespace. A rejected Binding token fails the turn, is re-read,
+and the release namespace. With `config.source: crds` those Roles name the Secrets (`resourceNames`)
+instead of the namespace, except in `rbac.secretNamespaces`, the namespaces of `rbac.secretNames` get a Role for the names listed there, and a
+ClusterRole lets the broker list and watch the three custom resource kinds, patch `bindings/status` and get the three CRDs by name. A rejected Binding token fails the turn, is re-read,
 audited and counted; nothing falls back.
 
 ## Hostile text

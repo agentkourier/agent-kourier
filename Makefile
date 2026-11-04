@@ -59,9 +59,10 @@ build: ## Build bin/agent-kourier
 tidy: ## Tidy go.mod and go.sum
 	go mod tidy
 
-crds: ## Generate the CRDs from api/v1alpha1 into charts/agent-kourier/files/crds (controller-gen, pinned in go.mod; a test fails when they drift)
+crds: ## Generate the CRDs from api/v1alpha1 into charts/agent-kourier/files/crds (controller-gen, pinned in go.mod) and their hashes into api/v1alpha1/crd_schema_hashes.go; tests fail when either drifts
 	rm -f charts/agent-kourier/files/crds/*.yaml
 	go tool controller-gen crd paths=./api/v1alpha1 output:crd:dir=charts/agent-kourier/files/crds
+	go run ./hack/crdhashes
 
 crd-corpus: ## Hold the CRD schemas to the broker's validation on a throwaway kind cluster that has only the CRDs (hack/kind/crd-corpus.sh; kind, kubectl and Docker; CRD_CORPUS_KUBECONFIG uses a local cluster you made instead)
 	hack/kind/crd-corpus.sh

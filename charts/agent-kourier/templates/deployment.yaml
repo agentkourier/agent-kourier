@@ -28,9 +28,9 @@ spec:
         {{- with omit .Values.podLabels "app.kubernetes.io/name" "app.kubernetes.io/instance" }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- if or .Values.podAnnotations (and .Values.config.rollOnChange (not .Values.config.existingConfigMap)) }}
+      {{- if or .Values.podAnnotations (and .Values.config.rollOnChange (not .Values.config.existingConfigMap) (not (include "agentkourier.crMode" .))) }}
       annotations:
-        {{- if and .Values.config.rollOnChange (not .Values.config.existingConfigMap) }}
+        {{- if and .Values.config.rollOnChange (not .Values.config.existingConfigMap) (not (include "agentkourier.crMode" .)) }}
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
         {{- end }}
         {{- with .Values.podAnnotations }}
@@ -55,7 +55,13 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           # cmd/agent-kourier takes no arguments: it is configured by this environment.
           env:
+            {{- if include "agentkourier.crMode" . }}
+            {{- /* Only for crds, so that the pod template of the default does not move. With crds there is no directory to read. */}}
+            - {name: AGENTKOURIER_CONFIG_SOURCE, value: crds}
+            - {name: AGENTKOURIER_CHAT_CONNECTION, value: {{ include "agentkourier.chatConnection" . | quote }}}
+            {{- else }}
             - {name: AGENTKOURIER_CONFIG_DIR, value: /etc/agent-kourier}
+            {{- end }}
             - {name: AGENTKOURIER_STORE, value: {{ .Values.store.type | quote }}}
             {{- if include "agentkourier.sqlite" . }}
             - {name: AGENTKOURIER_DB_PATH, value: {{ printf "/data/%s" .Values.persistence.dbFile | quote }}}
@@ -104,7 +110,9 @@ spec:
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           volumeMounts:
+            {{- if not (include "agentkourier.crMode" .) }}
             - {name: config, mountPath: /etc/agent-kourier, readOnly: true}
+            {{- end }}
             {{- if include "agentkourier.sqlite" . }}
             - {name: data, mountPath: /data}
             {{- end }}
@@ -122,8 +130,10 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       volumes:
+        {{- if not (include "agentkourier.crMode" .) }}
         - name: config
           configMap: {name: {{ include "agentkourier.configMapName" . }}}
+        {{- end }}
         {{- if include "agentkourier.sqlite" . }}
         - name: data
           persistentVolumeClaim: {claimName: {{ include "agentkourier.pvcName" . }}}
