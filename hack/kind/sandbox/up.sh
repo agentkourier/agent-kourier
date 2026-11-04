@@ -272,8 +272,9 @@ check "the agent sandbox-sre is Ready" "${K[@]}" -n kagent wait --for=condition=
 # as agentkourier_chat_connected{...} 1 on /metrics. If Slack rejected the tokens it exits 1 (fatal auth: a restart would be rejected
 # again, so the pod crash-loops and says so); any other exit is a failure of the tier.
 SLACK_CONNECTED='slack: socket mode connected'
+# Both labels: the release's token refresh pods carry its instance label, and every release's Agent Kourier carries the name label.
 agentkourier_state() { # ready | fatal-auth | exit <code> | starting
-  "${K[@]}" -n agent-kourier get pods -l "app.kubernetes.io/instance=${SANDBOX_RELEASE}" -o json | jq -r '
+  "${K[@]}" -n agent-kourier get pods -l "app.kubernetes.io/name=agent-kourier,app.kubernetes.io/instance=${SANDBOX_RELEASE}" -o json | jq -r '
     [.items[] | select(.metadata.deletionTimestamp == null)] | sort_by(.metadata.creationTimestamp) | last // empty
     | .status.containerStatuses[0] // empty
     | if .ready then "ready"
