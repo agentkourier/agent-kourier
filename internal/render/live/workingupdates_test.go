@@ -103,7 +103,7 @@ func TestEmptyUpdatesDoNotHoldWorkingOff(t *testing.T) {
 		e.elapse(time.Second)
 		run.Handle(update(""))
 	}
-	e.atOnce(t, "the Working… card", func() bool { return len(e.tasks()) == 1 })
+	e.delayDue(t, "the Working… card", func() bool { return len(e.tasks()) == 1 })
 	run.Handle(text("b", "Done."))
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
@@ -308,7 +308,7 @@ func TestUpdatesDoNotHoldTheActivityCardOff(t *testing.T) {
 		e.elapse(time.Second)
 		run.Handle(update(""))
 	}
-	e.atOnce(t, "the card", func() bool { return len(e.tasks()) == 1 })
+	e.delayDue(t, "the card", func() bool { return len(e.tasks()) == 1 })
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
 }

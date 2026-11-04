@@ -912,8 +912,8 @@ func TestExistingClaimAndConfigMapAreNotRendered(t *testing.T) {
 // tierCases are the kind tiers' Agent Kourier as hack/kind's scripts install it and the E2E tests find it: the values, the release the
 // script names, and what the chart must make of them. Everything here is something a script or a test relies on: the object
 // names (kubectl -n agent-kourier get deploy agent-kourier, the runner's Role for the Deployment agent-kourier), the pod label
-// app.kubernetes.io/name=agent-kourier (NetworkPolicies trust it) and app.kubernetes.io/instance=<release> (lib.sh tells the tier's
-// Agent Kourier from the sandbox's by it), the container name, the image the scripts load, the ConfigMap the scripts make, and
+// app.kubernetes.io/name=agent-kourier (NetworkPolicies trust it) and app.kubernetes.io/instance=<release> (lib.sh and the E2E tests tell
+// the tier's Agent Kourier from any other release's by it), the container name, the image the scripts load, the ConfigMap the scripts make, and
 // the volume.
 var tierCases = []struct {
 	name, values, release string

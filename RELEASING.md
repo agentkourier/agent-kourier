@@ -173,7 +173,11 @@ belongs with a change to the other.
 `.github/workflows/ci.yml` runs `make fmt` (no diff), `make lint` and `make build` (the `lint` job), and what `make test`
 runs as two more jobs side by side, `make test-race` with `make test-scripts` (`test`) and `make test-testhooks`
 (`test-testhooks`), on pull requests and pushes to `main`. The `test` job has helm installed and `AGENTKOURIER_REQUIRE_HELM=1`
-so the chart tests cannot skip. The `zizmor` job (`make lint-workflows`, `hack/security/lint-workflows.sh`) audits
+so the chart tests cannot skip. The `test-postgres` job (`make test-postgres`, `hack/postgres/test.sh`) runs the Postgres
+store's tests, the store conformance suite among them, and the broker's Postgres tests against a throwaway Postgres
+container; those tests skip in `test` and `test-testhooks`, which have no database. It is not a required check. To make
+it one, the owner adds `test-postgres` from `ci` to the `main` ruleset, and the same change adds it to `CI_REQUIRED_JOBS` in
+`hack/release/check-ci.sh` and to the lists above. The `zizmor` job (`make lint-workflows`, `hack/security/lint-workflows.sh`) audits
 every workflow with a pinned zizmor under the policy in `.github/zizmor.yml` and fails on any finding; it first
 proves the policy still fails a set of unsafe fixtures (`hack/security/testdata/zizmor`), and then that the inline
 ignore comments hide only the findings the script lists. It runs with `contents: read` and uploads no SARIF, so it

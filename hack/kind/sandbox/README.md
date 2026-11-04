@@ -32,8 +32,9 @@ Slack sandbox workspace  <-- wss/https -->  agent-kourier-sandbox (agent-kourier
 | `make sandbox-heal` | Heals two things in the full tier, each only if it needs it, and otherwise says `ok` and changes nothing. First **kindnet** (`ds/kindnet` in `kube-system`, the network plugin): if an agent-kourier-labelled probe pod reaches the kagent controller on 8083, which `controller-admit-frontdoor-only` must refuse, it restarts kindnet, waits, and probes again (about 13 s when healthy). Then the **egress gateway** (`deploy/atenet-egress`): if its pod is more than 20 hours old or a log holds `CertificateExpired`, it restarts it and waits. For a **long session**: the gateway's certificate lives 24 hours and is never reloaded, so after about a day every agent turn fails with "not ready" (see "If it does not come up"). `make sandbox-up` does the gateway's check before it verifies, and **refuses** (does not heal) a stale kindnet. Changes nothing else; needs no secrets file. |
 
 While the sandbox is up, `make e2e-full` and `make e2e-full-up` **refuse**
-(`Run: make sandbox-down first`): the sandbox's pod carries the label the front door trusts (`app.kubernetes.io/name=agent-kourier`, which the
-tests find Agent Kourier's pods by; the tier's Service selects the tier's release alone), so a test run would drive the sandbox's Agent Kourier. `kubectl logs deploy/agent-kourier` is the tier's (scaled to zero);
+(`Run: make sandbox-down first`): the sandbox takes the place of the tier's Agent Kourier, which is at zero replicas meanwhile, so a test run would find no
+Agent Kourier and a bring-up would start the tier's beside the sandbox's. Another release of the chart in the namespace is no reason to refuse: every release's pods carry the label the front door trusts
+(`app.kubernetes.io/name=agent-kourier`), and the tier's scripts and tests find the tier's own by `app.kubernetes.io/instance=agent-kourier` as well. `kubectl logs deploy/agent-kourier` is the tier's (scaled to zero);
 use `deploy/agent-kourier-sandbox`.
 
 `make` shows all four in its help. The secrets file is `$SANDBOX_ENV`, default `~/.config/agent-kourier/sandbox.env`:

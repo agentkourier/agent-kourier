@@ -34,6 +34,15 @@ func TestTurnThatFailsForAGoodAfterTheTaskIsNamedIsTold(t *testing.T) {
 				return fmt.Errorf("send message: %w", agent.ErrForbidden)
 			}
 		}, "the agent refused to continue the task", TurnRefused},
+		{"a reconnect whose card is answered 403", func(f *fixture) {
+			f.agent.script = lost(fmt.Errorf("reconnect to agent: %w", agent.ErrAgentForbidden))
+		}, "the agent refused to continue the task", TurnRefused},
+		{"a read of the lost task whose card is answered 403", func(f *fixture) {
+			f.agent.script = lost(errors.New("connection reset"))
+			f.agent.get = func(a2a.TaskID) (*a2a.Task, error) {
+				return nil, fmt.Errorf("connect to agent: %w", agent.ErrAgentForbidden)
+			}
+		}, "the agent refused to continue the task", TurnRefused},
 		{"a stream that ends with no final task", func(f *fixture) {
 			f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
 				accepted(h, n)
@@ -71,6 +80,11 @@ func TestTurnThatFailsForAGoodAfterTheTaskIsNamedIsTold(t *testing.T) {
 			}
 			if f.taskID() != "t1" {
 				t.Errorf("task %q recorded; want t1 kept, for reconciliation", f.taskID())
+			}
+			f.amu.Lock()
+			defer f.amu.Unlock()
+			if len(f.rejected) != 0 {
+				t.Errorf("Rejected calls = %+v; want none: no credential was refused", f.rejected)
 			}
 		})
 	}

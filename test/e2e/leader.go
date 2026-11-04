@@ -12,11 +12,12 @@ import (
 	"github.com/agentkourier/agent-kourier/test/e2e/kube"
 )
 
-// Agent Kourier's container and the label of its pod (charts/agent-kourier, as the tiers install it); its namespace and Deployment
-// are kube.AgentKourierNamespace and kube.AgentKourierDeployment.
+// Agent Kourier's container and the labels of its pod (charts/agent-kourier, as the tiers install it: release agent-kourier, whose
+// instance label tells it from any other release of the chart in the namespace); its namespace and Deployment are
+// kube.AgentKourierNamespace and kube.AgentKourierDeployment.
 const (
 	agentKourierContainer = "agent-kourier"
-	agentKourierPods      = "app.kubernetes.io/name=agent-kourier"
+	agentKourierPods      = "app.kubernetes.io/name=agent-kourier,app.kubernetes.io/instance=agent-kourier"
 	// agentKourierMetricsPort is the port of a pod's health and metrics (the chart's listen.port, 8080).
 	agentKourierMetricsPort = "8080"
 	// askTimeout is how long one question to one replica may take: a frozen process does not answer, and must not hold

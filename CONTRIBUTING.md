@@ -68,6 +68,10 @@ keeps its credentials, `actions/cache` or a setup action's cache in a release wo
 a full commit SHA. It is not a required check yet. If you change a workflow, run `make lint-workflows` (it installs the pinned zizmor and needs `jq`); `.github/zizmor.yml` says how a finding is
 fixed or suppressed.
 
+`ci` also runs `test-postgres` (`make test-postgres`), the Postgres store's tests and the broker's Postgres tests
+against a throwaway Postgres container; in `test` and `test-testhooks`, which have no database, those tests skip. It is
+not a required check yet. If you change the store or a migration, run it locally; it needs Docker.
+
 The `docs` workflow (`build`, the strict site build, and `links`, an external link check) runs only
 when a pull request touches the documentation sources, and its checks are not required; keep them
 green anyway.
