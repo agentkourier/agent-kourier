@@ -1,7 +1,8 @@
 # Pull requests and pushes to main: the checks `make` runs locally, nothing else. `make test` is
 # test-race, test-testhooks and test-scripts in turn; here they are jobs of their own, which run side by side,
-# because the two race passes alone outlast one job's budget on a runner of this size. Nothing is retried or
-# skipped. The kind tiers (make e2e-fast and the others) are not here; RELEASING.md says what they would need.
+# because the two race passes alone outlast one job's budget on a runner of this size. make test-postgres, which make
+# test does not run, is a job of its own too. Nothing is retried or skipped. The kind tiers (make e2e-fast and the
+# others) are not here; RELEASING.md says what they would need.
 name: ci
 
 on:
@@ -155,6 +156,45 @@ jobs:
             go-test-testhooks-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-
             go-test-testhooks-${{ runner.os }}-
       - run: make test-testhooks
+      - if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-env.outputs.modcache }}
+            ${{ steps.go-env.outputs.gocache }}
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
+
+  # The tests that need a database skip in the jobs above, which have none: without this job the store conformance
+  # suite runs on SQLite only. hack/postgres/test.sh starts a throwaway Postgres container, which the runner's Docker
+  # serves, and sets the DSN those tests read, so they cannot skip here.
+  test-postgres:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: setup-go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - id: go-env
+        name: Locate the Go caches
+        run: |
+          echo "modcache=$(go env GOMODCACHE)" >>"${GITHUB_OUTPUT}"
+          echo "gocache=$(go env GOCACHE)" >>"${GITHUB_OUTPUT}"
+      - id: go-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-env.outputs.modcache }}
+            ${{ steps.go-env.outputs.gocache }}
+          key: go-test-postgres-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-test-postgres-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-
+            go-test-postgres-${{ runner.os }}-
+      - run: make test-postgres
       - if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
