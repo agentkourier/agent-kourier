@@ -101,7 +101,9 @@ func TestReadyIsDerived(t *testing.T) {
 		{"approvers failing", []Condition{cond(be, True, ReasonOK), cond(ch, True, ReasonOK), cond(ap, False, ReasonGroupNotFound)}, False, "ApproversReadable:GroupNotFound"},
 		{"false beats unknown", []Condition{cond(be, Unknown, ReasonPending), cond(ch, False, ReasonChannelArchived)}, False, "ChannelJoined:ChannelArchived"},
 		{"pending is unknown", []Condition{cond(be, True, ReasonOK), cond(ch, Unknown, ReasonPending)}, Unknown, "ChannelJoined:Pending"},
-		{"unknown names the first unknown", []Condition{cond(be, Unknown, ReasonProbeTimeout), cond(ch, Unknown, ReasonPending)}, Unknown, "BackendReachable:ProbeTimeout"},
+		{"pending is named before an unknown that has a result", []Condition{cond(be, Unknown, ReasonProbeTimeout), cond(ch, Unknown, ReasonPending)}, Unknown, "ChannelJoined:Pending"},
+		{"pending is named before an unknown, in either order", []Condition{cond(be, Unknown, ReasonPending), cond(ch, Unknown, ReasonChatUnavailable)}, Unknown, "BackendReachable:Pending"},
+		{"unknown names the first unknown", []Condition{cond(be, Unknown, ReasonProbeTimeout), cond(ch, Unknown, ReasonChatUnavailable)}, Unknown, "BackendReachable:ProbeTimeout"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -116,6 +118,24 @@ func TestReadyIsDerived(t *testing.T) {
 				t.Errorf("Ready is not last: %+v", conds)
 			}
 		})
+	}
+}
+
+func TestConditionPendingReadsReadysReasonToo(t *testing.T) {
+	for _, tc := range []struct {
+		c    Condition
+		want bool
+	}{
+		{Condition{Type: BackendReachable, Status: Unknown, Reason: ReasonPending}, true},
+		{Condition{Type: Ready, Status: Unknown, Reason: "ChannelJoined:Pending"}, true},
+		{Condition{Type: Ready, Status: Unknown, Reason: "BackendReachable:ProbeTimeout"}, false},
+		{Condition{Type: BackendReachable, Status: Unknown, Reason: ReasonProbeFailed}, false},
+		{Condition{Type: BackendReachable, Status: True, Reason: ReasonOK}, false},
+		{Condition{Type: Ready, Status: False, Reason: "ChannelJoined:Pending"}, false},
+	} {
+		if got := tc.c.Pending(); got != tc.want {
+			t.Errorf("%+v.Pending() = %v; want %v", tc.c, got, tc.want)
+		}
 	}
 }
 

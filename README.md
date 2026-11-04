@@ -68,6 +68,10 @@ Without a broker, each of these is code in every agent that talks to chat:
   and starts an investigation in each alert's thread, with a cooldown per alert, a rate
   limit and a daily cap. There is no webhook, so alerts reach people whether or not Agent
   Kourier is running.
+- **Agents that call agents.** A mention of Agent Kourier by another bot starts a turn in
+  that thread, with the thread so far as untrusted data, within fixed limits. It is on by default; a
+  Binding turns it off with `chat.botMentions: none`. See
+  [Let another agent start yours](docs/how-to/any-bot-trigger.md#let-another-agent-start-yours).
 - **Feedback.** An investigation's final message has useful and not-useful buttons, and
   Prometheus counts the votes per agent and alert name.
 - **Backend choice.** kagent, an agent in Google AX, and any A2A 1.0 or 0.3 agent whose card

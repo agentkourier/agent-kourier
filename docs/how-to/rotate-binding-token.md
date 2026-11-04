@@ -20,6 +20,8 @@ kubectl -n payments create secret generic payments-agent-token \
 Use the Binding's namespace and Secret name, and the key the reference names (`token` by default). Secrets that Agent
 Kourier reads must be type `Opaque`.
 
+A write to the Secret starts a pass of [Binding verification](../reference/metrics.md#binding-verification), within about 30 seconds or when a pass already running ends, which fetches the agent's card with the new token. `agentkourier_binding_ready` is 1 afterwards if the front door takes the token and the channel still reads true; if the front door refuses it, `BackendReachable` reads `False/CredentialsRejected`. A Secret refreshed on a schedule starts a pass each time too.
+
 ## Refresh a Dex token on a schedule
 
 When the backend's front door takes Dex ID tokens, the Helm chart can keep the token fresh with an hourly CronJob. It

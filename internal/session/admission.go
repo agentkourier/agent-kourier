@@ -133,10 +133,13 @@ const (
 // (spec 8.4, D38). A reply that was queued as a turn is the answer only if it came after the question was asked,
 // and a question that nobody has seen takes no answer: its reply is no answer when the question has closed, and
 // waits for the prompt when it is still open. A reply pinned to its question at the intake was decided there, and
-// is never a turn: it is the answer, or, when the question closed unseen, consumed.
+// is never a turn: it is the answer, or, when the question closed unseen, consumed. A turn that nobody wrote (a bot's mention,
+// a trigger's prompt) is never an answer: only a person answers a question.
 func JudgeAnswer(r store.Reply, q AskedQuestion) AnswerVerdict {
 	pinned := Queued(r).Kind == AdmitAnswer
 	switch {
+	case !pinned && r.UserID == SystemUser:
+		return AnswerNone
 	case !pinned && r.EnqueuedAt.Before(q.CreatedAt):
 		return AnswerNone
 	case !q.Posted && !q.Open && pinned:

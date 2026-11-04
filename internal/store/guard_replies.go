@@ -95,6 +95,19 @@ func (g *Guarded) PreviousReply(ctx context.Context, key ConversationKey, sequen
 	return r, err
 }
 
+// PreviousWholeReply implements ReplyQueue.
+func (g *Guarded) PreviousWholeReply(ctx context.Context, key ConversationKey, sequence int64) (r Reply, err error) {
+	err = g.run(ctx, "agentkourier.store.PreviousWholeReply", func(ctx context.Context) error {
+		if !validKey(key) || sequence < 1 {
+			return fmt.Errorf("previous whole reply %+v below %d: a key and a sequence from 1 are required: %w", key, sequence, ErrInvalid)
+		}
+		var err error
+		r, err = g.a.PreviousWholeReply(ctx, key, sequence)
+		return err
+	})
+	return r, err
+}
+
 // MarkReplyDelivered implements ReplyQueue.
 func (g *Guarded) MarkReplyDelivered(ctx context.Context, id string, at time.Time) error {
 	return g.run(ctx, "agentkourier.store.MarkReplyDelivered", func(ctx context.Context) error {

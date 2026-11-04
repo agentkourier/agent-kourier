@@ -182,16 +182,25 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 		return nil, fmt.Errorf("store retention: %w", err)
 	}
 	stops.add("store-retention", startLoop(runCtx, retain.Run))
+	// The verification of the Bindings: whether each one's backend answers and its channel has the bot in it, probed on a schedule
+	// and reported as metrics and log lines only. It sends the agent nothing, posts nothing and changes no readiness. It reads
+	// through the Bindings' pools, the platform and the Secrets, so it stops in the interactions' step, before the manager, the drain, the pool
+	// and the resolver. Added before the interactions start, it stops after their tap, worker and sweeper, with the store's loops.
+	prober := verification{
+		Bindings: bindings, Platform: platform, Snaps: boot.Reloader, Revision: boot.Reloader.Revision, Conn: conn,
+		Secrets: boot.Secrets, Metrics: metrics, Log: log, Interval: cfg.probeEvery, Tick: cfg.probeTick, MinRevisionGap: cfg.probeGap,
+	}.newProber()
+	stops.add("binding-verification", startLoop(runCtx, func(c context.Context) error { prober.Run(c); return nil }))
+
 	interactions, err := parts.start(runCtx, mgr, ix, &stops)
 	if err != nil {
 		return nil, err
 	}
-
 	// A match of a botMessage trigger that starts a turn becomes a session through the manager's intake, the path a
 	// mention takes. The threads of the keys are in the store; the permalink comes from what the platform learned when it
 	// connected, since the start runs on the acknowledgement path and may call neither Slack nor the agent.
 	starter, err := newTriggerStarter(triggerStarterConfig{
-		Conn: connName, Submit: mgr, Notice: sink.QueueNotice, Audit: auditor, Link: platform.Permalink, Log: log,
+		Conn: connName, Submit: mgr, Takes: mgr.Takes, Notice: sink.QueueNotice, Audit: auditor, Link: platform.Permalink, Log: log,
 	})
 	if err != nil {
 		return nil, err

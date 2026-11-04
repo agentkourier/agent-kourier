@@ -493,7 +493,7 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 	if err != nil {
 		return idle, fmt.Errorf("read session: %w", err)
 	}
-	backend, err := m.cfg.Bindings.Backend(sess.Binding)
+	backend, err := m.sessionBackend(sess)
 	if errors.Is(err, ErrUnknownBinding) { // it left the config since the turn was queued: no retry loop
 		t := &tstate{key: key, c: c, r: r, sess: sess}
 		m.notice(t, NoticeBindingGone, "")
@@ -604,14 +604,16 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 	return m.drive(t, send)
 }
 
-// wantsThreadContext reports whether the turn r takes the thread's context (Config.ThreadContext): a person's turn, in
-// a Binding with chat.threadReplies: mention. A reply that was admitted as an answer to a question is no turn (Queued).
+// wantsThreadContext reports whether the turn r takes the thread's context (Config.ThreadContext): a turn marked to carry the
+// whole thread, or a person's turn in a Binding with chat.threadReplies: mention. A reply that was admitted as an answer to a
+// question is no turn (Queued).
 func (m *Manager) wantsThreadContext(r store.Reply, b Backend) bool {
-	return b.ThreadReplies == v1alpha1.ThreadRepliesMention && r.UserID != SystemUser && Queued(r).Kind == AdmitTurn
+	return Queued(r).Kind == AdmitTurn && (r.WholeThread || (b.ThreadReplies == v1alpha1.ThreadRepliesMention && r.UserID != SystemUser))
 }
 
 // readWindow finds where the window of the turn r opens, which is the message of the row before it in the session's
-// queue, delivered or not, and keeps it for the turn. It is read from stored rows, so it is the same on every attempt,
+// queue, delivered or not, and keeps it for the turn. A turn that carries the thread reads back to the last that did: a turn
+// between them carried no bot's post. It is read from stored rows, so it is the same on every attempt,
 // after a restart and after a failover. A turn with no row before it has no window. It runs before the turn is sent,
 // where a store that fails waits like any other failure of the runner: the turn is never sent without its context,
 // which it could not be sent again with, and nothing tells the thread the agent cannot be reached.
@@ -619,10 +621,14 @@ func (m *Manager) readWindow(ctx context.Context, c *convo, r store.Reply, b Bac
 	if !m.wantsThreadContext(r, b) || c.window.id == r.ID {
 		return nil
 	}
-	prev, err := m.cfg.Store.PreviousReply(ctx, r.Key, r.Sequence)
+	previous := m.cfg.Store.PreviousReply
+	if r.WholeThread {
+		previous = m.cfg.Store.PreviousWholeReply
+	}
+	prev, err := previous(ctx, r.Key, r.Sequence)
 	switch {
-	case errors.Is(err, store.ErrNotFound): // the first turn of the thread: nothing came before it
-		c.window = windowText{id: r.ID, none: true}
+	case errors.Is(err, store.ErrNotFound): // no turn came before it, or none that carried the thread
+		c.window = windowText{id: r.ID, none: !r.WholeThread} // a turn that carries the thread has all of it to read
 	case err != nil:
 		return fmt.Errorf("read the turn before %s: %w", r.ID, err)
 	default:
@@ -639,7 +645,7 @@ func (m *Manager) withThreadContext(ctx context.Context, c *convo, r store.Reply
 		return r
 	}
 	if !c.window.asked {
-		c.window.section, c.window.asked = m.cfg.ThreadContext(ctx, r.Key, binding, c.window.after, r.MessageRef), true
+		c.window.section, c.window.asked = m.cfg.ThreadContext(ctx, r.Key, binding, c.window.after, r.MessageRef, r.WholeThread), true
 	}
 	if c.window.section != "" {
 		r.Text += "\n\n" + c.window.section
@@ -783,7 +789,11 @@ func (t *tstate) outputTurn() store.TaskTurn {
 	if ackEmoji == "" {
 		ackID = ""
 	}
-	return store.TaskTurn{ID: cmp.Or(t.nid, t.began.ID, t.r.ID), User: cmp.Or(ack.UserID, t.r.UserID, t.began.User), MessageRef: cmp.Or(ack.MessageRef, t.r.MessageRef, t.began.MessageRef), Acknowledgment: ackEmoji, AcknowledgmentID: ackID}
+	mention := t.began.Mention // an answer leaves it: the task is still the mention's, whoever's message the turn names now
+	if t.r.WholeThread {
+		mention = cmp.Or(mention, t.r.MessageRef)
+	}
+	return store.TaskTurn{ID: cmp.Or(t.nid, t.began.ID, t.r.ID), User: cmp.Or(ack.UserID, t.r.UserID, t.began.User), MessageRef: cmp.Or(ack.MessageRef, t.r.MessageRef, t.began.MessageRef), Acknowledgment: ackEmoji, AcknowledgmentID: ackID, Mention: mention}
 }
 
 // sinkRef is the TurnRef the sink is given for this attempt. An answer's output is a message of its own, named after the
@@ -791,15 +801,17 @@ func (t *tstate) outputTurn() store.TaskTurn {
 // after a lost stream, or looked up or sent again after a send of unknown outcome, continues the message it had.
 func (t *tstate) sinkRef() TurnRef {
 	shown := t.outputTurn()
-	return TurnRef{Key: t.key, Binding: t.sess.Binding, MessageID: shown.ID, UserID: shown.User, Output: t.b.Output, Progress: t.b.Progress, Recovered: t.recovered || t.follow || t.takes, Restarted: t.recovered, Feedback: feedbackOf(shown.User, t.b), ThreadReplies: t.b.ThreadReplies, Mentions: t.b.Mentions, MaxMentions: t.b.MaxMentions}
+	return TurnRef{Key: t.key, Binding: t.sess.Binding, MessageID: shown.ID, UserID: shown.User, Output: t.b.Output, Progress: t.b.Progress, Recovered: t.recovered || t.follow || t.takes, Restarted: t.recovered, Feedback: feedbackOf(shown, t.b), ThreadReplies: t.b.ThreadReplies, Mentions: t.b.Mentions, MaxMentions: t.b.MaxMentions}
 }
 
-// feedbackOf is the feedback buttons the final message of a turn written by user carries (TurnRef.Feedback).
-func feedbackOf(user string, b Backend) store.FeedbackKind {
+// feedbackOf is the feedback buttons the final message of a turn carries (TurnRef.Feedback): an investigation's always, and an
+// answer's on a Binding with feedback.enabled. A turn nobody wrote is an investigation. A bot's mention is also nobody's, but it is a
+// question put by another agent: it is answered like a person's, which the recorded turn can tell after a restart too.
+func feedbackOf(turn store.TaskTurn, b Backend) store.FeedbackKind {
 	switch {
-	case user == SystemUser:
+	case turn.User == SystemUser && turn.Mention == "":
 		return store.FeedbackInvestigation
-	case user != "" && b.Feedback:
+	case turn.User != "" && b.Feedback:
 		return store.FeedbackAnswer
 	}
 	return ""

@@ -239,7 +239,7 @@ func (su suite) sessionTasks(t *testing.T) {
 
 	su.run(t, "ClearSessionAcknowledgment clears only the matching task turn", func(t *testing.T, s store.Store) {
 		ctx := t.Context()
-		first := store.TaskTurn{ID: "turn1", User: "U1", MessageRef: "1700.01", Acknowledgment: "eyes", AcknowledgmentID: "source1"}
+		first := store.TaskTurn{ID: "turn1", User: "U1", MessageRef: "1700.01", Acknowledgment: "eyes", AcknowledgmentID: "source1", Mention: "1700.00"}
 		noErr(t, s.UpsertSession(ctx, store.Session{Key: key, ContextID: "ctx1", Binding: "ns/b", LastActivity: t0}), "UpsertSession")
 		noErr(t, s.SetSessionTask(ctx, key, "ctx1", "task1", first), "SetSessionTask")
 		noErr(t, s.ClearSessionAcknowledgment(ctx, key, "task1", "turn1"), "clear matching acknowledgment")
@@ -273,7 +273,7 @@ func (su suite) sessionTasks(t *testing.T) {
 		if got := getSession(t, s, key); got.Turn != (store.TaskTurn{}) {
 			t.Fatalf("a new session's turn = %+v; want none", got.Turn)
 		}
-		first, answer := store.TaskTurn{ID: "slack:c:C1:1.1", User: "U1", MessageRef: "1700.01", Acknowledgment: "eyes", AcknowledgmentID: "message-1"}, store.TaskTurn{ID: "answer-1", User: "U2", MessageRef: "1700.02", Acknowledgment: "eyes", AcknowledgmentID: "answer-message-1"}
+		first, answer := store.TaskTurn{ID: "slack:c:C1:1.1", User: "U1", MessageRef: "1700.01", Acknowledgment: "eyes", AcknowledgmentID: "message-1", Mention: "1700.00"}, store.TaskTurn{ID: "answer-1", User: "U2", MessageRef: "1700.02", Acknowledgment: "eyes", AcknowledgmentID: "answer-message-1"}
 		noErr(t, s.SetSessionTask(ctx, key, "c1", "t1", first), "the task begins")
 		if got := getSession(t, s, key); got.TaskID != "t1" || got.Turn != first || got.TurnTask != "t1" {
 			t.Errorf("session = %+v; want task t1 of turn %+v, recorded for t1", got, first)

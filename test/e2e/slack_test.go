@@ -213,6 +213,33 @@ func TestSlackSetsUpUsersAndMembers(t *testing.T) {
 	}
 }
 
+// The control client archives a channel and puts it back, as conversations.info shows.
+func TestSlackArchivesAChannel(t *testing.T) {
+	f, ctx := newFixture(t), t.Context()
+	if err := f.sl.SetMembers(ctx, "C1", "UFAKEBOT"); err != nil {
+		t.Fatal(err)
+	}
+	info := func() (*slack.Channel, error) {
+		return f.bot.GetConversationInfo(&slack.GetConversationInfoInput{ChannelID: "C1"})
+	}
+	if err := f.sl.SetArchived(ctx, "C1", true); err != nil {
+		t.Fatal(err)
+	}
+	if ch, err := info(); err != nil || !ch.IsArchived || !ch.IsMember {
+		t.Errorf("conversations.info = %+v, %v; want an archived channel the bot is in", ch, err)
+	}
+	if err := f.sl.SetArchived(ctx, "C1", false); err != nil {
+		t.Fatal(err)
+	}
+	if ch, err := info(); err != nil || ch.IsArchived {
+		t.Errorf("conversations.info = %+v, %v; want the channel not archived", ch, err)
+	}
+	var se *StatusError
+	if err := f.sl.SetArchived(ctx, "", true); !errors.As(err, &se) || se.Status != http.StatusBadRequest {
+		t.Errorf("SetArchived with no channel = %v; want a 400", err)
+	}
+}
+
 func TestSlackShowsAStreamingMessage(t *testing.T) {
 	f, ctx := newFixture(t), t.Context()
 	root := f.post(t, slack.MsgOptionText("question", false))

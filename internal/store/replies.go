@@ -5,6 +5,10 @@ import (
 	"time"
 )
 
+// SystemUser is the user a turn is filed under when nobody wrote it (an alert's first prompt, a bot's mention). The value is
+// stored (reply_queue.user_id, sessions.turn_user), so a change of it needs a migration that rewrites those columns.
+const SystemUser = "agent-kourier:system"
+
 // Reply is a thread reply waiting for its session's active task to finish
 // (spec 8.2, D21).
 type Reply struct {
@@ -26,8 +30,11 @@ type Reply struct {
 	Acknowledgment string
 	// InteractionID pins a text reply to its first question across recovery.
 	InteractionID string
-	Text          string
-	EnqueuedAt    time.Time
+	// WholeThread says the turn carries what the thread holds, every author's, since the session's previous turn: a bot's
+	// mention, whose own message says nothing of what was asked.
+	WholeThread bool
+	Text        string
+	EnqueuedAt  time.Time
 }
 
 // MaxReplyIDs is the most IDs that one call that takes many reply IDs (HasReplies, AcknowledgmentLister's
@@ -72,6 +79,10 @@ type ReplyQueue interface {
 	// stored rows. ErrNotFound if the session has no row below it, as for its first turn; ErrInvalid for an invalid
 	// key or a sequence below 1.
 	PreviousReply(ctx context.Context, key ConversationKey, sequence int64) (Reply, error)
+	// PreviousWholeReply is PreviousReply among the rows marked WholeThread: the last turn below the given sequence that carried
+	// the thread. A turn between them carried no bot's post, so the next turn that carries the thread reads back to this one.
+	// ErrNotFound if no row of the session below it was marked; ErrInvalid as PreviousReply.
+	PreviousWholeReply(ctx context.Context, key ConversationKey, sequence int64) (Reply, error)
 	// MarkReplyDelivered records that the reply was sent at the given time and
 	// discards its text. Marking again is a no-op. It returns ErrNotFound for
 	// an unknown ID and ErrInvalid for an empty ID or zero time.

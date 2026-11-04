@@ -18,7 +18,7 @@ func endStaleTaskQuery(h store.SessionHorizons, t store.StaleTask) (string, []an
 	b := store.NewBinder(Dialect{})
 	key := `s.connection = ` + b.Arg(t.Key.Connection) + ` AND s.channel = ` + b.Arg(t.Key.Channel) + ` AND s.thread_ts = ` + b.Arg(t.Key.Thread)
 	task := `s.task_id = ` + b.Arg(t.TaskID)
-	return `UPDATE sessions AS s SET task_id = '', turn_id = '', turn_user = '', turn_task = '', turn_message_ts = '', turn_acknowledgment = '', turn_acknowledgment_id = ''
+	return `UPDATE sessions AS s SET task_id = '', turn_id = '', turn_user = '', turn_task = '', turn_message_ts = '', turn_acknowledgment = '', turn_acknowledgment_id = '', turn_mention = ''
 			WHERE ` + key + ` AND ` + task + ` AND ` + b.Render(store.PastHorizon("s", h)), b.Args()
 }
 
