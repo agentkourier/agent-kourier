@@ -48,6 +48,36 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- default (printf "%s-config" (include "agentkourier.fullname" .)) .Values.config.existingConfigMap -}}
 {{- end -}}
 
+{{/* True (non-empty) when Agent Kourier reads its resources from custom resources (config.source crds), not from files. */}}
+{{- define "agentkourier.crMode" -}}
+{{- if eq (default "files" .Values.config.source) "crds" -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+The ChatConnection this broker serves with config.source crds, as namespace/name (AGENTKOURIER_CHAT_CONNECTION): config.chatConnection,
+in the release namespace when it names no namespace, or the one entry of config.chatConnections when it is empty. A cluster may hold
+the connections of several brokers, so a second entry is no guess to make.
+*/}}
+{{- define "agentkourier.chatConnection" -}}
+{{- $ref := .Values.config.chatConnection -}}
+{{- if not $ref -}}
+{{- if ne (len .Values.config.chatConnections) 1 -}}
+{{- fail "config.source crds needs config.chatConnection: the namespace/name of the one ChatConnection this broker serves. A cluster may hold the connections of several brokers, so it is left out only when config.chatConnections has exactly one entry" -}}
+{{- end -}}
+{{- range $name, $r := .Values.config.chatConnections -}}
+{{- $ref = printf "%s/%s" (default $.Release.Namespace $r.namespace) $name -}}
+{{- end -}}
+{{- else if not (contains "/" $ref) -}}
+{{- $ref = printf "%s/%s" .Release.Namespace $ref -}}
+{{- end -}}
+{{- $ref -}}
+{{- end -}}
+
+{{/* The ClusterRole (and its binding) that reads the custom resources: cluster-scoped, so the release namespace is in the name. */}}
+{{- define "agentkourier.clusterRoleName" -}}
+{{- printf "%s-%s-crs" (include "agentkourier.fullname" .) .Release.Namespace | trunc 253 | trimSuffix "-" -}}
+{{- end -}}
+
 {{/* True (non-empty) when Agent Kourier keeps its state in SQLite on a volume. */}}
 {{- define "agentkourier.sqlite" -}}
 {{- if ne .Values.store.type "postgres" -}}true{{- end -}}
@@ -95,6 +125,27 @@ Checks that no values file can get past. Included by the Deployment, which every
 {{- end -}}
 {{- if and .Values.config.existingConfigMap (or .Values.config.agentBackends .Values.config.chatConnections .Values.config.bindings) -}}
 {{- fail "config.existingConfigMap and config.agentBackends/chatConnections/bindings are two ways to supply the same files: set one" -}}
+{{- end -}}
+{{- if include "agentkourier.crMode" . -}}
+{{- if .Values.config.existingConfigMap -}}
+{{- fail "config.existingConfigMap is for config.source files: with crds Agent Kourier reads custom resources and mounts no ConfigMap, so it would be ignored" -}}
+{{- end -}}
+{{- /* The minimum is 1.33, the first minor on which the status write of a stored-invalid Binding ratchets (measured; it is refused on 1.30 to 1.32). The -0 lets a
+       vendor suffix (v1.33.1-gke.1, v1.33.0-eks-abc) pass. */ -}}
+{{- if not (semverCompare ">=1.33.0-0" .Capabilities.KubeVersion.Version) -}}
+{{- fail (printf "config.source crds needs Kubernetes 1.33 or later: the API server is %s. 1.33 is the first minor tried on which a status write of a Binding that a rule of the CRDs now refuses is accepted (it is refused on 1.30 to 1.32). With helm template, pass the cluster's version (--kube-version): Helm's default is its own. config.source files has no minimum" .Capabilities.KubeVersion.Version) -}}
+{{- end -}}
+{{- /* A CRD and the custom resources of it in one release can fail where Helm maps the kind, so the CRDs come first: they must already be served
+       when the chart renders. A render that does not ask the cluster (helm template, helm install --dry-run=client) has only the versions it is given. */ -}}
+{{- if not (.Capabilities.APIVersions.Has "agentkourier.dev/v1alpha1") -}}
+{{- if (.Values.crds).install -}}
+{{- fail "config.source crds needs the CRDs (group agentkourier.dev, version v1alpha1) to be installed before the release that renders custom resources, and the cluster does not serve them yet: crds.install installs them with this release, too late for it. In an earlier install or upgrade set crds.install=true with config.source files, then set config.source crds. With helm template, add --api-versions agentkourier.dev/v1alpha1 to render as if they were installed" -}}
+{{- end -}}
+{{- fail "config.source crds needs the CRDs (group agentkourier.dev, version v1alpha1) to be installed before this release, and the cluster does not serve them. In an earlier install or upgrade set crds.install=true with config.source files, or apply the chart's files/crds yourself (kubectl apply --server-side -f charts/agent-kourier/files/crds), then set config.source crds. With helm template, add --api-versions agentkourier.dev/v1alpha1 to render as if they were installed" -}}
+{{- end -}}
+{{- $_ := include "agentkourier.chatConnection" . -}}
+{{- /* With files, config.chatConnection and rbac.secretNames are ignored, and the chart does not refuse them: a rollback to files keeps the values
+       it had, in an incident, and they are harmless there. */ -}}
 {{- end -}}
 {{- if and .Values.serviceMonitor.enabled (not .Values.service.enabled) -}}
 {{- fail "serviceMonitor.enabled needs service.enabled: the ServiceMonitor selects the metrics Service" -}}
@@ -184,13 +235,62 @@ says where its Secrets are). With none of these, the release namespace.
 {{- keys $found | sortAlpha | toJson -}}
 {{- end -}}
 
-{{/* One Agent Kourier resource as a file of the config directory. Called with the kind, the name, the entry and the root. */}}
+{{/*
+With config.source crds, the Secrets that the chart can name, by namespace, as a JSON object of sorted lists: the ChatConnections'
+credentials, the Bindings' identity tokens, the AgentBackends' header values, the Postgres DSN's (in the release namespace) and
+rbac.secretNames. The Roles of the Secrets name exactly these (resourceNames). It parallels agentkourier.secretNamespaces, which files
+mode keeps as it is: test/chart holds the two to the same references.
+*/}}
+{{- define "agentkourier.secretNames" -}}
+{{- $found := dict -}}
+{{- range $_, $r := .Values.config.chatConnections -}}
+{{- with dig "credentialsSecretRef" "name" "" (default (dict) $r.spec) -}}
+{{- include "agentkourier.addSecret" (dict "found" $found "namespace" (default $.Release.Namespace $r.namespace) "name" .) -}}
+{{- end -}}
+{{- end -}}
+{{- range $_, $r := .Values.config.bindings -}}
+{{- with dig "identity" "tokenSecretRef" "name" "" (default (dict) $r.spec) -}}
+{{- include "agentkourier.addSecret" (dict "found" $found "namespace" (default $.Release.Namespace $r.namespace) "name" .) -}}
+{{- end -}}
+{{- end -}}
+{{- range $_, $r := .Values.config.agentBackends -}}
+{{- range $h := (default (list) (dig "headers" (list) (default (dict) $r.spec))) -}}
+{{- with dig "valueSecretRef" "name" "" $h -}}
+{{- include "agentkourier.addSecret" (dict "found" $found "namespace" (default $.Release.Namespace $r.namespace) "name" .) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if eq .Values.store.type "postgres" -}}
+{{- include "agentkourier.addSecret" (dict "found" $found "namespace" $.Release.Namespace "name" .Values.store.postgres.dsnSecret.name) -}}
+{{- end -}}
+{{- range $ns, $names := .Values.rbac.secretNames -}}
+{{- range $name := $names -}}
+{{- include "agentkourier.addSecret" (dict "found" $found "namespace" $ns "name" $name) -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $found -}}
+{{- end -}}
+
+{{/* Adds a Secret name to the list of its namespace in a dict (found), keeping each list sorted and without repeats. Prints nothing. */}}
+{{- define "agentkourier.addSecret" -}}
+{{- $names := default (list) (get .found .namespace) -}}
+{{- $_ := set .found .namespace (append $names .name | uniq | sortAlpha) -}}
+{{- end -}}
+
+{{/*
+One Agent Kourier resource, as a file of the config directory or, with labels, as a custom resource. Called with the kind, the name, the
+entry, the root and optionally labels. The files do not carry the labels: they stay as they always were.
+*/}}
 {{- define "agentkourier.resource" -}}
 apiVersion: agentkourier.dev/v1alpha1
 kind: {{ .kind }}
 metadata:
   name: {{ .name }}
   namespace: {{ default .root.Release.Namespace .entry.namespace }}
+  {{- if .labels }}
+  labels:
+    {{- include "agentkourier.labels" .root | nindent 4 }}
+  {{- end }}
 spec:
   {{- required (printf "config entry %s %q needs a spec" .kind .name) .entry.spec | toYaml | nindent 2 }}
 {{- end -}}

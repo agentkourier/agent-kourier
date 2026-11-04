@@ -1,7 +1,7 @@
 # Agent Kourier
 
 Installs agent-kourier, the broker between chat and A2A agents: one Deployment of the
-production image, its state (a SQLite volume, or a Postgres database you run), the ConfigMap of its resources, and the read
+production image, its state (a SQLite volume, or a Postgres database you run), its resources (a ConfigMap, or custom resources), and the read
 access to the Secrets they name.
 
 **One replica with SQLite, or two with Postgres.** SQLite is one file on a volume that one pod may use, so the
@@ -50,7 +50,7 @@ helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --ver
 Secrets, and a dry run that finds a misspelt field before the pod does. The published chart has `image.repository` and
 `image.digest` stamped with the release's image. From source (`charts/agent-kourier` in a checkout) the chart also
 needs `image.repository`. Check a values file with `helm template` before installing, or from a checkout with
-`helm lint --strict -f my-values.yaml charts/agent-kourier`. `ci/` holds the values the tests render: `minimal`, `postgres` (minimal on Postgres, with a NetworkPolicy), `full` (everything switched on), and the kind tiers' Agent Kourier, which
+`helm lint --strict -f my-values.yaml charts/agent-kourier`. `ci/` holds the values the tests render: `minimal`, `crds` (the route of custom resources, with grants of Secrets by name, which `helm template` renders only with `--kube-version` and `--api-versions agentkourier.dev/v1alpha1`), `postgres` (minimal on Postgres, with a NetworkPolicy), `full` (everything switched on), and the kind tiers' Agent Kourier, which
 `hack/kind` installs with this chart: `fast` (the fast tier's, and the full tier's), `fast-postgres` (the fast tier's on Postgres:
 `E2E_STORE=postgres make e2e-fast-up`; `fast-postgres-ha` is an overlay on it, layered with a second `-f`, for two replicas and a shorter lease:
 `E2E_STORE=postgres E2E_REPLICAS=2 make e2e-fast-up`, which the two-replica failover end-to-end test runs on), `ax` (the AX tier's, with a database file of its own) and `sandbox` (the sandbox
@@ -60,11 +60,14 @@ tier's, with the token-refresh CronJob).
 
 | Object | When | Notes |
 |---|---|---|
-| Deployment `<fullname>` | always | one container, config at `/etc/agent-kourier`, SQLite at `/data` (with `store.type: sqlite`, strategy Recreate), `/tmp` an emptyDir; with Postgres strategy RollingUpdate (one surge, none unavailable) |
-| ServiceAccount, and a Role and RoleBinding for Secrets | always (`rbac.create`) | one Role in each namespace that holds a Secret the config names, and in the release namespace with Postgres (the DSN's Secret) |
+| Deployment `<fullname>` | always | one container, config at `/etc/agent-kourier` (the ConfigMap, which `config.source: crds` does not mount), SQLite at `/data` (with `store.type: sqlite`, strategy Recreate), `/tmp` an emptyDir; with Postgres strategy RollingUpdate (one surge, none unavailable) |
+| ServiceAccount, and a Role and RoleBinding for Secrets | always (`rbac.create`) | one Role in each namespace that holds a Secret the config names, and in the release namespace with Postgres (the DSN's Secret). It covers every Secret of the namespace; with `config.source: crds` it names the Secrets (`resourceNames`), except in the namespaces of `rbac.secretNamespaces` |
 | Lease `<fullname>-leader` | `store.type: postgres` | empty; the replicas elect their leader with it. Kept on `helm uninstall` (`helm.sh/resource-policy: keep`), with its release annotations, so a reinstall under the same release name adopts it; only another release that renders the same name (`fullnameOverride`) would conflict. Do not delete it while Agent Kourier runs: Agent Kourier may not create a Lease, so leadership stops until `helm upgrade` recreates it |
 | Role and RoleBinding `<fullname>-leader` | `store.type: postgres` (`rbac.create`) | `get` and `update` on that one Lease, in the release namespace; no `create`, which cannot be limited by name |
-| ConfigMap `<fullname>-config` | unless `config.existingConfigMap` | one `*.yaml` file per resource, from `config.*` |
+| ConfigMap `<fullname>-config` | unless `config.existingConfigMap` or `config.source: crds` | one `*.yaml` file per resource, from `config.*` |
+| ChatConnection, AgentBackend and Binding custom resources | `config.source: crds` | one per entry of `config.*`, in its namespace (default: the release's), which must exist; deleted when the release stops rendering them |
+| CustomResourceDefinitions `agentbackends`, `bindings` and `chatconnections` of `agentkourier.dev` | `crds.install` (off) | the generated files of `files/crds`; kept on `helm uninstall` and when `crds.install` is turned off (`helm.sh/resource-policy: keep`) |
+| ClusterRole and ClusterRoleBinding `<fullname>-<namespace>-crs` | `config.source: crds` (`rbac.create`) | `list` and `watch` on the three kinds, `patch` on `bindings/status`, `get` on the three CRDs by name; see Custom resources instead of a ConfigMap |
 | PersistentVolumeClaim `<fullname>-data` | `store.type: sqlite`, unless `persistence.existingClaim` | kept on `helm uninstall` (`persistence.retainOnUninstall`); none with Postgres |
 | Service | `service.enabled` | ClusterIP on the health and metrics port, and nothing else |
 | ServiceMonitor | `serviceMonitor.enabled` | prometheus-operator; needs the Service |
@@ -87,14 +90,121 @@ NetworkPolicy in another namespace for instance, needs the real name, or you set
   resource's spec exactly as the [resource reference](../../docs/reference/binding.md) describes it (the chart does not interpret it; Agent Kourier's loader validates it at start).
   `namespace` defaults to the release's. Or `config.existingConfigMap`, a ConfigMap you manage, with `rbac.secretNamespaces` to say where
   its Secrets are. Not both.
+- `config.source` (`files`, the default, or `crds`), `config.chatConnection` and `crds.install`: where Agent Kourier reads those resources from
+  (see Custom resources instead of a ConfigMap). The default is the ConfigMap route, and renders what it always has.
 - `store.type` (`sqlite`, the default, or `postgres`) and, with Postgres, `store.postgres.dsnSecret` and `store.postgres.timeouts` (see Store).
 - `replicaCount` (2 with Postgres for a standby) and `leaderElection.*`, the Lease's timings (see High availability).
 - `logLevel`, `syncTimeout`, `auditRetention` (empty keeps the audit log for ever; a duration of at least 24h purges older entries), `extraEnv` (OpenTelemetry settings go here), `resources`, `persistence.*` (SQLite's volume).
 - `service`, `serviceMonitor`, `networkPolicy`, `podDisruptionBudget`, `tokenRefresh`: off until you switch them on.
 
-A config change rolls the pod (a `checksum/config` annotation). Agent Kourier also reloads its files in place, and follows a Secret
+With the files route a config change rolls the pod (a `checksum/config` annotation). Agent Kourier also reloads its files in place, and follows a Secret
 that a reload adds, in any namespace its ServiceAccount may list and watch it in. A Secret it may not read fails that reload: the last
 good config stays in force, and the reload is tried again at the next recheck, which runs every minute. Turn the roll off with `config.rollOnChange: false`.
+
+## Custom resources instead of a ConfigMap
+
+`config.source` says where Agent Kourier reads its resources, and the pod's `AGENTKOURIER_CONFIG_SOURCE` follows it. **`files`, the default,
+is everything above**: a ConfigMap (or your own), loaded all or nothing. **`crds`** reads `Binding`, `AgentBackend` and `ChatConnection`
+custom resources of group `agentkourier.dev` from the cluster, so that other teams can own their Bindings: a resource that fails validation is
+left out (or, if it had a good generation, that generation keeps serving) and the others carry on. The two are never merged and there is no
+fallback: with `files`, custom resources in the cluster are ignored, and with `crds` there is no ConfigMap and no config directory. The route is
+chosen at start; moving between them is an upgrade of the release. Nothing changes until you set `config.source: crds`: the default renders the
+same objects as before (`test/chart` pins all seven values files against golden files, and the pod's template does not move).
+
+What the route needs:
+
+- **Kubernetes 1.33 or later.** 1.33 is the first minor tried on which a server-side apply of a Binding's status, to a Binding stored invalid by a rule of the CRDs (which a later, stricter schema can cause), ratchets: it is refused on 1.30.13, 1.31.0, 1.32.0 and 1.32.5 and accepted with a warning on 1.33.1, 1.35.0 and 1.37.0 (measured on kind; 1.33.0 and 1.34 were not tried). Ordinary updates of such a Binding ratchet from 1.30. The chart refuses an API server
+  it can see is older. The files route has no minimum.
+- **The CRDs installed before the release that sets `config.source: crds`.** A first install that renders the CRDs and custom resources of them in
+  one release fails (measured: `resource mapping not found ... ensure CRDs are installed first`), so the chart refuses to render the custom
+  resources unless the cluster already serves `agentkourier.dev/v1alpha1`, and says what to do. `crds.install: true` renders the CRDs, from the
+  generated files in `files/crds`; or apply those files yourself (`kubectl apply --server-side -f charts/agent-kourier/files/crds`) and leave it
+  off, which is the way for an installer that may not create CRDs. Helm will not take over CRDs that `kubectl` made (`invalid ownership metadata`), so choose one of the two and keep to it.
+- **`config.chatConnection`**: the one `ChatConnection` this broker serves, as `namespace/name` (or `name`, in the release namespace). It may be
+  left empty when `config.chatConnections` has exactly one entry. A cluster may hold the connections of several brokers, and each owns only the
+  Bindings whose `connectionRef` names its connection.
+- **Namespaces that exist.** A file can name a namespace that does not exist; a custom resource cannot.
+
+Move a running install to it in two upgrades, each a working install, and back by the same values (put `crds: {install: true}` in the values
+file as well, and keep it there: a release without it no longer holds the CRDs, so no later chart upgrade changes them; measured with `helm get
+manifest`, which goes from three CRDs to none):
+
+```sh
+# 1. The CRDs, with the route still files: they are inert.
+helm upgrade agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version <this chart's version> -n agent-kourier \
+  -f my-values.yaml --set crds.install=true
+# 2. The route: the same config.* values become custom resources, and the ConfigMap and its mount go. crds.install stays on.
+helm upgrade agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version <this chart's version> -n agent-kourier \
+  -f my-values.yaml --set crds.install=true,config.source=crds
+kubectl get akbinding,akbackend,akconnection -A
+```
+
+`--reuse-values` works from the previous release (0.1.6) too: the chart reads the keys it adds as unset when the old values lack them.
+
+`kubectl get akbinding`, `akbackend` and `akconnection` (or `bindings.agentkourier.dev` and so on, and `kubectl get agentkourier` for all
+three) list them. **Never `kubectl get bindings`**: that is the core `bindings` resource, which is something else and fails. Going back, with
+`config.source=files`: the ConfigMap returns from the same values, and Helm deletes the custom resources the chart rendered (it stops rendering
+them), while the ones made by hand stay in the cluster, unread, as do the CRDs. The values of the route (`config.chatConnection`, `rbac.secretNames`)
+may stay set: with `files` they are ignored, so going back is the same values with `config.source: files`. `helm uninstall` likewise deletes the
+rendered resources and keeps the CRDs, and with them every custom resource of the cluster: **never delete a CRD to get out of a refusal**, since
+that deletes every team's resources. A reinstall under another release name (or in another namespace) with `crds.install: true` is refused by
+Helm (`invalid ownership metadata`), because the kept CRDs name the release that made them. There are two ways on, neither of which deletes
+anything:
+
+- Install the new release with `crds.install: false`. The CRDs are used as they are, and nothing then upgrades them, so a later chart that changes
+  a schema needs one of the next.
+- Hand the CRDs to the new release, then install it with `crds.install: true`: `kubectl annotate crd agentbackends.agentkourier.dev
+  bindings.agentkourier.dev chatconnections.agentkourier.dev --overwrite meta.helm.sh/release-name=<new release>
+  meta.helm.sh/release-namespace=<its namespace>`. Both annotations are needed when the namespace differs (measured: with only the name, Helm
+  still refuses; with both it installs and adopts the CRDs).
+
+Install the CRDs from one release only.
+
+**What the route grants.** With `rbac.create`, a ClusterRole `<fullname>-<namespace>-crs`, bound to the ServiceAccount:
+
+| Rule | Why |
+|---|---|
+| `list`, `watch` on `bindings`, `agentbackends`, `chatconnections` of `agentkourier.dev` | every replica reads the three kinds with informers, in every namespace (it never issues a `get`) |
+| `patch` on `bindings/status` | for the leader to write a Binding's status with a server-side apply, which is a `patch` on the subresource and needs no `create`, `update` or `get` (measured on kind) |
+| `get` on the three CRDs, by name | the broker compares, at start and every minute, the annotation `agentkourier.dev/schema-sha256` of each CRD with the hash it was built with, and says the result in its log (when a CRD's result changes) and in `agentkourier_crd_schema_state`. The generated CRD files carry the annotation (their SHA-256 without that line), so a Helm install and a `kubectl apply` apply it (measured), and a GitOps tool that applies the files should too (a statement of what such a tool should do; none has been run). A mismatch warns and stops nothing: update the CRDs the way they were installed, to those of the chart release that matches the image: `helm upgrade` with `crds.install` for CRDs that Helm made, `kubectl apply --server-side -f` of that release's `files/crds` for CRDs that `kubectl` made, and the next minute's comparison says so. What was measured on kind is a forced server-side apply of the files over Helm-made CRDs, which cleared a mismatch; it also moves those fields to `kubectl`, which a later `helm upgrade` may conflict with (not measured). The annotation is a statement by whoever wrote the CRD, not proof of what the API server serves: a CRD edited by hand keeps its hash. A CRD from an older chart or file has none and is reported as `unannotated`, which is not a fault; one the broker may not get is `unknown` |
+
+The Secret Roles change too: with `crds` each names the Secrets the chart can see (`resourceNames`) instead of the whole namespace: those that
+`config.*` and the Postgres DSN refer to, and `rbac.secretNames` (a map of namespace to Secret names) for the ones it cannot, such as the
+credentials of a `ChatConnection` you made by hand. That works because Agent Kourier's informers ask for each Secret by name (a `metadata.name`
+field selector), and Kubernetes authorizes `list` and `watch` by `resourceNames` for such a request: a list without the selector, a Secret the Role
+does not name, and a `get` are forbidden (measured on kind, Kubernetes 1.30.13 and 1.37.0). A namespace in `rbac.secretNamespaces` is still granted whole.
+A team that makes its own Bindings grants its own Secrets the same way, with a Role in its namespace and a RoleBinding to this ServiceAccount
+(here `agent-kourier` in namespace `agent-kourier`; without the binding the Role grants nothing, and `kubectl auth can-i` says no):
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: agent-kourier-secrets, namespace: team-a}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [team-a-agent-token]
+    verbs: [list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: agent-kourier-secrets, namespace: team-a}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agent-kourier-secrets}
+subjects:
+  - {kind: ServiceAccount, name: agent-kourier, namespace: agent-kourier}
+```
+
+A Binding whose Secret is not granted does not stop the broker or fail a reload: it stays served, and its `BackendReachable` condition says
+`CredentialsUnreadable` (the log gives that reason; the metric `agentkourier_binding_condition` shows only `status="false"` for the condition). Only the Secrets the broker itself needs (the connection's tokens, the
+Postgres DSN's) fail the start with exit code 3.
+
+Whoever can write a Binding and an AgentBackend in a namespace can have any Secret of that namespace that Agent Kourier may read sent to the
+AgentBackend's URL, so that grant is also what bounds what they can reach.
+
+To preview a render, use `helm template` and give it what a cluster would: `--kube-version` (Helm's default is its own) and `--api-versions
+agentkourier.dev/v1alpha1`, which a tool that renders with `helm template` for you (a GitOps controller) must pass from the cluster. Without them
+`helm template` fails with the chart's message, and `helm install --dry-run=client` likewise. `helm lint` takes no API versions, and in its mode Helm
+logs the chart's refusal and goes on, so a lint of such a values file passes without having checked the CRDs.
 
 ## Store
 
@@ -177,7 +287,8 @@ looks like a credential (key, token, secret, auth, cookie, password), which belo
 - The pod label `app.kubernetes.io/name: agent-kourier` is fixed, whatever the release is named, because NetworkPolicies elsewhere
   (the front door's, in the kind tiers) admit pods by it. Nothing else the chart makes carries it on a pod; in
   particular the token-refresh Job's pod does not.
-- **The chart's Secrets RBAC is namespace-wide, not by name.** Agent Kourier follows each Secret the config names with an informer of
+- **The chart's Secrets RBAC is namespace-wide on the files route, and by name with `config.source: crds`** (see Custom resources instead
+  of a ConfigMap; the rest of this paragraph is the files route). Agent Kourier follows each Secret the config names with an informer of
   its own, which needs `list` and `watch` on that Secret and asks for it by name (a `metadata.name` field selector); `get` is never
   used or granted. Kubernetes authorizes such a request by `resourceNames`, so with `rbac.create: false` you can grant `list` and
   `watch` on named Secrets instead. The chart's Roles name no Secret, so each reads every Secret in its namespace, although Agent
@@ -278,7 +389,7 @@ was the largest of them at 188 MiB.
 
 ## Tests
 
-`go test ./test/chart` renders the chart with `helm template` and checks it: golden files for seven of the `ci/` values files (`fast-postgres-ha` is an overlay, checked layered on `fast-postgres`), the
+`go test ./test/chart` renders the chart with `helm template` and checks it: golden files for eight of the `ci/` values files (`fast-postgres-ha` is an overlay, checked layered on `fast-postgres`), the
 refusals (replicas above 1 with SQLite, Postgres without its Secret, a monitor without a Service, a NetworkPolicy without the API server, and the rest), the security
 properties above, and what the kind tiers' values render (the object names, labels, image and volume that `hack/kind`'s scripts and the E2E tests rely
 on), and the fast and AX tiers' config, which is loaded through Agent Kourier's own loader. It needs `helm` on PATH and skips without it, so that `make test` runs on a machine with only Go;

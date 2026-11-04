@@ -45,6 +45,7 @@ type Metrics struct {
 	probeDuration *prometheus.HistogramVec
 	invalid       *prometheus.GaugeVec
 	bindingRej    *prometheus.GaugeVec
+	crdSchema     *prometheus.GaugeVec // series only once set, which only a broker on the custom resources does (crdschema.go)
 }
 
 // The kinds and reasons that the config gauges carry, a closed set each.
@@ -93,6 +94,8 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 			Help: "Objects of the custom resource config source that the broker refuses or holds past their deletion, by kind: a Binding of this broker (it names this broker's connection, or none that exists) that fails Default or Validate; any AgentBackend in the cluster that does, whoever uses it; and this broker's own ChatConnection when it fails them or was deleted and is held. Each is served from its last good generation, or left out if it has none. 0 while the config is read from files, where one bad object fails the whole reload."}, []string{"kind"}),
 		bindingRej: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_config_binding_rejections",
 			Help: "Bindings of the custom resource config source that are not accepted as written, by the reason of their Accepted condition: InvalidSpec, BackendNotFound, BackendRejected, ConnectionNotFound, ConnectionRejected, NamespaceNotAllowed or ChannelConflict. A Binding that is served from an older generation counts too. 0 while the config is read from files."}, []string{"reason"}),
+		crdSchema: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_crd_schema_state",
+			Help: "1 for what the broker found when it compared each CRD's schema hash with the one it was built with, at start and every minute, and 0 for the other states, by CRD and state (match, mismatch, unannotated or unknown). Only a broker that reads custom resources has these series; with files there are none."}, []string{"crd", "state"}),
 	}
 	m.ConfigReport(config.Report{})
 	staleGauge := prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "agentkourier_config_stale",
@@ -103,7 +106,7 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 		return 0
 	})
 	var err error
-	for _, c := range []prometheus.Collector{m.auditFailures, m.rejections, m.abandons, m.reloadErrors, m.approvals, m.timeouts, m.removed, m.decisions, m.chatUp, m.turns, m.leader, m.takeovers, m.bindingCond, m.bindingReady, m.probeDuration, m.invalid, m.bindingRej, staleGauge} {
+	for _, c := range []prometheus.Collector{m.auditFailures, m.rejections, m.abandons, m.reloadErrors, m.approvals, m.timeouts, m.removed, m.decisions, m.chatUp, m.turns, m.leader, m.takeovers, m.bindingCond, m.bindingReady, m.probeDuration, m.invalid, m.bindingRej, m.crdSchema, staleGauge} {
 		err = errors.Join(err, m.reg.Register(c))
 	}
 	if err != nil {
