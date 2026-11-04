@@ -112,14 +112,14 @@ func (c *clock) due() time.Time {
 	return earliest
 }
 
-// dueForAtOnce is when the earliest timer fires that atOnce turns the clock to: one due by by, and, if whole is set, one armed for
-// a whole write window, whenever that falls due. It is the zero time if there is none.
-func (c *clock) dueForAtOnce(by time.Time, whole bool) time.Time {
+// dueForAtOnce is when the earliest timer fires that atOnce turns the clock to: one armed for no more than a write window and due
+// by by. It is the zero time if there is none.
+func (c *clock) dueForAtOnce(by time.Time) time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var earliest time.Time
 	for _, tm := range c.timers {
-		if !tm.long && (!tm.at.After(by) || (whole && tm.d == throttle)) && (earliest.IsZero() || tm.at.Before(earliest)) {
+		if !tm.long && tm.d <= throttle && !tm.at.After(by) && (earliest.IsZero() || tm.at.Before(earliest)) {
 			earliest = tm.at
 		}
 	}
@@ -186,27 +186,26 @@ func TestCatchUpTurnsOnlyForATimerTheTurnCouldNotReach(t *testing.T) {
 	}
 }
 
-// atOnce turns to a timer due within its window, and to a whole write window armed late while it is told to, and never to what
-// is left of the delay.
+// atOnce turns to a write window due by the end of its own, and never to a longer timer, however soon that falls due: a delay the
+// run left behind must not move the clock under a wait the run is arming.
 func TestDueForAtOnceLeavesTheDelay(t *testing.T) {
 	start := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	c := &clock{now: start}
-	by := start.Add(throttle)
 	c.After(3 * time.Second)
-	if got := c.dueForAtOnce(by, true); !got.IsZero() {
-		t.Errorf("due %v with only the delay pending; want none", got)
+	if got := c.dueForAtOnce(start.Add(4 * time.Second)); !got.IsZero() {
+		t.Errorf("due %v with only a delay pending, due by the limit; want none", got)
 	}
-	c.advance(time.Second)
+	window := start.Add(throttle)
 	c.After(throttle)
-	if got, want := c.dueForAtOnce(by, true), start.Add(time.Second+throttle); !got.Equal(want) {
-		t.Errorf("due %v; want the window armed late, %v", got, want)
+	if got := c.dueForAtOnce(window.Add(-time.Millisecond)); !got.IsZero() {
+		t.Errorf("due %v with the window due past the limit; want none", got)
 	}
-	if got := c.dueForAtOnce(by, false); !got.IsZero() {
-		t.Errorf("due %v once the next request is made; want none", got)
+	if got := c.dueForAtOnce(window); !got.Equal(window) {
+		t.Errorf("due %v; want the window, %v", got, window)
 	}
 	c.After(time.Second)
-	if got := c.dueForAtOnce(by, false); !got.Equal(by) {
-		t.Errorf("due %v; want the timer due by the window's end, %v", got, by)
+	if got, want := c.dueForAtOnce(window), start.Add(time.Second); !got.Equal(want) {
+		t.Errorf("due %v; want the earlier of the two, %v", got, want)
 	}
 }
 

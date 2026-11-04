@@ -43,7 +43,8 @@ func (e *env) progressRun(t *testing.T, mode v1alpha1.ProgressMode, recipient st
 // arms after the clock stopped is still turned to, and so is a write window that it armed while the clock was turning: a loaded
 // machine can hold a run in a write, which it ends by arming the timer of its next window, and a window armed less than its own
 // length before the stop, or after it, falls due past where the clock stopped. The clock is not turned for a longer timer armed
-// during the turn, nor for any timer armed before it, so a thing that comes too late still fails the test.
+// during the turn, nor for any timer armed before it. What is left of a delay, armed during the turn for no more than a window's
+// length, looks like a window and is turned to, so this bound is looser than atOnce's.
 func (e *env) until(t *testing.T, what string, limit time.Duration, cond func() bool) time.Duration {
 	t.Helper()
 	const lag = 5 * time.Second
@@ -65,20 +66,17 @@ func (e *env) until(t *testing.T, what string, limit time.Duration, cond func() 
 }
 
 // atOnce waits for a thing that only the throttle may hold back, and asserts that by how it waits: the clock stands until the run
-// waits on a timer that falls due within one write window, less than the delay, and turns only to that. A write already under way
-// when atOnce began is waited for as well: the run arms the window after it from the time the clock shows when it returns, which a
-// timer the run left behind can have moved, so until the next request, a whole write window is turned to however late it falls due.
-// That request is the one the thing should come with, so a thing that waits for a timer of the delay never comes and fails the
-// test. until's time says nothing of this: a slow run makes it longer, so it is no upper bound.
+// waits on a write window due within one window's length, and turns only to that. It never turns to a longer timer, so a delay the
+// run left behind cannot move the clock under a wait the run is arming, and a thing that waits for the delay never comes and fails
+// the test. until's time says nothing of this: a slow run makes it longer, so it is no upper bound.
 func (e *env) atOnce(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	by := e.clk.Now().Add(throttle)
-	writes := e.writes()
 	eventually(t, what, func() bool {
 		if cond() {
 			return true
 		}
-		if due := e.clk.dueForAtOnce(by, e.writes() == writes); !due.IsZero() {
+		if due := e.clk.dueForAtOnce(by); !due.IsZero() {
 			e.clk.advance(max(due.Sub(e.clk.Now()), 0))
 		}
 		return false
