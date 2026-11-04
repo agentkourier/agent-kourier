@@ -89,7 +89,7 @@ ChatAcknowledgment configures the temporary reaction on an accepted message.
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `enabled` | boolean | No | `true` | Enabled adds the reaction after the message is durably accepted and removes it when processing ends. It defaults to true. |
-| `emoji` | string | No | None | Emoji is the reaction name without colons. Left empty, the platform's own acknowledgment reaction is used (Slack: hourglass_flowing_sand). The API fills in no default, so a stored Binding does not carry one platform's reaction. Pattern `^(?:[a-z0-9][a-z0-9+_-]*|[+-][a-z0-9][a-z0-9+_-]*)$`. |
+| `emoji` | string | No | None | Emoji is the reaction name without colons. Left empty, the platform's own acknowledgment reaction is used (Slack: hourglass_flowing_sand). The API fills in no default, so a stored Binding does not carry one platform's reaction. Pattern `^(?:[a-z0-9][a-z0-9+_-]*|[+-][a-z0-9][a-z0-9+_-]*)?$`. |
 
 ## Trigger
 
@@ -122,7 +122,7 @@ Extract pulls one named value out of a message field. The entry's name in Trigge
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `field` | string | Yes | None | Field is the message field the regex runs on. One of `text`, `title`, `link`, `fallback`, `footer`, `body`. |
-| `regex` | string | Yes | None | Regex is a Go (RE2) regular expression of at most 512 bytes. The CRD's schema counts characters and Agent Kourier counts bytes, so a regex of multibyte characters can pass the schema and still be refused when Agent Kourier reads it. At least 1 character. At most 512 characters. |
+| `regex` | string | Yes | None | Regex is a Go (RE2) regular expression of at most 512 bytes. At least 1 character. At most 512 characters. |
 
 ## TriggerThread
 

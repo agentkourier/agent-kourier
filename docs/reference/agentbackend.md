@@ -32,7 +32,7 @@ Header is a static HTTP header. Set exactly one of value and valueSecretRef; val
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | string | Yes | None | Name is at most 256 bytes. The CRD's schema counts characters and Agent Kourier counts bytes, so a name of multibyte characters can pass the schema and still be refused when Agent Kourier reads it. At least 1 character. At most 256 characters. |
+| `name` | string | Yes | None | Name is at most 256 bytes. At least 1 character. At most 256 characters. |
 | `value` | string | No | None |  |
 | `valueSecretRef` | [SecretKeyRef](#secretkeyref) | No | None |  |
 

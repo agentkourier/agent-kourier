@@ -7,6 +7,11 @@ import (
 )
 
 // Enumerations. Each type's values are also listed in its field's Enum marker.
+//
+// A field that Default fills from "" (output, progress, threadReplies, botMentions, from.kind, thread.by) lists "" in its
+// Enum marker too, and the emoji pattern accepts it: an object that says `output: ""` is one the broker accepts, so the
+// schema must not refuse it (D50: nothing the schema refuses may be accepted by the broker). A field that Validate
+// refuses when it is empty (dialect, platform, trigger type, extract field) does not.
 type (
 	// Dialect selects how Agent Kourier speaks to an agent backend.
 	Dialect string
@@ -145,8 +150,11 @@ type AgentBackendSpec struct {
 // identity is refused, because the Binding identity owns it: Authorization, Proxy-Authorization, Cookie,
 // X-User-Id, X-Agent-Name, X-Share-Token and X-Kagent-Insecure-Runtime-Identity.
 type Header struct {
-	// Name is at most 256 bytes. The CRD's schema counts characters and Agent Kourier counts bytes, so a name of
-	// multibyte characters can pass the schema and still be refused when Agent Kourier reads it.
+	// The generated CRD schema counts characters and Agent Kourier counts bytes, so a name of multibyte characters can
+	// pass the schema and still be refused when Agent Kourier reads it. (Not in the doc comment below, which the
+	// reference pages print, while no CRD ships.)
+
+	// Name is at most 256 bytes.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=256
 	Name           string        `json:"name"`
@@ -253,7 +261,7 @@ type ChatBinding struct {
 	// +kubebuilder:validation:Pattern=`^[CG][A-Z0-9]+$`
 	Channel string `json:"channel"`
 	// Output defaults to live.
-	// +kubebuilder:validation:Enum=live;final
+	// +kubebuilder:validation:Enum=live;final;""
 	// +kubebuilder:default=live
 	// +optional
 	Output OutputMode `json:"output"`
@@ -264,7 +272,7 @@ type ChatBinding struct {
 	// activity shows one Working… card (a line in an alert thread) that counts the steps, or the agent's working updates
 	// until the first step is counted, and names no tool, no argument and nothing the agent said. A Binding that sets none
 	// gets steps-and-activity. Output final ignores it.
-	// +kubebuilder:validation:Enum=steps;steps-and-activity;activity
+	// +kubebuilder:validation:Enum=steps;steps-and-activity;activity;""
 	// +kubebuilder:default=steps-and-activity
 	// +optional
 	Progress ProgressMode `json:"progress"`
@@ -272,7 +280,7 @@ type ChatBinding struct {
 	// With mention, only a reply that mentions Agent Kourier is a turn, whether a mention or a
 	// trigger started the thread; the next mentioned turn carries the other replies as
 	// context. A typed answer to a pending question that takes text replies needs no mention.
-	// +kubebuilder:validation:Enum=all;mention
+	// +kubebuilder:validation:Enum=all;mention;""
 	// +kubebuilder:default=all
 	// +optional
 	ThreadReplies ThreadReplies `json:"threadReplies"`
@@ -280,7 +288,7 @@ type ChatBinding struct {
 	// incoming webhook that can post in the channel starts a turn in the mention's thread, with a fixed prompt and
 	// held to fixed limits. The platform cannot tell an agent from any other bot. With none, a bot's mention starts
 	// nothing. Agent Kourier's own posts, and a bot that a botMessage trigger names, are never taken as a mention.
-	// +kubebuilder:validation:Enum=any;none
+	// +kubebuilder:validation:Enum=any;none;""
 	// +kubebuilder:default=any
 	// +optional
 	BotMentions BotMentions `json:"botMentions"`
@@ -340,7 +348,7 @@ type ChatAcknowledgment struct {
 	// Emoji is the reaction name without colons. Left empty, the platform's own acknowledgment reaction is used
 	// (Slack: hourglass_flowing_sand). The API fills in no default, so a stored Binding does not carry one platform's
 	// reaction.
-	// +kubebuilder:validation:Pattern=`^(?:[a-z0-9][a-z0-9+_-]*|[+-][a-z0-9][a-z0-9+_-]*)$`
+	// +kubebuilder:validation:Pattern=`^(?:[a-z0-9][a-z0-9+_-]*|[+-][a-z0-9][a-z0-9+_-]*)?$`
 	// +optional
 	Emoji string `json:"emoji,omitempty"`
 }

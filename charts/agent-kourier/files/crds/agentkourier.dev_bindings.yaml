@@ -101,7 +101,7 @@ spec:
                           Emoji is the reaction name without colons. Left empty, the platform's own acknowledgment reaction is used
                           (Slack: hourglass_flowing_sand). The API fills in no default, so a stored Binding does not carry one platform's
                           reaction.
-                        pattern: ^(?:[a-z0-9][a-z0-9+_-]*|[+-][a-z0-9][a-z0-9+_-]*)$
+                        pattern: ^(?:[a-z0-9][a-z0-9+_-]*|[+-][a-z0-9][a-z0-9+_-]*)?$
                         type: string
                       enabled:
                         default: true
@@ -120,6 +120,7 @@ spec:
                     enum:
                     - any
                     - none
+                    - ""
                     type: string
                   channel:
                     description: 'Channel is the platform''s channel ID, not its name
@@ -193,6 +194,7 @@ spec:
                     enum:
                     - live
                     - final
+                    - ""
                     type: string
                   progress:
                     default: steps-and-activity
@@ -208,6 +210,7 @@ spec:
                     - steps
                     - steps-and-activity
                     - activity
+                    - ""
                     type: string
                   threadReplies:
                     default: all
@@ -219,6 +222,7 @@ spec:
                     enum:
                     - all
                     - mention
+                    - ""
                     type: string
                   triggers:
                     description: |-
@@ -254,9 +258,8 @@ spec:
                                 - body
                                 type: string
                               regex:
-                                description: |-
-                                  Regex is a Go (RE2) regular expression of at most 512 bytes. The CRD's schema counts characters and Agent Kourier
-                                  counts bytes, so a regex of multibyte characters can pass the schema and still be refused when Agent Kourier reads it.
+                                description: Regex is a Go (RE2) regular expression
+                                  of at most 512 bytes.
                                 maxLength: 512
                                 minLength: 1
                                 type: string
@@ -286,6 +289,7 @@ spec:
                                 bot exists today, and it is the default.
                               enum:
                               - bot
+                              - ""
                               type: string
                           required:
                           - id
@@ -346,6 +350,7 @@ spec:
                                 "key" share a thread.'
                               enum:
                               - key
+                              - ""
                               type: string
                             closeWhen:
                               additionalProperties:

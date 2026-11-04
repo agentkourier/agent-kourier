@@ -100,7 +100,7 @@ type BotSource struct {
 	// +kubebuilder:validation:Pattern=`^B[A-Z0-9]+$`
 	ID string `json:"id"`
 	// Kind is what kind of sender ID names. Only bot exists today, and it is the default.
-	// +kubebuilder:validation:Enum=bot
+	// +kubebuilder:validation:Enum=bot;""
 	// +kubebuilder:default=bot
 	// +optional
 	Kind SenderKind `json:"kind,omitempty"`
@@ -112,8 +112,11 @@ type Extract struct {
 	// Field is the message field the regex runs on.
 	// +kubebuilder:validation:Enum=text;title;link;fallback;footer;body
 	Field MessageField `json:"field"`
-	// Regex is a Go (RE2) regular expression of at most 512 bytes. The CRD's schema counts characters and Agent Kourier
-	// counts bytes, so a regex of multibyte characters can pass the schema and still be refused when Agent Kourier reads it.
+	// The generated CRD schema counts characters and Agent Kourier counts bytes, so a regex of multibyte characters can
+	// pass the schema and still be refused when Agent Kourier reads it. (Not in the doc comment below, which the
+	// reference pages print, while no CRD ships.)
+
+	// Regex is a Go (RE2) regular expression of at most 512 bytes.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=512
 	Regex string `json:"regex"`
@@ -122,7 +125,7 @@ type Extract struct {
 // TriggerThread decides which thread a message joins and when it closes the thread.
 type TriggerThread struct {
 	// By is key: messages with the same extracted "key" share a thread.
-	// +kubebuilder:validation:Enum=key
+	// +kubebuilder:validation:Enum=key;""
 	// +optional
 	By ThreadBy `json:"by,omitempty"`
 	// Cooldown is how long after a turn the same key starts no new turn. Required with by,

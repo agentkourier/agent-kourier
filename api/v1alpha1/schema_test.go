@@ -154,9 +154,11 @@ func nameProbes() []string {
 	return slices.Compact(slices.Sorted(slices.Values(probes)))
 }
 
-// sameAnswer fails for every probe on which the schema's answer differs from the broker's. A schema may be looser than
-// the broker (it then only fails to fast-fail), but never stricter.
-func sameAnswer(t *testing.T, what string, s schema, brokerAccepts func(string) bool, probes []string) {
+// sameAnswer fails for every probe on which the schema is stricter than the broker, which is what breaks the invariant.
+// With exact set, it fails for every probe on which the schema is looser too: a marker that copies a rule whole must
+// not drift into a weaker one, which only fails to fast-fail and which nothing else would notice. A pattern that is
+// meant to be a superset, as the duration's is, does not set it.
+func sameAnswer(t *testing.T, what string, s schema, brokerAccepts func(string) bool, probes []string, exact bool) {
 	t.Helper()
 	var stricter, looser int
 	accepts := s.matcher(t)
@@ -170,6 +172,9 @@ func sameAnswer(t *testing.T, what string, s schema, brokerAccepts func(string) 
 			}
 		case got && !want:
 			looser++
+			if exact && looser <= 5 {
+				t.Errorf("%s: the schema accepts %q, which the broker refuses; the marker is meant to copy the rule whole", what, p)
+			}
 		}
 	}
 	t.Logf("%s: %d probes, schema looser than the broker on %d", what, len(probes), looser)
@@ -203,9 +208,77 @@ func TestSchemaNamesMatchTheBrokersRules(t *testing.T) {
 		{"bindings", "spec.identity.tokenSecretRef.key", func(v string) bool { return v == "" || len(validation.IsConfigMapKey(v)) == 0 }},
 	} {
 		t.Run(tc.plural+"/"+tc.path, func(t *testing.T) {
-			sameAnswer(t, tc.path, crdSchema(t, tc.plural).at(t, tc.path), tc.brokerOK, probes)
+			sameAnswer(t, tc.path, crdSchema(t, tc.plural).at(t, tc.path), tc.brokerOK, probes, true)
 		})
 	}
+}
+
+// TestSchemaEmojiMatchesTheBrokersRule: the broker tests a reaction name only when it is not empty (`Emoji != "" && !match`),
+// so the schema's pattern accepts "" besides what reactionName does, and is not equal to its literal.
+func TestSchemaEmojiMatchesTheBrokersRule(t *testing.T) {
+	probes := every([]string{"a", "0", "+", "-", "_", ":", "A", "é"}, 4)
+	sameAnswer(t, "acknowledgment.emoji", crdSchema(t, "bindings").at(t, "spec.chat.acknowledgment.emoji"),
+		func(v string) bool { return v == "" || reactionName.MatchString(v) }, probes, true)
+}
+
+// TestSchemaEnumsListTheEmptyValueExactlyWhereTheBrokerAcceptsIt holds the enums to the invariant for a field written as
+// "": Default fills it, so the broker accepts it, and the schema must too; where Validate refuses "", the enum must not
+// list it, or a fast-fail is lost. Every enum of the schema is in the table, so a new one must be put in it.
+func TestSchemaEnumsListTheEmptyValueExactlyWhereTheBrokerAcceptsIt(t *testing.T) {
+	bindings, backends, conns := crdSchema(t, "bindings"), crdSchema(t, "agentbackends"), crdSchema(t, "chatconnections")
+	trigger := "spec.chat.triggers[]"
+	for _, tc := range []struct {
+		node  schema
+		name  string
+		empty bool // Default fills it, so the broker accepts ""
+	}{
+		{bindings.at(t, "spec.chat.output"), "output", true},
+		{bindings.at(t, "spec.chat.progress"), "progress", true},
+		{bindings.at(t, "spec.chat.threadReplies"), "threadReplies", true},
+		{bindings.at(t, "spec.chat.botMentions"), "botMentions", true},
+		{bindings.at(t, trigger+".from.kind"), "from.kind", true},
+		{bindings.at(t, trigger+".thread.by"), "thread.by", true},
+		{backends.at(t, "spec.dialect"), "dialect", false},
+		{conns.at(t, "spec.platform"), "platform", false},
+		{bindings.at(t, trigger+".type"), "trigger type", false},
+		{bindings.at(t, trigger+".extract.{}.field"), "extract field", false},
+	} {
+		enum, _ := tc.node["enum"].([]any)
+		if len(enum) == 0 {
+			t.Errorf("%s has no enum", tc.name)
+		}
+		if got := slices.Contains(enum, any("")); got != tc.empty {
+			t.Errorf("%s: the enum lists \"\" = %t, want %t (the broker accepts \"\" = %t)", tc.name, got, tc.empty, tc.empty)
+		}
+	}
+	// And the table is whole: count the enums in the three schemas.
+	var n int
+	for _, sc := range []schema{bindings, backends, conns} {
+		n += countEnums(sc)
+	}
+	if n != 10 {
+		t.Errorf("the schemas have %d enums and the table 10: put the new one in it", n)
+	}
+}
+
+func countEnums(v any) int {
+	var n int
+	switch t := v.(type) {
+	case map[string]any:
+		if _, ok := t["enum"]; ok {
+			n++
+		}
+		for _, c := range t {
+			n += countEnums(c)
+		}
+	case schema:
+		return countEnums(map[string]any(t))
+	case []any:
+		for _, c := range t {
+			n += countEnums(c)
+		}
+	}
+	return n
 }
 
 // TestSchemaPatternsEqualTheGoLiterals holds each pattern marker to the regex literal of the rule it copies. The
@@ -219,7 +292,6 @@ func TestSchemaPatternsEqualTheGoLiterals(t *testing.T) {
 		{"bindings", "spec.chat.triggers[].from.id", botID},
 		{"bindings", "spec.chat.mentions[].name", mentionName},
 		{"bindings", "spec.chat.mentions[].user", mentionUser},
-		{"bindings", "spec.chat.acknowledgment.emoji", reactionName},
 		{"bindings", "spec.interactions.approverGroups[]", approverGroupID},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
@@ -323,7 +395,7 @@ func TestSchemaDurationPatternIsASupersetOfParseDuration(t *testing.T) {
 	if nodes[0].str("pattern") == "" {
 		t.Fatalf("%s has no pattern, so `banana` passes the schema", durationFields[0].path)
 	}
-	sameAnswer(t, "duration pattern", nodes[0], sameAnswerAsParse, probes)
+	sameAnswer(t, "duration pattern", nodes[0], sameAnswerAsParse, probes, false)
 	// And it must still refuse what is plainly not a duration, or it is no fast-fail at all.
 	for _, v := range []string{"banana", "30", "1d", "1 h", ""} {
 		if nodes[0].accepts(t, v) {
