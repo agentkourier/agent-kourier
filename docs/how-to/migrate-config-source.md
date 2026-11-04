@@ -236,10 +236,17 @@ Keep `crds.install: true` while you do; it does not need to change. What happens
 team's. A broker that is running when its CRDs are deleted keeps serving the config it had (measured: it logs
 `custom resource informer cannot list or watch` and sets `agentkourier_config_stale` to 1), and a restart then exits with code 2.
 
-> **[PLACEHOLDER: not yet decided by the owner. Replace this paragraph before the page is published.]**
-> This is where the page says what the move back does to a mention that arrives while the pods change: whether a mention
-> in that window can go unanswered until the new leader takes over, how long that lasts on SQLite (one replica, Recreate strategy)
-> and on Postgres (a rolling update), and whether to schedule the move. Nothing here has been measured for the window yet.
+<!-- CHECK AFTER THE FIX MERGES: this section describes the behaviour of fix/hold-bindings-with-held-connection, which is not in the
+code this page was checked against. Read the broker's handling of a deleted own ChatConnection again, and take out this comment and the
+unmeasured wording below, before the page is published. No number for the loss on a move back has been given yet. -->
+
+**The move back keeps answering.** When the chart stops rendering the custom resources, it deletes the ChatConnection too, and the old pods are
+still running while that happens. A broker holds its own ChatConnection at its last good generation after it is deleted, and holds that
+connection's Bindings and the AgentBackends they use at theirs as well, until the connection comes back or the broker restarts. So the old pods
+keep routing until they end, and the new pods take over with the ConfigMap's config.
+
+**The cost.** Deleting a ChatConnection on purpose does not stop routing until the broker restarts. To stop a Binding, delete the Binding alone,
+while its connection exists: that stops it at the next reload, within about 10 seconds.
 
 ## When it does not work
 

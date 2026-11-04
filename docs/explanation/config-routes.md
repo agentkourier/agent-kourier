@@ -80,6 +80,10 @@ went to `Accepted=False`, within 25 seconds), and so does an older Binding whose
   broker makes does not, so read the log or `agentkourier_config_invalid_objects` after changing an AgentBackend or a ChatConnection.
 - **A Binding that is not served keeps its sessions.** Retention skips the sessions of a Binding that exists and was refused, until it is served
   again or deleted, so a Binding left broken keeps its sessions indefinitely.
+- **Deleting a ChatConnection does not stop routing.** A broker holds its own ChatConnection at its last good generation after it is
+  deleted, and the Bindings of that connection and the AgentBackends they use with it, until the connection returns or the broker
+  restarts. That is what lets a move back to the ConfigMap keep answering while the old pods end. To stop a Binding, delete the Binding alone
+  while its connection exists: it stops at the next reload, within about 10 seconds.
 - **Deleting a CRD deletes every object of the kind.** A broker that is running keeps serving what it had and sets `agentkourier_config_stale` to 1;
   a restart exits with code 2.
 
