@@ -20,8 +20,9 @@
 #   7. the second session is found again and released.                                                       (finish-2)
 #   8. the way back once more, from the custom resources, with the rollout held for 45 seconds after the upgrade, so that the old pods run that long without the
 #      custom resources (a third session, open-3 and finish-3, and a probe).
+#   9. the way forward once more, from the ConfigMap, held the same way, so that the old pods run that long with their mounted ConfigMap deleted (open-4, finish-4).
 # Each phase is the E2E test TestCR_MigrationKeepsASessionAlive (hack/kind/e2e-run.sh with E2E_PHASE). A phase that fails does not stop the run. Steps
-# 0, 3, 6 and 8 are watched: a person's mention of the Binding's channel every two seconds for 100 seconds from before the step (phase probe-100), which
+# 0, 3, 6, 8 and 9 are watched: a person's mention of the Binding's channel every two seconds for 100 seconds from before the step (phase probe-100), which
 # says how many were answered, and how many were delivered and never answered, which is a message that a broker without the Binding ignored without
 # a word; a timeline of the pods and of how many Bindings the cluster holds, every two seconds; and the log of each pod that was there when the
 # step began. Everything goes to CRS_MIGRATION_OUT (a new temporary directory by default; no token or Secret value is in it, as Agent Kourier logs none).
@@ -180,6 +181,19 @@ phase open-3
 echo "==> the way back, with a rollout that waits 45 seconds"
 move to-files-slow slow_way_back
 phase finish-3
+
+# And the way forward, held the same way: the chart deletes the ConfigMap that the old pods have mounted, and the pods go on running behind a slow new one.
+slow_way_forward() {
+  "${K[@]}" -n agent-kourier rollout pause deploy/agent-kourier >/dev/null
+  upgrade -f "${HERE}/crds-values.yaml"
+  date -u +'%T the Deployment is paused for 45s, with the ConfigMap deleted' >>"${OUT}/timeline-to-crds-slow.txt"
+  sleep 45
+  "${K[@]}" -n agent-kourier rollout resume deploy/agent-kourier >/dev/null
+}
+phase open-4
+echo "==> the way forward, with a rollout that waits 45 seconds"
+move to-crds-slow slow_way_forward
+phase finish-4
 
 echo "==> what the pods that were there before each move said (lines about gone, removed, notices, a reload, a refusal or the lease), by pod"
 for f in "${OUT}"/log-*.txt; do

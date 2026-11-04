@@ -11,8 +11,8 @@
 #                  cluster runs.
 #  kubectl-get     What `kubectl get` shows: the short names, the category, the columns READY and REASON, and that `kubectl get bindings` is not it.
 #  stored-invalid  A Binding stored before a tightening of the schema: it is made under a CRD with a rule left out, and the rule is put back. A
-#                  server-side apply to its status subresource, which is what the status writer does, is accepted with a warning on this node
-#                  (Kubernetes 1.37), and with CRS_STATUS_WRITER=1 the leader writes Accepted=False on it.
+#                  server-side apply to its status subresource, which is what the status writer does, is accepted on this node (Kubernetes 1.37), with a warning for a CEL
+#                  rule and none for a schema pattern, and with CRS_STATUS_WRITER=1 the leader writes Accepted=False on it.
 #  wait            `kubectl wait --for=condition=Ready` on a Binding that was deleted and made again: it returns when the new object is Ready, not
 #                  at once on the old one's status. Needs the status writer: CRS_STATUS_WRITER=1.
 #
@@ -182,7 +182,7 @@ ${out}"
   if [ "${STATUS_WRITER}" = 1 ]; then
     local ready
     ready=$("${K[@]}" -n agent-kourier get akbinding fast-chat -o 'jsonpath={.status.conditions[?(@.type=="Ready")].status}')
-    check "fast-chat has a Ready condition (status written by the leader), and kubectl get shows it in READY: $(printf %s "${out}" | sed -n 2p)" test -n "${ready}"
+    check "fast-chat has a Ready condition (status written by the leader)" test -n "${ready}"
   else
     skip "READY and REASON values: they are the status writer's (CRS_STATUS_WRITER=1)"
   fi
@@ -294,6 +294,20 @@ wait_ready() {
     fail "kubectl wait --for=condition=Ready on the new object timed out"
   fi
   "${K[@]}" -n agent-kourier get akbinding "${name}"
+
+  # A Binding whose backend is dead (fast-verify-no-agent: the stub has no such agent) never becomes Ready, so the wait must time out, not return.
+  local dead=fast-verify-no-agent reason
+  "${K[@]}" -n agent-kourier get akbinding "${dead}" -o json | jq 'del(.status, .metadata.uid, .metadata.resourceVersion, .metadata.generation, .metadata.creationTimestamp, .metadata.managedFields)' >"${WORK}/dead.yaml"
+  "${K[@]}" -n agent-kourier delete akbinding "${dead}" >/dev/null
+  "${K[@]}" apply -f "${WORK}/dead.yaml" >/dev/null
+  if "${K[@]}" -n agent-kourier wait --for=condition=Ready "akbinding/${dead}" --timeout=90s >/dev/null 2>&1; then
+    fail "kubectl wait --for=condition=Ready returned for ${dead}, whose agent the backend does not have"
+  else
+    pass "kubectl wait --for=condition=Ready on ${dead} times out after 90s, as it must for a dead backend"
+  fi
+  reason=$("${K[@]}" -n agent-kourier get akbinding "${dead}" -o 'jsonpath={.status.conditions[?(@.type=="Ready")].status}/{.status.conditions[?(@.type=="Ready")].reason}')
+  note "${dead} after the wait: Ready=${reason}"
+  case "${reason}" in False/*) pass "${dead} says Ready=False, with its reason" ;; *) fail "${dead} says Ready=${reason}, want False" ;; esac
 }
 
 [ $# -gt 0 ] || set -- unknown-fields kubectl-get stored-invalid wait
