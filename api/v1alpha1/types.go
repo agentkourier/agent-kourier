@@ -130,9 +130,21 @@ type AgentBackendList struct {
 type AgentBackendSpec struct {
 	// +kubebuilder:validation:Enum=a2a;kagent-v1
 	Dialect Dialect `json:"dialect"`
+	// The URL rules below copy only what the broker's parse (url.Parse, in validate.go) is certain to refuse, and are
+	// regular expressions, not CEL's url(), which is ParseRequestURI and throws on values the broker accepts (a
+	// fragment; getHostname() is empty for a host that is only a port). url.Parse cuts the fragment off before it
+	// checks anything, so a rule that reads past a "#" refuses what the broker accepts: each rule stops at the first
+	// "#" (and the authority ends at "/", "?" or "#"). A URL that this parse refuses and the rules let through is
+	// refused when the broker reads it. (Not in the doc comment below, which the reference pages print, while no CRD
+	// ships.)
+
 	// URL is the http or https base URL for kagent-v1, or the exact JSON-RPC endpoint for a2a.
 	// The a2a card must be served at URL + "/.well-known/agent-card.json", as AX does.
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:XValidation:rule=`self.matches('(?i)^https?://[^/?#]')`,message="must be an http or https URL with a host"
+	// +kubebuilder:validation:XValidation:rule=`!self.matches('(?i)^https?://[^/?#]*@')`,message="must not contain credentials; identity comes from the Binding"
+	// +kubebuilder:validation:XValidation:rule=`!self.matches(r'^[^#]*[\x00-\x1f\x7f]')`,message="invalid URL: must not contain control characters"
+	// +kubebuilder:validation:XValidation:rule=`!self.matches(r'(?i)^https?://[^/?#]*[ \\^\x60{|}]')`,message="invalid URL: the host must not contain a space, backslash, caret, backtick, brace or bar"
 	URL string `json:"url"`
 	// Headers are sent on every request. Omitted headers add no static headers. At most 32.
 	// +kubebuilder:validation:MaxItems=32
@@ -150,14 +162,19 @@ type AgentBackendSpec struct {
 // defaults to "token", as for the other single-value Secret references. A header that carries or selects
 // identity is refused, because the Binding identity owns it: Authorization, Proxy-Authorization, Cookie,
 // X-User-Id, X-Agent-Name, X-Share-Token and X-Kagent-Insecure-Runtime-Identity.
+//
+// +kubebuilder:validation:XValidation:rule=`(has(self.value) && self.value != "") != has(self.valueSecretRef)`,message="set exactly one of value and valueSecretRef"
 type Header struct {
-	// The generated CRD schema counts characters and Agent Kourier counts bytes, so a name of multibyte characters can
-	// pass the schema and still be refused when Agent Kourier reads it. (Not in the doc comment below, which the
-	// reference pages print, while no CRD ships.)
+	// The generated CRD schema counts characters, and so does CEL's size(), but Agent Kourier counts bytes, so the byte
+	// rule below is on bytes(self). The reserved names are IsReservedHeader's, which compares the canonical form of
+	// the name (http.CanonicalHeaderKey changes only the case of ASCII letters), so the rule compares lowerAscii.
+	// (Not in the doc comment below, which the reference pages print, while no CRD ships.)
 
 	// Name is at most 256 bytes.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=256
+	// +kubebuilder:validation:XValidation:rule="size(bytes(self)) <= 256",message="is longer than the 256 byte limit"
+	// +kubebuilder:validation:XValidation:rule="!(self.lowerAscii() in ['authorization', 'proxy-authorization', 'cookie', 'x-user-id', 'x-agent-name', 'x-share-token', 'x-kagent-insecure-runtime-identity'])",message="header is reserved for the Binding identity"
 	Name           string        `json:"name"`
 	Value          string        `json:"value,omitempty"`
 	ValueSecretRef *SecretKeyRef `json:"valueSecretRef,omitempty"`
@@ -269,6 +286,8 @@ type AgentRef struct {
 
 // Identity is the service identity every turn in the Binding runs as, whoever wrote the message. Set
 // userId, tokenSecretRef, or both.
+//
+// +kubebuilder:validation:XValidation:rule=`(has(self.userId) && self.userId != "") || has(self.tokenSecretRef)`,message="set userId, tokenSecretRef, or both"
 type Identity struct {
 	// UserID is sent as X-User-Id when the backend runs in insecure mode.
 	UserID string `json:"userId,omitempty"`
@@ -354,6 +373,7 @@ type ChatMention struct {
 	// Name is what the agent writes, after an `@`: lowercase letters, digits and `-`, starting with a letter, at most 63
 	// characters. `here`, `channel` and `everyone` are refused.
 	// +kubebuilder:validation:Pattern=`^[a-z][a-z0-9-]{0,62}$`
+	// +kubebuilder:validation:XValidation:rule="!(self in ['here', 'channel', 'everyone'])",message="a broadcast name (here, channel or everyone) is reserved and cannot be declared"
 	Name string `json:"name"`
 	// User is the platform's user ID of the person (Slack: `U…` or `W…`). It comes only from here, never from the agent.
 	// +kubebuilder:validation:Pattern=`^[UW][A-Z0-9]{2,20}$`
@@ -382,12 +402,15 @@ type RateLimit struct {
 	// Per is the window length.
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:Pattern=`^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`
+	// +kubebuilder:validation:XValidation:rule="duration(self) >= duration('10s') && duration(self) <= duration('24h')",message="is out of range, must be between 10s and 24h"
 	Per metav1.Duration `json:"per"`
 	// +kubebuilder:validation:Minimum=1
 	MaxConcurrent int32 `json:"maxConcurrent"`
 }
 
 // Interactions configures agent pauses that wait on a person.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.approverGroups) || size(self.approverGroups) == 0 || (has(self.toolApprovals) && self.toolApprovals)",message="requires spec.interactions.toolApprovals: true",fieldPath=".approverGroups"
 type Interactions struct {
 	// AskUser lets the agent ask questions in the thread. Defaults to false.
 	// +kubebuilder:default=false
@@ -408,6 +431,7 @@ type Interactions struct {
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:default="30m"
 	// +kubebuilder:validation:Pattern=`^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`
+	// +kubebuilder:validation:XValidation:rule="duration(self) >= duration('0s')",message="must be positive; leave it out, or write 0, for the default"
 	// +optional
 	Timeout metav1.Duration `json:"timeout"`
 }
@@ -429,6 +453,7 @@ type Session struct {
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:default="2160h"
 	// +kubebuilder:validation:Pattern=`^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`
+	// +kubebuilder:validation:XValidation:rule="duration(self) >= duration('0s')",message="must be positive; leave it out, or write 0, for the default"
 	// +optional
 	ThreadTTL metav1.Duration `json:"threadTTL"`
 }

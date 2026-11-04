@@ -186,6 +186,10 @@ spec:
                             characters. `here`, `channel` and `everyone` are refused.
                           pattern: ^[a-z][a-z0-9-]{0,62}$
                           type: string
+                          x-kubernetes-validations:
+                          - message: a broadcast name (here, channel or everyone)
+                              is reserved and cannot be declared
+                            rule: '!(self in [''here'', ''channel'', ''everyone''])'
                         user:
                           description: 'User is the platform''s user ID of the person
                             (Slack: `U…` or `W…`). It comes only from here, never
@@ -253,6 +257,16 @@ spec:
                             message matching any entry is ignored.
                           maxProperties: 6
                           type: object
+                          x-kubernetes-validations:
+                          - message: unsupported message field, must be one of text,
+                              title, link, fallback, footer, body
+                            rule: self.all(k, k in ['text', 'title', 'link', 'fallback',
+                              'footer', 'body'])
+                          - message: a regular expression is required
+                            rule: self.all(k, size(self[k]) > 0)
+                          - message: a regular expression is longer than the 512 byte
+                              limit
+                            rule: self.all(k, size(self[k]) <= 512)
                         extract:
                           additionalProperties:
                             description: |-
@@ -276,6 +290,10 @@ spec:
                                 maxLength: 512
                                 minLength: 1
                                 type: string
+                                x-kubernetes-validations:
+                                - message: regular expression is longer than the 512
+                                    byte limit
+                                  rule: size(bytes(self)) <= 512
                             required:
                             - field
                             - regex
@@ -285,6 +303,15 @@ spec:
                             regexes does not match does not match the trigger. At most 32.
                           maxProperties: 32
                           type: object
+                          x-kubernetes-validations:
+                          - message: 'invalid extract name: it must start with a lower-case
+                              letter and use only letters, digits and ''_'', so a
+                              template can read .Fields.<name>'
+                            rule: self.all(k, k.matches('^[a-z][A-Za-z0-9_]*$'))
+                          - message: every regex must have a named group (?P<name>...)
+                              that is the entry's name, and supplies the value
+                            rule: self.all(k, self[k].regex.contains('(?P<' + k +
+                              '>') || self[k].regex.contains('(?<' + k + '>'))
                         from:
                           description: From names the sender a botMessage trigger
                             accepts. Required for botMessage.
@@ -336,6 +363,11 @@ spec:
                                   description: Per is the window length.
                                   pattern: ^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$
                                   type: string
+                                  x-kubernetes-validations:
+                                  - message: is out of range, must be between 10s
+                                      and 24h
+                                    rule: duration(self) >= duration('10s') && duration(self)
+                                      <= duration('24h')
                               required:
                               - maxConcurrent
                               - maxRuns
@@ -349,6 +381,16 @@ spec:
                             match. Every entry must match.
                           maxProperties: 6
                           type: object
+                          x-kubernetes-validations:
+                          - message: unsupported message field, must be one of text,
+                              title, link, fallback, footer, body
+                            rule: self.all(k, k in ['text', 'title', 'link', 'fallback',
+                              'footer', 'body'])
+                          - message: a regular expression is required
+                            rule: self.all(k, size(self[k]) > 0)
+                          - message: a regular expression is longer than the 512 byte
+                              limit
+                            rule: self.all(k, size(self[k]) <= 512)
                         promptTemplate:
                           description: |-
                             PromptTemplate is a Go template over the trigger's view of the message (.Channel,
@@ -374,6 +416,9 @@ spec:
                                 entries as extract does, 32.
                               maxProperties: 32
                               type: object
+                              x-kubernetes-validations:
+                              - message: the value that closes the thread is required
+                                rule: self.all(k, size(self[k]) > 0)
                             cooldown:
                               description: |-
                                 Cooldown is how long after a turn the same key starts no new turn. Required with by,
@@ -394,6 +439,35 @@ spec:
                               pattern: ^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$
                               type: string
                           type: object
+                          x-kubernetes-validations:
+                          - fieldPath: .cooldown
+                            message: requires thread.by
+                            rule: (has(self.by) && self.by != "") || !has(self.cooldown)
+                              || duration(self.cooldown) == duration('0s')
+                          - fieldPath: .maxIdle
+                            message: requires thread.by
+                            rule: (has(self.by) && self.by != "") || !has(self.maxIdle)
+                              || duration(self.maxIdle) == duration('0s')
+                          - fieldPath: .closeWhen
+                            message: requires thread.by
+                            rule: (has(self.by) && self.by != "") || !has(self.closeWhen)
+                              || size(self.closeWhen) == 0
+                          - fieldPath: .cooldown
+                            message: required with thread.by
+                            rule: '!(has(self.by) && self.by != "") || (has(self.cooldown)
+                              && duration(self.cooldown) != duration(''0s''))'
+                          - fieldPath: .cooldown
+                            message: is out of range, must be between 1m and 168h
+                            rule: '!has(self.cooldown) || duration(self.cooldown)
+                              == duration(''0s'') || (duration(self.cooldown) >= duration(''1m'')
+                              && duration(self.cooldown) <= duration(''168h''))'
+                          - fieldPath: .maxIdle
+                            message: is out of range, must be between twice the cooldown
+                              and 720h
+                            rule: '!has(self.maxIdle) || duration(self.maxIdle) ==
+                              duration(''0s'') || (duration(self.maxIdle) >= (has(self.cooldown)
+                              ? duration(self.cooldown) + duration(self.cooldown)
+                              : duration(''0s'')) && duration(self.maxIdle) <= duration(''720h''))'
                         type:
                           description: |-
                             Type is mention, a person @mentioning Agent Kourier, or botMessage, a message a bot posts.
@@ -406,6 +480,60 @@ spec:
                       required:
                       - type
                       type: object
+                      x-kubernetes-validations:
+                      - fieldPath: .from
+                        message: 'not allowed with type: mention'
+                        rule: self.type != 'mention' || !has(self.from)
+                      - fieldPath: .match
+                        message: 'not allowed with type: mention'
+                        rule: self.type != 'mention' || !has(self.match) || size(self.match)
+                          == 0
+                      - fieldPath: .exclude
+                        message: 'not allowed with type: mention'
+                        rule: self.type != 'mention' || !has(self.exclude) || size(self.exclude)
+                          == 0
+                      - fieldPath: .extract
+                        message: 'not allowed with type: mention'
+                        rule: self.type != 'mention' || !has(self.extract) || size(self.extract)
+                          == 0
+                      - fieldPath: .thread
+                        message: 'not allowed with type: mention'
+                        rule: self.type != 'mention' || !has(self.thread) || !((has(self.thread.by)
+                          && self.thread.by != "") || (has(self.thread.cooldown) &&
+                          duration(self.thread.cooldown) != duration('0s')) || (has(self.thread.maxIdle)
+                          && duration(self.thread.maxIdle) != duration('0s')) || (has(self.thread.closeWhen)
+                          && size(self.thread.closeWhen) > 0))
+                      - fieldPath: .promptTemplate
+                        message: 'not allowed with type: mention'
+                        rule: self.type != 'mention' || !has(self.promptTemplate)
+                          || self.promptTemplate == ""
+                      - fieldPath: .limits
+                        message: 'not allowed with type: mention'
+                        rule: self.type != 'mention' || !has(self.limits) || !(has(self.limits.rateLimit)
+                          || has(self.limits.maxRunsPerDay))
+                      - fieldPath: .from.id
+                        message: 'required with type: botMessage'
+                        rule: self.type != 'botMessage' || has(self.from)
+                      - fieldPath: .promptTemplate
+                        message: 'required with type: botMessage'
+                        rule: self.type != 'botMessage' || (has(self.promptTemplate)
+                          && self.promptTemplate != "")
+                      - fieldPath: .limits.rateLimit
+                        message: 'required with type: botMessage: set maxRuns, per
+                          and maxConcurrent'
+                        rule: self.type != 'botMessage' || (has(self.limits) && has(self.limits.rateLimit))
+                      - fieldPath: .limits.maxRunsPerDay
+                        message: 'required with type: botMessage: set the cap for
+                          a day, or 0 for no cap'
+                        rule: self.type != 'botMessage' || (has(self.limits) && has(self.limits.maxRunsPerDay))
+                      - fieldPath: .thread.by
+                        message: 'thread.by: key requires an extract named "key"'
+                        rule: '!(has(self.thread) && has(self.thread.by) && self.thread.by
+                          == ''key'') || (has(self.extract) && ''key'' in self.extract)'
+                      - fieldPath: .thread.closeWhen
+                        message: every key must be the name of an entry of extract
+                        rule: '!has(self.thread) || !has(self.thread.closeWhen) ||
+                          self.thread.closeWhen.all(k, has(self.extract) && k in self.extract)'
                     maxItems: 50
                     type: array
                 required:
@@ -455,6 +583,9 @@ spec:
                       in insecure mode.
                     type: string
                 type: object
+                x-kubernetes-validations:
+                - message: set userId, tokenSecretRef, or both
+                  rule: (has(self.userId) && self.userId != "") || has(self.tokenSecretRef)
               interactions:
                 description: Interactions configures agent pauses that wait on a person.
                 properties:
@@ -480,12 +611,21 @@ spec:
                       Defaults to 30m.
                     pattern: ^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$
                     type: string
+                    x-kubernetes-validations:
+                    - message: must be positive; leave it out, or write 0, for the
+                        default
+                      rule: duration(self) >= duration('0s')
                   toolApprovals:
                     default: false
                     description: ToolApprovals lets the agent ask a person to approve
                       tool calls in the thread. Defaults to false.
                     type: boolean
                 type: object
+                x-kubernetes-validations:
+                - fieldPath: .approverGroups
+                  message: 'requires spec.interactions.toolApprovals: true'
+                  rule: '!has(self.approverGroups) || size(self.approverGroups) ==
+                    0 || (has(self.toolApprovals) && self.toolApprovals)'
               session:
                 description: Session configures thread-to-session mapping.
                 properties:
@@ -496,6 +636,10 @@ spec:
                       (90 days).
                     pattern: ^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$
                     type: string
+                    x-kubernetes-validations:
+                    - message: must be positive; leave it out, or write 0, for the
+                        default
+                      rule: duration(self) >= duration('0s')
                 type: object
             required:
             - agent

@@ -24,7 +24,7 @@ spec:
 ---
 # rule: agentbackend/spec.url: not parseable
 # want: spec.url: must be an http or https URL with a host
-# schema: accepts
+# schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: AgentBackend
 metadata:
@@ -36,7 +36,7 @@ spec:
 ---
 # rule: agentbackend/spec.url: credentials in the URL
 # want: spec.url: must not contain credentials
-# schema: accepts
+# schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: AgentBackend
 metadata:
@@ -48,7 +48,7 @@ spec:
 ---
 # rule: agentbackend/spec.url: scheme is not http or https
 # want: spec.url: invalid URL "ftp://kagent"
-# schema: accepts
+# schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: AgentBackend
 metadata:
@@ -58,9 +58,21 @@ spec:
   dialect: a2a
   url: "ftp://kagent"
 ---
+# rule: agentbackend/spec.url: control character
+# want: spec.url: must be an http or https URL with a host
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent\n"
+---
 # rule: agentbackend/spec.url: no host
 # want: spec.url: invalid URL "http:"
-# schema: accepts
+# schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: AgentBackend
 metadata:
@@ -86,7 +98,8 @@ spec:
 ---
 # rule: agentbackend/spec.headers[].name: reserved, Authorization
 # want: is reserved for the Binding identity
-# schema: accepts
+# schema: refuses
+# field: spec.headers[0].name
 apiVersion: agentkourier.dev/v1alpha1
 kind: AgentBackend
 metadata:
@@ -100,7 +113,8 @@ spec:
 ---
 # rule: agentbackend/spec.headers[].name: reserved, proxy-authorization
 # want: is reserved for the Binding identity
-# schema: accepts
+# schema: refuses
+# field: spec.headers[0].name
 apiVersion: agentkourier.dev/v1alpha1
 kind: AgentBackend
 metadata:
@@ -114,7 +128,8 @@ spec:
 ---
 # rule: agentbackend/spec.headers[].name: reserved, COOKIE
 # want: is reserved for the Binding identity
-# schema: accepts
+# schema: refuses
+# field: spec.headers[0].name
 apiVersion: agentkourier.dev/v1alpha1
 kind: AgentBackend
 metadata:
@@ -128,7 +143,8 @@ spec:
 ---
 # rule: agentbackend/spec.headers[].name: reserved, X-User-Id
 # want: is reserved for the Binding identity
-# schema: accepts
+# schema: refuses
+# field: spec.headers[0].name
 apiVersion: agentkourier.dev/v1alpha1
 kind: AgentBackend
 metadata:
@@ -142,7 +158,8 @@ spec:
 ---
 # rule: agentbackend/spec.headers[].name: reserved, x-agent-name
 # want: is reserved for the Binding identity
-# schema: accepts
+# schema: refuses
+# field: spec.headers[0].name
 apiVersion: agentkourier.dev/v1alpha1
 kind: AgentBackend
 metadata:
@@ -156,7 +173,8 @@ spec:
 ---
 # rule: agentbackend/spec.headers[].name: reserved, X-Share-Token
 # want: is reserved for the Binding identity
-# schema: accepts
+# schema: refuses
+# field: spec.headers[0].name
 apiVersion: agentkourier.dev/v1alpha1
 kind: AgentBackend
 metadata:
@@ -170,7 +188,8 @@ spec:
 ---
 # rule: agentbackend/spec.headers[].name: reserved, X-Kagent-Insecure-Runtime-Identity
 # want: is reserved for the Binding identity
-# schema: accepts
+# schema: refuses
+# field: spec.headers[0].name
 apiVersion: agentkourier.dev/v1alpha1
 kind: AgentBackend
 metadata:
@@ -184,7 +203,7 @@ spec:
 ---
 # rule: agentbackend/spec.headers[]: neither value nor valueSecretRef
 # want: spec.headers[0]: set exactly one of value and valueSecretRef
-# schema: accepts
+# schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: AgentBackend
 metadata:
@@ -198,7 +217,7 @@ spec:
 ---
 # rule: agentbackend/spec.headers[]: both value and valueSecretRef
 # want: spec.headers[0]: set exactly one of value and valueSecretRef
-# schema: accepts
+# schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: AgentBackend
 metadata:
@@ -416,7 +435,7 @@ spec:
 ---
 # rule: agentbackend/spec.headers[].name: under 256 characters but over 256 bytes
 # want: spec.headers[0].name: is 400 bytes, longer than the 256 byte limit
-# schema: accepts
+# schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: AgentBackend
 metadata:

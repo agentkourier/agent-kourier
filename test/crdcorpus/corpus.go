@@ -14,6 +14,7 @@
 //	# rule: binding/spec.chat.channel: required     what the entry shows; unique
 //	# want: spec.chat.channel: required             text the broker's refusal must contain
 //	# schema: refuses                               or "accepts": what the apiserver's schema does with it
+//	# broker-only: why the schema cannot refuse it  required with "accepts", and not allowed with "refuses"
 //	# field: spec.chat.channel                      optional: the field the schema's refusal must name; by default the
 //	                                                text of want before its first ": "
 //	# cluster: skip because ...                     optional: not sent to an apiserver, with the reason
@@ -23,8 +24,10 @@
 // the name and namespace, accepts. That is the apiserver's rule and not a marker, so it is outside the invariant, and
 // the corpus has no entry for it.
 //
-// "schema: accepts" is a rule only the broker enforces. It is how this package says which rules the CRD does not copy
-// (yet), so the day a marker or CEL rule starts to refuse an entry, the test fails until the flag follows it.
+// "schema: accepts" is a rule only the broker enforces. It is how this package says which rules the CRD does not copy,
+// so the day a marker or CEL rule starts to refuse an entry, the test fails until the flag follows it. Each such entry
+// says why in its "# broker-only:" line, which makes the entries the list of what the CRD leaves to the broker, with
+// the reasons; a reason that stops being true is a rule to write.
 package crdcorpus
 
 import (
@@ -64,6 +67,9 @@ type Entry struct {
 	Want string
 	// SchemaRefuses says whether the CRD's schema refuses the object.
 	SchemaRefuses bool
+	// BrokerOnly is why the CRD does not refuse an object that only the broker refuses: the "# broker-only:" line. It is
+	// set exactly for an entry that the schema accepts and that is sent to an apiserver.
+	BrokerOnly string
 	// Field is the field that the schema's refusal must name, when it refuses: the entry's "# field:" line, or the text
 	// of Want before its first ": ". It is empty if neither says.
 	Field string
@@ -120,7 +126,7 @@ func Root() (string, error) {
 
 // InvalidEntries is how many entries the invalid half has. Both tests hold the corpus to it, so an entry cannot be
 // dropped, or added, without this changing in the same commit.
-const InvalidEntries = 152
+const InvalidEntries = 153
 
 // MinValidEntries is the fewest valid entries the valid half may have: the repository's resources change, so this is a
 // floor and not a count. It is under what the roots hold today (see TestEveryValidEntryIsAcceptedByTheBroker), and
@@ -306,7 +312,7 @@ func newEntry(name string, obj map[string]any) Entry {
 
 // parseInvalid reads one document of an invalid file: the comment header, then the object.
 func parseInvalid(doc []byte) (Entry, error) {
-	var rule, want, schema, skip, field string
+	var rule, want, schema, skip, field, brokerOnly string
 	for line := range strings.SplitSeq(string(doc), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -315,7 +321,7 @@ func parseInvalid(doc []byte) (Entry, error) {
 		if !strings.HasPrefix(line, "#") {
 			break
 		}
-		for key, dst := range map[string]*string{"# rule: ": &rule, "# want: ": &want, "# schema: ": &schema, "# cluster: ": &skip, "# field: ": &field} {
+		for key, dst := range map[string]*string{"# rule: ": &rule, "# want: ": &want, "# schema: ": &schema, "# cluster: ": &skip, "# field: ": &field, "# broker-only: ": &brokerOnly} {
 			if v, ok := strings.CutPrefix(line, key); ok {
 				*dst = v
 			}
@@ -350,6 +356,12 @@ func parseInvalid(doc []byte) (Entry, error) {
 		e.SchemaRefuses = true
 	case schema != "accepts":
 		return Entry{}, fmt.Errorf("%s: '# schema:' must be refuses or accepts, got %q", rule, schema)
+	}
+	e.BrokerOnly = brokerOnly
+	if wantReason := !e.SchemaRefuses && e.SkipCluster == ""; wantReason && brokerOnly == "" {
+		return Entry{}, fmt.Errorf("%s: the schema accepts it, so a '# broker-only:' line must say why the CRD leaves it to the broker", rule)
+	} else if !wantReason && brokerOnly != "" {
+		return Entry{}, fmt.Errorf("%s: a '# broker-only:' line is only for an entry that the schema accepts", rule)
 	}
 	return e, nil
 }
