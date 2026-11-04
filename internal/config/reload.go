@@ -6,9 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,13 +13,15 @@ import (
 
 // ReloaderConfig configures a Reloader.
 type ReloaderConfig struct {
-	// Dir is the config directory, as for Load.
+	// Dir is the config directory, as for Load. It is ignored if Source is set.
 	Dir string
+	// Source is where the objects are read from. It defaults to the files of Dir.
+	Source Source
 	// Secrets checks the Secrets that objects refer to.
 	Secrets SecretResolver
-	// PollInterval is how often Dir is checked for changes. It defaults to 10s.
+	// PollInterval is how often the source is checked for changes. It defaults to 10s.
 	PollInterval time.Duration
-	// SecretsInterval is how often the config is resolved again even if no file changed,
+	// SecretsInterval is how often the config is resolved again even if the source did not change,
 	// because Secrets change on their own. It defaults to 1m.
 	SecretsInterval time.Duration
 	// SecretsWait bounds how long a reload waits for the Secrets that it newly refers to to become readable, when Secrets
@@ -47,10 +46,10 @@ type Status struct {
 	Errors uint64
 }
 
-// Reloader keeps a Snapshot of a config directory current. Readers call Current, which takes
+// Reloader keeps a Snapshot of the config current. Readers call Current, which takes
 // no lock; a failed reload keeps the last good snapshot.
 type Reloader struct {
-	dir          string
+	source       Source
 	secrets      SecretResolver
 	poll         time.Duration
 	secretsEvery time.Duration
@@ -68,14 +67,19 @@ type Reloader struct {
 	failures        int // consecutive failed reloads
 }
 
-// errConfigMoving means the config directory changed during two loads in a row, so neither
-// result can be trusted. It is not a config error; the next poll tries again.
-var errConfigMoving = errors.New("config directory changed during the load")
+// errConfigMoving means the config source changed during two loads in a row, so neither
+// result can be trusted. It is not a config error; the next poll tries again. At Start there
+// is no next poll: the first load fails with it.
+var errConfigMoving = errors.New("config changed during the load")
 
 // NewReloader returns a Reloader that has not loaded anything yet.
 func NewReloader(cfg ReloaderConfig) *Reloader {
+	src := cfg.Source
+	if src == nil {
+		src = dirSource{cfg.Dir}
+	}
 	r := &Reloader{
-		dir:          cfg.Dir,
+		source:       src,
 		secrets:      cfg.Secrets,
 		poll:         cmp.Or(cfg.PollInterval, 10*time.Second),
 		secretsEvery: cmp.Or(cfg.SecretsInterval, time.Minute),
@@ -124,12 +128,12 @@ func (r *Reloader) Start(ctx context.Context) error {
 // Wait blocks until the loop started by Start has stopped, which happens once its ctx ends.
 func (r *Reloader) Wait() { r.wg.Wait() }
 
-// reload rebuilds the snapshot if the files changed since the last attempt, or if force is
+// reload rebuilds the snapshot if the source changed since the last attempt, or if force is
 // set, and publishes it. A failed rebuild is recorded and logged and returned, and leaves the
 // last good snapshot in place. A rebuild cut short by ctx is returned but not recorded.
 func (r *Reloader) reload(ctx context.Context, force bool) error {
 	if !force {
-		if fingerprint(generation(r.dir)) == r.lastFingerprint {
+		if r.source.Fingerprint(ctx) == r.lastFingerprint {
 			return nil
 		}
 	}
@@ -181,15 +185,15 @@ func (r *Reloader) warnToolApprovalPolicies(snap *Snapshot) {
 	}
 }
 
-// build loads and resolves the config from one generation of the directory. If the
-// generation changes while it works, it goes again, once. If it changes again, neither result
-// is trusted and build returns errConfigMoving.
+// build reads the config from the source and resolves it. If the source changes while it works,
+// it goes again, once. If it changes again, neither result is trusted and build returns
+// errConfigMoving.
 func (r *Reloader) build(ctx context.Context) (pub *published, fp string, err error) {
 	for range 2 {
-		root, gen := generation(r.dir)
-		fp, pub = fingerprint(root, gen), nil
 		var set *Set
-		if set, err = Load(ctx, root); err == nil {
+		set, fp, err = r.source.Set(ctx)
+		pub = nil
+		if err == nil {
 			refs := set.secretRefs() // before Resolve, which takes the set
 			r.watchSecrets(ctx, refs)
 			var snap *Snapshot
@@ -197,7 +201,7 @@ func (r *Reloader) build(ctx context.Context) (pub *published, fp string, err er
 				pub = newPublished(snap, fp, refs)
 			}
 		}
-		if _, now := generation(r.dir); now == gen {
+		if r.source.Fingerprint(ctx) == fp {
 			return pub, fp, err
 		}
 	}
@@ -215,44 +219,4 @@ func (r *Reloader) watchSecrets(ctx context.Context, refs []secretRef) {
 	ctx, cancel := context.WithTimeout(ctx, r.secretsWait)
 	defer cancel()
 	_ = w.Watch(ctx, secretNames(refs))
-}
-
-// generation returns the directory to read config from. A mounted ConfigMap replaces its
-// files by pointing the ..data symlink at a new directory, and files read through the
-// top-level links can come from two generations. Reading the target directory itself, which
-// never changes, cannot. Without ..data, the directory is read as it is, and gen is empty.
-func generation(dir string) (root, gen string) {
-	gen, err := os.Readlink(filepath.Join(dir, "..data"))
-	if err != nil {
-		return dir, ""
-	}
-	if filepath.IsAbs(gen) {
-		return gen, gen
-	}
-	return filepath.Join(dir, gen), gen
-}
-
-// fingerprint summarizes the config files of root by name, size, and modification time, and
-// the generation, so that a change to any of them changes it. It cannot fail: a directory or
-// file that cannot be read fingerprints as its error, so that a broken state looks the same
-// on every poll and fixing it looks like a change.
-func fingerprint(root, gen string) string {
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return "!" + err.Error()
-	}
-	var b strings.Builder
-	b.WriteString(gen)
-	for _, e := range entries {
-		if !isConfigFile(e.Name()) {
-			continue
-		}
-		fi, err := os.Stat(filepath.Join(root, e.Name())) // follows symlinks
-		if err != nil {
-			fmt.Fprintf(&b, "|%s:!%v", e.Name(), err)
-			continue
-		}
-		fmt.Fprintf(&b, "|%s:%d:%d", e.Name(), fi.Size(), fi.ModTime().UnixNano())
-	}
-	return b.String()
 }
