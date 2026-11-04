@@ -79,7 +79,8 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 			return err
 		}
 	}
-	var crds *CRDSource // the custom resources are read only when the config source says so
+	var crds *CRDSource    // the custom resources are read only when the config source says so
+	var status *statusSink // and Binding.status is written only then, and only by the leader
 	if cfg.source() == SourceCRDs {
 		dyn := cfg.Dynamic
 		if dyn == nil {
@@ -88,6 +89,13 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 			}
 		}
 		crds = &CRDSource{Client: dyn, Connection: cfg.ChatConnection}
+		status = &statusSink{client: cfg.StatusClient}
+		if status.client == nil {
+			status.warnings = &warningCounter{}
+			if status.client, err = InClusterStatusClient(status.warnings); err != nil {
+				return err
+			}
+		}
 	}
 	// The election has a client of its own, so that the informers' lists cannot queue a renewal of the Lease behind them.
 	leaseClient := cfg.LeaseClient
@@ -209,7 +217,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		lease = newLeaseClock(cfg.leaseNow)
 		guard = newLeaseFence(cfg.Election, lease, fail.now)
 	}
-	leader := &leaderHalf{cfg: cfg, log: log, sd: sd, metrics: metrics, boot: boot, st: st, leaseFence: guard}
+	leader := &leaderHalf{cfg: cfg, log: log, sd: sd, metrics: metrics, boot: boot, st: st, leaseFence: guard, status: status}
 	leaderDone := make(chan error, 1)
 	runLeader := func() {
 		leave, ok := gate.enter()

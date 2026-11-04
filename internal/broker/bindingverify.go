@@ -316,8 +316,9 @@ func bindingTargets(snap *config.Snapshot, conn v1alpha1.ObjectRef) []bindingche
 			continue
 		}
 		out = append(out, bindingcheck.Target{
-			Binding: v1alpha1.NamespacedName(rb.Binding.Namespace, rb.Binding.Name),
-			Channel: rb.Binding.Spec.Chat.Channel,
+			Binding:    v1alpha1.NamespacedName(rb.Binding.Namespace, rb.Binding.Name),
+			Channel:    rb.Binding.Spec.Chat.Channel,
+			Generation: rb.Binding.Generation,
 		})
 	}
 	return out
@@ -410,6 +411,10 @@ type verification struct {
 	// MinRevisionGap is the Prober's: the least time between a pass and one that only a change of the config or of a Secret calls
 	// for. Zero takes minRevisionGap.
 	MinRevisionGap time.Duration
+	// Status, when set, is told that something moved: each transition, and the end of each pass, which moves the conditions'
+	// observed generation although nothing transitions. It is set with the crds config source and nil with files, which the
+	// verification then serves exactly as it did.
+	Status *statusWriter
 }
 
 // credentialsSecret is where the connection's credentials are in the current config: the Secret its ChatConnection names, in its
@@ -450,6 +455,14 @@ func (v verification) timed(cond bindingcheck.ConditionType, check func() (bindi
 	return check()
 }
 
+// notifyStatus tells the status writer, if there is one, that the Prober's findings moved. It must be quick: it is a hook of the
+// Prober, called with the results held up.
+func (v verification) notifyStatus() {
+	if v.Status != nil {
+		v.Status.notify()
+	}
+}
+
 // newProber returns the Prober of the verification: its State is the conditions of the Bindings, which the hooks report as
 // metrics and log lines and nothing else, and it writes nothing else. It is the leader half's to run and to stop (leaderHalf.start).
 // Revision changes call for a pass at most once every minRevisionGap.
@@ -471,7 +484,8 @@ func (v verification) newProber() *bindingcheck.Prober {
 			return v.timed(bindingcheck.ChannelJoined, func() (bindingcheck.Outcome, error) { return channels.CheckChannel(ctx, channel) })
 		}),
 		Interval: v.Interval, Tick: v.Tick, Timeout: timeout, MinRevisionGap: cmp.Or(v.MinRevisionGap, minRevisionGap),
-		OnTransition: func(tr bindingcheck.Transition) { v.Metrics.BindingCondition(tr); l.transition(tr) },
+		OnTransition: func(tr bindingcheck.Transition) { v.Metrics.BindingCondition(tr); l.transition(tr); v.notifyStatus() },
+		OnPass:       v.notifyStatus,
 		OnProbeError: l.probeError,
 		OnPrune:      func(names []string) { v.Metrics.BindingsPruned(names); l.pruned(names) },
 	})

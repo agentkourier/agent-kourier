@@ -45,6 +45,7 @@ type Metrics struct {
 	probeDuration *prometheus.HistogramVec
 	invalid       *prometheus.GaugeVec
 	bindingRej    *prometheus.GaugeVec
+	statusWrites  *prometheus.CounterVec
 }
 
 // The kinds and reasons that the config gauges carry, a closed set each.
@@ -93,6 +94,8 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 			Help: "Objects of the custom resource config source that the broker refuses or holds past their deletion, by kind: a Binding of this broker (it names this broker's connection, or none that exists) that fails Default or Validate; any AgentBackend in the cluster that does, whoever uses it; and this broker's own ChatConnection when it fails them or was deleted and is held. Each is served from its last good generation, or left out if it has none. 0 while the config is read from files, where one bad object fails the whole reload."}, []string{"kind"}),
 		bindingRej: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_config_binding_rejections",
 			Help: "Bindings of the custom resource config source that are not accepted as written, by the reason of their Accepted condition: InvalidSpec, BackendNotFound, BackendRejected, ConnectionNotFound, ConnectionRejected, NamespaceNotAllowed or ChannelConflict. A Binding that is served from an older generation counts too. 0 while the config is read from files."}, []string{"reason"}),
+		statusWrites: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_binding_status_writes_total",
+			Help: "Writes of a Binding's status by the leader, by result: written, or failed (the API server refused or could not be reached; it is tried again). The series exist only once the leader of a broker that reads the custom resources has made a write."}, []string{"result"}),
 	}
 	m.ConfigReport(config.Report{})
 	staleGauge := prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "agentkourier_config_stale",
@@ -103,7 +106,7 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 		return 0
 	})
 	var err error
-	for _, c := range []prometheus.Collector{m.auditFailures, m.rejections, m.abandons, m.reloadErrors, m.approvals, m.timeouts, m.removed, m.decisions, m.chatUp, m.turns, m.leader, m.takeovers, m.bindingCond, m.bindingReady, m.probeDuration, m.invalid, m.bindingRej, staleGauge} {
+	for _, c := range []prometheus.Collector{m.auditFailures, m.rejections, m.abandons, m.reloadErrors, m.approvals, m.timeouts, m.removed, m.decisions, m.chatUp, m.turns, m.leader, m.takeovers, m.bindingCond, m.bindingReady, m.probeDuration, m.invalid, m.bindingRej, m.statusWrites, staleGauge} {
 		err = errors.Join(err, m.reg.Register(c))
 	}
 	if err != nil {
@@ -150,6 +153,17 @@ func (m *Metrics) ConfigReport(r config.Report) {
 		m.bindingRej.WithLabelValues(string(reason)).Set(float64(reasons[string(reason)]))
 	}
 	m.bindingRej.WithLabelValues(otherLabel).Set(float64(reasons[otherLabel]))
+}
+
+// StatusWrite counts a write of a Binding's status: statusConfig.OnWrite. A result outside the two the writer reports is
+// one series, "other".
+func (m *Metrics) StatusWrite(result string) {
+	switch result {
+	case "written", "failed":
+	default:
+		result = otherLabel
+	}
+	m.statusWrites.WithLabelValues(result).Inc()
 }
 
 // ApprovalOutcome counts what became of a pause, by Binding: one a Binding's policy turned away (interact.Config.OnApprovalOutcome),
