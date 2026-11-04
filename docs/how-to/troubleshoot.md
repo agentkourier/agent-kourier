@@ -100,7 +100,7 @@ kubectl auth can-i list secrets -n agent-kourier --as system:serviceaccount:agen
 kubectl auth can-i watch secrets -n agent-kourier --as system:serviceaccount:agent-kourier:<serviceaccount>
 ```
 
-A Role that names its Secrets (`resourceNames`, which you can write yourself with `rbac.create: false`) answers `no` to
+A Role that names its Secrets (`resourceNames`, which the chart writes with `config.source: crds`, or you write yourself with `rbac.create: false`) answers `no` to
 those two. Ask about one Secret instead:
 
 ```sh
@@ -108,8 +108,8 @@ kubectl auth can-i list secrets/<secret-name> -n agent-kourier --as system:servi
 kubectl auth can-i watch secrets/<secret-name> -n agent-kourier --as system:serviceaccount:agent-kourier:<serviceaccount>
 ```
 
-The chart grants `list` and `watch` in each namespace that holds a Secret the config names, and `rbac.secretNamespaces`
-adds more. A `config.existingConfigMap` needs `rbac.secretNamespaces`, because the chart cannot
+The chart grants `list` and `watch` in each namespace that holds a Secret the config names (for the Secrets named, with
+`config.source: crds`), and `rbac.secretNamespaces` adds more. A `config.existingConfigMap` needs `rbac.secretNamespaces`, because the chart cannot
 read the ConfigMap to find the namespaces.
 
 ## The pod exits with code 2 and the error says `load config`
