@@ -70,11 +70,14 @@ type Trigger struct {
 	// From names the sender a botMessage trigger accepts. Required for botMessage.
 	From *BotSource `json:"from,omitempty"`
 	// Match maps a message field to a regex it must match. Every entry must match.
+	// +kubebuilder:validation:MaxProperties=6
 	Match map[MessageField]string `json:"match,omitempty"`
 	// Exclude maps a message field to a regex; a message matching any entry is ignored.
+	// +kubebuilder:validation:MaxProperties=6
 	Exclude map[MessageField]string `json:"exclude,omitempty"`
 	// Extract names the values to pull out of a message. A message in which one of these
-	// regexes does not match does not match the trigger.
+	// regexes does not match does not match the trigger. At most 32.
+	// +kubebuilder:validation:MaxProperties=32
 	Extract map[string]Extract `json:"extract,omitempty"`
 	// Thread ties messages that share an extracted key to one thread.
 	// +optional
@@ -109,7 +112,10 @@ type Extract struct {
 	// Field is the message field the regex runs on.
 	// +kubebuilder:validation:Enum=text;title;link;fallback;footer;body
 	Field MessageField `json:"field"`
-	// Regex is a Go (RE2) regular expression of at most 512 bytes.
+	// Regex is a Go (RE2) regular expression of at most 512 bytes. The CRD's schema counts characters and Agent Kourier
+	// counts bytes, so a regex of multibyte characters can pass the schema and still be refused when Agent Kourier reads it.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=512
 	Regex string `json:"regex"`
 }
 
@@ -121,6 +127,8 @@ type TriggerThread struct {
 	By ThreadBy `json:"by,omitempty"`
 	// Cooldown is how long after a turn the same key starts no new turn. Required with by,
 	// and between 1m and 168h.
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Pattern=`^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`
 	// +optional
 	Cooldown metav1.Duration `json:"cooldown,omitzero"`
 	// MaxIdle is how long an open thread may go without a message of its key before Agent Kourier counts it
@@ -132,11 +140,15 @@ type TriggerThread struct {
 	// starts a second investigation for it. Twice the cooldown covers that only for a 4h cooldown
 	// against Alertmanager's 4h repeat_interval; a longer repeat_interval needs a maxIdle set
 	// above it.
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Pattern=`^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`
 	// +optional
 	// +doc:default=Larger of `24h` and twice the cooldown
 	MaxIdle metav1.Duration `json:"maxIdle,omitzero"`
 	// CloseWhen maps an extracted field to the value that closes the thread: Agent Kourier posts a
-	// note and starts no turn. Every entry must equal.
+	// note and starts no turn. Every entry must equal. It names only extracted fields, so it holds at most as many
+	// entries as extract does, 32.
+	// +kubebuilder:validation:MaxProperties=32
 	// +optional
 	CloseWhen map[string]string `json:"closeWhen,omitempty"`
 }

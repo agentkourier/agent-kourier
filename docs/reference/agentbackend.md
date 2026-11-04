@@ -23,7 +23,7 @@ AgentBackendSpec is the desired state of an AgentBackend.
 |---|---|---|---|---|
 | `dialect` | string | Yes | None | One of `a2a`, `kagent-v1`. |
 | `url` | string | Yes | None | URL is the http or https base URL for kagent-v1, or the exact JSON-RPC endpoint for a2a. The a2a card must be served at URL + "/.well-known/agent-card.json", as AX does. At least 1 character. |
-| `headers` | [][Header](#header) | No | Empty list | Headers are sent on every request. Omitted headers add no static headers. |
+| `headers` | [][Header](#header) | No | Empty list | Headers are sent on every request. Omitted headers add no static headers. At most 32. |
 | `allowedNamespaces` | []string | No | Empty list | AllowedNamespaces lists the other namespaces whose Bindings may reference this backend. Each is a DNS-1123 label. An empty list permits references only from the backend's own namespace. |
 
 ## Header
@@ -32,7 +32,7 @@ Header is a static HTTP header. Set exactly one of value and valueSecretRef; val
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | string | Yes | None | At least 1 character. |
+| `name` | string | Yes | None | Name is at most 256 bytes. The CRD's schema counts characters and Agent Kourier counts bytes, so a name of multibyte characters can pass the schema and still be refused when Agent Kourier reads it. At least 1 character. At most 256 characters. |
 | `value` | string | No | None |  |
 | `valueSecretRef` | [SecretKeyRef](#secretkeyref) | No | None |  |
 
@@ -42,8 +42,8 @@ SecretKeyRef names one value in a Secret in the referring object's namespace.
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | string | Yes | None | Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a letter or digit. |
-| `key` | string | No | `token` | Key selects the entry of the Secret. It defaults to "token". It consists of alphanumeric characters, '-', '_' or '.'. |
+| `name` | string | Yes | None | Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a letter or digit. Pattern `^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`. At most 253 characters. |
+| `key` | string | No | `token` | Key selects the entry of the Secret. It defaults to "token". It consists of at most 253 alphanumeric characters, '-', '_' or '.', and is neither "." nor "..", nor does it start with "..". Pattern `^(\.?[-_a-zA-Z0-9][-._a-zA-Z0-9]*)?$`. At most 253 characters. |
 
 ---
 

@@ -1,6 +1,7 @@
 package v1alpha1
 
 import (
+	"fmt"
 	"maps"
 	"reflect"
 	"regexp"
@@ -311,6 +312,26 @@ func TestParsePromptTemplate(t *testing.T) {
 // bot returns the botMessage trigger of binding.yaml, after defaulting, which is [1].
 func bot(o *Binding) *Trigger { return &o.Spec.Chat.Triggers[1] }
 
+// manyTriggers returns n valid triggers, the mention trigger and n-1 botMessage triggers of distinct senders.
+func manyTriggers(o *Binding, n int) []Trigger {
+	ts := []Trigger{o.Spec.Chat.Triggers[0]}
+	for i := 1; i < n; i++ {
+		tr := *bot(o)
+		tr.From = &BotSource{ID: fmt.Sprintf("B%010d", i), Kind: SenderKindBot}
+		ts = append(ts, tr)
+	}
+	return ts
+}
+
+// moreExtracts makes tr's extract hold n entries, the first of which are the fixture's three.
+func moreExtracts(tr *Trigger, n int) {
+	tr.Extract = maps.Clone(tr.Extract)
+	for i := len(tr.Extract); i < n; i++ {
+		name := fmt.Sprintf("e%d", i)
+		tr.Extract[name] = Extract{Field: FieldText, Regex: fmt.Sprintf("(?P<%s>x)", name)}
+	}
+}
+
 func TestTriggersValidate(t *testing.T) {
 	const at = "spec.chat.triggers[1]"
 	fieldsList := "text, title, link, fallback, footer, body"
@@ -484,6 +505,14 @@ func TestTriggersValidate(t *testing.T) {
 		{"template reading every view field and every extract", func(o *Binding) {
 			bot(o).PromptTemplate = "{{ .Channel }} {{ .State }} {{ .Key }} {{ .Link }} {{ .Source }} {{ .Fields.state }} {{ .Fields.key }} {{ .Fields.alertname }}"
 		}, ""},
+
+		// Caps, which the CRD schema carries too.
+		{"the most triggers ok", func(o *Binding) { o.Spec.Chat.Triggers = manyTriggers(o, maxTriggers) }, ""},
+		{"too many triggers", func(o *Binding) { o.Spec.Chat.Triggers = manyTriggers(o, maxTriggers+1) },
+			fmt.Sprintf("spec.chat.triggers: has %d items, maximum is %d", maxTriggers+1, maxTriggers)},
+		{"the most extracts ok", func(o *Binding) { moreExtracts(bot(o), maxExtract) }, ""},
+		{"too many extracts", func(o *Binding) { moreExtracts(bot(o), maxExtract+1) },
+			fmt.Sprintf("%s.extract: has %d entries, maximum is %d", at, maxExtract+1, maxExtract)},
 
 		// Duplicates.
 		{"the same bot, match and exclude but a different extract is not a duplicate", func(o *Binding) {

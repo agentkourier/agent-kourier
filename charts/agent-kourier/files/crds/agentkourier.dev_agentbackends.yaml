@@ -49,6 +49,8 @@ spec:
                   AllowedNamespaces lists the other namespaces whose Bindings may reference this backend. Each is a DNS-1123 label.
                   An empty list permits references only from the backend's own namespace.
                 items:
+                  maxLength: 63
+                  pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                   type: string
                 type: array
               dialect:
@@ -60,7 +62,7 @@ spec:
                 type: string
               headers:
                 description: Headers are sent on every request. Omitted headers add
-                  no static headers.
+                  no static headers. At most 32.
                 items:
                   description: |-
                     Header is a static HTTP header. Set exactly one of value and valueSecretRef; valueSecretRef's key
@@ -69,6 +71,10 @@ spec:
                     X-User-Id, X-Agent-Name, X-Share-Token and X-Kagent-Insecure-Runtime-Identity.
                   properties:
                     name:
+                      description: |-
+                        Name is at most 256 bytes. The CRD's schema counts characters and Agent Kourier counts bytes, so a name of
+                        multibyte characters can pass the schema and still be refused when Agent Kourier reads it.
+                      maxLength: 256
                       minLength: 1
                       type: string
                     value:
@@ -80,13 +86,17 @@ spec:
                         key:
                           default: token
                           description: |-
-                            Key selects the entry of the Secret. It defaults to "token". It consists of alphanumeric characters,
-                            '-', '_' or '.'.
+                            Key selects the entry of the Secret. It defaults to "token". It consists of at most 253 alphanumeric characters,
+                            '-', '_' or '.', and is neither "." nor "..", nor does it start with "..".
+                          maxLength: 253
+                          pattern: ^(\.?[-_a-zA-Z0-9][-._a-zA-Z0-9]*)?$
                           type: string
                         name:
                           description: |-
                             Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a
                             letter or digit.
+                          maxLength: 253
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                           type: string
                       required:
                       - name
@@ -94,6 +104,7 @@ spec:
                   required:
                   - name
                   type: object
+                maxItems: 32
                 type: array
               url:
                 description: |-

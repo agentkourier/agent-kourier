@@ -46,10 +46,16 @@ const (
 // ChatConnection in another namespace only if that resource lists the Binding's namespace in its
 // allowedNamespaces.
 type ObjectRef struct {
+	// Namespace is a DNS-1123 label: at most 63 lowercase letters, digits or '-', starting and ending with a letter or
+	// digit.
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$`
 	// +doc:default=Namespace of the referring object
 	Namespace string `json:"namespace,omitempty"`
 	// Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a
 	// letter or digit.
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
 	Name string `json:"name"`
 }
 
@@ -65,9 +71,13 @@ const DefaultSecretKey = "token"
 type SecretKeyRef struct {
 	// Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a
 	// letter or digit.
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
 	Name string `json:"name"`
-	// Key selects the entry of the Secret. It defaults to "token". It consists of alphanumeric characters,
-	// '-', '_' or '.'.
+	// Key selects the entry of the Secret. It defaults to "token". It consists of at most 253 alphanumeric characters,
+	// '-', '_' or '.', and is neither "." nor "..", nor does it start with "..".
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^(\.?[-_a-zA-Z0-9][-._a-zA-Z0-9]*)?$`
 	// +kubebuilder:default=token
 	// +optional
 	Key string `json:"key,omitempty"`
@@ -77,6 +87,8 @@ type SecretKeyRef struct {
 type SecretRef struct {
 	// Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a
 	// letter or digit.
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
 	Name string `json:"name"`
 }
 
@@ -116,11 +128,14 @@ type AgentBackendSpec struct {
 	// The a2a card must be served at URL + "/.well-known/agent-card.json", as AX does.
 	// +kubebuilder:validation:MinLength=1
 	URL string `json:"url"`
-	// Headers are sent on every request. Omitted headers add no static headers.
+	// Headers are sent on every request. Omitted headers add no static headers. At most 32.
+	// +kubebuilder:validation:MaxItems=32
 	// +doc:default=Empty list
 	Headers []Header `json:"headers,omitempty"`
 	// AllowedNamespaces lists the other namespaces whose Bindings may reference this backend. Each is a DNS-1123 label.
 	// An empty list permits references only from the backend's own namespace.
+	// +kubebuilder:validation:items:MaxLength=63
+	// +kubebuilder:validation:items:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	// +doc:default=Empty list
 	AllowedNamespaces []string `json:"allowedNamespaces,omitempty"`
 }
@@ -130,7 +145,10 @@ type AgentBackendSpec struct {
 // identity is refused, because the Binding identity owns it: Authorization, Proxy-Authorization, Cookie,
 // X-User-Id, X-Agent-Name, X-Share-Token and X-Kagent-Insecure-Runtime-Identity.
 type Header struct {
+	// Name is at most 256 bytes. The CRD's schema counts characters and Agent Kourier counts bytes, so a name of
+	// multibyte characters can pass the schema and still be refused when Agent Kourier reads it.
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=256
 	Name           string        `json:"name"`
 	Value          string        `json:"value,omitempty"`
 	ValueSecretRef *SecretKeyRef `json:"valueSecretRef,omitempty"`
@@ -165,6 +183,8 @@ type ChatConnectionSpec struct {
 	CredentialsSecretRef SecretRef `json:"credentialsSecretRef"`
 	// AllowedNamespaces lists the other namespaces whose Bindings may reference this connection. Each is a DNS-1123 label.
 	// An empty list permits references only from the connection's own namespace.
+	// +kubebuilder:validation:items:MaxLength=63
+	// +kubebuilder:validation:items:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	// +doc:default=Empty list
 	AllowedNamespaces []string `json:"allowedNamespaces,omitempty"`
 }
@@ -212,6 +232,8 @@ type AgentRef struct {
 	Name string `json:"name"`
 	// Namespace is the agent's namespace on the backend: a DNS-1123 label of at most 63 lowercase letters, digits or
 	// '-', starting and ending with a letter or digit.
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	Namespace string `json:"namespace"`
 }
 
@@ -267,13 +289,17 @@ type ChatBinding struct {
 	// +optional
 	Acknowledgment *ChatAcknowledgment `json:"acknowledgment,omitempty"`
 	// Triggers decide which events in the channel start or continue a turn. Empty means
-	// [{type: mention}]: a mention starts a session. A list that names triggers is the whole list.
+	// [{type: mention}]: a mention starts a session. A list that names triggers is the whole list. At most 50.
+	// +kubebuilder:validation:MaxItems=50
 	// +doc:default=`[{type: mention}]`
 	// +optional
 	Triggers []Trigger `json:"triggers,omitempty"`
 	// Mentions are the people an agent may notify, by writing `@name` in its reply. Agent Kourier then posts a message in the
 	// thread that mentions each one named, one message for each. A name not listed here notifies nobody, and an agent can never supply
 	// a user ID. Empty means no mentions, and nothing is added to the prompt. At most 50.
+	// +kubebuilder:validation:MaxItems=50
+	// +listType=map
+	// +listMapKey=name
 	// +optional
 	Mentions []ChatMention `json:"mentions,omitempty"`
 	// MaxMentionsPerTurn is the most people one turn mentions, at most 10; the people after them are not mentioned. It defaults to 2.
@@ -324,6 +350,8 @@ type RateLimit struct {
 	// +kubebuilder:validation:Minimum=1
 	MaxRuns int32 `json:"maxRuns"`
 	// Per is the window length.
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Pattern=`^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`
 	Per metav1.Duration `json:"per"`
 	// +kubebuilder:validation:Minimum=1
 	MaxConcurrent int32 `json:"maxConcurrent"`
@@ -342,10 +370,14 @@ type Interactions struct {
 	// An empty list allows any non-bot channel member. At most 10 groups may be named. Group IDs start with S and contain
 	// uppercase letters and digits; duplicates and empty entries are refused.
 	// +kubebuilder:validation:MaxItems=10
+	// +kubebuilder:validation:items:Pattern=`^S[A-Z0-9]+$`
+	// +listType=set
 	// +optional
 	ApproverGroups []string `json:"approverGroups,omitempty"`
 	// Timeout is how long a pause waits for an answer. Defaults to 30m.
+	// +kubebuilder:validation:Type=string
 	// +kubebuilder:default="30m"
+	// +kubebuilder:validation:Pattern=`^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`
 	// +optional
 	Timeout metav1.Duration `json:"timeout"`
 }
@@ -364,7 +396,9 @@ type Feedback struct {
 type Session struct {
 	// ThreadTTL is how long a thread keeps its session after its last activity. Defaults to 2160h
 	// (90 days).
+	// +kubebuilder:validation:Type=string
 	// +kubebuilder:default="2160h"
+	// +kubebuilder:validation:Pattern=`^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`
 	// +optional
 	ThreadTTL metav1.Duration `json:"threadTTL"`
 }
