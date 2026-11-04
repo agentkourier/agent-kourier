@@ -15,7 +15,8 @@ import (
 // watchingSecrets is a SecretResolver that is also a SecretWatcher, and records what the Reloader asks of it, in order.
 type watchingSecrets struct {
 	fakeSecrets
-	hold bool // Watch waits for its context to end, as one that cannot reach the API server does
+	hold     bool   // Watch waits for its context to end, as one that cannot reach the API server does
+	onRetain func() // called by Retain, before it records
 
 	mu    sync.Mutex
 	calls []string
@@ -41,7 +42,12 @@ func (w *watchingSecrets) Watch(ctx context.Context, names []SecretName) error {
 	return nil
 }
 
-func (w *watchingSecrets) Retain(names []SecretName) { w.record(fmt.Sprint("retain ", names)) }
+func (w *watchingSecrets) Retain(names []SecretName) {
+	if w.onRetain != nil {
+		w.onRetain()
+	}
+	w.record(fmt.Sprint("retain ", names))
+}
 
 // take returns what was asked since the last call.
 func (w *watchingSecrets) take() []string {
@@ -95,6 +101,23 @@ func TestReloaderFollowsTheSecretsOfEachConfig(t *testing.T) {
 		if strings.HasPrefix(c, "retain") {
 			t.Errorf("a failed reload told the resolver to %s", c)
 		}
+	}
+}
+
+// Retain comes after the new snapshot is published, not before: a reader that finds a Secret dropped must find the snapshot
+// that dropped it, or it could read the old snapshot's Binding for a Secret that is already let go.
+func TestReloaderRetainsAfterItPublishes(t *testing.T) {
+	secrets := &watchingSecrets{fakeSecrets: specSecrets()}
+	r := newTestReloader(specDir(t), secrets)
+	mustReload(t, r, true)
+	old := r.Current()
+	var atRetain *Snapshot
+	secrets.onRetain = func() { atRetain = r.Current() }
+
+	mustReload(t, r, true) // builds a new snapshot of the same config
+
+	if atRetain == nil || atRetain == old || atRetain != r.Current() {
+		t.Errorf("at Retain, Current was the old snapshot %t (nil %t); want the one the reload published", atRetain == old, atRetain == nil)
 	}
 }
 

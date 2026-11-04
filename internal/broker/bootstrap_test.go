@@ -250,9 +250,10 @@ func TestBootstrapFollowsTheExtraSecrets(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(c.Stop)
-			_, err = c.Secrets.Value(t.Context(), "agent-kourier", "agent-kourier-pg", "dsn")
+			// Keys never follows a Secret, so it tells whether the Secret was followed from the start.
+			_, err = c.Secrets.Keys(t.Context(), "agent-kourier", "agent-kourier-pg")
 			if (extra != nil) != (err == nil) || (extra == nil && !errors.Is(err, k8ssecrets.ErrNotWatched)) {
-				t.Errorf("Value of the extra Secret = %v, with extra Secrets %v", err, extra)
+				t.Errorf("Keys of the extra Secret = %v, with extra Secrets %v", err, extra)
 			}
 		})
 	}

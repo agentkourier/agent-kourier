@@ -11,6 +11,14 @@
 // belong to Agent Kourier and not to a resource of the config, such as the Postgres DSN's, stay
 // followed until Stop.
 //
+// A turn holds the Binding of the snapshot it began under, for as long as it runs, and reads that
+// Binding's Secrets through Value. A reload that drops one of them from the config does not cut
+// the turn off: Value follows a Secret that is not followed, waits for its cache (at most
+// onDemandWait) and reads it. That informer lasts until the next Watch that does not name the
+// Secret, or the next Retain that does not, so a holder that still reads it later follows it again.
+// Keys and SecretVersion do not: they answer ErrNotWatched and make no API call, because the
+// Reloader asks only about Secrets it has just named.
+//
 // # RBAC
 //
 // The informer needs list and watch on a Secret; it never issues a get. Both are authorized by a
@@ -37,8 +45,8 @@
 // The cache holds each Secret's name, type, data and resourceVersion (which SecretVersion
 // returns), and nothing else: the informer's transform drops annotations such as
 // last-applied-configuration, which can hold a second copy of the values. Only Opaque
-// Secrets (or an empty type) keep their values, so that Value costs no API call; every other
-// type (a Helm release, a service account token, TLS keys, a docker config) keeps key names
+// Secrets (or an empty type) keep their values, so that Value of a followed Secret costs no API
+// call; every other type (a Helm release, a service account token, TLS keys, a docker config) keeps key names
 // only, and Value refuses it. Keys returns names only.
 // Value returns a secret.Value, which no formatting path can print, built from a copy of the
 // bytes, so a Secret's rotation never changes a Value already read.
@@ -76,6 +84,9 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/config"
 	secretval "github.com/agentkourier/agent-kourier/internal/secret"
 )
+
+// onDemandWait bounds the wait of a Value for the cache of a Secret that it had to follow.
+const onDemandWait = 10 * time.Second
 
 // syncPoll is how often a wait looks at whether its caches have synced, as client-go's own wait does.
 const syncPoll = 20 * time.Millisecond
@@ -231,9 +242,13 @@ func (r *Resolver) Start(ctx context.Context) error {
 }
 
 // Watch follows each of names that is not followed yet and waits as Start does, for all of them,
-// so it is safe to call again with the same names. A Secret of names that is followed stays so
-// until Retain leaves it out, even if the wait fails. It implements config.SecretWatcher.
+// so it is safe to call again with the same names. It first stops every informer that is not pinned,
+// not retained by the latest Retain and not in names: what an earlier Watch started for a config
+// that never became a snapshot, and what Value followed for a holder of a dropped Secret. So a run
+// of failed reloads leaves at most the informers of the latest one. A Secret of names stays followed
+// until a Watch or Retain leaves it out, even if the wait fails. It implements config.SecretWatcher.
 func (r *Resolver) Watch(ctx context.Context, names []config.SecretName) error {
+	r.release(names)
 	es, err := r.follow(names, false)
 	if err != nil {
 		return err
@@ -316,9 +331,32 @@ func (r *Resolver) Retain(names []config.SecretName) {
 		}
 	}
 	r.mu.Unlock()
-	for _, e := range gone {
+	stopAll(gone)
+}
+
+// release stops the informer of every entry that is not pinned, not retained and not in names.
+func (r *Resolver) release(names []config.SecretName) {
+	keep := make(map[config.SecretName]bool, len(names))
+	for _, n := range names {
+		keep[n] = true
+	}
+	var gone []*entry
+	r.mu.Lock()
+	for n, e := range r.entries {
+		if !e.pinned && !e.retained && !keep[n] {
+			delete(r.entries, n)
+			gone = append(gone, e)
+		}
+	}
+	r.mu.Unlock()
+	stopAll(gone)
+}
+
+// stopAll ends the informers of es and waits for their goroutines, which the caller must not do under r.mu.
+func stopAll(es []*entry) {
+	for _, e := range es {
 		e.stop()
-		e.factory.Shutdown() // outside the lock: it waits for the informer's goroutines
+		e.factory.Shutdown()
 	}
 }
 
@@ -391,7 +429,20 @@ func (r *Resolver) get(namespace, name string) (*corev1.Secret, error) {
 	return s, nil
 }
 
-// Keys returns the sorted key names of the Secret from the cache. It fails as get does.
+// getFollowing follows the Secret, waits for its cache and reads it as get does.
+func (r *Resolver) getFollowing(ctx context.Context, namespace, name string) (*corev1.Secret, error) {
+	es, err := r.follow([]config.SecretName{{Namespace: namespace, Name: name}}, false)
+	if err != nil {
+		return nil, fmt.Errorf("secret %s/%s: %w", namespace, name, err)
+	}
+	ctx, cancel := context.WithTimeout(ctx, onDemandWait)
+	defer cancel()
+	_ = r.await(ctx, es) // get says why the Secret cannot be read, if it cannot
+	return r.get(namespace, name)
+}
+
+// Keys returns the sorted key names of the Secret from the cache. It makes no API call, and it
+// fails as get does: a Secret that is not followed is ErrNotWatched.
 func (r *Resolver) Keys(_ context.Context, namespace, name string) ([]string, error) {
 	s, err := r.get(namespace, name)
 	if err != nil {
@@ -402,7 +453,7 @@ func (r *Resolver) Keys(_ context.Context, namespace, name string) ([]string, er
 
 // SecretVersion returns the resourceVersion of the cached Secret, which the API server changes on
 // every write to the Secret, including a new value under the same keys. It reads the cache and
-// makes no API call, and it fails as get does.
+// makes no API call, even for a Secret that is not followed (ErrNotWatched), and it fails as get does.
 //
 // The cache is as current as its last good list or watch. While one is failing the version stays
 // where it was, as do the values Value and Keys return, and a Secret rotated meanwhile is not
@@ -421,11 +472,19 @@ func (r *Resolver) SecretVersion(_ context.Context, namespace, name string) (str
 // Secret has no such key, secret.ErrEmptyValue when the key holds no bytes, and
 // secret.ErrUnsupportedType when the Secret is not Opaque. Error messages name the namespace,
 // Secret and key (and the type), never the value.
-func (r *Resolver) Value(_ context.Context, namespace, name, key string) (secretval.Value, error) {
+//
+// A Secret that is not followed is followed now, for a holder of a Binding that a reload has since
+// dropped (see the package comment): Value waits for its cache, at most onDemandWait or until ctx
+// ends, and then reads it, so a Value of such a Secret makes API calls. If the cache has not synced
+// by then, or access was denied, it fails as get does.
+func (r *Resolver) Value(ctx context.Context, namespace, name, key string) (secretval.Value, error) {
 	if key == "" {
 		key = v1alpha1.DefaultSecretKey
 	}
 	s, err := r.get(namespace, name)
+	if errors.Is(err, ErrNotWatched) {
+		s, err = r.getFollowing(ctx, namespace, name)
+	}
 	if err != nil {
 		return secretval.Value{}, fmt.Errorf("read key %q: %w", key, err)
 	}

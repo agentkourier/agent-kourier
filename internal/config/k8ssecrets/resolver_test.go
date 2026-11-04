@@ -384,7 +384,7 @@ func TestValueErrors(t *testing.T) {
 		{"missing key", r, "sre", "creds", "nokey", "nokey", secretval.ErrKeyNotFound},
 		{"missing Secret, default key", r, "payments", "creds", "", "token", config.ErrSecretNotFound},
 		{"empty value", r, "sre", "creds", "empty", "empty", secretval.ErrEmptyValue},
-		{"not followed", r, "kube-system", "creds", "token", "token", ErrNotWatched},
+		{"not followed, so followed now, and not there", r, "kube-system", "creds", "token", "token", config.ErrSecretNotFound},
 		{"cache not synced", unsynced(t), "sre", "creds", "token", "token", ErrNotSynced},
 		{"stopped", stopped, "sre", "creds", "token", "token", ErrStopped},
 	}
