@@ -41,6 +41,9 @@ type TriggerMatch struct {
 	Received time.Time
 	// Message is the message, whole.
 	Message Inbound
+	// Mention says the match is a bot's mention and not a botMessage trigger's: the turn belongs in the thread the mention
+	// is in, and carries the thread.
+	Mention bool
 }
 
 // fieldRegex is one match or exclude entry, or the regex of an extract, compiled.

@@ -4,7 +4,7 @@ For anyone writing or changing a Binding's `botMessage` triggers: at the end, yo
 history through the triggers and seen what each message would become, before going live.
 
 `agent-kourier dry-run` only reads Slack (`auth.test` and `conversations.history`). It posts nothing, starts no session, writes nothing
-and needs no cluster.
+and needs no cluster. It shows nothing of [another bot's mention](any-bot-trigger.md#let-another-agent-start-yours), which arrives as its own event and not in history.
 
 ## Before you start
 

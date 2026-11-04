@@ -86,6 +86,11 @@ type Backend struct {
 	// Feedback is the Binding's feedback.enabled: the final message of an answer to a person carries the
 	// useful and not-useful buttons (spec 8.7). An investigation that nobody asked for always does.
 	Feedback bool
+	// Mentions are the people the Binding's chat.mentions declares, and MaxMentions its chat.maxMentionsPerTurn, which the sink
+	// is told of each turn. MentionPrompt is the line a session's first prompt ends with to tell the agent the names, or "".
+	Mentions      []v1alpha1.ChatMention
+	MaxMentions   int
+	MentionPrompt string
 	// AcknowledgmentEnabled adds a temporary reaction to each accepted message. AcknowledgmentEmoji is the
 	// bare platform reaction name kept with the queued reply so a reload cannot change what is removed.
 	AcknowledgmentEnabled bool
@@ -138,12 +143,15 @@ type TurnRef struct {
 	// follow continues the same output message but must keep the original pause retry window.
 	Restarted bool
 	// Feedback says which feedback buttons the final message of the output carries (spec 8.7): none for the
-	// zero value, those of an investigation for a turn that nobody wrote (an alert's first prompt: its user is
-	// SystemUser), and those of an answer for a person's turn on a Binding with feedback.enabled.
+	// zero value, those of an investigation for an alert's first prompt (nobody wrote it: its user is SystemUser),
+	// and those of an answer for a person's turn or a bot's mention on a Binding with feedback.enabled.
 	Feedback store.FeedbackKind
 	// ThreadReplies is the Binding's chat.threadReplies. In mention the final message of the output tells the thread to mention
 	// Agent Kourier to ask a follow-up (D38); anything else, the empty value too, adds nothing.
 	ThreadReplies v1alpha1.ThreadReplies
+	// Mentions are the people the Binding declares, and MaxMentions the most a turn notifies (Backend.Mentions).
+	Mentions    []v1alpha1.ChatMention
+	MaxMentions int
 }
 
 // NoticeKind is what a Notice tells the thread.
@@ -242,9 +250,9 @@ type Sink interface {
 
 // NoThreadContext is the ThreadContext of a manager whose mentioned turns carry their own message alone: the platform
 // cannot read a thread, or the deployment does not want it to. It adds no text, but the runner still reads where the
-// window opens (one Store.PreviousReply per mentioned turn of a mention-only Binding) before it asks the hook, and a store
+// window opens (one store read per mentioned turn of a mention-only Binding, or per bot's mention) before it asks the hook, and a store
 // that fails there holds the turn back like any other store failure of the runner.
-func NoThreadContext(context.Context, Key, string, string, string) string { return "" }
+func NoThreadContext(context.Context, Key, string, string, string, bool) string { return "" }
 
 // TextReplyOutcome says what the interaction module did with a queued reply.
 type TextReplyOutcome uint8
@@ -305,8 +313,9 @@ type Config struct {
 	// mentions enqueued against ts order), and the hook returns "" for it. It never fails, and it may do I/O, so it
 	// is called off every lock. The
 	// runner calls it once for each turn it sends, in the send of a turn only: never for a task that is followed
-	// again, found again or recovered. NoThreadContext adds nothing.
-	ThreadContext func(ctx context.Context, key Key, binding, after, before string) string
+	// again, found again or recovered. NoThreadContext adds nothing. whole says the turn is one that carries what the thread
+	// holds, every author's (store.Reply.WholeThread), and after is empty on the thread's first turn: from its root.
+	ThreadContext func(ctx context.Context, key Key, binding, after, before string, whole bool) string
 	// After waits for a duration, and defaults to time.After. A test injects a clock.
 	After func(time.Duration) <-chan time.Time
 	// RetryBase and RetryMax are the first pause before a resend, which doubles up to RetryMax.

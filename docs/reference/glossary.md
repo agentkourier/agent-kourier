@@ -26,6 +26,11 @@ Binding identity
 :   The one service identity, a bearer token or a user ID, that every turn of a Binding runs as, chat or alert. The
     person who wrote a message is carried as attribution, never as the identity.
 
+Binding verification
+:   The leader's repeated check that a Binding can be served: that its agent's card can be fetched and that the bot is
+    in its channel. It reports through metrics and log lines and changes nothing else. See
+    [Metrics](metrics.md#binding-verification).
+
 Channel
 :   A place in a chat platform where people post, named by its ID. One channel takes at most one Binding per
     connection.

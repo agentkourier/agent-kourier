@@ -103,7 +103,8 @@ type Part interface{ part() }
 type Header struct{ Text string }
 
 // Body is the text of a reply. Markdown is untrusted CommonMark, in which an adapter may allow emphasis,
-// code and lists and must not allow a mention, a broadcast, a link, an image, HTML or a date.
+// code and lists and must not allow a mention, a broadcast, a masked link, an image, HTML or a date. A bare URL may be a
+// link that shows its own address, where a platform has no way to stop it (chattest's AllowAutolink).
 type Body struct{ Markdown string }
 
 // Context is a line of small print: literal text, one line.
@@ -142,6 +143,9 @@ type ToolLine struct {
 // and then Text, literal text of Agent Kourier's own on one line, such as "answered this question first.". User is a
 // platform's own user ID, which the adapter checks against the shape of the platform's IDs before it makes a
 // mention of it; anything else is shown as "someone", and never as markup, whatever it holds.
+//
+// A message that must notify the person holds Mentions and no Body: Slack shows a mention beside a Body and notifies nobody of
+// it (docs/spikes/slack-mention-probe.md, row N1).
 type Mention struct{ User, Text string }
 
 // Buttons is a row of buttons. A press comes back as an Interaction whose PromptID is the button's Value.

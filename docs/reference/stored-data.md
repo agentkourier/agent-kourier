@@ -20,10 +20,10 @@ Agent text that streams to a thread is never stored. Spans, metric labels and th
 | `reply_queue.text` | A thread reply, or an alert prompt, waiting for its turn. | Cleared when the turn is delivered. A reply that was never delivered is dropped, with its text, after 30 days (below). |
 | `interaction_presses.inputs` | What a person typed into a prompt. | Until the press is processed, or the worker gives up (an hour); purged an hour after the interaction's deadline at the latest. |
 | `outbox.payload` | The message to post. | Cleared once posted or abandoned. A row still unposted after 7 days is abandoned (reason `expired`) and its payload emptied; the row stays until its session is deleted. |
-| `sessions`, `reply_queue` (delivered), `interactions`, `interaction_presses`, `outbox` | IDs, keys, refs and times of a thread: no message text is left in them. | Until the session has been expired for 90 days, then all deleted together (below). |
+| `sessions`, `reply_queue` (delivered), `interactions`, `interaction_presses`, `outbox` | IDs, keys, refs and times of a thread: no message text is left in them. The ID of an `outbox` row for a mention holds the platform user ID of the person mentioned, and logs and traces show that ID too, as `outbox_id` and `agentkourier.outbox.id`. | Until the session has been expired for 90 days, then all deleted together (below). `AGENTKOURIER_AUDIT_RETENTION` does not shorten this. |
 | `feedback` | A person's verdict on a message of an investigation or an answer: the session and turn, the voter's platform ID, the Binding, the agent, the alert name and the verdict, and when. No free text. | For good: kept so that a review of the votes can read them. No retention loop deletes a row, and the deletion of a session 90 days after it expired (below) leaves its feedback rows. |
 | `sessions.origin_source`, `sessions.origin_subject`, `sessions.agent_name` | The bounded source and subject that caused the thread, each in the name shape (ASCII letters, digits and `_.-:`, at most 128 bytes), and the agent of the Binding when the session was made. Both origin values are empty for an ordinary conversation; a source may have no subject. Follow-up turns keep the origin and agent captured when the session was created. | As long as the session row, which is deleted with its thread (below). |
-| `audit` | IDs, codes, outcomes and lengths, never message text; the platform user ID of a voter or presser; an `email` column that nothing writes today; and, for an unusable pause, one redacted reason of at most 120 bytes. For oversized or abandoned prompts with a stored interaction, the refusal reason is audited before the interaction closes; recovery records a cancellation only when its result is known, so `ErrNotPaused` and a crash after cancellation before the audit do not produce an invented success row. An answered tool approval also stores approved and denied counts and up to 20 cleaned tool names in request order, when they fit within the audit row limit; it stores no arguments or rejection reasons. | For ever, unless `AGENTKOURIER_AUDIT_RETENTION` is set (below). |
+| `audit` | IDs, codes, outcomes and lengths, never message text; the platform user ID of a voter or presser, and of a person a reply mentioned with the name the Binding declares for them; an `email` column that nothing writes today; and, for an unusable pause, one redacted reason of at most 120 bytes. For oversized or abandoned prompts with a stored interaction, the refusal reason is audited before the interaction closes; recovery records a cancellation only when its result is known, so `ErrNotPaused` and a crash after cancellation before the audit do not produce an invented success row. An answered tool approval also stores approved and denied counts and up to 20 cleaned tool names in request order, when they fit within the audit row limit; it stores no arguments or rejection reasons. | For ever, unless `AGENTKOURIER_AUDIT_RETENTION` is set (below). |
 | `events.payload` | Nothing writes it. | n/a |
 
 ### Feedback
@@ -233,6 +233,12 @@ Before that they reach neither the agent nor its provider (with `all`, every rep
 sent and held in memory while that turn is the head of its session's queue, `reply_queue.text` holds only what the person who
 mentioned Agent Kourier wrote, and no reply's content is logged. A typed answer to a question that takes text replies needs no
 mention: it is queued pinned to the question and kept as its answer (`interactions.answer`, above).
+
+A bot's mention reads the thread on any Binding, whatever `chat.threadReplies` says: on the first bot's mention in the thread, what opened it and every
+author's messages up to the mention; on a later one, every author's messages since the previous bot's mention. So what people wrote in a thread
+reaches the agent, and so its model provider, once a bot mentions Agent Kourier there, without anyone having mentioned it themselves. Set
+`chat.botMentions: none` to stop that. Those messages are cleaned, redacted, cut and not stored, as above; `reply_queue.text` holds the fixed prompt
+and the bot's post.
 
 ### Sessions and what belongs to them
 

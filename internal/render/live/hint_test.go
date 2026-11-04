@@ -173,6 +173,8 @@ type crashOnce struct {
 	stored chan string
 }
 
+func (c *crashOnce) Enqueue(context.Context, outbox.Post) (string, error) { return "", nil }
+
 func (c *crashOnce) Send(ctx context.Context, p outbox.Post) (chat.Ref, error) {
 	var crash error
 	c.once.Do(func() {

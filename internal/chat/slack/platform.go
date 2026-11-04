@@ -60,9 +60,11 @@ type API interface {
 	Unreact(ctx context.Context, channel, ts, name string) error
 	IsChannelMember(ctx context.Context, channel, user string) (bool, error)
 	IsInAnyUserGroup(ctx context.Context, groups []string, user string) (bool, error)
+	ChannelAccess(ctx context.Context, channel string) (chat.Access, error)
 	IsBot(ctx context.Context, user string) (bool, error)
 	ResolveUser(ctx context.Context, id string) (dialect.User, error)
 	ThreadBetween(ctx context.Context, conn, channel, threadTS, after, before string, limit int) ([]chat.HistoryMessage, int, error)
+	ThreadFromStart(ctx context.Context, conn, channel, threadTS, before string, limit int) ([]chat.HistoryMessage, int, error)
 	SetThreadStatus(ctx context.Context, channel, threadTS, status string) error
 	WorkspaceURL() string
 }
@@ -138,7 +140,16 @@ func (in inbound) AcceptsBot(channel, botID string) bool {
 	return ok && f.AcceptsBot(channel, botID)
 }
 
-var _ BotFilter = inbound{}
+// AcceptsBotMention is BotMentionFilter: the neutral sink's answer, and no if it gives none (chat.BotMentionFilter).
+func (in inbound) AcceptsBotMention(channel, botID string) bool {
+	f, ok := in.sink.(chat.BotMentionFilter)
+	return ok && f.AcceptsBotMention(channel, botID)
+}
+
+var (
+	_ BotFilter        = inbound{}
+	_ BotMentionFilter = inbound{}
+)
 
 func (in inbound) Interaction(ctx context.Context, i Interaction) error {
 	return in.sink.Interaction(ctx, in.p.interaction(i))
@@ -170,6 +181,12 @@ func (p *Platform) Find(ctx context.Context, t chat.Target, tag string, since ti
 // chat.ErrInvalid.
 func (p *Platform) ThreadBetween(ctx context.Context, t chat.Target, after, before string, limit int) ([]chat.HistoryMessage, int, error) {
 	return p.c.ThreadBetween(ctx, p.conn, t.Channel, t.Thread, after, before, limit)
+}
+
+// ThreadFromStart implements chat.ThreadReader over the Client's (Client.ThreadFromStart). A target that names no thread is
+// chat.ErrInvalid.
+func (p *Platform) ThreadFromStart(ctx context.Context, t chat.Target, before string, limit int) ([]chat.HistoryMessage, int, error) {
+	return p.c.ThreadFromStart(ctx, p.conn, t.Channel, t.Thread, before, limit)
 }
 
 // Update replaces the message at r with o. Slack takes the blocks again with every update, so an update
@@ -468,6 +485,11 @@ func (p *Platform) IsInAnyGroup(ctx context.Context, groups []string, user strin
 	return p.c.IsInAnyUserGroup(ctx, groups, user)
 }
 
+// ChannelAccess says whether the bot is in channel and whether channel is archived, from one conversations.info call.
+func (p *Platform) ChannelAccess(ctx context.Context, channel string) (chat.Access, error) {
+	return p.c.ChannelAccess(ctx, channel)
+}
+
 // IsBot says whether user is a bot; it fails closed.
 func (p *Platform) IsBot(ctx context.Context, user string) (bool, error) {
 	return p.c.IsBot(ctx, user)
@@ -494,7 +516,9 @@ func (p *Platform) Capabilities() chat.Caps { return caps }
 
 // Classify says what an error of the Client means for a retry: a rejected credential is fatal, the codes
 // that say the same call will never work are permanent, with the reason in neutral terms and Slack's own
-// code beside it, and anything else, a rate limit, a server error or a timeout, may pass.
+// code beside it, and anything else, a rate limit, a server error or a timeout, may pass. For OpOther the permanent
+// errors are those of ChannelAccess that wrap chat.ErrChannelNotFound or chat.ErrMissingScope, and only those: Slack's raw
+// code in an error that wraps neither is not read as permanent.
 func (p *Platform) Classify(op chat.Op, err error) chat.Verdict {
 	if code := fatalAuthCode(err); code != "" {
 		return chat.Verdict{Class: chat.FatalAuth, Code: code}
@@ -507,6 +531,14 @@ func (p *Platform) Classify(op chat.Op, err error) chat.Verdict {
 	case chat.OpReact:
 		if code := reactionPermanentCode(err); code != "" {
 			return chat.Verdict{Class: chat.Permanent, Reason: reactionReason[code], Code: code}
+		}
+	case chat.OpOther:
+		// The code is Slack's own, and is empty for an error that never reached Slack (an empty channel).
+		switch {
+		case errors.Is(err, chat.ErrChannelNotFound):
+			return chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonChannelGone, Code: channelAccessCode(err)}
+		case errors.Is(err, chat.ErrMissingScope):
+			return chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonOther, Code: channelAccessCode(err)}
 		}
 	}
 	v := chat.Verdict{Class: chat.Transient}

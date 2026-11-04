@@ -191,3 +191,11 @@ the thread, and the next message starts a fresh context.
 An alert thread is a session like any other, started by a trigger instead of a person. Repeats of the same alert attach
 to the thread as notes, its resolve closes it with a note, and people continue the investigation by replying. The
 first turn names no person; it is filed under the system user. See [Chat triggers](../reference/chat-triggers.md).
+
+## Another agent's mention
+
+Another bot's mention is a turn of the thread it is in, filed under the system user too. It can start a session in a thread Agent Kourier does not
+own, or continue one it does, and it carries what the thread holds, because the post that mentions says nothing of what was asked. A session it
+starts takes a person's reply only if it mentions Agent Kourier, whatever `chat.threadReplies` says: the thread was people's before another agent
+named this one in it. A thread Agent Kourier already owned keeps its Binding's rule. See
+[A bot's mention](../reference/chat-triggers.md#a-bots-mention).

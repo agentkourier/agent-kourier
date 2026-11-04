@@ -215,6 +215,11 @@ func (p *recordingPlatform) IsInAnyGroup(context.Context, []string, string) (boo
 	return false, nil
 }
 
+func (p *recordingPlatform) ChannelAccess(context.Context, string) (chat.Access, error) {
+	p.note("ChannelAccess")
+	return chat.Access{}, nil
+}
+
 func (p *recordingPlatform) IsBot(context.Context, string) (bool, error) {
 	p.note("IsBot")
 	return false, nil
@@ -233,6 +238,10 @@ func (p *recordingPlatform) Capabilities() chat.Caps           { p.note("Capabil
 func (p *recordingPlatform) Permalink(chat.Ref) (string, bool) { p.note("Permalink"); return "", false }
 func (p *recordingPlatform) ThreadBetween(context.Context, chat.Target, string, string, int) ([]chat.HistoryMessage, int, error) {
 	p.note("ThreadBetween")
+	return nil, 0, nil
+}
+func (p *recordingPlatform) ThreadFromStart(context.Context, chat.Target, string, int) ([]chat.HistoryMessage, int, error) {
+	p.note("ThreadFromStart")
 	return nil, 0, nil
 }
 func (p *recordingPlatform) MarkBusy(context.Context, chat.Target, bool) error {
@@ -258,8 +267,8 @@ func (s *recordingStream) Stop(context.Context, string, chat.Message, string) er
 // TestEveryChatMethodIsClassified, so that a method added to the interface is decided on before it can be called unfenced.
 var (
 	chatPlatformWrites = map[string]bool{"Post": true, "Update": true, "Stream": true, "Ephemeral": true, "React": true, "Unreact": true, "MarkBusy": true}
-	chatPlatformReads  = map[string]bool{"Run": true, "Find": true, "RefAt": true, "StreamAt": true, "IsMember": true, "IsInAnyGroup": true, "IsBot": true,
-		"ResolveUser": true, "Fits": true, "Classify": true, "Capabilities": true, "Permalink": true, "ThreadBetween": true}
+	chatPlatformReads  = map[string]bool{"Run": true, "Find": true, "RefAt": true, "StreamAt": true, "IsMember": true, "IsInAnyGroup": true, "ChannelAccess": true, "IsBot": true,
+		"ResolveUser": true, "Fits": true, "Classify": true, "Capabilities": true, "Permalink": true, "ThreadBetween": true, "ThreadFromStart": true}
 	chatStreamWrites = map[string]bool{"Append": true, "Step": true, "Stop": true}
 	chatStreamReads  = map[string]bool{"Ref": true}
 )

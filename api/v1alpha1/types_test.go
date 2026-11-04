@@ -70,6 +70,19 @@ func TestToolApprovalFieldsDecode(t *testing.T) {
 	}
 }
 
+func TestDefaultMaxMentionsPerTurn(t *testing.T) {
+	for _, tc := range []struct {
+		in   *int
+		want int
+	}{{nil, DefaultMaxMentionsPerTurn}, {new(0), 0}, {new(1), 1}, {new(10), 10}} {
+		b := &Binding{Spec: BindingSpec{Chat: ChatBinding{MaxMentionsPerTurn: tc.in}}}
+		b.Default()
+		if got := b.Spec.Chat.MentionCap(); got != tc.want {
+			t.Errorf("MaxMentionsPerTurn %v after Default = %d, want %d", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestDefaultThreadReplies(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -84,6 +97,25 @@ func TestDefaultThreadReplies(t *testing.T) {
 			b.Default()
 			if got := b.Spec.Chat.ThreadReplies; got != tc.want {
 				t.Errorf("ThreadReplies after Default = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDefaultBotMentions(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		in, want BotMentions
+	}{
+		{"omitted", "", BotMentionsAny},
+		{"any kept", BotMentionsAny, BotMentionsAny},
+		{"none kept", BotMentionsNone, BotMentionsNone},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := &Binding{Spec: BindingSpec{Chat: ChatBinding{BotMentions: tc.in}}}
+			b.Default()
+			if got := b.Spec.Chat.BotMentions; got != tc.want {
+				t.Errorf("BotMentions after Default = %q, want %q", got, tc.want)
 			}
 		})
 	}

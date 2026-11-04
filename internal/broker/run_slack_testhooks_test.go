@@ -250,7 +250,8 @@ func tapHandOffAlive() bool {
 
 // A pause the intake cannot take up is in the tap's hands, retrying, when the shutdown comes. The tap is
 // stopped first in the interactions' step, so that the intake is handed no more and nothing is left
-// retrying, then the worker and the rest in the reverse order of their start, and no goroutine is left
+// retrying, then the worker and the rest in the reverse order of their start (the verification of the Bindings, started before the
+// interactions, among the loops that stop after them), and no goroutine is left
 // (the package's goleak).
 func TestRunStopsTheTapFirstWithAPauseInFlight(t *testing.T) {
 	w := askWorld(t)
@@ -280,7 +281,7 @@ func TestRunStopsTheTapFirstWithAPauseInFlight(t *testing.T) {
 	if !aliveAtStep.Load() {
 		t.Error("no hand-off was in flight when the interactions' step began (the control: the scan finds it)")
 	}
-	if want := "tap,worker,sweeper,replacer,backstop,retention,store-retention,trigger-digest,trigger-threads"; notes.got() != want {
+	if want := "tap,worker,sweeper,replacer,backstop,retention,binding-verification,store-retention,trigger-digest,trigger-threads"; notes.got() != want {
 		t.Errorf("the interactions stopped as %s, want %s", notes.got(), want)
 	}
 	if tapHandOffAlive() {
@@ -337,6 +338,83 @@ func TestRunPostsTheAgentsAnswerThroughItsOwnRenderer(t *testing.T) {
 	w.mention(t, r)
 
 	w.waitFor(t, "the agent's answer", func(m fakeslack.Message) bool { return strings.Contains(m.Text, "the answer") && !m.Streaming })
+}
+
+// mentionAudit is a store that keeps the audit rows of mentions.
+type mentionAudit struct {
+	store.Audit
+	mu   sync.Mutex
+	rows []store.AuditEntry
+}
+
+func (a *mentionAudit) AppendAudit(ctx context.Context, e store.AuditEntry) error {
+	if strings.HasPrefix(e.Subject, "mention ") {
+		a.mu.Lock()
+		a.rows = append(a.rows, e)
+		a.mu.Unlock()
+	}
+	return a.Audit.AppendAudit(ctx, e)
+}
+
+func (a *mentionAudit) outcomes() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]string, len(a.rows))
+	for i, e := range a.rows {
+		out[i] = e.Outcome
+	}
+	return out
+}
+
+// A reply that names a person the Binding declares reaches Slack as written, and is followed in the thread by a message of
+// context lines that mention the person, through Run's own renderer and outbox, and the audit log says so. The prompt told
+// the agent the name.
+func TestRunNotifiesADeclaredPersonAfterTheReply(t *testing.T) {
+	w := newSlackWorld(t, "xoxb-fake-bot")
+	w.cfg.sink = nil
+	binding := filepath.Join(w.cfg.ConfigDir, "binding.yaml")
+	raw, err := os.ReadFile(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withMentions := strings.Replace(string(raw), "\n  chat:\n", "\n  chat:\n    mentions:\n      - { name: payments-owner, user: U0SAM }\n", 1)
+	if withMentions == string(raw) {
+		t.Fatal("the example Binding has no chat block to add mentions to")
+	}
+	if err := os.WriteFile(binding, []byte(withMentions), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var prompt atomic.Value
+	w.stub.Agent("kagent", "k8s-agent").Reply(func(p string) []stubagent.Step {
+		prompt.Store(p)
+		return []stubagent.Step{stubagent.Text("ask @payments-owner, not @here")}
+	})
+	aud := &mentionAudit{}
+	w.cfg.auditStore = func(s store.Audit) store.Audit { aud.Audit = s; return aud }
+	r := start(t, w.cfg)
+
+	w.mention(t, r)
+
+	note := w.waitFor(t, "the mention", func(m fakeslack.Message) bool { return strings.Contains(string(m.Blocks), "@U0SAM") })
+	if strings.Contains(note.Text, "@U0SAM") || strings.Contains(string(note.Blocks), `"type":"markdown"`) || strings.Contains(string(note.Blocks), `"type":"rich_text"`) {
+		t.Errorf("the mention = %q, blocks %s; want context lines, and no token in its text", note.Text, note.Blocks)
+	}
+	thread := w.fake.Thread("C0123456789", note.ThreadTS)
+	if at := slices.IndexFunc(thread, func(m fakeslack.Message) bool { return strings.Contains(m.Text, "ask @payments-owner") }); at < 0 || thread[len(thread)-1].TS != note.TS {
+		t.Errorf("thread = %+v; want the reply, and the mention last", thread)
+	}
+	for _, m := range thread {
+		if m.TS != note.TS && strings.Contains(string(m.Blocks)+m.Text, "@U0SAM") {
+			t.Errorf("another message holds the token: %+v", m)
+		}
+	}
+	if got, _ := prompt.Load().(string); !strings.Contains(got, "You may use these names: payments-owner.") || strings.Contains(got, "U0SAM") {
+		t.Errorf("the prompt = %q; want the name and no user ID", got)
+	}
+	waitUntil(t, "the audit row", func() bool { return len(aud.outcomes()) > 0 })
+	if got := aud.outcomes(); len(got) != 1 || !strings.Contains(got[0], "name=payments-owner user=U0SAM") {
+		t.Errorf("audit rows = %q; want one for the person", got)
+	}
 }
 
 // A thread that has expired is told so by the notice the intake raises, which Run connects to the same

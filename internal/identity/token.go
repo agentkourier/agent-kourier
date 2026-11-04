@@ -51,7 +51,8 @@ type SecretReader interface {
 type TokenSource interface {
 	// Token returns the current token. It is called for every operation, so an
 	// implementation that caches must expire what it caches. On failure the error wraps
-	// agent.ErrTokenUnreadable.
+	// agent.ErrTokenUnreadable. It must return when ctx ends: agent.Pool.Close waits for a probe
+	// that is reading the token, so a source that ignores ctx holds Close.
 	Token(ctx context.Context) (secret.Value, error)
 	// Refresh drops anything cached and reads the token again. It is called after the
 	// backend rejected the token, and returns the error a fresh Token would.

@@ -47,7 +47,8 @@ type Presses interface {
 	// An answer typed as a reply in the thread is a press not yet recorded, so it counts too: a reply
 	// that waits in the reply queue pinned to the interaction, and enqueued at or before before; or,
 	// for an interaction that is pending, takes text replies and has its prompt posted, one not pinned
-	// to any question that was enqueued from the interaction's creation to before.
+	// to any question that was enqueued from the interaction's creation to before, and that a person wrote: a turn filed
+	// under SystemUser is never an answer.
 	PendingPresses(ctx context.Context, interactionID string, before time.Time) (bool, error)
 	// DeletePress removes the press with seq, once it is processed. A press that is already gone is
 	// not an error: a crash may repeat the call.

@@ -40,7 +40,21 @@ const (
 	maxThreadCooldown  = 7 * 24 * time.Hour
 	// maxApproverGroups keeps each approval press within a bounded number of uncached group lookups.
 	maxApproverGroups = 10
+	// maxMentions bounds the names a Binding declares, each of which the agent is told of in its first prompt.
+	maxMentions = 50
 )
+
+// mentionName is what an agent writes after an "@"; its literal must equal ChatMention.Name's Pattern marker. mentionUser
+// is a Slack user ID, the only platform's; its literal must equal ChatMention.User's Pattern marker, and matches what the
+// Slack adapter makes a mention of.
+var (
+	mentionName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
+	mentionUser = regexp.MustCompile(`^[UW][A-Z0-9]{2,20}$`)
+)
+
+// broadcastNames are the words a platform reads as a mention of everyone. None may be declared, so that no reply that names
+// one can ever look as if a broadcast were allowed.
+var broadcastNames = map[string]bool{"here": true, "channel": true, "everyone": true}
 
 // approverGroupID matches Slack user group IDs. Its literal is also documented by Interactions.ApproverGroups.
 var approverGroupID = regexp.MustCompile(`^S[A-Z0-9]+$`)
@@ -202,6 +216,7 @@ func (b *Binding) Validate() error {
 	p.oneOf("spec.chat.output", string(s.Chat.Output), string(OutputLive), string(OutputFinal))
 	p.oneOf("spec.chat.progress", string(s.Chat.Progress), string(ProgressSteps), string(ProgressStepsAndActivity), string(ProgressActivity))
 	p.oneOf("spec.chat.threadReplies", string(s.Chat.ThreadReplies), string(ThreadRepliesAll), string(ThreadRepliesMention))
+	p.oneOf("spec.chat.botMentions", string(s.Chat.BotMentions), string(BotMentionsAny), string(BotMentionsNone))
 	if a := s.Chat.Acknowledgment; a == nil {
 		p.add("spec.chat.acknowledgment", "required after defaulting")
 	} else {
@@ -213,10 +228,42 @@ func (b *Binding) Validate() error {
 		}
 	}
 	p.triggers("spec.chat.triggers", s.Chat.Triggers)
+	p.mentions("spec.chat.mentions", s.Chat.Mentions)
+	if n := s.Chat.MentionCap(); n < 1 || n > 10 {
+		p.add("spec.chat.maxMentionsPerTurn", "%d is out of range, must be from 1 to 10", n)
+	}
 	p.interactions("spec.interactions", s.Interactions)
 	p.duration("spec.interactions.timeout", s.Interactions.Timeout)
 	p.duration("spec.session.threadTTL", s.Session.ThreadTTL)
 	return errors.Join(p...)
+}
+
+func (p *problems) mentions(path string, mentions []ChatMention) {
+	if len(mentions) > maxMentions {
+		p.add(path, "has %d items, maximum is %d", len(mentions), maxMentions)
+	}
+	seen := make(map[string]int, len(mentions))
+	for idx, m := range mentions {
+		at := fmt.Sprintf("%s[%d]", path, idx)
+		switch {
+		case m.Name == "":
+			p.add(at+".name", "required")
+		case broadcastNames[m.Name]:
+			p.add(at+".name", "%q is reserved: a broadcast cannot be declared", m.Name)
+		case !mentionName.MatchString(m.Name):
+			p.add(at+".name", "invalid name %q: use lowercase letters, digits and '-', starting with a letter, at most 63 characters", m.Name)
+		}
+		if previous, ok := seen[m.Name]; ok && m.Name != "" {
+			p.add(at+".name", "duplicate of index %d", previous)
+		} else {
+			seen[m.Name] = idx
+		}
+		if m.User == "" {
+			p.add(at+".user", "required")
+		} else if !mentionUser.MatchString(m.User) {
+			p.add(at+".user", "invalid user ID %q: must be a user ID such as U0123456789", m.User)
+		}
+	}
 }
 
 func (p *problems) interactions(path string, in Interactions) {

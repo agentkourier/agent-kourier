@@ -57,7 +57,7 @@ func TestSmoke(t *testing.T) {
 	if err := CheckTier(env.Tier); err != nil {
 		t.Fatal(err)
 	}
-	deployed, err := pods.List(ctx, kube.AgentKourierNamespace, "app.kubernetes.io/name=agent-kourier")
+	deployed, err := pods.List(ctx, kube.AgentKourierNamespace, agentKourierPods)
 	if err != nil {
 		t.Fatal(err)
 	}

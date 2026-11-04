@@ -48,7 +48,7 @@ type Config struct {
 	// IsChannelMember does (default 1000, Slack's largest). A test sets it small. It also sets how much of a thread
 	// ThreadBetween reads: five pages of it, and a window of more is chat.ErrThreadTooLong.
 	PageLimit int
-	// AuthzTimeout bounds each IsChannelMember and each IsBot call, and each IsInAnyUserGroup call as a whole, every group of it (default 2 seconds, which a zero or negative value also means). A caller off
+	// AuthzTimeout bounds each IsChannelMember, each ChannelAccess and each IsBot call, and each IsInAnyUserGroup call as a whole, every group of it (default 2 seconds, which a zero or negative value also means). A caller off
 	// Slack's 3 second acknowledgement path may allow more.
 	AuthzTimeout time.Duration
 }
@@ -63,7 +63,7 @@ type Client struct {
 	timeout  time.Duration
 	max      int
 	pageSize int
-	// membersPage is IsChannelMember's page size, and authz the bound of it, of IsBot and of IsInAnyUserGroup.
+	// membersPage is IsChannelMember's page size, and authz the bound of it, of IsBot, of ChannelAccess and of IsInAnyUserGroup.
 	membersPage int
 	authz       time.Duration
 	onConn      func(connected bool) // Config.OnConnection
@@ -163,7 +163,11 @@ func (c *Client) handle(ctx context.Context, smc *socketmode.Client, me self, si
 	switch ev.Type {
 	case socketmode.EventTypeEventsAPI:
 		if outer, ok := ev.Data.(slackevents.EventsAPIEvent); ok {
-			if m, v := decode(me, outer.InnerEvent.Data); c.takes(ctx, sink, m, v) {
+			m, v := decode(me, outer.InnerEvent.Data)
+			if v == forward && m.Mentioned && m.Bot.ID != "" && fromAnotherWorkspace(outer) {
+				v = dropped // a bot of another workspace may have posted it: a channel shared across workspaces fails closed
+			}
+			if c.takes(ctx, sink, m, v) {
 				if err := sink.Message(ctx, m); err != nil {
 					c.log.WarnContext(ctx, "slack: message not taken; left unacknowledged for Slack to send again",
 						"channel", m.Channel, "ts", m.TS, "err", err)
@@ -203,6 +207,10 @@ func (c *Client) takes(ctx context.Context, sink Sink, m Message, v verdict) boo
 	if v == dropped {
 		return false
 	}
+	if m.Mentioned && m.Bot.ID != "" {
+		filter, filters := sink.(BotMentionFilter)
+		return v != ownPost && filters && filter.AcceptsBotMention(m.Channel, m.Bot.ID)
+	}
 	filter, filters := sink.(BotFilter)
 	named := m.Bot.ID != "" && filters && filter.AcceptsBot(m.Channel, m.Bot.ID)
 	if v == ownPost {
@@ -215,4 +223,19 @@ func (c *Client) takes(ctx context.Context, sink Sink, m Message, v verdict) boo
 		return false
 	}
 	return m.Bot.ID == "" || named
+}
+
+// fromAnotherWorkspace says whether an event is in a channel shared with another workspace, by Slack's flag for a channel shared
+// outside the organization, or was written from a team other than the one it was delivered for, which is how a channel shared inside
+// an organization may show. Neither shape has been seen from Slack: this fails closed on either.
+func fromAnotherWorkspace(outer slackevents.EventsAPIEvent) bool {
+	if outer.IsExtSharedChannel {
+		return true
+	}
+	e, ok := outer.InnerEvent.Data.(*slackevents.AppMentionEvent)
+	if !ok {
+		return false
+	}
+	other := func(team string) bool { return team != "" && team != outer.TeamID }
+	return other(e.UserTeam) || other(e.SourceTeam)
 }

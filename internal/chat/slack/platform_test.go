@@ -273,6 +273,7 @@ func slackSubject(t *testing.T) (chattest.Subject, *slack.Platform) {
 			return out
 		},
 		Inert:    inertRequests(w),
+		Channels: slackChannels(fake),
 		TooLarge: &chat.Prompt{ID: "ix-big", Questions: make([]chat.Question, 60)},
 		// A prompt of tools too large for one message: 30 tools take 62 blocks.
 		ToolApprovals: true,
@@ -282,7 +283,8 @@ func slackSubject(t *testing.T) (chattest.Subject, *slack.Platform) {
 		// Slack makes a bare URL in text and in markdown into a link that shows its own address, and no escape
 		// stops it: a backslash before a colon is shown as a backslash, and Slack has no escape for mrkdwn. The
 		// link goes where the text says and nowhere else, and every request is inert (no unfurl, so Slack does
-		// not fetch it). UNCONFIRMED(WP-04): whether a plain_text object does the same.
+		// not fetch it). A URL of a message in the workspace is Slack's own reference to the message. A plain_text
+		// object makes no link (docs/spikes/slack-mention-probe.md).
 		AllowAutolink: true,
 		Concessions: []chattest.Concession{{
 			Where: chat.WhereToolArgs, Kinds: []chattest.Kind{chattest.KindCode},
@@ -302,6 +304,28 @@ func slackSubject(t *testing.T) (chattest.Subject, *slack.Platform) {
 				"it cannot show the blocks, and the adapter sends every message's text as a plain_text block too, which is what is read",
 		}},
 	}, p
+}
+
+// slackChannels puts the fake Slack in each state of a channel the contract of ChannelAccess names: the bot is a member or not
+// of the channel, which is archived or not, Slack has never heard of it, or the app lacks the scope. The bot is the fake's own
+// (fakeslack.WithBot's default user).
+func slackChannels(fake *fakeslack.Server) func(chattest.ChannelState) string {
+	return func(state chattest.ChannelState) string {
+		fake.SetMissingScope("conversations.info", state == chattest.ChannelScopeMissing)
+		switch state {
+		case chattest.ChannelJoined, chattest.ChannelScopeMissing:
+			fake.SetMembers("C0JOINED", "U1", "UFAKEBOT")
+			return "C0JOINED"
+		case chattest.ChannelNotJoined:
+			fake.SetMembers("C0NOTJOINED", "U1")
+			return "C0NOTJOINED"
+		case chattest.ChannelArchived:
+			fake.SetMembers("C0ARCHIVED", "UFAKEBOT")
+			fake.SetArchived("C0ARCHIVED", true)
+			return "C0ARCHIVED"
+		}
+		return "C0UNKNOWN"
+	}
 }
 
 // inertRequests checks that every request was sent with Slack's parsing and unfurling off.

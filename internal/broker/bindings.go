@@ -21,6 +21,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/identity"
 	"github.com/agentkourier/agent-kourier/internal/interact"
+	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/session"
 )
 
@@ -100,8 +101,9 @@ func NewBindings(snaps Snapshots, secrets identity.SecretReader, aud identity.Au
 	}, nil
 }
 
-// Close closes the agent pools, then the idle connections of the dialects' transports, so that
-// no goroutine outlives it. Calls after it fail.
+// Close closes the agent pools, which cancel and wait for the CheckAgent calls in flight, then the idle connections
+// of the dialects' transports, so that no idle connection's goroutine outlives it. Streams already running end with
+// their own context. Calls after it fail.
 func (b *Bindings) Close() {
 	for _, k := range b.kits {
 		k.pool.Close()
@@ -159,10 +161,35 @@ func (b *Bindings) Backend(name string) (session.Backend, error) {
 		Progress:                 rb.Binding.Spec.Chat.Progress,
 		Feedback:                 rb.Binding.Spec.Feedback.Enabled,
 		ThreadReplies:            rb.Binding.Spec.Chat.ThreadReplies,
+		Mentions:                 rb.Binding.Spec.Chat.Mentions,
+		MaxMentions:              rb.Binding.Spec.Chat.MentionCap(),
+		MentionPrompt:            render.MentionPrompt(rb.Binding.Spec.Chat.Mentions),
 		AcknowledgmentEnabled:    ackEnabled,
 		AcknowledgmentEmoji:      ackEmoji,
 		AcknowledgmentConfigured: true,
 	}, nil
+}
+
+// CheckAgent reports whether the agent of the Binding named "namespace/name" can be reached now, for the
+// verification of Bindings: it fetches the agent card on a fresh connection, through the pool and the
+// identity a call of the Binding uses (agent.Pool.Check), and sends the agent nothing. The Binding is resolved as
+// Backend resolves it, so an error wrapping session.ErrUnknownBinding means the config has no such Binding.
+//
+// The error is the probe's as it is, never typed by what a status means to a call: a 403 is a
+// *dialect.HTTPStatusError and not agent.ErrCredentialsRejected, and the caller finds the cause with
+// errors.As and errors.Is (see agent.Pool.Check). It never calls identity.Source.Rejected, so a token the backend
+// rejects, probed on a schedule, writes no audit row and does not count as a rejected credential. It is not
+// fenced (fenceAgent): the card fetch changes nothing the agent holds.
+func (b *Bindings) CheckAgent(ctx context.Context, name string) error {
+	rb, k, err := b.resolve(name)
+	if err != nil {
+		return err
+	}
+	src, err := identity.New(rb.Binding, rb.Backend, b.secrets, b.aud, identity.Options{})
+	if err != nil {
+		return fmt.Errorf("broker: Binding %s: %w", name, err)
+	}
+	return k.pool.Check(ctx, src.Target())
 }
 
 // acknowledgment is whether a Binding reacts to an accepted message, and with which reaction: the one the Binding names, else

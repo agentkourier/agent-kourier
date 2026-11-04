@@ -47,6 +47,9 @@ increase(agentkourier_credential_rejections_total[15m]) > 0
 # The running config lags the files: the last reload failed
 agentkourier_config_stale == 1
 
+# A Binding cannot be served. One failed probe holds this until the next pass, so give the rule a `for: 10m`
+agentkourier_binding_ready == 0
+
 # Stalled inbound or outbound work
 agentkourier_reply_queue_oldest_age_seconds > 300
 agentkourier_outbox_oldest_age_seconds > 300

@@ -16,6 +16,8 @@ type (
 	ProgressMode string
 	// ThreadReplies selects which replies in a thread Agent Kourier owns are turns (spec 8.2).
 	ThreadReplies string
+	// BotMentions selects whether another bot's mention of Agent Kourier starts a turn (spec 8.2).
+	BotMentions string
 )
 
 // Values of the enumerations, plus the only platform and alert source type in v1.
@@ -32,6 +34,9 @@ const (
 
 	ThreadRepliesAll     ThreadReplies = "all"
 	ThreadRepliesMention ThreadReplies = "mention"
+
+	BotMentionsAny  BotMentions = "any"
+	BotMentionsNone BotMentions = "none"
 
 	PlatformSlack = "slack"
 )
@@ -246,6 +251,14 @@ type ChatBinding struct {
 	// +kubebuilder:default=all
 	// +optional
 	ThreadReplies ThreadReplies `json:"threadReplies"`
+	// BotMentions defaults to any: on a Binding with a mention trigger, a mention of Agent Kourier by any bot or
+	// incoming webhook that can post in the channel starts a turn in the mention's thread, with a fixed prompt and
+	// held to fixed limits. The platform cannot tell an agent from any other bot. With none, a bot's mention starts
+	// nothing. Agent Kourier's own posts, and a bot that a botMessage trigger names, are never taken as a mention.
+	// +kubebuilder:validation:Enum=any;none
+	// +kubebuilder:default=any
+	// +optional
+	BotMentions BotMentions `json:"botMentions"`
 	// Acknowledgment controls the temporary reaction Agent Kourier adds to an accepted message while it is being processed.
 	// It defaults to enabled with the platform's own reaction (Slack: hourglass_flowing_sand).
 	// +optional
@@ -256,6 +269,37 @@ type ChatBinding struct {
 	// +doc:default=`[{type: mention}]`
 	// +optional
 	Triggers []Trigger `json:"triggers,omitempty"`
+	// Mentions are the people an agent may notify, by writing `@name` in its reply. Agent Kourier then posts a message in the
+	// thread that mentions each one named, one message for each. A name not listed here notifies nobody, and an agent can never supply
+	// a user ID. Empty means no mentions, and nothing is added to the prompt. At most 50.
+	// +optional
+	Mentions []ChatMention `json:"mentions,omitempty"`
+	// MaxMentionsPerTurn is the most people one turn mentions, at most 10; the people after them are not mentioned. It defaults to 2.
+	// 0 is refused: to notify nobody, leave mentions empty.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=10
+	// +kubebuilder:default=2
+	// +optional
+	MaxMentionsPerTurn *int `json:"maxMentionsPerTurn,omitempty"`
+}
+
+// MentionCap is the most people one turn mentions: MaxMentionsPerTurn, or its default if it is not set.
+func (c ChatBinding) MentionCap() int {
+	if c.MaxMentionsPerTurn == nil {
+		return DefaultMaxMentionsPerTurn
+	}
+	return *c.MaxMentionsPerTurn
+}
+
+// ChatMention is one person an agent may notify.
+type ChatMention struct {
+	// Name is what the agent writes, after an `@`: lowercase letters, digits and `-`, starting with a letter, at most 63
+	// characters. `here`, `channel` and `everyone` are refused.
+	// +kubebuilder:validation:Pattern=`^[a-z][a-z0-9-]{0,62}$`
+	Name string `json:"name"`
+	// User is the platform's user ID of the person (Slack: `U…` or `W…`). It comes only from here, never from the agent.
+	// +kubebuilder:validation:Pattern=`^[UW][A-Z0-9]{2,20}$`
+	User string `json:"user"`
 }
 
 // ChatAcknowledgment configures the temporary reaction on an accepted message.
@@ -327,6 +371,7 @@ type Session struct {
 const (
 	DefaultInteractionTimeout = 30 * time.Minute
 	DefaultThreadTTL          = 90 * 24 * time.Hour
+	DefaultMaxMentionsPerTurn = 2
 )
 
 // Default fills the fields left empty. A ChatConnection has none to fill; the method keeps the shape that
@@ -344,12 +389,18 @@ func (b *Binding) Default() {
 	if b.Spec.Chat.ThreadReplies == "" {
 		b.Spec.Chat.ThreadReplies = ThreadRepliesAll
 	}
+	if b.Spec.Chat.BotMentions == "" {
+		b.Spec.Chat.BotMentions = BotMentionsAny
+	}
 	if b.Spec.Chat.Acknowledgment == nil {
 		b.Spec.Chat.Acknowledgment = &ChatAcknowledgment{}
 	}
 	if b.Spec.Chat.Acknowledgment.Enabled == nil {
 		enabled := true
 		b.Spec.Chat.Acknowledgment.Enabled = &enabled
+	}
+	if b.Spec.Chat.MaxMentionsPerTurn == nil {
+		b.Spec.Chat.MaxMentionsPerTurn = new(DefaultMaxMentionsPerTurn)
 	}
 	b.Spec.Chat.defaultTriggers()
 	if b.Spec.Interactions.Timeout.Duration == 0 {
