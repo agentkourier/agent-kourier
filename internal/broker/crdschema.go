@@ -144,7 +144,7 @@ func (f finding) log(log *slog.Logger, name, prev string) {
 			log.Info("the schema hash of a CRD now matches the one this broker was built with", append([]any{"crd", name}, was...)...)
 		}
 	case SchemaMismatch:
-		log.Warn("the schema hash of a CRD is not the one this broker was built with: apply the CRDs of the chart release that matches this image (crds.install, or kubectl apply --server-side -f of that release's files/crds); the hash says which files were applied, not what the API server serves",
+		log.Warn("the schema hash of a CRD is not the one this broker was built with: update the CRDs the way they were installed, to those of the chart release that matches this image (helm upgrade with crds.install, or kubectl apply --server-side -f of that release's files/crds); the hash says which files were applied, not what the API server serves",
 			append([]any{"crd", name, "annotation", v1alpha1.SchemaHashAnnotation, "cluster", f.cluster, "built", f.built}, was...)...)
 	case SchemaUnannotated:
 		log.Info("a CRD has no schema hash, so it cannot be compared with the one this broker was built with: it comes from a chart or file that did not carry it",

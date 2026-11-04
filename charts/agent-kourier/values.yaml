@@ -111,8 +111,8 @@ config:
 # render the same CRD conflict.
 #
 # Each carries the annotation agentkourier.dev/schema-sha256, which the generated file holds (the SHA-256 of the file without that line), so that
-# whatever applies the file applies it. The broker compares it with the hash it was built with, at start and every minute (a mismatch warns, once,
-# and is a metric, agentkourier_crd_schema_state; it stops nothing). It states which files were applied: it is not proof of what the API server serves. A CRD from an older chart or file has none, which is reported as unannotated and is no fault.
+# whatever applies the file applies it (Helm and kubectl do, measured; a GitOps tool should, unverified). The broker compares it with the hash it was built with, at start and every minute (a mismatch warns when a CRD's result changes, and is a metric, agentkourier_crd_schema_state;
+# it stops nothing). It states which files were applied: it is not proof of what the API server serves. A CRD from an older chart or file has none, which is reported as unannotated and is no fault.
 #
 # They carry helm.sh/resource-policy: keep, so uninstalling the release, or turning this off, leaves them there, and with them every custom
 # resource: deleting a CRD deletes its resources too. Nor does a release that has this off upgrade them: a chart upgrade that changes a schema

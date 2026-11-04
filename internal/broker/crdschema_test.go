@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -101,6 +103,23 @@ func schemaSoon(t *testing.T, what string, cond func() bool) {
 	}
 }
 
+// countGets makes the client count each get of a CRD, and returns the count. It does not handle the get: the others do.
+func countGets(c *dynamicfake.FakeDynamicClient) *atomic.Int64 {
+	var n atomic.Int64
+	c.PrependReactor("get", "customresourcedefinitions", func(k8stesting.Action) (bool, runtime.Object, error) {
+		n.Add(1)
+		return false, nil, nil
+	})
+	return &n
+}
+
+// afterPasses waits until the watch has made n more passes (three gets each) than it had when the call began.
+func afterPasses(t *testing.T, gets *atomic.Int64, n int) {
+	t.Helper()
+	want := gets.Load() + int64(3*n)
+	schemaSoon(t, "more passes of the watch", func() bool { return gets.Load() >= want })
+}
+
 // runWatch runs watchCRDSchemas against client with a short period until the gauge holds a state for every CRD and several passes have been
 // made, then stops it and waits for it to return. It returns the metrics and what was logged.
 func runWatch(t *testing.T, client *dynamicfake.FakeDynamicClient, during func()) (*Metrics, string) {
@@ -111,6 +130,7 @@ func runWatch(t *testing.T, client *dynamicfake.FakeDynamicClient, during func()
 	if err != nil {
 		t.Fatal(err)
 	}
+	gets := countGets(client)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); watchCRDSchemas(ctx, client, log, m, 4*time.Millisecond) }()
@@ -125,7 +145,7 @@ func runWatch(t *testing.T, client *dynamicfake.FakeDynamicClient, during func()
 	if during != nil {
 		during()
 	}
-	time.Sleep(60 * time.Millisecond) // many passes: the log must not repeat itself
+	afterPasses(t, gets, 4) // several more passes: the log must not repeat itself
 	cancel()
 	<-done
 	return m, logs.String()
@@ -228,6 +248,7 @@ func TestWatchFollowsAChangeOfTheCRDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	gets := countGets(c)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); watchCRDSchemas(ctx, c, log, m, 4*time.Millisecond) }()
@@ -235,10 +256,10 @@ func TestWatchFollowsAChangeOfTheCRDs(t *testing.T) {
 	schemaSoon(t, "a match", func() bool { return state() == SchemaMatch })
 	set(c, other)
 	schemaSoon(t, "a mismatch after the CRD changed", func() bool { return state() == SchemaMismatch })
-	time.Sleep(40 * time.Millisecond)
+	afterPasses(t, gets, 3) // the mismatch is seen again and again, and logged once
 	set(c, built)
 	schemaSoon(t, "a match again", func() bool { return state() == SchemaMatch })
-	time.Sleep(40 * time.Millisecond)
+	afterPasses(t, gets, 3)
 	cancel()
 	<-done
 	out := logs.String()
@@ -252,30 +273,71 @@ func TestWatchFollowsAChangeOfTheCRDs(t *testing.T) {
 
 func mustHash(name string) string { h, _ := v1alpha1.SchemaSHA256(name); return h }
 
-// TestWatchStopsWithItsContext: the watch returns when its context ends, in the middle of a pass or between two, and a stop is not a finding.
+// blockingGets makes every get of a CRD on c wait until release is closed, after telling entered (once) that a get has begun, and then answer
+// forbidden, as a request that was cut short by a stop answers. It returns release, safe to close more than once.
+func blockingGets(c *dynamicfake.FakeDynamicClient, entered chan<- struct{}) func() {
+	release := make(chan struct{})
+	var once sync.Once
+	c.PrependReactor("get", "customresourcedefinitions", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-release
+		return true, nil, apierrors.NewForbidden(crdResource.GroupResource(), a.(k8stesting.GetAction).GetName(), nil)
+	})
+	return func() { once.Do(func() { close(release) }) }
+}
+
+// TestWatchStopsWithItsContext: a stop in the middle of a get is not a finding. The watch is cancelled while a get is in flight, the get then
+// fails as it would for a cut request, and the watch returns having logged nothing and set no gauge: neither a warning for a CRD that was never
+// read nor a state of "unknown" for it.
 func TestWatchStopsWithItsContext(t *testing.T) {
 	m, err := NewMetrics(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var logs bytes.Buffer
+	c := crdCluster()
+	entered := make(chan struct{}, 1)
+	release := blockingGets(c, entered)
+	t.Cleanup(release)
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		watchCRDSchemas(ctx, crdCluster(), slog.New(slog.NewTextHandler(&logs, nil)), m, time.Hour)
+		watchCRDSchemas(ctx, c, slog.New(slog.NewTextHandler(&logs, nil)), m, time.Hour)
 	}()
-	schemaSoon(t, "the watch returns", func() bool {
-		select {
-		case <-done:
-			return true
-		default:
-			return false
-		}
-	})
+	<-entered // a get is in flight
+	cancel()
+	release()
+	<-done
 	if logs.Len() != 0 || gatherNames(t, m)["agentkourier_crd_schema_state"] {
-		t.Errorf("a stopped watch logged %q or set the gauge", logs.String())
+		t.Errorf("a watch stopped in a get logged %q or set the gauge", logs.String())
+	}
+}
+
+// TestRunWaitsForTheSchemaWatchAtShutdown: the shutdown's resolver step waits for the watch (run.go), so a get that is still in flight when the
+// broker is told to stop holds Run back until it ends: Run does not return while the watch is in a get, and returns once it is out. Without
+// the wait Run would return at once and leave the goroutine behind.
+func TestRunWaitsForTheSchemaWatchAtShutdown(t *testing.T) {
+	c := crStartConfig(t, nil)
+	entered := make(chan struct{}, 1)
+	release := blockingGets(c.Dynamic.(*dynamicfake.FakeDynamicClient), entered)
+	t.Cleanup(release)
+	r := start(t, c)
+	r.until("/readyz", http.StatusOK)
+	<-entered // the watch is in its first get
+	r.cancel()
+	select {
+	case err := <-r.done:
+		r.done <- err
+		t.Fatalf("Run returned (%v) while the schema watch was still in a get: the shutdown does not wait for it", err)
+	case <-time.After(400 * time.Millisecond): // the step's own bound is 2 s, so this is inside it
+	}
+	release()
+	if err := r.wait(); err != nil {
+		t.Errorf("Run = %v after the watch ended; want nil", err)
 	}
 }
 

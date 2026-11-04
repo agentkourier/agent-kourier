@@ -29,19 +29,20 @@ const (
 var stamp = regexp.MustCompile(`(?m)^    ` + regexp.QuoteMeta(annotation) + `: [0-9a-f]{64}\n`)
 
 func main() {
-	if err := run(); err != nil {
+	if err := run(crdsDir, outFile); err != nil {
 		fmt.Fprintln(os.Stderr, "crdhashes:", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
-	files, err := filepath.Glob(filepath.Join(crdsDir, "*.yaml"))
+// run stamps the CRD files of dir and writes the Go file out; main gives it the repository's own.
+func run(dir, out string) error {
+	files, err := filepath.Glob(filepath.Join(dir, "*.yaml"))
 	if err != nil {
 		return err
 	}
 	if len(files) == 0 {
-		return fmt.Errorf("no CRDs in %s: run `make crds`", crdsDir)
+		return fmt.Errorf("no CRDs in %s: run `make crds`", dir)
 	}
 	type entry struct{ name, hash string }
 	var entries []entry
@@ -95,5 +96,5 @@ func SchemaSHA256(crdName string) (string, bool) {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(outFile, src, 0o644) //nolint:gosec // source code, world-readable like the rest of the tree
+	return os.WriteFile(out, src, 0o644) //nolint:gosec // source code, world-readable like the rest of the tree
 }
