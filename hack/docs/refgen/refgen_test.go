@@ -83,6 +83,9 @@ func TestAPIReferenceFieldRows(t *testing.T) {
 	if strings.Contains(spec, "hidden") {
 		t.Errorf("an unexported field is listed:\n%s", spec)
 	}
+	if strings.Contains(spec, "unlisted") || strings.Contains(page, "## Unlisted") {
+		t.Errorf("a field marked +doc:hide is listed, or its struct has a section:\n%s", page)
+	}
 	part := section(t, page, "Part")
 	if want := "| `id` | string | Yes | None | ID matches a pattern. Pattern `^P[0-9]+$`. |"; !strings.Contains(part, want) {
 		t.Errorf("Part lacks %q:\n%s", want, part)
@@ -150,8 +153,10 @@ func TestAPIReferenceSectionsInFieldOrderOnce(t *testing.T) {
 
 // TestAPIReferenceCoversEveryField checks the generated reference of the real API against the Go types by reflection,
 // which reads the types differently from the generator: every JSON field of every struct a resource reaches has a row
-// in that struct's section.
+// in that struct's section, except the fields the reference leaves out on purpose (+doc:hide), which must have none.
 func TestAPIReferenceCoversEveryField(t *testing.T) {
+	// unlisted are the fields the reference leaves out on purpose (+doc:hide), by struct and JSON name.
+	unlisted := map[string]bool{"Binding.status": true}
 	pages, err := apiReference(filepath.Join(root, "api/v1alpha1"), "api/v1alpha1", v1alpha1.APIVersion)
 	if err != nil {
 		t.Fatalf("apiReference: %v", err)
@@ -179,6 +184,12 @@ func TestAPIReferenceCoversEveryField(t *testing.T) {
 			for f := range rt.Fields() {
 				name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
 				if !f.IsExported() || name == "" || name == "-" {
+					continue
+				}
+				if unlisted[rt.Name()+"."+name] {
+					if strings.Contains(body, "| `"+name+"` |") {
+						t.Errorf("%s: section %s lists %s, which is not written yet", kind, rt.Name(), name)
+					}
 					continue
 				}
 				if !strings.Contains(body, "| `"+name+"` |") {

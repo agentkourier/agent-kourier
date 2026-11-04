@@ -57,7 +57,7 @@ type Set struct {
 // Load reads every *.yaml and *.yml file directly inside dir, in lexical order. Each file may
 // hold several documents separated by "---". Documents that are empty or only comments are
 // skipped and not counted. Each other document must carry the v1alpha1 apiVersion and a known
-// kind, decode without unknown fields, and pass Default and Validate.
+// kind, decode without unknown fields, and pass Default and Validate. A Binding must also have no status key.
 //
 // Load reports every problem it finds, joined, each prefixed with "<file>#<n> <kind>
 // <namespace>/<name>:" (n is the 1-based document number in the file) and returns a nil Set.
@@ -184,7 +184,7 @@ func (l *loader) document(file string, n, line int, doc []byte) {
 	case "ChatConnection":
 		errs = decode(j, &l.set.ChatConnections)
 	case "Binding":
-		errs = decode(j, &l.set.Bindings)
+		errs = decodeBindingFile(j, &l.set.Bindings)
 	default:
 		l.fail(loc, fmt.Errorf("unknown kind %q, must be one of AgentBackend, ChatConnection, Binding", h.Kind))
 		return
@@ -219,6 +219,28 @@ func decode[T any, PT interface {
 	}
 	if len(errs) == 0 {
 		*dst = append(*dst, *obj)
+	}
+	return errs
+}
+
+// errStatusInFile is the problem with a Binding file that has a status key.
+var errStatusInFile = errors.New("status: a file may not set it, remove it")
+
+// decodeBindingFile is decode for the Binding in a file, which may not set a status. The Binding type has the field,
+// so strict decoding accepts it and this refuses it. The refusal is here, not in decode or Validate, because a custom
+// resource source will decode the objects of an API server through decode, and they carry a status. Any status key
+// is refused, even an empty or null one. It follows the problems decode reports; when decode cannot decode the
+// document at all, as with a status of the wrong type, it reports that one problem and the refusal follows it, and
+// Validate has not run. Like decode, it adds the Binding to dst when decode found no problem, and Load returns no Set
+// when any problem was found.
+func decodeBindingFile(j []byte, dst *[]v1alpha1.Binding) []error {
+	errs := decode(j, dst)
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(j, &top); err != nil {
+		return append(errs, err)
+	}
+	if _, ok := top["status"]; ok {
+		errs = append(errs, errStatusInFile)
 	}
 	return errs
 }
