@@ -51,6 +51,10 @@ Run `make` for help. Only Go and the tools pinned in `go.mod` (`tool` directive)
 golangci-lint runs as `go tool golangci-lint`, never a global install.
 
 - `make fmt lint test build tidy`: `test` runs `go test -race ./...` and then `go test -race -tags testhooks ./internal/...`; `build` writes `bin/agent-kourier`.
+- `make crds` regenerates the CustomResourceDefinitions in `charts/agent-kourier/files/crds/` from the markers in `api/v1alpha1` with
+  `controller-gen` (pinned as a `tool` in `go.mod`, run as `go tool controller-gen`). Run it after changing an API type or marker and commit the
+  result: `TestCommittedCRDsMatchGeneration` in `make test` fails when the committed files differ from what generation produces. The
+  production binary does not link controller-tools.
 - `make e2e-fast-up` / `e2e-full-up` / `e2e-ax-up` bring up the kind tiers (`hack/kind/`); `e2e-fast-down`,
   `e2e-full-down`, `e2e-ax-down` and `e2e-down` (all) tear them down. `e2e-fast` / `e2e-full` / `e2e-ax` run the E2E tests in that tier
   as an in-cluster Job (`hack/kind/e2e-run.sh`).
@@ -69,7 +73,7 @@ golangci-lint runs as `go tool golangci-lint`, never a global install.
 - `make docs-check` fails on a misspelt product name (`hack/docs/namecheck` reads `mkdocs.yml`, the theme
   overrides, `docs/` except `brand` and `spikes`, and the files that pages of `docs/` include with `--8<--`, found under the
   snippets `base_path` in `mkdocs.yml`; an include it cannot find fails too, and `kourier/` as a path segment is not a misspelling) and, in the public sources (`README.md`, the chart
-  README, all of `charts/agent-kourier/values.yaml`, every text file under `docs/` except `brand` and `spikes`, the theme
+  README, all of `charts/agent-kourier/values.yaml`, the generated CRDs under `charts/agent-kourier/files/crds`, every text file under `docs/` except `brand` and `spikes`, the theme
   overrides, and every `README.md` and YAML file under `examples/recipes`), on internal plan, decision and risk IDs and `tasks/` paths, removed field and page names, API fields the types do
   not have yet (a field stops being flagged once `api/v1alpha1` has it), a release version other than `charts/agent-kourier/Chart.yaml`'s, wording that says there is no release,
   a `helm` install of `./charts/agent-kourier` (the release gate refuses a tag that is not the chart's version, so a
