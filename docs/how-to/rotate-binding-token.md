@@ -74,9 +74,11 @@ the same on every mint: `email` when `userIdClaim: email`, otherwise the claim c
 
 ## When a token expires anyway
 
-The call fails with HTTP 401 at the front door, or with 403 on an A2A call after the card fetch. Agent Kourier fails the turn, re-reads the Secret, writes an
-audit entry, and counts `agentkourier_credential_rejections_total{binding}`. The thread says the agent's front door
-refused the Binding's credentials. It never falls back to `userId`.
+The call fails with HTTP 401 at the front door, or with 403 on an A2A call after the card fetch. On a send or a followed
+task, Agent Kourier fails the turn, re-reads the Secret, writes an audit entry, and counts
+`agentkourier_credential_rejections_total{binding}`. The thread says the agent's front door refused the Binding's
+credentials. A lookup before a resend is [retried instead](troubleshoot.md#http-401-at-the-card-fetch) and not counted.
+Agent Kourier never falls back to `userId`.
 
 Write a fresh token into the Secret; the next message works. Alert on any increase of
 `agentkourier_credential_rejections_total`.

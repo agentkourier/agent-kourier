@@ -574,14 +574,6 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 				if sess.TaskID != "" { // a task of the session runs: this turn is behind it
 					return idle, hold
 				}
-			case errors.Is(err, agent.ErrAgentForbidden) && hold == nil && !c.patient:
-				// A card 403 before any task of this turn is known: the same credentials get the same 403, so asking again changes
-				// nothing. It fails as a send would (unsent), and is not told apart from one by the thread.
-				if first && c.left == nil {
-					t.handed, c.left = true, t // what an earlier process left is ended by this failure, as below
-				}
-				m.audit(t, audit.Call{Op: audit.OpFindTask, ContextID: sess.ContextID, MessageID: r.ID, Err: err})
-				return m.fail(t, TurnForbidden, agentForbiddenWhy, err)
 			case err != nil:
 				c.patient = c.patient || hold != nil // a turn the agent took is never failed
 				if first && c.left == nil {
@@ -1382,9 +1374,6 @@ func (m *Manager) wedged(t *tstate) (outcome, error) {
 	return blocked, fmt.Errorf("cancel wedged task %s: %w", t.taskID, err)
 }
 
-// agentForbiddenWhy is the detail of the notice a card 403 fails a turn with.
-const agentForbiddenWhy = "the agent was not found, or does not permit the Binding's identity"
-
 // unsent handles a send that failed before the agent named a task, by what the error says
 // about how far the message got (see the agent package's errors).
 func (m *Manager) unsent(t *tstate, err error) (outcome, error) {
@@ -1397,7 +1386,7 @@ func (m *Manager) unsent(t *tstate, err error) (outcome, error) {
 		return m.fail(t, TurnForbidden, "the agent refused the Binding's identity for this session", err)
 	case errors.Is(err, agent.ErrAgentForbidden): // before ErrNotSent, which it comes with: the same credentials get the same 403
 		m.audit(t, t.call(err))
-		return m.fail(t, TurnForbidden, agentForbiddenWhy, err)
+		return m.fail(t, TurnForbidden, "the agent was not found, or does not permit the Binding's identity", err)
 	case errors.Is(err, agent.ErrBusy): // some task of the session runs, or it is not ready: try again later, never give up
 		if errors.Is(err, agent.ErrNotReady) {
 			// A session that is starting or in a lifecycle operation holds no turn ahead of this one, so the

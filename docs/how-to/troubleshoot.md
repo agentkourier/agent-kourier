@@ -191,20 +191,30 @@ URL exactly as written.
 
 ### `HTTP 401` at the card fetch
 
-The front door refused the Binding's token. The turn is not retried: the thread gets "This request failed, and I won't
+The front door refused the Binding's token. A send is not retried: the thread gets "This request failed, and I won't
 try it again" with the detail that the agent's front door refused the Binding's credentials, the log's
 `session turn failed` line carries the reason, and `agentkourier_credential_rejections_total` counts it. Check the Secret named by `identity.tokenSecretRef`
 and the front door's own configuration. An HTTP 403 on an A2A call, after the card was fetched, is handled the same way.
+
+A lookup before a resend goes differently: it is not counted, the Secret is not read again, and the lookup is retried. The
+thread says "I can't reach the agent right now, and I'm trying again", and the turn fails as unreachable after 15 minutes.
 
 ### `HTTP 403` at the card fetch
 
 The agent does not exist, or does not permit the Binding's identity. kagent 1.0.0-alpha5 answers both with 403, so a
 misspelt `agent.name` or `agent.namespace` in the Binding gets this status; kagent 0.9.x answers an unknown agent with 404.
-A turn on its way to the agent is not retried: the thread gets "This request failed, and I won't try it again" with the detail
-that the agent was not found, or does not permit the Binding's identity, and the log's `session turn failed` line carries the
-reason. Other requests go differently. An answer to a paused question leaves the pause open, and the thread is told the answer
-could not be delivered. A task already under way is not followed again, and the thread is told the agent refused to continue
-it. A turn held behind a task of the session, or one the agent took that was never recorded, is looked up again after a backoff, for as long as the 403 lasts.
+A send is not retried: the thread gets "This request failed, and I won't try it again" with the detail that the agent was
+not found, or does not permit the Binding's identity, and the log's `session turn failed` line carries the reason. Other
+requests go differently:
+
+- An answer by a button leaves the pause open, and the thread is told the answer could not be delivered.
+- A typed answer to a question on the `a2a` dialect waits and is tried again, with nothing said in the thread.
+- A task already under way is not followed again, and the thread is told the agent refused to continue it. After a restart
+  with a reply queued behind that task, recovery asks about the reply first and keeps asking, with nothing said in the thread.
+- A lookup before a resend is retried, because the agent may already have the turn. The thread says "I can't reach the agent
+  right now, and I'm trying again", and the turn fails as unreachable after 15 minutes. A turn held behind a task of the
+  session, or one this process knows the agent took and did not record, is retried with no limit.
+
 None of these is counted as a rejected credential. Check the Binding's `agent.name` and
 `agent.namespace`, then the rules that let the Binding's identity use the agent, in kagent and in the front door.
 

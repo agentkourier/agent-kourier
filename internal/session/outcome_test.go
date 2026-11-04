@@ -263,42 +263,44 @@ func TestForbiddenFailsTheTurnAndIsAudited(t *testing.T) {
 	}
 }
 
-// A lookup that the card answers with 403 fails the turn as a send would: the same credentials get the
-// same 403, so it is not asked again, and the thread does not say the agent cannot be reached.
-func TestLookupOfACardAnswered403FailsTheTurn(t *testing.T) {
+// A card 403 on a resend's lookup is retried like any failed lookup, not failed as a send is: the agent may have the
+// turn, unrecorded, and an agent being recreated answers again. So the reply is not dropped, and the task is followed.
+func TestLookupOfACardAnswered403IsRetried(t *testing.T) {
 	f := newFixture(t)
 	sink := f.live()
 	f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, time.Millisecond
 	f.agent.script = unknown(1)
+	lookups := 0
 	f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
-		return nil, nil, fmt.Errorf("connect to agent: %w", agent.ErrAgentForbidden)
+		if lookups++; lookups < 3 {
+			return nil, nil, fmt.Errorf("connect to agent: %w", agent.ErrAgentForbidden)
+		}
+		return &a2a.Task{ID: "t9", ContextID: "c1"}, []a2a.TaskID{"t9"}, nil
+	}
+	f.agent.follow = func(id a2a.TaskID, h agent.Handler) error {
+		h(agent.StateEvent{TaskID: id, ContextID: "c1", State: a2a.TaskStateWorking})
+		h(agent.FinalEvent{Task: &a2a.Task{ID: id, ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateCompleted}}})
+		return nil
 	}
 	for _, ts := range []string{"1", "2"} {
 		if _, err := f.submit(inbound(ts)); err != nil {
 			t.Fatal(err)
 		}
+		waitFinal(t, sink)
 	}
-	eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
-	f.retired(t)
-	if got := sink.noticesOf(NoticeFailed)[0].Detail; got != agentForbiddenWhy {
-		t.Errorf("notice detail %q; want %q", got, agentForbiddenWhy)
+	if got := sink.noticesOf(NoticeFailed); len(got) != 0 {
+		t.Errorf("failed notices = %+v; a lookup that fails drops nothing", got)
 	}
 	f.agent.mu.Lock()
-	sends, finds := len(f.agent.msgs), len(f.agent.finds)
+	sends, finds, follows := len(f.agent.msgs), len(f.agent.finds), slices.Clone(f.agent.follows)
 	f.agent.mu.Unlock()
-	if sends != 2 || finds != 1 {
-		t.Errorf("%d sends, %d lookups; want turn 1 and turn 2 once, and one lookup", sends, finds)
+	if sends != 2 || finds != 3 || !slices.Equal(follows, []a2a.TaskID{"t9"}) {
+		t.Errorf("%d sends, %d lookups, followed %v; want 2 sends, 3 lookups and t9 followed", sends, finds, follows)
 	}
 	f.amu.Lock()
 	defer f.amu.Unlock()
-	lookups := 0
-	for _, a := range f.audits {
-		if a.Op == audit.OpFindTask && errors.Is(a.Err, agent.ErrAgentForbidden) {
-			lookups++
-		}
-	}
-	if lookups != 1 || len(f.rejected) != 0 {
-		t.Errorf("%d lookups audited, Rejected %+v; want one audited, and no Rejected", lookups, f.rejected)
+	if len(f.rejected) != 0 {
+		t.Errorf("Rejected %+v; a card 403 is no rejected credential", f.rejected)
 	}
 }
 
