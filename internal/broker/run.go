@@ -127,9 +127,6 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	if err != nil {
 		return fmt.Errorf("metrics: %w", err)
 	}
-	if crds != nil { // once, at start, and only on the custom resources: the files route makes no call and has no series
-		checkCRDSchemas(ctx, crds.Client, log, metrics)
-	}
 	obs, err := telemetry.New(metrics.reg, provider)
 	if err != nil {
 		return fmt.Errorf("telemetry metrics: %w", err)
@@ -157,7 +154,10 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		return fmt.Errorf("bootstrap: %w", err)
 	}
 	current.Store(boot)
-	sd.add(stepResolver, func(context.Context) { cancel(); boot.Reloader.Wait(); boot.Stop() }) // the Reloader stops before the resolver
+	// With the custom resources only, and after Bootstrap, so that an API server that does not answer, or CRDs that are absent, are met first
+	// where they are named clearly: the comparison of each CRD's schema hash with this build's, at once and every minute (crdschema.go).
+	schemaDone := startSchemaWatch(runCtx, crds, log, metrics)
+	sd.add(stepResolver, func(c context.Context) { cancel(); waitFor(c, schemaDone); boot.Reloader.Wait(); boot.Stop() }) // the Reloader stops before the resolver
 
 	conn, err := ChooseConnection(runCtx, boot.Reloader.Current(), boot.Secrets)
 	if err != nil {

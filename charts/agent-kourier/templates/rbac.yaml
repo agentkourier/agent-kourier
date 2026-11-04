@@ -71,7 +71,7 @@ subjects:
 {{- /* With config.source crds, what the broker does to the custom resources, and no more. Every replica reads the three kinds with informers
        (list and watch, never get: internal/config/crsource), in every namespace, which is why this is a ClusterRole; the leader writes
        Binding.status with a server-side apply, a patch on the status subresource of bindings (no create, update or get). The CRDs may be
-       got by name, and only those three, to compare the schema they serve with the chart's (the schema-sha256 annotation of crds.yaml). */}}
+       got by name, and only those three, so the broker can compare the schema-sha256 annotation of each with the hash it was built with (crdschema.go). */}}
 {{- if and .Values.rbac.create (include "agentkourier.crMode" .) }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1

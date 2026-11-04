@@ -49,7 +49,7 @@ func TestCommittedCRDsMatchGeneration(t *testing.T) {
 			slices.Sorted(maps.Keys(got)), slices.Sorted(maps.Keys(want)))
 	}
 	for name, w := range want {
-		if !bytes.Equal(w, got[name]) {
+		if !bytes.Equal(w, stripSchemaHash(got[name])) { // the committed file also carries the hash annotation, which make crds adds after controller-gen
 			t.Errorf("%s is out of date with api/v1alpha1; run `make crds` and commit the result", name)
 		}
 	}

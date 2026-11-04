@@ -2,8 +2,8 @@
 
 package v1alpha1
 
-// SchemaSHA256 returns the SHA-256, in hex, of the generated CRD file of the named CustomResourceDefinition
-// (charts/agent-kourier/files/crds), which the chart stamps on the CRD it renders as the annotation SchemaHashAnnotation. The
+// SchemaSHA256 returns the SHA-256, in hex, of the generated CRD file of the named CustomResourceDefinition, without its annotation line
+// (charts/agent-kourier/files/crds), which the file carries as the annotation SchemaHashAnnotation, so that what applies it applies it. The
 // bool is false for a name that is not one of this package's CRDs.
 func SchemaSHA256(crdName string) (string, bool) {
 	switch crdName {

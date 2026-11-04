@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -143,8 +144,8 @@ func TestCRDsInstallAddsOnlyTheCRDs(t *testing.T) {
 }
 
 // TestCRDsAreTheGeneratedFiles: the chart's CRDs are the files that `make crds` generates, rendered, not a second copy that can drift: the
-// spec of each is the file's, byte for byte (the file is not parsed and written again), with the chart's labels, resource-policy keep and the
-// SHA-256 of the generated file added to the metadata.
+// spec of each is the file's, byte for byte (the file is not parsed and written again), with the chart's labels and resource-policy keep added to the
+// metadata. The hash annotation is the file's own (the SHA-256 of the file without that line), passed on as it is.
 func TestCRDsAreTheGeneratedFiles(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
@@ -182,12 +183,14 @@ func TestCRDsAreTheGeneratedFiles(t *testing.T) {
 			if ann["helm.sh/resource-policy"] != "keep" {
 				t.Errorf("annotations %v; want helm.sh/resource-policy keep, so that an uninstall leaves the CRD and every resource of it", ann)
 			}
-			if ann[v1alpha1.SchemaHashAnnotation] != sha256Hex(raw) {
-				t.Errorf("schema-sha256 %v; want the SHA-256 of %s, %s", ann[v1alpha1.SchemaHashAnnotation], f, sha256Hex(raw))
+			// The hash is the file's own annotation, which the chart passes on as it is: it is the SHA-256 of the file without that line.
+			bare := schemaHashLine.ReplaceAll(raw, nil)
+			if ann[v1alpha1.SchemaHashAnnotation] != sha256Hex(bare) || sub(want, "metadata")["annotations"].(map[string]any)[v1alpha1.SchemaHashAnnotation] != sha256Hex(bare) {
+				t.Errorf("schema-sha256 %v; want the SHA-256 of %s without its annotation line, %s", ann[v1alpha1.SchemaHashAnnotation], f, sha256Hex(bare))
 			}
-			// The hash the broker is built with is the one the chart stamps: the broker compares them at start.
+			// The hash the broker is built with is the one the rendered CRD carries: the broker compares them.
 			if built, ok := v1alpha1.SchemaSHA256(want.name()); !ok || ann[v1alpha1.SchemaHashAnnotation] != built {
-				t.Errorf("the chart stamps %v on %s; the broker is built with %q (%v)", ann[v1alpha1.SchemaHashAnnotation], want.name(), built, ok)
+				t.Errorf("the rendered %s carries %v; the broker is built with %q (%v)", want.name(), ann[v1alpha1.SchemaHashAnnotation], built, ok)
 			}
 			if ann["controller-gen.kubebuilder.io/version"] == nil {
 				t.Errorf("annotations %v lost what controller-gen wrote", ann)
@@ -323,6 +326,9 @@ func TestCRMode(t *testing.T) {
 		}
 	}
 }
+
+// schemaHashLine is the one line of a generated CRD that its hash does not cover.
+var schemaHashLine = regexp.MustCompile(`(?m)^    agentkourier\.dev/schema-sha256: [0-9a-f]{64}\n`)
 
 // sha256Hex is the hex SHA-256 of b.
 func sha256Hex(b []byte) string {
@@ -525,8 +531,6 @@ func TestCRModeRefusals(t *testing.T) {
 		{"an existing ConfigMap", crMode("--set", image+",config.source=crds,config.chatConnection=c,config.existingConfigMap=mine"), "config.existingConfigMap is for config.source files"},
 		{"no connection named, and none given", crMode("--set", image+",config.source=crds"), "needs config.chatConnection"},
 		{"two connections and none chosen", crMode("--set", image+",config.source=crds", "--set-json", twoConnections), "needs config.chatConnection"},
-		{"a connection with files", []string{"--set", image + ",config.chatConnection=c"}, "config.chatConnection is for config.source crds"},
-		{"Secret names with files", []string{"--set-json", `rbac.secretNames={"ns":["a"]}`, "--set", image}, "rbac.secretNames is for config.source crds"},
 		{"a connection of three parts", crMode("--set", image+",config.source=crds,config.chatConnection=a/b/c"), "config.chatConnection"},
 		{"a connection in capitals", crMode("--set", image+",config.source=crds,config.chatConnection=Slack"), "config.chatConnection"},
 		{"an unknown source", []string{"--set", image + ",config.source=crd"}, "config.source"},
@@ -622,6 +626,26 @@ func TestCRModeRBACFollowsTheValues(t *testing.T) {
 		t.Errorf("ClusterRole names %v for one release name in two namespaces; want two, since a ClusterRole has no namespace", names)
 	}
 
+	// A namespace in both rbac.secretNamespaces and rbac.secretNames is granted whole: the names do not narrow what was asked for in full. The
+	// values file names platform in secretNames only, so its Role has names; adding it to secretNamespaces drops them.
+	platformRule := func(objs []object) rbacv1.PolicyRule {
+		for _, o := range objs {
+			if o.kind() == "Role" && o.namespace() == "platform" && o.name() == "agent-kourier-secrets" {
+				var r rbacv1.Role
+				find(t, []object{o}, "Role", o.name(), &r)
+				return r.Rules[0]
+			}
+		}
+		t.Fatalf("no Secret Role in namespace platform: %v", kinds(objs))
+		return rbacv1.PolicyRule{}
+	}
+	if rule := platformRule(args("agent-kourier")); !slices.Equal(rule.ResourceNames, []string{"shared-token"}) {
+		t.Errorf("platform's Role names %v; want shared-token (it is in secretNames only)", rule.ResourceNames)
+	}
+	if rule := platformRule(args("agent-kourier", "--set", "rbac.secretNamespaces={team-b,platform}")); len(rule.ResourceNames) != 0 {
+		t.Errorf("platform's Role names %v although the namespace is in rbac.secretNamespaces; want the whole namespace", rule.ResourceNames)
+	}
+
 	objs := args("agent-kourier", "--set", "crds.install=true")
 	var cr rbacv1.ClusterRole
 	find(t, objs, "ClusterRole", "agent-kourier-agent-kourier-crs", &cr)
@@ -670,5 +694,54 @@ func TestFilesRouteHasNoMinimumVersion(t *testing.T) {
 		if _, err := render(t.Context(), t, "agent-kourier", "agent-kourier", args...); err != nil {
 			t.Errorf("render on Kubernetes 1.20 with %v: %v; want it to render", extra, err)
 		}
+	}
+}
+
+// TestUpgradeFromAReleaseThatLacksTheNewValues: `helm upgrade --reuse-values` from release 0.1.6 hands the chart the values of that release, which
+// have no crds, config.source, config.chatConnection or rbac.secretNames, and the chart must read each as unset: it renders, and renders what the
+// defaults render. (A release made with those values at the defaults is the same render.) Measured for real on kind, from the released chart.
+func TestUpgradeFromAReleaseThatLacksTheNewValues(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	base := []string{"-f", values("minimal")}
+	want, err := render(t.Context(), t, "agent-kourier", "agent-kourier", base...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, unset := range []string{"crds", "config.source", "config.chatConnection", "rbac.secretNames", "crds.install"} {
+		t.Run(unset, func(t *testing.T) {
+			t.Parallel()
+			got, err := render(t.Context(), t, "agent-kourier", "agent-kourier", append(slices.Clone(base), "--set", unset+"=null")...)
+			if err != nil {
+				t.Fatalf("with %s unset: %v", unset, err)
+			}
+			if got != want {
+				t.Errorf("with %s unset the render differs from the defaults':\n%s", unset, firstDifference(want, got))
+			}
+		})
+	}
+	all, err := render(t.Context(), t, "agent-kourier", "agent-kourier", append(slices.Clone(base), "--set", "crds=null,config.source=null,config.chatConnection=null,rbac.secretNames=null")...)
+	if err != nil || all != want {
+		t.Errorf("with all four unset: %v\n%s", err, firstDifference(want, all))
+	}
+}
+
+// TestFilesRouteIgnoresTheCRModeValues: going back to files keeps the values of the route of custom resources, and the chart does not refuse them:
+// they are ignored, and the render is the defaults'. An operator rolling back in an incident is not stopped by the chart.
+func TestFilesRouteIgnoresTheCRModeValues(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	base := []string{"-f", values("minimal")}
+	want, err := render(t.Context(), t, "agent-kourier", "agent-kourier", base...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := render(t.Context(), t, "agent-kourier", "agent-kourier", append(slices.Clone(base), "--set", "config.source=files,config.chatConnection=agent-kourier/slack-main",
+		"--set-json", `rbac.secretNames={"agent-kourier":["slack-main"]}`)...)
+	if err != nil {
+		t.Fatalf("files with the values of the CR route: %v", err)
+	}
+	if got != want {
+		t.Errorf("the values of the CR route change the files route's render:\n%s", firstDifference(want, got))
 	}
 }

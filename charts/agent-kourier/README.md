@@ -125,24 +125,40 @@ What the route needs:
   Bindings whose `connectionRef` names its connection.
 - **Namespaces that exist.** A file can name a namespace that does not exist; a custom resource cannot.
 
-Move a running install to it in two upgrades, each a working install, and back by the same values:
+Move a running install to it in two upgrades, each a working install, and back by the same values (put `crds: {install: true}` in the values
+file as well, and keep it there: a release without it no longer holds the CRDs, so no later chart upgrade changes them; measured with `helm get
+manifest`, which goes from three CRDs to none):
 
 ```sh
 # 1. The CRDs, with the route still files: they are inert.
 helm upgrade agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version <this chart's version> -n agent-kourier \
   -f my-values.yaml --set crds.install=true
-# 2. The route: the same config.* values become custom resources, and the ConfigMap and its mount go.
+# 2. The route: the same config.* values become custom resources, and the ConfigMap and its mount go. crds.install stays on.
 helm upgrade agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version <this chart's version> -n agent-kourier \
-  -f my-values.yaml --set config.source=crds
+  -f my-values.yaml --set crds.install=true,config.source=crds
 kubectl get akbinding,akbackend,akconnection -A
 ```
+
+`--reuse-values` works from the previous release (0.1.6) too: the chart reads the keys it adds as unset when the old values lack them.
 
 `kubectl get akbinding`, `akbackend` and `akconnection` (or `bindings.agentkourier.dev` and so on, and `kubectl get agentkourier` for all
 three) list them. **Never `kubectl get bindings`**: that is the core `bindings` resource, which is something else and fails. Going back, with
 `config.source=files`: the ConfigMap returns from the same values, and Helm deletes the custom resources the chart rendered (it stops rendering
-them), while the ones made by hand stay in the cluster, unread, as do the CRDs. `helm uninstall` likewise deletes the rendered resources and keeps
-the CRDs (and so every custom resource of the cluster; deleting a CRD deletes them), and a reinstall under another release name with
-`crds.install: true` is refused by Helm until you delete them or use the first name. Install the CRDs from one release only.
+them), while the ones made by hand stay in the cluster, unread, as do the CRDs. The values of the route (`config.chatConnection`, `rbac.secretNames`)
+may stay set: with `files` they are ignored, so going back is the same values with `config.source: files`. `helm uninstall` likewise deletes the
+rendered resources and keeps the CRDs, and with them every custom resource of the cluster: **never delete a CRD to get out of a refusal**, since
+that deletes every team's resources. A reinstall under another release name (or in another namespace) with `crds.install: true` is refused by
+Helm (`invalid ownership metadata`), because the kept CRDs name the release that made them. There are two ways on, neither of which deletes
+anything:
+
+- Install the new release with `crds.install: false`. The CRDs are used as they are, and nothing then upgrades them, so a later chart that changes
+  a schema needs one of the next.
+- Hand the CRDs to the new release, then install it with `crds.install: true`: `kubectl annotate crd agentbackends.agentkourier.dev
+  bindings.agentkourier.dev chatconnections.agentkourier.dev --overwrite meta.helm.sh/release-name=<new release>
+  meta.helm.sh/release-namespace=<its namespace>`. Both annotations are needed when the namespace differs (measured: with only the name, Helm
+  still refuses; with both it installs and adopts the CRDs).
+
+Install the CRDs from one release only.
 
 **What the route grants.** With `rbac.create`, a ClusterRole `<fullname>-<namespace>-crs`, bound to the ServiceAccount:
 
@@ -150,14 +166,15 @@ the CRDs (and so every custom resource of the cluster; deleting a CRD deletes th
 |---|---|
 | `list`, `watch` on `bindings`, `agentbackends`, `chatconnections` of `agentkourier.dev` | every replica reads the three kinds with informers, in every namespace (it never issues a `get`) |
 | `patch` on `bindings/status` | for the leader to write a Binding's status with a server-side apply, which is a `patch` on the subresource and needs no `create`, `update` or `get` (measured on kind) |
-| `get` on the three CRDs, by name | the broker compares, once at start, the annotation `agentkourier.dev/schema-sha256` that the chart puts on each CRD (the SHA-256 of the generated file) with the hash it was built with, and says the result in its log and in `agentkourier_crd_schema_state`. A mismatch warns and stops nothing: apply the CRDs of the chart release that matches the image, then restart the broker. A CRD with no annotation (applied from the files by hand) is reported as `unannotated`, which is not a fault, and one it may not get as `unknown` |
+| `get` on the three CRDs, by name | the broker compares, at start and every minute, the annotation `agentkourier.dev/schema-sha256` of each CRD with the hash it was built with, and says the result in its log (when a CRD's result changes) and in `agentkourier_crd_schema_state`. The generated CRD files carry the annotation (their SHA-256 without that line), so a Helm install, a `kubectl apply` and a GitOps tool all apply it. A mismatch warns and stops nothing: apply the CRDs of the chart release that matches the image (`crds.install`, or `kubectl apply --server-side -f` of that release's `files/crds`; measured on kind: that clears it), and the next minute's comparison says so. The annotation is a statement by whoever wrote the CRD, not proof of what the API server serves: a CRD edited by hand keeps its hash. A CRD from an older chart or file has none and is reported as `unannotated`, which is not a fault; one the broker may not get is `unknown` |
 
 The Secret Roles change too: with `crds` each names the Secrets the chart can see (`resourceNames`) instead of the whole namespace: those that
 `config.*` and the Postgres DSN refer to, and `rbac.secretNames` (a map of namespace to Secret names) for the ones it cannot, such as the
 credentials of a `ChatConnection` you made by hand. That works because Agent Kourier's informers ask for each Secret by name (a `metadata.name`
 field selector), and Kubernetes authorizes `list` and `watch` by `resourceNames` for such a request: a list without the selector, a Secret the Role
 does not name, and a `get` are forbidden (measured on kind, Kubernetes 1.30.13 and 1.37.0). A namespace in `rbac.secretNamespaces` is still granted whole.
-A team that makes its own Bindings grants its own Secrets the same way, with a Role in its namespace bound to this ServiceAccount:
+A team that makes its own Bindings grants its own Secrets the same way, with a Role in its namespace and a RoleBinding to this ServiceAccount
+(here `agent-kourier` in namespace `agent-kourier`; without the binding the Role grants nothing, and `kubectl auth can-i` says no):
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -168,7 +185,18 @@ rules:
     resources: [secrets]
     resourceNames: [team-a-agent-token]
     verbs: [list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: agent-kourier-secrets, namespace: team-a}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agent-kourier-secrets}
+subjects:
+  - {kind: ServiceAccount, name: agent-kourier, namespace: agent-kourier}
 ```
+
+A Binding whose Secret is not granted does not stop the broker or fail a reload: it stays served, and its `BackendReachable` condition says
+`CredentialsUnreadable` (in the log and in `agentkourier_binding_condition`). Only the Secrets the broker itself needs (the connection's tokens, the
+Postgres DSN's) fail the start with exit code 3.
 
 Whoever can write a Binding and an AgentBackend in a namespace can have any Secret of that namespace that Agent Kourier may read sent to the
 AgentBackend's URL, so that grant is also what bounds what they can reach.

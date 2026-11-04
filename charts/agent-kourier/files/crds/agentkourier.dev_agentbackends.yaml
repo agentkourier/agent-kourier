@@ -3,6 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
+    agentkourier.dev/schema-sha256: ef506727da3d2b3b2e359fc8c2a25da7abccd494c7bbae95aa8faf29d69be11f
     controller-gen.kubebuilder.io/version: v0.23.0
   name: agentbackends.agentkourier.dev
 spec:

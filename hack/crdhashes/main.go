@@ -1,8 +1,8 @@
-// Command crdhashes writes api/v1alpha1/crd_schema_hashes.go: the SHA-256 of each generated CRD file under
-// charts/agent-kourier/files/crds, by the CRD's name. The chart stamps the same hash on each CRD it renders
-// (the annotation agentkourier.dev/schema-sha256), and the broker compares it with the one in this file, so that a broker
-// can tell whether the CRDs of its cluster are the ones it was built with. `make crds` runs it after controller-gen; run it from
-// the repository root. A test in api/v1alpha1 fails while the file differs from the CRDs.
+// Command crdhashes stamps each generated CRD file under charts/agent-kourier/files/crds with the annotation
+// agentkourier.dev/schema-sha256, whose value is the SHA-256 of the file without that one line, and writes the same hashes, by the CRD's
+// name, into api/v1alpha1/crd_schema_hashes.go. Whatever applies the file (Helm, kubectl, a GitOps tool) then applies the hash with it, and
+// the broker compares the annotation of each CRD of its cluster with the hash it was built with. `make crds` runs it after controller-gen;
+// run it from the repository root. It is idempotent. Tests in api/v1alpha1 fail while the files or the Go file are not what it writes.
 package main
 
 import (
@@ -12,6 +12,7 @@ import (
 	"go/format"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -19,9 +20,13 @@ import (
 )
 
 const (
-	crdsDir = "charts/agent-kourier/files/crds"
-	outFile = "api/v1alpha1/crd_schema_hashes.go"
+	crdsDir    = "charts/agent-kourier/files/crds"
+	outFile    = "api/v1alpha1/crd_schema_hashes.go"
+	annotation = "agentkourier.dev/schema-sha256"
 )
+
+// stamp is the one line the hash does not cover: the annotation, first under metadata.annotations.
+var stamp = regexp.MustCompile(`(?m)^    ` + regexp.QuoteMeta(annotation) + `: [0-9a-f]{64}\n`)
 
 func main() {
 	if err := run(); err != nil {
@@ -54,8 +59,20 @@ func run() error {
 		if crd.Metadata.Name == "" {
 			return fmt.Errorf("%s: no metadata.name", f)
 		}
-		sum := sha256.Sum256(raw)
-		entries = append(entries, entry{crd.Metadata.Name, hex.EncodeToString(sum[:])})
+		bare := stamp.ReplaceAll(raw, nil)
+		sum := sha256.Sum256(bare)
+		hash := hex.EncodeToString(sum[:])
+		const opening = "\n  annotations:\n"
+		at := strings.Index(string(bare), opening)
+		if at < 0 {
+			return fmt.Errorf("%s: no metadata.annotations, as controller-gen writes it", f)
+		}
+		at += len(opening)
+		stamped := string(bare[:at]) + "    " + annotation + ": " + hash + "\n" + string(bare[at:])
+		if err := os.WriteFile(f, []byte(stamped), 0o644); err != nil { //nolint:gosec // generated source, world-readable like the rest of the tree
+			return err
+		}
+		entries = append(entries, entry{crd.Metadata.Name, hash})
 	}
 	slices.SortFunc(entries, func(a, b entry) int { return strings.Compare(a.name, b.name) })
 
@@ -64,8 +81,8 @@ func run() error {
 
 package v1alpha1
 
-// SchemaSHA256 returns the SHA-256, in hex, of the generated CRD file of the named CustomResourceDefinition
-// (charts/agent-kourier/files/crds), which the chart stamps on the CRD it renders as the annotation SchemaHashAnnotation. The
+// SchemaSHA256 returns the SHA-256, in hex, of the generated CRD file of the named CustomResourceDefinition, without its annotation line
+// (charts/agent-kourier/files/crds), which the file carries as the annotation SchemaHashAnnotation, so that what applies it applies it. The
 // bool is false for a name that is not one of this package's CRDs.
 func SchemaSHA256(crdName string) (string, bool) {
 	switch crdName {

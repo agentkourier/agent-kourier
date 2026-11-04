@@ -1,16 +1,16 @@
-{{- /* The CustomResourceDefinitions that `make crds` generates from api/v1alpha1 into files/crds, as they are, with three additions: the chart's
-       labels, helm.sh/resource-policy keep (an uninstall leaves them, and with them every resource of the cluster), and the SHA-256 of the
-       generated file as the schema-sha256 annotation, so the schema a cluster serves can be told from the chart's. They are in templates/ and not
-       crds/ so that an upgrade of the release applies a changed schema. The file is not parsed and written again, which could change a
-       number's form; the three lines go in after the line that opens the metadata. */ -}}
-{{- if .Values.crds.install }}
+{{- /* The CustomResourceDefinitions that `make crds` generates from api/v1alpha1 into files/crds, as they are, with two additions: the chart's
+       labels and helm.sh/resource-policy keep (an uninstall leaves them, and with them every resource of the cluster). The files already carry
+       the annotation agentkourier.dev/schema-sha256 (their hash without that line, which make crds adds), so whatever applies them applies it.
+       They are in templates/ and not crds/ so that an upgrade of the release applies a changed schema. The file is not parsed and written
+       again, which could change a number's form; the lines go in after the one that opens the metadata. */ -}}
+{{- if (.Values.crds).install }}
 {{- range $path, $_ := .Files.Glob "files/crds/*.yaml" }}
 {{- $text := $.Files.Get $path }}
 {{- $opening := "(?m)^metadata:\n  annotations:\n" }}
 {{- if not (regexMatch $opening $text) }}
 {{- fail (printf "%s does not open its metadata with annotations, as controller-gen writes it, so the chart cannot add its own" $path) }}
 {{- end }}
-{{- $added := printf "metadata:\n  labels:\n%s\n  annotations:\n    helm.sh/resource-policy: keep\n    agentkourier.dev/schema-sha256: %s\n" (include "agentkourier.labels" $ | indent 4) ($text | sha256sum) }}
+{{- $added := printf "metadata:\n  labels:\n%s\n  annotations:\n    helm.sh/resource-policy: keep\n" (include "agentkourier.labels" $ | indent 4) }}
 {{ regexReplaceAllLiteral $opening $text $added | trim }}
 {{ end }}
 {{- end }}

@@ -50,7 +50,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 
 {{/* True (non-empty) when Agent Kourier reads its resources from custom resources (config.source crds), not from files. */}}
 {{- define "agentkourier.crMode" -}}
-{{- if eq .Values.config.source "crds" -}}true{{- end -}}
+{{- if eq (default "files" .Values.config.source) "crds" -}}true{{- end -}}
 {{- end -}}
 
 {{/*
@@ -138,19 +138,14 @@ Checks that no values file can get past. Included by the Deployment, which every
 {{- /* A CRD and the custom resources of it in one release can fail where Helm maps the kind, so the CRDs come first: they must already be served
        when the chart renders. A render that does not ask the cluster (helm template, helm install --dry-run=client) has only the versions it is given. */ -}}
 {{- if not (.Capabilities.APIVersions.Has "agentkourier.dev/v1alpha1") -}}
-{{- if .Values.crds.install -}}
+{{- if (.Values.crds).install -}}
 {{- fail "config.source crds needs the CRDs (group agentkourier.dev, version v1alpha1) to be installed before the release that renders custom resources, and the cluster does not serve them yet: crds.install installs them with this release, too late for it. In an earlier install or upgrade set crds.install=true with config.source files, then set config.source crds. With helm template, add --api-versions agentkourier.dev/v1alpha1 to render as if they were installed" -}}
 {{- end -}}
 {{- fail "config.source crds needs the CRDs (group agentkourier.dev, version v1alpha1) to be installed before this release, and the cluster does not serve them. In an earlier install or upgrade set crds.install=true with config.source files, or apply the chart's files/crds yourself (kubectl apply --server-side -f charts/agent-kourier/files/crds), then set config.source crds. With helm template, add --api-versions agentkourier.dev/v1alpha1 to render as if they were installed" -}}
 {{- end -}}
 {{- $_ := include "agentkourier.chatConnection" . -}}
-{{- else -}}
-{{- if .Values.config.chatConnection -}}
-{{- fail "config.chatConnection is for config.source crds: with files Agent Kourier serves the one ChatConnection of its directory, and the setting would be ignored" -}}
-{{- end -}}
-{{- if .Values.rbac.secretNames -}}
-{{- fail "rbac.secretNames is for config.source crds: with files the Secret Roles are namespace-wide and cover every Secret of their namespace, so names would be ignored. Name a namespace in rbac.secretNamespaces" -}}
-{{- end -}}
+{{- /* With files, config.chatConnection and rbac.secretNames are ignored, and the chart does not refuse them: a rollback to files keeps the values
+       it had, in an incident, and they are harmless there. */ -}}
 {{- end -}}
 {{- if and .Values.serviceMonitor.enabled (not .Values.service.enabled) -}}
 {{- fail "serviceMonitor.enabled needs service.enabled: the ServiceMonitor selects the metrics Service" -}}

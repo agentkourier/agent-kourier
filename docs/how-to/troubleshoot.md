@@ -87,11 +87,18 @@ A misspelt field, or a Secret that is missing or lacks a key, also exits 2, with
 
 ## The pod exits with code 3
 
-The API server refused the pod access to Secrets. The pod reads each Secret its config names
-through an informer of its own, and a `forbidden` or `unauthorized` answer ends the start at once with
-`the API server denied access to Secrets` and exit code 3. The same answer for a Secret that a later
-config change names does not stop the pod: that reload fails with the same message, the log says
-`config reload failed; keeping the last good snapshot`, and the last good config stays in force.
+The API server refused the pod access to Secrets, or, with `config.source: crds`, to the custom resources. The pod reads
+each Secret its config names through an informer of its own. What a refusal does depends on the route:
+
+- **Files (`config.source: files`, the default).** A `forbidden` or `unauthorized` answer for any Secret the config names ends the start at
+  once with `the API server denied access to Secrets` and exit code 3. The same answer for a Secret that a later config change names does not
+  stop the pod: that reload fails with the same message, the log says `config reload failed; keeping the last good snapshot`, and the last good
+  config stays in force.
+- **Custom resources (`config.source: crds`).** Only the Secrets the broker itself needs, the connection's tokens and the Postgres DSN's, end the
+  start with exit code 3, as does a refusal to list the custom resources. A Secret that a team's Binding or AgentBackend names, and that the
+  ServiceAccount may not read, stops nothing and fails no reload: the Binding stays served, and the log says its `BackendReachable` condition is
+  false with the reason `CredentialsUnreadable`. The fix is a grant for that Secret: `rbac.secretNames` in the chart's values (namespace to Secret
+  names) for one the chart cannot see, or a Role and RoleBinding in the team's namespace for the ServiceAccount.
 
 Check the grant as the pod's ServiceAccount:
 
@@ -109,7 +116,7 @@ kubectl auth can-i watch secrets/<secret-name> -n agent-kourier --as system:serv
 ```
 
 The chart grants `list` and `watch` in each namespace that holds a Secret the config names (for the Secrets named, with
-`config.source: crds`), and `rbac.secretNamespaces` adds more. A `config.existingConfigMap` needs `rbac.secretNamespaces`, because the chart cannot
+`config.source: crds`, which also takes `rbac.secretNames` for the ones the chart cannot see), and `rbac.secretNamespaces` adds more. A `config.existingConfigMap` needs `rbac.secretNamespaces`, because the chart cannot
 read the ConfigMap to find the namespaces.
 
 ## The pod exits with code 2 and the error says `load config`
