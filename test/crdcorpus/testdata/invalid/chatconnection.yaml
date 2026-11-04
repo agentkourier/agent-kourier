@@ -1,0 +1,108 @@
+# rule: chatconnection/spec.platform: unsupported
+# want: spec.platform: unsupported value "teams"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: slack
+  namespace: sre
+spec:
+  platform: teams
+  credentialsSecretRef:
+    name: slack
+---
+# rule: chatconnection/spec.credentialsSecretRef.name: missing
+# want: spec.credentialsSecretRef.name: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: slack
+  namespace: sre
+spec:
+  platform: slack
+  credentialsSecretRef: {}
+---
+# rule: chatconnection/spec.credentialsSecretRef.name: empty
+# want: spec.credentialsSecretRef.name: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: slack
+  namespace: sre
+spec:
+  platform: slack
+  credentialsSecretRef:
+    name: ""
+---
+# rule: chatconnection/spec.credentialsSecretRef.name: invalid
+# want: spec.credentialsSecretRef.name: invalid name
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: slack
+  namespace: sre
+spec:
+  platform: slack
+  credentialsSecretRef:
+    name: Slack_Main
+---
+# rule: chatconnection/spec.credentialsSecretRef.name: over 253 characters
+# want: spec.credentialsSecretRef.name: invalid name
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: slack
+  namespace: sre
+spec:
+  platform: slack
+  credentialsSecretRef:
+    name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+---
+# rule: chatconnection/spec.allowedNamespaces[]: empty
+# want: spec.allowedNamespaces[0]: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: slack
+  namespace: sre
+spec:
+  platform: slack
+  credentialsSecretRef:
+    name: slack
+  allowedNamespaces:
+    - ""
+---
+# rule: chatconnection/spec.allowedNamespaces[]: invalid
+# want: spec.allowedNamespaces[0]: invalid namespace
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: slack
+  namespace: sre
+spec:
+  platform: slack
+  credentialsSecretRef:
+    name: slack
+  allowedNamespaces:
+    - Not_A_Namespace
+---
+# rule: chatconnection/spec.allowedNamespaces[]: over 63 characters
+# want: spec.allowedNamespaces[0]: invalid namespace
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: slack
+  namespace: sre
+spec:
+  platform: slack
+  credentialsSecretRef:
+    name: slack
+  allowedNamespaces:
+    - aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa

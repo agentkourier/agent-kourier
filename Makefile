@@ -4,7 +4,7 @@ LDFLAGS := -X main.version=$(VERSION)
 LINT    := go tool golangci-lint
 
 .DEFAULT_GOAL := help
-.PHONY: help fmt lint test test-race test-testhooks test-scripts test-postgres lint-workflows security security-govulncheck security-gitleaks security-image-scan build tidy crds image image-testhooks image-check release-image e2e-fast-up e2e-fast e2e-fast-down e2e-full-up e2e-full-down e2e-full e2e-down sandbox-up sandbox-down sandbox-heal sandbox-alert
+.PHONY: help fmt lint test test-race test-testhooks test-scripts test-postgres lint-workflows security security-govulncheck security-gitleaks security-image-scan build tidy crds crd-corpus image image-testhooks image-check release-image e2e-fast-up e2e-fast e2e-fast-down e2e-full-up e2e-full-down e2e-full e2e-down sandbox-up sandbox-down sandbox-heal sandbox-alert
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z0-9-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -12,8 +12,8 @@ help: ## Show this help
 fmt: ## Format code (gofmt and goimports rules from .golangci.yml)
 	$(LINT) fmt ./...
 
-lint: ## Run golangci-lint (also over the e2e, image and testhooks tagged code)
-	$(LINT) run --build-tags e2e,image ./...
+lint: ## Run golangci-lint (also over the e2e, image, crdcorpus and testhooks tagged code)
+	$(LINT) run --build-tags e2e,image,crdcorpus ./...
 	$(LINT) run --build-tags testhooks ./...
 
 test: test-race test-testhooks test-scripts ## Run all the unit tests: with the race detector, the testhooks-tagged ones, the kind scripts' own (CI runs the three apart)
@@ -62,6 +62,9 @@ tidy: ## Tidy go.mod and go.sum
 crds: ## Generate the CRDs from api/v1alpha1 into charts/agent-kourier/files/crds (controller-gen, pinned in go.mod; a test fails when they drift)
 	rm -f charts/agent-kourier/files/crds/*.yaml
 	go tool controller-gen crd paths=./api/v1alpha1 output:crd:dir=charts/agent-kourier/files/crds
+
+crd-corpus: ## Hold the CRD schemas to the broker's validation on a throwaway kind cluster that has only the CRDs (hack/kind/crd-corpus.sh; kind, kubectl and Docker; CRD_CORPUS_KUBECONFIG uses a local cluster you made instead)
+	hack/kind/crd-corpus.sh
 
 image: ## Build the production Agent Kourier image, agent-kourier:dev (hack/kind/build-agent-kourier.sh; Docker)
 	hack/kind/build-agent-kourier.sh

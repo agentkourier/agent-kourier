@@ -177,7 +177,13 @@ so the chart tests cannot skip. The `test-postgres` job (`make test-postgres`, `
 store's tests, the store conformance suite among them, and the broker's Postgres tests against a throwaway Postgres
 container; those tests skip in `test` and `test-testhooks`, which have no database. It is not a required check. To make
 it one, the owner adds `test-postgres` from `ci` to the `main` ruleset, and the same change adds it to `CI_REQUIRED_JOBS` in
-`hack/release/check-ci.sh` and to the lists above. The `zizmor` job (`make lint-workflows`, `hack/security/lint-workflows.sh`) audits
+`hack/release/check-ci.sh` and to the lists above. The `crd-corpus` job (`make crd-corpus`, `hack/kind/crd-corpus.sh`) brings up
+a kind cluster with only the three CRDs from `charts/agent-kourier/files/crds`, with no image and no Agent Kourier, and has
+`test/crdcorpus` send every entry of its corpus to it as a server-side dry-run create. It fails when the schema refuses
+an object the broker's own validation accepts, or when an entry's `schema:` flag no longer says what the schema does with
+it. It installs kind and kubectl with `hack/ci/install-kind-tools.sh`, at the pins and checksums the kind tiers use, and runs the
+node image of `hack/kind/lib.sh`. It is not a required check either, and the same two steps make it one, for `crd-corpus`.
+It has not yet run on a runner, so its timeout is a guess to tighten after its first run. The `zizmor` job (`make lint-workflows`, `hack/security/lint-workflows.sh`) audits
 every workflow with a pinned zizmor under the policy in `.github/zizmor.yml` and fails on any finding; it first
 proves the policy still fails a set of unsafe fixtures (`hack/security/testdata/zizmor`), and then that the inline
 ignore comments hide only the findings the script lists. It runs with `contents: read` and uploads no SARIF, so it
@@ -194,4 +200,4 @@ only when the push changes a path in its `push` trigger, so only such a push sav
 tiers are not in CI. They would need a runner with Docker and about 8 GB free, the `kind`, `kubectl`,
 `helm` and `jq` binaries installed at pinned versions (`hack/ci/install-kind-tools.sh` installs them, each checked
 against a pinned sha256), and the pinned node and base images pulled (the tiers
-take minutes to bring up, so they are best as a separate nightly or label-triggered workflow, not on every PR).
+take minutes to bring up, so they are best as a separate nightly or label-triggered workflow, not on every PR). The `crd-corpus` job is not a tier: its cluster has only the CRDs, and it runs on every PR.
