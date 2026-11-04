@@ -47,6 +47,10 @@ type Set struct {
 	AgentBackends   []v1alpha1.AgentBackend
 	ChatConnections []v1alpha1.ChatConnection
 	Bindings        []v1alpha1.Binding
+	// Invalid lists the objects that a source that fails one object at a time refused, which are not in the lists above, or
+	// are there as the last good generation of themselves (Invalid.Served). Load and file mode never fill it. Resolve
+	// ignores it, and so does ResolvePartial: a Reloader that runs per object reads it (Report).
+	Invalid []Invalid
 
 	// sources maps each object to its location, "<file>#<n>" as in Load's problems. It is keyed by
 	// identity, so an object added or renamed after Load has the location Load gave its new identity, if any. A Set not

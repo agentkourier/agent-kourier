@@ -6,9 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 )
 
 // ReloaderConfig configures a Reloader.
@@ -33,6 +36,16 @@ type ReloaderConfig struct {
 	// OnError is called with the error of each failed reload that Status.Errors counts, for a
 	// metric. It runs on the reloading goroutine, so it must not block.
 	OnError func(error)
+	// PerObject makes a bad object a problem of that object alone: the Set is resolved with ResolvePartial, so a Binding
+	// whose references fail or that lost its channel is left out and reported (Report), where otherwise any such problem
+	// fails the reload and the last good snapshot stays. It is for a source whose objects have different owners, the custom
+	// resources. It also stops the Secrets from being checked: a Secret that is missing or unreadable does not keep a
+	// Binding out of the snapshot, the prober says so, and only the Secrets of the objects that are served are followed.
+	// The files of a directory are one artifact, loaded all or nothing: leave it false for them.
+	PerObject bool
+	// OnReport is called with the Report of each snapshot that is published, including a recheck that finds nothing new,
+	// for a metric. It runs on the reloading goroutine, so it must not block.
+	OnReport func(Report)
 }
 
 // Status describes the health of a Reloader.
@@ -56,6 +69,8 @@ type Reloader struct {
 	secretsWait  time.Duration
 	log          *slog.Logger
 	onError      func(error)
+	perObject    bool
+	onReport     func(Report)
 
 	snap   atomic.Pointer[published] // the Snapshot with what Revision needs, replaced as one
 	status atomic.Pointer[Status]
@@ -64,7 +79,8 @@ type Reloader struct {
 	// Owned by whoever is reloading: Start, then the loop goroutine.
 	lastFingerprint string
 	lastAttempt     time.Time
-	failures        int // consecutive failed reloads
+	failures        int             // consecutive failed reloads
+	reported        map[string]bool // what the latest report said, so that a recheck stays silent about it
 }
 
 // errConfigMoving means the config source changed during two loads in a row, so neither
@@ -86,6 +102,8 @@ func NewReloader(cfg ReloaderConfig) *Reloader {
 		secretsWait:  cmp.Or(cfg.SecretsWait, 10*time.Second),
 		log:          cmp.Or(cfg.Logger, slog.Default()),
 		onError:      cfg.OnError,
+		perObject:    cfg.PerObject,
+		onReport:     cfg.OnReport,
 	}
 	r.status.Store(&Status{})
 	return r
@@ -98,6 +116,16 @@ func (r *Reloader) Current() *Snapshot {
 		return p.snap
 	}
 	return nil
+}
+
+// Report returns what the Reloader knows about the snapshot it serves besides the snapshot: the objects it refused and the
+// Bindings it does not serve as written. It is the zero Report before Start has succeeded, and has no rejections or
+// invalid objects unless the Reloader is PerObject.
+func (r *Reloader) Report() Report {
+	if p := r.snap.Load(); p != nil {
+		return p.report
+	}
+	return Report{}
 }
 
 // Status returns the health of the Reloader.
@@ -159,11 +187,15 @@ func (r *Reloader) reload(ctx context.Context, force bool) error {
 		}
 		st.Stale, st.LastSuccess, r.failures = false, r.lastAttempt, 0
 		r.snap.Store(pub)
+		r.logReport(pub.report)
 		if w, ok := r.secrets.(SecretWatcher); ok {
 			w.Retain(pub.secrets) // after the store, so that whoever finds a Secret dropped finds the snapshot that dropped it; a reader that still holds the old snapshot follows its Secrets again itself
 		}
 		if warnPolicies {
 			r.warnToolApprovalPolicies(pub.snap)
+		}
+		if r.onReport != nil {
+			r.onReport(pub.report)
 		}
 	}
 	r.status.Store(&st)
@@ -193,7 +225,11 @@ func (r *Reloader) build(ctx context.Context) (pub *published, fp string, err er
 		var set *Set
 		set, fp, err = r.source.Set(ctx)
 		pub = nil
-		if err == nil {
+		switch {
+		case err != nil:
+		case r.perObject:
+			pub = r.buildPerObject(ctx, set, fp)
+		default:
 			refs := set.secretRefs() // before Resolve, which takes the set
 			r.watchSecrets(ctx, refs)
 			var snap *Snapshot
@@ -219,4 +255,49 @@ func (r *Reloader) watchSecrets(ctx context.Context, refs []secretRef) {
 	ctx, cancel := context.WithTimeout(ctx, r.secretsWait)
 	defer cancel()
 	_ = w.Watch(ctx, secretNames(refs))
+}
+
+// buildPerObject resolves set object by object: a Binding that cannot be served is left out and reported, and nothing is
+// a failure of the reload. The Secrets it follows are those of what the snapshot serves, so that a Secret of a Binding
+// that was left out is neither followed nor a part of the revision. It reads no Secret: a Secret that is missing or lacks a
+// key does not keep a Binding out, and the prober reports it.
+func (r *Reloader) buildPerObject(ctx context.Context, set *Set, fp string) *published {
+	invalid := slices.Clone(set.Invalid) // the Set is the snapshot's from here
+	snap, rejections := resolvePerObject(set)
+	refs := servedSet(snap).secretRefs()
+	r.watchSecrets(ctx, refs)
+	pub := newPublished(snap, fp, refs)
+	slices.SortFunc(invalid, func(a, b Invalid) int {
+		return cmp.Or(cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name))
+	})
+	pub.report.Rejections, pub.report.Invalid = rejections, invalid
+	return pub
+}
+
+// logReport says, once, each object that the report refuses and each Binding that is not served as written. A recheck
+// that finds the same says nothing, and when none is left it says so. It owns r.reported, and runs on the goroutine that
+// reloads.
+func (r *Reloader) logReport(rep Report) {
+	now := map[string]bool{}
+	for _, inv := range rep.Invalid {
+		key := fmt.Sprintf("invalid %s %d %d %t %s", inv.ID(), inv.Generation, inv.Served, inv.Deleted, inv.Message)
+		now[key] = true
+		if !r.reported[key] {
+			r.log.Warn("config: an object is refused; it is served from its last good generation, or left out if it has none",
+				"kind", inv.Kind, "object", v1alpha1.NamespacedName(inv.Namespace, inv.Name), "generation", inv.Generation,
+				"served_generation", inv.Served, "deleted", inv.Deleted, "problems", inv.Message)
+		}
+	}
+	for _, rej := range rep.Rejections {
+		key := fmt.Sprintf("binding %s/%s %s %d %d %s", rej.Namespace, rej.Name, rej.Reason, rej.Generation, rej.Served, rej.Message)
+		now[key] = true
+		if !r.reported[key] {
+			r.log.Warn("config: a Binding is not accepted as written", "binding", v1alpha1.NamespacedName(rej.Namespace, rej.Name),
+				"reason", rej.Reason, "generation", rej.Generation, "served_generation", rej.Served, "problem", rej.Message)
+		}
+	}
+	if len(r.reported) > 0 && len(now) == 0 {
+		r.log.Info("config: every object is accepted")
+	}
+	r.reported = now
 }

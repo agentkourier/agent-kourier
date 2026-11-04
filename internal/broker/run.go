@@ -79,6 +79,16 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 			return err
 		}
 	}
+	var crds *CRDSource // the custom resources are read only when the config source says so
+	if cfg.source() == SourceCRDs {
+		dyn := cfg.Dynamic
+		if dyn == nil {
+			if dyn, err = InClusterDynamicClient(); err != nil {
+				return err
+			}
+		}
+		crds = &CRDSource{Client: dyn, Connection: cfg.ChatConnection}
+	}
 	// runCtx is the broker's own: a signal ends ctx, and the shutdown then stops the parts in order, one
 	// step at a time, where a context derived from ctx would stop them all at once. Until startup has
 	// finished, though, a signal does cancel it, so that a slow Bootstrap, Reconcile or Recover cannot
@@ -128,6 +138,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	}
 	boot, err := Bootstrap(runCtx, client, BootstrapOptions{
 		Dir: cfg.ConfigDir, ExtraSecrets: extraSecrets, SyncTimeout: cfg.SyncTimeout, PollInterval: cfg.reloadPoll, Logger: log, OnReloadError: metrics.ReloadError,
+		OnReport: metrics.ConfigReport, CRDs: crds,
 	})
 	if err != nil {
 		return fmt.Errorf("bootstrap: %w", err)

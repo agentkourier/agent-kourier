@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -12,9 +13,11 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 
 	"go.opentelemetry.io/otel/trace"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -22,9 +25,16 @@ import (
 // RunConfig is what Run is built from. Everything in it is injected: Run reads no environment
 // variable, and cmd/agent-kourier is the one place that does.
 type RunConfig struct {
-	// ConfigDir is the directory of resource files, and DBPath the SQLite file on the volume (read only with
-	// the SQLite store, and required then).
+	// ConfigSource says where the resources are read from: SourceFiles, the default (the empty value), or SourceCRDs.
+	ConfigSource ConfigSource
+	// ConfigDir is the directory of resource files, read with SourceFiles and required then; with SourceCRDs it is ignored.
+	// DBPath is the SQLite file on the volume (read only with the SQLite store, and required then).
 	ConfigDir, DBPath string
+	// ChatConnection is the one ChatConnection this broker serves, required with SourceCRDs, where a cluster may hold
+	// the connections of several brokers, and refused with SourceFiles, whose directory must hold exactly one.
+	ChatConnection v1alpha1.ObjectRef
+	// Dynamic reads the custom resources with SourceCRDs. Nil means InClusterDynamicClient.
+	Dynamic dynamic.Interface
 	// Store chooses SQLite, the default, or Postgres, and where the Postgres DSN is.
 	Store StoreConfig
 	// Election is the leader election of a store that fences (Postgres; see store.Fenced), and is required with one.
@@ -99,9 +109,45 @@ type RunConfig struct {
 	leaderLaunched func()
 }
 
+// ConfigSource is where a broker reads its resources from (spec D50).
+type ConfigSource string
+
+// The config sources. There is no fallback from one to the other and no merging: a broker on SourceFiles ignores the custom
+// resources of its cluster, and one on SourceCRDs ignores its config directory.
+const (
+	// SourceFiles reads the YAML files of RunConfig.ConfigDir, all or nothing.
+	SourceFiles ConfigSource = "files"
+	// SourceCRDs reads Binding, AgentBackend and ChatConnection from the cluster, one object at a time.
+	SourceCRDs ConfigSource = "crds"
+)
+
+// source returns the config source, files if none is set.
+func (c RunConfig) source() ConfigSource { return cmp.Or(c.ConfigSource, SourceFiles) }
+
+// validateSource checks the settings that depend on the config source.
+func (c RunConfig) validateSource() error {
+	haveConn := c.ChatConnection.Namespace != "" || c.ChatConnection.Name != ""
+	switch c.source() {
+	case SourceFiles:
+		if haveConn {
+			return fmt.Errorf("%w: ChatConnection is set with the %s config source, which serves the one ChatConnection of its directory: unset it", ErrWiring, SourceFiles)
+		}
+	case SourceCRDs:
+		if c.ChatConnection.Namespace == "" || c.ChatConnection.Name == "" {
+			return fmt.Errorf("%w: ChatConnection must be set to a namespace and a name with the %s config source: a cluster may hold the connections of several brokers, and this one serves only the one it is told", ErrWiring, SourceCRDs)
+		}
+	default:
+		return fmt.Errorf("%w: unknown config source %q, want %q or %q", ErrWiring, c.ConfigSource, SourceFiles, SourceCRDs)
+	}
+	return nil
+}
+
 // validate says whether c can run. A missing field is an error wrapping ErrWiring, which is a usage
 // error, so the process exits 2 and names it, rather than failing later in some other way.
 func (c RunConfig) validate() error {
+	if err := c.validateSource(); err != nil {
+		return err
+	}
 	if err := c.Store.validate(); err != nil {
 		return err
 	}
@@ -115,7 +161,7 @@ func (c RunConfig) validate() error {
 	}
 	var missing []string
 	for name, ok := range map[string]bool{
-		"ConfigDir": c.ConfigDir != "", "DBPath": c.DBPath != "" || c.Store.kind() != StoreSQLite, "Listener": c.Listener != nil,
+		"ConfigDir": c.ConfigDir != "" || c.source() != SourceFiles, "DBPath": c.DBPath != "" || c.Store.kind() != StoreSQLite, "Listener": c.Listener != nil,
 	} {
 		if !ok {
 			missing = append(missing, name)
@@ -147,12 +193,9 @@ func (c RunConfig) logger() *slog.Logger {
 // on a workstation can point at any cluster, and Agent Kourier reads Secrets. Outside a cluster the error
 // wraps ErrWiring and rest.ErrNotInCluster.
 func InClusterClient() (kubernetes.Interface, error) {
-	cfg, err := rest.InClusterConfig()
+	cfg, err := inClusterConfig()
 	if err != nil {
-		if errors.Is(err, rest.ErrNotInCluster) {
-			return nil, fmt.Errorf("%w: Agent Kourier runs only in a cluster: %w", ErrWiring, err)
-		}
-		return nil, fmt.Errorf("in-cluster config: %w", err)
+		return nil, err
 	}
 	// client-go's default is 5 requests a second with a burst of 10, shared by every request of this client. Each followed
 	// Secret is an informer that lists once (on a server without streamed lists), and relists after a watch expires, and
@@ -166,4 +209,33 @@ func InClusterClient() (kubernetes.Interface, error) {
 		return nil, fmt.Errorf("in-cluster client: %w", err)
 	}
 	return client, nil
+}
+
+// InClusterDynamicClient returns the dynamic client that reads the custom resources, for the same cluster and by the same
+// credentials as InClusterClient, with a rest.Config and so a rate limiter of its own: three informers list and watch, and
+// the status writer will have its own, so that neither delays the leader's Lease renewals. Outside a cluster the error wraps
+// ErrWiring and rest.ErrNotInCluster.
+func InClusterDynamicClient() (dynamic.Interface, error) {
+	cfg, err := inClusterConfig()
+	if err != nil {
+		return nil, err
+	}
+	client, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("in-cluster dynamic client: %w", err)
+	}
+	return client, nil
+}
+
+// inClusterConfig is the one way to a rest.Config: the pod's own ServiceAccount. Each call returns a new one, so that each
+// client sets its own limits.
+func inClusterConfig() (*rest.Config, error) {
+	cfg, err := rest.InClusterConfig()
+	if err != nil {
+		if errors.Is(err, rest.ErrNotInCluster) {
+			return nil, fmt.Errorf("%w: Agent Kourier runs only in a cluster: %w", ErrWiring, err)
+		}
+		return nil, fmt.Errorf("in-cluster config: %w", err)
+	}
+	return cfg, nil
 }

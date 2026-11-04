@@ -3,6 +3,7 @@ package broker
 import (
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/bindingcheck"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/session"
@@ -41,7 +43,16 @@ type Metrics struct {
 	bindingCond   *prometheus.GaugeVec
 	bindingReady  *prometheus.GaugeVec
 	probeDuration *prometheus.HistogramVec
+	invalid       *prometheus.GaugeVec
+	bindingRej    *prometheus.GaugeVec
 }
+
+// The kinds and reasons that the config gauges carry, a closed set each.
+var (
+	configKinds      = []string{config.KindAgentBackend, config.KindChatConnection, config.KindBinding}
+	rejectionReasons = []config.RejectionReason{config.ReasonInvalidSpec, config.ReasonBackendNotFound, config.ReasonBackendRejected,
+		config.ReasonConnectionNotFound, config.ReasonConnectionRejected, config.ReasonNamespaceNotAllowed, config.ReasonChannelConflict}
+)
 
 // NewMetrics returns the metrics. stale is read at each scrape for agentkourier_config_stale, and
 // may be nil (never stale): it is Config.Stale.
@@ -78,7 +89,12 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 			Help: "1 while every condition of the Binding is true, 0 while one is false or not yet known, by Binding. Only the leader reports it. A Binding has the series once every first probe of it has ended or one found it false."}, []string{"binding"}),
 		probeDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "agentkourier_binding_probe_duration_seconds",
 			Help: "How long a probe of a Binding took, by condition: the time the checker took, whatever it found.", Buckets: prometheus.DefBuckets}, []string{"condition"}),
+		invalid: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_config_invalid_objects",
+			Help: "Objects of the custom resource config source that fail Default or Validate, by kind: each is served from its last good generation, or left out if it has none. 0 while the config is read from files, where one bad object fails the whole reload."}, []string{"kind"}),
+		bindingRej: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_config_binding_rejections",
+			Help: "Bindings of the custom resource config source that are not accepted as written, by the reason of their Accepted condition: InvalidSpec, BackendNotFound, BackendRejected, ConnectionNotFound, ConnectionRejected, NamespaceNotAllowed or ChannelConflict. A Binding that is served from an older generation counts too. 0 while the config is read from files."}, []string{"reason"}),
 	}
+	m.ConfigReport(config.Report{})
 	staleGauge := prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "agentkourier_config_stale",
 		Help: "1 while the latest config reload failed, so the running config lags the files."}, func() float64 {
 		if stale != nil && stale() {
@@ -87,7 +103,7 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 		return 0
 	})
 	var err error
-	for _, c := range []prometheus.Collector{m.auditFailures, m.rejections, m.abandons, m.reloadErrors, m.approvals, m.timeouts, m.removed, m.decisions, m.chatUp, m.turns, m.leader, m.takeovers, m.bindingCond, m.bindingReady, m.probeDuration, staleGauge} {
+	for _, c := range []prometheus.Collector{m.auditFailures, m.rejections, m.abandons, m.reloadErrors, m.approvals, m.timeouts, m.removed, m.decisions, m.chatUp, m.turns, m.leader, m.takeovers, m.bindingCond, m.bindingReady, m.probeDuration, m.invalid, m.bindingRej, staleGauge} {
 		err = errors.Join(err, m.reg.Register(c))
 	}
 	if err != nil {
@@ -110,6 +126,31 @@ func (m *Metrics) CredentialRejected(binding string) { m.rejections.WithLabelVal
 
 // ReloadError counts a failed config reload: BootstrapOptions.OnReloadError.
 func (m *Metrics) ReloadError(error) { m.reloadErrors.Inc() }
+
+// ConfigReport sets the gauges of what the config source refused: BootstrapOptions.OnReport. Every kind and every reason has
+// its series, set at each report, so that one that cleared reads 0 and no series comes or goes. A reason outside the closed
+// set is counted as "other".
+func (m *Metrics) ConfigReport(r config.Report) {
+	kinds := make(map[string]int, len(configKinds))
+	for _, inv := range r.Invalid {
+		kinds[inv.Kind]++
+	}
+	for _, k := range configKinds {
+		m.invalid.WithLabelValues(k).Set(float64(kinds[k]))
+	}
+	reasons := make(map[string]int, len(rejectionReasons)+1)
+	for _, rej := range r.Rejections {
+		label := string(rej.Reason)
+		if !slices.Contains(rejectionReasons, rej.Reason) {
+			label = otherLabel
+		}
+		reasons[label]++
+	}
+	for _, reason := range rejectionReasons {
+		m.bindingRej.WithLabelValues(string(reason)).Set(float64(reasons[string(reason)]))
+	}
+	m.bindingRej.WithLabelValues(otherLabel).Set(float64(reasons[otherLabel]))
+}
 
 // ApprovalOutcome counts what became of a pause, by Binding: one a Binding's policy turned away (interact.Config.OnApprovalOutcome),
 // a tool approval that a person decided (interact.DecideConfig.OnApprovalOutcome), or one that timed out on a Binding that

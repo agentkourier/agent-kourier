@@ -30,6 +30,10 @@ type Source interface {
 	Fingerprint(ctx context.Context) string
 }
 
+// NewDirSource returns the Source of the config directory dir, which is what a Reloader reads when it is given Dir and no
+// Source. It is for a test of what two sources have in common (sourcetest).
+func NewDirSource(dir string) Source { return dirSource{dir} }
+
 // dirSource is the Source of a config directory, read as Load does. It holds no state.
 type dirSource struct{ dir string }
 

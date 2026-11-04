@@ -30,12 +30,13 @@ type published struct {
 	snap        *Snapshot
 	fingerprint string       // of the config files the snapshot was built from
 	secrets     []SecretName // the Secrets the snapshot's objects refer to, sorted and unique
+	report      Report       // what a source that fails one object at a time refused; only the Snapshot for files
 }
 
 // newPublished returns the published form of snap, built from the config files that
 // fingerprint describes, with the Secrets that refs name.
 func newPublished(snap *Snapshot, fingerprint string, refs []secretRef) *published {
-	return &published{snap: snap, fingerprint: fingerprint, secrets: secretNames(refs)}
+	return &published{snap: snap, fingerprint: fingerprint, secrets: secretNames(refs), report: Report{Snapshot: snap}}
 }
 
 // Revision returns an opaque digest of what the current snapshot was built from: the

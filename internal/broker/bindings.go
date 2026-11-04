@@ -238,6 +238,18 @@ func (b *Bindings) ThreadTTLs() (map[string]time.Duration, bool) {
 	return ttls, true
 }
 
+// Unserved returns the "namespace/name" of each Binding that exists in the cluster and is not in the current snapshot: one
+// that is not valid and has no good generation to serve, or whose references fail, or that lost its channel. It is what the
+// retention skips (retentionConfig.Unserved): such a Binding's sessions are not those of one that was deleted. Only a source
+// that fails one object at a time knows any; the files' Reloader has none, and a Snapshots that cannot report none either.
+func (b *Bindings) Unserved() []string {
+	r, ok := b.snaps.(interface{ Report() config.Report })
+	if !ok {
+		return nil
+	}
+	return r.Report().Unserved()
+}
+
 // Binding returns what the interactions need of the Binding named "namespace/name", from the
 // snapshot that is current: the dialect that reads and answers its pauses, the identity its audit
 // rows name, which pauses it allows, and how long one waits. Its errors are those of Backend: one

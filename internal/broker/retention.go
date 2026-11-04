@@ -115,6 +115,10 @@ type retentionConfig struct {
 	// ThreadTTLs returns the threadTTL of each Binding of the config by "namespace/name", and false while no config
 	// is loaded: Bindings.ThreadTTLs. A session is deleted SessionGrace after its Binding's threadTTL.
 	ThreadTTLs func() (map[string]time.Duration, bool)
+	// Unserved returns the "namespace/name" of each Binding that exists and is not in the config: Bindings.Unserved. It is
+	// optional, and nil means none, as with files. The sessions of such a Binding are skipped, not expired: its threadTTL is
+	// not known, and it is not a Binding that was deleted.
+	Unserved func() []string
 	// SessionGrace is how long past its threadTTL a session is kept (default defaultSessionGrace).
 	SessionGrace time.Duration
 	// SessionBatch is how many sessions each purge call deletes (default 100), and MaxSessionBatches how many calls one
@@ -298,19 +302,41 @@ func (r *retention) clearAcknowledgments(ctx context.Context, rows []store.Reply
 	return err
 }
 
+// neverPast is a horizon that no session is past: the store compares a session's last activity with it, and nothing is
+// before the epoch. It is how the sessions of a Binding that exists and is not served are skipped.
+var neverPast = time.Unix(0, 0).UTC()
+
 // sessionHorizons is when each Binding's sessions are past deleting: its threadTTL and the grace after now. A session
 // whose Binding is not in the config has no threadTTL to go by, and is held to the longest that any Binding has, and to no
 // less than the default: a Binding that is missing for a while (a config that lost it, and is mended) must not have its
 // sessions deleted on a shorter reckoning than it would have kept them by.
-func (r *retention) sessionHorizons(ttls map[string]time.Duration, now time.Time) store.SessionHorizons {
-	h := store.SessionHorizons{ByBinding: make(map[string]time.Time, len(ttls))}
+//
+// A Binding that is in the cluster and is not served (unserved: rejected, with no good generation) is not missing: its
+// threadTTL is as unknown as that of a deleted one, but a Binding with a longer one than the rest would lose its sessions
+// to the shorter reckoning of Otherwise, so its sessions are skipped (neverPast) until it is served. With none unserved, as
+// with files, the horizons are the same as without the argument.
+func (r *retention) sessionHorizons(ttls map[string]time.Duration, unserved []string, now time.Time) store.SessionHorizons {
+	h := store.SessionHorizons{ByBinding: make(map[string]time.Time, len(ttls)+len(unserved))}
 	longest := v1alpha1.DefaultThreadTTL
 	for name, ttl := range ttls {
 		h.ByBinding[name] = now.Add(-ttl - r.cfg.SessionGrace)
 		longest = max(longest, ttl)
 	}
 	h.Otherwise = now.Add(-longest - r.cfg.SessionGrace)
+	for _, name := range unserved {
+		if _, served := ttls[name]; !served {
+			h.ByBinding[name] = neverPast
+		}
+	}
 	return h
+}
+
+// unserved returns the Bindings whose sessions are skipped, none if the config has no such.
+func (r *retention) unserved() []string {
+	if r.cfg.Unserved == nil {
+		return nil
+	}
+	return r.cfg.Unserved()
 }
 
 // endStaleTasks ends the tasks that sessions past their horizon still record: only a crash after a session expired leaves
@@ -326,7 +352,7 @@ func (r *retention) endStaleTasks(ctx context.Context) {
 		return
 	}
 	now := r.cfg.Now()
-	h := r.sessionHorizons(ttls, now)
+	h := r.sessionHorizons(ttls, r.unserved(), now)
 	var tally staleTally
 	tried := map[store.ConversationKey]bool{} // a session whose ending failed is not tried again in this tick
 	down := map[string]bool{}                 // Bindings whose agent did not answer in this tick: not asked again
@@ -490,7 +516,7 @@ func (r *retention) purgeSessions(ctx context.Context) {
 	if !ok {
 		return
 	}
-	h := r.sessionHorizons(ttls, r.cfg.Now())
+	h := r.sessionHorizons(ttls, r.unserved(), r.cfg.Now())
 	var total store.PurgedSessions
 	for range r.cfg.MaxSessionBatches {
 		got, err := r.cfg.Store.PurgeExpiredSessions(ctx, h, r.cfg.SessionBatch)
