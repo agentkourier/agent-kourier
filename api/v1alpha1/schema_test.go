@@ -226,7 +226,7 @@ func TestSchemaEmojiMatchesTheBrokersRule(t *testing.T) {
 // fast-fail is lost. The broker is asked: each row sets the field to "" in a valid object and runs Default and
 // Validate, so the answer is the code's and not a column kept by hand. Default fills five of these from "" (output,
 // progress, threadReplies, botMentions, from.kind); Validate reads an empty thread.by as unset. Every enum of the
-// schema has a row, so a new one must be put in the table.
+// spec has a row, so a new one must be put in the table.
 func TestSchemaEnumsListTheEmptyValueExactlyWhereTheBrokerAcceptsIt(t *testing.T) {
 	bindings, backends, conns := crdSchema(t, "bindings"), crdSchema(t, "agentbackends"), crdSchema(t, "chatconnections")
 	trigger := "spec.chat.triggers[]"
@@ -280,12 +280,14 @@ func TestSchemaEnumsListTheEmptyValueExactlyWhereTheBrokerAcceptsIt(t *testing.T
 			t.Errorf("%s: the enum lists \"\" = %t, but the broker accepts \"\" = %t", tc.name, got, accepts)
 		}
 	}
+	// The spec only: D50's invariant is about what a file can say, and a file may not set a Binding's status, whose
+	// condition has an enum of its own (True, False, Unknown) that Validate never sees.
 	var n int
 	for _, sc := range []schema{bindings, backends, conns} {
-		n += countEnums(sc)
+		n += countEnums(sc.at(t, "spec"))
 	}
 	if n != len(rows) {
-		t.Errorf("the schemas have %d enums and the table %d rows: put the new one in it", n, len(rows))
+		t.Errorf("the specs have %d enums and the table %d rows: put the new one in it", n, len(rows))
 	}
 }
 

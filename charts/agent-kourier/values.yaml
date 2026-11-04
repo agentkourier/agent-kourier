@@ -84,8 +84,9 @@ config:
   agentBackends: {}
   chatConnections: {}
   bindings: {}
-  # Roll the pod when the rendered ConfigMap changes. Agent Kourier reloads its files in place, but a reload that adds a
-  # Secret namespace fails until the process restarts. Has no effect with existingConfigMap.
+  # Roll the pod when the rendered ConfigMap changes. Agent Kourier reloads its files in place, and follows a Secret that a
+  # reload adds, in any namespace its ServiceAccount may list and watch it in; a Secret it may not read fails that reload,
+  # and the last good config stays. Has no effect with existingConfigMap.
   rollOnChange: true
 
 # Where Agent Kourier keeps its state. SQLite is one file on a volume (persistence below), for one replica. Postgres is

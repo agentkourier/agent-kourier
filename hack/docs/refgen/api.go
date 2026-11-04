@@ -112,7 +112,7 @@ func (p *apiPackage) addConsts(gen *ast.GenDecl) {
 func (p *apiPackage) page(kind, apiVersion, from string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\n", kind)
-	fmt.Fprintf(&b, "This page lists every field of the %s resource, as the Go types in `%s` define it.\n\n", kind, from)
+	fmt.Fprintf(&b, "This page lists every field you can set on the %s resource, as the Go types in `%s` define it.\n\n", kind, from)
 	b.WriteString("The Default column shows what happens when a field is omitted. None means no default is supplied.\n\n")
 	fmt.Fprintf(&b, "`apiVersion: %s` · `kind: %s`\n\n", apiVersion, kind)
 	if d := description(p.docs[kind]); d != "" {
@@ -168,6 +168,9 @@ func (p *apiPackage) row(rootKind bool, f *ast.Field) (string, string, bool) {
 		return "", "", false
 	}
 	ms := markers(f.Doc)
+	if slices.Contains(ms, "+doc:hide") {
+		return "", "", false // a field the page leaves out, and with it the struct it holds
+	}
 	optional := strings.Contains(opts, "omitempty") || strings.Contains(opts, "omitzero") || slices.Contains(ms, "+optional")
 	if _, ptr := f.Type.(*ast.StarExpr); ptr {
 		optional = true

@@ -428,3 +428,18 @@ spec:
   headers:
     - name: "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
       value: v
+---
+# rule: agentbackend/status: the kind has none
+# want: status: unknown field
+# field: status
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+status:
+  ready: true

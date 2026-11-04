@@ -38,11 +38,11 @@ func (s *stubs) Status() config.Status {
 	return config.Status{}
 }
 
-func (s *stubs) Keys(context.Context, string, string) ([]string, error) {
+func (s *stubs) Ready() error {
 	if s.synced.Load() {
-		return nil, config.ErrSecretNotFound // a cache that has synced and lacks the name
+		return nil
 	}
-	return nil, k8ssecrets.ErrNotSynced
+	return k8ssecrets.ErrNotSynced
 }
 
 func (s *stubs) GetEvent(context.Context, string) (store.Event, error) {
@@ -54,7 +54,7 @@ func (s *stubs) GetEvent(context.Context, string) (store.Event, error) {
 
 func (s *stubs) readiness() *Readiness {
 	var r Readiness
-	r.Set(ConfigLoaded(s), SecretsSynced(s, []string{"sre"}), StoreOpen(s))
+	r.Set(ConfigLoaded(s), SecretsSynced(s), StoreOpen(s))
 	return &r
 }
 
@@ -89,8 +89,8 @@ func TestReadyzFlipsExactlyWhenItsThreeConditionsHold(t *testing.T) {
 
 // The secrets check reads a real resolver: unstarted and stopped are not ready, started is.
 func TestSecretsSyncedFollowsTheResolver(t *testing.T) {
-	r := k8ssecrets.New(cluster(), []string{"sre"})
-	check := SecretsSynced(r, []string{"sre"})
+	r := k8ssecrets.New(cluster(), k8ssecrets.WithPinned(config.SecretName{Namespace: "sre", Name: "agent-kourier-sre-alerts-oidc"}))
+	check := SecretsSynced(r)
 	if err := check.Fn(t.Context()); err == nil {
 		t.Error("an unstarted resolver is ready; want not")
 	}
@@ -203,7 +203,7 @@ func TestReadyzFailsClosedUntilChecksAreSet(t *testing.T) {
 	s.loaded.Store(true)
 	s.synced.Store(true)
 	s.open.Store(true)
-	r.Set(ConfigLoaded(&s), SecretsSynced(&s, []string{"sre"}), StoreOpen(&s))
+	r.Set(ConfigLoaded(&s), SecretsSynced(&s), StoreOpen(&s))
 	if code, _ := get(t, h, "/readyz"); code != http.StatusOK {
 		t.Errorf("/readyz after Set = %d; want 200", code)
 	}

@@ -217,13 +217,12 @@ func TestBindingRefusesTheRemovedWebhookFields(t *testing.T) {
 }
 
 // A field stays in the API only if it works (DA-3). The fields of features that are not built are refused by the strict
-// decoder, and return with the feature: the Binding's status and the ChatConnection's mode and directMessages.
+// decoder, and return with the feature: the ChatConnection's mode and directMessages.
 func TestTheFieldsOfUnbuiltFeaturesAreRefused(t *testing.T) {
 	for _, tc := range []struct {
 		name, in, field string
 		into            any
 	}{
-		{"status", "status: { conditions: [] }", "status", &Binding{}},
 		{"mode", "spec: { mode: socket }", "mode", &ChatConnection{}},
 		{"directMessages", "spec: { directMessages: { defaultBindingRef: { name: b } } }", "directMessages", &ChatConnection{}},
 	} {
@@ -233,6 +232,61 @@ func TestTheFieldsOfUnbuiltFeaturesAreRefused(t *testing.T) {
 				t.Errorf("strict decode error = %v, want an unknown-field error naming %s", err, tc.field)
 			}
 		})
+	}
+}
+
+// Only a Binding has a status. The other kinds are refused one, as an unknown field.
+func TestOnlyABindingHasAStatus(t *testing.T) {
+	const in = "status: { conditions: [] }"
+	for _, into := range []any{&AgentBackend{}, &ChatConnection{}} {
+		err := yaml.UnmarshalStrict([]byte(in), into)
+		if err == nil || !strings.Contains(err.Error(), "status") || !strings.Contains(err.Error(), "unknown field") {
+			t.Errorf("strict decode of %T error = %v, want an unknown-field error naming status", into, err)
+		}
+	}
+	var b Binding
+	if err := yaml.UnmarshalStrict([]byte(in), &b); err != nil {
+		t.Errorf("strict decode of a Binding with status: %v, want none", err)
+	}
+}
+
+// A Binding's status is not the user's to set, and a custom resource source will decode objects that carry it through the
+// same Default and Validate as a file, so neither looks at it. A Binding with no status marshals with no status key.
+func TestBindingStatusIsIgnoredByDefaultAndValidate(t *testing.T) {
+	var b Binding
+	data, err := os.ReadFile(filepath.Join("testdata", "binding-minimal.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.UnmarshalStrict(data, &b); err != nil {
+		t.Fatal(err)
+	}
+	b.Default()
+	if err := b.Validate(); err != nil {
+		t.Fatalf("Validate of a Binding with no status: %v", err)
+	}
+	if out, err := yaml.Marshal(b); err != nil || strings.Contains(string(out), "status") {
+		t.Errorf("a Binding with no status marshals as %q, %v; want no status key", out, err)
+	}
+
+	b.Status.Conditions = []metav1.Condition{{
+		Type: "Ready", Status: metav1.ConditionFalse, Reason: "Accepted:BackendNotFound", ObservedGeneration: 3,
+		LastTransitionTime: metav1.Date(2026, 11, 4, 10, 0, 0, 0, time.UTC), Message: "no such backend",
+	}}
+	b.Default()
+	if err := b.Validate(); err != nil {
+		t.Errorf("Validate of a Binding with a status: %v", err)
+	}
+	out, err := yaml.Marshal(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back Binding
+	if err := yaml.UnmarshalStrict(out, &back); err != nil {
+		t.Fatalf("a status round-trips through strict decoding: %v", err)
+	}
+	if len(back.Status.Conditions) != 1 || back.Status.Conditions[0].ObservedGeneration != 3 || back.Status.Conditions[0].Reason != "Accepted:BackendNotFound" {
+		t.Errorf("status after a round trip = %+v", back.Status)
 	}
 }
 

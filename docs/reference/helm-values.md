@@ -107,7 +107,7 @@ A commented first-install file for any A2A agent, to download and fill in, is th
 | `config.agentBackends` | `{}` |  |
 | `config.chatConnections` | `{}` |  |
 | `config.bindings` | `{}` |  |
-| `config.rollOnChange` | `true` | Roll the pod when the rendered ConfigMap changes. Agent Kourier reloads its files in place, but a reload that adds a Secret namespace fails until the process restarts. Has no effect with existingConfigMap. |
+| `config.rollOnChange` | `true` | Roll the pod when the rendered ConfigMap changes. Agent Kourier reloads its files in place, and follows a Secret that a reload adds, in any namespace its ServiceAccount may list and watch it in; a Secret it may not read fails that reload, and the last good config stays. Has no effect with existingConfigMap. |
 
 ## store
 

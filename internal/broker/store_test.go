@@ -17,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/config/k8ssecrets"
 	"github.com/agentkourier/agent-kourier/internal/secret"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -141,7 +142,7 @@ func TestOpenStorePostgresRefusesASecretThatCannotBeRead(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			r := k8ssecrets.New(client, []string{"agent-kourier"})
+			r := k8ssecrets.New(client, k8ssecrets.WithPinned(config.SecretName{Namespace: "agent-kourier", Name: "agent-kourier-pg"}))
 			if err := r.Start(t.Context()); err != nil {
 				t.Fatal(err)
 			}

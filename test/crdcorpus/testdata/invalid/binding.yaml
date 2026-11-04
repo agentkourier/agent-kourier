@@ -1012,3 +1012,31 @@ spec:
   chat:
     connectionRef: {name: slack}
     channel: 5
+---
+# rule: binding/status: a file may not set it
+# want: status: a file may not set it, remove it
+# field: status
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+status:
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: Ready
+      message: ok
+      lastTransitionTime: "2026-11-04T10:00:00Z"
+      observedGeneration: 1

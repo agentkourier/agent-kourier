@@ -1,6 +1,6 @@
 # Binding
 
-This page lists every field of the Binding resource, as the Go types in `api/v1alpha1` define it.
+This page lists every field you can set on the Binding resource, as the Go types in `api/v1alpha1` define it.
 
 The Default column shows what happens when a field is omitted. None means no default is supplied.
 
