@@ -5,7 +5,8 @@
 # names, and nothing is published to the host: the fake Slack's /_control/ has no authentication.
 # The Job's logs are printed, the Job is deleted, and the exit status is the test result.
 # Usage: e2e-run.sh fast|full|ax. E2E_RUN=REGEXP runs only the tests whose names match it (go test -run; the Job's own pattern, the
-# whole suite, when unset), to run one scenario again. The tier must be up (make e2e-fast-up or e2e-full-up); both tiers
+# whole suite, when unset), to run one scenario again. E2E_PHASE=NAME is the part of a scenario that a script runs between steps of its own
+# (hack/kind/crs-migration.sh: a Helm upgrade in the middle of a session); the scenarios that take one skip when it is empty. The tier must be up (make e2e-fast-up or e2e-full-up); both tiers
 # have the same doubles in namespaces e2e and monitoring, so the same tests run in both.
 #
 # Every kubectl call names --context kind-agent-kourier-<tier> and every kind call names
@@ -29,6 +30,9 @@ WAIT_SECONDS=${E2E_WAIT_SECONDS:-1320}
 # E2E_RUN goes into the Job's YAML as a string, and into a sed command: letters, digits and what a Go regexp of test names needs, and no
 # quote, backslash, space or other character that either would read.
 [[ -z "${E2E_RUN:-}" || "${E2E_RUN}" =~ ^[A-Za-z0-9_.*+?^$|()/-]+$ ]] || die "E2E_RUN must be a Go regexp of letters, digits and _.*+?^\$|()/- only (a / separates the pattern of a subtest)"
+
+# E2E_PHASE goes into the Job's YAML and a sed command too: lower-case letters, digits and hyphens only.
+[[ "${E2E_PHASE:-}" =~ ^[a-z0-9-]*$ ]] || die "E2E_PHASE must be lower-case letters, digits and hyphens only"
 
 for tool in docker kind kubectl go; do
   command -v "${tool}" >/dev/null || die "${tool} is required"
@@ -94,7 +98,7 @@ case "${tier}" in
   full) gate_url=http://scenariollm.kagent.svc.cluster.local:8080 ;;
   ax) gate_url=http://ax-gates.e2e.svc.cluster.local:8080 ;;
 esac
-sed -e "s/@TIER@/${tier}/" -e "s|@STUB_URL@|${gate_url}|" -e "s/@CONFIG_SOURCE@/${config_source}/" "${HERE}/e2e/runner.yaml" |
+sed -e "s/@TIER@/${tier}/" -e "s|@STUB_URL@|${gate_url}|" -e "s/@CONFIG_SOURCE@/${config_source}/" -e "s/@PHASE@/${E2E_PHASE:-}/" "${HERE}/e2e/runner.yaml" |
   { if [ -n "${E2E_RUN:-}" ]; then sed -e "s#-test.run=[^\"]*#-test.run=${E2E_RUN}#"; else cat; fi; } |
   "${K[@]}" apply -f - >/dev/null # the tier is fast or full: use_tier checked it
 result=
