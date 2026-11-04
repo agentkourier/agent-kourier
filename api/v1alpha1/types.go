@@ -218,6 +218,7 @@ type BindingSpec struct {
 type BindingStatus struct {
 	// Conditions are the Binding's states, one per type. The observedGeneration of a condition is the generation of
 	// the Binding it describes.
+	// +kubebuilder:validation:MaxItems=16
 	// +listType=map
 	// +listMapKey=type
 	// +optional

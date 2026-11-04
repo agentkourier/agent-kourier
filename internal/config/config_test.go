@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"sigs.k8s.io/yaml"
+
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 )
 
@@ -26,13 +28,13 @@ kind: ChatConnection
 metadata: { name: slack-main, namespace: agent-kourier-system }
 spec: { platform: slack, credentialsSecretRef: { name: slack-main } }
 `
-	// statusDoc is a status as the broker writes one on the custom resource route.
+	// statusDoc is a status as the API server serves one.
 	statusDoc = `status:
   conditions:
     - { type: Ready, status: "True", reason: Ready, lastTransitionTime: "2026-11-04T10:00:00Z", observedGeneration: 1 }
 `
 	// statusInFileMessage is what the loader says of a status in a Binding file, after the document's location.
-	statusInFileMessage = "status: written by the broker on the custom resource route; it has no place in a file, remove it"
+	statusInFileMessage = "status: a file may not set it, remove it"
 	bindingDoc          = `apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata: { name: sre-alerts, namespace: sre }
@@ -342,8 +344,8 @@ func TestLoadRejects(t *testing.T) {
 			want: []string{`b.yaml#1 Binding sre/sre-alerts: spec.alerts: unknown field`},
 		},
 		{
-			// A file never carries status: the broker writes it on the custom resource route. The Binding type has the
-			// field now, so strict decoding no longer refuses it and the loader does.
+			// A file never sets status. The Binding type has the field, so strict decoding does not refuse it and the
+			// loader does.
 			name:  "status in a Binding file",
 			files: map[string]string{"b.yaml": bindingDoc + statusDoc},
 			want:  []string{`b.yaml#1 Binding sre/sre-alerts: ` + statusInFileMessage},
@@ -352,6 +354,22 @@ func TestLoadRejects(t *testing.T) {
 			name:  "empty status in a Binding file",
 			files: map[string]string{"b.yaml": bindingDoc + "status: {}\n"},
 			want:  []string{`b.yaml#1 Binding sre/sre-alerts: ` + statusInFileMessage},
+		},
+		{
+			// Strict decoding is case-sensitive, so a key that is not exactly status is an unknown field.
+			name:  "Status with a capital in a Binding file",
+			files: map[string]string{"b.yaml": bindingDoc + "Status:\n  conditions: []\n"},
+			want:  []string{`b.yaml#1 Binding sre/sre-alerts: Status: unknown field`},
+		},
+		{
+			// A status of the wrong type stops the decode before Validate runs, so only the type error and the
+			// refusal are reported.
+			name:  "status of the wrong type in a Binding file",
+			files: map[string]string{"b.yaml": bindingDoc + "status: hello\n"},
+			want: []string{
+				`b.yaml#1 Binding sre/sre-alerts: json: cannot unmarshal string into Go struct field Binding.status of type v1alpha1.BindingStatus`,
+				`b.yaml#1 Binding sre/sre-alerts: ` + statusInFileMessage,
+			},
 		},
 		{
 			name:  "null status in a Binding file",
@@ -459,6 +477,25 @@ func TestLoadRejects(t *testing.T) {
 				t.Errorf("problems:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(tc.want, "\n"))
 			}
 		})
+	}
+}
+
+// decode, which Default and Validate follow, is open to a status: only the file path refuses one. A custom resource
+// source will decode the objects of an API server through decode, and they carry a status.
+func TestDecodeKeepsAStatus(t *testing.T) {
+	j, err := yaml.YAMLToJSONStrict([]byte(bindingDoc + statusDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []v1alpha1.Binding
+	if errs := decode(j, &got); len(errs) != 0 {
+		t.Fatalf("decode of a Binding with a status: %v, want no problems", errs)
+	}
+	if len(got) != 1 || len(got[0].Status.Conditions) != 1 {
+		t.Fatalf("decode kept %+v, want one Binding with one condition", got)
+	}
+	if c := got[0].Status.Conditions[0]; c.Type != "Ready" || c.Reason != "Ready" || c.ObservedGeneration != 1 {
+		t.Errorf("the condition after decode = %+v", c)
 	}
 }
 

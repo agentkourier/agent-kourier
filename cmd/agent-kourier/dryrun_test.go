@@ -521,8 +521,8 @@ func TestDryRunCommandLine(t *testing.T) {
 	}
 }
 
-// A Binding file that carries a status is refused by dry-run as the broker refuses it: the broker writes status on the
-// custom resource route, and a file has no place for it. The load fails before the token is read or Slack is asked.
+// A Binding file that carries a status is refused by dry-run as the broker refuses it: a file may not set status. The
+// load fails before the token is read or Slack is asked.
 func TestDryRunRefusesABindingFileWithStatus(t *testing.T) {
 	src, err := os.ReadFile(dryRunConfig + "/trial.yaml")
 	if err != nil {
@@ -535,7 +535,7 @@ func TestDryRunRefusesABindingFileWithStatus(t *testing.T) {
 	}
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"dry-run", "--config", dir, "--binding", "agent-kourier/trial"}, "dev", &stdout, &stderr, env{}.get)
-	want := "trial.yaml#1 Binding agent-kourier/trial: status: written by the broker on the custom resource route; it has no place in a file, remove it"
+	want := "trial.yaml#1 Binding agent-kourier/trial: status: a file may not set it, remove it"
 	if code != exitUsage || !strings.Contains(stderr.String(), want) || stdout.Len() > 0 {
 		t.Errorf("run = %d, stdout %q, stderr %q; want %d and an error that says %q", code, stdout.String(), stderr.String(), exitUsage, want)
 	}

@@ -224,23 +224,23 @@ func decode[T any, PT interface {
 }
 
 // errStatusInFile is the problem with a Binding file that has a status key.
-var errStatusInFile = errors.New("status: written by the broker on the custom resource route; it has no place in a file, remove it")
+var errStatusInFile = errors.New("status: a file may not set it, remove it")
 
-// decodeBindingFile is decode for the Binding in a file, which may not carry a status. The Binding type has the field,
-// so strict decoding accepts it; this refuses it, on the file route only, because the objects of the custom resource
-// route decode through decode and do carry one. Any status key is refused, even an empty or null one. It is reported
-// with the document's other problems.
+// decodeBindingFile is decode for the Binding in a file, which may not set a status. The Binding type has the field,
+// so strict decoding accepts it and this refuses it. The refusal is here, not in decode or Validate, because a custom
+// resource source will decode the objects of an API server through decode, and they carry a status. Any status key
+// is refused, even an empty or null one. It follows the problems decode reports; when decode cannot decode the
+// document at all, as with a status of the wrong type, it reports that one problem and the refusal follows it, and
+// Validate has not run. Like decode, it adds the Binding to dst when decode found no problem, and Load returns no Set
+// when any problem was found.
 func decodeBindingFile(j []byte, dst *[]v1alpha1.Binding) []error {
-	var bindings []v1alpha1.Binding
-	errs := decode(j, &bindings)
+	errs := decode(j, dst)
 	var top map[string]json.RawMessage
-	if err := json.Unmarshal(j, &top); err == nil {
-		if _, ok := top["status"]; ok {
-			errs = append(errs, errStatusInFile)
-		}
+	if err := json.Unmarshal(j, &top); err != nil {
+		return append(errs, err)
 	}
-	if len(errs) == 0 {
-		*dst = append(*dst, bindings...)
+	if _, ok := top["status"]; ok {
+		errs = append(errs, errStatusInFile)
 	}
 	return errs
 }

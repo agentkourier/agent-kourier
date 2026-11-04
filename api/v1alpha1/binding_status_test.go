@@ -31,6 +31,7 @@ type bindingCRD struct {
 							Properties struct {
 								Conditions struct {
 									Type        string   `json:"type"`
+									MaxItems    *int64   `json:"maxItems"`
 									ListType    string   `json:"x-kubernetes-list-type"`
 									ListMapKeys []string `json:"x-kubernetes-list-map-keys"`
 								} `json:"conditions"`
@@ -70,6 +71,11 @@ func TestBindingCRDHasAStatusSubresourceOfConditionsKeyedByType(t *testing.T) {
 	if c.Type != "array" || c.ListType != "map" || !slices.Equal(c.ListMapKeys, []string{"type"}) {
 		t.Errorf("status.conditions = %+v, want an array that is a list map keyed by type", c)
 	}
+	// The plan writes five condition types (Ready, BackendReachable, ChannelJoined, Accepted, ApproversReadable). The
+	// bound lets CEL rules walk the list within the API server's cost budget.
+	if c.MaxItems == nil || *c.MaxItems != 16 {
+		t.Errorf("status.conditions maxItems = %v, want 16", c.MaxItems)
+	}
 }
 
 // printerColumn evaluates a printer column's JSONPath on obj as the API server does: a path that matches nothing,
@@ -89,14 +95,21 @@ func printerColumn(t *testing.T, path string, obj map[string]any) string {
 
 func TestBindingPrinterColumns(t *testing.T) {
 	v := readBindingCRD(t).Spec.Versions[0]
-	var names []string
+	type column struct{ Name, Type, JSONPath string }
+	var got []column
 	paths := map[string]string{}
 	for _, c := range v.AdditionalPrinterColumns {
-		names = append(names, c.Name)
+		got = append(got, column{c.Name, c.Type, c.JSONPath})
 		paths[c.Name] = c.JSONPath
 	}
-	if want := []string{"Ready", "Reason", "Channel", "Age"}; !slices.Equal(names, want) {
-		t.Fatalf("printer columns = %v, want %v", names, want)
+	want := []column{
+		{"Ready", "string", `.status.conditions[?(@.type=="Ready")].status`},
+		{"Reason", "string", `.status.conditions[?(@.type=="Ready")].reason`},
+		{"Channel", "string", `.spec.chat.channel`},
+		{"Age", "date", `.metadata.creationTimestamp`},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("printer columns = %+v, want %+v", got, want)
 	}
 
 	meta := map[string]any{"creationTimestamp": "2026-11-04T10:00:00Z"}

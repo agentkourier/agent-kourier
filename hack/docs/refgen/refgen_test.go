@@ -153,7 +153,7 @@ func TestAPIReferenceSectionsInFieldOrderOnce(t *testing.T) {
 
 // TestAPIReferenceCoversEveryField checks the generated reference of the real API against the Go types by reflection,
 // which reads the types differently from the generator: every JSON field of every struct a resource reaches has a row
-// in that struct's section.
+// in that struct's section, except the fields the reference leaves out on purpose (+doc:hide), which must have none.
 func TestAPIReferenceCoversEveryField(t *testing.T) {
 	// unlisted are the fields the reference leaves out on purpose (+doc:hide), by struct and JSON name.
 	unlisted := map[string]bool{"Binding.status": true}

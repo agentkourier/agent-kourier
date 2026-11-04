@@ -112,7 +112,7 @@ func (p *apiPackage) addConsts(gen *ast.GenDecl) {
 func (p *apiPackage) page(kind, apiVersion, from string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\n", kind)
-	fmt.Fprintf(&b, "This page lists every field of the %s resource, as the Go types in `%s` define it.\n\n", kind, from)
+	fmt.Fprintf(&b, "This page lists every field you can set on the %s resource, as the Go types in `%s` define it.\n\n", kind, from)
 	b.WriteString("The Default column shows what happens when a field is omitted. None means no default is supplied.\n\n")
 	fmt.Fprintf(&b, "`apiVersion: %s` · `kind: %s`\n\n", apiVersion, kind)
 	if d := description(p.docs[kind]); d != "" {

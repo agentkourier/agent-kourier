@@ -250,7 +250,7 @@ func TestOnlyABindingHasAStatus(t *testing.T) {
 	}
 }
 
-// A Binding's status is the broker's to write, and the custom resource route decodes objects that carry it through the
+// A Binding's status is not the user's to set, and a custom resource source will decode objects that carry it through the
 // same Default and Validate as a file, so neither looks at it. A Binding with no status marshals with no status key.
 func TestBindingStatusIsIgnoredByDefaultAndValidate(t *testing.T) {
 	var b Binding
