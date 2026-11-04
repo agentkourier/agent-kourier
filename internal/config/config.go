@@ -57,7 +57,7 @@ type Set struct {
 // Load reads every *.yaml and *.yml file directly inside dir, in lexical order. Each file may
 // hold several documents separated by "---". Documents that are empty or only comments are
 // skipped and not counted. Each other document must carry the v1alpha1 apiVersion and a known
-// kind, decode without unknown fields, and pass Default and Validate.
+// kind, decode without unknown fields, and pass Default and Validate. A Binding must also have no status key.
 //
 // Load reports every problem it finds, joined, each prefixed with "<file>#<n> <kind>
 // <namespace>/<name>:" (n is the 1-based document number in the file) and returns a nil Set.
@@ -184,7 +184,7 @@ func (l *loader) document(file string, n, line int, doc []byte) {
 	case "ChatConnection":
 		errs = decode(j, &l.set.ChatConnections)
 	case "Binding":
-		errs = decode(j, &l.set.Bindings)
+		errs = decodeBindingFile(j, &l.set.Bindings)
 	default:
 		l.fail(loc, fmt.Errorf("unknown kind %q, must be one of AgentBackend, ChatConnection, Binding", h.Kind))
 		return
@@ -219,6 +219,28 @@ func decode[T any, PT interface {
 	}
 	if len(errs) == 0 {
 		*dst = append(*dst, *obj)
+	}
+	return errs
+}
+
+// errStatusInFile is the problem with a Binding file that has a status key.
+var errStatusInFile = errors.New("status: written by the broker on the custom resource route; it has no place in a file, remove it")
+
+// decodeBindingFile is decode for the Binding in a file, which may not carry a status. The Binding type has the field,
+// so strict decoding accepts it; this refuses it, on the file route only, because the objects of the custom resource
+// route decode through decode and do carry one. Any status key is refused, even an empty or null one. It is reported
+// with the document's other problems.
+func decodeBindingFile(j []byte, dst *[]v1alpha1.Binding) []error {
+	var bindings []v1alpha1.Binding
+	errs := decode(j, &bindings)
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(j, &top); err == nil {
+		if _, ok := top["status"]; ok {
+			errs = append(errs, errStatusInFile)
+		}
+	}
+	if len(errs) == 0 {
+		*dst = append(*dst, bindings...)
 	}
 	return errs
 }

@@ -174,11 +174,21 @@ type ChatConnectionSpec struct {
 //
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Namespaced,shortName=akbinding,categories=agentkourier
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].reason`
+// +kubebuilder:printcolumn:name="Channel",type=string,JSONPath=`.spec.chat.channel`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type Binding struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitzero"`
 
 	Spec BindingSpec `json:"spec"`
+	// Status is the observed state of the Binding. It is set through the status subresource and never in a file: the
+	// file loader refuses a Binding file that sets it.
+	// +doc:hide
+	// +optional
+	Status BindingStatus `json:"status,omitzero"`
 }
 
 // BindingList is a list of Binding.
@@ -202,6 +212,16 @@ type BindingSpec struct {
 	Feedback Feedback `json:"feedback,omitzero"`
 	// +optional
 	Session Session `json:"session,omitzero"`
+}
+
+// BindingStatus is the observed state of a Binding.
+type BindingStatus struct {
+	// Conditions are the Binding's states, one per type. The observedGeneration of a condition is the generation of
+	// the Binding it describes.
+	// +listType=map
+	// +listMapKey=type
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // AgentRef names the agent on a backend.

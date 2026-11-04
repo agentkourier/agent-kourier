@@ -26,7 +26,14 @@ kind: ChatConnection
 metadata: { name: slack-main, namespace: agent-kourier-system }
 spec: { platform: slack, credentialsSecretRef: { name: slack-main } }
 `
-	bindingDoc = `apiVersion: agentkourier.dev/v1alpha1
+	// statusDoc is a status as the broker writes one on the custom resource route.
+	statusDoc = `status:
+  conditions:
+    - { type: Ready, status: "True", reason: Ready, lastTransitionTime: "2026-11-04T10:00:00Z", observedGeneration: 1 }
+`
+	// statusInFileMessage is what the loader says of a status in a Binding file, after the document's location.
+	statusInFileMessage = "status: written by the broker on the custom resource route; it has no place in a file, remove it"
+	bindingDoc          = `apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata: { name: sre-alerts, namespace: sre }
 spec:
@@ -335,10 +342,42 @@ func TestLoadRejects(t *testing.T) {
 			want: []string{`b.yaml#1 Binding sre/sre-alerts: spec.alerts: unknown field`},
 		},
 		{
-			// A Binding has no status: its conditions were never set, and return with the controller that sets them.
-			name:  "removed status field",
-			files: map[string]string{"b.yaml": bindingDoc + "status:\n  conditions: []\n"},
-			want:  []string{`b.yaml#1 Binding sre/sre-alerts: status: unknown field`},
+			// A file never carries status: the broker writes it on the custom resource route. The Binding type has the
+			// field now, so strict decoding no longer refuses it and the loader does.
+			name:  "status in a Binding file",
+			files: map[string]string{"b.yaml": bindingDoc + statusDoc},
+			want:  []string{`b.yaml#1 Binding sre/sre-alerts: ` + statusInFileMessage},
+		},
+		{
+			name:  "empty status in a Binding file",
+			files: map[string]string{"b.yaml": bindingDoc + "status: {}\n"},
+			want:  []string{`b.yaml#1 Binding sre/sre-alerts: ` + statusInFileMessage},
+		},
+		{
+			name:  "null status in a Binding file",
+			files: map[string]string{"b.yaml": bindingDoc + "status:\n"},
+			want:  []string{`b.yaml#1 Binding sre/sre-alerts: ` + statusInFileMessage},
+		},
+		{
+			// The other problems of the document are reported with it, and a later document is still checked.
+			name:  "status with other problems in a Binding file",
+			files: map[string]string{"b.yaml": bindingDoc + "  bogus: 1\n" + statusDoc + "---\n" + strings.Replace(bindingDoc, "name: sre-alerts", "name: other", 1) + statusDoc},
+			want: []string{
+				`b.yaml#1 Binding sre/sre-alerts: spec.bogus: unknown field`,
+				`b.yaml#1 Binding sre/sre-alerts: ` + statusInFileMessage,
+				`b.yaml#2 Binding sre/other: ` + statusInFileMessage,
+			},
+		},
+		{
+			// Only a Binding has a status. The other kinds keep the plain strict-decode refusal.
+			name:  "status in an AgentBackend file",
+			files: map[string]string{"b.yaml": backendDoc + statusDoc},
+			want:  []string{`b.yaml#1 AgentBackend agent-kourier-system/kagent-pilot: status: unknown field`},
+		},
+		{
+			name:  "status in a ChatConnection file",
+			files: map[string]string{"c.yaml": connectionDoc + statusDoc},
+			want:  []string{`c.yaml#1 ChatConnection agent-kourier-system/slack-main: status: unknown field`},
 		},
 		{
 			name: "removed directMessages field",

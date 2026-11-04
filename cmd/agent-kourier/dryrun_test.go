@@ -521,6 +521,26 @@ func TestDryRunCommandLine(t *testing.T) {
 	}
 }
 
+// A Binding file that carries a status is refused by dry-run as the broker refuses it: the broker writes status on the
+// custom resource route, and a file has no place for it. The load fails before the token is read or Slack is asked.
+func TestDryRunRefusesABindingFileWithStatus(t *testing.T) {
+	src, err := os.ReadFile(dryRunConfig + "/trial.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	withStatus := append(bytes.Clone(src), "status:\n  conditions:\n    - { type: Ready, status: \"True\", reason: Ready, lastTransitionTime: \"2026-11-04T10:00:00Z\" }\n"...)
+	if err := os.WriteFile(dir+"/trial.yaml", withStatus, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"dry-run", "--config", dir, "--binding", "agent-kourier/trial"}, "dev", &stdout, &stderr, env{}.get)
+	want := "trial.yaml#1 Binding agent-kourier/trial: status: written by the broker on the custom resource route; it has no place in a file, remove it"
+	if code != exitUsage || !strings.Contains(stderr.String(), want) || stdout.Len() > 0 {
+		t.Errorf("run = %d, stdout %q, stderr %q; want %d and an error that says %q", code, stdout.String(), stderr.String(), exitUsage, want)
+	}
+}
+
 // --since is passed on to Slack: a message older than the window is not read, and the same channel read with no --since
 // gives all of it.
 func TestDryRunSinceReachesSlack(t *testing.T) {

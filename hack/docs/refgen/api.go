@@ -168,6 +168,9 @@ func (p *apiPackage) row(rootKind bool, f *ast.Field) (string, string, bool) {
 		return "", "", false
 	}
 	ms := markers(f.Doc)
+	if slices.Contains(ms, "+doc:hide") {
+		return "", "", false // a field the page leaves out, and with it the struct it holds
+	}
 	optional := strings.Contains(opts, "omitempty") || strings.Contains(opts, "omitzero") || slices.Contains(ms, "+optional")
 	if _, ptr := f.Type.(*ast.StarExpr); ptr {
 		optional = true
