@@ -1167,14 +1167,20 @@ func (u *Run) update(ctx context.Context, ref chat.Ref, v view) error {
 		err = u.cfg.Platform.Update(ctx, ref, chat.Say(v.posted()))
 	}
 	switch {
-	case errors.Is(err, chat.ErrWouldDropText) && v.body == "":
+	case errors.Is(err, chat.ErrWouldDropText) && !hasBody(v.m):
 		u.cfg.Logger.InfoContext(ctx, "live: the message holds text that an update with none would take away; it stands until the turn has text", "channel", u.turn.Channel)
 		u.holdsText = true
 		return errMessageStands
-	case err == nil && v.body != "":
+	case err == nil && hasBody(v.m):
 		u.holdsText = false // the text is now this run's own, and the next update is the platform's to judge again
 	}
 	return err
+}
+
+// hasBody says whether m holds text. It reads the message and not the view's body, which for a stream's stop can be the placeholder
+// (run): what the platform judges is the message.
+func hasBody(m chat.Message) bool {
+	return slices.ContainsFunc(m.Parts, func(p chat.Part) bool { _, ok := p.(chat.Body); return ok })
 }
 
 // cannotShow says whether err is the platform's refusal of a message's content: one it found malformed, too large, or of a

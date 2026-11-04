@@ -230,6 +230,29 @@ func TestAnUpdateWithTextEndsTheWait(t *testing.T) {
 	}
 }
 
+// A stream whose text the agent then takes back has nothing to end on, and its placeholder is no text either: the update that
+// would replace the stream's text with it is refused as any update with no text is, and the message stands. It is no failed write,
+// though the view carries the placeholder as the text a stream's stop would send.
+func TestAStreamWhoseTextIsTakenBackKeepsItWithNoFailedWrite(t *testing.T) {
+	e := setup(t)
+	run, _, outcome := e.observed(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1"})
+	run.Handle(text("a", "hello"))
+	eventually(t, "the text", func() bool { e.clk.advance(throttle); return strings.Contains(e.reply().Text, "hello") })
+	run.Handle(text("a", ""))
+	run.Handle(agent.FinalEvent{})
+	e.finish(t, run)
+	if m := e.reply(); m.Text != "hello" || m.Streaming {
+		t.Errorf("message %+v; want the text, the stream stopped", m)
+	}
+	if n := e.updates(); n != 1 {
+		t.Errorf("%d updates; want the one that was refused", n)
+	}
+	if got := outcome(); got != "empty_output" {
+		t.Errorf("final outcome %q; want empty_output", got)
+	}
+	e.assertNoRetries(t)
+}
+
 // The placeholder of a turn cut short is no text of the agent's, so it does not stand in the way of the next attempt: the attempt
 // shows its cards on it, with no refused call, and its answer replaces them. Here the turn is an alert thread's, which made this
 // message the one that repeated the error, attempt after attempt, while the agent was not ready.
@@ -259,6 +282,41 @@ func TestALaterAttemptShowsItsCardsOnThePlaceholderOfAnEarlierOne(t *testing.T) 
 	}
 	if n := e.updates() - updates; n > 3 {
 		t.Errorf("%d updates; want the card, its end and the answer at most", n)
+	}
+	e.assertNoRetries(t)
+}
+
+// A stream's text is all a stream can say, so a stream that ends with nothing says the placeholder as text, unlike a post or an
+// update: here one started for a step that the platform then refused. A later attempt holds its cards on it, as on any text,
+// and its answer replaces it.
+func TestAStreamsPlaceholderIsTextToALaterAttempt(t *testing.T) {
+	e := setup(t)
+	e.spy(t, true, func(int) error { return chat.ErrNoSteps })
+	first := e.stream(t)
+	first.Handle(call("c0", "search", nil))
+	eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
+	first.Handle(agent.FinalEvent{})
+	e.finish(t, first)
+	if m := e.reply(); m.Text != "(no output)" || m.Streaming {
+		t.Fatalf("message %+v; want the placeholder, stopped", m)
+	}
+
+	updates := e.updates()
+	later, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1", Recovered: true})
+	later.Handle(call("c1", "search", nil))
+	e.until(t, "the refused update", 8*time.Second, func() bool { return e.updates() > updates })
+	e.elapse(6 * throttle)
+	if m := e.reply(); m.Text != "(no output)" || len(m.Tasks()) != 0 {
+		t.Errorf("message %+v; want the placeholder, and no card on it", m)
+	}
+	if n := e.updates() - updates; n != 1 {
+		t.Errorf("%d updates; want the one that was refused", n)
+	}
+	later.Handle(text("a", "the whole answer"))
+	later.Handle(agent.FinalEvent{})
+	e.finish(t, later)
+	if m := e.reply(); m.Text != "the whole answer" {
+		t.Errorf("message %+v; want the answer", m)
 	}
 	e.assertNoRetries(t)
 }

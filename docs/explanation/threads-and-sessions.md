@@ -114,7 +114,9 @@ updated, to `(no output)` if the task has nothing to show. Slack refuses an upda
 text, so a turn that takes such a reply over stops it if it still streams, keeps its text, and shows no card or `Working…` on it
 until the turn has text. If the turn ends with no text, the reply keeps what it says. A reply with any other block beside its
 text, such as a card or a line of small print, has no such protection: Slack takes the update, and the text is gone, for good if
-the turn never has text of its own. `(no output)` itself is not text in this sense, so the next attempt's cards replace it. Nor is a request that may have reached the agent but got no
+the turn never has text of its own. A reply of text alone also keeps it when the agent takes that text back and the turn ends
+with nothing. `(no output)` in a reply that was posted or updated is not text in this sense, so the next attempt's cards replace
+it. A stream that ended with nothing says it as text, which holds those cards back as any text does. Nor is a request that may have reached the agent but got no
 answer, such as one cut off by a timeout: the reply stays as it is while the request is looked up and followed, or sent
 again, and that attempt takes the reply over. If following the task again is refused, or finds it gone or wedged, or the
 request is given up on before the agent is known to have it, the reply is ended as a failed request's is, and keeps the
