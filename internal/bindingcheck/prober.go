@@ -32,6 +32,9 @@ type Target struct {
 	Binding string
 	// Channel is the chat channel the Binding is bound to.
 	Channel string
+	// Generation is the metadata.generation of the Binding as it is in the config now, zero for one read from a file. The
+	// Prober stamps each result with the one its pass began with (Condition.ObservedGeneration).
+	Generation int64
 }
 
 // AgentChecker probes the agent backend of a Binding. It sets BackendReachable.
@@ -142,6 +145,11 @@ type Options struct {
 	// Every OnTransition call for a Binding comes before the OnPrune call that names it, and none follows it. It
 	// must not block, for the reason given at OnTransition, and a panic is recovered and reported to OnProbeError.
 	OnPrune func(names []string)
+	// OnPass is called on Run's goroutine when a pass has ended and its results are recorded, before the Prober looks at the
+	// next Tick. A probe that finds what it found before is no transition, but it moves the condition's ObservedGeneration, and
+	// this is how a consumer that writes conditions somewhere learns that. It must not block, as OnPrune must not, and a panic
+	// is recovered and reported to OnProbeError. It is not called for a pass that ctx ended.
+	OnPass func()
 }
 
 // Prober probes the Bindings of its Targets and records what the checkers report in a State.
@@ -240,6 +248,9 @@ func (p *Prober) Run(ctx context.Context) {
 		if began := time.Now(); !started || !began.Before(nextAt) || ((fresh || cur != rev) && !began.Before(lastPass.Add(p.o.MinRevisionGap))) {
 			started, rev, lastPass, fresh = true, cur, began, false
 			p.pass(ctx, targets)
+			if ctx.Err() == nil && p.o.OnPass != nil {
+				p.hook("OnPass", "", Target{}, p.o.OnPass)
+			}
 			nextAt = began.Add(jittered(p.o.Interval, rand.Float64())) //nolint:gosec // jitter spreads probes; it is not a secret
 		}
 		select {
@@ -354,7 +365,7 @@ func (p *Prober) sync(targets []Target) ([]Target, bool) {
 		}
 		p.known[t.Binding] = true
 		changed = true
-		p.state.Set(t.Binding, at, p.pending(BackendReachable, p.o.Agents != nil), p.pending(ChannelJoined, p.o.Channels != nil))
+		p.state.Set(t.Binding, at, p.pending(BackendReachable, p.o.Agents != nil, t.Generation), p.pending(ChannelJoined, p.o.Channels != nil, t.Generation))
 	}
 	for name := range p.known {
 		if !seen[name] {
@@ -368,11 +379,11 @@ func (p *Prober) sync(targets []Target) ([]Target, bool) {
 }
 
 // pending is the Pending condition of type t, or the zero Condition (which State.Set ignores) when t is not tracked.
-func (p *Prober) pending(t ConditionType, tracked bool) Condition {
+func (p *Prober) pending(t ConditionType, tracked bool, generation int64) Condition {
 	if !tracked {
 		return Condition{}
 	}
-	return Condition{Type: t, Status: Unknown, Reason: ReasonPending}
+	return Condition{Type: t, Status: Unknown, Reason: ReasonPending, ObservedGeneration: generation}
 }
 
 // pass probes every target once, p.o.Concurrency at a time, and returns when all the probes have ended. Each target
@@ -545,7 +556,8 @@ func (p *Prober) record(ctx context.Context, t ConditionType, target Target, res
 		p.fail(ProbeError{Condition: t, Target: target, Err: res.err})
 	}
 	at := time.Now()
-	for _, tr := range p.state.Set(target.Binding, at, Condition{Type: t, Status: res.out.Status, Reason: res.out.Reason, Message: res.out.Message}) {
+	cond := Condition{Type: t, Status: res.out.Status, Reason: res.out.Reason, Message: res.out.Message, ObservedGeneration: target.Generation}
+	for _, tr := range p.state.Set(target.Binding, at, cond) {
 		if p.o.OnTransition != nil {
 			p.hook("OnTransition", t, target, func() { p.o.OnTransition(tr) })
 		}

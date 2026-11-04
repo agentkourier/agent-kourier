@@ -143,9 +143,9 @@ func (r Reason) reportable(s Status) bool {
 	return false
 }
 
-// Condition is one fact about one Binding. Its fields and JSON names are those of metav1.Condition, less
-// ObservedGeneration (file-loaded objects have none) and plus LastProbeTime, which metav1.Condition does not have: a
-// controller that copies a Condition into a status drops LastProbeTime.
+// Condition is one fact about one Binding. Its fields and JSON names are those of metav1.Condition, plus LastProbeTime, which
+// metav1.Condition does not have: whoever copies a Condition into a status drops LastProbeTime. ObservedGeneration is zero for
+// a Binding that was read from a file, which has no generation.
 type Condition struct {
 	// Type is which fact this is.
 	Type ConditionType `json:"type"`
@@ -155,6 +155,11 @@ type Condition struct {
 	Reason Reason `json:"reason"`
 	// Message is a short, redacted detail. It is for people and is not part of the closed set.
 	Message string `json:"message"`
+	// ObservedGeneration is the generation of the Binding that the probe behind this condition was made for: the Target's
+	// Generation when the pass began, so an edit during the pass is not claimed as seen. It moves with every probe, whether or
+	// not the status or reason changed. A Pending condition has the Target's generation when the Binding was first seen. Ready's is
+	// the oldest of the conditions it is derived from.
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// LastTransitionTime is when Status last changed. A change of Reason or Message alone does not move it.
 	LastTransitionTime time.Time `json:"lastTransitionTime"`
 	// LastProbeTime is when the condition was last set from a probe, whether or not anything changed. It is the zero

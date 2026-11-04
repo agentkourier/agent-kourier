@@ -11,6 +11,11 @@ import (
 // one for Ready. Ready follows them in a Snapshot.
 var probed = []ConditionType{BackendReachable, ChannelJoined, ApproversReadable}
 
+// Types returns the condition types a State can hold, the probed ones in the order Snapshot gives them and then Ready: the
+// ones a consumer that copies conditions elsewhere can be given, and so the most it can hold for one Binding. The caller owns the
+// slice.
+func Types() []ConditionType { return append(slices.Clone(probed), Ready) }
+
 // Transition is a change of one condition of one Binding: of its status, or of its reason.
 type Transition struct {
 	// Binding is the Binding's key, namespace/name.
@@ -82,14 +87,20 @@ func (s *State) Set(binding string, at time.Time, conds ...Condition) []Transiti
 // all are, and Unknown otherwise; when it is not True it names the first condition that holds it back: a False one before any
 // Unknown, and for Unknown a Pending one before any other Unknown, so that Ready stays Pending (see Condition.Pending) for as long
 // as a first probe has not ended, whatever the ones that have ended found, and the order in which the probes end does not change what
-// Ready says. Its LastProbeTime is the latest of theirs; the caller sets its LastTransitionTime.
+// Ready says. Its LastProbeTime is the latest of theirs and its ObservedGeneration the oldest, since it says nothing newer than the oldest
+// evidence behind it; the caller sets its LastTransitionTime.
 func derive(cur map[ConditionType]Condition) Condition {
 	var first, pending, unknown *Condition
 	var probedAt time.Time
+	var seen int64
+	haveSeen := false
 	for _, t := range probed {
 		c, ok := cur[t]
 		if !ok {
 			continue
+		}
+		if !haveSeen || c.ObservedGeneration < seen {
+			seen, haveSeen = c.ObservedGeneration, true
 		}
 		if c.LastProbeTime.After(probedAt) {
 			probedAt = c.LastProbeTime
@@ -104,7 +115,7 @@ func derive(cur map[ConditionType]Condition) Condition {
 			unknown = &c
 		}
 	}
-	r := Condition{Type: Ready, Status: True, Reason: ReasonOK, LastProbeTime: probedAt}
+	r := Condition{Type: Ready, Status: True, Reason: ReasonOK, LastProbeTime: probedAt, ObservedGeneration: seen}
 	switch {
 	case first != nil:
 		r.Status = False
