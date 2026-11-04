@@ -270,6 +270,8 @@ kubectl -n agent-kourier logs <leader pod> | grep 'binding verification:'
 
 Port-forward to the leader's pod first, as in [Check the leader](high-availability.md#4-check-the-leader): a standby exports none of these series, and its log has none of these lines. A line has `binding`, `condition`, `status`, `reason` and `detail`, and `cause` when a request or read failed, and is written when the result changes, not at each probe. If it has left the log, a restart of the leader logs each result that is not true again.
 
+If you own a Binding and cannot read the broker's log, its status says only that the request for the card or the read of the channel failed, and that "the operator's log has the cause". That is on purpose: the cause names hosts, addresses and ports, which can be another team's, so a status never carries it, and it does not say whether a name did not resolve, a connection was refused or a certificate was not trusted. Ask whoever runs Agent Kourier to read the `cause` of the line for your Binding.
+
 One failed probe holds the Binding at 0 until the next pass, up to about 5.5 minutes later, so a result during an agent's rollout can clear by itself. A fixed Secret or config is checked again sooner: a change starts a pass, at most one every 30 seconds.
 
 ### `BackendReachable`
@@ -309,6 +311,12 @@ One failed probe holds the Binding at 0 until the next pass, up to about 5.5 min
 |---|---|---|---|
 | `ProbeTimeout` | unknown | The probe did not end within 10 seconds. | Wait for the next pass. If it stays, check the leader's log. |
 | `ProbeFailed` | unknown | The check could not tell. The line is `a probe failed`, with the error, and it is written at each probe. | Read the `error`. |
+
+### The status of a Binding keeps changing
+
+With the config read from custom resources, the leader writes the status of each Binding it serves, and writes it back if it differs. If something else keeps changing it, the two go on at each other every 10 seconds, and `agentkourier_binding_status_writes_total{result="put_back"}` climbs steadily. After three put-backs in a row the leader's log says, once for the Binding, `something else keeps changing the status of a Binding, and this broker keeps putting it back`, and names it.
+
+What else writes a Binding's status is either another Agent Kourier that serves the same Binding, or a controller of your own. The first happens when two installs name the same ChatConnection (`AGENTKOURIER_CHAT_CONNECTION`): give each its own connection, so that each serves its own Bindings. For the second, look at the `managedFields` of the Binding (`kubectl get akbinding <name> -n <namespace> -o yaml --show-managed-fields`): the manager `agent-kourier` owns the conditions of the types `Accepted`, `BackendReachable`, `ChannelJoined` and `Ready`, and any other manager that writes them is the one to stop. A person's edit is put back once and is no fight.
 
 ## An agent on kagent 0.9.x answers, but the answer can appear twice
 

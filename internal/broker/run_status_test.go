@@ -143,9 +143,14 @@ func TestRunStopsTheStatusWriterAfterTheVerification(t *testing.T) {
 	var mu sync.Mutex
 	var stops []string
 	c := crStartConfig(t, nil)
+	cluster := newStatusClusterOn(c.Dynamic.(*dynamicfake.FakeDynamicClient))
+	c.StatusClient = cluster.dyn
 	c.stopTrace = func(name string) { mu.Lock(); stops = append(stops, name); mu.Unlock() }
 	r := start(t, c)
 	r.until("/readyz", http.StatusOK)
+	// Readiness does not wait for the leader's work, so a signal that comes at once can end the broker before the leader half has
+	// started its loops, and there is nothing to stop in order: wait for what only the leader half produces, a status.
+	eventually(t, 10*time.Second, "the leader half wrote no status", func() bool { return cluster.count() > 0 })
 	r.cancel()
 	if err := r.wait(); err != nil {
 		t.Fatal(err)

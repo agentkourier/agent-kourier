@@ -473,8 +473,8 @@ func TestChannelCheckerReportsTheCauseOfAFailedReadThroughTheRealSlackClient(t *
 		message string // a substring of the Message, which reaches the status
 		cause   string // a substring of the Cause, which is for the log
 	}{
-		{"no_permission", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, "the chat platform read failed", "slack conversations.info: no_permission"},
-		{"access_denied", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, "the chat platform read failed", "slack conversations.info: access_denied"},
+		{"no_permission", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, msgChatReadFailed, "slack conversations.info: no_permission"},
+		{"access_denied", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, msgChatReadFailed, "slack conversations.info: access_denied"},
 		{"http500", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, "read failed", ""},
 		{"ratelimit", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, "rate-limited", ""},
 		{"hang", bindingcheck.ReasonChatUnavailable, bindingcheck.Unknown, "did not answer the read in time", ""},
@@ -549,7 +549,7 @@ func TestAgentCheckerSaysWhyTheCardRequestFailedWithoutItsURL(t *testing.T) {
 			if strings.Contains(out.Message+out.Cause, "SECRET-IN-URL") || strings.Contains(out.Message+out.Cause, "/agents/") {
 				t.Errorf("the message %q or the cause %q holds the request's URL", out.Message, out.Cause)
 			}
-			if out.Message != "the request for the agent card failed" {
+			if out.Message != msgCardRequestFailed {
 				t.Errorf("the message %q; want the one sentence for the reason, which claims nothing of an answer and nothing of the cause", out.Message)
 			}
 		})
@@ -1273,7 +1273,7 @@ func TestAFailedCardRequestPutsNothingOfTheErrorInTheMessage(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			out, ok := classifyAgent(fmt.Errorf("binding team-a/oncall: %w", &url.Error{Op: "Get", URL: "http://agent.team-b.svc:8080/", Err: cause}))
-			if !ok || out.Message != "the request for the agent card failed" {
+			if !ok || out.Message != msgCardRequestFailed {
 				t.Fatalf("classifyAgent = %+v, %t; want the one sentence", out, ok)
 			}
 			for _, leak := range []string{"team-b", "10.1.2.3", "10.0.0.5", "48122", "8080"} {
@@ -1292,5 +1292,20 @@ func TestAFailedCardRequestPutsNothingOfTheErrorInTheMessage(t *testing.T) {
 	}
 	if a, b := reset(48122), reset(50001); a.Message != b.Message || a.Cause == b.Cause {
 		t.Errorf("two resets on other ports: messages %q and %q, causes %q and %q; want one message and two causes", a.Message, b.Message, a.Cause, b.Cause)
+	}
+}
+
+// The sentence a status carries for a failed request or read sends a tenant to the operator, and names no class of cause: a class (a
+// name that does not resolve, a connection refused, a certificate not trusted) would let a tenant probe which internal hosts answer.
+func TestTheSentenceOfAFailedProbeSendsTheTenantToTheOperatorAndNamesNoClass(t *testing.T) {
+	for _, msg := range []string{msgCardRequestFailed, msgChatReadFailed} {
+		if !strings.HasSuffix(msg, "the operator's log has the cause") {
+			t.Errorf("%q does not send the reader to the operator's log", msg)
+		}
+		for _, class := range []string{"resolve", "refused", "certificate", "timed out", "reset", "TLS", "DNS", "no such host", "unreachable"} {
+			if strings.Contains(strings.ToLower(msg), strings.ToLower(class)) {
+				t.Errorf("%q names a class of cause (%q)", msg, class)
+			}
+		}
 	}
 }

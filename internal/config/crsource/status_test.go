@@ -114,3 +114,36 @@ func slicesIndex(objs []*unstructured.Unstructured, name string) int {
 	}
 	return -1
 }
+
+// The count of Binding events grows with each Binding added, changed or deleted, and with nothing else: it is what lets a reader of
+// the statuses skip a pass when nothing moved. A change of an AgentBackend is no Binding event.
+func TestBindingEventsCountTheChangesOfBindingsOnly(t *testing.T) {
+	leakCheck(t)
+	objs := corpus(t)
+	c := newCluster(t, objs...)
+	src := c.start(t)
+	alerts := find(objs, "sre-alerts")
+	grew := func(from uint64) func() bool { return func() bool { return src.BindingEvents() > from } }
+
+	before := src.BindingEvents()
+	until(t, func() { c.apply(withStatus(t, alerts.DeepCopy(), "Updated")) }, grew(before))
+
+	before = src.BindingEvents()
+	extra := find(objs, "chat-only")
+	extra.SetName("added")
+	extra.SetUID("uid-added")
+	until(t, func() { c.apply(extra) }, grew(before))
+
+	before = src.BindingEvents()
+	until(t, func() { c.remove(extra) }, grew(before))
+
+	before = src.BindingEvents()
+	backend := find(objs, "kagent-pilot")
+	backend.SetGeneration(2)
+	until(t, func() { c.apply(backend) }, func() bool {
+		return src.CachedGenerationForTest("AgentBackend", backend.GetNamespace(), backend.GetName()) == 2
+	})
+	if after := src.BindingEvents(); after != before {
+		t.Errorf("events went from %d to %d for a change of an AgentBackend", before, after)
+	}
+}

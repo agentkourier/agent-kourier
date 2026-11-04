@@ -55,6 +55,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -134,6 +135,8 @@ type Source struct {
 	good    map[key]goodObject
 	started bool
 
+	bindingEvents atomic.Uint64 // the events the Binding informer has delivered (BindingEvents)
+
 	errMu    sync.Mutex
 	lastErr  error     // the latest failure of a list or watch of an informer, from its error handler
 	errAt    time.Time // when it was reported
@@ -192,6 +195,12 @@ func (s *Source) Start(ctx context.Context) error {
 			s.log.Warn("custom resource informer cannot list or watch", "resource", gvr.Resource, "error", err)
 		})
 		s.stores[i], s.synced[i] = inf.GetStore(), inf.HasSynced
+		if i == 0 { // the Bindings: BindingEvents tells a reader of their statuses that one moved
+			count := func(...any) { s.bindingEvents.Add(1) }
+			_, _ = inf.AddEventHandler(cache.ResourceEventHandlerFuncs{
+				AddFunc: func(any) { count() }, UpdateFunc: func(any, any) { count() }, DeleteFunc: func(any) { count() },
+			})
+		}
 	}
 	s.factory = factory
 	s.mu.Unlock()
@@ -368,6 +377,12 @@ func (s *Source) BindingStatus(namespace, name string) (BindingStatus, bool, err
 	}
 	return BindingStatus{UID: u.GetUID(), Generation: u.GetGeneration(), Conditions: ConditionsOf(u)}, true, nil
 }
+
+// BindingEvents counts the events (an object added, changed or deleted) that the Binding informer has delivered, and only grows.
+// A reader of the statuses that sees it unchanged since it last looked knows that no Binding has changed since: the cache is
+// updated before the event is counted, so a change that the count has not caught up with yet is seen at the next look. It reads
+// no object, and is what lets a reader skip a pass over every status when nothing moved.
+func (s *Source) BindingEvents() uint64 { return s.bindingEvents.Load() }
 
 // ConditionsOf reads status.conditions of an object, in the order they are stored, and none if it has no readable ones. It
 // copies, and so does not change the object, which may be one that an informer's cache holds.

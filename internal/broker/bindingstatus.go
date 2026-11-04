@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -43,12 +44,17 @@ const (
 	// maxStatusMessage is the most bytes of a condition's message: a message is a line for a person, not a log.
 	maxStatusMessage = 1024
 	// The defaults of statusConfig's timings. A Binding's status is written at most once each statusGap (counted from the end of
-	// its last write), the writer looks at the config once each statusTick, and a call to the API server is cut at statusTimeout.
-	// The timeout is under the 5 s that the lease leaves between its renew deadline (10 s) and its duration (15 s): a write that
-	// the fence let through when the lease was nearly at its deadline ends before another replica can lead.
+	// its last write), the writer looks at what moved once each statusTick and makes a whole pass at least once each statusSlow
+	// (so that a write that was held back or failed is tried when it is due), and a call to the API server is cut at statusTimeout
+	// (statusCallTimeout gives the one a leader uses). The client stops waiting then; a request that was sent is not unsent.
 	statusGap     = 10 * time.Second
 	statusTick    = time.Second
+	statusSlow    = 10 * time.Second
 	statusTimeout = 3 * time.Second
+	// fightWindow and fightPutBacks say when a Binding's status is being fought over: this many put-backs, each within the window
+	// (in gaps) of the one before. A status that is put back once because a person edited it is no fight.
+	fightWindow   = 5
+	fightPutBacks = 3
 	// statusBackoffCap is the longest wait after failed writes of one Binding (it starts at the gap and doubles).
 	statusBackoffCap = 5 * time.Minute
 
@@ -141,17 +147,23 @@ type statusConfig struct {
 	Report     func() config.Report
 	Conditions func() map[string][]bindingcheck.Condition
 	Observed   func(namespace, name string) (crsource.BindingStatus, bool, error)
+	// Version, when set, is the count of the events of the Binding informer ((*crsource.Source).BindingEvents): the writer makes a
+	// pass at a tick only if it, the report, the Prober's hooks or the clock say that something moved. Nil makes a pass at every
+	// tick.
+	Version func() uint64
 	// Fence, when set, is checked before each write: a leader whose lease is past its renew deadline writes nothing. Nil with
 	// SQLite, which has no lease.
 	Fence *leaseFence
 	// Warnings is the counter of the client's WarningHandler, nil if the client is not one that counts.
 	Warnings *warningCounter
 	Log      *slog.Logger
-	// OnWrite is told the result of each write, "written" or "failed", for a metric. Nil means none.
+	// OnWrite is told the result of each write, "written", "put_back" (the status was written again to the words it already had)
+	// or "failed", for a metric. Nil means none.
 	OnWrite func(result string)
-	// Gap, Tick and Timeout default to statusGap, statusTick and statusTimeout; a test passes less. Now is time.Now if nil.
-	Gap, Tick, Timeout time.Duration
-	Now                func() time.Time
+	// Gap, Tick, Slow and Timeout default to statusGap, statusTick, statusSlow and statusTimeout; a test passes less. Now is
+	// time.Now if nil.
+	Gap, Tick, Slow, Timeout time.Duration
+	Now                      func() time.Time
 }
 
 // statusWriter writes Binding.status.conditions with Server-Side Apply on the status subresource. It is built and run by the
@@ -178,21 +190,39 @@ type statusConfig struct {
 // A broker that serves a Binding (it is in the Snapshot) says what it serves, and puts it back if the status says anything else,
 // whoever changed it, for one Binding at most once each Gap. A broker that only reports a Binding (the source refused it, so it
 // is not in the Snapshot) writes when it first sees the Binding, when its own words change, and when the status holds nothing;
-// it never answers back to a status that differs from the one it wrote, which is the reporter's rule: the status of a Binding that
-// the source refused may be the words of the broker that serves its last good generation, and the reporter, which cannot tell,
-// must not fight it. The server's own writes are bounded by the Gap, so the two cannot go on at each other.
+// it does not answer back to a status that differs from the one it wrote, which is the reporter's rule: the status of a Binding
+// that the source refused for its spec (InvalidSpec) or for a ChatConnection that does not exist (ConnectionNotFound) may be the
+// words of the broker that serves its last good generation, or of another broker that reports it, and a reporter, which cannot
+// tell, must not fight them. It does put back the words of a rejection that can only be its own (a backend that is not found,
+// a channel that is taken, a namespace that is not allowed: the Binding names a connection that exists, so it is this broker's),
+// so that another broker's stray ConnectionNotFound does not stay over them. The serving broker's own writes are bounded by the
+// Gap. Two brokers that both serve a Binding cannot be told apart from a controller that writes the status: each puts back, and
+// they go on at each other every Gap; the writer counts each put-back (result "put_back") and says so once, naming the Binding,
+// when it has put one back three times in a row.
+//
+// A Binding whose cached object is not the one the Snapshot serves (another uid: it was deleted and made again, and the Snapshot
+// has not reloaded yet) is left alone, since what it would say is the old object's; so is a reported Binding whose cached
+// generation is below the one the rejection was made for. The new object's status comes with the reload that brings it into the
+// Snapshot, up to one poll after the watch brought the object.
 //
 // A new leader starts every probed condition at Pending, and writing that would blank a good status at each failover. A
-// Pending condition is therefore replaced by what the status already says of its type, unless the status says it of an older
-// generation than the one served, or says nothing: then Pending is the truth, and is written. A probed condition whose evidence is
-// of another object (another UID) or of a generation above the one served is Pending as well.
+// Pending condition is therefore replaced by what the status already says of its type when that is of the generation served, and
+// otherwise (an older generation, a generation above the one served, or nothing) Pending is the truth, and is written. A probed
+// condition whose evidence is of another object (another UID) or of a generation above the one served is Pending as well.
 type statusWriter struct {
 	cfg  statusConfig
 	wake chan struct{}
 
+	// dirty is set by notify: the Prober said that something moved.
+	dirty atomic.Bool
+
 	// What follows belongs to the goroutine that runs reconcile.
-	keys     map[string]*statusKey
-	unsynced bool // the cache's not being synced has been logged
+	keys        map[string]*statusKey
+	unsynced    bool             // the cache's not being synced has been logged
+	lastSnap    *config.Snapshot // the Snapshot of the last pass
+	lastVersion uint64           // the informer's event count at the last pass
+	nextFull    time.Time        // a whole pass is due at this time
+	retryAt     time.Time        // a write that was held back is due at this time, if it is not zero
 }
 
 // statusKey is what the writer keeps for one Binding.
@@ -202,12 +232,19 @@ type statusKey struct {
 	failures  int
 	failed    bool // the current run of failures has been logged
 	stored    bool // a warning about the stored spec has been logged
+
+	putBacks   int       // put-backs in a row, each within fightWindow gaps of the one before
+	lastPutBck time.Time // when the latest was made
+	fought     bool      // the fight has been said
 }
 
 // statusWant is what the status of one Binding should say.
 type statusWant struct {
 	conditions []metav1.Condition
-	served     bool // the source serves the Binding: it is in the Snapshot
+	served     bool   // the source serves the Binding: it is in the Snapshot
+	own        bool   // served, or reported for a rejection that can only be this broker's: the writer puts its words back
+	uid        string // the uid of the Binding the Snapshot serves
+	observed   int64  // the generation of the Binding that the words are about: the generation served, or the one a rejection was made for
 }
 
 // newStatusWriter returns a writer for cfg, or an error naming what is missing.
@@ -224,16 +261,29 @@ func newStatusWriter(cfg statusConfig) (*statusWriter, error) {
 	case cfg.Log == nil:
 		return nil, errors.New("broker: Log is required for the status writer")
 	}
-	cfg.Gap, cfg.Tick, cfg.Timeout = cmp.Or(cfg.Gap, statusGap), cmp.Or(cfg.Tick, statusTick), cmp.Or(cfg.Timeout, statusTimeout)
+	cfg.Gap, cfg.Tick, cfg.Slow, cfg.Timeout = cmp.Or(cfg.Gap, statusGap), cmp.Or(cfg.Tick, statusTick), cmp.Or(cfg.Slow, statusSlow), cmp.Or(cfg.Timeout, statusTimeout)
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
 	return &statusWriter{cfg: cfg, wake: make(chan struct{}, 1), keys: map[string]*statusKey{}}, nil
 }
 
+// statusCallTimeout is how long a leader's write may take before the client stops waiting: the default, or half of the margin that the
+// election leaves between the renew deadline and the lease duration when that is smaller (both are chart values), so that a write that
+// the fence let through when the lease was nearly at its deadline is given up before another replica can lead. A broker with no
+// election (SQLite) has the default.
+func statusCallTimeout(e ElectionConfig, elected bool) time.Duration {
+	if !elected {
+		return statusTimeout
+	}
+	e = e.withDefaults()
+	return min(statusTimeout, (e.LeaseDuration-e.RenewDeadline)/2)
+}
+
 // notify says that something the writer reads has moved. It never blocks, and is safe from any goroutine: it is what the hooks
 // of the Prober call.
 func (w *statusWriter) notify() {
+	w.dirty.Store(true)
 	select {
 	case w.wake <- struct{}{}:
 	default:
@@ -262,6 +312,19 @@ func (w *statusWriter) reconcile(ctx context.Context) {
 	if rep.Snapshot == nil {
 		return // nothing has loaded
 	}
+	now := w.cfg.Now()
+	var version uint64
+	if w.cfg.Version != nil {
+		version = w.cfg.Version()
+	}
+	// A pass looks at every Binding, which costs, so it is made only if something moved: the Prober said so, the report is another,
+	// a Binding changed in the cache, a write that was held back is due, or the slow pass is.
+	moved := w.dirty.Swap(false) || w.cfg.Version == nil || rep.Snapshot != w.lastSnap || version != w.lastVersion ||
+		!now.Before(w.nextFull) || (!w.retryAt.IsZero() && !now.Before(w.retryAt))
+	if !moved {
+		return
+	}
+	w.lastSnap, w.lastVersion, w.nextFull, w.retryAt = rep.Snapshot, version, now.Add(w.cfg.Slow), time.Time{}
 	rejections := map[string][]config.Rejection{}
 	for _, r := range rep.Rejections {
 		key := r.Namespace + "/" + r.Name
@@ -289,13 +352,14 @@ func (w *statusWriter) reconcile(ctx context.Context) {
 				w.unsynced = true
 				w.cfg.Log.Warn("binding status: the statuses of the Bindings cannot be read yet, so none is written", "error", telemetry.LogText(err))
 			}
+			w.lastSnap = nil // look again at the next tick
 			return
 		}
 		have[key], found[key] = cur, ok
 	}
 	w.unsynced = false
 
-	wants := w.desire(keys, rejections, served, have, w.cfg.Conditions(), w.cfg.Now())
+	wants := w.desire(keys, rejections, served, have, w.cfg.Conditions(), now)
 	for _, key := range slices.Sorted(maps.Keys(wants)) {
 		if ctx.Err() != nil {
 			return
@@ -303,26 +367,35 @@ func (w *statusWriter) reconcile(ctx context.Context) {
 		if !found[key] { // the cache holds no such Binding: it is gone, or not yet seen, and has no status to write
 			continue
 		}
-		want := wants[key]
+		want, cur := wants[key], have[key]
+		if want.served && string(cur.UID) != want.uid {
+			continue // the cache holds another object of the name than the Snapshot serves: its status is the next reload's to say
+		}
+		if !want.served && cur.Generation < want.observed {
+			continue // the object is older than the generation that the rejection was made for: it was made again
+		}
 		st := w.keys[key]
 		if st == nil {
 			st = &statusKey{}
 			w.keys[key] = st
 		}
-		now := w.cfg.Now()
-		cur := ownedConditions(have[key].Conditions)
+		putBack := false
 		switch {
-		case equalConditions(want.conditions, cur):
+		case sameStatus(want.conditions, cur.Conditions):
 			st.desired = want.conditions
 			continue
-		case want.served:
-			// It says what it serves, and puts the status back if it says anything else.
-		case !equalConditions(want.conditions, st.desired), len(cur) == 0:
+		case want.own:
+			// It says what it serves, or what only it can say, and puts the status back if it says anything else.
+			putBack = st.desired != nil && sameStatus(want.conditions, st.desired)
+		case !sameStatus(want.conditions, st.desired), !hasTypes(cur.Conditions, want.conditions):
 			// A reporter writes when it first sees the Binding, when its own words change, and when the status holds nothing.
 		default:
 			continue // and never answers back to a status that differs from the one it wrote
 		}
-		if now.Before(st.notBefore) {
+		if now = w.cfg.Now(); now.Before(st.notBefore) {
+			if w.retryAt.IsZero() || st.notBefore.Before(w.retryAt) {
+				w.retryAt = st.notBefore
+			}
 			continue
 		}
 		if w.cfg.Fence != nil {
@@ -331,7 +404,7 @@ func (w *statusWriter) reconcile(ctx context.Context) {
 				return
 			}
 		}
-		w.write(ctx, key, st, want.conditions)
+		w.write(ctx, key, st, want.conditions, putBack)
 	}
 	for key := range w.keys { // a Binding that is gone from the report is forgotten, as its status goes with it
 		if _, ok := wants[key]; !ok {
@@ -342,7 +415,7 @@ func (w *statusWriter) reconcile(ctx context.Context) {
 
 // write applies want as the status of the Binding key and records what came of it. The call is cut at the timeout, so that one
 // request that hangs does not hold every other Binding's write, and the fence is asked again before the next.
-func (w *statusWriter) write(ctx context.Context, key string, st *statusKey, want []metav1.Condition) {
+func (w *statusWriter) write(ctx context.Context, key string, st *statusKey, want []metav1.Condition, putBack bool) {
 	namespace, name, _ := strings.Cut(key, "/")
 	callCtx, cancel := context.WithTimeout(ctx, w.cfg.Timeout)
 	defer cancel()
@@ -356,15 +429,20 @@ func (w *statusWriter) write(ctx context.Context, key string, st *statusKey, wan
 	now := w.cfg.Now() // after the call: the gap is from the end of a write, not from the start of the pass
 	switch {
 	case err == nil:
-		w.reportWrite(true)
+		if putBack {
+			w.reportWrite("put_back")
+			w.fight(key, st, now)
+		} else {
+			w.reportWrite("written")
+		}
 		st.desired, st.failures, st.failed = want, 0, false
 		st.notBefore = now.Add(w.cfg.Gap)
-		w.cfg.Log.Debug("binding status written", "binding", key)
+		w.cfg.Log.Debug("binding status written", "binding", key, "put_back", putBack)
 	case apierrors.IsNotFound(err): // the Binding was deleted since the config was read; the cache will drop it, and the report after it
 		st.notBefore = now.Add(w.cfg.Gap) // until then it is not asked again
 		w.cfg.Log.Debug("binding status: the Binding is gone", "binding", key)
 	default:
-		w.reportWrite(false)
+		w.reportWrite("failed")
 		st.failures++
 		wait := w.cfg.Gap
 		for i := 1; i < st.failures && wait < statusBackoffCap; i++ {
@@ -379,15 +457,27 @@ func (w *statusWriter) write(ctx context.Context, key string, st *statusKey, wan
 	}
 }
 
-func (w *statusWriter) reportWrite(ok bool) {
-	if w.cfg.OnWrite == nil {
-		return
+func (w *statusWriter) reportWrite(result string) {
+	if w.cfg.OnWrite != nil {
+		w.cfg.OnWrite(result)
 	}
-	if ok {
-		w.cfg.OnWrite("written")
-		return
+}
+
+// fight counts a put-back of the Binding key at now, and says once, when it is the third in a row (each within fightWindow gaps
+// of the one before), that something else keeps changing the status: the put-backs go on every gap, which a person's edit does not.
+func (w *statusWriter) fight(key string, st *statusKey, now time.Time) {
+	if st.putBacks > 0 && now.Sub(st.lastPutBck) <= fightWindow*w.cfg.Gap {
+		st.putBacks++
+	} else {
+		st.putBacks, st.fought = 1, false
 	}
-	w.cfg.OnWrite("failed")
+	st.lastPutBck = now
+	if st.putBacks >= fightPutBacks && !st.fought {
+		st.fought = true
+		w.cfg.Log.Warn("binding status: something else keeps changing the status of a Binding, and this broker keeps putting it back: "+
+			"another broker that serves the same Binding, or a controller that writes its status; the two will go on at each other every gap, and this is said once while they do",
+			"binding", key, "put_backs_in_a_row", st.putBacks)
+	}
 }
 
 // desire works out what the status of each Binding of keys should say now: the Bindings that the source serves or rejects.
@@ -403,6 +493,10 @@ func (w *statusWriter) desire(keys map[string]bool, rejections map[string][]conf
 			generation, uid = binding.Generation, string(binding.UID)
 		}
 		old := byType(have[key].Conditions)
+		var chosen map[string]metav1.Condition // the words this writer last chose, for the dates it gave them
+		if st := w.keys[key]; st != nil {
+			chosen = byType(st.desired)
+		}
 		accepted := acceptedCondition(rejections[key], generation)
 		conds := []metav1.Condition{accepted}
 		var ready *bindingcheck.Condition
@@ -425,10 +519,10 @@ func (w *statusWriter) desire(keys map[string]bool, rejections map[string][]conf
 		}
 		conds = append(conds, readyCondition(accepted, ready, generation, uid, old))
 		for i := range conds {
-			conds[i].LastTransitionTime = transitionTime(conds[i], old, at)
+			conds[i].LastTransitionTime = transitionTime(conds[i], old, chosen, at)
 		}
 		slices.SortFunc(conds, func(a, b metav1.Condition) int { return cmp.Compare(a.Type, b.Type) })
-		out[key] = statusWant{conditions: conds, served: isServed}
+		out[key] = statusWant{conditions: conds, served: isServed, own: isServed || !othersToo(rejections[key]), uid: uid, observed: accepted.ObservedGeneration}
 	}
 	return out
 }
@@ -480,15 +574,19 @@ func ownNamespaceText(r config.Rejection) string {
 		return r.Message
 	}
 	m := boundBy.FindStringSubmatchIndex(r.Message)
-	if m == nil || r.Message[m[2]:m[3]] == r.Namespace {
+	if m == nil { // the wording of resolution moved: say nothing of the winner, rather than say what may be another namespace's
+		return "spec.chat.channel: the channel is already bound by another Binding"
+	}
+	if r.Message[m[2]:m[3]] == r.Namespace {
 		return r.Message
 	}
 	return r.Message[:m[0]] + "already bound by a Binding in another namespace"
 }
 
 // probedCondition is the condition of the Prober c as a condition of the status of a Binding served at generation, and with uid.
-// A Pending one is replaced by what the status already says of that type if that is of the generation served or a newer one (the
-// takeover rule), and otherwise is what it is: not known, as of the generation served. A condition that the Prober made for
+// A Pending one is replaced by what the status already says of that type if that is of the generation served (the takeover rule;
+// one of a generation above it is of another object, since a generation never goes down), and otherwise is what it is: not known,
+// as of the generation served. A condition that the Prober made for
 // another object (a Binding of the name that was deleted and made again) or for a generation above the one served is no finding
 // about this one, and is Pending the same way.
 func probedCondition(c bindingcheck.Condition, generation int64, uid string, old map[string]metav1.Condition) metav1.Condition {
@@ -502,7 +600,7 @@ func probedCondition(c bindingcheck.Condition, generation int64, uid string, old
 	if !c.Pending() {
 		return out
 	}
-	if was, ok := old[out.Type]; ok && was.ObservedGeneration >= generation && !strings.HasPrefix(was.Reason, acceptedPrefix) {
+	if was, ok := old[out.Type]; ok && was.ObservedGeneration == generation && !strings.HasPrefix(was.Reason, acceptedPrefix) {
 		return was
 	}
 	out.ObservedGeneration = generation
@@ -525,13 +623,18 @@ func readyCondition(accepted metav1.Condition, ready *bindingcheck.Condition, ge
 	return probedCondition(*ready, generation, uid, old)
 }
 
-// transitionTime is when c's status last changed: the time the status already holds for the type when its status is the same, now
-// (at) when it differs, so that a condition that heals is not dated before the failure it healed; and for a type the status
-// does not hold yet, the time the Prober gave it, else now.
-func transitionTime(c metav1.Condition, old map[string]metav1.Condition, at metav1.Time) metav1.Time {
+// transitionTime is when c's status last changed: the time the status already holds for the type when its status is the same, else
+// the time this writer gave the same status of the type when it last wrote (so that a status that has not been seen to change,
+// as with a watch that is behind, is not dated anew at each write), else now (at) when the status differs from the status's, so that
+// a condition that heals is not dated before the failure it healed; and for a type the status does not hold, the time the
+// Prober gave it, else now.
+func transitionTime(c metav1.Condition, old, chosen map[string]metav1.Condition, at metav1.Time) metav1.Time {
 	if was, ok := old[c.Type]; ok {
 		if was.Status == c.Status && !was.LastTransitionTime.IsZero() {
 			return was.LastTransitionTime
+		}
+		if mine, ok := chosen[c.Type]; ok && mine.Status == c.Status && !mine.LastTransitionTime.IsZero() {
+			return mine.LastTransitionTime
 		}
 		return at
 	}
@@ -567,11 +670,21 @@ func byType(conds []metav1.Condition) map[string]metav1.Condition {
 	return out
 }
 
-// ownedConditions keeps the conditions the writer owns, sorted by type.
-func ownedConditions(conds []metav1.Condition) []metav1.Condition {
+// othersToo reports whether the rejections of a Binding are ones that another broker can make of it too: its spec is refused
+// (a refused edit is owned by the connection it names and by the one the last good generation names), or it names a ChatConnection
+// that does not exist (every broker owns a Binding of that). Any other reason is of a Binding that names a connection that exists,
+// which only that connection's broker owns.
+func othersToo(rejections []config.Rejection) bool {
+	return slices.ContainsFunc(rejections, func(r config.Rejection) bool {
+		return r.Reason == config.ReasonInvalidSpec || r.Reason == config.ReasonConnectionNotFound
+	})
+}
+
+// restrict keeps the conditions of types, sorted by type.
+func restrict(conds []metav1.Condition, types map[string]bool) []metav1.Condition {
 	var out []metav1.Condition
 	for _, c := range conds {
-		if slices.ContainsFunc(statusTypes, func(t bindingcheck.ConditionType) bool { return string(t) == c.Type }) {
+		if types[c.Type] {
 			out = append(out, c)
 		}
 	}
@@ -579,10 +692,28 @@ func ownedConditions(conds []metav1.Condition) []metav1.Condition {
 	return out
 }
 
-// equalConditions reports whether two lists say the same: every field but the time of the transition, which is kept from the
-// cluster when the status is the same, and so is no part of what they say.
-func equalConditions(a, b []metav1.Condition) bool {
-	return slices.EqualFunc(ownedConditions(a), ownedConditions(b), func(x, y metav1.Condition) bool {
+// typesOf is the set of types of conds.
+func typesOf(lists ...[]metav1.Condition) map[string]bool {
+	out := map[string]bool{}
+	for _, conds := range lists {
+		for _, c := range conds {
+			out[c.Type] = true
+		}
+	}
+	return out
+}
+
+// hasTypes reports whether cur holds any condition of a type that want has.
+func hasTypes(cur, want []metav1.Condition) bool { return len(restrict(cur, typesOf(want))) > 0 }
+
+// sameStatus reports whether the status cur says what want says: every field but the time of the transition, which is kept from the
+// cluster when the status is the same, and so is no part of what they say. It looks at the types that want writes and at no others:
+// a condition of another type that someone else wrote is not this writer's to compare or to remove, and the types that this writer
+// wrote and no longer says are removed by the write that changes the words (a Binding that stops being served is not accepted, so
+// its Accepted changes with them).
+func sameStatus(want, cur []metav1.Condition) bool {
+	types := typesOf(want)
+	return slices.EqualFunc(restrict(want, types), restrict(cur, types), func(x, y metav1.Condition) bool {
 		return x.Type == y.Type && x.Status == y.Status && x.Reason == y.Reason && x.Message == y.Message && x.ObservedGeneration == y.ObservedGeneration
 	})
 }

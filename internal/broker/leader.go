@@ -202,7 +202,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 		}
 		statusW, err = newStatusWriter(statusConfig{
 			Client: h.status.client, Report: boot.Reloader.Report, Conditions: func() map[string][]bindingcheck.Condition { return prober.State().Snapshot() },
-			Observed: boot.Source.BindingStatus, Fence: h.leaseFence, Warnings: h.status.warnings, Log: log, OnWrite: metrics.StatusWrite,
+			Observed: boot.Source.BindingStatus, Version: boot.Source.BindingEvents, Timeout: statusCallTimeout(h.cfg.Election, h.leaseFence != nil), Fence: h.leaseFence, Warnings: h.status.warnings, Log: log, OnWrite: metrics.StatusWrite,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("binding status: %w", err)

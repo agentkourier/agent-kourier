@@ -42,6 +42,14 @@ const minRevisionGap = 30 * time.Second
 // does not follow the press bound.
 func innerBound(outer time.Duration) time.Duration { return outer * 4 / 5 }
 
+// The one sentence of a request or a read that failed, whatever the cause: it reaches the status of a Binding, which its owner reads
+// and may not be allowed to read the broker's log, so it says only that the cause is there. It gives no class of cause (a name that
+// does not resolve, a refused connection, a certificate that is not trusted): each would let a tenant tell which internal hosts answer.
+const (
+	msgCardRequestFailed = "the request for the agent card failed; the operator's log has the cause"
+	msgChatReadFailed    = "the chat platform read failed; the operator's log has the cause"
+)
+
 // agentProbe is what the agent checker needs of Bindings: (*Bindings).CheckAgent, a card fetch that sends the agent nothing.
 type agentProbe interface {
 	CheckAgent(ctx context.Context, binding string) error
@@ -120,7 +128,7 @@ func classifyAgent(err error) (bindingcheck.Outcome, bool) {
 		if timedOut(err) {
 			return fail(bindingcheck.ReasonUnreachable, "the backend did not answer in time")
 		}
-		out, ok := fail(bindingcheck.ReasonUnreachable, "the request for the agent card failed")
+		out, ok := fail(bindingcheck.ReasonUnreachable, msgCardRequestFailed)
 		out.Cause = causeText(err)
 		return out, ok
 	}
@@ -254,7 +262,7 @@ func (c channelChecker) classifyError(err error) bindingcheck.Outcome {
 	case errors.Is(err, context.DeadlineExceeded):
 		return unavailable("the chat platform did not answer the read in time")
 	}
-	out := unavailable("the chat platform read failed")
+	out := unavailable(msgChatReadFailed)
 	out.Cause = telemetry.LogText(err)
 	return out
 }
