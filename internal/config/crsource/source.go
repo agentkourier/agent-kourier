@@ -349,6 +349,9 @@ type BindingStatus struct {
 	// was deleted and made again.
 	UID        types.UID
 	Generation int64
+	// ResourceVersion is the cached object's, which moves with each change the cache has seen (opaque: only compared for equal).
+	// A reader that finds it as it was knows the cache has seen nothing of the object since.
+	ResourceVersion string
 	// Conditions is status.conditions, in the order it is stored, none if it has none. It is a copy.
 	Conditions []metav1.Condition
 }
@@ -375,7 +378,7 @@ func (s *Source) BindingStatus(namespace, name string) (BindingStatus, bool, err
 	if !ok {
 		return BindingStatus{}, false, nil
 	}
-	return BindingStatus{UID: u.GetUID(), Generation: u.GetGeneration(), Conditions: ConditionsOf(u)}, true, nil
+	return BindingStatus{UID: u.GetUID(), Generation: u.GetGeneration(), ResourceVersion: u.GetResourceVersion(), Conditions: ConditionsOf(u)}, true, nil
 }
 
 // BindingEvents counts the events (an object added, changed or deleted) that the Binding informer has delivered, and only grows.

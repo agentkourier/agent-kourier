@@ -43,8 +43,10 @@ const minRevisionGap = 30 * time.Second
 func innerBound(outer time.Duration) time.Duration { return outer * 4 / 5 }
 
 // The one sentence of a request or a read that failed, whatever the cause: it reaches the status of a Binding, which its owner reads
-// and may not be allowed to read the broker's log, so it says only that the cause is there. It gives no class of cause (a name that
-// does not resolve, a refused connection, a certificate that is not trusted): each would let a tenant tell which internal hosts answer.
+// and may not be allowed to read the broker's log, so it says only that the cause is there. It hides the cause and the address, and no
+// more: a status still tells whether the backend answered (and with which status code), whether it did not answer in time, and whether
+// the request failed some other way. It names no further class of cause (a name that does not resolve, a refused connection, a
+// certificate that is not trusted), which would let a tenant tell more of which internal hosts answer.
 const (
 	msgCardRequestFailed = "the request for the agent card failed; the operator's log has the cause"
 	msgChatReadFailed    = "the chat platform read failed; the operator's log has the cause"

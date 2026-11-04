@@ -70,6 +70,7 @@ type statusCluster struct {
 	// held holds what the cache said when it was frozen (it has not yet seen what was written since).
 	unsynced error
 	held     map[string]crsource.BindingStatus
+	versions int
 	managed  map[string]map[string]bool // the condition types that each Binding's last apply of the writer's manager held: SSA owns those and no others
 }
 
@@ -142,6 +143,8 @@ func newStatusClusterOn(dyn *dynamicfake.FakeDynamicClient) *statusCluster {
 		}
 		c.managed[key] = held
 		u.Object["status"] = map[string]any{"conditions": kept}
+		c.versions++ // the lock is held
+		u.SetResourceVersion(fmt.Sprint(c.versions))
 		if err := c.dyn.Tracker().Update(crBindings, u, ap.Namespace); err != nil {
 			return true, nil, err
 		}
@@ -169,7 +172,27 @@ func (c *statusCluster) observed(namespace, name string) (crsource.BindingStatus
 		return crsource.BindingStatus{}, false, err
 	}
 	u := obj.(*unstructured.Unstructured)
-	return crsource.BindingStatus{UID: u.GetUID(), Generation: u.GetGeneration(), Conditions: crsource.ConditionsOf(u)}, true, nil
+	return crsource.BindingStatus{UID: u.GetUID(), Generation: u.GetGeneration(), ResourceVersion: u.GetResourceVersion(), Conditions: crsource.ConditionsOf(u)}, true, nil
+}
+
+// stamp gives the object the next resourceVersion, as each change of an API server's does.
+func (c *statusCluster) stamp(u *unstructured.Unstructured) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.versions++
+	u.SetResourceVersion(fmt.Sprint(c.versions))
+}
+
+// update makes the cluster hold u, as a person's edit or a re-creation does.
+func (c *statusCluster) update(u *unstructured.Unstructured, namespace string) error {
+	c.stamp(u)
+	return c.dyn.Tracker().Update(crBindings, u, namespace)
+}
+
+// add makes the cluster hold the new object u.
+func (c *statusCluster) add(u *unstructured.Unstructured) error {
+	c.stamp(u)
+	return c.dyn.Tracker().Add(u)
 }
 
 // freeze makes the cache say what it says now of the Bindings key, however the cluster changes, until thaw: a cache that the watch has not reached.
@@ -755,7 +778,7 @@ func TestAServingBrokerPutsItsStatusBackAtMostOnceEachGap(t *testing.T) {
 		t.Fatalf("applies = %d, want 1", c.count())
 	}
 	edited := storedBinding(sreAlerts, 1, metav1.Condition{Type: "Ready", Status: metav1.ConditionFalse, Reason: "ByHand", Message: "edited by hand", LastTransitionTime: metav1.NewTime(statusT0)})
-	if err := c.dyn.Tracker().Update(crBindings, edited, "sre"); err != nil {
+	if err := c.update(edited, "sre"); err != nil {
 		t.Fatal(err)
 	}
 	for range 5 {
@@ -834,7 +857,7 @@ func TestAStatusIsWrittenToABindingMadeAgainOnlyOnceTheSnapshotServesIt(t *testi
 			r.reconcile()
 
 			again := withUID(storedBinding(sreAlerts, generation), "uid-new") // deleted and made again: no status; the Snapshot has not reloaded
-			if err := c.dyn.Tracker().Update(crBindings, again, "sre"); err != nil {
+			if err := c.update(again, "sre"); err != nil {
 				t.Fatal(err)
 			}
 			applies := c.count()
@@ -887,7 +910,7 @@ func TestAStatusIsWrittenToABindingMadeAgainOnlyOnceTheSnapshotServesIt(t *testi
 		if c.count() != applies || strings.Contains(r.logs.String(), "level=WARN") {
 			t.Errorf("applies = %d (was %d), log:\n%s\nwant no write and no warning while the cache holds no Binding", c.count(), applies, r.logs)
 		}
-		if err := c.dyn.Tracker().Add(withUID(storedBinding(sreAlerts, 1), "uid-2")); err != nil {
+		if err := c.add(withUID(storedBinding(sreAlerts, 1), "uid-2")); err != nil {
 			t.Fatal(err)
 		}
 		r.advance(time.Minute)
@@ -915,7 +938,7 @@ func TestAStatusIsWrittenToABindingMadeAgainOnlyOnceTheSnapshotServesIt(t *testi
 		if c.count() != 1 {
 			t.Fatalf("applies = %d, want 1", c.count())
 		}
-		if err := c.dyn.Tracker().Update(crBindings, storedBinding(sreAlerts, 1), "sre"); err != nil { // made again: generation 1, no status
+		if err := c.update(storedBinding(sreAlerts, 1), "sre"); err != nil { // made again: generation 1, no status
 			t.Fatal(err)
 		}
 		for range 5 {
@@ -1579,16 +1602,17 @@ func TestAWriteIsCutAtTheTimeoutAndAHungOneHoldsUpNoOther(t *testing.T) {
 		elected  bool
 		want     time.Duration
 	}{
-		"no election (SQLite)":    {ElectionConfig{}, false, statusTimeout},
-		"the defaults":            {ElectionConfig{}, true, 2500 * time.Millisecond},
-		"a wide margin":           {ElectionConfig{LeaseDuration: 60 * time.Second, RenewDeadline: 10 * time.Second}, true, statusTimeout},
-		"a margin of two seconds": {ElectionConfig{LeaseDuration: 12 * time.Second, RenewDeadline: 10 * time.Second}, true, time.Second},
-		"a margin of one second":  {ElectionConfig{LeaseDuration: 11 * time.Second, RenewDeadline: 10 * time.Second}, true, 500 * time.Millisecond},
+		"no election (SQLite)":      {ElectionConfig{}, false, statusTimeout},
+		"the defaults":              {ElectionConfig{}, true, 2500 * time.Millisecond},
+		"a wide margin":             {ElectionConfig{LeaseDuration: 60 * time.Second, RenewDeadline: 10 * time.Second}, true, statusTimeout},
+		"a margin of two seconds":   {ElectionConfig{LeaseDuration: 12 * time.Second, RenewDeadline: 10 * time.Second}, true, time.Second},
+		"a margin of one second":    {ElectionConfig{LeaseDuration: 11 * time.Second, RenewDeadline: 10 * time.Second}, true, 500 * time.Millisecond},
+		"a margin of a millisecond": {ElectionConfig{LeaseDuration: 10*time.Second + time.Millisecond, RenewDeadline: 10 * time.Second}, true, statusFloor},
 	} {
 		if got := statusCallTimeout(tc.election, tc.elected); got != tc.want {
 			t.Errorf("%s: statusCallTimeout = %v, want %v", name, got, tc.want)
 		}
-		if e := tc.election.withDefaults(); tc.elected && statusCallTimeout(tc.election, true) >= e.LeaseDuration-e.RenewDeadline {
+		if e := tc.election.withDefaults(); tc.elected && e.LeaseDuration-e.RenewDeadline >= 2*statusFloor && statusCallTimeout(tc.election, true) >= e.LeaseDuration-e.RenewDeadline {
 			t.Errorf("%s: the timeout is not under the margin of the election", name)
 		}
 	}
@@ -1799,7 +1823,7 @@ func TestAFightOverTheStatusIsCountedAndSaidOnce(t *testing.T) {
 		r.reconcile()
 		for range 4 { // four edits, each far from the last
 			edited := storedBinding(sreAlerts, 1, metav1.Condition{Type: "Ready", Status: metav1.ConditionFalse, Reason: "ByHand", LastTransitionTime: metav1.NewTime(statusT0)})
-			if err := c.dyn.Tracker().Update(crBindings, edited, "sre"); err != nil {
+			if err := c.update(edited, "sre"); err != nil {
 				t.Fatal(err)
 			}
 			r.advance(11 * time.Second)
@@ -1974,5 +1998,65 @@ func TestAStatusOfAGenerationAboveTheOneServedIsNotCarried(t *testing.T) {
 		if typ != "Accepted" && got.Status == metav1.ConditionTrue {
 			t.Errorf("%s = True: a status of generation 5 was carried over for an object served at 4", typ)
 		}
+	}
+}
+
+// A watch that stalls is no fight. The cache holds what it held before the writer wrote, however long it lags, and the writer's own
+// words differ from it: that is not someone else's change, so it is not put back, counted or said, and nothing is written again for
+// it. A real change in the meantime is written, as the first write was.
+func TestAStalledWatchIsNoFight(t *testing.T) {
+	c := newStatusCluster(t, storedBinding(sreAlerts, 1))
+	if err := c.update(storedBinding(sreAlerts, 1), "sre"); err != nil { // the object has a resourceVersion, as one of a cluster does
+		t.Fatal(err)
+	}
+	r := newStatusRig(t, c, map[string]int64{sreAlerts: 1})
+	r.set(sreAlerts, probe(1)...)
+	c.freeze(t, sreAlerts) // the cache says there is no status, and goes on saying it
+	for i := range 60 {
+		r.reconcile()
+		r.advance(time.Second)
+		if i == 30 { // a real change, in a minute of a stalled watch
+			conds := probe(1)
+			conds[0].Status, conds[0].Reason = bindingcheck.False, bindingcheck.ReasonAgentNotFound
+			conds[2].Status, conds[2].Reason = bindingcheck.False, "BackendReachable:AgentNotFound"
+			r.set(sreAlerts, conds...)
+		}
+	}
+	if want := []string{"written", "written"}; !slices.Equal(r.writes, want) || c.count() != 2 {
+		t.Errorf("results = %v, applies = %d; want the first write and the real change, and no put-back", r.writes, c.count())
+	}
+	if strings.Contains(r.logs.String(), "keeps changing") {
+		t.Errorf("a stalled watch was called a fight:\n%s", r.logs)
+	}
+	c.thaw()
+	r.advance(11 * time.Second)
+	r.reconcile()
+	if c.count() != 2 {
+		t.Errorf("applies = %d once the cache caught up, want 2", c.count())
+	}
+}
+
+// A reporter writes again when the status holds none of the types it writes, though it holds a condition of another type: that is
+// no status of its own.
+func TestAReporterWritesAgainWhenTheStatusHoldsNoneOfItsTypes(t *testing.T) {
+	c := newStatusCluster(t, storedBinding(sreAlerts, 1))
+	r := newStatusRig(t, c, nil)
+	r.reject(config.Rejection{Namespace: "sre", Name: "alerts", Reason: config.ReasonInvalidSpec, Generation: 1, Message: "spec: generation 1 is invalid"})
+	r.reconcile()
+	foreign := storedBinding(sreAlerts, 1, cond("ApproversReadable", metav1.ConditionFalse, "GroupNotFound", 1, statusT0))
+	if err := c.update(foreign, "sre"); err != nil {
+		t.Fatal(err)
+	}
+	r.advance(11 * time.Second)
+	r.reconcile()
+	if c.count() != 2 || c.stored(t, sreAlerts)["Accepted"].Status != metav1.ConditionFalse {
+		t.Errorf("applies = %d, status = %v; want the reporter's words written again over a status with none of its types", c.count(), c.stored(t, sreAlerts))
+	}
+	for range 5 {
+		r.advance(time.Minute)
+		r.reconcile()
+	}
+	if c.count() != 2 {
+		t.Errorf("applies = %d, want 2", c.count())
 	}
 }

@@ -51,6 +51,10 @@ const (
 	statusTick    = time.Second
 	statusSlow    = 10 * time.Second
 	statusTimeout = 3 * time.Second
+	// statusFloor is the least a call is given, whatever margin the election leaves: a write that is cut at once never succeeds.
+	// A margin under twice the floor is not one the writer can keep (the write then outlasts half of it); the fence is still asked
+	// before each write, and a write the client gave up on is not unsent.
+	statusFloor = 250 * time.Millisecond
 	// fightWindow and fightPutBacks say when a Binding's status is being fought over: this many put-backs, each within the window
 	// (in gaps) of the one before. A status that is put back once because a person edited it is no fight.
 	fightWindow   = 5
@@ -174,7 +178,8 @@ type statusConfig struct {
 // # What a Binding's status says
 //
 // Accepted is composed here from the Rejections of the report: True when there are none, else False with one reason chosen by
-// acceptedReasonOrder and every message of the Binding. BackendReachable, ChannelJoined and ApproversReadable are the Prober's,
+// acceptedReasonOrder and every message of the Binding. BackendReachable and ChannelJoined are the Prober's (and ApproversReadable
+// would be, were anything to set it; nothing does yet),
 // for a Binding the source serves, copied as they are, except that a message that the Prober keeps for the log never reaches
 // them (Condition.Cause). Ready is the Prober's, except that a Binding that is not accepted is not ready: False, with the reason
 // "Accepted:<Reason>". Each condition has an observedGeneration: a probed one the generation its pass began at (never above the
@@ -233,9 +238,11 @@ type statusKey struct {
 	failed    bool // the current run of failures has been logged
 	stored    bool // a warning about the stored spec has been logged
 
-	putBacks   int       // put-backs in a row, each within fightWindow gaps of the one before
-	lastPutBck time.Time // when the latest was made
-	fought     bool      // the fight has been said
+	putBacks    int       // put-backs in a row, each within fightWindow gaps of the one before
+	lastPutBack time.Time // when the latest was made
+
+	rvAtWrite string // the resourceVersion the cache held when this writer last wrote: a cache still at it has seen nothing since
+	fought    bool   // the fight has been said
 }
 
 // statusWant is what the status of one Binding should say.
@@ -277,7 +284,7 @@ func statusCallTimeout(e ElectionConfig, elected bool) time.Duration {
 		return statusTimeout
 	}
 	e = e.withDefaults()
-	return min(statusTimeout, (e.LeaseDuration-e.RenewDeadline)/2)
+	return max(statusFloor, min(statusTimeout, (e.LeaseDuration-e.RenewDeadline)/2))
 }
 
 // notify says that something the writer reads has moved. It never blocks, and is safe from any goroutine: it is what the hooks
@@ -387,6 +394,9 @@ func (w *statusWriter) reconcile(ctx context.Context) {
 		case want.own:
 			// It says what it serves, or what only it can say, and puts the status back if it says anything else.
 			putBack = st.desired != nil && sameStatus(want.conditions, st.desired)
+			if putBack && cur.ResourceVersion == st.rvAtWrite {
+				continue // the cache is as it was when this writer wrote: it has not caught up, and so has seen no change of anyone's
+			}
 		case !sameStatus(want.conditions, st.desired), !hasTypes(cur.Conditions, want.conditions):
 			// A reporter writes when it first sees the Binding, when its own words change, and when the status holds nothing.
 		default:
@@ -404,7 +414,7 @@ func (w *statusWriter) reconcile(ctx context.Context) {
 				return
 			}
 		}
-		w.write(ctx, key, st, want.conditions, putBack)
+		w.write(ctx, key, st, want.conditions, cur.ResourceVersion, putBack)
 	}
 	for key := range w.keys { // a Binding that is gone from the report is forgotten, as its status goes with it
 		if _, ok := wants[key]; !ok {
@@ -415,7 +425,7 @@ func (w *statusWriter) reconcile(ctx context.Context) {
 
 // write applies want as the status of the Binding key and records what came of it. The call is cut at the timeout, so that one
 // request that hangs does not hold every other Binding's write, and the fence is asked again before the next.
-func (w *statusWriter) write(ctx context.Context, key string, st *statusKey, want []metav1.Condition, putBack bool) {
+func (w *statusWriter) write(ctx context.Context, key string, st *statusKey, want []metav1.Condition, seenRV string, putBack bool) {
 	namespace, name, _ := strings.Cut(key, "/")
 	callCtx, cancel := context.WithTimeout(ctx, w.cfg.Timeout)
 	defer cancel()
@@ -435,7 +445,7 @@ func (w *statusWriter) write(ctx context.Context, key string, st *statusKey, wan
 		} else {
 			w.reportWrite("written")
 		}
-		st.desired, st.failures, st.failed = want, 0, false
+		st.desired, st.rvAtWrite, st.failures, st.failed = want, seenRV, 0, false
 		st.notBefore = now.Add(w.cfg.Gap)
 		w.cfg.Log.Debug("binding status written", "binding", key, "put_back", putBack)
 	case apierrors.IsNotFound(err): // the Binding was deleted since the config was read; the cache will drop it, and the report after it
@@ -466,12 +476,12 @@ func (w *statusWriter) reportWrite(result string) {
 // fight counts a put-back of the Binding key at now, and says once, when it is the third in a row (each within fightWindow gaps
 // of the one before), that something else keeps changing the status: the put-backs go on every gap, which a person's edit does not.
 func (w *statusWriter) fight(key string, st *statusKey, now time.Time) {
-	if st.putBacks > 0 && now.Sub(st.lastPutBck) <= fightWindow*w.cfg.Gap {
+	if st.putBacks > 0 && now.Sub(st.lastPutBack) <= fightWindow*w.cfg.Gap {
 		st.putBacks++
 	} else {
 		st.putBacks, st.fought = 1, false
 	}
-	st.lastPutBck = now
+	st.lastPutBack = now
 	if st.putBacks >= fightPutBacks && !st.fought {
 		st.fought = true
 		w.cfg.Log.Warn("binding status: something else keeps changing the status of a Binding, and this broker keeps putting it back: "+

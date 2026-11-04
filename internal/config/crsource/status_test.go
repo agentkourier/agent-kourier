@@ -69,9 +69,10 @@ func TestBindingStatusFollowsTheClusterAndTellsAnObjectMadeAgain(t *testing.T) {
 	ns := alerts.GetNamespace()
 
 	edited := withStatus(t, alerts.DeepCopy(), "Edited")
+	edited.SetResourceVersion("42")
 	until(t, func() { c.apply(edited) }, func() bool {
 		s, ok, err := src.BindingStatus(ns, "sre-alerts")
-		return err == nil && ok && len(s.Conditions) == 1 && s.Conditions[0].Reason == "Edited"
+		return err == nil && ok && len(s.Conditions) == 1 && s.Conditions[0].Reason == "Edited" && s.ResourceVersion == "42"
 	})
 
 	old, _, _ := src.BindingStatus(ns, "sre-alerts")

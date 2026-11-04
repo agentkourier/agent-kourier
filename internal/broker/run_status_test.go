@@ -2,8 +2,10 @@ package broker
 
 import (
 	"bytes"
+	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
@@ -12,7 +14,9 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/rest"
 )
 
 // With the custom resources as the source, the broker that leads writes each Binding's status: it is a SQLite broker, so it leads
@@ -204,4 +208,50 @@ func (l *lockedBuffer) String() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.buf.String()
+}
+
+// The leader gives each write the timeout of its election, which is half the margin between the renew deadline and the lease duration
+// when that is under the default: here the election leaves a second, so a request that the API server never answers is given up
+// on after half a second, and not after the default three. The status client is pointed at a server that holds the request until the
+// client goes away, and sees when it did.
+func TestRunTheStatusWritesAreGivenUpOnAtTheMarginOfTheElection(t *testing.T) {
+	c, rep, _ := crElectionConfig(t, "pod-a_1")
+	arrived, gone := make(chan time.Time, 16), make(chan time.Time, 16)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.Copy(io.Discard, r.Body) // a server watches for the client to go only once it has read the request
+		arrived <- time.Now()
+		select {
+		case <-r.Context().Done():
+			gone <- time.Now()
+		case <-time.After(10 * time.Second):
+		}
+	}))
+	t.Cleanup(srv.Close)
+	client, err := dynamic.NewForConfig(&rest.Config{Host: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.StatusClient = client
+	now := time.Now()
+	c.leaseNow = func() time.Time { return now } // a fresh lease: the fence lets the writes through
+	rep.running = start(t, c)
+
+	var began time.Time
+	select {
+	case began = <-arrived:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("no status was sent\n%s", rep.logs.String())
+	}
+	select {
+	case ended := <-gone:
+		if d := ended.Sub(began); d < 200*time.Millisecond || d > 1500*time.Millisecond {
+			t.Errorf("the client gave up after %v, want about the 500 ms that the election's margin allows (the default is 3 s)", d)
+		}
+	case <-time.After(6 * time.Second):
+		t.Fatal("the client did not give up on the request within 6 s: the writer was given no timeout of the election's")
+	}
 }
