@@ -263,6 +263,45 @@ func TestForbiddenFailsTheTurnAndIsAudited(t *testing.T) {
 	}
 }
 
+// A lookup that the card answers with 403 fails the turn as a send would: the same credentials get the
+// same 403, so it is not asked again, and the thread does not say the agent cannot be reached.
+func TestLookupOfACardAnswered403FailsTheTurn(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, time.Millisecond
+	f.agent.script = unknown(1)
+	f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
+		return nil, nil, fmt.Errorf("connect to agent: %w", agent.ErrAgentForbidden)
+	}
+	for _, ts := range []string{"1", "2"} {
+		if _, err := f.submit(inbound(ts)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+	f.retired(t)
+	if got := sink.noticesOf(NoticeFailed)[0].Detail; got != agentForbiddenWhy {
+		t.Errorf("notice detail %q; want %q", got, agentForbiddenWhy)
+	}
+	f.agent.mu.Lock()
+	sends, finds := len(f.agent.msgs), len(f.agent.finds)
+	f.agent.mu.Unlock()
+	if sends != 2 || finds != 1 {
+		t.Errorf("%d sends, %d lookups; want turn 1 and turn 2 once, and one lookup", sends, finds)
+	}
+	f.amu.Lock()
+	defer f.amu.Unlock()
+	lookups := 0
+	for _, a := range f.audits {
+		if a.Op == audit.OpFindTask && errors.Is(a.Err, agent.ErrAgentForbidden) {
+			lookups++
+		}
+	}
+	if lookups != 1 || len(f.rejected) != 0 {
+		t.Errorf("%d lookups audited, Rejected %+v; want one audited, and no Rejected", lookups, f.rejected)
+	}
+}
+
 // unknown makes send n of the agent fail with an unknown outcome, as a stream lost before the
 // agent named a task does.
 func unknown(n int) func(context.Context, int, agent.Handler) error {
@@ -920,28 +959,36 @@ func TestNotSentDoesNotForgetAnEarlierUnknownOutcome(t *testing.T) {
 // A turn the agent may have taken is never given up on: however long the lookups fail, it is not
 // failed, and is followed when the agent answers.
 func TestHeldTurnNeverGivesUp(t *testing.T) {
-	t.Run("a held turn whose lookups keep failing", func(t *testing.T) {
-		f := newFixture(t)
-		sink := f.live()
-		f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, time.Millisecond
-		f.seed("ns/b1", 0) // a task t1 is recorded, so the head is held until it is looked up
-		lookups := 0
-		f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
-			if lookups++; lookups < 4 {
-				f.now.Store(t0.Add(time.Duration(lookups) * 10 * time.Minute).UnixNano())
-				return nil, nil, errors.New("agent unreachable")
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"a held turn whose lookups keep failing", errors.New("agent unreachable")},
+		{"a held turn whose lookups keep getting a card 403", fmt.Errorf("connect to agent: %w", agent.ErrAgentForbidden)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			sink := f.live()
+			f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, time.Millisecond
+			f.seed("ns/b1", 0) // a task t1 is recorded, so the head is held until it is looked up
+			lookups := 0
+			f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
+				if lookups++; lookups < 4 {
+					f.now.Store(t0.Add(time.Duration(lookups) * 10 * time.Minute).UnixNano())
+					return nil, nil, tc.err
+				}
+				return &a2a.Task{ID: "t1", ContextID: "c1"}, []a2a.TaskID{"t1"}, nil
 			}
-			return &a2a.Task{ID: "t1", ContextID: "c1"}, []a2a.TaskID{"t1"}, nil
-		}
-		f.agent.follow = func(_ a2a.TaskID, h agent.Handler) error { return turn(h, 0, a2a.TaskStateCompleted) }
-		if _, err := f.submit(inbound("1")); err != nil {
-			t.Fatal(err)
-		}
-		waitFinal(t, sink)
-		if got := sink.noticesOf(NoticeFailed); len(got) != 0 {
-			t.Errorf("failed notices = %+v; a turn the agent has is never given up on", got)
-		}
-	})
+			f.agent.follow = func(_ a2a.TaskID, h agent.Handler) error { return turn(h, 0, a2a.TaskStateCompleted) }
+			if _, err := f.submit(inbound("1")); err != nil {
+				t.Fatal(err)
+			}
+			waitFinal(t, sink)
+			if got := sink.noticesOf(NoticeFailed); len(got) != 0 {
+				t.Errorf("failed notices = %+v; a turn the agent has is never given up on", got)
+			}
+		})
+	}
 }
 
 // One -32004 must not make an unreachable agent patient for ever: a busy session means the agent
