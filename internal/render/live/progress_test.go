@@ -66,18 +66,33 @@ func (e *env) until(t *testing.T, what string, limit time.Duration, cond func() 
 }
 
 // atOnce waits for a thing that only the throttle may hold back, and asserts that by how it waits: the clock stands until the run
-// waits on a write window due within one window's length, and turns only to that. It never turns to a longer timer, so a delay the
-// run left behind cannot move the clock under a wait the run is arming, and a thing that waits for the delay never comes and fails
-// the test. until's time says nothing of this: a slow run makes it longer, so it is no upper bound.
+// waits on a timer armed for no more than a write window and due within one, and turns only to that. It never turns to a whole
+// delay, so one the run left behind cannot move the clock under a wait the run is arming, and a thing that waits for the delay never
+// comes and fails the test. What is left of a delay can be armed short enough to look like a window, and is turned to if it is due by
+// then. until's time says nothing of this: a slow run makes it longer, so it is no upper bound.
 func (e *env) atOnce(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	e.turnWithinAWindow(t, what, cond, e.clk.dueForAtOnce)
+}
+
+// delayDue waits for a thing that the delay has already brought due. A slow run can arm the delay after the clock has moved on, so
+// the clock may turn to any timer due within one write window, and no further: a thing that something put off by a whole delay
+// never comes and fails the test.
+func (e *env) delayDue(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	e.turnWithinAWindow(t, what, cond, e.clk.dueBy)
+}
+
+// turnWithinAWindow waits for cond, turning the clock to what due picks among the timers that fall due within one write window.
+func (e *env) turnWithinAWindow(t *testing.T, what string, cond func() bool, due func(by time.Time) time.Time) {
 	t.Helper()
 	by := e.clk.Now().Add(throttle)
 	eventually(t, what, func() bool {
 		if cond() {
 			return true
 		}
-		if due := e.clk.dueForAtOnce(by); !due.IsZero() {
-			e.clk.advance(max(due.Sub(e.clk.Now()), 0))
+		if at := due(by); !at.IsZero() {
+			e.clk.advance(max(at.Sub(e.clk.Now()), 0))
 		}
 		return false
 	})

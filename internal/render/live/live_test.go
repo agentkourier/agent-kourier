@@ -99,31 +99,34 @@ func (c *clock) catchUp(began, stopped int) time.Duration {
 	return d
 }
 
-// due is when the earliest timer fires.
-func (c *clock) due() time.Time {
+// earliest is when the first pending timer that pick takes fires, the final text's deadline aside. It is the zero time if there
+// is none.
+func (c *clock) earliest(pick func(timer) bool) time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var earliest time.Time
 	for _, tm := range c.timers {
-		if !tm.long && (earliest.IsZero() || tm.at.Before(earliest)) {
+		if !tm.long && pick(tm) && (earliest.IsZero() || tm.at.Before(earliest)) {
 			earliest = tm.at
 		}
 	}
 	return earliest
 }
 
+// due is when the earliest timer fires.
+func (c *clock) due() time.Time {
+	return c.earliest(func(timer) bool { return true })
+}
+
 // dueForAtOnce is when the earliest timer fires that atOnce turns the clock to: one armed for no more than a write window and due
-// by by. It is the zero time if there is none.
+// by by.
 func (c *clock) dueForAtOnce(by time.Time) time.Time {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	var earliest time.Time
-	for _, tm := range c.timers {
-		if !tm.long && tm.d <= throttle && !tm.at.After(by) && (earliest.IsZero() || tm.at.Before(earliest)) {
-			earliest = tm.at
-		}
-	}
-	return earliest
+	return c.earliest(func(tm timer) bool { return tm.d <= throttle && !tm.at.After(by) })
+}
+
+// dueBy is when the earliest timer fires, if that is by by.
+func (c *clock) dueBy(by time.Time) time.Time {
+	return c.earliest(func(tm timer) bool { return !tm.at.After(by) })
 }
 
 // waiting is how many timers are pending, but for the final text's deadline.
@@ -194,6 +197,12 @@ func TestDueForAtOnceLeavesTheDelay(t *testing.T) {
 	c.After(3 * time.Second)
 	if got := c.dueForAtOnce(start.Add(4 * time.Second)); !got.IsZero() {
 		t.Errorf("due %v with only a delay pending, due by the limit; want none", got)
+	}
+	if got, want := c.dueBy(start.Add(4*time.Second)), start.Add(3*time.Second); !got.Equal(want) {
+		t.Errorf("dueBy %v; want the delay, %v", got, want)
+	}
+	if got := c.dueBy(start.Add(2 * time.Second)); !got.IsZero() {
+		t.Errorf("dueBy %v with the delay due past the limit; want none", got)
 	}
 	window := start.Add(throttle)
 	c.After(throttle)
