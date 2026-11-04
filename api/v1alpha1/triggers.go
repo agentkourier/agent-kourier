@@ -59,7 +59,7 @@ func messageFields() []MessageField {
 	return []MessageField{FieldText, FieldTitle, FieldLink, FieldFallback, FieldFooter, FieldBody}
 }
 
-// Trigger is one way an event in the bound channel starts or continues a turn (spec 8.2).
+// Trigger is one way an event in the bound channel starts or continues a turn.
 // Triggers are tried in order and the first that matches handles the event.
 type Trigger struct {
 	// Type is mention, a person @mentioning Agent Kourier, or botMessage, a message a bot posts.
@@ -126,7 +126,7 @@ type TriggerThread struct {
 	// MaxIdle is how long an open thread may go without a message of its key before Agent Kourier counts it
 	// abandoned, so that the key's next fire starts a new investigation instead of a note. It covers a
 	// resolve that never arrived. It needs by, is at least twice the cooldown, and is at most 720h; unset
-	// means the larger of 24h and twice the cooldown (see EffectiveMaxIdle). It must be longer than the
+	// means the larger of 24h and twice the cooldown. It must be longer than the
 	// sender's repeat interval (Alertmanager's repeat_interval): an alert that keeps firing repeats at that
 	// interval, and a maxIdle shorter than it counts a live alert abandoned between two repeats and
 	// starts a second investigation for it. Twice the cooldown covers that only for a 4h cooldown

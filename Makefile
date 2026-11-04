@@ -4,7 +4,7 @@ LDFLAGS := -X main.version=$(VERSION)
 LINT    := go tool golangci-lint
 
 .DEFAULT_GOAL := help
-.PHONY: help fmt lint test test-race test-testhooks test-scripts test-postgres lint-workflows security security-govulncheck security-gitleaks security-image-scan build tidy image image-testhooks image-check release-image e2e-fast-up e2e-fast e2e-fast-down e2e-full-up e2e-full-down e2e-full e2e-down sandbox-up sandbox-down sandbox-heal sandbox-alert
+.PHONY: help fmt lint test test-race test-testhooks test-scripts test-postgres lint-workflows security security-govulncheck security-gitleaks security-image-scan build tidy crds image image-testhooks image-check release-image e2e-fast-up e2e-fast e2e-fast-down e2e-full-up e2e-full-down e2e-full e2e-down sandbox-up sandbox-down sandbox-heal sandbox-alert
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z0-9-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -58,6 +58,10 @@ build: ## Build bin/agent-kourier
 
 tidy: ## Tidy go.mod and go.sum
 	go mod tidy
+
+crds: ## Generate the CRDs from api/v1alpha1 into charts/agent-kourier/files/crds (controller-gen, pinned in go.mod; a test fails when they drift)
+	rm -f charts/agent-kourier/files/crds/*.yaml
+	go tool controller-gen crd paths=./api/v1alpha1 output:crd:dir=charts/agent-kourier/files/crds
 
 image: ## Build the production Agent Kourier image, agent-kourier:dev (hack/kind/build-agent-kourier.sh; Docker)
 	hack/kind/build-agent-kourier.sh
