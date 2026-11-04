@@ -42,7 +42,7 @@ examples/ax             reference A2A agent for Google AX (separate module)
 docs/                   the documentation site (mkdocs; docs/brand is the brand kit and is not published)
 test/{fakeslack,stubagent,e2e,fixtures,kindmanifests,chart,crdcorpus,...}
 hack/kind/              kind tier scripts (fast, full, ax, sandbox)
-hack/{docs,release,postgres}  doc generators, release scripts, Postgres test helpers
+hack/{docs,release,postgres,crdhashes}  doc generators, release scripts, Postgres test helpers, the CRD schema hashes
 ```
 
 ## Make targets
@@ -54,7 +54,9 @@ golangci-lint runs as `go tool golangci-lint`, never a global install.
 - `make crds` regenerates the CustomResourceDefinitions in `charts/agent-kourier/files/crds/` from the markers in `api/v1alpha1` with
   `controller-gen` (pinned as a `tool` in `go.mod`, run as `go tool controller-gen`). Run it after changing an API type or marker and commit the
   result: `TestCommittedCRDsMatchGeneration` in `make test` fails when the committed files differ from what generation produces. The
-  production binary does not link controller-tools.
+  production binary does not link controller-tools. It then runs `hack/crdhashes`, which writes the SHA-256 of each CRD file into
+  `api/v1alpha1/crd_schema_hashes.go`: the broker compares it, at start in CR mode, with the annotation the chart stamps on the CRD, and
+  `TestSchemaHashesMatchTheCommittedCRDs` fails when the two drift.
 - `make crd-corpus` holds the CRD schemas to the broker's validation: it applies only the CRDs to a throwaway kind cluster
   (`hack/kind/crd-corpus.sh`; `CRD_CORPUS_KUBECONFIG` uses a local cluster you made instead) and `test/crdcorpus` sends each corpus entry to it
   as a server-side dry-run create. A new API field or validation rule gets a marker where the schema can copy it and an entry in
