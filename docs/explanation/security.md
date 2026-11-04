@@ -94,6 +94,12 @@ Hostile text can still steer a model, so two things are worth knowing about what
   text, and nothing unfurls it, so Slack does not fetch it. A person still has to choose to click it. A URL of a message in
   the connected workspace shows as Slack's own reference to that message.
 
+- **Another agent can be woken.** A bot's mention of Agent Kourier starts a turn on any Binding with a `mention` trigger, unless it sets
+  `chat.botMentions: none`, and Slack cannot tell an agent from any other bot. So hostile text that steers one agent into writing another's name
+  wakes that other agent, and any bot or webhook in the channel can do the same directly. The turns are held to fixed limits, and the post and the
+  thread reach the agent as untrusted data, but no hop limit exists, and the receiving agent decides what to trust. A bot's turn cannot answer a pending question, and a session that a bot's mention began takes a person's reply only if it mentions Agent Kourier, so a mention does not turn what people write in that thread into prompts. See
+  [Chat triggers](../reference/chat-triggers.md#a-bots-mention).
+
 ### Not allowed, by design
 
 These are refused on purpose. None of them can be configured, and a request to add one needs a decision of its own.

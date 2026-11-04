@@ -33,7 +33,7 @@ var (
 )
 
 // Permalink implements chat.Permalinker: "<workspace>/archives/<channel>/p<ts without its dot>", the form Slack's own
-// permalinks of a message have. It is built from the workspace address the client keeps (WorkspaceURL) and makes no
+// permalinks of a message have, with "?thread_ts=<thread>&cid=<channel>" for a reply in a thread. It is built from the workspace address the client keeps (WorkspaceURL) and makes no
 // call, so it can be used where a call cannot. It is false before Run has connected and for a Ref whose channel or ts is
 // not the shape Slack's are.
 func (p *Platform) Permalink(r chat.Ref) (string, bool) {
@@ -44,5 +44,9 @@ func (p *Platform) Permalink(r chat.Ref) (string, bool) {
 	if base == "" {
 		return "", false
 	}
-	return base + "/archives/" + r.Channel + "/p" + strings.Replace(r.ID, ".", "", 1), true
+	link := base + "/archives/" + r.Channel + "/p" + strings.Replace(r.ID, ".", "", 1)
+	if r.Thread != "" && r.Thread != r.ID && messageTS.MatchString(r.Thread) {
+		link += "?thread_ts=" + r.Thread + "&cid=" + r.Channel
+	}
+	return link, true
 }

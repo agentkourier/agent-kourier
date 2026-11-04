@@ -356,6 +356,8 @@ func TestJudgeAnswer(t *testing.T) {
 		{"a turn after a question that closed after its prompt was posted", reply(asked.Add(time.Second), false), AskedQuestion{CreatedAt: asked, Posted: true}, AnswerDecides},
 		{"a turn after a question whose prompt is not posted yet", reply(asked.Add(time.Second), false), AskedQuestion{CreatedAt: asked, Open: true}, AnswerWaits},
 		{"a turn after a question that closed unseen", reply(asked.Add(time.Second), false), AskedQuestion{CreatedAt: asked}, AnswerNone},
+		// A turn nobody wrote: a bot's mention or a trigger's prompt, which stays a turn whatever the question.
+		{"a turn nobody wrote, after a posted open question", store.Reply{ID: "r1", UserID: SystemUser, WholeThread: true, EnqueuedAt: asked.Add(time.Second)}, seen, AnswerNone},
 		// A reply pinned to its question when it was queued.
 		{"pinned, to a posted open question", reply(asked.Add(time.Second), true), seen, AnswerDecides},
 		{"pinned, to a question that closed after its prompt was posted", reply(asked.Add(time.Second), true), AskedQuestion{CreatedAt: asked, Posted: true}, AnswerDecides},

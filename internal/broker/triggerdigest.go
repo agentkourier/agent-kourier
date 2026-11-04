@@ -135,8 +135,8 @@ func (d *triggerDigest) post(ctx context.Context, dg store.TriggerDigest) {
 	d.cfg.Logger.InfoContext(ctx, "triggers: queued the digest line of a window of alerts that limits stopped", "binding", dg.Binding, "trigger", dg.Trigger, "channel", dg.Channel, "window", dg.End.Sub(dg.Start))
 }
 
-// digestText is the line: how many alerts were not investigated, in how long, and which limit stopped them
-// ("7 alert messages not investigated in the last 10m (rate limit)."). When more than one limit did, each is counted. It is
+// digestText is the line: how many bot messages were not investigated, in how long, and which limit stopped them
+// ("7 bot messages not investigated in the last 10m (rate limit)."). When more than one limit did, each is counted. It is
 // Agent Kourier's own wording and numbers, and names no alert.
 func digestText(dg store.TriggerDigest) string {
 	reasons := []struct {
@@ -155,9 +155,9 @@ func digestText(dg store.TriggerDigest) string {
 	if len(names) > 1 {
 		why = strings.Join(counted, ", ")
 	}
-	noun := "alert messages"
+	noun := "bot messages"
 	if total == 1 {
-		noun = "alert message"
+		noun = "bot message"
 	}
 	return fmt.Sprintf("%d %s not investigated in the last %s (%s).", total, noun, compactDuration(dg.End.Sub(dg.Start)), why)
 }

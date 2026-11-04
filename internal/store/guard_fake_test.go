@@ -267,6 +267,11 @@ func (f *fakeAdapter) PreviousReply(_ context.Context, _ store.ConversationKey, 
 	return zero[store.Reply](), f.err
 }
 
+func (f *fakeAdapter) PreviousWholeReply(_ context.Context, _ store.ConversationKey, _ int64) (store.Reply, error) {
+	f.record("PreviousWholeReply")
+	return zero[store.Reply](), f.err
+}
+
 func (f *fakeAdapter) PurgeAudit(_ context.Context, _ time.Time, _ int) (int, error) {
 	f.record("PurgeAudit")
 	return zero[int](), f.err

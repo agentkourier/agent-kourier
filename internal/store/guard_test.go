@@ -283,6 +283,13 @@ func nextReplyAfter(k store.ConversationKey, after int64) call {
 	return func(ctx context.Context, s store.Store) error { _, err := s.NextReplyAfter(ctx, k, after); return err }
 }
 
+func previousWholeReply(k store.ConversationKey, sequence int64) call {
+	return func(ctx context.Context, s store.Store) error {
+		_, err := s.PreviousWholeReply(ctx, k, sequence)
+		return err
+	}
+}
+
 func previousReply(k store.ConversationKey, sequence int64) call {
 	return func(ctx context.Context, s store.Store) error {
 		_, err := s.PreviousReply(ctx, k, sequence)
@@ -580,6 +587,9 @@ func specs() []spec {
 		{"PreviousReply", previousReply(key, 1), with(
 			withKeys(func(k store.ConversationKey) call { return previousReply(k, 1) }),
 			map[string]call{"sequence 0": previousReply(key, 0)})},
+		{"PreviousWholeReply", previousWholeReply(key, 1), with(
+			withKeys(func(k store.ConversationKey) call { return previousWholeReply(k, 1) }),
+			map[string]call{"sequence 0": previousWholeReply(key, 0)})},
 		{"MarkReplyDelivered", markReplyDelivered("r1", t0), map[string]call{
 			"no ID":   markReplyDelivered("", t0),
 			"no time": markReplyDelivered("r1", time.Time{}),
