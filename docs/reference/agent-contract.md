@@ -269,7 +269,8 @@ Notes for an agent author:
 
 | The agent answers | What Agent Kourier does |
 |---|---|
-| HTTP 401 or 403, at any call | The credentials are rejected: the turn fails without a retry, and `agentkourier_credential_rejections_total` counts it |
+| HTTP 401 at any request, or HTTP 403 at an A2A call | The credentials are rejected. A send or a followed task fails without a retry, an answer leaves the pause open, and `agentkourier_credential_rejections_total` counts them. A lookup before a resend is retried and not counted: the turn fails as unreachable after 15 minutes, or is retried with no limit if it is held |
+| HTTP 403 at the agent card fetch | The agent does not exist, or does not permit the identity. A send fails without a retry and is audited. An answer by a button leaves the pause open, and a followed task is not followed again. A lookup before a resend is retried: the turn fails as unreachable after 15 minutes, or is retried with no limit if it is held. A typed answer, and recovery with a reply queued behind the task, keep trying with nothing said in the thread. None of these is a rejected credential, so `agentkourier_credential_rejections_total` does not count them |
 | JSON-RPC `-31403` | The identity is refused for this session: the turn fails |
 | JSON-RPC `-32004` to a send | Busy: the same message is sent again after a backoff, for as long as it takes, and the thread is told after 2 minutes. Do not use `-32004` for an operation the agent does not support, or a turn waits for ever |
 | JSON-RPC `-32603` to an answer | The answer is rejected: the paused task is cancelled and the thread told |

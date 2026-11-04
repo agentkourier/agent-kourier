@@ -183,8 +183,8 @@ func (p *Pool) conn(ctx context.Context, t Target) (Conn, error) {
 		return e.client, nil
 	}
 	client, err := p.connect(ctx, t, creds)
-	if err != nil {
-		return nil, err
+	if err != nil { // the card fetch is the request a connect makes, so an HTTP status here is the card's
+		return nil, cardError(err)
 	}
 	e.client, e.seal = client, seal // a replaced client is left to finish the streams it carries
 	return client, nil

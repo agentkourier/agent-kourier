@@ -71,24 +71,34 @@ func TestReconnectWaitsForRetryAfter(t *testing.T) {
 	}
 }
 
-// A token that expired is refused at the card fetch, which is where the Pool connects on first
-// use and after every credential change. Every call must carry the signal to re-mint it.
+// The Pool fetches the card on first use and after every credential change, so every call can
+// fail there. A token the front door refuses is a 401, and every call must carry the signal to
+// re-mint it. A 403 there is no such signal: kagent 1.0 answers it for an agent that does not
+// exist as for one this identity may not use (measured), so it is ErrAgentForbidden, and never
+// ErrCredentialsRejected. Either way the status stays in the chain.
 func TestCardRefusedTypesEveryCall(t *testing.T) {
-	for _, code := range []int{http.StatusUnauthorized, http.StatusForbidden} {
-		t.Run(http.StatusText(code), func(t *testing.T) {
+	for _, tc := range []struct {
+		code      int
+		want, not error
+	}{
+		{http.StatusUnauthorized, ErrCredentialsRejected, ErrAgentForbidden},
+		{http.StatusForbidden, ErrAgentForbidden, ErrCredentialsRejected},
+	} {
+		t.Run(http.StatusText(tc.code), func(t *testing.T) {
 			fa := newFakeAgent(t, liveStream(t))
-			fa.cardStatus = code
+			fa.cardStatus = tc.code
 			agent := newPool(t).Agent(targetFor(fa, "team/sre", token("t")))
 			calls := map[string]func() error{
 				"Send":       func() error { return agent.Send(t.Context(), message("hi"), nil) },
 				"Answer":     func() error { return agent.Answer(t.Context(), message("hi"), nil) },
+				"Follow":     func() error { return agent.Follow(t.Context(), "t1", nil) },
 				"GetTask":    func() error { _, err := agent.GetTask(t.Context(), "t1"); return err },
 				"CancelTask": func() error { _, err := agent.CancelTask(t.Context(), "t1"); return err },
 				"FindTask":   func() error { _, _, err := agent.FindTask(t.Context(), "c1", "m1"); return err },
 			}
 			for name, call := range calls {
-				if err := call(); !errors.Is(err, ErrCredentialsRejected) {
-					t.Errorf("%s: err = %v, want ErrCredentialsRejected", name, err)
+				if err := call(); !errors.Is(err, tc.want) || errors.Is(err, tc.not) || httpStatus(err) != tc.code {
+					t.Errorf("%s: err = %v; want %v with HTTP %d, and not %v", name, err, tc.want, tc.code, tc.not)
 				}
 			}
 			if err := calls["Send"](); !errors.Is(err, ErrNotSent) {
@@ -100,8 +110,9 @@ func TestCardRefusedTypesEveryCall(t *testing.T) {
 
 // The front door answers a send with an HTTP status before any event. A 4xx means it
 // refused the request, so nothing was sent and retrying is safe; 401 and 403 also say the
-// credentials were refused (WP-21e re-mints). A 5xx may have come after the agent took the
-// message, so its outcome is unknown.
+// credentials were refused (WP-21e re-mints). A 403 here is no card 403: the card was fetched
+// with these credentials, so the agent exists and is not ErrAgentForbidden. A 5xx may have come
+// after the agent took the message, so its outcome is unknown.
 func TestHTTPStatusBeforeAnyEventTypesTheOutcome(t *testing.T) {
 	for _, tc := range []struct {
 		code       int
@@ -120,8 +131,8 @@ func TestHTTPStatusBeforeAnyEventTypesTheOutcome(t *testing.T) {
 		t.Run(http.StatusText(tc.code), func(t *testing.T) {
 			fa := newFakeAgent(t, func(_ rpc, w http.ResponseWriter) { http.Error(w, "no", tc.code) })
 			err := newPool(t).Agent(targetFor(fa, "team/sre", token("t"))).Send(t.Context(), message("hi"), nil)
-			if errors.Is(err, ErrNotSent) != tc.wantSent || errors.Is(err, ErrCredentialsRejected) != tc.wantAuth || errors.Is(err, ErrOutcomeUnknown) != tc.wantUnsure {
-				t.Errorf("err = %v; want not-sent %v, credentials-rejected %v, unknown %v", err, tc.wantSent, tc.wantAuth, tc.wantUnsure)
+			if errors.Is(err, ErrNotSent) != tc.wantSent || errors.Is(err, ErrCredentialsRejected) != tc.wantAuth || errors.Is(err, ErrOutcomeUnknown) != tc.wantUnsure || errors.Is(err, ErrAgentForbidden) {
+				t.Errorf("err = %v; want not-sent %v, credentials-rejected %v, unknown %v, and not agent-forbidden", err, tc.wantSent, tc.wantAuth, tc.wantUnsure)
 			}
 		})
 	}

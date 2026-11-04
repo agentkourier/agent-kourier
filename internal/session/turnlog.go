@@ -25,7 +25,8 @@ const (
 	TurnCanceled  TurnOutcome = "canceled"
 	// TurnCredentialsRejected is a turn the agent's front door refused the Binding's credentials of.
 	TurnCredentialsRejected TurnOutcome = "credentials_rejected"
-	// TurnForbidden is a turn the agent refused the Binding's identity for.
+	// TurnForbidden is a turn the agent refused the Binding's identity for, or whose agent's card
+	// was answered 403: the agent does not exist, or does not permit the identity.
 	TurnForbidden TurnOutcome = "forbidden"
 	// TurnUnreachable is a turn given up on after SendGiveUp of an agent that could not be reached.
 	TurnUnreachable TurnOutcome = "unreachable"

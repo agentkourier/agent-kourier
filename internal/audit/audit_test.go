@@ -337,6 +337,8 @@ func TestAgentCall(t *testing.T) {
 		{"ok", Call{Op: OpSend, TaskID: "t1", ContextID: "c1", MessageID: "m1"}, "task=t1 context=c1 message=m1", "send: ok"},
 		{"credentials rejected (D34)", Call{Op: OpSend, MessageID: "m1", Err: notSent401}, "message=m1",
 			"send: failed credentials_rejected,not_sent,http_401"},
+		{"agent not found or not permitted (a card 403)", Call{Op: OpSend, MessageID: "m1", Err: fmt.Errorf("send: %w", errors.Join(agent.ErrNotSent, agent.ErrAgentForbidden, &dialect.HTTPStatusError{Code: 403}))},
+			"message=m1", "send: failed not_sent,agent_forbidden,http_403"},
 		{"outcome unknown", Call{Op: OpSend, MessageID: "m1", Err: fmt.Errorf("x: %w", agent.ErrOutcomeUnknown)}, "message=m1", "send: failed outcome_unknown"},
 		{"stream lost names its task", Call{Op: OpSend, MessageID: "m1", Err: fmt.Errorf("x: %w", lost)}, "task=t-lost context=c-lost message=m1", "send: failed stream_lost"},
 		{"answer rejected", Call{Op: OpAnswer, TaskID: "t1", Err: agent.ErrAnswerRejected}, "task=t1", "answer: failed answer_rejected"},

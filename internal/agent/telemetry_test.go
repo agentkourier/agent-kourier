@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -18,6 +19,46 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 	"github.com/agentkourier/agent-kourier/internal/telemetry/telemetrytest"
 )
+
+// Each typed error has its outcome. A card 403 on a reconnect comes as a lost stream too, and is told as the 403.
+func TestFinishAgentOutcomes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"credentials rejected", ErrCredentialsRejected, "credentials_rejected"},
+		{"identity refused", ErrForbidden, "forbidden"},
+		{"card 403", ErrAgentForbidden, "agent_forbidden"},
+		{"card 403 on a reconnect", fmt.Errorf("%w: %w", ErrStreamLost, ErrAgentForbidden), "agent_forbidden"},
+		{"stream lost", ErrStreamLost, "stream_lost"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exporter := tracetest.NewInMemoryExporter()
+			provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+			defer func() { _ = provider.Shutdown(context.Background()) }()
+			obs, err := telemetry.New(prometheus.NewRegistry(), provider)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, op := telemetry.Start(telemetry.WithObserver(t.Context(), obs), "agentkourier.agent.send")
+			finishAgent(op, tc.err)
+			spans := exporter.GetSpans()
+			if len(spans) != 1 {
+				t.Fatalf("%d spans; want 1", len(spans))
+			}
+			for _, attr := range spans[0].Attributes {
+				if attr.Key == "agentkourier.outcome" {
+					if got := attr.Value.AsString(); got != tc.want {
+						t.Fatalf("outcome = %q; want %q", got, tc.want)
+					}
+					return
+				}
+			}
+			t.Fatalf("no outcome on the span: %+v", spans[0].Attributes)
+		})
+	}
+}
 
 func TestAuthRequiredTaskTelemetry(t *testing.T) {
 	for _, operation := range []string{"send", "answer", "follow"} {

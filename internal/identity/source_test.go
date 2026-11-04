@@ -368,6 +368,8 @@ func TestRejected(t *testing.T) {
 			nil, agent.ErrBusy, fmt.Errorf("x: %w", agent.ErrNotSent), context.Canceled, agent.ErrForbidden, agent.ErrTokenRequired,
 			// a status alone, without the sentinel the pool joins to it, is not for this hook
 			&dialect.HTTPStatusError{Code: 403}, fmt.Errorf("send: %w", &dialect.HTTPStatusError{Code: 401}),
+			// a card 403: the agent does not exist, or does not permit the identity; the token was not refused
+			fmt.Errorf("%w: %w: %w", agent.ErrNotSent, agent.ErrAgentForbidden, &dialect.HTTPStatusError{Code: 403}),
 		} {
 			f := newFixture(t, v1alpha1.Identity{TokenSecretRef: tokenRef()})
 			c := call
