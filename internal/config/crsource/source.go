@@ -18,6 +18,21 @@
 // reported here. If the own connection is deleted while the broker runs, the Set keeps the last good generation of it, and
 // says so in Set.Invalid.
 //
+// # The hold
+//
+// While the own connection is deleted and held, the Set holds with it, at their last good generation, the Bindings that
+// named it and are gone from the cluster too, and the AgentBackends that those Bindings name and that are gone. Helm deletes
+// the objects it rendered together, so a rollback from custom resources to a ConfigMap takes the Bindings, the backends and the
+// connection away while the old pods still run, and a broker that dropped the Bindings would stop answering for as long as
+// it takes the new pods to lead. Each held object is in Set.Invalid as Deleted, so that it is counted and says what it is. The
+// hold lasts until the connection is back, when what is still gone goes, or until the broker restarts, which has no last
+// good and fails at start as it always did.
+//
+// The hold is for the connection and not for a Binding: a Binding deleted alone, while the connection exists, goes at the next
+// read, which is the way to stop one. And it is decided by the listing of the moment of the read. A Binding deleted in an
+// earlier read than the connection is already gone from the last good, so it is not held. Helm deletes what it rendered in
+// milliseconds, against a read every 10 s, so this is rare, and the source adds no delay to close it.
+//
 // # Change detection
 //
 // Fingerprint is the sorted uid and metadata.generation of every object, never resourceVersion: a status write bumps
@@ -52,6 +67,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -144,6 +160,7 @@ type Source struct {
 	now      func() time.Time
 
 	probeEvery, probeTimeout time.Duration
+	holding                  bool           // the own connection is deleted and held, with what went with it
 	probeExited              func()         // a test's hook, called as the probe's goroutine ends
 	wg                       sync.WaitGroup // the probe
 }
@@ -429,14 +446,23 @@ func (s *Source) Set(context.Context) (*config.Set, string, error) {
 		func(u *unstructured.Unstructured) bool { return keyOf(config.KindChatConnection, u) == s.own }, &set.ChatConnections, &set.Invalid)
 	read(s, config.KindBinding, l.bindings, live, func(u *unstructured.Unstructured) bool { return s.owns(l, u) }, &set.Bindings, &set.Invalid)
 
-	// The broker's own connection is held when it is deleted: a running broker keeps its last good one.
+	// The broker's own connection is held when it is deleted: a running broker keeps its last good one, and with it what
+	// the connection's Bindings and their backends were (see the package comment).
+	held := false
 	if !live[s.own] {
 		if g, ok := s.good[s.own]; ok {
 			if conn, _ := config.DecodeObject[v1alpha1.ChatConnection](g.json); conn != nil {
+				held = true
 				set.ChatConnections = append(set.ChatConnections, *conn)
 				set.Invalid = append(set.Invalid, config.Invalid{Kind: s.own.kind, Namespace: s.own.namespace, Name: s.own.name, Served: g.generation, Deleted: true})
+				nb, nbe := s.hold(l, live, set)
+				s.holdStarted(nb, nbe)
 			}
 		}
+	}
+	if !held && s.holding {
+		s.holding = false
+		s.log.Info("the ChatConnection of the broker is back; what was held with it and is still gone is gone")
 	}
 	for k := range s.good {
 		if !live[k] && k != s.own {
@@ -444,6 +470,73 @@ func (s *Source) Set(context.Context) (*config.Set, string, error) {
 		}
 	}
 	return set, fp, nil
+}
+
+// holdStarted says, once, that a hold has begun, and how much it holds.
+func (s *Source) holdStarted(bindings, backends int) {
+	if s.holding {
+		return
+	}
+	s.holding = true
+	s.log.Warn("the ChatConnection of the broker was deleted: it is held at its last good generation, and so are the Bindings of it that are gone, "+
+		"and the AgentBackends they use that are gone, until the connection is back or the broker restarts; delete a Binding alone to stop it",
+		"connection", s.own.namespace+"/"+s.own.name, "held_bindings", bindings, "held_backends", backends)
+}
+
+// hold adds to set the Bindings that named the own connection and are gone from the cluster, and the AgentBackends that they
+// name and that are gone, each at its last good generation and listed as Deleted in set.Invalid, and marks them live so that
+// they are not forgotten. Gone is absent from the listing: an object that is there, whoever's it is now, is read as it
+// always is, and a Binding made again has its new uid and generation, never a held one. It returns how many of each it holds.
+// The caller holds s.mu.
+func (s *Source) hold(l listing, live map[key]bool, set *config.Set) (bindings, backends int) {
+	gone := func(k key, kind string) bool { _, listed := l.keys[k]; return k.kind == kind && !listed && !live[k] }
+	wanted := map[key]bool{}
+	for _, k := range slices.SortedFunc(maps.Keys(s.good), compareKeys) {
+		g := s.good[k]
+		if !gone(k, config.KindBinding) {
+			continue
+		}
+		var raw unstructured.Unstructured
+		if raw.UnmarshalJSON(g.json) != nil || refOf(config.KindChatConnection, &raw, "spec", "chat", "connectionRef") != s.own {
+			continue
+		}
+		b, _ := config.DecodeObject[v1alpha1.Binding](g.json)
+		if b == nil {
+			continue
+		}
+		live[k] = true
+		set.Bindings = append(set.Bindings, *b)
+		set.Invalid = append(set.Invalid, config.Invalid{Kind: k.kind, Namespace: k.namespace, Name: k.name, Served: g.generation, Deleted: true})
+		wanted[refOf(config.KindAgentBackend, &raw, "spec", "agent", "backendRef")] = true
+		bindings++
+	}
+	for _, k := range slices.SortedFunc(maps.Keys(wanted), compareKeys) {
+		g, ok := s.good[k]
+		if !ok || !gone(k, config.KindAgentBackend) {
+			continue
+		}
+		be, _ := config.DecodeObject[v1alpha1.AgentBackend](g.json)
+		if be == nil {
+			continue
+		}
+		live[k] = true
+		set.AgentBackends = append(set.AgentBackends, *be)
+		set.Invalid = append(set.Invalid, config.Invalid{Kind: k.kind, Namespace: k.namespace, Name: k.name, Served: g.generation, Deleted: true})
+		backends++
+	}
+	return bindings, backends
+}
+
+// refOf returns the object of the kind that the Binding raw names at path (spec.chat.connectionRef, spec.agent.backendRef):
+// in the Binding's own namespace when the reference names none.
+func refOf(kind string, raw *unstructured.Unstructured, path ...string) key {
+	ns, _, _ := unstructured.NestedString(raw.Object, append(path, "namespace")...)
+	name, _, _ := unstructured.NestedString(raw.Object, append(path, "name")...)
+	return key{kind, cmp.Or(ns, raw.GetNamespace()), name}
+}
+
+func compareKeys(a, b key) int {
+	return cmp.Or(cmp.Compare(a.kind, b.kind), cmp.Compare(a.namespace, b.namespace), cmp.Compare(a.name, b.name))
 }
 
 // read decodes the listed objects of one kind that the broker owns (owns says so of an object), as T. A good one is
@@ -534,6 +627,7 @@ func (s *Source) owns(l listing, u *unstructured.Unstructured) bool {
 type listing struct {
 	bindings, backends, connections []*unstructured.Unstructured
 	hasConnection                   map[key]bool
+	keys                            map[key]struct{} // every object listed, of any kind, whoever's it is
 }
 
 // list reads the three caches, each sorted by namespace and name. It fails while one has not synced, and once stopped.
@@ -549,10 +643,17 @@ func (s *Source) list() (listing, error) {
 			return listing{}, ErrNotSynced
 		}
 	}
-	l := listing{hasConnection: map[key]bool{}}
+	l := listing{hasConnection: map[key]bool{}, keys: map[key]struct{}{}}
 	l.bindings, l.backends, l.connections = objects(stores[0]), objects(stores[1]), objects(stores[2])
 	for _, u := range l.connections {
 		l.hasConnection[keyOf(config.KindChatConnection, u)] = true
+		l.keys[keyOf(config.KindChatConnection, u)] = struct{}{}
+	}
+	for _, u := range l.bindings {
+		l.keys[keyOf(config.KindBinding, u)] = struct{}{}
+	}
+	for _, u := range l.backends {
+		l.keys[keyOf(config.KindAgentBackend, u)] = struct{}{}
 	}
 	return l, nil
 }

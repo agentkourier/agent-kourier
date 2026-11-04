@@ -1276,6 +1276,35 @@ func TestABindingThatLeavesTheReportIsForgotten(t *testing.T) {
 	}
 }
 
+// A Binding that the source holds after its deletion is served and has no object: the writer finds it in no cache, and writes
+// nothing for it, says nothing and counts no failure, while the Binding that does have an object is written as it is.
+func TestAHeldBindingWithNoObjectIsNotWrittenSaidOrCounted(t *testing.T) {
+	c := newStatusCluster(t, storedBinding("sre/kept", 1)) // sre/held has no object: it was deleted, and is held
+	r := newStatusRig(t, c, map[string]int64{"sre/kept": 1, "sre/held": 1})
+	r.set("sre/kept", probe(1)...)
+	r.set("sre/held", probe(1)...)
+	r.reconcile()
+	r.advance(time.Minute)
+	r.set("sre/held", probe(1, bindingcheck.BackendReachable)...)
+	r.reconcile()
+	for _, a := range c.snapshotApplies() {
+		if a.Name == "held" {
+			t.Errorf("a status was written for the held Binding: %+v", a)
+		}
+	}
+	if strings.Contains(r.logs.String(), "level=WARN") || strings.Contains(r.logs.String(), "level=ERROR") {
+		t.Errorf("the writer said something about a Binding that is held:\n%s", r.logs.String())
+	}
+	for _, w := range r.writes {
+		if w == "failed" {
+			t.Error("a failed write was counted for a Binding that is held")
+		}
+	}
+	if len(r.writes) == 0 {
+		t.Error("the Binding that has an object was not written either, so the test shows nothing")
+	}
+}
+
 // Nothing is written while no config has loaded: an empty report is not every Binding removed, and writes nothing for one.
 func TestNothingIsWrittenBeforeTheConfigHasLoaded(t *testing.T) {
 	c := newStatusCluster(t, storedBinding(sreAlerts, 1))

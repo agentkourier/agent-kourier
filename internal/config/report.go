@@ -173,6 +173,9 @@ func resolvePerObject(set *Set) (*Snapshot, []Rejection) {
 
 	for _, rb := range snap.Bindings() {
 		id := identity{KindBinding, rb.Binding.Namespace, rb.Binding.Name}
+		if inv, held := invalid[id]; held && inv.Deleted {
+			continue // held after its deletion: there is no object to say anything of, and it is served as it was
+		}
 		flag := func(reason RejectionReason, path string, inv Invalid) {
 			out = append(out, Rejection{Namespace: id.namespace, Name: id.name, Reason: reason, Message: path + ": " + inv.describe(inv.Namespace == id.namespace, true),
 				Generation: rb.Binding.Generation, Served: rb.Binding.Generation})
