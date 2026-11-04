@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
@@ -37,7 +36,7 @@ type secretRef struct {
 
 // secretRefs lists every Secret that set refers to: each ChatConnection's credentials, an
 // AgentBackend's header Secrets, and a Binding's token. Resolve checks them, and
-// SecretNamespaces reads the namespaces off them, so the two cannot drift apart. An empty key
+// SecretNames lists the Secrets off them, so the two cannot drift apart. An empty key
 // means the default, for a Set that has not been through Default.
 func (s *Set) secretRefs() []secretRef {
 	var refs []secretRef
@@ -64,14 +63,39 @@ func (s *Set) secretRefs() []secretRef {
 	return refs
 }
 
-// SecretNamespaces returns the sorted namespaces whose Secrets set refers to, which are the ones
-// a SecretResolver must be given.
-func (s *Set) SecretNamespaces() []string {
-	seen := map[string]bool{}
-	for _, ref := range s.secretRefs() {
-		seen[ref.from.namespace] = true
+// SecretName names one Secret.
+type SecretName struct{ Namespace, Name string }
+
+// String is namespace/name.
+func (n SecretName) String() string { return n.Namespace + "/" + n.Name }
+
+// secretNames returns the sorted, unique Secrets that refs name, each in the namespace of the object that names it.
+func secretNames(refs []secretRef) []SecretName {
+	names := make([]SecretName, 0, len(refs))
+	for _, ref := range refs {
+		names = append(names, SecretName{ref.from.namespace, ref.name})
 	}
-	return slices.Sorted(maps.Keys(seen))
+	slices.SortFunc(names, func(a, b SecretName) int {
+		return cmp.Or(cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name))
+	})
+	return slices.Compact(names)
+}
+
+// SecretNames returns the sorted Secrets that set refers to, each once, which are the ones a SecretWatcher must follow.
+func (s *Set) SecretNames() []SecretName { return secretNames(s.secretRefs()) }
+
+// SecretWatcher is an optional interface of a SecretResolver that follows Secrets one by one, as the cluster-backed one
+// does. The Reloader calls it around each reload, so that a resolver reads exactly the Secrets the config refers to: it
+// holds nothing else, and a Secret that a reload adds is readable without a restart.
+type SecretWatcher interface {
+	// Watch starts following each of names that is not followed yet, and waits until each is readable or ctx ends. The
+	// error says which is not and why. Resolve reports the same Secrets through Keys, so a caller that is about to
+	// resolve may ignore it. The Secrets stay followed after ctx ends.
+	Watch(ctx context.Context, names []SecretName) error
+	// Retain keeps following exactly names (and whatever the resolver was told to keep itself) and stops following the
+	// rest. The Reloader calls it with the Secrets of each snapshot it publishes, and never after a failed reload, so
+	// the Secrets of the last good snapshot stay readable.
+	Retain(names []SecretName)
 }
 
 // presentSecrets is a SecretResolver for which every Secret exists and has the keys given.

@@ -176,11 +176,13 @@ looks like a credential (key, token, secret, auth, cookie, password), which belo
 - The pod label `app.kubernetes.io/name: agent-kourier` is fixed, whatever the release is named, because NetworkPolicies elsewhere
   (the front door's, in the kind tiers) admit pods by it. Nothing else the chart makes carries it on a pod; in
   particular the token-refresh Job's pod does not.
-- **Secrets RBAC is namespace-wide, not by name.** Agent Kourier caches Secrets with an informer, which needs `list` and `watch`, and
-  Kubernetes cannot limit those verbs by `resourceNames`. Each Role therefore reads every Secret in its namespace, and Agent Kourier
-  keeps the Opaque ones in memory (internal/config/k8ssecrets documents it). The chart grants it only in namespaces that hold a
-  Secret the config names, and `get` is never granted. Give Agent Kourier's Secrets a namespace of their own when the namespace is shared. With Postgres the DSN's Secret is in the release namespace, which therefore gets this Role too.
-  Narrowing to named Secrets is an Agent Kourier change (one informer per Secret), a possible later change.
+- **The chart's Secrets RBAC is namespace-wide, not by name.** Agent Kourier follows each Secret the config names with an informer of
+  its own, which needs `list` and `watch` on that Secret and asks for it by name (a `metadata.name` field selector); `get` is never
+  used or granted. Kubernetes authorizes such a request by `resourceNames`, so with `rbac.create: false` you can grant `list` and
+  `watch` on named Secrets instead. The chart's Roles name no Secret, so each reads every Secret in its namespace, although Agent
+  Kourier keeps in memory only the Opaque ones that the config names, and with Postgres the DSN's (internal/config/k8ssecrets
+  documents it). The chart grants the Role only in namespaces that hold a Secret the config names. Give Agent Kourier's Secrets a
+  namespace of their own when the namespace is shared. With Postgres the DSN's Secret is in the release namespace, which therefore gets this Role too.
 - `klogVerbosity` stays 0 (the schema caps it at 7): at 8 and above client-go logs response bodies, Secret lists included.
 - **NetworkPolicy** (`networkPolicy.enabled`, which needs a CNI that enforces it): egress to DNS, to the API server (you give
   its addresses in `kubeApiServer.cidrs`, since a policy cannot select it), to Slack on

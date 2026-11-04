@@ -1,7 +1,9 @@
 {{- if .Values.rbac.create }}
-{{- /* The resolver caches the Secrets of each namespace its config refers to with an informer: list and watch, never get.
-       Those verbs cannot be limited by resourceName, so the Role reads every Secret in the namespace, and Agent Kourier keeps
-       the Opaque ones in memory (internal/config/k8ssecrets). Keep those namespaces to ones that hold Agent Kourier's. */ -}}
+{{- /* The resolver follows each Secret its config refers to with an informer of its own: list and watch on that one Secret, by a
+       metadata.name field selector, never get. Kubernetes authorizes such a request by resourceName, so a Role could name single
+       Secrets (with rbac.create=false, grant that yourself). These Roles are namespace-wide, which grants every Secret in the
+       namespace, although Agent Kourier keeps in memory only the Opaque ones its config refers to (internal/config/k8ssecrets).
+       Keep those namespaces to ones that hold Agent Kourier's. */ -}}
 {{- range $ns := include "agentkourier.secretNamespaces" . | fromJsonArray }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
