@@ -249,7 +249,8 @@ func (u *Run) sendStep(ctx context.Context, st chat.Step, final bool) (bool, err
 // updates carry the run's steps instead (carries), the earlier attempt's calls among them, since the agent reports
 // them again: Slack drops a stream's cards from a message it updates, and shows the task_card blocks of the update
 // (probed 2026-10-21 in a sandbox workspace, by chat.update read back through conversations.replies and seen in the
-// web client). With no ts, the earlier attempt may have started a stream that cannot be found (R16): the whole text is
+// web client). An update with no text cannot replace a message that holds only text, which the run finds out from the
+// platform (update). With no ts, the earlier attempt may have started a stream that cannot be found (R16): the whole text is
 // posted as a new message, under a row of its own, through the outbox, which stores no steps.
 func (u *Run) takeOver(ctx context.Context, ref *chat.Ref, id string) error {
 	row, err := u.cfg.Store.GetOutbox(ctx, id)
@@ -288,10 +289,14 @@ func (u *Run) writeMoved(ctx context.Context, ref *chat.Ref) error {
 		case ref.ID == "":
 			return errNothingToShow
 		}
-		v.m, v.body, v.ok = render.Nothing(), render.NoOutput, true
+		v.m, v.ok = render.Nothing(), true
 	}
 	return u.write(ctx, ref, v)
 }
 
 // errNothingToShow is what a write says when the turn ended with nothing to show and there is no message to leave.
 var errNothingToShow = errors.New("live: the turn ended with nothing to show")
+
+// errMessageStands is what a write says when the platform refused to put content with no text in the place of what the message
+// holds (update). It is no failed write: the run does not try it again.
+var errMessageStands = errors.New("live: the message stands until the turn has text")

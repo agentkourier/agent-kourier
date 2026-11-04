@@ -196,7 +196,7 @@ func (p *Platform) Update(ctx context.Context, r chat.Ref, o chat.Outgoing) erro
 	if err != nil {
 		return err
 	}
-	return p.c.Update(ctx, r.Channel, r.ID, c)
+	return wouldDropText(p.c.Update(ctx, r.Channel, r.ID, c))
 }
 
 // Stream starts a streaming message in t, shown to the user to, with the markdown first. The stream starts in the
@@ -456,6 +456,21 @@ func notStreaming(err error) error {
 	return err
 }
 
+// wouldDropText marks the error of an update that takes the text from a message that holds only text, which Slack says by the
+// code of its response. Slack documents block_mismatch as "Rich-text blocks cannot be replaced with non-rich-text blocks", and a
+// probe on 2026-11-03 in a sandbox workspace, by chat.update, found what that means. The message's blocks must all be rich text
+// (a markdown block and a stream's text are stored as rich_text), and the update's blocks must hold no markdown or rich_text
+// block. A message with a card or any other block beside its text takes such an update and loses the text, one posted with text
+// and no blocks takes it too, and no blocks at all, or an empty list, is no such update. Five tries, 2 seconds apart, were all
+// refused, and an update with text then passed. Matched by the code, never by text.
+func wouldDropText(err error) error {
+	var resp slackgo.SlackErrorResponse
+	if errors.As(err, &resp) && resp.Err == "block_mismatch" {
+		return fmt.Errorf("%w: %w", chat.ErrWouldDropText, err)
+	}
+	return err
+}
+
 // Ephemeral shows m to user alone.
 func (p *Platform) Ephemeral(ctx context.Context, t chat.Target, user string, m chat.Message) error {
 	c, err := renderMessage(m)
@@ -554,6 +569,7 @@ var (
 		"channel_not_found": chat.ReasonChannelGone, "is_archived": chat.ReasonChannelGone, "not_in_channel": chat.ReasonChannelGone,
 		"msg_too_long": chat.ReasonTooLong, "invalid_blocks": chat.ReasonInvalidContent, "invalid_blocks_format": chat.ReasonInvalidContent,
 		"invalid_chunks": chat.ReasonInvalidContent, "streaming_mode_mismatch": chat.ReasonInvalidContent, "cannot_provide_both_markdown_text_and_chunks": chat.ReasonInvalidContent,
+		"block_mismatch": chat.ReasonOther, // not content that cannot be shown: the same content passes on another message
 	}
 	reactionReason = map[string]chat.Reason{
 		"message_not_found": chat.ReasonChannelGone, "channel_not_found": chat.ReasonChannelGone, "is_archived": chat.ReasonChannelGone,

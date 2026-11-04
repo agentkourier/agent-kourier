@@ -8,8 +8,8 @@ import (
 
 // permanentCode returns the Slack error code in err if it says that the same post will never
 // succeed, and "" otherwise (including for an error that is not Slack's own). Those codes are a
-// channel that is gone, archived or that Agent Kourier is not in, text that is too long, and blocks Slack
-// refuses; a rate limit, a server error or a timeout may pass on another try, and a rejected token is
+// channel that is gone, archived or that Agent Kourier is not in, text that is too long, blocks Slack
+// refuses, and an update that would take a message's text away (wouldDropText, measured); a rate limit, a server error or a timeout may pass on another try, and a rejected token is
 // the restart policy's. It reads the code scrub keeps, through any wrapping.
 //
 // UNCONFIRMED(WP-04): that these are the codes Slack answers with, in particular both
@@ -24,7 +24,7 @@ func permanentCode(err error) string {
 	}
 	switch resp.Err {
 	case "channel_not_found", "is_archived", "not_in_channel", "msg_too_long", "invalid_blocks", "invalid_blocks_format",
-		"invalid_chunks", "streaming_mode_mismatch", "cannot_provide_both_markdown_text_and_chunks":
+		"invalid_chunks", "streaming_mode_mismatch", "cannot_provide_both_markdown_text_and_chunks", "block_mismatch":
 		return resp.Err
 	}
 	return ""

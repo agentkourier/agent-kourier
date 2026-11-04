@@ -168,6 +168,10 @@ var (
 	// ErrNotStreaming is wrapped by the error of an Append or a Stop of a message that is not streaming: it ended,
 	// or it never was a stream. The caller that is finishing a stream it did not start tolerates it.
 	ErrNotStreaming = errors.New("chat: the message is not streaming")
+	// ErrWouldDropText is wrapped by the error of an Update that the platform refuses because the message holds only text
+	// and the new content has none: the text can be changed, and not taken away. The message is as it was, and the same
+	// content is refused however often it is tried, until a call has text to put in its place, which is accepted.
+	ErrWouldDropText = errors.New("chat: the update would take away the text that is all the message holds")
 	// ErrTooLarge is returned by Fits for a prompt that does not fit in one message even in its
 	// plainest form. No retry mends it, and the caller reports the pause as unusable.
 	ErrTooLarge = errors.New("chat: the prompt does not fit in one message")
@@ -225,7 +229,10 @@ type Platform interface {
 	// Find returns the message in t tagged with tag, posted no earlier than about since, if there is one.
 	// Its error is not "not found": that is found false.
 	Find(ctx context.Context, t Target, tag string, since time.Time) (Ref, bool, error)
-	// Update replaces the content of the message at r with o.
+	// Update replaces the content of the message at r with o. A platform may keep a message's text from being replaced by
+	// content with none, and says so with ErrWouldDropText. A caller that does not know what the message holds can give
+	// content with no text and take that answer, but must not count on it: a platform may also take such content, and the
+	// text is then gone.
 	Update(ctx context.Context, r Ref, o Outgoing) error
 	// RefAt is the Ref of the message with the platform's ID id in a conversation, which a caller that recorded the ID alone
 	// (the outbox, the interactions) gets back whole, so that no caller writes a platform's fields by hand.

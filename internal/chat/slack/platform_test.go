@@ -442,3 +442,27 @@ func TestSlackSuppliesTheDefaultAcknowledgmentReaction(t *testing.T) {
 		t.Errorf("AckReaction = %q, want hourglass_flowing_sand", got)
 	}
 }
+
+// An update that takes the text from a message that holds only text is ErrWouldDropText, which no retry mends, and the message
+// is as it was. One that brings text passes.
+func TestUpdateSaysItWouldDropText(t *testing.T) {
+	fake := newFake(t)
+	p := slack.NewPlatform(slack.New(clientConfig(fake)), "ns/conn")
+	r, err := p.Post(t.Context(), chat.Target{Channel: "C1"}, chat.Say(chat.Message{Fallback: "body", Parts: []chat.Part{chat.Body{Markdown: "body"}}}), "ev1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	steps := chat.Message{Fallback: "search", Parts: []chat.Part{chat.Steps{Steps: []chat.Step{{ID: "s1", Title: "search", State: chat.StepDone}}}}}
+	err = p.Update(t.Context(), r, chat.Say(steps))
+	if !errors.Is(err, chat.ErrWouldDropText) {
+		t.Fatalf("Update with no text = %v; want ErrWouldDropText", err)
+	}
+	if v := p.Classify(chat.OpPost, err); v.Class != chat.Permanent || v.Code != "block_mismatch" {
+		t.Errorf("Classify = %+v; want it permanent, with the code", v)
+	}
+	withText := steps
+	withText.Parts = append(slices.Clone(steps.Parts), chat.Body{Markdown: "new"})
+	if err := p.Update(t.Context(), r, chat.Say(withText)); err != nil {
+		t.Errorf("Update with text = %v; want it to pass", err)
+	}
+}
