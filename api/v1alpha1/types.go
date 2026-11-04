@@ -90,6 +90,7 @@ func (r *SecretKeyRef) defaultKey() {
 // AgentBackend describes an A2A server that hosts agents. Owned by the platform team.
 //
 // +kubebuilder:object:root=true
+// +kubebuilder:resource:scope=Namespaced
 type AgentBackend struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitzero"`
@@ -138,6 +139,7 @@ type Header struct {
 // ChatConnection is a workspace connection. Owned by the platform team.
 //
 // +kubebuilder:object:root=true
+// +kubebuilder:resource:scope=Namespaced
 type ChatConnection struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitzero"`
@@ -171,6 +173,7 @@ type ChatConnectionSpec struct {
 // Owned by an application team.
 //
 // +kubebuilder:object:root=true
+// +kubebuilder:resource:scope=Namespaced
 type Binding struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitzero"`

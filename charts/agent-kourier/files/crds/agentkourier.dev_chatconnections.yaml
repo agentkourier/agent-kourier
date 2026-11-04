@@ -1,0 +1,74 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.23.0
+  name: chatconnections.agentkourier.dev
+spec:
+  group: agentkourier.dev
+  names:
+    kind: ChatConnection
+    listKind: ChatConnectionList
+    plural: chatconnections
+    singular: chatconnection
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ChatConnection is a workspace connection. Owned by the platform
+          team.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ChatConnectionSpec is the desired state of a ChatConnection.
+            properties:
+              allowedNamespaces:
+                description: |-
+                  AllowedNamespaces lists the other namespaces whose Bindings may reference this connection. Each is a DNS-1123 label.
+                  An empty list permits references only from the connection's own namespace.
+                items:
+                  type: string
+                type: array
+              credentialsSecretRef:
+                description: CredentialsSecretRef names one Secret with the fixed
+                  keys botToken and appToken (Socket Mode).
+                properties:
+                  name:
+                    description: |-
+                      Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a
+                      letter or digit.
+                    type: string
+                required:
+                - name
+                type: object
+              platform:
+                enum:
+                - slack
+                type: string
+            required:
+            - credentialsSecretRef
+            - platform
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
