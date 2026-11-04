@@ -35,6 +35,9 @@ type RunConfig struct {
 	ChatConnection v1alpha1.ObjectRef
 	// Dynamic reads the custom resources with SourceCRDs. Nil means InClusterDynamicClient.
 	Dynamic dynamic.Interface
+	// LeaseClient is the client of the leader election, used with a store that fences. Nil means InClusterLeaseClient, a
+	// client with a rate limiter of its own, when Client is nil too, and Client when a test gave one.
+	LeaseClient kubernetes.Interface
 	// Store chooses SQLite, the default, or Postgres, and where the Postgres DSN is.
 	Store StoreConfig
 	// Election is the leader election of a store that fences (Postgres; see store.Fenced), and is required with one.
@@ -198,17 +201,48 @@ func InClusterClient() (kubernetes.Interface, error) {
 		return nil, err
 	}
 	// client-go's default is 5 requests a second with a burst of 10, shared by every request of this client. Each followed
-	// Secret is an informer that lists once (on a server without streamed lists), and relists after a watch expires, and
-	// the leader's Lease renewals go through the same limiter, so a hundred Secrets would take about 18 s to list and could
-	// hold a renewal past the renew deadline. The higher limit lets a client send up to 50 requests a second, and on a
+	// Secret is an informer that lists once (on a server without streamed lists), and relists after a watch expires, so a
+	// hundred Secrets would take about 18 s to list. The higher limit lets a client send up to 50 requests a second, and on a
 	// server without streamed lists that is up to 50 lists a second when the API server restarts and every informer lists
-	// again (the burst of 100 lets the first hundred go at once). In a steady state it is one watch per Secret.
-	cfg.QPS, cfg.Burst = 50, 100
+	// again (the burst of 100 lets the first hundred go at once). In a steady state it is one watch per Secret. The leader's
+	// Lease renewals do not share this limiter: they have a client of their own (InClusterLeaseClient), so that the informers
+	// cannot hold a renewal past the renew deadline.
+	return newClient(withLimits(cfg, secretsQPS, secretsBurst))
+}
+
+// The rate limits of the clients, by what each is for: the Secret informers (many lists and watches, in bursts), and the
+// Lease (one renewal each RetryPeriod, which must never wait behind them).
+const (
+	secretsQPS, secretsBurst = 50, 100
+	leaseQPS, leaseBurst     = 5, 10
+)
+
+// withLimits returns a copy of cfg with the rate limit given, so that each client has its own limiter.
+func withLimits(cfg *rest.Config, qps float32, burst int) *rest.Config {
+	c := rest.CopyConfig(cfg)
+	c.QPS, c.Burst = qps, burst
+	return c
+}
+
+func newClient(cfg *rest.Config) (kubernetes.Interface, error) {
 	client, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("in-cluster client: %w", err)
 	}
 	return client, nil
+}
+
+// InClusterLeaseClient returns the client of the leader election, for the same cluster and by the same credentials as
+// InClusterClient, with a rate limiter of its own. The Lease is renewed once each RetryPeriod, and the leader exits if it
+// cannot renew within the renew deadline (10 s), so a renewal must not queue behind the lists of the Secret informers, which
+// share a limiter among themselves. Only a store that fences, which has an election, uses it. Outside a cluster the error
+// wraps ErrWiring and rest.ErrNotInCluster.
+func InClusterLeaseClient() (kubernetes.Interface, error) {
+	cfg, err := inClusterConfig()
+	if err != nil {
+		return nil, err
+	}
+	return newClient(withLimits(cfg, leaseQPS, leaseBurst))
 }
 
 // InClusterDynamicClient returns the dynamic client that reads the custom resources, for the same cluster and by the same

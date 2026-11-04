@@ -25,6 +25,10 @@ type Invalid struct {
 	Served int64
 	// Deleted means the object no longer exists and its last good generation is held.
 	Deleted bool
+	// AllowedNamespaces is what the refused object's own spec.allowedNamespaces says, read from the raw object when it
+	// could not be decoded, for an AgentBackend or ChatConnection. A Binding of another namespace is told only what a valid
+	// object would tell it (see resolvePerObject), and this is how it is known which that is.
+	AllowedNamespaces []string
 	// Message is the problems found, joined, each as "path: message". It is capped, and it names fields and the values
 	// that were set in them, which are never Secret values: a Secret is named, not read.
 	Message string
@@ -34,8 +38,10 @@ type Invalid struct {
 func (i Invalid) ID() string { return identity{i.Kind, i.Namespace, i.Name}.String() }
 
 // describe says what became of the object in a sentence that a Binding's rejection can carry: the generation and why it is
-// refused, and the generation served in its place.
-func (i Invalid) describe() string {
+// refused, and the generation served in its place. withMessage says whether to add the problems found: they are the owner's
+// text, and are for a Binding of the object's own namespace only. serving says whether the Binding runs the last good
+// generation; where it does not (a refused Binding that resolution then drops), the sentence says that it is not served either.
+func (i Invalid) describe(withMessage, serving bool) string {
 	var b strings.Builder
 	b.WriteString(i.ID())
 	switch {
@@ -44,15 +50,30 @@ func (i Invalid) describe() string {
 	default:
 		fmt.Fprintf(&b, " generation %d is invalid", i.Generation)
 	}
-	if i.Served > 0 {
+	switch {
+	case i.Served > 0 && serving:
 		fmt.Fprintf(&b, ", serving generation %d", i.Served)
-	} else {
+	case i.Served > 0:
+		fmt.Fprintf(&b, ", and its last good generation %d is not served either", i.Served)
+	default:
 		b.WriteString(", with no earlier generation to serve")
 	}
-	if i.Message != "" {
+	if withMessage && i.Message != "" {
 		b.WriteString(": " + i.Message)
 	}
 	return b.String()
+}
+
+// rejectionFor says why a Binding in namespace from is left out when the object it names is refused and has no good
+// generation, so that ResolvePartial, which does not have it, answers not found. It answers as it would for a valid object
+// that is there: another namespace that the object does not allow gets NamespaceNotAllowed, in the very words of a valid
+// one, and tells nothing of the object but that it exists, which a valid one tells too; one that it allows, or the object's
+// own namespace, gets the rejected reason, with the owner's problems only in the object's own namespace.
+func (i Invalid) rejectionFor(from, path string, rejected RejectionReason) (RejectionReason, string) {
+	if i.Namespace != from && !slices.Contains(i.AllowedNamespaces, from) {
+		return ReasonNamespaceNotAllowed, fmt.Sprintf("%s: %s does not allow namespace %s", path, i.ID(), from)
+	}
+	return rejected, path + ": " + i.describe(i.Namespace == from, true)
 }
 
 // Report is what a Reloader knows about the config it serves besides the Snapshot: the objects it refused and the
@@ -120,17 +141,28 @@ func resolvePerObject(set *Set) (*Snapshot, []Rejection) {
 
 	snap, partial := ResolvePartial(set)
 	var out []Rejection
+	said := map[identity]bool{}
 	for _, rej := range partial {
-		refs := bindings[identity{KindBinding, rej.Namespace, rej.Name}]
+		id := identity{KindBinding, rej.Namespace, rej.Name}
+		refs := bindings[id]
 		rej.Generation = refs.generation
+		// A Binding at its last good generation that resolution then drops still has a refused spec, which comes first, and
+		// the generation that the status says was observed is the new one.
+		if inv, ok := invalid[id]; ok {
+			rej.Generation = inv.Generation
+			if !said[id] {
+				said[id] = true
+				out = append(out, Rejection{Namespace: id.namespace, Name: id.name, Reason: ReasonInvalidSpec, Message: "spec: " + inv.describe(true, false), Generation: inv.Generation})
+			}
+		}
 		switch rej.Reason {
 		case ReasonBackendNotFound:
 			if inv, ok := invalid[refs.backend]; ok {
-				rej.Reason, rej.Message = ReasonBackendRejected, "spec.agent.backendRef: "+inv.describe()
+				rej.Reason, rej.Message = inv.rejectionFor(rej.Namespace, "spec.agent.backendRef", ReasonBackendRejected)
 			}
 		case ReasonConnectionNotFound:
 			if inv, ok := invalid[refs.conn]; ok {
-				rej.Reason, rej.Message = ReasonConnectionRejected, "spec.chat.connectionRef: "+inv.describe()
+				rej.Reason, rej.Message = inv.rejectionFor(rej.Namespace, "spec.chat.connectionRef", ReasonConnectionRejected)
 			}
 		}
 		out = append(out, rej)
@@ -139,12 +171,12 @@ func resolvePerObject(set *Set) (*Snapshot, []Rejection) {
 	for _, rb := range snap.Bindings() {
 		id := identity{KindBinding, rb.Binding.Namespace, rb.Binding.Name}
 		flag := func(reason RejectionReason, path string, inv Invalid) {
-			out = append(out, Rejection{Namespace: id.namespace, Name: id.name, Reason: reason, Message: path + ": " + inv.describe(),
+			out = append(out, Rejection{Namespace: id.namespace, Name: id.name, Reason: reason, Message: path + ": " + inv.describe(inv.Namespace == id.namespace, true),
 				Generation: rb.Binding.Generation, Served: rb.Binding.Generation})
 		}
 		refs := bindings[id]
 		if inv, ok := invalid[id]; ok {
-			out = append(out, Rejection{Namespace: id.namespace, Name: id.name, Reason: ReasonInvalidSpec, Message: "spec: " + inv.describe(),
+			out = append(out, Rejection{Namespace: id.namespace, Name: id.name, Reason: ReasonInvalidSpec, Message: "spec: " + inv.describe(true, true),
 				Generation: inv.Generation, Served: inv.Served})
 		}
 		if inv, ok := invalid[refs.backend]; ok {
@@ -157,7 +189,7 @@ func resolvePerObject(set *Set) (*Snapshot, []Rejection) {
 	// A refused Binding that has no good generation is not in the Set at all, and so is nowhere above.
 	for _, inv := range set.Invalid {
 		if inv.Kind == KindBinding && inv.Served == 0 {
-			out = append(out, Rejection{Namespace: inv.Namespace, Name: inv.Name, Reason: ReasonInvalidSpec, Message: "spec: " + inv.describe(), Generation: inv.Generation})
+			out = append(out, Rejection{Namespace: inv.Namespace, Name: inv.Name, Reason: ReasonInvalidSpec, Message: "spec: " + inv.describe(true, true), Generation: inv.Generation})
 		}
 	}
 	slices.SortStableFunc(out, func(a, b Rejection) int {

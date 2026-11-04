@@ -5,11 +5,15 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8stesting "k8s.io/client-go/testing"
+
+	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 
 	"github.com/agentkourier/agent-kourier/internal/config/crsource"
 )
@@ -90,4 +94,54 @@ func grep(text, sub string) string {
 		}
 	}
 	return strings.Join(out, "\n")
+}
+
+// The retention skip is wired through Run: the sessions of a Binding that exists in the cluster and is not served (its spec
+// is invalid and it has no good generation) outlive a retention tick that deletes those of a Binding that was deleted, which
+// are the same age. Without the skip both fall to the same horizon and both go.
+func TestRunKeepsTheSessionsOfAnUnservedBinding(t *testing.T) {
+	c := crStartConfig(t, func(objs []*unstructured.Unstructured) {
+		_ = unstructured.SetNestedField(objs[2].Object, "#general", "spec", "chat", "channel") // sre-alerts is invalid, and new
+	})
+	c.retentionEvery = 10 * time.Millisecond
+	seed, err := sqlite.Open(t.Context(), c.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	day := 24 * time.Hour
+	unserved := store.ConversationKey{Connection: "slack", Channel: "C1", Thread: "1.1"}
+	deleted := store.ConversationKey{Connection: "slack", Channel: "C1", Thread: "2.2"}
+	for k, binding := range map[store.ConversationKey]string{unserved: "sre/sre-alerts", deleted: "sre/long-gone"} {
+		if err := seed.UpsertSession(t.Context(), store.Session{Key: k, Binding: binding, LastActivity: time.Now().Add(-400 * day)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	r := start(t, c)
+	r.until("/readyz", http.StatusOK)
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) { // the store's own metric says the sweep ran
+		if _, body := r.get("/metrics"); strings.Contains(body, `operation="agentkourier.store.PurgeExpiredSessions"`) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the session purge never ran")
+		}
+	}
+	r.cancel()
+	if err := r.wait(); err != nil {
+		t.Fatal(err)
+	}
+	st, err := sqlite.Open(t.Context(), c.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	for k, want := range map[store.ConversationKey]bool{unserved: true, deleted: false} {
+		_, err := st.GetSession(t.Context(), k, 100*365*day, time.Now())
+		if present := err == nil; present != want {
+			t.Errorf("session %s present = %v (%v); want %v", k.Thread, present, err, want)
+		}
+	}
 }

@@ -169,7 +169,7 @@ func bootstrapCRDs(ctx context.Context, client kubernetes.Interface, opts Bootst
 	}
 	rl := config.NewReloader(config.ReloaderConfig{
 		Source: src, Secrets: secrets, PollInterval: opts.PollInterval, SecretsInterval: opts.SecretsInterval, SecretsWait: opts.SecretsWait,
-		Logger: log, OnError: opts.OnReloadError, OnReport: opts.OnReport, PerObject: true,
+		Logger: log, OnError: opts.OnReloadError, OnReport: opts.OnReport, PerObject: true, FirstLoadWait: cmp.Or(opts.SyncTimeout, defaultSyncTimeout),
 	})
 	if err := rl.Start(ctx); err != nil {
 		failed()

@@ -43,12 +43,14 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/tools/cache"
@@ -78,7 +80,10 @@ var (
 	connectionsGVR = schema.GroupVersionResource{Group: v1alpha1.Group, Version: v1alpha1.Version, Resource: "chatconnections"}
 )
 
-var _ config.Source = (*Source)(nil)
+var (
+	_ config.Source      = (*Source)(nil)
+	_ config.StaleSource = (*Source)(nil)
+)
 
 // Options configures a Source. Client and Connection are required.
 type Options struct {
@@ -115,6 +120,11 @@ type Source struct {
 	synced  [3]cache.InformerSynced
 	good    map[key]goodObject
 	started bool
+
+	errMu   sync.Mutex
+	lastErr error     // the latest failure of a list or watch of an informer
+	errAt   time.Time // when it was reported
+	now     func() time.Time
 }
 
 // New returns a Source that has read nothing. It refuses Options without a Client or a Connection.
@@ -127,7 +137,7 @@ func New(opts Options) (*Source, error) {
 	}
 	s := &Source{
 		client: opts.Client, log: cmp.Or(opts.Logger, slog.Default()), good: map[key]goodObject{},
-		own: key{config.KindChatConnection, opts.Connection.Namespace, opts.Connection.Name},
+		own: key{config.KindChatConnection, opts.Connection.Namespace, opts.Connection.Name}, now: time.Now,
 	}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	return s, nil
@@ -157,6 +167,9 @@ func (s *Source) Start(ctx context.Context) error {
 		inf := factory.ForResource(gvr).Informer()
 		// The handler replaces client-go's, which logs through klog. The only error is an informer that has started.
 		_ = inf.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
+			s.errMu.Lock()
+			s.lastErr, s.errAt = fmt.Errorf("%s.%s: %w", gvr.Resource, gvr.Group, err), s.now()
+			s.errMu.Unlock()
 			s.log.Warn("custom resource informer cannot list or watch", "resource", gvr.Resource, "error", err)
 		})
 		s.stores[i], s.synced[i] = inf.GetStore(), inf.HasSynced
@@ -173,9 +186,17 @@ func (s *Source) Start(ctx context.Context) error {
 	return nil
 }
 
-// probe lists one resource, a page of one, to tell the three things that go wrong at start apart.
+// probe lists one resource, a page of one, and opens a watch on it and closes it, to tell the three things that go wrong at
+// start apart, whichever of the two the ServiceAccount may not do.
 func (s *Source) probe(ctx context.Context, gvr schema.GroupVersionResource) error {
 	_, err := s.client.Resource(gvr).List(ctx, metav1.ListOptions{Limit: 1})
+	if err == nil {
+		var w watch.Interface
+		one := int64(1)
+		if w, err = s.client.Resource(gvr).Watch(ctx, metav1.ListOptions{TimeoutSeconds: &one}); err == nil {
+			w.Stop()
+		}
+	}
 	switch {
 	case err == nil:
 		return nil
@@ -185,6 +206,23 @@ func (s *Source) probe(ctx context.Context, gvr schema.GroupVersionResource) err
 		return fmt.Errorf("%w: list %s.%s: the ServiceAccount needs list and watch on it in every namespace: %w", ErrAccessDenied, gvr.Resource, gvr.Group, err)
 	}
 	return fmt.Errorf("list %s.%s: %w", gvr.Resource, gvr.Group, err)
+}
+
+// staleAfter is how long after an informer reports a failed list or watch the source says it is stale. The reflector tries
+// again with a backoff that tops out at 30 s and reports each failure, so a failure that goes on is seen again well inside
+// it, and one that has cleared stops being said after it.
+const staleAfter = 90 * time.Second
+
+// Stale returns why the cache may lag the cluster, or nil: the latest failure of a list or watch of an informer, for
+// staleAfter after it was reported. The cache is kept while the cluster cannot be reached, which is right (an outage is not
+// every object removed), and this is how a Reloader says so. It implements config.StaleSource.
+func (s *Source) Stale() error {
+	s.errMu.Lock()
+	defer s.errMu.Unlock()
+	if s.lastErr != nil && s.now().Sub(s.errAt) < staleAfter {
+		return s.lastErr
+	}
+	return nil
 }
 
 // Stop ends the informers and waits for their goroutines to exit. Set reports ErrStopped afterwards.
@@ -243,20 +281,29 @@ func (s *Source) Set(context.Context) (*config.Set, string, error) {
 	return set, fp, nil
 }
 
-// read decodes the listed objects of one kind that keep says belong to the broker, as T. A good one is appended to dst and
-// remembered. A bad one is appended to invalid, with the last good generation of the same object, the same incarnation of
-// it, in dst in its place. live gets the key of each object that was listed and kept, bad or good. The caller holds s.mu.
+// read decodes the listed objects of one kind that the broker owns (owns says so of an object), as T. A good one is
+// appended to dst and remembered. A bad one is appended to invalid, with the last good generation of the same object, the
+// same incarnation of it, in dst in its place. live gets the key of each object that was listed and owned, bad or good. The
+// caller holds s.mu.
+//
+// Two rules keep a refused generation from taking away what was served. The own connection is one object for as long as the
+// broker runs, whatever uid it has, so a connection that was deleted and made again invalid still serves the last good one.
+// And a generation that fails to decode cannot be trusted to say whose it is: when the object has a last good generation,
+// that one decides whether the broker owns it, so an edit that is invalid and also names another broker's connection does not
+// take a Binding out of routing unreported.
 func read[T any, PT interface {
 	*T
 	Default()
 	Validate() error
-}](s *Source, kind string, objs []*unstructured.Unstructured, live map[key]bool, keep func(*unstructured.Unstructured) bool, dst *[]T, invalid *[]config.Invalid) {
+}](s *Source, kind string, objs []*unstructured.Unstructured, live map[key]bool, owns func(*unstructured.Unstructured) bool, dst *[]T, invalid *[]config.Invalid) {
 	for _, u := range objs {
-		if !keep(u) {
+		k := keyOf(kind, u)
+		g, hasGood := s.good[k]
+		same := hasGood && (g.uid == u.GetUID() || k == s.own)
+		mine := owns(u)
+		if !mine && !same {
 			continue
 		}
-		k := keyOf(kind, u)
-		live[k] = true
 		j, err := u.MarshalJSON()
 		var obj *T
 		var errs []error
@@ -266,12 +313,26 @@ func read[T any, PT interface {
 			obj, errs = config.DecodeObject[T, PT](j)
 		}
 		if obj != nil {
+			if !mine { // a valid edit to another broker's connection: the Binding is that broker's now, and the pruning forgets it
+				continue
+			}
+			live[k] = true
 			s.good[k] = goodObject{uid: u.GetUID(), generation: u.GetGeneration(), json: j}
 			*dst = append(*dst, *obj)
 			continue
 		}
+		if !mine { // refused, and its own words say it is another broker's: the last good generation says otherwise
+			prev := &unstructured.Unstructured{}
+			if prev.UnmarshalJSON(g.json) != nil || !owns(prev) {
+				continue
+			}
+		}
+		live[k] = true
 		inv := config.Invalid{Kind: kind, Namespace: u.GetNamespace(), Name: u.GetName(), Generation: u.GetGeneration(), Message: config.CapMessage(joinErrors(errs))}
-		if g, ok := s.good[k]; ok && g.uid == u.GetUID() {
+		if kind != config.KindBinding {
+			inv.AllowedNamespaces, _, _ = unstructured.NestedStringSlice(u.Object, "spec", "allowedNamespaces")
+		}
+		if same {
 			if last, _ := config.DecodeObject[T, PT](g.json); last != nil {
 				*dst = append(*dst, *last)
 				inv.Served = g.generation

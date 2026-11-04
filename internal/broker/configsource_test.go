@@ -53,3 +53,21 @@ func TestInClusterDynamicClientRefusesOutsideACluster(t *testing.T) {
 		t.Errorf("InClusterDynamicClient = %v, %v; want no client and ErrWiring wrapping ErrNotInCluster", client, err)
 	}
 }
+
+// The leader election has a client of its own, with a rate limiter of its own: the informers' lists must not queue a renewal
+// of the Lease behind them.
+func TestTheLeaseHasItsOwnClientAndLimiter(t *testing.T) {
+	t.Setenv("KUBERNETES_SERVICE_HOST", "")
+	t.Setenv("KUBERNETES_SERVICE_PORT", "")
+	client, err := InClusterLeaseClient()
+	if client != nil || !errors.Is(err, ErrWiring) || !errors.Is(err, rest.ErrNotInCluster) {
+		t.Errorf("InClusterLeaseClient = %v, %v; want no client and ErrWiring wrapping ErrNotInCluster", client, err)
+	}
+
+	base := &rest.Config{Host: "https://example.invalid", QPS: 1, Burst: 1}
+	secrets, lease := withLimits(base, secretsQPS, secretsBurst), withLimits(base, leaseQPS, leaseBurst)
+	if secrets.QPS == lease.QPS || secrets.Burst == lease.Burst || base.QPS != 1 || base.Burst != 1 {
+		t.Errorf("limits: secrets %v/%d, lease %v/%d, base %v/%d; want two copies with limits of their own and the base untouched",
+			secrets.QPS, secrets.Burst, lease.QPS, lease.Burst, base.QPS, base.Burst)
+	}
+}

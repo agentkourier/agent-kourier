@@ -627,6 +627,21 @@ func TestReadyIgnoresARetainedSecretThatIsDenied(t *testing.T) {
 	}
 }
 
+// A pinned Secret that the API server denies still makes the broker unready, where a retained one does not: it is Agent
+// Kourier's own (the Postgres DSN), and nothing reports it for anyone else.
+func TestReadyCountsAPinnedSecretThatIsDenied(t *testing.T) {
+	client := newAPI(t, secret("agent-kourier", "pg"))
+	client.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, denied() })
+	r := New(client, WithPinned(sn("agent-kourier", "pg")), WithLogger(slog.New(slog.DiscardHandler)))
+	t.Cleanup(r.Stop)
+	if err := r.Start(t.Context()); !errors.Is(err, ErrAccessDenied) {
+		t.Fatalf("Start = %v, want ErrAccessDenied", err)
+	}
+	if err := r.Ready(); !errors.Is(err, ErrNotSynced) || !strings.Contains(err.Error(), "agent-kourier/pg") {
+		t.Errorf("Ready with a pinned Secret that is denied = %v, want ErrNotSynced naming it", err)
+	}
+}
+
 // A Secret that does not sync in time is named, with the cause, and stays followed: the next Watch finds it synced once
 // the cause passes.
 func TestWatchNamesTheUnsyncedSecretAndItsCause(t *testing.T) {

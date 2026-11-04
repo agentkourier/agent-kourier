@@ -8,6 +8,17 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
+// known is a ThreadTTLsAndUnserved of the fixture's threadTTLs and the Bindings that unserved names, none if it is nil.
+func known(unserved func() []string) func() (map[string]time.Duration, []string, bool) {
+	return func() (map[string]time.Duration, []string, bool) {
+		ttls, ok := ttls()
+		if unserved == nil {
+			return ttls, nil, ok
+		}
+		return ttls, unserved(), ok
+	}
+}
+
 // A Binding that is in the cluster and not in the routing table (rejected, with no good generation to serve) has sessions that
 // were made under a threadTTL this process does not know. They are not those of a Binding that was deleted, which fall to the
 // Otherwise horizon, the longest threadTTL: they are skipped, with a horizon that no session is past, until the Binding is
@@ -34,7 +45,7 @@ func TestRetentionSkipsTheSessionsOfAnUnservedBinding(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := &fakeRetentionStore{}
-			newSessionRetention(t, f, func(c *retentionConfig) { c.Unserved = tc.unserved }).purgeSessions(t.Context())
+			newSessionRetention(t, f, func(c *retentionConfig) { c.ThreadTTLsAndUnserved = known(tc.unserved) }).purgeSessions(t.Context())
 			calls := f.sessions()
 			if len(calls) != 1 || !maps.EqualFunc(calls[0].horizons.ByBinding, tc.want.ByBinding, time.Time.Equal) || !calls[0].horizons.Otherwise.Equal(tc.want.Otherwise) {
 				t.Errorf("PurgeExpiredSessions calls = %+v; want one with the horizons %+v", calls, tc.want)
@@ -48,7 +59,9 @@ func TestRetentionSkipsTheSessionsOfAnUnservedBinding(t *testing.T) {
 
 // The stale tasks of an unserved Binding are not listed as past their horizon either: the same horizons.
 func TestRetentionSkipsTheStaleTasksOfAnUnservedBinding(t *testing.T) {
-	g := newStaleRig(t, nil, func(c *retentionConfig) { c.Unserved = func() []string { return []string{"ns/broken"} } })
+	g := newStaleRig(t, nil, func(c *retentionConfig) {
+		c.ThreadTTLsAndUnserved = known(func() []string { return []string{"ns/broken"} })
+	})
 	g.r.endStaleTasks(t.Context())
 	if len(g.f.staleLists) == 0 || !g.f.staleLists[0].horizons.ByBinding["ns/broken"].Equal(neverPast) {
 		t.Errorf("ListStaleTasks calls = %+v; want the horizon of ns/broken to be that no session is past", g.f.staleLists)

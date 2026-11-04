@@ -89,6 +89,16 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		}
 		crds = &CRDSource{Client: dyn, Connection: cfg.ChatConnection}
 	}
+	// The election has a client of its own, so that the informers' lists cannot queue a renewal of the Lease behind them.
+	leaseClient := cfg.LeaseClient
+	if leaseClient == nil && cfg.Client == nil && cfg.Store.kind() == StorePostgres {
+		if leaseClient, err = InClusterLeaseClient(); err != nil {
+			return err
+		}
+	}
+	if leaseClient == nil {
+		leaseClient = client
+	}
 	// runCtx is the broker's own: a signal ends ctx, and the shutdown then stops the parts in order, one
 	// step at a time, where a context derived from ctx would stop them all at once. Until startup has
 	// finished, though, a signal does cancel it, so that a slow Bootstrap, Reconcile or Recover cannot
@@ -241,7 +251,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	if fenced == nil {
 		go runLeader()
 	} else {
-		cand, err = startCandidacy(ctx, client, cfg.Election, log, lease, candidacyCallbacks{
+		cand, err = startCandidacy(ctx, leaseClient, cfg.Election, log, lease, candidacyCallbacks{
 			gained: func(context.Context) { runLeader() },
 			lost:   func() { fail.now(leaseLostReason) },
 		})

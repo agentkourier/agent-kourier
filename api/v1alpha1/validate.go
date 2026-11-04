@@ -173,7 +173,11 @@ func (a *AgentBackend) Validate() error {
 		// net/http would turn userinfo into Basic auth, bypassing the Binding identity.
 		p.add("spec.url", "must not contain credentials; identity comes from the Binding (D14)")
 	} else if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		p.add("spec.url", "invalid URL %q: must be an http or https URL with a host", u.Redacted())
+		// The message may reach a log or a status that more people read than the object: the password is hidden, and so is
+		// what a token often rides in, the query and the fragment. The verdict does not depend on either.
+		shown := *u
+		shown.RawQuery, shown.ForceQuery, shown.Fragment, shown.RawFragment = "", false, "", ""
+		p.add("spec.url", "invalid URL %q: must be an http or https URL with a host", shown.Redacted())
 	}
 	if len(s.Headers) > maxHeaders {
 		p.add("spec.headers", "has %d items, maximum is %d", len(s.Headers), maxHeaders)

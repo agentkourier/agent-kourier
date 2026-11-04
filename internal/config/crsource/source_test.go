@@ -93,9 +93,12 @@ func newCluster(t *testing.T, objs ...*unstructured.Unstructured) *cluster {
 }
 
 // start returns a Source over the cluster that is started and is stopped when the test ends, serving own.
-func (c *cluster) start(t *testing.T) *crsource.Source {
+func (c *cluster) start(t *testing.T) *crsource.Source { return c.startAs(t, own) }
+
+// startAs is start for the broker that serves the connection conn.
+func (c *cluster) startAs(t *testing.T, conn v1alpha1.ObjectRef) *crsource.Source {
 	t.Helper()
-	src, err := crsource.New(crsource.Options{Client: c.client, Connection: own})
+	src, err := crsource.New(crsource.Options{Client: c.client, Connection: conn})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,13 +193,13 @@ func bindingNames(s *config.Set) []string {
 
 // The custom resource source runs the same conformance suite as the files.
 func TestConformance(t *testing.T) {
-	sourcetest.Run(t, func(t *testing.T, docs []string) config.Source {
+	sourcetest.Run(t, func(t *testing.T, corpus sourcetest.Corpus) config.Source {
 		leakCheck(t)
 		var objs []*unstructured.Unstructured
-		for i, d := range docs {
+		for i, d := range corpus.Docs {
 			objs = append(objs, object(t, d, fmt.Sprintf("uid-%d", i), 1))
 		}
-		return newCluster(t, objs...).start(t)
+		return newCluster(t, objs...).startAs(t, corpus.Connection)
 	}, sourcetest.Options{PerObject: true})
 }
 

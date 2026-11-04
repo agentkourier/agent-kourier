@@ -60,39 +60,57 @@ func TestResolvePerObject(t *testing.T) {
 			[]Rejection{{Namespace: "sre", Name: "sre-alerts", Reason: ReasonInvalidSpec, Generation: 1,
 				Message: "spec: Binding sre/sre-alerts generation 1 is invalid, with no earlier generation to serve: spec.chat.channel: required"}},
 			[]string{"sre/chat-only"}},
-		{"a backend that is invalid and has no good generation is BackendRejected, not not found",
+		{"a backend of another namespace that is invalid, has no good generation and allows the Binding is BackendRejected without the owner's text",
 			func(s *Set) {
 				s.AgentBackends = nil
-				s.Invalid = []Invalid{{Kind: KindAgentBackend, Namespace: "agent-kourier-system", Name: "kagent-pilot", Generation: 5, Message: "spec.url: required"}}
+				s.Invalid = []Invalid{{Kind: KindAgentBackend, Namespace: "agent-kourier-system", Name: "kagent-pilot", Generation: 5, Message: "spec.url: required", AllowedNamespaces: []string{"sre"}}}
 			},
 			[]Rejection{
 				{Namespace: "sre", Name: "chat-only", Reason: ReasonBackendRejected, Generation: 2,
-					Message: "spec.agent.backendRef: " + backend + " generation 5 is invalid, with no earlier generation to serve: spec.url: required"},
+					Message: "spec.agent.backendRef: " + backend + " generation 5 is invalid, with no earlier generation to serve"},
 				{Namespace: "sre", Name: "sre-alerts", Reason: ReasonBackendRejected, Generation: 2,
-					Message: "spec.agent.backendRef: " + backend + " generation 5 is invalid, with no earlier generation to serve: spec.url: required"},
+					Message: "spec.agent.backendRef: " + backend + " generation 5 is invalid, with no earlier generation to serve"},
 			},
 			nil},
-		{"a backend that is invalid and has a last good generation leaves its Bindings served and flagged",
+		{"a backend of another namespace that is invalid, has no good generation and does not allow the Binding answers as a valid one does",
+			func(s *Set) {
+				s.AgentBackends = nil
+				s.Invalid = []Invalid{{Kind: KindAgentBackend, Namespace: "agent-kourier-system", Name: "kagent-pilot", Generation: 5, Message: "spec.url: required", AllowedNamespaces: []string{"payments"}}}
+			},
+			[]Rejection{
+				{Namespace: "sre", Name: "chat-only", Reason: ReasonNamespaceNotAllowed, Generation: 2, Message: "spec.agent.backendRef: " + backend + " does not allow namespace sre"},
+				{Namespace: "sre", Name: "sre-alerts", Reason: ReasonNamespaceNotAllowed, Generation: 2, Message: "spec.agent.backendRef: " + backend + " does not allow namespace sre"},
+			},
+			nil},
+		{"a backend in the Binding's own namespace that is invalid has the owner's text in the rejection",
+			func(s *Set) {
+				sreAlerts(s).Spec.Agent.BackendRef = v1alpha1.ObjectRef{Name: "mine"}
+				s.Invalid = []Invalid{{Kind: KindAgentBackend, Namespace: "sre", Name: "mine", Generation: 5, Message: "spec.url: required"}}
+			},
+			[]Rejection{{Namespace: "sre", Name: "sre-alerts", Reason: ReasonBackendRejected, Generation: 2,
+				Message: "spec.agent.backendRef: AgentBackend sre/mine generation 5 is invalid, with no earlier generation to serve: spec.url: required"}},
+			[]string{"sre/chat-only"}},
+		{"a backend that is invalid and has a last good generation leaves its Bindings served and flagged, without the owner's text",
 			func(s *Set) {
 				s.Invalid = []Invalid{{Kind: KindAgentBackend, Namespace: "agent-kourier-system", Name: "kagent-pilot", Generation: 5, Served: 4, Message: "spec.url: required"}}
 			},
 			[]Rejection{
 				{Namespace: "sre", Name: "chat-only", Reason: ReasonBackendRejected, Generation: 2, Served: 2,
-					Message: "spec.agent.backendRef: " + backend + " generation 5 is invalid, serving generation 4: spec.url: required"},
+					Message: "spec.agent.backendRef: " + backend + " generation 5 is invalid, serving generation 4"},
 				{Namespace: "sre", Name: "sre-alerts", Reason: ReasonBackendRejected, Generation: 2, Served: 2,
-					Message: "spec.agent.backendRef: " + backend + " generation 5 is invalid, serving generation 4: spec.url: required"},
+					Message: "spec.agent.backendRef: " + backend + " generation 5 is invalid, serving generation 4"},
 			},
 			[]string{"sre/chat-only", "sre/sre-alerts"}},
-		{"a connection that is invalid and has no good generation is ConnectionRejected",
+		{"a connection that is invalid, has no good generation and allows the Binding is ConnectionRejected",
 			func(s *Set) {
 				s.ChatConnections = nil
-				s.Invalid = []Invalid{{Kind: KindChatConnection, Namespace: "agent-kourier-system", Name: "slack-main", Generation: 7, Message: "spec.platform: unsupported"}}
+				s.Invalid = []Invalid{{Kind: KindChatConnection, Namespace: "agent-kourier-system", Name: "slack-main", Generation: 7, Message: "spec.platform: unsupported", AllowedNamespaces: []string{"sre"}}}
 			},
 			[]Rejection{
 				{Namespace: "sre", Name: "chat-only", Reason: ReasonConnectionRejected, Generation: 2,
-					Message: "spec.chat.connectionRef: " + conn + " generation 7 is invalid, with no earlier generation to serve: spec.platform: unsupported"},
+					Message: "spec.chat.connectionRef: " + conn + " generation 7 is invalid, with no earlier generation to serve"},
 				{Namespace: "sre", Name: "sre-alerts", Reason: ReasonConnectionRejected, Generation: 2,
-					Message: "spec.chat.connectionRef: " + conn + " generation 7 is invalid, with no earlier generation to serve: spec.platform: unsupported"},
+					Message: "spec.chat.connectionRef: " + conn + " generation 7 is invalid, with no earlier generation to serve"},
 			},
 			nil},
 		{"a connection that was deleted and is held says so",
@@ -117,11 +135,23 @@ func TestResolvePerObject(t *testing.T) {
 				{Namespace: "sre", Name: "chat-only", Reason: ReasonInvalidSpec, Generation: 3, Served: 2,
 					Message: "spec: Binding sre/chat-only generation 3 is invalid, serving generation 2: a"},
 				{Namespace: "sre", Name: "chat-only", Reason: ReasonBackendRejected, Generation: 2, Served: 2,
-					Message: "spec.agent.backendRef: " + backend + " generation 5 is invalid, serving generation 4: b"},
+					Message: "spec.agent.backendRef: " + backend + " generation 5 is invalid, serving generation 4"},
 				{Namespace: "sre", Name: "sre-alerts", Reason: ReasonBackendRejected, Generation: 2, Served: 2,
-					Message: "spec.agent.backendRef: " + backend + " generation 5 is invalid, serving generation 4: b"},
+					Message: "spec.agent.backendRef: " + backend + " generation 5 is invalid, serving generation 4"},
 			},
 			[]string{"sre/chat-only", "sre/sre-alerts"}},
+		{"a Binding at its last good generation that resolution then drops still has its refused spec, at the new generation",
+			func(s *Set) {
+				sreAlerts(s).Spec.Agent.BackendRef.Name = "nope"
+				s.Invalid = []Invalid{{Kind: KindBinding, Namespace: "sre", Name: "sre-alerts", Generation: 5, Served: 2, Message: "x"}}
+			},
+			[]Rejection{
+				{Namespace: "sre", Name: "sre-alerts", Reason: ReasonInvalidSpec, Generation: 5,
+					Message: "spec: Binding sre/sre-alerts generation 5 is invalid, and its last good generation 2 is not served either: x"},
+				{Namespace: "sre", Name: "sre-alerts", Reason: ReasonBackendNotFound, Generation: 5,
+					Message: "spec.agent.backendRef: AgentBackend agent-kourier-system/nope not found"},
+			},
+			[]string{"sre/chat-only"}},
 		{"a channel conflict is a rejection that is not served",
 			func(s *Set) {
 				sreAlerts(s).CreationTimestamp = at(2)
@@ -303,5 +333,63 @@ func TestReloaderOfFilesIsNotPerObject(t *testing.T) {
 	}
 	if r.Current() != nil || len(r.Report().Rejections) != 0 {
 		t.Errorf("a failed first load left a snapshot or a report: %v %+v", r.Current(), r.Report())
+	}
+}
+
+// The text of another namespace's refused object, a URL with a token in its query, never reaches a Binding's rejection, which
+// the Binding's own namespace can read: not when the object has no good generation and is left out, not when it is served
+// from an older one, and not for a namespace that it does not allow. The owner's text stays in Invalid.
+func TestResolvePerObjectKeepsAnotherNamespacesTextOut(t *testing.T) {
+	const text = `spec.url: invalid URL "ftp://internal.team-b.example/?token=s3cret"`
+	for _, tc := range []struct {
+		name    string
+		allowed []string
+		served  int64
+	}{
+		{"allowed, no good generation", []string{"sre"}, 0},
+		{"allowed, served from an older generation", []string{"sre"}, 4},
+		{"not allowed, no good generation", nil, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			set := generations(t)
+			sreAlerts(set).Spec.Agent.BackendRef = v1alpha1.ObjectRef{Namespace: "team-b", Name: "private"}
+			set.AgentBackends = set.AgentBackends[:0]
+			inv := Invalid{Kind: KindAgentBackend, Namespace: "team-b", Name: "private", Generation: 5, Served: tc.served, Message: text, AllowedNamespaces: tc.allowed}
+			set.Invalid = []Invalid{inv}
+			if tc.served > 0 {
+				be := v1alpha1.AgentBackend{}
+				be.Namespace, be.Name, be.Generation, be.Spec.Dialect = "team-b", "private", tc.served, v1alpha1.DialectA2A
+				be.Spec.AllowedNamespaces = tc.allowed
+				set.AgentBackends = append(set.AgentBackends, be)
+			}
+			_, got := resolvePerObject(set)
+			if len(got) == 0 {
+				t.Fatal("no rejection")
+			}
+			for _, rej := range got {
+				if strings.Contains(rej.Message, "s3cret") || strings.Contains(rej.Message, "token") {
+					t.Errorf("%s/%s %s: %s; the rejection quotes another namespace's text", rej.Namespace, rej.Name, rej.Reason, rej.Message)
+				}
+			}
+			if !strings.Contains(inv.Message, "s3cret") {
+				t.Error("the test lost its token")
+			}
+		})
+	}
+}
+
+// The words a Binding gets for a backend of another namespace that is refused and not allowed are those of a valid backend
+// that does not allow it: the Binding learns that the object exists, which it learns of a valid one, and no more.
+func TestAnInvalidBackendThatDoesNotAllowABindingAnswersAsAValidOneDoes(t *testing.T) {
+	valid := generations(t)
+	valid.AgentBackends[0].Spec.AllowedNamespaces = []string{"payments"}
+	_, want := resolvePerObject(valid)
+
+	refused := generations(t)
+	refused.AgentBackends = nil
+	refused.Invalid = []Invalid{{Kind: KindAgentBackend, Namespace: "agent-kourier-system", Name: "kagent-pilot", Generation: 5, Message: "spec.url: required", AllowedNamespaces: []string{"payments"}}}
+	_, got := resolvePerObject(refused)
+	if !slices.Equal(got, want) {
+		t.Errorf("rejections for a refused backend:\n%+v\nwant those of a valid one:\n%+v", got, want)
 	}
 }
