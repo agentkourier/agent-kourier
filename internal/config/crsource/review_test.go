@@ -232,8 +232,15 @@ func TestStopWaitsForTheInformers(t *testing.T) {
 		if err := src.Start(t.Context()); err != nil {
 			t.Fatal(err)
 		}
-		if r, p := running(); r == 0 || p == 0 {
-			t.Fatalf("%d informers and %d probes run after Start, so this test proves nothing", r, p)
+		// Start returns once the informers have synced, and the probe's goroutine may not have been scheduled yet.
+		for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(time.Millisecond) {
+			r, p := running()
+			if r != 0 && p != 0 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%d informers and %d probes run after Start, so this test proves nothing", r, p)
+			}
 		}
 		src.Stop()
 		if r, p := running(); r != 0 || p != 0 {
