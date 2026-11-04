@@ -66,7 +66,7 @@ func (m *Manager) recoverKey(key Key) {
 		log.Error("recover: read session", "error", err)
 		return
 	}
-	backend, err := m.cfg.Bindings.Backend(sess.Binding)
+	backend, err := m.sessionBackend(sess)
 	switch {
 	case errors.Is(err, ErrUnknownBinding):
 		log.Warn("recover: skipping a session whose Binding is not configured", "skip", "unknown_binding", "binding", sess.Binding, "error", err)

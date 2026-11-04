@@ -313,6 +313,100 @@ func TestUnchangedRevisionDoesNotProbeEarlyAndChangedOneDoesAtTheNextTick(t *tes
 	})
 }
 
+// A change of Revision inside the gap since the last pass began waits for the gap to end and is then probed once, for the last
+// revision: many changes in the gap are one pass, and none is lost. The first pass, and a pass the Interval calls for, are not held
+// back by the gap.
+func TestRevisionChangesInsideTheMinimumGapGiveOnePassWhenTheGapEndsAndNeverLoseTheLast(t *testing.T) {
+	const gap = 30 * time.Second
+	g := &targets{}
+	g.set("r0", Target{"b", "C1"})
+	agents := &fakeAgents{}
+	run(t, Options{Targets: g.Targets, Revision: g.Revision, Agents: agents, MinRevisionGap: gap, Interval: time.Hour}, func(h *harness) {
+		if got := agents.count("b"); got != 1 {
+			t.Fatalf("the first pass made %d probes, want 1: the gap does not hold it back", got)
+		}
+		// Many changes in the gap, a Tick apart.
+		for i := 1; i <= 4; i++ {
+			g.set(fmt.Sprintf("r%d", i), Target{"b", "C1"})
+			h.advance(tick)
+		}
+		if got := agents.count("b"); got != 1 {
+			t.Fatalf("%d probes 20s after the first pass with revisions changing; want 1: the gap is 30s", got)
+		}
+		h.advance(gap) // well past the gap since the first pass began
+		if got := agents.count("b"); got != 2 {
+			t.Fatalf("%d probes after the gap; want 2: one pass for all the changes", got)
+		}
+		// A change just inside the next gap waits, and a later one in it replaces it: the pass at the end of the gap is for the last.
+		g.set("r5", Target{"b", "C1"})
+		h.advance(tick)
+		if got := agents.count("b"); got != 2 {
+			t.Fatalf("%d probes inside the gap; want 2", got)
+		}
+		g.set("r6", Target{"b", "C1"})
+		h.advance(gap)
+		if got := agents.count("b"); got != 3 {
+			t.Errorf("%d probes after the second gap; want 3: the last change must still be probed", got)
+		}
+		h.advance(gap)
+		if got := agents.count("b"); got != 3 {
+			t.Errorf("%d probes with nothing changed; want 3", got)
+		}
+	})
+}
+
+// A pass the Interval calls for is not held back by the gap, however long the gap.
+func TestTheMinimumGapDoesNotHoldBackTheInterval(t *testing.T) {
+	g := &targets{}
+	g.set("r0", Target{"a", "C1"})
+	agents := &fakeAgents{}
+	run(t, Options{Targets: g.Targets, Revision: g.Revision, Agents: agents, MinRevisionGap: 10 * time.Minute, Interval: time.Minute}, func(h *harness) {
+		h.advance(2 * time.Minute) // past the Interval, inside the gap
+		if got := agents.count("a"); got < 2 {
+			t.Errorf("%d probes after two intervals; want at least 2: the gap is for changes", got)
+		}
+	})
+}
+
+// A Binding that appears in Targets is a change like any other: inside the gap it waits, its conditions Pending, and is probed when the
+// gap ends, not lost (the appearance is reported once, and is kept until a pass runs). Pruning is not held up by the gap, and a Binding
+// that leaves Targets does not call for a pass.
+func TestANewBindingInsideTheMinimumGapWaitsPendingAndIsProbedWhenItEnds(t *testing.T) {
+	const gap = 30 * time.Second
+	g := &targets{}
+	g.set("r0", Target{"a", "C1"}, Target{"gone", "C9"})
+	agents := &fakeAgents{}
+	var pruned []string
+	run(t, Options{Targets: g.Targets, Revision: g.Revision, Agents: agents, MinRevisionGap: gap, Interval: time.Hour,
+		OnPrune: func(names []string) { pruned = append(pruned, names...) }}, func(h *harness) {
+		if got := agents.count("a"); got != 1 {
+			t.Fatalf("the first pass made %d probes of a; want 1", got)
+		}
+		h.advance(tick)
+		g.set("r0", Target{"a", "C1"}, Target{"b", "C2"}) // b appears, the revision unchanged; gone leaves
+		h.advance(tick)
+		wantCond(t, h.conds("b"), BackendReachable, Unknown, ReasonPending)
+		if got := agents.count("b"); got != 0 {
+			t.Fatalf("the new Binding was probed %d times inside the gap; want 0", got)
+		}
+		if !slices.Equal(pruned, []string{"gone"}) {
+			t.Errorf("pruned %v inside the gap; want [gone]: pruning is not held up", pruned)
+		}
+		if got := agents.count("a"); got != 1 {
+			t.Errorf("%d probes of a inside the gap; want 1: a Binding that left needs no pass", got)
+		}
+		h.advance(gap) // the gap since the first pass is over; the appearance, reported once, is still kept
+		if got := agents.count("b"); got != 1 {
+			t.Errorf("the new Binding was probed %d times when the gap ended; want 1", got)
+		}
+		wantCond(t, h.conds("b"), BackendReachable, True, ReasonOK)
+		h.advance(gap)
+		if got := agents.count("b"); got != 1 {
+			t.Errorf("the new Binding was probed %d times with nothing changed; want 1", got)
+		}
+	})
+}
+
 func TestARevisionThatBlocksDoesNotStopTheProbes(t *testing.T) {
 	g := &targets{}
 	g.set("r1", Target{"b", "C1"})
@@ -1284,7 +1378,7 @@ func TestEveryReasonACheckerMayReportIsReportable(t *testing.T) {
 		case ReasonPending, ReasonProbeFailed, ReasonProbeTimeout:
 		case ReasonChatCredentialsRejected:
 			want = []Status{False}
-		case ReasonChatUnavailable, ReasonChatCredentialsChanged:
+		case ReasonChatUnavailable, ReasonChatCredentialsChanged, ReasonChatCredentialsUnusable:
 			want = []Status{Unknown}
 		default:
 			want = []Status{False, Unknown}

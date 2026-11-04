@@ -230,12 +230,21 @@ func (h *triggered) reopenStore(t *testing.T) {
 // the loader would, and G1 to payments/pay with none.
 func snapshotOf(t *testing.T, triggers []v1alpha1.Trigger) *config.Snapshot {
 	t.Helper()
+	return snapshotBotMentions(t, triggers, "")
+}
+
+// snapshotBotMentions is snapshotOf with chat.botMentions set on C1's Binding.
+func snapshotBotMentions(t *testing.T, triggers []v1alpha1.Trigger, mode v1alpha1.BotMentions) *config.Snapshot {
+	t.Helper()
 	meta := func(ns, name string) metav1.ObjectMeta { return metav1.ObjectMeta{Namespace: ns, Name: name} }
 	bind := func(ns, name, channel string, triggers []v1alpha1.Trigger) v1alpha1.Binding {
 		b := v1alpha1.Binding{ObjectMeta: meta(ns, name), Spec: v1alpha1.BindingSpec{
 			Agent:    v1alpha1.AgentRef{BackendRef: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "kagent"}, Namespace: "kagent", Name: "sre-agent"},
 			Identity: v1alpha1.Identity{UserID: "agent-kourier-sre"},
 			Chat:     v1alpha1.ChatBinding{ConnectionRef: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"}, Channel: channel, Triggers: triggers}}}
+		if channel == "C1" {
+			b.Spec.Chat.BotMentions = mode
+		}
 		b.Default() // as the loader does: no triggers means the mention trigger
 		return b
 	}
@@ -259,6 +268,12 @@ func snapshotOf(t *testing.T, triggers []v1alpha1.Trigger) *config.Snapshot {
 		}
 	}
 	return snap
+}
+
+// setBotMentions swaps in a routing table in which C1's Binding has the triggers and says mode in chat.botMentions.
+func (h *triggered) setBotMentions(t *testing.T, mode v1alpha1.BotMentions, triggers []v1alpha1.Trigger) {
+	t.Helper()
+	h.snap.Store(snapshotBotMentions(t, triggers, mode))
 }
 
 // reload swaps in a routing table with the given triggers, as a config reload does.

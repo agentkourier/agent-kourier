@@ -92,7 +92,9 @@ func RunPlatform(ctx context.Context, runner PlatformRunner, sink chat.Sink, p R
 // connection column (Phase 4), and only a platform that has an adapter (Slack, in Socket Mode). Anything else is an
 // error wrapping ErrWiring. The tokens are those of the snapshot at the call: Run reads them at start, and again when the
 // leader half starts, since a standby may lead long after it started. A change of the connection or of its Secret applies
-// to a running leader on restart, which the stale flag shows.
+// to a running leader on restart, and nothing flags it as a failed reload (the stale flag is for reloads that failed): the
+// verification of the Bindings tells of tokens that differ from these (ChatCredentialsChanged), and logs a Binding that a reload moved
+// to another connection when it stops verifying it.
 func ChooseConnection(ctx context.Context, snap *config.Snapshot, secrets identity.SecretReader) (Connection, error) {
 	if snap == nil {
 		return Connection{}, errors.New("broker: the config has not loaded yet")

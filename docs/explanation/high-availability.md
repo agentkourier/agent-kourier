@@ -24,7 +24,7 @@ flowchart TB
 
 High availability is active/passive. Two replicas of one Deployment share a Postgres database. One is the **leader**:
 it holds a Kubernetes Lease and runs all of Agent Kourier's work, which is the Socket Mode connection, the session
-runners, the outbox, the sweeps and the digests. The other is the **standby**: it serves health and metrics and waits
+runners, the outbox, the sweeps, the digests and the verification of Bindings. The other is the **standby**: it serves health and metrics and waits
 for the Lease.
 
 Active/active, with workers on every replica, is deferred until one replica's throughput is not enough. With one

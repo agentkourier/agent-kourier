@@ -238,6 +238,31 @@ func (su suite) presses(t *testing.T) {
 		}
 	})
 
+	// A turn that nobody wrote, such as a bot's mention, is never an answer, so it does not hold a question back from its timeout.
+	su.run(t, "PendingPresses ignores a queued turn that nobody wrote", func(t *testing.T, s store.Store) {
+		ctx := t.Context()
+		k := store.ConversationKey{Connection: "ns/conn", Channel: "C1", Thread: "1.1"}
+		i := store.Interaction{ID: "ix-text", Key: k, TaskID: "t1", Kind: store.InteractionAskUser, Request: []byte(`{}`), TextReplies: true, CreatedAt: t0, Deadline: t0.Add(time.Hour)}
+		if _, err := s.CreateInteraction(ctx, i); err != nil {
+			t.Fatal(err)
+		}
+		noErr(t, s.SetInteractionMessageRef(ctx, i.ID, "1.2"), "SetInteractionMessageRef")
+		system := store.Reply{ID: "mention", Key: k, UserID: store.SystemUser, MessageRef: "1.3", Text: "a bot's mention", EnqueuedAt: t0.Add(time.Minute)}
+		if _, err := s.EnqueueReply(ctx, system); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := s.PendingPresses(ctx, i.ID, i.Deadline); err != nil || got {
+			t.Errorf("with a bot's mention queued = %v, %v; want false, so that the question times out", got, err)
+		}
+		person := store.Reply{ID: "person", Key: k, UserID: "U1", MessageRef: "1.4", Text: "my answer", EnqueuedAt: t0.Add(2 * time.Minute)}
+		if _, err := s.EnqueueReply(ctx, person); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := s.PendingPresses(ctx, i.ID, i.Deadline); err != nil || !got {
+			t.Errorf("with a person's reply queued = %v, %v; want true", got, err)
+		}
+	})
+
 	// PendingPresses says whether a press of the interaction made at or before a time is waiting.
 	su.run(t, "PendingPresses says whether a press made at or before a time is waiting", func(t *testing.T, s store.Store) {
 		ctx := t.Context()

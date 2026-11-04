@@ -102,6 +102,25 @@ func TestDefaultThreadReplies(t *testing.T) {
 	}
 }
 
+func TestDefaultBotMentions(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		in, want BotMentions
+	}{
+		{"omitted", "", BotMentionsAny},
+		{"any kept", BotMentionsAny, BotMentionsAny},
+		{"none kept", BotMentionsNone, BotMentionsNone},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := &Binding{Spec: BindingSpec{Chat: ChatBinding{BotMentions: tc.in}}}
+			b.Default()
+			if got := b.Spec.Chat.BotMentions; got != tc.want {
+				t.Errorf("BotMentions after Default = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestDefaultAcknowledgment(t *testing.T) {
 	enabled := false
 	for _, tc := range []struct {

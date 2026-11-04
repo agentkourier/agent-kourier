@@ -88,7 +88,7 @@ type Options struct {
 	// Targets of the last good call, prunes nothing and probes those; a panic never reads as an empty list.
 	Targets func() []Target
 	// Revision names the state of the config the probes depend on, and a change of it (from what the last pass saw)
-	// runs a pass at the next Tick; a channel or a Secret changes only through it. Each call runs in a goroutine of
+	// runs a pass at the next Tick, or when MinRevisionGap since the last pass began is over, if that is later; a channel or a Secret changes only through it. Each call runs in a goroutine of
 	// its own under the Timeout, and must honor its context. When a read fails it should return a marker that
 	// differs from any revision it returns on success and is the same on every call while the failure lasts: the
 	// next pass then reports the failure, and the recovery is another change that runs another pass. A call that
@@ -103,6 +103,15 @@ type Options struct {
 	// Channels probes channels, one probe per Target. Nil means ChannelJoined is not tracked. Targets must hold only
 	// Bindings on the chat connection that Channels answers for (see ChannelChecker).
 	Channels ChannelChecker
+	// MinRevisionGap is the least time between the start of a pass and the start of one that only a change calls for: a change of
+	// Revision, or a Binding that is new in Targets (a reload that adds one is a change like any other). A change that comes inside
+	// the gap is not lost: it waits, and the pass runs at the first Tick after the gap, for whatever the Revision and the Targets are
+	// then, so many changes in the gap give one pass, which sees the last. A new Binding's conditions are Pending until that pass. It
+	// does not hold back the first pass or a pass the Interval calls for, and it does not hold back pruning, which happens at every
+	// Tick, and so waits for a pass that is running to end (a Binding that leaves Targets is no change that needs a pass). It exists so that a Revision that moves for no cause the
+	// probes can see, such as a Secret written to again and again, cannot make the Prober probe every Binding at every Tick. Zero
+	// means no gap.
+	MinRevisionGap time.Duration
 	// Interval is how long after a pass begins the next is due, 5 minutes by default, and not a pause after it ends.
 	// Each wait strays from it by up to 10% either way, so that many brokers do not probe together. A pass that outlasts
 	// its wait is followed by the next one Tick after it ends. The loop looks only at each Tick, so a pass can begin up
@@ -116,8 +125,10 @@ type Options struct {
 	// Concurrency is how many probes run at once, 4 by default.
 	Concurrency int
 	// OnTransition is called for each change of a condition's status or reason, Ready included (filter on
-	// Transition.New.Type), and never for a probe that changed neither. A new Binding's Pending conditions are not
-	// transitions. Calls are serialized with each other and with OnProbeError, run on a probe's goroutine and hold
+	// Transition.New.Type), and never for a probe that changed neither. The Pending a new Binding's probed conditions are stored
+	// with is not a transition, but Ready's can be: when the first probes end one at a time, Ready moves from being Pending on one
+	// condition to being Pending on the next, so a consumer that treats Ready as unknown only once it has a result tests
+	// Condition.Pending. Calls are serialized with each other and with OnProbeError, run on a probe's goroutine and hold
 	// up the other probes' results while they run, so the hook must be quick and must not wait on the Prober. The
 	// Prober does not bound a hook, so one that blocks stops probing and delays shutdown. A hook that panics is
 	// recovered and the panic is reported to OnProbeError; the State is already updated.
@@ -185,7 +196,8 @@ func jittered(interval time.Duration, r float64) time.Duration {
 }
 
 // Run probes until ctx ends. A pass runs at once, when a Binding appears in Targets or the Revision differs from the
-// last pass's (at the next Tick), and when the jittered Interval since the last pass began has run out. A pass
+// last pass's (at the next Tick, and not within MinRevisionGap of the start of the last pass: the pass then waits for the
+// gap to end, with the change kept), and when the jittered Interval since the last pass began has run out. A pass
 // finishes before the next begins, so passes never overlap. Call Run once.
 //
 // When the context ends, Run waits for the checkers and the Revision call it started that are still running, up to
@@ -198,10 +210,12 @@ func jittered(interval time.Duration, r float64) time.Duration {
 func (p *Prober) Run(ctx context.Context) {
 	defer p.waitForGoroutines()
 	var (
-		rev     string
-		nextAt  time.Time
-		started bool
-		targets []Target // the last good Targets, deduplicated
+		rev      string
+		nextAt   time.Time
+		started  bool
+		lastPass time.Time // when the last pass began
+		fresh    bool      // a Binding appeared since the last pass: the changed that sync reports once, kept until a pass runs
+		targets  []Target  // the last good Targets, deduplicated
 	)
 	for {
 		// Revision is read before Targets: a reload that lands between the two reads is then seen by Targets
@@ -211,9 +225,10 @@ func (p *Prober) Run(ctx context.Context) {
 		if r, ok := p.revision(ctx); ok {
 			cur = r
 		}
-		var changed bool
 		if got, ok := p.listTargets(); ok {
+			var changed bool
 			targets, changed = p.sync(got)
+			fresh = fresh || changed
 		} else {
 			// The revision cannot be probed against targets that are not known to be current. Leave it unseen, so
 			// that the first Tick where Targets answers sees the change and probes.
@@ -222,8 +237,8 @@ func (p *Prober) Run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if began := time.Now(); !started || changed || cur != rev || !began.Before(nextAt) {
-			started, rev = true, cur
+		if began := time.Now(); !started || !began.Before(nextAt) || ((fresh || cur != rev) && !began.Before(lastPass.Add(p.o.MinRevisionGap))) {
+			started, rev, lastPass, fresh = true, cur, began, false
 			p.pass(ctx, targets)
 			nextAt = began.Add(jittered(p.o.Interval, rand.Float64())) //nolint:gosec // jitter spreads probes; it is not a secret
 		}

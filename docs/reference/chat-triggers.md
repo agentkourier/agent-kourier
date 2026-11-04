@@ -16,6 +16,7 @@ These are the defaults, which a Binding with no `chat.triggers` gets.
 | A reply without a mention in any other thread | Ignored. |
 | Any message Agent Kourier posted, including the edit events of its own posts | Ignored, always. |
 | A message from any other bot or app | Ignored, unless a `botMessage` trigger names its bot ID. |
+| A mention of Agent Kourier by any other bot or app | A turn in the thread that holds it, within fixed limits, unless the Binding says otherwise. See [A bot's mention](#a-bots-mention). |
 | An edit or deletion of any message, or another non-message subtype | Ignored. Plain messages, `thread_broadcast` and `file_share` (its text only) count as messages. |
 | A direct message | Not served yet. |
 
@@ -28,6 +29,32 @@ These are the defaults, which a Binding with no `chat.triggers` gets.
   in logs and metrics.
 - v1 has two types: `mention` and `botMessage`. A `mention` trigger takes no other field.
 - Whether a reply in an owned thread needs a mention is `chat.threadReplies`, not a trigger.
+
+## A bot's mention
+
+Any bot or incoming webhook that can post in a bound channel can start a turn by mentioning Agent Kourier, because Slack cannot tell an
+agent from any other bot. This is on by default for a Binding with a `mention` trigger, including one with no `chat.triggers`.
+Set `chat.botMentions: none` to turn it off. A Binding whose list leaves out the `mention` trigger takes no bot's mention either.
+
+| | |
+|---|---|
+| Where the turn goes | The thread that holds the mention, or a new thread for a mention outside one. A new session if Agent Kourier does not own the thread. |
+| Limits | Fixed, and across every bot on the Binding: 3 turns in any 30 minutes, 1 at a time, 20 in any 24 hours. They count mentions, including those in a thread Agent Kourier already owns. "1 at a time" lasts while the mention's own turn is queued or running, including while it waits for a person's answer: a later turn in its thread does not hold it. A mention whose session takes no turn does not count. A mention in an alert's thread does not count as that alert running under the trigger's `maxConcurrent`. |
+| The prompt | Fixed, with the post and the thread so far as untrusted data. The post is its text, its first attachment's fields and, if that attachment has no text, what its section, context, header and rich text blocks say past its text. The thread is what opened it and every author's messages since, except Agent Kourier's own and what were already turns, at most 50: what opened it stays, with the newest. A bot's message in the thread shows the same parts as the post, and its broadcasts and file shares (their text and blocks) count. A later mention gets what came since the previous bot's mention, so a reply sent to the agent as context on a person's turn can come again. |
+| Replies in the thread | A session that a bot's mention began takes a person's reply as a turn only if it mentions Agent Kourier, whatever `chat.threadReplies` says, and the final message says so. A thread Agent Kourier already owned keeps its Binding's rule. |
+| Rating buttons | As on an answer to a person: only with `feedback.enabled`, and counted as an answer. |
+| A limit is reached | No turn and nothing in the thread. Counted, audited, and in the digest line of its window. |
+
+These are never taken as a mention:
+
+- Agent Kourier's own posts.
+- An edit that adds a mention.
+- A bot that a `botMessage` trigger of the Binding names. That trigger reads its posts.
+- Any bot's mention in a channel shared with another workspace.
+
+A session past its `threadTTL`, or whose Binding has left the config, takes no turn from a bot, with no note, and the mention uses none of the limits. A bot's turn never answers a
+pending question; it stays a turn of its own, queued until the pause ends, and the question still times out at its deadline. [Let another agent start yours](../how-to/any-bot-trigger.md#let-another-agent-start-yours) has what
+this does not bound.
 
 ## `botMessage` fields
 
@@ -90,7 +117,7 @@ or a queued turn. When several limits are reached, the daily cap is reported fir
 concurrency.
 
 Once for each window and trigger, one line at the top level of the channel counts the starts a limit stopped, for
-example "7 alert messages not investigated in the last 10m (rate limit)." A window opens with the first stopped start
+example "7 bot messages not investigated in the last 10m (rate limit)." A window opens with the first stopped start
 and lasts the trigger's `rateLimit.per`. The line holds a count, a length
 and a limit, never any text of an alert.
 

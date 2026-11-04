@@ -234,6 +234,12 @@ sent and held in memory while that turn is the head of its session's queue, `rep
 mentioned Agent Kourier wrote, and no reply's content is logged. A typed answer to a question that takes text replies needs no
 mention: it is queued pinned to the question and kept as its answer (`interactions.answer`, above).
 
+A bot's mention reads the thread on any Binding, whatever `chat.threadReplies` says: on the first bot's mention in the thread, what opened it and every
+author's messages up to the mention; on a later one, every author's messages since the previous bot's mention. So what people wrote in a thread
+reaches the agent, and so its model provider, once a bot mentions Agent Kourier there, without anyone having mentioned it themselves. Set
+`chat.botMentions: none` to stop that. Those messages are cleaned, redacted, cut and not stored, as above; `reply_queue.text` holds the fixed prompt
+and the bot's post.
+
 ### Sessions and what belongs to them
 
 Clearing content leaves the rows, and a thread that nobody answers again would keep its rows for ever. A session is kept after

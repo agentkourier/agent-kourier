@@ -163,7 +163,11 @@ func (c *Client) handle(ctx context.Context, smc *socketmode.Client, me self, si
 	switch ev.Type {
 	case socketmode.EventTypeEventsAPI:
 		if outer, ok := ev.Data.(slackevents.EventsAPIEvent); ok {
-			if m, v := decode(me, outer.InnerEvent.Data); c.takes(ctx, sink, m, v) {
+			m, v := decode(me, outer.InnerEvent.Data)
+			if v == forward && m.Mentioned && m.Bot.ID != "" && fromAnotherWorkspace(outer) {
+				v = dropped // a bot of another workspace may have posted it: a channel shared across workspaces fails closed
+			}
+			if c.takes(ctx, sink, m, v) {
 				if err := sink.Message(ctx, m); err != nil {
 					c.log.WarnContext(ctx, "slack: message not taken; left unacknowledged for Slack to send again",
 						"channel", m.Channel, "ts", m.TS, "err", err)
@@ -203,6 +207,10 @@ func (c *Client) takes(ctx context.Context, sink Sink, m Message, v verdict) boo
 	if v == dropped {
 		return false
 	}
+	if m.Mentioned && m.Bot.ID != "" {
+		filter, filters := sink.(BotMentionFilter)
+		return v != ownPost && filters && filter.AcceptsBotMention(m.Channel, m.Bot.ID)
+	}
 	filter, filters := sink.(BotFilter)
 	named := m.Bot.ID != "" && filters && filter.AcceptsBot(m.Channel, m.Bot.ID)
 	if v == ownPost {
@@ -215,4 +223,19 @@ func (c *Client) takes(ctx context.Context, sink Sink, m Message, v verdict) boo
 		return false
 	}
 	return m.Bot.ID == "" || named
+}
+
+// fromAnotherWorkspace says whether an event is in a channel shared with another workspace, by Slack's flag for a channel shared
+// outside the organization, or was written from a team other than the one it was delivered for, which is how a channel shared inside
+// an organization may show. Neither shape has been seen from Slack: this fails closed on either.
+func fromAnotherWorkspace(outer slackevents.EventsAPIEvent) bool {
+	if outer.IsExtSharedChannel {
+		return true
+	}
+	e, ok := outer.InnerEvent.Data.(*slackevents.AppMentionEvent)
+	if !ok {
+		return false
+	}
+	other := func(team string) bool { return team != "" && team != outer.TeamID }
+	return other(e.UserTeam) || other(e.SourceTeam)
 }

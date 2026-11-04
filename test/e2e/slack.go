@@ -119,6 +119,12 @@ func (s *Slack) SetMembers(ctx context.Context, channel string, users ...string)
 	return s.c.do(ctx, http.MethodPost, "/_control/members", map[string]any{"channel": channel, "users": users}, nil)
 }
 
+// SetArchived marks channel archived, or not, for conversations.info. It does not register the channel: SetMembers does, and the
+// fake reports channel_not_found for a channel it was not given.
+func (s *Slack) SetArchived(ctx context.Context, channel string, archived bool) error {
+	return s.c.do(ctx, http.MethodPost, "/_control/archived", map[string]any{"channel": channel, "archived": archived}, nil)
+}
+
 // SetUserGroup registers a Slack user group and replaces its membership.
 func (s *Slack) SetUserGroup(ctx context.Context, group string, users ...string) error {
 	return s.c.do(ctx, http.MethodPost, "/_control/usergroups", map[string]any{"usergroup": group, "users": users}, nil)

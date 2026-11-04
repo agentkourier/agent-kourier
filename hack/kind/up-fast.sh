@@ -118,7 +118,7 @@ b64url() { printf %s "$1" | base64 | tr -d '=\n' | tr '/+' '_-'; }
   --from-literal=token="$(b64url '{"alg":"none"}').$(b64url '{"email":"agent-kourier-fast@example.test"}')." --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
 # The rollout restart in install_agentkourier picks up a rebuilt image (same tag) or a changed ConfigMap; verify.sh
 # waits for the rollout and shows Agent Kourier's log if it does not become ready.
-deploy_agentkourier "${FAST}/agent-kourier/config/agentbackend.yaml" "${FAST}/agent-kourier/a2a"
+deploy_agentkourier "${FAST}/agent-kourier/config/agentbackend.yaml" "${FAST}/agent-kourier/a2a" "${FAST}/agent-kourier/verify"
 
 step "verify"
 "${FAST}/verify.sh"

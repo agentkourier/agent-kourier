@@ -118,6 +118,7 @@ func TestAPIReferenceDefaultsMatchRuntime(t *testing.T) {
 		{"AgentBackend", "SecretKeyRef", "key", "string", backend.Spec.Headers[0].ValueSecretRef.Key},
 		{"Binding", "ChatBinding", "output", "string", string(binding.Spec.Chat.Output)},
 		{"Binding", "ChatBinding", "threadReplies", "string", string(binding.Spec.Chat.ThreadReplies)},
+		{"Binding", "ChatBinding", "botMentions", "string", string(binding.Spec.Chat.BotMentions)},
 		{"Binding", "ChatBinding", "triggers", "[][Trigger](#trigger)", "[{type: " + string(binding.Spec.Chat.Triggers[0].Type) + "}]"},
 		{"Binding", "Interactions", "askUser", "boolean", fmt.Sprint(binding.Spec.Interactions.AskUser)},
 		{"Binding", "Interactions", "timeout", "duration", fmt.Sprintf("%dm", binding.Spec.Interactions.Timeout.Duration/time.Minute)},

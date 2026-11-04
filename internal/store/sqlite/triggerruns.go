@@ -15,12 +15,14 @@ const day = 24 * time.Hour
 
 // runningStartsQuery is the statement that counts the admitted starts of a trigger since a time whose investigation is
 // still going: its session has an active task, or it has a turn that is queued and not yet delivered, which is a start
-// that was taken and has not begun. A run counts once however many of its turns are queued.
+// that was taken and has not begun. A run counts once however many of its turns are queued. A bot's mention (a run with a
+// session_thread_ts) is running only while its own turn is, and any other run only while no mention's is: a session holds one
+// kind of work at a time, and a mention in an alert's old thread is not the alert still going, nor is a person's later turn the mention.
 func runningStartsQuery() string {
 	return `SELECT COUNT(*) FROM trigger_runs r
 	WHERE r.binding = ? AND r.trigger_index = ? AND r.limited = '' AND r.at > ?
-	AND (EXISTS (SELECT 1 FROM sessions s WHERE s.connection = r.connection AND s.channel = r.channel AND s.thread_ts = r.thread_ts AND s.task_id <> '')
-	  OR EXISTS (SELECT 1 FROM reply_queue q WHERE q.connection = r.connection AND q.channel = r.channel AND q.thread_ts = r.thread_ts AND ` + store.UndeliveredReplies("q").Text(Dialect{}) + `))`
+	AND (EXISTS (SELECT 1 FROM sessions s WHERE s.connection = r.connection AND s.channel = r.channel AND s.thread_ts = COALESCE(NULLIF(r.session_thread_ts, ''), r.thread_ts) AND s.task_id <> '' AND s.turn_mention = CASE WHEN r.session_thread_ts = '' THEN '' ELSE r.thread_ts END)
+	  OR EXISTS (SELECT 1 FROM reply_queue q WHERE q.connection = r.connection AND q.channel = r.channel AND q.thread_ts = COALESCE(NULLIF(r.session_thread_ts, ''), r.thread_ts) AND (CASE WHEN r.session_thread_ts = '' THEN q.whole_thread = 0 ELSE q.message_ts = r.thread_ts END) AND ` + store.UndeliveredReplies("q").Text(Dialect{}) + `))`
 }
 
 // startsSince counts the admitted starts of a trigger after a time. Its arguments are the Binding, the trigger and the time.
@@ -68,7 +70,7 @@ func (s *adapter) AdmitTriggerRun(ctx context.Context, run store.TriggerRun, lim
 			admission.Admitted = true
 			return recordStart(ctx, tx, run, now)
 		}
-		admission.Limit = limit
+		admission.Limit, admission.Again = limit, stoppedBefore
 		if stoppedBefore {
 			return nil // its row and window stand
 		}
@@ -110,10 +112,10 @@ func reachedLimit(ctx context.Context, tx *sql.Tx, run store.TriggerRun, limits 
 
 // recordStart records the start, over a row of the message that was stopped before.
 func recordStart(ctx context.Context, tx *sql.Tx, run store.TriggerRun, now int64) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO trigger_runs (connection, channel, thread_ts, binding, trigger_index, at) VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT (connection, channel, thread_ts) DO UPDATE SET binding = excluded.binding, trigger_index = excluded.trigger_index,
+	_, err := tx.ExecContext(ctx, `INSERT INTO trigger_runs (connection, channel, thread_ts, session_thread_ts, binding, trigger_index, at) VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (connection, channel, thread_ts) DO UPDATE SET session_thread_ts = excluded.session_thread_ts, binding = excluded.binding, trigger_index = excluded.trigger_index,
 			at = excluded.at, limited = '', window_start = 0, window_end = 0, digested = 0`,
-		run.Key.Connection, run.Key.Channel, run.Key.Thread, run.Binding, run.Trigger, now)
+		run.Key.Connection, run.Key.Channel, run.Key.Thread, run.SessionThread, run.Binding, run.Trigger, now)
 	return err
 }
 
@@ -126,9 +128,9 @@ func recordStopped(ctx context.Context, tx *sql.Tx, run store.TriggerRun, limit 
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO trigger_runs (connection, channel, thread_ts, binding, trigger_index, at, limited, window_start, window_end)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		run.Key.Connection, run.Key.Channel, run.Key.Thread, run.Binding, run.Trigger, now, string(limit), start, end)
+	_, err = tx.ExecContext(ctx, `INSERT INTO trigger_runs (connection, channel, thread_ts, session_thread_ts, binding, trigger_index, at, limited, window_start, window_end)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		run.Key.Connection, run.Key.Channel, run.Key.Thread, run.SessionThread, run.Binding, run.Trigger, now, string(limit), start, end)
 	return err
 }
 

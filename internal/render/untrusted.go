@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
 	"strings"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
@@ -97,6 +98,8 @@ type untrustedItem struct {
 	// any other is not written.
 	Wrapper string
 	Fields  []untrustedField
+	// Pinned says the item stays whatever else is left out (oldestPolicy). Only items at the start of a block's Items are.
+	Pinned bool
 }
 
 // leftOutNoun names the items that a block leaves out, for its last line. Both are caller prose, constants, and are escaped
@@ -113,7 +116,8 @@ func (n leftOutNoun) line(count int) string {
 
 // oldestPolicy is how a block that leaves out its oldest items does it: it keeps the newest items that fit, whole, shows
 // them oldest first, and counts the rest in a last line ("3 earlier replies left out."). The items are in the order they
-// were written.
+// were written. Those Pinned stay whatever else is left out, and count towards MaxItems: what opened a thread says what the rest
+// are about, and it is the oldest of them. The last line counts what lies between them and what is shown.
 type oldestPolicy struct {
 	// Noun names the items that are left out, for the last line.
 	Noun leftOutNoun
@@ -229,6 +233,7 @@ type cleanedField struct {
 type cleanedItem struct {
 	wrapper string
 	fields  []cleanedField
+	pinned  bool
 }
 
 // clean returns s as the field's kind cleans it. A kind it does not know is free text, the strictest. A field that is
@@ -260,7 +265,7 @@ func (b untrustedBlock) cleanItems() []cleanedItem {
 		if it.Wrapper != "" && !validName(it.Wrapper) {
 			continue
 		}
-		c := cleanedItem{wrapper: it.Wrapper, fields: make([]cleanedField, 0, len(it.Fields))}
+		c := cleanedItem{wrapper: it.Wrapper, fields: make([]cleanedField, 0, len(it.Fields)), pinned: it.Pinned}
 		content := false
 		for _, f := range it.Fields {
 			if !validName(f.Name) {
@@ -384,13 +389,21 @@ func (b untrustedBlock) render() (section string, leftOut int) {
 	} else { // leave out the oldest items
 		dropped := max(o.Dropped, 0)
 		all := make([]renderedItem, 0, len(items))
-		for _, it := range items {
+		pinned := 0 // an item that cleaned to nothing is not there, so a pin goes with it and to no other item
+		for i, it := range items {
 			r, _ := it.render(math.MaxInt / 4) // an item is bounded by its caps alone
 			all = append(all, r)
+			if it.pinned && pinned == i {
+				pinned++
+			}
 		}
-		first := 0 // the older ones are cut by count
+		room := b.MaxUnits - frame
+		for _, r := range all[:pinned] {
+			room -= chat.Units(r.text)
+		}
+		first := pinned // the older ones are cut by count
 		if o.MaxItems > 0 {
-			first = max(len(all)-o.MaxItems, 0)
+			first = max(len(all)-o.MaxItems+pinned, pinned)
 		}
 		// keep returns where the newest items that fit in room begin, never before first.
 		keep := func(room int) int {
@@ -401,12 +414,12 @@ func (b untrustedBlock) render() (section string, leftOut int) {
 			}
 			return i
 		}
-		start := keep(b.MaxUnits - frame)
-		if dropped+start > 0 { // the last line is there: its room is taken, for the most that it can count
-			start = keep(b.MaxUnits - frame - chat.Units(o.Noun.line(dropped+len(all))+"\n"))
+		start := keep(room)
+		if dropped+start-pinned > 0 { // the last line is there: its room is taken, for the most that it can count
+			start = keep(room - chat.Units(o.Noun.line(dropped+len(all))+"\n"))
 		}
-		shown = all[start:]
-		leftOut = dropped + start
+		shown = slices.Concat(all[:pinned], all[start:])
+		leftOut = dropped + start - pinned
 		if leftOut > 0 {
 			last = o.Noun.line(leftOut) + "\n"
 		}
