@@ -26,6 +26,12 @@
 # charts/agent-kourier/ci/fast-postgres-ha-values.yaml, and brings up the container signaler (fast/signaler.yaml) that the failover scenario S16
 # uses to freeze or kill the leader's process. The rest of the suite runs on two replicas too. Without it, or with 1, there is one replica and
 # no signaler, and S16 skips. Re-running with another E2E_REPLICAS changes the replicas in place.
+#
+# E2E_CONFIG_SOURCE=crds runs Agent Kourier on custom resources instead of the ConfigMap (the default, files): the CRDs are installed first, with
+# the release still on the ConfigMap route, then the same config is applied as Binding, AgentBackend and ChatConnection resources and the release is
+# upgraded to read them (lib.sh's deploy_agentkourier, with hack/kind/crds-values.yaml): the move the chart README gives. The E2E suite is the same on
+# either, and the scenarios that are about the custom resources (the CR_ tests) skip on the ConfigMap route. Re-running with the other value moves
+# the tier over in place, and back: the custom resources stay in the cluster, unread, when the tier goes back to files.
 set -eEuo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -45,6 +51,8 @@ case "${E2E_REPLICAS}" in
   2) [ "${E2E_STORE}" = postgres ] || die "E2E_REPLICAS=2 needs E2E_STORE=postgres: SQLite is one replica (spec R7)" ;;
   *) die "E2E_REPLICAS must be 1 or 2" ;;
 esac
+E2E_CONFIG_SOURCE=${E2E_CONFIG_SOURCE:-files}
+require_config_source
 CTX=kind-${CLUSTER}
 K=(kubectl --context "${CTX}")
 H=(helm --kube-context "${CTX}")
@@ -122,4 +130,4 @@ deploy_agentkourier "${FAST}/agent-kourier/config/agentbackend.yaml" "${FAST}/ag
 
 step "verify"
 "${FAST}/verify.sh"
-echo "fast tier up in ${SECONDS}s (context ${CTX}, store ${E2E_STORE}, ${E2E_REPLICAS} Agent Kourier replica(s))"
+echo "fast tier up in ${SECONDS}s (context ${CTX}, store ${E2E_STORE}, ${E2E_REPLICAS} Agent Kourier replica(s), config source ${E2E_CONFIG_SOURCE})"

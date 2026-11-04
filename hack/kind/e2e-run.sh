@@ -76,6 +76,17 @@ echo "==> run the Job in ${CTX}"
 "${K[@]}" -n e2e delete job "${JOB}" --ignore-not-found >/dev/null
 # The runner's Role in Agent Kourier's namespace needs the namespace to exist.
 "${K[@]}" get namespace agent-kourier >/dev/null 2>&1 || "${K[@]}" create namespace agent-kourier >/dev/null
+# So does its Role in e2e-team, the empty namespace where the custom-resource scenarios play a team (hack/kind/e2e/runner.yaml).
+"${K[@]}" get namespace e2e-team >/dev/null 2>&1 || "${K[@]}" create namespace e2e-team >/dev/null
+# Where Agent Kourier reads its config from now: the Deployment says (the chart sets AGENTKOURIER_CONFIG_SOURCE only for crds), not the tier's bring-up,
+# so a tier moved between the two in place is run as it is. The CR_ tests skip unless it is crds.
+config_source=$("${K[@]}" -n agent-kourier get deploy/agent-kourier -o 'jsonpath={.spec.template.spec.containers[0].env[?(@.name=="AGENTKOURIER_CONFIG_SOURCE")].value}' 2>/dev/null || true)
+config_source=${config_source:-files}
+case "${config_source}" in
+  files | crds) ;;
+  *) die "the Deployment's AGENTKOURIER_CONFIG_SOURCE is '${config_source}'; want files or crds" ;;
+esac
+echo "config source: ${config_source}"
 # The scenarios release their gates (Stub.Release) where the tier holds them: the stub agent in the fast tier, and
 # the scenario model in the full one, which has the stub's release path.
 case "${tier}" in
@@ -83,7 +94,7 @@ case "${tier}" in
   full) gate_url=http://scenariollm.kagent.svc.cluster.local:8080 ;;
   ax) gate_url=http://ax-gates.e2e.svc.cluster.local:8080 ;;
 esac
-sed -e "s/@TIER@/${tier}/" -e "s|@STUB_URL@|${gate_url}|" "${HERE}/e2e/runner.yaml" |
+sed -e "s/@TIER@/${tier}/" -e "s|@STUB_URL@|${gate_url}|" -e "s/@CONFIG_SOURCE@/${config_source}/" "${HERE}/e2e/runner.yaml" |
   { if [ -n "${E2E_RUN:-}" ]; then sed -e "s#-test.run=[^\"]*#-test.run=${E2E_RUN}#"; else cat; fi; } |
   "${K[@]}" apply -f - >/dev/null # the tier is fast or full: use_tier checked it
 result=

@@ -92,8 +92,8 @@ var valuesFile = regexp.MustCompile(`ci/[a-z-]+-values\.yaml`)
 // exist; none applies a hand-made Agent Kourier manifest any more.
 func TestEveryTierInstallsTheChart(t *testing.T) {
 	for _, tc := range []struct{ script, want string }{
-		{"lib.sh", `install_agentkourier "${AGENTKOURIER_VALUES:-${ROOT}/charts/agent-kourier/ci/fast-values.yaml}"`}, // the fast and full tiers (deploy_agentkourier)
-		{"up-fast.sh", `AGENTKOURIER_VALUES=${ROOT}/charts/agent-kourier/ci/fast-postgres-values.yaml`},               // E2E_STORE=postgres
+		{"lib.sh", `values=${AGENTKOURIER_VALUES:-${ROOT}/charts/agent-kourier/ci/fast-values.yaml}`},   // the fast and full tiers (deploy_agentkourier)
+		{"up-fast.sh", `AGENTKOURIER_VALUES=${ROOT}/charts/agent-kourier/ci/fast-postgres-values.yaml`}, // E2E_STORE=postgres
 		{"up-ax.sh", `install_agentkourier "${ROOT}/charts/agent-kourier/ci/ax-values.yaml"`},
 		{"sandbox/up.sh", `helm_install_agentkourier "${SANDBOX_RELEASE}" "${ROOT}/charts/agent-kourier/ci/sandbox-values.yaml"`},
 	} {

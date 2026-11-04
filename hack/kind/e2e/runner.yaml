@@ -57,6 +57,55 @@ metadata:
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: e2e-runner}
 subjects: [{kind: ServiceAccount, name: e2e-runner, namespace: e2e}]
 ---
+# The scenarios of the custom resources route (the CR_ tests; they skip unless Agent Kourier reads custom resources, E2E_CONFIG_SOURCE=crds).
+# In Agent Kourier's namespace the runner only reads the three kinds: it looks at the tier's own Bindings and their status, and makes none.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: e2e-runner-crs
+  namespace: agent-kourier
+rules:
+  - apiGroups: [agentkourier.dev]
+    resources: [bindings, agentbackends, chatconnections]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: e2e-runner-crs
+  namespace: agent-kourier
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: e2e-runner-crs}
+subjects: [{kind: ServiceAccount, name: e2e-runner, namespace: e2e}]
+---
+# The team namespace e2e-team, which e2e-run.sh creates empty: what a team does there is what the scenarios do, and it is all the runner may do
+# anywhere but here. It makes Bindings and AgentBackends, a token Secret, and the Role and RoleBinding that let Agent Kourier read that Secret (the
+# RBAC a team must add). It may list and watch Secrets only so that Kubernetes lets it grant that (a Role cannot give what its maker lacks); it
+# never reads one, since it has no get, and the namespace holds no Secret but the ones a scenario makes. e2e-team is allowed by the tier's
+# ChatConnection (allowedNamespaces), the one thing outside it that the scenarios rely on.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: e2e-runner-team
+  namespace: e2e-team
+rules:
+  - apiGroups: [agentkourier.dev]
+    resources: [bindings, agentbackends]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create, delete, list, watch]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [roles, rolebindings]
+    verbs: [get, create, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: e2e-runner-team
+  namespace: e2e-team
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: e2e-runner-team}
+subjects: [{kind: ServiceAccount, name: e2e-runner, namespace: e2e}]
+---
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -76,8 +125,10 @@ spec:
         - name: e2e
           image: agent-kourier-e2e/runner:dev
           imagePullPolicy: Never
-          args: ["-test.v", "-test.run=^Test(Smoke|Fault.*|S[0-9]+_.*|AX_.*|A2A_.*|Verify_.*)$", "-test.timeout=20m"]
+          args: ["-test.v", "-test.run=^Test(Smoke|Fault.*|S[0-9]+_.*|AX_.*|A2A_.*|Verify_.*|CR_.*)$", "-test.timeout=20m"]
           # The tier the Job runs in: e2e-run.sh puts fast or full here, so that a test can tell a tier
           # that has Agent Kourier from one that does not yet.
-          env: [{name: E2E_TIER, value: "@TIER@"}, {name: E2E_STUB_URL, value: "@STUB_URL@"}]
+          # E2E_CONFIG_SOURCE is where the tier's Agent Kourier reads its config from, files (the ConfigMap) or crds (custom resources): e2e-run.sh
+          # reads it from the Deployment as it is now, so that a tier moved between the two in place is run as it is, and the CR_ tests skip on files.
+          env: [{name: E2E_TIER, value: "@TIER@"}, {name: E2E_STUB_URL, value: "@STUB_URL@"}, {name: E2E_CONFIG_SOURCE, value: "@CONFIG_SOURCE@"}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}

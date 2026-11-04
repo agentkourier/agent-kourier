@@ -311,16 +311,37 @@ install_agentkourier() {
   "${K[@]}" -n agent-kourier rollout restart deploy/agent-kourier >/dev/null
 }
 
+# require_config_source: die unless E2E_CONFIG_SOURCE is files (the default, the ConfigMap route) or crds (custom resources). Call it in a script's
+# preflight, before anything is changed.
+require_config_source() {
+  case "${E2E_CONFIG_SOURCE:-files}" in
+    files | crds) ;;
+    *) die "E2E_CONFIG_SOURCE must be files or crds" ;;
+  esac
+}
+
+# crds_held_by_release: succeed when the CRDs in the cluster were installed by the release agent-kourier (crds.install), so that a tier that goes back to
+# the ConfigMap route keeps crds.install on, as the chart README says to: a release without it no longer holds them. Needs K.
+crds_held_by_release() {
+  [ "$("${K[@]}" get crd bindings.agentkourier.dev -o 'jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}' 2>/dev/null || true)" = agent-kourier ]
+}
+
 # deploy_agentkourier AGENTBACKEND [EXTRA_CONFIG_DIR...]: Agent Kourier's namespace, fake Slack Secret, config and chart, which the fast and full tiers share.
 # AGENTKOURIER_VALUES is the values file (the fast tier's by default) and the array AGENTKOURIER_HELM_ARGS, if the caller set it, holds more helm
 # arguments. The config is the fast tier's Bindings and ChatConnection (fast/agent-kourier/config), with AGENTBACKEND, a file, in place of the fast
 # tier's AgentBackend: the Bindings name it `agents` in both tiers. Each EXTRA_CONFIG_DIR adds the YAML files of a directory: the fast tier
 # passes the Bindings that reach the stub agent through the a2a dialect and those that verification checks against the stub, which the full
 # tier, with no stub, must not load.
+# E2E_CONFIG_SOURCE says where Agent Kourier reads that config from. files (the default) puts it in the ConfigMap agent-kourier-config, which the chart
+# mounts. crds follows the move a user makes, in two upgrades: the CRDs first (the release as it was, with crds.install on), then the same files applied
+# as custom resources and the release upgraded with crds-values.yaml, so that the pod reads them and the ConfigMap is not mounted. The ConfigMap is still
+# made (a ConfigMap of a user's own is not touched by the move either), so that the tier can go back: running this again with files upgrades the release
+# to the ConfigMap route, and the custom resources stay in the cluster, unread, as the chart README says. Either way the config is the same files.
 # The Secrets are fake constants made here and never committed, and the agent token (Secret agent-kourier-agent-token) is the caller's to
 # make: it differs by tier. Needs HERE, ROOT, K, H.
 deploy_agentkourier() {
-  local config dir
+  local config dir source=${E2E_CONFIG_SOURCE:-files} values=${AGENTKOURIER_VALUES:-${ROOT}/charts/agent-kourier/ci/fast-values.yaml}
+  require_config_source
   refuse_while_sandbox_up
   config=$(mktemp -d)
   trap 'rm -rf "${config}"; trap - RETURN' RETURN # the scratch directory goes however this ends
@@ -334,7 +355,31 @@ deploy_agentkourier() {
   "${K[@]}" -n agent-kourier create secret generic slack-fast --from-literal=botToken=xoxb-fake-test-token \
     --from-literal=appToken=xapp-fake-test-token --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
   "${K[@]}" -n agent-kourier create configmap agent-kourier-config --from-file="${config}" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
-  install_agentkourier "${AGENTKOURIER_VALUES:-${ROOT}/charts/agent-kourier/ci/fast-values.yaml}" ${AGENTKOURIER_HELM_ARGS[@]+"${AGENTKOURIER_HELM_ARGS[@]}"} # (an empty array is unset to bash 3.2)
+  case "${source}" in
+    files)
+      # A tier that was on crds holds the CRDs under the release: keep them there. (An empty array is unset to bash 3.2.)
+      if crds_held_by_release; then
+        install_agentkourier "${values}" ${AGENTKOURIER_HELM_ARGS[@]+"${AGENTKOURIER_HELM_ARGS[@]}"} --set crds.install=true
+      else
+        install_agentkourier "${values}" ${AGENTKOURIER_HELM_ARGS[@]+"${AGENTKOURIER_HELM_ARGS[@]}"}
+      fi
+      ;;
+    crds)
+      # 1. The CRDs, the route still files: the pod's template does not move, so there is no restart. Skipped when the release already holds them,
+      # which is a tier that is already on crds being brought up again: it would put the pod on the ConfigMap route for the length of the step.
+      if ! crds_held_by_release; then
+        replace_unowned_deployment agent-kourier
+        adopt_into_release agent-kourier serviceaccount/agent-kourier role/agent-kourier-secrets rolebinding/agent-kourier-secrets service/agent-kourier pvc/agent-kourier-data
+        helm_install_agentkourier agent-kourier "${values}" ${AGENTKOURIER_HELM_ARGS[@]+"${AGENTKOURIER_HELM_ARGS[@]}"} --set crds.install=true
+      fi
+      "${K[@]}" wait --for=condition=Established --timeout=60s crd/bindings.agentkourier.dev crd/agentbackends.agentkourier.dev crd/chatconnections.agentkourier.dev >/dev/null
+      # 2. The config as custom resources (the files are manifests of the three kinds already), then the route. A server-side dry run first, so that a
+      # file the CRDs refuse stops here with the apiserver's words.
+      "${K[@]}" apply --dry-run=server -f "${config}" >/dev/null
+      "${K[@]}" apply -f "${config}" >/dev/null
+      install_agentkourier "${values}" ${AGENTKOURIER_HELM_ARGS[@]+"${AGENTKOURIER_HELM_ARGS[@]}"} -f "${HERE}/crds-values.yaml"
+      ;;
+  esac
 }
 
 # apply_signaler: the container signaler (fast/signaler.yaml, in namespace e2e), which S16 uses to freeze or kill an Agent Kourier replica; the fast
