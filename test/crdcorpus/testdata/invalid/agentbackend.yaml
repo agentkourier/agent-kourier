@@ -58,6 +58,18 @@ spec:
   dialect: a2a
   url: "ftp://kagent"
 ---
+# rule: agentbackend/spec.url: control character
+# want: spec.url: must be an http or https URL with a host
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent\n"
+---
 # rule: agentbackend/spec.url: no host
 # want: spec.url: invalid URL "http:"
 # schema: refuses

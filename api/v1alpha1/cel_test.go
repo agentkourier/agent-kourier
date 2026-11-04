@@ -119,7 +119,8 @@ func durationLiterals(t *testing.T, rule string) []time.Duration {
 }
 
 // TestCELRulesAreSafeToShip holds every rule to what keeps a copy safe: it sits in the spec and never reads the status
-// (Validate ignores it, and a rule above the spec would run on every write to the status subresource), has a message
+// (Validate ignores it; a rule in the spec runs on a write to the status subresource too, as every rule of the schema
+// does), is not above the spec, has a message
 // that a person can act on and is not computed (a messageExpression could print a value beyond the object), and is not
 // a transition rule, which a stored object that is already invalid would fail on every update (an ordinary rule is
 // ratcheted: an update that leaves the field as it was is let through).

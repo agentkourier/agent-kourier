@@ -83,7 +83,9 @@ than one problem. It is not a required check yet. If you change an API type, a m
 is pulled. A new field or rule gets an entry in `test/crdcorpus/testdata/invalid`, whose `# broker-only:` line says why
 the CRD leaves it to the broker if no marker or CEL rule refuses it, and, if you write a CEL rule, an entry in
 `testdata/valid` at each edge where the rule could refuse an object that `Validate` accepts. A CEL rule may refuse only
-what `Validate` refuses: a rule you cannot make exact stays out, and the entry says why.
+what `Validate` refuses: a rule you cannot make exact stays out, and the entry says why. In a marker on a type, write
+an empty string in a rule as `""` inside backticks, never `''`: gofmt rewrites two apostrophes in a doc comment into a
+typographic quote, which breaks the rule.
 
 The `docs` workflow (`build`, the strict site build, and `links`, an external link check) runs only
 when a pull request touches the documentation sources, and its checks are not required; keep them

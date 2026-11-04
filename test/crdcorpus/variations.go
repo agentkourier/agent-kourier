@@ -167,13 +167,18 @@ func urls() func(*rand.Rand) any {
 		"http://ka\"gent", "http://ka<gent>", "http://ka'gent", "http://ka%41gent", "http://ka%zzgent", "http://ka%gent", "http://bücher.de/",
 		"http://kagent:80:80", "http://kagent:port", "https://a.b.c.d.example.com:8443/a/b/c?d=e#f", "http://kagent/\x7f", "http://\x7fkagent",
 	}
-	pieces := []string{"http", "HTTPS", "ftp", "://", ":", "/", "@", "u", "h", ".", "80", "[::1]", "[", "]", " ", "#", "?", "%", "%41", "\\", "\t", "é", "{", "|", "^", "`"}
+	pieces := []string{"http", "HTTPS", "ftp", "://", ":", "/", "@", "u", "h", ".", "80", "[::1]", "[", "]", " ", "#", "?", "%", "%41", "\\", "\t", "\n", "\r", "\x7f", "é", "{", "|", "^", "`", "#", "#"}
 	return func(r *rand.Rand) any {
 		if r.IntN(10) < 6 {
 			return curated[r.IntN(len(curated))]
 		}
+		// Most start with a scheme and an authority, or nearly all of them would be refused for having none.
 		var b strings.Builder
-		for range 1 + r.IntN(7) {
+		if r.IntN(10) < 8 {
+			b.WriteString([]string{"http://", "https://", "HTTP://", "hTtPs://"}[r.IntN(4)])
+			b.WriteString([]string{"kagent", "h", "kagent.kagent:8083", "[::1]", ":80", "a.b"}[r.IntN(6)])
+		}
+		for range 1 + r.IntN(5) {
 			b.WriteString(pieces[r.IntN(len(pieces))])
 		}
 		return b.String()
@@ -237,7 +242,8 @@ func variationTemplates() []template {
 			{"spec.url", urls()},
 			{"spec.headers.0.name", headerNames()},
 			{"spec.headers.0.name", headerNames()},
-			{"spec.headers.0.value", of("v", "", absent{})},
+			{"spec.headers.0.value", of("v", "", absent{}, nil)},
+			{"spec.headers.0.valueSecretRef", of(nil, nil)},
 			{"spec.headers.0.valueSecretRef", of(map[string]any{"name": "s"}, map[string]any{"name": "s", "key": "k"}, absent{}, map[string]any{"name": "s", "key": ""})},
 			{"spec.headers.1.name", headerNames()},
 			{"spec.headers.1.value", of("v", "", absent{})},
@@ -266,7 +272,20 @@ func variationTemplates() []template {
 func bindingMutations(dur, messageFields, extractNames func(*rand.Rand) any) []mutation {
 	const t = "spec.chat.triggers.1."
 	return []mutation{
-		{"spec.identity.userId", of("u", "", absent{})},
+		// Objects written out empty and values written as null, which the apiserver reads as unset (it prunes a null, or
+		// defaults it) and the broker's decoder reads as unset.
+		{"spec.interactions", of(map[string]any{}, nil, map[string]any{"timeout": nil, "toolApprovals": nil, "approverGroups": nil})},
+		{"spec.session", of(map[string]any{}, nil, map[string]any{"threadTTL": nil})},
+		{"spec.feedback", of(map[string]any{}, nil)},
+		{"spec.chat.acknowledgment", of(map[string]any{}, nil, map[string]any{"enabled": nil, "emoji": nil})},
+		{"spec.chat.triggers.1.limits", of(nil, map[string]any{"rateLimit": nil, "maxRunsPerDay": nil})},
+		{"spec.chat.triggers.1.thread", of(nil, map[string]any{"by": nil, "cooldown": nil, "maxIdle": nil, "closeWhen": nil})},
+		{"spec.chat.triggers.1.match", of(nil, nil)},
+		{"spec.chat.triggers.1.extract", of(nil, nil)},
+		{"spec.chat.triggers.1.from.kind", of(nil, nil)},
+		{"spec.chat.triggers.0", of(map[string]any{"type": "mention", "from": nil, "match": nil, "thread": nil, "limits": nil, "promptTemplate": nil})},
+		{"spec.identity.tokenSecretRef", of(nil, map[string]any{"name": "s", "key": nil})},
+		{"spec.identity.userId", of("u", "", absent{}, nil)},
 		{"spec.identity.tokenSecretRef", of(absent{}, map[string]any{"name": "s"}, map[string]any{"name": "s", "key": ""})},
 		{"spec.identity", of(map[string]any{}, map[string]any{"userId": ""}, map[string]any{"userId": "u"})},
 		{"spec.interactions.toolApprovals", of(true, false, absent{})},

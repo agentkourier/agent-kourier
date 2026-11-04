@@ -132,15 +132,18 @@ type AgentBackendSpec struct {
 	Dialect Dialect `json:"dialect"`
 	// The URL rules below copy only what the broker's parse (url.Parse, in validate.go) is certain to refuse, and are
 	// regular expressions, not CEL's url(), which is ParseRequestURI and throws on values the broker accepts (a
-	// fragment, a host that is only a port). A URL that this parse refuses and the rules let through is refused when
-	// the broker reads it. (Not in the doc comment below, which the reference pages print, while no CRD ships.)
+	// fragment; getHostname() is empty for a host that is only a port). url.Parse cuts the fragment off before it
+	// checks anything, so a rule that reads past a "#" refuses what the broker accepts: each rule stops at the first
+	// "#" (and the authority ends at "/", "?" or "#"). A URL that this parse refuses and the rules let through is
+	// refused when the broker reads it. (Not in the doc comment below, which the reference pages print, while no CRD
+	// ships.)
 
 	// URL is the http or https base URL for kagent-v1, or the exact JSON-RPC endpoint for a2a.
 	// The a2a card must be served at URL + "/.well-known/agent-card.json", as AX does.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:XValidation:rule=`self.matches('(?i)^https?://[^/?#]')`,message="must be an http or https URL with a host"
 	// +kubebuilder:validation:XValidation:rule=`!self.matches('(?i)^https?://[^/?#]*@')`,message="must not contain credentials; identity comes from the Binding"
-	// +kubebuilder:validation:XValidation:rule=`!self.matches(r'[\x00-\x1f\x7f]')`,message="invalid URL: must not contain control characters"
+	// +kubebuilder:validation:XValidation:rule=`!self.matches(r'^[^#]*[\x00-\x1f\x7f]')`,message="invalid URL: must not contain control characters"
 	// +kubebuilder:validation:XValidation:rule=`!self.matches(r'(?i)^https?://[^/?#]*[ \\^\x60{|}]')`,message="invalid URL: the host must not contain a space, backslash, caret, backtick, brace or bar"
 	URL string `json:"url"`
 	// Headers are sent on every request. Omitted headers add no static headers. At most 32.

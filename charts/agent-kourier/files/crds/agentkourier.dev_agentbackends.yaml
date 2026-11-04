@@ -126,7 +126,7 @@ spec:
                 - message: must not contain credentials; identity comes from the Binding
                   rule: '!self.matches(''(?i)^https?://[^/?#]*@'')'
                 - message: 'invalid URL: must not contain control characters'
-                  rule: '!self.matches(r''[\x00-\x1f\x7f]'')'
+                  rule: '!self.matches(r''^[^#]*[\x00-\x1f\x7f]'')'
                 - message: 'invalid URL: the host must not contain a space, backslash,
                     caret, backtick, brace or bar'
                   rule: '!self.matches(r''(?i)^https?://[^/?#]*[ \\^\x60{|}]'')'

@@ -86,10 +86,26 @@ spec:
   dialect: a2a
   url: "http://kagent./%41%20"
 ---
-# AgentBackend.spec.url that the broker accepts: the URL of every other example, with a port.
+# AgentBackend.spec.url that the broker accepts: a control character after the fragment mark, which url.Parse cuts off before it checks.
 apiVersion: agentkourier.dev/v1alpha1
 kind: AgentBackend
 metadata: {name: cel-url-11, namespace: sre}
+spec:
+  dialect: a2a
+  url: "http://kagent#\t"
+---
+# AgentBackend.spec.url that the broker accepts: a fragment that ends in a newline, as a YAML block scalar makes.
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: cel-url-12, namespace: sre}
+spec:
+  dialect: a2a
+  url: "http://kagent/p?q=1#frag\n"
+---
+# AgentBackend.spec.url that the broker accepts: the URL of every other example, with a port.
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: cel-url-13, namespace: sre}
 spec:
   dialect: a2a
   url: "http://kagent.kagent:8083/"
