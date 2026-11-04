@@ -1,0 +1,1042 @@
+# rule: binding/metadata.name: missing
+# want: metadata.name: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+---
+# rule: binding/metadata.name: invalid
+# want: metadata.name: invalid name
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: Alerts_Binding
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+---
+# rule: binding/metadata.namespace: missing
+# want: metadata.namespace: required
+# cluster: skip because an apiserver fills the namespace in from the request, so only the broker can see it missing
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+---
+# rule: binding/metadata.namespace: invalid
+# want: metadata.namespace: invalid namespace
+# cluster: skip because an apiserver looks the namespace up before it validates the object
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: Bad_NS
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+---
+# rule: binding/spec.agent.backendRef.name: empty
+# want: spec.agent.backendRef.name: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: ""}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+---
+# rule: binding/spec.agent.backendRef.name: invalid
+# want: spec.agent.backendRef.name: invalid name
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: Bad_Name}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+---
+# rule: binding/spec.agent.backendRef.namespace: invalid
+# want: spec.agent.backendRef.namespace: invalid namespace
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent, namespace: Bad_NS}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+---
+# rule: binding/spec.agent.backendRef.namespace: over 63 characters
+# want: spec.agent.backendRef.namespace: invalid namespace
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent, namespace: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+---
+# rule: binding/spec.agent.name: empty
+# want: spec.agent.name: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: ""
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+---
+# rule: binding/spec.agent.namespace: missing
+# want: spec.agent.namespace: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+---
+# rule: binding/spec.agent.namespace: invalid
+# want: spec.agent.namespace: invalid namespace
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: Bad_NS
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+---
+# rule: binding/spec.agent.namespace: over 63 characters
+# want: spec.agent.namespace: invalid namespace
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+---
+# rule: binding/spec.identity: neither userId nor tokenSecretRef
+# want: spec.identity: set userId, tokenSecretRef, or both
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity: {}
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+---
+# rule: binding/spec.identity.tokenSecretRef.name: empty
+# want: spec.identity.tokenSecretRef.name: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+    tokenSecretRef: {name: ""}
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+---
+# rule: binding/spec.identity.tokenSecretRef.name: invalid
+# want: spec.identity.tokenSecretRef.name: invalid name
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+    tokenSecretRef: {name: Bad_Name}
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+---
+# rule: binding/spec.identity.tokenSecretRef.key: invalid
+# want: spec.identity.tokenSecretRef.key: invalid key
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+    tokenSecretRef: {name: s, key: "a b"}
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+---
+# rule: binding/spec.identity.tokenSecretRef.key: starts with dot dot
+# want: spec.identity.tokenSecretRef.key: invalid key
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+    tokenSecretRef: {name: s, key: "..token"}
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+---
+# rule: binding/spec.chat.connectionRef.name: empty
+# want: spec.chat.connectionRef.name: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: ""}
+    channel: C0123456789
+---
+# rule: binding/spec.chat.connectionRef.name: invalid
+# want: spec.chat.connectionRef.name: invalid name
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: Bad_Name}
+    channel: C0123456789
+---
+# rule: binding/spec.chat.connectionRef.namespace: invalid
+# want: spec.chat.connectionRef.namespace: invalid namespace
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack, namespace: Bad_NS}
+    channel: C0123456789
+---
+# rule: binding/spec.chat.channel: empty
+# want: spec.chat.channel: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: ""
+---
+# rule: binding/spec.chat.channel: a name, not an ID
+# want: spec.chat.channel: invalid channel "#sre-alerts"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: "#sre-alerts"
+---
+# rule: binding/spec.chat.output: unsupported
+# want: spec.chat.output: unsupported value "carrier-pigeon"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    output: carrier-pigeon
+---
+# rule: binding/spec.chat.progress: unsupported
+# want: spec.chat.progress: unsupported value "spinner"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    progress: spinner
+---
+# rule: binding/spec.chat.threadReplies: unsupported
+# want: spec.chat.threadReplies: unsupported value "none"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    threadReplies: none
+---
+# rule: binding/spec.chat.botMentions: unsupported
+# want: spec.chat.botMentions: unsupported value "some"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    botMentions: some
+---
+# rule: binding/spec.chat.acknowledgment.emoji: invalid
+# want: spec.chat.acknowledgment.emoji: invalid reaction name ":eyes:"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    acknowledgment: {emoji: ":eyes:"}
+---
+# rule: binding/spec.chat.mentions: over the cap of 50
+# want: spec.chat.mentions: has 51 items, maximum is 50
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    mentions: [{name: p0, user: U0123456789}, {name: p1, user: U0123456789}, {name: p2, user: U0123456789}, {name: p3, user: U0123456789}, {name: p4, user: U0123456789}, {name: p5, user: U0123456789}, {name: p6, user: U0123456789}, {name: p7, user: U0123456789}, {name: p8, user: U0123456789}, {name: p9, user: U0123456789}, {name: p10, user: U0123456789}, {name: p11, user: U0123456789}, {name: p12, user: U0123456789}, {name: p13, user: U0123456789}, {name: p14, user: U0123456789}, {name: p15, user: U0123456789}, {name: p16, user: U0123456789}, {name: p17, user: U0123456789}, {name: p18, user: U0123456789}, {name: p19, user: U0123456789}, {name: p20, user: U0123456789}, {name: p21, user: U0123456789}, {name: p22, user: U0123456789}, {name: p23, user: U0123456789}, {name: p24, user: U0123456789}, {name: p25, user: U0123456789}, {name: p26, user: U0123456789}, {name: p27, user: U0123456789}, {name: p28, user: U0123456789}, {name: p29, user: U0123456789}, {name: p30, user: U0123456789}, {name: p31, user: U0123456789}, {name: p32, user: U0123456789}, {name: p33, user: U0123456789}, {name: p34, user: U0123456789}, {name: p35, user: U0123456789}, {name: p36, user: U0123456789}, {name: p37, user: U0123456789}, {name: p38, user: U0123456789}, {name: p39, user: U0123456789}, {name: p40, user: U0123456789}, {name: p41, user: U0123456789}, {name: p42, user: U0123456789}, {name: p43, user: U0123456789}, {name: p44, user: U0123456789}, {name: p45, user: U0123456789}, {name: p46, user: U0123456789}, {name: p47, user: U0123456789}, {name: p48, user: U0123456789}, {name: p49, user: U0123456789}, {name: p50, user: U0123456789}]
+---
+# rule: binding/spec.chat.mentions[].name: missing
+# want: spec.chat.mentions[0].name: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    mentions: [{user: U0123456789}]
+---
+# rule: binding/spec.chat.mentions[].name: reserved, here
+# want: spec.chat.mentions[0].name: "here" is reserved
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    mentions: [{name: here, user: U0123456789}]
+---
+# rule: binding/spec.chat.mentions[].name: reserved, channel
+# want: spec.chat.mentions[0].name: "channel" is reserved
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    mentions: [{name: channel, user: U0123456789}]
+---
+# rule: binding/spec.chat.mentions[].name: reserved, everyone
+# want: spec.chat.mentions[0].name: "everyone" is reserved
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    mentions: [{name: everyone, user: U0123456789}]
+---
+# rule: binding/spec.chat.mentions[].name: invalid
+# want: spec.chat.mentions[0].name: invalid name "Sam"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    mentions: [{name: Sam, user: U0123456789}]
+---
+# rule: binding/spec.chat.mentions[].name: declared twice
+# want: spec.chat.mentions[1].name: duplicate of index 0
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    mentions: [{name: sam, user: U0123456789}, {name: sam, user: U9876543210}]
+---
+# rule: binding/spec.chat.mentions[].user: missing
+# want: spec.chat.mentions[0].user: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    mentions: [{name: sam}]
+---
+# rule: binding/spec.chat.mentions[].user: a user group
+# want: spec.chat.mentions[0].user: invalid user ID "S0123456789"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    mentions: [{name: oncall, user: S0123456789}]
+---
+# rule: binding/spec.chat.maxMentionsPerTurn: 0
+# want: spec.chat.maxMentionsPerTurn: 0 is out of range
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    maxMentionsPerTurn: 0
+---
+# rule: binding/spec.chat.maxMentionsPerTurn: 11
+# want: spec.chat.maxMentionsPerTurn: 11 is out of range
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    maxMentionsPerTurn: 11
+---
+# rule: binding/spec.chat.maxMentionsPerTurn: -1
+# want: spec.chat.maxMentionsPerTurn: -1 is out of range
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    maxMentionsPerTurn: -1
+---
+# rule: binding/spec.interactions.approverGroups: needs toolApprovals
+# want: spec.interactions.approverGroups: requires spec.interactions.toolApprovals: true
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+  interactions:
+    approverGroups: [S0123456789]
+---
+# rule: binding/spec.interactions.approverGroups: over the cap of 10
+# want: spec.interactions.approverGroups: has 11 items, maximum is 10
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+  interactions:
+    toolApprovals: true
+    approverGroups: [S0000000000, S0000000001, S0000000002, S0000000003, S0000000004, S0000000005, S0000000006, S0000000007, S0000000008, S0000000009, S0000000010]
+---
+# rule: binding/spec.interactions.approverGroups[]: empty
+# want: spec.interactions.approverGroups[0]: must not be empty
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+  interactions:
+    toolApprovals: true
+    approverGroups: [""]
+---
+# rule: binding/spec.interactions.approverGroups[]: not a user group ID
+# want: spec.interactions.approverGroups[0]: invalid group ID "C0123456789"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+  interactions:
+    toolApprovals: true
+    approverGroups: [C0123456789]
+---
+# rule: binding/spec.interactions.approverGroups[]: named twice
+# want: spec.interactions.approverGroups[1]: duplicate of index 0
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+  interactions:
+    toolApprovals: true
+    approverGroups: [S0123456789, S0123456789]
+---
+# rule: binding/spec.interactions.timeout: negative
+# want: spec.interactions.timeout: must be positive
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+  interactions:
+    timeout: "-1m"
+---
+# rule: binding/spec.interactions.timeout: not a duration
+# want: invalid duration "banana"
+# field: spec.interactions.timeout
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+  interactions:
+    timeout: banana
+---
+# rule: binding/spec.session.threadTTL: negative
+# want: spec.session.threadTTL: must be positive
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+  session:
+    threadTTL: "-1h"
+---
+# rule: binding/spec.session.threadTTL: no unit
+# want: missing unit in duration "30"
+# field: spec.session.threadTTL
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+  session:
+    threadTTL: "30"
+---
+# rule: binding/decoder: a field the type does not have, at the top
+# want: bogus: unknown field
+# field: bogus
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+bogus: 1
+---
+# rule: binding/decoder: a field the type does not have, in the spec
+# want: spec.chat.chanel: unknown field
+# field: spec.chat.chanel
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    chanel: C0123456789
+---
+# rule: binding/decoder: a value of the wrong type
+# want: cannot unmarshal number into Go struct field
+# field: spec.chat.channel
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: 5
+---
+# rule: binding/status: a file may not set it
+# want: status: a file may not set it, remove it
+# field: status
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+status:
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: Ready
+      message: ok
+      lastTransitionTime: "2026-11-04T10:00:00Z"
+      observedGeneration: 1

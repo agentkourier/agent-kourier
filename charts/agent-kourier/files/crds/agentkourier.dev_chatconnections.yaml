@@ -49,6 +49,8 @@ spec:
                   AllowedNamespaces lists the other namespaces whose Bindings may reference this connection. Each is a DNS-1123 label.
                   An empty list permits references only from the connection's own namespace.
                 items:
+                  maxLength: 63
+                  pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                   type: string
                 type: array
               credentialsSecretRef:
@@ -59,6 +61,8 @@ spec:
                     description: |-
                       Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a
                       letter or digit.
+                    maxLength: 253
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                     type: string
                 required:
                 - name

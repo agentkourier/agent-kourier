@@ -1,0 +1,1958 @@
+# rule: trigger/spec.chat.triggers: over the cap of 50
+# want: spec.chat.triggers: has 51 items, maximum is 50
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers: [{type: mention}, {type: botMessage, from: {id: B0000000001}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000002}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000003}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000004}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000005}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000006}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000007}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000008}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000009}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000010}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000011}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000012}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000013}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000014}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000015}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000016}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000017}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000018}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000019}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000020}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000021}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000022}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000023}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000024}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000025}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000026}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000027}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000028}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000029}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000030}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000031}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000032}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000033}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000034}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000035}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000036}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000037}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000038}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000039}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000040}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000041}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000042}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000043}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000044}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000045}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000046}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000047}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000048}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000049}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}, {type: botMessage, from: {id: B0000000050}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}}]
+---
+# rule: trigger/spec.chat.triggers[].type: unsupported
+# want: spec.chat.triggers[1].type: unsupported value "message"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: message
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/from: not allowed with type mention
+# want: spec.chat.triggers[0].from: not allowed with type: mention
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention, from: {id: B0123456789}}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/match: not allowed with type mention
+# want: spec.chat.triggers[0].match: not allowed with type: mention
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention, match: {title: x}}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/exclude: not allowed with type mention
+# want: spec.chat.triggers[0].exclude: not allowed with type: mention
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention, exclude: {title: x}}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/extract: not allowed with type mention
+# want: spec.chat.triggers[0].extract: not allowed with type: mention
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention, extract: {state: {field: title, regex: "(?P<state>x)"}}}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/thread.by: not allowed with type mention
+# want: spec.chat.triggers[0].thread: not allowed with type: mention
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention, thread: {by: key}}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/thread.cooldown: not allowed with type mention
+# want: spec.chat.triggers[0].thread: not allowed with type: mention
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention, thread: {cooldown: 1h}}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/thread.maxIdle: not allowed with type mention
+# want: spec.chat.triggers[0].thread: not allowed with type: mention
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention, thread: {maxIdle: 48h}}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/thread.closeWhen: not allowed with type mention
+# want: spec.chat.triggers[0].thread: not allowed with type: mention
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention, thread: {closeWhen: {a: b}}}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/promptTemplate: not allowed with type mention
+# want: spec.chat.triggers[0].promptTemplate: not allowed with type: mention
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention, promptTemplate: x}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/limits: not allowed with type mention
+# want: spec.chat.triggers[0].limits: not allowed with type: mention
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention, limits: {maxRunsPerDay: 1}}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].from.id: missing
+# want: spec.chat.triggers[1].from.id: required
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].from.id: empty
+# want: spec.chat.triggers[1].from.id: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: ""}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].from.id: a name, not an ID
+# want: spec.chat.triggers[1].from.id: invalid sender ID "alertmanager"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: alertmanager}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].from.id: a user ID
+# want: spec.chat.triggers[1].from.id: invalid sender ID "U0123456789"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: U0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].from.kind: unsupported
+# want: spec.chat.triggers[1].from.kind: unsupported value "webhook"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789, kind: webhook}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].match: unknown field
+# want: spec.chat.triggers[1].match.subject: unsupported message field "subject"
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {subject: x}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].match: empty regex
+# want: spec.chat.triggers[1].match.title: required
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: ""}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].match: regex over 512 bytes
+# want: spec.chat.triggers[1].match.title: regular expression is 513 bytes
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match:
+          title: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].match: regex that does not compile
+# want: spec.chat.triggers[1].match.title: invalid regular expression
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "("}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].exclude: unknown field
+# want: spec.chat.triggers[1].exclude.subject: unsupported message field "subject"
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+        exclude: {subject: x}
+---
+# rule: trigger/spec.chat.triggers[].exclude: empty regex
+# want: spec.chat.triggers[1].exclude.title: required
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+        exclude: {title: ""}
+---
+# rule: trigger/spec.chat.triggers[].exclude: regex over 512 bytes
+# want: spec.chat.triggers[1].exclude.title: regular expression is 513 bytes
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+        exclude:
+          title: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+---
+# rule: trigger/spec.chat.triggers[].exclude: regex that does not compile
+# want: spec.chat.triggers[1].exclude.title: invalid regular expression
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+        exclude: {title: "("}
+---
+# rule: trigger/spec.chat.triggers[].extract: invalid name
+# want: spec.chat.triggers[1].extract.Alert-Name: invalid extract name
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+          Alert-Name: {field: title, regex: "(?P<Alert_Name>x)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].extract[].field: unknown
+# want: spec.chat.triggers[1].extract.state.field: unsupported message field "subject"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: subject, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].extract[].field: missing
+# want: spec.chat.triggers[1].extract.state.field: unsupported message field ""
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract: {state: {regex: "(?P<state>FIRING|RESOLVED)"}, key: {field: fallback, regex: "(?P<key>.+)"}}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].extract[].regex: empty
+# want: spec.chat.triggers[1].extract.state.regex: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract: {state: {field: title, regex: ""}, key: {field: fallback, regex: "(?P<key>.+)"}}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].extract[].regex: over 512 characters
+# want: spec.chat.triggers[1].extract.state.regex: regular expression is 513 bytes
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state:
+            field: title
+            regex: "(?P<state>a)aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].extract[].regex: under 512 characters but over 512 bytes
+# want: spec.chat.triggers[1].extract.state.regex: regular expression is 532 bytes
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state:
+            field: title
+            regex: "(?P<state>x)éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].extract[].regex: does not compile
+# want: spec.chat.triggers[1].extract.state.regex: invalid regular expression
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract: {state: {field: title, regex: "(?P<state>"}, key: {field: fallback, regex: "(?P<key>.+)"}}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].extract[].regex: no group named like the entry
+# want: spec.chat.triggers[1].extract.state.regex: must have a named group (?P<state>...)
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract: {state: {field: title, regex: "(?P<other>x)"}, key: {field: fallback, regex: "(?P<key>.+)"}}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].extract: over the cap of 32
+# want: spec.chat.triggers[1].extract: has 33 entries, maximum is 32
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+          e0: {field: text, regex: "(?P<e0>x)"}
+          e1: {field: text, regex: "(?P<e1>x)"}
+          e2: {field: text, regex: "(?P<e2>x)"}
+          e3: {field: text, regex: "(?P<e3>x)"}
+          e4: {field: text, regex: "(?P<e4>x)"}
+          e5: {field: text, regex: "(?P<e5>x)"}
+          e6: {field: text, regex: "(?P<e6>x)"}
+          e7: {field: text, regex: "(?P<e7>x)"}
+          e8: {field: text, regex: "(?P<e8>x)"}
+          e9: {field: text, regex: "(?P<e9>x)"}
+          e10: {field: text, regex: "(?P<e10>x)"}
+          e11: {field: text, regex: "(?P<e11>x)"}
+          e12: {field: text, regex: "(?P<e12>x)"}
+          e13: {field: text, regex: "(?P<e13>x)"}
+          e14: {field: text, regex: "(?P<e14>x)"}
+          e15: {field: text, regex: "(?P<e15>x)"}
+          e16: {field: text, regex: "(?P<e16>x)"}
+          e17: {field: text, regex: "(?P<e17>x)"}
+          e18: {field: text, regex: "(?P<e18>x)"}
+          e19: {field: text, regex: "(?P<e19>x)"}
+          e20: {field: text, regex: "(?P<e20>x)"}
+          e21: {field: text, regex: "(?P<e21>x)"}
+          e22: {field: text, regex: "(?P<e22>x)"}
+          e23: {field: text, regex: "(?P<e23>x)"}
+          e24: {field: text, regex: "(?P<e24>x)"}
+          e25: {field: text, regex: "(?P<e25>x)"}
+          e26: {field: text, regex: "(?P<e26>x)"}
+          e27: {field: text, regex: "(?P<e27>x)"}
+          e28: {field: text, regex: "(?P<e28>x)"}
+          e29: {field: text, regex: "(?P<e29>x)"}
+          e30: {field: text, regex: "(?P<e30>x)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].thread.by: unsupported
+# want: spec.chat.triggers[1].thread.by: unsupported value "message"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: message, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].thread.cooldown: needs thread.by
+# want: spec.chat.triggers[1].thread.cooldown: requires thread.by
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {cooldown: 1h}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].thread.maxIdle: needs thread.by
+# want: spec.chat.triggers[1].thread.maxIdle: requires thread.by
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {maxIdle: 48h}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].thread.closeWhen: needs thread.by
+# want: spec.chat.triggers[1].thread.closeWhen: requires thread.by
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].thread.by: key needs an extract named key
+# want: spec.chat.triggers[1].thread.by: key requires an extract named "key"
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract: {state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].thread.cooldown: required with by
+# want: spec.chat.triggers[1].thread.cooldown: required with thread.by
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].thread.cooldown: under a minute
+# want: spec.chat.triggers[1].thread.cooldown: 59s is out of range
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 59s, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].thread.cooldown: over 168h
+# want: spec.chat.triggers[1].thread.cooldown: 169h0m0s is out of range
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 169h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].thread.cooldown: not a duration
+# want: invalid duration "banana"
+# field: spec.chat.triggers[1].thread.cooldown
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: banana, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].thread.maxIdle: under twice the cooldown
+# want: spec.chat.triggers[1].thread.maxIdle: 3h0m0s is out of range
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}, maxIdle: 3h}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].thread.maxIdle: over 720h
+# want: spec.chat.triggers[1].thread.maxIdle: 721h0m0s is out of range
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}, maxIdle: 721h}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].thread.maxIdle: not a duration
+# want: in duration "1 day"
+# field: spec.chat.triggers[1].thread.maxIdle
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}, maxIdle: "1 day"}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].thread.closeWhen: not an extracted field
+# want: spec.chat.triggers[1].thread.closeWhen.status: not an extracted field
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {status: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].thread.closeWhen: empty value
+# want: spec.chat.triggers[1].thread.closeWhen.state: required
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: ""}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].thread.closeWhen: over the cap of 32, one key not extracted
+# want: spec.chat.triggers[1].thread.closeWhen.e30: not an extracted field
+# field: spec.chat.triggers[1].thread.closeWhen
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+          e0: {field: text, regex: "(?P<e0>x)"}
+          e1: {field: text, regex: "(?P<e1>x)"}
+          e2: {field: text, regex: "(?P<e2>x)"}
+          e3: {field: text, regex: "(?P<e3>x)"}
+          e4: {field: text, regex: "(?P<e4>x)"}
+          e5: {field: text, regex: "(?P<e5>x)"}
+          e6: {field: text, regex: "(?P<e6>x)"}
+          e7: {field: text, regex: "(?P<e7>x)"}
+          e8: {field: text, regex: "(?P<e8>x)"}
+          e9: {field: text, regex: "(?P<e9>x)"}
+          e10: {field: text, regex: "(?P<e10>x)"}
+          e11: {field: text, regex: "(?P<e11>x)"}
+          e12: {field: text, regex: "(?P<e12>x)"}
+          e13: {field: text, regex: "(?P<e13>x)"}
+          e14: {field: text, regex: "(?P<e14>x)"}
+          e15: {field: text, regex: "(?P<e15>x)"}
+          e16: {field: text, regex: "(?P<e16>x)"}
+          e17: {field: text, regex: "(?P<e17>x)"}
+          e18: {field: text, regex: "(?P<e18>x)"}
+          e19: {field: text, regex: "(?P<e19>x)"}
+          e20: {field: text, regex: "(?P<e20>x)"}
+          e21: {field: text, regex: "(?P<e21>x)"}
+          e22: {field: text, regex: "(?P<e22>x)"}
+          e23: {field: text, regex: "(?P<e23>x)"}
+          e24: {field: text, regex: "(?P<e24>x)"}
+          e25: {field: text, regex: "(?P<e25>x)"}
+          e26: {field: text, regex: "(?P<e26>x)"}
+          e27: {field: text, regex: "(?P<e27>x)"}
+          e28: {field: text, regex: "(?P<e28>x)"}
+          e29: {field: text, regex: "(?P<e29>x)"}
+        thread:
+          by: key
+          cooldown: 2h
+          closeWhen:
+            state: RESOLVED
+            key: k
+            e0: v
+            e1: v
+            e2: v
+            e3: v
+            e4: v
+            e5: v
+            e6: v
+            e7: v
+            e8: v
+            e9: v
+            e10: v
+            e11: v
+            e12: v
+            e13: v
+            e14: v
+            e15: v
+            e16: v
+            e17: v
+            e18: v
+            e19: v
+            e20: v
+            e21: v
+            e22: v
+            e23: v
+            e24: v
+            e25: v
+            e26: v
+            e27: v
+            e28: v
+            e29: v
+            e30: v
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].limits.rateLimit: required
+# want: spec.chat.triggers[1].limits.rateLimit: required
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].limits.maxRunsPerDay: required
+# want: spec.chat.triggers[1].limits.maxRunsPerDay: required
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].limits.rateLimit.maxRuns: zero
+# want: spec.chat.triggers[1].limits.rateLimit.maxRuns: must be positive
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 0, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].limits.rateLimit.maxConcurrent: zero
+# want: spec.chat.triggers[1].limits.rateLimit.maxConcurrent: must be positive
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 0}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].limits.rateLimit.per: under 10s
+# want: spec.chat.triggers[1].limits.rateLimit.per: 5s is out of range
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 5s, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].limits.rateLimit.per: over 24h
+# want: spec.chat.triggers[1].limits.rateLimit.per: 25h0m0s is out of range
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 25h, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].limits.rateLimit.per: no unit
+# want: missing unit in duration "30"
+# field: spec.chat.triggers[1].limits.rateLimit.per
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: "30", maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].limits.maxRunsPerDay: negative
+# want: spec.chat.triggers[1].limits.maxRunsPerDay: must not be negative
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: -1}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].promptTemplate: required
+# want: spec.chat.triggers[1].promptTemplate: required
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+---
+# rule: trigger/spec.chat.triggers[].promptTemplate: does not parse
+# want: spec.chat.triggers[1].promptTemplate: invalid template
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "{{ .State "
+---
+# rule: trigger/spec.chat.triggers[].promptTemplate: names an extract the trigger lacks
+# want: is not an extract of this trigger
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "{{ .Fields.nope }}"
+---
+# rule: trigger/spec.chat.triggers[].promptTemplate: fails when it runs
+# want: spec.chat.triggers[1].promptTemplate: invalid template
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "{{ slice .Key 0 100 }}"
+---
+# rule: trigger/spec.chat.triggers: the same trigger twice
+# want: spec.chat.triggers[2]: duplicate of spec.chat.triggers[1]
+# schema: accepts
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."

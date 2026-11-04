@@ -42,6 +42,16 @@ const (
 	maxApproverGroups = 10
 	// maxMentions bounds the names a Binding declares, each of which the agent is told of in its first prompt.
 	maxMentions = 50
+	// maxTriggers, maxExtract, maxHeaders and maxHeaderNameLen bound what the CRD schema's validation rules walk: the
+	// apiserver prices a rule by the largest list, map or string it can meet, and refuses a schema whose rules cost
+	// too much, so each of these is also a maxItems, maxProperties or maxLength in the schema. They are set far above
+	// any real use, which today is two triggers, three extracts, one header and a header name of 16 characters. A config
+	// over one is refused when it loads, on the file route too. maxExtract also bounds thread.closeWhen: a closeWhen
+	// key must be an extract's, so that bound refuses nothing the extract cap does not.
+	maxTriggers      = 50
+	maxExtract       = 32
+	maxHeaders       = 32
+	maxHeaderNameLen = 256
 )
 
 // mentionName is what an agent writes after an "@"; its literal must equal ChatMention.Name's Pattern marker. mentionUser
@@ -165,9 +175,15 @@ func (a *AgentBackend) Validate() error {
 	} else if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		p.add("spec.url", "invalid URL %q: must be an http or https URL with a host", u.Redacted())
 	}
+	if len(s.Headers) > maxHeaders {
+		p.add("spec.headers", "has %d items, maximum is %d", len(s.Headers), maxHeaders)
+	}
 	for i, h := range s.Headers {
 		path := fmt.Sprintf("spec.headers[%d]", i)
 		p.required(path+".name", h.Name)
+		if len(h.Name) > maxHeaderNameLen {
+			p.add(path+".name", "is %d bytes, longer than the %d byte limit", len(h.Name), maxHeaderNameLen)
+		}
 		if IsReservedHeader(h.Name) {
 			p.add(path+".name", "header %q is reserved for the Binding identity (D14)", h.Name)
 		}
@@ -331,6 +347,9 @@ func (p *problems) fieldRegexes(path string, m map[MessageField]string) {
 // triggers validates the trigger list: each trigger on its own, then the list for triggers
 // that could never be reached.
 func (p *problems) triggers(path string, ts []Trigger) {
+	if len(ts) > maxTriggers {
+		p.add(path, "has %d items, maximum is %d", len(ts), maxTriggers)
+	}
 	seen := map[string]int{}
 	for i := range ts {
 		at := fmt.Sprintf("%s[%d]", path, i)
@@ -397,6 +416,9 @@ func (p *problems) botMessageTrigger(path string, t *Trigger) {
 	}
 	p.fieldRegexes(path+".match", t.Match)
 	p.fieldRegexes(path+".exclude", t.Exclude)
+	if len(t.Extract) > maxExtract {
+		p.add(path+".extract", "has %d entries, maximum is %d", len(t.Extract), maxExtract)
+	}
 	for _, name := range slices.Sorted(maps.Keys(t.Extract)) {
 		p.extract(path+".extract."+name, name, t.Extract[name])
 	}

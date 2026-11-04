@@ -36,7 +36,7 @@ AgentRef names the agent on a backend.
 |---|---|---|---|---|
 | `backendRef` | [ObjectRef](#objectref) | Yes | None |  |
 | `name` | string | Yes | None | Name is the agent's name on the backend. At least 1 character. |
-| `namespace` | string | Yes | None | Namespace is the agent's namespace on the backend: a DNS-1123 label of at most 63 lowercase letters, digits or '-', starting and ending with a letter or digit. |
+| `namespace` | string | Yes | None | Namespace is the agent's namespace on the backend: a DNS-1123 label of at most 63 lowercase letters, digits or '-', starting and ending with a letter or digit. Pattern `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`. At most 63 characters. |
 
 ## ObjectRef
 
@@ -44,8 +44,8 @@ ObjectRef names a resource in a namespace. An empty namespace means the namespac
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `namespace` | string | No | Namespace of the referring object |  |
-| `name` | string | Yes | None | Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a letter or digit. |
+| `namespace` | string | No | Namespace of the referring object | Namespace is a DNS-1123 label: at most 63 lowercase letters, digits or '-', starting and ending with a letter or digit. Pattern `^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$`. At most 63 characters. |
+| `name` | string | Yes | None | Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a letter or digit. Pattern `^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`. At most 253 characters. |
 
 ## Identity
 
@@ -62,8 +62,8 @@ SecretKeyRef names one value in a Secret in the referring object's namespace.
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | string | Yes | None | Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a letter or digit. |
-| `key` | string | No | `token` | Key selects the entry of the Secret. It defaults to "token". It consists of alphanumeric characters, '-', '_' or '.'. |
+| `name` | string | Yes | None | Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a letter or digit. Pattern `^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`. At most 253 characters. |
+| `key` | string | No | `token` | Key selects the entry of the Secret. It defaults to "token". It consists of at most 253 alphanumeric characters, '-', '_' or '.', and is neither "." nor "..", nor does it start with "..". Pattern `^(\.?[-_a-zA-Z0-9][-._a-zA-Z0-9]*)?$`. At most 253 characters. |
 
 ## ChatBinding
 
@@ -78,7 +78,7 @@ ChatBinding places the Binding in a channel.
 | `threadReplies` | string | No | `all` | ThreadReplies defaults to all: any person's reply in a thread Agent Kourier owns is a turn. With mention, only a reply that mentions Agent Kourier is a turn, whether a mention or a trigger started the thread; the next mentioned turn carries the other replies as context. A typed answer to a pending question that takes text replies needs no mention. One of `all`, `mention`. |
 | `botMentions` | string | No | `any` | BotMentions defaults to any: on a Binding with a mention trigger, a mention of Agent Kourier by any bot or incoming webhook that can post in the channel starts a turn in the mention's thread, with a fixed prompt and held to fixed limits. The platform cannot tell an agent from any other bot. With none, a bot's mention starts nothing. Agent Kourier's own posts, and a bot that a botMessage trigger names, are never taken as a mention. One of `any`, `none`. |
 | `acknowledgment` | [ChatAcknowledgment](#chatacknowledgment) | No | None | Acknowledgment controls the temporary reaction Agent Kourier adds to an accepted message while it is being processed. It defaults to enabled with the platform's own reaction (Slack: hourglass_flowing_sand). |
-| `triggers` | [][Trigger](#trigger) | No | `[{type: mention}]` | Triggers decide which events in the channel start or continue a turn. Empty means [{type: mention}]: a mention starts a session. A list that names triggers is the whole list. |
+| `triggers` | [][Trigger](#trigger) | No | `[{type: mention}]` | Triggers decide which events in the channel start or continue a turn. Empty means [{type: mention}]: a mention starts a session. A list that names triggers is the whole list. At most 50. |
 | `mentions` | [][ChatMention](#chatmention) | No | None | Mentions are the people an agent may notify, by writing `@name` in its reply. Agent Kourier then posts a message in the thread that mentions each one named, one message for each. A name not listed here notifies nobody, and an agent can never supply a user ID. Empty means no mentions, and nothing is added to the prompt. At most 50. |
 | `maxMentionsPerTurn` | integer | No | `2` | MaxMentionsPerTurn is the most people one turn mentions, at most 10; the people after them are not mentioned. It defaults to 2. 0 is refused: to notify nobody, leave mentions empty. Minimum 1. |
 
@@ -89,7 +89,7 @@ ChatAcknowledgment configures the temporary reaction on an accepted message.
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `enabled` | boolean | No | `true` | Enabled adds the reaction after the message is durably accepted and removes it when processing ends. It defaults to true. |
-| `emoji` | string | No | None | Emoji is the reaction name without colons. Left empty, the platform's own acknowledgment reaction is used (Slack: hourglass_flowing_sand). The API fills in no default, so a stored Binding does not carry one platform's reaction. Pattern `^(?:[a-z0-9][a-z0-9+_-]*|[+-][a-z0-9][a-z0-9+_-]*)$`. |
+| `emoji` | string | No | None | Emoji is the reaction name without colons. Left empty, the platform's own acknowledgment reaction is used (Slack: hourglass_flowing_sand). The API fills in no default, so a stored Binding does not carry one platform's reaction. Pattern `^(?:[a-z0-9][a-z0-9+_-]*|[+-][a-z0-9][a-z0-9+_-]*)?$`. |
 
 ## Trigger
 
@@ -101,7 +101,7 @@ Trigger is one way an event in the bound channel starts or continues a turn. Tri
 | `from` | [BotSource](#botsource) | No | None | From names the sender a botMessage trigger accepts. Required for botMessage. |
 | `match` | map[string]string | No | None | Match maps a message field to a regex it must match. Every entry must match. Keys: `text`, `title`, `link`, `fallback`, `footer`, `body`. |
 | `exclude` | map[string]string | No | None | Exclude maps a message field to a regex; a message matching any entry is ignored. Keys: `text`, `title`, `link`, `fallback`, `footer`, `body`. |
-| `extract` | map[string][Extract](#extract) | No | None | Extract names the values to pull out of a message. A message in which one of these regexes does not match does not match the trigger. |
+| `extract` | map[string][Extract](#extract) | No | None | Extract names the values to pull out of a message. A message in which one of these regexes does not match does not match the trigger. At most 32. |
 | `thread` | [TriggerThread](#triggerthread) | No | None | Thread ties messages that share an extracted key to one thread. |
 | `promptTemplate` | string | No | None | PromptTemplate is a Go template over the trigger's view of the message (.Channel, .State, .Key, .Fields, .Link, .Source). Required for botMessage. |
 | `limits` | [TriggerLimits](#triggerlimits) | No | None | Limits bounds how many investigations the trigger starts (rate, concurrency and a daily cap). Required for botMessage: both rateLimit and maxRunsPerDay. |
@@ -122,7 +122,7 @@ Extract pulls one named value out of a message field. The entry's name in Trigge
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `field` | string | Yes | None | Field is the message field the regex runs on. One of `text`, `title`, `link`, `fallback`, `footer`, `body`. |
-| `regex` | string | Yes | None | Regex is a Go (RE2) regular expression of at most 512 bytes. |
+| `regex` | string | Yes | None | Regex is a Go (RE2) regular expression of at most 512 bytes. At least 1 character. At most 512 characters. |
 
 ## TriggerThread
 
@@ -131,9 +131,9 @@ TriggerThread decides which thread a message joins and when it closes the thread
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `by` | string | No | None | By is key: messages with the same extracted "key" share a thread. One of `key`. |
-| `cooldown` | duration | No | None | Cooldown is how long after a turn the same key starts no new turn. Required with by, and between 1m and 168h. |
-| `maxIdle` | duration | No | Larger of `24h` and twice the cooldown | MaxIdle is how long an open thread may go without a message of its key before Agent Kourier counts it abandoned, so that the key's next fire starts a new investigation instead of a note. It covers a resolve that never arrived. It needs by, is at least twice the cooldown, and is at most 720h; unset means the larger of 24h and twice the cooldown. It must be longer than the sender's repeat interval (Alertmanager's repeat_interval): an alert that keeps firing repeats at that interval, and a maxIdle shorter than it counts a live alert abandoned between two repeats and starts a second investigation for it. Twice the cooldown covers that only for a 4h cooldown against Alertmanager's 4h repeat_interval; a longer repeat_interval needs a maxIdle set above it. |
-| `closeWhen` | map[string]string | No | None | CloseWhen maps an extracted field to the value that closes the thread: Agent Kourier posts a note and starts no turn. Every entry must equal. |
+| `cooldown` | duration | No | None | Cooldown is how long after a turn the same key starts no new turn. Required with by, and between 1m and 168h. Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. |
+| `maxIdle` | duration | No | Larger of `24h` and twice the cooldown | MaxIdle is how long an open thread may go without a message of its key before Agent Kourier counts it abandoned, so that the key's next fire starts a new investigation instead of a note. It covers a resolve that never arrived. It needs by, is at least twice the cooldown, and is at most 720h; unset means the larger of 24h and twice the cooldown. It must be longer than the sender's repeat interval (Alertmanager's repeat_interval): an alert that keeps firing repeats at that interval, and a maxIdle shorter than it counts a live alert abandoned between two repeats and starts a second investigation for it. Twice the cooldown covers that only for a 4h cooldown against Alertmanager's 4h repeat_interval; a longer repeat_interval needs a maxIdle set above it. Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. |
+| `closeWhen` | map[string]string | No | None | CloseWhen maps an extracted field to the value that closes the thread: Agent Kourier posts a note and starts no turn. Every entry must equal. It names only extracted fields, so it holds at most as many entries as extract does, 32. |
 
 ## TriggerLimits
 
@@ -151,7 +151,7 @@ RateLimit allows MaxRuns agent runs per window and MaxConcurrent at once.
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `maxRuns` | integer | Yes | None | Minimum 1. |
-| `per` | duration | Yes | None | Per is the window length. |
+| `per` | duration | Yes | None | Per is the window length. Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. |
 | `maxConcurrent` | integer | Yes | None | Minimum 1. |
 
 ## ChatMention
@@ -172,7 +172,7 @@ Interactions configures agent pauses that wait on a person.
 | `askUser` | boolean | No | `false` | AskUser lets the agent ask questions in the thread. Defaults to false. |
 | `toolApprovals` | boolean | No | `false` | ToolApprovals lets the agent ask a person to approve tool calls in the thread. Defaults to false. |
 | `approverGroups` | []string | No | None | ApproverGroups names the platform's user groups whose members may decide a tool approval, by the platform's ID (Slack: `S…`). An empty list allows any non-bot channel member. At most 10 groups may be named. Group IDs start with S and contain uppercase letters and digits; duplicates and empty entries are refused. |
-| `timeout` | duration | No | `30m` | Timeout is how long a pause waits for an answer. Defaults to 30m. |
+| `timeout` | duration | No | `30m` | Timeout is how long a pause waits for an answer. Defaults to 30m. Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. |
 
 ## Feedback
 
@@ -188,7 +188,7 @@ Session configures thread-to-session mapping.
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `threadTTL` | duration | No | `2160h` | ThreadTTL is how long a thread keeps its session after its last activity. Defaults to 2160h (90 days). |
+| `threadTTL` | duration | No | `2160h` | ThreadTTL is how long a thread keeps its session after its last activity. Defaults to 2160h (90 days). Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. |
 
 ---
 
