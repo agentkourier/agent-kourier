@@ -2,7 +2,9 @@ package bindingcheck
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -31,6 +33,21 @@ func TestReadyObservesTheOldestGenerationItIsDerivedFrom(t *testing.T) {
 				t.Errorf("Ready.ObservedGeneration = %d, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+// Ready says whose evidence it rests on: the UID that all its conditions have, or none if they differ.
+func TestReadyHasTheCommonUIDOfItsConditionsOrNone(t *testing.T) {
+	s := NewState()
+	s.Set("same", t0,
+		Condition{Type: BackendReachable, Status: True, Reason: ReasonOK, UID: "u"}, Condition{Type: ChannelJoined, Status: True, Reason: ReasonOK, UID: "u"})
+	s.Set("mixed", t0,
+		Condition{Type: BackendReachable, Status: True, Reason: ReasonOK, UID: "u"}, Condition{Type: ChannelJoined, Status: True, Reason: ReasonOK, UID: "v"})
+	if got := find(t, s.Snapshot()["same"], Ready).UID; got != "u" {
+		t.Errorf("Ready.UID = %q, want u", got)
+	}
+	if got := find(t, s.Snapshot()["mixed"], Ready).UID; got != "" {
+		t.Errorf("Ready.UID = %q for conditions of two objects, want none", got)
 	}
 }
 
@@ -135,6 +152,65 @@ func TestOnPassIsCalledOnceAfterEachPass(t *testing.T) {
 		}
 		if overlapped.Load() {
 			t.Error("OnPass was called while a probe was in flight")
+		}
+	})
+}
+
+// A Binding that is deleted and made again has the name it had and a new UID, and restarts its generation at 1: what was found of
+// the first object is not a finding about the second. Its conditions are Pending at its generation until a probe of it ends, and
+// a probe that was still in flight for the first object records nothing, whatever it found.
+func TestARecreatedBindingIsPendingAtItsGenerationAndAnOldProbeIsDropped(t *testing.T) {
+	g := &targets{}
+	g.set("r1", Target{Binding: "b", Channel: "C1", Generation: 7, UID: "old"})
+	var gate chan struct{}
+	var calls atomic.Int32
+	agents := &fakeAgents{fn: func(context.Context, string) (Outcome, error) {
+		if calls.Add(1) == 2 {
+			<-gate
+		}
+		return ok(), nil
+	}}
+	runIn(t, func() Options {
+		gate = make(chan struct{})
+		return Options{Targets: g.Targets, Revision: g.Revision, Agents: agents, Channels: &fakeChannels{}, Timeout: time.Hour}
+	}, func(h *harness) {
+		c := h.conds("b")
+		if c[Ready].Status != True || c[Ready].ObservedGeneration != 7 {
+			t.Fatalf("Ready = %s at %d, want True at 7", c[Ready].Status, c[Ready].ObservedGeneration)
+		}
+		g.set("r1", Target{Binding: "b", Channel: "C1", Generation: 1, UID: "new"}) // made again: the second pass is held in its probe
+		h.advance(tick)
+		c = h.conds("b")
+		if b := c[BackendReachable]; b.Status != Unknown || b.Reason != ReasonPending || b.ObservedGeneration != 1 || b.UID != "new" {
+			t.Errorf("BackendReachable = %s/%s at %d for %q, want Unknown/Pending at the new object's generation 1 and UID", b.Status, b.Reason, b.ObservedGeneration, b.UID)
+		}
+		if c[Ready].Status == True || c[Ready].ObservedGeneration != 1 {
+			t.Errorf("Ready = %s at %d, want it not True and at 1: the old object's True is not the new one's", c[Ready].Status, c[Ready].ObservedGeneration)
+		}
+		close(gate)
+		synctest.Wait()
+		c = h.conds("b")
+		if c[Ready].Status != True || c[Ready].ObservedGeneration != 1 || c[Ready].UID != "new" {
+			t.Errorf("Ready = %s at %d for %q after the new object's probe, want True at 1 for \"new\"", c[Ready].Status, c[Ready].ObservedGeneration, c[Ready].UID)
+		}
+	})
+}
+
+// The cause of a probe, which the status must not carry, reaches the condition for the log and is not in its JSON.
+func TestACausePassesToTheConditionForTheLogAndNotIntoItsJSON(t *testing.T) {
+	g := &targets{}
+	g.set("r1", Target{Binding: "b", Channel: "C1"})
+	agents := &fakeAgents{fn: func(context.Context, string) (Outcome, error) {
+		return Outcome{Status: False, Reason: ReasonUnreachable, Message: "the request failed", Cause: "dial tcp 10.0.0.5:8080: refused"}, nil
+	}}
+	run(t, Options{Targets: g.Targets, Revision: g.Revision, Agents: agents}, func(h *harness) {
+		c := h.conds("b")[BackendReachable]
+		if c.Message != "the request failed" || c.Cause != "dial tcp 10.0.0.5:8080: refused" {
+			t.Errorf("condition = %q / %q, want the message and the cause apart", c.Message, c.Cause)
+		}
+		b, err := json.Marshal(c)
+		if err != nil || strings.Contains(string(b), "10.0.0.5") {
+			t.Errorf("JSON = %s (%v), want no cause in it", b, err)
 		}
 	})
 }

@@ -35,6 +35,12 @@ type Target struct {
 	// Generation is the metadata.generation of the Binding as it is in the config now, zero for one read from a file. The
 	// Prober stamps each result with the one its pass began with (Condition.ObservedGeneration).
 	Generation int64
+	// UID is the metadata.uid of the Binding, empty for one read from a file. A Binding of the same name with another UID is
+	// another object (deleted and made again, which restarts its generation at 1): at the next Tick after a pass the Prober
+	// forgets what it found of the first and makes the conditions of the second Pending at its generation. Each result is
+	// stamped with the UID of its pass (Condition.UID), so that whoever reads it can tell whose it is while a pass that began
+	// before the change is still running.
+	UID string
 }
 
 // AgentChecker probes the agent backend of a Binding. It sets BackendReachable.
@@ -169,7 +175,7 @@ type Prober struct {
 	started      sync.WaitGroup
 	revisionBusy atomic.Bool
 
-	known map[string]bool // Bindings seen at the last Tick; owned by Run's goroutine
+	known map[string]string // the UID of each Binding seen at the last Tick, by key; owned by Run's goroutine
 }
 
 // probeKey identifies a probe: a condition type and a Binding's key.
@@ -192,7 +198,7 @@ func NewProber(o Options) *Prober {
 	if o.Concurrency <= 0 {
 		o.Concurrency = defaultConcurrency
 	}
-	return &Prober{o: o, state: NewState(), apply: make(chan struct{}, 1), running: map[probeKey]bool{}, known: map[string]bool{}}
+	return &Prober{o: o, state: NewState(), apply: make(chan struct{}, 1), running: map[probeKey]bool{}, known: map[string]string{}}
 }
 
 // State returns the State the Prober records into. Readers use Snapshot.
@@ -360,12 +366,12 @@ func (p *Prober) sync(targets []Target) ([]Target, bool) {
 		}
 		seen[t.Binding] = true
 		kept, names = append(kept, t), append(names, t.Binding)
-		if p.known[t.Binding] {
+		if uid, ok := p.known[t.Binding]; ok && uid == t.UID {
 			continue
 		}
-		p.known[t.Binding] = true
+		p.known[t.Binding] = t.UID
 		changed = true
-		p.state.Set(t.Binding, at, p.pending(BackendReachable, p.o.Agents != nil, t.Generation), p.pending(ChannelJoined, p.o.Channels != nil, t.Generation))
+		p.state.Set(t.Binding, at, p.pending(BackendReachable, p.o.Agents != nil, t.Generation, t.UID), p.pending(ChannelJoined, p.o.Channels != nil, t.Generation, t.UID))
 	}
 	for name := range p.known {
 		if !seen[name] {
@@ -379,11 +385,11 @@ func (p *Prober) sync(targets []Target) ([]Target, bool) {
 }
 
 // pending is the Pending condition of type t, or the zero Condition (which State.Set ignores) when t is not tracked.
-func (p *Prober) pending(t ConditionType, tracked bool, generation int64) Condition {
+func (p *Prober) pending(t ConditionType, tracked bool, generation int64, uid string) Condition {
 	if !tracked {
 		return Condition{}
 	}
-	return Condition{Type: t, Status: Unknown, Reason: ReasonPending, ObservedGeneration: generation}
+	return Condition{Type: t, Status: Unknown, Reason: ReasonPending, ObservedGeneration: generation, UID: uid}
 }
 
 // pass probes every target once, p.o.Concurrency at a time, and returns when all the probes have ended. Each target
@@ -556,7 +562,7 @@ func (p *Prober) record(ctx context.Context, t ConditionType, target Target, res
 		p.fail(ProbeError{Condition: t, Target: target, Err: res.err})
 	}
 	at := time.Now()
-	cond := Condition{Type: t, Status: res.out.Status, Reason: res.out.Reason, Message: res.out.Message, ObservedGeneration: target.Generation}
+	cond := Condition{Type: t, Status: res.out.Status, Reason: res.out.Reason, Message: res.out.Message, Cause: res.out.Cause, ObservedGeneration: target.Generation, UID: target.UID}
 	for _, tr := range p.state.Set(target.Binding, at, cond) {
 		if p.o.OnTransition != nil {
 			p.hook("OnTransition", t, target, func() { p.o.OnTransition(tr) })

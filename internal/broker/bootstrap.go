@@ -59,6 +59,10 @@ type Config struct {
 	// Secrets is the resolver the Reloader checks against, and the identity package reads through.
 	Secrets *k8ssecrets.Resolver
 
+	// Source is the source of the custom resources, which the Reloader reads, and which holds the Binding informer that the status
+	// writer reads the statuses from. Nil when the config is read from files.
+	Source *crsource.Source
+
 	stopSource func() // ends the informers of the custom resources, when the Reloader reads them
 }
 
@@ -175,7 +179,7 @@ func bootstrapCRDs(ctx context.Context, client kubernetes.Interface, opts Bootst
 		failed()
 		return nil, wiring(err)
 	}
-	return &Config{Reloader: rl, Secrets: secrets, stopSource: src.Stop}, nil
+	return &Config{Reloader: rl, Secrets: secrets, Source: src, stopSource: src.Stop}, nil
 }
 
 // ownConnection returns the broker's own ChatConnection of set, or an error wrapping ErrWiring that says whether it does not

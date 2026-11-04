@@ -35,6 +35,10 @@ type RunConfig struct {
 	ChatConnection v1alpha1.ObjectRef
 	// Dynamic reads the custom resources with SourceCRDs. Nil means InClusterDynamicClient.
 	Dynamic dynamic.Interface
+	// statusWarnings is the counter of the WarningHandler of a StatusClient that a test gives, which feeds it itself: nil makes
+	// Run's own, which only the client Run makes feeds. A seam for this package's tests, so that the counter's wiring to the
+	// writer can be seen.
+	statusWarnings *warningCounter
 	// StatusClient writes Binding.status with SourceCRDs, from the leader only. Nil means InClusterStatusClient, which has a
 	// rate limiter of its own and counts the Warnings of the API server instead of logging them. With SourceFiles it is never
 	// used, and no client is made for it.

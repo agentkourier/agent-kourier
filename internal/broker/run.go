@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -89,9 +90,8 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 			}
 		}
 		crds = &CRDSource{Client: dyn, Connection: cfg.ChatConnection}
-		status = &statusSink{client: cfg.StatusClient}
+		status = &statusSink{client: cfg.StatusClient, warnings: cmp.Or(cfg.statusWarnings, &warningCounter{})}
 		if status.client == nil {
-			status.warnings = &warningCounter{}
 			if status.client, err = InClusterStatusClient(status.warnings); err != nil {
 				return err
 			}

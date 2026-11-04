@@ -93,6 +93,7 @@ func derive(cur map[ConditionType]Condition) Condition {
 	var first, pending, unknown *Condition
 	var probedAt time.Time
 	var seen int64
+	var uid string
 	haveSeen := false
 	for _, t := range probed {
 		c, ok := cur[t]
@@ -100,8 +101,14 @@ func derive(cur map[ConditionType]Condition) Condition {
 			continue
 		}
 		if !haveSeen || c.ObservedGeneration < seen {
-			seen, haveSeen = c.ObservedGeneration, true
+			seen = c.ObservedGeneration
 		}
+		if !haveSeen {
+			uid = c.UID
+		} else if c.UID != uid {
+			uid = ""
+		}
+		haveSeen = true
 		if c.LastProbeTime.After(probedAt) {
 			probedAt = c.LastProbeTime
 		}
@@ -115,7 +122,7 @@ func derive(cur map[ConditionType]Condition) Condition {
 			unknown = &c
 		}
 	}
-	r := Condition{Type: Ready, Status: True, Reason: ReasonOK, LastProbeTime: probedAt, ObservedGeneration: seen}
+	r := Condition{Type: Ready, Status: True, Reason: ReasonOK, LastProbeTime: probedAt, ObservedGeneration: seen, UID: uid}
 	switch {
 	case first != nil:
 		r.Status = False

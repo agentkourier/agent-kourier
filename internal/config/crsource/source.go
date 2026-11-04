@@ -60,6 +60,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
@@ -79,9 +80,9 @@ var (
 	// three resources. It is the operator's to fix: the RBAC of the ServiceAccount.
 	ErrAccessDenied = errors.New("the API server denied access to the custom resources")
 	// ErrNotSynced is returned by Set while an informer's cache has not synced, since an empty cache would read as every
-	// object removed.
+	// object removed, and by BindingStatus while the Binding informer has not.
 	ErrNotSynced = errors.New("the custom resource caches have not synced")
-	// ErrStopped is returned by Set after Stop.
+	// ErrStopped is returned by Set and BindingStatus after Stop.
 	ErrStopped = errors.New("the custom resource source is stopped")
 )
 
@@ -330,6 +331,66 @@ func (s *Source) Fingerprint(context.Context) string {
 		return "!" + err.Error()
 	}
 	return l.fingerprint()
+}
+
+// BindingStatus is what the cache of the Binding informer holds of one Binding's status: the object it is the status of, and
+// its conditions as written.
+type BindingStatus struct {
+	// UID and Generation are the cached object's, so that a status can be told from that of an object of the same name that
+	// was deleted and made again.
+	UID        types.UID
+	Generation int64
+	// Conditions is status.conditions, in the order it is stored, none if it has none. It is a copy.
+	Conditions []metav1.Condition
+}
+
+// BindingStatus returns the status that the informer's cache holds for the Binding namespace/name, and false if the cache
+// holds no such Binding. It reads the cached object and nothing else: nothing the Set serves, and nothing in the
+// fingerprint, depends on it, and a change of status is no change of the config. It fails with ErrNotSynced until the Binding
+// informer has synced, since an empty cache would read as a Binding with no status, and with ErrStopped after Stop.
+func (s *Source) BindingStatus(namespace, name string) (BindingStatus, bool, error) {
+	if s.ctx.Err() != nil {
+		return BindingStatus{}, false, ErrStopped
+	}
+	s.mu.Lock()
+	store, synced := s.stores[0], s.synced[0]
+	s.mu.Unlock()
+	if store == nil || synced == nil || !synced() {
+		return BindingStatus{}, false, ErrNotSynced
+	}
+	item, exists, err := store.GetByKey(namespace + "/" + name)
+	if err != nil || !exists {
+		return BindingStatus{}, false, err
+	}
+	u, ok := item.(*unstructured.Unstructured)
+	if !ok {
+		return BindingStatus{}, false, nil
+	}
+	return BindingStatus{UID: u.GetUID(), Generation: u.GetGeneration(), Conditions: ConditionsOf(u)}, true, nil
+}
+
+// ConditionsOf reads status.conditions of an object, in the order they are stored, and none if it has no readable ones. It
+// copies, and so does not change the object, which may be one that an informer's cache holds.
+func ConditionsOf(u *unstructured.Unstructured) []metav1.Condition {
+	if u == nil {
+		return nil
+	}
+	raw, _, err := unstructured.NestedSlice(u.Object, "status", "conditions")
+	if err != nil {
+		return nil
+	}
+	var out []metav1.Condition
+	for _, item := range raw {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		var c metav1.Condition
+		if runtime.DefaultUnstructuredConverter.FromUnstructured(m, &c) == nil {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // Set reads the objects as of one moment, decodes each, and returns them with the fingerprint of what it read. See the

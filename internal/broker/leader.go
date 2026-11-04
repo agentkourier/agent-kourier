@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -196,9 +197,12 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	var prober *bindingcheck.Prober
 	var statusW *statusWriter
 	if h.status != nil {
+		if boot.Source == nil {
+			return nil, errors.New("binding status: the config has no custom resource source to read the statuses from")
+		}
 		statusW, err = newStatusWriter(statusConfig{
 			Client: h.status.client, Report: boot.Reloader.Report, Conditions: func() map[string][]bindingcheck.Condition { return prober.State().Snapshot() },
-			Fence: h.leaseFence, Warnings: h.status.warnings, Log: log, OnWrite: metrics.StatusWrite,
+			Observed: boot.Source.BindingStatus, Fence: h.leaseFence, Warnings: h.status.warnings, Log: log, OnWrite: metrics.StatusWrite,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("binding status: %w", err)

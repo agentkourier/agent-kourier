@@ -14,6 +14,7 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+	"unicode/utf8"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -22,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utiljson "k8s.io/apimachinery/pkg/util/json"
+	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	k8stesting "k8s.io/client-go/testing"
 
@@ -29,7 +31,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/bindingcheck"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/config"
-	"github.com/agentkourier/agent-kourier/internal/redact"
+	"github.com/agentkourier/agent-kourier/internal/config/crsource"
 )
 
 // statusApply is one apply of a status that the fake API server took.
@@ -62,9 +64,12 @@ type statusCluster struct {
 	fail    func(statusApply) error // an error to answer an apply with, nil to take it
 	warn    *warningCounter         // told warnN Warnings with each apply it takes
 	warnN   int
-	lists   int
-	listErr error
 	applied chan struct{} // told, without waiting, of each apply taken: for a test that runs a whole broker
+
+	// The informer's cache, as the writer reads it: the objects as they are, unless unsynced is set (the cache has not synced) or
+	// held holds what the cache said when it was frozen (it has not yet seen what was written since).
+	unsynced error
+	held     map[string]crsource.BindingStatus
 }
 
 func newStatusCluster(t *testing.T, objs ...*unstructured.Unstructured) *statusCluster {
@@ -79,12 +84,6 @@ func newStatusCluster(t *testing.T, objs ...*unstructured.Unstructured) *statusC
 // newStatusClusterOn makes dyn, a fake cluster that holds Bindings, take applies of their status as statusCluster says.
 func newStatusClusterOn(dyn *dynamicfake.FakeDynamicClient) *statusCluster {
 	c := &statusCluster{dyn: dyn, applied: make(chan struct{}, 256)}
-	c.dyn.PrependReactor("list", "bindings", func(k8stesting.Action) (bool, runtime.Object, error) {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		c.lists++
-		return c.listErr != nil, nil, c.listErr
-	})
 	c.dyn.PrependReactor("patch", "bindings", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		pa := a.(k8stesting.PatchActionImpl)
 		if pa.GetPatchType() != types.ApplyPatchType {
@@ -123,6 +122,51 @@ func newStatusClusterOn(dyn *dynamicfake.FakeDynamicClient) *statusCluster {
 		return true, u, nil
 	})
 	return c
+}
+
+// observed is what the Binding informer's cache holds of the status of the Binding namespace/name: statusConfig.Observed.
+func (c *statusCluster) observed(namespace, name string) (crsource.BindingStatus, bool, error) {
+	c.mu.Lock()
+	err, held := c.unsynced, c.held
+	c.mu.Unlock()
+	if err != nil {
+		return crsource.BindingStatus{}, false, err
+	}
+	if st, ok := held[namespace+"/"+name]; ok {
+		return st, true, nil
+	}
+	obj, err := c.dyn.Tracker().Get(crBindings, namespace, name)
+	if apierrors.IsNotFound(err) {
+		return crsource.BindingStatus{}, false, nil
+	}
+	if err != nil {
+		return crsource.BindingStatus{}, false, err
+	}
+	u := obj.(*unstructured.Unstructured)
+	return crsource.BindingStatus{UID: u.GetUID(), Generation: u.GetGeneration(), Conditions: crsource.ConditionsOf(u)}, true, nil
+}
+
+// freeze makes the cache say what it says now of the Bindings key, however the cluster changes, until thaw: a cache that the watch has not reached.
+func (c *statusCluster) freeze(t *testing.T, keys ...string) {
+	t.Helper()
+	held := map[string]crsource.BindingStatus{}
+	for _, key := range keys {
+		ns, name, _ := strings.Cut(key, "/")
+		st, ok, err := c.observed(ns, name)
+		if err != nil || !ok {
+			t.Fatalf("freeze %s: %v %v", key, ok, err)
+		}
+		held[key] = st
+	}
+	c.mu.Lock()
+	c.held = held
+	c.mu.Unlock()
+}
+
+func (c *statusCluster) thaw() {
+	c.mu.Lock()
+	c.held = nil
+	c.mu.Unlock()
 }
 
 // crClusterOf is a fake dynamic client over the three kinds that holds objs.
@@ -165,7 +209,7 @@ func (c *statusCluster) stored(t *testing.T, key string) map[string]metav1.Condi
 	if err != nil {
 		t.Fatal(err)
 	}
-	return byType(conditionsOf(obj.(*unstructured.Unstructured)))
+	return byType(crsource.ConditionsOf(obj.(*unstructured.Unstructured)))
 }
 
 // storedBinding is a Binding of the cluster at generation, with the status conds if there are any.
@@ -192,13 +236,19 @@ func cond(typ string, status metav1.ConditionStatus, reason string, generation i
 // snapshotOf resolves one Binding for each key, each at the generation given, with its own channel on one connection.
 func snapshotOf(t *testing.T, generations map[string]int64) *config.Snapshot {
 	t.Helper()
+	return snapshotWithUIDs(t, generations, nil)
+}
+
+// snapshotWithUIDs is snapshotOf for Bindings that have the uids given, by key, and none where it has none.
+func snapshotWithUIDs(t *testing.T, generations map[string]int64, uids map[string]string) *config.Snapshot {
+	t.Helper()
 	set := &config.Set{
 		AgentBackends:   []v1alpha1.AgentBackend{{ObjectMeta: metav1.ObjectMeta{Namespace: "sre", Name: "agent"}, Spec: v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectA2A}}},
 		ChatConnections: []v1alpha1.ChatConnection{{ObjectMeta: metav1.ObjectMeta{Namespace: "sre", Name: "slack"}}},
 	}
 	for _, key := range slices.Sorted(maps.Keys(generations)) {
 		ns, name, _ := strings.Cut(key, "/")
-		b := v1alpha1.Binding{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, Generation: generations[key]}}
+		b := v1alpha1.Binding{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, Generation: generations[key], UID: types.UID(uids[key])}}
 		b.Spec.Agent.BackendRef = v1alpha1.ObjectRef{Namespace: "sre", Name: "agent"}
 		b.Spec.Chat.ConnectionRef = v1alpha1.ObjectRef{Namespace: "sre", Name: "slack"}
 		b.Spec.Chat.Channel = "C-" + name
@@ -238,9 +288,9 @@ func newStatusRig(t *testing.T, cluster *statusCluster, serving map[string]int64
 	w, err := newStatusWriter(statusConfig{
 		Client: cluster.dyn, Report: func() config.Report { r.mu.Lock(); defer r.mu.Unlock(); return r.report },
 		Conditions: func() map[string][]bindingcheck.Condition { r.mu.Lock(); defer r.mu.Unlock(); return r.probed },
-		Warnings:   cluster.warn, Log: slog.New(slog.NewTextHandler(r.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Observed:   cluster.observed, Warnings: cluster.warn, Log: slog.New(slog.NewTextHandler(r.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		OnWrite: func(result string) { r.writes = append(r.writes, result) },
-		Gap:     10 * time.Second, Tick: time.Second, Resync: 10 * time.Minute,
+		Gap:     10 * time.Second, Tick: time.Second,
 		Now: func() time.Time { r.mu.Lock(); defer r.mu.Unlock(); return r.now },
 	})
 	if err != nil {
@@ -259,6 +309,13 @@ func (r *statusRig) set(key string, conds ...bindingcheck.Condition) {
 	r.probed[key] = conds
 	r.mu.Unlock()
 	r.w.notify()
+}
+
+// serveWith makes the source serve the Bindings at the generations and with the uids given.
+func (r *statusRig) serveWith(generations map[string]int64, uids map[string]string) {
+	r.mu.Lock()
+	r.report.Snapshot = snapshotWithUIDs(r.t, generations, uids)
+	r.mu.Unlock()
 }
 
 // reject replaces what the source refused.
@@ -467,11 +524,12 @@ func TestFailoverWritesNothingWhileTheStatusStaysTrue(t *testing.T) {
 	if c.count() != 0 {
 		t.Errorf("applies = %d, want none: the status was true before the failover and is true after it", c.count())
 	}
-	// A probe that finds a thing false afterwards is written, and the time of the transition is the Prober's.
+	// A probe that finds a thing false afterwards is written, and the time of the transition is when the writer saw the status change.
 	bad := probe(4)
 	bad[0].Status, bad[0].Reason, bad[0].LastTransitionTime = bindingcheck.False, bindingcheck.ReasonAgentNotFound, statusT0.Add(2*time.Minute)
 	bad[2].Status, bad[2].Reason, bad[2].LastTransitionTime = bindingcheck.False, "BackendReachable:AgentNotFound", statusT0.Add(2*time.Minute)
 	r.advance(time.Minute)
+	seenAt := statusT0.Add(5*time.Second + 2*time.Minute)
 	r.set(sreAlerts, bad...)
 	r.reconcile()
 	if c.count() != 1 {
@@ -479,8 +537,8 @@ func TestFailoverWritesNothingWhileTheStatusStaysTrue(t *testing.T) {
 	}
 	got := c.last(t).conds()
 	if got["BackendReachable"]["status"] != "False" || got["BackendReachable"]["reason"] != "AgentNotFound" ||
-		got["BackendReachable"]["lastTransitionTime"] != statusT0.Add(2*time.Minute).Format(time.RFC3339) {
-		t.Errorf("BackendReachable = %v, want False/AgentNotFound at the transition", got["BackendReachable"])
+		got["BackendReachable"]["lastTransitionTime"] != seenAt.Format(time.RFC3339) {
+		t.Errorf("BackendReachable = %v, want False/AgentNotFound, at %s", got["BackendReachable"], seenAt.Format(time.RFC3339))
 	}
 	if got["ChannelJoined"]["lastTransitionTime"] != then.Format(time.RFC3339) {
 		t.Errorf("ChannelJoined lastTransitionTime = %v, want %s: it did not change status", got["ChannelJoined"]["lastTransitionTime"], then.Format(time.RFC3339))
@@ -605,11 +663,12 @@ func TestAFailedWriteIsTriedAgainWithBackoffAndSaidOnce(t *testing.T) {
 	}
 
 	t.Run("deleted", func(t *testing.T) {
-		c := newStatusCluster(t) // the cluster no longer has the Binding the report has
+		c := newStatusCluster(t, storedBinding(sreAlerts, 1)) // the cache has the Binding, the API server has already lost it
+		c.fail = func(statusApply) error { return apierrors.NewNotFound(crBindings.GroupResource(), "alerts") }
 		r := newStatusRig(t, c, map[string]int64{sreAlerts: 1})
 		r.set(sreAlerts, probe(1)...)
 		r.reconcile()
-		for range 8 { // the source's next reload, up to 10 s away, drops the Binding from the report
+		for range 8 { // the cache's next event, which a watch brings at once, drops the Binding from the report
 			r.advance(time.Second)
 			r.reconcile()
 		}
@@ -622,38 +681,41 @@ func TestAFailedWriteIsTriedAgainWithBackoffAndSaidOnce(t *testing.T) {
 	})
 }
 
-// Nothing is written before the writer knows what the cluster holds: a list that fails must not turn into Pending over a good
-// status, and the writer writes as soon as a list succeeds.
-func TestNothingIsWrittenUntilTheClusterWasListed(t *testing.T) {
+// Nothing is written while the statuses cannot be read: a cache that has not synced would say that every status is empty, and a
+// new leader would write Pending over a good one. It is said once, and the writer goes on as soon as the cache can be read.
+func TestNothingIsWrittenUntilTheStatusesCanBeRead(t *testing.T) {
 	c := newStatusCluster(t, storedBinding(sreAlerts, 1,
 		cond("Accepted", metav1.ConditionTrue, "OK", 1, statusT0), cond("BackendReachable", metav1.ConditionTrue, "OK", 1, statusT0),
 		cond("ChannelJoined", metav1.ConditionTrue, "OK", 1, statusT0), cond("Ready", metav1.ConditionTrue, "OK", 1, statusT0)))
-	c.listErr = apierrors.NewServiceUnavailable("the API server is down")
+	c.unsynced = crsource.ErrNotSynced
 	r := newStatusRig(t, c, map[string]int64{sreAlerts: 1})
 	r.set(sreAlerts, probe(1, bindingcheck.BackendReachable, bindingcheck.ChannelJoined)...)
-	r.reconcile()
-	r.advance(statusListRetry / 2)
-	r.reconcile()
-	if c.count() != 0 {
-		t.Fatalf("applies = %d with no list, want none", c.count())
+	for range 3 {
+		r.advance(time.Second)
+		r.reconcile()
 	}
-	if c.lists != 1 {
-		t.Errorf("lists = %d inside the retry wait, want 1", c.lists)
+	if c.count() != 0 {
+		t.Fatalf("applies = %d with a cache that has not synced, want none", c.count())
+	}
+	if n := strings.Count(r.logs.String(), "cannot be read yet"); n != 1 {
+		t.Errorf("the cache that cannot be read was said %d times, want once:\n%s", n, r.logs)
 	}
 	c.mu.Lock()
-	c.listErr = nil
+	c.unsynced = nil
 	c.mu.Unlock()
-	r.advance(statusListRetry)
+	r.advance(time.Second)
 	r.reconcile()
-	if c.lists != 2 || c.count() != 0 {
-		t.Errorf("lists = %d, applies = %d; want the list to succeed and the good status to be kept (no write)", c.lists, c.count())
+	if c.count() != 0 {
+		t.Errorf("applies = %d once the cache synced, want none: the good status is kept (Pending is carried over it)", c.count())
+	}
+	if got := c.stored(t, sreAlerts)["Ready"]; got.Status != metav1.ConditionTrue {
+		t.Errorf("Ready = %+v, want it kept True", got)
 	}
 }
 
-// The status of an object that was deleted and made again holds nothing, and the writer, which wrote the old one, writes the new
-// one at its next list. A status that someone changed by hand is not put back, which keeps two brokers that report one Binding
-// from taking it from each other at every list.
-func TestAStatusThatIsGoneIsWrittenAgainAndOneThatDiffersIsNot(t *testing.T) {
+// A broker that serves a Binding says what it serves, and puts the status back if it says anything else, whoever changed it, at most
+// once each gap; and when nothing differs it writes nothing, however many passes follow.
+func TestAServingBrokerPutsItsStatusBackAtMostOnceEachGap(t *testing.T) {
 	c := newStatusCluster(t, storedBinding(sreAlerts, 1))
 	r := newStatusRig(t, c, map[string]int64{sreAlerts: 1})
 	r.set(sreAlerts, probe(1)...)
@@ -661,73 +723,186 @@ func TestAStatusThatIsGoneIsWrittenAgainAndOneThatDiffersIsNot(t *testing.T) {
 	if c.count() != 1 {
 		t.Fatalf("applies = %d, want 1", c.count())
 	}
-
-	// Someone edits a condition's message: not put back.
-	edited := storedBinding(sreAlerts, 1, metav1.Condition{Type: "Ready", Status: metav1.ConditionTrue, Reason: "OK", Message: "edited by hand", LastTransitionTime: metav1.NewTime(statusT0)})
+	edited := storedBinding(sreAlerts, 1, metav1.Condition{Type: "Ready", Status: metav1.ConditionFalse, Reason: "ByHand", Message: "edited by hand", LastTransitionTime: metav1.NewTime(statusT0)})
 	if err := c.dyn.Tracker().Update(crBindings, edited, "sre"); err != nil {
 		t.Fatal(err)
 	}
-	r.advance(11 * time.Minute) // a resync passes
-	r.reconcile()
+	for range 5 {
+		r.advance(time.Second)
+		r.reconcile()
+	}
 	if c.count() != 1 {
-		t.Errorf("applies after a list that finds a different status = %d, want 1: the writer's own words have not changed", c.count())
+		t.Errorf("applies = %d inside the gap, want 1", c.count())
 	}
-
-	// The object is made again: no status at all.
-	if err := c.dyn.Tracker().Update(crBindings, storedBinding(sreAlerts, 1), "sre"); err != nil {
-		t.Fatal(err)
-	}
-	r.advance(11 * time.Minute)
+	r.advance(10 * time.Second)
 	r.reconcile()
 	if c.count() != 2 {
-		t.Errorf("applies after a list that finds no status = %d, want 2: the status is written again", c.count())
+		t.Fatalf("applies after the gap = %d, want 2: the status is put back", c.count())
 	}
-	if got := c.stored(t, sreAlerts)["Ready"]; got.Status != metav1.ConditionTrue {
-		t.Errorf("Ready = %+v, want True again", got)
+	if got := c.stored(t, sreAlerts); got["Ready"].Status != metav1.ConditionTrue || got["Accepted"].Status != metav1.ConditionTrue {
+		t.Errorf("status = %+v, want it put back", got)
+	}
+	for range 50 {
+		r.advance(time.Minute)
+		r.reconcile()
+	}
+	if c.count() != 2 {
+		t.Errorf("applies = %d after fifty passes with nothing different, want 2", c.count())
 	}
 }
 
-// Two writers over one Binding that say different things: the first leader says it serves generation 1 from its memory while
-// generation 2 is invalid, the second, a new leader or another broker that reports the Binding as nobody's, says it serves none.
-// A new writer sets right what it finds, which is what a failover should do. Two writers that live at the same time do not
-// fight: each writes once, whatever number of lists and passes follow, and the last writer's words stay until one of them changes.
-func TestTwoWritersThatDisagreeWriteOnceEachAndDoNotFight(t *testing.T) {
-	x := config.Rejection{Namespace: "sre", Name: "alerts", Reason: config.ReasonInvalidSpec, Generation: 2, Served: 1,
-		Message: "spec: Binding sre/alerts generation 2 is invalid, serving generation 1: spec.chat.channel: wrong"}
-	y := config.Rejection{Namespace: "sre", Name: "alerts", Reason: config.ReasonInvalidSpec, Generation: 2, Served: 0,
-		Message: "spec: Binding sre/alerts generation 2 is invalid, with no earlier generation to serve: spec.chat.channel: wrong"}
-	c := newStatusCluster(t, storedBinding(sreAlerts, 2))
+// A cache that has not yet seen what the writer wrote is no drift: the writer does not write again for it inside the gap, and
+// writes nothing once the cache has caught up and says the same.
+func TestACacheThatLagsItsOwnWriteIsNotDrift(t *testing.T) {
+	c := newStatusCluster(t, storedBinding(sreAlerts, 1))
+	r := newStatusRig(t, c, map[string]int64{sreAlerts: 1})
+	r.set(sreAlerts, probe(1)...)
+	c.freeze(t, sreAlerts) // the cache says there is no status
+	r.reconcile()
+	for range 5 {
+		r.advance(time.Second)
+		r.reconcile()
+	}
+	if c.count() != 1 {
+		t.Fatalf("applies = %d while the cache lagged inside the gap, want 1", c.count())
+	}
+	c.thaw()
+	r.advance(10 * time.Second)
+	r.reconcile()
+	if c.count() != 1 {
+		t.Errorf("applies = %d once the cache caught up, want 1", c.count())
+	}
+}
 
-	// X serves generation 1; Y serves nothing. Each has its own report.
-	rx := newStatusRig(t, c, map[string]int64{sreAlerts: 1})
-	rx.reject(x)
-	rx.set(sreAlerts, probe(1)...)
-	ry := newStatusRig(t, c, nil)
-	ry.reject(y)
-
-	rx.reconcile()
-	if got := c.stored(t, sreAlerts)["Accepted"]; got.Status != metav1.ConditionFalse || !strings.Contains(got.Message, "serving generation 1") {
-		t.Fatalf("after X: Accepted = %+v, want False, serving generation 1", got)
-	}
-	ry.reconcile() // Y takes over, or reports a Binding that no broker owns
-	if got := c.stored(t, sreAlerts)["Accepted"]; !strings.Contains(got.Message, "no earlier generation") {
-		t.Fatalf("after Y: Accepted = %+v, want Y's words: a new writer sets right what it finds", got)
-	}
-	if rdy := c.stored(t, sreAlerts)["Ready"]; rdy.Status != metav1.ConditionFalse || rdy.Reason != "Accepted:InvalidSpec" {
-		t.Errorf("Ready = %s/%s, want False/Accepted:InvalidSpec: a Binding that is not accepted is not ready", rdy.Status, rdy.Reason)
-	}
-	if c.stored(t, sreAlerts)["BackendReachable"].Type != "" {
-		t.Error("Y's status has BackendReachable, though Y serves no Binding: a Binding that is not served has no probes, and X's are gone")
-	}
-	for range 5 { // lists and passes of both, long after
-		for _, r := range []*statusRig{rx, ry} {
-			r.advance(11 * time.Minute)
+// A Binding that was deleted and made again has no status, which the writer sees at watch latency: the object has another uid and
+// the same generation, and the words of the old object's status cannot make the new one look done. The deletion seen first, with the
+// cache holding no Binding for a while, writes nothing and no error, and the object that comes after is written. A reporter, which
+// answers back to nothing, writes the status of an object that has none.
+func TestAStatusIsWrittenToABindingMadeAgain(t *testing.T) {
+	for name, serving := range map[string]bool{"served": true, "reported": false} {
+		t.Run(name, func(t *testing.T) {
+			c := newStatusCluster(t, storedBinding(sreAlerts, 1))
+			var r *statusRig
+			if serving {
+				r = newStatusRig(t, c, map[string]int64{sreAlerts: 1})
+				r.set(sreAlerts, probe(1)...)
+			} else {
+				r = newStatusRig(t, c, nil)
+				r.reject(config.Rejection{Namespace: "sre", Name: "alerts", Reason: config.ReasonBackendNotFound, Generation: 1, Message: "spec.agent.backendRef: not found"})
+			}
 			r.reconcile()
+			if c.count() != 1 {
+				t.Fatalf("applies = %d, want 1", c.count())
+			}
+
+			again := storedBinding(sreAlerts, 1) // made again between two reloads: another uid, generation 1 again, no status
+			again.SetUID("uid-again")
+			if err := c.dyn.Tracker().Update(crBindings, again, "sre"); err != nil {
+				t.Fatal(err)
+			}
+			r.advance(10 * time.Second) // the gap
+			r.reconcile()
+			if c.count() != 2 || len(c.stored(t, sreAlerts)) == 0 {
+				t.Fatalf("applies = %d, status = %v after the object was made again, want a second write of its status", c.count(), c.stored(t, sreAlerts))
+			}
+
+			if err := c.dyn.Tracker().Delete(crBindings, "sre", "alerts"); err != nil { // deleted: the cache holds none for a while
+				t.Fatal(err)
+			}
+			for range 3 {
+				r.advance(time.Minute)
+				r.reconcile()
+			}
+			if c.count() != 2 || strings.Contains(r.logs.String(), "level=WARN") {
+				t.Errorf("applies = %d, log:\n%s\nwant no write and no warning while the cache holds no Binding", c.count(), r.logs)
+			}
+			third := storedBinding(sreAlerts, 1)
+			third.SetUID("uid-third")
+			if err := c.dyn.Tracker().Add(third); err != nil {
+				t.Fatal(err)
+			}
+			r.advance(time.Minute)
+			r.reconcile()
+			if c.count() != 3 || len(c.stored(t, sreAlerts)) == 0 {
+				t.Errorf("applies = %d, status = %v for the third object, want a third write", c.count(), c.stored(t, sreAlerts))
+			}
+		})
+	}
+}
+
+// Two brokers that both report one Binding: the one that serves it has the last word, whichever wrote first. A reporter writes when
+// it first sees the Binding and never answers back, and the server puts its status back once each gap, so the two do not fight, and
+// a broker whose view of the connection was out of date (its poll fell in the gap of a ChatConnection that was replaced) leaves a
+// wrong status for the length of a watch event and not for ever.
+func TestTheServingBrokersWordsWinOverAReportersWhicheverWroteFirst(t *testing.T) {
+	served := config.Rejection{Namespace: "sre", Name: "alerts", Reason: config.ReasonInvalidSpec, Generation: 2, Served: 1,
+		Message: "spec: Binding sre/alerts generation 2 is invalid, serving generation 1: spec.chat.channel: wrong"}
+	reported := config.Rejection{Namespace: "sre", Name: "alerts", Reason: config.ReasonInvalidSpec, Generation: 2, Served: 0,
+		Message: "spec: Binding sre/alerts generation 2 is invalid, with no earlier generation to serve: spec.chat.channel: wrong"}
+	for name, serverFirst := range map[string]bool{"the server wrote first": true, "the reporter wrote first": false} {
+		t.Run(name, func(t *testing.T) {
+			c := newStatusCluster(t, storedBinding(sreAlerts, 2))
+			server := newStatusRig(t, c, map[string]int64{sreAlerts: 1})
+			server.reject(served)
+			server.set(sreAlerts, probe(1)...)
+			reporter := newStatusRig(t, c, nil)
+			reporter.reject(reported)
+
+			first, second := reporter, server
+			if serverFirst {
+				first, second = server, reporter
+			}
+			first.reconcile()
+			second.reconcile()
+			for range 30 { // passes of both, far apart and close together
+				for _, r := range []*statusRig{server, reporter} {
+					r.advance(11 * time.Second)
+					r.reconcile()
+					r.reconcile()
+				}
+			}
+			got := c.stored(t, sreAlerts)
+			if !strings.Contains(got["Accepted"].Message, "serving generation 1") {
+				t.Errorf("Accepted = %+v, want the serving broker's words", got["Accepted"])
+			}
+			if got["BackendReachable"].Type == "" {
+				t.Error("the status lost the probes of the serving broker")
+			}
+			if n := c.count(); n > 3 {
+				t.Errorf("applies = %d, want at most 3: the reporter writes once and the server puts it back once", n)
+			}
+		})
+	}
+
+	t.Run("a connection that was replaced", func(t *testing.T) {
+		// The server serves the Binding with every probe True. Another broker's poll fell in the gap of a ChatConnection that was
+		// made again with --force, so for a poll it reports ConnectionNotFound on a Binding it does not serve.
+		c := newStatusCluster(t, storedBinding(sreAlerts, 1))
+		server := newStatusRig(t, c, map[string]int64{sreAlerts: 1})
+		server.set(sreAlerts, probe(1)...)
+		reporter := newStatusRig(t, c, nil)
+		reporter.reject(config.Rejection{Namespace: "sre", Name: "alerts", Reason: config.ReasonConnectionNotFound, Generation: 1,
+			Message: "spec.chat.connectionRef: ChatConnection sre/slack not found"})
+		server.reconcile()
+		reporter.reconcile()
+		if got := c.stored(t, sreAlerts)["Accepted"]; got.Reason != "ConnectionNotFound" {
+			t.Fatalf("after the reporter: Accepted = %+v, want its ConnectionNotFound", got)
 		}
-	}
-	if c.count() != 2 {
-		t.Errorf("applies = %d after both writers listed and passed five times, want 2: one each, no fight", c.count())
-	}
+		server.advance(11 * time.Second)
+		server.reconcile()
+		if got := c.stored(t, sreAlerts); got["Accepted"].Status != metav1.ConditionTrue || got["Ready"].Status != metav1.ConditionTrue {
+			t.Errorf("status = %+v after the server's next pass, want Accepted and Ready True again", got)
+		}
+		for range 50 {
+			for _, r := range []*statusRig{server, reporter} {
+				r.advance(time.Minute)
+				r.reconcile()
+			}
+		}
+		if got := c.stored(t, sreAlerts); got["Ready"].Status != metav1.ConditionTrue || c.count() != 3 {
+			t.Errorf("Ready = %+v, applies = %d after fifty passes, want Ready True and 3 applies: the server's, the reporter's, the server's", got["Ready"], c.count())
+		}
+	})
 }
 
 // What the status says of a Binding that is rejected: Accepted is False with the reason and the message of the rejection, Ready
@@ -870,8 +1045,8 @@ func TestMessagesAreRedactedAndCut(t *testing.T) {
 	if strings.Contains(msg, "hunter2") {
 		t.Errorf("the message shows the credential: %q", msg)
 	}
-	if len(msg) > maxStatusMessage+len(redact.Truncated) {
-		t.Errorf("the message is %d bytes, want at most %d", len(msg), maxStatusMessage+len(redact.Truncated))
+	if len(msg) > maxStatusMessage {
+		t.Errorf("the message is %d bytes, want at most %d", len(msg), maxStatusMessage)
 	}
 	if strings.Contains(msg, "\n") {
 		t.Errorf("the message has a line break: %q", msg)
@@ -994,21 +1169,27 @@ func TestRunWritesWhenToldAndEndsWithItsContext(t *testing.T) {
 		if c.count() != 1 {
 			t.Fatalf("applies at start = %d, want 1: the first pass writes a Binding that has no status", c.count())
 		}
-		conds := probe(1)
-		conds[0].Status, conds[0].Reason = bindingcheck.False, bindingcheck.ReasonAgentNotFound
-		conds[2].Status, conds[2].Reason = bindingcheck.False, "BackendReachable:AgentNotFound"
-		r.mu.Lock()
-		r.probed[sreAlerts] = conds
-		r.mu.Unlock()
-		time.Sleep(statusGap + time.Second) // the gap is over, and a tick has passed without a word from the Prober
-		synctest.Wait()
-		if c.count() != 1 {
-			t.Fatalf("applies = %d, want 1 until the writer is told", c.count())
+		change := func(reason bindingcheck.Reason) {
+			conds := probe(1)
+			conds[0].Status, conds[0].Reason = bindingcheck.False, reason
+			conds[2].Status, conds[2].Reason = bindingcheck.False, "BackendReachable:"+reason
+			r.mu.Lock()
+			r.probed[sreAlerts] = conds
+			r.mu.Unlock()
 		}
-		r.w.notify()
+		change(bindingcheck.ReasonAgentNotFound)
+		time.Sleep(statusGap + time.Second) // a tick passes with no word from the Prober, and the gap is over
 		synctest.Wait()
 		if c.count() != 2 {
-			t.Errorf("applies after notify = %d, want 2", c.count())
+			t.Fatalf("applies = %d after a tick, want 2: the loop looks at each tick", c.count())
+		}
+		time.Sleep(statusGap + time.Second) // nothing changed: nothing is written, and the gap is over again
+		synctest.Wait()
+		change(bindingcheck.ReasonAgentNotReady)
+		r.w.notify()
+		synctest.Wait() // no time passes: only a word from the Prober can have woken it
+		if c.count() != 3 {
+			t.Errorf("applies after notify = %d, want 3", c.count())
 		}
 		cancel()
 		<-done
@@ -1019,11 +1200,11 @@ func TestRunWritesWhenToldAndEndsWithItsContext(t *testing.T) {
 func TestVerificationTellsTheStatusWriterOfTransitionsAndPasses(t *testing.T) {
 	r := newStatusRig(t, newStatusCluster(t), nil)
 	v := verification{Status: r.w}
-	if r.w.dirty.Load() {
-		t.Fatal("a new writer is dirty")
+	if len(r.w.wake) != 0 {
+		t.Fatal("a new writer has been told something moved")
 	}
 	v.notifyStatus()
-	if !r.w.dirty.Load() {
+	if len(r.w.wake) != 1 {
 		t.Error("notifyStatus did not tell the writer")
 	}
 	verification{}.notifyStatus() // no writer: nothing to tell, and no panic
@@ -1032,7 +1213,10 @@ func TestVerificationTellsTheStatusWriterOfTransitionsAndPasses(t *testing.T) {
 // A writer is not built without what it needs, and the error names what is missing.
 func TestNewStatusWriterNamesWhatIsMissing(t *testing.T) {
 	ok := statusConfig{Client: crClusterOf(), Report: func() config.Report { return config.Report{} },
-		Conditions: func() map[string][]bindingcheck.Condition { return nil }, Log: slog.New(slog.DiscardHandler)}
+		Conditions: func() map[string][]bindingcheck.Condition { return nil }, Log: slog.New(slog.DiscardHandler),
+		Observed: func(string, string) (crsource.BindingStatus, bool, error) {
+			return crsource.BindingStatus{}, false, nil
+		}}
 	for name, tc := range map[string]struct {
 		edit func(*statusConfig)
 		want string
@@ -1040,6 +1224,7 @@ func TestNewStatusWriterNamesWhatIsMissing(t *testing.T) {
 		"client":     {func(c *statusConfig) { c.Client = nil }, "Client"},
 		"report":     {func(c *statusConfig) { c.Report = nil }, "Report"},
 		"conditions": {func(c *statusConfig) { c.Conditions = nil }, "Conditions"},
+		"observed":   {func(c *statusConfig) { c.Observed = nil }, "Observed"},
 		"log":        {func(c *statusConfig) { c.Log = nil }, "Log"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1087,14 +1272,319 @@ func TestTheBrokersProberTellsTheStatusWriterAtTheEndOfEachPass(t *testing.T) {
 	runProber(t, p)
 	waitSettled(t, p, 1)
 	eventually(t, 10*time.Second, "no second pass", func() bool { return calls.Load() >= 3 })
-	r.w.dirty.Store(false)
-	eventually(t, 10*time.Second, "the end of a pass without a transition did not tell the writer", func() bool { return r.w.dirty.Load() })
+	select { // clear what the transitions of the first pass said
+	case <-r.w.wake:
+	default:
+	}
+	eventually(t, 10*time.Second, "the end of a pass without a transition did not tell the writer", func() bool { return len(r.w.wake) == 1 })
 }
 
 // The Prober is given each Binding's generation, so that what it stamps is the generation the Binding had when the pass began.
 func TestBindingTargetsCarryTheGeneration(t *testing.T) {
-	got := bindingTargets(snapshotOf(t, map[string]int64{sreAlerts: 7}), v1alpha1.ObjectRef{Namespace: "sre", Name: "slack"})
-	if want := []bindingcheck.Target{{Binding: sreAlerts, Channel: "C-alerts", Generation: 7}}; !slices.Equal(got, want) {
+	got := bindingTargets(snapshotWithUIDs(t, map[string]int64{sreAlerts: 7}, map[string]string{sreAlerts: "uid-7"}), v1alpha1.ObjectRef{Namespace: "sre", Name: "slack"})
+	if want := []bindingcheck.Target{{Binding: sreAlerts, Channel: "C-alerts", Generation: 7, UID: "uid-7"}}; !slices.Equal(got, want) {
 		t.Errorf("targets = %v, want %v", got, want)
+	}
+}
+
+// A probed condition that is not about this object is no finding about it: one that the Prober made for another object of the name
+// (deleted and made again, with a new uid) or at a generation above the one served is Pending, at the generation served. What
+// the status says is never of a generation above the one served, and a kubectl wait that takes a True of generation 7 for the object
+// at generation 1 would say the condition was met.
+func TestAProbedConditionThatIsNotAboutThisObjectIsPending(t *testing.T) {
+	for name, tc := range map[string]struct {
+		condGen  int64
+		condUID  string
+		wantTrue bool
+	}{
+		"a generation above the one served": {7, "uid-new", false},
+		"another object":                    {1, "uid-old", false},
+		"this object":                       {1, "uid-new", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := newStatusCluster(t, storedBinding(sreAlerts, 1))
+			r := newStatusRig(t, c, nil)
+			r.serveWith(map[string]int64{sreAlerts: 1}, map[string]string{sreAlerts: "uid-new"})
+			conds := probe(tc.condGen)
+			for i := range conds {
+				conds[i].UID = tc.condUID
+			}
+			r.set(sreAlerts, conds...)
+			r.reconcile()
+			for typ, got := range c.stored(t, sreAlerts) {
+				if got.ObservedGeneration > 1 {
+					t.Errorf("%s observedGeneration = %d, want it never above the generation served, 1", typ, got.ObservedGeneration)
+				}
+				if typ == "Accepted" {
+					continue
+				}
+				if isTrue := got.Status == metav1.ConditionTrue; isTrue != tc.wantTrue {
+					t.Errorf("%s = %s/%s, want True %v", typ, got.Status, got.Reason, tc.wantTrue)
+				}
+			}
+		})
+	}
+}
+
+// What a ChannelConflict says to the tenant who lost the channel: not which Binding of another namespace holds it, which the tenant
+// has no right to know. A winner in the tenant's own namespace is named, and the rest of the message is as resolution wrote it
+// (the log keeps all of it, and so does the report). The sentence is the one that resolution really writes.
+func TestAChannelConflictDoesNotNameABindingOfAnotherNamespace(t *testing.T) {
+	conflict := func(winnerNamespace string) config.Rejection {
+		t.Helper()
+		binding := func(ns, name string, created time.Time) v1alpha1.Binding {
+			b := v1alpha1.Binding{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, CreationTimestamp: metav1.NewTime(created)}}
+			b.Spec.Agent.BackendRef = v1alpha1.ObjectRef{Namespace: "platform", Name: "agent"}
+			b.Spec.Chat.ConnectionRef = v1alpha1.ObjectRef{Namespace: "platform", Name: "slack"}
+			b.Spec.Chat.Channel = "C0123456789"
+			return b
+		}
+		set := &config.Set{
+			AgentBackends: []v1alpha1.AgentBackend{{ObjectMeta: metav1.ObjectMeta{Namespace: "platform", Name: "agent"},
+				Spec: v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectA2A, AllowedNamespaces: []string{"team-a", "team-b"}}}},
+			ChatConnections: []v1alpha1.ChatConnection{{ObjectMeta: metav1.ObjectMeta{Namespace: "platform", Name: "slack"},
+				Spec: v1alpha1.ChatConnectionSpec{AllowedNamespaces: []string{"team-a", "team-b"}}}},
+			Bindings: []v1alpha1.Binding{binding(winnerNamespace, "secret-project-payroll", statusT0), binding("team-a", "alerts", statusT0.Add(time.Hour))},
+		}
+		_, rejected := config.ResolvePartial(set)
+		for _, r := range rejected {
+			if r.Reason == config.ReasonChannelConflict && r.Namespace == "team-a" && r.Name == "alerts" {
+				return r
+			}
+		}
+		t.Fatalf("resolution did not reject team-a/alerts for its channel: %+v", rejected)
+		return config.Rejection{}
+	}
+
+	other := conflict("team-b")
+	if !strings.Contains(other.Message, "team-b/secret-project-payroll") {
+		t.Fatalf("resolution's message = %q: the sentence this test pins has changed", other.Message)
+	}
+	got := acceptedCondition([]config.Rejection{other}, 0)
+	if strings.Contains(got.Message, "team-b") || strings.Contains(got.Message, "payroll") {
+		t.Errorf("the status says %q: it names a Binding of another namespace", got.Message)
+	}
+	if want := "spec.chat.channel: C0123456789 on ChatConnection platform/slack is already bound by a Binding in another namespace"; got.Message != want {
+		t.Errorf("message = %q, want %q", got.Message, want)
+	}
+	if !strings.Contains(other.Message, "team-b/secret-project-payroll") {
+		t.Error("the Rejection itself was changed: the log and the report keep the whole text")
+	}
+
+	own := conflict("team-a")
+	if got := acceptedCondition([]config.Rejection{own}, 0); got.Message != own.Message || !strings.Contains(got.Message, "team-a/secret-project-payroll") {
+		t.Errorf("same-namespace message = %q, want resolution's, naming the winner", got.Message)
+	}
+}
+
+// The writer that looks before the Prober's first Tick finds no probed conditions, which are Pending and not gone: SSA would remove
+// what it left out. A good status is kept (Pending is carried over it), and one that has none gets Pending for each.
+func TestAServedBindingTheProberHasNotListedYetIsPendingNotGone(t *testing.T) {
+	good := []metav1.Condition{
+		cond("Accepted", metav1.ConditionTrue, "OK", 1, statusT0), cond("BackendReachable", metav1.ConditionTrue, "OK", 1, statusT0),
+		cond("ChannelJoined", metav1.ConditionTrue, "OK", 1, statusT0), cond("Ready", metav1.ConditionTrue, "OK", 1, statusT0),
+	}
+	c := newStatusCluster(t, storedBinding(sreAlerts, 1, good...))
+	r := newStatusRig(t, c, map[string]int64{sreAlerts: 1}) // the Prober has found nothing
+	r.reconcile()
+	if c.count() != 0 {
+		t.Errorf("applies = %d, want none: a good status is not removed because the Prober has not listed the Binding", c.count())
+	}
+	if got := c.stored(t, sreAlerts); len(got) != 4 || got["BackendReachable"].Status != metav1.ConditionTrue {
+		t.Errorf("status = %+v, want it kept", got)
+	}
+
+	c = newStatusCluster(t, storedBinding(sreAlerts, 1))
+	r = newStatusRig(t, c, map[string]int64{sreAlerts: 1})
+	r.reconcile()
+	got := c.stored(t, sreAlerts)
+	for _, typ := range []string{"BackendReachable", "ChannelJoined", "Ready"} {
+		if got[typ].Status != metav1.ConditionUnknown || got[typ].Reason != "Pending" || got[typ].ObservedGeneration != 1 {
+			t.Errorf("%s = %s/%s at %d, want Unknown/Pending at 1", typ, got[typ].Status, got[typ].Reason, got[typ].ObservedGeneration)
+		}
+	}
+}
+
+// timedClient is a dynamic client that notes the deadline of each apply, and holds those of the Bindings that hang until their
+// context ends.
+type timedClient struct {
+	dynamic.Interface
+	hang      func(name string) bool
+	slow      func() // called as each apply begins, for a test that moves a clock
+	mu        sync.Mutex
+	deadlines []time.Duration // the time left when each apply began, 0 for a call with no deadline
+}
+
+func (c *timedClient) Resource(gvr schema.GroupVersionResource) dynamic.NamespaceableResourceInterface {
+	return timedResource{c.Interface.Resource(gvr), c}
+}
+
+type timedResource struct {
+	dynamic.NamespaceableResourceInterface
+	c *timedClient
+}
+
+func (r timedResource) Namespace(ns string) dynamic.ResourceInterface {
+	return timedNamespace{r.NamespaceableResourceInterface.Namespace(ns), r.c}
+}
+
+type timedNamespace struct {
+	dynamic.ResourceInterface
+	c *timedClient
+}
+
+func (n timedNamespace) ApplyStatus(ctx context.Context, name string, obj *unstructured.Unstructured, opts metav1.ApplyOptions) (*unstructured.Unstructured, error) {
+	left := time.Duration(0)
+	if dl, ok := ctx.Deadline(); ok {
+		left = time.Until(dl)
+	}
+	n.c.mu.Lock()
+	n.c.deadlines = append(n.c.deadlines, left)
+	n.c.mu.Unlock()
+	if n.c.slow != nil {
+		n.c.slow()
+	}
+	if n.c.hang != nil && n.c.hang(name) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return n.ResourceInterface.ApplyStatus(ctx, name, obj, opts)
+}
+
+// A call to the API server is cut at the timeout, which is less than the 5 s that the lease leaves between its renew deadline and its
+// duration, so that a write that the fence let through at the deadline ends before another replica leads; and one request that hangs
+// holds up no other Binding's write, and is a failed write like any other.
+func TestAWriteIsCutAtTheTimeoutAndAHungOneHoldsUpNoOther(t *testing.T) {
+	if margin := defaultLeaseDuration - defaultRenewDeadline; statusTimeout >= margin {
+		t.Fatalf("statusTimeout %v is not under the %v the lease leaves after its renew deadline", statusTimeout, margin)
+	}
+	c := newStatusCluster(t, storedBinding("sre/a", 1), storedBinding("sre/b", 1))
+	r := newStatusRig(t, c, map[string]int64{"sre/a": 1, "sre/b": 1})
+	timed := &timedClient{Interface: c.dyn, hang: func(name string) bool { return name == "a" }}
+	r.w.cfg.Client, r.w.cfg.Timeout = timed, 30*time.Millisecond
+	r.set("sre/a", probe(1)...)
+	r.set("sre/b", probe(1)...)
+	r.reconcile()
+
+	timed.mu.Lock()
+	deadlines := slices.Clone(timed.deadlines)
+	timed.mu.Unlock()
+	if len(deadlines) != 2 {
+		t.Fatalf("applies attempted = %d, want 2: the hung one did not stop the other", len(deadlines))
+	}
+	for _, d := range deadlines {
+		if d <= 0 || d > 30*time.Millisecond {
+			t.Errorf("an apply began with %v left, want a deadline of the timeout", d)
+		}
+	}
+	if got := c.stored(t, "sre/b")["Accepted"]; got.Status != metav1.ConditionTrue {
+		t.Errorf("b's Accepted = %+v, want it written", got)
+	}
+	if want := []string{"failed", "written"}; !slices.Equal(r.writes, want) {
+		t.Errorf("results = %v, want %v", r.writes, want)
+	}
+
+	// The default is the constant, and there is a deadline on the real call.
+	w, err := newStatusWriter(statusConfig{Client: c.dyn, Report: r.w.cfg.Report, Conditions: r.w.cfg.Conditions, Observed: c.observed, Log: slog.New(slog.DiscardHandler)})
+	if err != nil || w.cfg.Timeout != statusTimeout {
+		t.Errorf("default timeout = %v (%v), want %v", w.cfg.Timeout, err, statusTimeout)
+	}
+}
+
+// When a condition heals it is dated when the writer saw it heal, not by the Prober's own time, which can be older than the status it
+// replaces: a condition that was False at one hour and True at the next must not say it has been True since before it was False.
+func TestAHealedConditionIsDatedWhenItHealed(t *testing.T) {
+	c := newStatusCluster(t, storedBinding(sreAlerts, 1,
+		cond("Accepted", metav1.ConditionTrue, "OK", 1, statusT0), cond("BackendReachable", metav1.ConditionFalse, "AgentNotFound", 1, statusT0.Add(time.Hour)),
+		cond("ChannelJoined", metav1.ConditionTrue, "OK", 1, statusT0), cond("Ready", metav1.ConditionFalse, "BackendReachable:AgentNotFound", 1, statusT0.Add(time.Hour))))
+	r := newStatusRig(t, c, map[string]int64{sreAlerts: 1})
+	r.set(sreAlerts, probe(1)...) // True, by the Prober's account since a minute after the start
+	r.advance(2 * time.Hour)
+	r.reconcile()
+	healed := statusT0.Add(2 * time.Hour).Format(time.RFC3339)
+	got := c.last(t).conds()
+	if got["BackendReachable"]["lastTransitionTime"] != healed || got["Ready"]["lastTransitionTime"] != healed {
+		t.Errorf("healed at %v and %v, want %s", got["BackendReachable"]["lastTransitionTime"], got["Ready"]["lastTransitionTime"], healed)
+	}
+	if got["ChannelJoined"]["lastTransitionTime"] != statusT0.Format(time.RFC3339) {
+		t.Errorf("ChannelJoined lastTransitionTime = %v, want %s: it did not change", got["ChannelJoined"]["lastTransitionTime"], statusT0.Format(time.RFC3339))
+	}
+}
+
+// A probe that finds the same with another cause (a connection that reset, on another ephemeral port each pass) is no change of the
+// status: the cause is for the log, the message is one sentence, and nothing is written for it.
+func TestAProbeThatFindsTheSameWithAnotherCauseWritesNothing(t *testing.T) {
+	c := newStatusCluster(t, storedBinding(sreAlerts, 1))
+	r := newStatusRig(t, c, map[string]int64{sreAlerts: 1})
+	failing := func(port string) []bindingcheck.Condition {
+		conds := probe(1)
+		conds[0].Status, conds[0].Reason, conds[0].Message = bindingcheck.False, bindingcheck.ReasonUnreachable, "the request for the agent card failed"
+		conds[0].Cause = "read tcp 10.1.2.3:" + port + "->10.0.0.5:8080: read: connection reset by peer"
+		conds[2].Status, conds[2].Reason, conds[2].Message = bindingcheck.False, "BackendReachable:Unreachable", "the request for the agent card failed"
+		return conds
+	}
+	r.set(sreAlerts, failing("48122")...)
+	r.reconcile()
+	for i := range 5 {
+		r.advance(time.Minute)
+		r.set(sreAlerts, failing(fmt.Sprint(50000+i))...)
+		r.reconcile()
+	}
+	if c.count() != 1 {
+		t.Errorf("applies = %d across passes that differ only in the port, want 1", c.count())
+	}
+	if msg := c.stored(t, sreAlerts)["BackendReachable"].Message; strings.Contains(msg, "10.") || strings.Contains(msg, "48122") {
+		t.Errorf("the status says %q: it carries an address or a port", msg)
+	}
+}
+
+// The message of a status is at most maxStatusMessage bytes whatever it started as, redaction that lengthens text included, is
+// valid UTF-8 and one line, and is cut with a mark; a short one is as it was.
+func TestAMessageIsAtMostTheCapAfterRedaction(t *testing.T) {
+	for name, in := range map[string]string{
+		"long words":      strings.Repeat("padding ", 1000),
+		"redaction grows": strings.Repeat("access_token=abc ", 300),
+		"multibyte":       strings.Repeat("é ", 3000),
+		"lines":           strings.Repeat("a line\nanother line\n", 400),
+	} {
+		got := statusMessage(in)
+		if len(got) > maxStatusMessage || !utf8.ValidString(got) || strings.Contains(got, "\n") {
+			t.Errorf("%s: %d bytes, valid %v, one line %v; want at most %d, valid and one line", name, len(got), utf8.ValidString(got), !strings.Contains(got, "\n"), maxStatusMessage)
+		}
+		if !strings.HasSuffix(got, ellipsis) && !strings.HasSuffix(got, "(truncated)") {
+			t.Errorf("%s: %q does not end in the mark of a cut", name, got[max(0, len(got)-20):])
+		}
+	}
+	if got := statusMessage("a short one"); got != "a short one" {
+		t.Errorf("a short message = %q", got)
+	}
+	if statusMessage("") != "" {
+		t.Error("an empty message is not empty")
+	}
+}
+
+// The gap between two writes of a Binding is counted from the end of a write, not from the start of the pass: a write that takes
+// 5 s, in a pass that began at 0, leaves the Binding closed to another until 15 s, and one at 12 s is held back.
+func TestTheGapIsCountedFromTheEndOfAWrite(t *testing.T) {
+	c := newStatusCluster(t, storedBinding(sreAlerts, 1))
+	r := newStatusRig(t, c, map[string]int64{sreAlerts: 1})
+	timed := &timedClient{Interface: c.dyn, slow: func() { r.advance(5 * time.Second) }}
+	r.w.cfg.Client = timed
+	r.set(sreAlerts, probe(1)...)
+	r.reconcile() // begins at 0, ends at 5 s
+	r.advance(7 * time.Second)
+	conds := probe(1)
+	conds[0].Status, conds[0].Reason = "False", "AgentNotFound"
+	conds[2].Status, conds[2].Reason = "False", "BackendReachable:AgentNotFound"
+	r.set(sreAlerts, conds...)
+	timed.slow = nil
+	r.reconcile() // 12 s: inside the gap of the write that ended at 5 s
+	if c.count() != 1 {
+		t.Fatalf("applies = %d at 12 s, want 1: the gap runs from the end of the first write", c.count())
+	}
+	r.advance(4 * time.Second)
+	r.reconcile() // 16 s
+	if c.count() != 2 {
+		t.Errorf("applies = %d at 16 s, want 2", c.count())
 	}
 }
