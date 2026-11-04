@@ -25,7 +25,7 @@ type TriggerLimits struct {
 	// Required for a botMessage trigger, with all three fields set.
 	// +optional
 	RateLimit *RateLimit `json:"rateLimit,omitempty"`
-	// MaxRunsPerDay caps starts in any 24 hours (D31). Required for a botMessage trigger: an explicit 0 means
+	// MaxRunsPerDay caps starts in any 24 hours. Required for a botMessage trigger: an explicit 0 means
 	// no cap.
 	// +kubebuilder:validation:Minimum=0
 	// +optional
