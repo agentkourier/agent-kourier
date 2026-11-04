@@ -113,7 +113,7 @@ same objects as before (`test/chart` pins all seven values files against golden 
 
 What the route needs:
 
-- **Kubernetes 1.30 or later.** CRD validation ratcheting is on by default from 1.30 and off before it, and without it a status write to a stored object that a rule of the CRDs now refuses fails (seen with 1.29's validation code run in process; no 1.29 cluster was tried). The chart refuses an API server
+- **Kubernetes 1.30 or later.** CRD validation ratcheting, which lets an object that a rule of the CRDs now refuses still be updated, is on by default from 1.30. A server-side apply of a Binding's status to such an object is refused before 1.33 (measured on kind: refused on 1.30.13 to 1.32.5, passed with a warning on 1.33.1, 1.35.0 and 1.37.0), so on 1.30 to 1.32 the status of a Binding that a later, stricter schema refuses is not updated. The chart refuses an API server
   it can see is older. The files route has no minimum.
 - **The CRDs installed before the release that sets `config.source: crds`.** A first install that renders the CRDs and custom resources of them in
   one release fails (measured: `resource mapping not found ... ensure CRDs are installed first`), so the chart refuses to render the custom
@@ -130,10 +130,10 @@ Move a running install to it in two upgrades, each a working install, and back b
 ```sh
 # 1. The CRDs, with the route still files: they are inert.
 helm upgrade agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version <this chart's version> -n agent-kourier \
-  --reuse-values --set crds.install=true
+  -f my-values.yaml --set crds.install=true
 # 2. The route: the same config.* values become custom resources, and the ConfigMap and its mount go.
 helm upgrade agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version <this chart's version> -n agent-kourier \
-  --reuse-values --set config.source=crds
+  -f my-values.yaml --set config.source=crds
 kubectl get akbinding,akbackend,akconnection -A
 ```
 
