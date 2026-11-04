@@ -26,6 +26,10 @@ var ErrChatFenced = errors.New("broker: chat write refused: the leader's lease w
 // the error is for the one call that is refused, and for a test.
 var ErrAgentFenced = fmt.Errorf("broker: agent call refused: the leader's lease was not renewed within its renew deadline: %w", agent.ErrNotSent)
 
+// ErrStatusFenced is the error of a write of a Binding's status that was refused for the same reason: the leader's lease is past
+// its renew deadline. The refusal also stops the process, so the error is for the one write that is refused, and for a test.
+var ErrStatusFenced = errors.New("broker: status write refused: the leader's lease was not renewed within its renew deadline")
+
 // leaseClock keeps when this replica last renewed its Lease, on the monotonic clock. A leader that is paused as a whole (a
 // SIGSTOP, a frozen node, a long garbage-collection pause) renews nothing while the pause lasts, and the monotonic clock goes
 // on: the first call after it finds the lease old, which the Lease itself cannot tell it, since only its own renewals touch it.
@@ -127,6 +131,12 @@ func (f *leaseFence) allow(op string) error {
 // stopped (stop, with the reason) and the error is ErrAgentFenced.
 func (f *leaseFence) allowAgent(op string) error {
 	return f.check("an agent call", op, ErrAgentFenced)
+}
+
+// allowStatus says whether the write of a Binding's status op may be made now. If it may not, the process is stopped (stop, with the
+// reason) and the error is ErrStatusFenced. A deposed leader that overwrote a status would undo what the leader that took over wrote.
+func (f *leaseFence) allowStatus(op string) error {
+	return f.check("a status write", op, ErrStatusFenced)
 }
 
 // check is the one test of the lease clock that both allow and allowAgent make: what is the kind of call, op its name, and

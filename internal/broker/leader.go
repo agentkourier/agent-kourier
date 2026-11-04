@@ -2,11 +2,13 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/audit"
+	"github.com/agentkourier/agent-kourier/internal/bindingcheck"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
@@ -30,6 +32,9 @@ type leaderHalf struct {
 	// renew deadline. Nil with SQLite, which has no lease: openPlatform is the one place the platform is built, and start the one
 	// place the Bindings are, so that no write to the chat and no call that changes the agent goes round it.
 	leaseFence *leaseFence
+	// status is what the status writer writes with, set only with the crds config source: nil means the config comes from
+	// files, whose Bindings have no status, and the leader half makes no writer.
+	status *statusSink
 }
 
 // openPlatform builds the chat platform of conn, and with an election fences it: every write to the chat that the leader half
@@ -186,10 +191,31 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	// and reported as metrics and log lines only. It sends the agent nothing, posts nothing and changes no readiness. It reads
 	// through the Bindings' pools, the platform and the Secrets, so it stops in the interactions' step, before the manager, the drain, the pool
 	// and the resolver. Added before the interactions start, it stops after their tap, worker and sweeper, with the store's loops.
-	prober := verification{
+	// With the crds config source the leader also writes what the Prober found, and what the source refused, into each Binding's
+	// status (the status writer, which a standby never has, and the files route has none). It runs once the Prober exists, since it
+	// reads its State, and is stopped after it, since it reads that State to the end.
+	var prober *bindingcheck.Prober
+	var statusW *statusWriter
+	if h.status != nil {
+		if boot.Source == nil {
+			return nil, errors.New("binding status: the config has no custom resource source to read the statuses from")
+		}
+		statusW, err = newStatusWriter(statusConfig{
+			Client: h.status.client, Report: boot.Reloader.Report, Conditions: func() map[string][]bindingcheck.Condition { return prober.State().Snapshot() },
+			Observed: boot.Source.BindingStatus, Version: boot.Source.BindingEvents, Timeout: statusCallTimeout(h.cfg.Election, h.leaseFence != nil), Fence: h.leaseFence, Warnings: h.status.warnings, Log: log, OnWrite: metrics.StatusWrite,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("binding status: %w", err)
+		}
+	}
+	prober = verification{
 		Bindings: bindings, Platform: platform, Snaps: boot.Reloader, Revision: boot.Reloader.Revision, Conn: conn,
 		Secrets: boot.Secrets, Metrics: metrics, Log: log, Interval: cfg.probeEvery, Tick: cfg.probeTick, MinRevisionGap: cfg.probeGap,
+		Status: statusW,
 	}.newProber()
+	if statusW != nil {
+		stops.add("binding-status", startLoop(runCtx, func(c context.Context) error { statusW.Run(c); return nil }))
+	}
 	stops.add("binding-verification", startLoop(runCtx, func(c context.Context) error { prober.Run(c); return nil }))
 
 	interactions, err := parts.start(runCtx, mgr, ix, &stops)

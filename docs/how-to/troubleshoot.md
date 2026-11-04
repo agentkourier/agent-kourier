@@ -268,7 +268,9 @@ curl -s localhost:8080/metrics | grep -E '^agentkourier_binding_condition.*statu
 kubectl -n agent-kourier logs <leader pod> | grep 'binding verification:'
 ```
 
-Port-forward to the leader's pod first, as in [Check the leader](high-availability.md#4-check-the-leader): a standby exports none of these series, and its log has none of these lines. A line has `binding`, `condition`, `status`, `reason` and `detail`, and is written when the result changes, not at each probe. If it has left the log, a restart of the leader logs each result that is not true again.
+Port-forward to the leader's pod first, as in [Check the leader](high-availability.md#4-check-the-leader): a standby exports none of these series, and its log has none of these lines. A line has `binding`, `condition`, `status`, `reason` and `detail`, and `cause` when a request or read failed, and is written when the result changes, not at each probe. If it has left the log, a restart of the leader logs each result that is not true again.
+
+If you own a Binding and cannot read the broker's log, its status says only that the request for the card or the read of the channel failed, and that "the operator's log has the cause". That is on purpose: the cause names hosts, addresses and ports, which can be another team's, so a status never carries it, and it does not say whether a name did not resolve, a connection was refused or a certificate was not trusted. Ask whoever runs Agent Kourier to read the `cause` of the line for your Binding.
 
 One failed probe holds the Binding at 0 until the next pass, up to about 5.5 minutes later, so a result during an agent's rollout can clear by itself. A fixed Secret or config is checked again sooner: a change starts a pass, at most one every 30 seconds.
 
@@ -277,7 +279,7 @@ One failed probe holds the Binding at 0 until the next pass, up to about 5.5 min
 | `reason` | Status | What happened | What to do |
 |---|---|---|---|
 | `CredentialsUnreadable` | false | The Binding's token, or a Secret behind a header of the backend, cannot be read. | Check the Secret named by `identity.tokenSecretRef` or the header's `valueSecretRef`. It must exist, be type `Opaque` and have the key, and the value must not be empty or hold a control character, such as the trailing newline of `--from-file`. |
-| `Unreachable` | false | The request for the card failed, or the backend did not answer within 8 seconds. `detail` has the cause. | See [The host does not resolve](#the-host-does-not-resolve-or-the-connection-times-out). A backend that takes longer than 8 seconds to serve its card reads this too, although a turn's connect waits up to 30 seconds. |
+| `Unreachable` | false | The request for the card failed (`cause` has its error), or the backend did not answer within 8 seconds. | See [The host does not resolve](#the-host-does-not-resolve-or-the-connection-times-out). A backend that takes longer than 8 seconds to serve its card reads this too, although a turn's connect waits up to 30 seconds. |
 | `CredentialsRejected` | false | The backend answered 401. It rejected the token, or the Binding has none and the backend needs one. | See [`HTTP 401`](#http-401-at-the-card-fetch). |
 | `AgentForbidden` | false | The backend answered 403: the agent is not found, or not permitted for this identity. kagent's front door answers this for an agent that does not exist. | See [`HTTP 403`](#http-403-at-the-card-fetch). |
 | `AgentNotFound` | false | The backend answered 404. | Check `agent.namespace` and `agent.name`, and the AgentBackend's `url`. |
@@ -301,7 +303,7 @@ One failed probe holds the Binding at 0 until the next pass, up to about 5.5 min
 | `ChatCredentialsRejected` | false | Slack rejected the bot's token. | Replace the token and restart Agent Kourier. |
 | `ChatCredentialsChanged` | unknown | The ChatConnection's Secret holds other tokens than the ones in use, so the read was not made. | Restart Agent Kourier to use the new tokens. |
 | `ChatCredentialsUnusable` | unknown | The Secret, or a key of it, is gone or empty, or the Secret is of a type that is never read. The connection keeps the tokens it read, and the read was not made. | Mend the Secret. A restart fails until you do. |
-| `ChatUnavailable` | unknown | Slack rate-limited the read, did not answer in time, or the read failed. `detail` has the cause, such as `no_permission` or `connection refused`. | Wait for the next pass. If it stays, read the cause. |
+| `ChatUnavailable` | unknown | Slack rate-limited the read, did not answer in time, or the read failed (`cause` has why, such as `no_permission` or `connection refused`). | Wait for the next pass. If it stays, read the cause. |
 
 ### Either condition
 
@@ -309,6 +311,12 @@ One failed probe holds the Binding at 0 until the next pass, up to about 5.5 min
 |---|---|---|---|
 | `ProbeTimeout` | unknown | The probe did not end within 10 seconds. | Wait for the next pass. If it stays, check the leader's log. |
 | `ProbeFailed` | unknown | The check could not tell. The line is `a probe failed`, with the error, and it is written at each probe. | Read the `error`. |
+
+### The status of a Binding keeps changing
+
+With the config read from custom resources, the leader writes the status of each Binding it serves, and writes it back if it differs. If something else keeps changing it, the two go on at each other every 10 seconds, and `agentkourier_binding_status_writes_total{result="put_back"}` climbs steadily. After three put-backs in a row, each within about a minute (five gaps) of the last, the leader's log says, once for the Binding, `something else keeps changing the status of a Binding, and this broker keeps putting it back`, and names it.
+
+What else writes a Binding's status is either another Agent Kourier that serves the same Binding, or a controller of your own. The first happens when two installs name the same ChatConnection (`AGENTKOURIER_CHAT_CONNECTION`): give each its own connection, so that each serves its own Bindings. For the second, look at the `managedFields` of the Binding (`kubectl get akbinding <name> -n <namespace> -o yaml --show-managed-fields`): the manager `agent-kourier` owns the conditions of the types `Accepted`, `BackendReachable`, `ChannelJoined` and `Ready`, and any other manager that writes them is the one to stop. A person's edit is put back once and is no fight. A controller that writes the status once a minute or more slowly stays below the three, and shows only in the metric.
 
 ## An agent on kagent 0.9.x answers, but the answer can appear twice
 
