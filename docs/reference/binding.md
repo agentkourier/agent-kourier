@@ -1,6 +1,6 @@
 # Binding
 
-This page lists every field you can set on the Binding resource, as the Go types in `api/v1alpha1` define it.
+This page lists every field of the Binding resource, as the Go types in `api/v1alpha1` define it. You do not set `status`: it is the observed state.
 
 The Default column shows what happens when a field is omitted. None means no default is supplied.
 
@@ -14,6 +14,7 @@ Binding connects one agent to one chat channel. Owned by an application team.
 |---|---|---|---|---|
 | `metadata` | ObjectMeta | Yes | None | Standard Kubernetes object metadata. Agent Kourier reads `name` and `namespace`. |
 | `spec` | [BindingSpec](#bindingspec) | Yes | None |  |
+| `status` | [BindingStatus](#bindingstatus) | No | None | Status is the observed state of the Binding. It is set through the status subresource and never in a file: the file loader refuses a Binding file that sets it. |
 
 ## BindingSpec
 
@@ -189,6 +190,14 @@ Session configures thread-to-session mapping.
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `threadTTL` | duration | No | `2160h` | ThreadTTL is how long a thread keeps its session after its last activity. Defaults to 2160h (90 days). Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. |
+
+## BindingStatus
+
+BindingStatus is the observed state of a Binding.
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `conditions` | []Condition | No | None | Conditions are the Binding's states, one per type. The observedGeneration of a condition is the generation of the Binding it describes. |
 
 ---
 

@@ -63,6 +63,24 @@ func TestAPIReferenceHeaderAndDoc(t *testing.T) {
 	}
 }
 
+// TestAPIReferenceSaysStatusIsNotSet checks the sentence that tells a reader of a page with a status that it is not
+// theirs to set: the page of a kind that has a status has it, and the page of one that has none does not.
+func TestAPIReferenceSaysStatusIsNotSet(t *testing.T) {
+	const sentence = "You do not set `status`: it is the observed state."
+	if page := fixturePages(t)["Widget"]; !strings.Contains(page, sentence) {
+		t.Errorf("the page of a Widget, which has a status, lacks %q:\n%s", sentence, page)
+	}
+	pages, err := apiReference(filepath.Join(root, "api/v1alpha1"), "api/v1alpha1", v1alpha1.APIVersion)
+	if err != nil {
+		t.Fatalf("apiReference: %v", err)
+	}
+	for kind, want := range map[string]bool{"Binding": true, "AgentBackend": false, "ChatConnection": false} {
+		if got := strings.Contains(pages[kind], sentence); got != want {
+			t.Errorf("the page of %s has the sentence = %v, want %v", kind, got, want)
+		}
+	}
+}
+
 func TestAPIReferenceFieldRows(t *testing.T) {
 	page := fixturePages(t)["Widget"]
 	spec := section(t, page, "WidgetSpec")
@@ -82,9 +100,6 @@ func TestAPIReferenceFieldRows(t *testing.T) {
 	}
 	if strings.Contains(spec, "hidden") {
 		t.Errorf("an unexported field is listed:\n%s", spec)
-	}
-	if strings.Contains(spec, "unlisted") || strings.Contains(page, "## Unlisted") {
-		t.Errorf("a field marked +doc:hide is listed, or its struct has a section:\n%s", page)
 	}
 	part := section(t, page, "Part")
 	if want := "| `id` | string | Yes | None | ID matches a pattern. Pattern `^P[0-9]+$`. |"; !strings.Contains(part, want) {
@@ -153,10 +168,8 @@ func TestAPIReferenceSectionsInFieldOrderOnce(t *testing.T) {
 
 // TestAPIReferenceCoversEveryField checks the generated reference of the real API against the Go types by reflection,
 // which reads the types differently from the generator: every JSON field of every struct a resource reaches has a row
-// in that struct's section, except the fields the reference leaves out on purpose (+doc:hide), which must have none.
+// in that struct's section.
 func TestAPIReferenceCoversEveryField(t *testing.T) {
-	// unlisted are the fields the reference leaves out on purpose (+doc:hide), by struct and JSON name.
-	unlisted := map[string]bool{"Binding.status": true}
 	pages, err := apiReference(filepath.Join(root, "api/v1alpha1"), "api/v1alpha1", v1alpha1.APIVersion)
 	if err != nil {
 		t.Fatalf("apiReference: %v", err)
@@ -184,12 +197,6 @@ func TestAPIReferenceCoversEveryField(t *testing.T) {
 			for f := range rt.Fields() {
 				name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
 				if !f.IsExported() || name == "" || name == "-" {
-					continue
-				}
-				if unlisted[rt.Name()+"."+name] {
-					if strings.Contains(body, "| `"+name+"` |") {
-						t.Errorf("%s: section %s lists %s, which is not written yet", kind, rt.Name(), name)
-					}
 					continue
 				}
 				if !strings.Contains(body, "| `"+name+"` |") {

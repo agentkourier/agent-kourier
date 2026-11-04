@@ -54,15 +54,7 @@ type WidgetSpec struct {
 	// +kubebuilder:validation:Minimum=0
 	Count   int32 `json:"count,omitempty"`
 	Enabled bool  `json:"enabled,omitempty"`
-	// Unlisted is a field the page leaves out, with the struct it holds.
-	// +doc:hide
-	Unlisted *Unlisted `json:"unlisted,omitempty"`
-	hidden   string
-}
-
-// Unlisted is reached only through a field that the page leaves out, so it has no section.
-type Unlisted struct {
-	Name string `json:"name"`
+	hidden  string
 }
 
 // Part is one part.

@@ -112,8 +112,11 @@ func (p *apiPackage) addConsts(gen *ast.GenDecl) {
 func (p *apiPackage) page(kind, apiVersion, from string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\n", kind)
-	fmt.Fprintf(&b, "This page lists every field you can set on the %s resource, as the Go types in `%s` define it.\n\n", kind, from)
-	b.WriteString("The Default column shows what happens when a field is omitted. None means no default is supplied.\n\n")
+	fmt.Fprintf(&b, "This page lists every field of the %s resource, as the Go types in `%s` define it.", kind, from)
+	if p.hasStatus(kind) {
+		b.WriteString(" You do not set `status`: it is the observed state.")
+	}
+	b.WriteString("\n\nThe Default column shows what happens when a field is omitted. None means no default is supplied.\n\n")
 	fmt.Fprintf(&b, "`apiVersion: %s` · `kind: %s`\n\n", apiVersion, kind)
 	if d := description(p.docs[kind]); d != "" {
 		b.WriteString(escapeText(d, false) + "\n")
@@ -149,6 +152,27 @@ func (p *apiPackage) page(kind, apiVersion, from string) string {
 	return b.String()
 }
 
+// hasStatus reports whether the kind's own struct has a field whose JSON name is status.
+func (p *apiPackage) hasStatus(kind string) bool {
+	st := p.structs[kind]
+	if st == nil {
+		return false
+	}
+	for _, f := range st.Fields.List {
+		if f.Tag == nil {
+			continue
+		}
+		s, err := strconv.Unquote(f.Tag.Value)
+		if err != nil {
+			continue
+		}
+		if name, _, _ := strings.Cut(reflect.StructTag(s).Get("json"), ","); name == "status" {
+			return true
+		}
+	}
+	return false
+}
+
 // row returns the table row of one field, and the name of the package's struct the field holds, if any.
 func (p *apiPackage) row(rootKind bool, f *ast.Field) (string, string, bool) {
 	tag := ""
@@ -168,9 +192,6 @@ func (p *apiPackage) row(rootKind bool, f *ast.Field) (string, string, bool) {
 		return "", "", false
 	}
 	ms := markers(f.Doc)
-	if slices.Contains(ms, "+doc:hide") {
-		return "", "", false // a field the page leaves out, and with it the struct it holds
-	}
 	optional := strings.Contains(opts, "omitempty") || strings.Contains(opts, "omitzero") || slices.Contains(ms, "+optional")
 	if _, ptr := f.Type.(*ast.StarExpr); ptr {
 		optional = true
