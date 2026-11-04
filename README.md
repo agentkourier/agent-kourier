@@ -121,7 +121,7 @@ resource to allow the referring namespace.
 The resources below look like Kubernetes objects, and by default they are **configuration files**, loaded from
 `AGENTKOURIER_CONFIG_DIR`, usually through a mounted ConfigMap. GitOps can manage the
 ConfigMap, Secrets, and Deployment. The Helm chart can instead install the CRDs and have the broker read the
-resources from the cluster as custom resources (`config.source: crds`, which needs Kubernetes 1.30 or later; see
+resources from the cluster as custom resources (`config.source: crds`, which needs Kubernetes 1.33 or later; see
 the [chart README](charts/agent-kourier/README.md)). There is no controller: the broker reads them with informers.
 The two routes are never merged.
 

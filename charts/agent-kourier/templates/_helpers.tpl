@@ -130,10 +130,10 @@ Checks that no values file can get past. Included by the Deployment, which every
 {{- if .Values.config.existingConfigMap -}}
 {{- fail "config.existingConfigMap is for config.source files: with crds Agent Kourier reads custom resources and mounts no ConfigMap, so it would be ignored" -}}
 {{- end -}}
-{{- /* CRD validation ratcheting, which lets an object that a rule now refuses still be updated, is on by default from 1.30 (a status write of such an object ratchets only from 1.33: measured). The -0 lets a
-       vendor suffix (v1.30.2-gke.1, v1.30.0-eks-abc) pass. */ -}}
-{{- if not (semverCompare ">=1.30.0-0" .Capabilities.KubeVersion.Version) -}}
-{{- fail (printf "config.source crds needs Kubernetes 1.30 or later: the API server is %s. CRD validation ratcheting is on by default from 1.30 and not before, and without it an object that a rule of the CRDs now refuses cannot be updated. With helm template, pass the cluster's version (--kube-version): Helm's default is its own. config.source files has no minimum" .Capabilities.KubeVersion.Version) -}}
+{{- /* The minimum is 1.33, the first minor on which the status write of a stored-invalid Binding ratchets (measured; it is refused on 1.30 to 1.32). The -0 lets a
+       vendor suffix (v1.33.1-gke.1, v1.33.0-eks-abc) pass. */ -}}
+{{- if not (semverCompare ">=1.33.0-0" .Capabilities.KubeVersion.Version) -}}
+{{- fail (printf "config.source crds needs Kubernetes 1.33 or later: the API server is %s. 1.33 is the first minor tried on which a status write of a Binding that a rule of the CRDs now refuses is accepted (it is refused on 1.30 to 1.32). With helm template, pass the cluster's version (--kube-version): Helm's default is its own. config.source files has no minimum" .Capabilities.KubeVersion.Version) -}}
 {{- end -}}
 {{- /* A CRD and the custom resources of it in one release can fail where Helm maps the kind, so the CRDs come first: they must already be served
        when the chart renders. A render that does not ask the cluster (helm template, helm install --dry-run=client) has only the versions it is given. */ -}}

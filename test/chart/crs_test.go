@@ -26,7 +26,7 @@ import (
 
 // crdsServed makes helm template render as if the cluster already served the CRDs on a Kubernetes that CR mode accepts: the render of
 // config.source crds refuses to go on otherwise (a CRD and the resources of it cannot be in one release's first apply).
-var crdsServed = []string{"--api-versions", "agentkourier.dev/v1alpha1", "--kube-version", "v1.30.2"}
+var crdsServed = []string{"--api-versions", "agentkourier.dev/v1alpha1", "--kube-version", "v1.33.2"}
 
 // crMode is crdsServed plus more arguments, as a new slice.
 func crMode(more ...string) []string { return append(slices.Clone(crdsServed), more...) }
@@ -182,8 +182,12 @@ func TestCRDsAreTheGeneratedFiles(t *testing.T) {
 			if ann["helm.sh/resource-policy"] != "keep" {
 				t.Errorf("annotations %v; want helm.sh/resource-policy keep, so that an uninstall leaves the CRD and every resource of it", ann)
 			}
-			if ann["agentkourier.dev/schema-sha256"] != sha256Hex(raw) {
-				t.Errorf("schema-sha256 %v; want the SHA-256 of %s, %s", ann["agentkourier.dev/schema-sha256"], f, sha256Hex(raw))
+			if ann[v1alpha1.SchemaHashAnnotation] != sha256Hex(raw) {
+				t.Errorf("schema-sha256 %v; want the SHA-256 of %s, %s", ann[v1alpha1.SchemaHashAnnotation], f, sha256Hex(raw))
+			}
+			// The hash the broker is built with is the one the chart stamps: the broker compares them at start.
+			if built, ok := v1alpha1.SchemaSHA256(want.name()); !ok || ann[v1alpha1.SchemaHashAnnotation] != built {
+				t.Errorf("the chart stamps %v on %s; the broker is built with %q (%v)", ann[v1alpha1.SchemaHashAnnotation], want.name(), built, ok)
 			}
 			if ann["controller-gen.kubebuilder.io/version"] == nil {
 				t.Errorf("annotations %v lost what controller-gen wrote", ann)
@@ -515,8 +519,9 @@ func TestCRModeRefusals(t *testing.T) {
 	}{
 		{"the CRDs are not served", []string{"-f", values("crds")}, "serve them"},
 		{"the CRDs are not served and crds.install is set", []string{"-f", values("crds"), "--set", "crds.install=true"}, "crds.install installs them with this release, too late for it"},
-		{"Kubernetes 1.29", []string{"-f", values("crds"), "--api-versions", "agentkourier.dev/v1alpha1", "--kube-version", "v1.29.9"}, "needs Kubernetes 1.30 or later"},
-		{"a vendor build of 1.29", []string{"-f", values("crds"), "--api-versions", "agentkourier.dev/v1alpha1", "--kube-version", "v1.29.14-gke.1"}, "needs Kubernetes 1.30 or later"},
+		{"Kubernetes 1.32", []string{"-f", values("crds"), "--api-versions", "agentkourier.dev/v1alpha1", "--kube-version", "v1.32.9"}, "needs Kubernetes 1.33 or later"},
+		{"Kubernetes 1.30", []string{"-f", values("crds"), "--api-versions", "agentkourier.dev/v1alpha1", "--kube-version", "v1.30.2"}, "needs Kubernetes 1.33 or later"},
+		{"a vendor build of 1.32", []string{"-f", values("crds"), "--api-versions", "agentkourier.dev/v1alpha1", "--kube-version", "v1.32.14-gke.1"}, "needs Kubernetes 1.33 or later"},
 		{"an existing ConfigMap", crMode("--set", image+",config.source=crds,config.chatConnection=c,config.existingConfigMap=mine"), "config.existingConfigMap is for config.source files"},
 		{"no connection named, and none given", crMode("--set", image+",config.source=crds"), "needs config.chatConnection"},
 		{"two connections and none chosen", crMode("--set", image+",config.source=crds", "--set-json", twoConnections), "needs config.chatConnection"},
@@ -539,12 +544,12 @@ func TestCRModeRefusals(t *testing.T) {
 	}
 }
 
-// TestCRModeKubeVersions: the minimum is 1.30 and a vendor suffix does not turn a good version away; helm's own default for a render that
+// TestCRModeKubeVersions: the minimum is 1.33 and a vendor suffix does not turn a good version away; helm's own default for a render that
 // names no version (this helm's, which is newer) is above it.
 func TestCRModeKubeVersions(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
-	for _, v := range []string{"v1.30.0", "v1.30.0-eks-abc", "v1.30.2-gke.1", "v1.31.4", "v1.37.0"} {
+	for _, v := range []string{"v1.33.0", "v1.33.0-eks-abc", "v1.33.2-gke.1", "v1.34.1", "v1.37.0"} {
 		t.Run(v, func(t *testing.T) {
 			t.Parallel()
 			if _, err := render(t.Context(), t, "agent-kourier", "agent-kourier", "-f", values("crds"), "--api-versions", "agentkourier.dev/v1alpha1", "--kube-version", v); err != nil {
@@ -652,5 +657,18 @@ func TestCRModeNeedsNoConfig(t *testing.T) {
 	}
 	if env := podEnv(deployment(t, objs)); env["AGENTKOURIER_CHAT_CONNECTION"] != "platform/slack" {
 		t.Errorf("AGENTKOURIER_CHAT_CONNECTION %q; want platform/slack", env["AGENTKOURIER_CHAT_CONNECTION"])
+	}
+}
+
+// TestFilesRouteHasNoMinimumVersion: the version check belongs to config.source crds alone. The ConfigMap route renders on an old API server,
+// with or without crds.install, so no default path gained a check.
+func TestFilesRouteHasNoMinimumVersion(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	for _, extra := range [][]string{nil, {"--set", "crds.install=true"}} {
+		args := append([]string{"-f", values("minimal"), "--kube-version", "v1.20.0"}, extra...)
+		if _, err := render(t.Context(), t, "agent-kourier", "agent-kourier", args...); err != nil {
+			t.Errorf("render on Kubernetes 1.20 with %v: %v; want it to render", extra, err)
+		}
 	}
 }

@@ -113,7 +113,7 @@ same objects as before (`test/chart` pins all seven values files against golden 
 
 What the route needs:
 
-- **Kubernetes 1.30 or later.** CRD validation ratcheting, which lets an object that a rule of the CRDs now refuses still be updated, is on by default from 1.30. A server-side apply of a Binding's status to such an object is refused before 1.33 (measured on kind: refused on 1.30.13 to 1.32.5, passed with a warning on 1.33.1, 1.35.0 and 1.37.0), so on 1.30 to 1.32 the status of a Binding that a later, stricter schema refuses is not updated. The chart refuses an API server
+- **Kubernetes 1.33 or later.** 1.33 is the first minor tried on which a server-side apply of a Binding's status, to a Binding stored invalid by a rule of the CRDs (which a later, stricter schema can cause), ratchets: it is refused on 1.30.13, 1.31.0, 1.32.0 and 1.32.5 and accepted with a warning on 1.33.1, 1.35.0 and 1.37.0 (measured on kind; 1.33.0 and 1.34 were not tried). Ordinary updates of such a Binding ratchet from 1.30. The chart refuses an API server
   it can see is older. The files route has no minimum.
 - **The CRDs installed before the release that sets `config.source: crds`.** A first install that renders the CRDs and custom resources of them in
   one release fails (measured: `resource mapping not found ... ensure CRDs are installed first`), so the chart refuses to render the custom
@@ -150,7 +150,7 @@ the CRDs (and so every custom resource of the cluster; deleting a CRD deletes th
 |---|---|
 | `list`, `watch` on `bindings`, `agentbackends`, `chatconnections` of `agentkourier.dev` | every replica reads the three kinds with informers, in every namespace (it never issues a `get`) |
 | `patch` on `bindings/status` | for the leader to write a Binding's status with a server-side apply, which is a `patch` on the subresource and needs no `create`, `update` or `get` (measured on kind) |
-| `get` on the three CRDs, by name | to compare the schema a cluster serves with the chart's, by the annotation `agentkourier.dev/schema-sha256` that the chart puts on each CRD (the SHA-256 of the generated file). The broker does not read it yet |
+| `get` on the three CRDs, by name | the broker compares, once at start, the annotation `agentkourier.dev/schema-sha256` that the chart puts on each CRD (the SHA-256 of the generated file) with the hash it was built with, and says the result in its log and in `agentkourier_crd_schema_state`. A mismatch warns and stops nothing: apply the CRDs of the chart release that matches the image, then restart the broker. A CRD with no annotation (applied from the files by hand) is reported as `unannotated`, which is not a fault, and one it may not get as `unknown` |
 
 The Secret Roles change too: with `crds` each names the Secrets the chart can see (`resourceNames`) instead of the whole namespace: those that
 `config.*` and the Postgres DSN refer to, and `rbac.secretNames` (a map of namespace to Secret names) for the ones it cannot, such as the
