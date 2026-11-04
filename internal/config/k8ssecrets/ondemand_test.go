@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"go.uber.org/goleak"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/watch"
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/agentkourier/agent-kourier/internal/config"
@@ -107,10 +107,25 @@ func TestValueKeepsTheCallersCancellation(t *testing.T) {
 	}
 }
 
+// entryOf returns the entry of a followed Secret, or nil.
+func entryOf(r *Resolver, n config.SecretName) *entry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.entries[n]
+}
+
 // Secrets that a failed reload asked for are let go by the next reload: a run of failed reloads leaves the informers of the
 // last one, not of each. What a successful reload retained, and what is pinned, stays.
+//
+// The released informers are held and asked directly whether they ended: told to end, and Shutdown, which waits for the
+// informer's goroutines, returns. A snapshot of the goroutines at some point would race with the reflectors of the kept
+// Secrets, which list, sync, and only then open their watch; the watch here opens late on purpose.
 func TestFailedReloadsDoNotAccumulateInformers(t *testing.T) {
 	client := newAPI(t, secret("agent-kourier", "pg"), secret("sre", "kept"))
+	client.PrependWatchReactor("secrets", func(k8stesting.Action) (bool, watch.Interface, error) {
+		time.Sleep(200 * time.Millisecond) // a watch that opens after the cache has synced, as on a slow runner
+		return false, nil, nil
+	})
 	r := New(client, WithPinned(sn("agent-kourier", "pg")), WithLogger(slog.New(slog.DiscardHandler)))
 	t.Cleanup(r.Stop)
 	if err := r.Start(t.Context()); err != nil {
@@ -120,12 +135,14 @@ func TestFailedReloadsDoNotAccumulateInformers(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.Retain([]config.SecretName{sn("sre", "kept")}) // a good snapshot
-	base := goleak.IgnoreCurrent()                   // the pinned and the retained informers are up
+	kept, pinned := entryOf(r, sn("sre", "kept")), entryOf(r, sn("agent-kourier", "pg"))
 
+	held := map[config.SecretName]*entry{}
 	for _, n := range []string{"bad1", "bad2", "bad3", "bad4", "bad5"} { // five failed reloads, each with a new Secret
 		if err := r.Watch(t.Context(), []config.SecretName{sn("sre", "kept"), sn("sre", n)}); err != nil {
 			t.Fatal(err)
 		}
+		held[sn("sre", n)] = entryOf(r, sn("sre", n))
 	}
 
 	want := map[config.SecretName]bool{sn("agent-kourier", "pg"): true, sn("sre", "kept"): true, sn("sre", "bad5"): true}
@@ -133,12 +150,32 @@ func TestFailedReloadsDoNotAccumulateInformers(t *testing.T) {
 		t.Errorf("informers = %v, want %v: the pinned and retained Secrets and the latest reload's", got, want)
 	}
 
-	// The informers that were let go must have ended, not only left the map: after a reload that names the retained
-	// Secret alone, nothing runs beyond the pinned and retained ones. Stop is not called first, as it would end them all.
+	// One more reload that names the retained Secret alone lets go of bad5 too. Every informer that was let go must have
+	// been told to end and have no goroutine left; the pinned and the retained one must still run.
 	if err := r.Watch(t.Context(), []config.SecretName{sn("sre", "kept")}); err != nil {
 		t.Fatal(err)
 	}
-	goleak.VerifyNone(t, base)
+	for n, e := range held {
+		select {
+		case <-e.ended:
+		default:
+			t.Errorf("the informer of %s was let go but not told to end", n)
+		}
+		done := make(chan struct{})
+		go func() { e.factory.Shutdown(); close(done) }() // waits for the informer's goroutines, and returns at once if they are gone
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Errorf("the informer of %s still runs after it was let go", n)
+		}
+	}
+	for n, e := range map[string]*entry{"kept": kept, "pinned": pinned} {
+		select {
+		case <-e.ended:
+			t.Errorf("the %s informer ended although it must keep running", n)
+		default:
+		}
+	}
 }
 
 // An informer that Value started for a holder lasts until the next Watch that does not name the Secret. A holder that still
