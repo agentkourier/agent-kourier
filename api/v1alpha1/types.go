@@ -90,7 +90,7 @@ func (r *SecretKeyRef) defaultKey() {
 // AgentBackend describes an A2A server that hosts agents. Owned by the platform team.
 //
 // +kubebuilder:object:root=true
-// +kubebuilder:resource:scope=Namespaced
+// +kubebuilder:resource:scope=Namespaced,shortName=akbackend,categories=agentkourier
 type AgentBackend struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitzero"`
@@ -128,7 +128,7 @@ type AgentBackendSpec struct {
 // Header is a static HTTP header. Set exactly one of value and valueSecretRef; valueSecretRef's key
 // defaults to "token", as for the other single-value Secret references. A header that carries or selects
 // identity is refused, because the Binding identity owns it: Authorization, Proxy-Authorization, Cookie,
-// X-User-Id, X-Agent-Name, X-Share-Token and X-Kagent-Insecure-Runtime-Identity (D14, D32; see IsReservedHeader).
+// X-User-Id, X-Agent-Name, X-Share-Token and X-Kagent-Insecure-Runtime-Identity.
 type Header struct {
 	// +kubebuilder:validation:MinLength=1
 	Name           string        `json:"name"`
@@ -139,7 +139,7 @@ type Header struct {
 // ChatConnection is a workspace connection. Owned by the platform team.
 //
 // +kubebuilder:object:root=true
-// +kubebuilder:resource:scope=Namespaced
+// +kubebuilder:resource:scope=Namespaced,shortName=akconn,categories=agentkourier
 type ChatConnection struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitzero"`
@@ -173,7 +173,7 @@ type ChatConnectionSpec struct {
 // Owned by an application team.
 //
 // +kubebuilder:object:root=true
-// +kubebuilder:resource:scope=Namespaced
+// +kubebuilder:resource:scope=Namespaced,shortName=akb,categories=agentkourier
 type Binding struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitzero"`
@@ -215,7 +215,7 @@ type AgentRef struct {
 	Namespace string `json:"namespace"`
 }
 
-// Identity is the service identity every turn in the Binding runs as, whoever wrote the message (D14). Set
+// Identity is the service identity every turn in the Binding runs as, whoever wrote the message. Set
 // userId, tokenSecretRef, or both.
 type Identity struct {
 	// UserID is sent as X-User-Id when the backend runs in insecure mode.
@@ -266,9 +266,8 @@ type ChatBinding struct {
 	// It defaults to enabled with the platform's own reaction (Slack: hourglass_flowing_sand).
 	// +optional
 	Acknowledgment *ChatAcknowledgment `json:"acknowledgment,omitempty"`
-	// Triggers decide which events in the channel start or continue a turn (spec 8.2). Empty means
-	// [{type: mention}]: a mention starts a session. A list that names triggers is the whole list
-	// (see defaultTriggers).
+	// Triggers decide which events in the channel start or continue a turn. Empty means
+	// [{type: mention}]: a mention starts a session. A list that names triggers is the whole list.
 	// +doc:default=`[{type: mention}]`
 	// +optional
 	Triggers []Trigger `json:"triggers,omitempty"`
@@ -351,7 +350,7 @@ type Interactions struct {
 	Timeout metav1.Duration `json:"timeout"`
 }
 
-// Feedback configures the useful and not-useful buttons (D27, spec 8.7). The final message of an investigation that
+// Feedback configures the useful and not-useful buttons. The final message of an investigation that
 // a trigger started always carries them; Enabled adds them to the Binding's chat answers too.
 type Feedback struct {
 	// Enabled puts the buttons on the final message of an answer to a person's message in a thread. It does not
@@ -363,7 +362,7 @@ type Feedback struct {
 
 // Session configures thread-to-session mapping.
 type Session struct {
-	// ThreadTTL is how long a thread keeps its session after its last activity (D28). Defaults to 2160h
+	// ThreadTTL is how long a thread keeps its session after its last activity. Defaults to 2160h
 	// (90 days).
 	// +kubebuilder:default="2160h"
 	// +optional

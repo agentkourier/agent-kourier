@@ -8,9 +8,13 @@ metadata:
 spec:
   group: agentkourier.dev
   names:
+    categories:
+    - agentkourier
     kind: Binding
     listKind: BindingList
     plural: bindings
+    shortNames:
+    - akb
     singular: binding
   scope: Namespaced
   versions:
@@ -198,12 +202,11 @@ spec:
                     type: string
                   triggers:
                     description: |-
-                      Triggers decide which events in the channel start or continue a turn (spec 8.2). Empty means
-                      [{type: mention}]: a mention starts a session. A list that names triggers is the whole list
-                      (see defaultTriggers).
+                      Triggers decide which events in the channel start or continue a turn. Empty means
+                      [{type: mention}]: a mention starts a session. A list that names triggers is the whole list.
                     items:
                       description: |-
-                        Trigger is one way an event in the bound channel starts or continues a turn (spec 8.2).
+                        Trigger is one way an event in the bound channel starts or continues a turn.
                         Triggers are tried in order and the first that matches handles the event.
                       properties:
                         exclude:
@@ -269,7 +272,7 @@ spec:
                           properties:
                             maxRunsPerDay:
                               description: |-
-                                MaxRunsPerDay caps starts in any 24 hours (D31). Required for a botMessage trigger: an explicit 0 means
+                                MaxRunsPerDay caps starts in any 24 hours. Required for a botMessage trigger: an explicit 0 means
                                 no cap.
                               format: int32
                               minimum: 0
@@ -334,7 +337,7 @@ spec:
                                 MaxIdle is how long an open thread may go without a message of its key before Agent Kourier counts it
                                 abandoned, so that the key's next fire starts a new investigation instead of a note. It covers a
                                 resolve that never arrived. It needs by, is at least twice the cooldown, and is at most 720h; unset
-                                means the larger of 24h and twice the cooldown (see EffectiveMaxIdle). It must be longer than the
+                                means the larger of 24h and twice the cooldown. It must be longer than the
                                 sender's repeat interval (Alertmanager's repeat_interval): an alert that keeps firing repeats at that
                                 interval, and a maxIdle shorter than it counts a live alert abandoned between two repeats and
                                 starts a second investigation for it. Twice the cooldown covers that only for a 4h cooldown
@@ -361,7 +364,7 @@ spec:
                 type: object
               feedback:
                 description: |-
-                  Feedback configures the useful and not-useful buttons (D27, spec 8.7). The final message of an investigation that
+                  Feedback configures the useful and not-useful buttons. The final message of an investigation that
                   a trigger started always carries them; Enabled adds them to the Binding's chat answers too.
                 properties:
                   enabled:
@@ -373,7 +376,7 @@ spec:
                 type: object
               identity:
                 description: |-
-                  Identity is the service identity every turn in the Binding runs as, whoever wrote the message (D14). Set
+                  Identity is the service identity every turn in the Binding runs as, whoever wrote the message. Set
                   userId, tokenSecretRef, or both.
                 properties:
                   tokenSecretRef:
@@ -432,7 +435,7 @@ spec:
                   threadTTL:
                     default: 2160h
                     description: |-
-                      ThreadTTL is how long a thread keeps its session after its last activity (D28). Defaults to 2160h
+                      ThreadTTL is how long a thread keeps its session after its last activity. Defaults to 2160h
                       (90 days).
                     type: string
                 type: object

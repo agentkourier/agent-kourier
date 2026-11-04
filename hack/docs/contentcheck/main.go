@@ -373,7 +373,12 @@ func publicFiles(root string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return slices.Concat(files, recipes, helmExamples, docs, overrides), nil
+	// The CRDs are generated from the API types' comments, so a maintainer reference left in one reaches kubectl explain.
+	crds, err := textFiles(root, "charts/agent-kourier/files/crds", nil)
+	if err != nil {
+		return nil, err
+	}
+	return slices.Concat(files, recipes, helmExamples, crds, docs, overrides), nil
 }
 
 // allowEntry is one deliberate exception: a line of path that matches rule and holds text.

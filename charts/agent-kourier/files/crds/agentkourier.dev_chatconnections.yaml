@@ -8,9 +8,13 @@ metadata:
 spec:
   group: agentkourier.dev
   names:
+    categories:
+    - agentkourier
     kind: ChatConnection
     listKind: ChatConnectionList
     plural: chatconnections
+    shortNames:
+    - akconn
     singular: chatconnection
   scope: Namespaced
   versions:

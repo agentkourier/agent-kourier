@@ -2,6 +2,7 @@ package v1alpha1_test
 
 import (
 	"bytes"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +17,20 @@ const crdsDir = "../../charts/agent-kourier/files/crds"
 // what controller-gen produces from this package's types and markers. It runs the same generator invocation as
 // `make crds` (keep the two in step), so a type or marker change that is not followed by `make crds` fails here.
 func TestCommittedCRDsMatchGeneration(t *testing.T) {
+	// go test caches a passing result keyed on the files the test itself opens, and it never sees the ones that the
+	// generator subprocess reads. Without these Stats an edit to a type or marker would replay "ok (cached)" and
+	// pass without a regeneration. Stat records each file's size and modification time, so an in-place edit
+	// invalidates the cache, and an unchanged tree still caches. go.mod is here because it pins the generator.
+	goFiles, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range append(goFiles, "../../go.mod") {
+		if _, err := os.Stat(f); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	generated := t.TempDir()
 	cmd := exec.CommandContext(t.Context(), "go", "tool", "controller-gen", "crd", "paths=./api/v1alpha1", "output:crd:dir="+generated)
 	cmd.Dir = "../.."
@@ -29,16 +44,9 @@ func TestCommittedCRDsMatchGeneration(t *testing.T) {
 		t.Fatal("controller-gen wrote no CRDs")
 	}
 
-	names := func(m map[string][]byte) []string {
-		var s []string
-		for n := range m {
-			s = append(s, n)
-		}
-		slices.Sort(s)
-		return s
-	}
-	if !slices.Equal(names(want), names(got)) {
-		t.Fatalf("CRD files differ from generation: committed %v, generated %v; run `make crds`", names(got), names(want))
+	if !slices.Equal(slices.Sorted(maps.Keys(want)), slices.Sorted(maps.Keys(got))) {
+		t.Fatalf("CRD files differ from generation: committed %v, generated %v; run `make crds`",
+			slices.Sorted(maps.Keys(got)), slices.Sorted(maps.Keys(want)))
 	}
 	for name, w := range want {
 		if !bytes.Equal(w, got[name]) {

@@ -8,9 +8,13 @@ metadata:
 spec:
   group: agentkourier.dev
   names:
+    categories:
+    - agentkourier
     kind: AgentBackend
     listKind: AgentBackendList
     plural: agentbackends
+    shortNames:
+    - akbackend
     singular: agentbackend
   scope: Namespaced
   versions:
@@ -62,7 +66,7 @@ spec:
                     Header is a static HTTP header. Set exactly one of value and valueSecretRef; valueSecretRef's key
                     defaults to "token", as for the other single-value Secret references. A header that carries or selects
                     identity is refused, because the Binding identity owns it: Authorization, Proxy-Authorization, Cookie,
-                    X-User-Id, X-Agent-Name, X-Share-Token and X-Kagent-Insecure-Runtime-Identity (D14, D32; see IsReservedHeader).
+                    X-User-Id, X-Agent-Name, X-Share-Token and X-Kagent-Insecure-Runtime-Identity.
                   properties:
                     name:
                       minLength: 1
