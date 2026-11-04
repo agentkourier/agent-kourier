@@ -9,6 +9,7 @@
 # the tier's config for the length of the run; the script puts it back at the end (CRS_MIGRATION_KEEP=1 leaves the release as it is, for a look).
 #
 # The steps, each an upgrade of release agent-kourier with the tier's values and the file above:
+#   0. a plain rollout on the ConfigMap route, which is what any restart costs and the baseline for the rest.
 #   1. files route: a session (a task held on a gate, a reply queued behind it) is opened.                    (E2E_PHASE open-1)
 #   2. crds.install=true: the CRDs, which are inert, and no pod rolls.
 #   3. config.source=crds: the same values render custom resources, and the ConfigMap goes.
@@ -17,10 +18,13 @@
 #   6. config.source=files: the ConfigMap returns, and Helm deletes the custom resources it rendered, while the old pods, which read them,
 #      may still be up.
 #   7. the second session is found again and released.                                                       (finish-2)
-# Each phase is the E2E test TestCR_MigrationKeepsASessionAlive (hack/kind/e2e-run.sh with E2E_PHASE). A phase that fails does not stop the run: what
-# each saw is printed, with the log lines of the old pods that carry the words binding, gone, removed or served, and a timeline of the pods and of
-# how many Bindings the cluster held, every two seconds, from the upgrade of steps 3 and 6. Everything goes to CRS_MIGRATION_OUT (a new temporary
-# directory by default; no token or Secret value is in it, as Agent Kourier logs none).
+#   8. the way back once more, from the custom resources, with the rollout held for 45 seconds after the upgrade, so that the old pods run that long without the
+#      custom resources (a third session, open-3 and finish-3, and a probe).
+# Each phase is the E2E test TestCR_MigrationKeepsASessionAlive (hack/kind/e2e-run.sh with E2E_PHASE). A phase that fails does not stop the run. Steps
+# 0, 3, 6 and 8 are watched: a person's mention of the Binding's channel every two seconds for 100 seconds from before the step (phase probe-100), which
+# says how many were answered, and how many were delivered and never answered, which is a message that a broker without the Binding ignored without
+# a word; a timeline of the pods and of how many Bindings the cluster holds, every two seconds; and the log of each pod that was there when the
+# step began. Everything goes to CRS_MIGRATION_OUT (a new temporary directory by default; no token or Secret value is in it, as Agent Kourier logs none).
 #
 # Every kubectl and helm call names --context kind-agent-kourier-fast, as the tier's scripts do; assert_context aborts unless that is the local kind cluster.
 set -eEuo pipefail
@@ -69,7 +73,7 @@ phase() {
   else
     RESULTS+=("FAIL ${name}")
   fi
-  grep -E '^[[:space:]]+(cr_migration_test|scenario_test|wait).go|^--- |session [0-9] ' "${OUT}/phase-${name}.log" | cut -c1-600 || true
+  grep -E '^[[:space:]]+(cr_migration_test|scenario_test|wait).go|^--- |^[[:space:]]+(UMIG|bot)' "${OUT}/phase-${name}.log" | cut -c1-600 || true
 }
 
 # observe TAG: until stop_watching, a timeline (the pods of the release, and how many Bindings the cluster holds) every two seconds, and the log of each
@@ -80,7 +84,8 @@ observe() {
   (
     while :; do
       printf '%s pods:' "$(date -u +%T)"
-      "${K[@]}" -n agent-kourier get pods -l "${TIER_AGENTKOURIER_PODS}" -o 'jsonpath={range .items[*]}{" "}{.metadata.name}{"="}{.status.phase}{if .metadata.deletionTimestamp}{"/terminating"}{end}{end}' 2>/dev/null || true
+      "${K[@]}" -n agent-kourier get pods -l "${TIER_AGENTKOURIER_PODS}" --no-headers -o 'custom-columns=N:.metadata.name,P:.status.phase,D:.metadata.deletionTimestamp' 2>/dev/null |
+        awk '{n=$1; sub(/^agent-kourier-/, "", n); printf " %s=%s%s", n, $2, ($3 != "<none>" ? "/terminating" : "")}' || true
       printf ' bindings=%s\n' "$("${K[@]}" get akbinding -A --no-headers 2>/dev/null | wc -l | tr -d ' ')"
       sleep 2
     done
@@ -98,12 +103,44 @@ stop_watching() {
 }
 trap 'stop_watching' EXIT
 
+# move TAG COMMAND...: the move itself, watched: a person's mention of the Binding's channel every two seconds from before the command to after the
+# rollout (the E2E test, in the phase probe-SECONDS), a timeline and the logs of the pods that are there when it starts. The command is run when the
+# probe says it has started; the probe's own summary is printed at the end. A move that fails the script is a failed move.
+move() {
+  local tag=$1 probe_pid waited=0
+  shift
+  observe "${tag}"
+  E2E_PHASE=probe-100 E2E_RUN='TestCR_MigrationKeepsASessionAlive' "${HERE}/e2e-run.sh" fast >"${OUT}/probe-${tag}.log" 2>&1 &
+  probe_pid=$!
+  # The Job's log is read while it runs: go test -v prints a line of t.Logf as it is made.
+  until "${K[@]}" -n e2e logs job/e2e-runner 2>/dev/null | grep -q 'probing started'; do
+    kill -0 "${probe_pid}" 2>/dev/null || die "the probe ended before it started; see ${OUT}/probe-${tag}.log"
+    sleep 2
+    waited=$((waited + 2))
+    [ "${waited}" -lt 240 ] || die "the probe did not start within four minutes"
+  done
+  date -u +'%T the command starts' >>"${OUT}/timeline-${tag}.txt"
+  "$@"
+  date -u +'%T the command returned' >>"${OUT}/timeline-${tag}.txt"
+  rolled_out
+  date -u +'%T rolled out' >>"${OUT}/timeline-${tag}.txt"
+  wait "${probe_pid}" || true
+  stop_watching
+  echo "--- the probe during ${tag}"
+  grep -E 'probe summary|probe [0-9]+ at' "${OUT}/probe-${tag}.log" | sed -e 's/^[[:space:]]*cr_migration_test.go:[0-9]*: //' | cut -c1-400
+  echo "--- timeline of ${tag} (${OUT}/timeline-${tag}.txt)"
+  cat "${OUT}/timeline-${tag}.txt"
+}
+
 echo "outputs in ${OUT}"
 echo "==> the release on the ConfigMap route, with the scenario's config (the chart makes the ConfigMap; the tier's own goes)"
 "${K[@]}" -n agent-kourier delete configmap agent-kourier-config --ignore-not-found >/dev/null
 upgrade
 rolled_out
 "${K[@]}" -n agent-kourier get configmap agent-kourier-config >/dev/null
+
+echo "==> a plain rollout on the ConfigMap route, for what any restart costs (the baseline)"
+move files-restart "${K[@]}" -n agent-kourier rollout restart deploy/agent-kourier
 
 phase open-1
 
@@ -113,13 +150,7 @@ upgrade --set crds.install=true
 rolled_out
 
 echo "==> step 2 of the move: config.source=crds"
-observe to-crds
-date -u +'%T upgrading' >>"${OUT}/timeline-to-crds.txt"
-upgrade -f "${HERE}/crds-values.yaml"
-date -u +'%T helm returned' >>"${OUT}/timeline-to-crds.txt"
-rolled_out
-sleep 20
-stop_watching
+move to-crds upgrade -f "${HERE}/crds-values.yaml"
 echo "Bindings now: $("${K[@]}" get akbinding -A --no-headers | wc -l | tr -d ' ') (kubectl get akbinding -A)"
 "${K[@]}" get akbinding,akbackend,akconnection -A
 
@@ -127,23 +158,34 @@ phase finish-1
 phase open-2
 
 echo "==> the way back: config.source=files, the same values (crds.install stays on)"
-observe to-files
-date -u +'%T upgrading' >>"${OUT}/timeline-to-files.txt"
-upgrade --set crds.install=true
-date -u +'%T helm returned' >>"${OUT}/timeline-to-files.txt"
-echo "Bindings right after the upgrade returned: $("${K[@]}" get akbinding -A --no-headers 2>/dev/null | wc -l | tr -d ' ')"
-rolled_out
-sleep 20
-stop_watching
+move to-files upgrade --set crds.install=true
 
 phase finish-2
 
-echo "==> what the old pods said (lines about bindings, gone, removed or served), by pod"
-for f in "${OUT}"/log-to-*.txt; do
+# The way back again, with a rollout that is slow to start: on kind the new pod is ready in about three seconds, so the old pods, which read the custom
+# resources Helm has just deleted, are gone before the config is read again (the Reloader looks every ten seconds). A real cluster pulls an image or
+# waits for a probe. The Deployment is paused for 45 seconds after the upgrade, so that the old pods run for that long with the custom resources gone,
+# as they would behind a new pod that takes that long.
+slow_way_back() {
+  "${K[@]}" -n agent-kourier rollout pause deploy/agent-kourier >/dev/null
+  upgrade --set crds.install=true
+  date -u +'%T the Deployment is paused for 45s, with the custom resources deleted' >>"${OUT}/timeline-to-files-slow.txt"
+  sleep 45
+  "${K[@]}" -n agent-kourier rollout resume deploy/agent-kourier >/dev/null
+}
+echo "==> onto the custom resources again, for a slow way back"
+upgrade -f "${HERE}/crds-values.yaml"
+rolled_out
+phase open-3
+echo "==> the way back, with a rollout that waits 45 seconds"
+move to-files-slow slow_way_back
+phase finish-3
+
+echo "==> what the pods that were there before each move said (lines about gone, removed, notices, a reload, a refusal or the lease), by pod"
+for f in "${OUT}"/log-*.txt; do
   echo "--- $(basename "${f}")"
-  grep -iE 'binding|gone|removed|served|notice' "${f}" | cut -c1-300 | head -40 || true
+  grep -iE 'gone|removed|notice|shutting|signal|another replica|reloaded|refused|abandon|dropp' "${f}" | grep -v 'condition is false' | cut -c1-300 | head -15 || true
 done
-echo "==> timelines: ${OUT}/timeline-to-crds.txt and ${OUT}/timeline-to-files.txt"
 
 if [ "${CRS_MIGRATION_KEEP:-}" != 1 ]; then
   echo "==> the tier back as it was: Helm deletes the ConfigMap it made, since the tier's values use its own; bring-up makes that one"

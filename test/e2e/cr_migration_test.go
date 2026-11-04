@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -35,8 +37,8 @@ func TestCR_MigrationKeepsASessionAlive(t *testing.T) {
 		t.Skip("a phase of hack/kind/crs-migration.sh (E2E_PHASE=open-1, finish-1, ...): it runs between the Helm upgrades of a migration, and means nothing alone")
 	}
 	kind, n, ok := strings.Cut(env.Phase, "-")
-	if !ok || (kind != "open" && kind != "finish") || n == "" {
-		t.Fatalf("E2E_PHASE = %q; want open-N or finish-N", env.Phase)
+	if !ok || (kind != "open" && kind != "finish" && kind != "probe") || n == "" {
+		t.Fatalf("E2E_PHASE = %q; want open-N, finish-N or probe-SECONDS", env.Phase)
 	}
 	if env.Tier != "fast" {
 		t.Skipf("the migration runs in the fast tier, which has the stub agent; this is the %s tier", env.Tier)
@@ -47,6 +49,106 @@ func TestCR_MigrationKeepsASessionAlive(t *testing.T) {
 		migrationOpen(t, s, n)
 	case "finish":
 		migrationFinish(t, s, n)
+	case "probe":
+		seconds, err := strconv.Atoi(n)
+		if err != nil || seconds < 10 || seconds > 600 {
+			t.Fatalf("E2E_PHASE = %q; want probe-SECONDS with 10 to 600", env.Phase)
+		}
+		migrationProbe(t, s, time.Duration(seconds)*time.Second)
+	}
+}
+
+// probe is one mention that the probe phase sent, and what became of it.
+type probe struct {
+	n        int
+	sent     time.Time
+	sendErr  error         // the fake could not deliver it: no client of Socket Mode was connected, which Slack would retry
+	acked    bool          // Agent Kourier took the event
+	answered bool          // the thread got a finished reply
+	after    time.Duration // how long the reply took
+}
+
+// migrationProbe says what a person who writes in the Binding's channel meets while the broker is moved: for d it mentions Agent Kourier every two
+// seconds, from its own goroutine, and each mention gets 20 seconds to be answered (scenario-gated, with no gate, answers at once). It is a
+// measurement and does not judge: a mention that is delivered and acked and never answered is one that a broker without the Binding ignored without a
+// word, which is what a person would call a lost message, and the summary says how many there were and when. hack/kind/crs-migration.sh starts it as
+// the Helm upgrade starts, and waits for the line "probing started" in its log.
+func migrationProbe(t *testing.T, s *scenario, d time.Duration) {
+	const user, every, patience = "UMIGPROBE", 2 * time.Second, 20 * time.Second
+	s.know(user)
+	var mu sync.Mutex
+	var probes []*probe
+	var wg sync.WaitGroup
+	t.Logf("probing started: a mention of %s every %s for %s", ChannelCRMigration, every, d)
+	start := time.Now()
+	for i := 1; time.Since(start) < d; i++ {
+		p := &probe{n: i, sent: time.Now()}
+		mu.Lock()
+		probes = append(probes, p)
+		mu.Unlock()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(s.ctx, patience+15*time.Second)
+			defer cancel()
+			m, err := s.slack.Mention(ctx, ChannelCRMigration, user, fmt.Sprintf("%sprobe %d", botMention, p.n))
+			if err != nil {
+				mu.Lock()
+				p.sendErr = err
+				mu.Unlock()
+				return
+			}
+			acked := true
+			for _, id := range m.Envelopes {
+				if _, err := s.slack.AckWait(ctx, 15*time.Second, id); err != nil {
+					acked = false
+				}
+			}
+			_, err = s.slack.WaitThread(ctx, patience, ChannelCRMigration, m.TS, func(th []fakeslack.MessageView) bool {
+				bots := BotMessages(th)
+				return len(bots) >= 1 && finished(bots[len(bots)-1])
+			})
+			mu.Lock()
+			p.acked, p.answered, p.after = acked, err == nil, time.Since(p.sent)
+			mu.Unlock()
+		}()
+		time.Sleep(every)
+	}
+	wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+	var lost, notSent, answered []*probe
+	for _, p := range probes {
+		switch {
+		case p.sendErr != nil:
+			notSent = append(notSent, p)
+		case !p.answered:
+			lost = append(lost, p)
+		default:
+			answered = append(answered, p)
+		}
+	}
+	at := func(ps []*probe) string {
+		if len(ps) == 0 {
+			return "none"
+		}
+		return fmt.Sprintf("from +%s to +%s", ps[0].sent.Sub(start).Round(time.Second), ps[len(ps)-1].sent.Sub(start).Round(time.Second))
+	}
+	t.Logf("probe summary: %d mentions: %d answered, %d delivered and never answered (%s), %d not delivered because no Socket Mode client was connected (%s)",
+		len(probes), len(answered), len(lost), at(lost), len(notSent), at(notSent))
+	for _, p := range probes {
+		state := "answered after " + p.after.Round(100*time.Millisecond).String()
+		switch {
+		case p.sendErr != nil:
+			state = "not delivered"
+		case !p.answered:
+			state = fmt.Sprintf("NEVER ANSWERED (acked: %t)", p.acked)
+		}
+		t.Logf("probe %d at +%s: %s", p.n, p.sent.Sub(start).Round(100*time.Millisecond), state)
+	}
+	if len(probes) == 0 {
+		t.Fatal("no probe was sent")
 	}
 }
 
