@@ -12,7 +12,8 @@ install is likely to meet. For the install itself, see [Install with Helm](insta
   an exhausted balance.
 - **The agent runtime's controller log**, when the agent is on kagent.
 - **Metrics.** Agent Kourier's own metrics start with `agentkourier_`. See
-  [Metrics](../reference/metrics.md).
+  [Metrics](../reference/metrics.md). `agentkourier_binding_ready` says whether a Binding
+  [can be served](#a-binding-is-not-ready).
 
 Keep the pod log open while you reproduce a problem. The `session turn` lines say what the
 turn did and why it stopped.
@@ -188,12 +189,34 @@ Agent Kourier follows no redirects, because a redirect could carry the Binding's
 somewhere else. Write the slash on the AgentBackend's `url`. The `a2a` dialect sends to the
 URL exactly as written.
 
-### `HTTP 401` or `HTTP 403` at the card fetch
+### `HTTP 401` at the card fetch
 
-The front door refused the Binding's token. The turn is not retried: the thread gets "This request failed, and I won't
+The front door refused the Binding's token. A send is not retried: the thread gets "This request failed, and I won't
 try it again" with the detail that the agent's front door refused the Binding's credentials, the log's
 `session turn failed` line carries the reason, and `agentkourier_credential_rejections_total` counts it. Check the Secret named by `identity.tokenSecretRef`
-and the front door's own configuration.
+and the front door's own configuration. An HTTP 403 on an A2A call, after the card was fetched, is handled the same way.
+
+A lookup before a resend goes differently: it is not counted, the Secret is not read again, and the lookup is retried. The
+thread says "I can't reach the agent right now, and I'm trying again", and the turn fails as unreachable after 15 minutes.
+
+### `HTTP 403` at the card fetch
+
+The agent does not exist, or does not permit the Binding's identity. kagent 1.0.0-alpha5 answers both with 403, so a
+misspelt `agent.name` or `agent.namespace` in the Binding gets this status; kagent 0.9.x answers an unknown agent with 404.
+A send is not retried: the thread gets "This request failed, and I won't try it again" with the detail that the agent was
+not found, or does not permit the Binding's identity, and the log's `session turn failed` line carries the reason. Other
+requests go differently:
+
+- An answer by a button leaves the pause open, and the thread is told the answer could not be delivered.
+- A typed answer to a question on the `a2a` dialect waits and is tried again, with nothing said in the thread.
+- A task already under way is not followed again, and the thread is told the agent refused to continue it. After a restart
+  with a reply queued behind that task, recovery asks about the reply first and keeps asking, with nothing said in the thread.
+- A lookup before a resend is retried, because the agent may already have the turn. The thread says "I can't reach the agent
+  right now, and I'm trying again", and the turn fails as unreachable after 15 minutes. A turn held behind a task of the
+  session, or one this process knows the agent took and did not record, is retried with no limit.
+
+None of these is counted as a rejected credential. Check the Binding's `agent.name` and
+`agent.namespace`, then the rules that let the Binding's identity use the agent, in kagent and in the front door.
 
 ### The host does not resolve, or the connection times out
 
@@ -214,6 +237,61 @@ Agent Kourier never saw the message. Check, in this order:
    The `slack: socket mode connected` line has a `num_connections` field. A fresh start
    can read 8 with no other consumer and replies still arriving, so treat a
    number above 1 as a reason to look and not as proof.
+
+## A Binding is not ready
+
+`agentkourier_binding_ready{binding="<namespace>/<name>"}` is 0, or the leader's log has a line that starts with `binding verification:`.
+
+The leader checks each Binding of the connection it serves: it fetches the agent's card, and it reads the channel as the bot. [Binding verification](../reference/metrics.md#binding-verification) says when. The result only reports: turns still run for a Binding that is not ready, and `/readyz` does not change.
+
+The metric names the condition, and the log line has the reason:
+
+```sh
+curl -s localhost:8080/metrics | grep -E '^agentkourier_binding_condition.*status="(false|unknown)"} 1'
+kubectl -n agent-kourier logs <leader pod> | grep 'binding verification:'
+```
+
+Port-forward to the leader's pod first, as in [Check the leader](high-availability.md#4-check-the-leader): a standby exports none of these series, and its log has none of these lines. A line has `binding`, `condition`, `status`, `reason` and `detail`, and is written when the result changes, not at each probe. If it has left the log, a restart of the leader logs each result that is not true again.
+
+One failed probe holds the Binding at 0 until the next pass, up to about 5.5 minutes later, so a result during an agent's rollout can clear by itself. A fixed Secret or config is checked again sooner: a change starts a pass, at most one every 30 seconds.
+
+### `BackendReachable`
+
+| `reason` | Status | What happened | What to do |
+|---|---|---|---|
+| `CredentialsUnreadable` | false | The Binding's token, or a Secret behind a header of the backend, cannot be read. | Check the Secret named by `identity.tokenSecretRef` or the header's `valueSecretRef`. It must exist, be type `Opaque` and have the key, and the value must not be empty or hold a control character, such as the trailing newline of `--from-file`. |
+| `Unreachable` | false | The request for the card failed, or the backend did not answer within 8 seconds. `detail` has the cause. | See [The host does not resolve](#the-host-does-not-resolve-or-the-connection-times-out). A backend that takes longer than 8 seconds to serve its card reads this too, although a turn's connect waits up to 30 seconds. |
+| `CredentialsRejected` | false | The backend answered 401. It rejected the token, or the Binding has none and the backend needs one. | See [`HTTP 401`](#http-401-at-the-card-fetch). |
+| `AgentForbidden` | false | The backend answered 403: the agent is not found, or not permitted for this identity. kagent's front door answers this for an agent that does not exist. | See [`HTTP 403`](#http-403-at-the-card-fetch). |
+| `AgentNotFound` | false | The backend answered 404. | Check `agent.namespace` and `agent.name`, and the AgentBackend's `url`. |
+| `AgentNotReady` | false | The backend answered 409. kagent's code answers this for an agent that is not ready (read from its code, not measured). | Check the agent's pod. |
+| `BackendError` | false | The backend answered 5xx, or a 2xx other than 200. | Check the logs of the agent and the front door. |
+| `UnexpectedStatus` | false | The backend answered a 3xx, often a redirect to a login page, or a 4xx no other reason names. Agent Kourier follows no redirects. | See [`HTTP 307 Temporary Redirect`](#http-307-temporary-redirect), and check that the `url` reaches the agent and not a login page. |
+| `UnexpectedStatus` | unknown | The backend answered 408, 425 or 429, which says nothing about the agent. | Wait for the next pass. |
+| `InvalidAgentCard` | false | The backend answered 200 with something that is not an agent card, such as a login page. | Check the AgentBackend's `url`. |
+| `StreamingUnsupported` | false | The agent's card does not advertise streaming, which Agent Kourier requires. | Turn on streaming in the agent. |
+| `UnsupportedExtension` | false | The agent's card requires an extension Agent Kourier does not speak. | Make the extension optional in the agent. |
+| `NoJSONRPCInterface` | false | The agent's card lists no JSON-RPC interface. | See [`agent card lists no JSON-RPC interface`](#agent-card-lists-no-json-rpc-interface). |
+
+### `ChannelJoined`
+
+| `reason` | Status | What happened | What to do |
+|---|---|---|---|
+| `NotInChannel` | false | The bot is not in the channel. | Send `/invite @Agent Kourier` in it. What Slack answers for a private channel the bot is in has not been measured: if Slack leaves out the membership flag there, that channel reads this too. |
+| `ChannelNotFound` | false | The channel does not exist, or the bot cannot see it, as with a private channel the bot is not in. | Check `chat.channel`, which is an ID, then invite the bot. |
+| `ChannelArchived` | false | The channel is archived. | Unarchive it, or point the Binding at another channel. |
+| `MissingScope` | false | The Slack app lacks the scope to read the channel. | Add `channels:read` and `groups:read` and reinstall the app. See [Configure Slack](configure-slack.md). |
+| `ChatCredentialsRejected` | false | Slack rejected the bot's token. | Replace the token and restart Agent Kourier. |
+| `ChatCredentialsChanged` | unknown | The ChatConnection's Secret holds other tokens than the ones in use, so the read was not made. | Restart Agent Kourier to use the new tokens. |
+| `ChatCredentialsUnusable` | unknown | The Secret, or a key of it, is gone or empty, or the Secret is of a type that is never read. The connection keeps the tokens it read, and the read was not made. | Mend the Secret. A restart fails until you do. |
+| `ChatUnavailable` | unknown | Slack rate-limited the read, did not answer in time, or the read failed. `detail` has the cause, such as `no_permission` or `connection refused`. | Wait for the next pass. If it stays, read the cause. |
+
+### Either condition
+
+| `reason` | Status | What happened | What to do |
+|---|---|---|---|
+| `ProbeTimeout` | unknown | The probe did not end within 10 seconds. | Wait for the next pass. If it stays, check the leader's log. |
+| `ProbeFailed` | unknown | The check could not tell. The line is `a probe failed`, with the error, and it is written at each probe. | Read the `error`. |
 
 ## An agent on kagent 0.9.x answers, but the answer can appear twice
 

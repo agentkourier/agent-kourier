@@ -16,6 +16,8 @@ type (
 	ProgressMode string
 	// ThreadReplies selects which replies in a thread Agent Kourier owns are turns (spec 8.2).
 	ThreadReplies string
+	// BotMentions selects whether another bot's mention of Agent Kourier starts a turn (spec 8.2).
+	BotMentions string
 )
 
 // Values of the enumerations, plus the only platform and alert source type in v1.
@@ -32,6 +34,9 @@ const (
 
 	ThreadRepliesAll     ThreadReplies = "all"
 	ThreadRepliesMention ThreadReplies = "mention"
+
+	BotMentionsAny  BotMentions = "any"
+	BotMentionsNone BotMentions = "none"
 
 	PlatformSlack = "slack"
 )
@@ -246,6 +251,14 @@ type ChatBinding struct {
 	// +kubebuilder:default=all
 	// +optional
 	ThreadReplies ThreadReplies `json:"threadReplies"`
+	// BotMentions defaults to any: on a Binding with a mention trigger, a mention of Agent Kourier by any bot or
+	// incoming webhook that can post in the channel starts a turn in the mention's thread, with a fixed prompt and
+	// held to fixed limits. The platform cannot tell an agent from any other bot. With none, a bot's mention starts
+	// nothing. Agent Kourier's own posts, and a bot that a botMessage trigger names, are never taken as a mention.
+	// +kubebuilder:validation:Enum=any;none
+	// +kubebuilder:default=any
+	// +optional
+	BotMentions BotMentions `json:"botMentions"`
 	// Acknowledgment controls the temporary reaction Agent Kourier adds to an accepted message while it is being processed.
 	// It defaults to enabled with the platform's own reaction (Slack: hourglass_flowing_sand).
 	// +optional
@@ -375,6 +388,9 @@ func (b *Binding) Default() {
 	}
 	if b.Spec.Chat.ThreadReplies == "" {
 		b.Spec.Chat.ThreadReplies = ThreadRepliesAll
+	}
+	if b.Spec.Chat.BotMentions == "" {
+		b.Spec.Chat.BotMentions = BotMentionsAny
 	}
 	if b.Spec.Chat.Acknowledgment == nil {
 		b.Spec.Chat.Acknowledgment = &ChatAcknowledgment{}

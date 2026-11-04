@@ -37,6 +37,10 @@ type TriggerRun struct {
 	Trigger int
 	// Key is the alert's message: its connection, channel and ts as the thread.
 	Key ConversationKey
+	// SessionThread is the thread of the session that a bot's mention is a turn of, whether or not the mention opened it. Empty
+	// means Key.Thread and a start that owns its session. Rate and daily count messages by Key; concurrency finds the session by
+	// this, and counts a mention only while its own turn is queued or began the session's task (TaskTurn.Mention).
+	SessionThread string
 	// At is when the start was decided. The windows of the limits end here.
 	At time.Time
 }
@@ -58,6 +62,8 @@ type TriggerAdmission struct {
 	Admitted bool
 	// Limit is the limit that stopped the start, empty if it was admitted.
 	Limit TriggerLimit
+	// Again says that this message was stopped before: its row and its window stand, and it is told and counted once.
+	Again bool
 }
 
 // TriggerDigest is one window of starts that limits stopped, and the count of them by limit: what a digest line says
@@ -81,12 +87,13 @@ type TriggerRuns interface {
 	// limits against the starts the trigger made before, and if none is reached records the start, and otherwise
 	// records that it was stopped, for the digest. A start is one row per message, so asking again for a message
 	// that was admitted already is admitted again without being counted twice. A message that was stopped is checked
-	// afresh: capacity may have come back. A stopped message already recorded keeps its row and window. Binding,
+	// afresh: capacity may have come back. A stopped message already recorded keeps its row and window, and says Again. Binding,
 	// Key and At are required, and At after the Unix epoch (ErrInvalid otherwise).
 	//
 	// The limits count the starts of the Binding's trigger. Rate and daily count the starts in the window before
 	// run.At: they slide. Concurrent counts the admitted starts whose session has an active task or an undelivered
-	// turn, which is how a start that was queued and has not begun is a running investigation too.
+	// turn, which is how a start that was queued and has not begun is a running investigation too. A run with a
+	// SessionThread counts only for its own turn, and one without counts for none of a mention's (TriggerRun.SessionThread).
 	AdmitTriggerRun(ctx context.Context, run TriggerRun, limits TriggerRunLimits) (TriggerAdmission, error)
 	// ListTriggerDigests returns the windows of stopped starts that ended at or before now and have not been
 	// digested, oldest first, with their counts by limit.

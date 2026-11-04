@@ -7,6 +7,9 @@ import "strings"
 // uses the ASCII name shape.
 const MaxOriginPart = 128
 
+// OriginBotMention is the source of a session that a bot's mention made. It is no alert, so feedback attributes no alert to it.
+const OriginBotMention = "botMention"
+
 // Origin identifies the bounded external source and subject that caused a
 // session. The zero value is an ordinary conversation. Source may be present
 // without Subject when a source has no subject to retain.

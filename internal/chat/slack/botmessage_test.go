@@ -147,7 +147,8 @@ func TestAnAppPostIsABotMessageAndNeverAMention(t *testing.T) {
 }
 
 // What is not a bot's new message is dropped, and acknowledged, though the bot is one the sink takes: edits,
-// deletions, a bot's other subtypes, an app_mention by a bot, a message with nothing in it, a direct message.
+// deletions, a bot's other subtypes, an app_mention by a bot to a sink that cannot say whether it takes one, a message with
+// nothing in it, a direct message.
 func TestABotsEditsDeletionsAndOtherSubtypesAreIgnored(t *testing.T) {
 	fake, sk, _ := startBots(t, "C1", webhookBot)
 	post := map[string]any{"subtype": "bot_message", "bot_id": webhookBot, "username": "Alertmanager", "user": "", "text": "",

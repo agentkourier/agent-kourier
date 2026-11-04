@@ -497,6 +497,27 @@ func (f *FakePlatform) BusyCalls() []BusyCall {
 	return slices.Clone(f.busyCalls)
 }
 
+// ThreadFromStart implements chat.ThreadReader: the message said or posted whose ID is the thread's, and then ThreadBetween's window.
+func (f *FakePlatform) ThreadFromStart(ctx context.Context, t chat.Target, before string, limit int) ([]chat.HistoryMessage, int, error) {
+	msgs, dropped, err := f.ThreadBetween(ctx, t, "", before, limit)
+	if err != nil {
+		return nil, 0, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, m := range f.said {
+		if m.At.Channel == t.Channel && m.At.ID == t.Thread {
+			return append([]chat.HistoryMessage{{Message: m}}, msgs...), dropped, nil
+		}
+	}
+	for _, m := range f.messages {
+		if m.Ref.Channel == t.Channel && m.Ref.ID == t.Thread {
+			return append([]chat.HistoryMessage{{Message: chat.Inbound{At: m.Ref, Text: m.Out.Message.Fallback}, Own: true}}, msgs...), dropped, nil
+		}
+	}
+	return msgs, dropped, nil
+}
+
 // ThreadBetween implements chat.ThreadReader over what the fake holds of the thread: what was posted in it (Agent Kourier's own,
 // Own) and what Say delivered to it, by their IDs, which it compares as a platform's timestamps ("seconds.fraction"; the
 // IDs of its own posts are "n.000"). The window is exclusive on both sides, an empty bound is none, and the thread's root is

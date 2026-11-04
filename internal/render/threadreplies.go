@@ -66,21 +66,34 @@ func threadItem(r ThreadReply) untrustedItem {
 // out already. It keeps the newest MaxThreadReplies entries that fit, and says how many it left out altogether, dropped
 // included, in the block's last line. It returns "" and 0 if there is no reply to show.
 func ThreadRepliesCounted(entries []ThreadReply, dropped int) (section string, leftOut int) {
+	// The clause ends in the comma that closes its aside, before the verb of the sentence the module writes. The aside
+	// says which of the two shows who wrote a reply: the name is what a person calls themselves, and is theirs to choose.
+	return threadBlock("Replies that people wrote in this thread since the previous turn, without mentioning Agent Kourier "+
+		"(in each, the id is who wrote it, by the platform's ID, and the from is only the name they call themselves),",
+		leftOutNoun{One: "earlier reply", Many: "earlier replies"}, entries, 0, dropped)
+}
+
+// ThreadMessagesCounted is ThreadRepliesCounted for a turn that carries the thread: entries are what people and other bots wrote
+// in it, from its start or since the last turn that carried the thread, up to the message that mentioned Agent Kourier. The first pinned of them stay
+// whatever else is left out (untrustedItem.Pinned): the message that opened the thread, on its first turn.
+func ThreadMessagesCounted(entries []ThreadReply, pinned, dropped int) (section string, leftOut int) {
+	return threadBlock("Messages that people and other bots wrote in this thread before the mention, leaving out any that were already a request to you "+
+		"(in each, the id is who wrote it, by the platform's ID, and the from is only the name they go by),",
+		leftOutNoun{One: "earlier message", Many: "earlier messages"}, entries, pinned, dropped)
+}
+
+func threadBlock(opening string, noun leftOutNoun, entries []ThreadReply, pinned, dropped int) (section string, leftOut int) {
 	items := make([]untrustedItem, len(entries))
 	for i, r := range entries {
 		items[i] = threadItem(r)
+		items[i].Pinned = i < pinned
 	}
 	return untrustedBlock{
-		// The clause ends in the comma that closes its aside, before the verb of the sentence the module writes. The aside
-		// says which of the two shows who wrote a reply: the name is what a person calls themselves, and is theirs to choose.
-		Opening: "Replies that people wrote in this thread since the previous turn, without mentioning Agent Kourier " +
-			"(in each, the id is who wrote it, by the platform's ID, and the from is only the name they call themselves),",
-		Plural:    true,
-		Order:     "oldest first",
-		TagPrefix: threadTagPrefix,
-		Oldest: &oldestPolicy{
-			Noun: leftOutNoun{One: "earlier reply", Many: "earlier replies"}, MaxItems: MaxThreadReplies, Dropped: dropped,
-		},
+		Opening:       opening,
+		Plural:        true,
+		Order:         "oldest first",
+		TagPrefix:     threadTagPrefix,
+		Oldest:        &oldestPolicy{Noun: noun, MaxItems: MaxThreadReplies, Dropped: dropped},
 		MaxUnits:      MaxThreadBlockUnits,
 		OmitWhenEmpty: true,
 		Items:         items,

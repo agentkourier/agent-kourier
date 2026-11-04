@@ -16,6 +16,10 @@ CLUSTER=agent-kourier-full
 OWNER_LABEL=agentkourier.agent-kourier.dev/owner=up-full
 # Set by up-full.sh after creation; records which checkout owns the cluster.
 CHECKOUT_KEY=agentkourier.agent-kourier.dev/checkout
+# The pods of a tier's own Agent Kourier, release "agent-kourier": the two labels its Deployment selects them by. The name label alone will not
+# do: every release of the chart in the namespace carries it (the sandbox's and any other), since the front door's NetworkPolicy trusts it.
+# test/e2e's agentKourierPods is the same selector.
+TIER_AGENTKOURIER_PODS=app.kubernetes.io/name=agent-kourier,app.kubernetes.io/instance=agent-kourier
 
 die() {
   echo "error: $*" >&2
@@ -79,14 +83,24 @@ assert_owned() {
     die "kind cluster ${CLUSTER} exists but was not created by this script; refusing to touch it"
 }
 
-# refuse_while_sandbox_up: die while the sandbox tier's Agent Kourier (hack/kind/sandbox) is in the cluster. Its pod carries the label
-# app.kubernetes.io/name=agent-kourier that the front door's NetworkPolicy trusts (so it must), and the tests find Agent Kourier's pods by it, so a run of
-# the E2E tests would drive the sandbox's Agent Kourier and a bring-up would start the tier's beside it. An API error is not a refusal: only a
-# Deployment that is there is. Needs K.
+# refuse_while_sandbox_up: die while the sandbox tier's Agent Kourier (hack/kind/sandbox) is in the cluster. It takes the place of the tier's, which
+# sandbox/up.sh has scaled to zero, so a run of the E2E tests would find no Agent Kourier and a bring-up would start the tier's beside it. It looks for the
+# sandbox's Deployment by name, not for a label: another release of the chart in the namespace is no reason to refuse. An API error is not a
+# refusal: only a Deployment that is there is. Needs K.
 refuse_while_sandbox_up() {
   local found
   found=$("${K[@]}" -n agent-kourier get deploy agent-kourier-sandbox --ignore-not-found -o name 2>/dev/null) || found=
-  [ -z "${found}" ] || die "the sandbox tier is up (${found}); its Agent Kourier carries the tier's label. Run: make sandbox-down first"
+  [ -z "${found}" ] || die "the sandbox tier is up (${found}), with the tier's Agent Kourier at zero replicas. Run: make sandbox-down first"
+}
+
+# wait_tier_agentkourier_gone: wait for the tier's own Agent Kourier, which the caller has scaled to zero, to have no pod left: the chart's, and the
+# hand-made one of a tier brought up before the chart, which has no instance label at all. A selector has no "or", so each is a wait of its
+# own, and a wait that matches no pod returns at once. Another release of the chart in the namespace is not waited for: it does not exit. Needs K.
+wait_tier_agentkourier_gone() {
+  local selector
+  for selector in "${TIER_AGENTKOURIER_PODS}" 'app.kubernetes.io/name=agent-kourier,!app.kubernetes.io/instance'; do
+    "${K[@]}" -n agent-kourier wait --for=delete pod -l "${selector}" --timeout=90s >/dev/null
+  done
 }
 
 # owner_checkout: the checkout path recorded on the node, or "unknown".
@@ -297,23 +311,25 @@ install_agentkourier() {
   "${K[@]}" -n agent-kourier rollout restart deploy/agent-kourier >/dev/null
 }
 
-# deploy_agentkourier AGENTBACKEND [EXTRA_CONFIG_DIR]: Agent Kourier's namespace, fake Slack Secret, config and chart, which the fast and full tiers share.
+# deploy_agentkourier AGENTBACKEND [EXTRA_CONFIG_DIR...]: Agent Kourier's namespace, fake Slack Secret, config and chart, which the fast and full tiers share.
 # AGENTKOURIER_VALUES is the values file (the fast tier's by default) and the array AGENTKOURIER_HELM_ARGS, if the caller set it, holds more helm
 # arguments. The config is the fast tier's Bindings and ChatConnection (fast/agent-kourier/config), with AGENTBACKEND, a file, in place of the fast
-# tier's AgentBackend: the Bindings name it `agents` in both tiers. EXTRA_CONFIG_DIR, if given, adds the YAML files of a directory: the fast
-# tier passes the Bindings that reach the stub agent through the a2a dialect, which the full tier, with no stub, must not load.
+# tier's AgentBackend: the Bindings name it `agents` in both tiers. Each EXTRA_CONFIG_DIR adds the YAML files of a directory: the fast tier
+# passes the Bindings that reach the stub agent through the a2a dialect and those that verification checks against the stub, which the full
+# tier, with no stub, must not load.
 # The Secrets are fake constants made here and never committed, and the agent token (Secret agent-kourier-agent-token) is the caller's to
 # make: it differs by tier. Needs HERE, ROOT, K, H.
 deploy_agentkourier() {
-  local config
+  local config dir
   refuse_while_sandbox_up
   config=$(mktemp -d)
   trap 'rm -rf "${config}"; trap - RETURN' RETURN # the scratch directory goes however this ends
   cp "${HERE}"/fast/agent-kourier/config/*.yaml "${config}"
   cp "$1" "${config}/agentbackend.yaml"
-  if [ -n "${2:-}" ]; then
-    cp "$2"/*.yaml "${config}"
-  fi
+  shift
+  for dir in "$@"; do
+    cp "${dir}"/*.yaml "${config}"
+  done
   "${K[@]}" create namespace agent-kourier --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
   "${K[@]}" -n agent-kourier create secret generic slack-fast --from-literal=botToken=xoxb-fake-test-token \
     --from-literal=appToken=xapp-fake-test-token --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
@@ -508,8 +524,8 @@ kindnet_log_failing() {
 }
 
 # NETPOL_PROBE_LABEL marks the probe pods of policy_probe, so that delete_netpol_probes finds them. The probe runs inside command
-# substitutions, which cannot hand a pod name back to the caller's trap, and the pod carries the Agent Kourier label (a leftover one fails
-# the next e2e-full, which wants exactly one such pod): so the traps delete by this label.
+# substitutions, which cannot hand a pod name back to the caller's trap, and the pod carries the Agent Kourier label and no instance label (a leftover
+# one is trusted by the front door, and holds up wait_tier_agentkourier_gone in the next make sandbox-up): so the traps delete by this label.
 NETPOL_PROBE_LABEL=agentkourier.agent-kourier.dev/probe=netpol
 
 # NETPOL_PROBE_SCRIPT: what the probe pod runs, with the control's URL as $1 and the controller's as $2. It prints one line,

@@ -36,6 +36,31 @@ func TestPermalinkIsBuiltFromTheCachedWorkspaceURL(t *testing.T) {
 	}
 }
 
+// A reply's link says which thread it is in, as Slack's own permalink of a reply does. What is not a ts names no thread.
+func TestPermalinkOfAReplyNamesItsThread(t *testing.T) {
+	fake := newFake(t, fakeslack.WithTeam("T0EXAMPLE1", "example"))
+	client := slack.New(clientConfig(fake))
+	p := slack.NewPlatform(client, intakeConn)
+	run(t, client, &sink{})
+	waitConnected(t, fake)
+
+	const bare = "https://example.slack.com/archives/C0123456789/p1759560000123456"
+	for _, tt := range []struct{ name, thread, want string }{
+		{"a reply", "1759550000.000100", bare + "?thread_ts=1759550000.000100&cid=C0123456789"},
+		{"the thread's root", "1759560000.123456", bare},
+		{"outside any thread", "", bare},
+		{"a thread that is no ts", "1759550000.000100&x=1", bare},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			r := ref("C0123456789", "1759560000.123456")
+			r.Thread = tt.thread
+			if got, ok := p.Permalink(r); !ok || got != tt.want {
+				t.Errorf("Permalink = %q, %v; want %q", got, ok, tt.want)
+			}
+		})
+	}
+}
+
 // What is not a channel and a ts has no permalink, so that nothing the platform did not make is put in a link.
 func TestPermalinkRefusesWhatIsNotAChannelAndATimestamp(t *testing.T) {
 	fake := newFake(t)

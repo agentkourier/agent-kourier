@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"strconv"
@@ -29,37 +30,43 @@ func checks(l store.TriggerRunLimits) bool {
 }
 
 // admit asks the trigger's limits whether the match may start a turn, and records the start if it may, in one atomic
-// step in the store (so the count survives a restart). It returns the limit that stops it, or "" if it may start. It
+// step in the store (so the count survives a restart). It returns what they said: the limit that stops it, if one does. It
 // is a local read and write, as the acknowledgement path allows. Asking again for the same message, as a redelivery
 // does, is the same start: it is counted once. Without IntakeConfig.TriggerRuns, or with limits that check nothing,
 // nothing stops a start; a loaded botMessage trigger always has a rate limit, so the second case arises only for a
 // match built in code.
-func (in *Intake) admit(ctx context.Context, m TriggerMatch) (store.TriggerLimit, error) {
+func (in *Intake) admit(ctx context.Context, m TriggerMatch) (store.TriggerAdmission, error) {
 	limits := runLimits(m.Limits)
 	if in.cfg.TriggerRuns == nil || !checks(limits) {
-		return "", nil
+		return store.TriggerAdmission{Admitted: true}, nil
 	}
 	run := store.TriggerRun{
 		Binding: m.Binding, Trigger: m.Index, At: m.Received,
 		Key: store.ConversationKey{Connection: in.conn, Channel: m.Message.At.Channel, Thread: m.Message.At.ID},
 	}
+	if m.Mention {
+		run.SessionThread = cmp.Or(m.Message.At.Thread, m.Message.At.ID)
+	}
 	adm, err := in.cfg.TriggerRuns.AdmitTriggerRun(ctx, run, limits)
 	if err != nil {
-		return "", fmt.Errorf("check the limits of trigger %d of %s for %s: %w", m.Index, m.Binding, m.MessageID, err)
+		return store.TriggerAdmission{}, fmt.Errorf("check the limits of trigger %d of %s for %s: %w", m.Index, m.Binding, m.MessageID, err)
 	}
-	return adm.Limit, nil
+	return adm, nil
 }
 
 // stopThread is what a limit does to a fire that reserved a thread: it gives the reservation back and counts the
 // decision. The key is as if it had not fired, so the next fire of it may start when there is capacity; and nothing
 // is posted, since a note per alert is what a storm must not do (D26). If the release fails the decision is left
-// unset and the error returned: the redelivery finds its own reservation and is checked again.
-func (in *Intake) stopThread(ctx context.Context, m TriggerMatch, hash string, out decided, limit store.TriggerLimit) (decided, error) {
+// unset and the error returned: the redelivery finds its own reservation and is checked again. A message stopped before is
+// a redelivery, and was counted then.
+func (in *Intake) stopThread(ctx context.Context, m TriggerMatch, hash string, out decided, adm store.TriggerAdmission) (decided, error) {
 	if _, err := in.cfg.TriggerThreads.ReleaseTriggerThread(ctx, m.Binding, hash, m.Message.At.ID); err != nil {
 		out.decision = ""
 		return out, fmt.Errorf("release the thread of key %s: %w", out.keyHash, err)
 	}
-	in.countLimited(ctx, m, limit)
+	if !adm.Again {
+		in.countLimited(ctx, m, adm.Limit)
+	}
 	out.decision = DecisionLimited
 	return out, nil
 }

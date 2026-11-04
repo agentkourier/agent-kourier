@@ -468,7 +468,99 @@ func running(t *testing.T, s store.Store, ts string, at time.Time) {
 	}
 }
 
+// turnOf makes the session of a thread's active task the turn of message, which the bot's mention named by mention began, if any did.
+func turnOf(t *testing.T, s store.Store, thread, message, mention string, at time.Time) {
+	t.Helper()
+	key := runOf(thread, at).Key
+	if err := s.UpsertSession(t.Context(), store.Session{Key: key, Binding: tBinding, LastActivity: at}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetSessionTask(t.Context(), key, "ctx-"+thread, "task-"+thread, store.TaskTurn{ID: "turn-" + message, User: "U1", MessageRef: message, Mention: mention}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// inThread is the run of a message ts that is a turn of the session of thread: a start in a thread that the message did not open.
+func inThread(ts, thread string, at time.Time) store.TriggerRun {
+	r := runOf(ts, at)
+	r.SessionThread = thread
+	return r
+}
+
 func (su suite) triggerRuns(t *testing.T) {
+	su.run(t, "each message in one thread is a start of its own", func(t *testing.T, s store.Store) {
+		lim := store.TriggerRunLimits{MaxRuns: 2, Per: time.Hour, DigestWindow: time.Hour}
+		for _, ts := range []string{"100.2", "100.3"} {
+			if got := admit(t, s, inThread(ts, "100.1", t0), lim); !got.Admitted {
+				t.Fatalf("message %s of the thread = %+v; want admitted", ts, got)
+			}
+		}
+		if got := admit(t, s, inThread("100.4", "100.1", t0), lim); got.Admitted || got.Limit != store.LimitRate {
+			t.Errorf("a third message of the thread = %+v; want the rate limit: the limits count messages and not threads", got)
+		}
+		if got := admit(t, s, inThread("100.2", "100.1", t0), lim); !got.Admitted {
+			t.Errorf("asking again for an admitted message = %+v; want admitted, and not counted twice", got)
+		}
+	})
+
+	su.run(t, "a start in a thread is running while its own turn is", func(t *testing.T, s store.Store) {
+		lim := store.TriggerRunLimits{MaxConcurrent: 1, DigestWindow: time.Hour}
+		if got := admit(t, s, inThread("100.2", "100.1", t0), lim); !got.Admitted {
+			t.Fatalf("the first start = %+v; want admitted", got)
+		}
+		if got := admit(t, s, inThread("100.3", "100.1", t0), lim); !got.Admitted {
+			t.Fatalf("with no task yet, a second start = %+v; want admitted", got)
+		}
+		turnOf(t, s, "100.1", "100.2", "100.2", t0)
+		if got := admit(t, s, inThread("200.2", "200.1", t0), lim); got.Admitted || got.Limit != store.LimitConcurrent {
+			t.Errorf("another thread's start while the first's turn runs = %+v; want the concurrency limit, found through SessionThread", got)
+		}
+		turnOf(t, s, "100.1", "100.7", "100.2", t0) // a person answered the mention's question, and the turn's message is theirs
+		if got := admit(t, s, inThread("200.3", "200.1", t0), lim); got.Admitted || got.Limit != store.LimitConcurrent {
+			t.Errorf("a start while the mention's task goes on after an answer = %+v; want the concurrency limit", got)
+		}
+	})
+
+	su.run(t, "a later turn of a mention's session does not hold the mention's place", func(t *testing.T, s store.Store) {
+		lim := store.TriggerRunLimits{MaxConcurrent: 1, DigestWindow: time.Hour}
+		if got := admit(t, s, inThread("100.2", "100.1", t0), lim); !got.Admitted {
+			t.Fatalf("the mention = %+v; want admitted", got)
+		}
+		turnOf(t, s, "100.1", "100.9", "", t0) // a person's reply is the session's task now
+		queued := store.Reply{ID: "person-queued", Key: runOf("100.1", t0).Key, UserID: "U1", MessageRef: "100.8", Text: "and another", EnqueuedAt: t0}
+		if _, err := s.EnqueueReply(t.Context(), queued); err != nil {
+			t.Fatal(err)
+		}
+		if got := admit(t, s, inThread("200.2", "200.1", t0), lim); !got.Admitted {
+			t.Errorf("a mention in another thread = %+v; want admitted: the first mention's own turn has ended", got)
+		}
+	})
+
+	su.run(t, "a mention in an alert's thread is not the alert still going", func(t *testing.T, s store.Store) {
+		lim := store.TriggerRunLimits{MaxConcurrent: 1, DigestWindow: time.Hour}
+		if got := admit(t, s, runOf("100.1", t0), lim); !got.Admitted {
+			t.Fatalf("the alert = %+v; want admitted", got)
+		}
+		key := runOf("100.1", t0).Key
+		turnOf(t, s, "100.1", "100.1", "", t0) // the alert's own turn holds the alert's place
+		if got := admit(t, s, runOf("200.1", t0), lim); got.Admitted {
+			t.Fatalf("a second alert while the first runs = %+v; want the concurrency limit", got)
+		}
+		noErr(t, s.SetSessionTask(t.Context(), key, "", "", store.TaskTurn{}), "the alert's turn ends")
+		mention := store.Reply{ID: "mention-queued", Key: key, UserID: store.SystemUser, MessageRef: "100.5", WholeThread: true, Text: "the prompt", EnqueuedAt: t0}
+		if _, err := s.EnqueueReply(t.Context(), mention); err != nil {
+			t.Fatal(err)
+		}
+		if got := admit(t, s, runOf("200.2", t0), lim); !got.Admitted {
+			t.Fatalf("an alert with a mention's turn queued in the first's thread = %+v; want admitted", got)
+		}
+		noErr(t, s.MarkReplyDelivered(t.Context(), mention.ID, t0), "the mention's turn is sent")
+		turnOf(t, s, "100.1", "100.5", "100.5", t0)
+		if got := admit(t, s, runOf("200.3", t0), lim); !got.Admitted {
+			t.Errorf("an alert with a mention's task in the first's thread = %+v; want admitted", got)
+		}
+	})
+
 	su.run(t, "a start under the limits is admitted", func(t *testing.T, s store.Store) {
 		if got := admit(t, s, runOf("100.1", t0), runLimits); !got.Admitted || got.Limit != "" {
 			t.Errorf("the first start = %+v; want admitted", got)
@@ -618,11 +710,11 @@ func (su suite) triggerRuns(t *testing.T) {
 	su.run(t, "a stopped message is checked afresh when asked for again", func(t *testing.T, s store.Store) {
 		lim := store.TriggerRunLimits{MaxRuns: 1, Per: time.Minute, DigestWindow: time.Minute}
 		admit(t, s, runOf("1.1", t0), lim)
-		if got := admit(t, s, runOf("1.2", t0.Add(time.Second)), lim); got.Admitted {
-			t.Fatalf("the second = %+v; want stopped", got)
+		if got := admit(t, s, runOf("1.2", t0.Add(time.Second)), lim); got.Admitted || got.Again {
+			t.Fatalf("the second = %+v; want stopped, for the first time", got)
 		}
-		if got := admit(t, s, runOf("1.2", t0.Add(time.Second)), lim); got.Admitted || got.Limit != store.LimitRate {
-			t.Errorf("the same stopped message again = %+v; want stopped, rate", got)
+		if got := admit(t, s, runOf("1.2", t0.Add(time.Second)), lim); got.Admitted || got.Limit != store.LimitRate || !got.Again {
+			t.Errorf("the same stopped message again = %+v; want stopped, rate, again", got)
 		}
 		if got := admit(t, s, runOf("1.2", t0.Add(2*time.Minute)), lim); !got.Admitted {
 			t.Fatalf("the stopped message once the window has passed = %+v; want admitted", got)
