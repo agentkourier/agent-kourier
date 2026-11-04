@@ -65,7 +65,8 @@ const (
 	// ReasonCredentialsUnreadable is a BackendReachable reason: the Binding's token Secret or a Secret behind one of
 	// the backend's headers cannot be read.
 	ReasonCredentialsUnreadable Reason = "CredentialsUnreadable"
-	// ReasonUnreachable is a BackendReachable reason: the backend did not answer (dial, TLS or timeout).
+	// ReasonUnreachable is a BackendReachable reason: the request for the agent card failed (a name that does not resolve, a refused
+	// connection, a TLS handshake that failed, a connection that dropped) or the backend did not answer in time.
 	ReasonUnreachable Reason = "Unreachable"
 	// ReasonCredentialsRejected is a BackendReachable reason: the backend answered 401, either because it rejected
 	// the Binding's token or because the Binding has none and the backend needs one.
@@ -111,6 +112,11 @@ const (
 	// is using.
 	ReasonChatCredentialsChanged Reason = "ChatCredentialsChanged"
 
+	// ReasonChatCredentialsUnusable is an Unknown ChannelJoined reason: the Secret that holds the chat credentials, or a key of it, is
+	// gone or empty, or the Secret is of a type that is never read. The connection still uses the tokens it read, and a restart
+	// fails until the Secret is mended, which tells it from ReasonChatCredentialsChanged, where a restart is what is wanted.
+	ReasonChatCredentialsUnusable Reason = "ChatCredentialsUnusable"
+
 	// ReasonGroupNotFound is an ApproversReadable reason: a named approver group does not exist.
 	ReasonGroupNotFound Reason = "GroupNotFound"
 )
@@ -125,7 +131,7 @@ func (r Reason) reportable(s Status) bool {
 		return s == True
 	case ReasonChatCredentialsRejected:
 		return s == False
-	case ReasonChatUnavailable, ReasonChatCredentialsChanged:
+	case ReasonChatUnavailable, ReasonChatCredentialsChanged, ReasonChatCredentialsUnusable:
 		return s == Unknown
 	case ReasonCredentialsUnreadable, ReasonUnreachable, ReasonCredentialsRejected, ReasonAgentForbidden, ReasonAgentNotFound,
 		ReasonAgentNotReady, ReasonBackendError, ReasonUnexpectedStatus, ReasonInvalidAgentCard, ReasonStreamingUnsupported,

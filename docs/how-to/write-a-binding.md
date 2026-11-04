@@ -77,6 +77,8 @@ ending in `.yaml`, and ask them to list your namespace in `rbac.secretNamespaces
 Mention the bot in the channel. A thread opens and the agent answers in it. If nothing happens, see
 [Troubleshoot an install](troubleshoot.md#the-mention-gets-no-reply-and-the-log-shows-no-session-turn-started).
 
+The leader also checks the Binding by itself, within about 30 seconds of the reload or when a pass already running ends: `agentkourier_binding_ready{binding="<namespace>/<name>"}` is 1 when the agent's card can be fetched and the bot is in the channel. If it is 0, see [A Binding is not ready](troubleshoot.md#a-binding-is-not-ready).
+
 One channel takes one Binding. A second Binding for the same channel on the same connection makes the whole
 config fail to load: a reload keeps the last good config, and a fresh start fails. The error names the Binding that
 already holds the channel.
@@ -89,11 +91,13 @@ already holds the channel.
   [Investigate Alertmanager alerts](investigate-alertmanager-alerts.md) for a worked trigger, or
   [Start investigations from any bot's messages](any-bot-trigger.md) for another tool's bot.
 - **Keep threads around for less than 90 days:** set `session.threadTTL`, for example `720h`.
-- **Rating buttons on answers:** set `feedback.enabled: true`. Investigations that a trigger started always carry them.
+- **Rating buttons on answers:** set `feedback.enabled: true`. Investigations that a trigger started always carry them. A turn that another bot's mention started counts as an answer.
 - **Choose what a live reply shows while the agent works:** set `chat.progress` to `steps`, `steps-and-activity` (the
   default) or `activity`. The default adds a `Working…` card when 3 seconds pass with nothing new; `activity` shows one
   card (a line in an alert thread) that counts the steps and names no tool; `steps` is the cards and lines alone. See
   [Output](../explanation/threads-and-sessions.md#output).
+- **Turn off other bots' mentions:** any bot or webhook in the channel can start a turn by mentioning Agent Kourier. Set
+  `chat.botMentions: none` to stop that. See [A bot's mention](../reference/chat-triggers.md#a-bots-mention).
 - **Let the agent notify people:** declare them under `chat.mentions`, each with the `name` the agent writes and the
   `user` ID it stands for. See [Let the agent notify people](#let-the-agent-notify-people).
 - **Change the processing reaction:** set `chat.acknowledgment.emoji` to a bare Slack reaction name. The reaction is removed when

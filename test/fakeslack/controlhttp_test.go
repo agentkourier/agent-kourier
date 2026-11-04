@@ -156,6 +156,34 @@ func TestControlSetsUpAndInspects(t *testing.T) {
 	}
 }
 
+// The control surface archives a channel for conversations.info, as the Go method does, and a call that says so puts it back.
+func TestControlArchivesAChannel(t *testing.T) {
+	fake, _ := connected(t)
+	api := slack.New(testToken, slack.OptionAPIURL(fake.URL()+"/"))
+	if s := control(t, fake, "POST", "/_control/members", map[string]any{"channel": "C1", "users": []string{"UFAKEBOT"}}, nil); s != 200 {
+		t.Fatalf("members status = %d", s)
+	}
+	info := func() (archived bool, err error) {
+		ch, err := api.GetConversationInfo(&slack.GetConversationInfoInput{ChannelID: "C1"})
+		return ch != nil && ch.IsArchived, err
+	}
+	if archived, err := info(); err != nil || archived {
+		t.Fatalf("conversations.info = %t, %v; want a channel that is not archived", archived, err)
+	}
+	if s := control(t, fake, "POST", "/_control/archived", map[string]any{"channel": "C1", "archived": true}, nil); s != 200 {
+		t.Fatalf("archived status = %d", s)
+	}
+	if archived, err := info(); err != nil || !archived {
+		t.Errorf("conversations.info after archiving = %t, %v; want archived", archived, err)
+	}
+	if s := control(t, fake, "POST", "/_control/archived", map[string]any{"channel": "C1", "archived": false}, nil); s != 200 {
+		t.Fatalf("unarchived status = %d", s)
+	}
+	if archived, err := info(); err != nil || archived {
+		t.Errorf("conversations.info after unarchiving = %t, %v; want not archived", archived, err)
+	}
+}
+
 func TestControlMapsErrorsToStatuses(t *testing.T) {
 	fake, _ := connected(t)
 	_, ask := postAsk(t, fake)
@@ -174,6 +202,7 @@ func TestControlMapsErrorsToStatuses(t *testing.T) {
 		{"user without an id", "/_control/users", `{"name": "ada"}`, 400},
 		{"members without a channel", "/_control/members", `{"users": ["U1"]}`, 400},
 		{"user group without an id", "/_control/usergroups", `{"users": ["U1"]}`, 400},
+		{"archived without a channel", "/_control/archived", `{"archived": true}`, 400},
 		{"dm without text", "/_control/dm", `{"user": "U1"}`, 400},
 		{"mention without a channel", "/_control/mention", map[string]string{"user": "U1", "text": mentionText}, 400},
 		{"submit an option the select does not offer", "/_control/submit", map[string]any{"user": "U1", "message_ts": ask, "action_id": "submit",

@@ -3,10 +3,13 @@ package broker
 import (
 	"errors"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/agentkourier/agent-kourier/internal/bindingcheck"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
@@ -35,6 +38,9 @@ type Metrics struct {
 	turns         *prometheus.CounterVec
 	leader        prometheus.Gauge
 	takeovers     prometheus.Counter
+	bindingCond   *prometheus.GaugeVec
+	bindingReady  *prometheus.GaugeVec
+	probeDuration *prometheus.HistogramVec
 }
 
 // NewMetrics returns the metrics. stale is read at each scrape for agentkourier_config_stale, and
@@ -66,6 +72,12 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 			Help: "1 while this replica does Agent Kourier's work (it leads, or it is the only replica: SQLite), 0 while it is a standby."}),
 		takeovers: prometheus.NewCounter(prometheus.CounterOpts{Name: "agentkourier_leader_takeovers_total",
 			Help: "Times this replica took the leadership: it won the lease and was given the next epoch."}),
+		bindingCond: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_binding_condition",
+			Help: "1 for the status a Binding's condition has (true, false or unknown) and 0 for the other two, by Binding and condition. Only the leader reports it. A condition has series once its first probe has ended; Ready has them once every first probe of the Binding has ended or one found it false."}, []string{"binding", "condition", "status"}),
+		bindingReady: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_binding_ready",
+			Help: "1 while every condition of the Binding is true, 0 while one is false or not yet known, by Binding. Only the leader reports it. A Binding has the series once every first probe of it has ended or one found it false."}, []string{"binding"}),
+		probeDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "agentkourier_binding_probe_duration_seconds",
+			Help: "How long a probe of a Binding took, by condition: the time the checker took, whatever it found.", Buckets: prometheus.DefBuckets}, []string{"condition"}),
 	}
 	staleGauge := prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "agentkourier_config_stale",
 		Help: "1 while the latest config reload failed, so the running config lags the files."}, func() float64 {
@@ -75,7 +87,7 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 		return 0
 	})
 	var err error
-	for _, c := range []prometheus.Collector{m.auditFailures, m.rejections, m.abandons, m.reloadErrors, m.approvals, m.timeouts, m.removed, m.decisions, m.chatUp, m.turns, m.leader, m.takeovers, staleGauge} {
+	for _, c := range []prometheus.Collector{m.auditFailures, m.rejections, m.abandons, m.reloadErrors, m.approvals, m.timeouts, m.removed, m.decisions, m.chatUp, m.turns, m.leader, m.takeovers, m.bindingCond, m.bindingReady, m.probeDuration, staleGauge} {
 		err = errors.Join(err, m.reg.Register(c))
 	}
 	if err != nil {
@@ -182,6 +194,50 @@ func (m *Metrics) Leader(leading bool) {
 
 // Takeover counts a leadership taken: the lease won and the epoch bumped.
 func (m *Metrics) Takeover() { m.takeovers.Inc() }
+
+// BindingCondition records a condition of a Binding that changed: bindingcheck.Options.OnTransition. The condition's series
+// say its new status (1 for it, 0 for the other two), and a change of Ready also sets agentkourier_binding_ready, which is 1
+// for True and 0 for False and Unknown. The reason is not a label: a reason that flaps would make series come and go, and
+// it is in the log line of the transition.
+//
+// A Ready that is still Pending (no condition is False, and a first probe has not ended: bindingcheck names a Pending condition
+// before any other Unknown, so the order in which the probes end does not matter) gets no series of its own and no ready gauge: the
+// Binding is not known to be unready, only not yet known, and a rule on == 0 would fire after every restart for the length of the slower
+// probe. A Binding that a first result has already found False has the series at once, with 0, which is true. The other conditions'
+// series are exported as they end. Ready never becomes Pending again.
+func (m *Metrics) BindingCondition(tr bindingcheck.Transition) {
+	if tr.New.Type == bindingcheck.Ready && tr.New.Pending() {
+		return
+	}
+	for _, s := range [...]bindingcheck.Status{bindingcheck.True, bindingcheck.False, bindingcheck.Unknown} {
+		v := 0.0
+		if tr.New.Status == s {
+			v = 1
+		}
+		m.bindingCond.WithLabelValues(tr.Binding, string(tr.New.Type), strings.ToLower(string(s))).Set(v)
+	}
+	if tr.New.Type == bindingcheck.Ready {
+		v := 0.0
+		if tr.New.Status == bindingcheck.True {
+			v = 1
+		}
+		m.bindingReady.WithLabelValues(tr.Binding).Set(v)
+	}
+}
+
+// BindingsPruned deletes every series of the Bindings that left the config: bindingcheck.Options.OnPrune. The Prober calls it after
+// the last transition it reports for a Binding, so a series it deletes is not set again.
+func (m *Metrics) BindingsPruned(names []string) {
+	for _, name := range names {
+		m.bindingCond.DeletePartialMatch(prometheus.Labels{"binding": name})
+		m.bindingReady.DeleteLabelValues(name)
+	}
+}
+
+// BindingProbed observes how long a probe of a condition took.
+func (m *Metrics) BindingProbed(cond bindingcheck.ConditionType, d time.Duration) {
+	m.probeDuration.WithLabelValues(string(cond)).Observe(d.Seconds())
+}
 
 // Handler serves the registry in the Prometheus text format.
 func (m *Metrics) Handler() http.Handler {

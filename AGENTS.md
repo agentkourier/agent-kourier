@@ -32,6 +32,7 @@ internal/render         agent output to neutral messages
 internal/feedback       useful / not-useful votes on investigations
 internal/audit          audit log
 internal/telemetry      Prometheus metrics and OpenTelemetry traces
+internal/bindingcheck   per-Binding conditions and the prober that checks them
 internal/broker         composition: Bindings, chat platform factory, lifecycle, health, leader election, shutdown order
 internal/interact       interactions: pause intake, button presses, timeout sweep
 internal/redact         shared secret redaction for display and audit text
