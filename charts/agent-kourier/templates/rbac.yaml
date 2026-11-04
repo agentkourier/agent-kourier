@@ -1,10 +1,17 @@
 {{- if .Values.rbac.create }}
 {{- /* The resolver follows each Secret its config refers to with an informer of its own: list and watch on that one Secret, by a
-       metadata.name field selector, never get. Kubernetes authorizes such a request by resourceName, so a Role could name single
-       Secrets (with rbac.create=false, grant that yourself). These Roles are namespace-wide, which grants every Secret in the
-       namespace, although Agent Kourier keeps in memory only the Opaque ones its config refers to (internal/config/k8ssecrets).
-       Keep those namespaces to ones that hold Agent Kourier's. */ -}}
-{{- range $ns := include "agentkourier.secretNamespaces" . | fromJsonArray }}
+       metadata.name field selector, never get. Kubernetes authorizes such a request by resourceName, so a Role can name single
+       Secrets. With config.source files these Roles are namespace-wide, which grants every Secret in the namespace, although Agent
+       Kourier keeps in memory only the Opaque ones its config refers to (internal/config/k8ssecrets). Keep those namespaces to ones
+       that hold Agent Kourier's. With crds each Role names the Secrets that the chart can see (agentkourier.secretNames), except in a
+       namespace of rbac.secretNamespaces, which stays namespace-wide. */ -}}
+{{- $named := dict }}
+{{- $namespaces := include "agentkourier.secretNamespaces" . | fromJsonArray }}
+{{- if include "agentkourier.crMode" . }}
+{{- $named = include "agentkourier.secretNames" . | fromJson }}
+{{- $namespaces = concat (keys $named) .Values.rbac.secretNamespaces | uniq | sortAlpha }}
+{{- end }}
+{{- range $ns := $namespaces }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -16,6 +23,9 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: [secrets]
+    {{- if and (hasKey $named $ns) (not (has $ns $.Values.rbac.secretNamespaces)) }}
+    resourceNames: {{ get $named $ns | toJson }}
+    {{- end }}
     verbs: [list, watch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -55,6 +65,40 @@ metadata:
   labels:
     {{- include "agentkourier.labels" . | nindent 4 }}
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "agentkourier.fullname" . }}-leader}
+subjects:
+  - {kind: ServiceAccount, name: {{ include "agentkourier.serviceAccountName" . }}, namespace: {{ .Release.Namespace }}}
+{{- end }}
+{{- /* With config.source crds, what the broker does to the custom resources, and no more. Every replica reads the three kinds with informers
+       (list and watch, never get: internal/config/crsource), in every namespace, which is why this is a ClusterRole; the leader writes
+       Binding.status with a server-side apply, a patch on the status subresource of bindings (no create, update or get). The CRDs may be
+       got by name, and only those three, to compare the schema they serve with the chart's (the schema-sha256 annotation of crds.yaml). */}}
+{{- if and .Values.rbac.create (include "agentkourier.crMode" .) }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "agentkourier.clusterRoleName" . }}
+  labels:
+    {{- include "agentkourier.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [agentkourier.dev]
+    resources: [agentbackends, bindings, chatconnections]
+    verbs: [list, watch]
+  - apiGroups: [agentkourier.dev]
+    resources: [bindings/status]
+    verbs: [patch]
+  - apiGroups: [apiextensions.k8s.io]
+    resources: [customresourcedefinitions]
+    resourceNames: [agentbackends.agentkourier.dev, bindings.agentkourier.dev, chatconnections.agentkourier.dev]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "agentkourier.clusterRoleName" . }}
+  labels:
+    {{- include "agentkourier.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ include "agentkourier.clusterRoleName" . }}}
 subjects:
   - {kind: ServiceAccount, name: {{ include "agentkourier.serviceAccountName" . }}, namespace: {{ .Release.Namespace }}}
 {{- end }}
