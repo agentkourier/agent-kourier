@@ -234,6 +234,12 @@ On `helm uninstall` the chart keeps the claim by default: `persistence.retainOnU
 behaviour is not guaranteed. If the data matters, create the claim yourself and set `persistence.existingClaim`, so no
 release owns it, and stop with `replicaCount: 0` rather than by removing the app.
 
+The CustomResourceDefinitions that `crds.install` renders are kept on `helm uninstall` the same way (`helm.sh/resource-policy: keep`), and that too is
+Helm's guarantee only. Under Argo CD with prune, turning `crds.install` off, or deleting the Application, may delete the CRDs, and deleting a CRD deletes every
+Binding, AgentBackend or ChatConnection of that kind in the cluster, which is every team's. The chart renders `argocd.argoproj.io/sync-options: Prune=false,Delete=false`
+on each CRD, which Argo CD's documentation says stops that. This is unverified: Argo CD has not been run against this chart. A tool other than Helm or Argo CD needs its own way to be told to leave them,
+or have the CRDs applied outside what it prunes (see [Apply the CRDs yourself](migrate-config-source.md#apply-the-crds-yourself)).
+
 ## Build from source
 
 For a change that is not in a release yet. You need a checkout of this repository and `docker`.

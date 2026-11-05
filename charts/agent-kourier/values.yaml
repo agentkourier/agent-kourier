@@ -118,6 +118,11 @@ config:
 # They carry helm.sh/resource-policy: keep, so uninstalling the release, or turning this off, leaves them there, and with them every custom
 # resource: deleting a CRD deletes its resources too. Nor does a release that has this off upgrade them: a chart upgrade that changes a schema
 # needs it set, so keep it in the values file for as long as the chart is meant to look after the CRDs.
+#
+# "Kept" is Helm's guarantee only. Under Argo CD with prune, turning this off, or deleting the Application, may delete the CRDs, and every team's
+# Binding, AgentBackend and ChatConnection with them. The chart also renders argocd.argoproj.io/sync-options: Prune=false,Delete=false on each CRD,
+# which Argo CD's documentation says stops that (unverified: Argo CD has not been run against this chart). Another tool that prunes needs its own
+# way to be told to leave the CRDs, or the CRDs applied outside what it prunes.
 crds:
   install: false
 
