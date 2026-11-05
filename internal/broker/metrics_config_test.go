@@ -57,3 +57,26 @@ func TestConfigGaugesStartAtZero(t *testing.T) {
 		t.Errorf("invalid objects series = %v; want one per kind", got)
 	}
 }
+
+// What the broker holds after a deletion has a gauge of its own, by kind, apart from what is refused: a held object counts
+// in both, and one that is refused and not held in the first only.
+func TestConfigReportSetsTheHeldObjectsGauge(t *testing.T) {
+	m := mustMetrics(t, nil)
+	m.ConfigReport(config.Report{Invalid: []config.Invalid{
+		{Kind: config.KindChatConnection, Deleted: true}, {Kind: config.KindBinding, Deleted: true}, {Kind: config.KindBinding, Deleted: true},
+		{Kind: config.KindAgentBackend, Deleted: true}, {Kind: config.KindAgentBackend}, // a backend that is refused, and not held
+	}})
+	want := []string{"{kind=AgentBackend} 1", "{kind=Binding} 2", "{kind=ChatConnection} 1"}
+	if got := gauges(t, m, "agentkourier_config_held_objects"); !slices.Equal(got, want) {
+		t.Errorf("held objects = %v; want %v", got, want)
+	}
+	if got := gauges(t, m, "agentkourier_config_invalid_objects"); !slices.Contains(got, "{kind=AgentBackend} 2") {
+		t.Errorf("invalid objects = %v; want a backend that is held counted here too, with the one that is refused", got)
+	}
+	m.ConfigReport(config.Report{})
+	for _, s := range gauges(t, m, "agentkourier_config_held_objects") {
+		if !strings.HasSuffix(s, " 0") {
+			t.Errorf("%s after an empty report; want 0", s)
+		}
+	}
+}
