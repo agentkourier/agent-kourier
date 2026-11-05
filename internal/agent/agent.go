@@ -54,6 +54,13 @@ type Config struct {
 	// names the calls the approval waits on with it (FinalEvent.AwaitingApproval). A Pool sets it from its dialect.
 	// Nil reads none.
 	ParseInteraction func(task a2a.Task) (*dialect.Interaction, error)
+	// MaxReplyBytes bounds what one send or follow holds of the agent's reply in memory: the text of its artifacts, the
+	// tool results that wait for their call, and the bookkeeping of each tool part, which the agent decides and a
+	// stream's length does not limit. It does not bound how long a reply is in all: the dialect bounds each event and
+	// each answer (dialect.MaxEventBytes, dialect.MaxResponseBytes), and a stream that sends text that is thrown away
+	// can run as long as its context. A reply past it ends the send or follow with an error that wraps
+	// dialect.ErrResponseTooLarge, which is not a lost stream and is not reconnected. Default DefaultMaxReplyBytes.
+	MaxReplyBytes int
 }
 
 func (c Config) withDefaults() Config {
@@ -71,6 +78,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.ConnectTimeout <= 0 {
 		c.ConnectTimeout = 30 * time.Second
+	}
+	if c.MaxReplyBytes <= 0 {
+		c.MaxReplyBytes = DefaultMaxReplyBytes
 	}
 	return c
 }
@@ -123,7 +133,7 @@ func (a *Agent) send(ctx context.Context, msg *a2a.Message, h Handler, answer bo
 		return fmt.Errorf("%w: connect to agent: %w", ErrNotSent, typed(err, false))
 	}
 	asm := newAssembler(h)
-	asm.interaction = a.cfg.ParseInteraction
+	asm.interaction, asm.limit = a.cfg.ParseInteraction, a.cfg.MaxReplyBytes
 	asm.replies = !answer // an answer's task is msg.TaskID: a Message must not end it as a reply with no task
 	defer asm.release("") // a result still waiting for its call has no later assembler to deliver it
 	if answer && msg.TaskID != "" {
@@ -153,7 +163,7 @@ func (a *Agent) send(ctx context.Context, msg *a2a.Message, h Handler, answer bo
 	switch err = a.reconnect(ctx, asm, err); {
 	case err == nil:
 		return nil
-	case ctx.Err() != nil:
+	case ctx.Err() != nil || tooLarge(err): // the agent would send the same again: no lost stream to follow
 		return fmt.Errorf("send message: %w", err)
 	}
 	return &StreamLostError{TaskID: asm.taskID, ContextID: asm.contextID, Err: typed(err, false)}
@@ -239,6 +249,9 @@ var errInactive = errors.New("agent: no event within the inactivity timeout")
 // at once, supplies the final task. Only if that fails, or finds the task unsettled, does
 // read return io.ErrUnexpectedEOF.
 func (a *Agent) read(ctx context.Context, conn Conn, asm *assembler, open func(context.Context) iter.Seq2[a2a.Event, error]) error {
+	if asm.over != nil { // the seed of an answer, or the snapshot a resume opened with, spent the budget
+		return asm.over
+	}
 	sctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	watchdog := time.AfterFunc(a.cfg.InactivityTimeout, cancel)
@@ -251,6 +264,10 @@ func (a *Agent) read(ctx context.Context, conn Conn, asm *assembler, open func(c
 		}
 		watchdog.Reset(a.cfg.InactivityTimeout)
 		asm.apply(ev)
+		if asm.over != nil { // ending the loop closes the stream
+			err = asm.over
+			break
+		}
 		if asm.final != nil {
 			return nil
 		}
@@ -263,6 +280,9 @@ func (a *Agent) read(ctx context.Context, conn Conn, asm *assembler, open func(c
 	case ctx.Err() == nil && settled(asm.state) && asm.taskID != "":
 		if task, gerr := a.getTask(ctx, conn, asm.taskID); gerr == nil {
 			asm.apply(task)
+			if asm.over != nil {
+				return asm.over
+			}
 			if asm.final != nil {
 				return nil
 			}

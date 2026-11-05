@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -79,6 +80,8 @@ func TestClassifyAgentSaysWhatEachAnswerMeans(t *testing.T) {
 		{"unsupported extension", wrap(dialect.ErrUnsupportedExtension), want{bindingcheck.False, bindingcheck.ReasonUnsupportedExtension}},
 		{"no JSON-RPC interface", wrap(dialect.ErrNoJSONRPCInterface), want{bindingcheck.False, bindingcheck.ReasonNoJSONRPCInterface}},
 		{"invalid card", wrap(dialect.ErrInvalidAgentCard), want{bindingcheck.False, bindingcheck.ReasonInvalidAgentCard}},
+		{"card too large, from the request", wrap(&url.Error{Op: "Get", URL: "http://backend", Err: fmt.Errorf("%w: more than 1 bytes", dialect.ErrResponseTooLarge)}), want{bindingcheck.False, bindingcheck.ReasonInvalidAgentCard}},
+		{"card too large, from the read", wrap(fmt.Errorf("failed to read card response: %w", dialect.ErrResponseTooLarge)), want{bindingcheck.False, bindingcheck.ReasonInvalidAgentCard}},
 		{"dial failure", wrap(&url.Error{Op: "Get", URL: "http://backend", Err: dial}), want{bindingcheck.False, bindingcheck.ReasonUnreachable}},
 		{"dial failure, no client around it", wrap(dial), want{bindingcheck.False, bindingcheck.ReasonUnreachable}},
 		{"DNS failure", wrap(&url.Error{Op: "Get", URL: "http://backend", Err: &net.DNSError{Err: "no such host", Name: "backend", IsNotFound: true}}), want{bindingcheck.False, bindingcheck.ReasonUnreachable}},
@@ -1292,6 +1295,34 @@ func TestAFailedCardRequestPutsNothingOfTheErrorInTheMessage(t *testing.T) {
 	}
 	if a, b := reset(48122), reset(50001); a.Message != b.Message || a.Cause == b.Cause {
 		t.Errorf("two resets on other ports: messages %q and %q, causes %q and %q; want one message and two causes", a.Message, b.Message, a.Cause, b.Cause)
+	}
+}
+
+// A card past the bound is one fixed sentence that says the bound and names no host, whichever way the transport reported it, and the
+// cause is in the Cause for the log. The sentence's number is the dialect's bound.
+func TestACardPastTheBoundIsOneSentenceThatNamesNoHost(t *testing.T) {
+	cause := fmt.Errorf("%w: more than %d bytes", dialect.ErrResponseTooLarge, dialect.MaxCardBytes)
+	for name, err := range map[string]error{
+		"from the request": &url.Error{Op: "Get", URL: "http://agent.team-b.svc:8080/.well-known/agent-card.json", Err: cause},
+		"from the read":    fmt.Errorf("resolve agent card: failed to read card response: %w", cause),
+	} {
+		t.Run(name, func(t *testing.T) {
+			out, ok := classifyAgent(fmt.Errorf("binding team-a/oncall: %w", err))
+			if !ok || out.Status != bindingcheck.False || out.Reason != bindingcheck.ReasonInvalidAgentCard || out.Message != msgCardTooLarge {
+				t.Fatalf("classifyAgent = %+v, %t; want False/InvalidAgentCard and the one sentence", out, ok)
+			}
+			if want := fmt.Sprintf("%d MiB", dialect.MaxCardBytes>>20); !strings.Contains(msgCardTooLarge, want) {
+				t.Errorf("the sentence %q does not say the bound, %s", msgCardTooLarge, want)
+			}
+			for _, leak := range []string{"team-b", "8080", "agent-card"} {
+				if strings.Contains(out.Message, leak) {
+					t.Errorf("the message %q holds %q", out.Message, leak)
+				}
+			}
+			if !strings.Contains(out.Cause, strconv.Itoa(dialect.MaxCardBytes)) || strings.Contains(out.Cause, "team-b") {
+				t.Errorf("cause = %q, want the bound and no URL", out.Cause)
+			}
+		})
 	}
 }
 

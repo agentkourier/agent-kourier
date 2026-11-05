@@ -180,11 +180,15 @@ func refused(err error) bool {
 }
 
 // permanent reports whether a request that got err would get it again: a 4xx, but not a 408
-// (the request timed out) or a 429 (slow down), which say try again, not no.
+// (the request timed out) or a 429 (slow down), which say try again, not no; and a reply that is too large.
 func permanent(err error) bool {
 	code := httpStatus(err)
-	return refused(err) && code != http.StatusRequestTimeout && code != http.StatusTooManyRequests
+	return tooLarge(err) || (refused(err) && code != http.StatusRequestTimeout && code != http.StatusTooManyRequests)
 }
+
+// tooLarge reports whether err is a reply larger than the dialect reads or the Agent holds (dialect.ErrResponseTooLarge). It
+// is no lost connection: a reconnect gets the same reply.
+func tooLarge(err error) bool { return errors.Is(err, dialect.ErrResponseTooLarge) }
 
 // retryAfter returns the delay the backend asked for in err's HTTP status, or 0.
 func retryAfter(err error) time.Duration {
