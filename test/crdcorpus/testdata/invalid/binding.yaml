@@ -951,6 +951,174 @@ spec:
   session:
     threadTTL: "30"
 ---
+# rule: binding/spec.interactions.timeout: over 168h
+# want: spec.interactions.timeout: 169h0m0s is out of range, must be at most 168h0m0s
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+  interactions:
+    timeout: "169h"
+---
+# rule: binding/spec.interactions.timeout: the largest Duration
+# want: spec.interactions.timeout: 2562047h47m16.854775807s is out of range, must be at most 168h0m0s
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+  interactions:
+    timeout: "2562047h47m16.854775807s"
+---
+# rule: binding/spec.session.threadTTL: over 8760h
+# want: spec.session.threadTTL: 8761h0m0s is out of range, must be at most 8760h0m0s
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+  session:
+    threadTTL: "8761h"
+---
+# rule: binding/spec.session.threadTTL: the largest Duration
+# want: spec.session.threadTTL: 2562047h47m16.854775807s is out of range, must be at most 8760h0m0s
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+  session:
+    threadTTL: "2562047h47m16.854775807s"
+---
+# rule: binding/spec.interactions.timeout: a nanosecond over 168h
+# want: spec.interactions.timeout: 168h0m0.000000001s is out of range, must be at most 168h0m0s
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+  interactions:
+    timeout: "168h1ns"
+---
+# rule: binding/spec.interactions.timeout: a minute over 168h, in minutes
+# want: spec.interactions.timeout: 168h1m0s is out of range, must be at most 168h0m0s
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+  interactions:
+    timeout: "10081m"
+---
+# rule: binding/spec.session.threadTTL: a nanosecond over 8760h
+# want: spec.session.threadTTL: 8760h0m0.000000001s is out of range, must be at most 8760h0m0s
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+  session:
+    threadTTL: "8760h1ns"
+---
+# rule: binding/spec.session.threadTTL: a minute over 8760h, in minutes
+# want: spec.session.threadTTL: 8760h1m0s is out of range, must be at most 8760h0m0s
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+  session:
+    threadTTL: "525601m"
+---
 # rule: binding/decoder: a field the type does not have, at the top
 # want: bogus: unknown field
 # field: bogus

@@ -48,7 +48,9 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Duration(t, "triggerRuns", MaxLimitWindow)
 	limitsdoc.Duration(t, "botDay", MaxLimitWindow)
 	limitsdoc.Duration(t, "interactionTimeout", DefaultInteractionTimeout)
+	limitsdoc.Duration(t, "interactionTimeoutMax", MaxInteractionTimeout)
 	limitsdoc.Duration(t, "threadTTL", DefaultThreadTTL)
+	limitsdoc.Duration(t, "threadTTLMax", MaxThreadTTL)
 
 	limitsdoc.Text(t, "templateFuncs", allowedFuncList())
 	limitsdoc.Bytes(t, "promptOutput", MaxPromptOutput)

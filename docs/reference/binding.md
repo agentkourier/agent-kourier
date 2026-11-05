@@ -173,7 +173,7 @@ Interactions configures agent pauses that wait on a person.
 | `askUser` | boolean | No | `false` | AskUser lets the agent ask questions in the thread. Defaults to false. |
 | `toolApprovals` | boolean | No | `false` | ToolApprovals lets the agent ask a person to approve tool calls in the thread. Defaults to false. |
 | `approverGroups` | []string | No | None | ApproverGroups names the platform's user groups whose members may decide a tool approval, by the platform's ID (Slack: `S…`). An empty list allows any non-bot channel member. At most 10 groups may be named. Group IDs start with S and contain uppercase letters and digits; duplicates and empty entries are refused. |
-| `timeout` | duration | No | `30m` | Timeout is how long a pause waits for an answer. Defaults to 30m. Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. |
+| `timeout` | duration | No | `30m` | Timeout is how long a pause waits for an answer. Defaults to 30m. At most 168h (7 days); a longer one is refused. Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. |
 
 ## Feedback
 
@@ -189,7 +189,7 @@ Session configures thread-to-session mapping.
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `threadTTL` | duration | No | `2160h` | ThreadTTL is how long a thread keeps its session after its last activity. Defaults to 2160h (90 days). Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. |
+| `threadTTL` | duration | No | `2160h` | ThreadTTL is how long a thread keeps its session after its last activity. Defaults to 2160h (90 days). At most 8760h (365 days); a longer one is refused. Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. |
 
 ## BindingStatus
 

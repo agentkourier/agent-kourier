@@ -428,11 +428,12 @@ type Interactions struct {
 	// +listType=set
 	// +optional
 	ApproverGroups []string `json:"approverGroups,omitempty"`
-	// Timeout is how long a pause waits for an answer. Defaults to 30m.
+	// Timeout is how long a pause waits for an answer. Defaults to 30m. At most 168h (7 days); a longer one is refused.
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:default="30m"
 	// +kubebuilder:validation:Pattern=`^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`
 	// +kubebuilder:validation:XValidation:rule="duration(self) >= duration('0s')",message="must be positive; leave it out, or write 0, for the default"
+	// +kubebuilder:validation:XValidation:rule="duration(self) <= duration('168h')",message="is out of range, must be at most 168h"
 	// +optional
 	Timeout metav1.Duration `json:"timeout"`
 }
@@ -450,11 +451,12 @@ type Feedback struct {
 // Session configures thread-to-session mapping.
 type Session struct {
 	// ThreadTTL is how long a thread keeps its session after its last activity. Defaults to 2160h
-	// (90 days).
+	// (90 days). At most 8760h (365 days); a longer one is refused.
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:default="2160h"
 	// +kubebuilder:validation:Pattern=`^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`
 	// +kubebuilder:validation:XValidation:rule="duration(self) >= duration('0s')",message="must be positive; leave it out, or write 0, for the default"
+	// +kubebuilder:validation:XValidation:rule="duration(self) <= duration('8760h')",message="is out of range, must be at most 8760h"
 	// +optional
 	ThreadTTL metav1.Duration `json:"threadTTL"`
 }
@@ -464,6 +466,14 @@ const (
 	DefaultInteractionTimeout = 30 * time.Minute
 	DefaultThreadTTL          = 90 * 24 * time.Hour
 	DefaultMaxMentionsPerTurn = 2
+)
+
+// The longest interactions.timeout and session.threadTTL (168h and 8760h). Neither is left unbounded: the longest threadTTL
+// of any Binding sets how long the sessions of a Binding that has left the config are kept, and a duration near the largest
+// one overflows the arithmetic on it. The schema carries the same two numbers in CEL rules.
+const (
+	MaxInteractionTimeout = 7 * 24 * time.Hour
+	MaxThreadTTL          = 365 * 24 * time.Hour
 )
 
 // Default fills the fields left empty. A ChatConnection has none to fill; the method keeps the shape that

@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    agentkourier.dev/schema-sha256: 12bddd53c1b721f2e93010090ef4ded494065bf1380603e8fb733cf85cba7d0c
+    agentkourier.dev/schema-sha256: 05b27b026a039545594e563d9f557d1f2c98c95e1d954411a979f9b5aec20a0e
     controller-gen.kubebuilder.io/version: v0.23.0
   name: bindings.agentkourier.dev
 spec:
@@ -614,13 +614,15 @@ spec:
                   timeout:
                     default: 30m
                     description: Timeout is how long a pause waits for an answer.
-                      Defaults to 30m.
+                      Defaults to 30m. At most 168h (7 days); a longer one is refused.
                     pattern: ^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$
                     type: string
                     x-kubernetes-validations:
                     - message: must be positive; leave it out, or write 0, for the
                         default
                       rule: duration(self) >= duration('0s')
+                    - message: is out of range, must be at most 168h
+                      rule: duration(self) <= duration('168h')
                   toolApprovals:
                     default: false
                     description: ToolApprovals lets the agent ask a person to approve
@@ -639,13 +641,15 @@ spec:
                     default: 2160h
                     description: |-
                       ThreadTTL is how long a thread keeps its session after its last activity. Defaults to 2160h
-                      (90 days).
+                      (90 days). At most 8760h (365 days); a longer one is refused.
                     pattern: ^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$
                     type: string
                     x-kubernetes-validations:
                     - message: must be positive; leave it out, or write 0, for the
                         default
                       rule: duration(self) >= duration('0s')
+                    - message: is out of range, must be at most 8760h
+                      rule: duration(self) <= duration('8760h')
                 type: object
             required:
             - agent
