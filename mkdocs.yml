@@ -165,6 +165,7 @@ nav:
       - Metrics: reference/metrics.md
       - Logs and traces: reference/logs-and-traces.md
       - Stored data: reference/stored-data.md
+      - Limits: reference/limits.md
       - Glossary: reference/glossary.md
   - Explanation:
       - explanation/index.md
