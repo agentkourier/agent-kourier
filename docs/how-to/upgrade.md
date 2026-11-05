@@ -443,6 +443,11 @@ The current values, and what else the broker bounds, are on [Limits](../referenc
   are many, says it is the sum.
 - **A reply that adds up to more than 341 KiB** in the text the turn holds ends the turn the same way, however many events it came in. Before, the same reply was held
   up to 2 MiB.
+- **A person's answer to a paused task** is held to the same bounds, with two things that differ. What it reads of the paused task first, to tell what is new in the answer (the
+  tool calls and results of the turn that paused), is not counted against the 341 KiB: a task that paused after some five hundred tool steps (on kagent 1.0, a figure calculated from the task's
+  shape, not measured) can be answered, which it could not be if those parts were counted. And a reply to the
+  answer that is too large before the agent names the task again ends the turn as any other does: the thread is told in the same sentence, Agent Kourier cancels the task that was answered,
+  once, and the answer is not sent again. The task is not read first, and not parked again for a person to answer into the same reply.
 - **An answer over 4 MiB** is not read either. The answer to `GetTask` carries the task with its whole history, so a long task with large tool results can pass it. The
   turn ends in the same way wherever it reads its task: after a lost stream, after a stream that ended with the task settled and no final task, when it follows a
   task again after a restart, when a person's answer or text reply to a paused task reads the task, and when the read after an answer of unknown outcome meets it. The task is

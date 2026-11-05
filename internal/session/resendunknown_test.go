@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -157,5 +158,31 @@ func TestTaskLeftByACardThatIsTooLargeIsReadOnceAndCancellableOnceTheCardIsFixed
 	f.retired(t)
 	if got := f.sentIDs(); !slices.Equal(got, []string{inbound("9").MessageID}) {
 		t.Errorf("sent %v; want the queued reply", got)
+	}
+}
+
+// The lookup of the queued head that recovery makes before it follows the recorded task is asked again until it answers. A card that is
+// too large fails it the same way each time, until the card is fixed, and what an operator can read is why: one WARN, not one for each
+// pass, which would fill the log at the pace of the backoff.
+func TestRecoverLogsAnOversizedCardOfTheLookupOnce(t *testing.T) {
+	f, sink := restarted(t)
+	logs := newLogRecorder()
+	f.m.cfg.Logger = slog.New(logs)
+	queuedBeforeTheRestart(t, f)
+	var finds atomic.Int32
+	f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
+		if finds.Add(1) <= 4 {
+			return nil, nil, fmt.Errorf("list tasks of context c1: %w", errCard)
+		}
+		return nil, nil, nil // the card is fixed: the head is not the task's turn
+	}
+	f.recover(t)
+	waitFinal(t, sink) // the recorded task, followed once the lookup answered
+	if n := finds.Load(); n != 5 {
+		t.Fatalf("%d lookups; want 5: four that met the card, and the one that answered", n)
+	}
+	lines := logs.lines("recover: the agent's card is too large to read, so the queued head cannot be looked up; it is asked again until the card is fixed")
+	if len(lines) != 1 || lines[0].attrs["task"] != "t1" || lines[0].attrs["head"] != inbound("1").MessageID {
+		t.Errorf("WARNs about the card = %+v; want one, for the head and the task, however many times it was asked", lines)
 	}
 }

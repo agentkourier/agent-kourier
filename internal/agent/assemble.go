@@ -569,21 +569,19 @@ func (a *assembler) tool(place toolPlace, art a2a.ArtifactID, tp toolPart) {
 // shows its own steps. The task is kept for fetchCall when the answer is a tool approval, whose approved call is a step of
 // the answer. A question's call (kagent's ask_user) is not: the paused turn showed it as it asked, and the answer streams
 // only its result, which then waits for a call that does not come and is delivered when the send ends.
+//
+// What seed notes is not charged to the budget (keep). It is the paused turn's, not the reply of this one, and the task is
+// bounded by the answer to the call that read it (dialect.MaxResponseBytes), as is the task kept. A task that paused after some
+// five hundred tool steps (kagent 1.0, calculated) would otherwise spend the whole budget before the answer was sent, and could
+// never be answered. What the answer adds is charged as any reply is.
 func (a *assembler) seed(t *a2a.Task, approval bool) {
 	if approval {
 		a.paused = t
 	}
 	eachToolPart(t, func(place toolPlace, art a2a.ArtifactID, tp toolPart) {
 		if place.source == inArtifact {
-			key := artifactPart{art, tp.says}
-			if _, known := a.sent[key]; !known {
-				a.keep(len(art) + entryBytes)
-			}
-			a.sent[key]++
+			a.sent[artifactPart{art, tp.says}]++
 		} else {
-			if !a.placed[place] {
-				a.keep(len(place.owner) + entryBytes)
-			}
 			a.placed[place] = true
 		}
 	})

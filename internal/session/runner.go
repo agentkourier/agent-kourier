@@ -1116,7 +1116,8 @@ func (m *Manager) answer(c *convo, work answerWork) (outcome, error) {
 
 // unanswered handles an answer that failed before the agent named a task again. A rejected one
 // wedged its task, which Agent.Answer has already cancelled (R17). A busy one, or one refused as not ready, is read
-// (see readAnswered). Any other failure leaves the task paused, so the person can answer again.
+// (see readAnswered). One whose reply was too large ends the turn (tooLarge). Any other failure leaves the task paused,
+// so the person can answer again.
 func (m *Manager) unanswered(t *tstate, err error) (outcome, error) {
 	switch {
 	case errors.Is(err, agent.ErrAnswerRejected):
@@ -1133,6 +1134,12 @@ func (m *Manager) unanswered(t *tstate, err error) (outcome, error) {
 			audit.Call{Op: audit.OpCancel, TaskID: t.taskID, ContextID: t.sess.ContextID, MessageID: t.nid})
 		m.finish(t, TurnAnswerRejected)
 		return ended, m.end(context.WithoutCancel(m.ctx), t.key, t.c.ttl)
+	case dialect.AnswerTooLarge(err) && m.ctx.Err() == nil:
+		// Before ErrOutcomeUnknown, which it comes with when no task was named: the agent would send the same reply to the
+		// same answer again, whatever the task is doing now. So the task is not read, to be parked again for a person to answer
+		// into the same reply or followed into it: the turn ends, with a notice, and the task is cancelled, as when the
+		// reply is too large after the task is named.
+		return m.tooLarge(t, err)
 	case errors.Is(err, agent.ErrBusy):
 		return m.readAnswered(t, err, "")
 	case errors.Is(err, agent.ErrMessageReply): // the agent replied, and not with the task: one that still waits did not take it
@@ -1305,7 +1312,10 @@ func (m *Manager) unverified(t *tstate, cause error) (outcome, error) {
 // (agent.Config.UnaryTimeout) does: this is the backstop for an AgentAPI that does not keep to it.
 const cancelTimeout = 30 * time.Second
 
-// tooLarge handles a task whose reply, after it was named, passed what Agent Kourier reads or holds. The agent refused nothing:
+// tooLarge handles a task whose reply, after it was named, passed what Agent Kourier reads or holds (or an answer's, before it was
+// named again: the task is the one answered). A reply that is one Message and no task names none (t.taskID is empty): there is
+// nothing to cancel, so the turn ends at once, and the notice is named after the turn, since a thread's second such turn would
+// otherwise share its name. The agent refused nothing:
 // the broker stopped reading. The turn ends, the thread is told in fixed words (what it was already shown stays), and the
 // task is cancelled, so that it does not run on at the agent with nobody reading it. The turn's own queue row, if the task
 // came from one that nothing marked (recovery found the head to be the task's own, in the gap after a crash), is marked
@@ -1317,13 +1327,17 @@ const cancelTimeout = 30 * time.Second
 func (m *Manager) tooLarge(t *tstate, err error) (outcome, error) {
 	t.c.follow = nil
 	m.drives(t.c, "")
-	// Named after the task and the thread, as the notice of a refusal is: a restart that follows the task again raises the same post.
-	m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: taskNoticeID(t.key, t.taskID, NoticeFailed), Kind: NoticeFailed, MessageRef: t.r.MessageRef, Detail: tooLargeDetail})
+	if t.taskID == "" {
+		m.notice(t, NoticeFailed, tooLargeDetail)
+	} else {
+		// Named after the task and the thread, as the notice of a refusal is: a restart that follows the task again raises the same post.
+		m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: taskNoticeID(t.key, t.taskID, NoticeFailed), Kind: NoticeFailed, MessageRef: t.r.MessageRef, Detail: tooLargeDetail})
+	}
 	if merr := m.cfg.Store.MarkReplyDelivered(context.WithoutCancel(m.ctx), t.r.ID, m.cfg.Now()); merr != nil && !errors.Is(merr, store.ErrNotFound) {
 		m.cfg.Logger.WarnContext(m.ctx, "session: could not mark the turn of a task whose reply was too large delivered", "key", t.key, "turn", t.r.ID, "error", merr)
 	}
 	var endErr error
-	cancelled := m.cancelOversized(t)
+	cancelled := t.taskID == "" || m.cancelOversized(t)
 	if cancelled {
 		t.c.settle()
 		endErr = m.end(context.WithoutCancel(m.ctx), t.key, t.c.ttl)
@@ -1513,7 +1527,7 @@ func (m *Manager) wedged(t *tstate) (outcome, error) {
 	m.warnUnverifiedCancel(t.key, t.sess.Binding, t.taskID, err)
 	switch {
 	case kind == cancelDone:
-		m.audit(t, t.call(nil))
+		m.audit(t, t.call(err)) // err is nil, or an answer too large to read, which the row says
 		m.notice(t, NoticeWedged, "")
 		m.finish(t, TurnWedged)
 		c.follow = nil

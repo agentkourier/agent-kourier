@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -293,29 +294,136 @@ func TestStubResponseTooLargeCancelsTheTaskAtTheAgent(t *testing.T) {
 	}
 }
 
-// An answer whose reply is too large before the task is named again comes with ErrOutcomeUnknown, so the task is read and,
-// still working, followed: the follow meets the same reply, and ends as any other turn that does. The answer is not sent
-// again, and the task is cancelled.
+// An answer whose reply is too large before the task is named again comes with ErrOutcomeUnknown, and it is not read for what it
+// is: the agent would send the same reply to the same answer again, whatever the task is doing now, so the task is not read and
+// the answer is not sent again. The turn ends as any whose reply is too large does: the thread is told, in the same words, the
+// task is cancelled, and the turn is logged and counted. A task that still waits for input is not parked again for a person to
+// answer into the same reply, and one that still works is not followed, since the follow would meet the same.
 func TestResponseTooLargeOfAnAnswerBeforeTheTaskIsNamed(t *testing.T) {
-	f, sink := pausedFirst(t, func(*a2a.Message, agent.Handler) error {
+	waits := func(id a2a.TaskID) (*a2a.Task, error) {
+		return &a2a.Task{ID: id, ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired}}, nil
+	}
+	for _, tc := range []struct {
+		name string
+		get  func(a2a.TaskID) (*a2a.Task, error)
+	}{
+		{"the task still waits for input", waits},
+		{"the task works", func(id a2a.TaskID) (*a2a.Task, error) { return working(t0)(id) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, sink, logs, ends := logged(t)
+			pausedFirstOn(t, f, sink, func(*a2a.Message, agent.Handler) error {
+				return fmt.Errorf("%w: %w", agent.ErrOutcomeUnknown, errTooLarge)
+			})
+			f.agent.mu.Lock()
+			f.agent.get = tc.get
+			f.agent.follow = func(id a2a.TaskID, _ agent.Handler) error {
+				t.Errorf("task %s followed; want the turn ended without reading or following it", id)
+				return fmt.Errorf("follow task %s: %w", id, errTooLarge)
+			}
+			f.agent.mu.Unlock()
+			if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
+				t.Fatal(err)
+			}
+			if id, want := f.nextSent(), inbound("2").MessageID; id != want {
+				t.Errorf("sent %s after the answer; want %s: the queue goes on", id, want)
+			}
+			got := sink.noticesOf(NoticeFailed)
+			if len(got) != 1 || got[0].Detail != tooLargeSentence || got[0].ID != taskNoticeID(key, "t1", NoticeFailed) {
+				t.Errorf("failed notices = %+v; want one saying %q, named after the task", got, tooLargeSentence)
+			}
+			if got := f.cancelled(); len(got) != 1 || got[0] != "t1" {
+				t.Errorf("cancelled %v; want t1 once", got)
+			}
+			// Not the whole list: the held reply goes out as a turn of its own, and may be counted by now.
+			if got := ends.get(); slices.Index(got, "ns/b1 "+string(TurnResponseTooLarge)) != 0 || slices.Contains(got[1:], "ns/b1 "+string(TurnResponseTooLarge)) {
+				t.Errorf("outcomes reported = %v; want the turn counted once, as ns/b1 %s, first", got, TurnResponseTooLarge)
+			}
+			if len(logs.lines("session turn stopped: what the agent sent was more than Agent Kourier can read or hold")) != 1 {
+				t.Errorf("no WARN that the turn stopped: the end of a turn is logged")
+			}
+			f.m.mu.Lock()
+			parked := f.m.convos[key] != nil && f.m.convos[key].parked != ""
+			f.m.mu.Unlock()
+			if parked {
+				t.Errorf("the task is parked again: a person would answer into the same reply")
+			}
+			f.agent.mu.Lock()
+			defer f.agent.mu.Unlock()
+			if len(f.agent.answers) != 1 {
+				t.Errorf("%d answers sent; want the one: it is not sent again", len(f.agent.answers))
+			}
+		})
+	}
+}
+
+// A reply that is one Message and no task, and passes the budget, names no task: there is none to cancel, and the cancel of the task
+// "" that was sent before was refused by the agent, kept the turn from ending cleanly, and had its audit row. The notice is named
+// after the turn, not after a task, since two such turns in a thread would otherwise share one name and the outbox keeps one row for it.
+func TestResponseTooLargeOfAMessageReplyCancelsNothing(t *testing.T) {
+	f, sink, logs, ends := logged(t)
+	f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, time.Millisecond
+	f.agent.cancelErr = func(int) error { return fmt.Errorf("cancel task : %w", a2a.ErrInvalidParams) }
+	f.agent.script = func(_ context.Context, _ int, h agent.Handler) error {
+		h(agent.StateEvent{ContextID: "c1", State: a2a.TaskStateCompleted}) // no task: the reply is a Message
 		return fmt.Errorf("%w: %w", agent.ErrOutcomeUnknown, errTooLarge)
-	})
-	f.agent.follow = func(a2a.TaskID, agent.Handler) error { return fmt.Errorf("follow task t1: %w", errTooLarge) }
-	if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
+	}
+	ins := []Inbound{inbound("1"), inbound("2")}
+	for i, in := range ins {
+		if _, err := f.submit(in); err != nil {
+			t.Fatal(err)
+		}
+		eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= i+1 })
+		f.retired(t)
+	}
+	got := sink.noticesOf(NoticeFailed)
+	if len(got) != 2 || got[0].ID != ins[0].MessageID+"/failed" || got[1].ID != ins[1].MessageID+"/failed" || got[0].Detail != tooLargeSentence {
+		t.Errorf("failed notices = %+v; want one for each turn, named after it, saying %q", got, tooLargeSentence)
+	}
+	if got := f.cancelled(); len(got) != 0 {
+		t.Errorf("cancelled %q; want none: the reply named no task", got)
+	}
+	if got := ends.get(); len(got) != 2 || got[0] != "ns/b1 "+string(TurnResponseTooLarge) || got[1] != got[0] {
+		t.Errorf("outcomes reported = %v; want two, ns/b1 %s", got, TurnResponseTooLarge)
+	}
+	if n := len(logs.lines("session turn stopped: what the agent sent was more than Agent Kourier can read or hold")); n != 2 {
+		t.Errorf("%d WARN lines that the turn stopped; want one for each turn", n)
+	}
+	f.amu.Lock()
+	defer f.amu.Unlock()
+	for _, a := range f.audits {
+		if a.Op == audit.OpCancel {
+			t.Errorf("audit %+v; want no cancel: no task was named", a)
+		}
+	}
+}
+
+// A turn that ends because the reply was too large, once its task is cancelled, leaves nothing of its retries behind: the tries and the
+// time of the loss that were counted for it would otherwise be held against the next turn of the thread, which would be given up on early
+// for an agent that was unreachable for the last one.
+func TestResponseTooLargeSettlesTheRetryStateOfTheThread(t *testing.T) {
+	f, _, logs, _ := logged(t)
+	f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, time.Millisecond
+	f.agent.script = lost(errors.New("connection reset")) // counts a try, and the time of the loss
+	f.agent.get = working(t0)
+	var c *convo
+	f.agent.follow = func(a2a.TaskID, agent.Handler) error {
+		f.m.mu.Lock()
+		c = f.m.convos[key]
+		f.m.mu.Unlock()
+		return fmt.Errorf("follow task t1: %w", errTooLarge)
+	}
+	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	if id, want := f.nextSent(), inbound("2").MessageID; id != want {
-		t.Errorf("sent %s after the answer; want %s", id, want)
+	eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= 1 })
+	f.retired(t)
+	f.m.mu.Lock()
+	defer f.m.mu.Unlock()
+	if c == nil {
+		t.Fatal("the follow did not run")
 	}
-	if got := sink.noticesOf(NoticeFailed); len(got) != 1 || got[0].Detail != tooLargeSentence {
-		t.Errorf("failed notices = %+v; want one saying %q", got, tooLargeSentence)
-	}
-	if got := f.cancelled(); len(got) != 1 || got[0] != "t1" {
-		t.Errorf("cancelled %v; want t1 once", got)
-	}
-	f.agent.mu.Lock()
-	defer f.agent.mu.Unlock()
-	if len(f.agent.answers) != 1 {
-		t.Errorf("%d answers sent; want the one: it is not sent again", len(f.agent.answers))
+	if c.tries != 0 || !c.since.IsZero() {
+		t.Errorf("tries = %d, since = %v; want both cleared: the turn is over", c.tries, c.since)
 	}
 }

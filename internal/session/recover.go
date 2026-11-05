@@ -9,6 +9,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
@@ -111,6 +112,11 @@ func (m *Manager) recoverKey(key Key) {
 				// agent may have it. Nothing is sent from here, and nothing is asked for ever.
 				log.Warn("recover: the agent's list of tasks could not be read in full, so the queued head is not looked up", "head", head.ID, "task", sess.TaskID, "binding", sess.Binding, "error", err)
 				break
+			}
+			if errors.Is(err, dialect.ErrCardTooLarge) && attempt == 1 {
+				// No connection can be made, and the same comes again until the card is fixed: it is asked again after a backoff, which
+				// is no reason to say it each time.
+				log.Warn("recover: the agent's card is too large to read, so the queued head cannot be looked up; it is asked again until the card is fixed", "head", head.ID, "task", sess.TaskID, "binding", sess.Binding, "error", err)
 			}
 			if err == nil {
 				if task != nil && string(task.ID) == sess.TaskID {
