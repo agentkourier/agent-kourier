@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -202,22 +203,22 @@ func TestReplyBehindAnOversizedRecoveredTaskGoesOutWhenItIsOver(t *testing.T) {
 	}
 }
 
-// A resend is looked up first (spec 8.2), because the agent may have the turn and a resend into a context is not deduplicated.
-// When the agent's list of tasks is too large to read, at every page size, it is not known whether it has it, and it never will
-// be. The turn is not sent: it fails, and each signal is made. The thread is told what happened and that the agent may have
-// started it, with the next step; the audit log has the lookup as failed with response_too_large; the log line says why; the
-// outcome lookup_too_large is counted, which an operator can alert on. Nothing is looked up again.
-func TestResendWhoseLookupIsTooLargeFailsTheTurnWithEverySignal(t *testing.T) {
+// A resend whose outcome was unknown is looked up first (spec 8.2), because the agent may have the turn and a resend into a context is
+// not deduplicated. When the agent's list of tasks cannot be read in full, it is not known whether it has it, and it never will be. The
+// turn is not sent: it fails, and each signal is made. The thread is told what happened and that the agent may be running it, with the
+// next step; the audit log has the lookup as failed with lookup_incomplete and response_too_large; the log line says why; the outcome
+// lookup_incomplete is counted, which an operator can alert on. Nothing is looked up again.
+func TestResendWhoseLookupIsIncompleteFailsTheTurnWithEverySignal(t *testing.T) {
 	f, sink, logs, ends := logged(t)
 	f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, 4*time.Millisecond
 	f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
 		if n == 1 {
-			return fmt.Errorf("send message: %w", agent.ErrBusy)
+			return fmt.Errorf("%w: connection reset", agent.ErrOutcomeUnknown) // the agent may have taken it
 		}
 		return turn(h, n, a2a.TaskStateCompleted)
 	}
 	f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
-		return nil, nil, fmt.Errorf("list tasks of context c1: %w", errAnswerTooLarge)
+		return nil, nil, fmt.Errorf("%w: list tasks of context c1: %w", agent.ErrLookupIncomplete, errAnswerTooLarge)
 	}
 	for _, ts := range []string{"1", "2"} {
 		if _, err := f.submit(inbound(ts)); err != nil {
@@ -233,29 +234,34 @@ func TestResendWhoseLookupIsTooLargeFailsTheTurnWithEverySignal(t *testing.T) {
 	sends, finds, follows := len(f.agent.msgs), len(f.agent.finds), len(f.agent.follows)
 	f.agent.mu.Unlock()
 	if sends != 2 || finds != 1 || follows != 0 {
-		t.Errorf("%d sends, %d lookups, %d follows; want 2 sends (turn 1, and turn 2 that was busy), one lookup and nothing followed: the turn is not sent to find out", sends, finds, follows)
+		t.Errorf("%d sends, %d lookups, %d follows; want 2 sends (turn 1, and turn 2 whose outcome was unknown), one lookup and nothing followed: the turn is not sent to find out", sends, finds, follows)
 	}
 	// The thread.
 	got := sink.noticesOf(NoticeFailed)
-	if len(got) != 1 || got[0].Detail != lookupTooLargeDetail || got[0].MessageRef != "2" {
-		t.Fatalf("failed notices = %+v; want one, about message 2, saying %q", got, lookupTooLargeDetail)
+	if len(got) != 1 || got[0].Detail != lookupIncompleteDetail || got[0].MessageRef != "2" {
+		t.Fatalf("failed notices = %+v; want one, about message 2, saying %q", got, lookupIncompleteDetail)
 	}
 	for _, bad := range []string{"http", "://", "bytes", "Bearer", "4194304"} {
 		if strings.Contains(got[0].Detail, bad) {
 			t.Errorf("the notice %q holds %q: it names no host, size or token", got[0].Detail, bad)
 		}
 	}
-	if !strings.Contains(got[0].Detail, "may have started it") || !strings.Contains(got[0].Detail, "post the message again") {
-		t.Errorf("the notice %q does not say that the agent may have the turn, and what to do", got[0].Detail)
+	if !strings.Contains(got[0].Detail, "may be running it") || !strings.Contains(got[0].Detail, "post it again") {
+		t.Errorf("the notice %q does not say that the agent may be running the turn, and what to do", got[0].Detail)
 	}
 	// The log.
-	failed := logs.lines("session turn failed")
-	if len(failed) != 1 || failed[0].attrs["reason"] != lookupTooLargeDetail || !strings.Contains(fmt.Sprint(failed[0].attrs["error"]), "too large") {
-		t.Errorf("failed lines = %+v; want one with the reason and an error that says too large", failed)
+	var failed []logRecord // the retry of the first send's unknown outcome is logged under the same message, without a reason
+	for _, line := range logs.lines("session turn failed") {
+		if line.attrs["reason"] != nil {
+			failed = append(failed, line)
+		}
+	}
+	if len(failed) != 1 || failed[0].attrs["reason"] != lookupIncompleteDetail || failed[0].attrs["binding"] != "ns/b1" || !strings.Contains(fmt.Sprint(failed[0].attrs["error"]), "too large") {
+		t.Errorf("failed lines = %+v; want one with the reason, the binding, and an error that says too large", failed)
 	}
 	// The count.
-	if got := ends.get(); len(got) != 2 || got[1] != "ns/b1 "+string(TurnLookupTooLarge) {
-		t.Errorf("outcomes reported = %v; want the second turn counted as ns/b1 %s", got, TurnLookupTooLarge)
+	if got := ends.get(); len(got) != 2 || got[1] != "ns/b1 "+string(TurnLookupIncomplete) {
+		t.Errorf("outcomes reported = %v; want the second turn counted as ns/b1 %s", got, TurnLookupIncomplete)
 	}
 	// The audit log.
 	f.amu.Lock()
@@ -277,7 +283,7 @@ func TestRecoverDoesNotWaitOnALookupWhosePageIsTooLargeAndDoesNotSendTheHead(t *
 	f, sink := restarted(t)
 	queuedBeforeTheRestart(t, f)
 	f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
-		return nil, nil, fmt.Errorf("list tasks of context c1: %w", errAnswerTooLarge)
+		return nil, nil, fmt.Errorf("%w: list tasks of context c1: %w", agent.ErrLookupIncomplete, errAnswerTooLarge)
 	}
 	f.recover(t)
 	waitFinal(t, sink) // the recorded task, followed
@@ -290,8 +296,8 @@ func TestRecoverDoesNotWaitOnALookupWhosePageIsTooLargeAndDoesNotSendTheHead(t *
 	if finds > 3 {
 		t.Errorf("%d lookups; want a few at most: an answer that cannot come is not asked for again and again", finds)
 	}
-	if got := sink.noticesOf(NoticeFailed); got[0].Detail != lookupTooLargeDetail {
-		t.Errorf("failed notice = %q; want %q", got[0].Detail, lookupTooLargeDetail)
+	if got := sink.noticesOf(NoticeFailed); got[0].Detail != lookupIncompleteDetail {
+		t.Errorf("failed notice = %q; want %q", got[0].Detail, lookupIncompleteDetail)
 	}
 	if !f.queueEmpty() {
 		t.Error("the head is still queued: it failed")
@@ -363,6 +369,20 @@ func TestAnswerOfUnknownOutcomeWhoseTaskCannotBeRead(t *testing.T) {
 			t.Errorf("notice = %q; want that it could not tell, and no claim that the answer was not delivered", got[0].Detail)
 		}
 	})
+	t.Run("the read meets an agent card that is too large", func(t *testing.T) {
+		f, sink := pausedFirst(t, unknown)
+		f.agent.get = func(a2a.TaskID) (*a2a.Task, error) { return nil, fmt.Errorf("get task t1: %w", errCard) }
+		if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
+			t.Fatal(err)
+		}
+		eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) >= 1 })
+		if got := sink.noticesOf(NoticeFailed); got[0].Detail != answerUnknownDetail {
+			t.Errorf("notice = %q; want %q: a card says nothing of what the agent sent, and nothing was cancelled", got[0].Detail, answerUnknownDetail)
+		}
+		if got := f.cancelled(); len(got) != 0 {
+			t.Errorf("cancelled %v; want none: no call was made", got)
+		}
+	})
 	t.Run("the task is too large to read", func(t *testing.T) {
 		f, sink := pausedFirst(t, unknown)
 		var gets atomic.Int32
@@ -390,7 +410,7 @@ func TestLookupTooLargeBehindARecordedTaskHoldsTheHeadUntilTheTaskEnds(t *testin
 	looked := make(chan struct{}, 8)
 	f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
 		looked <- struct{}{}
-		return nil, nil, fmt.Errorf("list tasks of context c1: %w", errAnswerTooLarge)
+		return nil, nil, fmt.Errorf("%w: list tasks of context c1: %w", agent.ErrLookupIncomplete, errAnswerTooLarge)
 	}
 	if _, err := f.submit(inbound("1")); err != nil { // the redelivered event wakes a runner before recovery attaches the task
 		t.Fatal(err)
@@ -413,5 +433,225 @@ func TestLookupTooLargeBehindARecordedTaskHoldsTheHeadUntilTheTaskEnds(t *testin
 	f.retired(t)
 	if sends, _, follows := f.agent.counts(); sends != 0 || follows != 1 {
 		t.Errorf("%d sends and %d follows; want the task followed once and the head never sent", sends, follows)
+	}
+}
+
+// errCard is what a call that had to open a connection first meets when the agent's card is past the bound: nothing was sent, and nothing
+// was read of any task.
+var errCard = fmt.Errorf("connect to agent: %w: %w: an agent card of more than %d bytes", dialect.ErrCardTooLarge, dialect.ErrResponseTooLarge, dialect.MaxCardBytes)
+
+// A reply that this process queued, and that the agent refused (-32004) or never saw, is not looked up blind: the agent does not have it, so there
+// is nothing to find, and when the list of tasks cannot be read in full the reply is sent, as it is whenever the agent is free. It was failed
+// with a notice that the agent may be running it, and posting it again failed the same way.
+func TestRefusedReplyIsSentWhenTheListCannotBeReadAndTheAgentIsFree(t *testing.T) {
+	f, sink, logs, ends := logged(t)
+	f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, 4*time.Millisecond
+	var busy atomic.Int32
+	f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+		if n == 1 && busy.Add(1) == 1 {
+			return fmt.Errorf("send message: %w", agent.ErrBusy) // refused, not recorded: the agent does not have it
+		}
+		return turn(h, n, a2a.TaskStateCompleted)
+	}
+	f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
+		return nil, nil, fmt.Errorf("%w: list tasks of context c1: %w", agent.ErrLookupIncomplete, errAnswerTooLarge)
+	}
+	for _, ts := range []string{"1", "2"} {
+		if _, err := f.submit(inbound(ts)); err != nil {
+			t.Fatal(err)
+		}
+		waitFinal(t, sink)
+	}
+	f.retired(t)
+	if got := sink.noticesOf(NoticeFailed); len(got) != 0 {
+		t.Errorf("failed notices = %+v; want none: the agent never had the reply", got)
+	}
+	if got := ends.get(); len(got) != 2 || got[1] != "ns/b1 "+string(TurnCompleted) {
+		t.Errorf("outcomes reported = %v; want both turns completed", got)
+	}
+	f.agent.mu.Lock()
+	sends := len(f.agent.msgs)
+	f.agent.mu.Unlock()
+	if sends != 3 {
+		t.Errorf("%d sends; want 3: turn 1, turn 2 refused, and turn 2 again", sends)
+	}
+	if lines := logs.lines("session turn not looked up: the agent's list of tasks could not be read in full, and the agent has not taken the turn"); len(lines) != 1 || lines[0].attrs["binding"] != "ns/b1" {
+		t.Errorf("lines = %+v; want the one WARN that says the reply was sent without a lookup, with the binding", lines)
+	}
+	if !f.queueEmpty() {
+		t.Error("the reply is still queued")
+	}
+}
+
+// The same for a reply that was never sent at all: queued by this process and held behind a task that a restart recorded. When that task ends
+// the reply is looked up, the list cannot be read in full, and it is sent: the agent has never had it.
+func TestReplyHeldBehindARecordedTaskIsSentWhenTheListCannotBeRead(t *testing.T) {
+	f, sink := restarted(t)
+	looked := make(chan struct{}, 8)
+	f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
+		looked <- struct{}{}
+		return nil, nil, fmt.Errorf("%w: list tasks of context c1: %w", agent.ErrLookupIncomplete, errAnswerTooLarge)
+	}
+	if _, err := f.submit(inbound("9")); err != nil { // queued by this process, behind the recorded task
+		t.Fatal(err)
+	}
+	select {
+	case <-looked:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the reply was not looked up")
+	}
+	f.recover(t)
+	waitFinal(t, sink) // the recorded task, followed
+	waitFinal(t, sink) // the reply, sent after it
+	f.retired(t)
+	if got := sink.noticesOf(NoticeFailed); len(got) != 0 {
+		t.Errorf("failed notices = %+v; want none: the agent never had the reply", got)
+	}
+	if sends, _, follows := f.agent.counts(); sends != 1 || follows != 1 {
+		t.Errorf("%d sends and %d follows; want the task followed once and the reply sent once", sends, follows)
+	}
+}
+
+// An agent card that is too large is no list that is too large. A lookup that had to open a connection meets it, and nothing was read of the
+// agent's tasks: the turn is not failed with a notice about the list, and not sent blind either; it is retried as any turn the agent
+// cannot be reached for is, and goes out once the agent can be asked.
+func TestLookupThatMeetsAnOversizedCardIsRetriedNotFailed(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, 4*time.Millisecond
+	f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+		if n == 1 {
+			return fmt.Errorf("%w: connection reset", agent.ErrOutcomeUnknown)
+		}
+		return turn(h, n, a2a.TaskStateCompleted)
+	}
+	var asks atomic.Int32
+	f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
+		if asks.Add(1) <= 2 {
+			return nil, nil, errCard
+		}
+		return nil, nil, nil // the card is fine again: the agent does not have the turn
+	}
+	for _, ts := range []string{"1", "2"} {
+		if _, err := f.submit(inbound(ts)); err != nil {
+			t.Fatal(err)
+		}
+		waitFinal(t, sink)
+	}
+	if got := sink.noticesOf(NoticeFailed); len(got) != 0 {
+		t.Errorf("failed notices = %+v; want none: a card is no list, and the turn was waiting", got)
+	}
+	if n := asks.Load(); n != 3 {
+		t.Errorf("%d lookups; want 3: two that met the card and one that answered", n)
+	}
+}
+
+// A task that cannot be followed because the connection could not be opened, for the agent card, is told so. The thread is not told that the
+// agent refused, or that what it sent was too large: no call was made. Nothing is cancelled, for there is no connection to cancel on, and the
+// task stays recorded.
+func TestFollowThatMeetsAnOversizedCardSaysSoAndKeepsTheTask(t *testing.T) {
+	f, sink := restarted(t)
+	f.agent.follow = func(a2a.TaskID, agent.Handler) error { return fmt.Errorf("follow task t1: %w", errCard) }
+	f.recover(t)
+	eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+	f.retired(t)
+	if got := sink.noticesOf(NoticeFailed); got[0].Detail != cardTooLargeDetail {
+		t.Errorf("notice = %q; want %q", got[0].Detail, cardTooLargeDetail)
+	}
+	if got := f.cancelled(); len(got) != 0 {
+		t.Errorf("cancelled %v; want none: no connection was made", got)
+	}
+	if id := f.taskID(); id != "t1" {
+		t.Errorf("task %q recorded; want t1: the agent still has it", id)
+	}
+}
+
+// A cancel that could not open its connection did not reach the agent, and is not counted as done. The Stop control reports the failure and
+// the record stays, where a cancel whose answer was too large is done.
+func TestStopWhoseConnectionCouldNotBeOpenedLeavesTheRecord(t *testing.T) {
+	f, _ := restarted(t)
+	f.agent.cancelErr = func(int) error { return fmt.Errorf("connect to agent: %w", errCard) }
+	stopped, err := f.m.Stop(t.Context(), key, "t1", "U1")
+	if err == nil || stopped {
+		t.Errorf("Stop = %v, %v; want the failure", stopped, err)
+	}
+	if id := f.taskID(); id != "t1" {
+		t.Errorf("task %q recorded; want t1: the cancel never reached the agent", id)
+	}
+	if got := classifyCancel(errCard); got != cancelTransient {
+		t.Errorf("classifyCancel of a card that is too large = %d, want cancelTransient", got)
+	}
+}
+
+// A pause that Stop ends on a cancel counted as done without being read says no more than that the thread no longer waits: it does not
+// say that the task was stopped, which Agent Kourier does not know. The stop of an ordinary cancel still says it, and a WARN names the
+// unverified cancel.
+func TestStopOfAPausedTaskThatWasNotVerifiedDoesNotSayItStopped(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		cancelErr  error
+		getTooBig  bool
+		wantNotice NoticeKind
+	}{
+		{"the cancel's answer was too large", fmt.Errorf("cancel task t1: %w", errAnswerTooLarge), false, NoticeStopUnverified},
+		{"the agent says it cannot cancel, and the task is too large to read", fmt.Errorf("cancel task t1: %w", a2a.ErrTaskNotCancelable), true, NoticeStopUnverified},
+		{"an ordinary cancel", nil, false, NoticeStopped},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, sink := pausedFirst(t, func(*a2a.Message, agent.Handler) error { return nil })
+			logs := newLogRecorder()
+			f.m.cfg.Logger = slog.New(logs)
+			if tc.cancelErr != nil {
+				f.agent.cancelErr = func(int) error { return tc.cancelErr }
+			}
+			if tc.getTooBig {
+				var gets atomic.Int32
+				f.agent.get = tooLargeGet(&gets)
+			}
+			stopped, err := f.m.Stop(t.Context(), key, "t1", "U1")
+			if err != nil || !stopped {
+				t.Fatalf("Stop = %v, %v; want it stopped", stopped, err)
+			}
+			other := NoticeStopUnverified
+			if tc.wantNotice == NoticeStopUnverified {
+				other = NoticeStopped
+			}
+			if got := sink.noticesOf(tc.wantNotice); len(got) != 1 {
+				t.Errorf("%s notices = %d; want one", tc.wantNotice, len(got))
+			}
+			if got := sink.noticesOf(other); len(got) != 0 {
+				t.Errorf("%s notices = %d; want none", other, len(got))
+			}
+			warned := len(logs.lines("session: the answer to a cancel was too large to read, so the cancel is counted as done without being verified")) +
+				len(logs.lines("session: the task could not be read for its size after the agent said it cannot be cancelled, so it is counted as over without being verified"))
+			if want := tc.wantNotice == NoticeStopUnverified; (warned == 1) != want {
+				t.Errorf("%d WARNs about an unverified cancel; want one = %v", warned, want)
+			}
+		})
+	}
+}
+
+// A send that could not open its connection, for the agent card, is a send that never left: it is retried as any is, and it is not failed
+// with the notice for what the agent sent, which would be false: the agent was sent nothing and sent nothing.
+func TestSendThatMeetsAnOversizedCardIsRetriedNotFailedAsTooLarge(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, 4*time.Millisecond
+	var tries atomic.Int32
+	f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+		if tries.Add(1) <= 2 {
+			return fmt.Errorf("%w: %w", agent.ErrNotSent, errCard)
+		}
+		return turn(h, n, a2a.TaskStateCompleted)
+	}
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	waitFinal(t, sink)
+	if got := sink.noticesOf(NoticeFailed); len(got) != 0 {
+		t.Errorf("failed notices = %+v; want none", got)
+	}
+	if n := tries.Load(); n != 3 {
+		t.Errorf("%d sends; want 3: two that never left and one that did", n)
 	}
 }

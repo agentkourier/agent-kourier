@@ -835,11 +835,15 @@ holds the turn's `messageId` (kagent records it there). Found: reconcile as in 8
 (`GetTask`, then `SubscribeToTask` if not terminal). Absent: send. A `-32004` on that send
 means some task is active, possibly an `input-required` pause, so the turn is queued as
 below and the lookup repeats when the active task ends. A page of the list past the bound on a response (4 MiB; each task carries its
-history) is asked for again at half the size, down to 3 tasks, and the pages after it at the size that fit; a holder found on an earlier
-page is the answer when a later page cannot be read at any size. When no holder is known and a page cannot be read, the turn is not sent,
-since the agent may have it and a resend into a context is not deduplicated: it fails (the turn outcome `lookup_too_large`), the thread is
-told that the agent may have started it and that posting the message again runs it once more, the lookup is audited as failed with
-`response_too_large`, and recovery does not ask again. Whether the model runs twice for a
+history) is asked for again at half the size, down to 3 tasks, and the pages after it at the size that fit. The walk has 5 minutes and 200 pages,
+a page token that comes again ends it, and a call that fails at a page size the walk lowered is taken as the list not read (whether a page token
+continues at another size is not known). A holder found on an earlier page is the answer when the list cannot be read in full. When no holder
+is known and the list cannot be read in full, the turn is not sent, since the agent may have it and a resend into a context is not deduplicated:
+it fails (the turn outcome `lookup_incomplete`), the thread is told that Agent Kourier could not tell and that the agent may be running it, and
+that posting the message again runs it, the lookup is audited as failed with `lookup_incomplete` (and its cause, such as `response_too_large`),
+and recovery does not ask again. A reply that this process queued and that the agent refused (-32004, not ready, not sent) or that was held behind a
+task and never sent is not such a turn, since the agent does not have it: it is sent, whatever the list says. An agent card past its bound is
+no answer (`dialect.ErrCardTooLarge`): a lookup that meets it is retried as any that cannot reach the agent. Whether the model runs twice for a
 duplicate task is not measured; the second task runs in full. An expired session is kept for a grace period (90 days) after its threadTTL has run out, so that
 Agent Kourier can tell a reply in an expired thread (notice) from a reply in a thread it never owned (ignored). After the grace the
 session is deleted with every row that belongs to it, and the thread is one Agent Kourier never owned: a reply without an @mention is

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 
@@ -25,6 +26,11 @@ const (
 	minListPageSize     = 3
 )
 
+// DefaultLookupTimeout is the default of Config.LookupTimeout: five minutes for the whole walk of FindTask, which is a call of its own
+// for each page and for each size a page was asked for at. Without it, 200 pages and the halvings of each, read one at a time, hold the
+// conversation's runner for hours.
+const DefaultLookupTimeout = 5 * time.Minute
+
 // FindTask returns the task in contextID whose history holds messageID, or nil if there is
 // none, and the IDs of every task that holds it, the returned one first. More than one ID
 // means the turn already ran twice: the caller should tell the thread. It is how the caller
@@ -38,16 +44,18 @@ const (
 // It follows nextPageToken to the end and does not rely on page order. Of several holders it
 // returns one that has not ended, else the earliest, and lists the rest in that order. A
 // task that shows on two pages, as the list shifts, counts once, as its newest copy. Each
-// page is a unary call under UnaryTimeout. A page token seen before fails the lookup at
-// once.
+// page is a unary call under UnaryTimeout.
 //
 // A page past dialect.MaxResponseBytes (each task of it carries its history) is asked for again at half the size, down to
-// minListPageSize, and the pages after it at the size that fit. If a page does not fit even then, and an earlier page held
-// the turn, the holders found so far are the answer: the agent has the turn. If none did, the lookup fails with an error that
-// wraps dialect.ErrResponseTooLarge, and the caller does not know whether the agent has the turn: the agent sends the same page
-// again, so the lookup can never answer, and the caller must not send the turn again to find out. UNCONFIRMED: WP-03 measured
-// the lookup on a context of three tasks; paging past kagent's page size of 50 is not measured, nor is a page token
-// continued with another page size.
+// minListPageSize, and the pages after it at the size that fit. The walk as a whole has Config.LookupTimeout and at most
+// maxListPages pages, and a page token seen before ends it. If the walk cannot be completed for any of these reasons, and an
+// earlier page held the turn, the holders found so far are the answer: the agent has the turn. If none did, the lookup fails with
+// an error that wraps ErrLookupIncomplete (and the cause: dialect.ErrResponseTooLarge, a context deadline, ...): the caller does
+// not know whether the agent has the turn, asking again gets the same, and it must not send the turn again to find out. A call
+// that fails on the first page asked for at a size the walk shrank to is taken as incomplete too: whether a server continues a
+// page token with another page size is not known (UNCONFIRMED), so an error there may be the shrink's own. The caller's own
+// cancellation is none of these. UNCONFIRMED: WP-03 measured the lookup on a context of three tasks; paging past kagent's page
+// size of 50 is not measured.
 func (a *Agent) FindTask(ctx context.Context, contextID, messageID string) (telemetryResult0 *a2a.Task, telemetryResult1 []a2a.TaskID, telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.agent.find")
 	defer func() { finishAgent(op, telemetryErr) }()
@@ -60,14 +68,26 @@ func (a *Agent) FindTask(ctx context.Context, contextID, messageID string) (tele
 	if err != nil {
 		return nil, nil, fmt.Errorf("connect to agent: %w", typed(err, false))
 	}
+	walk, stop := context.WithTimeout(ctx, a.cfg.LookupTimeout)
+	defer stop()
 	var holders []*a2a.Task
 	byID := map[a2a.TaskID]int{} // index in holders
 	seen := map[string]bool{}
-	req := &a2a.ListTasksRequest{ContextID: contextID}
-	for range maxListPages {
-		page, err := a.listPage(ctx, conn, req)
-		if tooLarge(err) && len(holders) > 0 {
+	l := &lister{a: a, conn: conn, req: &a2a.ListTasksRequest{ContextID: contextID}}
+	// giveUp ends a walk that cannot be completed: with the holders found, if there are any, and else with the error, which says so.
+	giveUp := func(err error) (*a2a.Task, []a2a.TaskID, error) {
+		if len(holders) > 0 {
 			return preferred(holders)
+		}
+		return nil, nil, err
+	}
+	for range maxListPages {
+		page, err := l.page(walk)
+		if err != nil && ctx.Err() == nil && walk.Err() != nil && !errors.Is(err, ErrLookupIncomplete) { // the walk's own deadline, not the caller's end
+			err = fmt.Errorf("%w: the walk of the task list of context %s took more than %s: %w", ErrLookupIncomplete, contextID, a.cfg.LookupTimeout, err)
+		}
+		if errors.Is(err, ErrLookupIncomplete) {
+			return giveUp(err)
 		}
 		if err != nil {
 			return nil, nil, err
@@ -87,12 +107,12 @@ func (a *Agent) FindTask(ctx context.Context, contextID, messageID string) (tele
 		case next == "":
 			return preferred(holders)
 		case seen[next]:
-			return nil, nil, fmt.Errorf("find task: the task list of context %s repeats page token %q", contextID, next)
+			return giveUp(fmt.Errorf("%w: the task list of context %s repeats page token %q", ErrLookupIncomplete, contextID, next))
 		default:
-			seen[next], req.PageToken = true, next
+			seen[next], l.req.PageToken = true, next
 		}
 	}
-	return nil, nil, fmt.Errorf("find task: the task list of context %s ran past %d pages", contextID, maxListPages)
+	return giveUp(fmt.Errorf("%w: the task list of context %s ran past %d pages", ErrLookupIncomplete, contextID, maxListPages))
 }
 
 // preferred orders the holders by earlier, and returns the first with every ID.
@@ -116,19 +136,36 @@ func preferred(holders []*a2a.Task) (*a2a.Task, []a2a.TaskID, error) {
 	return holders[0], ids, nil
 }
 
-// listPage reads the page req asks for, and asks for it again at half the size while it is over the bound, down to
-// minListPageSize. The size that worked stays in req, for the pages after it.
-func (a *Agent) listPage(ctx context.Context, conn Conn, req *a2a.ListTasksRequest) (*a2a.ListTasksResponse, error) {
+// lister reads the pages of FindTask's walk, at a size that it lowers when a page is over the bound.
+type lister struct {
+	a           *Agent
+	conn        Conn
+	req         *a2a.ListTasksRequest
+	afterShrink bool // the size was lowered, and no call has been made at it yet
+}
+
+// page reads the page req asks for, and asks for it again at half the size while it is over the bound, down to minListPageSize,
+// where it gives up with an error that wraps ErrLookupIncomplete. The size that worked stays in req, for the pages after it. The first
+// call at a lowered size that fails is incomplete too, whatever it fails with but the caller's own end: a page token may not be
+// continued at another size, and the walk has no way to tell that from any other failure.
+func (l *lister) page(ctx context.Context) (*a2a.ListTasksResponse, error) {
 	for {
-		page, err := a.listTasks(ctx, conn, req)
-		if !tooLarge(err) {
-			return page, err
-		}
-		half := cmp.Or(req.PageSize, defaultListPageSize) / 2
-		if half < minListPageSize {
+		page, err := l.a.listTasks(ctx, l.conn, l.req)
+		switch {
+		case err == nil:
+			l.afterShrink = false
+			return page, nil
+		case tooLarge(err):
+			half := cmp.Or(l.req.PageSize, defaultListPageSize) / 2
+			if half < minListPageSize {
+				return nil, fmt.Errorf("%w: %w", ErrLookupIncomplete, err)
+			}
+			l.req.PageSize, l.afterShrink = half, true
+		case l.afterShrink && ctx.Err() == nil:
+			return nil, fmt.Errorf("%w: at a page size of %d, which the walk lowered it to: %w", ErrLookupIncomplete, l.req.PageSize, err)
+		default:
 			return nil, err
 		}
-		req.PageSize = half
 	}
 }
 

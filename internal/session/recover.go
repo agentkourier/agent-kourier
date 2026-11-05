@@ -9,7 +9,6 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
-	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
@@ -105,12 +104,12 @@ func (m *Manager) recoverKey(key Key) {
 				log.Warn("recover: the agent cannot list tasks, so the queued head is not looked up", "head", head.ID, "task", sess.TaskID)
 				break
 			}
-			if errors.Is(err, dialect.ErrResponseTooLarge) {
-				// A page of the agent's list is more than Agent Kourier reads at any size it asked for, and comes again, so asking
-				// again would never answer either. The recorded task is followed first, as above, and the head stays queued: the
+			if errors.Is(err, agent.ErrLookupIncomplete) {
+				// The agent's list could not be read in full (a page past the bound at every size, the walk's deadline or page limit),
+				// and the same comes again, so asking again would never answer either. The recorded task is followed first, as above, and the head stays queued: the
 				// runner looks it up when it takes it up, finds the same, and fails it without sending it (unverified), for the
 				// agent may have it. Nothing is sent from here, and nothing is asked for ever.
-				log.Warn("recover: the agent's list of tasks is too large to read, so the queued head is not looked up", "head", head.ID, "task", sess.TaskID, "error", err)
+				log.Warn("recover: the agent's list of tasks could not be read in full, so the queued head is not looked up", "head", head.ID, "task", sess.TaskID, "binding", sess.Binding, "error", err)
 				break
 			}
 			if err == nil {

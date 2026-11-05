@@ -100,7 +100,20 @@ var (
 	// text says the bound and never anything the backend sent. A backend that does it again does it every time, so
 	// it is not retried as a lost stream.
 	ErrResponseTooLarge = errors.New("response from the backend is too large")
+	// ErrCardTooLarge is joined to ErrResponseTooLarge for an agent card past MaxCardBytes. It says that no connection was
+	// made: the card is what a client is built from, and it is read when a connection is opened, never as the answer to a call. A
+	// caller that means the answer to a call (a task, a page of tasks, an event) tells it apart with AnswerTooLarge, since a
+	// card that is too large says nothing of what the agent holds, and no call was made.
+	ErrCardTooLarge = errors.New("agent card is too large")
 )
+
+// AnswerTooLarge reports whether err is a response past a bound that is not the agent card: an event of a stream, the answer
+// to a call, or a reply of a turn. The card's error (ErrCardTooLarge) is an ErrResponseTooLarge too, and it reaches a call that
+// had to open a connection first, where nothing was sent and nothing was read: it must not be taken for what a task or a page of
+// tasks holds.
+func AnswerTooLarge(err error) bool {
+	return errors.Is(err, ErrResponseTooLarge) && !errors.Is(err, ErrCardTooLarge)
+}
 
 // The most a dialect's transport reads of a backend's response, by what the response is. The backend of a Binding may
 // be a tenant's, and an unbounded read would let it fill the memory of the leader. None bounds how long a stream may

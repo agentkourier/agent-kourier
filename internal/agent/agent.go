@@ -54,6 +54,9 @@ type Config struct {
 	// names the calls the approval waits on with it (FinalEvent.AwaitingApproval). A Pool sets it from its dialect.
 	// Nil reads none.
 	ParseInteraction func(task a2a.Task) (*dialect.Interaction, error)
+	// LookupTimeout bounds the whole walk of FindTask, which asks for each page of the list of tasks and asks again for a page that is over
+	// the bound at a smaller size. A walk that passes it is incomplete (ErrLookupIncomplete). Default DefaultLookupTimeout, 5 minutes.
+	LookupTimeout time.Duration
 	// MaxReplyBytes bounds what one send or follow holds of the agent's reply in memory: the text of its artifacts, the
 	// tool results that wait for their call, and the bookkeeping of each tool part, which the agent decides and a
 	// stream's length does not limit. It does not bound how long a reply is in all: the dialect bounds each event and
@@ -78,6 +81,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.ConnectTimeout <= 0 {
 		c.ConnectTimeout = 30 * time.Second
+	}
+	if c.LookupTimeout <= 0 {
+		c.LookupTimeout = DefaultLookupTimeout
 	}
 	if c.MaxReplyBytes <= 0 {
 		c.MaxReplyBytes = DefaultMaxReplyBytes

@@ -13,6 +13,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/audit"
+	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -498,7 +499,10 @@ func (r *retention) cancelStale(ctx context.Context, t store.StaleTask, down map
 	case errors.Is(err, session.ErrUnknownBinding):
 		return staleCancel{how: audit.StaleCancelNoBinding}
 	}
-	if !errors.Is(err, a2a.ErrTaskNotFound) && !errors.Is(err, a2a.ErrTaskNotCancelable) {
+	// An agent that answers that the task is unknown, that it cannot be cancelled, or with an answer too large to read (the whole task, as a real
+	// a2a-go server answers a cancel; the session counts it as done too, without verifying it, see session.classifyCancel) is up, and is
+	// asked for the next. An agent card that is too large is not an answer: no call was made, and that is down as any connection that fails is.
+	if !errors.Is(err, a2a.ErrTaskNotFound) && !errors.Is(err, a2a.ErrTaskNotCancelable) && !dialect.AnswerTooLarge(err) {
 		down[t.Binding] = true
 	}
 	return staleCancel{how: audit.StaleCancelFailed, err: err, identity: identity}
