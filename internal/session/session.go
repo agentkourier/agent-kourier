@@ -380,7 +380,9 @@ type Manager struct {
 	// have marked, from when the runner takes it up. Only those turns raise a NoticeDequeued: the sink is not asked
 	// to take a reaction off every turn that never had one.
 	marked map[string]struct{}
-	closed bool // set by Close: no runner starts after it, so wg.Add cannot race wg.Wait, and no convos entry leaks
+	// cancelTimeout bounds the cancel of a task whose reply was too large (see tooLarge); a test shortens it.
+	cancelTimeout time.Duration
+	closed        bool // set by Close: no runner starts after it, so wg.Add cannot race wg.Wait, and no convos entry leaks
 	// intake serializes Submit: UpsertSession replaces a whole row, so two Submits that
 	// both found no session must not both write one.
 	intake sync.Mutex
@@ -429,7 +431,7 @@ func New(cfg Config) (*Manager, error) {
 	if cfg.SendGiveUp <= 0 {
 		cfg.SendGiveUp = 15 * time.Minute
 	}
-	m := &Manager{cfg: cfg, convos: map[Key]*convo{}, unrecorded: map[Key]string{}, attempted: map[Key]attempt{}, begun: map[string]time.Time{}, fresh: map[string]struct{}{}, marked: map[string]struct{}{}}
+	m := &Manager{cfg: cfg, convos: map[Key]*convo{}, unrecorded: map[Key]string{}, attempted: map[Key]attempt{}, begun: map[string]time.Time{}, fresh: map[string]struct{}{}, marked: map[string]struct{}{}, cancelTimeout: cancelTimeout}
 	base := cfg.Context
 	if base == nil {
 		base = context.Background()
