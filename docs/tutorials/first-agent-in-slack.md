@@ -237,6 +237,7 @@ Next:
 
 - [Your first alert investigation](first-alert-investigation.md) starts a session from an alert instead of a mention.
 - [Threads and sessions](../explanation/threads-and-sessions.md) explains what happened in the thread.
+- [Choose a config route](../explanation/config-routes.md) says where Agent Kourier can read its resources from: files, as here, or custom resources.
 - [Install with Helm](../how-to/install-with-helm.md) runs Agent Kourier on your own cluster.
 - [Start from a recipe](../how-to/recipes.md): the `docs-agent` recipe is an agent that runs on any cluster, with no
   kagent, so it is the shortest way to a working agent once Agent Kourier is installed.

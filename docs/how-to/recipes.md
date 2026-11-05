@@ -63,6 +63,11 @@ narrowed to one receiver, and `askUser` on. Replace `CREPLACESRE` and `B0REPLACE
 Put the directory in a ConfigMap and point the chart at it with `config.existingConfigMap`; the chart needs
 `rbac.secretNamespaces` to find the Secrets `slack` and `sre-triage-token`. The recipe's README has the commands.
 
+To read the recipe's resources as custom resources instead, apply the same YAML (`kubectl apply -f examples/recipes/sre-triage/kourier/`, with the namespace `agent-kourier`
+existing): it applies as written, since each resource sits in that namespace and names the others without one. What changes is the chart's values: no `config.existingConfigMap`, `config.source: crds`,
+`config.chatConnection: agent-kourier/slack`, and `rbac.secretNames` for the Secrets the YAML names (the chart cannot read what you apply yourself) in place of `rbac.secretNamespaces`.
+[Move the config between a ConfigMap and custom resources](migrate-config-source.md) has the steps. The other recipes' resources work the same way.
+
 ### The agent
 
 The agent and its prompt. The tools are listed by name and only read; the tool server also runs `--read-only`, and
