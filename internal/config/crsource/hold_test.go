@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -42,11 +43,11 @@ func (c *cluster) startLogged(t *testing.T) (*crsource.Source, *logSink) {
 	return src, logs
 }
 
-// deleteForRollback deletes what Helm deletes when it takes the rendered objects away, in the order that no read can split:
-// the connection first, so that no read sees a Binding gone and its connection still there.
+// deleteForRollback deletes what Helm deletes when it takes the rendered objects away, in its order as measured: the
+// AgentBackend, then the Bindings by name, the ChatConnection last.
 func (c *cluster) deleteForRollback(objs []*unstructured.Unstructured) {
 	c.t.Helper()
-	for _, name := range []string{"slack-main", "kagent-pilot", "chat-only", "sre-alerts"} {
+	for _, name := range []string{"kagent-pilot", "chat-only", "sre-alerts", "slack-main"} {
 		c.remove(find(objs, name))
 	}
 }
@@ -116,9 +117,8 @@ func TestOnlyWhatTheHeldBindingsNeedIsHeld(t *testing.T) {
 	}
 }
 
-// A Binding deleted alone, while the connection exists, stops at the next read, and is not brought back when the connection
-// is deleted later: the hold is for the connection, and the kill switch of a Binding is its deletion.
-func TestABindingDeletedAloneIsNotHeld(t *testing.T) {
+// A Binding deleted alone, while the connection exists, stops at the next read: that is the way to stop one.
+func TestABindingDeletedAloneStopsAtTheNextRead(t *testing.T) {
 	leakCheck(t)
 	objs := corpus(t)
 	c := newCluster(t, objs...)
@@ -127,18 +127,209 @@ func TestABindingDeletedAloneIsNotHeld(t *testing.T) {
 	until(t, func() { c.remove(find(objs, "chat-only")) }, func() bool { s, _ := set(t, src); return len(s.Bindings) == 1 })
 	s, _ := set(t, src)
 	if len(held(s)) != 0 || len(s.Invalid) != 0 {
-		t.Fatalf("held %v, Invalid %+v with the connection there; want nothing held", held(s), s.Invalid)
+		t.Errorf("held %v, Invalid %+v with the connection there; want nothing held", held(s), s.Invalid)
+	}
+}
+
+// The trade of the grace: a Binding deleted alone is kept, not served, for goneGrace, and if its connection is deleted inside
+// it, it comes back, held. After the grace it does not.
+func TestABindingDeletedAloneComesBackHeldOnlyInsideTheGrace(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		after time.Duration
+		want  string
+	}{
+		{"inside the grace", 30 * time.Second, allHeld},
+		{"after the grace", 90 * time.Second, "AgentBackend agent-kourier-system/kagent-pilot@1 Binding sre/sre-alerts@1 ChatConnection agent-kourier-system/slack-main@1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			leakCheck(t)
+			objs := corpus(t)
+			c := newCluster(t, objs...)
+			clock := &testClock{now: time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)}
+			src := c.startWithClock(t, clock)
+			set(t, src)
+			until(t, func() { c.remove(find(objs, "chat-only")) }, func() bool { s, _ := set(t, src); return len(s.Bindings) == 1 })
+			clock.advance(tc.after)
+			set(t, src) // a read finds it gone for this long
+			until(t, func() {
+				c.remove(find(objs, "kagent-pilot"))
+				c.remove(find(objs, "sre-alerts"))
+				c.remove(find(objs, "slack-main"))
+			}, func() bool { s, _ := set(t, src); return len(held(s)) >= 3 })
+			s, _ := set(t, src)
+			if got := strings.Join(held(s), " "); got != tc.want {
+				t.Errorf("held = %s; want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// Helm's order, with a read after the backend and a read after the Bindings, which is what a slow API server gives: the
+// backend and the Bindings were forgotten by the read that found them gone, and the connection's deletion could not bring them
+// back. With the grace they are kept, and everything is held and served, and nothing is rejected.
+func TestHelmsOrderWithReadsBetweenKeepsEverythingServed(t *testing.T) {
+	leakCheck(t)
+	objs := corpus(t)
+	c := newCluster(t, objs...)
+	src, logs := c.startLogged(t)
+	set(t, src)
+	gone := func(kind, ns, name string) bool { return src.CachedGenerationForTest(kind, ns, name) < 0 }
+
+	until(t, func() { c.remove(find(objs, "kagent-pilot")) }, func() bool { return gone("AgentBackend", "agent-kourier-system", "kagent-pilot") })
+	if s, _ := set(t, src); len(s.AgentBackends) != 0 || len(s.Bindings) != 2 { // a read between: the backend is gone, not served
+		t.Fatalf("after the backend: backends %d, Bindings %d", len(s.AgentBackends), len(s.Bindings))
+	}
+	until(t, func() { c.remove(find(objs, "chat-only")); c.remove(find(objs, "sre-alerts")) },
+		func() bool { return gone("Binding", "sre", "chat-only") && gone("Binding", "sre", "sre-alerts") })
+	if s, _ := set(t, src); len(s.Bindings) != 0 { // a read between: the Bindings are gone
+		t.Fatalf("after the Bindings: %d Bindings", len(s.Bindings))
+	}
+	until(t, func() { c.remove(find(objs, "slack-main")) }, func() bool { return gone("ChatConnection", "agent-kourier-system", "slack-main") })
+
+	s, _ := set(t, src)
+	if got := strings.Join(held(s), " "); got != allHeld {
+		t.Errorf("held = %s; want %s", got, allHeld)
+	}
+	rep := report(t, src)
+	if n := len(rep.Snapshot.Bindings()); n != 2 || len(rep.Rejections) != 0 {
+		t.Errorf("%d Bindings served, rejections %+v; want both served and nothing rejected", n, rep.Rejections)
+	}
+	if !strings.Contains(logs.String(), "held_bindings=2") || !strings.Contains(logs.String(), "held_backends=1") || !strings.Contains(logs.String(), "held_without_backend=0") {
+		t.Errorf("the Warn does not say what is held:\n%s", logs.String())
+	}
+}
+
+// What is held does not expire during the hold, however long it lasts; and what the grace kept is not served while the
+// connection is there.
+func TestWhatIsHeldDoesNotExpire(t *testing.T) {
+	leakCheck(t)
+	objs := corpus(t)
+	c := newCluster(t, objs...)
+	clock := &testClock{now: time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)}
+	src := c.startWithClock(t, clock)
+	set(t, src)
+	until(t, func() { c.remove(find(objs, "kagent-pilot")) }, func() bool {
+		return src.CachedGenerationForTest("AgentBackend", "agent-kourier-system", "kagent-pilot") < 0
+	})
+	if s, _ := set(t, src); len(s.AgentBackends) != 0 {
+		t.Fatalf("a backend that is gone is served while its connection is there")
+	}
+	until(t, func() { c.deleteForRollback(objs) }, func() bool { s, _ := set(t, src); return len(held(s)) == 4 })
+	for range 3 {
+		clock.advance(10 * time.Minute)
+		if s, _ := set(t, src); strings.Join(held(s), " ") != allHeld {
+			t.Fatalf("held = %v after the clock moved; want it all, for as long as the connection is held", held(s))
+		}
+	}
+}
+
+// A hold whose Bindings name a backend that is gone for longer than the grace says so: the Bindings are held and cannot be
+// served, and the Warn counts them.
+func TestTheWarnCountsHeldBindingsWithoutABackend(t *testing.T) {
+	leakCheck(t)
+	objs := corpus(t)
+	c := newCluster(t, objs...)
+	clock := &testClock{now: time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)}
+	src, logs := c.startLoggedWithClock(t, clock)
+	set(t, src)
+	until(t, func() { c.remove(find(objs, "kagent-pilot")) }, func() bool {
+		return src.CachedGenerationForTest("AgentBackend", "agent-kourier-system", "kagent-pilot") < 0
+	})
+	set(t, src)
+	clock.advance(2 * time.Minute)
+	set(t, src) // the backend has been gone past the grace, and is forgotten
+	until(t, func() {
+		c.remove(find(objs, "chat-only"))
+		c.remove(find(objs, "sre-alerts"))
+		c.remove(find(objs, "slack-main"))
+	},
+		func() bool { s, _ := set(t, src); return len(held(s)) == 3 })
+	if !strings.Contains(logs.String(), "held_bindings=2") || !strings.Contains(logs.String(), "held_backends=0") || !strings.Contains(logs.String(), "held_without_backend=2") {
+		t.Errorf("the Warn does not count the Bindings that have no backend:\n%s", logs.String())
+	}
+	if !strings.Contains(logs.String(), "bringing the connection back and then deleting the Binding") {
+		t.Errorf("the Warn does not say how to stop a Binding during the hold:\n%s", logs.String())
+	}
+}
+
+// The backend of a Binding of the held connection that is still there is held when it goes: it is a tenant's Binding on a
+// backend that was rendered with the release.
+func TestTheBackendOfALiveBindingOfAHeldConnectionIsHeld(t *testing.T) {
+	leakCheck(t)
+	objs := corpus(t)
+	c := newCluster(t, objs...)
+	src := c.start(t)
+	set(t, src)
+	until(t, func() { c.remove(find(objs, "kagent-pilot")); c.remove(find(objs, "slack-main")) },
+		func() bool { s, _ := set(t, src); return len(held(s)) == 2 })
+	s, _ := set(t, src)
+	want := "AgentBackend agent-kourier-system/kagent-pilot@1 ChatConnection agent-kourier-system/slack-main@1"
+	if got := strings.Join(held(s), " "); got != want || len(s.Bindings) != 2 {
+		t.Errorf("held = %s, Bindings %v; want %s held and both Bindings still there, which resolve", got, bindingNames(s), want)
+	}
+	if rep := report(t, src); len(rep.Snapshot.Bindings()) != 2 {
+		t.Errorf("%d Bindings served; want both, on the held backend", len(rep.Snapshot.Bindings()))
+	}
+}
+
+// The references of the chart's own objects name no namespace, since they are all in the release's: a hold that read a
+// reference without the Binding's namespace would find neither the connection nor the backend.
+func TestAHoldReadsReferencesThatNameNoNamespace(t *testing.T) {
+	leakCheck(t)
+	objs := corpus(t)
+	for _, name := range []string{"kagent-pilot", "slack-main"} {
+		_ = unstructured.SetNestedStringSlice(find(objs, name).Object, nil, "spec", "allowedNamespaces")
+	}
+	b := find(objs, "chat-only")
+	b.SetNamespace("agent-kourier-system")
+	_ = unstructured.SetNestedMap(b.Object, map[string]any{"name": "slack-main"}, "spec", "chat", "connectionRef")
+	_ = unstructured.SetNestedMap(b.Object, map[string]any{"name": "kagent-pilot"}, "spec", "agent", "backendRef")
+	all := []*unstructured.Unstructured{find(objs, "kagent-pilot"), find(objs, "slack-main"), b}
+	c := newCluster(t, all...)
+	src := c.start(t)
+	if s, _ := set(t, src); len(s.Bindings) != 1 {
+		t.Fatalf("Bindings = %v; the Binding with references of no namespace is not read", bindingNames(s))
 	}
 	until(t, func() {
-		c.remove(find(objs, "slack-main"))
-		c.remove(find(objs, "kagent-pilot"))
-		c.remove(find(objs, "sre-alerts"))
+		c.remove(find(all, "kagent-pilot"))
+		c.remove(find(all, "chat-only"))
+		c.remove(find(all, "slack-main"))
 	}, func() bool { s, _ := set(t, src); return len(held(s)) == 3 })
-	s, _ = set(t, src)
-	want := "AgentBackend agent-kourier-system/kagent-pilot@1 Binding sre/sre-alerts@1 ChatConnection agent-kourier-system/slack-main@1"
-	if got := strings.Join(held(s), " "); got != want {
-		t.Errorf("held = %s; want %s: chat-only was stopped, and stays stopped", got, want)
+	if rep := report(t, src); len(rep.Snapshot.Bindings()) != 1 || len(rep.Rejections) != 0 {
+		t.Errorf("%d Bindings served, rejections %+v; want the one held, resolved against the held backend and connection", len(rep.Snapshot.Bindings()), rep.Rejections)
 	}
+}
+
+// testClock is a clock a test moves.
+type testClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *testClock) Now() time.Time { c.mu.Lock(); defer c.mu.Unlock(); return c.now }
+
+func (c *testClock) advance(d time.Duration) { c.mu.Lock(); c.now = c.now.Add(d); c.mu.Unlock() }
+
+func (c *cluster) startWithClock(t *testing.T, clock *testClock) *crsource.Source {
+	t.Helper()
+	src, _ := c.startLoggedWithClock(t, clock)
+	return src
+}
+
+func (c *cluster) startLoggedWithClock(t *testing.T, clock *testClock) (*crsource.Source, *logSink) {
+	t.Helper()
+	logs := &logSink{}
+	src, err := crsource.New(crsource.Options{Client: c.client, Connection: own, Logger: slog.New(slog.NewTextHandler(logs, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src.SetClockForTest(clock.Now)
+	t.Cleanup(src.Stop)
+	if err := src.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	return src, logs
 }
 
 // A Binding made again during the hold is the new object, with its new uid and generation, and never the held one; and one
@@ -221,6 +412,11 @@ func TestTheHoldEndsWhenTheConnectionIsBack(t *testing.T) {
 	until(t, func() { c.remove(find(objs, "slack-main")) }, func() bool { s, _ := set(t, src); return len(held(s)) > 0 })
 	if n := strings.Count(logs.String(), "was deleted: it is held"); n != 2 {
 		t.Errorf("a second hold was said %d times in all; want 2", n)
+	}
+	// What went while the first hold lasted and was dropped when the connection came back is not brought back by the second.
+	s, _ = set(t, src)
+	if got := strings.Join(held(s), " "); got != "ChatConnection agent-kourier-system/slack-main@1" || len(s.Bindings) != 1 {
+		t.Errorf("held = %s, Bindings %v; want the connection alone: sre-alerts went with the first hold and stays gone", got, bindingNames(s))
 	}
 }
 

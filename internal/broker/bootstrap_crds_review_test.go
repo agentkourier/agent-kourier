@@ -101,14 +101,13 @@ func TestBootstrapCRDsKeepsRoutingWhenEverythingIsDeletedTogether(t *testing.T) 
 			t.Fatal(err)
 		}
 	}
-	// The connection first: the order in which no read can see a Binding gone and its connection still there. The informers'
-	// watches may not be open yet, so repeat until the broker has seen all four gone.
+	// The informers' watches may not be open yet, so repeat until the broker has seen all four gone.
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		del(crConnections, "agent-kourier-system", "slack-main")
-		del(crBackends, "agent-kourier-system", "kagent-pilot")
-		del(crBindings, "sre", "sre-alerts")
+		del(crBackends, "agent-kourier-system", "kagent-pilot") // Helm's order: the backend, the Bindings by name, the connection last
 		del(crBindings, "sre", "chat-only")
+		del(crBindings, "sre", "sre-alerts")
+		del(crConnections, "agent-kourier-system", "slack-main")
 		time.Sleep(20 * time.Millisecond)
 		if len(c.Reloader.Report().Invalid) == 4 {
 			break

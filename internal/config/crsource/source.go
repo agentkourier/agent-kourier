@@ -21,17 +21,24 @@
 // # The hold
 //
 // While the own connection is deleted and held, the Set holds with it, at their last good generation, the Bindings that
-// named it and are gone from the cluster too, and the AgentBackends that those Bindings name and that are gone. Helm deletes
-// the objects it rendered together, so a rollback from custom resources to a ConfigMap takes the Bindings, the backends and the
-// connection away while the old pods still run, and a broker that dropped the Bindings would stop answering for as long as
-// it takes the new pods to lead. Each held object is in Set.Invalid as Deleted, so that it is counted and says what it is. The
-// hold lasts until the connection is back, when what is still gone goes, or until the broker restarts, which has no last
-// good and fails at start as it always did.
+// named it and are gone from the cluster too, and the AgentBackends that those Bindings, and the Bindings of it that are
+// still there, name and that are gone. Helm deletes the objects it rendered one after another, the backend, then the Bindings
+// by name, the connection last, while the old pods still run, so a rollback from custom resources to a ConfigMap takes them
+// all away, and a broker that dropped the Bindings would stop answering for as long as it takes the new pods to lead. Each
+// held object is in Set.Invalid as Deleted, so that it is counted and says what it is. The hold lasts until the connection is
+// back, when what is still gone goes, or until the broker restarts, which has no last good and fails at start as it always
+// did.
 //
-// The hold is for the connection and not for a Binding: a Binding deleted alone, while the connection exists, goes at the next
-// read, which is the way to stop one. And it is decided by the listing of the moment of the read. A Binding deleted in an
-// earlier read than the connection is already gone from the last good, so it is not held. Helm deletes what it rendered in
-// milliseconds, against a read every 10 s, so this is rare, and the source adds no delay to close it.
+// A read can fall between those deletes, and across a slow API server (a 40 ms round trip, 50 Bindings) it often does, so an
+// object that is gone is not forgotten at once: it is kept, and not served, for goneGrace after the read that first found it
+// gone. A connection deleted inside the grace takes what went before it into the hold; one deleted after it finds nothing
+// to hold. So the grace bounds the split and does not close it: a deletion that takes longer than goneGrace between its
+// first object and the connection can still lose what went first.
+//
+// The hold is for the connection and not for a Binding. A Binding deleted alone, while the connection exists, stops at the
+// next read, and that is the way to stop one; but if its connection is deleted within the grace it comes back, held. While the
+// connection is held a Binding that is deleted stays held, and so stops only when the connection is back and the Binding is
+// deleted.
 //
 // # Change detection
 //
@@ -134,7 +141,17 @@ type goodObject struct {
 	uid        types.UID
 	generation int64
 	json       []byte
+	goneAt     time.Time // when a read first found the object gone, zero while it is there
+	held       bool      // the hold took it: it stays until the connection is back
 }
+
+// goneGrace is how long an object that a read found gone is kept, not served, so that a connection deleted just after
+// it takes it into the hold. Helm deletes what it rendered one at a time, the AgentBackend and the Bindings before the
+// connection, and the time from the first of them to the last was measured at up to 47% of the 10 s read on a 40 ms
+// round trip with 50 Bindings, and a read that falls between them would otherwise forget the backend and leave the
+// Bindings held and unable to resolve. A minute is six reads and several times the longest rollback measured. A
+// deletion that takes longer than this can still split.
+const goneGrace = time.Minute
 
 // Source is a config.Source of the custom resources. Start it, and Stop it when done.
 type Source struct {
@@ -448,49 +465,82 @@ func (s *Source) Set(context.Context) (*config.Set, string, error) {
 
 	// The broker's own connection is held when it is deleted: a running broker keeps its last good one, and with it what
 	// the connection's Bindings and their backends were (see the package comment).
-	held := false
+	var ownConn *v1alpha1.ChatConnection
+	var ownGood goodObject
 	if !live[s.own] {
 		if g, ok := s.good[s.own]; ok {
-			if conn, _ := config.DecodeObject[v1alpha1.ChatConnection](g.json); conn != nil {
-				held = true
-				set.ChatConnections = append(set.ChatConnections, *conn)
-				set.Invalid = append(set.Invalid, config.Invalid{Kind: s.own.kind, Namespace: s.own.namespace, Name: s.own.name, Served: g.generation, Deleted: true})
-				nb, nbe := s.hold(l, live, set)
-				s.holdStarted(nb, nbe)
-			}
+			ownGood = g
+			ownConn, _ = config.DecodeObject[v1alpha1.ChatConnection](g.json)
 		}
 	}
-	if !held && s.holding {
+	s.forget(l, live, s.clock(), ownConn == nil)
+	if ownConn != nil {
+		set.ChatConnections = append(set.ChatConnections, *ownConn)
+		set.Invalid = append(set.Invalid, config.Invalid{Kind: s.own.kind, Namespace: s.own.namespace, Name: s.own.name, Served: ownGood.generation, Deleted: true})
+		s.holdStarted(s.hold(l, live, set))
+	} else if s.holding {
 		s.holding = false
 		s.log.Info("the ChatConnection of the broker is back; what was held with it and is still gone is gone")
-	}
-	for k := range s.good {
-		if !live[k] && k != s.own {
-			delete(s.good, k)
-		}
 	}
 	return set, fp, nil
 }
 
-// holdStarted says, once, that a hold has begun, and how much it holds.
-func (s *Source) holdStarted(bindings, backends int) {
+// forget drops from the last good what is not there any more and is not held. An object that is listed and was not read as
+// the broker's (it went to another broker, or was refused away) is dropped at once. One that is not listed is gone: it is
+// marked with the time of the read that found it so, and dropped goneGrace after that; and one that the hold took is dropped
+// when the connection is back (ownLive), and not before. The caller holds s.mu.
+func (s *Source) forget(l listing, live map[key]bool, now time.Time, ownLive bool) {
+	for k, g := range s.good {
+		if k == s.own || live[k] {
+			continue
+		}
+		if _, listed := l.keys[k]; listed {
+			delete(s.good, k)
+			continue
+		}
+		switch {
+		case g.held && ownLive:
+			delete(s.good, k)
+		case g.held:
+		case g.goneAt.IsZero():
+			g.goneAt = now
+			s.good[k] = g
+		case now.Sub(g.goneAt) >= goneGrace:
+			delete(s.good, k)
+		}
+	}
+}
+
+// clock is the source's time, which a test replaces.
+func (s *Source) clock() time.Time {
+	s.errMu.Lock()
+	defer s.errMu.Unlock()
+	return s.now()
+}
+
+// holdStarted says, once, that a hold has begun: how many Bindings and AgentBackends it holds, and how many of the held
+// Bindings name a backend that is gone and was not held, which are not served.
+func (s *Source) holdStarted(bindings, backends, withoutBackend int) {
 	if s.holding {
 		return
 	}
 	s.holding = true
-	s.log.Warn("the ChatConnection of the broker was deleted: it is held at its last good generation, and so are the Bindings of it that are gone, "+
-		"and the AgentBackends they use that are gone, until the connection is back or the broker restarts; delete a Binding alone to stop it",
-		"connection", s.own.namespace+"/"+s.own.name, "held_bindings", bindings, "held_backends", backends)
+	s.log.Warn("the ChatConnection of the broker was deleted: it is held at its last good generation, with the Bindings of it that are gone "+
+		"and the AgentBackends that they and the Bindings of it that are still there use and that are gone, until the connection is back "+
+		"or the broker restarts; while it is held a Binding is stopped by bringing the connection back and then deleting the Binding",
+		"connection", s.own.namespace+"/"+s.own.name, "held_bindings", bindings, "held_backends", backends, "held_without_backend", withoutBackend)
 }
 
-// hold adds to set the Bindings that named the own connection and are gone from the cluster, and the AgentBackends that they
-// name and that are gone, each at its last good generation and listed as Deleted in set.Invalid, and marks them live so that
-// they are not forgotten. Gone is absent from the listing: an object that is there, whoever's it is now, is read as it
-// always is, and a Binding made again has its new uid and generation, never a held one. It returns how many of each it holds.
-// The caller holds s.mu.
-func (s *Source) hold(l listing, live map[key]bool, set *config.Set) (bindings, backends int) {
+// hold adds to set the Bindings that named the own connection and are gone from the cluster, and the AgentBackends that
+// they, and the Bindings of the connection that are still there, name and that are gone, each at its last good generation
+// and listed as Deleted in set.Invalid, and marks them live so that they are not forgotten. Gone is absent from the listing,
+// which includes what a read found gone a moment ago (see goneGrace): an object that is there, whoever's it is now, is read as
+// it always is, and a Binding made again has its new uid and generation, never a held one. It returns how many Bindings and
+// backends it holds, and how many held Bindings name a backend that is not in the set. The caller holds s.mu.
+func (s *Source) hold(l listing, live map[key]bool, set *config.Set) (bindings, backends, withoutBackend int) {
 	gone := func(k key, kind string) bool { _, listed := l.keys[k]; return k.kind == kind && !listed && !live[k] }
 	wanted := map[key]bool{}
+	var heldBindings []key
 	for _, k := range slices.SortedFunc(maps.Keys(s.good), compareKeys) {
 		g := s.good[k]
 		if !gone(k, config.KindBinding) {
@@ -505,10 +555,19 @@ func (s *Source) hold(l listing, live map[key]bool, set *config.Set) (bindings, 
 			continue
 		}
 		live[k] = true
+		g.held = true
+		s.good[k] = g
 		set.Bindings = append(set.Bindings, *b)
 		set.Invalid = append(set.Invalid, config.Invalid{Kind: k.kind, Namespace: k.namespace, Name: k.name, Served: g.generation, Deleted: true})
-		wanted[refOf(config.KindAgentBackend, &raw, "spec", "agent", "backendRef")] = true
+		heldBindings = append(heldBindings, k)
 		bindings++
+	}
+	// The backends that a Binding of the connection names, held or still there: a tenant's Binding on a backend that was
+	// rendered with the release is what the hold is for.
+	for _, b := range set.Bindings {
+		if cmp.Or(b.Spec.Chat.ConnectionRef.Namespace, b.Namespace) == s.own.namespace && b.Spec.Chat.ConnectionRef.Name == s.own.name {
+			wanted[key{config.KindAgentBackend, cmp.Or(b.Spec.Agent.BackendRef.Namespace, b.Namespace), b.Spec.Agent.BackendRef.Name}] = true
+		}
 	}
 	for _, k := range slices.SortedFunc(maps.Keys(wanted), compareKeys) {
 		g, ok := s.good[k]
@@ -520,11 +579,23 @@ func (s *Source) hold(l listing, live map[key]bool, set *config.Set) (bindings, 
 			continue
 		}
 		live[k] = true
+		g.held = true
+		s.good[k] = g
 		set.AgentBackends = append(set.AgentBackends, *be)
 		set.Invalid = append(set.Invalid, config.Invalid{Kind: k.kind, Namespace: k.namespace, Name: k.name, Served: g.generation, Deleted: true})
 		backends++
 	}
-	return bindings, backends
+	have := map[key]bool{}
+	for _, be := range set.AgentBackends {
+		have[key{config.KindAgentBackend, be.Namespace, be.Name}] = true
+	}
+	for _, k := range heldBindings {
+		var raw unstructured.Unstructured
+		if raw.UnmarshalJSON(s.good[k].json) == nil && !have[refOf(config.KindAgentBackend, &raw, "spec", "agent", "backendRef")] {
+			withoutBackend++
+		}
+	}
+	return bindings, backends, withoutBackend
 }
 
 // refOf returns the object of the kind that the Binding raw names at path (spec.chat.connectionRef, spec.agent.backendRef):

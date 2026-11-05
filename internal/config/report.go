@@ -12,8 +12,10 @@ import (
 // and Validate, or could not be decoded. File mode has none: a file that does not load fails the whole load.
 //
 // A broker serves what it can instead: Served is the generation of the same object that the Set holds in its place, the
-// last good one, or zero when there is none and the object is left out. A deleted object that is held on purpose (the
-// broker's own ChatConnection, which a running broker keeps) has Deleted set and no Generation.
+// last good one, or zero when there is none and the object is left out. A deleted object that is held on purpose has Deleted
+// set and no Generation: the broker's own ChatConnection, which a running broker keeps, and, while that is held, the Bindings
+// of it and the AgentBackends they use that went with it. A held Binding that cannot be served (it lost its channel, or its
+// backend is gone) is counted here and not served.
 type Invalid struct {
 	// Kind is KindAgentBackend, KindChatConnection or KindBinding.
 	Kind string
@@ -137,6 +139,7 @@ func resolvePerObject(set *Set) (*Snapshot, []Rejection) {
 		b := &set.Bindings[i]
 		bindings[identity{KindBinding, b.Namespace, b.Name}] = &bindingRefs{
 			generation: b.Generation,
+			channel:    b.Spec.Chat.Channel,
 			backend:    identity{KindAgentBackend, cmp.Or(b.Spec.Agent.BackendRef.Namespace, b.Namespace), b.Spec.Agent.BackendRef.Name},
 			conn:       identity{KindChatConnection, cmp.Or(b.Spec.Chat.ConnectionRef.Namespace, b.Namespace), b.Spec.Chat.ConnectionRef.Name},
 		}
@@ -147,8 +150,18 @@ func resolvePerObject(set *Set) (*Snapshot, []Rejection) {
 	said := map[identity]bool{}
 	for _, rej := range partial {
 		id := identity{KindBinding, rej.Namespace, rej.Name}
+		if inv, held := invalid[id]; held && inv.Deleted {
+			continue // held after its deletion and not served: it has no object to say anything of, and no generation to count
+		}
 		refs := bindings[id]
 		rej.Generation = refs.generation
+		if rej.Reason == ReasonChannelConflict {
+			if w, ok := snap.BindingForChannel(refs.conn.namespace, refs.conn.name, refs.channel); ok {
+				if inv, held := invalid[identity{KindBinding, w.Binding.Namespace, w.Binding.Name}]; held && inv.Deleted {
+					rej.Message += " (that Binding is deleted, and held until its connection is back)"
+				}
+			}
+		}
 		// A Binding at its last good generation that resolution then drops still has a refused spec, which comes first, and
 		// the generation that the status says was observed is the new one.
 		if inv, ok := invalid[id]; ok {
@@ -207,6 +220,7 @@ func resolvePerObject(set *Set) (*Snapshot, []Rejection) {
 // bindingRefs is what resolvePerObject keeps of a Binding of the Set: its generation and the two objects it names.
 type bindingRefs struct {
 	generation    int64
+	channel       string
 	backend, conn identity
 }
 

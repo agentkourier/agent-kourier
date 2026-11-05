@@ -47,6 +47,9 @@ increase(agentkourier_credential_rejections_total[15m]) > 0
 # The running config may lag its source: the last reload failed, or the source cannot be reached
 agentkourier_config_stale == 1
 
+# The broker serves what the cluster no longer has: its ChatConnection was deleted, and it holds the Bindings that went with it
+agentkourier_config_held_objects > 0
+
 # A Binding cannot be served. One failed probe holds this until the next pass, so give the rule a `for: 10m`
 agentkourier_binding_ready == 0
 

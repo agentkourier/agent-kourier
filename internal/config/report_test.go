@@ -453,7 +453,48 @@ func TestTheReloaderDoesNotSayEachHeldObject(t *testing.T) {
 	if strings.Contains(log.String(), "sre-alerts") {
 		t.Errorf("the Reloader said the held Binding:\n%s", log.String())
 	}
-	if !strings.Contains(log.String(), "slack-main") {
-		t.Errorf("the Reloader no longer says the held connection:\n%s", log.String())
+	if !strings.Contains(log.String(), "kind=ChatConnection object=agent-kourier-system/slack-main") || !strings.Contains(log.String(), "deleted=true") {
+		t.Errorf("the Reloader no longer says, in its own line, that the connection is held:\n%s", log.String())
+	}
+}
+
+// A held Binding that loses its channel to an older Binding, or whose backend is gone, is not served and is not a rejection to
+// count: it has no object and no generation, and the gauge of rejections is of what a tenant can fix. It is in Invalid, as held.
+func TestAHeldBindingThatCannotBeServedIsNotCountedAsRejected(t *testing.T) {
+	set := generations(t)
+	sreAlerts(set).CreationTimestamp = at(2)
+	set.Bindings = append(set.Bindings, bindingLike(set, "sre", "older", "C0123456789", func(b *v1alpha1.Binding) { b.CreationTimestamp = at(1); b.Generation = 9 }))
+	set.Invalid = []Invalid{{Kind: KindBinding, Namespace: "sre", Name: "sre-alerts", Served: 2, Deleted: true}}
+	snap, got := resolvePerObject(set)
+	for _, r := range got {
+		if r.Name == "sre-alerts" {
+			t.Errorf("the held Binding that lost its channel has a rejection: %+v", r)
+		}
+	}
+	if _, ok := snap.Binding("sre", "sre-alerts"); ok {
+		t.Error("the held Binding that lost its channel is served")
+	}
+	if un := (Report{Rejections: got}).Unserved(); slices.Contains(un, "sre/sre-alerts") {
+		t.Errorf("Unserved = %v; a held Binding is no Binding that exists", un)
+	}
+}
+
+// A live Binding that loses its channel to a held one is told that the Binding it names is deleted and held: it cannot find it
+// with kubectl, and the age ordering stays.
+func TestALiveBindingThatLosesAChannelToAHeldOneIsTold(t *testing.T) {
+	set := generations(t)
+	sreAlerts(set).CreationTimestamp = at(1)
+	set.Bindings = append(set.Bindings, bindingLike(set, "sre", "newer", "C0123456789", func(b *v1alpha1.Binding) { b.CreationTimestamp = at(2); b.Generation = 3 }))
+	set.Invalid = []Invalid{{Kind: KindBinding, Namespace: "sre", Name: "sre-alerts", Served: 2, Deleted: true}}
+	_, got := resolvePerObject(set)
+	var msg string
+	for _, r := range got {
+		if r.Name == "newer" && r.Reason == ReasonChannelConflict {
+			msg = r.Message
+		}
+	}
+	const want = "is already bound by Binding sre/sre-alerts (that Binding is deleted, and held until its connection is back)"
+	if !strings.HasSuffix(msg, want) {
+		t.Errorf("message = %q; want it to end %q", msg, want)
 	}
 }
