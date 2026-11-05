@@ -238,6 +238,7 @@ func TestRunTheStatusWritesAreGivenUpOnAtTheMarginOfTheElection(t *testing.T) {
 	c.StatusClient = client
 	now := time.Now()
 	c.leaseNow = func() time.Time { return now } // a fresh lease: the fence lets the writes through
+	started := time.Now()                        // the client's timeout starts after this: no sooner than a timeout later can it give up
 	rep.running = start(t, c)
 
 	var began time.Time
@@ -248,7 +249,12 @@ func TestRunTheStatusWritesAreGivenUpOnAtTheMarginOfTheElection(t *testing.T) {
 	}
 	select {
 	case ended := <-gone:
-		if d := ended.Sub(began); d < 200*time.Millisecond || d > 1500*time.Millisecond {
+		// began is when the handler had read the body, which a loaded machine can put well after the client sent, so a late handler
+		// shortens the span from it: it is no lower bound. That is taken from started, which is before the client sent.
+		if d := ended.Sub(started); d < 450*time.Millisecond {
+			t.Errorf("the client gave up %v after the run started, before the 500 ms that the election's margin allows", d)
+		}
+		if d := ended.Sub(began); d > 2*time.Second {
 			t.Errorf("the client gave up after %v, want about the 500 ms that the election's margin allows (the default is 3 s)", d)
 		}
 	case <-time.After(6 * time.Second):
