@@ -318,6 +318,36 @@ func TestAnInvalidUpdateKeepsTheLastGoodGeneration(t *testing.T) {
 	}
 }
 
+// A Binding with a regex over the instruction limit, which the CRD schema cannot count, is refused as any invalid spec is:
+// it is not served, and its message says the field, the count and the limit, which is what the Binding's Accepted condition
+// shows as InvalidSpec.
+func TestABindingWithACostlyRegexIsNotServed(t *testing.T) {
+	leakCheck(t)
+	objs := corpus(t)
+	c := newCluster(t, objs...)
+	src := c.start(t)
+	_, fp := set(t, src)
+
+	fresh := find(objs, "chat-only")
+	fresh.SetName("costly")
+	fresh.SetUID("uid-costly")
+	trigger := map[string]any{
+		"type": "botMessage", "from": map[string]any{"id": "B0123456789"}, "promptTemplate": "x",
+		"match":  map[string]any{"title": ".{0,1000}"},
+		"limits": map[string]any{"rateLimit": map[string]any{"maxRuns": int64(1), "per": "10s", "maxConcurrent": int64(1)}, "maxRunsPerDay": int64(0)},
+	}
+	_ = unstructured.SetNestedSlice(fresh.Object, []any{map[string]any{"type": "mention"}, trigger}, "spec", "chat", "triggers")
+	until(t, func() { c.apply(fresh) }, func() bool { return src.Fingerprint(t.Context()) != fp })
+	s, _ := set(t, src)
+	if len(s.Invalid) != 1 || s.Invalid[0].Name != "costly" || s.Invalid[0].Served != 0 {
+		t.Fatalf("Invalid = %+v; want costly, not served", s.Invalid)
+	}
+	const want = "spec.chat.triggers[1].match.title: regular expression compiles to 2002 instructions, more than the 2000 instruction limit"
+	if !strings.Contains(s.Invalid[0].Message, want) {
+		t.Errorf("the message is %q; want it to say %q", s.Invalid[0].Message, want)
+	}
+}
+
 // An object that is invalid when it first appears has no earlier generation: it is not served. One that was deleted and
 // made again under the same name, which is another object, does not borrow the generation of the first.
 func TestAnInvalidNewObjectIsNotServedAndARecreatedOneDoesNotBorrow(t *testing.T) {

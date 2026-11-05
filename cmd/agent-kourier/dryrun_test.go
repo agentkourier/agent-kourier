@@ -541,6 +541,62 @@ func TestDryRunRefusesABindingFileWithStatus(t *testing.T) {
 	}
 }
 
+// costlyBinding is a Binding file whose botMessage trigger has the given match, exclude and extract lines.
+func costlyBinding(match, exclude, extract string) string {
+	return `apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: trial, namespace: agent-kourier}
+spec:
+  agent: {backendRef: {namespace: agent-kourier, name: agents}, namespace: kagent, name: sandbox-sre}
+  identity: {userId: agent-kourier-sandbox}
+  chat:
+    connectionRef: {namespace: agent-kourier, name: sandbox-slack}
+    channel: C0123456789
+    triggers:
+      - type: mention
+      - type: botMessage
+        from: {id: B0123456789}
+        match: ` + match + `
+        exclude: ` + exclude + `
+        extract: ` + extract + `
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 40}
+        promptTemplate: "An alert."
+`
+}
+
+// A Binding file with a regex over the instruction limit, or whose regexes together pass the Binding's budget, is refused
+// by dry-run as the broker refuses it, with the field, the count and the limit, before the token is read or Slack is asked.
+// It is how an operator finds such a file before upgrading, so it runs with no token at all. The file that is exactly at both
+// limits loads: dry-run then fails for want of a token, which is a later step.
+func TestDryRunRefusesABindingWhoseRegexesAreTooCostly(t *testing.T) {
+	const atLimit = `'.{0,999}'` // 2000 instructions
+	two := "{text: " + atLimit + ", title: " + atLimit + "}"
+	half := "{text: '.{0,499}'}" // 1000 instructions: with two at the limit, the 5000 of the budget
+	for _, tc := range []struct {
+		name string
+		file string
+		want string // what stderr says; empty when the file loads
+	}{
+		{"one regex over the limit", costlyBinding("{title: '.{0,1000}'}", "{}", "{}"),
+			"spec.chat.triggers[1].match.title: regular expression compiles to 2002 instructions, more than the 2000 instruction limit"},
+		{"regexes that come to the budget", costlyBinding(two, half, "{}"), "SLACK_BOT_TOKEN"},
+		{"the regexes of the Binding over the budget", costlyBinding(two, half, "{state: {field: text, regex: '(?P<state>x)'}}"),
+			"spec.chat.triggers[1].extract.state.regex: the regular expressions of the Binding compile to 5005 instructions with this one, more than the 5000 instruction limit for a Binding"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(dir+"/trial.yaml", []byte(tc.file), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var stdout, stderr bytes.Buffer
+			code := run([]string{"dry-run", "--config", dir, "--binding", "agent-kourier/trial"}, "dev", &stdout, &stderr, env{}.get)
+			if code != exitUsage || !strings.Contains(stderr.String(), tc.want) || stdout.Len() > 0 {
+				t.Errorf("run = %d, stdout %q, stderr %q; want %d and an error that says %q", code, stdout.String(), stderr.String(), exitUsage, tc.want)
+			}
+		})
+	}
+}
+
 // --since is passed on to Slack: a message older than the window is not read, and the same channel read with no --since
 // gives all of it.
 func TestDryRunSinceReachesSlack(t *testing.T) {

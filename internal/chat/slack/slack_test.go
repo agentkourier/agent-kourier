@@ -178,8 +178,17 @@ func TestDeliversMentionsAndReplies(t *testing.T) {
 		{Channel: "G1", TS: private.TS, User: "U1", Text: botMark + " hi", Mentioned: true},
 		{Channel: "G1", TS: private.TS, User: "U1", Text: botMark + " hi", Mentioned: true, ChannelType: "group"},
 	}
-	if got := sk.messages(); !slices.Equal(got, want) {
-		t.Fatalf("messages =\n%+v\nwant\n%+v", got, want)
+	// The events of one channel arrive at the sink in order; those of different channels are handled at the same time, so
+	// only each channel's own order is held.
+	got := sk.messages()
+	if len(got) != len(want) {
+		t.Fatalf("%d messages, want %d:\n%+v", len(got), len(want), got)
+	}
+	for _, channel := range []string{"C1", "G1"} {
+		elsewhere := func(m slack.Message) bool { return m.Channel != channel }
+		if g, w := slices.DeleteFunc(slices.Clone(got), elsewhere), slices.DeleteFunc(slices.Clone(want), elsewhere); !slices.Equal(g, w) {
+			t.Fatalf("messages of %s =\n%+v\nwant\n%+v", channel, g, w)
+		}
 	}
 }
 
