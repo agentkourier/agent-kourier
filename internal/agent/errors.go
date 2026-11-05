@@ -70,7 +70,7 @@ var (
 	// to do without one (spec 8.2 says to send nothing when a lookup FAILS; this one cannot succeed).
 	ErrLookupUnsupported = errors.New("agent: the agent cannot list tasks")
 	// ErrLookupIncomplete means FindTask could not read the list of the context's tasks to its end, and no page it did read held the turn, so
-	// it is not known whether the agent has the turn, and asking again gets the same: a page was over the bound at the smallest size it
+	// it is not known whether the agent has the turn, and the caller must not find out by sending it: a page was over the bound at the smallest size it
 	// asked for (dialect.ErrResponseTooLarge, also in the chain), the walk passed Config.LookupTimeout or maxListPages, a page token came
 	// again, or a call failed at a page size the walk had just lowered. A caller must not send the turn to find out: a message sent
 	// again into a context is not deduplicated.

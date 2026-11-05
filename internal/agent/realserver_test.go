@@ -62,8 +62,12 @@ func TestRealServerAnswersEveryCancelOfAnOversizedTaskWithTheTask(t *testing.T) 
 	card.Capabilities.Streaming = true
 	mux.Handle("/.well-known/agent-card.json", a2asrv.NewStaticAgentCardHandler(card))
 	mux.Handle("/", a2asrv.NewJSONRPCHandler(a2asrv.NewHandler(ex)))
-	a := (&fakeAgent{Server: srv}).agentViaWith(t, generic.New(0), quick)
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	// A real server and 5 MiB of tasks on a loaded runner: the budget is for the test to finish, not for anything to be quick, so it is
+	// minutes, and a call is given as long (the 30 s it had failed every run at a load average of 60).
+	slow := quick
+	slow.UnaryTimeout = 3 * time.Minute
+	a := (&fakeAgent{Server: srv}).agentViaWith(t, generic.New(0), slow)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
 	defer cancel()
 	go func() { _ = a.Send(ctx, message("go"), nil) }()
 	var id a2a.TaskID

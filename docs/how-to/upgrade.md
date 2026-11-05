@@ -459,10 +459,11 @@ grow past 4 MiB, needs a build with other constants.
   If none did, Agent Kourier does not know whether the agent already has the turn and cannot find out, so it **does not send the turn again**: it fails, and the thread is told. This is for an agent
   that can list tasks; an agent that cannot (A2A 0.3, kagent 0.9.x) is still sent the turn, which may run twice. Recovery after a restart follows the recorded task first, and the queued message then
   fails the same way; nothing is asked for again and again. A reply that this process queued, and that the agent refused as busy or not ready, or that was held behind a task and never sent, is not in
-  this case: the agent does not have it, so it is sent when the agent is free, whatever the list says, and a WARN says so.
+  this case: the agent does not have it, so it is sent when the agent is free, whatever the list says, and a WARN says so. A send that failed in any other way before a task was named (a JSON-RPC error such as -32603, say) is in
+  this case, since the agent may have started the task and failed on the way back.
 - **An agent card over 1 MiB** is no answer. It is read when a connection is opened, so a call that had to open one (a lookup, a cancel, a follow) can meet it, with nothing sent and nothing read of any task. It
   is not counted as an answer past a bound: a cancel that met it is not done, a lookup that met it is retried like any lookup that could not reach the agent, and a follow that met it tells the thread
-  `Agent Kourier could not open a connection to the agent, because its agent card is too large to read, so the turn stopped. The task stays at the agent.` The Binding's `BackendReachable` condition reports the card.
+  `Agent Kourier could not connect to the agent: its agent card is too large to read, so the turn stopped. The task stays at the agent. Once the card is fixed, press Stop or restart Agent Kourier.` The task stays recorded and nothing follows it again by itself: once the card is fixed, the Stop control cancels it, and a restart follows it. The Binding's `BackendReachable` condition reports the card.
 
 **What the thread shows.** When a turn stops, text that arrived before the bound was passed stays shown, cut to what a message holds as it always was (12000 UTF-16 units in the
 Slack adapter, with a mark where it is cut). Then the thread gets one fixed sentence, `the agent sent more than Agent Kourier can read or hold, so the turn stopped`, and the

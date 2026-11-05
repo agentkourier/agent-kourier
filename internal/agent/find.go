@@ -51,7 +51,7 @@ const DefaultLookupTimeout = 5 * time.Minute
 // maxListPages pages, and a page token seen before ends it. If the walk cannot be completed for any of these reasons, and an
 // earlier page held the turn, the holders found so far are the answer: the agent has the turn. If none did, the lookup fails with
 // an error that wraps ErrLookupIncomplete (and the cause: dialect.ErrResponseTooLarge, a context deadline, ...): the caller does
-// not know whether the agent has the turn, asking again gets the same, and it must not send the turn again to find out. A call
+// not know whether the agent has the turn, and it must not send the turn again to find out: a page too large or a token that comes again comes again, and a walk that took too long may end sooner another time but nothing says it will. A call
 // that fails on the first page asked for at a size the walk shrank to is taken as incomplete too: whether a server continues a
 // page token with another page size is not known (UNCONFIRMED), so an error there may be the shrink's own. The caller's own
 // cancellation is none of these. UNCONFIRMED: WP-03 measured the lookup on a context of three tasks; paging past kagent's page
@@ -146,8 +146,9 @@ type lister struct {
 
 // page reads the page req asks for, and asks for it again at half the size while it is over the bound, down to minListPageSize,
 // where it gives up with an error that wraps ErrLookupIncomplete. The size that worked stays in req, for the pages after it. The first
-// call at a lowered size that fails is incomplete too, whatever it fails with but the caller's own end: a page token may not be
-// continued at another size, and the walk has no way to tell that from any other failure.
+// call at a lowered size that is refused (a 4xx but a 408 or 429, or an error the agent answered with) is incomplete too: a page token may
+// not be continued at another size, and the walk has no way to tell that from any other refusal. A 5xx, a timeout or a lost connection is
+// no sign of that, and is the error it is, which is retried.
 func (l *lister) page(ctx context.Context) (*a2a.ListTasksResponse, error) {
 	for {
 		page, err := l.a.listTasks(ctx, l.conn, l.req)
@@ -161,7 +162,7 @@ func (l *lister) page(ctx context.Context) (*a2a.ListTasksResponse, error) {
 				return nil, fmt.Errorf("%w: %w", ErrLookupIncomplete, err)
 			}
 			l.req.PageSize, l.afterShrink = half, true
-		case l.afterShrink && ctx.Err() == nil:
+		case l.afterShrink && ctx.Err() == nil && (permanent(err) || isProtocol(err)):
 			return nil, fmt.Errorf("%w: at a page size of %d, which the walk lowered it to: %w", ErrLookupIncomplete, l.req.PageSize, err)
 		default:
 			return nil, err

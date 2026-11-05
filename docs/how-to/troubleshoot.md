@@ -71,8 +71,10 @@ Read the `error` to find which bound it was:
 again in its artifacts (read in `test/fixtures/kagent/approval/02-approve.response.sse`), and it arrives as one event. No single result has to be large: in a test with results of 300 KiB,
 results adding up to 1800 KiB passed, and eight of them, 2400 KiB, ended the turn at the final event with a reply of a few bytes. Add up what the agent's tools returned in the turn (its own log has it).
 
-A card that is too large is told apart from these: a follow that meets it says `Agent Kourier could not open a connection to the agent, because its agent card is too large to read, so the turn stopped. The task stays at the agent.`, cancels nothing, and leaves
-the task recorded; a lookup or a send that meets it is retried like any that could not reach the agent. The Binding's `BackendReachable` condition names the card. Trim the card.
+A card that is too large is told apart from these: a follow, or the read of a task that comes before it, that meets it says `Agent Kourier could not connect to the agent: its agent card is too large to read, so the turn stopped. The task stays at the agent. Once the card is fixed, press Stop or restart Agent Kourier.`, cancels nothing, and leaves
+the task recorded and followed by no one (the turn outcome is `refused`, as for any connection that fails on a follow). A lookup or a send that meets it is retried like any that could not reach the agent. The Binding's `BackendReachable` condition names the card.
+Trim the card. Nothing follows the task again by itself: once the card is fixed, press **Stop** on the thread, which cancels the task and lets a reply that waits behind it go out, or restart Agent Kourier, which follows it. A reply that was queued behind it
+stays queued until one of the two.
 
 **What to do.** Have the agent's tools return what the model needs: filter, summarise or page a result, and cap it in the tool. Keep a task's tool output well under 2 MiB in all.
 If the `error` says `more than 4194304 bytes` after a restart, the task's history has grown past what is read; trim the tools the same way. Agent Kourier cannot read it, so it cancels it.
