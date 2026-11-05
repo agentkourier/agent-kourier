@@ -188,12 +188,24 @@ func TestStaleWhileAnInformerFails(t *testing.T) {
 	}
 	mu.Lock()
 	failing = false
+	atEnd := opened
 	mu.Unlock()
-	clockMu.Lock()
-	clock = clock.Add(5 * time.Minute)
-	clockMu.Unlock()
+	// The informer's next watch, which succeeds, is after its last failure was reported, so the clock can be moved without a
+	// report landing on the new time.
+	until(t, func() {}, func() bool { mu.Lock(); defer mu.Unlock(); return opened > atEnd })
+	advance := func(d time.Duration) {
+		clockMu.Lock()
+		clock = clock.Add(d)
+		clockMu.Unlock()
+	}
+	// The window is 90 s from the report: the failure is still said a moment inside it, and is not once it has passed.
+	advance(89 * time.Second)
+	if err := src.Stale(); err == nil {
+		t.Error("Stale = nil 89 s after the last failure; want it still said (the window is 90 s)")
+	}
+	advance(2 * time.Second)
 	if err := src.Stale(); err != nil {
-		t.Errorf("Stale = %v a while after the failures stopped; want nil", err)
+		t.Errorf("Stale = %v 91 s after the failures stopped; want nil", err)
 	}
 }
 

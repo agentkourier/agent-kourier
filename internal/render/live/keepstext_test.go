@@ -357,19 +357,38 @@ func TestAttemptsOnTheTextPlaceholderOfAnEarlierReleaseDoNotRetryTheRefusal(t *t
 func TestTheRefusalIsHandledThroughTheNeutralSeamOfAnyPlatform(t *testing.T) {
 	e := setup(t)
 	fake := chattest.NewFake()
-	e.cfg.Platform = fake
+	p := &refusesTextless{Platform: fake}
+	e.cfg.Platform = p
 	e.live = newRenderer(t, e.cfg)
 	e.leftOpen(t, "partial")
-	fake.FailNext("Update", fmt.Errorf("refused: %w", chat.ErrWouldDropText))
 	again, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1", Recovered: true})
 	again.Handle(call("c1", "search", nil))
+	eventually(t, "the refused update", func() bool { return p.refused.Load() == 1 })
 	e.elapse(2 * throttle)
+	if n := p.refused.Load(); n != 1 {
+		t.Errorf("%d refused updates; want the one", n)
+	}
 	again.Handle(text("a", "the whole answer"))
 	again.Handle(agent.FinalEvent{})
 	e.finish(t, again)
 	got := fake.Messages()
-	if len(got) != 1 || got[0].Updates != 1 || !slices.Contains(got[0].Out.Message.Parts, chat.Part(chat.Body{Markdown: "the whole answer"})) {
-		t.Errorf("messages %+v; want the answer, in the one update that followed the refusal", got)
+	if len(got) != 1 || got[0].Updates == 0 || !slices.Contains(got[0].Out.Message.Parts, chat.Part(chat.Body{Markdown: "the whole answer"})) {
+		t.Errorf("messages %+v; want the answer, in an update after the refusal", got)
 	}
 	e.assertNoRetries(t)
+}
+
+// refusesTextless refuses an update whose message has no body, as a platform that cannot take a message's text away would, and
+// passes every other. It refuses by what the write holds, so it cannot land on the wrong one however the run's timers fall.
+type refusesTextless struct {
+	chat.Platform
+	refused atomic.Int32
+}
+
+func (p *refusesTextless) Update(ctx context.Context, r chat.Ref, o chat.Outgoing) error {
+	if o.Message != nil && !slices.ContainsFunc(o.Message.Parts, func(pt chat.Part) bool { _, ok := pt.(chat.Body); return ok }) {
+		p.refused.Add(1)
+		return fmt.Errorf("refused: %w", chat.ErrWouldDropText)
+	}
+	return p.Platform.Update(ctx, r, o)
 }

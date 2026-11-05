@@ -1,6 +1,7 @@
 package crsource_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -181,6 +182,73 @@ func TestUnknownFieldsAreNamedOncePerGenerationAndNeverByValue(t *testing.T) {
 	set(t, src)
 	if n := strings.Count(logs.String(), said); n != 3 {
 		t.Errorf("said %d times in all; want 3 (generations 1, 2 and 4)\n%s", n, logs.String())
+	}
+}
+
+// A generation that has the field again after one that had none is said again, though it has the generation it had: the report is of
+// what the object holds now, and an object that once held it and was cleaned of it is not one that was said already. A defaulted
+// field comes and goes with the CRDs, not with the generation.
+func TestAnUnknownFieldThatReturnsAtTheSameGenerationIsSaidAgain(t *testing.T) {
+	leakCheck(t)
+	objs := corpus(t)
+	c := newCluster(t, objs...)
+	with := withField(t, find(objs, "sre-alerts"), "x", "spec", "chat", "futureField")
+	c.apply(with)
+	src, logs := c.startLogged(t)
+	const said = "fields this broker does not know"
+	set(t, src)
+	cached := func() bool {
+		u := src.CachedObjectForTest("Binding", "sre", "sre-alerts")
+		_, has, _ := unstructured.NestedFieldNoCopy(u.Object, "spec", "chat", "futureField")
+		return has
+	}
+	if n := strings.Count(logs.String(), said); n != 1 {
+		t.Fatalf("said %d times at the start; want once\n%s", n, logs.String())
+	}
+	until(t, func() { c.apply(find(objs, "sre-alerts")) }, func() bool { return !cached() })
+	set(t, src)
+	until(t, func() { c.apply(with) }, cached)
+	set(t, src)
+	if n := strings.Count(logs.String(), said); n != 2 {
+		t.Errorf("said %d times; want twice, as the field came back at generation 1 after a read without it\n%s", n, logs.String())
+	}
+}
+
+// A Binding that names a connection that does not exist is the broker's, and is another broker's once that connection exists, with
+// no change to the Binding. What is not read says nothing and is forgotten, so when the connection goes and the Binding is the
+// broker's again, its unknown fields are said again, as for an object that is new to it.
+func TestAnUnknownFieldIsSaidAgainWhenTheBindingComesBackToTheBroker(t *testing.T) {
+	leakCheck(t)
+	objs := corpus(t)
+	ghost := withField(t, find(objs, "chat-only"), "x", "spec", "chat", "futureField")
+	ghost.SetName("ghost")
+	ghost.SetUID("uid-ghost")
+	_ = unstructured.SetNestedField(ghost.Object, "C0999999990", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(ghost.Object, "slack-ghost", "spec", "chat", "connectionRef", "name")
+	other := find(objs, "slack-main")
+	other.SetName("slack-ghost")
+	other.SetUID("uid-slack-ghost")
+	c := newCluster(t, append(objs, ghost)...)
+	src, logs := c.startLogged(t)
+	const said = "fields this broker does not know"
+	set(t, src)
+	if n := strings.Count(logs.String(), said); n != 1 || !strings.Contains(logs.String(), "name=ghost") {
+		t.Fatalf("said %d times at the start; want once, for the ghost Binding\n%s", n, logs.String())
+	}
+	until(t, func() { c.apply(other) }, func() bool {
+		return src.CachedGenerationForTest("ChatConnection", other.GetNamespace(), other.GetName()) >= 0
+	})
+	if s, _ := set(t, src); slices.Contains(bindingNames(s), "sre/ghost") {
+		t.Fatalf("Bindings = %v; want the Binding that names an existing connection to be that connection's broker's", bindingNames(s))
+	}
+	until(t, func() { c.remove(other) }, func() bool {
+		return src.CachedGenerationForTest("ChatConnection", other.GetNamespace(), other.GetName()) < 0
+	})
+	if s, _ := set(t, src); !slices.Contains(bindingNames(s), "sre/ghost") {
+		t.Fatalf("Bindings = %v; want the Binding back, its connection gone", bindingNames(s))
+	}
+	if n := strings.Count(logs.String(), said); n != 2 {
+		t.Errorf("said %d times; want twice, once when the Binding came back to the broker\n%s", n, logs.String())
 	}
 }
 
