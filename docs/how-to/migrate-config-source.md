@@ -263,18 +263,17 @@ Keep `crds.install: true` while you do; it does not need to change. What the mov
 
 **Never delete a CRD to get out of a refusal.** Deleting it deletes every custom resource of that kind in the cluster, which is every team's. What a running
 broker does depends on what goes. Deleting the Bindings CRD alone stops every Binding, within about 20 seconds (60 at most): their `agentkourier_binding_ready`
-series are gone and a new mention gets no answer. Deleting all three CRDs takes the ChatConnection too, and the broker then holds what went with it (below) and keeps answering.
+series are gone and a new mention gets no answer. Deleting all three CRDs takes the ChatConnection too, and the broker then holds what went with it (below) and keeps routing.
 Either way the broker sets `agentkourier_config_stale` to 1 and logs `custom resource informer cannot list or watch`, and a restart exits with code 2, since the CRDs are not installed.
 
-**The move back keeps answering.** The chart deletes what it rendered one object after another while the old pods still run: the AgentBackend, the Bindings, the ChatConnection last.
+**The move back keeps the old pods routing.** The chart deletes what it rendered one object after another while the old pods still run: the AgentBackend, the Bindings, the ChatConnection last.
 A broker that finds its own ChatConnection deleted holds it at its last good generation, and holds with it, at theirs, the Bindings that are gone and the AgentBackends that
 those Bindings and the Bindings still there use, until the connection is back or the broker restarts. So the old pods keep routing until they end, a failover keeps routing,
 and the new pods take over with the ConfigMap's config. A broker that restarts while it holds has no last good generation and fails at start. A deletion takes effect only at a read of
 the cluster that finds nothing newly gone, at least 8 seconds after the last read that did, so the deletes of one upgrade count as one change. A deletion that goes on for longer than a
 minute between its first object and the connection can still lose what went first: an AgentBackend deleted first leaves its Bindings not served. `agentkourier_config_held_objects`
 says what is held ([Metrics](../reference/metrics.md#connection-configuration-and-turns)), and [Alert on what matters](export-telemetry.md#alert-on-what-matters) has a rule for it.
-
-<!-- ROLLBACK NUMBER: the measured loss of a move back goes here, as one sentence, if a reader needs it; pending from the migration rerun. Delete this marker either way. -->
+This does not promise that no message is lost across the rollout: while no pod holds a Socket Mode connection, whether Slack delivers an event again is not something this page can tell you.
 
 **The cost.** Deleting a ChatConnection on purpose does not stop routing until the broker restarts. A Binding deleted alone, while its connection exists, stops in about 10 to
 20 seconds, later behind a stream of other deletions and after 60 seconds at most. One deleted within a minute before its connection comes back as held. While the connection is held, a
