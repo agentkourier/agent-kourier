@@ -3,6 +3,7 @@ package v1alpha1
 import (
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -279,5 +280,15 @@ func TestBindingValidate(t *testing.T) {
 		}, fmt.Sprintf("spec.interactions.approverGroups: has %d items, maximum is %d", maxApproverGroups+1, maxApproverGroups)},
 		{"negative interaction timeout", func(o *Binding) { o.Spec.Interactions.Timeout.Duration = -1 }, "spec.interactions.timeout: must be positive"},
 		{"negative threadTTL", func(o *Binding) { o.Spec.Session.ThreadTTL.Duration = -1 }, "spec.session.threadTTL: must be positive"},
+		{"interaction timeout at the cap", func(o *Binding) { o.Spec.Interactions.Timeout.Duration = MaxInteractionTimeout }, ""},
+		{"interaction timeout over the cap", func(o *Binding) { o.Spec.Interactions.Timeout.Duration = MaxInteractionTimeout + time.Nanosecond },
+			"spec.interactions.timeout: 168h0m0.000000001s is out of range, must be at most 168h0m0s"},
+		{"interaction timeout of the largest Duration", func(o *Binding) { o.Spec.Interactions.Timeout.Duration = math.MaxInt64 },
+			"spec.interactions.timeout: 2562047h47m16.854775807s is out of range, must be at most 168h0m0s"},
+		{"threadTTL at the cap", func(o *Binding) { o.Spec.Session.ThreadTTL.Duration = MaxThreadTTL }, ""},
+		{"threadTTL over the cap", func(o *Binding) { o.Spec.Session.ThreadTTL.Duration = MaxThreadTTL + time.Nanosecond },
+			"spec.session.threadTTL: 8760h0m0.000000001s is out of range, must be at most 8760h0m0s"},
+		{"threadTTL of the largest Duration", func(o *Binding) { o.Spec.Session.ThreadTTL.Duration = math.MaxInt64 },
+			"spec.session.threadTTL: 2562047h47m16.854775807s is out of range, must be at most 8760h0m0s"},
 	})
 }
