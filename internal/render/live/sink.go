@@ -171,6 +171,8 @@ func noticeText(kind session.NoticeKind) (string, bool) {
 		return "The agent rejected that answer, so I cancelled its task. You can ask again.", true
 	case session.NoticeAnswerDropped:
 		return "That answer arrived after the task had ended, so I did not send it.", true
+	case session.NoticeStopUnverified:
+		return "I asked the agent to stop the task, but what it answered was too large to read, so I can't tell whether it stopped. This thread no longer waits for it.", true
 	case session.NoticeStopped:
 		return "The task was stopped.", true
 	case session.NoticeWedged:

@@ -38,11 +38,13 @@ const MaxFallback = 1000
 // NoOutput is what a message says when its turn ended with nothing to show.
 const NoOutput = "(no output)"
 
+// MaxNoticeDetail is the most of a notice's detail, in UTF-16 units, that a thread shows: the rest is cut and marked. A fixed sentence that
+// Agent Kourier means to be read whole is held to it by a test of its own.
+const MaxNoticeDetail = 200
+
 const (
 	maxToolName = 64  // units of a tool name in a status line
 	maxToolArgs = 160 // units of the argument summary in a status line
-
-	maxNoticeDetail = 200 // units of a notice's detail
 )
 
 // Body returns the text of a turn: each artifact's latest text, in the order the artifacts first appeared, one
@@ -168,7 +170,7 @@ func Nothing() chat.Message {
 func Notice(fixed, detail string) chat.Message {
 	text := fixed
 	if detail != "" {
-		text += " " + chat.Truncate(chat.Clean(detail, true), maxNoticeDetail)
+		text += " " + chat.Truncate(chat.Clean(detail, true), MaxNoticeDetail)
 	}
 	return chat.Message{Fallback: text}
 }

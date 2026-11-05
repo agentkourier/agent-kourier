@@ -545,7 +545,7 @@ Did the turn run, and how did it end? Agent Kourier logs every turn at INFO, by 
 
 - `session turn started`, and `session turn ended`, which carries the `outcome` (`completed`, `failed`, `rejected`, `canceled`,
   `credentials_rejected`, `forbidden`, `unreachable`, `session_gone`, `binding_gone`, `wedged`, `uncancellable`, `pause_ended`,
-  `answer_rejected`, `refused`, `no_final`, `response_too_large`, `lookup_too_large`) and `duration_ms`. `grep 'session turn'` reads a session at a glance; a start with no end
+  `answer_rejected`, `refused`, `no_final`, `response_too_large`, `lookup_incomplete`) and `duration_ms`. `grep 'session turn'` reads a session at a glance; a start with no end
   is a turn still running, or one a restart recovers (`recovered=true` on its lines).
 - `agentkourier_turn_outcomes_total{binding="sandbox",outcome="..."}` counts the ends by the same outcomes. It is counted before the
   line is logged, so a line you see is already in the count.

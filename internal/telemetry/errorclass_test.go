@@ -19,6 +19,7 @@ func TestErrorClassOfAResponseThatIsTooLarge(t *testing.T) {
 	}{
 		{"an answer past the bound", fmt.Errorf("get task t1: %w: more than 4194304 bytes", dialect.ErrResponseTooLarge), "response_too_large"},
 		{"an event past the bound, wrapped twice", fmt.Errorf("send: %w", fmt.Errorf("%w: an event of more than 2097152 bytes", dialect.ErrResponseTooLarge)), "response_too_large"},
+		{"an agent card past its bound has its own class", fmt.Errorf("connect: %w: %w", dialect.ErrCardTooLarge, dialect.ErrResponseTooLarge), "card_too_large"},
 		{"a cancelled call is still cancelled", fmt.Errorf("%w: %w", dialect.ErrResponseTooLarge, context.Canceled), "cancelled"},
 		{"any other error", errors.New("boom"), "error"},
 	} {

@@ -19,6 +19,7 @@ import (
 type bound struct {
 	limit  int64
 	stream bool // the limit is of one event, not of the whole body
+	card   bool // the body is the agent card
 }
 
 // boundOf says how the response to req is bounded, given what the request asked for before authentication added
@@ -33,7 +34,7 @@ type bound struct {
 func boundOf(req *http.Request, asked string, resp *http.Response) bound {
 	switch {
 	case req.Method == http.MethodGet:
-		return bound{limit: dialect.MaxCardBytes}
+		return bound{limit: dialect.MaxCardBytes, card: true}
 	case isEventStream(asked, resp.Header.Get("Content-Type")):
 		return bound{limit: dialect.MaxEventBytes, stream: true}
 	}
@@ -64,6 +65,9 @@ func limited(resp *http.Response, b bound) (*http.Response, error) {
 
 // tooLarge is the error of a body past its bound. It says the bound, and nothing of the response or the backend.
 func tooLarge(b bound) error {
+	if b.card {
+		return fmt.Errorf("%w: %w: an agent card of more than %d bytes", dialect.ErrCardTooLarge, dialect.ErrResponseTooLarge, b.limit)
+	}
 	if b.stream {
 		return fmt.Errorf("%w: an event of more than %d bytes", dialect.ErrResponseTooLarge, b.limit)
 	}

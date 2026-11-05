@@ -83,8 +83,8 @@ func TestFindTaskGivesUpOnAPageThatIsTooLargeAtTheFloor(t *testing.T) {
 	l := &listing{}
 	fa := newFakeAgent(t, l.serve)
 	task, holders, err := fa.agentViaWith(t, generic.New(0), quick).FindTask(t.Context(), "c-1", "m-1")
-	if !errors.Is(err, dialect.ErrResponseTooLarge) || task != nil || holders != nil {
-		t.Fatalf("FindTask = %v, %v, %v; want the error and no task", task, holders, err)
+	if !errors.Is(err, dialect.ErrResponseTooLarge) || !errors.Is(err, ErrLookupIncomplete) || task != nil || holders != nil {
+		t.Fatalf("FindTask = %v, %v, %v; want an incomplete lookup, caused by the page that is too large, and no task", task, holders, err)
 	}
 	if want := []int{0, 25, 12, 6, 3}; !slices.Equal(l.sizes, want) {
 		t.Errorf("page sizes asked = %v, want %v: down to a floor of 3 and no further", l.sizes, want)

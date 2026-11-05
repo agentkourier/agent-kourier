@@ -16,6 +16,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
+	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
@@ -702,5 +703,33 @@ func TestRunEndsATaskThatACrashLeftOnAnExpiredSession(t *testing.T) {
 	}
 	if !strings.HasPrefix(ended[0].Outcome, "stale_task_ended: cancel=failed ") { // the agent was asked, through the Binding, and did not answer
 		t.Errorf("the outcome = %q; want a cancel that was made at the agent and failed", ended[0].Outcome)
+	}
+}
+
+// An answer too large to read is an answer: the agent is up, and the other stale tasks of its Binding are cancelled too. It was taken for a
+// failed connection, which skipped the rest of the Binding's tasks for the tick and ended them with no cancel. An agent card that is too large
+// is no answer, and is down as any connection that fails: nothing was asked of it.
+func TestRetentionDoesNotTakeAnOversizedAnswerForAnAgentThatIsDown(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		err       error
+		wantAsked []cancelCall
+	}{
+		{"an answer too large to read", fmt.Errorf("cancel task: %w: more than %d bytes", dialect.ErrResponseTooLarge, dialect.MaxResponseBytes),
+			[]cancelCall{{"ns/big", "t1"}, {"ns/big", "t2"}}},
+		{"an agent card too large to read", fmt.Errorf("connect to agent: %w: %w", dialect.ErrCardTooLarge, dialect.ErrResponseTooLarge),
+			[]cancelCall{{"ns/big", "t1"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newStaleRig(t, []store.StaleTask{stale("1.1", "ns/big", "t1"), stale("2.2", "ns/big", "t2")}, func(c *retentionConfig) { c.StaleBatch = 10 })
+			g.agents.errs = map[string]error{"ns/big": tc.err}
+			g.r.endStaleTasks(t.Context())
+			if got := g.agents.got(); !equal(got, tc.wantAsked) {
+				t.Errorf("cancels = %+v; want %+v", got, tc.wantAsked)
+			}
+			if len(g.f.endCalls) != 2 {
+				t.Errorf("%d tasks ended; want both, whatever the agent said", len(g.f.endCalls))
+			}
+		})
 	}
 }
