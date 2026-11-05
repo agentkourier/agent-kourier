@@ -545,6 +545,8 @@ func TestCRModeRefusals(t *testing.T) {
 		{"an unknown source", []string{"--set", image + ",config.source=crd"}, "config.source"},
 		{"a Secret name with a slash", crMode("--set", image+",config.source=crds,config.chatConnection=c", "--set-json", `rbac.secretNames={"ns":["a/b"]}`), "rbac.secretNames"},
 		{"a typo in crds.install", []string{"--set", image + ",crds.instal=true"}, "specifications of the schema"},
+		// The refusal is one for both routes: with the CRs the broker lists and watches through the API server as well.
+		{"a NetworkPolicy without the API server", crMode("--set", image+",config.source=crds,config.chatConnection=c,networkPolicy.enabled=true"), "networkPolicy.kubeApiServer.cidrs"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
