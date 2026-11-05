@@ -339,7 +339,7 @@ func TestTheRunnerJobRunsEveryE2ETest(t *testing.T) {
 		t.Errorf("found %d e2e tests; the scan is not looking at them", seen)
 	}
 	// Each family the files hold has a test the pattern selects, named here: a family that is dropped from the pattern fails even if the scan misses it.
-	for _, name := range []string{"TestSmoke", "TestFault_X", "TestS1_X", "TestAX_X", "TestA2A_APlainPodThatRestartedAnswersAThreadFromAFreshContext", "TestVerify_BindingsThatCannotBeServedAreNotReadyAndTheLeaderSaysWhy"} {
+	for _, name := range []string{"TestSmoke", "TestFault_X", "TestS1_X", "TestAX_X", "TestA2A_APlainPodThatRestartedAnswersAThreadFromAFreshContext", "TestVerify_BindingsThatCannotBeServedAreNotReadyAndTheLeaderSaysWhy", "TestCR_X"} {
 		if !re.MatchString(name) {
 			t.Errorf("the Job's pattern %q does not select %s, so it would never run", pattern, name)
 		}
@@ -519,13 +519,15 @@ func TestS16StormHasS15sLimitsAndTheAlertBotOfItsOwn(t *testing.T) {
 func TestRunnerJobGetsItsTier(t *testing.T) {
 	var job batchv1.Job
 	load(t, "../../hack/kind/e2e/runner.yaml", "Job", &job)
-	var tier, stub string
+	var tier, stub, source string
 	for _, e := range job.Spec.Template.Spec.Containers[0].Env {
 		switch e.Name {
 		case "E2E_TIER":
 			tier = e.Value
 		case "E2E_STUB_URL":
 			stub = e.Value
+		case "E2E_CONFIG_SOURCE":
+			source = e.Value
 		}
 	}
 	script, err := os.ReadFile("../../hack/kind/e2e-run.sh")
@@ -539,6 +541,12 @@ func TestRunnerJobGetsItsTier(t *testing.T) {
 		!strings.Contains(string(script), "fast) gate_url=http://stubagent.e2e.svc.cluster.local:8080") ||
 		!strings.Contains(string(script), "full) gate_url=http://scenariollm.kagent.svc.cluster.local:8080") {
 		t.Errorf("E2E_STUB_URL = %q in the Job; want the placeholder @STUB_URL@, which e2e-run.sh sets to the stub's Service in the fast tier and the scenario model's in the full tier", stub)
+	}
+	// Where Agent Kourier reads its config from is read from its Deployment as it is when the Job is made, so that a tier moved between the ConfigMap and the
+	// custom resources in place is run as it is now, and not as it was brought up.
+	if source != "@CONFIG_SOURCE@" || !strings.Contains(string(script), `-e "s/@CONFIG_SOURCE@/${config_source}/"`) ||
+		!strings.Contains(string(script), `env[?(@.name=="AGENTKOURIER_CONFIG_SOURCE")].value`) {
+		t.Errorf("E2E_CONFIG_SOURCE = %q in the Job; want the placeholder @CONFIG_SOURCE@, which e2e-run.sh sets from the AGENTKOURIER_CONFIG_SOURCE of the Deployment", source)
 	}
 }
 
