@@ -807,26 +807,27 @@ func decodeObject[T any, PT interface {
 	return config.DecodeObject[T, PT](j)
 }
 
-// lastApplied is the annotation that kubectl apply puts on an object: a copy of the whole object.
-const lastApplied = "kubectl.kubernetes.io/last-applied-configuration"
+// slimmed lists the fields of metadata that the informers do not keep. The API server limits none of them in total beyond the
+// size of the object itself, so a namespace writer who may create these objects can grow every broker's cache with them:
+// managedFields, which it keeps for every manager that has written the object; annotations, among them
+// kubectl.kubernetes.io/last-applied-configuration, which a client-side apply makes a second copy of the spec; labels,
+// ownerReferences and finalizers.
+var slimmed = [...]string{"managedFields", "annotations", "labels", "ownerReferences", "finalizers"}
 
-// slim is the informers' transform. It drops from each object, before it is cached, what no code of the broker reads and what
-// can be as large as the object itself: metadata.managedFields, which the API server keeps for every manager that has
-// written the object, and the last-applied-configuration annotation, which a client-side apply keeps as a second copy of
-// the spec. Neither is in the fingerprint, in a decoded object that the broker reads, or in a status.
+// slim is the informers' transform. It drops from each object, before it is cached, the fields of slimmed, which no code of the
+// broker reads: the fingerprint is the uid and generation, a decoded object is read by name, namespace, generation, uid and creation
+// time (which orders the Bindings that claim a channel), a status is written from the Binding's name alone, and a Helm or Argo
+// annotation or label is for those tools. What is dropped is not in a decoded object either, so an edit of nothing but those fields
+// changes neither the fingerprint (the API server does not move metadata.generation for it) nor the Set. The rest of metadata
+// stays, so that a field of it that this broker has no type for is still named in the log (see "Unknown fields").
 func slim(obj any) (any, error) {
 	u, ok := obj.(*unstructured.Unstructured)
 	if !ok {
 		return obj, nil
 	}
-	u.SetManagedFields(nil)
-	if a := u.GetAnnotations(); a != nil {
-		if _, has := a[lastApplied]; has {
-			delete(a, lastApplied)
-			if len(a) == 0 {
-				a = nil
-			}
-			u.SetAnnotations(a)
+	if meta, ok := u.Object["metadata"].(map[string]any); ok {
+		for _, f := range slimmed {
+			delete(meta, f)
 		}
 	}
 	return obj, nil

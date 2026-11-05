@@ -3,7 +3,9 @@ package crsource_test
 import (
 	"strings"
 	"testing"
+	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/agentkourier/agent-kourier/internal/config"
@@ -226,42 +228,77 @@ func TestTheLastGoodGenerationIsTheCachedObjectNotACopy(t *testing.T) {
 	}
 }
 
-// What the informers keep is what the broker reads: not metadata.managedFields, and not the copy of the spec that kubectl apply puts in an
-// annotation, which is as large as the spec. Every other annotation stays, and the object the Set is made of is whole.
+// What the informers keep is what the broker reads: not metadata.managedFields, labels, annotations (which can hold the copy of the spec that
+// kubectl apply puts in one), ownerReferences or finalizers, none of which a namespace writer is limited in beyond the size of the object. The
+// identity, the generation, the creation time (which orders Bindings that claim a channel) and the object the Set is made of stay whole.
 func TestTheCacheDropsWhatTheBrokerNeverReads(t *testing.T) {
 	leakCheck(t)
 	objs := corpus(t)
+	created := metav1.NewTime(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC))
 	for i, u := range objs {
 		u = u.DeepCopy()
-		u.SetManagedFields(nil)
+		u.SetCreationTimestamp(created)
 		_ = unstructured.SetNestedSlice(u.Object, []any{map[string]any{"manager": "kubectl", "operation": "Apply", "apiVersion": "agentkourier.dev/v1alpha1"}}, "metadata", "managedFields")
-		a := map[string]string{"kubectl.kubernetes.io/last-applied-configuration": strings.Repeat("{}", 100)}
-		if u.GetName() == "sre-alerts" {
-			a["team.example/owner"] = "sre"
-		}
-		u.SetAnnotations(a)
+		u.SetAnnotations(map[string]string{"kubectl.kubernetes.io/last-applied-configuration": strings.Repeat("{}", 100), "team.example/owner": "sre"})
+		u.SetLabels(map[string]string{"app.kubernetes.io/managed-by": "Helm", "argocd.argoproj.io/instance": "kourier"})
+		u.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "v1", Kind: "ConfigMap", Name: "owner", UID: "owner-uid"}})
+		u.SetFinalizers([]string{"team.example/cleanup"})
 		objs[i] = u
 	}
 	src := newCluster(t, objs...).start(t)
-	for _, name := range []string{"sre-alerts", "chat-only"} {
-		u := src.CachedObjectForTest("Binding", "sre", name)
+	for _, o := range objs {
+		u := src.CachedObjectForTest(o.GetKind(), o.GetNamespace(), o.GetName())
 		if u == nil {
-			t.Fatalf("the cache holds no Binding %s", name)
+			t.Fatalf("the cache holds no %s %s/%s", o.GetKind(), o.GetNamespace(), o.GetName())
 		}
-		if _, has, _ := unstructured.NestedFieldNoCopy(u.Object, "metadata", "managedFields"); has {
-			t.Errorf("%s: the cache holds managedFields", name)
+		for _, f := range []string{"managedFields", "labels", "annotations", "ownerReferences", "finalizers"} {
+			if v, has, _ := unstructured.NestedFieldNoCopy(u.Object, "metadata", f); has {
+				t.Errorf("%s %s: the cache holds metadata.%s = %v", o.GetKind(), o.GetName(), f, v)
+			}
 		}
-		a := u.GetAnnotations()
-		if _, has := a["kubectl.kubernetes.io/last-applied-configuration"]; has {
-			t.Errorf("%s: the cache holds the last-applied-configuration annotation", name)
-		}
-		if name == "sre-alerts" && a["team.example/owner"] != "sre" {
-			t.Errorf("%s: annotations = %v; want the others kept", name, a)
-		}
-		if _, has, _ := unstructured.NestedFieldNoCopy(u.Object, "metadata", "annotations"); has && name == "chat-only" {
-			t.Errorf("%s: an annotations field with nothing in it is left", name)
+		if u.GetUID() != o.GetUID() || u.GetGeneration() != o.GetGeneration() || !u.GetCreationTimestamp().Time.Equal(created.Time) || u.GetNamespace() != o.GetNamespace() || u.GetName() != o.GetName() {
+			t.Errorf("%s %s: the cache holds uid %q generation %d created %v; want %q %d %v", o.GetKind(), o.GetName(), u.GetUID(), u.GetGeneration(), u.GetCreationTimestamp(), o.GetUID(), o.GetGeneration(), created)
 		}
 	}
 	s, _ := set(t, src)
 	servesAll(t, s)
+	for _, b := range s.Bindings {
+		if !b.CreationTimestamp.Time.Equal(created.Time) {
+			t.Errorf("Binding %s: creationTimestamp = %v in the Set; want %v, which orders the Bindings that claim a channel", b.Name, b.CreationTimestamp, created)
+		}
+	}
+}
+
+// An edit of nothing but labels, annotations, finalizers or owner references is no change of the config: the API server does not move
+// metadata.generation for it, the cache has dropped them, and the fingerprint and the Set are as they were. An edit of the spec still moves the
+// fingerprint, so what the broker serves cannot lag an edit that matters.
+func TestAnEditOfMetadataTheBrokerDoesNotReadMovesNothing(t *testing.T) {
+	leakCheck(t)
+	objs := corpus(t)
+	c := newCluster(t, objs...)
+	src := c.start(t)
+	s, before := set(t, src)
+	servesAll(t, s)
+
+	edited := find(objs, "sre-alerts")
+	edited.SetLabels(map[string]string{"team.example/edited": "yes"})
+	edited.SetAnnotations(map[string]string{"kubectl.kubernetes.io/last-applied-configuration": strings.Repeat("x", 1000), "team.example/note": "n"})
+	edited.SetFinalizers([]string{"team.example/cleanup"})
+	events := src.BindingEvents()
+	until(t, func() { c.apply(edited) }, func() bool { return src.BindingEvents() > events })
+	s, after := set(t, src)
+	servesAll(t, s)
+	if after != before {
+		t.Errorf("the fingerprint moved with an edit of labels, annotations and finalizers: %q, was %q", after, before)
+	}
+	if u := src.CachedObjectForTest("Binding", "sre", "sre-alerts"); u == nil || u.GetLabels() != nil || u.GetAnnotations() != nil || u.GetFinalizers() != nil {
+		t.Errorf("the cache of the edited Binding holds labels, annotations or finalizers: %v", u)
+	}
+
+	spec := withField(t, edited, "C0123456780", "spec", "chat", "channel")
+	spec.SetGeneration(2)
+	until(t, func() { c.apply(spec) }, func() bool { return cachedGeneration(src, spec) == 2 })
+	if _, moved := set(t, src); moved == before {
+		t.Error("the fingerprint did not move with an edit of the spec")
+	}
 }
