@@ -18,7 +18,7 @@ is that image by digest. Nothing is released by hand.
    exact commit from a push to `main`. The release gate checks the same commit and the latest attempt again; a
    missing, pending, failed or pull-request-only run blocks the release.
 4. Run the kind tiers on that commit by hand, since no workflow does ([CI](#ci) says why). The custom resource
-   route has its own runs of the tiers, and two scenarios that nothing else runs. Each tier needs Docker and
+   route has its own runs of the tiers, two scenarios that nothing else runs, and a run of the failover tests. Each tier needs Docker and
    about 8 GB free; take each down before the next comes up:
 
    ```sh
@@ -27,11 +27,28 @@ is that image by digest. Nothing is released by hand.
    E2E_CONFIG_SOURCE=crds make e2e-fast-up e2e-fast e2e-crs-scenarios e2e-fast-down
    E2E_CONFIG_SOURCE=crds make e2e-full-up e2e-full e2e-full-down                # custom resources
    E2E_STORE=postgres E2E_REPLICAS=2 make e2e-fast-up e2e-crs-migration e2e-fast-down
+   E2E_CONFIG_SOURCE=crds E2E_STORE=postgres E2E_REPLICAS=2 make e2e-fast-up e2e-fast e2e-fast-down   # failover
    ```
 
-   `make e2e-fast` and `make e2e-full` read which route the Deployment is on and run the tests of that route, so the two
-   runs on `E2E_CONFIG_SOURCE=crds` are the only ones that run the `CR_` tests. `make e2e-crs-scenarios` needs the fast tier up on the custom resource route, and
-   `make e2e-crs-migration` needs it on Postgres with two replicas on the ConfigMap route (the default); each says so and stops if the tier is not as it needs. A failure blocks the tag.
+   `make e2e-fast` and `make e2e-full` read which route the Deployment is on and run the tests of that route. What the
+   runs cover, in the order above:
+
+   1. The fast tier on the ConfigMap route, with one SQLite replica: the suite, with every `CR_` test and S16 skipped.
+   2. The full tier on the ConfigMap route: its own suite, with the `CR_` tests and S16 skipped.
+   3. The fast tier on the custom resource route, with one replica: the suite and the `CR_` tests, except the failover test,
+      which needs two replicas, and the migration test, which runs only in its phases.
+      `make e2e-crs-scenarios` adds the scenarios that need kubectl or Helm, and needs the tier up on this route.
+   4. The full tier on the custom resource route: its own suite against an Agent Kourier that reads custom resources. It
+      runs none of the `CR_` tests, which skip off the fast tier (`test/e2e/cr_test.go`: they use the stub agent, which
+      the full tier lacks).
+   5. `make e2e-crs-migration`, which needs the fast tier up on Postgres with two replicas on the ConfigMap route (the
+      default), and runs `TestCR_MigrationKeepsASessionAlive` in its phases.
+   6. The fast tier on Postgres with two replicas on the custom resource route: the only run of the failover tests.
+      S16 (`TestS16_FailoverLosesNoEventAndDuplicatesNone`) needs the fast tier with two replicas and runs on either route;
+      `TestCR_FailoverDoesNotBlankStatus` needs the custom resource route as well. Both skip anywhere else, so no other run
+      executes them.
+
+   `make e2e-crs-scenarios` and `make e2e-crs-migration` say what they need and stop if the tier is not as they need it. A failure blocks the tag.
 5. `git tag vX.Y.Z <the release pull request's commit on main>` and `git push origin vX.Y.Z`.
 6. Watch the `release` workflow. Its job summary and the GitHub Release body name the pushed image and chart
    digests. A GitHub Release is created only after both signatures verify.
@@ -49,7 +66,7 @@ line's newest and perhaps as latest.
 `.github/workflows/release.yml` runs `hack/release/release.sh`, the script behind `make release-image`:
 
 - First checks the exact tagged commit through the Actions API. `ci.yml` must contain successful `lint`, `test`,
-  `test-testhooks` and `docs-agent` jobs. `security.yml` must contain successful `govulncheck (root)`,
+  `test-testhooks`, `docs-agent`, `crd-corpus (1.37)` and `crd-corpus (1.33)` jobs. `security.yml` must contain successful `govulncheck (root)`,
   `govulncheck (ax)`, `govulncheck (docs-agent)`, `gitleaks`, `trivy (linux-amd64)` and `trivy (linux-arm64)` jobs.
   `codeql.yml` must contain a successful `analyze (go)` job. These are the status checks the `main` ruleset
   requires. `codeql.yml` skips `analyze` while the repository is private, and a skipped run blocks the release.
@@ -160,7 +177,7 @@ are applied now:
      their own pull request. Squash is the only allowed merge method.
    - Require signed commits. A squash merge in GitHub is signed by GitHub, so every commit merged this way passes.
    - Require these status checks, with the branch up to date before merging (strict): `lint`, `test`,
-     `test-testhooks` and `docs-agent` from `ci`; `govulncheck (root)`, `govulncheck (ax)`,
+     `test-testhooks`, `docs-agent`, `crd-corpus (1.37)` and `crd-corpus (1.33)` from `ci`; `govulncheck (root)`, `govulncheck (ax)`,
      `govulncheck (docs-agent)`, `gitleaks`, `trivy (linux-amd64)` and `trivy (linux-arm64)` from `security`; and
      `analyze (go)` from `codeql`. The scheduled released-image rescan is intentionally not a required check.
    - Block force pushes and restrict deletions.
@@ -196,9 +213,12 @@ it one, the owner adds `test-postgres` from `ci` to the `main` ruleset, and the 
 a kind cluster with only the three CRDs from `charts/agent-kourier/files/crds`, with no image and no Agent Kourier, and has
 `test/crdcorpus` send every entry of its corpus to it as a server-side dry-run create. It fails when the schema refuses
 an object the broker's own validation accepts, or when an entry's `schema:` flag no longer says what the schema does with
-it. It installs kind and kubectl with `hack/ci/install-kind-tools.sh`, at the pins and checksums the kind tiers use, and runs the
-node image of `hack/kind/lib.sh`. It is not a required check either, and the same two steps make it one, for `crd-corpus`.
-It has not yet run on a runner, so its timeout is a guess to tighten after its first run. The `zizmor` job (`make lint-workflows`, `hack/security/lint-workflows.sh`) audits
+it. It is the only job that has an API server compile the schemas' CEL rules. It installs kind and kubectl with
+`hack/ci/install-kind-tools.sh`, at the pins and checksums the kind tiers use, and runs twice: on the node image of
+`hack/kind/lib.sh` (`NODE_IMAGE`, Kubernetes 1.37, the job `crd-corpus (1.37)`) and on the oldest Kubernetes the chart admits
+(`NODE_IMAGE_MIN`, 1.33, the job `crd-corpus (1.33)`; `CRD_CORPUS_NODE=min make crd-corpus` runs it locally). Both are required checks of
+the `main` ruleset and are in `CI_REQUIRED_JOBS`. Renaming either job, or moving the chart's minimum Kubernetes version, is a change to the
+workflow, `NODE_IMAGE_MIN`, the ruleset and `CI_REQUIRED_JOBS` together. A run took about three minutes on a warm cache; the timeout is 20. The `zizmor` job (`make lint-workflows`, `hack/security/lint-workflows.sh`) audits
 every workflow with a pinned zizmor under the policy in `.github/zizmor.yml` and fails on any finding; it first
 proves the policy still fails a set of unsafe fixtures (`hack/security/testdata/zizmor`), and then that the inline
 ignore comments hide only the findings the script lists. It runs with `contents: read` and uploads no SARIF, so it
