@@ -24,10 +24,16 @@ type Env struct {
 	// Tier is the tier the runner is in, "fast" or "full", from E2E_TIER (hack/kind/e2e-run.sh sets it). It
 	// has no default: a test that needs it must fail when it is missing, not guess.
 	Tier string
+	// ConfigSource is where the tier's Agent Kourier reads its config from, "files" (the ConfigMap) or "crds" (custom resources), from
+	// E2E_CONFIG_SOURCE (hack/kind/e2e-run.sh reads it from the Deployment). The scenarios of the custom resources route skip unless it is crds.
+	ConfigSource string
+	// Phase is the part of a scenario that a script runs between helm upgrades, from E2E_PHASE: empty in an ordinary run, in which such a
+	// scenario skips (hack/kind/crs-migration.sh sets it).
+	Phase string
 }
 
 // NewEnv reads E2E_SLACK_URL, E2E_SINK_URL, E2E_STUB_URL, E2E_ALERTMANAGER_URL and
-// E2E_AGENTKOURIER_URL, E2E_SIGNALER_URL and E2E_TIER through getenv (os.Getenv in a runner); an unset or empty variable takes its
+// E2E_AGENTKOURIER_URL, E2E_SIGNALER_URL, E2E_TIER, E2E_CONFIG_SOURCE and E2E_PHASE through getenv (os.Getenv in a runner); an unset or empty variable takes its
 // default.
 func NewEnv(getenv func(string) string) Env {
 	get := func(key, def string) string {
@@ -45,5 +51,7 @@ func NewEnv(getenv func(string) string) Env {
 		AgentKourierURL: get("E2E_AGENTKOURIER_URL", "http://agent-kourier.agent-kourier.svc.cluster.local:8080"),
 		SignalerURL:     get("E2E_SIGNALER_URL", "http://signaler.e2e.svc.cluster.local:8080"),
 		Tier:            getenv("E2E_TIER"),
+		ConfigSource:    get("E2E_CONFIG_SOURCE", "files"),
+		Phase:           getenv("E2E_PHASE"),
 	}
 }

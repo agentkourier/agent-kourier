@@ -70,6 +70,14 @@ golangci-lint runs as `go tool golangci-lint`, never a global install.
 - `make e2e-fast-up` / `e2e-full-up` / `e2e-ax-up` bring up the kind tiers (`hack/kind/`); `e2e-fast-down`,
   `e2e-full-down`, `e2e-ax-down` and `e2e-down` (all) tear them down. `e2e-fast` / `e2e-full` / `e2e-ax` run the E2E tests in that tier
   as an in-cluster Job (`hack/kind/e2e-run.sh`).
+- `E2E_CONFIG_SOURCE=crds make e2e-fast-up` (or `e2e-full-up`) runs the tier on custom resources: the CRDs first, then the same config as CRs and the
+  release upgraded with `hack/kind/crds-values.yaml`, as the chart README says to move. The default, `files`, is the ConfigMap route. The bring-up moves a tier
+  between the two in place; `e2e-run.sh` reads the source from the Deployment, and the `CR_` tests skip on files. Run `make e2e-fast` on each source before
+  a change to `internal/config`, the chart or `hack/kind`.
+- `make e2e-crs-scenarios` runs what the Job cannot, because its image has no kubectl or Helm (`hack/kind/crs-scenarios.sh`; the fast tier up on
+  `E2E_CONFIG_SOURCE=crds`): what each client does with an unknown field, what `kubectl get` shows, a
+  Binding stored before a tightening of the schema, and `kubectl wait`. `make e2e-crs-migration` (`hack/kind/crs-migration.sh`) moves a release between the ConfigMap
+  and the custom resources and back with Helm while a session is in flight, on a fresh Postgres tier with two replicas, and puts the tier back on the ConfigMap route after (the CRDs stay under the release, so a second run needs a fresh tier).
 - AX fixtures use the separate `examples/ax` module and unmodified pinned AX/Substrate APIs; see
   `hack/kind/ax/README.md` for shared scenarios and capability differences. `make ax-smoke` exercises Bedrock/Haiku.
 - `make image` builds `agent-kourier:dev`, the production image, from the `Dockerfile` (pinned Go and distroless

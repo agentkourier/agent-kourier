@@ -21,6 +21,9 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT=$(cd "${HERE}/../.." && pwd)
 # shellcheck source-path=SCRIPTDIR source=lib.sh
 . "${HERE}/lib.sh"
+# E2E_CONFIG_SOURCE=crds runs Agent Kourier on custom resources instead of the ConfigMap (the default, files), as up-fast.sh does (lib.sh's deploy_agentkourier).
+E2E_CONFIG_SOURCE=${E2E_CONFIG_SOURCE:-files}
+require_config_source
 FULL=${HERE}/full
 CTX=kind-${CLUSTER}
 K=(kubectl --context "${CTX}")
@@ -147,4 +150,4 @@ settle_full_tier
 step "verify"
 "${FULL}/verify.sh"
 docker stats --no-stream --format 'node cpu={{.CPUPerc}} mem={{.MemUsage}}' "$(kind get nodes --name "${CLUSTER}")"
-echo "full tier up in ${SECONDS}s (context ${CTX})"
+echo "full tier up in ${SECONDS}s (context ${CTX}, config source ${E2E_CONFIG_SOURCE})"

@@ -1,0 +1,32 @@
+# The config of the migration scenario (hack/kind/crs-migration.sh), as values of the chart: a release whose config the chart owns, which is the
+# case where moving between the ConfigMap and the custom resources is "the same config.* values" and the chart renders a ConfigMap on one route and
+# custom resources on the other. It is one connection (the tier's, the fake Slack), the stub agent's backend and one Binding on a channel of its own,
+# answered by scenario-gated, which holds a task on a gate that the test releases. It replaces the tier's own config for the length of the scenario.
+# The Secrets are the tier's (slack-fast, agent-kourier-agent-token, in namespace agent-kourier, which the tier's values grant).
+config:
+  existingConfigMap: ""
+  chatConnection: agent-kourier/slack-fast # read with config.source: crds, and ignored with files
+  chatConnections:
+    slack-fast:
+      spec:
+        platform: slack
+        credentialsSecretRef: {name: slack-fast}
+  agentBackends:
+    agents:
+      spec:
+        dialect: kagent-v1
+        url: http://stubagent.e2e.svc.cluster.local:8080
+  bindings:
+    migrate:
+      spec:
+        agent:
+          backendRef: {name: agents}
+          namespace: kagent
+          name: scenario-gated
+        identity:
+          userId: agent-kourier-fast
+          tokenSecretRef: {name: agent-kourier-agent-token}
+        chat:
+          connectionRef: {name: slack-fast}
+          channel: CCRMIGRATE
+          output: live

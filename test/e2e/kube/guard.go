@@ -43,6 +43,20 @@ func NewInCluster() (*Pods, error) {
 }
 
 func newInCluster(inClusterConfig func() (*rest.Config, error), namespaceFile string) (*Pods, error) {
+	cfg, err := guardedConfig(inClusterConfig, namespaceFile)
+	if err != nil {
+		return nil, err
+	}
+	client, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("kube: build clientset: %w", err)
+	}
+	return newPods(client), nil
+}
+
+// guardedConfig is the in-cluster config, after the check that the service account's namespace, read from namespaceFile, is
+// [Namespace]. Every client of this package is built from it.
+func guardedConfig(inClusterConfig func() (*rest.Config, error), namespaceFile string) (*rest.Config, error) {
 	cfg, err := inClusterConfig()
 	if err != nil {
 		if errors.Is(err, rest.ErrNotInCluster) {
@@ -57,9 +71,5 @@ func newInCluster(inClusterConfig func() (*rest.Config, error), namespaceFile st
 	if got := strings.TrimSpace(string(raw)); got != Namespace {
 		return nil, fmt.Errorf("%w: got %q; refusing to control pods", ErrWrongNamespace, got)
 	}
-	client, err := kubernetes.NewForConfig(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("kube: build clientset: %w", err)
-	}
-	return newPods(client), nil
+	return cfg, nil
 }
