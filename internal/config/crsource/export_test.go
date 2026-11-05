@@ -68,3 +68,8 @@ func (s *Source) LastGoodIsCachedForTest(kind, namespace, name string) bool {
 // SetProbeExitHookForTest sets a function that the probe's goroutine calls as it ends, before Start. A test that makes it slow
 // can tell whether Stop waited for the goroutine, which a goroutine that ends at once cannot show.
 func (s *Source) SetProbeExitHookForTest(f func()) { s.probeExited = f }
+
+// SlimForTest applies the informers' transform to u, as the cache does to each object before it holds it.
+func SlimForTest(u *unstructured.Unstructured) {
+	_, _ = slim(u)
+}
