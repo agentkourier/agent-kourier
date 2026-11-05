@@ -335,7 +335,7 @@ func TestSchemaPatternsEqualTheGoLiterals(t *testing.T) {
 // TestSchemaCapsEqualTheBrokersCaps pins every bound in the schema to the constant Validate enforces, so that neither
 // can move alone.
 func TestSchemaCapsEqualTheBrokersCaps(t *testing.T) {
-	bindings, backends := crdSchema(t, "bindings"), crdSchema(t, "agentbackends")
+	bindings, backends, connections := crdSchema(t, "bindings"), crdSchema(t, "agentbackends"), crdSchema(t, "chatconnections")
 	trigger := "spec.chat.triggers[]"
 	for _, tc := range []struct {
 		name string
@@ -343,6 +343,17 @@ func TestSchemaCapsEqualTheBrokersCaps(t *testing.T) {
 		key  string
 		want int
 	}{
+		{"backend allowedNamespaces", backends.at(t, "spec.allowedNamespaces"), "maxItems", maxAllowedNamespaces},
+		{"connection allowedNamespaces", connections.at(t, "spec.allowedNamespaces"), "maxItems", maxAllowedNamespaces},
+		// The broker counts bytes and the schema characters, so the schema is never the stricter of the two.
+		{"backend url", backends.at(t, "spec.url"), "maxLength", maxURLLen},
+		{"header value", backends.at(t, "spec.headers[].value"), "maxLength", maxHeaderValueLen},
+		{"channel", bindings.at(t, "spec.chat.channel"), "maxLength", maxChatIDLen},
+		{"sender ID", bindings.at(t, trigger+".from.id"), "maxLength", maxChatIDLen},
+		{"approver group", bindings.at(t, "spec.interactions.approverGroups[]"), "maxLength", maxChatIDLen},
+		{"emoji", bindings.at(t, "spec.chat.acknowledgment.emoji"), "maxLength", maxEmojiLen},
+		{"mention name", bindings.at(t, "spec.chat.mentions[].name"), "maxLength", maxMentionNameLen},
+		{"mention user", bindings.at(t, "spec.chat.mentions[].user"), "maxLength", maxMentionUserLen},
 		{"mentions", bindings.at(t, "spec.chat.mentions"), "maxItems", maxMentions},
 		{"approverGroups", bindings.at(t, "spec.interactions.approverGroups"), "maxItems", maxApproverGroups},
 		{"triggers", bindings.at(t, "spec.chat.triggers"), "maxItems", maxTriggers},
@@ -364,6 +375,79 @@ func TestSchemaCapsEqualTheBrokersCaps(t *testing.T) {
 	} {
 		if got := tc.node.num(tc.key); got != tc.want {
 			t.Errorf("%s: schema %s = %d, Go rule = %d", tc.name, tc.key, got, tc.want)
+		}
+	}
+	// The text of a duration is capped by the decoder (DurationTextProblems), which sees it before it is a Duration.
+	for _, f := range durationFields {
+		if got := crdSchema(t, f.plural).at(t, f.path).num("maxLength"); got != maxDurationTextLen {
+			t.Errorf("%s: schema maxLength = %d, maxDurationTextLen = %d", f.path, got, maxDurationTextLen)
+		}
+	}
+}
+
+// TestEverySpecStringListAndMapIsBounded fails for a string, list or map of a spec that has no bound in the schema: a field
+// that nothing bounds lets one namespace writer make an object as large as the apiserver allows, and every broker keeps
+// each object in memory. A string is bounded by an enum or a maxLength, or, for a value of a map, by a rule of the map that
+// compares its size; a list by maxItems; a map by maxProperties, and its keys by a rule of the map that bounds them
+// (their size, or a list they must be in), or by the one rule below that ties them to another map's keys.
+func TestEverySpecStringListAndMapIsBounded(t *testing.T) {
+	// A map whose keys are bounded by a rule on another node, with the node and a piece of the rule, so that taking the rule
+	// out fails here too. A closeWhen key must be the name of an extract entry, which has a bound of its own.
+	keysByOtherRule := map[string]struct{ node, rule string }{
+		"bindings spec.chat.triggers[].thread.closeWhen": {"spec.chat.triggers[]", "closeWhen.all(k, has(self.extract) && k in self.extract)"},
+	}
+	usedOtherRule := map[string]bool{}
+	var walk func(plural, path string, n schema, parentRules []celRule, mapValue bool)
+	walk = func(plural, path string, n schema, parentRules []celRule, mapValue bool) {
+		key := plural + " " + path
+		switch n.str("type") {
+		case "string":
+			switch {
+			case n["enum"] != nil || n.num("maxLength") >= 0:
+			case mapValue && slices.ContainsFunc(parentRules, func(r celRule) bool { return strings.Contains(r.Rule, "size(self[k]) <= ") }):
+			default:
+				t.Errorf("%s: a string with no enum, no maxLength and no size rule", key)
+			}
+		case "array":
+			if n.num("maxItems") < 0 {
+				t.Errorf("%s: a list with no maxItems", key)
+			}
+		case "object":
+			if _, hasProps := n["properties"]; hasProps {
+				break
+			}
+			if n.num("maxProperties") < 0 {
+				t.Errorf("%s: a map with no maxProperties", key)
+			}
+			if other, ok := keysByOtherRule[key]; ok {
+				usedOtherRule[key] = true
+				if !slices.ContainsFunc(crdSchema(t, plural).at(t, other.node).rules(), func(r celRule) bool { return strings.Contains(r.Rule, other.rule) }) {
+					t.Errorf("%s: its keys are bounded by a rule of %s containing %q, which is gone", key, other.node, other.rule)
+				}
+			} else if !slices.ContainsFunc(n.rules(), func(r celRule) bool {
+				return strings.Contains(r.Rule, "size(k)") || strings.Contains(r.Rule, "k in [")
+			}) {
+				t.Errorf("%s: a map whose keys have no rule that bounds them (size(k), or k in [list])", key)
+			}
+		}
+		if props, ok := n["properties"].(map[string]any); ok {
+			for name, c := range props {
+				walk(plural, path+"."+name, schema(c.(map[string]any)), nil, false)
+			}
+		}
+		if items, ok := n["items"].(map[string]any); ok {
+			walk(plural, path+"[]", schema(items), nil, false)
+		}
+		if values, ok := n["additionalProperties"].(map[string]any); ok {
+			walk(plural, path+".{}", schema(values), n.rules(), true)
+		}
+	}
+	for _, plural := range []string{"agentbackends", "chatconnections", "bindings"} {
+		walk(plural, "spec", crdSchema(t, plural).child(t, "", "properties").child(t, "", "spec"), nil, false)
+	}
+	for key := range keysByOtherRule {
+		if !usedOtherRule[key] {
+			t.Errorf("%s is listed as bounded by a rule elsewhere, and is not a map of the schema", key)
 		}
 	}
 }

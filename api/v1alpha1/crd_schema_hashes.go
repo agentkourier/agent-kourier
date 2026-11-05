@@ -8,11 +8,11 @@ package v1alpha1
 func SchemaSHA256(crdName string) (string, bool) {
 	switch crdName {
 	case "agentbackends.agentkourier.dev":
-		return "ef506727da3d2b3b2e359fc8c2a25da7abccd494c7bbae95aa8faf29d69be11f", true
+		return "2efcd886055f356a454eb1649f2f099a724ef03f36e957b061363ad09c49b248", true
 	case "bindings.agentkourier.dev":
-		return "05b27b026a039545594e563d9f557d1f2c98c95e1d954411a979f9b5aec20a0e", true
+		return "9708cc81a96bf49b96e86c08f8aba41b770874c71ef9bf618e6a68098741428b", true
 	case "chatconnections.agentkourier.dev":
-		return "080a33ab7e0a84075c63e58fc72fb1fe1dec1d7809f8f817b45856054af8f107", true
+		return "fff5906b6e7540de68223cbfde531ee37fa3c1d62fc43c280e68eaf8bac9050c", true
 	}
 	return "", false
 }

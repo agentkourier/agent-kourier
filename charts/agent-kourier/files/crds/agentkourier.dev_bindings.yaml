@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    agentkourier.dev/schema-sha256: 05b27b026a039545594e563d9f557d1f2c98c95e1d954411a979f9b5aec20a0e
+    agentkourier.dev/schema-sha256: 9708cc81a96bf49b96e86c08f8aba41b770874c71ef9bf618e6a68098741428b
     controller-gen.kubebuilder.io/version: v0.23.0
   name: bindings.agentkourier.dev
 spec:
@@ -116,7 +116,8 @@ spec:
                         description: |-
                           Emoji is the reaction name without colons. Left empty, the platform's own acknowledgment reaction is used
                           (Slack: hourglass_flowing_sand). The API fills in no default, so a stored Binding does not carry one platform's
-                          reaction.
+                          reaction. At most 100 bytes.
+                        maxLength: 100
                         pattern: ^(?:[a-z0-9][a-z0-9+_-]*|[+-][a-z0-9][a-z0-9+_-]*)?$
                         type: string
                       enabled:
@@ -140,7 +141,8 @@ spec:
                     type: string
                   channel:
                     description: 'Channel is the platform''s channel ID, not its name
-                      (Slack: `C…` or `G…`).'
+                      (Slack: `C…` or `G…`). At most 32 bytes.'
+                    maxLength: 32
                     pattern: ^[CG][A-Z0-9]+$
                     type: string
                   connectionRef:
@@ -187,6 +189,7 @@ spec:
                           description: |-
                             Name is what the agent writes, after an `@`: lowercase letters, digits and `-`, starting with a letter, at most 63
                             characters. `here`, `channel` and `everyone` are refused.
+                          maxLength: 63
                           pattern: ^[a-z][a-z0-9-]{0,62}$
                           type: string
                           x-kubernetes-validations:
@@ -197,6 +200,7 @@ spec:
                           description: 'User is the platform''s user ID of the person
                             (Slack: `U…` or `W…`). It comes only from here, never
                             from the agent.'
+                          maxLength: 21
                           pattern: ^[UW][A-Z0-9]{2,20}$
                           type: string
                       required:
@@ -303,10 +307,12 @@ spec:
                             type: object
                           description: |-
                             Extract names the values to pull out of a message. A message in which one of these
-                            regexes does not match does not match the trigger. At most 32.
+                            regexes does not match does not match the trigger. At most 32, each named in at most 63 bytes.
                           maxProperties: 32
                           type: object
                           x-kubernetes-validations:
+                          - message: an extract name is longer than the 63 byte limit
+                            rule: self.all(k, size(k) <= 63)
                           - message: 'invalid extract name: it must start with a lower-case
                               letter and use only letters, digits and ''_'', so a
                               template can read .Fields.<name>'
@@ -324,6 +330,8 @@ spec:
                                 ID is the sender's ID on the platform, never a display name (Slack: the bot ID, `B…`). The load cannot know
                                 Agent Kourier's own ID, so naming it loads: Agent Kourier's own posts are never forwarded, so the trigger
                                 matches nothing, and the Slack adapter logs one warning, the first time one of its posts arrives.
+                                At most 32 bytes.
+                              maxLength: 32
                               pattern: ^B[A-Z0-9]+$
                               type: string
                             kind:
@@ -364,6 +372,7 @@ spec:
                                   type: integer
                                 per:
                                   description: Per is the window length.
+                                  maxLength: 64
                                   pattern: ^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$
                                   type: string
                                   x-kubernetes-validations:
@@ -418,16 +427,19 @@ spec:
                               description: |-
                                 CloseWhen maps an extracted field to the value that closes the thread: Agent Kourier posts a
                                 note and starts no turn. Every entry must equal. It names only extracted fields, so it holds at most as many
-                                entries as extract does, 32.
+                                entries as extract does, 32. A value is at most 256 bytes.
                               maxProperties: 32
                               type: object
                               x-kubernetes-validations:
                               - message: the value that closes the thread is required
                                 rule: self.all(k, size(self[k]) > 0)
+                              - message: a value is longer than the 256 byte limit
+                                rule: self.all(k, size(self[k]) <= 256)
                             cooldown:
                               description: |-
                                 Cooldown is how long after a turn the same key starts no new turn. Required with by,
                                 and between 1m and 168h.
+                              maxLength: 64
                               pattern: ^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$
                               type: string
                             maxIdle:
@@ -441,6 +453,7 @@ spec:
                                 starts a second investigation for it. Twice the cooldown covers that only for a 4h cooldown
                                 against Alertmanager's 4h repeat_interval; a longer repeat_interval needs a maxIdle set
                                 above it.
+                              maxLength: 64
                               pattern: ^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$
                               type: string
                           type: object
@@ -599,8 +612,9 @@ spec:
                     description: |-
                       ApproverGroups names the platform's user groups whose members may decide a tool approval, by the platform's ID (Slack: `S…`).
                       An empty list allows any non-bot channel member. At most 10 groups may be named. Group IDs start with S and contain
-                      uppercase letters and digits; duplicates and empty entries are refused.
+                      uppercase letters and digits, at most 32 bytes; duplicates and empty entries are refused.
                     items:
+                      maxLength: 32
                       pattern: ^S[A-Z0-9]+$
                       type: string
                     maxItems: 10
@@ -615,6 +629,7 @@ spec:
                     default: 30m
                     description: Timeout is how long a pause waits for an answer.
                       Defaults to 30m. At most 168h (7 days); a longer one is refused.
+                    maxLength: 64
                     pattern: ^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$
                     type: string
                     x-kubernetes-validations:
@@ -642,6 +657,7 @@ spec:
                     description: |-
                       ThreadTTL is how long a thread keeps its session after its last activity. Defaults to 2160h
                       (90 days). At most 8760h (365 days); a longer one is refused.
+                    maxLength: 64
                     pattern: ^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$
                     type: string
                     x-kubernetes-validations:
