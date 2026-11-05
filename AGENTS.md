@@ -66,7 +66,7 @@ golangci-lint runs as `go tool golangci-lint`, never a global install.
 - `make crd-corpus` holds the CRD schemas to the broker's validation: it applies only the CRDs to a throwaway kind cluster
   (`hack/kind/crd-corpus.sh`; `CRD_CORPUS_KUBECONFIG` uses a local cluster you made instead) and `test/crdcorpus` sends each corpus entry to it
   as a server-side dry-run create. A new API field or validation rule gets a marker where the schema can copy it and an entry in
-  `test/crdcorpus/testdata/invalid` with its `# schema: refuses` or `# schema: accepts` flag. The CI job `crd-corpus` runs it. A bound in the
+  `test/crdcorpus/testdata/invalid` with its `# schema: refuses` or `# schema: accepts` flag. The CI job `crd-corpus` runs it on the pinned node and on the chart's minimum Kubernetes (`CRD_CORPUS_NODE=min`, `NODE_IMAGE_MIN` in `hack/kind/lib.sh`). A bound in the
   schema is a cap in `Validate` too (`maxTriggers`, `maxExtract`, `maxHeaders`, `maxHeaderNameLen`), so lowering one can refuse a config that loads today.
 - `make e2e-fast-up` / `e2e-full-up` / `e2e-ax-up` bring up the kind tiers (`hack/kind/`); `e2e-fast-down`,
   `e2e-full-down`, `e2e-ax-down` and `e2e-down` (all) tear them down. `e2e-fast` / `e2e-full` / `e2e-ax` run the E2E tests in that tier

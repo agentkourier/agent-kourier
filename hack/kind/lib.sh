@@ -5,6 +5,12 @@
 # doubles, through a build argument). Used by the scripts that source this file.
 # shellcheck disable=SC2034
 NODE_IMAGE=kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+# The oldest Kubernetes the chart admits (crMode's check in charts/agent-kourier/templates/_helpers.tpl), which only
+# the CRD corpus runs on (CRD_CORPUS_NODE=min, hack/kind/crd-corpus.sh). The digest is from the notes of kind v0.32.0,
+# the newest release that publishes a 1.33 node image; renovate.json holds it on 1.33. Keep its minor equal to that
+# check's, which test/kindmanifests guards.
+# shellcheck disable=SC2034
+NODE_IMAGE_MIN=kindest/node:v1.33.12@sha256:3f5c8443c620245e4d355cfe09e96a91ead32ceaa569d3f1ca9edf0cb2fe2ff4
 RUNTIME_IMAGE=gcr.io/distroless/static-debian12@sha256:d75cdd72874d4790092fcb1b058493ecf6bb5bf2b2b897045b00ff01d91843f2
 # The Go image Agent Kourier is built in (the Dockerfile's builder stage); go.mod's go version is 1.27.3.
 GO_IMAGE=golang:1.27.3@sha256:2920bb124f1a2e12a1d39f0cab756ae0068441ee1da7655dec7f5e374944095b

@@ -6,11 +6,16 @@
 # the entries need, so the cluster is thrown away after.
 #
 # Without arguments the script makes a cluster named agent-kourier-crds (CRD_CORPUS_CLUSTER overrides it) from lib.sh's
-# pinned node image, applies charts/agent-kourier/files/crds to it, runs the test, and deletes the cluster. It is
+# pinned node image (NODE_IMAGE), applies charts/agent-kourier/files/crds to it, runs the test, and deletes the cluster. It is
 # not one of the E2E tiers, so `make e2e-down` does not touch it, and it keeps its kubeconfig in a temporary file, so the
 # host kubeconfig and its current context are never read or changed. A cluster of that name that this script did not
 # create (it lacks the owner label) is refused, not reused or deleted. CRD_CORPUS_KEEP=1 leaves the cluster up for a
 # second run, which reuses it.
+#
+# CRD_CORPUS_NODE=min makes the cluster from lib.sh's NODE_IMAGE_MIN, the oldest Kubernetes the chart admits, instead
+# (default, or CRD_CORPUS_NODE=default: NODE_IMAGE; any other value is refused). CI runs both. A cluster for the
+# minimum is named agent-kourier-crds-min unless CRD_CORPUS_CLUSTER names one, so that CRD_CORPUS_KEEP=1 never reuses
+# one version's cluster for the other. It has no effect with CRD_CORPUS_KUBECONFIG, whose cluster is its own.
 #
 # CRD_CORPUS_KUBECONFIG=<file> runs against the cluster that kubeconfig's current context names instead: it is not
 # created and not deleted, and the script and the test both refuse an API server that is not on this machine. The CRDs are applied to it.
@@ -22,7 +27,17 @@ ROOT=$(cd "${HERE}/../.." && pwd)
 . "${HERE}/lib.sh"
 
 CRDS=${ROOT}/charts/agent-kourier/files/crds
-CORPUS_CLUSTER=${CRD_CORPUS_CLUSTER:-agent-kourier-crds}
+case "${CRD_CORPUS_NODE:-default}" in
+  default)
+    CORPUS_NODE_IMAGE=${NODE_IMAGE}
+    CORPUS_CLUSTER=${CRD_CORPUS_CLUSTER:-agent-kourier-crds}
+    ;;
+  min)
+    CORPUS_NODE_IMAGE=${NODE_IMAGE_MIN}
+    CORPUS_CLUSTER=${CRD_CORPUS_CLUSTER:-agent-kourier-crds-min}
+    ;;
+  *) die "CRD_CORPUS_NODE is '${CRD_CORPUS_NODE}': want default or min" ;;
+esac
 CORPUS_OWNER=agentkourier.agent-kourier.dev/owner=crd-corpus
 
 for tool in kubectl go; do
@@ -60,7 +75,7 @@ else
     # Set before the create, not after: an interrupt during it can leave the cluster half made, and the next run would
     # reuse it and never delete it. Deleting a cluster that was never made does nothing.
     CREATED=1
-    kind create cluster --name "${CORPUS_CLUSTER}" --image "${NODE_IMAGE}" --kubeconfig "${KUBECONFIG_FILE}" --wait 120s --config - <<EOF
+    kind create cluster --name "${CORPUS_CLUSTER}" --image "${CORPUS_NODE_IMAGE}" --kubeconfig "${KUBECONFIG_FILE}" --wait 120s --config - <<EOF
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: ${CORPUS_CLUSTER}
@@ -81,6 +96,8 @@ case "${server}" in
   https://127.0.0.1:* | https://localhost:* | https://\[::1\]:*) ;;
   *) die "API server ${server} is not on this machine; refusing to apply CRDs to it" ;;
 esac
+
+echo "==> Kubernetes $("${K[@]}" version -o json | sed -n 's/^ *"gitVersion": "\(v[^"]*\)".*/\1/p' | tail -n 1)"
 
 echo "==> CRDs"
 "${K[@]}" apply --server-side -f "${CRDS}"
