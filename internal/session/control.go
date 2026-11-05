@@ -134,11 +134,22 @@ func classifyCancel(err error) cancelKind {
 // unverified, if it is not nil, is set when the task is counted as over without Agent Kourier having read it: the answer to the cancel was too large, or
 // the agent said the task cannot be cancelled and the task is too large to read, so that what became of it is not known.
 func (m *Manager) cancelActive(ctx context.Context, key Key, id a2a.TaskID, by string, needPause bool, unverified *bool) (done, paused bool, err error) {
-	sess, err := m.cfg.Store.GetSession(ctx, key, readAll, m.cfg.Now())
-	if errors.Is(err, store.ErrNotFound) || (err == nil && (id == "" || sess.TaskID != string(id))) {
-		return false, false, nil
-	} else if err != nil {
-		return false, false, fmt.Errorf("read session: %w", err)
+	recorded := func() (sess store.Session, isTask bool, err error) {
+		sess, err = m.cfg.Store.GetSession(ctx, key, readAll, m.cfg.Now())
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			return sess, false, nil
+		case err != nil:
+			return sess, false, fmt.Errorf("read session: %w", err)
+		}
+		return sess, id != "" && sess.TaskID == string(id), nil
+	}
+	sess, isTask, err := recorded()
+	if err != nil || !isTask {
+		return false, false, err
+	}
+	if m.afterSessionRead != nil {
+		m.afterSessionRead()
 	}
 	if needPause {
 		m.mu.Lock()
@@ -147,6 +158,14 @@ func (m *Manager) cancelActive(ctx context.Context, key Key, id a2a.TaskID, by s
 		m.mu.Unlock()
 		if notPaused { // the runner streams it, or waits on something else
 			return false, false, nil
+		}
+		// A look that finds no runner does not say the pause is open: it is also what a pause leaves that another control ended since the
+		// read above, once its runner has cleared the record and retired (releasePause clears the record before it resets the runner,
+		// and retire comes after). So the record is read again after the look. A record that is still the task's, read after no
+		// runner was seen, was not cleared before the runner went, so the pause was open at the look; after a restart the record is
+		// there, and the cancel goes on.
+		if sess, isTask, err = recorded(); err != nil || !isTask {
+			return false, false, err
 		}
 	}
 	backend, err := m.cfg.Bindings.Backend(sess.Binding)

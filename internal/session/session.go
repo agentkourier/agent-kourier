@@ -386,7 +386,10 @@ type Manager struct {
 	marked map[string]struct{}
 	// cancelTimeout bounds the cancel of a task whose reply was too large (see tooLarge); a test shortens it.
 	cancelTimeout time.Duration
-	closed        bool // set by Close: no runner starts after it, so wg.Add cannot race wg.Wait, and no convos entry leaks
+	// afterSessionRead, if it is set, is called by cancelActive between its read of the session and its look at the runner, which is
+	// where a test makes another control end the pause. Nil in production.
+	afterSessionRead func()
+	closed           bool // set by Close: no runner starts after it, so wg.Add cannot race wg.Wait, and no convos entry leaks
 	// intake serializes Submit: UpsertSession replaces a whole row, so two Submits that
 	// both found no session must not both write one.
 	intake sync.Mutex
