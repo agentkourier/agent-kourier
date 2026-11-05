@@ -1213,7 +1213,10 @@ func (m *Manager) repark(t *tstate, detail string) outcome {
 	}
 
 	m.mu.Lock()
-	t.c.parked, t.c.released = t.taskID, false
+	// The runner stops driving the task as it parks on it, under the one lock, as a pause found in a stream does (no gap between
+	// parked and driving): drive's deferred m.drives(c, "") comes only after the watcher is told, and a Stop that lands in between
+	// finds the task driven, is refused by endPause as for a task that streams, and leaves the runner parked on a task that was cancelled.
+	t.c.parked, t.c.released, t.c.driving = t.taskID, false, ""
 	pt := *t
 	pt.answer, pt.nid = false, ""
 	t.c.paused = &pt
