@@ -25,8 +25,8 @@
 #      (open-5, release-5, reply-5, settle-5). Before the old pods hold their Bindings the thread ends with the notice that the agent is no longer set up.
 # Each phase is the E2E test TestCR_MigrationKeepsASessionAlive (hack/kind/e2e-run.sh with E2E_PHASE). A phase that fails does not stop the run. Steps
 # 0, 3, 6, 8 and 9 are watched: a person's mention of the Binding's channel every two seconds for 100 seconds from before the step (phase probe-100), which
-# says how many were answered, and how many were delivered and never answered, which is a message that a broker without the Binding ignored without
-# a word; a timeline of the pods and of how many Bindings the cluster holds, every two seconds; and the log of each pod that was there when the
+# says how many were answered, and how many were delivered and never answered, which a person would call a lost message (that the broker ignored it is an
+# inference, from the log of the pod and the Bindings it had); a timeline of the pods and of how many Bindings the cluster holds, every two seconds; and the log of each pod that was there when the
 # step began. Everything goes to CRS_MIGRATION_OUT (a new temporary directory by default; no token or Secret value is in it, as Agent Kourier logs none).
 #
 # Every kubectl and helm call names --context kind-agent-kourier-fast, as the tier's scripts do; assert_context aborts unless that is the local kind cluster.
@@ -109,20 +109,28 @@ stop_watching() {
 # release (crds.install stays on), so the tier is back on the ConfigMap route with them in the cluster, and a second run of this script needs a fresh tier.
 restore_tier() {
   helm_install_agentkourier agent-kourier "${CHART}/ci/fast-postgres-values.yaml" -f "${CHART}/ci/fast-postgres-ha-values.yaml" --set crds.install=true >/dev/null 2>&1 || true
-  E2E_STORE=postgres E2E_REPLICAS=2 "${HERE}/up-fast.sh" >"${OUT}/restore.log" 2>&1
+  E2E_STORE=postgres E2E_REPLICAS=2 E2E_CONFIG_SOURCE=files "${HERE}/up-fast.sh" >"${OUT}/restore.log" 2>&1
 }
 # On any exit, a failed one included: stop the watchers, let a held rollout go, and put the tier back unless CRS_MIGRATION_KEEP=1. RESTORE is set by the first change.
 RESTORE=
+RESULTS_PRINTED=
+# print_results: what each phase and probe said, and a failed one as the exit status.
+print_results() {
+  RESULTS_PRINTED=1
+  echo "==> results"
+  printf '%s\n' ${RESULTS[@]+"${RESULTS[@]}"}
+}
 cleanup() {
   local rc=$?
   stop_watching
+  [ -n "${RESULTS_PRINTED}" ] || [ "${#RESULTS[@]}" -eq 0 ] || print_results
   if [ -n "${RESTORE}" ]; then
     "${K[@]}" -n agent-kourier rollout resume deploy/agent-kourier >/dev/null 2>&1 || true
     if [ "${CRS_MIGRATION_KEEP:-}" != 1 ]; then
       echo "==> the tier back on the ConfigMap route (the CRDs stay under the release)"
       restore_tier || {
         echo "error: putting the tier back failed; see ${OUT}/restore.log (hack/kind/down.sh fast and a bring-up is the way out)" >&2
-        rc=1
+        [ "${rc}" -ne 0 ] || rc=1
       }
     fi
   fi
@@ -228,22 +236,14 @@ move to-crds-slow slow_way_forward
 phase finish-4
 
 # The destructive order, which no hold above runs: the first task ends and a new reply is written while the old pods run without the custom resources.
-# The old pods have seen the Bindings go (a line of the log says so, within the reload's ten seconds) when the first gate is released: the turn ends in a
-# pod that has lost its Binding, and the reply queued behind it is next. Then a new reply is written in the thread. After the rollout, settle-5 wants all
-# three answered once. If the old pods hold what the custom resources had (the broker's own connection is held, and its Bindings with it), the line is not
-# in their log and the phases pass; if they do not, the thread says the agent is no longer set up, and settle-5 fails with it.
+# release-5 waits, with a bound, until an old pod counts its ChatConnection as held (agentkourier_config_invalid_objects{kind="ChatConnection"} is 1: the way
+# back deletes the connection last), and fails if it does not, so the first gate is only released into pods that have seen the resources go: the turn ends in
+# a pod that has lost its Binding, or holds it, and the reply queued behind it is next. Then a new reply is written in the thread. The second gate stays
+# closed until settle-5, so that task crosses the rollout; settle-5 wants all three answered once. If the old pods do not hold what the custom resources
+# had, the thread says the agent is no longer set up, and settle-5 fails with it.
 hold_way_back() {
-  local seen=no _
   "${K[@]}" -n agent-kourier rollout pause deploy/agent-kourier >/dev/null
   upgrade --set crds.install=true
-  for _ in $(seq 20); do
-    if grep -qs 'stopped verifying a Binding' "${OUT}"/log-to-files-hold-*.txt; then
-      seen=yes
-      break
-    fi
-    sleep 2
-  done
-  echo "the old pods said they stopped verifying a Binding, within 40s of the upgrade: ${seen}"
   phase release-5
   phase reply-5
   "${K[@]}" -n agent-kourier rollout resume deploy/agent-kourier >/dev/null
@@ -266,8 +266,7 @@ for f in "${OUT}"/log-*.txt; do
   grep -iE 'gone|removed|notice|shutting|signal|another replica|reloaded|refused|abandon|dropp' "${f}" | grep -v 'condition is false' | cut -c1-300 | head -15 || true
 done
 
-echo "==> results"
-printf '%s\n' "${RESULTS[@]}"
+print_results
 case " ${RESULTS[*]} " in
   *" FAIL "*) exit 1 ;;
 esac

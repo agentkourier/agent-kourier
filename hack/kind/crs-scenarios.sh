@@ -59,8 +59,16 @@ contains() { case $1 in *"$2"*) return 0 ;; *) return 1 ;; esac; } # TEXT PART
 WORK=$(mktemp -d)
 RESTORE_PATH=
 RESTORE_VALUE=
+HELM_VALUES= # the user values the release had before the Helm case changed them: put back by cleanup if the case did not
 cleanup() {
   local rc=$?
+  if [ -n "${HELM_VALUES}" ]; then
+    "${H[@]}" upgrade agent-kourier "${ROOT}/charts/agent-kourier" --namespace agent-kourier --reset-values -f "${HELM_VALUES}" --force-conflicts >/dev/null 2>&1 ||
+      {
+        echo "FAIL: the release agent-kourier could not be put back to its values (${HELM_VALUES})" >&2
+        rc=1
+      }
+  fi
   "${K[@]}" -n agent-kourier delete akbinding ck11-unknown ck11-stored-invalid --ignore-not-found >/dev/null 2>&1 || true
   # A rule left out of the CRD by a case that did not get to put it back goes back now; a restore that fails is said, and fails the run.
   if [ -n "${RESTORE_PATH:-}" ]; then
@@ -158,6 +166,7 @@ unknown_fields() {
   # the chart's values would write it. The release is the tier's, upgraded with its own values and one more Binding, and put back after.
   local values original=${WORK}/helm-values.json
   "${H[@]}" get values agent-kourier --namespace agent-kourier -o json >"${original}" # the values the release has now, to put back exactly (a map merges, and null leaves a mark)
+  HELM_VALUES=${original}
   values=$(jq -nc '{"ck11-unknown": {spec: {agent: {backendRef: {name: "agents"}, namespace: "kagent", name: "test-agent"}, identity: {userId: "ck11", tokenSecretRef: {name: "agent-kourier-agent-token"}}, chat: {connectionRef: {name: "slack-fast"}, channel: "CCRUNKNOWN", output: "live", bogusField: "x"}}}}')
   if out=$("${H[@]}" upgrade agent-kourier "${ROOT}/charts/agent-kourier" --namespace agent-kourier --reuse-values --force-conflicts --set-json "config.bindings=${values}" 2>&1); then
     if [ "$(stored bogusField)" = absent ] && [ -n "$("${K[@]}" -n agent-kourier get akbinding ck11-unknown --ignore-not-found -o name)" ]; then
@@ -174,7 +183,8 @@ unknown_fields() {
       fail "helm upgrade: refused, but a Binding ck11-unknown is in the cluster"
     fi
   fi
-  "${H[@]}" upgrade agent-kourier "${ROOT}/charts/agent-kourier" --namespace agent-kourier --reset-values -f "${original}" --force-conflicts >/dev/null ||
+  "${H[@]}" upgrade agent-kourier "${ROOT}/charts/agent-kourier" --namespace agent-kourier --reset-values -f "${original}" --force-conflicts >/dev/null &&
+    HELM_VALUES= ||
     fail "helm: the release could not be put back to the values it had"
   check "helm: the rendered Binding is gone after the values go back" test -z "$("${K[@]}" -n agent-kourier get akbinding ck11-unknown --ignore-not-found -o name)"
   skip "Argo CD: not run here, there is none in the tier; what Argo does with an unknown field (it applies with kubectl's own validation or server-side, by its sync options) is left to the Flatcar validation"
@@ -193,8 +203,13 @@ ${out}"
     contains "${out%%$'\n'*}" "${col}" && pass "kubectl get akbinding has the column ${col}" || fail "kubectl get akbinding has no column ${col}"
   done
   if out=$("${K[@]}" get bindings -A 2>&1); then fail "kubectl get bindings -A answered: that is the core resource, which must not be what the docs say to type"; else pass "kubectl get bindings -A fails (the core resource of that name): ${out##*$'\n'}"; fi
-  local ready
-  ready=$("${K[@]}" -n agent-kourier get akbinding fast-chat -o 'jsonpath={.status.conditions[?(@.type=="Ready")].status}')
+  # The leader writes a status after a probe and at most every ten seconds: a tier that has just come up has none yet, so it is waited for.
+  local ready='' _
+  for _ in $(seq 60); do
+    ready=$("${K[@]}" -n agent-kourier get akbinding fast-chat -o 'jsonpath={.status.conditions[?(@.type=="Ready")].status}')
+    [ -z "${ready}" ] || break
+    sleep 2
+  done
   check "fast-chat has a Ready condition (status written by the leader)" test -n "${ready}"
   check "kubectl get akbinding shows a value in READY, not an empty column" test -n "$("${K[@]}" -n agent-kourier get akbinding fast-chat --no-headers | awk '{print $2}' | grep -E '^(True|False|Unknown)$' || true)"
 }

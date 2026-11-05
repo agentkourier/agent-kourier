@@ -108,6 +108,16 @@ func TestRunnerRoles(t *testing.T) {
 // another namespace.
 func TestRunnerCRRoles(t *testing.T) {
 	roles := runnerRolesByName(t)
+	// No rule of any Role is a wildcard: a "*" in resources, verbs or API groups would grant more than the lists the tests above and below pin.
+	for name, r := range roles {
+		for _, rule := range r.Rules {
+			for _, list := range [][]string{rule.Resources, rule.Verbs, rule.APIGroups, rule.ResourceNames} {
+				if slices.Contains(list, "*") {
+					t.Errorf("Role %s has a rule with a wildcard: %v", name, rule)
+				}
+			}
+		}
+	}
 	team, ok := roles[TeamNamespace+"/e2e-runner-team"]
 	if !ok {
 		t.Fatalf("the manifest has no Role e2e-runner-team in %s", TeamNamespace)

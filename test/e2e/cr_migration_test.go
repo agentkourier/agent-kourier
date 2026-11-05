@@ -87,16 +87,17 @@ type probe struct {
 	answered bool          // the thread got a finished reply within the wait
 	after    time.Duration // how long the reply took
 	text     string        // what the bot said in the thread when it was read again at the end, all of it
-	right    bool          // that text holds the answer that was wanted
+	answers  int           // how many bot messages of the thread hold the answer that was wanted
 }
 
 // migrationProbe says what a person who writes in the Binding's channel meets while the broker is moved: for d it mentions Agent Kourier every two
 // seconds, from its own goroutine, and each mention gets 20 seconds to be answered (scenario-gated, with no gate, answers at once). When it is over every
 // thread is read again, so that an answer that came after the wait is told from one that never came, and the text is checked: a bot message that is not
 // the answer (a notice, an error) is not counted as an answer. It is a measurement and does not judge: a mention that is delivered and acked and
-// never answered is one that a broker without the Binding ignored without a word, which a person would call a lost message, and the summary says how many
-// there were and when. A mention that could not be delivered is counted apart and only when the fake said it had no Socket Mode client (a 409); what real
-// Slack does then is unknown, and the fake drops the event. Any other error is printed. hack/kind/crs-migration.sh starts it as the Helm upgrade starts,
+// never answered is one that a person would call a lost message (that a broker without the Binding ignored it is an inference, not observed), and the summary says how many
+// there were and when. A mention that could not be delivered is counted apart and only when the fake said it had no Socket Mode client (a 409) and the
+// thread, read again, shows no answer: the fake stores the message and says 409 when a later event of it could not be sent, so the first may have been
+// delivered and answered. What real Slack does then is unknown, and the fake drops the event. Any other error is printed. An answer twice is counted apart. hack/kind/crs-migration.sh starts it as the Helm upgrade starts,
 // and waits for the line "probing started" in its log.
 func migrationProbe(t *testing.T, s *scenario, d time.Duration) {
 	const user, every, patience = "UMIGPROBE", 2 * time.Second, 20 * time.Second
@@ -120,7 +121,8 @@ func migrationProbe(t *testing.T, s *scenario, d time.Duration) {
 			if err != nil {
 				var se *StatusError
 				mu.Lock()
-				p.sendErr, p.noConn = err, errors.As(err, &se) && se.Status == http.StatusConflict
+				// A message that the fake stored and could not deliver in full comes back with its TS: it is read again with the rest.
+				p.sendErr, p.noConn, p.ts = err, errors.As(err, &se) && se.Status == http.StatusConflict, m.TS
 				mu.Unlock()
 				return
 			}
@@ -141,11 +143,12 @@ func migrationProbe(t *testing.T, s *scenario, d time.Duration) {
 		time.Sleep(every) // the cadence of the probe: a mention every two seconds, whatever the answers take
 	}
 	wg.Wait()
+	time.Sleep(10 * time.Second) // the last mentions have had their wait, and an answer a little later than it is still told from none
 
 	mu.Lock()
 	defer mu.Unlock()
 	for _, p := range probes { // late: what each thread holds now
-		if p.sendErr != nil || p.ts == "" {
+		if p.ts == "" {
 			continue
 		}
 		th, err := s.slack.Thread(s.ctx, ChannelCRMigration, p.ts)
@@ -156,20 +159,24 @@ func migrationProbe(t *testing.T, s *scenario, d time.Duration) {
 		var texts []string
 		for _, b := range BotMessages(th) {
 			texts = append(texts, b.Text)
-			p.right = p.right || strings.Contains(b.Text, probeAnswer)
+			if strings.Contains(b.Text, probeAnswer) {
+				p.answers++
+			}
 		}
 		p.text = strings.Join(texts, " | ")
 	}
-	var onTime, late, wrong, never, noConn, other []*probe
+	var onTime, late, wrong, never, noConn, other, twice []*probe
 	for _, p := range probes {
 		switch {
-		case p.noConn:
+		case p.noConn && p.answers == 0:
 			noConn = append(noConn, p)
-		case p.sendErr != nil:
+		case p.sendErr != nil && !p.noConn:
 			other = append(other, p)
-		case p.answered && p.right:
+		case p.answers > 1:
+			twice = append(twice, p)
+		case p.answers == 1 && p.answered && p.sendErr == nil:
 			onTime = append(onTime, p)
-		case p.right:
+		case p.answers == 1:
 			late = append(late, p)
 		case p.text != "":
 			wrong = append(wrong, p)
@@ -183,22 +190,24 @@ func migrationProbe(t *testing.T, s *scenario, d time.Duration) {
 		}
 		return fmt.Sprintf("from +%s to +%s", ps[0].sent.Sub(start).Round(time.Second), ps[len(ps)-1].sent.Sub(start).Round(time.Second))
 	}
-	t.Logf("probe summary: %d mentions: %d answered, %d answered after the wait, %d got a bot message that is not the answer, %d delivered and never answered (%s), %d not delivered (the fake had no Socket Mode client; unknown on real Slack, the fake drops it) (%s), %d failed otherwise",
-		len(probes), len(onTime), len(late), len(wrong), len(never), at(never), len(noConn), at(noConn), len(other))
+	t.Logf("probe summary: %d mentions: %d answered, %d answered after the wait or after a 409, %d answered more than once, %d got a bot message that is not the answer, %d delivered and, when read again, not answered (%s), %d not delivered (the fake had no Socket Mode client; unknown on real Slack, the fake drops it) (%s), %d failed otherwise",
+		len(probes), len(onTime), len(late), len(twice), len(wrong), len(never), at(never), len(noConn), at(noConn), len(other))
 	for _, p := range probes {
 		state := "answered after " + p.after.Round(100*time.Millisecond).String()
 		switch {
-		case p.noConn:
+		case p.noConn && p.answers == 0:
 			state = "NOT DELIVERED (the fake had no Socket Mode client)"
-		case p.sendErr != nil:
+		case p.sendErr != nil && !p.noConn:
 			state = "FAILED: " + p.sendErr.Error()
-		case p.answered && p.right:
-		case p.right:
-			state = "ANSWERED LATE, after the wait"
+		case p.answers > 1:
+			state = fmt.Sprintf("ANSWERED %d TIMES: %q", p.answers, p.text)
+		case p.answers == 1 && p.answered && p.sendErr == nil:
+		case p.answers == 1:
+			state = "ANSWERED after the wait, or after a 409"
 		case p.text != "":
 			state = fmt.Sprintf("NOT THE ANSWER (acked: %t): %q", p.acked, p.text)
 		default:
-			state = fmt.Sprintf("NEVER ANSWERED (acked: %t)", p.acked)
+			state = fmt.Sprintf("NO ANSWER IN THE THREAD WHEN READ AGAIN (acked: %t)", p.acked)
 		}
 		t.Logf("probe %d at +%s: %s", p.n, p.sent.Sub(start).Round(100*time.Millisecond), state)
 	}
@@ -228,8 +237,9 @@ func migrationOpen(t *testing.T, s *scenario, n string) {
 	t.Logf("session %s is open: thread %s, the first task held on %s, a reply queued behind it on %s", n, m.TS, first, second)
 }
 
-// migrationSession finds session n again in the channel, by its two gates, and releases both when the phase ends (a gate left closed holds its task for good).
-func migrationSession(t *testing.T, s *scenario, n string) (root fakeslack.MessageView, first, second string) {
+// migrationSession finds session n again in the channel, by its two gates. With releaseAtEnd it releases both when the phase ends, which is for the phases
+// that end the session (a gate left closed holds its task for good); release-N and reply-N leave the second gate closed, so that its task crosses the rollout.
+func migrationSession(t *testing.T, s *scenario, n string, releaseAtEnd bool) (root fakeslack.MessageView, first, second string) {
 	t.Helper()
 	msgs, err := s.slack.Messages(s.ctx, ChannelCRMigration)
 	if err != nil {
@@ -250,13 +260,15 @@ func migrationSession(t *testing.T, s *scenario, n string) (root fakeslack.Messa
 	if first == "" || second == "" {
 		t.Fatalf("session %s is not in %s: no mention with its first gate, or no reply with its second", n, ChannelCRMigration)
 	}
-	t.Cleanup(func() {
-		for _, g := range []string{first, second} {
-			if err := s.stub.Release(context.WithoutCancel(s.ctx), g); err != nil {
-				t.Errorf("release %s at the end: %v", g, err)
+	if releaseAtEnd {
+		t.Cleanup(func() {
+			for _, g := range []string{first, second} {
+				if err := s.stub.Release(context.WithoutCancel(s.ctx), g); err != nil {
+					t.Errorf("release %s at the end: %v", g, err)
+				}
 			}
-		}
-	})
+		})
+	}
 	return root, first, second
 }
 
@@ -275,7 +287,7 @@ const noticeOfGone = "no longer set up"
 
 // migrationFinish finds session n again and ends it, once the move is over.
 func migrationFinish(t *testing.T, s *scenario, n string) {
-	root, first, second := migrationSession(t, s, n)
+	root, first, second := migrationSession(t, s, n, true)
 	found, err := s.slack.Thread(s.ctx, ChannelCRMigration, root.TS)
 	if err != nil {
 		t.Fatal(err)
@@ -320,7 +332,20 @@ func migrationFinish(t *testing.T, s *scenario, n string) {
 // migrationRelease ends the first task of session n now, in whatever Agent Kourier is running now: with the way back held, that is a pod that has seen the
 // Bindings of the release go. The turn ends there, and the reply that waited behind it is next. It waits only for the first answer.
 func migrationRelease(t *testing.T, s *scenario, n string) {
-	root, first, _ := migrationSession(t, s, n)
+	root, first, _ := migrationSession(t, s, n, false)
+	// The old pods must have seen the Bindings go before the first task ends, or this phase would not exercise the hold. The broker holds its own connection
+	// when the resource goes (the way back deletes it last), which agentkourier_config_invalid_objects{kind="ChatConnection"} counts: it is the signal, with no
+	// log line to match. Waited for with a bound, and a timeout fails the phase.
+	err := Wait(s.ctx, 90*time.Second, "an old pod to have seen its ChatConnection go (agentkourier_config_invalid_objects{kind=ChatConnection} >= 1)", func(ctx context.Context) (bool, error) {
+		v, err := s.leaderCounter(ctx, "agentkourier_config_invalid_objects", map[string]string{"kind": "ChatConnection"})
+		if errors.Is(err, ErrNoSample) {
+			return false, nil
+		}
+		return v >= 1, err
+	})
+	if err != nil {
+		t.Fatalf("%v: the old pods have not seen the custom resources go, so releasing now would not show what a pod that has seen it does", err)
+	}
 	if err := s.stub.Release(s.ctx, first); err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +359,7 @@ func migrationRelease(t *testing.T, s *scenario, n string) {
 // migrationReply writes a new reply in the thread of session n, which has no gate and is answered at once by a Binding that is there. It is acked and
 // not waited for: what becomes of it is for settle-N.
 func migrationReply(t *testing.T, s *scenario, n string) {
-	root, _, _ := migrationSession(t, s, n)
+	root, _, _ := migrationSession(t, s, n, false)
 	r := s.reply(ChannelCRMigration, root.TS, "UMIG"+n, fmt.Sprintf("session %s third", n))
 	th, err := s.slack.Thread(s.ctx, ChannelCRMigration, root.TS)
 	if err != nil {
@@ -347,7 +372,7 @@ func migrationReply(t *testing.T, s *scenario, n string) {
 // ended once, the reply that waited behind it is answered, once, the new reply is answered, once, and no message says that the agent is no longer set up.
 // It is the case where the broker that ran the turn had lost the Binding: what the thread shows then is the loss.
 func migrationSettle(t *testing.T, s *scenario, n string) {
-	root, _, second := migrationSession(t, s, n)
+	root, _, second := migrationSession(t, s, n, true)
 	found, err := s.slack.Thread(s.ctx, ChannelCRMigration, root.TS)
 	if err != nil {
 		t.Fatal(err)
@@ -382,6 +407,13 @@ func migrationSettle(t *testing.T, s *scenario, n string) {
 	bots := BotMessages(end)
 	if len(bots) != 3 || strings.Count(bots[0].Text, "Released.") != 1 || strings.Count(bots[1].Text, "Released.") != 1 || strings.Count(bots[2].Text, probeAnswer) != 1 {
 		t.Errorf("the thread has %d bot messages, want the first task's text once, the queued reply's once and the new reply's once:%s", len(bots), describe(end))
+	}
+	err = Consistently(s.ctx, 5*time.Second, "the thread holds the three answers and nothing more", func(ctx context.Context) (bool, error) {
+		th, err := s.slack.Thread(ctx, ChannelCRMigration, root.TS)
+		return len(BotMessages(th)) == 3, err
+	})
+	if err != nil {
+		t.Error(err)
 	}
 	t.Logf("session %s ended:%s", n, describe(end))
 }
