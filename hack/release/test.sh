@@ -83,6 +83,14 @@ echo "== a missing required job fails closed"
 run_case missing-job 1 missing-job
 contains "missing-job: names the missing required job" "required job 'test' is missing" "${TMP}/missing-job.out"
 
+echo "== a corpus run on the minimum Kubernetes that failed fails closed"
+run_case corpus-min-failure 1 corpus-min-failure
+contains "corpus-min-failure: names the required job" "required job 'crd-corpus (1.33)' is failure" "${TMP}/corpus-min-failure.out"
+
+echo "== a missing corpus run fails closed"
+run_case corpus-min-missing 1 corpus-min-missing
+contains "corpus-min-missing: names the missing required job" "required job 'crd-corpus (1.33)' is missing" "${TMP}/corpus-min-missing.out"
+
 echo "== a skipped required job fails closed"
 run_case skipped-required 1 skipped-required
 contains "skipped-required: names the skipped required job" "required job 'test-testhooks' is skipped" "${TMP}/skipped-required.out"
