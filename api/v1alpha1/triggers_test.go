@@ -313,7 +313,7 @@ func TestParsePromptTemplate(t *testing.T) {
 func bot(o *Binding) *Trigger { return &o.Spec.Chat.Triggers[1] }
 
 // manyTriggers returns n valid triggers, the mention trigger and n-1 botMessage triggers of distinct senders. Their regexes
-// are small: fifty of the fixture's own, which are about 370 instructions together, would pass the budget of a Binding.
+// are small: the fixture's trigger is about 370 instructions, so fifty of them are about 18500, over the budget of a Binding.
 func manyTriggers(o *Binding, n int) []Trigger {
 	ts := []Trigger{o.Spec.Chat.Triggers[0]}
 	for i := 1; i < n; i++ {

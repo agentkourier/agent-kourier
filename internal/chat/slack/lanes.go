@@ -12,8 +12,9 @@ const (
 	// maxChannelBacklog is the events a channel's lane holds: the one being handled and those that wait behind it.
 	maxChannelBacklog = 16
 	// maxPendingEvents is the events all lanes hold, past which a channel that already has one held is refused another. A
-	// channel with none is not refused its first, so a channel is never shed for the others being busy, and the lanes hold
-	// at most this many events and one for each channel beyond it.
+	// channel with none is never refused its first event, however busy the others are, but once the total is full a channel
+	// takes one at a time: a second event while its first is held, such as a press during a message or the next alert of a
+	// burst, is shed. The lanes hold at most this many events and one for each other channel with an event waiting.
 	maxPendingEvents = 256
 )
 
@@ -98,3 +99,10 @@ func (l *lanes) drain(channel string, ln *lane) {
 
 // wait returns when every event submitted has run. It is for the end of a run: submit must not be called while it waits.
 func (l *lanes) wait() { l.wg.Wait() }
+
+// held is the events the lanes hold now, those being run included.
+func (l *lanes) held() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.pending
+}

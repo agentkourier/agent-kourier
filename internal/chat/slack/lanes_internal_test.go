@@ -100,8 +100,9 @@ func TestLanesAreBounded(t *testing.T) {
 	}
 }
 
-// However many channels are hot, every other channel can still have an event taken: a hostile Binding owns one channel, and
-// several of them must not fill the lanes so that a healthy channel's events, or its presses, are shed.
+// However many channels are hot, every other channel can still have its first event taken: a hostile Binding owns one channel,
+// and several of them must not fill the lanes so that a healthy channel's events are all shed. With the total full a channel
+// takes one event at a time, as the second assertion of the test says, so a second event for it is shed.
 func TestEveryChannelHasASlot(t *testing.T) {
 	l := newLanes(maxChannelBacklog, 4)
 	release := make(chan struct{})

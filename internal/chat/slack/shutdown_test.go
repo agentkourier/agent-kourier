@@ -28,7 +28,8 @@ func heldRun(t *testing.T, queued int) (fake *fakeslack.Server, sk *sink, cancel
 		first.Do(func() { close(held); <-release })
 		return nil
 	}
-	cancel, wait = run(t, slack.New(clientConfig(fake)), sk)
+	client := slack.New(clientConfig(fake))
+	cancel, wait = run(t, client, sk)
 	waitConnected(t, fake)
 	for i := 0; i <= queued; i++ {
 		ids = append(ids, send(t, fake, onChannel("C1", fmt.Sprintf("%d.1", i+1), "x")))
@@ -38,7 +39,12 @@ func heldRun(t *testing.T, queued int) (fake *fakeslack.Server, sk *sink, cancel
 	case <-time.After(5 * time.Second):
 		t.Fatal("the sink was not called")
 	}
-	time.Sleep(200 * time.Millisecond) // the reader has taken the rest and queued them behind the held one
+	// Wait until the reader has queued the rest behind the held one: the lanes hold them all.
+	for deadline := time.Now().Add(5 * time.Second); client.PendingEvents() != queued+1; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the lanes hold %d events, want %d", client.PendingEvents(), queued+1)
+		}
+	}
 	return fake, sk, cancel, wait, open, calls, ids
 }
 

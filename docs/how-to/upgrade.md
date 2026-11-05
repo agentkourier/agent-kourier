@@ -558,11 +558,25 @@ on the files route: at start the broker exits with [code 2](../reference/cli.md#
 route a Binding over a limit is not served after the upgrade, since a restarted broker has no earlier good generation of it: it has `Accepted=False` with the reason `InvalidSpec`, and its channel
 has no Binding until you edit it. An earlier release has none of these limits, so after a [rollback](#roll-back) such a config loads again.
 
-**What the limits do not make small.** They cap the cost, and the cost they allow is still a fraction of a second to a second or more for each message. Measured in a test process on a laptop (macOS arm64, Go 1.27, `-race` off, a load average of about 2.5 on 8 cores), trying a Binding at the whole
-budget (regular expressions of about 2000, 2000 and 1000 instructions, each finding its match only at the last byte) on messages whose six fields are 16 KiB each took about 0.4 seconds with `.{0,997}` and about 0.7 seconds
-with `\pL{0,990}`; one regular expression of about 2000 instructions that does not match takes about 0.3 and 0.5 seconds. At the earlier budget of 20000 instructions the same Binding took about four times as long. The time grows with both the instructions and the length of the field.
-It runs on the lane of the channel, so the channel's events wait behind it first, but it is CPU: many busy channels slow the acknowledgments of healthy ones too. With the Go runtime held to one CPU (`GOMAXPROCS=1`), a healthy channel's acknowledgment took about 0.1 seconds
-with 2 other channels each trying one such regular expression on 16 KiB, 0.5 seconds with 8, and 2.8 seconds with 32; with 8 CPUs it took 0.04 seconds with 8 and 0.06 with 32. Validating a Binding at every cap, with 2156 regular expressions of 512 bytes, took about 20 milliseconds, where compiling every one of them took about 19 seconds. Keep Bindings of channels that people you do not trust can post in well under the limits.
+**What the limits do not make small.** They cap the cost, and the cost they allow is a fraction of a second to a second for each message. Go's regular expression engine does work in proportion to the
+instructions of the program times the length of the text, so the time grows with both, and it grows when the CPU is shared with other work. The benchmark `BenchmarkRegexCost` in `internal/chat` measures it on 16 KiB fields, which is all a
+regular expression reads; run it on your own hardware with `go test ./internal/chat -run '^$' -bench BenchmarkRegexCost -benchtime 3x` (it is not part of `make test`).
+
+One process, `GOMAXPROCS=1`, three runs of three iterations each, on an Apple M2 laptop with 8 CPUs (macOS arm64, Go 1.27, `-race` off), at a load average of 14.3 before the runs and 10.4 after, which is not an idle machine. The
+times are the median of the three, for one message whose six fields are 16 KiB each:
+
+| | `.{0,n}` | `\pL{0,n}` |
+|---|---|---|
+| One regular expression of about 2000 instructions that finds no match (`one_regex_miss`) | 0.38 s | 0.62 s |
+| The same, finding its match at the last byte (`one_regex_hit`) | 0.27 s | 0.30 s |
+| A Binding at the budget of 5000 instructions: two matches of about 2000 that find their match at the last byte, and an exclude of about 1000 that finds none (`binding_at_budget`) | 0.67 s | 0.81 s |
+
+The Binding took 1.8 times (`.`) and 1.3 times (`\pL`) the time of one regular expression that misses, and 2.5 and 2.7 times the time of one that hits, which is about the 2.5 that its instructions say (5000 over 2000). A miss costs more
+than a hit at the last byte, and a Unicode class costs more than the dot. The figures swing with the load: an earlier run of the same benchmark, at a load average of 7 to 12, gave 1.5 seconds for the dot's miss. They are for comparing the cases, not for sizing a machine; measure your own.
+
+The time runs on the lane of the channel, so the channel's own events wait behind it first, but it is CPU: many busy channels slow the acknowledgments of healthy ones too. Validating a Binding at every cap, with 2156 regular
+expressions of 512 bytes, took 7 to 20 milliseconds (`TestValidateOfAHostileBindingIsCheap` logs it with `-v`), where compiling every one of them with `regexp.Compile` took about 19 seconds in one measurement at a load average of about 3. Keep
+Bindings of channels that people you do not trust can post in well under the limits.
 
 ## Upgrade to the release that caps the pause timeout and the thread TTL
 

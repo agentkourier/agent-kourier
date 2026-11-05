@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
@@ -72,6 +73,9 @@ type Client struct {
 	users map[string]cachedUser // guarded by mu
 	team  string                // the workspace ID, from auth.test; guarded by mu
 	url   string                // the workspace's origin, from auth.test, once Run has asked; guarded by mu
+
+	// lanes is the lanes of the Run that is going, for a test to read what they hold (PendingEvents in export_test.go).
+	lanes atomic.Pointer[lanes]
 
 	// ownNamed makes the warning that a trigger names Agent Kourier's own bot ID one, however many of its posts arrive.
 	ownNamed sync.Once
@@ -143,6 +147,7 @@ func (c *Client) Run(ctx context.Context, sink Sink) error {
 	c.mu.Unlock()
 	ctx, cancel := context.WithCancel(ctx)
 	lanes, shed := newLanes(maxChannelBacklog, maxPendingEvents), &shedLog{}
+	c.lanes.Store(lanes)
 	// Events in flight see the end of Run, those waiting on a lane are dropped unhandled, and Run returns when the ones in flight
 	// have returned: the next Run must not overlap the lanes of this one.
 	defer func() { cancel(); lanes.wait(); c.flushShed(shed) }()
