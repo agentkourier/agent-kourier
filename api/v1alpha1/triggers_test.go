@@ -494,8 +494,14 @@ func TestTriggersValidate(t *testing.T) {
 		{"typo in a top-level field in the else branch", func(o *Binding) {
 			bot(o).PromptTemplate = `{{ if eq .State "FIRING" }}x{{ else }}{{ .Stat }}{{ end }}`
 		}, at + `.promptTemplate: invalid template: promptTemplate:1:41: no field .Stat in the prompt view (it has .Channel, .State, .Key, .Link, .Source and .Fields)`},
-		{"the whole of .Fields", func(o *Binding) { bot(o).PromptTemplate = `{{ range .Fields }}{{ . }}{{ end }}` },
-			at + `.promptTemplate: invalid template: promptTemplate:1:9: .Fields as a whole cannot be read: name an entry, such as .Fields.alertname`},
+		{"the whole of .Fields", func(o *Binding) { bot(o).PromptTemplate = `{{ len .Fields }}` },
+			at + `.promptTemplate: invalid template: promptTemplate:1:7: .Fields as a whole cannot be read: name an entry, such as .Fields.alertname`},
+		{"a range", func(o *Binding) { bot(o).PromptTemplate = `{{ range 3 }}x{{ end }}` },
+			at + `.promptTemplate: invalid template: promptTemplate:1:9: range is not allowed: a prompt template has no loops`},
+		{"a variable", func(o *Binding) { bot(o).PromptTemplate = `{{ $k := .State }}{{ $k }}` },
+			at + `.promptTemplate: invalid template: promptTemplate:1:3: a variable is not allowed: read the value where you use it`},
+		{"printf", func(o *Binding) { bot(o).PromptTemplate = `{{ printf "%s" .State }}` },
+			at + `.promptTemplate: invalid template: promptTemplate:1:3: function printf is not allowed: use only and, eq, ge, gt, index, le, len, lt, ne, not, or and slice`},
 		{"a slice of the key that a long key fits", func(o *Binding) {
 			bot(o).PromptTemplate = `{{ slice .Key 0 10 }} {{ slice .Fields.alertname 0 10 }}`
 		}, ""},
@@ -507,6 +513,11 @@ func TestTriggersValidate(t *testing.T) {
 		}, ""},
 
 		// Caps, which the CRD schema carries too.
+		{"a template at the length cap ok", func(o *Binding) { bot(o).PromptTemplate = strings.Repeat("x", maxPromptTemplateLen) }, ""},
+		{"a template over the length cap", func(o *Binding) { bot(o).PromptTemplate = strings.Repeat("x", maxPromptTemplateLen+1) },
+			fmt.Sprintf("%s.promptTemplate: is %d bytes, longer than the %d byte limit", at, maxPromptTemplateLen+1, maxPromptTemplateLen)},
+		{"a template over the length cap is not parsed", func(o *Binding) { bot(o).PromptTemplate = strings.Repeat("{{", maxPromptTemplateLen) },
+			fmt.Sprintf("%s.promptTemplate: is %d bytes, longer than the %d byte limit", at, 2*maxPromptTemplateLen, maxPromptTemplateLen)},
 		{"the most triggers ok", func(o *Binding) { o.Spec.Chat.Triggers = manyTriggers(o, maxTriggers) }, ""},
 		{"too many triggers", func(o *Binding) { o.Spec.Chat.Triggers = manyTriggers(o, maxTriggers+1) },
 			fmt.Sprintf("spec.chat.triggers: has %d items, maximum is %d", maxTriggers+1, maxTriggers)},

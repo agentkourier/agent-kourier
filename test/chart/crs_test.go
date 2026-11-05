@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -339,23 +340,28 @@ func sha256Hex(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// decodeCR passes a rendered custom resource through the decoder of the file loader, which the broker's CR source uses too.
+// decodeCR passes a rendered custom resource through the decoder of the file loader, which the broker's CR source uses too. The broker
+// tolerates a field it does not know and the chart must not render one, so each is an error here.
 func decodeCR(t *testing.T, kind string, o object) []error {
 	t.Helper()
 	b, err := json.Marshal(o)
 	if err != nil {
 		t.Fatal(err)
 	}
+	var unknown []string
 	var errs []error
 	switch kind {
 	case "AgentBackend":
-		_, errs = config.DecodeObject[v1alpha1.AgentBackend](b)
+		_, unknown, errs = config.DecodeObject[v1alpha1.AgentBackend](b)
 	case "ChatConnection":
-		_, errs = config.DecodeObject[v1alpha1.ChatConnection](b)
+		_, unknown, errs = config.DecodeObject[v1alpha1.ChatConnection](b)
 	case "Binding":
-		_, errs = config.DecodeObject[v1alpha1.Binding](b)
+		_, unknown, errs = config.DecodeObject[v1alpha1.Binding](b)
 	default:
 		t.Fatalf("unknown kind %s", kind)
+	}
+	for _, f := range unknown {
+		errs = append(errs, fmt.Errorf("%s: unknown field", f))
 	}
 	return errs
 }

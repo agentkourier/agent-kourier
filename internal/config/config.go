@@ -252,18 +252,33 @@ func decodeBindingFile(j []byte, dst *[]v1alpha1.Binding) []error {
 // strictDecode decodes the JSON in j into obj and returns each unknown field as an error "path: unknown field".
 // The error result is set when j cannot be decoded at all, as with a value of the wrong type.
 func strictDecode(j []byte, obj any) (unknown []error, err error) {
-	strict, err := kjson.UnmarshalStrict(j, obj, kjson.DisallowUnknownFields)
+	paths, other, err := scanDecode(j, obj)
 	if err != nil {
 		return nil, err
+	}
+	for _, p := range paths {
+		unknown = append(unknown, fmt.Errorf("%s: unknown field", p))
+	}
+	return append(unknown, other...), nil
+}
+
+// scanDecode decodes the JSON in j into obj, which holds every field that obj has, and returns the path of each field it
+// does not have, in document order, and any other problem the strict decoder found. The error result is set when j cannot
+// be decoded at all.
+func scanDecode(j []byte, obj any) (paths []string, other []error, err error) {
+	strict, err := kjson.UnmarshalStrict(j, obj, kjson.DisallowUnknownFields)
+	if err != nil {
+		return nil, nil, err
 	}
 	for _, e := range strict {
 		var fe kjson.FieldError
 		if errors.As(e, &fe) {
-			e = fmt.Errorf("%s: unknown field", fe.FieldPath())
+			paths = append(paths, fe.FieldPath())
+		} else {
+			other = append(other, e)
 		}
-		unknown = append(unknown, e)
 	}
-	return unknown, nil
+	return paths, other, nil
 }
 
 // DecodeStrict decodes the YAML in data into obj as the loader decodes a resource: a duplicate key is an

@@ -86,8 +86,26 @@ type team struct {
 }
 
 // newTeam makes the team's Secret (a fake unsigned JWT, which is all the stub agent asks of a bearer), grants Agent Kourier that one Secret, and makes
-// the AgentBackend. It is the RBAC a team must add: without the grant Agent Kourier cannot read the token.
+// the AgentBackend. It is the RBAC a team must add: without the grant Agent Kourier cannot read the token. Everything a case makes is removed when
+// it ends, and what an earlier run left of the same names, before it starts.
 func (c *crScenario) newTeam(prefix string) *team {
+	c.t.Helper()
+	tm := c.newTeamUngranted(prefix)
+	tm.grant()
+	return tm
+}
+
+// grant lets Agent Kourier read the team's Secret: the Role and the RoleBinding that name it.
+func (tm *team) grant() {
+	tm.t.Helper()
+	if err := tm.crs.GrantSecret(tm.ctx, tm.secret); err != nil {
+		tm.t.Fatal(err)
+	}
+}
+
+// newTeamUngranted is newTeam without the grant: the Secret and the AgentBackend are made and the Role is not, so that a case can apply a Binding
+// first and the Role after, as a team that is told only later does.
+func (c *crScenario) newTeamUngranted(prefix string) *team {
 	c.t.Helper()
 	tm := &team{crScenario: c, prefix: prefix, secret: prefix + "-token", backend: prefix + "-agents"}
 	c.t.Cleanup(tm.remove)
@@ -101,9 +119,6 @@ func (c *crScenario) newTeam(prefix string) *team {
 	enc := base64.RawURLEncoding
 	token := enc.EncodeToString([]byte(`{"alg":"none"}`)) + "." + enc.EncodeToString([]byte(`{"email":"e2e-team@example.test"}`)) + "."
 	if err := c.crs.CreateSecret(c.ctx, tm.secret, map[string]string{"token": token}); err != nil {
-		c.t.Fatal(err)
-	}
-	if err := c.crs.GrantSecret(c.ctx, tm.secret); err != nil {
 		c.t.Fatal(err)
 	}
 	tm.create(kube.AgentBackendGVR, tm.backend, map[string]any{"dialect": "kagent-v1", "url": c.env.StubURL})
@@ -257,14 +272,29 @@ func (c *crScenario) waitRejections(reason string, want float64) {
 // is empty when the tier comes up, and nothing the tier is configured with is in it. In a run of the whole suite the other cases have made Secrets here
 // before, so an informer of Agent Kourier may have been asked about a Secret of this namespace: what this case shows is the Binding's own Secret, which
 // is new, read with no restart.
+//
+// The Role comes after the Binding, as it does for a team that is told of it late: until it exists the Binding says BackendReachable is False,
+// CredentialsUnreadable, and once it is applied the same Binding serves, with nothing asked again of Agent Kourier.
 func TestCR_ABindingInANewNamespaceServesWithNoRestart(t *testing.T) {
 	c := newCRScenario(t)
 	before, err := c.reps.All(c.ctx)
 	if err != nil || len(before) == 0 {
 		t.Fatalf("the replicas before = %v, %v", before, err)
 	}
-	tm := c.newTeam("newns")
+	tm := c.newTeamUngranted("newns")
 	tm.addBinding("newns", ChannelCRNewNamespace, crAgentAnswer)
+	err = Wait(c.ctx, statusWithin, "the Binding to say that its credentials are unreadable, with no Role yet", func(ctx context.Context) (bool, error) {
+		obj, err := c.crs.Get(ctx, kube.BindingGVR, kube.TeamNamespace, "newns")
+		if err != nil {
+			return false, err
+		}
+		cond, ok := condition(obj, "BackendReachable")
+		return ok && cond["status"] == "False" && cond["reason"] == "CredentialsUnreadable", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tm.grant()
 
 	c.answeredBy(ChannelCRNewNamespace, crAnswer, crServeTimeout)
 
