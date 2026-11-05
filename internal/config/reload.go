@@ -42,13 +42,17 @@ type ReloaderConfig struct {
 	// resources. It also stops the Secrets from being checked: a Secret that is missing or unreadable does not keep a
 	// Binding out of the snapshot, the prober says so, and only the Secrets of the objects that are served are followed.
 	// The files of a directory are one artifact, loaded all or nothing: leave it false for them.
+	//
+	// A PerObject Reloader publishes each read of the Source, and does not read again to see whether the source moved
+	// meanwhile: it takes the Source at its word that Set is the state the fingerprint it returns names (see Source). What
+	// changed after the read is found at the next poll, which compares the source's fingerprint with that of the read. So a
+	// source that is edited without pause is published as it was at the start of each read, a read behind at most, where a
+	// Reloader that discarded a read that went stale would publish nothing for as long as the edits last. A Reloader that is
+	// not PerObject reads a directory, which gives no such word, and so reads again when it changes under the read.
 	PerObject bool
 	// OnReport is called with the Report of each snapshot that is published, including a recheck that finds nothing new,
 	// for a metric. It runs on the reloading goroutine, so it must not block.
 	OnReport func(Report)
-	// FirstLoadWait bounds how long Start of a PerObject Reloader goes on trying while the config keeps changing under
-	// its first load. It defaults to 30s, and the files' Reloader ignores it.
-	FirstLoadWait time.Duration
 }
 
 // Status describes the health of a Reloader.
@@ -65,16 +69,15 @@ type Status struct {
 // Reloader keeps a Snapshot of the config current. Readers call Current, which takes
 // no lock; a failed reload keeps the last good snapshot.
 type Reloader struct {
-	source        Source
-	secrets       SecretResolver
-	poll          time.Duration
-	secretsEvery  time.Duration
-	secretsWait   time.Duration
-	log           *slog.Logger
-	onError       func(error)
-	perObject     bool
-	onReport      func(Report)
-	firstLoadWait time.Duration
+	source       Source
+	secrets      SecretResolver
+	poll         time.Duration
+	secretsEvery time.Duration
+	secretsWait  time.Duration
+	log          *slog.Logger
+	onError      func(error)
+	perObject    bool
+	onReport     func(Report)
 
 	snap   atomic.Pointer[published] // the Snapshot with what Revision needs, replaced as one
 	status atomic.Pointer[Status]
@@ -85,11 +88,12 @@ type Reloader struct {
 	lastAttempt     time.Time
 	failures        int             // consecutive failed reloads
 	reported        map[string]bool // what the latest report said, so that a recheck stays silent about it
+	approvalWarned  map[string]bool // the Bindings whose approval policy the latest warning named, so that a change elsewhere stays silent
 }
 
 // errConfigMoving means the config source changed during two loads in a row, so neither
 // result can be trusted. It is not a config error; the next poll tries again. At Start there
-// is no next poll: the first load fails with it.
+// is no next poll: the first load fails with it. A PerObject Reloader never returns it: see ReloaderConfig.PerObject.
 var errConfigMoving = errors.New("config changed during the load")
 
 // NewReloader returns a Reloader that has not loaded anything yet.
@@ -99,16 +103,15 @@ func NewReloader(cfg ReloaderConfig) *Reloader {
 		src = dirSource{cfg.Dir}
 	}
 	r := &Reloader{
-		source:        src,
-		secrets:       cfg.Secrets,
-		poll:          cmp.Or(cfg.PollInterval, 10*time.Second),
-		secretsEvery:  cmp.Or(cfg.SecretsInterval, time.Minute),
-		secretsWait:   cmp.Or(cfg.SecretsWait, 10*time.Second),
-		log:           cmp.Or(cfg.Logger, slog.Default()),
-		onError:       cfg.OnError,
-		perObject:     cfg.PerObject,
-		onReport:      cfg.OnReport,
-		firstLoadWait: cmp.Or(cfg.FirstLoadWait, 30*time.Second),
+		source:       src,
+		secrets:      cfg.Secrets,
+		poll:         cmp.Or(cfg.PollInterval, 10*time.Second),
+		secretsEvery: cmp.Or(cfg.SecretsInterval, time.Minute),
+		secretsWait:  cmp.Or(cfg.SecretsWait, 10*time.Second),
+		log:          cmp.Or(cfg.Logger, slog.Default()),
+		onError:      cfg.OnError,
+		perObject:    cfg.PerObject,
+		onReport:     cfg.OnReport,
 	}
 	r.status.Store(&Status{})
 	return r
@@ -146,21 +149,8 @@ func (r *Reloader) Status() Status {
 
 // Start loads the config and, if that works, starts checking for changes every PollInterval
 // until ctx ends. A failure of the first load is returned and starts nothing. Call Start once.
-//
-// A PerObject Reloader whose first load finds the config moving (errConfigMoving: two edits anywhere in the cluster landed
-// during the build, which a busy cluster does) tries again, for FirstLoadWait, where the files' Reloader fails: a custom
-// resource can change at any moment, and a start that exits for it would restart into the same chance.
 func (r *Reloader) Start(ctx context.Context) error {
-	err := r.reload(ctx, true)
-	for until := time.Now().Add(r.firstLoadWait); r.perObject && errors.Is(err, errConfigMoving) && time.Now().Before(until); {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("load config: %w", err)
-		case <-time.After(100 * time.Millisecond):
-		}
-		err = r.reload(ctx, true)
-	}
-	if err != nil {
+	if err := r.reload(ctx, true); err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 	r.wg.Go(func() {
@@ -231,31 +221,41 @@ func (r *Reloader) reload(ctx context.Context, force bool) error {
 	return err
 }
 
-// warnToolApprovalPolicies reports the enabled approval policy that leaves every non-bot channel member eligible.
-// The warning belongs to the config load, so it is emitted even before a Binding is used by the broker.
+// warnToolApprovalPolicies reports the enabled approval policy that leaves every non-bot channel member eligible, once for each
+// Binding that has it: a changed read that leaves the Binding's policy as it was says nothing, so that one team editing in a
+// loop does not repeat the warning about another's Binding at every poll. A Binding that fixes its policy and enables it again
+// is warned of again. The warning belongs to the config load, so it is emitted even before a Binding is used by the broker.
 func (r *Reloader) warnToolApprovalPolicies(snap *Snapshot) {
+	now := map[string]bool{}
 	for _, rb := range snap.Bindings() {
 		in := rb.Binding.Spec.Interactions
 		if in.ToolApprovals && len(in.ApproverGroups) == 0 {
-			r.log.Warn("config: tool approvals are enabled without approver groups; any non-bot channel member may decide",
-				"binding", rb.Binding.Namespace+"/"+rb.Binding.Name)
+			name := rb.Binding.Namespace + "/" + rb.Binding.Name
+			now[name] = true
+			if !r.approvalWarned[name] {
+				r.log.Warn("config: tool approvals are enabled without approver groups; any non-bot channel member may decide", "binding", name)
+			}
 		}
 	}
+	r.approvalWarned = now
 }
 
-// build reads the config from the source and resolves it. If the source changes while it works,
-// it goes again, once. If it changes again, neither result is trusted and build returns
-// errConfigMoving.
+// build reads the config from the source and resolves it. A PerObject Reloader resolves the one read it makes and returns it with
+// the fingerprint the source gave it (see ReloaderConfig.PerObject). Otherwise, if the source changes while it works, it goes
+// again, once. If it changes again, neither result is trusted and build returns errConfigMoving.
 func (r *Reloader) build(ctx context.Context) (pub *published, fp string, err error) {
+	if r.perObject {
+		var set *Set
+		if set, fp, err = r.source.Set(ctx); err != nil {
+			return nil, fp, err
+		}
+		return r.buildPerObject(ctx, set, fp), fp, nil
+	}
 	for range 2 {
 		var set *Set
 		set, fp, err = r.source.Set(ctx)
 		pub = nil
-		switch {
-		case err != nil:
-		case r.perObject:
-			pub = r.buildPerObject(ctx, set, fp)
-		default:
+		if err == nil {
 			refs := set.secretRefs() // before Resolve, which takes the set
 			r.watchSecrets(ctx, refs)
 			var snap *Snapshot

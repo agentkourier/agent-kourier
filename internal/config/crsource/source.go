@@ -66,6 +66,15 @@
 // resourceVersion and not generation, and a source that moved with it would start a reload, a probe pass and a status write
 // for every status write.
 //
+// Set reads every object from one listing of the three caches, and returns that listing's fingerprint: the Set is the state
+// the fingerprint names, however long the decoding takes and whatever the caches do meanwhile. That is what lets a
+// config.Reloader that is PerObject publish a read without checking that the source held still while it was made: an edit that
+// landed after the listing is not in the Set, and is found at the next poll, which compares the fingerprint of the caches with
+// that of the read. A tenant that edits an object in a loop gets, at most, a reload at each poll, each one read behind.
+// The three caches are listed one after another, Bindings first, and not at one instant, so a Set can hold objects of
+// different kinds from slightly different moments. Each object in it is a whole object of its cache, and what an edit that
+// landed between the lists changed is found at the next poll too, as it is for any edit after the listing.
+//
 // # RBAC
 //
 // The ServiceAccount needs list and watch on bindings, agentbackends and chatconnections of agentkourier.dev, in every
@@ -482,9 +491,9 @@ func ConditionsOf(u *unstructured.Unstructured) []metav1.Condition {
 	return out
 }
 
-// Set reads the objects as of one moment, decodes each, and returns them with the fingerprint of what it read. See the
-// package comment for what it leaves out and what it keeps. It fails only when the caches have not synced or the source is
-// stopped. Each call returns a Set of its own.
+// Set reads the objects from one listing of the caches (see "Change detection"), decodes each, and returns them with the
+// fingerprint of that listing. See the package comment for what it leaves out and what it keeps. It fails only when the caches
+// have not synced or the source is stopped. Each call returns a Set of its own.
 func (s *Source) Set(context.Context) (*config.Set, string, error) {
 	l, err := s.list()
 	if err != nil {
@@ -889,7 +898,8 @@ func (s *Source) owns(l listing, u *unstructured.Unstructured) bool {
 	return ref == s.own || !l.hasConnection[ref]
 }
 
-// listing is what the three caches held at one moment.
+// listing is what the three caches held when they were listed, one after another (Bindings first, then AgentBackends, then
+// ChatConnections), not at one instant.
 type listing struct {
 	bindings, backends, connections []*unstructured.Unstructured
 	hasConnection                   map[key]bool
