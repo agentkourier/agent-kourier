@@ -107,6 +107,59 @@ func TestValueKeepsTheCallersCancellation(t *testing.T) {
 	}
 }
 
+// A Binding may be applied before the Role that lets Agent Kourier read its Secret. The informer of that Secret is denied, the config's
+// Watch says so, and the Binding's credentials are unreadable. The docs promise that it recovers on its own, with no restart, once the Role
+// is applied: nothing asks again (no Watch, no Retain, no new informer), and the informer that was denied keeps listing and syncs. The
+// denial it reported before stays on record, and must not be what a read of a synced cache answers.
+func TestADeniedSecretIsReadOnceTheRoleIsApplied(t *testing.T) {
+	client := newAPI(t, secret("sre", "creds"))
+	var allowed atomic.Bool
+	client.PrependReactor("list", "secrets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if !allowed.Load() && a.(k8stesting.ListAction).GetListRestrictions().Fields.String() == "metadata.name=creds" {
+			return true, nil, denied()
+		}
+		return false, nil, nil
+	})
+	r := New(client, WithLogger(slog.New(slog.DiscardHandler)))
+	t.Cleanup(r.Stop)
+	names := []config.SecretName{sn("sre", "creds")}
+	if err := r.Watch(t.Context(), names); !errors.Is(err, ErrAccessDenied) {
+		t.Fatalf("Watch before the Role = %v, want ErrAccessDenied", err)
+	}
+	r.Retain(names) // the snapshot that the Binding is in is published, and holds the Secret
+	if _, err := r.Value(t.Context(), "sre", "creds", "token"); !errors.Is(err, ErrAccessDenied) {
+		t.Fatalf("Value before the Role = %v, want ErrAccessDenied", err)
+	}
+	before := entryOf(r, names[0])
+	if before == nil {
+		t.Fatal("the denied Secret is not followed any more; the informer must go on listing")
+	}
+	listsBefore, _ := client.count(names[0])
+
+	allowed.Store(true) // the team applies the Role
+
+	var v string
+	waitFor(t, "a Value of the Secret once the Role is applied", func() bool {
+		got, err := r.Value(t.Context(), "sre", "creds", "token")
+		if err == nil {
+			v = got.Reveal()
+		}
+		return err == nil
+	})
+	if v != canary {
+		t.Errorf("Value = %q, want the Secret's", v)
+	}
+	if after := entryOf(r, names[0]); after != before {
+		t.Error("the Secret has another informer than the one that was denied: it was started again, not recovered")
+	}
+	if lists, _ := client.count(names[0]); lists <= listsBefore {
+		t.Errorf("lists = %d after %d: the informer that was denied did not list again", lists, listsBefore)
+	}
+	if _, err := r.SecretVersion(t.Context(), "sre", "creds"); err != nil {
+		t.Errorf("SecretVersion once the Secret has synced = %v", err)
+	}
+}
+
 // entryOf returns the entry of a followed Secret, or nil.
 func entryOf(r *Resolver, n config.SecretName) *entry {
 	r.mu.Lock()
