@@ -39,6 +39,7 @@ internal/bindingcheck   per-Binding conditions and the prober that checks them
 internal/broker         composition: Bindings, chat platform factory, lifecycle, health, leader election, shutdown order
 internal/interact       interactions: pause intake, button presses, timeout sweep
 internal/redact         shared secret redaction for display and audit text
+internal/limitsdoc      test support that holds docs/reference/limits.md to the constants of the code
 internal/testhooks      test-only hooks, compiled in under the testhooks build tag
 charts/agent-kourier    Helm chart
 examples/ax             reference A2A agent for Google AX (separate module)
@@ -139,6 +140,11 @@ a WP mixes concerns. At most four agents (implementers and reviewers together) r
   date, a version); mark it in the PR or commit body as unverified rather than stating it as fact.
 - A reviewer, human or agent, verifies against the code and names the file and line; agreement between docs is
   not evidence.
+- A change that adds or moves a limit (a bound, a cap, a default timeout, a version) updates `docs/reference/limits.md` in the same change:
+  the value, what happens past it, and whether a setting changes it. A value that is a constant or a default of the code is written in a code
+  span followed at once by a marker (copy a row of the page), and a test in the package that holds it calls `limitsdoc.Count`, `Bytes`,
+  `Duration` or `Text` with the marker's ID, so that the constant cannot change without the page; `internal/limitsdoc` fails a marker that no
+  test calls.
 - No work-package, decision or risk IDs, `tasks/` paths, personal or workspace identifiers in public pages.
 - Run `make docs-ref docs-check docs-build` before pushing a docs change. Pushing to `main` deploys the site.
 

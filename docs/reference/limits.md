@@ -1,0 +1,208 @@
+# Limits
+
+This page lists the limits Agent Kourier places that an operator, a Binding author or an agent backend can run into. Each row gives the value,
+where it applies, what happens past it, and whether a setting changes it. The reasons and the how-tos are on the pages the rows link to.
+
+Where a value is a constant of the code, or a default the code fills in, a test compares it with this page in every build. Some values are
+rules of Kubernetes or of a chat platform that the code does not hold as a constant, and a few are shapes of the code, such as the six
+message fields; the tests read what the code does for those. The figures that were measured, and not read from the code, say so.
+
+**What "past it" means.**
+
+- **Refused at load**: the broker's own validation rejects the object when it reads it. On the files route one such object fails the whole
+  config: at start the broker exits with code 2, and on a reload it keeps the last good config. On the custom resource route that object
+  is not served. See [What a bad object does](../explanation/config-routes.md#what-a-bad-object-does).
+- **Refused by the API server**: the CRD schema rejects the create or update, so the object never reaches the broker. This is the custom
+  resource route only. A schema bound that the code also holds is refused at load too, because the broker checks every object it reads.
+  The schema counts characters and the broker counts bytes, so a value of multibyte characters can pass the API server and still be refused at load.
+- **Cut**: shortened. Where the text is shown to people, the end is marked `… (truncated)`<!--limit:truncatedMark-->.
+- **Ends the turn**, **dropped**, **queued**: the turn stops, the item is thrown away, or it waits. The row says which, and what the thread is told.
+
+## Run the broker
+
+| Limit | Value | Past it | Setting |
+|---|---|---|---|
+| Kubernetes version, custom resource route (`config.source: crds`) | `1.33`<!--limit:minKubernetes--> or later | `helm install` and `helm upgrade` fail while the chart renders, with `config.source crds needs Kubernetes 1.33 or later`. The ConfigMap route has no minimum. | None. With `helm template`, pass the cluster's version with `--kube-version`. |
+| Replicas that do the work | One | With SQLite, `replicaCount` above 1 fails while the chart renders. With Postgres the replicas elect a leader through a Lease: one works and the others stand by. See [Run two replicas](../how-to/high-availability.md). | `store.type`, `replicaCount` |
+| ChatConnections one broker serves | One | With files, a directory that holds none or several stops the start (exit code 2). With custom resources the broker serves only the one `AGENTKOURIER_CHAT_CONNECTION` names and ignores the others. | `config.chatConnection`, custom resources only |
+| Bindings on one channel of a ChatConnection | One | With files, refused at load. With custom resources the older Binding holds the channel, and the other is not served and says `ChannelConflict`. See [Who holds a channel](../explanation/config-routes.md#who-holds-a-channel). | None |
+| One config file, files route | `1 MiB`<!--limit:configFile--> for each `*.yaml` or `*.yml` file of `AGENTKOURIER_CONFIG_DIR` | Refused at load, so the whole config is. | None |
+| How often a change is read | Every `10s`<!--limit:reloadPoll-->, files and custom resources | The change takes effect at the next read. | None |
+| Delay of a deleted custom resource | About 10 to 20 seconds after the delete: it takes effect at the first read that finds nothing newly deleted, and no sooner than `8s`<!--limit:settleFloor--> after the last read that did. Other deletions can defer it, but a deletion first seen `1m`<!--limit:goneGrace--> ago takes effect at the next read whatever else is deleted. | Until then the object is served as it was. When it takes effect, the object is kept, not served, for another minute, so that a ChatConnection deleted just after it takes the object into the hold. | None |
+| Leader election, Postgres only | Lease duration `15s`<!--limit:leaseDuration-->, renew deadline `10s`<!--limit:renewDeadline-->, retry period `2s`<!--limit:retryPeriod--> | A standby takes the Lease a lease duration after the last renewal it saw. A leader that cannot renew within the renew deadline exits at once with code 5. Timings that do not satisfy lease duration > renew deadline > 1.2 × retry period stop the start (exit code 2). See [High availability](../explanation/high-availability.md#the-lease-and-its-timings). | `leaderElection.leaseDuration`, `renewDeadline` and `retryPeriod` (`AGENTKOURIER_LEASE_*`) |
+| Wait for the Secret caches at start | `30s`<!--limit:syncTimeout--> | The start fails (exit code 4). | `syncTimeout` (`AGENTKOURIER_SYNC_TIMEOUT`) |
+| Time to stop | The broker's ordered shutdown takes up to `25s`<!--limit:shutdown-->. The chart gives the pod `40`<!--limit:terminationGrace--> seconds. | The broker stops waiting at its total. Kubernetes ends the pod when the grace period does. | `terminationGracePeriodSeconds`; the shutdown total has none |
+| Memory of the container | The chart's default limit is `256Mi`<!--limit:memoryLimit-->, and it sets `GOMEMLIMIT` to four fifths of the limit. | A container that passes the limit is ended by the kernel, and Kubernetes restarts it. Nothing in the broker bounds the total: see [what has no limit](#what-has-no-limit). | `resources.limits.memory`; see [the release that sets GOMEMLIMIT](../how-to/upgrade.md#upgrade-to-the-release-that-sets-gomemlimit) |
+| The broker's requests to the API server | Secret informers `50`<!--limit:secretsQPS--> a second with a burst of `100`<!--limit:secretsBurst-->, Binding status writes `20`<!--limit:statusQPS--> with `40`<!--limit:statusBurst-->, Lease renewals `5`<!--limit:leaseQPS--> with `10`<!--limit:leaseBurst--> | A request waits for its client's limiter before it is sent. Each client has a limiter of its own, so a burst of status writes does not hold up a Lease renewal. | None |
+| Postgres connections, Postgres only | `10`<!--limit:pgConns--> for each replica. A statement may run `30s`<!--limit:pgStatement-->, and a transaction may sit idle `10s`<!--limit:pgIdleInTx-->. | A caller waits for a free connection. The server cancels a statement that runs longer, and ends a transaction that idles longer. | `store.postgres.timeouts: role` leaves the two timeouts to the database role. The connection count has no setting: a `pool_max_conns` in the DSN does not change it. |
+
+## Write a Binding, an AgentBackend or a ChatConnection
+
+These caps hold the objects to a size, so that a stored object, and the memory the broker keeps for each of them, stay bounded. The
+[upgrade page](../how-to/upgrade.md#upgrade-to-the-release-that-bounds-triggers-extract-entries-and-headers) has the errors each prints.
+Counts are of entries. A length in bytes is of bytes.
+
+| Limit | Value | Past it | Setting |
+|---|---|---|---|
+| Triggers in a Binding (`spec.chat.triggers`) | `50`<!--limit:triggers--> | Refused at load, and by the API server. | None |
+| `extract` entries in a `botMessage` trigger. The same number bounds the entries of `thread.closeWhen`, whose keys must be extract names. | `32`<!--limit:extract--> | Refused at load, and by the API server. | None |
+| `match` or `exclude` entries in a trigger: one for each message field | `6`<!--limit:messageFields--> | A key that is not a message field is refused at load, and by the API server. | None |
+| A regular expression of `match`, `exclude` or `extract` | `512`<!--limit:regex--> bytes | Refused at load, and by the API server. | None |
+| `promptTemplate` of a `botMessage` trigger | `8192`<!--limit:promptTemplate--> bytes | Refused at load without being parsed, and by the API server. | None |
+| `spec.agent.name` of a Binding | `253`<!--limit:agentName--> bytes | Refused at load, and by the API server. | None |
+| `spec.identity.userId` of a Binding | `256`<!--limit:userId--> bytes | Refused at load, and by the API server. | None |
+| Headers of an AgentBackend (`spec.headers`) | `32`<!--limit:headers--> | Refused at load, and by the API server. | None |
+| The name of a header | `256`<!--limit:headerName--> bytes | Refused at load, and by the API server. | None |
+| `chat.mentions` of a Binding | `50`<!--limit:mentions--> | Refused at load, and by the API server. | None |
+| `chat.maxMentionsPerTurn` | From 1 to `10`<!--limit:mentionsPerTurnMax-->, default `2`<!--limit:mentionsPerTurnDefault--> | A value out of range, 0 included, is refused at load, and by the API server. The mentions past the cap in one turn are not mentioned. | The field itself |
+| `interactions.approverGroups` | `10`<!--limit:approverGroups--> groups | Refused at load, and by the API server. | None |
+| `thread.cooldown` of a trigger | From `1m`<!--limit:cooldownMin--> to `168h`<!--limit:cooldownMax--> | Refused at load, and by the API server. | The field itself |
+| `thread.maxIdle` of a trigger | At least twice the cooldown and at most `720h`<!--limit:maxIdleMax-->. Unset, it is the larger of `24h`<!--limit:maxIdleDefault--> and twice the cooldown. | Refused at load, and by the API server. | The field itself |
+| `rateLimit.per` of a trigger | From `10s`<!--limit:rateWindowMin--> to `24h`<!--limit:rateWindowMax--> | Refused at load, and by the API server. | The field itself |
+| `rateLimit.maxRuns`, `rateLimit.maxConcurrent` and `maxRunsPerDay` | At least 1 for the first two, and 0 or more for the last (0 is no cap). No upper bound. | Refused at load, and by the API server. | The fields themselves |
+| Names of Bindings, AgentBackends, ChatConnections and Secrets (Kubernetes names) | `253`<!--limit:nameLen--> characters | Refused at load, and by the API server. | None |
+| Namespaces, and the names of `chat.mentions` | `63`<!--limit:namespaceLen--> characters for a namespace, `63`<!--limit:mentionNameLen--> for a mention name | Refused at load, and by the API server. | None |
+
+Some checks are not in the CRD schema. A prompt template's rules and a regular expression's syntax are not something the schema can express,
+so on the custom resource route the API server accepts them and the broker refuses the object at load. A `url` of an `a2a` AgentBackend with a
+query or a fragment passes the schema and the load, and is refused each time the broker connects (a probe or a turn). The size of a config file
+is a limit of the files route only. [Tune triggers with a dry run](../how-to/tune-triggers.md) loads files the way the broker does, so it finds
+what is refused at load before you apply a config.
+
+## Write a prompt template
+
+A `botMessage` trigger's `promptTemplate` is text that runs over values taken out of a message. These limits keep what it can do small.
+[The release that limits prompt templates](../how-to/upgrade.md#upgrade-to-the-release-that-limits-prompt-templates) has the errors.
+
+| Limit | Value | Past it | Setting |
+|---|---|---|---|
+| What a template may use | No `range`, `define`, `template` or `block`, and no variable. It calls only `and, eq, ge, gt, index, le, len, lt, ne, not, or and slice`<!--limit:templateFuncs-->. It reads values only as `.Channel`, `.State`, `.Key`, `.Link`, `.Source`, `.Fields.name` or `index .Fields "name"`. | Refused at load, and only there: the API server cannot read a template. | None |
+| What a template writes | `256 KiB`<!--limit:promptOutput--> | At load the Binding is refused. When a trigger renders it, no turn starts, a note is posted in the alert's thread, the start is audited, and `agentkourier_trigger_refused_total` counts it with the reason `render_error`. With the other bounds in force a template cannot reach it: one of the longest allowed length that does nothing but read `.Link` writes at most 910 × 256 bytes, about 227 KiB (computed from the bounds on this page, not run). It is a backstop. | None |
+| The values a load check runs the template over | `64`<!--limit:placeholder--> bytes each | A template that slices a value past that length fails the load. One that slices past the length of a real value, but within that length, passes the load and fails when the first message renders: a render error, so no turn starts. | None |
+| A value the template reads: `.Fields` entries, `.State`, `.Channel` and `.Source` | `128`<!--limit:valueBytes--> bytes, of ASCII letters, digits and `_ . - :` | The render is refused: no turn, a note in the alert's thread, an audit entry, and `agentkourier_trigger_refused_total` with the reason `too_long` or `characters`. | None |
+| `.Key` | `128`<!--limit:keyBytes--> bytes, with `/` also allowed | The same. | None |
+| `.Link` | `256`<!--limit:linkBytes--> bytes of an `http` or `https` URL | The same, with the reason `too_long`, `characters` or `not_link`. | None |
+| The instruction part of the first prompt (the template's output) | `4000`<!--limit:instructionUnits--> UTF-16 units | Cut. | None |
+| One field of the message in the untrusted block | `3000`<!--limit:fieldUnits--> UTF-16 units | Cut. | None |
+| The untrusted block as a whole | `8000`<!--limit:untrustedUnits--> UTF-16 units | Fields that do not fit are left out, and a last line says so. The whole prompt is at most `12002`<!--limit:promptUnits--> units. | None |
+
+## Build or connect an agent backend
+
+### What the broker reads and holds
+
+The backend of a Binding may be a tenant's, so the broker bounds each thing it reads. A bound is on one response or one event, never on a
+stream's length. The values are constants of the binary: no chart value, file or custom resource field reaches them.
+[The release that lowers the bounds](../how-to/upgrade.md#upgrade-to-the-release-that-lowers-the-bounds-on-what-it-reads) has what each means for an agent.
+
+| Limit | Value | Past it | Setting |
+|---|---|---|---|
+| The agent card | `1 MiB`<!--limit:cardBytes--> | The card is not read. A probe sets the Binding's `BackendReachable` condition to `False` with the reason `InvalidAgentCard`. A turn that needs the card fails with the same error, which ends the turn with the outcome `response_too_large` (read from the code, not run). | None |
+| One event of a stream, the lines of it up to the blank line | `2 MiB`<!--limit:eventBytes--> | The read fails at the bound, never as a shortened event. The turn ends with the outcome `response_too_large`: the thread keeps what it was shown and is told, in a fixed sentence, that the reply was too large, and Agent Kourier cancels the task at the agent, once, within `30s`<!--limit:cancelBound-->. On kagent 1.0 the final event of a task repeats the task's tool calls and results, so all of them together, from the start of the task, count against this bound, not only the last one. | None |
+| The answer to a call that is not a stream (`GetTask`, `CancelTask`, `ListTasks`), or a JSON answer to a call that asked for a stream | `4 MiB`<!--limit:answerBytes--> | The same. A page of `ListTasks` past it is never a reason to send the turn again without knowing: the lookup is retried at half the page size, and if it still fails the turn fails, with a log line, an audit entry, a metric and a notice in the thread. | None |
+| What one turn holds of the agent's reply: its artifacts' text, tool results that wait for their call, and the bookkeeping of each tool part | `341 KiB`<!--limit:replyBytes--> | The same, however many events it came in. | None |
+
+These bounds give each response a size and the broker no total, and what a response costs in memory depends on the JSON it holds: a response
+of many small objects at the bound costs much more than the same number of bytes of text. The figures are from a test process, not from a
+pod: the Go test binary on a laptop, with the fake agent and the client in one process, and a pod's own baseline was not measured. With small
+objects at the bound, two or three large responses read at the same time passed the chart's default limit of 256Mi. So the number of streams
+or answers that fit is not a limit to plan by. An AgentBackend must be one you trust, or get a broker of its own, because the backend decides
+how many large responses are in flight. The measurement and its counts are in
+[the release that lowers the bounds](../how-to/upgrade.md#upgrade-to-the-release-that-lowers-the-bounds-on-what-it-reads).
+
+### How long the broker waits on an agent
+
+| Limit | Value | Past it | Setting |
+|---|---|---|---|
+| A stream with no event | `5m`<!--limit:inactivity--> | The stream is cut and reconciled with `GetTask` and then `SubscribeToTask`, and no text is delivered twice. A tool call that is silent for longer is cut the same way. | None |
+| Reconnects in a row that bring nothing new | `5`<!--limit:reconnects--> | The send is treated as a lost stream, and the turn follows the task again after a backoff. | None |
+| The backoff before a resend or a follow | Starts at `1s`<!--limit:retryBase-->, doubles up to `60s`<!--limit:retryMax--> | It waits. A turn that is blocked is retried after the backoff and is never dropped, except as the next rows say. | None |
+| A call to start answering (response headers) | `30s`<!--limit:responseStart--> | The call fails. This bounds a call's start, not a stream's length. | None |
+| `GetTask` and `CancelTask` | `30s`<!--limit:unaryTimeout--> each | The call fails. | None |
+| Fetching the agent card to connect | `30s`<!--limit:connectTimeout--> | The connect fails. | None |
+| An agent that cannot be reached | Retried for `15m`<!--limit:giveUp--> | The turn ends with the outcome `unreachable`, and the thread is told that the agent could not be reached. The second failure in a row also tells the thread that the broker is retrying. | None |
+| An agent that answers busy or not ready (`-32004`) | Retried with no limit | The turn waits behind it. The thread is told after `2m`<!--limit:busyNotice-->. | None |
+| A task still working after its stream was lost, with no sign of life | `1h`<!--limit:workingAge--> | The task is presumed wedged and cancelled, and the turn ends with the outcome `wedged`. A live stream is never limited by this. | None |
+| The cancel of a task whose reply was too large | `30s`<!--limit:cancelBound--> | A cancel that fails is logged and leaves the task recorded, for the Stop control or a restart to reconcile. | None |
+
+### What the broker sends
+
+| Limit | Value | Past it | Setting |
+|---|---|---|---|
+| The name and the email of the person who wrote a turn, as sent to the agent | `64`<!--limit:actorRunes--> characters each | Both are cleaned (control and format characters and brackets are dropped) and then cut, in the text prefix and in `name` and `email` of `metadata["agentkourier.dev/actor"]`. The ID in the metadata is as the chat platform gave it. See [the agent contract](agent-contract.md). | None |
+
+### What a pause may ask
+
+A pause that the dialect cannot show, or that does not fit one message, is refused as unusable: the thread is told in a fixed sentence, the
+task is cancelled, and the refusal is audited. [The agent contract](agent-contract.md#structured-questions-and-tool-approvals) lists the rest of the rules.
+
+| Limit | Value | Past it | Setting |
+|---|---|---|---|
+| Questions in one pause | `20`<!--limit:questions--> | Unusable. | None |
+| Choices of one question | `100`<!--limit:choices--> | Unusable. | None |
+| Tools in one approval | `20`<!--limit:tools--> | Unusable. | None |
+| The arguments of one tool in an approval prompt | `3000`<!--limit:approvalArgs--> UTF-16 units | Unusable, because the approver would not see what runs. | None |
+| All of an approval prompt's argument text | `3600`<!--limit:approvalTotal--> UTF-16 units | Unusable. | None |
+| The Block Kit JSON of an approval prompt | `16000`<!--limit:approvalBlocks--> UTF-16 units | Unusable. | None |
+| How long a pause waits for an answer | `30m`<!--limit:interactionTimeout--> by default, with no upper bound | A question's task is cancelled and the thread told. An approval is denied for every tool, with the reason that no one decided in time, and the prompt shows a timed-out ending. | `interactions.timeout` of the Binding |
+
+## Start investigations: triggers, rates and probes
+
+| Limit | Value | Past it | Setting |
+|---|---|---|---|
+| Starts of a `botMessage` trigger | The `rateLimit` (`maxRuns` in any `per`, and `maxConcurrent` at once) and `maxRunsPerDay`, all required | The start is not made: no turn, nothing in the alert's thread. It is counted in `agentkourier_trigger_limited_total` and in one digest line for the window. Only a start is limited: a repeat, a close and a note never are. See [Limits and the digest line](chat-triggers.md#limits-and-the-digest-line). | `limits` of the trigger |
+| Starts of a `mention` trigger (a person's mention) | No limit | Nothing stops a person's mention from starting a turn. | None: a `mention` trigger takes no `limits` field |
+| A bot's mention of Agent Kourier, across every bot on a Binding | `3`<!--limit:botRuns--> in any `30m`<!--limit:botPer-->, `1`<!--limit:botConcurrent--> at a time, and `20`<!--limit:botPerDay--> in any `24h`<!--limit:botDay--> | The start is not made: no turn and nothing in the thread. It is counted, audited and in the window's digest line. | `chat.botMentions: none` turns bot mentions off. The numbers have no setting. |
+| Presses of buttons waiting to be processed | `1000`<!--limit:pressTotal--> in all, `10`<!--limit:pressPerUser--> for one person | A press past either is dropped. It is logged at WARN and acknowledged to the chat platform, and the person is told nothing. | None |
+| Probes of a Binding | Every `5m`<!--limit:probeInterval-->, each pass shifted by up to 10% so that brokers do not probe together, and `4`<!--limit:probeConcurrency--> at a time. Each Binding has two: the agent card and the channel. | Each adapter bounds its own call a little earlier. A probe that takes more than `10s`<!--limit:probeTimeout--> is `Unknown` with the reason `ProbeTimeout`. A change to the config calls for a pass no sooner than `30s`<!--limit:probeGap--> after the last pass began. | None |
+| People one turn mentions | At most `chat.maxMentionsPerTurn` | The people past the cap are not mentioned. | `chat.maxMentionsPerTurn` |
+
+## What a thread shows
+
+The chat side cuts text to what a message holds. Units are UTF-16 units, as the chat platform counts them.
+
+| Limit | Value | Past it | Setting |
+|---|---|---|---|
+| The agent's reply in one message | `12000`<!--limit:replyUnits--> units (Slack's markdown block) | Cut. The cut is marked. | None |
+| Steps a live stream shows | `50`<!--limit:steps--> | The calls after these are made and not shown. | None. `chat.progress` and `chat.output` choose what is shown, not how many steps. |
+| Steps a message shows when it is updated | The latest `20`<!--limit:stepsListed-->, under a line that counts the earlier ones | The earlier ones are not listed. | None. `chat.progress` and `chat.output` choose what is shown, not how many steps. |
+| A tool's name and its arguments in a status line | `64`<!--limit:toolName--> units and `160`<!--limit:toolArgs--> units | Cut. | None |
+| A step card's title or details (Slack) | `256`<!--limit:stepText--> units | Cut. | None |
+| Blocks in one Slack message | `50`<!--limit:blocks--> | A prompt past it is refused as unusable. A reply's step cards take the room that the other blocks leave, and a line says how many steps are not shown. | None |
+| Choices as radio buttons or checkboxes (Slack) | `10`<!--limit:inlineChoices--> | A question with more gets a select menu, up to `100`<!--limit:selectChoices--> choices. | None |
+| One choice's text, and a button's (Slack) | `75`<!--limit:choiceUnits--> units | A question with a longer choice, or more choices than a select holds, is shown as a numbered list that the person answers by number. Each line is cut at `200`<!--limit:listLine--> units. A button's label is cut. | None |
+| A prompt's heading (Slack) | `150`<!--limit:headerUnits--> units | Cut. | None |
+| Replies carried as thread context to a turn on a Binding with `chat.threadReplies: mention`, and to a bot's mention | The newest `50`<!--limit:threadReplies--> replies, each cut at `1000`<!--limit:threadReplyUnits--> units, an author's name and ID at `100`<!--limit:threadNameUnits--> each, and the whole block at `6000`<!--limit:threadBlockUnits--> | Replies that do not fit are left out, the oldest first, and the block's last line counts them. | None |
+| The window of a thread the broker reads for that context | `1000`<!--limit:threadWindow--> messages | A longer window cannot be read: the turn carries the fixed line that Agent Kourier could not read the earlier replies (a bot's mention keeps the message that opened the thread). | None |
+| A condition's message in a Binding's status | `1024`<!--limit:statusMessage--> bytes | Cut, and marked, after secrets are taken out. | None |
+
+## What the broker keeps, and logs
+
+The durations here are the ones people notice. [Stored data](stored-data.md) has what each table holds and how a sweep runs.
+
+| Limit | Value | Past it | Setting |
+|---|---|---|---|
+| How long a thread keeps its session after its last activity | `90d`<!--limit:threadTTL--> by default, with no upper bound | The session is expired: a reply in the thread gets the notice that the conversation has expired. | `session.threadTTL` of the Binding |
+| How long an expired session is kept | `90d`<!--limit:sessionGrace--> after its `threadTTL` has run out | The session is deleted with every row that belongs to it. | None |
+| A reply that was never delivered | `30d`<!--limit:strandedReply--> | Dropped, with its text. | None |
+| A post that was never posted | `7d`<!--limit:outboxRetention--> | Abandoned with the reason `expired`, and its text dropped. A failed post is retried from `5s`<!--limit:outboxRetryBase--> doubling up to `5m`<!--limit:outboxRetryMax-->, and each call to the chat platform is bounded at `30s`<!--limit:outboxCall-->. | None |
+| The request and answer of a settled interaction | `25h`<!--limit:clearGrace--> after it was decided, and `7d`<!--limit:undeliveredGrace--> for an answer that was never marked delivered | The text is emptied, and the row stays. | None |
+| The record of a trigger's starts, which its limits count | `24h`<!--limit:triggerRuns--> | The record is purged. | None |
+| Audit entries | Kept for ever by default. A retention must be at least `24h`<!--limit:auditRetentionMin-->. | An entry past the retention is purged. A retention under that stops the start (exit code 2). | `auditRetention` (`AGENTKOURIER_AUDIT_RETENTION`) |
+| Votes on investigations, in `agentkourier_investigation_feedback_total` | `100`<!--limit:feedbackLabels--> alert names for each Binding | The votes on any other name are counted under the name `other`. The votes themselves are kept for good. | None |
+| An error's text in a log line | `300`<!--limit:logError--> bytes | Cut, and marked. The text that is cut is not logged anywhere. | None |
+| The reason of an unusable pause in the audit log | `120`<!--limit:auditReason--> bytes | Cut. | None |
+
+## What has no limit
+
+The broker does not bound these, and the code confirms it. Where the number can hurt, the row says what to do.
+
+| What | What to do |
+|---|---|
+| Bindings, AgentBackends and ChatConnections in a cluster or a namespace, and the entries of `allowedNamespaces` | A cap of the schema or of `Validate` bounds one object, never how many there are. Put a `ResourceQuota` in each tenant's namespace with `count/bindings.agentkourier.dev` and `count/agentbackends.agentkourier.dev`. The API server then refuses a create past it with `exceeded quota` (measured on kind 1.37.0, as [Security](../explanation/security.md#what-the-people-who-write-these-objects-can-do) says; not run again for this page). A quota limits the count and not the size. |
+| Streams and calls open to agents at once | Each has a size bound, but nothing bounds the number, so the bounds give the broker no total. Run only AgentBackends you trust, or give one its own broker, and size `resources.limits.memory` for the responses that can be in flight at once: see [what the broker reads and holds](#what-the-broker-reads-and-holds). |
+| The length of a stream, and the text a stream carries in all | A stream runs as long as its turn. The broker holds only up to the reply bound, and a stream that sends text that is thrown away can run as long as its context. |
+| Threads, sessions and turns at once | Each thread runs one turn at a time and queues the rest. Nothing bounds how many threads run turns at once, or how many replies queue in a thread. |
+| A person's mentions | A `mention` trigger has no limit. A rate limit applies to bots only. |
+| The size of an AgentBackend's `url` and of a header's value | Only the number and the name of headers are bounded. |
+| The audit log and the votes | Kept for ever unless you set `auditRetention`. No retention deletes a vote. |
+| The upper bound of `interactions.timeout`, `session.threadTTL` and of `rateLimit.maxRuns`, `maxConcurrent` and `maxRunsPerDay` | Only a lower bound is checked. |

@@ -309,7 +309,7 @@ agent that sends no such update sees no change.
 Agent Kourier bounded none of these before. This release refuses a config that holds more than the bounds below, and
 loads a config within them as before. Nothing else about a Binding or an AgentBackend changes. No example, recipe or
 kind tier config in this repository has more than two triggers, three `extract` entries or one header, or a header name of
-more than 16 characters, so the bounds are far above what they use.
+more than 16 characters, so the bounds are far above what they use. [Limits](../reference/limits.md) lists every limit.
 
 | Where | Bound | The error |
 |---|---|---|
@@ -369,6 +369,7 @@ while the new pod starts; with Postgres (`RollingUpdate`) the new pod starts bes
 A `promptTemplate` is run when a Binding loads, and again for each message a trigger matches. This release refuses a template that could
 run for ever or build a string without bound, and bounds three strings that had no limit. A config that does neither loads as before.
 No example, recipe or kind tier config in this repository uses a construct below: they read `.Channel`, `.State`, `.Key` and `.Fields.<name>`.
+The current values are on [Limits](../reference/limits.md#write-a-prompt-template).
 
 **What a template may use.** Text and comments, `if` (with `else if` and `else`), `with`, the view's fields (`.Channel`, `.State`, `.Key`,
 `.Link`, `.Source`), `.Fields.<name>` or `index .Fields "<name>"`, and the functions `and`, `eq`, `ge`, `gt`, `index`, `le`, `len`, `lt`, `ne`,
@@ -424,7 +425,8 @@ This release lowers what Agent Kourier reads from an agent, so that a backend th
 | What one turn holds of the agent's reply (the text of its artifacts, tool results that wait for their call, the bookkeeping of each tool part) | 2 MiB | 341 KiB |
 
 The agent card stays at 1 MiB. **There is no setting for any of them**: they are constants of the binary, and no chart value, file or custom resource field reaches them, so
-a reply that is over them cannot be let through by configuration. Nothing in the chart's values changes.
+a reply that is over them cannot be let through by configuration. Nothing in the chart's values changes. The current values, and what else the
+broker bounds, are on [Limits](../reference/limits.md#what-the-broker-reads-and-holds).
 
 **What an agent that sends more sees.**
 

@@ -74,4 +74,5 @@ TS                 SENDER       OUTCOME    TRIGGER  STATE     ALERTNAME         
 - **Flapping.** The summary lists keys that fired and closed at least 3 times. A `cooldown` shorter than the gap
   between those cycles starts a new investigation each time.
 
-Copy the Binding, change its `match`, `exclude` and `extract`, and run again until the lines read right.
+Copy the Binding, change its `match`, `exclude` and `extract`, and run again until the lines read right. The sizes a trigger is held to,
+and what a limit does to a start, are on [Limits](../reference/limits.md).
