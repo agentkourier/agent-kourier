@@ -1639,16 +1639,18 @@ func TestResultsWaitingForTheHookAreDroppedAfterCancel(t *testing.T) {
 			<-release
 		}}
 	}, func(h *harness) {
+		defer close(release) // a hook that a failed run left waiting must not hang the bubble
 		// Three probes have finished; one is in the hook and the other two wait to record.
-		before := runtime.NumGoroutine()
+		if got := hooks.Load(); got != 1 {
+			t.Fatalf("hook calls before the cancel = %d, want 1: the result that is recording", got)
+		}
 		h.cancel()
 		synctest.Wait()
-		if left := before - runtime.NumGoroutine(); left != 2 {
-			t.Errorf("%d goroutines left at the cancel, want the 2 that were waiting to record", left)
-		}
-		release <- struct{}{} // BackendReachable of the first
-		release <- struct{}{} // Ready of the first
-		h.stop()
+		// Let the one in the hook finish: BackendReachable, then Ready, of the first Binding. A result that still
+		// waited to record would take its place and call the hook a third time.
+		release <- struct{}{}
+		release <- struct{}{}
+		synctest.Wait()
 		if got := hooks.Load(); got != 2 {
 			t.Errorf("hook calls = %d, want 2: only the result that was recording when the cancel came", got)
 		}
