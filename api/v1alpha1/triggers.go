@@ -1,7 +1,8 @@
 package v1alpha1
 
 import (
-	"io"
+	"bytes"
+	"errors"
 	"maps"
 	"slices"
 	"strings"
@@ -113,7 +114,9 @@ type Trigger struct {
 	// +optional
 	Thread TriggerThread `json:"thread,omitzero"`
 	// PromptTemplate is a Go template over the trigger's view of the message (.Channel,
-	// .State, .Key, .Fields, .Link, .Source). Required for botMessage.
+	// .State, .Key, .Fields, .Link, .Source). Required for botMessage. At most 8192 bytes; it has no loops,
+	// variables or defined templates, and calls only and, eq, ge, gt, index, le, len, lt, ne, not, or and slice.
+	// +kubebuilder:validation:MaxLength=8192
 	PromptTemplate string `json:"promptTemplate,omitempty"`
 	// Limits bounds how many investigations the trigger starts (rate, concurrency and a daily cap). Required
 	// for botMessage: both rateLimit and maxRunsPerDay.
@@ -272,6 +275,37 @@ func ParsePromptTemplate(name, text string) (*template.Template, error) {
 	return template.New(name).Option("missingkey=error").Parse(text)
 }
 
+// MaxPromptOutput caps what a prompt template may write, in bytes. The renderer keeps the first
+// MaxInstructionUnits (4000) UTF-16 units of the output, so a template that reaches this writes
+// mostly what is thrown away; it is a template that should not run, not one that is cut.
+const MaxPromptOutput = 256 << 10
+
+// ErrPromptOutputTooLarge is the error of a template that writes more than MaxPromptOutput bytes.
+var ErrPromptOutputTooLarge = errors.New("prompt template output is longer than the byte limit")
+
+// ExecutePrompt runs tmpl over view and returns what it writes. It writes through a buffer that
+// fails, with ErrPromptOutputTooLarge, at the write that would pass MaxPromptOutput, so a template
+// that writes without end stops there and holds at most that much, never what it would have
+// written. Load-time validation and the renderer both run templates through it. A template must
+// have passed TemplateRefs first: the limit bounds what is written, not the time a loop takes.
+func ExecutePrompt(tmpl *template.Template, view PromptView) (string, error) {
+	var out cappedBuffer
+	if err := tmpl.Execute(&out, view); err != nil {
+		return "", err
+	}
+	return out.buf.String(), nil
+}
+
+// cappedBuffer is a bytes.Buffer that refuses a write that would take it past MaxPromptOutput.
+type cappedBuffer struct{ buf bytes.Buffer }
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	if b.buf.Len()+len(p) > MaxPromptOutput {
+		return 0, ErrPromptOutputTooLarge
+	}
+	return b.buf.Write(p)
+}
+
 // placeholderLen is the length of the placeholder values checkPromptTemplate runs a template
 // against. It is long, so a template that slices a value ({{ slice .Key 0 10 }}) loads. The
 // trade-off is accepted: a slice longer than a real value ({{ slice .State 0 10 }} on
@@ -279,10 +313,12 @@ func ParsePromptTemplate(name, text string) (*template.Template, error) {
 // an error, and CT-4b surfaces render errors like refusals (audited, no turn).
 const placeholderLen = 64
 
-// checkPromptTemplate parses text, walks its parse trees so that every reference is checked in
-// every branch (see TemplateRefs; each .Fields entry must also be an extract of the trigger),
-// and then runs it once against a view whose values are placeholders, for the errors a walk
-// cannot see, such as a function called with the wrong arguments. The parse is the renderer's
+// checkPromptTemplate parses text, walks its parse tree so that every reference is checked in
+// every branch and a template that would loop, recurse or grow without bound is refused (see
+// TemplateRefs; each .Fields entry must also be an extract of the trigger), and then runs it once
+// against a view whose values are placeholders, through ExecutePrompt's limit, for the errors a
+// walk cannot see, such as a function called with the wrong arguments. The run comes after the
+// walk, so a template the walk refuses is never run. The parse is the renderer's
 // (ParsePromptTemplate), so a template that passes here parses there.
 func checkPromptTemplate(name, text string, extract map[string]Extract) error {
 	tmpl, err := ParsePromptTemplate(name, text)
@@ -301,5 +337,6 @@ func checkPromptTemplate(name, text string, extract map[string]Extract) error {
 	for n := range extract {
 		view.Fields[n] = placeholder
 	}
-	return tmpl.Execute(io.Discard, view)
+	_, err = ExecutePrompt(tmpl, view)
+	return err
 }

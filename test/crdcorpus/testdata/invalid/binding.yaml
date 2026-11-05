@@ -1041,3 +1041,41 @@ status:
       message: ok
       lastTransitionTime: "2026-11-04T10:00:00Z"
       observedGeneration: 1
+---
+# rule: binding/spec.agent.name: over 253 characters
+# want: spec.agent.name: is 254 bytes, longer than the 253 byte limit
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+---
+# rule: binding/spec.identity.userId: over 256 characters
+# want: spec.identity.userId: is 257 bytes, longer than the 256 byte limit
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
