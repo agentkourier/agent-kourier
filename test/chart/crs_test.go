@@ -144,7 +144,7 @@ func TestCRDsInstallAddsOnlyTheCRDs(t *testing.T) {
 }
 
 // TestCRDsAreTheGeneratedFiles: the chart's CRDs are the files that `make crds` generates, rendered, not a second copy that can drift: the
-// spec of each is the file's, byte for byte (the file is not parsed and written again), with the chart's labels and resource-policy keep added to the
+// spec of each is the file's, byte for byte (the file is not parsed and written again), with the chart's labels, resource-policy keep and Argo CD's Prune=false,Delete=false added to the
 // metadata. The hash annotation is the file's own (the SHA-256 of the file without that line), passed on as it is.
 func TestCRDsAreTheGeneratedFiles(t *testing.T) {
 	t.Parallel()
@@ -182,6 +182,9 @@ func TestCRDsAreTheGeneratedFiles(t *testing.T) {
 			ann := sub(meta, "annotations")
 			if ann["helm.sh/resource-policy"] != "keep" {
 				t.Errorf("annotations %v; want helm.sh/resource-policy keep, so that an uninstall leaves the CRD and every resource of it", ann)
+			}
+			if ann["argocd.argoproj.io/sync-options"] != "Prune=false,Delete=false" {
+				t.Errorf("annotations %v; want argocd.argoproj.io/sync-options Prune=false,Delete=false, so that Argo CD does not prune the CRD or delete it with the Application", ann)
 			}
 			// The hash is the file's own annotation, which the chart passes on as it is: it is the SHA-256 of the file without that line.
 			bare := schemaHashLine.ReplaceAll(raw, nil)
@@ -743,5 +746,24 @@ func TestFilesRouteIgnoresTheCRModeValues(t *testing.T) {
 	}
 	if got != want {
 		t.Errorf("the values of the CR route change the files route's render:\n%s", firstDifference(want, got))
+	}
+}
+
+// TestTokenRefreshInCRModeDoesNotNeedTheBindingInTheValues: with config.source crds a team applies its own Binding, and the chart cannot see it in
+// config.*, so the check that some Binding names the refreshed Secret (which the files route makes) does not apply: the render goes on, and
+// the Job's Role is in the namespace it is told. The same values on the files route are still refused.
+func TestTokenRefreshInCRModeDoesNotNeedTheBindingInTheValues(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	refresh := "tokenRefresh.enabled=true,tokenRefresh.targetSecret=team-token,tokenRefresh.targetNamespace=team-a,tokenRefresh.dex.tokenURL=http://dex,tokenRefresh.dex.clientId=c,tokenRefresh.dex.credentialsSecret=d"
+	objs := mustRender(t, "agent-kourier", "agent-kourier", append([]string{"-f", values("crds"), "--set", refresh}, crdsServed...)...)
+	var r rbacv1.Role
+	find(t, objs, "Role", "agent-kourier-token-refresh", &r)
+	if r.Namespace != "team-a" || len(r.Rules) != 1 || !slices.Equal(r.Rules[0].ResourceNames, []string{"team-token"}) {
+		t.Errorf("Role %+v in %q; want the one rule for team-token, in team-a, where the hand-made Binding is", r.Rules, r.Namespace)
+	}
+	_, err := render(t.Context(), t, "agent-kourier", "agent-kourier", "-f", values("crds"), "--set", "config.source=files,"+refresh)
+	if err == nil || !strings.Contains(err.Error(), "no Binding in namespace team-a has identity.tokenSecretRef naming it") {
+		t.Errorf("the files route with the same values: %v; want the refusal that no Binding reads the Secret", err)
 	}
 }

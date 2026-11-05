@@ -9,8 +9,9 @@
 {{- $targetNs := default .Release.Namespace .Values.tokenRefresh.targetNamespace }}
 {{- $targetKey := .Values.tokenRefresh.targetKey }}
 {{- /* A token patched into a Secret no Binding reads expires unseen: with the config inline, some Binding in the target
-       namespace must name this Secret and key as its identity token. */ -}}
-{{- if not .Values.config.existingConfigMap }}
+       namespace must name this Secret and key as its identity token. The chart cannot see a Binding it did not render: not in
+       an existingConfigMap, and not with config.source crds, where a team applies its own, so it does not look then. */ -}}
+{{- if not (or .Values.config.existingConfigMap (include "agentkourier.crMode" .)) }}
 {{- $reads := false }}
 {{- range $_, $r := .Values.config.bindings }}
 {{- $spec := default (dict) $r.spec }}
