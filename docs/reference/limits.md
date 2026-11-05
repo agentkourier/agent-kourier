@@ -66,6 +66,15 @@ Counts are of entries. A length in bytes is of bytes.
 | `chat.mentions` of a Binding | `50`<!--limit:mentions--> | Refused at load, and by the API server. | None |
 | `chat.maxMentionsPerTurn` | From 1 to `10`<!--limit:mentionsPerTurnMax-->, default `2`<!--limit:mentionsPerTurnDefault--> | A value out of range, 0 included, is refused at load, and by the API server. The mentions past the cap in one turn are not mentioned. | The field itself |
 | `interactions.approverGroups` | `10`<!--limit:approverGroups--> groups | Refused at load, and by the API server. | None |
+| `allowedNamespaces` of an AgentBackend or a ChatConnection | `256`<!--limit:allowedNamespaces--> namespaces | Refused at load, and by the API server. | None |
+| The `url` of an AgentBackend | `2048`<!--limit:backendURL--> bytes. A `?` or a `#` anywhere in it is refused, so a URL has no query and no fragment, even an empty one. | Refused at load, and by the API server. | None |
+| The `value` of a header | `4096`<!--limit:headerValue--> bytes | Refused at load, and by the API server. | None |
+| `chat.channel`, a trigger's `from.id`, and each entry of `interactions.approverGroups` | `32`<!--limit:chatID--> bytes each | Refused at load, and by the API server. | None |
+| The `user` of a `chat.mentions` entry | `21`<!--limit:mentionUserLen--> characters | Refused at load, and by the API server. | None |
+| `chat.acknowledgment.emoji` | `100`<!--limit:emoji--> bytes | Refused at load, and by the API server. | None |
+| The name of an `extract` entry. The keys of `thread.closeWhen` are extract names, so the same number bounds them. | `63`<!--limit:extractName--> bytes | Refused at load, and by the API server. | None |
+| A value of `thread.closeWhen` | `256`<!--limit:closeWhenValue--> bytes | Refused at load, and by the API server. | None |
+| The text of a duration (`interactions.timeout`, `session.threadTTL`, `thread.cooldown`, `thread.maxIdle`, `rateLimit.per`) | `64`<!--limit:durationText--> characters, whatever the value that it writes | Refused at load, and by the API server. The broker reads the text before it becomes a duration, so the file route refuses it too. | None |
 | `thread.cooldown` of a trigger | From `1m`<!--limit:cooldownMin--> to `168h`<!--limit:cooldownMax--> | Refused at load, and by the API server. | The field itself |
 | `thread.maxIdle` of a trigger | At least twice the cooldown and at most `720h`<!--limit:maxIdleMax-->. Unset, it is the larger of `24h`<!--limit:maxIdleDefault--> and twice the cooldown. | Refused at load, and by the API server. | The field itself |
 | `rateLimit.per` of a trigger | From `10s`<!--limit:rateWindowMin--> to `24h`<!--limit:rateWindowMax--> | Refused at load, and by the API server. | The field itself |
@@ -76,8 +85,7 @@ Counts are of entries. A length in bytes is of bytes.
 | Namespaces, and the names of `chat.mentions` | `63`<!--limit:namespaceLen--> characters for a namespace, `63`<!--limit:mentionNameLen--> for a mention name | Refused at load, and by the API server. | None |
 
 Some checks are not in the CRD schema. A prompt template's rules and a regular expression's syntax are not something the schema can express,
-so on the custom resource route the API server accepts them and the broker refuses the object at load. A `url` of an `a2a` AgentBackend with a
-query or a fragment passes the schema and the load, and is refused each time the broker connects (a probe or a turn). The size of a config file
+so on the custom resource route the API server accepts them and the broker refuses the object at load. The size of a config file
 is a limit of the files route only. [Tune triggers with a dry run](../how-to/tune-triggers.md) loads files the way the broker does, so it finds
 what is refused at load before you apply a config.
 
@@ -226,6 +234,5 @@ The broker does not bound these, and the code confirms it. Where the number can 
 | The length of a stream, and the text a stream carries in all | A stream runs as long as its turn. The broker holds only up to the reply bound, and a stream that sends text that is thrown away can run as long as its context. |
 | Threads, sessions and turns at once | Each thread runs one turn at a time and queues the rest. Nothing bounds how many threads run turns at once, or how many replies queue in a thread. |
 | A person's mentions | A `mention` trigger has no limit. A rate limit applies to bots only. |
-| The size of an AgentBackend's `url` and of a header's value | Only the number and the name of headers are bounded. |
 | The audit log and the votes | The audit log is kept for ever unless you set `auditRetention`. Nothing deletes a vote, and `auditRetention` does not reach them. |
 | The upper bound of `rateLimit.maxRuns`, `maxConcurrent` and `maxRunsPerDay` | Only a lower bound is checked. |

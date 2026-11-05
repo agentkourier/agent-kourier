@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    agentkourier.dev/schema-sha256: 080a33ab7e0a84075c63e58fc72fb1fe1dec1d7809f8f817b45856054af8f107
+    agentkourier.dev/schema-sha256: fff5906b6e7540de68223cbfde531ee37fa3c1d62fc43c280e68eaf8bac9050c
     controller-gen.kubebuilder.io/version: v0.23.0
   name: chatconnections.agentkourier.dev
 spec:
@@ -48,11 +48,12 @@ spec:
               allowedNamespaces:
                 description: |-
                   AllowedNamespaces lists the other namespaces whose Bindings may reference this connection. Each is a DNS-1123 label.
-                  An empty list permits references only from the connection's own namespace.
+                  An empty list permits references only from the connection's own namespace. At most 256.
                 items:
                   maxLength: 63
                   pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                   type: string
+                maxItems: 256
                 type: array
               credentialsSecretRef:
                 description: CredentialsSecretRef names one Secret with the fixed

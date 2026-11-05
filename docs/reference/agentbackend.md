@@ -22,9 +22,9 @@ AgentBackendSpec is the desired state of an AgentBackend.
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `dialect` | string | Yes | None | One of `a2a`, `kagent-v1`. |
-| `url` | string | Yes | None | URL is the http or https base URL for kagent-v1, or the exact JSON-RPC endpoint for a2a. The a2a card must be served at URL + "/.well-known/agent-card.json", as AX does. At least 1 character. |
+| `url` | string | Yes | None | URL is the http or https base URL for kagent-v1, or the exact JSON-RPC endpoint for a2a. The a2a card must be served at URL + "/.well-known/agent-card.json", as AX does. At most 2048 bytes, with no query and no fragment. At least 1 character. At most 2048 characters. |
 | `headers` | [][Header](#header) | No | Empty list | Headers are sent on every request. Omitted headers add no static headers. At most 32. |
-| `allowedNamespaces` | []string | No | Empty list | AllowedNamespaces lists the other namespaces whose Bindings may reference this backend. Each is a DNS-1123 label. An empty list permits references only from the backend's own namespace. |
+| `allowedNamespaces` | []string | No | Empty list | AllowedNamespaces lists the other namespaces whose Bindings may reference this backend. Each is a DNS-1123 label. An empty list permits references only from the backend's own namespace. At most 256. |
 
 ## Header
 
@@ -33,7 +33,7 @@ Header is a static HTTP header. Set exactly one of value and valueSecretRef; val
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `name` | string | Yes | None | Name is at most 256 bytes. At least 1 character. At most 256 characters. |
-| `value` | string | No | None |  |
+| `value` | string | No | None | Value is the header's value, at most 4096 bytes. A secret goes in valueSecretRef. At most 4096 characters. |
 | `valueSecretRef` | [SecretKeyRef](#secretkeyref) | No | None |  |
 
 ## SecretKeyRef

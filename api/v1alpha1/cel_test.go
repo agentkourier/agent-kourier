@@ -230,6 +230,18 @@ func TestCELLiteralsEqualTheBrokersConstants(t *testing.T) {
 		}
 	})
 
+	t.Run("extract name length and closeWhen value length", func(t *testing.T) {
+		// A map key has no maxLength in a schema, so a rule bounds it. Characters are never more than bytes, so neither
+		// rule is the stricter of the two.
+		if got := limit(t, ruleWith(t, bindings.at(t, trigger+".extract"), "size(k)")); got != maxExtractNameLen {
+			t.Errorf("extract name: rule %d, maxExtractNameLen %d", got, maxExtractNameLen)
+		}
+		rule := ruleWith(t, bindings.at(t, trigger+".thread.closeWhen"), "size(self[k]) <= ")
+		if got := limit(t, rule); got != maxCloseWhenValueLen {
+			t.Errorf("closeWhen value: rule %d, maxCloseWhenValueLen %d", got, maxCloseWhenValueLen)
+		}
+	})
+
 	t.Run("extract name", func(t *testing.T) {
 		rule := ruleWith(t, bindings.at(t, trigger+".extract"), "matches(")
 		m := regexp.MustCompile(`matches\('([^']*)'\)`).FindStringSubmatch(rule)
