@@ -144,7 +144,11 @@ a WP mixes concerns. At most four agents (implementers and reviewers together) r
   the value, what happens past it, and whether a setting changes it. A value that is a constant or a default of the code is written in a code
   span followed at once by a marker (copy a row of the page), and a test in the package that holds it calls `limitsdoc.Count`, `Bytes`,
   `Duration` or `Text` with the marker's ID, so that the constant cannot change without the page; `internal/limitsdoc` fails a marker that no
-  test calls.
+  test calls, and a guard given a literal. The guard passes the value that production runs with: the constant production reads, or the
+  default read where the constructor fills it in (not a parallel default of the test's own, and not a number typed again). A default that the
+  binary fills in from its environment is read from the binary (`cmd/agent-kourier`). A chart value is read from the chart's files
+  (`internal/limitsdoc`). Check a new guard by changing the production value and seeing the test fail. A test file with a build tag is not
+  counted as a guard.
 - No work-package, decision or risk IDs, `tasks/` paths, personal or workspace identifiers in public pages.
 - Run `make docs-ref docs-check docs-build` before pushing a docs change. Pushing to `main` deploys the site.
 

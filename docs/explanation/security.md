@@ -127,7 +127,7 @@ What bounds this is what the broker can read, and where it can connect:
   and has its status written, and every object is held in the broker's memory. The caps (50 triggers in a Binding, 32 `extract` entries in a trigger, 32 headers in an AgentBackend)
   limit how big one object is, and nothing limits how many a namespace holds. Put a `ResourceQuota` in each tenant's namespace with `count/bindings.agentkourier.dev` and
   `count/agentbackends.agentkourier.dev`: the API server refuses a create past it with `exceeded quota` (measured on kind 1.37.0). A quota limits the count and not the size
-  of what is stored, so it sits beside the caps and replaces none of them. Every limit, with what happens past it, is on [Limits](../reference/limits.md).
+  of what is stored, so it sits beside the caps and replaces none of them. The limits you can run into, with what happens past each, are on [Limits](../reference/limits.md).
 
 What a writer of a Binding and an AgentBackend sees of your conversations. The agent of a Binding receives each mention of the bot in the channel, each reply in a thread the Binding owns
 (with `chat.threadReplies: all`, the default, every reply in the thread, not only the ones that mention the bot), and with a `botMessage` trigger the messages of the bot that

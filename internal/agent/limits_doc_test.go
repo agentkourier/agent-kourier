@@ -16,4 +16,6 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Count(t, "reconnects", cfg.MaxReconnects)
 	limitsdoc.Duration(t, "unaryTimeout", cfg.UnaryTimeout)
 	limitsdoc.Duration(t, "connectTimeout", cfg.ConnectTimeout)
+	limitsdoc.Count(t, "listPageStart", defaultListPageSize)
+	limitsdoc.Count(t, "listPageMin", minListPageSize)
 }

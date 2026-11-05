@@ -16,6 +16,7 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Count(t, "choiceUnits", maxOption)
 	limitsdoc.Count(t, "listLine", maxListLine)
 	limitsdoc.Count(t, "headerUnits", maxHeader)
+	limitsdoc.Count(t, "questionUnits", maxLabel)
 	limitsdoc.Count(t, "approvalArgs", maxApprovalArgs)
 	limitsdoc.Count(t, "approvalTotal", maxApprovalTotal)
 	limitsdoc.Count(t, "approvalBlocks", maxApprovalBlocks)

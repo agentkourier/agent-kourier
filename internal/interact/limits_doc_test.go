@@ -35,4 +35,12 @@ func TestLimitsPage(t *testing.T) {
 	}
 	limitsdoc.Duration(t, "clearGrace", r.cfg.ClearGrace)
 	limitsdoc.Duration(t, "undeliveredGrace", r.cfg.UndeliveredGrace)
+
+	// The broker builds the press worker with only its processor and logger, and the Slack client with PressAuthzTimeout.
+	w, err := NewWorker(WorkerConfig{Processor: struct{ PressProcessor }{}})
+	if err != nil {
+		t.Fatalf("NewWorker: %v", err)
+	}
+	limitsdoc.Duration(t, "pressGiveUp", w.cfg.GiveUpAfter)
+	limitsdoc.Duration(t, "pressAuthz", PressAuthzTimeout)
 }

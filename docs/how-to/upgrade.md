@@ -309,7 +309,7 @@ agent that sends no such update sees no change.
 Agent Kourier bounded none of these before. This release refuses a config that holds more than the bounds below, and
 loads a config within them as before. Nothing else about a Binding or an AgentBackend changes. No example, recipe or
 kind tier config in this repository has more than two triggers, three `extract` entries or one header, or a header name of
-more than 16 characters, so the bounds are far above what they use. [Limits](../reference/limits.md) lists every limit.
+more than 16 characters, so the bounds are far above what they use. [Limits](../reference/limits.md) lists the limits you can run into.
 
 | Where | Bound | The error |
 |---|---|---|

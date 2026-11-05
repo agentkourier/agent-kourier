@@ -1,6 +1,7 @@
 package limitsdoc
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -99,77 +100,6 @@ func mustWrite(t *testing.T, path, content string) {
 	}
 }
 
-// guardCallRE finds a call of a guard with a literal ID. In another package the call is limitsdoc.Count(t, "id", ...), and in
-// this one it is Count(t, "id", ...).
-var guardCallRE = regexp.MustCompile(`(limitsdoc\.)?\b(?:Count|Bytes|Duration|Text)\(\s*[A-Za-z_][A-Za-z0-9_]*\s*,\s*"([^"]+)"`)
-
-// TestEveryMarkerHasAGuard fails for a marker of the page that no test of the repository holds to the code, and for a marker
-// that is not a code span with a value before it, which the guards could not read.
-func TestEveryMarkerHasAGuard(t *testing.T) {
-	top, err := root()
-	if err != nil {
-		t.Fatal(err)
-	}
-	page, err := os.ReadFile(filepath.Join(top, PagePath))
-	if err != nil {
-		t.Fatal(err)
-	}
-	marks := parse(string(page))
-	if raw := anyMarkerRE.FindAllString(string(page), -1); len(raw) != len(marks) {
-		t.Errorf("%s has %d markers and %d of them follow a code span: every <!--limit:id--> must come right after the `value` it guards", PagePath, len(raw), len(marks))
-	}
-	guarded := map[string]string{} // id -> a file that calls it
-	err = filepath.WalkDir(top, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			switch d.Name() {
-			case ".git", "node_modules", "bin", ".claude", "spike", "tasks":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		src, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		own := filepath.Dir(path) == filepath.Join(top, "internal", "limitsdoc")
-		for line := range strings.Lines(string(src)) {
-			if strings.HasPrefix(strings.TrimSpace(line), "//") {
-				continue // a comment that shows a call is no call
-			}
-			for _, m := range guardCallRE.FindAllStringSubmatch(line, -1) {
-				if qualified := m[1] != ""; qualified || own {
-					guarded[m[2]] = path
-				}
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	seen := map[string]bool{}
-	for _, m := range marks {
-		if seen[m.ID] {
-			continue
-		}
-		seen[m.ID] = true
-		if guarded[m.ID] == "" {
-			t.Errorf("%s:%d: the limit %q is on the page and no test holds it to the code: call limitsdoc.Count, Bytes, Duration or Text with the ID in the test of the package that holds the constant", PagePath, m.Line, m.ID)
-		}
-	}
-	for id, path := range guarded {
-		if !seen[id] && !strings.HasPrefix(id, "selftest.") {
-			t.Errorf("%s guards the limit %q, which is not on the page", path, id)
-		}
-	}
-}
-
 // The values below are the chart's, not a Go package's: the page states them, and they are read from the chart's files.
 
 func TestChartLimits(t *testing.T) {
@@ -197,10 +127,37 @@ func TestChartLimits(t *testing.T) {
 			Limits map[string]string `json:"limits"`
 		} `json:"resources"`
 		TerminationGracePeriodSeconds int `json:"terminationGracePeriodSeconds"`
+		Persistence                   struct {
+			Size string `json:"size"`
+		} `json:"persistence"`
+		LivenessProbe struct {
+			PeriodSeconds    int `json:"periodSeconds"`
+			FailureThreshold int `json:"failureThreshold"`
+		} `json:"livenessProbe"`
 	}
 	if err := yaml.Unmarshal(raw, &values); err != nil {
 		t.Fatal(err)
 	}
 	Text(t, "memoryLimit", values.Resources.Limits["memory"])
 	Count(t, "terminationGrace", values.TerminationGracePeriodSeconds)
+	Text(t, "persistenceSize", values.Persistence.Size)
+	Count(t, "livenessPeriod", values.LivenessProbe.PeriodSeconds)
+	Count(t, "livenessFailures", values.LivenessProbe.FailureThreshold)
+
+	// The chart refuses a klogVerbosity above the cap that the binary holds it to.
+	rawSchema, err := os.ReadFile(filepath.Join(top, "charts", "agent-kourier", "values.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Properties struct {
+			KlogVerbosity struct {
+				Maximum int `json:"maximum"`
+			} `json:"klogVerbosity"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(rawSchema, &schema); err != nil {
+		t.Fatal(err)
+	}
+	Count(t, "klogMax", schema.Properties.KlogVerbosity.Maximum)
 }

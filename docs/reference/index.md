@@ -34,6 +34,6 @@ With custom resources a Binding also has a status, which [Binding status](bindin
 - [Metrics](metrics.md): every Prometheus metric.
 - [Logs and traces](logs-and-traces.md): trace settings, span attributes and what a log line carries.
 - [Stored data](stored-data.md): what is kept, for how long, and what never is.
-- [Limits](limits.md): every limit Agent Kourier places on what it accepts, reads, shows and waits for, what happens past it, and whether a
+- [Limits](limits.md): the limits you can run into on what Agent Kourier accepts, reads, shows and waits for, what happens past each, and whether a
   setting changes it.
 - [Glossary](glossary.md): the terms these pages use.
