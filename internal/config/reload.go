@@ -214,8 +214,13 @@ func (r *Reloader) reload(ctx context.Context, force bool) error {
 		st.Stale, st.LastSuccess, r.failures = false, r.lastAttempt, 0
 		r.snap.Store(pub)
 		r.logReport(pub.report)
-		if w, ok := r.secrets.(SecretWatcher); ok {
-			w.Retain(pub.secrets) // after the store, so that whoever finds a Secret dropped finds the snapshot that dropped it; a reader that still holds the old snapshot follows its Secrets again itself
+		// After the store, so that whoever finds a Secret dropped finds the snapshot that dropped it; a reader that still holds the old
+		// snapshot follows its Secrets again itself.
+		switch w := r.secrets.(type) {
+		case KeyedSecretWatcher:
+			w.RetainKeys(pub.reads)
+		case SecretWatcher:
+			w.Retain(pub.names())
 		}
 		if warnPolicies {
 			r.warnToolApprovalPolicies(pub.snap)
@@ -270,17 +275,22 @@ func (r *Reloader) build(ctx context.Context) (pub *published, fp string, err er
 	return nil, "", errConfigMoving
 }
 
-// watchSecrets has a SecretWatcher follow the Secrets that refs name, and waits a bounded time for each to be readable.
+// watchSecrets has a SecretWatcher follow the Secrets that refs name (a KeyedSecretWatcher with the keys that they read), and waits a bounded time for each to be readable.
 // It ignores the answer: Resolve asks for each of the Secrets next and reports every one that is not readable, with its
 // cause, in the error of the reload.
 func (r *Reloader) watchSecrets(ctx context.Context, refs []secretRef) {
-	w, ok := r.secrets.(SecretWatcher)
-	if !ok {
+	var watch func(context.Context) error
+	switch w := r.secrets.(type) {
+	case KeyedSecretWatcher:
+		watch = func(ctx context.Context) error { return w.WatchKeys(ctx, secretReads(refs)) }
+	case SecretWatcher:
+		watch = func(ctx context.Context) error { return w.Watch(ctx, secretNames(refs)) }
+	default:
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, r.secretsWait)
 	defer cancel()
-	_ = w.Watch(ctx, secretNames(refs))
+	_ = watch(ctx)
 }
 
 // buildPerObject resolves set object by object: a Binding that cannot be served is left out and reported, and nothing is

@@ -167,7 +167,8 @@ func bootstrapCRDs(ctx context.Context, client kubernetes.Interface, opts Bootst
 		failed()
 		return nil, err
 	}
-	if err := secrets.Watch(syncCtx, []config.SecretName{{Namespace: conn.Namespace, Name: conn.Spec.CredentialsSecretRef.Name}}); err != nil {
+	own := config.SecretRead{SecretName: config.SecretName{Namespace: conn.Namespace, Name: conn.Spec.CredentialsSecretRef.Name}, Keys: config.ChatCredentialKeys()}
+	if err := secrets.WatchKeys(syncCtx, []config.SecretRead{own}); err != nil {
 		failed()
 		return nil, fmt.Errorf("start the secret resolver: %w", err)
 	}
