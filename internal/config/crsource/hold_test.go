@@ -118,6 +118,63 @@ func TestOnlyWhatTheHeldBindingsNeedIsHeld(t *testing.T) {
 	}
 }
 
+// A Binding that is still there and names no connection that exists is the broker's to report, as every Binding of no other broker is,
+// but it is no Binding of the held connection, and the backend it uses is not held for it: a backend gone from the cluster that only
+// such Bindings name is forgotten, as when nothing is held. Two of them say the connection's name with a different namespace, or
+// another name in its namespace, which a hold that compared either alone would take for the connection's.
+func TestTheBackendOfALiveBindingOfNoHeldConnectionIsNotHeld(t *testing.T) {
+	leakCheck(t)
+	objs := corpus(t)
+	var extra []*unstructured.Unstructured
+	for _, tc := range []struct{ name, namespace, ref, refNamespace string }{
+		{"wrong-namespace", "sre", "slack-main", ""},                        // sre/slack-main: the Binding's own namespace is the default
+		{"wrong-name", "sre", "another-connection", "agent-kourier-system"}, // in the connection's namespace, with another name
+	} {
+		backend := find(objs, "kagent-pilot")
+		backend.SetName("for-" + tc.name)
+		backend.SetUID(types.UID("uid-for-" + tc.name))
+		b := find(objs, "chat-only")
+		b.SetName(tc.name)
+		b.SetNamespace(tc.namespace)
+		b.SetUID(types.UID("uid-" + tc.name))
+		_ = unstructured.SetNestedField(b.Object, "C0999999990", "spec", "chat", "channel")
+		ref := map[string]any{"name": tc.ref}
+		if tc.refNamespace != "" {
+			ref["namespace"] = tc.refNamespace
+		}
+		_ = unstructured.SetNestedMap(b.Object, ref, "spec", "chat", "connectionRef")
+		_ = unstructured.SetNestedField(b.Object, backend.GetName(), "spec", "agent", "backendRef", "name")
+		_ = unstructured.SetNestedField(b.Object, backend.GetNamespace(), "spec", "agent", "backendRef", "namespace")
+		extra = append(extra, backend, b)
+	}
+	c := newCluster(t, slices.Concat(objs, extra)...)
+	src := c.start(t)
+	s, _ := set(t, src)
+	if len(bindingNames(s)) != 4 || len(s.AgentBackends) != 3 {
+		t.Fatalf("Bindings %v, backends %d; want four and three before the hold: the Bindings of no connection are read", bindingNames(s), len(s.AgentBackends))
+	}
+	until(t, func() {
+		c.deleteForRollback(objs)
+		for _, u := range extra {
+			if u.GetKind() == "AgentBackend" {
+				c.remove(u)
+			}
+		}
+	}, func() bool {
+		s, _ := set(t, src)
+		return len(held(s)) == 4 && src.CachedGenerationForTest("AgentBackend", "agent-kourier-system", "for-wrong-namespace") < 0 &&
+			src.CachedGenerationForTest("AgentBackend", "agent-kourier-system", "for-wrong-name") < 0
+	})
+	s, _ = set(t, src)
+	got := strings.Join(held(s), " ")
+	if got != allHeld {
+		t.Errorf("held = %s; want %s: not the backends that Bindings of no held connection use", got, allHeld)
+	}
+	if len(s.AgentBackends) != 1 {
+		t.Errorf("%d backends in the Set; want only the held one", len(s.AgentBackends))
+	}
+}
+
 // seenGone makes the cluster delete the object and waits until the informer's cache has seen it go, so that the read that follows
 // finds it gone.
 func (c *cluster) seenGone(t *testing.T, src *crsource.Source, kind string, objs []*unstructured.Unstructured, name string) {
