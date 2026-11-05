@@ -17,8 +17,23 @@ is that image by digest. Nothing is released by hand.
 3. Before tagging, confirm that `ci.yml`, `security.yml` and `codeql.yml` have completed successfully for that
    exact commit from a push to `main`. The release gate checks the same commit and the latest attempt again; a
    missing, pending, failed or pull-request-only run blocks the release.
-4. `git tag vX.Y.Z <the release pull request's commit on main>` and `git push origin vX.Y.Z`.
-5. Watch the `release` workflow. Its job summary and the GitHub Release body name the pushed image and chart
+4. Run the kind tiers on that commit by hand, since no workflow does ([CI](#ci) says why). The custom resource
+   route has its own runs of the tiers, and two scenarios that nothing else runs. Each tier needs Docker and
+   about 8 GB free; take each down before the next comes up:
+
+   ```sh
+   make e2e-fast-up e2e-fast e2e-fast-down                                       # the ConfigMap route
+   make e2e-full-up e2e-full e2e-full-down
+   E2E_CONFIG_SOURCE=crds make e2e-fast-up e2e-fast e2e-crs-scenarios e2e-fast-down
+   E2E_CONFIG_SOURCE=crds make e2e-full-up e2e-full e2e-full-down                # custom resources
+   E2E_STORE=postgres E2E_REPLICAS=2 make e2e-fast-up e2e-crs-migration e2e-fast-down
+   ```
+
+   `make e2e-fast` and `make e2e-full` read which route the Deployment is on and run the tests of that route, so the two
+   runs on `E2E_CONFIG_SOURCE=crds` are the only ones that run the `CR_` tests. `make e2e-crs-scenarios` needs the fast tier up on the custom resource route, and
+   `make e2e-crs-migration` needs it on Postgres with two replicas on the ConfigMap route (the default); each says so and stops if the tier is not as it needs. A failure blocks the tag.
+5. `git tag vX.Y.Z <the release pull request's commit on main>` and `git push origin vX.Y.Z`.
+6. Watch the `release` workflow. Its job summary and the GitHub Release body name the pushed image and chart
    digests. A GitHub Release is created only after both signatures verify.
 
 If a first release attempt fails before its GitHub Release is created, rerun that tag after fixing the failure.
@@ -197,7 +212,7 @@ and save none, so a pull request runs cold until a push run on `main` has saved 
 packages, `echo-agent` in `ci.yml` and `build` in `docs.yml`, keep pip's cache under the same rules, keyed on the job,
 the runner OS, the Python version and the requirements files they install from. `docs.yml` runs on a push to `main`
 only when the push changes a path in its `push` trigger, so only such a push saves the `build` job's caches. Each job has its own timeout, set from the times seen on a cold cache. The kind
-tiers are not in CI. They would need a runner with Docker and about 8 GB free, the `kind`, `kubectl`,
+tiers are not in CI, which is why "Cut a release" has you run them, with the custom resource scenarios, by hand. They would need a runner with Docker and about 8 GB free, the `kind`, `kubectl`,
 `helm` and `jq` binaries installed at pinned versions (`hack/ci/install-kind-tools.sh` installs them, each checked
 against a pinned sha256), and the pinned node and base images pulled (the tiers
 take minutes to bring up, so they are best as a separate nightly or label-triggered workflow, not on every PR). The `crd-corpus` job is not a tier: its cluster has only the CRDs, and it runs on every PR.

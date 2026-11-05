@@ -98,6 +98,10 @@ What bounds this is what the broker can read, and where it can connect:
   its own with a Role and RoleBinding ([the how-to](../how-to/migrate-config-source.md#let-a-team-add-its-own-binding)), so a Secret that nobody granted cannot be
   read through a Binding. `rbac.secretNamespaces` grants a whole namespace and removes that bound for it, and so does every
   namespace-wide Role on the ConfigMap route, which is what the chart writes there.
+  Removing a grant is not an immediate cut-off. The broker keeps a cache for each Secret it has read, and when a team deletes its Role, that cache goes on
+  serving the value it holds: the broker logs the warning `secret informer cannot list or watch` for the Secret, and keeps calling the agent with the cached token, so the
+  Binding stays `Ready` while its probes succeed. A Secret that is deleted or rotated after the Role went is not seen, and the broker uses the old value until it restarts
+  (read from `internal/config/k8ssecrets/resolver.go`; not run). To cut a team off, delete the Binding or restart the broker as well.
 - **Where the pod may connect.** The `url` is fetched from the broker's pod. The chart's NetworkPolicy is off by default. Turned on, it allows egress to DNS, the API
   server, the database, what you list in `networkPolicy.extraEgress`, and Slack's rule, which is port 443 to every address outside the private ranges. So a backend
   at a private address, such as an in-cluster Service, is unreachable until you list it in `extraEgress`, but any public HTTPS host stays reachable
@@ -106,6 +110,11 @@ What bounds this is what the broker can read, and where it can connect:
   policy a `url` can name anything the pod reaches.
 - **`allowedNamespaces`.** A Binding may use an AgentBackend or ChatConnection of another namespace only if that object lists the Binding's
   namespace. It lists none by default.
+- **How many objects.** Write access to these kinds can also cost the broker capacity, not only data: each Binding is probed (two probes every 5 minutes, four at a time, each up to 10 seconds)
+  and has its status written, and every object is held in the broker's memory. The caps (50 triggers in a Binding, 32 `extract` entries in a trigger, 32 headers in an AgentBackend)
+  limit how big one object is, and nothing limits how many a namespace holds. Put a `ResourceQuota` in each tenant's namespace with `count/bindings.agentkourier.dev` and
+  `count/agentbackends.agentkourier.dev`: the API server refuses a create past it with `exceeded quota` (measured on kind 1.37.0). A quota limits the count and not the size
+  of what is stored, so it sits beside the caps and replaces none of them.
 
 What a writer of a Binding and an AgentBackend sees of your conversations. The agent of a Binding receives each mention of the bot in the channel, each reply in a thread the Binding owns
 (with `chat.threadReplies: all`, the default, every reply in the thread, not only the ones that mention the bot), and with a `botMessage` trigger the messages of the bot that
