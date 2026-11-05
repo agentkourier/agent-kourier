@@ -16,7 +16,7 @@ supported. [Move the config between a ConfigMap and custom resources](../how-to/
 | ChatConnections | Exactly one in the directory | Many in the cluster; the broker serves the one `AGENTKOURIER_CHAT_CONNECTION` names |
 | Kubernetes | No minimum | 1.33 or later, which the chart checks |
 | Extra grants | A Role for the Secrets in each namespace | A ClusterRole to read the three kinds and write `bindings/status`, and Roles that name the Secrets |
-| Unknown fields | The loader refuses the file | The API server refuses them at apply, or drops them (see below) |
+| Unknown fields | The loader refuses the file | The API server refuses them at apply, or drops them; the broker ignores one its own types lack (see below) |
 | A change is read | At the next check of the files, every 10 seconds, and the chart rolls the pod when its ConfigMap changes | At the next check, every 10 seconds |
 
 The two are never merged and there is no fallback. A broker on `files` ignores any custom resources in the cluster, and a broker on
@@ -34,7 +34,8 @@ Kubernetes of 1.33 or later, and the need to think about who may write which obj
 
 ## What a bad object does
 
-Both routes run the same code on each object: the same defaults, the same validation, the same checks between objects. They differ in what
+Both routes run the same code on each object: the same defaults, the same validation, the same checks between objects. They differ on a field that the broker's types do not have
+(the files refuse it, the broker ignores it on custom resources: see [Unknown fields](#unknown-fields)), and in what
 they do with a failure.
 
 **Files are all or nothing.** One resource that does not load fails the config. At start the broker exits with code 2 and names the
@@ -128,9 +129,22 @@ For a Binding with `spec.chat.bogusField`, with kubectl 1.37.1 and Helm 4 (anoth
 | `kubectl apply --validate=false` | Stored without the field, and no message |
 | `helm upgrade`, with the field in a `config.*` value | Refused: `field not declared in schema`, and the release goes to `failed` with the objects as they were |
 
-On the files route the loader refuses a file with a field it does not know. On the custom resource route that holds for a client that asks the API server to
-refuse unknown fields, and not for one that does not: with `--validate=false` the field is dropped silently, and the object runs without it, so a field
-that a release removed is ignored without an error. What Argo CD does with an unknown field is not covered here.
+On the files route the loader refuses a file with a field it does not know, and so the whole config. On the custom resource route the API server's schema decides what an
+object may hold, and a client that asks it to refuse unknown fields is refused (the table); one that does not, such as `--validate=false`, has the field dropped silently, and the
+object runs without it, so a field that a release removed is ignored without an error. What Argo CD does with an unknown field is not covered here.
+
+**A broker older than its CRDs ignores a field it does not know.** The broker does not refuse an object on the custom resource route because of a field that its own types lack,
+in the `spec`, the `status` or the `metadata` of a Binding, an AgentBackend or a ChatConnection: the field is ignored and the object is read as the rest of it says. This is
+what lets an older broker keep serving under newer CRDs. The CRDs are applied before an upgrade, and rolling back only the image leaves them new; a later release can add a
+field with a default, and the API server then adds that field to every stored object it returns, without a change of the object's generation. If the broker refused such a
+field it would serve no Binding at all, and a broker that cannot read its own ChatConnection would not start. A field that the broker's types do have, with a value that they cannot
+read or that fails validation, is still refused.
+
+The broker says what it ignored: one warning for each object, for each generation of it, `a custom resource has fields this broker does not know, and ignores them`, with the
+`kind`, `namespace`, `name` and `generation` of the object and the path of each field (`spec.chat.futureField`, at most ten of them, and their count as `unknown_fields`), and never
+a value. What tells an operator that the CRDs and the broker differ is `agentkourier_crd_schema_state`, which reads `mismatch` for a CRD whose annotation `agentkourier.dev/schema-sha256` is not the hash of the schema the broker was built
+with, as when the CRDs come from a newer chart release than the image. It cannot see every difference: a CRD that was edited by hand keeps its annotation and reads `match`, and one that has
+no annotation reads `unannotated`. To end the mismatch, bring the CRDs and the image to the same chart release.
 
 ## One ChatConnection
 

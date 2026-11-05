@@ -37,6 +37,34 @@ func (s *Source) CachedGenerationForTest(kind, namespace, name string) int64 {
 	return -1
 }
 
+// CachedObjectForTest returns the object of the kind that an informer's cache holds now, and nil if it holds none. It is the cache's
+// own object: a test reads it and changes nothing.
+func (s *Source) CachedObjectForTest(kind, namespace, name string) *unstructured.Unstructured {
+	s.mu.Lock()
+	stores := s.stores
+	s.mu.Unlock()
+	store := map[string]int{"Binding": 0, "AgentBackend": 1, "ChatConnection": 2}[kind]
+	if stores[store] == nil {
+		return nil
+	}
+	for _, it := range stores[store].List() {
+		if u, ok := it.(*unstructured.Unstructured); ok && u.GetNamespace() == namespace && u.GetName() == name {
+			return u
+		}
+	}
+	return nil
+}
+
+// LastGoodIsCachedForTest says whether the last good generation of the object is the very object that the informer's cache holds, so
+// that holding it costs nothing more than the cache does.
+func (s *Source) LastGoodIsCachedForTest(kind, namespace, name string) bool {
+	cached := s.CachedObjectForTest(kind, namespace, name)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	g, ok := s.good[key{kind, namespace, name}]
+	return ok && cached != nil && g.obj == cached
+}
+
 // SetProbeExitHookForTest sets a function that the probe's goroutine calls as it ends, before Start. A test that makes it slow
 // can tell whether Stop waited for the goroutine, which a goroutine that ends at once cannot show.
 func (s *Source) SetProbeExitHookForTest(f func()) { s.probeExited = f }
