@@ -84,9 +84,9 @@ namespace and name, holds the channel, and the other is not served and says `Cha
 - **Deleting a ChatConnection does not stop routing.** A broker holds its own ChatConnection at its last good generation after it is deleted, and with it the
   Bindings of it that are gone and the AgentBackends they use, until the connection returns or the broker restarts. That is what lets a move back to the
   ConfigMap keep the old pods routing while they end ([the how-to](../how-to/migrate-config-source.md#move-back-to-the-configmap) has the details, and
-  `agentkourier_config_held_objects` says what is held). A Binding deleted alone, while its connection exists, stops in about 10 to 20 seconds, and in 60 at most; one deleted while
-  its connection is held stays held, so bring the connection back first. A held Binding keeps its channel against a newer one, and a Binding that was just deleted keeps it for up to about 20 seconds.
-- **Deleting a CRD deletes every object of the kind.** Deleting the Bindings CRD alone stops the Bindings within about 20 seconds, and a new mention gets no answer. Deleting all
+  `agentkourier_config_held_objects` says what is held). A Binding deleted alone, while its connection exists, stops in about 10 to 20 seconds, behind a stream of other deletions in about 80 at most; one deleted while
+  its connection is held stays held, so bring the connection back first. A held Binding keeps its channel against a newer one, and a Binding that was just deleted keeps it for up to about 20 seconds, longer behind a stream of other deletions.
+- **Deleting a CRD deletes every object of the kind.** Deleting the Bindings CRD alone stops the Bindings within about 20 seconds (longer behind a stream of other deletions), and a new mention gets no answer. Deleting all
   three takes the connection with them, and the broker holds the rest and keeps routing. In both the broker sets `agentkourier_config_stale` to 1, and a restart exits with code 2.
 
 ## What is checked, and where

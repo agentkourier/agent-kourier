@@ -197,7 +197,7 @@ to do, and one is the team's.
      - {kind: ServiceAccount, name: agent-kourier, namespace: agent-kourier}
    ```
 
-   The verbs are `list` and `watch`, not `get`. Give the Role a name that the chart would not (`<release>-secrets` is its own), so that the two never meet. Check with `kubectl auth can-i list secrets/team-a-agent-token -n team-a --as
+   The verbs are `list` and `watch`, not `get`. Give the Role a name that the chart would not (`<fullname>-secrets` is its own: `agent-kourier-secrets` for the release on this page), so that the two never meet. Check with `kubectl auth can-i list secrets/team-a-agent-token -n team-a --as
    system:serviceaccount:agent-kourier:agent-kourier`: it says `yes`, and `list secrets` without the name says `no`.
    Until the Role exists the Binding is `BackendReachable=False` with `CredentialsUnreadable`. It recovers on its own, with no restart, once the Role is
    applied.
@@ -247,7 +247,7 @@ leave the team's Bindings out of the ConfigMap and use plain `--set config.sourc
 
 A Secret outside the release namespace needs a grant on this route, and `rbac.secretNames` is ignored. The Role that a team made for its own Secret stays after the move
 and is that grant. The other way is `rbac.secretNamespaces`, which replaces the chart's default of the release namespace, so list the release namespace as well; and if a team's Role has the name
-the chart would give its own there (`<release>-secrets`), delete it first, or the upgrade fails with `invalid ownership metadata`.
+the chart would give its own there (`<fullname>-secrets`, which is `agent-kourier-secrets` for the release on this page), delete it first, or the upgrade fails with `invalid ownership metadata`.
 
 Keep `crds.install: true` while you do; it does not need to change. What the move back does:
 
@@ -262,7 +262,7 @@ Keep `crds.install: true` while you do; it does not need to change. What the mov
 | Sessions, the outbox and the audit log | Kept, since they live in the store. A session of a Binding that is not in the config is not recovered, and a reply in its thread gets "This thread's agent is no longer set up, so I can't pass your messages on." Such a session is deleted once it has been idle for the longest `threadTTL` of any Binding (at least the default of 90 days) plus a grace of 90 days. |
 
 **Never delete a CRD to get out of a refusal.** Deleting it deletes every custom resource of that kind in the cluster, which is every team's. What a running
-broker does depends on what goes. Deleting the Bindings CRD alone stops every Binding, within about 20 seconds (60 at most): their `agentkourier_binding_ready`
+broker does depends on what goes. Deleting the Bindings CRD alone stops every Binding, within about 20 seconds (about 80 at most, behind a stream of other deletions): their `agentkourier_binding_ready`
 series are gone and a new mention gets no answer. Deleting all three CRDs takes the ChatConnection too, and the broker then holds what went with it (below) and keeps routing.
 Either way the broker sets `agentkourier_config_stale` to 1 and logs `custom resource informer cannot list or watch`, and a restart exits with code 2, since the CRDs are not installed.
 
@@ -276,8 +276,8 @@ says what is held ([Metrics](../reference/metrics.md#connection-configuration-an
 This does not promise that no message is lost across the rollout: while no pod holds a Socket Mode connection, whether Slack delivers an event again is not something this page can tell you.
 
 **The cost.** Deleting a ChatConnection on purpose does not stop routing until the broker restarts. A Binding deleted alone, while its connection exists, stops in about 10 to
-20 seconds, later behind a stream of other deletions and after 60 seconds at most. One deleted within a minute before its connection comes back as held. While the connection is held, a
-Binding that is deleted stays held: bring the connection back, then delete the Binding.
+20 seconds, later behind a stream of other deletions and after about 80 seconds at most. A Binding deleted in the minute before its connection is deleted comes back, held. While the connection
+is held, a Binding that is deleted stays held, and leaves by itself once the connection is back. To stop a Binding that is still there, bring the connection back first, then delete it.
 
 ## When it does not work
 
@@ -287,6 +287,7 @@ Binding that is deleted stays held: bring the connection back, then delete the B
 | `helm upgrade` fails with `config.source crds needs Kubernetes 1.33 or later` | The API server is older. The ConfigMap route has no minimum: stay on it. With `helm template`, pass the cluster's version with `--kube-version`. |
 | The pod crash-loops and `kubectl logs` says `ChatConnection agent-kourier/slack was not found` (exit code 2) | The broker owns one ChatConnection, named by `AGENTKOURIER_CHAT_CONNECTION`, and does not start without it. Apply it, or name the one that exists in `config.chatConnection`. Once the resources exist the pod starts at its next restart, with nothing else to do. |
 | `helm upgrade` fails with `conflict with "kubectl-patch"` or another manager | Someone edited a chart-rendered resource by hand, and Helm will not overwrite a field another manager set. Put the change in your values. To discard the hand edit, add `--force-conflicts`. |
+| `helm upgrade --wait` (or `helm install --wait`) fails with `resource Binding/<namespace>/<name> not ready` | Helm 4 reads the status of the Bindings the chart renders on this route, and a Binding is not `Ready` until the leader has probed it, or while its agent or channel cannot be reached. Allow a longer `--timeout`, or leave `--wait` out and check the Bindings as in [Check that it worked](#check-that-it-worked). |
 | `helm upgrade` fails with `field not declared in schema`, or `Invalid value` | A rendered resource has a field the schema does not have, or a value it refuses. The release goes to `failed` and the objects stay as they were; fix the values and upgrade again. |
 | The pod exits with code 2 and `the custom resource definitions are not installed` | The CRDs are not in the cluster. Install them, as in step 1. |
 | A reinstall under another release name fails with `invalid ownership metadata` | The kept CRDs name the release that made them. See the [chart README](https://github.com/agentkourier/agent-kourier/blob/main/charts/agent-kourier/README.md#custom-resources-instead-of-a-configmap) for the two ways on that delete nothing. |
