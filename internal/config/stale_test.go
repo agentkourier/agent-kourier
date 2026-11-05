@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync/atomic"
@@ -55,42 +56,72 @@ func TestStatusIsStaleWhileTheSourceSaysItLags(t *testing.T) {
 	}
 }
 
-// movingSource is a source that changes under the first loads: each Fingerprint of the first moves says something new.
-type movingSource struct {
-	perObjectSource
-	moves int
+// editedWhileRead is a source that is edited without pause: each read hands out the config of one generation of sre-alerts,
+// under the fingerprint of that generation, and an edit lands before the read is over, so that the fingerprint has moved on by
+// the time the Reloader looks at it again.
+type editedWhileRead struct {
+	t    *testing.T
+	make func(*testing.T) *Set
+	gen  int64
+	sets int
 }
 
-func (m *movingSource) Fingerprint(context.Context) string {
-	if m.moves > 0 {
-		m.moves--
-		m.fp += "x"
-	}
-	return m.fp
+func (e *editedWhileRead) fp() string { return fmt.Sprintf("generation-%d", e.gen) }
+
+func (e *editedWhileRead) Set(context.Context) (*Set, string, error) {
+	e.sets++
+	set := e.make(e.t)
+	sreAlerts(set).Generation = e.gen
+	read := e.fp()
+	e.gen++ // the edit
+	return set, read, nil
 }
 
-// A custom resource can change at any moment, so a first load that finds the config moving goes on trying, for a while, where
-// the files' Reloader fails at once: a start that exits for it would restart into the same chance.
-func TestStartOfAPerObjectReloaderRetriesAMovingFirstLoad(t *testing.T) {
-	mk := func() *movingSource {
-		return &movingSource{perObjectSource: perObjectSource{t: t, make: generations, fp: "v"}, moves: 3}
+func (e *editedWhileRead) Fingerprint(context.Context) string { return e.fp() }
+
+// servedGeneration is the generation of sre-alerts that r serves.
+func servedGeneration(t *testing.T, r *Reloader) int64 {
+	t.Helper()
+	snap := r.Current()
+	if snap == nil {
+		t.Fatal("the Reloader serves no snapshot")
 	}
-	r := newPerObjectReloader(mk(), specSecrets(), func(c *ReloaderConfig) { c.FirstLoadWait = 5 * time.Second })
+	rb, ok := snap.Binding("sre", "sre-alerts")
+	if !ok {
+		t.Fatal("the snapshot has no sre-alerts")
+	}
+	return rb.Binding.Generation
+}
+
+// A custom resource can change at any moment, so a source that is edited without pause must not stop a per-object Reloader from
+// publishing, at Start or later: it serves each read as it was read, and the next poll finds what was edited since. The
+// Reloader of files, which reads a directory that can change under the read, still reads again, gives up when it moves again,
+// and publishes nothing, as before.
+func TestAPerObjectReloaderPublishesWhatItReadFromASourceThatIsEditedWithoutPause(t *testing.T) {
+	src := &editedWhileRead{t: t, make: generations, gen: 10}
+	r := newPerObjectReloader(src, specSecrets(), func(c *ReloaderConfig) { c.PollInterval = time.Hour })
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	if err := r.Start(ctx); err != nil {
-		t.Fatalf("Start of a per-object Reloader = %v; want it to try again until the config holds still", err)
+		t.Fatalf("Start of a per-object Reloader whose source is edited during every read = %v; want it to publish that read", err)
 	}
 	cancel()
 	r.Wait()
-
-	files := NewReloader(ReloaderConfig{Source: mk(), Secrets: specSecrets(), Logger: slog.New(slog.DiscardHandler)})
-	if err := files.Start(t.Context()); err == nil || !strings.Contains(err.Error(), "changed during the load") {
-		t.Errorf("Start of a files Reloader = %v; want it to fail with a config that moves, as before", err)
+	if got := servedGeneration(t, r); got != 10 || src.sets != 1 {
+		t.Errorf("after Start: serving generation %d after %d reads; want the one read, generation 10", got, src.sets)
+	}
+	if r.lastFingerprint != "generation-10" {
+		t.Errorf("fingerprint kept after Start = %q; want that of the read, so that the next poll finds the edit", r.lastFingerprint)
+	}
+	for want := int64(11); want <= 13; want++ {
+		mustReload(t, r, false) // a poll
+		if got, st := servedGeneration(t, r), r.Status(); got != want || st.Stale || st.Errors != 0 {
+			t.Errorf("poll: serving generation %d, status %+v; want generation %d, fresh, with no error", got, st, want)
+		}
 	}
 
-	short := newPerObjectReloader(&movingSource{perObjectSource: perObjectSource{t: t, make: generations, fp: "v"}, moves: 1000}, specSecrets(), func(c *ReloaderConfig) { c.FirstLoadWait = 300 * time.Millisecond })
-	if err := short.Start(t.Context()); err == nil || !strings.Contains(err.Error(), "changed during the load") {
-		t.Errorf("Start of a per-object Reloader whose config never holds still = %v; want it to give up after FirstLoadWait", err)
+	files := NewReloader(ReloaderConfig{Source: &editedWhileRead{t: t, make: generations, gen: 10}, Secrets: specSecrets(), Logger: slog.New(slog.DiscardHandler)})
+	if err := files.Start(t.Context()); err == nil || !strings.Contains(err.Error(), "changed during the load") || files.Current() != nil {
+		t.Errorf("Start of a Reloader that is not per-object, over a source edited during every read = %v, serving a snapshot %v; want it to fail, serving none, as before", err, files.Current() != nil)
 	}
 }

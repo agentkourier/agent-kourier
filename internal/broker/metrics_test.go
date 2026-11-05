@@ -146,14 +146,33 @@ func TestMetricLabelsAreBounded(t *testing.T) {
 	}
 }
 
+// turnOutcomeLabels are the values of the label outcome of agentkourier_turn_outcomes_total, as docs/reference/metrics.md names them and
+// as operators write them into alert rules. They are literals, not session.TurnOutcomes(): a test that iterates the list it checks
+// passes when an outcome is dropped from it, and a dropped outcome is counted as "other", which no alert on its name sees.
+var turnOutcomeLabels = []string{"completed", "failed", "rejected", "canceled", "credentials_rejected", "forbidden", "unreachable",
+	"session_gone", "binding_gone", "wedged", "uncancellable", "pause_ended", "answer_rejected", "refused", "no_final", "response_too_large",
+	"lookup_incomplete"}
+
 // Every outcome the session manager can report is its own label, and one it cannot is "other".
 func TestEveryTurnOutcomeHasItsOwnLabel(t *testing.T) {
+	var listed []string
 	for _, o := range session.TurnOutcomes() {
+		listed = append(listed, string(o))
+	}
+	if !slices.Equal(listed, turnOutcomeLabels) {
+		t.Errorf("session.TurnOutcomes() = %q, want %q: an outcome that is not listed is counted as other", listed, turnOutcomeLabels)
+	}
+	for _, label := range turnOutcomeLabels {
 		m := mustMetrics(t, nil)
-		m.TurnOutcome("ns/b", o)
-		if got := samples(t, m); !slices.Contains(got, "agentkourier_turn_outcomes_total{binding=ns/b,outcome="+string(o)+"} 1") {
-			t.Errorf("outcome %q: samples = %v; want its own label", o, got)
+		m.TurnOutcome("ns/b", session.TurnOutcome(label))
+		if got := samples(t, m); !slices.Contains(got, "agentkourier_turn_outcomes_total{binding=ns/b,outcome="+label+"} 1") {
+			t.Errorf("outcome %q: samples = %v; want its own label", label, got)
 		}
+	}
+	m := mustMetrics(t, nil)
+	m.TurnOutcome("ns/b", session.TurnOutcome("made_up"))
+	if got := samples(t, m); !slices.Contains(got, "agentkourier_turn_outcomes_total{binding=ns/b,outcome=other} 1") {
+		t.Errorf("an outcome the session cannot report: samples = %v; want it counted as other", got)
 	}
 }
 

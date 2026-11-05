@@ -391,8 +391,8 @@ func TestAnswerOfUnknownOutcomeWhoseTaskCannotBeRead(t *testing.T) {
 			t.Fatal(err)
 		}
 		eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) >= 1 })
-		if got := sink.noticesOf(NoticeFailed); got[0].Detail != tooLargeSentence {
-			t.Errorf("notice = %q; want %q", got[0].Detail, tooLargeSentence)
+		if got := sink.noticesOf(NoticeFailed); got[0].Detail != tooLargeAnswerSentence {
+			t.Errorf("notice = %q; want %q", got[0].Detail, tooLargeAnswerSentence)
 		}
 		eventually(t, "the cancel", func() bool { return len(f.cancelled()) >= 1 }) // the thread is told first
 		if got := f.cancelled(); len(got) != 1 || got[0] != "t1" {
@@ -655,4 +655,156 @@ func TestSendThatMeetsAnOversizedCardIsRetriedNotFailedAsTooLarge(t *testing.T) 
 	if n := tries.Load(); n != 3 {
 		t.Errorf("%d sends; want 3: two that never left and one that did", n)
 	}
+}
+
+// A pause that ends because its task was too large to read also ends the signals that a person made while the task was read: a
+// cancel or timeout (endPause) puts one release on the convo's channel, an answer puts its work there, and each channel holds one
+// for the park that is over. If one stayed, the next pause of the thread would meet it, and be released, or answered, at once, by a
+// person who spoke to the last. Both are put there while the read is in flight, which is where a person's press can come. The reply
+// that was read goes out as a turn of its own and pauses on a task of its own, which must stay paused.
+func TestPauseThatIsTooLargeToReadLeavesNoSignalForTheNextPause(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		signal func(f *fixture) error
+	}{
+		{"a cancel or a timeout", func(f *fixture) error { return f.m.endPause(f.t.Context(), key, "t1") }},
+		{"an answer", func(f *fixture) error { return f.m.Answer(f.t.Context(), key, answerMsg("ans-1")) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, sink, _, ends := logged(t)
+			f.textReplies = true
+			f.m.cfg.RetryBase = time.Millisecond
+			f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+				return turn(h, n, a2a.TaskStateInputRequired) // turn 1 pauses on t1, and the reply that is read pauses on t2
+			}
+			f.agent.answer = func(*a2a.Message, agent.Handler) error {
+				return errors.New("an answer reached the agent") // asserted below: none is sent
+			}
+			var signalErr error
+			f.agent.get = func(id a2a.TaskID) (*a2a.Task, error) {
+				if id == "t1" {
+					signalErr = tc.signal(f)
+					return nil, fmt.Errorf("get task t1: %w", errAnswerTooLarge)
+				}
+				return &a2a.Task{ID: id, ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired}}, nil
+			}
+			f.setTextReply(func(context.Context, Key, store.Reply, a2a.Task) (TextReplyOutcome, error) {
+				return TextReplyWait, nil // for the pause on t2, which the test leaves be
+			})
+			if _, err := f.submit(inbound("1")); err != nil {
+				t.Fatal(err)
+			}
+			waitFinal(t, sink)
+			if _, err := f.submit(inbound("2")); err != nil { // the text reply that makes the runner read the task
+				t.Fatal(err)
+			}
+			waitFinal(t, sink) // the reply went out as a turn, and paused on t2
+			parked := func() a2a.TaskID {
+				f.m.mu.Lock()
+				defer f.m.mu.Unlock()
+				if c := f.m.convos[key]; c != nil {
+					return c.parked
+				}
+				return ""
+			}
+			eventually(t, "the runner to park on t2", func() bool { return parked() == "t2" })
+			// A signal that was left would act at once. Nothing is awaited that the test can observe, so it looks for a while.
+			deadline := time.Now().Add(300 * time.Millisecond)
+			for time.Now().Before(deadline) {
+				if p := parked(); p != "t2" {
+					t.Fatalf("parked on %q; want the pause on t2 to stay: a signal for the last pause released or answered it", p)
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			if signalErr != nil {
+				t.Errorf("the signal made while the task was read: %v; want it accepted, for the park was not over", signalErr)
+			}
+			if got := ends.get(); strings.Contains(strings.Join(got, ","), string(TurnPauseEnded)) {
+				t.Errorf("outcomes reported = %v; want no pause ended", got)
+			}
+			f.agent.mu.Lock()
+			defer f.agent.mu.Unlock()
+			if len(f.agent.answers) != 0 {
+				t.Errorf("%d answers sent; want none: the person answered the pause that is over", len(f.agent.answers))
+			}
+		})
+	}
+}
+
+// A queued turn that an earlier process left (it may have posted a message for it, a stream that is still open) and that ends here with
+// no attempt of its own, because the lookup that has to come first cannot read the agent's list of tasks, hands that on: the sink is given
+// the turn, recovered, of the same message, on a context that is already over and does not continue, so that the renderer ends what the
+// earlier process showed and does not leave it standing as if the agent were still at work.
+func TestLookupIncompleteOnARestartEndsWhatTheEarlierProcessLeft(t *testing.T) {
+	f, sink := restarted(t)
+	if err := f.st.UpsertSession(t.Context(), store.Session{Key: key, Binding: "ns/b1", ContextID: "c1", LastActivity: t0}); err != nil {
+		t.Fatal(err)
+	}
+	queuedBeforeTheRestart(t, f)
+	f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
+		return nil, nil, fmt.Errorf("%w: list tasks of context c1: %w", agent.ErrLookupIncomplete, errAnswerTooLarge)
+	}
+	f.recover(t)
+	eventually(t, "the head to fail", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+	f.retired(t)
+	if got := sink.noticesOf(NoticeFailed); got[0].Detail != lookupIncompleteDetail {
+		t.Errorf("failed notice = %q; want %q", got[0].Detail, lookupIncompleteDetail)
+	}
+	if sends, _, _ := f.agent.counts(); sends != 0 {
+		t.Errorf("%d sends; want none: the head is not sent when it cannot be looked up", sends)
+	}
+	sink.mu.Lock()
+	refs := append([]TurnRef(nil), sink.refs...)
+	sink.mu.Unlock()
+	if len(refs) != 1 || !refs[0].Recovered || refs[0].MessageID != inbound("1").MessageID {
+		t.Fatalf("sink turns %+v; want one, recovered, of message 1: what the earlier process left is ended", refs)
+	}
+	if cause := sink.causeOf(t, 0); errors.Is(cause, ErrTurnContinues) {
+		t.Errorf("the sink context ended with %v; want the turn over, and not continuing", cause)
+	}
+}
+
+// unverifiedCancelWarning is the WARN that a cancel is counted as done on an answer too large to read (docs/how-to/upgrade.md names it).
+const unverifiedCancelWarning = "session: the answer to a cancel was too large to read, so the cancel is counted as done without being verified"
+
+// A cancel that the runner makes itself, of a task whose reply was too large or of one presumed wedged, and whose answer is too large to
+// read, is counted as done, and says so in the log: the cancel reached the agent and what it did to the task is not known, and the thread
+// is told no more than that the turn stopped or the task was cancelled. Each place that cancels has its own call that logs it.
+func TestACancelOfTheRunnerWhoseAnswerIsTooLargeIsWarnedAboutOnce(t *testing.T) {
+	cancelErr := func(int) error { return fmt.Errorf("cancel task t1: %w", errAnswerTooLarge) }
+	check := func(t *testing.T, f *fixture, logs *logRecorder) {
+		t.Helper()
+		eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= 1 })
+		f.retired(t)
+		lines := logs.lines(unverifiedCancelWarning)
+		if len(lines) != 1 || lines[0].attrs["task"] != "t1" {
+			t.Errorf("WARNs about an unverified cancel = %+v; want one, for task t1", lines)
+		}
+		if id := f.taskID(); id != "" {
+			t.Errorf("task %q recorded; want it cleared: the cancel is counted as done", id)
+		}
+		// The audit row says the answer was not read (docs/how-to/upgrade.md): a row that said the cancel worked would claim what is not known.
+		f.amu.Lock()
+		defer f.amu.Unlock()
+		if len(f.audits) != 1 || f.audits[0].Op != audit.OpCancel || !errors.Is(f.audits[0].Err, dialect.ErrResponseTooLarge) {
+			t.Errorf("audits = %+v; want one cancel, failed with response_too_large", f.audits)
+		}
+	}
+	t.Run("a task whose reply was too large", func(t *testing.T) {
+		f, _, logs, _ := logged(t)
+		f.agent.script = oversized
+		f.agent.cancelErr = cancelErr
+		if _, err := f.submit(inbound("1")); err != nil {
+			t.Fatal(err)
+		}
+		check(t, f, logs)
+	})
+	t.Run("a task presumed wedged", func(t *testing.T) {
+		logs := newLogRecorder()
+		f, _ := wedgedFixture(t, func(f *fixture) {
+			f.m.cfg.Logger = slog.New(logs)
+			f.agent.cancelErr = cancelErr
+		}, "1")
+		check(t, f, logs)
+	})
 }

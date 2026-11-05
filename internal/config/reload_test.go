@@ -213,6 +213,46 @@ func TestReloaderWarnsApprovalsOnlyForInitialOrChangedConfig(t *testing.T) {
 	}
 }
 
+// The warning is about a Binding, so a change to the config that leaves that Binding's policy alone, such as another team's edit
+// under a source that is edited all the time, does not say it again, as the report logs each refused object once. A policy
+// that is fixed and then enabled again is a new one and is said again.
+func TestReloaderWarnsOfAnApprovalPolicyOncePerBinding(t *testing.T) {
+	dir := specDir(t)
+	path := filepath.Join(dir, "binding.yaml")
+	other := filepath.Join(dir, "binding-minimal.yaml")
+	const warning = "tool approvals are enabled without approver groups; any non-bot channel member may decide"
+	enabled := strings.Replace(mustRead(t, path), "    askUser: true\n", "    askUser: true\n    toolApprovals: true\n", 1)
+	writeFile(t, path, enabled)
+	var logs bytes.Buffer
+	r := NewReloader(ReloaderConfig{Dir: dir, Secrets: specSecrets(), Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+	warned := func(from int) bool {
+		t.Helper()
+		return strings.Contains(logs.String()[from:], warning)
+	}
+
+	mustReload(t, r, true)
+	if !warned(0) {
+		t.Fatal("the policy was not warned of at the first load")
+	}
+	for i := range 3 { // edits of another Binding's file, each a changed read
+		before := logs.Len()
+		writeFile(t, other, mustRead(t, other)+strings.Repeat("#", i+1)+"\n")
+		mustReload(t, r, false)
+		if warned(before) {
+			t.Errorf("edit %d of another Binding's file warned of the policy of sre-alerts again: %q", i+1, logs.String()[before:])
+		}
+	}
+
+	writeFile(t, path, strings.Replace(enabled, "    toolApprovals: true\n", "", 1))
+	mustReload(t, r, false)
+	before := logs.Len()
+	writeFile(t, path, enabled)
+	mustReload(t, r, false)
+	if !warned(before) {
+		t.Error("a policy that was fixed and enabled again was not warned of")
+	}
+}
+
 func TestReloaderStartFailsOnBadConfig(t *testing.T) {
 	dir := specDir(t)
 	writeFile(t, filepath.Join(dir, "binding.yaml"), "kind: [")

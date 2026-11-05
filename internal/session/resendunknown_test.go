@@ -2,7 +2,9 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -157,5 +159,50 @@ func TestTaskLeftByACardThatIsTooLargeIsReadOnceAndCancellableOnceTheCardIsFixed
 	f.retired(t)
 	if got := f.sentIDs(); !slices.Equal(got, []string{inbound("9").MessageID}) {
 		t.Errorf("sent %v; want the queued reply", got)
+	}
+}
+
+// The lookup of the queued head that recovery makes before it follows the recorded task is asked again until it answers. A card that is
+// too large fails it the same way each time, until the card is fixed, and what an operator can read is why: one WARN for the thread in a
+// run of Recover, whenever the card is first met, and not one for each pass, which would fill the log at the pace of the backoff.
+func TestRecoverLogsAnOversizedCardOfTheLookupOnce(t *testing.T) {
+	const warning = "recover: the agent's card is too large to read, so the queued head cannot be looked up; it is asked again until the card is fixed"
+	card := func() error { return fmt.Errorf("list tasks of context c1: %w", errCard) }
+	for _, tc := range []struct {
+		name  string
+		fails []func() error // the first lookups fail like this, and the one after them answers
+	}{
+		{"every try meets the card", []func() error{card, card, card, card}},
+		{"the first failure is another error", []func() error{func() error { return errors.New("connection refused") }, card, card, card, card}},
+		{"the card comes and goes", []func() error{card, func() error { return errors.New("connection refused") }, card, card}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, sink := restarted(t)
+			logs := newLogRecorder()
+			f.m.cfg.Logger = slog.New(logs)
+			queuedBeforeTheRestart(t, f)
+			var finds, beforeFollow atomic.Int32
+			f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
+				if n := int(finds.Add(1)); n <= len(tc.fails) {
+					return nil, nil, tc.fails[n-1]()
+				}
+				return nil, nil, nil // the card is fixed: the head is not the task's turn
+			}
+			// The runner looks the head up itself once the task has ended, and that is no concern of recovery: the lookups are
+			// counted where recovery is done with them, when the recorded task is followed.
+			f.agent.follow = func(_ a2a.TaskID, h agent.Handler) error {
+				beforeFollow.Store(finds.Load())
+				return turn(h, 0, a2a.TaskStateCompleted)
+			}
+			f.recover(t)
+			waitFinal(t, sink) // the recorded task, followed once the lookup answered
+			if n, want := int(beforeFollow.Load()), len(tc.fails)+1; n != want {
+				t.Fatalf("%d lookups before the follow; want %d: the failures, and the one that answered", n, want)
+			}
+			lines := logs.lines(warning)
+			if len(lines) != 1 || lines[0].attrs["task"] != "t1" || lines[0].attrs["head"] != inbound("1").MessageID {
+				t.Errorf("WARNs about the card = %+v; want one, for the head and the task, however many times it was asked", lines)
+			}
+		})
 	}
 }
