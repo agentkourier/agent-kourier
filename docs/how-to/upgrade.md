@@ -330,7 +330,8 @@ An earlier release has none of these four bounds, so after a [rollback](#roll-ba
 ## Upgrade to the release that serves custom resources
 
 This release can read `Binding`, `AgentBackend` and `ChatConnection` from custom resources instead of files. Nothing changes until you ask:
-the default `config.source: files` renders the objects it always has, and the pod's template does not move. Release 0.1.6 has none of it.
+the default `config.source: files` renders the objects it always has, and the route adds nothing to the pod's template (a release that also sets `GOMEMLIMIT` moves the
+template for that reason: see [the release that sets GOMEMLIMIT](#upgrade-to-the-release-that-sets-gomemlimit)). Release 0.1.6 has none of it.
 
 - **New values.** `config.source` (`files` or `crds`), `config.chatConnection`, `crds.install` and `rbac.secretNames`. To move, see
   [Move the config between a ConfigMap and custom resources](migrate-config-source.md). The route needs Kubernetes 1.33 or later, and only the
@@ -345,3 +346,16 @@ the default `config.source: files` renders the objects it always has, and the po
 
 After you move to custom resources, rolling back to a release without them leaves the CRDs and every custom resource in the cluster, unread. Move back
 to the files route first, as in [Move back to the ConfigMap](migrate-config-source.md#move-back-to-the-configmap), then roll the chart back.
+
+## Upgrade to the release that sets GOMEMLIMIT
+
+The chart now gives the container `GOMEMLIMIT`, the Go runtime's soft memory limit, at 80% of `resources.limits.memory`, in bytes: the default
+limit of 256Mi gives 214748364. The runtime then collects more often as its memory nears the limit. The variable is part of the pod template, so
+**this upgrade restarts the pod**, as any change to the template does, with every values file that has a memory limit. With SQLite (`Recreate`) there is a gap
+while the new pod starts; with Postgres (`RollingUpdate`) the new pod starts beside the old one and takes over when the old one stops.
+
+- **It is soft.** It caps nothing. Memory that is live stays, so a number of large replies from agents read at the same time (each event of up to
+  10 MiB takes several times its size while it is decoded) can still pass the container's limit and be OOM-killed. Raise `resources.limits.memory` for that.
+- **Your own wins.** A `GOMEMLIMIT` in `extraEnv` is the only one rendered, as you wrote it. The runtime reads a number of bytes, optionally with `B`, `KiB`, `MiB`,
+  `GiB` or `TiB` after it (`100MiB`), and 9223372036854775807, its default, turns the limit off.
+- **No variable** is rendered without a memory limit, for a limit that is an exponent or in milli-bytes, or under 1Mi.

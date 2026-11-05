@@ -221,6 +221,8 @@ Default: `{}`
 
 ## resources
 
+The memory limit sets GOMEMLIMIT too: when limits.memory is a plain quantity (a number of bytes, optionally fractional, with no suffix or one of Ki, Mi, Gi, Ti, Pi, k, M, G, T, P), the container gets GOMEMLIMIT at 80% of it, in bytes, so that the Go runtime collects harder as its memory nears the limit. It is a soft limit: it caps nothing, and memory that is live (many large replies from agents decoded at once) can still pass the limit and be OOM-killed. No variable is set without a memory limit, for a quantity this does not read (an exponent, milli-bytes) or one under 1Mi, or when extraEnv sets GOMEMLIMIT, which then wins. The variable is part of the pod template: the first upgrade to a chart that sets it restarts the pod.
+
 | Key | Default | Description |
 |---|---|---|
 | `resources.requests` | `{cpu: 50m, memory: 64Mi}` |  |

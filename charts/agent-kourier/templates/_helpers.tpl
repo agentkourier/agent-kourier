@@ -93,6 +93,34 @@ the connections of several brokers, so a second entry is no guess to make.
 {{- end -}}
 
 {{/*
+The Go runtime's soft memory limit (GOMEMLIMIT) in bytes: four fifths of resources.limits.memory, which leaves the rest for what the Go
+runtime does not count and for the moment between the limit being reached and a collection finishing. Empty, so that no variable is rendered, when:
+there is no memory limit; the limit is not a plain, binary (Ki Mi Gi Ti Pi) or decimal (k M G T P) quantity, which this does not read and
+Kubernetes still accepts (it is never a reason to fail the render); it is under 1 MiB; or extraEnv sets GOMEMLIMIT itself, which then wins and is
+not duplicated. The value may arrive as a string ("256Mi"), a whole number from --set, or a float64 from a values file (1000000000).
+resourceFieldRef with a divisor cannot do this: a divisor only scales the limit to a unit, never to a percentage, and with no limit it yields
+the node's allocatable memory.
+*/}}
+{{- define "agentkourier.goMemLimit" -}}
+{{- $own := false -}}
+{{- range .Values.extraEnv -}}
+{{- if and (kindIs "map" .) (eq (toString (get . "name")) "GOMEMLIMIT") -}}{{- $own = true -}}{{- end -}}
+{{- end -}}
+{{- $mem := dig "limits" "memory" "" (.Values.resources | default dict) -}}
+{{- $text := toString $mem -}}
+{{- if kindIs "float64" $mem -}}{{- $text = printf "%.0f" $mem -}}{{- end -}}
+{{- $number := regexFind "^[0-9]+(\\.[0-9]+)?" $text -}}
+{{- $unit := trimPrefix $number $text -}}
+{{- $units := dict "" 1 "k" 1000 "M" 1000000 "G" 1000000000 "T" 1000000000000 "P" 1000000000000000 "Ki" 1024 "Mi" 1048576 "Gi" 1073741824 "Ti" 1099511627776 "Pi" 1125899906842624 -}}
+{{- if and (not $own) $number (hasKey $units $unit) -}}
+{{- $bytes := int64 (floor (mulf (float64 $number) (float64 (get $units $unit)))) -}}
+{{- if and (ge $bytes 1048576) (lt $bytes 1000000000000000000) -}}
+{{- div (mul $bytes 4) 5 -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Checks that no values file can get past. Included by the Deployment, which every install has.
 */}}
 {{- define "agentkourier.validate" -}}

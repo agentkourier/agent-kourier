@@ -56,7 +56,7 @@ spec:
           # cmd/agent-kourier takes no arguments: it is configured by this environment.
           env:
             {{- if include "agentkourier.crMode" . }}
-            {{- /* Only for crds, so that the pod template of the default does not move. With crds there is no directory to read. */}}
+            {{- /* Only for crds: the default's template carries no variable of this route. With crds there is no directory to read. */}}
             - {name: AGENTKOURIER_CONFIG_SOURCE, value: crds}
             - {name: AGENTKOURIER_CHAT_CONNECTION, value: {{ include "agentkourier.chatConnection" . | quote }}}
             {{- else }}
@@ -92,6 +92,10 @@ spec:
             {{- end }}
             {{- with .Values.auditRetention }}
             - {name: AGENTKOURIER_AUDIT_RETENTION, value: {{ . | quote }}}
+            {{- end }}
+            {{- /* Before extraEnv, which may set GOMEMLIMIT itself: the helper renders nothing then. */}}
+            {{- with include "agentkourier.goMemLimit" . }}
+            - {name: GOMEMLIMIT, value: {{ . | quote }}}
             {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
