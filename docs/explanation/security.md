@@ -126,10 +126,12 @@ What bounds this is what the broker can read, and where it can connect:
 - **How many objects, and how big.** Write access to these kinds can also cost the broker capacity, not only data: each Binding is probed (two probes every 5 minutes, four at a time, each up to 10 seconds)
   and has its status written, and every object is held in the broker's memory. Every string, list and map in the `spec` of the three kinds has a bound, in the schema and in `Validate`,
   and the keys of a map are bounded too ([Limits](../reference/limits.md) has each; a test fails for a field that has none). Those bounds hold an AgentBackend to about 156 KiB of JSON (32 headers of 4096 bytes, 256 allowed
-  namespaces, a URL of 2048 bytes) and a ChatConnection to about 17 KiB. They do not hold a Binding to a size, because they multiply: 50 triggers, each with 6 `match` and 6 `exclude` regular expressions
-  and up to 32 `extract` entries of 512 bytes, 32 `closeWhen` values and a template of 8192 bytes, allow about 2.1 MiB of JSON. That is more than the API server takes in one write (etcd's default limit for a request
-  is 1.5 MiB, from its documentation and not checked here), so what bounds the size of a Binding is that request limit, and the control is how many Bindings a namespace may hold. The caps do not reach the metadata of an object
-  either: the API server checks each label on its own and limits neither how many an object has nor their total size (stated from Kubernetes' behaviour, not checked here).
+  namespaces, a URL of 2048 bytes) and a ChatConnection to about 17 KiB. A Binding's bounds multiply: 50 triggers, each with 6 `match` and 6 `exclude` regular expressions and up to 32 `extract` entries of 512 bytes,
+  32 `closeWhen` values of 256 bytes and a template of 8192 bytes, would allow about 2.1 MiB of JSON. What keeps a Binding well under that is the limit on what its regular expressions cost: 5000 instructions in all, so a
+  Binding cannot hold most of the 2156 that the other bounds allow. The largest Binding that `Validate` accepts is about 1.3 MiB of JSON, which is under what the API server takes in one write (etcd's default limit for a request is
+  1.5 MiB, from its documentation and not checked here), so the bounds and not that limit are what size it. That figure depends on the instruction limit: a regex can be as dense as one character class of 512 bytes,
+  which costs a few instructions, so the limit bounds how many regexes there are and not how much text. The bounds do not reach the metadata of an object: the API server checks each label on its own and limits neither how many an object has nor their total size
+  (stated from Kubernetes' behaviour, not checked here).
   What an object holds in the broker's cache was measured by building the largest object that `Validate` accepts and decoding it as the cache does (an unstructured object), taking the growth of the live heap after a
   collection over several copies, in a test process and not in a pod. `TestLargestObjectsAreWhatTheSecurityPageSays` in `internal/config/crsource` does it and logs the figures with `-v`. On one run:
 
@@ -137,12 +139,11 @@ What bounds this is what the broker can read, and where it can connect:
   |---|---|---|---|
   | The largest AgentBackend | 155.5 KiB | 0.17 MiB | about 1200 |
   | The largest ChatConnection | 17.1 KiB | 0.03 MiB | about 7900 |
-  | The largest Binding by the caps | 2.10 MiB | 2.9 MiB | about 70 |
-  | A Binding of about 1.5 MiB, which is what the API server accepts | 1.46 MiB | 2.0 MiB | about 100 |
+  | The largest Binding | 1.28 MiB | 1.8 MiB | about 115 |
 
   The 205 MiB is what the chart's `GOMEMLIMIT` allows with the default memory limit of 256Mi. The figures are of the cache alone, and not of everything the broker holds, so they are bounds and not predictions.
-  So a namespace with a quota of N Bindings can have the broker hold up to about N times 2.0 MiB for them: 50 Bindings of the largest size the API server takes are about 100 MiB, half of the 205 MiB, and 100 of them
-  are all of it. Put a `ResourceQuota` in each tenant's namespace with `count/bindings.agentkourier.dev` and `count/agentbackends.agentkourier.dev`: the API server refuses a create past it
+  So a namespace with a quota of N Bindings can have the broker hold up to about N times 1.8 MiB for them: 50 Bindings of the largest size are about 90 MiB, and 115 of them are all of the 205 MiB.
+  Put a `ResourceQuota` in each tenant's namespace with `count/bindings.agentkourier.dev` and `count/agentbackends.agentkourier.dev`: the API server refuses a create past it
   with `exceeded quota` (measured on kind 1.37.0), and set `resources.limits.memory` for the quotas you give out. A quota limits the count and not the size of what is stored, so it sits beside the bounds and replaces none of them.
   Nothing limits how many objects a namespace holds without one. The limits you can run into, with what happens past each, are on [Limits](../reference/limits.md).
 

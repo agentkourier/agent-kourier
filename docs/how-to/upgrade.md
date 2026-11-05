@@ -534,6 +534,60 @@ garbage collector's timing decided). Nothing bounds how many streams or calls ar
 that trigger starts. Size `resources.limits.memory` for the number of agents that can answer at once, with the worst shape in mind, and see
 [the release that sets GOMEMLIMIT](#upgrade-to-the-release-that-sets-gomemlimit).
 
+## Upgrade to the release that bounds what a trigger's regular expressions cost
+
+The 512 byte cap on a regular expression did not bound what it costs: a regular expression of 504 bytes, `.{0,1000}` written 56 times, compiles to 112002 instructions (counted with Go 1.27), and the time to try a regular expression on a message grows with that size and the
+message's length. This release holds the program of each regular expression of a Binding to a size, and the programs of a
+Binding to a total, and reads only the head of a long field. A config within them loads as before. The regular expressions of the example Bindings in this repository are 10
+to 98 instructions each (measured), so no example, recipe or kind tier config comes near a limit. The current values are on
+[Limits](../reference/limits.md#write-a-binding-an-agentbackend-or-a-chatconnection).
+
+| Where | Limit | The error |
+|---|---|---|
+| One regular expression of a trigger's `match`, `exclude` or an `extract` entry | 2000 instructions | `spec.chat.triggers[1].match.title: regular expression compiles to 2002 instructions, more than the 2000 instruction limit; the regular expressions after it are not checked` |
+| All the regular expressions of a Binding | 5000 instructions | `spec.chat.triggers[1].extract.state.regex: the regular expressions of the Binding compile to 5005 instructions with this one, more than the 5000 instruction limit for a Binding; the regular expressions after it are not checked` |
+
+The instructions are those of the program that Go compiles the expression to (`.{0,999}` is 2000 and `a` is 3), not its length in bytes. The check ends at the first regular expression it
+refuses, so a Binding that fails shows one error, and fixing it can show the next, such as an expression that does not compile. The API server cannot count instructions, so on the custom
+resource route it still creates the object; the broker then refuses it as it refuses any invalid spec.
+
+**What changes beyond the refusal.**
+
+- **A regular expression reads the first 16 KiB of its field.** `match`, `exclude` and `extract` see the same head, cut on a character boundary. Before, they read the whole field. A match on text
+  past 16 KiB no longer matches, and an expression that ends in `$` ends at the end of the head. An alert message does not come near it.
+- **The events of one Slack channel are handled one at a time and in order, and different channels at the same time.** Before, one event at a time across all channels, so a slow match delayed every
+  channel's acknowledgments. The broker now holds at most 16 events for a channel and 256 in all (a channel with none held always gets its first); an event past a bound is left unacknowledged, so Slack may send it again, and is counted in
+  `agentkourier_slack_events_shed_total` and logged at WARN. Slack's retries are finite (not verified here), so a shed event can be lost, and one that comes back after a later event of its channel was taken is handled after it: order within a thread
+  holds only while the bounds do. A crash loses no more than before: an event is still acknowledged only after the broker has written it. When the broker is stopping, the events still waiting on a lane are not handled and stay unacknowledged.
+  `agentkourier_slack_ack_duration_seconds` now counts from the moment the broker took the event off the connection, so it includes the wait behind the channel's earlier events.
+
+**Check before you upgrade.** Run `agent-kourier dry-run` of the new release against your files, as in
+[the release that bounds triggers](#upgrade-to-the-release-that-bounds-triggers-extract-entries-and-headers). It loads them with the broker's loader and reports each error
+above without a token, and it reads files, never the cluster, so on the custom resource route give it the YAML you applied. A file over a limit fails the load of the whole config
+on the files route: at start the broker exits with [code 2](../reference/cli.md#exit-codes) and names the field, and on a reload it keeps the last good config. On the custom resource
+route a Binding over a limit is not served after the upgrade, since a restarted broker has no earlier good generation of it: it has `Accepted=False` with the reason `InvalidSpec`, and its channel
+has no Binding until you edit it. An earlier release has none of these limits, so after a [rollback](#roll-back) such a config loads again.
+
+**What the limits do not make small.** They cap the cost, and the cost they allow is a fraction of a second to a second for each message. Go's regular expression engine does work in proportion to the
+instructions of the program times the length of the text, so the time grows with both, and it grows when the CPU is shared with other work. The benchmark `BenchmarkRegexCost` in `internal/chat` measures it on 16 KiB fields, which is all a
+regular expression reads; run it on your own hardware with `go test ./internal/chat -run '^$' -bench BenchmarkRegexCost -benchtime 3x` (it is not part of `make test`).
+
+One process, `GOMAXPROCS=1`, three runs of three iterations each, on an Apple M2 laptop with 8 CPUs (macOS arm64, Go 1.27, `-race` off), at a load average of 14.3 before the runs and 10.4 after, which is not an idle machine. The
+times are the median of the three, for one message whose six fields are 16 KiB each:
+
+| | `.{0,n}` | `\pL{0,n}` |
+|---|---|---|
+| One regular expression of about 2000 instructions that finds no match (`one_regex_miss`) | 0.38 s | 0.62 s |
+| The same, finding its match at the last byte (`one_regex_hit`) | 0.27 s | 0.30 s |
+| A Binding at the budget of 5000 instructions: two matches of about 2000 that find their match at the last byte, and an exclude of about 1000 that finds none (`binding_at_budget`) | 0.67 s | 0.81 s |
+
+The Binding took 1.8 times (`.`) and 1.3 times (`\pL`) the time of one regular expression that misses, and 2.5 and 2.7 times the time of one that hits, which is about the 2.5 that its instructions say (5000 over 2000). A miss costs more
+than a hit at the last byte, and a Unicode class costs more than the dot. The figures swing with the load: an earlier run of the same benchmark, at a load average of 7 to 12, gave 1.5 seconds for the dot's miss. They are for comparing the cases, not for sizing a machine; measure your own.
+
+The time runs on the lane of the channel, so the channel's own events wait behind it first, but it is CPU: many busy channels slow the acknowledgments of healthy ones too. Validating a Binding at every cap, with 2156 regular
+expressions of 512 bytes, took 7 to 20 milliseconds (`TestValidateOfAHostileBindingIsCheap` logs it with `-v`), where compiling every one of them with `regexp.Compile` took about 19 seconds in one measurement at a load average of about 3. Keep
+Bindings of channels that people you do not trust can post in well under the limits.
+
 ## Upgrade to the release that caps the pause timeout and the thread TTL
 
 `interactions.timeout` and `session.threadTTL` had a lower bound and no upper one. This release refuses a config that sets either over its cap, and

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
@@ -73,6 +74,9 @@ type Client struct {
 	team  string                // the workspace ID, from auth.test; guarded by mu
 	url   string                // the workspace's origin, from auth.test, once Run has asked; guarded by mu
 
+	// lanes is the lanes of the Run that is going, for a test to read what they hold (PendingEvents in export_test.go).
+	lanes atomic.Pointer[lanes]
+
 	// ownNamed makes the warning that a trigger names Agent Kourier's own bot ID one, however many of its posts arrive.
 	ownNamed sync.Once
 }
@@ -107,9 +111,19 @@ func New(cfg Config) *Client {
 }
 
 // Run connects over Socket Mode and gives sink each message that may be a turn and each
-// button press, one at a time and in order, until ctx ends (the error wraps ctx's) or the connection fails for
+// button press, until ctx ends (the error wraps ctx's) or the connection fails for
 // good, as with a rejected token. slack-go reconnects by itself otherwise, and Run logs each step of that (watch)
 // and tells Config.OnConnection whether the connection is up.
+//
+// The events of one channel reach the sink one at a time and in the order they arrived, and the events of different
+// channels at the same time, so a sink that is slow for one channel (a Binding whose regexes are costly to try) holds up that
+// channel's events, and not the reading of the connection. It does not keep the CPU for the others: with many busy channels
+// the acknowledgments of healthy ones slow too. The adapter holds at most maxChannelBacklog events for a channel, and
+// maxPendingEvents in all, past which a channel that already has an event held is refused another; a channel with none always
+// gets its first. An event refused is not queued but left unacknowledged, which is what a sink's error does, so Slack may send
+// it again (how often is Slack's), and it can be lost; one that comes back after a later event of its channel was taken is
+// handled after it. It is counted as agentkourier_slack_events_shed_total and logged at WARN (shedLog). When ctx ends, the
+// events still waiting on a lane are not given to the sink and stay unacknowledged, and Run returns when the ones in flight have.
 //
 // A bot's message is given to the sink only if the sink is a BotFilter that takes the bot in the message's
 // channel, and Agent Kourier's own posts never are (decode, takes).
@@ -117,9 +131,9 @@ func New(cfg Config) *Client {
 // An events_api or interactive envelope is acknowledged only after the sink returns nil, so
 // a message the sink could not take is sent again by Slack; a press probably is not
 // (UNCONFIRMED(WP-04)), and its failure is only shown to the person. Envelopes that are neither
-// a turn nor a press are acknowledged as soon as they are decoded. Other envelope kinds (slash commands) are not handled here.
-// Run calls the sink itself, between reads of the connection, so a slow sink delays the
-// acknowledgements: Slack expects each within 3 seconds, and sends the event again if late.
+// a turn nor a press are acknowledged as soon as their channel's earlier events are done. Other envelope kinds (slash commands) are not handled here.
+// A sink is called from several goroutines, one for each channel with events to handle, so it must be safe for concurrent
+// use. A slow sink delays the acknowledgements of its channel's events: Slack expects each within 3 seconds, and sends the event again if late.
 func (c *Client) Run(ctx context.Context, sink Sink) error {
 	auth, err := c.api.AuthTestContext(ctx)
 	if err != nil {
@@ -131,33 +145,100 @@ func (c *Client) Run(ctx context.Context, sink Sink) error {
 	c.mu.Lock()
 	c.url = workspaceOrigin(auth.URL)
 	c.mu.Unlock()
+	ctx, cancel := context.WithCancel(ctx)
+	lanes, shed := newLanes(maxChannelBacklog, maxPendingEvents), &shedLog{}
+	c.lanes.Store(lanes)
+	// Events in flight see the end of Run, those waiting on a lane are dropped unhandled, and Run returns when the ones in flight
+	// have returned: the next Run must not overlap the lanes of this one.
+	defer func() { cancel(); lanes.wait(); c.flushShed(shed) }()
 	smc := socketmode.New(c.api)
 	done := make(chan error, 1)
 	go func() { done <- smc.RunContext(ctx) }()
 	w := &watch{c: c}
 	defer w.close()
+	me := self{user: auth.UserID, bot: auth.BotID}
 	for {
 		select {
 		case ev := <-smc.Events: // every type is drained, or slack-go's reader stalls
 			w.event(ctx, ev)
-			c.handle(ctx, smc, self{user: auth.UserID, bot: auth.BotID}, sink, ev)
+			if ev.Request == nil {
+				continue
+			}
+			channel := eventChannel(me, ev)
+			received := time.Now()
+			if reason := lanes.submit(channel, func() { c.handle(ctx, smc, me, sink, ev, received) }); reason != "" {
+				c.shed(ctx, shed, reason, channel, ev)
+			}
 		case err := <-done:
 			return c.scrub("socket mode", err)
 		}
 	}
 }
 
-// handle gives sink the message of an events_api event, or the press of an interactive one,
-// then acknowledges the event.
-func (c *Client) handle(ctx context.Context, smc *socketmode.Client, me self, sink Sink, ev socketmode.Event) {
-	if ev.Request == nil {
+// eventChannel is the channel an event is about, which is the lane it is handled on: the message's, or the one the pressed
+// button is in. An event that decodes to nothing has none, and shares the lane of the empty channel, where it is
+// acknowledged without a call to the sink.
+func eventChannel(me self, ev socketmode.Event) string {
+	switch ev.Type {
+	case socketmode.EventTypeEventsAPI:
+		if outer, ok := ev.Data.(slackevents.EventsAPIEvent); ok {
+			m, _ := decode(me, outer.InnerEvent.Data)
+			return m.Channel
+		}
+	case socketmode.EventTypeInteractive:
+		if cb, ok := ev.Data.(slackgo.InteractionCallback); ok {
+			return cb.Container.ChannelID
+		}
+	}
+	return ""
+}
+
+// shedLogEvery is the pace of the WARN line for shed events: the first at once, and then one line for each interval, which
+// says how many were shed since the last. An overload that sheds every event would otherwise write a line for each.
+const shedLogEvery = 10 * time.Second
+
+// shedLog paces the log line of shed events. Run's loop is its only caller.
+type shedLog struct {
+	last       time.Time
+	suppressed int
+}
+
+// shed counts an event that the lanes would not take, which is left unacknowledged, and logs it (shedLog) with where it was
+// and what kind of envelope it was, and never what it said.
+func (c *Client) shed(ctx context.Context, l *shedLog, reason, channel string, ev socketmode.Event) {
+	telemetry.Count(ctx, "agentkourier_slack_events_shed_total", reason)
+	if now := c.now(); l.last.IsZero() || now.Sub(l.last) >= shedLogEvery {
+		c.log.WarnContext(ctx, "slack: an event was left unacknowledged for Slack to send again; the adapter holds as many events as it may",
+			"reason", reason, "channel", channel, "type", ev.Type, "alsoShedSinceLastLine", l.suppressed)
+		l.last, l.suppressed = now, 0
 		return
 	}
-	started := time.Now()
+	l.suppressed++
+}
+
+// flushShed logs the events shed since the last line, if there are any, so that the end of Run does not lose their count.
+func (c *Client) flushShed(l *shedLog) {
+	if l.suppressed == 0 {
+		return
+	}
+	c.log.Warn("slack: events were left unacknowledged for Slack to send again before the connection ended; the adapter held as many events as it may",
+		"alsoShedSinceLastLine", l.suppressed)
+	l.suppressed = 0
+}
+
+// handle gives sink the message of an events_api event, or the press of an interactive one,
+// then acknowledges the event. received is when Run took the event off the connection: the time the ack duration counts
+// from, which is Slack's clock, so a wait on the lane of the event's channel is part of it.
+func (c *Client) handle(ctx context.Context, smc *socketmode.Client, me self, sink Sink, ev socketmode.Event, received time.Time) {
+	if ev.Request == nil || ctx.Err() != nil {
+		// Run has ended: an event that waited on a lane is not given to the sink, which may pay a costly match for it before
+		// it looks at ctx. It stays unacknowledged, as a shed one does, for the next Run.
+		return
+	}
 	ctx, op := telemetry.Start(ctx, "agentkourier.slack.envelope", attribute.String("agentkourier.platform", "slack"))
 	outcome := "withheld"
 	defer func() {
-		telemetry.Observe(ctx, "agentkourier_slack_ack_duration_seconds", time.Since(started), outcome)
+		telemetry.Observe(ctx, "agentkourier_slack_ack_duration_seconds", time.Since(received), outcome)
 		op.FinishOutcome(nil, outcome)
 	}()
 	switch ev.Type {

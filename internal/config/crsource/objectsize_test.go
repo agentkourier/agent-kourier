@@ -3,6 +3,7 @@ package crsource_test
 import (
 	"encoding/json"
 	"fmt"
+	"regexp/syntax"
 	"runtime"
 	"strings"
 	"testing"
@@ -96,10 +97,36 @@ func largestConnection() *v1alpha1.ChatConnection {
 	}
 }
 
-// largestBinding is a Binding with every cap at its maximum, but for the number of triggers, which is n of at most 50: each
-// trigger has 6 match and 6 exclude regexes of 512 bytes, 32 extract entries of 512 bytes with names of 63, 32 closeWhen
-// values of 256 bytes, and a template of 8192 bytes.
-func largestBinding(n int) *v1alpha1.Binding {
+// regexInstructions is what Validate counts of a regex: the instructions of the program it compiles to, after Simplify.
+func regexInstructions(t *testing.T, expr string) int {
+	t.Helper()
+	re, err := syntax.Parse(expr, syntax.Perl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prog, err := syntax.Compile(re.Simplify())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(prog.Inst)
+}
+
+// denseRegex is a regex of exactly 512 bytes that begins with prefix and ends with suffix, and compiles to as few instructions
+// as one can make it: a single character class, whose text can be as long as one likes. The instruction limit of a Binding
+// (5000, summed over its regexes) bounds how many regexes a Binding can hold and not the bytes of regex text, so the largest
+// Binding is made of these.
+func denseRegex(prefix, suffix string) string {
+	fill := 512 - len(prefix) - len(suffix) - len("[]")
+	return prefix + "[" + strings.Repeat("abcdefghijklmnopqrstuvwxyz0123456789", fill/36+1)[:fill] + "]" + suffix
+}
+
+// largestBinding is a Binding with every cap at its maximum that Validate accepts, with up to n triggers (at most 50): each
+// has a template of 8192 bytes and extract entries with a name of 63 bytes and a regex of 512, each with a closeWhen value of
+// 256 bytes, and match and exclude regexes of 512 bytes. It holds as many regexes as the instruction limit of a Binding
+// lets it: each trigger has "key" (which thread.by needs), and the rest goes to more extract entries and then to the match and
+// exclude fields, trigger by trigger.
+func largestBinding(t *testing.T, n int) *v1alpha1.Binding {
+	t.Helper()
 	b := &v1alpha1.Binding{
 		TypeMeta:   metav1.TypeMeta{APIVersion: v1alpha1.APIVersion, Kind: "Binding"},
 		ObjectMeta: metav1.ObjectMeta{Name: strings.Repeat("a", 63), Namespace: strings.Repeat("a", 63)},
@@ -122,39 +149,65 @@ func largestBinding(n int) *v1alpha1.Binding {
 		b.Spec.Interactions.ApproverGroups = append(b.Spec.Interactions.ApproverGroups, fmt.Sprintf("S%031d", i))
 	}
 	b.Spec.Chat.Triggers = []v1alpha1.Trigger{{Type: v1alpha1.TriggerMention}}
+	const budget = 5000 // the instruction limit of a Binding's regexes
+	used := 0
+	take := func(expr string) bool { // reports whether the regex still fits in the budget, and takes its cost if it does
+		c := regexInstructions(t, expr)
+		if used+c > budget {
+			return false
+		}
+		used += c
+		return true
+	}
+	// Every trigger first gets the extract entry "key", which thread.by needs and which costs as little as any regex, so that the
+	// budget is not spent before the last trigger has its template; then the budget goes to more extract entries and to the
+	// match and exclude regexes, trigger by trigger.
 	for i := 1; i < n; i++ {
-		tr := v1alpha1.Trigger{
+		expr := denseRegex("(?P<key>", ")")
+		if !take(expr) {
+			break
+		}
+		b.Spec.Chat.Triggers = append(b.Spec.Chat.Triggers, v1alpha1.Trigger{
 			Type:    v1alpha1.TriggerBotMessage,
 			From:    &v1alpha1.BotSource{ID: fmt.Sprintf("B%031d", i), Kind: v1alpha1.SenderKindBot},
-			Match:   map[v1alpha1.MessageField]string{},
-			Exclude: map[v1alpha1.MessageField]string{},
-			Extract: map[string]v1alpha1.Extract{},
+			Extract: map[string]v1alpha1.Extract{"key": {Field: "text", Regex: expr}},
 			Thread: v1alpha1.TriggerThread{By: v1alpha1.ThreadByKey, Cooldown: metav1.Duration{Duration: 2 * time.Hour},
-				CloseWhen: map[string]string{}},
+				CloseWhen: map[string]string{"key": strings.Repeat("v", 256)}},
 			Limits: v1alpha1.TriggerLimits{RateLimit: &v1alpha1.RateLimit{MaxRuns: 5, Per: metav1.Duration{Duration: 10 * time.Minute}, MaxConcurrent: 2},
 				MaxRunsPerDay: new(int32(20))},
 			PromptTemplate: strings.Repeat("x", 8192),
-		}
-		for _, f := range []v1alpha1.MessageField{"text", "title", "link", "fallback", "footer", "body"} {
-			tr.Match[f] = strings.Repeat("x", 512)
-			tr.Exclude[f] = strings.Repeat("x", 512)
-		}
-		for j := range 32 {
+		})
+	}
+	for i := 1; i < len(b.Spec.Chat.Triggers); i++ {
+		tr := &b.Spec.Chat.Triggers[i]
+		for j := 1; j < 32; j++ {
 			name := fmt.Sprintf("%s%02d", strings.Repeat("e", 61), j)
-			if j == 0 {
-				name = "key"
+			expr := denseRegex("(?P<"+name+">", ")")
+			if !take(expr) {
+				break
 			}
-			tr.Extract[name] = v1alpha1.Extract{Field: "text", Regex: "(?P<" + name + ">x)" + strings.Repeat("x", 512-len(name)-len("(?P<>x)"))}
+			tr.Extract[name] = v1alpha1.Extract{Field: "text", Regex: expr}
 			tr.Thread.CloseWhen[name] = strings.Repeat("v", 256)
 		}
-		b.Spec.Chat.Triggers = append(b.Spec.Chat.Triggers, tr)
+		for _, side := range []*map[v1alpha1.MessageField]string{&tr.Match, &tr.Exclude} {
+			for _, f := range []v1alpha1.MessageField{"text", "title", "link", "fallback", "footer", "body"} {
+				expr := denseRegex("", "")
+				if !take(expr) {
+					break
+				}
+				if *side == nil {
+					*side = map[v1alpha1.MessageField]string{}
+				}
+				(*side)[f] = expr
+			}
+		}
 	}
 	return b
 }
 
-// TestLargestObjectsAreWhatTheSecurityPageSays builds the largest AgentBackend, ChatConnection and Binding that Validate accepts, and a
-// Binding of about etcd's request limit, and logs what each holds in an informer cache. It fails if one is refused, or if one
-// is larger than the page says by a wide margin.
+// TestLargestObjectsAreWhatTheSecurityPageSays builds the largest AgentBackend, ChatConnection and Binding that Validate accepts and
+// logs what each holds in an informer cache. It fails if one is refused, or if one is larger or smaller than the page says by
+// a wide margin.
 func TestLargestObjectsAreWhatTheSecurityPageSays(t *testing.T) {
 	validate := func(what string, obj interface {
 		Default()
@@ -179,29 +232,16 @@ func TestLargestObjectsAreWhatTheSecurityPageSays(t *testing.T) {
 		t.Errorf("the largest ChatConnection is %d bytes of JSON and holds %.3f MiB; want 12 to 32 KiB and under 0.2 MiB", bytes, held)
 	}
 
-	full := largestBinding(50)
+	full := largestBinding(t, 50)
 	validate("Binding", full)
-	bytes, held = sizeMeasure(t, "largest Binding by the caps (50 triggers)", full, 20)
-	if bytes < 2<<20 || bytes > 3<<20 || held < 2 || held > 8 {
-		t.Errorf("the largest Binding is %d bytes of JSON and holds %.3f MiB; want 2 to 3 MiB and 2 to 8 MiB", bytes, held)
+	bytes, held = sizeMeasure(t, "largest Binding", full, 20)
+	if n := len(full.Spec.Chat.Triggers); n != 50 {
+		t.Errorf("the largest Binding has %d triggers; want 50", n)
 	}
-
-	// A Binding of about the request limit of etcd, which is what an API server takes: the most triggers that fit.
-	n := 2
-	for {
-		body, err := json.Marshal(largestBinding(n + 1))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(body) > etcdRequestLimit {
-			break
-		}
-		n++
-	}
-	limit := largestBinding(n)
-	validate("Binding of the request limit", limit)
-	bytes, held = sizeMeasure(t, fmt.Sprintf("Binding of about 1.5 MiB (%d triggers)", n), limit, 20)
-	if bytes > etcdRequestLimit || bytes < 1<<20 || held < 1 || held > 6 {
-		t.Errorf("a Binding of the request limit is %d bytes of JSON and holds %.3f MiB; want 1 to 1.5 MiB and 1 to 6 MiB", bytes, held)
+	// The caps hold a Binding under the request limit of etcd only because the instruction limit on its regexes keeps it from
+	// holding all 2156 that the other caps would allow (about 2.1 MiB of JSON). If this fails on the size, the page says what
+	// is no longer true: that the caps bound a Binding, and not the API server's request limit.
+	if bytes < 1<<20 || bytes > etcdRequestLimit || held < 1 || held > 4 {
+		t.Errorf("the largest Binding is %d bytes of JSON and holds %.3f MiB; want 1 MiB to etcd's %d bytes and 1 to 4 MiB", bytes, held, etcdRequestLimit)
 	}
 }

@@ -62,6 +62,7 @@ func New(reg prometheus.Registerer, provider trace.TracerProvider) (*Observer, e
 		{"agentkourier_session_recovery_total", "Session recovery and reconciliation outcomes.", []string{"outcome"}},
 		{"agentkourier_render_final_total", "Final output delivery outcomes.", []string{"outcome"}},
 		{"agentkourier_chat_api_calls_total", "Chat API operations, including logical errors over HTTP 200.", []string{"operation", "outcome"}},
+		{"agentkourier_slack_events_shed_total", "Slack events left unacknowledged, so that Slack sends them again, because the adapter already held as many as it may: channel_backlog (one channel's lane was full) or adapter_backlog (all lanes were).", []string{"reason"}},
 	} {
 		c := prometheus.NewCounterVec(prometheus.CounterOpts{Name: d.name, Help: d.help}, d.labels)
 		if err := reg.Register(c); err != nil {
