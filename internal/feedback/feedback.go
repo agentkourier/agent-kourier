@@ -266,10 +266,15 @@ func (h *Handler) Process(ctx context.Context, press store.Press) (interact.Resu
 	// The message the buttons are on is the one the turn's outbox row says it is, in the channel of the press: the thread and
 	// the turn in the value are the button's own words, and a vote is recorded for them only if the platform agrees (as a
 	// prompt's press must name the message of its interaction).
-	switch ok, err := h.onMessage(ctx, press, v); {
+	switch found, err := h.onMessage(ctx, press, v); {
 	case err != nil:
 		return interact.Retry, fmt.Errorf("feedback: read the message of %s: %w", v.Turn, err)
-	case !ok:
+	case found == messageUnrecorded:
+		// The message is on the platform before its place is written to the row, and a press can come in between. It is tried
+		// again, as every press that cannot be processed yet is, until the worker's age bound ends it (and says so).
+		h.cfg.Logger.DebugContext(ctx, "feedback: the message of a press has no place recorded yet; it will be tried again", "channel", press.Channel)
+		return interact.Retry, nil
+	case found == messageOther:
 		h.cfg.Logger.DebugContext(ctx, "feedback: a press names a message that is not the turn's; it was ignored", "channel", press.Channel)
 		return h.finish(ctx, press, to, "")
 	}
@@ -320,22 +325,43 @@ func alertName(origin store.Origin) string {
 	return AlertName(origin.Subject)
 }
 
+// messageFound is what onMessage finds of the message a press was made on.
+type messageFound int
+
+const (
+	// messageOther: no row of the turn's reply holds that message, so the press names another.
+	messageOther messageFound = iota
+	// messageTurns: a row of the turn's reply holds that message and place.
+	messageTurns
+	// messageUnrecorded: no row holds the message, and a row of the turn's reply in the press's channel and thread has no message
+	// recorded yet, so the press may well be on it.
+	messageUnrecorded
+)
+
 // onMessage says whether the message that press was made on is the output of v's turn in v's thread, in the channel of the press:
-// the outbox row of the turn's reply, or of its reply posted again (outbox.RepostedSource), holds that message and place. An
-// error is a read that failed, and says nothing of the press.
-func (h *Handler) onMessage(ctx context.Context, press store.Press, v Value) (bool, error) {
+// the outbox row of the turn's reply, or of its reply posted again (outbox.RepostedSource), holds that message and place. A row
+// of that place that holds no message yet is not a no: the platform shows a message before its row is written. An error is a
+// read that failed, and says nothing of the press.
+func (h *Handler) onMessage(ctx context.Context, press store.Press, v Value) (messageFound, error) {
+	found := messageOther
 	for _, source := range []string{v.Turn, outbox.RepostedSource(v.Turn)} {
 		row, err := h.cfg.Store.GetOutbox(ctx, outbox.ID(source, store.OutboxReply))
 		if errors.Is(err, store.ErrNotFound) {
 			continue
 		} else if err != nil {
-			return false, err
+			return messageOther, err
 		}
-		if row.MessageRef != "" && row.MessageRef == press.MessageRef && row.Channel == press.Channel && row.Thread == v.Thread {
-			return true, nil
+		if row.Channel != press.Channel || row.Thread != v.Thread {
+			continue
+		}
+		switch row.MessageRef {
+		case "":
+			found = messageUnrecorded
+		case press.MessageRef:
+			return messageTurns, nil
 		}
 	}
-	return false, nil
+	return found, nil
 }
 
 // words is a verdict as the voter reads it.
