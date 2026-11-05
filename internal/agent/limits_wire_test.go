@@ -255,10 +255,73 @@ func TestCheckBoundsTheCard(t *testing.T) {
 	}
 }
 
-// The budget leaves room for the final task that repeats the reply: the reply as the artifact, the status message and a
-// message of the history, in one event, with JSON escaping on top of the text.
-func TestBudgetLeavesRoomForAFinalTaskThatRepeatsTheReply(t *testing.T) {
-	if 4*DefaultMaxReplyBytes > dialect.MaxEventBytes {
-		t.Fatalf("four times the budget (%d) passes the bound of an event (%d): a reply the thread can hold might not fit its final task", DefaultMaxReplyBytes, dialect.MaxEventBytes)
+// The budget of a turn's reply is a number the documentation states (341 KiB, in docs/explanation/security.md and
+// docs/how-to/upgrade.md), and no setting reaches it. Like the bounds of the dialect, it is pinned by a literal, so that a
+// change of it is a change of the documentation too (see TestBoundsAreWhatTheDocumentationStates).
+func TestDefaultMaxReplyBytesIsWhatTheDocumentationStates(t *testing.T) {
+	if DefaultMaxReplyBytes != 341<<10 {
+		t.Errorf("DefaultMaxReplyBytes = %d, the documentation says %d (341 KiB): change it there too, and say so in the upgrade note", DefaultMaxReplyBytes, 341<<10)
 	}
+}
+
+// The budget leaves room for the final task that repeats the reply, and it leaves it for the worst honest text. The final
+// task of a stream holds the reply up to three times (the artifact, the status message and a message of the history), and
+// JSON may double the size of a text: a newline or a quote is two bytes on the wire (an agent that escapes what is not
+// ASCII makes more of it, and this does not cover that). Six times the budget is therefore the most a reply that fits
+// the budget takes on the wire, and it must fit one event, or the turn ends with the notice for a reply that was shown
+// whole and was under the budget. A budget that is four or five times smaller than an event still holds the repeated
+// text of an ordinary reply, but not of one that is all line breaks, which is what this keeps.
+func TestBudgetLeavesRoomForAFinalTaskThatRepeatsTheReply(t *testing.T) {
+	const copies, escaped = 3, 2
+	if copies*escaped*DefaultMaxReplyBytes > dialect.MaxEventBytes {
+		t.Fatalf("%d copies of a reply of the budget (%d bytes), each twice its size once escaped, pass the bound of an event (%d): a reply the thread can hold might not fit its final task",
+			copies, DefaultMaxReplyBytes, dialect.MaxEventBytes)
+	}
+	// The answer to GetTask holds the same task, and the history of the turn besides: it has to hold it with room to spare.
+	if 2*copies*escaped*DefaultMaxReplyBytes > dialect.MaxResponseBytes {
+		t.Fatalf("a final task at the budget, escaped, takes more than half of an answer (%d bytes): the history of a turn would not fit beside it", dialect.MaxResponseBytes)
+	}
+}
+
+// The largest reply the budget allows, of the characters that JSON doubles, arrives in a final task of three copies that
+// is the largest event the bound allows, and the same task is read as the answer to GetTask: both are read whole, by the
+// real client, and the turn ends with the final event. This is the margin the test above states, run through the transport.
+func TestFinalTaskOfAReplyAtTheBudgetIsReadAsAnEventAndAsAnAnswer(t *testing.T) {
+	const size = 1 << 10
+	chunks := (DefaultMaxReplyBytes - firstChunk) / size
+	doubled := strings.Repeat("\"\n", size/2) // two bytes of text, four on the wire
+	reply := strings.Repeat(doubled, chunks)
+	final := wireFinal(reply)
+	event := len(final) - len("\n") // as the bound counts it: the blank line that ends the event is not part of it
+	if event > dialect.MaxEventBytes {
+		t.Fatalf("the final task is an event of %d bytes, over the bound of %d", event, dialect.MaxEventBytes)
+	}
+	// GetTask answers with the task as the result, where an event of a stream has it under "task".
+	answer := strings.TrimSuffix(strings.Replace(strings.TrimSuffix(strings.TrimPrefix(final, "data: "), "\n\n"), `"result":{"task":`, `"result":`, 1), "}")
+	fa := newFakeAgent(t, func(call rpc, w http.ResponseWriter) {
+		switch call.Method {
+		case "SendStreamingMessage":
+			write(w, []byte(wireWorking))
+			for range chunks {
+				write(w, []byte(wireText(doubled, true)))
+			}
+			write(w, []byte(final))
+		case "GetTask":
+			_, _ = io.WriteString(w, answer)
+		}
+	})
+	a := fa.agentViaWith(t, generic.New(0), quick)
+	h, got := collector()
+	if err := a.Send(t.Context(), message("go"), h); err != nil {
+		t.Fatalf("a reply of %d bytes, whose final task is %d bytes of an event of at most %d: %v", len(reply), event, dialect.MaxEventBytes, err)
+	}
+	if last, ok := (*got)[len(*got)-1].(FinalEvent); !ok || last.Task == nil {
+		t.Fatalf("last event = %#v, want the final event", (*got)[len(*got)-1])
+	}
+	task, err := a.GetTask(t.Context(), "t-1")
+	if err != nil || task == nil || len(task.Artifacts) != 1 {
+		t.Fatalf("GetTask = %v, %v; want the task, read whole", task, err)
+	}
+	t.Logf("a reply of %d KiB; its final task is an event of %d KiB (%d%% of the bound of an event, %d%% of the bound of an answer)",
+		len(reply)>>10, event>>10, 100*event/dialect.MaxEventBytes, 100*event/dialect.MaxResponseBytes)
 }

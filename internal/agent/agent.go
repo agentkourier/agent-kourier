@@ -54,6 +54,9 @@ type Config struct {
 	// names the calls the approval waits on with it (FinalEvent.AwaitingApproval). A Pool sets it from its dialect.
 	// Nil reads none.
 	ParseInteraction func(task a2a.Task) (*dialect.Interaction, error)
+	// LookupTimeout bounds the whole walk of FindTask, which asks for each page of the list of tasks and asks again for a page that is over
+	// the bound at a smaller size. A walk that passes it is incomplete (ErrLookupIncomplete). Default DefaultLookupTimeout, 5 minutes.
+	LookupTimeout time.Duration
 	// MaxReplyBytes bounds what one send or follow holds of the agent's reply in memory: the text of its artifacts, the
 	// tool results that wait for their call, and the bookkeeping of each tool part, which the agent decides and a
 	// stream's length does not limit. It does not bound how long a reply is in all: the dialect bounds each event and
@@ -78,6 +81,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.ConnectTimeout <= 0 {
 		c.ConnectTimeout = 30 * time.Second
+	}
+	if c.LookupTimeout <= 0 {
+		c.LookupTimeout = DefaultLookupTimeout
 	}
 	if c.MaxReplyBytes <= 0 {
 		c.MaxReplyBytes = DefaultMaxReplyBytes
@@ -247,7 +253,7 @@ var errInactive = errors.New("agent: no event within the inactivity timeout")
 // A stream that ends cleanly after a status update that settled the task, without the full
 // task (as the a2a-sdk Python server has been seen to end its streams), is not a drop: one GetTask on conn,
 // at once, supplies the final task. Only if that fails, or finds the task unsettled, does
-// read return io.ErrUnexpectedEOF.
+// read return io.ErrUnexpectedEOF; an answer that is too large (dialect.ErrResponseTooLarge) is returned as it is.
 func (a *Agent) read(ctx context.Context, conn Conn, asm *assembler, open func(context.Context) iter.Seq2[a2a.Event, error]) error {
 	if asm.over != nil { // the seed of an answer, or the snapshot a resume opened with, spent the budget
 		return asm.over
@@ -278,7 +284,11 @@ func (a *Agent) read(ctx context.Context, conn Conn, asm *assembler, open func(c
 	case err != nil:
 		return err
 	case ctx.Err() == nil && settled(asm.state) && asm.taskID != "":
-		if task, gerr := a.getTask(ctx, conn, asm.taskID); gerr == nil {
+		task, gerr := a.getTask(ctx, conn, asm.taskID)
+		if tooLarge(gerr) { // no lost stream: a reconnect reads the same answer
+			return gerr
+		}
+		if gerr == nil {
 			asm.apply(task)
 			if asm.over != nil {
 				return asm.over
@@ -305,8 +315,8 @@ func (a *Agent) GetTask(ctx context.Context, id a2a.TaskID) (telemetryResult0 *a
 	return a.getTask(ctx, conn, id)
 }
 
-// CancelTask cancels the task and returns it as the agent left it. It backs the thread's
-// stop control, and Answer calls it for a wedged task (R17). UnaryTimeout bounds it,
+// CancelTask cancels the task and returns it as the agent left it. It backs the session's
+// cancels (the interaction timeout's, the wedged task's; a thread stop control is not built), and Answer calls it for a wedged task (R17). UnaryTimeout bounds it,
 // resolving the connection included.
 func (a *Agent) CancelTask(ctx context.Context, id a2a.TaskID) (telemetryResult0 *a2a.Task, telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.agent.cancel")

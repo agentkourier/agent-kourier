@@ -100,7 +100,20 @@ var (
 	// text says the bound and never anything the backend sent. A backend that does it again does it every time, so
 	// it is not retried as a lost stream.
 	ErrResponseTooLarge = errors.New("response from the backend is too large")
+	// ErrCardTooLarge is joined to ErrResponseTooLarge for an agent card past MaxCardBytes. It says that no connection was
+	// made: the card is what a client is built from, and it is read when a connection is opened, never as the answer to a call. A
+	// caller that means the answer to a call (a task, a page of tasks, an event) tells it apart with AnswerTooLarge, since a
+	// card that is too large says nothing of what the agent holds, and no call was made.
+	ErrCardTooLarge = errors.New("agent card is too large")
 )
+
+// AnswerTooLarge reports whether err is a response past a bound that is not the agent card: an event of a stream, the answer
+// to a call, or a reply of a turn. The card's error (ErrCardTooLarge) is an ErrResponseTooLarge too, and it reaches a call that
+// had to open a connection first, where nothing was sent and nothing was read: it must not be taken for what a task or a page of
+// tasks holds.
+func AnswerTooLarge(err error) bool {
+	return errors.Is(err, ErrResponseTooLarge) && !errors.Is(err, ErrCardTooLarge)
+}
 
 // The most a dialect's transport reads of a backend's response, by what the response is. The backend of a Binding may
 // be a tenant's, and an unbounded read would let it fill the memory of the leader. None bounds how long a stream may
@@ -110,12 +123,21 @@ const (
 	MaxCardBytes = 1 << 20
 	// MaxResponseBytes is the most of the answer to a call that is not a stream (GetTask, CancelTask, ListTasks), or
 	// of a JSON answer to a call that asked for a stream, which is a single JSON-RPC response and may hold a task
-	// with its whole history.
-	MaxResponseBytes = 16 << 20
+	// with its whole history. It is twice an event: the final task of a reply at the budget, three copies of it
+	// escaped, is half of an answer (agent.DefaultMaxReplyBytes), which leaves the rest for the history. An answer
+	// is decoded whole, and what that takes depends on the shape of the JSON, which the backend chooses: about
+	// three and a half times its size for text, and about fifty times for a data part of small objects (measured in a
+	// test process), so the bound is of what is read and not of the memory it takes.
+	MaxResponseBytes = 4 << 20
 	// MaxEventBytes is the most of one event of a stream: the lines of it, line breaks included, up to the blank line
-	// that ends it. It is the bound a2a-go puts on one line (10 MiB), so that an event split over lines cannot hold
-	// more than an event of one line.
-	MaxEventBytes = 10 << 20
+	// that ends it. It is under the bound a2a-go puts on one line (10 MiB), so that an event split over lines cannot hold
+	// more than an event of one line, and a line is never the bound. a2a-go reads an event with a buffer that doubles
+	// from 64 KiB to the size of the largest event the stream has sent and keeps it while the stream is open, so what
+	// an open stream holds grows with this number, and a power of two wastes none of the doubling. Decoding an event
+	// takes memory by its shape, as for an answer: about four and a half times its size for text and about fifty times
+	// for small objects (measured in a test process). The final task of kagent 1.0 holds every tool call and result of
+	// the turn again, so for a turn that uses tools it is the sum of the tool output that has to fit an event.
+	MaxEventBytes = 2 << 20
 )
 
 type freshConnectionKey struct{}

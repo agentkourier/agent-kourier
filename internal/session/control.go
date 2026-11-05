@@ -11,6 +11,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/audit"
+	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -18,7 +19,8 @@ import (
 // conversation is not paused on the task named.
 var ErrNotPaused = errors.New("session: the conversation is not paused on that task")
 
-// Stop is the thread's stop control (spec 8.2): it cancels the task taskID, the one the control
+// Stop is the thread's stop control (spec 8.2), which is specified and not built: nothing calls it in production, and the Slack adapter handles
+// no stop press. It cancels the task taskID, the one the control
 // was rendered for, and the queued replies then go on. It reports false, without calling the
 // agent, when that is not the task recorded for the thread, so an old button cannot stop a newer
 // task. The caller has already checked that by may press the button (D12). A running task's stream
@@ -27,12 +29,18 @@ var ErrNotPaused = errors.New("session: the conversation is not paused on that t
 // (see cancelActive). Stop calls the agent before it returns, so an adapter runs it off Slack's
 // 3-second acknowledgement path: enqueue the control, and act on it from the queue.
 func (m *Manager) Stop(ctx context.Context, key Key, taskID a2a.TaskID, by string) (stopped bool, err error) {
-	done, paused, err := m.cancelActive(ctx, key, taskID, by, false)
+	var unverified bool
+	done, paused, err := m.cancelActive(ctx, key, taskID, by, false, &unverified)
 	if err != nil || !done {
 		return false, err
 	}
 	if paused {
-		m.taskNotice(ctx, key, taskID, NoticeStopped, "")
+		// A task that was counted as over without being read is not said to have been stopped: Agent Kourier does not know that.
+		kind := NoticeStopped
+		if unverified {
+			kind = NoticeStopUnverified
+		}
+		m.taskNotice(ctx, key, taskID, kind, "")
 	}
 	return true, nil
 }
@@ -44,7 +52,7 @@ func (m *Manager) Stop(ctx context.Context, key Key, taskID a2a.TaskID, by strin
 // tells the thread nothing, which the caller does. It works after a restart. reason is for the
 // log. Like Stop, it calls the agent before it returns: run it off any acknowledgement path.
 func (m *Manager) Cancel(ctx context.Context, key Key, taskID a2a.TaskID, reason string) error {
-	done, _, err := m.cancelActive(ctx, key, taskID, "", true)
+	done, _, err := m.cancelActive(ctx, key, taskID, "", true, nil)
 	switch {
 	case err != nil:
 		return err
@@ -81,6 +89,14 @@ const (
 	cancelTransient                     // anything else: it may pass
 )
 
+// warnUnverifiedCancel logs a cancel that is counted as done on an answer that was too large to read: the cancel reached the agent, and what
+// it did to the task is not known.
+func (m *Manager) warnUnverifiedCancel(key Key, binding string, id a2a.TaskID, err error) {
+	if dialect.AnswerTooLarge(err) {
+		m.cfg.Logger.Warn("session: the answer to a cancel was too large to read, so the cancel is counted as done without being verified", "key", key, "binding", binding, "task", string(id), "error", err)
+	}
+}
+
 func classifyCancel(err error) cancelKind {
 	switch {
 	case err == nil:
@@ -93,6 +109,16 @@ func classifyCancel(err error) cancelKind {
 		return cancelCredentials
 	case errors.Is(err, agent.ErrForbidden), errors.Is(err, agent.ErrAgentForbidden):
 		return cancelForbidden
+	case dialect.AnswerTooLarge(err):
+		// The cancel got an answer that is more than Agent Kourier reads, and it is counted as done, without being verified. A
+		// real a2a-go server answers a cancel, and a repeat of one that took, with the whole task, where a refusal is a small
+		// JSON-RPC error (shown in a test against its handler; not confirmed on kagent), so the answer says the cancel reached
+		// the agent, and asking again gets the same answer, never the refusal that would say the task ended. But what Agent
+		// Kourier read of it is only that it was too large: an error with a large body (a 200 with a JSON-RPC error that
+		// carries a large data member, say) reads the same. Nothing is claimed of what became of the task: the audit row says
+		// the answer was not read, a WARN names the unverified cancel, and the thread is told no more than that. The agent
+		// card is not an answer (dialect.ErrCardTooLarge): no call was made, so it is not done.
+		return cancelDone
 	}
 	return cancelTransient
 }
@@ -104,7 +130,10 @@ func classifyCancel(err error) cancelKind {
 // times, then reported. Where the task is over, the pause ends if the runner is parked on it, or
 // the record is cleared and the queue woken if no runner drives it. done is false when id is not
 // the recorded task, and, with needPause, when it is not paused.
-func (m *Manager) cancelActive(ctx context.Context, key Key, id a2a.TaskID, by string, needPause bool) (done, paused bool, err error) {
+//
+// unverified, if it is not nil, is set when the task is counted as over without Agent Kourier having read it: the answer to the cancel was too large, or
+// the agent said the task cannot be cancelled and the task is too large to read, so that what became of it is not known.
+func (m *Manager) cancelActive(ctx context.Context, key Key, id a2a.TaskID, by string, needPause bool, unverified *bool) (done, paused bool, err error) {
 	sess, err := m.cfg.Store.GetSession(ctx, key, readAll, m.cfg.Now())
 	if errors.Is(err, store.ErrNotFound) || (err == nil && (id == "" || sess.TaskID != string(id))) {
 		return false, false, nil
@@ -147,7 +176,15 @@ func (m *Manager) cancelActive(ctx context.Context, key Key, id a2a.TaskID, by s
 	}
 	switch kind {
 	case cancelEnded:
-		if task, gerr := backend.Agent.GetTask(ctx, id); gerr != nil || !task.Status.State.Terminal() {
+		// The task is read to see that it ended. One too large to read has been cancelled, as the cancel's own answer is: the
+		// agent says it cannot cancel it again because it ended, and a read that fails for its size is no sign it still runs.
+		task, gerr := backend.Agent.GetTask(ctx, id)
+		if tooLarge := dialect.AnswerTooLarge(gerr); tooLarge {
+			if unverified != nil {
+				*unverified = true
+			}
+			m.cfg.Logger.Warn("session: the task could not be read for its size after the agent said it cannot be cancelled, so it is counted as over without being verified", "key", key, "binding", sess.Binding, "task", string(id), "error", gerr)
+		} else if gerr != nil || !task.Status.State.Terminal() {
 			return false, false, fmt.Errorf("cancel task %s: %w", id, cerr)
 		}
 	case cancelGone:
@@ -158,6 +195,12 @@ func (m *Manager) cancelActive(ctx context.Context, key Key, id a2a.TaskID, by s
 		_ = m.endPause(ctx, key, id) // a parked runner is released; the record is already cleared
 		return true, false, nil
 	case cancelDone:
+		if dialect.AnswerTooLarge(cerr) {
+			if unverified != nil {
+				*unverified = true
+			}
+			m.warnUnverifiedCancel(key, sess.Binding, id, cerr)
+		}
 	default:
 		return false, false, fmt.Errorf("cancel task %s: %w", id, cerr)
 	}

@@ -12,10 +12,12 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 )
 
-// DefaultMaxReplyBytes is the default of Config.MaxReplyBytes: 2 MiB, some fifty of Slack's longest messages of text. The
-// final task of a stream may repeat the text two or three times, and has to fit an event (dialect.MaxEventBytes, which is also
-// what a2a-go reads of one line), with JSON escaping on top; this leaves room for that.
-const DefaultMaxReplyBytes = 2 << 20
+// DefaultMaxReplyBytes is the default of Config.MaxReplyBytes: 341 KiB, some thirty times the 12000 UTF-16 units that one
+// message of the Slack adapter shows of a reply (a thread shows no more of a longer one: it is cut and marked). A reply past
+// it ends the turn, where one that the thread would have shown cut used to be shown. The final task of a stream may repeat
+// the text three times, and has to fit an event (dialect.MaxEventBytes), with JSON escaping on top that may double each
+// copy; six times the budget is an event, and this leaves room for that (TestBudgetLeavesRoomForAFinalTaskThatRepeatsTheReply).
+const DefaultMaxReplyBytes = 341 << 10
 
 // entryBytes is what the assembler charges for each entry it adds to one of its maps, besides the entry's key: the
 // hash, the header of the string, and the map's own overhead, rounded up.

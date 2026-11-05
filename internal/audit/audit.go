@@ -672,6 +672,11 @@ func errorTags(err error) []string {
 		{agent.ErrForbidden, "forbidden"}, {agent.ErrAgentForbidden, "agent_forbidden"}, {agent.ErrAnswerRejected, "answer_rejected"}, {agent.ErrCancelFailed, "cancel_failed"}, {agent.ErrTokenRequired, "token_required"},
 		{agent.ErrTokenUnreadable, "token_unreadable"}, {agent.ErrHeaderUnreadable, "header_unreadable"},
 		{agent.ErrPoolClosed, "pool_closed"}, {agent.ErrStreamingUnsupported, "streaming_unsupported"},
+		// What the broker would not read or hold of a response (an event, an answer, a page of tasks, a reply), and the
+		// agent card, which is not an answer to a call and says nothing of a task: it comes when a connection is opened.
+		{dialect.ErrCardTooLarge, "card_too_large"},
+		// A lookup that could not read the agent's list of tasks in full, so it is not known whether the agent has the turn.
+		{agent.ErrLookupIncomplete, "lookup_incomplete"},
 		// Answer's automatic cancel (R17) can fail and is joined to ErrAnswerRejected: a wedged task must not read as cleared.
 		{a2a.ErrTaskNotCancelable, "task_not_cancelable"}, {a2a.ErrTaskNotFound, "task_not_found"},
 		{context.Canceled, "canceled"}, {context.DeadlineExceeded, "deadline_exceeded"},
@@ -679,6 +684,9 @@ func errorTags(err error) []string {
 		if errors.Is(err, t.err) {
 			tags = append(tags, t.tag)
 		}
+	}
+	if dialect.AnswerTooLarge(err) {
+		tags = append(tags, "response_too_large")
 	}
 	var hs *dialect.HTTPStatusError
 	if errors.As(err, &hs) {

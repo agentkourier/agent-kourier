@@ -18,6 +18,8 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
+
+	"github.com/agentkourier/agent-kourier/internal/dialect"
 )
 
 type observerKey struct{}
@@ -187,6 +189,10 @@ func ErrorClass(err error) string {
 		return "cancelled"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "timeout"
+	case errors.Is(err, dialect.ErrCardTooLarge):
+		return "card_too_large"
+	case errors.Is(err, dialect.ErrResponseTooLarge):
+		return "response_too_large"
 	}
 	var status httpStatusError
 	if errors.As(err, &status) {

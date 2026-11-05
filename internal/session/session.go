@@ -197,6 +197,10 @@ const (
 	// NoticeStopped says a person stopped a task that was not streaming, so there is nothing else
 	// to show it (spec 8.2).
 	NoticeStopped NoticeKind = "stopped"
+	// NoticeStopUnverified says a person stopped a task that was not streaming and Agent Kourier cannot say it stopped: the answer to the
+	// cancel, or the task, was too large to read. It claims no more than that the pause is over. Manager.Stop is its only source and has no
+	// caller in production, so no person sees it yet.
+	NoticeStopUnverified NoticeKind = "stop_unverified"
 	// NoticeWedged says a task ran past maxWorkingAge and was cancelled (R17).
 	NoticeWedged NoticeKind = "wedged"
 	// NoticeDuplicateRun says the agent ran a turn more than once (spec 8.2).

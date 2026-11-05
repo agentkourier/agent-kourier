@@ -249,7 +249,7 @@ func TestNoticeKeepsItsDetailLiteralOnOneLineAndCapped(t *testing.T) {
 	if got := Notice("Stopped.", ""); got.Fallback != "Stopped." {
 		t.Errorf("Notice with no detail = %q", got.Fallback)
 	}
-	if got := Notice("x", strings.Repeat("d", 500)); chat.Units(got.Fallback) > 2+maxNoticeDetail || !strings.HasSuffix(got.Fallback, chat.Truncated) {
+	if got := Notice("x", strings.Repeat("d", 500)); chat.Units(got.Fallback) > 2+MaxNoticeDetail || !strings.HasSuffix(got.Fallback, chat.Truncated) {
 		t.Errorf("a long detail gives %d units; want it capped and marked", chat.Units(got.Fallback))
 	}
 }

@@ -17,13 +17,17 @@ import (
 	"github.com/agentkourier/agent-kourier/test/stubagent"
 )
 
-// tooLargeSentence is what the thread is told when the agent's reply is larger than Agent Kourier holds. It is fixed,
-// and names neither the backend nor the size: the test pins the words, so that a change of them is a decision.
-const tooLargeSentence = "the agent's reply was larger than Agent Kourier holds, so the turn stopped"
+// tooLargeSentence is what the thread is told when what the agent sent is more than Agent Kourier can read or hold: an event, an
+// answer, the reply, or the tasks of a list. It is fixed, true for each of them, and names neither the backend nor a size: the test
+// pins the words, so that a change of them is a decision.
+const tooLargeSentence = "the agent sent more than Agent Kourier can read or hold, so the turn stopped"
 
 // errTooLarge is what the agent package returns for a reply past a bound: dialect.ErrResponseTooLarge, with where it
 // was found in its text.
-var errTooLarge = fmt.Errorf("%w: an event of more than %d bytes", dialect.ErrResponseTooLarge, 10<<20)
+var errTooLarge = fmt.Errorf("%w: an event of more than %d bytes", dialect.ErrResponseTooLarge, dialect.MaxEventBytes)
+
+// errAnswerTooLarge is the same for the answer to a call that is not a stream: GetTask, CancelTask or ListTasks.
+var errAnswerTooLarge = fmt.Errorf("%w: more than %d bytes", dialect.ErrResponseTooLarge, dialect.MaxResponseBytes)
 
 // oversized makes turn 0 name the task t1, say something, and then fail as agent.Send does when the reply passes a bound:
 // no StreamLostError, for the agent would send the same again.

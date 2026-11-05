@@ -69,6 +69,12 @@ var (
 	// call will never answer. A caller that needs the answer treats it as no information and decides what
 	// to do without one (spec 8.2 says to send nothing when a lookup FAILS; this one cannot succeed).
 	ErrLookupUnsupported = errors.New("agent: the agent cannot list tasks")
+	// ErrLookupIncomplete means FindTask could not read the list of the context's tasks to its end, and no page it did read held the turn, so
+	// it is not known whether the agent has the turn, and the caller must not find out by sending it: a page was over the bound at the smallest size it
+	// asked for (dialect.ErrResponseTooLarge, also in the chain), the walk passed Config.LookupTimeout or maxListPages, a page token came
+	// again, or a call failed at a page size the walk had just lowered. A caller must not send the turn to find out: a message sent
+	// again into a context is not deduplicated.
+	ErrLookupIncomplete = errors.New("agent: the list of the context's tasks could not be read in full")
 	// ErrNotReady means the -32004 is no busy session, the backend's dialect says (Config.NotReady), but one that
 	// cannot take input yet: it is starting, or in a lifecycle operation, or the agent is not rolled out. The
 	// message was not recorded either, and is resent unchanged after a backoff just the same; what differs is
@@ -180,15 +186,16 @@ func refused(err error) bool {
 }
 
 // permanent reports whether a request that got err would get it again: a 4xx, but not a 408
-// (the request timed out) or a 429 (slow down), which say try again, not no; and a reply that is too large.
+// (the request timed out) or a 429 (slow down), which say try again, not no; and a response that is too large, an agent card too.
 func permanent(err error) bool {
 	code := httpStatus(err)
-	return tooLarge(err) || (refused(err) && code != http.StatusRequestTimeout && code != http.StatusTooManyRequests)
+	return errors.Is(err, dialect.ErrResponseTooLarge) || (refused(err) && code != http.StatusRequestTimeout && code != http.StatusTooManyRequests)
 }
 
-// tooLarge reports whether err is a reply larger than the dialect reads or the Agent holds (dialect.ErrResponseTooLarge). It
+// tooLarge reports whether err is a reply larger than the dialect reads or the Agent holds (dialect.AnswerTooLarge): an event,
+// the answer to a call, or the reply of a turn, and not the agent card, which says nothing of what the agent sent. It
 // is no lost connection: a reconnect gets the same reply.
-func tooLarge(err error) bool { return errors.Is(err, dialect.ErrResponseTooLarge) }
+func tooLarge(err error) bool { return dialect.AnswerTooLarge(err) }
 
 // retryAfter returns the delay the backend asked for in err's HTTP status, or 0.
 func retryAfter(err error) time.Duration {
