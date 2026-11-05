@@ -31,8 +31,13 @@ func guardCalls(t *testing.T, top string) (guarded map[string]string, problems [
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", "node_modules", "bin", ".claude", "spike", "tasks":
+			case ".git", "node_modules", "bin", ".claude", "spike", "tasks", "testdata":
 				return filepath.SkipDir
+			}
+			if path != top {
+				if _, err := os.Stat(filepath.Join(path, "go.mod")); err == nil {
+					return filepath.SkipDir // another module (examples/ax): its tests are not this repository's guards
+				}
 			}
 			return nil
 		}
@@ -87,7 +92,7 @@ func guardCalls(t *testing.T, top string) (guarded map[string]string, problems [
 				problems = append(problems, at+": "+err.Error())
 				return true
 			}
-			if _, literal := call.Args[2].(*ast.BasicLit); literal && !strings.HasPrefix(id, "selftest.") {
+			if onlyLiterals(call.Args[2]) && !strings.HasPrefix(id, "selftest.") {
 				problems = append(problems, at+": the limit "+strconv.Quote(id)+" is given a literal: pass the constant or the default that the code uses, or the test holds the page to a copy of it")
 			}
 			guarded[id] = path
@@ -99,6 +104,36 @@ func guardCalls(t *testing.T, top string) (guarded map[string]string, problems [
 		t.Fatal(err)
 	}
 	return guarded, problems
+}
+
+// onlyLiterals reports whether e is a number written out: literals, and the units of package time, joined by arithmetic, in
+// parentheses or under a conversion, such as (50), 90*24*time.Hour or int(24*time.Hour). It holds nothing that the code names.
+func onlyLiterals(e ast.Expr) bool {
+	switch e := e.(type) {
+	case *ast.BasicLit:
+		return true
+	case *ast.ParenExpr:
+		return onlyLiterals(e.X)
+	case *ast.UnaryExpr:
+		return onlyLiterals(e.X)
+	case *ast.BinaryExpr:
+		return onlyLiterals(e.X) && onlyLiterals(e.Y)
+	case *ast.SelectorExpr:
+		x, ok := e.X.(*ast.Ident)
+		return ok && x.Name == "time"
+	case *ast.CallExpr:
+		if len(e.Args) != 1 {
+			return false
+		}
+		switch fun := e.Fun.(type) {
+		case *ast.Ident: // int(...), int64(...)
+			return onlyLiterals(e.Args[0])
+		case *ast.SelectorExpr: // time.Duration(...)
+			x, ok := fun.X.(*ast.Ident)
+			return ok && x.Name == "time" && onlyLiterals(e.Args[0])
+		}
+	}
+	return false
 }
 
 // TestEveryMarkerHasAGuard fails for a marker of the page that no test of the repository holds to the code, for a guard whose
@@ -144,10 +179,14 @@ func TestGuardCallsReadsTheSyntax(t *testing.T) {
 	mustWrite(t, filepath.Join(top, "go.mod"), "module x\n")
 	pkg := filepath.Join(top, "p")
 	mustWrite(t, filepath.Join(pkg, "a_test.go"), "package p\n\nfunc f() {\n\t// limitsdoc.Count(t, \"incomment\", maxTriggers)\n\tlimitsdoc.Count(t, \"good\", maxTriggers)\n\tlimitsdoc.Count(t, \"copied\", 50)\n\tlimitsdoc.Count(t, id, maxTriggers)\n}\n")
+	mustWrite(t, filepath.Join(pkg, "typed_test.go"), "package p\n\nfunc k() {\n\tlimitsdoc.Count(t, \"paren\", (50))\n\tlimitsdoc.Duration(t, \"units\", 90*24*time.Hour)\n\tlimitsdoc.Count(t, \"conv\", int(24*time.Hour))\n\tlimitsdoc.Count(t, \"sum\", 40+10)\n\tlimitsdoc.Duration(t, \"dur\", time.Duration(5)*time.Second)\n\tlimitsdoc.Count(t, \"named\", maxTriggers+1)\n\tlimitsdoc.Count(t, \"field\", cfg.Limit)\n\tlimitsdoc.Count(t, \"call\", len(f()))\n\tlimitsdoc.Count(t, \"convnamed\", int(maxTriggers))\n}\n")
+	mustWrite(t, filepath.Join(pkg, "testdata", "x_test.go"), "package p\n\nfunc d() { limitsdoc.Count(t, \"intestdata\", maxTriggers) }\n")
+	mustWrite(t, filepath.Join(top, "nested", "go.mod"), "module nested\n")
+	mustWrite(t, filepath.Join(top, "nested", "n_test.go"), "package n\n\nfunc n() { limitsdoc.Count(t, \"innested\", maxTriggers) }\n")
 	mustWrite(t, filepath.Join(pkg, "tagged_test.go"), "//go:build testhooks\n\npackage p\n\nfunc g() { limitsdoc.Count(t, \"tagged\", maxTriggers) }\n")
 	mustWrite(t, filepath.Join(pkg, "other_plan9_test.go"), "package p\n\nfunc h() { limitsdoc.Count(t, \"plan9\", maxTriggers) }\n")
 	guarded, problems := guardCalls(t, top)
-	for _, id := range []string{"incomment", "tagged", "plan9"} {
+	for _, id := range []string{"incomment", "tagged", "plan9", "intestdata", "innested"} {
 		if _, ok := guarded[id]; ok {
 			t.Errorf("%q is guarded, but its call is in a comment, behind a build constraint or in a file for another platform", id)
 		}
@@ -156,7 +195,17 @@ func TestGuardCallsReadsTheSyntax(t *testing.T) {
 		t.Error("a plain call was not read")
 	}
 	joined := strings.Join(problems, "\n")
-	if len(problems) != 2 || !strings.Contains(joined, `"copied" is given a literal`) || !strings.Contains(joined, "must be a string literal") {
-		t.Errorf("problems = %q, want a literal value and an ID that is not a literal", problems)
+	for _, id := range []string{"copied", "paren", "units", "conv", "sum", "dur"} {
+		if !strings.Contains(joined, `"`+id+`" is given a literal`) {
+			t.Errorf("the value of %q is written out and was not refused: %q", id, problems)
+		}
+	}
+	for _, id := range []string{"named", "field", "call", "convnamed", "good"} {
+		if strings.Contains(joined, `"`+id+`" is given a literal`) {
+			t.Errorf("the value of %q is the code's own and was refused: %q", id, problems)
+		}
+	}
+	if !strings.Contains(joined, "must be a string literal") || len(problems) != 7 {
+		t.Errorf("problems = %q, want six values written out and one ID that is not a literal", problems)
 	}
 }
