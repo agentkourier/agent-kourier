@@ -200,7 +200,7 @@ func TestConformance(t *testing.T) {
 			objs = append(objs, object(t, d, fmt.Sprintf("uid-%d", i), 1))
 		}
 		return newCluster(t, objs...).startAs(t, corpus.Connection)
-	}, sourcetest.Options{PerObject: true})
+	}, sourcetest.Options{PerObject: true, IgnoresUnknownFields: true})
 }
 
 // The objects of a cluster carry what an API server adds: a uid, a generation, a creation time. The Set keeps them, since
