@@ -241,6 +241,8 @@ spec:
           value: 45s
         - name: AGENTKOURIER_AUDIT_RETENTION
           value: 8760h
+        - name: GOMEMLIMIT
+          value: "429496729"
         - name: AGENTKOURIER_ENVIRONMENT
           value: production
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
