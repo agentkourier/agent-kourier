@@ -134,13 +134,16 @@ func TestABindingDeletedAloneStopsAtTheNextRead(t *testing.T) {
 // The trade of the grace: a Binding deleted alone is kept, not served, for goneGrace, and if its connection is deleted inside
 // it, it comes back, held. After the grace it does not.
 func TestABindingDeletedAloneComesBackHeldOnlyInsideTheGrace(t *testing.T) {
+	const notHeld = "AgentBackend agent-kourier-system/kagent-pilot@1 Binding sre/sre-alerts@1 ChatConnection agent-kourier-system/slack-main@1"
 	for _, tc := range []struct {
 		name  string
-		after time.Duration
+		after []time.Duration // the reads between the Binding's deletion and the connection's, each this long after the one before
 		want  string
 	}{
-		{"inside the grace", 30 * time.Second, allHeld},
-		{"after the grace", 90 * time.Second, "AgentBackend agent-kourier-system/kagent-pilot@1 Binding sre/sre-alerts@1 ChatConnection agent-kourier-system/slack-main@1"},
+		{"inside the grace", []time.Duration{30 * time.Second}, allHeld},
+		{"after the grace", []time.Duration{90 * time.Second}, notHeld},
+		// The grace is counted from the first read that found it gone, not from the latest: a read inside it does not start it again.
+		{"read again inside it, then past it", []time.Duration{30 * time.Second, 31 * time.Second}, notHeld},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			leakCheck(t)
@@ -150,8 +153,10 @@ func TestABindingDeletedAloneComesBackHeldOnlyInsideTheGrace(t *testing.T) {
 			src := c.startWithClock(t, clock)
 			set(t, src)
 			until(t, func() { c.remove(find(objs, "chat-only")) }, func() bool { s, _ := set(t, src); return len(s.Bindings) == 1 })
-			clock.advance(tc.after)
-			set(t, src) // a read finds it gone for this long
+			for _, step := range tc.after {
+				clock.advance(step)
+				set(t, src) // a read finds it gone for this long
+			}
 			until(t, func() {
 				c.remove(find(objs, "kagent-pilot"))
 				c.remove(find(objs, "sre-alerts"))
@@ -444,6 +449,41 @@ func TestABindingMovedToAnotherBrokerIsNotHeld(t *testing.T) {
 	want := "AgentBackend agent-kourier-system/kagent-pilot@1 Binding sre/chat-only@1 ChatConnection agent-kourier-system/slack-main@1"
 	if got := strings.Join(held(s), " "); got != want {
 		t.Errorf("held = %s; want %s: sre-alerts is another broker's now", got, want)
+	}
+}
+
+// A Binding that went to another broker and is made invalid back onto this one has no last good here: the generation that went
+// away is not served again under a new hold of the name.
+func TestAMovedBindingMadeInvalidBackOnTheOwnConnectionHasNoLastGood(t *testing.T) {
+	leakCheck(t)
+	objs := corpus(t)
+	other := find(objs, "slack-main")
+	other.SetName("slack-other")
+	other.SetUID("uid-other")
+	c := newCluster(t, append(objs, other)...)
+	src := c.start(t)
+	set(t, src)
+	moved := find(objs, "sre-alerts")
+	moved.SetGeneration(2)
+	_ = unstructured.SetNestedField(moved.Object, "slack-other", "spec", "chat", "connectionRef", "name")
+	until(t, func() { c.apply(moved) }, func() bool { return src.CachedGenerationForTest("Binding", "sre", "sre-alerts") == 2 })
+	if s, _ := set(t, src); slices.Contains(bindingNames(s), "sre/sre-alerts") {
+		t.Fatal("the Binding that went to another broker is still served")
+	}
+	back := find(objs, "sre-alerts")
+	back.SetGeneration(3)
+	_ = unstructured.SetNestedField(back.Object, "#general", "spec", "chat", "channel")
+	until(t, func() { c.apply(back) }, func() bool { return src.CachedGenerationForTest("Binding", "sre", "sre-alerts") == 3 })
+	s, _ := set(t, src)
+	if slices.Contains(bindingNames(s), "sre/sre-alerts") {
+		t.Errorf("Bindings = %v; sre-alerts is served from a generation that went to another broker", bindingNames(s))
+	}
+	refused := false
+	for _, inv := range s.Invalid {
+		refused = refused || (inv.Name == "sre-alerts" && inv.Served == 0 && !inv.Deleted)
+	}
+	if !refused {
+		t.Errorf("Invalid = %+v; want sre-alerts refused with no generation served", s.Invalid)
 	}
 }
 

@@ -2010,6 +2010,30 @@ func TestAChannelConflictFailsClosedWhenItsWordsMove(t *testing.T) {
 	}
 }
 
+// The words that the report adds after the winner of a channel, when it is a Binding that is deleted and held, are kept in what
+// the Binding's own namespace reads, and the name of a winner in another namespace is not: the anchor of the match is no longer the
+// end of the message.
+func TestAChannelHeldByAHeldBindingKeepsTheWordsThatSaySo(t *testing.T) {
+	const held = " (that Binding is deleted, and held until its connection is back)"
+	for _, tc := range []struct {
+		name, message, want string
+	}{
+		{"the same namespace", "spec.chat.channel: C1 on ChatConnection ns/c is already bound by Binding team-a/ghost" + held,
+			"spec.chat.channel: C1 on ChatConnection ns/c is already bound by Binding team-a/ghost" + held},
+		{"another namespace", "spec.chat.channel: C1 on ChatConnection ns/c is already bound by Binding team-b/ghost" + held,
+			"spec.chat.channel: C1 on ChatConnection ns/c is already bound by a Binding in another namespace" + held},
+		{"another namespace, as before", "spec.chat.channel: C1 on ChatConnection ns/c is already bound by Binding team-b/ghost",
+			"spec.chat.channel: C1 on ChatConnection ns/c is already bound by a Binding in another namespace"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ownNamespaceText(config.Rejection{Namespace: "team-a", Name: "alerts", Reason: config.ReasonChannelConflict, Message: tc.message})
+			if got != tc.want {
+				t.Errorf("message = %q; want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // A Pending condition takes what the status says of it only when that is of the generation served: one of a generation above
 // it cannot be of this object (a generation never goes down), and is not carried, nor is any written above the generation served.
 func TestAStatusOfAGenerationAboveTheOneServedIsNotCarried(t *testing.T) {
