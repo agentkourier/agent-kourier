@@ -312,12 +312,18 @@ func TestParsePromptTemplate(t *testing.T) {
 // bot returns the botMessage trigger of binding.yaml, after defaulting, which is [1].
 func bot(o *Binding) *Trigger { return &o.Spec.Chat.Triggers[1] }
 
-// manyTriggers returns n valid triggers, the mention trigger and n-1 botMessage triggers of distinct senders.
+// manyTriggers returns n valid triggers, the mention trigger and n-1 botMessage triggers of distinct senders. Their regexes
+// are small: fifty of the fixture's own, which are about 370 instructions together, would pass the budget of a Binding.
 func manyTriggers(o *Binding, n int) []Trigger {
 	ts := []Trigger{o.Spec.Chat.Triggers[0]}
 	for i := 1; i < n; i++ {
 		tr := *bot(o)
 		tr.From = &BotSource{ID: fmt.Sprintf("B%010d", i), Kind: SenderKindBot}
+		tr.Match, tr.Exclude = map[MessageField]string{FieldTitle: "^FIRING"}, nil
+		tr.Extract = map[string]Extract{}
+		for _, name := range []string{"state", "key", "alertname"} {
+			tr.Extract[name] = Extract{Field: FieldTitle, Regex: "(?P<" + name + ">x)"}
+		}
 		ts = append(ts, tr)
 	}
 	return ts

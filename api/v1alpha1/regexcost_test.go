@@ -36,6 +36,7 @@ func TestRegexInstructionCountsOfTheFixtures(t *testing.T) {
 		{`.{0,1000}`, maxRegexInstructions + 2},
 		{`(?P<state>.{0,998})`, maxRegexInstructions},
 		{`(?P<state>.{0,998})a`, maxRegexInstructions + 1},
+		{`.{0,499}`, 1000},
 		{`a`, 3},
 		{`.{0,900}`, 1802}, // measured with Go 1.27: the number the docs use of a regex under the limit
 	} {
@@ -97,39 +98,41 @@ func fields(n int, expr string) map[MessageField]string {
 }
 
 func TestBindingRegexInstructionBudget(t *testing.T) {
-	const atLimit = `.{0,999}` // 2000 instructions; ten of them are the Binding's 20000
-	if got := maxBindingRegexInstructions / maxRegexInstructions; got != 10 {
-		t.Fatalf("the cases below spend ten regexes of %d instructions, and the budget is %d", maxRegexInstructions, maxBindingRegexInstructions)
+	const (
+		atLimit = `.{0,999}` // 2000 instructions
+		half    = `.{0,499}` // 1000 instructions
+	)
+	if got := 2*maxRegexInstructions + 1000; got != maxBindingRegexInstructions {
+		t.Fatalf("the cases below spend two regexes of %d instructions and one of 1000, and the budget is %d", maxRegexInstructions, maxBindingRegexInstructions)
 	}
 	binding := func(o *Binding, ts ...Trigger) {
 		o.Spec.Chat.Triggers = append([]Trigger{o.Spec.Chat.Triggers[0]}, ts...)
 	}
 	runMutations[Binding](t, "binding.yaml", []mutation[Binding]{
-		{"ten regexes at the limit, in two triggers, are the budget", func(o *Binding) {
-			binding(o, regexTrigger(o, 1, fields(6, atLimit), nil), regexTrigger(o, 2, nil, fields(4, atLimit)))
+		{"regexes that come to the budget, in two triggers, are accepted", func(o *Binding) {
+			binding(o, regexTrigger(o, 1, fields(2, atLimit), nil), regexTrigger(o, 2, map[MessageField]string{FieldTitle: half}, nil))
 		}, ""},
 		{"a regex of three instructions past the budget", func(o *Binding) {
-			// The second trigger's match is spent first, then its excludes in the order of their field names (fallback,
-			// link, text, title): the fourth brings the total to 12003 + 6000 + 2000.
-			second := regexTrigger(o, 2, map[MessageField]string{FieldTitle: "a"}, fields(4, atLimit))
-			binding(o, regexTrigger(o, 1, fields(6, atLimit), nil), second)
-		}, "spec.chat.triggers[2].exclude.title: the regular expressions of the Binding compile to 20003 instructions with this one, " +
-			"more than the 20000 instruction limit for a Binding; the regular expressions after it are not checked"},
+			// The second trigger's match is spent first, then its exclude: 4000 + 1000, and then the three of "a".
+			second := regexTrigger(o, 2, map[MessageField]string{FieldTitle: half}, map[MessageField]string{FieldText: "a"})
+			binding(o, regexTrigger(o, 1, fields(2, atLimit), nil), second)
+		}, "spec.chat.triggers[2].exclude.text: the regular expressions of the Binding compile to 5003 instructions with this one, " +
+			"more than the 5000 instruction limit for a Binding; the regular expressions after it are not checked"},
 		{"the regexes after the one past the budget are not checked", func(o *Binding) {
-			// Ten at the limit are the whole budget; the match of the third trigger is the first past it, and neither its
+			// The first two triggers are the whole budget; the match of the third is the first past it, and neither its
 			// exclude nor the regex of a fourth trigger is checked, though both are invalid.
 			third := regexTrigger(o, 3, map[MessageField]string{FieldTitle: "a"}, map[MessageField]string{FieldTitle: "("})
 			fourth := regexTrigger(o, 4, map[MessageField]string{FieldTitle: "("}, nil)
-			binding(o, regexTrigger(o, 1, fields(6, atLimit), nil), regexTrigger(o, 2, nil, fields(4, atLimit)), third, fourth)
-		}, "spec.chat.triggers[3].match.title: the regular expressions of the Binding compile to 20003 instructions with this one, " +
-			"more than the 20000 instruction limit for a Binding; the regular expressions after it are not checked"},
+			binding(o, regexTrigger(o, 1, fields(2, atLimit), nil), regexTrigger(o, 2, map[MessageField]string{FieldTitle: half}, nil), third, fourth)
+		}, "spec.chat.triggers[3].match.title: the regular expressions of the Binding compile to 5003 instructions with this one, " +
+			"more than the 5000 instruction limit for a Binding; the regular expressions after it are not checked"},
 		{"the regexes of the Binding's other fields count", func(o *Binding) {
-			// Ten regexes at the limit are the whole budget, so the extract's is the first past it.
-			tr := regexTrigger(o, 1, fields(6, atLimit), fields(4, atLimit))
+			// The budget is spent by the matches and the exclude, so the extract's regex is the first past it.
+			tr := regexTrigger(o, 1, fields(2, atLimit), map[MessageField]string{FieldText: half})
 			tr.Extract = map[string]Extract{"state": {Field: FieldTitle, Regex: `(?P<state>x)`}}
 			binding(o, tr)
-		}, "spec.chat.triggers[1].extract.state.regex: the regular expressions of the Binding compile to 20005 instructions with this one, " +
-			"more than the 20000 instruction limit for a Binding; the regular expressions after it are not checked"},
+		}, "spec.chat.triggers[1].extract.state.regex: the regular expressions of the Binding compile to 5005 instructions with this one, " +
+			"more than the 5000 instruction limit for a Binding; the regular expressions after it are not checked"},
 	})
 }
 
@@ -173,9 +176,10 @@ func regexOf512(prefix, group string) string {
 }
 
 // Validate of a Binding at every cap stops at the first regex past a budget, so what a hostile Binding costs the broker is
-// the cost of one regex over the limit, or of eleven just under it, and not of the 2200 it could hold. The same Binding was
-// measured at close to two minutes when every regex was compiled, so a bound of seconds that holds even under the race
-// detector is a loose one; the single problem in the result is what shows that the rest was not compiled.
+// the cost of one regex over the limit, or of three just under it, and not of the 2156 it could hold. Compiling every regex of
+// the first case took about 19 s (regexp.Compile in a loop, a laptop with a load average of about 3 on 8 cores), so a bound of
+// seconds that holds even under the race detector is a loose one; the single problem in the result is what shows that the
+// rest was not compiled.
 func TestValidateOfAHostileBindingIsCheap(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

@@ -112,11 +112,14 @@ func New(cfg Config) *Client {
 // and tells Config.OnConnection whether the connection is up.
 //
 // The events of one channel reach the sink one at a time and in the order they arrived, and the events of different
-// channels at the same time, so a sink that is slow for one channel (a Binding whose regexes are costly to try) delays that
-// channel's events and not the reading of the connection or any other channel's. The adapter holds at most
-// maxChannelBacklog events for a channel and maxPendingEvents in all: an event that arrives past either is not queued but
-// left unacknowledged, which is what a sink's error does, so Slack sends it again; it is counted as
-// agentkourier_slack_events_shed_total and logged at WARN (shedLog).
+// channels at the same time, so a sink that is slow for one channel (a Binding whose regexes are costly to try) holds up that
+// channel's events, and not the reading of the connection. It does not keep the CPU for the others: with many busy channels
+// the acknowledgments of healthy ones slow too. The adapter holds at most maxChannelBacklog events for a channel, and
+// maxPendingEvents in all, past which a channel that already has an event held is refused another; a channel with none always
+// gets its first. An event refused is not queued but left unacknowledged, which is what a sink's error does, so Slack may send
+// it again (how often is Slack's), and it can be lost; one that comes back after a later event of its channel was taken is
+// handled after it. It is counted as agentkourier_slack_events_shed_total and logged at WARN (shedLog). When ctx ends, the
+// events still waiting on a lane are not given to the sink and stay unacknowledged, and Run returns when the ones in flight have.
 //
 // A bot's message is given to the sink only if the sink is a BotFilter that takes the bot in the message's
 // channel, and Agent Kourier's own posts never are (decode, takes).
@@ -140,7 +143,9 @@ func (c *Client) Run(ctx context.Context, sink Sink) error {
 	c.mu.Unlock()
 	ctx, cancel := context.WithCancel(ctx)
 	lanes, shed := newLanes(maxChannelBacklog, maxPendingEvents), &shedLog{}
-	defer func() { cancel(); lanes.wait() }() // events in flight see the end of Run, and Run returns when they have returned
+	// Events in flight see the end of Run, those waiting on a lane are dropped unhandled, and Run returns when the ones in flight
+	// have returned: the next Run must not overlap the lanes of this one.
+	defer func() { cancel(); lanes.wait(); c.flushShed(shed) }()
 	smc := socketmode.New(c.api)
 	done := make(chan error, 1)
 	go func() { done <- smc.RunContext(ctx) }()
@@ -206,18 +211,29 @@ func (c *Client) shed(ctx context.Context, l *shedLog, reason, channel string, e
 	l.suppressed++
 }
 
+// flushShed logs the events shed since the last line, if there are any, so that the end of Run does not lose their count.
+func (c *Client) flushShed(l *shedLog) {
+	if l.suppressed == 0 {
+		return
+	}
+	c.log.Warn("slack: events were left unacknowledged for Slack to send again before the connection ended; the adapter held as many events as it may",
+		"alsoShedSinceLastLine", l.suppressed)
+	l.suppressed = 0
+}
+
 // handle gives sink the message of an events_api event, or the press of an interactive one,
 // then acknowledges the event. received is when Run took the event off the connection: the time the ack duration counts
 // from, which is Slack's clock, so a wait on the lane of the event's channel is part of it.
 func (c *Client) handle(ctx context.Context, smc *socketmode.Client, me self, sink Sink, ev socketmode.Event, received time.Time) {
-	if ev.Request == nil {
+	if ev.Request == nil || ctx.Err() != nil {
+		// Run has ended: an event that waited on a lane is not given to the sink, which may pay a costly match for it before
+		// it looks at ctx. It stays unacknowledged, as a shed one does, for the next Run.
 		return
 	}
-	started := received
 	ctx, op := telemetry.Start(ctx, "agentkourier.slack.envelope", attribute.String("agentkourier.platform", "slack"))
 	outcome := "withheld"
 	defer func() {
-		telemetry.Observe(ctx, "agentkourier_slack_ack_duration_seconds", time.Since(started), outcome)
+		telemetry.Observe(ctx, "agentkourier_slack_ack_duration_seconds", time.Since(received), outcome)
 		op.FinishOutcome(nil, outcome)
 	}()
 	switch ev.Type {

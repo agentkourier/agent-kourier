@@ -570,10 +570,8 @@ spec:
 // limits loads: dry-run then fails for want of a token, which is a later step.
 func TestDryRunRefusesABindingWhoseRegexesAreTooCostly(t *testing.T) {
 	const atLimit = `'.{0,999}'` // 2000 instructions
-	six := func(regex string) string {
-		return "{text: " + regex + ", title: " + regex + ", link: " + regex + ", fallback: " + regex + ", footer: " + regex + ", body: " + regex + "}"
-	}
-	four := "{text: " + atLimit + ", title: " + atLimit + ", link: " + atLimit + ", fallback: " + atLimit + "}"
+	two := "{text: " + atLimit + ", title: " + atLimit + "}"
+	half := "{text: '.{0,499}'}" // 1000 instructions: with two at the limit, the 5000 of the budget
 	for _, tc := range []struct {
 		name string
 		file string
@@ -581,9 +579,9 @@ func TestDryRunRefusesABindingWhoseRegexesAreTooCostly(t *testing.T) {
 	}{
 		{"one regex over the limit", costlyBinding("{title: '.{0,1000}'}", "{}", "{}"),
 			"spec.chat.triggers[1].match.title: regular expression compiles to 2002 instructions, more than the 2000 instruction limit"},
-		{"ten regexes at the limit, the budget", costlyBinding(six(atLimit), four, "{}"), "SLACK_BOT_TOKEN"},
-		{"the regexes of the Binding over the budget", costlyBinding(six(atLimit), four, "{state: {field: text, regex: '(?P<state>x)'}}"),
-			"spec.chat.triggers[1].extract.state.regex: the regular expressions of the Binding compile to 20005 instructions with this one, more than the 20000 instruction limit for a Binding"},
+		{"regexes that come to the budget", costlyBinding(two, half, "{}"), "SLACK_BOT_TOKEN"},
+		{"the regexes of the Binding over the budget", costlyBinding(two, half, "{state: {field: text, regex: '(?P<state>x)'}}"),
+			"spec.chat.triggers[1].extract.state.regex: the regular expressions of the Binding compile to 5005 instructions with this one, more than the 5000 instruction limit for a Binding"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()

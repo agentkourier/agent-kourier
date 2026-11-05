@@ -4,12 +4,16 @@ import "sync"
 
 // What the adapter holds of the events it has read while the sink works through them. Each event is handled on a lane of its
 // channel, one at a time and in order, and the lanes of different channels run at the same time, so that a sink that is slow
-// for one channel (a Binding whose triggers are costly to match) delays that channel's events and no other's. An event past
-// either bound is not queued: the adapter leaves it unacknowledged, so Slack sends it again, and says so (shedReason).
+// for one channel (a Binding whose triggers are costly to match) holds up that channel's events, and not the reading of the
+// connection or the events of a channel whose sink is quick. It is no isolation of the CPU: lanes that are busy compete for
+// it, and with many of them the acknowledgments of healthy channels slow too. An event past either bound is not queued: the
+// adapter leaves it unacknowledged, so Slack may send it again, and says so (shed).
 const (
 	// maxChannelBacklog is the events a channel's lane holds: the one being handled and those that wait behind it.
-	maxChannelBacklog = 64
-	// maxPendingEvents is the events all lanes hold, which is also the most goroutines the lanes run.
+	maxChannelBacklog = 16
+	// maxPendingEvents is the events all lanes hold, past which a channel that already has one held is refused another. A
+	// channel with none is not refused its first, so a channel is never shed for the others being busy, and the lanes hold
+	// at most this many events and one for each channel beyond it.
 	maxPendingEvents = 256
 )
 
@@ -42,7 +46,9 @@ func newLanes(perChannel, total int) *lanes {
 }
 
 // submit queues fn on the lane of channel, to run after the earlier events of that channel. It returns the reason, a shed*
-// constant, if the lane or the lanes as a whole hold their bound, and then runs nothing; otherwise "". It never blocks on fn.
+// constant, if the channel's lane holds its bound, or the lanes as a whole hold theirs and the channel already has an event
+// held, and then runs nothing; otherwise "". The first event of a channel that holds none is always taken, so the lanes hold
+// more than the total when many channels each have one. It never blocks on fn.
 func (l *lanes) submit(channel string, fn func()) (shed string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -50,7 +56,8 @@ func (l *lanes) submit(channel string, fn func()) (shed string) {
 	switch {
 	case running && ln.held >= l.maxLane:
 		return shedChannelBacklog
-	case l.pending >= l.maxAll:
+	case running && l.pending >= l.maxAll:
+		// A channel that holds no event is never refused its first: however many channels are hot, a healthy one has a slot.
 		return shedAdapterBacklog
 	}
 	if !running {

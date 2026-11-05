@@ -84,8 +84,13 @@ func TestLanesAreBounded(t *testing.T) {
 	if shed := hold("C1"); shed != shedChannelBacklog {
 		t.Fatalf("a third event held for C1 was shed as %q, want %q", shed, shedChannelBacklog)
 	}
-	if shed := hold("C3"); shed != shedAdapterBacklog {
-		t.Fatalf("a fourth event held in all was shed as %q, want %q", shed, shedAdapterBacklog)
+	// A channel with no event held always gets its first, so the lanes hold more than the total when many channels have one.
+	if shed := hold("C3"); shed != "" {
+		t.Fatalf("the first event of a channel that holds none was shed as %q", shed)
+	}
+	// A channel that holds one is held to the total.
+	if shed := hold("C2"); shed != shedAdapterBacklog {
+		t.Fatalf("a second event for C2, with the lanes holding more than the total, was shed as %q, want %q", shed, shedAdapterBacklog)
 	}
 	close(release)
 	l.wait()
@@ -93,6 +98,32 @@ func TestLanesAreBounded(t *testing.T) {
 	if n, p := len(l.byChannel), l.pending; n != 0 || p != 0 {
 		t.Fatalf("after wait %d lanes and %d events remain", n, p)
 	}
+}
+
+// However many channels are hot, every other channel can still have an event taken: a hostile Binding owns one channel, and
+// several of them must not fill the lanes so that a healthy channel's events, or its presses, are shed.
+func TestEveryChannelHasASlot(t *testing.T) {
+	l := newLanes(maxChannelBacklog, 4)
+	release := make(chan struct{})
+	for i := range 4 { // four hot channels fill the total
+		if shed := l.submit(string(rune('A'+i)), func() { <-release }); shed != "" {
+			t.Fatalf("hot channel %d: %q", i, shed)
+		}
+	}
+	if shed := l.submit("A", func() {}); shed != shedAdapterBacklog {
+		t.Fatalf("a hot channel's next event was shed as %q, want %q", shed, shedAdapterBacklog)
+	}
+	healthy := make(chan struct{})
+	if shed := l.submit("healthy", func() { close(healthy) }); shed != "" {
+		t.Fatalf("a healthy channel's first event was shed as %q with the lanes full", shed)
+	}
+	select {
+	case <-healthy:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the healthy channel's event did not run")
+	}
+	close(release)
+	l.wait()
 }
 
 // The room that finished events leave is given back: a channel that was full takes another event.

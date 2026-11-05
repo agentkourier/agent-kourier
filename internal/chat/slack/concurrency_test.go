@@ -17,21 +17,28 @@ import (
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
-// startObserved is start with a client that logs to a buffer and a context that carries an observer, for a test that reads
-// the metrics and the log of the adapter.
-func startObserved(t *testing.T, sk slack.Sink) (*fakeslack.Server, *telemetrytest.Harness, *syncBuffer) {
+// startObservedRun is start with a client that logs to a buffer and a context that carries an observer, for a test that reads
+// the metrics and the log of the adapter. cancel ends Run, and wait returns its error; the end of the test does both.
+func startObservedRun(t *testing.T, sk slack.Sink) (fake *fakeslack.Server, h *telemetrytest.Harness, logs *syncBuffer, cancel context.CancelFunc, wait func() error) {
 	t.Helper()
-	fake := newFake(t)
-	h := telemetrytest.New(t)
-	logs := &syncBuffer{}
+	fake = newFake(t)
+	h = telemetrytest.New(t)
+	logs = &syncBuffer{}
 	cfg := slack.Config{BotToken: secret.New(botToken), AppToken: secret.New(appToken), APIURL: fake.URL() + "/",
 		Logger: slog.New(slog.NewTextHandler(logs, nil))}
 	ctx, cancel := context.WithCancel(h.Ctx)
 	done := make(chan error, 1)
 	go func() { done <- slack.New(cfg).Run(ctx, sk) }()
-	wait := sync.OnceValue(func() error { return <-done })
+	wait = sync.OnceValue(func() error { return <-done })
 	t.Cleanup(func() { cancel(); _ = wait() })
 	waitConnected(t, fake)
+	return fake, h, logs, cancel, wait
+}
+
+// startObserved is startObservedRun for a test that does not end Run itself.
+func startObserved(t *testing.T, sk slack.Sink) (*fakeslack.Server, *telemetrytest.Harness, *syncBuffer) {
+	t.Helper()
+	fake, h, logs, _, _ := startObservedRun(t, sk)
 	return fake, h, logs
 }
 

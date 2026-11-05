@@ -44,7 +44,7 @@ const (
 	// The schema cannot count instructions, so these are refused by the broker only. The regexes of this repository's
 	// example Bindings are 10 to 98 instructions, and the largest Binding's total is 375.
 	maxRegexInstructions        = 2000
-	maxBindingRegexInstructions = 20000
+	maxBindingRegexInstructions = 5000
 	minThreadCooldown           = time.Minute
 	maxThreadCooldown           = 7 * 24 * time.Hour
 	// maxApproverGroups keeps each approval press within a bounded number of uncached group lookups.
@@ -346,7 +346,7 @@ func (p *problems) interactions(path string, in Interactions) {
 }
 
 // regexBudget is what the regexes of one Binding have used of maxBindingRegexInstructions. A regex that is refused for its
-// cost ends the check of the regexes after it: each costs compile time, and a Binding can hold 2200 of them.
+// cost ends the check of the regexes after it: each costs compile time, and a Binding can hold 2156 of them.
 type regexBudget struct {
 	used    int
 	refused bool
