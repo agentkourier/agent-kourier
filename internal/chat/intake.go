@@ -91,7 +91,8 @@ type IntakeConfig struct {
 // Intake is the Sink that applies spec 8.2's trigger table, the same for every platform: it turns each
 // Inbound message into a turn for the session manager, or ignores it, and passes presses on. The adapter
 // has decided what is a mention and who is who, so nothing here knows a platform's syntax. It is safe for
-// concurrent use, though a platform's Run calls it from one goroutine.
+// concurrent use, and a platform's Run does: the Slack adapter calls it from one goroutine for each channel with events to
+// handle, so the events of a channel are handled one at a time and in order, and those of different channels at once.
 type Intake struct {
 	cfg    IntakeConfig
 	conn   string // the connection as it appears in keys: namespace/name

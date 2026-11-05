@@ -9,6 +9,15 @@ Slack expects an acknowledgement within about 3 seconds (documented for HTTP del
 adapter writes the turn locally, by its message ID, and only then acknowledges. If the write fails, the event is not
 acknowledged, and Slack delivers it again. Because the write is keyed by the message, a redelivery is the same turn.
 
+The events of one channel are handled one at a time and in the order they arrive, and different channels at the same
+time, so a Binding whose regular expressions are slow to try holds up its own channel's events first. It does not keep the
+CPU for the others: with many busy channels, the acknowledgments of healthy ones slow too. The broker holds a bounded number
+of events (see [Limits](../reference/limits.md#start-investigations-triggers-rates-and-probes)). An event that arrives past
+the bound is left unacknowledged, as if its write had failed, and Slack may send it again. Slack's retries are finite (not
+verified here), so a shed event can be lost, and one that comes back after a later event of its channel was taken is handled
+after it. Order within a thread therefore holds only while the bounds do, and the metric `agentkourier_slack_events_shed_total`
+says when they did not.
+
 ## Going out: an outbox, so a crash does not repeat a post
 
 Slack's `chat.postMessage` has no idempotency key, so a crash between posting and recording the result would otherwise
