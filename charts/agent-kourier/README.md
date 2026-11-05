@@ -109,7 +109,7 @@ custom resources of group `agentkourier.dev` from the cluster, so that other tea
 left out (or, if it had a good generation, that generation keeps serving) and the others carry on. The two are never merged and there is no
 fallback: with `files`, custom resources in the cluster are ignored, and with `crds` there is no ConfigMap and no config directory. The route is
 chosen at start; moving between them is an upgrade of the release. Nothing changes until you set `config.source: crds`: the default renders the
-same objects as before (`test/chart` pins all seven values files against golden files, and the pod's template does not move).
+same objects as before (`test/chart` pins all eight values files against golden files), and the route adds nothing to the pod's template.
 
 What the route needs:
 

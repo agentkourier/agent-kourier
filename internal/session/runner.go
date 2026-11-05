@@ -1188,6 +1188,9 @@ func (m *Manager) lost(t *tstate, err error) (outcome, error) {
 	case errors.Is(err, agent.ErrAgentForbidden):
 		// A card 403 on the reconnect: the agent is gone, or no longer permits the identity. Checked before a lost
 		// stream, which it comes as, so it is not followed in a loop; it is refused like any other answer below.
+	case errors.Is(err, dialect.ErrResponseTooLarge) && m.ctx.Err() == nil:
+		// Checked before a lost stream: the agent would send the same reply again, so following it again gets nowhere.
+		return m.tooLarge(t, err)
 	case errors.As(err, &sl):
 		if t.c.since.IsZero() {
 			t.c.since = m.cfg.Now()
@@ -1208,6 +1211,56 @@ func (m *Manager) lost(t *tstate, err error) (outcome, error) {
 	m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: taskNoticeID(t.key, t.taskID, NoticeFailed), Kind: NoticeFailed, MessageRef: t.r.MessageRef, Detail: "the agent refused to continue the task"})
 	m.finish(t, TurnRefused)
 	return ended, fmt.Errorf("send turn %s: %w", t.r.ID, err)
+}
+
+// tooLargeDetail is what the thread is told when the agent's reply passed what Agent Kourier holds (dialect.ErrResponseTooLarge).
+// It is fixed: it names no backend, no size and nothing the agent sent.
+const tooLargeDetail = "the agent's reply was larger than Agent Kourier holds, so the turn stopped"
+
+// cancelTimeout bounds the cancel of a task whose reply was too large, as the agent's own bound on a cancel
+// (agent.Config.UnaryTimeout) does: this is the backstop for an AgentAPI that does not keep to it.
+const cancelTimeout = 30 * time.Second
+
+// tooLarge handles a task whose reply, after it was named, passed what Agent Kourier holds. The agent refused nothing: the
+// broker stopped reading. The turn ends, the thread is told in fixed words (what it was already shown stays), and the
+// task is cancelled, so that it does not run on at the agent with nobody reading it. A cancel that fails does not change
+// any of that: the task stays recorded, for reconciliation, as after a refusal. The Stop control can cancel it from the
+// thread, and a restart follows it again, which meets the same reply and cancels it again.
+func (m *Manager) tooLarge(t *tstate, err error) (outcome, error) {
+	t.c.follow = nil
+	m.drives(t.c, "")
+	// Named after the task and the thread, as the notice of a refusal is: a restart that follows the task again raises the same post.
+	m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: taskNoticeID(t.key, t.taskID, NoticeFailed), Kind: NoticeFailed, MessageRef: t.r.MessageRef, Detail: tooLargeDetail})
+	var endErr error
+	if m.cancelOversized(t) {
+		t.c.settle()
+		endErr = m.end(context.WithoutCancel(m.ctx), t.key, t.c.ttl)
+	}
+	m.finish(t, TurnResponseTooLarge)
+	return ended, errors.Join(fmt.Errorf("send turn %s: %w", t.r.ID, err), endErr)
+}
+
+// cancelOversized cancels the task whose reply was too large, once, within cancelTimeout, and reports whether the task is
+// over at the agent (cancelled, already ended, or gone), so that it need not stay recorded. The call is audited as
+// Agent Kourier's own, under no person and no turn; a refused credential goes to the identity Source, which writes the row.
+func (m *Manager) cancelOversized(t *tstate) bool {
+	ctx, stop := context.WithTimeout(m.ctx, m.cancelTimeout)
+	defer stop()
+	_, err := t.b.Agent.CancelTask(ctx, t.taskID)
+	t.op, t.system = audit.OpCancel, true
+	defer func() { t.op, t.system = "", false }()
+	kind := classifyCancel(err)
+	if kind == cancelCredentials {
+		m.rejected(t, err)
+	} else {
+		m.audit(t, t.call(err))
+	}
+	switch kind {
+	case cancelDone, cancelEnded, cancelGone:
+		return true
+	}
+	m.cfg.Logger.WarnContext(m.ctx, "session: could not cancel a task whose reply was too large; it stays recorded", "key", t.key, "task", string(t.taskID), "error", err)
+	return false
 }
 
 // gone handles a session the agent no longer has: the thread is told, and the record of it is
@@ -1409,6 +1462,11 @@ func (m *Manager) unsent(t *tstate, err error) (outcome, error) {
 		}
 		t.c.since = time.Time{} // the agent answered: its unreachable time starts over, and a turn that then fails to send is given up on as usual
 		return blocked, fmt.Errorf("send turn %s: %w", t.r.ID, err)
+	case errors.Is(err, dialect.ErrResponseTooLarge):
+		// Before ErrOutcomeUnknown, which it comes with when no task was named: the agent would send the same reply to the
+		// same message again, so a resend gets nowhere, and each one would make it run the message once more. No task is
+		// named, so none can be cancelled.
+		return m.fail(t, TurnResponseTooLarge, tooLargeDetail, err)
 	case errors.Is(err, agent.ErrOutcomeUnknown): // the agent may have taken it: looked up before any resend
 		m.mu.Lock()
 		m.attempted[t.key] = attempt{id: t.r.ID, unknown: true}

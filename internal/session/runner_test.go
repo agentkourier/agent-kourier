@@ -33,17 +33,18 @@ type fakeAgent struct {
 	script            func(ctx context.Context, n int, h agent.Handler) error
 	hold              chan struct{} // if set, the first Send waits for it to close, before it runs script
 	// find and follow answer FindTask and Follow; finds and follows record their calls.
-	find      func(contextID, messageID string) (*a2a.Task, []a2a.TaskID, error)
-	follow    func(id a2a.TaskID, h agent.Handler) error
-	finds     []string
-	follows   []a2a.TaskID
-	get       func(id a2a.TaskID) (*a2a.Task, error)
-	cancels   []a2a.TaskID
-	cancelErr func(attempt int) error // the error of the n-th CancelTask (1-based), if any
-	onCancel  func(id a2a.TaskID)     // runs inside CancelTask, before it returns
-	answer    func(msg *a2a.Message, h agent.Handler) error
-	answers   []*a2a.Message
-	seq       []string // the calls in order: send, find, follow
+	find       func(contextID, messageID string) (*a2a.Task, []a2a.TaskID, error)
+	follow     func(id a2a.TaskID, h agent.Handler) error
+	finds      []string
+	follows    []a2a.TaskID
+	get        func(id a2a.TaskID) (*a2a.Task, error)
+	cancels    []a2a.TaskID
+	cancelErr  func(attempt int) error // the error of the n-th CancelTask (1-based), if any
+	onCancel   func(id a2a.TaskID)     // runs inside CancelTask, before it returns
+	cancelHang bool                    // CancelTask waits for its context to end, as a backend that never answers does
+	answer     func(msg *a2a.Message, h agent.Handler) error
+	answers    []*a2a.Message
+	seq        []string // the calls in order: send, find, follow
 }
 
 func (a *fakeAgent) FindTask(_ context.Context, contextID, messageID string) (*a2a.Task, []a2a.TaskID, error) {
@@ -65,13 +66,17 @@ func (a *fakeAgent) GetTask(_ context.Context, id a2a.TaskID) (*a2a.Task, error)
 	return get(id)
 }
 
-func (a *fakeAgent) CancelTask(_ context.Context, id a2a.TaskID) (*a2a.Task, error) {
+func (a *fakeAgent) CancelTask(ctx context.Context, id a2a.TaskID) (*a2a.Task, error) {
 	a.mu.Lock()
 	a.cancels = append(a.cancels, id)
-	hook, cerr, attempt := a.onCancel, a.cancelErr, len(a.cancels)
+	hook, cerr, attempt, hang := a.onCancel, a.cancelErr, len(a.cancels), a.cancelHang
 	a.mu.Unlock()
 	if hook != nil {
 		hook(id)
+	}
+	if hang {
+		<-ctx.Done()
+		return nil, ctx.Err()
 	}
 	if cerr != nil {
 		if err := cerr(attempt); err != nil {

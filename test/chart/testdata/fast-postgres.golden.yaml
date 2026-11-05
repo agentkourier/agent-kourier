@@ -51,6 +51,8 @@ spec:
           value: info
         - name: AGENTKOURIER_KLOG_V
           value: "0"
+        - name: GOMEMLIMIT
+          value: "214748364"
         - name: AGENTKOURIER_SLACK_API_URL
           value: http://fakeslack.e2e.svc.cluster.local:8080/
         image: agent-kourier-e2e/agent-kourier-testhooks:dev

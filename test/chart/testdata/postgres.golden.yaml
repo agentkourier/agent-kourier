@@ -106,6 +106,8 @@ spec:
           value: info
         - name: AGENTKOURIER_KLOG_V
           value: "0"
+        - name: GOMEMLIMIT
+          value: "214748364"
         image: registry.example.test/agent-kourier:v0.1.0
         imagePullPolicy: IfNotPresent
         livenessProbe:

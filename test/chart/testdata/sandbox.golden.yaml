@@ -136,6 +136,8 @@ spec:
           value: info
         - name: AGENTKOURIER_KLOG_V
           value: "0"
+        - name: GOMEMLIMIT
+          value: "214748364"
         image: agent-kourier:dev
         imagePullPolicy: Never
         livenessProbe:
