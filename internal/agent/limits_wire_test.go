@@ -246,8 +246,10 @@ func TestCheckBoundsTheCard(t *testing.T) {
 			if !errors.Is(err, dialect.ErrResponseTooLarge) {
 				t.Fatalf("Check = %v, want dialect.ErrResponseTooLarge", err)
 			}
-			if got := sent.Load(); got > 4*dialect.MaxCardBytes && tc.size > 4*dialect.MaxCardBytes {
-				t.Errorf("the server got to write %d MiB before the client hung up, want a few", got>>20)
+			// What the server wrote includes what the kernel buffered on both ends of the socket, which is several MiB on
+			// a Linux runner and more under load, so this bound is far above the card's and far below the gibibyte.
+			if got := sent.Load(); got > 64<<20 && tc.size > 64<<20 {
+				t.Errorf("the server got to write %d MiB of %d MiB before the client hung up", got>>20, tc.size>>20)
 			}
 		})
 	}
