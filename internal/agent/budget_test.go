@@ -262,3 +262,74 @@ func TestFollowThatSpendsTheBudgetIsNotReconnected(t *testing.T) {
 		})
 	}
 }
+
+// pausedWithToolSteps is a task paused for input that holds pairs tool calls and results, in its artifact and again in its
+// history as kagent 1.0 keeps them, and the same task as it goes on, completed, with text of its own.
+func pausedWithToolSteps(pairs int) (paused, answered *a2a.Task) {
+	var parts, hist []*a2a.Part
+	for i := range pairs {
+		id := fmt.Sprintf("call-%06d-aaaaaaaaaaaaaaaaaaaaaaaaaaaa", i)
+		parts = append(parts, callPart(kagv1, id), resultPart(kagv1, id, okResp))
+		hist = append(hist, callPart(kagv1, id), resultPart(kagv1, id, okResp))
+	}
+	steps := artifactOf("artifact-0000000000000000000000000000", parts...)
+	history := []*a2a.Message{messageOf(a2a.MessageRoleAgent, "h1", hist...)}
+	paused = &a2a.Task{ID: "t1", ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired}, History: history, Artifacts: []*a2a.Artifact{steps}}
+	answered = &a2a.Task{ID: "t1", ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateCompleted}, History: history,
+		Artifacts: []*a2a.Artifact{steps, artifactOf("answer", a2a.NewTextPart("done"))}}
+	return paused, answered
+}
+
+// The paused task of an answer is the turn that paused, not this one: what the assembler notes of it to tell a repeat is bounded
+// by the answer to the call that read it (dialect.MaxResponseBytes), and is not charged to the budget of this turn's reply. A task
+// that paused after some five hundred tool steps (kagent 1.0) would otherwise spend the whole budget at the seed, before the
+// answer was sent, and could never be answered. What the answer adds is charged as ever.
+func TestSeedOfAnAnswerIsNotChargedToTheBudget(t *testing.T) {
+	paused, answered := pausedWithToolSteps(1200)
+	h, got := collector()
+	asm := newAssembler(h)
+	asm.seed(paused, false)
+	if asm.over != nil || asm.kept != 0 {
+		t.Fatalf("after the seed: over = %v, kept = %d; want the budget untouched", asm.over, asm.kept)
+	}
+	asm.apply(answered)
+	if asm.over != nil || asm.final == nil {
+		t.Fatalf("after the final task: over = %v, final = %v; want the answer to end", asm.over, asm.final)
+	}
+	if g := outcomes(*got); len(g) != 0 {
+		t.Errorf("tool events = %d, want none: they are the paused turn's", len(g))
+	}
+	if all := texts(*got); len(all) != 1 || all[0] != "done" {
+		t.Errorf("texts = %q, want the answer's own", all)
+	}
+	// What the answer itself sends is charged against the whole budget, whatever the seed held.
+	asm = newAssembler(nil)
+	asm.seed(paused, false)
+	asm.apply(working())
+	asm.apply(delta(strings.Repeat("x", DefaultMaxReplyBytes)))
+	if asm.over == nil {
+		t.Errorf("a reply of the whole budget after a seed was not over: the seed is not a credit")
+	}
+}
+
+// An answer to a task that holds more tool steps than the budget is sent to the agent, and its reply is read (the seed spent the
+// budget before, and the answer was never sent, with the task left paused and the turn ending with nothing said).
+func TestAnswerToATaskOfManyToolStepsIsSent(t *testing.T) {
+	paused, answered := pausedWithToolSteps(1200)
+	synctest.Test(t, func(t *testing.T) {
+		ch := make(chan item, 1)
+		ch <- item{ev: answered}
+		m := newMemConn(t, []chan item{ch}, nil, getResult{task: paused})
+		h, got := collector()
+		msg := &a2a.Message{ID: "ans", TaskID: "t1", ContextID: "c1", Role: a2a.MessageRoleUser, Parts: a2a.ContentParts{a2a.NewTextPart("yes")}}
+		if err := memAgent(t, m, nil).Answer(t.Context(), msg, h); err != nil {
+			t.Fatalf("Answer: %v", err)
+		}
+		if want := []string{"get t1", "send", "send ended"}; !slices.Equal(m.calls(), want) {
+			t.Errorf("calls = %q, want %q", m.calls(), want)
+		}
+		if _, ok := (*got)[len(*got)-1].(FinalEvent); !ok {
+			t.Errorf("last event = %#v, want the final event", (*got)[len(*got)-1])
+		}
+	})
+}

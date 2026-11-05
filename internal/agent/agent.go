@@ -255,7 +255,7 @@ var errInactive = errors.New("agent: no event within the inactivity timeout")
 // at once, supplies the final task. Only if that fails, or finds the task unsettled, does
 // read return io.ErrUnexpectedEOF; an answer that is too large (dialect.ErrResponseTooLarge) is returned as it is.
 func (a *Agent) read(ctx context.Context, conn Conn, asm *assembler, open func(context.Context) iter.Seq2[a2a.Event, error]) error {
-	if asm.over != nil { // the seed of an answer, or the snapshot a resume opened with, spent the budget
+	if asm.over != nil { // the snapshot a resume opened with spent the budget (the seed of an answer is not charged to it)
 		return asm.over
 	}
 	sctx, cancel := context.WithCancel(ctx)

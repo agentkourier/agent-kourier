@@ -378,7 +378,6 @@ func (m *Manager) pauseTooLarge(c *convo, err error) (outcome, error) {
 	default:
 	}
 	m.mu.Unlock()
-	m.discardAnswer(c)
 	return out, lerr
 }
 
@@ -1116,7 +1115,8 @@ func (m *Manager) answer(c *convo, work answerWork) (outcome, error) {
 
 // unanswered handles an answer that failed before the agent named a task again. A rejected one
 // wedged its task, which Agent.Answer has already cancelled (R17). A busy one, or one refused as not ready, is read
-// (see readAnswered). Any other failure leaves the task paused, so the person can answer again.
+// (see readAnswered). One whose reply was too large ends the turn (tooLarge). Any other failure leaves the task paused,
+// so the person can answer again.
 func (m *Manager) unanswered(t *tstate, err error) (outcome, error) {
 	switch {
 	case errors.Is(err, agent.ErrAnswerRejected):
@@ -1133,6 +1133,15 @@ func (m *Manager) unanswered(t *tstate, err error) (outcome, error) {
 			audit.Call{Op: audit.OpCancel, TaskID: t.taskID, ContextID: t.sess.ContextID, MessageID: t.nid})
 		m.finish(t, TurnAnswerRejected)
 		return ended, m.end(context.WithoutCancel(m.ctx), t.key, t.c.ttl)
+	case dialect.AnswerTooLarge(err) && m.ctx.Err() == nil:
+		// Before ErrOutcomeUnknown, which it comes with when no task was named: the agent would send the same reply to the
+		// same answer again, whatever the task is doing now. So the task is not read, to be parked again for a person to answer
+		// into the same reply or followed into it: the turn ends, with a notice, and the task is cancelled, as when the
+		// reply is too large after the task is named. Whether the agent took the answer is not known, and a reply that was not read
+		// cannot say: a Message that is too large reads the same as anything else that is, though a small one (ErrMessageReply) is
+		// known not to continue the task. So the cancel is not a claim that the answer was refused: the thread is told that the
+		// agent may have acted on it (tooLargeAnswerDetail), and a task left open could be answered only into the same reply.
+		return m.tooLarge(t, err)
 	case errors.Is(err, agent.ErrBusy):
 		return m.readAnswered(t, err, "")
 	case errors.Is(err, agent.ErrMessageReply): // the agent replied, and not with the task: one that still waits did not take it
@@ -1260,11 +1269,11 @@ func (m *Manager) lost(t *tstate, err error) (outcome, error) {
 	t.c.follow = nil
 	m.drives(t.c, "")
 	// Named after the task and the thread, not the turn row: a restart that follows the task again raises the same post.
-	detail := "the agent refused to continue the task"
+	detail, id := "the agent refused to continue the task", taskNoticeID(t.key, t.taskID, NoticeFailed)
 	if errors.Is(err, dialect.ErrCardTooLarge) { // no connection was made: nothing was refused, and nothing was read of the task
-		detail = cardTooLargeDetail
+		detail, id = cardTooLargeDetail, taskNoticeID(t.key, t.taskID, noticeCardTooLarge)
 	}
-	m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: taskNoticeID(t.key, t.taskID, NoticeFailed), Kind: NoticeFailed, MessageRef: t.r.MessageRef, Detail: detail})
+	m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: id, Kind: NoticeFailed, MessageRef: t.r.MessageRef, Detail: detail})
 	m.finish(t, TurnRefused)
 	return ended, fmt.Errorf("send turn %s: %w", t.r.ID, err)
 }
@@ -1274,6 +1283,12 @@ func (m *Manager) lost(t *tstate, err error) (outcome, error) {
 // and true for each of them, a reply of sixteen bytes after tool results that add up to megabytes included: it names no
 // backend, no size and nothing the agent sent.
 const tooLargeDetail = "the agent sent more than Agent Kourier can read or hold, so the turn stopped"
+
+// tooLargeAnswerDetail is tooLargeDetail for the turn of an answer to a paused task, with what else is true of it: the task is the one
+// answered, and it is being cancelled; and the agent may have acted on the answer, which Agent Kourier cannot tell, since what the agent
+// sent after it was not read (it may have taken the answer, or replied to it with something too large, a message among them). It must be
+// shown whole (render.MaxNoticeDetail): a test holds it to that.
+const tooLargeAnswerDetail = "what the agent sent after the answer was more than Agent Kourier can read or hold, so the turn stopped and its task is being cancelled. The agent may have acted on the answer."
 
 // lookupIncompleteDetail is what the thread is told when the turn was not sent, because the agent's list of tasks could not be read in
 // full, whatever the reason (a page past the bound at every size, the walk's deadline or page limit, a server that did not answer at the
@@ -1305,7 +1320,10 @@ func (m *Manager) unverified(t *tstate, cause error) (outcome, error) {
 // (agent.Config.UnaryTimeout) does: this is the backstop for an AgentAPI that does not keep to it.
 const cancelTimeout = 30 * time.Second
 
-// tooLarge handles a task whose reply, after it was named, passed what Agent Kourier reads or holds. The agent refused nothing:
+// tooLarge handles a task whose reply, after it was named, passed what Agent Kourier reads or holds (or an answer's, before it was
+// named again: the task is the one answered). A reply that is one Message and no task names none (t.taskID is empty): there is
+// nothing to cancel, so the turn ends at once, and the notice is named after the turn, since a thread's second such turn would
+// otherwise share its name. The agent refused nothing:
 // the broker stopped reading. The turn ends, the thread is told in fixed words (what it was already shown stays), and the
 // task is cancelled, so that it does not run on at the agent with nobody reading it. The turn's own queue row, if the task
 // came from one that nothing marked (recovery found the head to be the task's own, in the gap after a crash), is marked
@@ -1317,13 +1335,16 @@ const cancelTimeout = 30 * time.Second
 func (m *Manager) tooLarge(t *tstate, err error) (outcome, error) {
 	t.c.follow = nil
 	m.drives(t.c, "")
-	// Named after the task and the thread, as the notice of a refusal is: a restart that follows the task again raises the same post.
-	m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: taskNoticeID(t.key, t.taskID, NoticeFailed), Kind: NoticeFailed, MessageRef: t.r.MessageRef, Detail: tooLargeDetail})
+	detail := tooLargeDetail
+	if t.answer {
+		detail = tooLargeAnswerDetail
+	}
+	m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: tooLargeNoticeID(t), Kind: NoticeFailed, MessageRef: t.r.MessageRef, Detail: detail})
 	if merr := m.cfg.Store.MarkReplyDelivered(context.WithoutCancel(m.ctx), t.r.ID, m.cfg.Now()); merr != nil && !errors.Is(merr, store.ErrNotFound) {
 		m.cfg.Logger.WarnContext(m.ctx, "session: could not mark the turn of a task whose reply was too large delivered", "key", t.key, "turn", t.r.ID, "error", merr)
 	}
 	var endErr error
-	cancelled := m.cancelOversized(t)
+	cancelled := t.taskID == "" || m.cancelOversized(t)
 	if cancelled {
 		t.c.settle()
 		endErr = m.end(context.WithoutCancel(m.ctx), t.key, t.c.ttl)
@@ -1396,6 +1417,22 @@ func (m *Manager) taskNotice(ctx context.Context, key Key, id a2a.TaskID, kind N
 // agent's do): a notice named after the task alone would be dropped in the second thread.
 func taskNoticeID(key Key, id a2a.TaskID, kind NoticeKind) string {
 	return "task:" + key.Connection + ":" + key.Channel + ":" + key.Thread + ":" + string(id) + "/" + string(kind)
+}
+
+// Notice IDs that are not a NoticeKind's name. The outbox keeps one row for an ID and drops a second notice of it, so two notices of one
+// task that say different things are named apart; each is the same across restarts, so that a restart that finds the same again raises
+// the same post.
+const (
+	noticeTooLarge     NoticeKind = "too_large"      // what the agent sent was more than Agent Kourier reads or holds (tooLarge)
+	noticeCardTooLarge NoticeKind = "card_too_large" // the agent's card was too large to follow the task (lost)
+)
+
+// tooLargeNoticeID names the notice of a task whose reply was too large (tooLarge), and, for a reply that names no task, of the turn.
+func tooLargeNoticeID(t *tstate) string {
+	if t.taskID == "" {
+		return cmp.Or(t.nid, t.r.ID) + "/" + string(noticeTooLarge)
+	}
+	return taskNoticeID(t.key, t.taskID, noticeTooLarge)
 }
 
 // resume follows the task of a turn whose stream was lost. A task WORKING for longer than
@@ -1513,7 +1550,7 @@ func (m *Manager) wedged(t *tstate) (outcome, error) {
 	m.warnUnverifiedCancel(t.key, t.sess.Binding, t.taskID, err)
 	switch {
 	case kind == cancelDone:
-		m.audit(t, t.call(nil))
+		m.audit(t, t.call(err)) // err is nil, or an answer too large to read, which the row says
 		m.notice(t, NoticeWedged, "")
 		m.finish(t, TurnWedged)
 		c.follow = nil
