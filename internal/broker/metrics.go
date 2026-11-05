@@ -45,6 +45,7 @@ type Metrics struct {
 	probeDuration *prometheus.HistogramVec
 	invalid       *prometheus.GaugeVec
 	bindingRej    *prometheus.GaugeVec
+	heldObjects   *prometheus.GaugeVec
 	statusWrites  *prometheus.CounterVec
 	crdSchema     *prometheus.GaugeVec // series only once set, which only a broker on the custom resources does (crdschema.go)
 }
@@ -92,7 +93,9 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 		probeDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "agentkourier_binding_probe_duration_seconds",
 			Help: "How long a probe of a Binding took, by condition: the time the checker took, whatever it found.", Buckets: prometheus.DefBuckets}, []string{"condition"}),
 		invalid: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_config_invalid_objects",
-			Help: "Objects of the custom resource config source that the broker refuses or holds past their deletion, by kind: a Binding of this broker (it names this broker's connection, or none that exists) that fails Default or Validate; any AgentBackend in the cluster that does, whoever uses it; and this broker's own ChatConnection when it fails them or was deleted and is held. Each is served from its last good generation, or left out if it has none. 0 while the config is read from files, where one bad object fails the whole reload."}, []string{"kind"}),
+			Help: "Objects of the custom resource config source that the broker refuses or holds past their deletion, by kind: a Binding of this broker (it names this broker's connection, or none that exists) that fails Default or Validate; any AgentBackend in the cluster that does, whoever uses it; this broker's own ChatConnection when it fails them or was deleted and is held; and, while that connection is held, each Binding of it and each AgentBackend they use that was deleted and is held with it. Each is served from its last good generation, or left out if it has none; a held Binding that lost its channel or whose backend is gone is counted and not served. 0 while the config is read from files, where one bad object fails the whole reload."}, []string{"kind"}),
+		heldObjects: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_config_held_objects",
+			Help: "Objects of the custom resource config source that were deleted and that the broker holds at their last good generation, by kind, while its own ChatConnection is deleted and held: the connection, the Bindings of it that are gone, and the AgentBackends that they and the Bindings of it that are still there use and that are gone. A held Binding whose backend went first, or that lost its channel, is held and not served. 0 when nothing is held, and always while the config is read from files."}, []string{"kind"}),
 		bindingRej: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_config_binding_rejections",
 			Help: "Bindings of the custom resource config source that are not accepted as written, by the reason of their Accepted condition: InvalidSpec, BackendNotFound, BackendRejected, ConnectionNotFound, ConnectionRejected, NamespaceNotAllowed or ChannelConflict. A Binding that is served from an older generation counts too. 0 while the config is read from files."}, []string{"reason"}),
 		statusWrites: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_binding_status_writes_total",
@@ -109,7 +112,7 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 		return 0
 	})
 	var err error
-	for _, c := range []prometheus.Collector{m.auditFailures, m.rejections, m.abandons, m.reloadErrors, m.approvals, m.timeouts, m.removed, m.decisions, m.chatUp, m.turns, m.leader, m.takeovers, m.bindingCond, m.bindingReady, m.probeDuration, m.invalid, m.bindingRej, m.crdSchema, m.statusWrites, staleGauge} {
+	for _, c := range []prometheus.Collector{m.auditFailures, m.rejections, m.abandons, m.reloadErrors, m.approvals, m.timeouts, m.removed, m.decisions, m.chatUp, m.turns, m.leader, m.takeovers, m.bindingCond, m.bindingReady, m.probeDuration, m.invalid, m.bindingRej, m.heldObjects, m.crdSchema, m.statusWrites, staleGauge} {
 		err = errors.Join(err, m.reg.Register(c))
 	}
 	if err != nil {
@@ -137,12 +140,16 @@ func (m *Metrics) ReloadError(error) { m.reloadErrors.Inc() }
 // its series, set at each report, so that one that cleared reads 0 and no series comes or goes. A reason outside the closed
 // set is counted as "other".
 func (m *Metrics) ConfigReport(r config.Report) {
-	kinds := make(map[string]int, len(configKinds))
+	kinds, heldKinds := make(map[string]int, len(configKinds)), make(map[string]int, len(configKinds))
 	for _, inv := range r.Invalid {
 		kinds[inv.Kind]++
+		if inv.Deleted {
+			heldKinds[inv.Kind]++
+		}
 	}
 	for _, k := range configKinds {
 		m.invalid.WithLabelValues(k).Set(float64(kinds[k]))
+		m.heldObjects.WithLabelValues(k).Set(float64(heldKinds[k]))
 	}
 	reasons := make(map[string]int, len(rejectionReasons)+1)
 	for _, rej := range r.Rejections {

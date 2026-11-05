@@ -306,6 +306,9 @@ func (r *Reloader) buildPerObject(ctx context.Context, set *Set, fp string) *pub
 func (r *Reloader) logReport(rep Report) {
 	now := map[string]bool{}
 	for _, inv := range rep.Invalid {
+		if inv.Deleted && inv.Kind != KindChatConnection {
+			continue // held with the connection: the source says so once, with how many
+		}
 		key := fmt.Sprintf("invalid %s %d %d %t %s", inv.ID(), inv.Generation, inv.Served, inv.Deleted, inv.Message)
 		now[key] = true
 		if !r.reported[key] {

@@ -2,6 +2,8 @@ package broker
 
 import (
 	"errors"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -9,6 +11,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/watch"
 	k8stesting "k8s.io/client-go/testing"
 )
@@ -79,5 +82,64 @@ func TestBootstrapCRDsIsStaleWhileAnInformerCannotWatch(t *testing.T) {
 	eventually(t, 10*time.Second, "the config was never reported stale", c.Stale)
 	if n := len(c.Reloader.Current().Bindings()); n != 2 {
 		t.Errorf("%d Bindings served while stale; want both, from the cache that was kept", n)
+	}
+}
+
+// A rollback deletes the connection, the backend and the Bindings together while the pods still run: the broker goes on
+// routing them from its last good, and a standby that takes over finds the connection. A broker that is started after it, with
+// nothing deleted to hold, fails at start as it always did.
+func TestBootstrapCRDsKeepsRoutingWhenEverythingIsDeletedTogether(t *testing.T) {
+	dyn := crCluster(t, nil)
+	c, err := Bootstrap(t.Context(), cluster(), crOptions(dyn))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.Stop)
+	del := func(gvr schema.GroupVersionResource, ns, name string) {
+		t.Helper()
+		if err := dyn.Resource(gvr).Namespace(ns).Delete(t.Context(), name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			t.Fatal(err)
+		}
+	}
+	// The informers' watches may not be open yet, so repeat until the broker has seen all four gone.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		del(crBackends, "agent-kourier-system", "kagent-pilot") // Helm's order: the backend, the Bindings by name, the connection last
+		del(crBindings, "sre", "chat-only")
+		del(crBindings, "sre", "sre-alerts")
+		del(crConnections, "agent-kourier-system", "slack-main")
+		time.Sleep(20 * time.Millisecond)
+		if len(c.Reloader.Report().Invalid) == 4 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the hold was not reported in 10s: %+v", c.Reloader.Report().Invalid)
+		}
+	}
+	rep := c.Reloader.Report()
+	if n := len(rep.Snapshot.Bindings()); n != 2 || len(rep.Rejections) != 0 {
+		t.Errorf("%d Bindings served, rejections %+v; want both served from the hold and nothing rejected", n, rep.Rejections)
+	}
+	if _, err := ChooseConnection(t.Context(), rep.Snapshot, c.Secrets); err != nil {
+		t.Errorf("ChooseConnection = %v; a takeover during the hold would exit with it", err)
+	}
+	if _, ok := rep.Snapshot.Binding("sre", "sre-alerts"); !ok {
+		t.Error("sre-alerts is not served: its token Secret must still resolve through what the config names")
+	}
+	if err := c.Secrets.Ready(); err != nil {
+		t.Errorf("the Secrets are not ready during the hold: %v", err)
+	}
+	if keys, err := c.Secrets.Keys(t.Context(), "sre", "agent-kourier-sre-alerts-oidc"); err != nil || !slices.Contains(keys, "token") {
+		t.Errorf("the token of the held Binding sre-alerts reads as %v, %v; want it still followed and readable", keys, err)
+	}
+
+	// A restart has no last good: the connection is missing, and the start fails as it did.
+	again, err := Bootstrap(t.Context(), cluster(), crOptions(dyn))
+	if again != nil {
+		again.Stop()
+		t.Fatal("a broker started with its connection deleted")
+	}
+	if !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), "was not found") {
+		t.Errorf("Bootstrap = %v; want ErrWiring saying the connection was not found", err)
 	}
 }
