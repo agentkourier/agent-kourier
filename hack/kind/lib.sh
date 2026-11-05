@@ -441,15 +441,29 @@ CURL_IMAGE=curlimages/curl:8.23.0@sha256:3fb7e13e5d179a845c97d78204f3f1064d19070
 # An empty NAME is nothing to delete.
 delete_agentkourier_pod() { [ -z "$1" ] || "${K[@]}" -n agent-kourier delete pod "$1" --ignore-not-found --wait=false >/dev/null 2>&1 || true; }
 
-# DEX_TOKEN_POD is the name of the pod refresh_dex_token is running, for a caller's EXIT trap: a Ctrl-C during its
-# `kubectl run` skips the function's own RETURN trap, and the pod's logs hold the token. Empty when there is none.
+# DEX_TOKEN_POD is the name of the pod refresh_dex_token is running, for a caller's EXIT trap: a Ctrl-C during one of its
+# kubectl calls skips the function's own RETURN trap, and the pod's status holds the token. Empty when there is none.
 DEX_TOKEN_POD=
 
-# dex_token_from: the token in what refresh_dex_token's pod printed, on stdin. The pod prints it as one line,
-# TOKEN:<jwt>:END, and the token is the first line that is exactly that. kubectl, when it cannot attach to the pod
-# under load, falls back to streaming the pod's logs, and can print them twice or cut a copy short and glue it to
-# the next: a line that is not wholly good is no token, and nothing is printed for it, so the caller tries again and
-# never stores a mangled one.
+# DEX_TOKEN_TRIES, DEX_TOKEN_POLLS and the sleeps between them are what refresh_dex_token waits for: up to DEX_TOKEN_TRIES pods, each given
+# DEX_TOKEN_POLLS looks, DEX_TOKEN_POLL_SLEEP seconds apart (two minutes: the first pod pulls the curl image), with DEX_TOKEN_RETRY_SLEEP
+# seconds between pods. The tests of test/kindmanifests set the sleeps to 0.
+: "${DEX_TOKEN_TRIES:=3}" "${DEX_TOKEN_POLLS:=120}" "${DEX_TOKEN_POLL_SLEEP:=1}" "${DEX_TOKEN_RETRY_SLEEP:=3}"
+
+# DEX_TOKEN_SCRIPT is what the pod of refresh_dex_token runs: it asks Dex for the Binding identity's ID token with the password grant (the client
+# and the user are the fake ones of full/dex.yaml) and writes it, as the one line TOKEN:<jwt>:END, to the pod's termination message, the file the
+# kubelet reads into the pod's status when the container ends. It exits 1 when Dex gave no token. Nothing is written to its output.
+# shellcheck disable=SC2016 # it runs in the pod, where its variables are
+DEX_TOKEN_SCRIPT='
+tok=$(curl -sf -m 20 -d grant_type=password -d client_id=agent-kourier-binding -d client_secret=fake-agent-kourier-binding-secret \
+  -d username=binding-test@example.test -d password=password -d "scope=openid email" \
+  http://dex.dex.svc.cluster.local:5556/dex/token | sed -n "s/.*\"id_token\":\"\([^\"]*\)\".*/\1/p")
+[ -n "${tok}" ] || exit 1
+printf "TOKEN:%s:END\n" "${tok}" >/dev/termination-log'
+
+# dex_token_from: the token in the termination message of refresh_dex_token's pod, on stdin. The pod writes it as one line,
+# TOKEN:<jwt>:END, and the token is the first line that is exactly that. A message that is not wholly good (the kubelet keeps 4096 bytes of
+# one, and cuts the rest) is no token, and nothing is printed for it, so the caller tries again and never stores a mangled one.
 dex_token_from() {
   sed -n 's/^TOKEN:\([A-Za-z0-9_-]\{1,\}\.[A-Za-z0-9_-]\{1,\}\.[A-Za-z0-9_-]\{1,\}\):END$/\1/p' | head -n 1
 }
@@ -459,27 +473,55 @@ dex_token_from() {
 # identity is a static user that signs in with the password grant, and its token lives 24 hours: run this before
 # each use of the full tier whose last refresh is not recent (up-full.sh and e2e-run.sh do). The token is made
 # inside the cluster by a throwaway pod, where Dex is, and goes from there to the Secret through pipes: it is
-# never printed, put on a command line or written to a file. The pod is deleted when this returns, whatever
-# happened, since its logs hold the token. Agent Kourier reads the Secret on every request, so a refreshed token is sent
-# from the next call. The client and the user are the fake ones of full/dex.yaml. Needs K.
+# never printed, put on a command line or written to a file. The pod runs to completion and the token is read from its status
+# (DEX_TOKEN_SCRIPT writes it to the termination message), not streamed: `kubectl run --rm -i` attaches to the pod and, on a loaded machine,
+# returned nothing, or a mangled copy of the logs, in about one try in ten. A try whose pod could not be made, did not finish or left no token
+# is tried again with a new pod, up to DEX_TOKEN_TRIES; the failure names what each try saw. The pod is deleted when
+# its try ends, whatever happened, since its status holds the token. The tracing of `set -x` is off inside the function, which
+# holds the token in a variable. Agent Kourier reads the Secret on every request, so a refreshed token is sent from the next call.
+# Needs K.
 refresh_dex_token() {
-  local pod tok attempt
+  local pod tok attempt phase polls out exit_code msg why tried= xtrace=
+  case $- in *x*) xtrace=1 ;; esac
+  set +x
   "${K[@]}" create namespace agent-kourier --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
-  for attempt in 1 2 3; do
+  for ((attempt = 1; attempt <= DEX_TOKEN_TRIES; attempt++)); do
+    [ "${attempt}" -eq 1 ] || sleep "${DEX_TOKEN_RETRY_SLEEP}"
     pod=dex-token-${RANDOM}
     DEX_TOKEN_POD=${pod}
-    trap 'delete_agentkourier_pod "${pod}"; trap - RETURN' RETURN # a return from here, an error included, still deletes it
-    tok=$("${K[@]}" -n agent-kourier run "${pod}" --rm -i --quiet --restart=Never --image="${CURL_IMAGE}" --command -- sh -c '
-      curl -sf -m 20 -d grant_type=password -d client_id=agent-kourier-binding -d client_secret=fake-agent-kourier-binding-secret \
-        -d username=binding-test@example.test -d password=password -d "scope=openid email" \
-        http://dex.dex.svc.cluster.local:5556/dex/token | sed -n "s/.*\"id_token\":\"\([^\"]*\)\".*/TOKEN:\1:END/p"' 2>/dev/null | dex_token_from) || tok=
+    tok=
+    why=
+    if ! "${K[@]}" -n agent-kourier run "${pod}" --restart=Never --image="${CURL_IMAGE}" --command -- sh -c "${DEX_TOKEN_SCRIPT}" >/dev/null 2>&1; then
+      why="kubectl run could not make the pod"
+    else
+      phase=
+      for ((polls = 0; polls < DEX_TOKEN_POLLS; polls++)); do
+        phase=$("${K[@]}" -n agent-kourier get pod "${pod}" -o 'jsonpath={.status.phase}' 2>/dev/null) || phase=
+        case "${phase}" in Succeeded | Failed) break ;; esac
+        sleep "${DEX_TOKEN_POLL_SLEEP}"
+      done
+      case "${phase}" in
+        Succeeded | Failed)
+          # "<exit code> <termination message>": the space is the template's, so a pod with no container status leaves both empty.
+          out=$("${K[@]}" -n agent-kourier get pod "${pod}" -o 'jsonpath={.status.containerStatuses[0].state.terminated.exitCode} {.status.containerStatuses[0].state.terminated.message}' 2>/dev/null) || out=" "
+          exit_code=${out%% *}
+          msg=${out#* }
+          tok=$(dex_token_from <<<"${msg}")
+          why="the pod ended ${phase} with exit code ${exit_code:-unknown} and ${#msg} bytes of termination message, none of them a token"
+          ;;
+        *) why="the pod was ${phase:-not found} after ${DEX_TOKEN_POLLS} looks" ;;
+      esac
+    fi
     delete_agentkourier_pod "${pod}"
     DEX_TOKEN_POD=
     [ -z "${tok}" ] || break
+    tried+="; try ${attempt}, pod ${pod}: ${why}"
   done
-  [ -n "${tok}" ] || die "Dex gave no ID token for the Binding identity after three tries (is Dex up? did the pod run?)"
+  [ -n "${tok}" ] || die "Dex gave no ID token for the Binding identity after ${DEX_TOKEN_TRIES} tries${tried} (is Dex up in namespace dex? each try runs a pod that asks it for the token and reads the pod's termination message)"
   printf %s "${tok}" | "${K[@]}" -n agent-kourier create secret generic agent-kourier-agent-token --from-file=token=/dev/stdin \
     --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  tok=
+  [ -z "${xtrace}" ] || set -x
 }
 
 # deploy_scenario_agents: the full tier's Phase 1 scenario agents (full/scenarios): the scenario model and the MCP
