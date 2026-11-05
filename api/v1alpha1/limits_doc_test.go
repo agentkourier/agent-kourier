@@ -30,6 +30,8 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Count(t, "extract", maxExtract)
 	limitsdoc.Count(t, "messageFields", len(messageFields()))
 	limitsdoc.Count(t, "regex", maxTriggerRegexLen)
+	limitsdoc.Count(t, "regexInstructions", maxRegexInstructions)
+	limitsdoc.Count(t, "bindingRegexInstructions", maxBindingRegexInstructions)
 	limitsdoc.Count(t, "promptTemplate", maxPromptTemplateLen)
 	limitsdoc.Count(t, "agentName", maxAgentNameLen)
 	limitsdoc.Count(t, "userId", maxUserIDLen)
