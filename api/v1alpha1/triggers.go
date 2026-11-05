@@ -105,8 +105,9 @@ type Trigger struct {
 	// +kubebuilder:validation:XValidation:rule="self.all(k, size(self[k]) <= 512)",message="a regular expression is longer than the 512 byte limit"
 	Exclude map[MessageField]string `json:"exclude,omitempty"`
 	// Extract names the values to pull out of a message. A message in which one of these
-	// regexes does not match does not match the trigger. At most 32.
+	// regexes does not match does not match the trigger. At most 32, each named in at most 63 bytes.
 	// +kubebuilder:validation:MaxProperties=32
+	// +kubebuilder:validation:XValidation:rule="self.all(k, size(k) <= 63)",message="an extract name is longer than the 63 byte limit"
 	// +kubebuilder:validation:XValidation:rule="self.all(k, k.matches('^[a-z][A-Za-z0-9_]*$'))",message="invalid extract name: it must start with a lower-case letter and use only letters, digits and '_', so a template can read .Fields.<name>"
 	// +kubebuilder:validation:XValidation:rule="self.all(k, self[k].regex.contains('(?P<' + k + '>') || self[k].regex.contains('(?<' + k + '>'))",message="every regex must have a named group (?P<name>...) that is the entry's name, and supplies the value"
 	Extract map[string]Extract `json:"extract,omitempty"`
@@ -130,6 +131,8 @@ type BotSource struct {
 	// ID is the sender's ID on the platform, never a display name (Slack: the bot ID, `B…`). The load cannot know
 	// Agent Kourier's own ID, so naming it loads: Agent Kourier's own posts are never forwarded, so the trigger
 	// matches nothing, and the Slack adapter logs one warning, the first time one of its posts arrives.
+	// At most 32 bytes.
+	// +kubebuilder:validation:MaxLength=32
 	// +kubebuilder:validation:Pattern=`^B[A-Z0-9]+$`
 	ID string `json:"id"`
 	// Kind is what kind of sender ID names. Only bot exists today, and it is the default.
@@ -172,6 +175,7 @@ type TriggerThread struct {
 	// Cooldown is how long after a turn the same key starts no new turn. Required with by,
 	// and between 1m and 168h.
 	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=64
 	// +kubebuilder:validation:Pattern=`^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`
 	// +optional
 	Cooldown metav1.Duration `json:"cooldown,omitzero"`
@@ -185,15 +189,17 @@ type TriggerThread struct {
 	// against Alertmanager's 4h repeat_interval; a longer repeat_interval needs a maxIdle set
 	// above it.
 	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=64
 	// +kubebuilder:validation:Pattern=`^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`
 	// +optional
 	// +doc:default=Larger of `24h` and twice the cooldown
 	MaxIdle metav1.Duration `json:"maxIdle,omitzero"`
 	// CloseWhen maps an extracted field to the value that closes the thread: Agent Kourier posts a
 	// note and starts no turn. Every entry must equal. It names only extracted fields, so it holds at most as many
-	// entries as extract does, 32.
+	// entries as extract does, 32. A value is at most 256 bytes.
 	// +kubebuilder:validation:MaxProperties=32
 	// +kubebuilder:validation:XValidation:rule="self.all(k, size(self[k]) > 0)",message="the value that closes the thread is required"
+	// +kubebuilder:validation:XValidation:rule="self.all(k, size(self[k]) <= 256)",message="a value is longer than the 256 byte limit"
 	// +optional
 	CloseWhen map[string]string `json:"closeWhen,omitempty"`
 }

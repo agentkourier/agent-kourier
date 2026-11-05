@@ -525,9 +525,10 @@ func TestYAMLScalarReadsBackAsTheString(t *testing.T) {
 	}
 }
 
-// A URL with characters that YAML gives a meaning to is written as it is and arrives as it was given.
+// A URL with characters that YAML gives a meaning to is written as it is and arrives as it was given. It has no query and
+// no fragment, which an AgentBackend refuses, so the awkward characters are in the path.
 func TestInitKeepsAnAwkwardURLWhole(t *testing.T) {
-	const awkward = "http://agent.example.com:8083/a2a/?x=1&y=2#frag"
+	const awkward = "http://agent.example.com:8083/a2a/&x=1,y: [2] *z"
 	out := outFile(t)
 	if _, stderr, code := initRun(t, "", env{}.get, "", starterArgs(out, "--agent-url", awkward)...); code != exitOK {
 		t.Fatalf("exit code %d, stderr %q", code, stderr)

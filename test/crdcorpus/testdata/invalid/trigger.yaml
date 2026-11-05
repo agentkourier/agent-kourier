@@ -2117,3 +2117,298 @@ spec:
         thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
         limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
         promptTemplate: '{{ printf "%2000000000d" 1 }}'
+---
+# rule: trigger/spec.chat.triggers[].from.id: over 32 characters
+# want: spec.chat.triggers[1].from.id: is 33 bytes, longer than the 32 byte limit
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B00000000000000000000000000000000}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].extract: a name over 63 characters
+# want: spec.chat.triggers[1].extract: entry 0, in name order, is named with 64 bytes, longer than the 63 byte limit
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+          eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee: {field: text, regex: "(?P<eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee>x)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].thread.closeWhen: a value over 256 characters
+# want: spec.chat.triggers[1].thread.closeWhen.state: is 257 bytes, longer than the 256 byte limit
+# field: spec.chat.triggers[1].thread.closeWhen
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: 2h, closeWhen: {state: vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].thread.cooldown: text over 64 characters
+# want: spec.chat.triggers[1].thread.cooldown: is 65 characters, longer than the 64 character limit
+# field: spec.chat.triggers[1].thread.cooldown
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: "0000000000000000000000000000000000000000000000000000000000000002h", maxIdle: "5h", closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: "10m", maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].thread.maxIdle: text over 64 characters
+# want: spec.chat.triggers[1].thread.maxIdle: is 65 characters, longer than the 64 character limit
+# field: spec.chat.triggers[1].thread.maxIdle
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: "2h", maxIdle: "0000000000000000000000000000000000000000000000000000000000000005h", closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: "10m", maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].limits.rateLimit.per: text over 64 characters
+# want: spec.chat.triggers[1].limits.rateLimit.per: is 65 characters, longer than the 64 character limit
+# field: spec.chat.triggers[1].limits.rateLimit.per
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: "2h", maxIdle: "5h", closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: "0000000000000000000000000000000000000000000000000000000000000010m", maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].match: a regex that compiles to more than 2000 instructions
+# want: spec.chat.triggers[1].match.title: regular expression compiles to 2002 instructions, more than the 2000 instruction limit
+# schema: accepts
+# broker-only: the schema cannot count what a regex compiles to: its rules see the text of the regex, at most 512 bytes, and the program that Go makes of it (regexp/syntax, after Simplify) is what the limit counts, so a regex of 9 bytes can be over it
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: '.{0,1000}'}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert."
+---
+# rule: trigger/spec.chat.triggers[].exclude: a regex that compiles to more than 2000 instructions
+# want: spec.chat.triggers[1].exclude.title: regular expression compiles to 2002 instructions, more than the 2000 instruction limit
+# schema: accepts
+# broker-only: the schema cannot count what a regex compiles to: its rules see the text of the regex, at most 512 bytes, and the program that Go makes of it (regexp/syntax, after Simplify) is what the limit counts, so a regex of 9 bytes can be over it
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        exclude: {title: '.{0,1000}'}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert."
+---
+# rule: trigger/spec.chat.triggers[].extract[].regex: a regex that compiles to more than 2000 instructions
+# want: spec.chat.triggers[1].extract.state.regex: regular expression compiles to 2002 instructions, more than the 2000 instruction limit
+# schema: accepts
+# broker-only: the schema cannot count what a regex compiles to: its rules see the text of the regex, at most 512 bytes, and the program that Go makes of it (regexp/syntax, after Simplify) is what the limit counts, so a regex of 9 bytes can be over it
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        extract: {state: {field: title, regex: '(?P<state>.{0,999})'}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert."
+---
+# rule: trigger/spec.chat.triggers: regexes that compile to more than 5000 instructions together
+# want: spec.chat.triggers[1].extract.state.regex: the regular expressions of the Binding compile to 5005 instructions with this one, more than the 5000 instruction limit for a Binding
+# schema: accepts
+# broker-only: the schema cannot count what a regex compiles to: its rules see the text of the regex, at most 512 bytes, and the program that Go makes of it (regexp/syntax, after Simplify) is what the limit counts, so a regex of 9 bytes can be over it
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {text: '.{0,999}', title: '.{0,999}'}
+        exclude: {text: '.{0,499}'}
+        extract: {state: {field: text, regex: '(?P<state>x)'}}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert."

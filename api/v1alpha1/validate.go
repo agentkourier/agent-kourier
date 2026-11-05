@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"regexp/syntax"
 	"slices"
 	"strings"
 	"time"
@@ -36,8 +37,16 @@ var extractName = regexp.MustCompile(`^[a-z][A-Za-z0-9_]*$`)
 // restart a turn on every message.
 const (
 	maxTriggerRegexLen = 512
-	minThreadCooldown  = time.Minute
-	maxThreadCooldown  = 7 * 24 * time.Hour
+	// maxRegexInstructions and maxBindingRegexInstructions bound what the regexes of a trigger cost: the instructions of
+	// the program each compiles to (regexp/syntax, after Simplify, the fail and match instructions included), and the
+	// sum over all the regexes of a Binding. The byte cap does not bound that cost: a regex of 504 bytes of
+	// .{0,1000} repeats compiles to 112002 instructions, and the time to try a regex grows with its program and the text.
+	// The schema cannot count instructions, so these are refused by the broker only. The regexes of this repository's
+	// example Bindings are 10 to 98 instructions, and the largest Binding's total is 375.
+	maxRegexInstructions        = 2000
+	maxBindingRegexInstructions = 5000
+	minThreadCooldown           = time.Minute
+	maxThreadCooldown           = 7 * 24 * time.Hour
 	// maxApproverGroups keeps each approval press within a bounded number of uncached group lookups.
 	maxApproverGroups = 10
 	// maxMentions bounds the names a Binding declares, each of which the agent is told of in its first prompt.
@@ -65,6 +74,36 @@ const (
 	maxPromptTemplateLen = 8192
 	maxAgentNameLen      = 253
 	maxUserIDLen         = 256
+)
+
+// The caps below bound the strings and the list that nothing else bounded, so that one namespace writer cannot make an
+// object as large as the apiserver allows, which every broker would then keep in memory. Each is also a maxItems,
+// maxLength or rule in the schema, so the apiserver refuses a longer one and so does a file loaded by the broker. They
+// count bytes, as Validate does, and the schema counts characters, so the schema is never the stricter of the two. Each is
+// set far above any real use, which today is:
+//
+//   - maxAllowedNamespaces 256: one namespace in every example (a namespace is at most 63 characters, so the list is at most 16 KiB).
+//   - maxChatIDLen 32: a channel, a sender and a user group are 11 characters in every example, and Slack's IDs are 9 to 11
+//     (unverified: not readable in this repository). A mention's name and user ID are already bounded by their patterns, to
+//     63 and 21: maxMentionNameLen and maxMentionUserLen say so as caps, so that the schema has a maxLength for them and a
+//     value over one is refused without being shown.
+//   - maxEmojiLen 100: the default reaction, hourglass_flowing_sand, is 21. Slack's own limit on a custom emoji name is
+//     100 characters (unverified: not readable in this repository).
+//   - maxURLLen 2048: the longest URL in an example or a test fixture is under 100 characters.
+//   - maxHeaderValueLen 4096: a static header value in an example is under 50 bytes, and a secret goes in valueSecretRef.
+//   - maxExtractNameLen 63, as a mention name: the longest extract name in an example is 9 characters. A closeWhen key
+//     must be an extract name, so it is bounded too.
+//   - maxCloseWhenValueLen 256: the value in an example is RESOLVED.
+const (
+	maxAllowedNamespaces = 256
+	maxChatIDLen         = 32
+	maxMentionNameLen    = 63
+	maxMentionUserLen    = 21
+	maxEmojiLen          = 100
+	maxURLLen            = 2048
+	maxHeaderValueLen    = 4096
+	maxExtractNameLen    = 63
+	maxCloseWhenValueLen = 256
 )
 
 // mentionName is what an agent writes after an "@"; its literal must equal ChatMention.Name's Pattern marker. mentionUser
@@ -156,7 +195,13 @@ func (p *problems) namespace(path, v string) {
 	}
 }
 
+// namespaces checks the namespaces of an allowedNamespaces list. A list over the cap is reported once and its entries not
+// checked, so that a list of a million bad entries is one problem and not a million.
 func (p *problems) namespaces(path string, ns []string) {
+	if len(ns) > maxAllowedNamespaces {
+		p.add(path, "has %d items, maximum is %d", len(ns), maxAllowedNamespaces)
+		return
+	}
 	for i, n := range ns {
 		p.namespace(fmt.Sprintf("%s[%d]", path, i), n)
 	}
@@ -184,6 +229,38 @@ func (p *problems) objectRef(path string, r *ObjectRef) {
 	}
 }
 
+// backendURL checks the url of an AgentBackend.
+func (p *problems) backendURL(raw string) {
+	if raw == "" {
+		p.add("spec.url", "required")
+		return
+	}
+	if len(raw) > maxURLLen {
+		// Not parsed, and no verdict below is given: each shows the host, which is as long as the URL may be.
+		p.maxBytes("spec.url", raw, maxURLLen)
+		return
+	}
+	u, err := url.Parse(raw)
+	switch {
+	case err != nil:
+		p.add("spec.url", "must be an http or https URL with a host")
+	case u.User != nil:
+		// net/http would turn userinfo into Basic auth, bypassing the Binding identity.
+		p.add("spec.url", "must not contain credentials; identity comes from the Binding (D14)")
+	case (u.Scheme != "http" && u.Scheme != "https") || u.Host == "":
+		// The message may reach a log or a status that more people read than the object, so it shows what is needed to fix
+		// the verdict, the scheme and the host, and no more: not a password, a query or a fragment, which a token rides in,
+		// and not a path or an opaque part, which may hold one too. The verdict does not depend on what is left out.
+		shown := (&url.URL{Scheme: u.Scheme, Host: u.Host}).String()
+		p.add("spec.url", "invalid URL %q: must be an http or https URL with a host", shown)
+	case strings.ContainsAny(raw, "?#"):
+		// Both dialects refuse a query or fragment when they build the endpoint, and the generic one would send a card request
+		// to a URL that the query breaks. Any "?" or "#" counts, empty or not, so the rule has a twin in the schema that
+		// needs no parse. The message shows neither: a token rides there.
+		p.add("spec.url", "must not have a query or fragment")
+	}
+}
+
 // Validate reports every per-object rule the object breaks, joined, each naming the field
 // path. Call Default first; Validate treats unset defaulted fields as invalid. It does not
 // resolve references or check other objects (see WP-21).
@@ -192,20 +269,7 @@ func (a *AgentBackend) Validate() error {
 	p.meta(a.ObjectMeta)
 	s := &a.Spec
 	p.oneOf("spec.dialect", string(s.Dialect), string(DialectA2A), string(DialectKagentV1))
-	if s.URL == "" {
-		p.add("spec.url", "required")
-	} else if u, err := url.Parse(s.URL); err != nil {
-		p.add("spec.url", "must be an http or https URL with a host")
-	} else if u.User != nil {
-		// net/http would turn userinfo into Basic auth, bypassing the Binding identity.
-		p.add("spec.url", "must not contain credentials; identity comes from the Binding (D14)")
-	} else if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		// The message may reach a log or a status that more people read than the object, so it shows what is needed to fix
-		// the verdict, the scheme and the host, and no more: not a password, a query or a fragment, which a token rides in,
-		// and not a path or an opaque part, which may hold one too. The verdict does not depend on what is left out.
-		shown := (&url.URL{Scheme: u.Scheme, Host: u.Host}).String()
-		p.add("spec.url", "invalid URL %q: must be an http or https URL with a host", shown)
-	}
+	p.backendURL(s.URL)
 	if len(s.Headers) > maxHeaders {
 		p.add("spec.headers", "has %d items, maximum is %d", len(s.Headers), maxHeaders)
 	}
@@ -213,6 +277,7 @@ func (a *AgentBackend) Validate() error {
 		path := fmt.Sprintf("spec.headers[%d]", i)
 		p.required(path+".name", h.Name)
 		p.maxBytes(path+".name", h.Name, maxHeaderNameLen)
+		p.maxBytes(path+".value", h.Value, maxHeaderValueLen)
 		if IsReservedHeader(h.Name) {
 			p.add(path+".name", "header %q is reserved for the Binding identity (D14)", h.Name)
 		}
@@ -257,6 +322,8 @@ func (b *Binding) Validate() error {
 	p.objectRef("spec.chat.connectionRef", &s.Chat.ConnectionRef)
 	if c := s.Chat.Channel; c == "" {
 		p.add("spec.chat.channel", "required")
+	} else if len(c) > maxChatIDLen {
+		p.maxBytes("spec.chat.channel", c, maxChatIDLen) // not shown: the channel is in the messages that name a conflict
 	} else if !channelID.MatchString(c) {
 		p.add("spec.chat.channel", "invalid channel %q: must be a channel ID such as C0123456789, not a name", c)
 	}
@@ -270,7 +337,9 @@ func (b *Binding) Validate() error {
 		if a.Enabled == nil {
 			p.add("spec.chat.acknowledgment.enabled", "required after defaulting")
 		}
-		if a.Emoji != "" && !reactionName.MatchString(a.Emoji) {
+		if len(a.Emoji) > maxEmojiLen {
+			p.maxBytes("spec.chat.acknowledgment.emoji", a.Emoji, maxEmojiLen)
+		} else if a.Emoji != "" && !reactionName.MatchString(a.Emoji) {
 			p.add("spec.chat.acknowledgment.emoji", "invalid reaction name %q: use lowercase letters, digits, '-', '_' or '+', with '+1' and '-1' allowed", a.Emoji)
 		}
 	}
@@ -297,6 +366,8 @@ func (p *problems) mentions(path string, mentions []ChatMention) {
 			p.add(at+".name", "required")
 		case broadcastNames[m.Name]:
 			p.add(at+".name", "%q is reserved: a broadcast cannot be declared", m.Name)
+		case len(m.Name) > maxMentionNameLen:
+			p.maxBytes(at+".name", m.Name, maxMentionNameLen)
 		case !mentionName.MatchString(m.Name):
 			p.add(at+".name", "invalid name %q: use lowercase letters, digits and '-', starting with a letter, at most 63 characters", m.Name)
 		}
@@ -305,9 +376,12 @@ func (p *problems) mentions(path string, mentions []ChatMention) {
 		} else {
 			seen[m.Name] = idx
 		}
-		if m.User == "" {
+		switch {
+		case m.User == "":
 			p.add(at+".user", "required")
-		} else if !mentionUser.MatchString(m.User) {
+		case len(m.User) > maxMentionUserLen:
+			p.maxBytes(at+".user", m.User, maxMentionUserLen)
+		case !mentionUser.MatchString(m.User):
 			p.add(at+".user", "invalid user ID %q: must be a user ID such as U0123456789", m.User)
 		}
 	}
@@ -323,9 +397,12 @@ func (p *problems) interactions(path string, in Interactions) {
 	seen := make(map[string]int, len(in.ApproverGroups))
 	for idx, group := range in.ApproverGroups {
 		at := fmt.Sprintf("%s.approverGroups[%d]", path, idx)
-		if group == "" {
+		switch {
+		case group == "":
 			p.add(at, "must not be empty")
-		} else if !approverGroupID.MatchString(group) {
+		case len(group) > maxChatIDLen:
+			p.maxBytes(at, group, maxChatIDLen)
+		case !approverGroupID.MatchString(group):
 			p.add(at, "invalid group ID %q: must be a Slack user group ID such as S0123456789", group)
 		}
 		if previous, ok := seen[group]; ok {
@@ -336,9 +413,18 @@ func (p *problems) interactions(path string, in Interactions) {
 	}
 }
 
-// regex checks that expr is a non-empty RE2 expression within the length cap, and returns it
-// compiled, or nil if it is not.
-func (p *problems) regex(path, expr string) *regexp.Regexp {
+// regexBudget is what the regexes of one Binding have used of maxBindingRegexInstructions. A regex that is refused for its
+// cost ends the check of the regexes after it: each costs compile time, and a Binding can hold 2156 of them.
+type regexBudget struct {
+	used    int
+	refused bool
+}
+
+// regex checks that expr is a non-empty RE2 expression within the length cap and the instruction limits, and returns the
+// names of its groups (regexp.Regexp.SubexpNames), or nil if it is not. It is regexp.Compile in its parts, so that the
+// program is counted before anything is built from it: a regex over maxRegexInstructions, or one that takes the Binding past
+// maxBindingRegexInstructions, is refused and ends the check of the regexes after it (b.refused), which return nil unchecked.
+func (p *problems) regex(path, expr string, b *regexBudget) []string {
 	if expr == "" {
 		p.add(path, "required")
 		return nil
@@ -347,12 +433,32 @@ func (p *problems) regex(path, expr string) *regexp.Regexp {
 		p.add(path, "regular expression is %d bytes, longer than the %d byte limit", len(expr), maxTriggerRegexLen)
 		return nil
 	}
-	re, err := regexp.Compile(expr)
+	if b.refused {
+		return nil
+	}
+	re, err := syntax.Parse(expr, syntax.Perl)
 	if err != nil {
 		p.add(path, "invalid regular expression: %v", err)
 		return nil
 	}
-	return re
+	prog, err := syntax.Compile(re.Simplify())
+	if err != nil {
+		p.add(path, "invalid regular expression: %v", err)
+		return nil
+	}
+	n := len(prog.Inst)
+	switch {
+	case n > maxRegexInstructions:
+		b.refused = true
+		p.add(path, "regular expression compiles to %d instructions, more than the %d instruction limit; the regular expressions after it are not checked", n, maxRegexInstructions)
+		return nil
+	case b.used+n > maxBindingRegexInstructions:
+		b.refused = true
+		p.add(path, "the regular expressions of the Binding compile to %d instructions with this one, more than the %d instruction limit for a Binding; the regular expressions after it are not checked", b.used+n, maxBindingRegexInstructions)
+		return nil
+	}
+	b.used += n
+	return re.CapNames()
 }
 
 // messageField checks that f names a field of a chat message.
@@ -367,11 +473,11 @@ func (p *problems) messageField(path string, f MessageField) {
 }
 
 // fieldRegexes checks a match or exclude map: known fields, each with a valid regex.
-func (p *problems) fieldRegexes(path string, m map[MessageField]string) {
+func (p *problems) fieldRegexes(path string, m map[MessageField]string, b *regexBudget) {
 	for _, f := range slices.Sorted(maps.Keys(m)) {
 		at := path + "." + string(f)
 		p.messageField(at, f)
-		p.regex(at, m[f])
+		p.regex(at, m[f], b)
 	}
 }
 
@@ -382,10 +488,11 @@ func (p *problems) triggers(path string, ts []Trigger) {
 		p.add(path, "has %d items, maximum is %d", len(ts), maxTriggers)
 	}
 	seen := map[string]int{}
+	var budget regexBudget
 	for i := range ts {
 		at := fmt.Sprintf("%s[%d]", path, i)
 		t := &ts[i]
-		p.trigger(at, t)
+		p.trigger(at, t, &budget)
 		// A trigger with the same bot, match, exclude and extract as an earlier one matches the
 		// same messages, so the later one would never run. Extract counts because an extract
 		// that does not match means the trigger does not match.
@@ -402,13 +509,13 @@ func (p *problems) triggers(path string, ts []Trigger) {
 	}
 }
 
-func (p *problems) trigger(path string, t *Trigger) {
+func (p *problems) trigger(path string, t *Trigger, b *regexBudget) {
 	p.oneOf(path+".type", string(t.Type), string(TriggerMention), string(TriggerBotMessage))
 	switch t.Type {
 	case TriggerMention:
 		p.mentionTrigger(path, t)
 	case TriggerBotMessage:
-		p.botMessageTrigger(path, t)
+		p.botMessageTrigger(path, t, b)
 	}
 }
 
@@ -431,10 +538,12 @@ func (p *problems) mentionTrigger(path string, t *Trigger) {
 	}
 }
 
-func (p *problems) botMessageTrigger(path string, t *Trigger) {
+func (p *problems) botMessageTrigger(path string, t *Trigger, b *regexBudget) {
 	switch {
 	case t.From == nil || t.From.ID == "":
 		p.add(path+".from.id", "required")
+	case len(t.From.ID) > maxChatIDLen:
+		p.maxBytes(path+".from.id", t.From.ID, maxChatIDLen)
 	case !botID.MatchString(t.From.ID):
 		p.add(path+".from.id", "invalid sender ID %q: must be the sender's ID (Slack: a bot ID such as B0123456789), not a name", t.From.ID)
 	}
@@ -445,13 +554,16 @@ func (p *problems) botMessageTrigger(path string, t *Trigger) {
 			p.oneOf(path+".from.kind", string(t.From.Kind), string(SenderKindBot))
 		}
 	}
-	p.fieldRegexes(path+".match", t.Match)
-	p.fieldRegexes(path+".exclude", t.Exclude)
+	p.fieldRegexes(path+".match", t.Match, b)
+	p.fieldRegexes(path+".exclude", t.Exclude, b)
 	if len(t.Extract) > maxExtract {
 		p.add(path+".extract", "has %d entries, maximum is %d", len(t.Extract), maxExtract)
 	}
-	for _, name := range slices.Sorted(maps.Keys(t.Extract)) {
-		p.extract(path+".extract."+name, name, t.Extract[name])
+	for i, name := range slices.Sorted(maps.Keys(t.Extract)) {
+		if p.longName(path+".extract", i, name) {
+			continue
+		}
+		p.extract(path+".extract."+name, name, t.Extract[name], b)
 	}
 	p.thread(path+".thread", &t.Thread, t.Extract)
 	p.limits(path+".limits", t.Limits)
@@ -464,16 +576,27 @@ func (p *problems) botMessageTrigger(path string, t *Trigger) {
 	}
 }
 
+// longName reports whether the name of an entry of a map is over the cap of an extract name, and if it is, adds a problem
+// that does not show it: a path has the name in it, and so would every message below it. It says which entry by its place
+// in the sorted names, counted from 0, which the caller passes.
+func (p *problems) longName(path string, index int, name string) bool {
+	if len(name) <= maxExtractNameLen {
+		return false
+	}
+	p.add(path, "entry %d, in name order, is named with %d bytes, longer than the %d byte limit", index, len(name), maxExtractNameLen)
+	return true
+}
+
 // extract checks one extract entry: a known field and a regex with a group named like the
 // entry, which is where the value comes from.
-func (p *problems) extract(path, name string, e Extract) {
+func (p *problems) extract(path, name string, e Extract, b *regexBudget) {
 	validName := extractName.MatchString(name)
 	if !validName {
 		p.add(path, "invalid extract name %q: must start with a lower-case letter and use only letters, digits and '_', so a template can read .Fields.%s", name, name)
 	}
 	p.messageField(path+".field", e.Field)
-	re := p.regex(path+".regex", e.Regex)
-	if re != nil && validName && !slices.Contains(re.SubexpNames(), name) {
+	groups := p.regex(path+".regex", e.Regex, b)
+	if groups != nil && validName && !slices.Contains(groups, name) {
 		p.add(path+".regex", "must have a named group (?P<%s>...) that supplies the value", name)
 	}
 }
@@ -531,11 +654,15 @@ func (p *problems) thread(path string, th *TriggerThread, extract map[string]Ext
 			p.add(path+".maxIdle", "%s is out of range, must be between twice the cooldown (%s) and %s", d, floor, MaxThreadMaxIdle)
 		}
 	}
-	for _, name := range slices.Sorted(maps.Keys(th.CloseWhen)) {
+	for i, name := range slices.Sorted(maps.Keys(th.CloseWhen)) {
+		if p.longName(path+".closeWhen", i, name) {
+			continue
+		}
 		at := path + ".closeWhen." + name
 		if _, ok := extract[name]; !ok {
 			p.add(at, "not an extracted field")
 		}
 		p.required(at, th.CloseWhen[name])
+		p.maxBytes(at, th.CloseWhen[name], maxCloseWhenValueLen)
 	}
 }

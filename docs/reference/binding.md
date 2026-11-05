@@ -73,7 +73,7 @@ ChatBinding places the Binding in a channel.
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `connectionRef` | [ObjectRef](#objectref) | Yes | None |  |
-| `channel` | string | Yes | None | Channel is the platform's channel ID, not its name (Slack: `C…` or `G…`). Pattern `^[CG][A-Z0-9]+$`. |
+| `channel` | string | Yes | None | Channel is the platform's channel ID, not its name (Slack: `C…` or `G…`). At most 32 bytes. Pattern `^[CG][A-Z0-9]+$`. At most 32 characters. |
 | `output` | string | No | `live` | Output defaults to live. One of `live`, `final`. |
 | `progress` | string | No | `steps-and-activity` | Progress chooses what a live reply shows of the agent's work before its text arrives. steps shows a card for each tool call; an alert thread's first post, which cannot carry cards, shows a status line for the latest call instead, as every write does on a platform without cards. steps-and-activity shows those, and a Working… card (or line, in that first post) whenever 3 seconds pass with nothing new, titled or stood in for by the agent's own progress line. activity shows one Working… card (a line in an alert thread) that counts the steps, or the agent's working updates until the first step is counted, and names no tool, no argument and nothing the agent said. A Binding that sets none gets steps-and-activity. Output final ignores it. One of `steps`, `steps-and-activity`, `activity`. |
 | `threadReplies` | string | No | `all` | ThreadReplies defaults to all: any person's reply in a thread Agent Kourier owns is a turn. With mention, only a reply that mentions Agent Kourier is a turn, whether a mention or a trigger started the thread; the next mentioned turn carries the other replies as context. A typed answer to a pending question that takes text replies needs no mention. One of `all`, `mention`. |
@@ -90,7 +90,7 @@ ChatAcknowledgment configures the temporary reaction on an accepted message.
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `enabled` | boolean | No | `true` | Enabled adds the reaction after the message is durably accepted and removes it when processing ends. It defaults to true. |
-| `emoji` | string | No | None | Emoji is the reaction name without colons. Left empty, the platform's own acknowledgment reaction is used (Slack: hourglass_flowing_sand). The API fills in no default, so a stored Binding does not carry one platform's reaction. Pattern `^(?:[a-z0-9][a-z0-9+_-]*|[+-][a-z0-9][a-z0-9+_-]*)?$`. |
+| `emoji` | string | No | None | Emoji is the reaction name without colons. Left empty, the platform's own acknowledgment reaction is used (Slack: hourglass_flowing_sand). The API fills in no default, so a stored Binding does not carry one platform's reaction. At most 100 bytes. Pattern `^(?:[a-z0-9][a-z0-9+_-]*|[+-][a-z0-9][a-z0-9+_-]*)?$`. At most 100 characters. |
 
 ## Trigger
 
@@ -102,7 +102,7 @@ Trigger is one way an event in the bound channel starts or continues a turn. Tri
 | `from` | [BotSource](#botsource) | No | None | From names the sender a botMessage trigger accepts. Required for botMessage. |
 | `match` | map[string]string | No | None | Match maps a message field to a regex it must match. Every entry must match. Keys: `text`, `title`, `link`, `fallback`, `footer`, `body`. |
 | `exclude` | map[string]string | No | None | Exclude maps a message field to a regex; a message matching any entry is ignored. Keys: `text`, `title`, `link`, `fallback`, `footer`, `body`. |
-| `extract` | map[string][Extract](#extract) | No | None | Extract names the values to pull out of a message. A message in which one of these regexes does not match does not match the trigger. At most 32. |
+| `extract` | map[string][Extract](#extract) | No | None | Extract names the values to pull out of a message. A message in which one of these regexes does not match does not match the trigger. At most 32, each named in at most 63 bytes. |
 | `thread` | [TriggerThread](#triggerthread) | No | None | Thread ties messages that share an extracted key to one thread. |
 | `promptTemplate` | string | No | None | PromptTemplate is a Go template over the trigger's view of the message (.Channel, .State, .Key, .Fields, .Link, .Source). Required for botMessage. At most 8192 bytes; it has no loops, variables or defined templates, and calls only and, eq, ge, gt, index, le, len, lt, ne, not, or and slice. At most 8192 characters. |
 | `limits` | [TriggerLimits](#triggerlimits) | No | None | Limits bounds how many investigations the trigger starts (rate, concurrency and a daily cap). Required for botMessage: both rateLimit and maxRunsPerDay. |
@@ -113,7 +113,7 @@ BotSource identifies the sender whose messages a trigger accepts: a message matc
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `id` | string | Yes | None | ID is the sender's ID on the platform, never a display name (Slack: the bot ID, `B…`). The load cannot know Agent Kourier's own ID, so naming it loads: Agent Kourier's own posts are never forwarded, so the trigger matches nothing, and the Slack adapter logs one warning, the first time one of its posts arrives. Pattern `^B[A-Z0-9]+$`. |
+| `id` | string | Yes | None | ID is the sender's ID on the platform, never a display name (Slack: the bot ID, `B…`). The load cannot know Agent Kourier's own ID, so naming it loads: Agent Kourier's own posts are never forwarded, so the trigger matches nothing, and the Slack adapter logs one warning, the first time one of its posts arrives. At most 32 bytes. Pattern `^B[A-Z0-9]+$`. At most 32 characters. |
 | `kind` | string | No | `bot` | Kind is what kind of sender ID names. Only bot exists today, and it is the default. One of `bot`. |
 
 ## Extract
@@ -132,9 +132,9 @@ TriggerThread decides which thread a message joins and when it closes the thread
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `by` | string | No | None | By is key: messages with the same extracted "key" share a thread. One of `key`. |
-| `cooldown` | duration | No | None | Cooldown is how long after a turn the same key starts no new turn. Required with by, and between 1m and 168h. Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. |
-| `maxIdle` | duration | No | Larger of `24h` and twice the cooldown | MaxIdle is how long an open thread may go without a message of its key before Agent Kourier counts it abandoned, so that the key's next fire starts a new investigation instead of a note. It covers a resolve that never arrived. It needs by, is at least twice the cooldown, and is at most 720h; unset means the larger of 24h and twice the cooldown. It must be longer than the sender's repeat interval (Alertmanager's repeat_interval): an alert that keeps firing repeats at that interval, and a maxIdle shorter than it counts a live alert abandoned between two repeats and starts a second investigation for it. Twice the cooldown covers that only for a 4h cooldown against Alertmanager's 4h repeat_interval; a longer repeat_interval needs a maxIdle set above it. Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. |
-| `closeWhen` | map[string]string | No | None | CloseWhen maps an extracted field to the value that closes the thread: Agent Kourier posts a note and starts no turn. Every entry must equal. It names only extracted fields, so it holds at most as many entries as extract does, 32. |
+| `cooldown` | duration | No | None | Cooldown is how long after a turn the same key starts no new turn. Required with by, and between 1m and 168h. Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. At most 64 characters. |
+| `maxIdle` | duration | No | Larger of `24h` and twice the cooldown | MaxIdle is how long an open thread may go without a message of its key before Agent Kourier counts it abandoned, so that the key's next fire starts a new investigation instead of a note. It covers a resolve that never arrived. It needs by, is at least twice the cooldown, and is at most 720h; unset means the larger of 24h and twice the cooldown. It must be longer than the sender's repeat interval (Alertmanager's repeat_interval): an alert that keeps firing repeats at that interval, and a maxIdle shorter than it counts a live alert abandoned between two repeats and starts a second investigation for it. Twice the cooldown covers that only for a 4h cooldown against Alertmanager's 4h repeat_interval; a longer repeat_interval needs a maxIdle set above it. Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. At most 64 characters. |
+| `closeWhen` | map[string]string | No | None | CloseWhen maps an extracted field to the value that closes the thread: Agent Kourier posts a note and starts no turn. Every entry must equal. It names only extracted fields, so it holds at most as many entries as extract does, 32. A value is at most 256 bytes. |
 
 ## TriggerLimits
 
@@ -152,7 +152,7 @@ RateLimit allows MaxRuns agent runs per window and MaxConcurrent at once.
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `maxRuns` | integer | Yes | None | Minimum 1. |
-| `per` | duration | Yes | None | Per is the window length. Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. |
+| `per` | duration | Yes | None | Per is the window length. Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. At most 64 characters. |
 | `maxConcurrent` | integer | Yes | None | Minimum 1. |
 
 ## ChatMention
@@ -161,8 +161,8 @@ ChatMention is one person an agent may notify.
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | string | Yes | None | Name is what the agent writes, after an `@`: lowercase letters, digits and `-`, starting with a letter, at most 63 characters. `here`, `channel` and `everyone` are refused. Pattern `^[a-z][a-z0-9-]{0,62}$`. |
-| `user` | string | Yes | None | User is the platform's user ID of the person (Slack: `U…` or `W…`). It comes only from here, never from the agent. Pattern `^[UW][A-Z0-9]{2,20}$`. |
+| `name` | string | Yes | None | Name is what the agent writes, after an `@`: lowercase letters, digits and `-`, starting with a letter, at most 63 characters. `here`, `channel` and `everyone` are refused. Pattern `^[a-z][a-z0-9-]{0,62}$`. At most 63 characters. |
+| `user` | string | Yes | None | User is the platform's user ID of the person (Slack: `U…` or `W…`). It comes only from here, never from the agent. Pattern `^[UW][A-Z0-9]{2,20}$`. At most 21 characters. |
 
 ## Interactions
 
@@ -172,8 +172,8 @@ Interactions configures agent pauses that wait on a person.
 |---|---|---|---|---|
 | `askUser` | boolean | No | `false` | AskUser lets the agent ask questions in the thread. Defaults to false. |
 | `toolApprovals` | boolean | No | `false` | ToolApprovals lets the agent ask a person to approve tool calls in the thread. Defaults to false. |
-| `approverGroups` | []string | No | None | ApproverGroups names the platform's user groups whose members may decide a tool approval, by the platform's ID (Slack: `S…`). An empty list allows any non-bot channel member. At most 10 groups may be named. Group IDs start with S and contain uppercase letters and digits; duplicates and empty entries are refused. |
-| `timeout` | duration | No | `30m` | Timeout is how long a pause waits for an answer. Defaults to 30m. At most 168h (7 days); a longer one is refused. Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. |
+| `approverGroups` | []string | No | None | ApproverGroups names the platform's user groups whose members may decide a tool approval, by the platform's ID (Slack: `S…`). An empty list allows any non-bot channel member. At most 10 groups may be named. Group IDs start with S and contain uppercase letters and digits, at most 32 bytes; duplicates and empty entries are refused. |
+| `timeout` | duration | No | `30m` | Timeout is how long a pause waits for an answer. Defaults to 30m. At most 168h (7 days); a longer one is refused. Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. At most 64 characters. |
 
 ## Feedback
 
@@ -189,7 +189,7 @@ Session configures thread-to-session mapping.
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `threadTTL` | duration | No | `2160h` | ThreadTTL is how long a thread keeps its session after its last activity. Defaults to 2160h (90 days). At most 8760h (365 days); a longer one is refused. Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. |
+| `threadTTL` | duration | No | `2160h` | ThreadTTL is how long a thread keeps its session after its last activity. Defaults to 2160h (90 days). At most 8760h (365 days); a longer one is refused. Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. At most 64 characters. |
 
 ## BindingStatus
 

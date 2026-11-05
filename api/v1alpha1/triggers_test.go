@@ -312,12 +312,18 @@ func TestParsePromptTemplate(t *testing.T) {
 // bot returns the botMessage trigger of binding.yaml, after defaulting, which is [1].
 func bot(o *Binding) *Trigger { return &o.Spec.Chat.Triggers[1] }
 
-// manyTriggers returns n valid triggers, the mention trigger and n-1 botMessage triggers of distinct senders.
+// manyTriggers returns n valid triggers, the mention trigger and n-1 botMessage triggers of distinct senders. Their regexes
+// are small: the fixture's trigger is about 370 instructions, so fifty of them are about 18500, over the budget of a Binding.
 func manyTriggers(o *Binding, n int) []Trigger {
 	ts := []Trigger{o.Spec.Chat.Triggers[0]}
 	for i := 1; i < n; i++ {
 		tr := *bot(o)
 		tr.From = &BotSource{ID: fmt.Sprintf("B%010d", i), Kind: SenderKindBot}
+		tr.Match, tr.Exclude = map[MessageField]string{FieldTitle: "^FIRING"}, nil
+		tr.Extract = map[string]Extract{}
+		for _, name := range []string{"state", "key", "alertname"} {
+			tr.Extract[name] = Extract{Field: FieldTitle, Regex: "(?P<" + name + ">x)"}
+		}
 		ts = append(ts, tr)
 	}
 	return ts
@@ -353,6 +359,9 @@ func TestTriggersValidate(t *testing.T) {
 		{"empty bot ID", func(o *Binding) { bot(o).From.ID = "" }, at + ".from.id: required"},
 		{"bot name instead of ID", func(o *Binding) { bot(o).From.ID = "alertmanager" },
 			at + `.from.id: invalid sender ID "alertmanager": must be the sender's ID (Slack: a bot ID such as B0123456789), not a name`},
+		{"a bot ID at the length cap ok", func(o *Binding) { bot(o).From.ID = "B" + strings.Repeat("0", maxChatIDLen-1) }, ""},
+		{"a bot ID over the length cap", func(o *Binding) { bot(o).From.ID = "B" + strings.Repeat("0", maxChatIDLen) },
+			at + fmt.Sprintf(".from.id: is %d bytes, longer than the %d byte limit", maxChatIDLen+1, maxChatIDLen)},
 		{"user ID instead of bot ID", func(o *Binding) { bot(o).From.ID = "U0123456789" },
 			at + `.from.id: invalid sender ID "U0123456789": must be the sender's ID (Slack: a bot ID such as B0123456789), not a name`},
 		{"kind other than bot", func(o *Binding) { bot(o).From.Kind = "webhook" },
@@ -420,6 +429,14 @@ func TestTriggersValidate(t *testing.T) {
 		{"extract name a template cannot read", func(o *Binding) {
 			bot(o).Extract["Alert-Name"] = Extract{Field: FieldTitle, Regex: `(?P<Alert_Name>x)`}
 		}, at + `.extract.Alert-Name: invalid extract name "Alert-Name": must start with a lower-case letter and use only letters, digits and '_', so a template can read .Fields.Alert-Name`},
+		{"an extract name at the length cap ok", func(o *Binding) {
+			name := strings.Repeat("e", maxExtractNameLen)
+			bot(o).Extract[name] = Extract{Field: FieldText, Regex: "(?P<" + name + ">x)"}
+		}, ""},
+		{"an extract name over the length cap", func(o *Binding) {
+			name := strings.Repeat("e", maxExtractNameLen+1)
+			bot(o).Extract[name] = Extract{Field: FieldText, Regex: "(?P<" + name + ">x)"}
+		}, at + fmt.Sprintf(".extract: entry 1, in name order, is named with %d bytes, longer than the %d byte limit", maxExtractNameLen+1, maxExtractNameLen)},
 		{"an extra extract is fine", func(o *Binding) {
 			bot(o).Extract["env"] = Extract{Field: FieldText, Regex: `env=(?P<env>\w+)`}
 		}, ""},
@@ -445,6 +462,12 @@ func TestTriggersValidate(t *testing.T) {
 		}, at + ".thread.closeWhen.status: not an extracted field"},
 		{"closeWhen with an empty value", func(o *Binding) { bot(o).Thread.CloseWhen["state"] = "" },
 			at + ".thread.closeWhen.state: required"},
+		{"a closeWhen value at the length cap ok", func(o *Binding) { bot(o).Thread.CloseWhen["state"] = strings.Repeat("v", maxCloseWhenValueLen) }, ""},
+		{"a closeWhen value over the length cap", func(o *Binding) { bot(o).Thread.CloseWhen["state"] = strings.Repeat("v", maxCloseWhenValueLen+1) },
+			at + fmt.Sprintf(".thread.closeWhen.state: is %d bytes, longer than the %d byte limit", maxCloseWhenValueLen+1, maxCloseWhenValueLen)},
+		{"a closeWhen key over the length cap", func(o *Binding) {
+			bot(o).Thread.CloseWhen[strings.Repeat("e", maxExtractNameLen+1)] = "x"
+		}, at + fmt.Sprintf(".thread.closeWhen: entry 0, in name order, is named with %d bytes, longer than the %d byte limit", maxExtractNameLen+1, maxExtractNameLen)},
 		{"closeWhen on an extra extracted field", func(o *Binding) {
 			bot(o).Extract["env"] = Extract{Field: FieldText, Regex: `env=(?P<env>\w+)`}
 			bot(o).Thread.CloseWhen = map[string]string{"env": "dev"}
