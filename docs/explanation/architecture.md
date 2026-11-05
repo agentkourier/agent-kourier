@@ -101,20 +101,20 @@ durable in the store; traces are exported only when configured.
 
 ## Configuration and deployment
 
-Agent Kourier reads resource-shaped YAML files from `AGENTKOURIER_CONFIG_DIR`.
-GitOps deploys those files as a ConfigMap alongside Secrets, the Agent Kourier
-Deployment, and persistent storage. The reloader validates changes and keeps the
-last accepted configuration if a reload fails. Secret access uses Kubernetes
-RBAC; cross-namespace resource references use configured namespace allowlists.
+Agent Kourier reads three kinds of resource, `ChatConnection`, `AgentBackend` and `Binding`, from one of two places, chosen when
+it starts. By default it reads resource-shaped YAML files from `AGENTKOURIER_CONFIG_DIR`, which GitOps deploys as a ConfigMap alongside
+Secrets, the Agent Kourier Deployment and persistent storage. The reloader validates changes and, if a reload fails, keeps the last accepted
+configuration. With the chart's `config.source: crds` it reads the same three kinds from the cluster as custom resources, one object
+at a time, so that teams can own their Bindings; there is no reconciliation controller, since the broker watches them itself, and the elected
+leader writes each Binding's `status`. The two routes are never merged. [Choose a config route](config-routes.md) says how they differ. Secret
+access uses Kubernetes RBAC; cross-namespace resource references use configured namespace allowlists.
 
-The config must hold exactly one `ChatConnection`; the broker refuses to start with more. Multiple bindings
+A broker serves one `ChatConnection`: see [One ChatConnection](config-routes.md#one-chatconnection) for how it is chosen on each route. Multiple bindings
 can route its channels to different agents and backends. The store is SQLite with
 one replica, or Postgres with one or two replicas (two are active and passive) (see
 [High availability](high-availability.md)); the broker is never active-active.
 
-The Helm chart can install the three kinds as CRDs and have the broker read them from the cluster
-(`config.source: crds`) instead of from files; there is no reconciliation controller, since the broker watches them
-itself. Agent Kourier does not
+Agent Kourier does not
 deploy an agent when it loads an `AgentBackend` or `Binding`: the runtime's own
 manifests, operator, or deployment tooling handle that lifecycle.
 

@@ -69,11 +69,22 @@ kubectl -n agent-kourier rollout restart deploy/agent-kourier
 agent-kourier: the broker cannot be wired: v1 serves exactly one ChatConnection, and the config has 2 [agent-kourier/slack, agent-kourier/slack2]
 ```
 
-The resource files loaded, but Agent Kourier cannot be put together from them, or an environment variable has a value
+The resources loaded, but Agent Kourier cannot be put together from them, or an environment variable has a value
 it cannot use. A restart fails the same way. The text after `the broker cannot be wired:` says which:
 
-- `v1 serves exactly one ChatConnection, and the config has` a count other than 1: keep exactly one entry under
-  `config.chatConnections`.
+- `v1 serves exactly one ChatConnection, and the config has` a count other than 1: this is the files route
+  (`config.source: files`), whose directory must hold exactly one. Keep exactly one entry under `config.chatConnections`. With
+  `config.source: crds` a cluster may hold many, and the broker serves the one it is told to, so this message does not occur.
+- `ChatConnection agent-kourier/slack was not found: AGENTKOURIER_CHAT_CONNECTION names the one connection this broker serves, and it must exist`:
+  the custom resource route. The ChatConnection that `config.chatConnection` names is not in the cluster. Apply it, or name the one that exists. The pod
+  restarts until it does, and starts at the next restart after it exists. `ChatConnection agent-kourier/slack is invalid` says why instead, in the
+  same way as the files' `load config` problems below.
+- `the custom resource definitions are not installed`: the custom resource route, and the CRDs are not in the cluster. Install them first, as in
+  [Move the config between a ConfigMap and custom resources](migrate-config-source.md#1-install-the-crds-still-on-the-configmap-route).
+- `AGENTKOURIER_CHAT_CONNECTION is required with AGENTKOURIER_CONFIG_SOURCE=crds`, `AGENTKOURIER_CHAT_CONNECTION is "x", want namespace/name`,
+  `is set with AGENTKOURIER_CONFIG_SOURCE=files, which serves the one ChatConnection of its directory: unset it`, and
+  `AGENTKOURIER_CONFIG_SOURCE is "...", want files or crds`: the variables disagree. The chart sets them from `config.source` and
+  `config.chatConnection`; check `extraEnv` for one of your own.
 - `ChatConnection agent-kourier/slack: read botToken of Secret agent-kourier/agent-kourier-slack:` (or `appToken`): the
   key is in the Secret but its value is empty. `kubectl create secret --from-literal=botToken="$SLACK_BOT_TOKEN"` stores an
   empty value when the variable is not set in that shell. Check that both variables are set, and replace the Secret as
@@ -82,8 +93,10 @@ it cannot use. A restart fails the same way. The text after `the broker cannot b
   `AGENTKOURIER_AUDIT_RETENTION is "1h", want keep, or a duration of at least 24h0m0s such as 8760h`. The chart sets these
   variables from its values (`auditRetention` here) and from `extraEnv`: fix the value there.
 
-A misspelt field, or a Secret that is missing or lacks a key, also exits 2, with `load config` after
+With the files route, a misspelt field, or a Secret that is missing or lacks a key, also exits 2, with `load config` after
 `the broker cannot be wired:`: see [The pod exits with code 2 and the error says `load config`](#the-pod-exits-with-code-2-and-the-error-says-load-config).
+With custom resources that never stops the broker: a bad object is left out and says so in its status (see
+[A Binding is not accepted](#a-binding-is-not-accepted)), except the broker's own ChatConnection, above.
 
 ## The pod exits with code 3
 
@@ -126,12 +139,13 @@ agent-kourier: bootstrap: the broker cannot be wired: load config: binding-my-bi
 binding-my-binding.yaml#1 Binding agent-kourier/my-binding: spec.chat.channel: required
 ```
 
-A resource file did not load. Each problem is on a line of its own: the file and the number of the document in it, the
+This is the files route (`config.source: files`): one resource file did not load, so none did. Each problem is on a line of its own: the file and the number of the document in it, the
 resource, the field, and what is wrong with it. With a ConfigMap the chart writes, the file is named after the
 resource's kind and name. The usual problems:
 
 - `unknown field`: a misspelt or misplaced field. The chart passes each `spec` through as written, so `helm lint` and
-  `helm template` accept it, and it shows only here, as a pod that restarts in a loop.
+  `helm template` accept it, and it shows only here, as a pod that restarts in a loop. (With custom resources the API server refuses
+  it when Helm applies it: see [Unknown fields](../explanation/config-routes.md#unknown-fields).)
 - `required`, or a value that does not match its pattern, such as a channel name where the channel ID belongs.
 - `not found` on a reference: a Binding's `connectionRef` or `backendRef` that names no resource, or a Secret that
   does not exist in that namespace.
@@ -254,6 +268,39 @@ Agent Kourier never saw the message. Check, in this order:
    The `slack: socket mode connected` line has a `num_connections` field. A fresh start
    can read 8 with no other consumer and replies still arriving, so treat a
    number above 1 as a reason to look and not as proof.
+
+## A Binding is not accepted
+
+With the config read from custom resources, `kubectl get akbinding -A` shows `False` in `READY` and `Accepted:<reason>` in `REASON`. This is
+the broker saying that it did not take the Binding as you wrote it. [Binding status](../reference/binding-status.md) explains the conditions. Read the
+reason and its message, which names the field:
+
+```sh
+kubectl -n team-a get akbinding team-a-chat -o yaml
+kubectl -n agent-kourier logs deploy/agent-kourier | grep 'config: '
+```
+
+The log of the leader, which the operator reads, has `config: a Binding is not accepted as written` with the `reason` and the `problem`, and
+`config: an object is refused` for an AgentBackend or ChatConnection that is invalid. `agentkourier_config_binding_rejections{reason="..."}`
+counts the Bindings in each reason, and `agentkourier_config_invalid_objects{kind="..."}` counts the invalid objects. With the files route none of this
+applies: a problem in one resource stops the whole config, as in [The pod exits with code 2 and the error says `load config`](#the-pod-exits-with-code-2-and-the-error-says-load-config).
+
+A Binding with no status at all, and empty `READY` and `REASON` columns, is either new (the broker writes its status within about 10 seconds) or names a ChatConnection
+that exists and that no broker serves: nothing reads it. Point its `connectionRef` at the connection a broker serves, which is in that broker's
+`AGENTKOURIER_CHAT_CONNECTION`.
+
+A Binding that is refused after an edit keeps running as it was: `message` says `serving generation 1`, and the other conditions describe that
+generation, while `Ready` is `False` with `Accepted:InvalidSpec`. A Binding with no earlier generation to serve is not served at all.
+
+| `reason` | What happened | What to do |
+|---|---|---|
+| `InvalidSpec` | The Binding fails a check of the broker. `message` names each field and the problem, for example `spec.chat.triggers[1]: duplicate of spec.chat.triggers[0]`. | Fix the field. The next apply is a new generation and is checked again. `kubectl apply --dry-run=server` catches what the schema checks, and the rules only the broker has (see [What is checked, and where](../explanation/config-routes.md#what-is-checked-and-where)) show only here. |
+| `BackendNotFound` | `spec.agent.backendRef` names an AgentBackend that does not exist: `AgentBackend team-a/nope not found`. | Check the name, and the namespace, which defaults to the Binding's. |
+| `BackendRejected` | The AgentBackend it names is invalid. If it had a good generation, that one is what runs, and `message` says which. | Fix the AgentBackend. In your own namespace `message` carries its problems. For one of another namespace it does not, so ask its owner. |
+| `ConnectionNotFound` | `spec.chat.connectionRef` names a ChatConnection that does not exist. No broker owns the Binding, so the leader of any broker that sees it writes this. | Check the name and the namespace. |
+| `ConnectionRejected` | The ChatConnection it names is invalid, as for `BackendRejected`. | Ask the owner of the ChatConnection. |
+| `NamespaceNotAllowed` | The AgentBackend or ChatConnection is in another namespace and its `allowedNamespaces` does not list the Binding's. The answer is the same whether the object is valid or not. | Ask the owner to list your namespace, or use an object of your own. |
+| `ChannelConflict` | Another Binding on the same ChatConnection holds the channel. The older one holds it, by `creationTimestamp`. If that Binding is in another namespace, `message` says only `a Binding in another namespace`. | Choose another channel. To find the holder, the operator reads the log line: it names it. [Who holds a channel](../explanation/config-routes.md#who-holds-a-channel) says how it is decided. |
 
 ## A Binding is not ready
 

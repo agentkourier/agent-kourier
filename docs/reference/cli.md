@@ -10,7 +10,9 @@ The broker is configured by environment variables, which the Helm chart sets fro
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `AGENTKOURIER_CONFIG_DIR` | `/etc/agent-kourier` | The directory of resource files (`*.yaml`). |
+| `AGENTKOURIER_CONFIG_SOURCE` | `files` | Where the resources are read from: `files` (also the meaning of unset) or `crds`. `files` reads `AGENTKOURIER_CONFIG_DIR`, all or nothing. `crds` reads `Binding`, `AgentBackend` and `ChatConnection` custom resources from the cluster, one object at a time, ignores the directory, and has the leader write `Binding.status`. Any other value exits with code 2. The two are never merged: a broker on `files` ignores custom resources. See [Choose a config route](../explanation/config-routes.md). |
+| `AGENTKOURIER_CONFIG_DIR` | `/etc/agent-kourier` | With `files`, the directory of resource files (`*.yaml`). |
+| `AGENTKOURIER_CHAT_CONNECTION` | | With `crds`, required: the one ChatConnection this broker serves, as `namespace/name`. It serves only the Bindings whose `connectionRef` names it. With `files` it is refused (exit code 2): the directory must hold exactly one ChatConnection. The chart sets it from `config.chatConnection`. |
 | `AGENTKOURIER_STORE` | `sqlite` | `sqlite` (one replica) or `postgres`. |
 | `AGENTKOURIER_DB_PATH` | `/data/agent-kourier.db` | The SQLite file, on the volume. A database from before the rename is in `courier.db`; point this at it to keep it (see [Upgrade](../how-to/upgrade.md#upgrade-across-the-rename)). |
 | `AGENTKOURIER_POSTGRES_DSN_SECRET` | | With `postgres`: where the DSN is, as `namespace/name/key` of a Secret, read through the Secret caches. Its namespace needs the same list and watch Role as the config's. |
@@ -47,8 +49,8 @@ timings mean for a takeover.
 |---|---|
 | 0 | Stopped after a signal. |
 | 1 | Slack rejected the tokens. A restart would be rejected again. |
-| 2 | The config, the wiring, or an environment variable is wrong. |
-| 3 | The API server denied access to Secrets. |
+| 2 | The config, the wiring, or an environment variable is wrong. With `crds` also: the CRDs are not installed, or the broker's own ChatConnection is missing or invalid at start. |
+| 3 | The API server denied access to Secrets, or, with `crds`, to the custom resources. |
 | 4 | Any other failure, such as the Secret caches not syncing. |
 | 5 | It was the leader and lost the lease, met a stale epoch, or had a chat write or an agent call refused because its lease was past the renew deadline. It ends at once, and Kubernetes restarts it as a standby. |
 
@@ -59,7 +61,7 @@ Slack (`conversations.history`), and posts, starts and writes nothing.
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--config` | `$AGENTKOURIER_CONFIG_DIR` | The directory of resource files, loaded with the broker's loader. |
+| `--config` | `$AGENTKOURIER_CONFIG_DIR` | The directory of resource files, loaded with the broker's loader. It always reads files, whatever the route of the install: to check custom resources against the CRDs, use `kubectl apply --dry-run=server`. |
 | `--binding` | | The Binding, as `namespace/name`. |
 | `--channel` | the Binding's | Another channel to read. |
 | `--token-file` | | A file with the bot token, alone or as a `SLACK_BOT_TOKEN=` line. Else `SLACK_BOT_TOKEN`. The file must be a regular file that the group and others cannot read. |

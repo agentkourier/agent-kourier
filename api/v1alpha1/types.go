@@ -232,7 +232,6 @@ type Binding struct {
 	Spec BindingSpec `json:"spec"`
 	// Status is the observed state of the Binding. It is set through the status subresource and never in a file: the
 	// file loader refuses a Binding file that sets it.
-	// +doc:hide
 	// +optional
 	Status BindingStatus `json:"status,omitzero"`
 }

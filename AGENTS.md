@@ -17,7 +17,10 @@ Directories appear when the work package that owns them lands; do not create emp
 ```
 cmd/agent-kourier/      entrypoint: the broker, the dry-run subcommand, --version
 api/v1alpha1/           resource types (Binding, AgentBackend, ChatConnection) and their validation
-internal/config         file loader for resources (Binding resolution, reload)
+internal/config         the config sources' shared core: the file loader, Binding resolution (all or nothing, or one object at a time), reload and its report
+internal/config/crsource   the custom resource source (AGENTKOURIER_CONFIG_SOURCE=crds): informers of the three kinds, the last good generation of each object
+internal/config/k8ssecrets per-Secret informers behind the Secret resolver
+internal/config/sourcetest conformance suite that the file source and the custom resource source both run
 internal/session        session manager (turns, reply queue, controls, recovery)
 internal/agent          A2A client: streaming, reconnect, typed outcomes, client pool
 internal/dialect        agent-dialect adapters (kagent, generic a2a)
@@ -40,7 +43,8 @@ internal/testhooks      test-only hooks, compiled in under the testhooks build t
 charts/agent-kourier    Helm chart
 examples/ax             reference A2A agent for Google AX (separate module)
 docs/                   the documentation site (mkdocs; docs/brand is the brand kit and is not published)
-test/{fakeslack,stubagent,e2e,fixtures,kindmanifests,chart,crdcorpus,...}
+test/{fakeslack,stubagent,e2e,fixtures,kindmanifests,chart,...}
+test/crdcorpus          valid and invalid objects that the CRD schemas and the broker's Validate must treat alike (`make crd-corpus` sends them to a real API server)
 hack/kind/              kind tier scripts (fast, full, ax, sandbox)
 hack/{docs,release,postgres,crdhashes}  doc generators, release scripts, Postgres test helpers, the CRD schema hashes
 ```

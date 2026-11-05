@@ -6,6 +6,11 @@ A2A
 :   The Agent2Agent protocol. Agent Kourier speaks A2A 1.0 over JSON-RPC, and A2A 0.3 to an agent whose card is a 0.3
     card, and needs an agent that streams.
 
+Accepted
+:   The condition of a Binding's status that says the broker took the Binding as written. With custom resources it is
+    `False` with a reason such as `InvalidSpec` or `ChannelConflict` when it did not
+    ([Binding status](binding-status.md)).
+
 Actor
 :   Who a turn is from, as the agent sees it: the `agentkourier.dev/actor` metadata (`id`, `platform`, and `name` and
     `email` when the chat platform knows them) and the prefix at the start of the text. It is information for the agent,
@@ -28,8 +33,8 @@ Binding identity
 
 Binding verification
 :   The leader's repeated check that a Binding can be served: that its agent's card can be fetched and that the bot is
-    in its channel. It reports through metrics and log lines and changes nothing else. See
-    [Metrics](metrics.md#binding-verification).
+    in its channel. It reports through metrics and log lines and, with custom resources, in the Binding's status, and changes
+    nothing else. See [Metrics](metrics.md#binding-verification) and [Binding status](binding-status.md).
 
 Channel
 :   A place in a chat platform where people post, named by its ID. One channel takes at most one Binding per
@@ -38,6 +43,10 @@ Channel
 ChatConnection
 :   The resource that connects Agent Kourier to one chat platform workspace, with the Secret that holds its tokens.
     Owned by the platform team.
+
+Config route
+:   Where the broker reads its resources from, chosen when it starts: `files` (the default, usually a ConfigMap, all or nothing) or `crds`
+    (custom resources, one object at a time). See [Choose a config route](../explanation/config-routes.md).
 
 Context
 :   The A2A `contextId` that a session maps to. Agent Kourier resumes the same context for every turn of a thread.

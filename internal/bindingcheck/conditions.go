@@ -4,7 +4,9 @@
 //
 // The package does no I/O of its own and knows neither the agent client nor a chat platform. A Prober calls the
 // AgentChecker and ChannelChecker it is given, and records what they report in a State. The conditions are shaped
-// like metav1.Condition so that a later controller can copy them into a status unchanged.
+// like metav1.Condition so that they can be copied into a status: with the custom resource config source, the elected
+// leader's status writer (internal/broker) does, keeping each condition's own observedGeneration and leaving out
+// LastProbeTime and Cause.
 package bindingcheck
 
 import "time"
