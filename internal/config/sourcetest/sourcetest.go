@@ -1,7 +1,8 @@
 // Package sourcetest is the conformance suite of config.Source: what every source of config objects must do the same, run
 // by the file source and by the custom resource source, so that the two routes decode, default, validate and resolve one
 // object the same way (spec D50). A source differs in how it handles a bad object, which is the failure model of its route,
-// and the suite checks the two models as two ways of saying the same problem.
+// and the suite checks the two models as two ways of saying the same problem. It differs in one thing more, which Options
+// names: whether a field that the types do not have is a problem or is ignored.
 //
 // A test that wants a source in the suite gives Run a Factory that builds it over a corpus: a set of YAML documents and the
 // ChatConnection that the source is to serve. The corpora are the API's examples and each recipe's, and the suite compares what
@@ -47,6 +48,10 @@ type Options struct {
 	// PerObject means that a bad object is left out of the Set and listed in Set.Invalid while the rest is read, as the
 	// custom resources do. Otherwise Set fails with the problems, as the loader of files does, and returns no Set.
 	PerObject bool
+	// IgnoresUnknownFields means that the source serves an object that has a field the types do not have, and ignores the
+	// field, as the custom resources do (the API server's schema decides what an object holds, and a broker may be older
+	// than its CRDs). Otherwise the object is refused with the problem "path: unknown field", as the files are.
+	IgnoresUnknownFields bool
 }
 
 // Run runs the suite against the source that f builds.
@@ -311,6 +316,12 @@ func invalidObjects(t *testing.T, f Factory, base Corpus, opts Options) {
 			docs, problem := invalid(t, c)
 			src := f(t, Corpus{Name: base.Name, Docs: docs, Connection: base.Connection})
 			set, fp, err := src.Set(context.Background())
+			if opts.IgnoresUnknownFields && strings.HasSuffix(problem, ": unknown field") {
+				if err != nil || len(set.Invalid) != 0 || len(viewsOf(t, set)) != 4 {
+					t.Fatalf("Set = %d objects, Invalid %+v, error %v; want all four objects, none refused, for a field the type does not have", len(viewsOf(t, set)), set.Invalid, err)
+				}
+				return
+			}
 			if fp == "" {
 				t.Error("Set returned no fingerprint with the problem, which a Reloader needs to not try the same state again")
 			}

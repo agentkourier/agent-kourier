@@ -4,8 +4,9 @@
 //
 // # What it gives
 //
-// Every object goes through config.DecodeObject, the decoder of the file loader, so a custom resource and a file are held
-// to the same Default and Validate. Unlike the files, one bad object is not a bad config: an object that fails to decode or
+// Every object goes through config.DecodeObject, which runs the Default and Validate of the file loader, so a custom resource
+// and a file are held to the same checks. They differ in one thing: a field that the broker's types do not have is not a
+// reason to refuse a custom resource (see "Unknown fields"). Unlike the files, one bad object is not a bad config: an object that fails to decode or
 // validate is left out of the Set and listed in Set.Invalid, and when the object had a good generation, that generation is
 // kept in memory and put in the Set in its place, so that a typo in an update does not take a Binding out of routing. A
 // Reloader that is PerObject turns the two into what is served and what is reported.
@@ -17,6 +18,17 @@
 // A Binding that names another existing connection belongs to the broker that serves that one, and is not in the Set and not
 // reported here. If the own connection is deleted while the broker runs, the Set keeps the last good generation of it, and
 // says so in Set.Invalid.
+//
+// # Unknown fields
+//
+// On this route the API server's schema is the arbiter of what an object may hold, and a broker is routinely older than the CRDs
+// of its cluster: CRDs are applied before an upgrade, an image-only rollback leaves them new, and the API server adds a
+// field with a default to every stored object it serves, with no change of generation. A broker that refused such a field
+// would serve no Binding, and one that refused a field of status or metadata would drop sessions. So decoding ignores a
+// field it has no type for, in spec, status and metadata, on every kind; the file route's decoder keeps refusing. Each
+// is named in the log, once for each generation of the object: the object and the path of the field, never a value. The
+// metric agentkourier_crd_schema_state says that the CRDs and the broker differ. A field the broker does know, with a value it
+// cannot read or that Validate refuses, is still a bad object.
 //
 // # The hold
 //
@@ -143,12 +155,14 @@ type Options struct {
 // key identifies an object of one kind.
 type key struct{ kind, namespace, name string }
 
-// goodObject is the last generation of an object that passed Default and Validate, as the JSON it was decoded from. It is
-// decoded again for each Set, so that no Set shares memory with another.
+// goodObject is the last generation of an object that passed Default and Validate. It holds the object as the informer's cache
+// held it, a pointer and not a copy, so that an object that is still the cache's costs nothing more than the cache: only a
+// generation that was refused, or an object that is gone, keeps one the cache no longer has. It is read only (nothing may
+// change a cached object), and it is decoded again for each Set, so that no Set shares memory with another.
 type goodObject struct {
 	uid        types.UID
 	generation int64
-	json       []byte
+	obj        *unstructured.Unstructured
 	goneAt     time.Time // when a read first found the object gone, zero while it is there
 	settledAt  time.Time // when the deletion took effect, zero while it is deferred (served as if still there) or the object is there
 	held       bool      // the hold took it: it stays until the connection is back
@@ -182,6 +196,7 @@ type Source struct {
 	stores  [3]cache.Store // bindings, backends, connections
 	synced  [3]cache.InformerSynced
 	good    map[key]goodObject
+	warned  map[key]warnedGeneration // the generation of each object whose unknown fields the log has named
 	started bool
 
 	bindingEvents atomic.Uint64 // the events the Binding informer has delivered (BindingEvents)
@@ -208,7 +223,7 @@ func New(opts Options) (*Source, error) {
 		return nil, errors.New("crsource: Options.Connection must name a ChatConnection as namespace and name")
 	}
 	s := &Source{
-		client: opts.Client, log: cmp.Or(opts.Logger, slog.Default()), good: map[key]goodObject{},
+		client: opts.Client, log: cmp.Or(opts.Logger, slog.Default()), good: map[key]goodObject{}, warned: map[key]warnedGeneration{},
 		own: key{config.KindChatConnection, opts.Connection.Namespace, opts.Connection.Name}, now: time.Now,
 		probeEvery: probeEvery, probeTimeout: probeTimeout,
 	}
@@ -238,6 +253,8 @@ func (s *Source) Start(ctx context.Context) error {
 	s.mu.Lock()
 	for i, gvr := range gvrs {
 		inf := factory.ForResource(gvr).Informer()
+		// The informer holds each object it lists, for as long as it runs, so what the broker never reads is dropped as it comes in.
+		_ = inf.SetTransform(slim)
 		// The handler replaces client-go's, which logs through klog. The only error is an informer that has started.
 		_ = inf.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
 			s.errMu.Lock()
@@ -481,6 +498,11 @@ func (s *Source) Set(context.Context) (*config.Set, string, error) {
 	read(s, config.KindChatConnection, l.connections, live,
 		func(u *unstructured.Unstructured) bool { return keyOf(config.KindChatConnection, u) == s.own }, &set.ChatConnections, &set.Invalid)
 	read(s, config.KindBinding, l.bindings, live, func(u *unstructured.Unstructured) bool { return s.owns(l, u) }, &set.Bindings, &set.Invalid)
+	for k := range s.warned { // what is not read now has no generation to be told of again
+		if !live[k] {
+			delete(s.warned, k)
+		}
+	}
 
 	// The broker's own connection is held when it is deleted: a running broker keeps its last good one, and with it what
 	// the connection's Bindings and their backends were (see the package comment).
@@ -489,7 +511,7 @@ func (s *Source) Set(context.Context) (*config.Set, string, error) {
 	if !live[s.own] {
 		if g, ok := s.good[s.own]; ok {
 			ownGood = g
-			ownConn, _ = config.DecodeObject[v1alpha1.ChatConnection](g.json)
+			ownConn, _, _ = decodeObject[v1alpha1.ChatConnection](g.obj)
 		}
 	}
 	now := s.clock()
@@ -570,11 +592,11 @@ func (s *Source) serveDeferred(l listing, set *config.Set) {
 		}
 		switch k.kind {
 		case config.KindBinding:
-			if b, _ := config.DecodeObject[v1alpha1.Binding](g.json); b != nil {
+			if b, _, _ := decodeObject[v1alpha1.Binding](g.obj); b != nil {
 				set.Bindings = append(set.Bindings, *b)
 			}
 		case config.KindAgentBackend:
-			if be, _ := config.DecodeObject[v1alpha1.AgentBackend](g.json); be != nil {
+			if be, _, _ := decodeObject[v1alpha1.AgentBackend](g.obj); be != nil {
 				set.AgentBackends = append(set.AgentBackends, *be)
 			}
 		}
@@ -653,11 +675,10 @@ func (s *Source) hold(l listing, live map[key]bool, set *config.Set) (bindings, 
 		if !gone(k, config.KindBinding) {
 			continue
 		}
-		var raw unstructured.Unstructured
-		if raw.UnmarshalJSON(g.json) != nil || refOf(config.KindChatConnection, &raw, "spec", "chat", "connectionRef") != s.own {
+		if refOf(config.KindChatConnection, g.obj, "spec", "chat", "connectionRef") != s.own {
 			continue
 		}
-		b, _ := config.DecodeObject[v1alpha1.Binding](g.json)
+		b, _, _ := decodeObject[v1alpha1.Binding](g.obj)
 		if b == nil {
 			continue
 		}
@@ -681,7 +702,7 @@ func (s *Source) hold(l listing, live map[key]bool, set *config.Set) (bindings, 
 		if !ok || !gone(k, config.KindAgentBackend) {
 			continue
 		}
-		be, _ := config.DecodeObject[v1alpha1.AgentBackend](g.json)
+		be, _, _ := decodeObject[v1alpha1.AgentBackend](g.obj)
 		if be == nil {
 			continue
 		}
@@ -697,8 +718,7 @@ func (s *Source) hold(l listing, live map[key]bool, set *config.Set) (bindings, 
 		have[key{config.KindAgentBackend, be.Namespace, be.Name}] = true
 	}
 	for _, k := range heldBindings {
-		var raw unstructured.Unstructured
-		if raw.UnmarshalJSON(s.good[k].json) == nil && !have[refOf(config.KindAgentBackend, &raw, "spec", "agent", "backendRef")] {
+		if !have[refOf(config.KindAgentBackend, s.good[k].obj, "spec", "agent", "backendRef")] {
 			withoutBackend++
 		}
 	}
@@ -740,26 +760,19 @@ func read[T any, PT interface {
 		if !mine && !same {
 			continue
 		}
-		j, err := u.MarshalJSON()
-		var obj *T
-		var errs []error
-		if err != nil {
-			errs = []error{err}
-		} else {
-			obj, errs = config.DecodeObject[T, PT](j)
-		}
+		obj, unknown, errs := decodeObject[T, PT](u)
+		s.noteUnknown(k, u, unknown)
 		if obj != nil {
 			if !mine { // a valid edit to another broker's connection: the Binding is that broker's now, and the pruning forgets it
 				continue
 			}
 			live[k] = true
-			s.good[k] = goodObject{uid: u.GetUID(), generation: u.GetGeneration(), json: j}
+			s.good[k] = goodObject{uid: u.GetUID(), generation: u.GetGeneration(), obj: u}
 			*dst = append(*dst, *obj)
 			continue
 		}
 		if !mine { // refused, and its own words say it is another broker's: the last good generation says otherwise
-			prev := &unstructured.Unstructured{}
-			if prev.UnmarshalJSON(g.json) != nil || !owns(prev) {
+			if !owns(g.obj) {
 				continue
 			}
 		}
@@ -772,13 +785,85 @@ func read[T any, PT interface {
 			inv.AllowedNamespaces, _, _ = unstructured.NestedStringSlice(u.Object, "spec", "allowedNamespaces")
 		}
 		if same {
-			if last, _ := config.DecodeObject[T, PT](g.json); last != nil {
+			if last, _, _ := decodeObject[T, PT](g.obj); last != nil {
 				*dst = append(*dst, *last)
 				inv.Served = g.generation
 			}
 		}
 		*invalid = append(*invalid, inv)
 	}
+}
+
+// decodeObject is config.DecodeObject of the JSON of u.
+func decodeObject[T any, PT interface {
+	*T
+	Default()
+	Validate() error
+}](u *unstructured.Unstructured) (*T, []string, []error) {
+	j, err := u.MarshalJSON()
+	if err != nil {
+		return nil, nil, []error{err}
+	}
+	return config.DecodeObject[T, PT](j)
+}
+
+// lastApplied is the annotation that kubectl apply puts on an object: a copy of the whole object.
+const lastApplied = "kubectl.kubernetes.io/last-applied-configuration"
+
+// slim is the informers' transform. It drops from each object, before it is cached, what no code of the broker reads and what
+// can be as large as the object itself: metadata.managedFields, which the API server keeps for every manager that has
+// written the object, and the last-applied-configuration annotation, which a client-side apply keeps as a second copy of
+// the spec. Neither is in the fingerprint, in a decoded object that the broker reads, or in a status.
+func slim(obj any) (any, error) {
+	u, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		return obj, nil
+	}
+	u.SetManagedFields(nil)
+	if a := u.GetAnnotations(); a != nil {
+		if _, has := a[lastApplied]; has {
+			delete(a, lastApplied)
+			if len(a) == 0 {
+				a = nil
+			}
+			u.SetAnnotations(a)
+		}
+	}
+	return obj, nil
+}
+
+// warnedGeneration is the object, by uid, and the generation of it whose unknown fields the log has named.
+type warnedGeneration struct {
+	uid        types.UID
+	generation int64
+}
+
+// maxNamedFields bounds how many unknown fields one log line names.
+const maxNamedFields = 10
+
+// noteUnknown says, once for each generation of an object, which fields of it this broker has no type for. The caller holds
+// s.mu. The API server's schema decides what an object may hold, and a broker that is older than the CRDs of its cluster
+// meets fields it does not know: a later release adds a field and the API server defaults it onto every stored object, with
+// no change of generation. They are ignored and are no reason to refuse the object. The line names the object and the paths
+// of the fields, and never a value.
+func (s *Source) noteUnknown(k key, u *unstructured.Unstructured, fields []string) {
+	if len(fields) == 0 {
+		delete(s.warned, k)
+		return
+	}
+	w := warnedGeneration{u.GetUID(), u.GetGeneration()}
+	if s.warned[k] == w {
+		return
+	}
+	s.warned[k] = w
+	named := fields
+	if len(named) > maxNamedFields {
+		named = named[:maxNamedFields]
+	}
+	s.log.Warn("a custom resource has fields this broker does not know, and ignores them; the CRDs of the cluster are probably newer than "+
+		"this broker, which agentkourier_crd_schema_state shows when they carry another schema hash",
+		"kind", k.kind, "namespace", k.namespace, "name", k.name, "generation", u.GetGeneration(),
+		"fields", strings.Join(named, ", "), "unknown_fields", len(fields))
 }
 
 // joinErrors renders each error on its own, separated by "; ".
