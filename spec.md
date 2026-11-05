@@ -499,11 +499,11 @@ spec:
     askUser: true
     toolApprovals: false             # true enables kagent-v1 approval prompts
     # approverGroups: [S0123456789]  # optional Slack user groups for approvals
-    timeout: 30m
+    timeout: 30m                     # at most 168h (7 days)
   feedback:
     enabled: true
   session:
-    threadTTL: 2160h                 # 90 days
+    threadTTL: 2160h                 # 90 days; at most 8760h (365 days)
 ```
 
 The three documents above (`AgentBackend` `kagent-pilot`, `ChatConnection` `slack-main`, `Binding`
@@ -855,7 +855,7 @@ best effort, then clears it and cancels its pending interactions, so that the se
 ended; a task a runner of the leader still holds is left to that runner. A session whose Binding has left the config is held to the longest threadTTL of
 any Binding (and at least the default) plus the grace.
 
-**Thread lifetime.** The mapping is kept for `threadTTL` (90 days) after the last
+**Thread lifetime.** The mapping is kept for `threadTTL` (90 days; at most 8760h, which `Validate` and the CRD both refuse to exceed, as they do an `interactions.timeout` over 168h) after the last
 activity, and a reply at any point in that window resumes the same `contextId`. kagent
 suspends and resumes idle sessions on its own. If the backend reports that the session
 no longer exists, Agent Kourier says so in the thread, clears the stored context, and the next

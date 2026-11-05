@@ -527,7 +527,7 @@ that trigger starts. Size `resources.limits.memory` for the number of agents tha
 ## Upgrade to the release that caps the pause timeout and the thread TTL
 
 `interactions.timeout` and `session.threadTTL` had a lower bound and no upper one. This release refuses a config that sets either over its cap, and
-loads a config within the caps as before. Nothing else about a Binding changes. No example, recipe or kind tier config in this repository sets either over
+loads a config within the caps as before. No example, recipe or kind tier config in this repository sets either over
 its cap. [Limits](../reference/limits.md) lists both.
 
 | Field | Cap | The error |
@@ -539,17 +539,34 @@ Both apply on both routes. On the custom resource route the API server also refu
 (`is out of range, must be at most 168h`, or `8760h`). The retention of sessions needs the cap: it holds the sessions of a Binding that has left the config to the longest
 `threadTTL` of any Binding that is in it, so a very long one made every tenant's orphaned sessions live as long.
 
+!!! warning "Lowering a `threadTTL` deletes sessions"
+    A `threadTTL` over the cap has to come down to 8760h or less, and that shortens how long the Binding's threads live. A thread that has been idle for longer than the new
+    `threadTTL` expires: a reply in it gets the notice that the conversation has expired. A session idle for longer than the new `threadTTL` plus the 90 days of grace is
+    deleted at the next sweeps of the retention, with its reply queue, interactions and outbox rows and the rest in
+    [Stored data](../reference/stored-data.md#sessions-and-what-belongs-to-them); only its votes are kept. A deleted session does not come back, and a
+    [rollback](#roll-back) does not restore it. Lowering a Binding from 5 years to 8760h deletes the sessions of its threads that were idle for more than 455 days.
+    Check how long the Binding's threads have been idle before you change the value.
+
 **With the files route**, a Binding over a cap fails the config as any invalid file does: at start-up the broker exits with [code 2](../reference/cli.md#exit-codes) and names the
 field, so the upgraded pod never becomes Ready, and a running broker that reloads keeps its last good config.
 
 **With custom resources**, a Binding already in the cluster over a cap is not removed or changed. The upgrade restarts the broker, which has no earlier generation of it
 to keep serving, so it does not serve that Binding: its status says `Accepted=False` with the reason `InvalidSpec` and the error above, and it takes no message until you lower the value.
-Other Bindings are not affected. The sessions of a Binding that exists and is not served are not deleted while it is not served. Whether the API server lets you edit another
-field of such a Binding before you lower the value is Kubernetes's rule on unchanged invalid fields, which was not run here: lower the value in the same edit.
+Its own sessions are not deleted while it is not served. A broker that was already running when you edit a Binding over a cap keeps serving the last good generation
+(the status says `InvalidSpec` and `serving generation N`), and the next restart takes the Binding out of routing, as
+[what the custom resource route does not promise](../explanation/config-routes.md#what-the-custom-resource-route-does-not-promise) says.
+Whether the API server lets you edit another field of such a Binding before you lower the value depends on how it treats a stored value that breaks a rule: an ordinary update of such a
+Binding is accepted from Kubernetes 1.30 (see [the chart's README](https://github.com/agentkourier/agent-kourier/blob/main/charts/agent-kourier/README.md)); lower the value in the same edit anyway.
+
+**Other Bindings' sessions can be deleted by this, with no one editing them.** The sessions of a Binding that is not in the config (one that was deleted) are held to the longest
+`threadTTL` of the Bindings that are served, and to at least the default, plus the 90 days. A Binding that is not served drops out of that longest, so while a Binding with a `threadTTL`
+of 5 years is not served, the sessions of deleted Bindings that it was keeping, those idle for more than 180 days (the default, plus the 90), are past deleting at the next sweeps.
+Upgrading with such a Binding does this, because the upgrade stops serving it. Lower its `threadTTL` before you upgrade, with the warning above in mind, or accept that the
+sessions of deleted Bindings that were idle for more than 180 days, and for less than the old longest `threadTTL` plus 90 days, go.
 
 **Check before you upgrade.** Run `agent-kourier dry-run` of the new release against your files, as in
 [the release that bounds triggers](#upgrade-to-the-release-that-bounds-triggers-extract-entries-and-headers). It reports each of these errors without a token. It reads files,
 never the cluster, so on the custom resource route give it the YAML you applied, and list the Bindings in the cluster for a `threadTTL` or `timeout` over a cap
-(`kubectl get bindings -A -o yaml`).
+(`kubectl get akbinding -A -o yaml`).
 
-An earlier release has no cap, so after a [rollback](#roll-back) a config over one loads again.
+An earlier release has no cap, so after a [rollback](#roll-back) a config over one loads again. Sessions deleted after you lowered a `threadTTL` stay deleted.

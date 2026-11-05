@@ -310,7 +310,7 @@ func (r *retention) clearAcknowledgments(ctx context.Context, rows []store.Reply
 var neverPast = time.Unix(0, 0).UTC()
 
 // horizon is the time ttl and grace before now. It saturates: a negative term counts as zero and a sum past the largest
-// Duration is the largest Duration (about 292 years), so a threadTTL that no config would hold, or a stored one, never
+// Duration is the largest Duration (about 292 years), so a threadTTL that no config would hold never
 // wraps round to a horizon after now, which would make every session before it past deleting.
 func horizon(now time.Time, ttl, grace time.Duration) time.Time {
 	ttl, grace = max(ttl, 0), max(grace, 0)
