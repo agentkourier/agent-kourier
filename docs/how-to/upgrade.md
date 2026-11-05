@@ -523,3 +523,33 @@ streams that ended right after their event, instead of staying open, were no bet
 garbage collector's timing decided). Nothing bounds how many streams or calls are open at once; the `rateLimit.maxConcurrent` of a `botMessage` trigger limits only the investigations
 that trigger starts. Size `resources.limits.memory` for the number of agents that can answer at once, with the worst shape in mind, and see
 [the release that sets GOMEMLIMIT](#upgrade-to-the-release-that-sets-gomemlimit).
+
+## Upgrade to the release that caps the pause timeout and the thread TTL
+
+`interactions.timeout` and `session.threadTTL` had a lower bound and no upper one. This release refuses a config that sets either over its cap, and
+loads a config within the caps as before. Nothing else about a Binding changes. No example, recipe or kind tier config in this repository sets either over
+its cap. [Limits](../reference/limits.md) lists both.
+
+| Field | Cap | The error |
+|---|---|---|
+| `spec.interactions.timeout` of a Binding | 168 hours (7 days) | `spec.interactions.timeout: 169h0m0s is out of range, must be at most 168h0m0s` |
+| `spec.session.threadTTL` of a Binding | 8760 hours (365 days) | `spec.session.threadTTL: 8761h0m0s is out of range, must be at most 8760h0m0s` |
+
+Both apply on both routes. On the custom resource route the API server also refuses a Binding over a cap when you create or update it, with a rule of the CRD
+(`is out of range, must be at most 168h`, or `8760h`). The retention of sessions needs the cap: it holds the sessions of a Binding that has left the config to the longest
+`threadTTL` of any Binding that is in it, so a very long one made every tenant's orphaned sessions live as long.
+
+**With the files route**, a Binding over a cap fails the config as any invalid file does: at start-up the broker exits with [code 2](../reference/cli.md#exit-codes) and names the
+field, so the upgraded pod never becomes Ready, and a running broker that reloads keeps its last good config.
+
+**With custom resources**, a Binding already in the cluster over a cap is not removed or changed. The upgrade restarts the broker, which has no earlier generation of it
+to keep serving, so it does not serve that Binding: its status says `Accepted=False` with the reason `InvalidSpec` and the error above, and it takes no message until you lower the value.
+Other Bindings are not affected. The sessions of a Binding that exists and is not served are not deleted while it is not served. Whether the API server lets you edit another
+field of such a Binding before you lower the value is Kubernetes's rule on unchanged invalid fields, which was not run here: lower the value in the same edit.
+
+**Check before you upgrade.** Run `agent-kourier dry-run` of the new release against your files, as in
+[the release that bounds triggers](#upgrade-to-the-release-that-bounds-triggers-extract-entries-and-headers). It reports each of these errors without a token. It reads files,
+never the cluster, so on the custom resource route give it the YAML you applied, and list the Bindings in the cluster for a `threadTTL` or `timeout` over a cap
+(`kubectl get bindings -A -o yaml`).
+
+An earlier release has no cap, so after a [rollback](#roll-back) a config over one loads again.

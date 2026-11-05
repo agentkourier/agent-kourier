@@ -7,12 +7,14 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"math"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
@@ -644,6 +646,46 @@ func TestRetentionPurgesSessionsPastTheirBindingsHorizon(t *testing.T) {
 				t.Errorf("PurgeExpiredSessions calls = %+v; want one, of a batch of 3, with the horizons %+v", calls, tc.want)
 			}
 		})
+	}
+}
+
+// A horizon is never after now, whatever the threadTTLs and the grace: a threadTTL that the config forbids (it caps it at
+// a year) but a stored or future value could still be, and a sum of it and the grace that overflows a Duration, must not
+// turn into a future horizon, past which every session of a Binding that has left the config would be deleted.
+func TestSessionHorizonsNeverFallAfterNow(t *testing.T) {
+	const maxDuration = time.Duration(math.MaxInt64)
+	for _, tc := range []struct {
+		name  string
+		ttl   time.Duration
+		grace time.Duration
+	}{
+		{"a threadTTL of the largest Duration", maxDuration, defaultSessionGrace},
+		{"a sum of threadTTL and grace that overflows", maxDuration - defaultSessionGrace + 1, defaultSessionGrace},
+		{"a grace of the largest Duration", v1alpha1.DefaultThreadTTL, maxDuration},
+		{"both of the largest Duration", maxDuration, maxDuration},
+		{"a negative threadTTL", -time.Hour, defaultSessionGrace},
+		{"the smallest Duration", time.Duration(math.MinInt64), defaultSessionGrace},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &retention{cfg: retentionConfig{SessionGrace: tc.grace}}
+			h := r.sessionHorizons(map[string]time.Duration{"ns/b": tc.ttl, "ns/default": v1alpha1.DefaultThreadTTL}, nil, sweepNow)
+			for name, at := range map[string]time.Time{"ns/b": h.ByBinding["ns/b"], "ns/default": h.ByBinding["ns/default"], "Otherwise": h.Otherwise} {
+				if at.After(sweepNow) {
+					t.Errorf("the horizon of %s is %s, after now (%s): the sessions of its Binding would be deleted at once", name, at, sweepNow)
+				}
+			}
+		})
+	}
+}
+
+// One Binding's threadTTL still lengthens Otherwise (it is held to the longest), but Otherwise moves back no further than
+// the saturated sum of that threadTTL and the grace, and does not wrap round to a time after the Binding's own horizon.
+func TestSessionHorizonsOtherwiseIsTheLongestBindingsOwn(t *testing.T) {
+	const maxDuration = time.Duration(math.MaxInt64)
+	r := &retention{cfg: retentionConfig{SessionGrace: defaultSessionGrace}}
+	h := r.sessionHorizons(map[string]time.Duration{"ns/b": maxDuration}, nil, sweepNow)
+	if !h.Otherwise.Equal(h.ByBinding["ns/b"]) {
+		t.Errorf("Otherwise = %s, the Binding's horizon = %s; want the same, as it is the longest", h.Otherwise, h.ByBinding["ns/b"])
 	}
 }
 
