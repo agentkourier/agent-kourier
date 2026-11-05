@@ -106,6 +106,8 @@ What bounds this is what the broker can read, and where it can connect:
   policy a `url` can name anything the pod reaches.
 - **`allowedNamespaces`.** A Binding may use an AgentBackend or ChatConnection of another namespace only if that object lists the Binding's
   namespace. It lists none by default.
+- **How much it reads.** The broker reads at most 1 MiB of an agent card, 16 MiB of the answer to a call, and 10 MiB of one event of a
+  stream, and a turn holds at most 2 MiB of the agent's reply in memory. A response past a bound is an error, never a shortened read. A stream's length is not limited.
 
 What a writer of a Binding and an AgentBackend sees of your conversations. The agent of a Binding receives each mention of the bot in the channel, each reply in a thread the Binding owns
 (with `chat.threadReplies: all`, the default, every reply in the thread, not only the ones that mention the bot), and with a `botMessage` trigger the messages of the bot that

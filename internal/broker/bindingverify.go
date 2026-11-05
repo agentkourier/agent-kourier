@@ -50,6 +50,9 @@ func innerBound(outer time.Duration) time.Duration { return outer * 4 / 5 }
 const (
 	msgCardRequestFailed = "the request for the agent card failed; the operator's log has the cause"
 	msgChatReadFailed    = "the chat platform read failed; the operator's log has the cause"
+	// msgCardTooLarge is what a card past dialect.MaxCardBytes is reported as: the bound is Agent Kourier's, not the backend's, so
+	// it is the one number a status may carry.
+	msgCardTooLarge = "the agent card is larger than 1 MiB, which Agent Kourier does not read; the operator's log has the cause"
 )
 
 // agentProbe is what the agent checker needs of Bindings: (*Bindings).CheckAgent, a card fetch that sends the agent nothing.
@@ -103,7 +106,8 @@ func (a agentChecker) CheckAgent(ctx context.Context, binding string) (bindingch
 // than that the request failed (a server that answers plain HTTP to an https request is a cause, not a silence), unless a deadline
 // passed, when it says the backend did not answer in time. A deadline is False although a turn's connect waits longer (the pool's
 // ConnectTimeout, 30s, against the probe's 8s): a backend that never answers, as behind a firewall, must not stay Unknown, so one that
-// is only slower than the probe's bound reads False too. It reports false for an error it cannot place, which the Prober records as a
+// is only slower than the probe's bound reads False too. A card past dialect.MaxCardBytes is InvalidAgentCard, with one sentence that names no
+// host (msgCardTooLarge). It reports false for an error it cannot place, which the Prober records as a
 // probe that could not tell.
 func classifyAgent(err error) (bindingcheck.Outcome, bool) {
 	fail := func(r bindingcheck.Reason, msg string) (bindingcheck.Outcome, bool) {
@@ -126,6 +130,10 @@ func classifyAgent(err error) (bindingcheck.Outcome, bool) {
 		return fail(bindingcheck.ReasonNoJSONRPCInterface, "the agent card lists no JSON-RPC interface")
 	case errors.Is(err, dialect.ErrInvalidAgentCard):
 		return fail(bindingcheck.ReasonInvalidAgentCard, "the backend answered 200 with something that is not an agent card")
+	case errors.Is(err, dialect.ErrResponseTooLarge): // before requestFailed: the client's *url.Error around it is a net.Error
+		out, ok := fail(bindingcheck.ReasonInvalidAgentCard, msgCardTooLarge)
+		out.Cause = causeText(err)
+		return out, ok
 	case requestFailed(err):
 		if timedOut(err) {
 			return fail(bindingcheck.ReasonUnreachable, "the backend did not answer in time")

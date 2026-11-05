@@ -12,11 +12,28 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 )
 
+// DefaultMaxReplyBytes is the default of Config.MaxReplyBytes: 2 MiB, some fifty of Slack's longest messages of text. The
+// final task of a stream may repeat the text two or three times, and has to fit an event (dialect.MaxEventBytes, which is also
+// what a2a-go reads of one line), with JSON escaping on top; this leaves room for that.
+const DefaultMaxReplyBytes = 2 << 20
+
+// entryBytes is what the assembler charges for each entry it adds to one of its maps, besides the entry's key: the
+// hash, the header of the string, and the map's own overhead, rounded up.
+const entryBytes = 128
+
 // assembler folds the events of one send, and of every reconnect within it, into Events.
 // A task snapshot (from GetTask, SubscribeToTask, or a replayed send) and a live chunk
 // take the same path, so the same text never arrives twice: an artifact chunk with
 // append: true adds to the artifact's text, and anything else replaces it (spec 8.3).
 // Tool parts follow the rules at (*assembler).tool.
+//
+// What it holds across events is bounded. The text of the artifacts, the results that wait for their call, and the keys
+// by which it tells a repeat (placed, sent, said, called, live) grow with what the agent sends, and a stream's length is
+// bounded by nothing but its context, so each is charged to one budget, limit bytes (keep). One event or response is
+// bounded by the transport (dialect.MaxEventBytes, dialect.MaxResponseBytes), and so are the task kept as the final one
+// and the paused task of an answer. When the budget is spent, over is set to an error that wraps
+// dialect.ErrResponseTooLarge and the assembler goes silent: it keeps and emits nothing more, and the caller ends the
+// send with that error.
 type assembler struct {
 	emit      Handler
 	text      map[a2a.ArtifactID]string
@@ -25,7 +42,7 @@ type assembler struct {
 	said      map[[sha256.Size]byte]toolSource // what each tool part delivered or held said, and where it was found
 	called    map[string]bool                  // the call IDs whose call was delivered
 	live      map[toolKey]bool                 // the calls, as a source reports them, that had a result from a live event
-	held      []ToolResultEvent                // results whose call has not come, in the order they came
+	held      []heldResult                     // results whose call has not come, in the order they came
 	snapshot  map[toolKey]toolPlace            // while a task snapshot is applied: the place of the last result of each call; else nil
 	paused    *a2a.Task                        // the task a tool approval answers, as the agent held it before the answer; nil if not an approval, or if unread
 	taskID    a2a.TaskID
@@ -40,6 +57,25 @@ type assembler struct {
 	unshown   bool   // an agent Message came before any task where it cannot be the reply: on an Answer
 	// interaction reads the pause of the task that ends the send (Config.ParseInteraction); nil reads none.
 	interaction func(a2a.Task) (*dialect.Interaction, error)
+	limit       int   // the budget of what the assembler holds: Config.MaxReplyBytes
+	kept        int   // what it holds, as keep charges it
+	over        error // set once kept passes limit; nothing is kept or emitted after
+}
+
+// heldResult is a result that waits for its call, with what it was charged.
+type heldResult struct {
+	ToolResultEvent
+	size int
+}
+
+// keep charges n bytes to what the assembler holds, which a negative n gives back, and reports whether the budget
+// has room still. Past it the assembler is over: it sets over once, and keeps nothing more.
+func (a *assembler) keep(n int) bool {
+	a.kept += n
+	if a.kept > a.limit && a.over == nil {
+		a.over = fmt.Errorf("%w: a reply of more than %d bytes", dialect.ErrResponseTooLarge, a.limit)
+	}
+	return a.over == nil
 }
 
 func newAssembler(h Handler) *assembler {
@@ -47,16 +83,23 @@ func newAssembler(h Handler) *assembler {
 		h = func(Event) {}
 	}
 	a := &assembler{text: map[a2a.ArtifactID]string{}, placed: map[toolPlace]bool{}, sent: map[artifactPart]int{}, said: map[[sha256.Size]byte]toolSource{},
-		called: map[string]bool{}, live: map[toolKey]bool{}}
+		called: map[string]bool{}, live: map[toolKey]bool{}, limit: DefaultMaxReplyBytes}
 	a.emit = func(e Event) {
+		if a.over != nil { // the send is ending with an error, and no event of it is news
+			return
+		}
 		a.changes++
 		h(e)
 	}
 	return a
 }
 
-// apply folds one event from the agent into the assembler and emits what changed.
+// apply folds one event from the agent into the assembler and emits what changed. Once the assembler is over (see keep)
+// it does nothing: a caller checks over after each apply.
 func (a *assembler) apply(ev a2a.Event) {
+	if a.over != nil {
+		return
+	}
 	before := a.changes
 	switch e := ev.(type) {
 	case *a2a.Task:
@@ -120,6 +163,9 @@ func (a *assembler) message(m *a2a.Message) {
 
 // end delivers the results still waiting for a call that never came, then the end of the send.
 func (a *assembler) end(task *a2a.Task) {
+	if a.over != nil { // a snapshot that spent the budget does not end the send as a success
+		return
+	}
 	a.release("")
 	a.final = task
 	a.emit(FinalEvent{Task: task, AwaitingApproval: a.awaitingApproval(task)})
@@ -191,12 +237,20 @@ func (a *assembler) artifact(art *a2a.Artifact, appendMode, snapshot bool) {
 	if !hasText {
 		return
 	}
-	old, t := a.text[art.ID], text.String()
+	old, had := a.text[art.ID]
+	t := text.String()
 	if appendMode {
 		t = old + t
 	}
 	stale := snapshot && strings.HasPrefix(old, t)
 	if t != old && !stale {
+		cost := len(t) - len(old)
+		if !had {
+			cost += len(art.ID) + entryBytes
+		}
+		if !a.keep(cost) {
+			return
+		}
 		a.text[art.ID] = t
 		a.emit(TextEvent{ArtifactID: art.ID, Text: t})
 	}
@@ -210,6 +264,9 @@ func (a *assembler) artifact(art *a2a.Artifact, appendMode, snapshot bool) {
 // keeps two calls that say the same (no call ID, same arguments) two. seen counts the parts of this chunk so far.
 func (a *assembler) artifactTool(art a2a.ArtifactID, index int, tp toolPart, appendMode bool, seen map[[sha256.Size]byte]int) {
 	key := artifactPart{art, tp.says}
+	if _, known := a.sent[key]; !known {
+		a.keep(len(art) + entryBytes)
+	}
 	if appendMode {
 		a.sent[key]++
 	} else {
@@ -232,6 +289,7 @@ func (a *assembler) messageTools(m *a2a.Message) {
 		place := messagePlace(m, i, tp)
 		if !a.placed[place] {
 			a.placed[place] = true
+			a.keep(len(place.owner) + entryBytes)
 			a.tool(place, "", tp)
 		}
 	}
@@ -393,6 +451,7 @@ func messagePlace(m *a2a.Message, index int, tp toolPart) toolPlace {
 type toolPart struct {
 	dialect.ToolPart
 	says [sha256.Size]byte
+	size int // the length of what it says, as JSON: what a result that waits for its call is charged
 }
 
 func decodeTool(p *a2a.Part) (toolPart, bool) {
@@ -404,7 +463,7 @@ func decodeTool(p *a2a.Part) (toolPart, bool) {
 	if err != nil { // unreachable for a part decoded from JSON
 		b = fmt.Appendf(nil, "%#v", tp)
 	}
-	return toolPart{tp, sha256.Sum256(b)}, true
+	return toolPart{tp, sha256.Sum256(b), len(b)}, true
 }
 
 // eachToolPart calls visit for each tool part a task snapshot holds, in the order they are read: its messages, then its
@@ -464,13 +523,20 @@ func lastResults(t *a2a.Task) map[toolKey]toolPlace {
 //     result whose call is nowhere waits for it, and is delivered when the send ends, or fails, if the call never comes.
 //   - A task that went on from a turn that paused holds that turn's tool parts, which are not this turn's news (seed).
 func (a *assembler) tool(place toolPlace, art a2a.ArtifactID, tp toolPart) {
-	if first, seen := a.said[tp.says]; seen && first != place.source {
+	first, seen := a.said[tp.says]
+	if seen && first != place.source {
 		return
+	}
+	if !seen {
+		a.keep(entryBytes)
 	}
 	a.said[tp.says] = place.source
 	if tp.Kind == dialect.ToolCall {
 		a.emit(ToolCallEvent{ArtifactID: art, CallID: tp.ID, Name: tp.Name, Args: tp.Args})
 		if tp.ID != "" {
+			if !a.called[tp.ID] {
+				a.keep(len(tp.ID) + entryBytes)
+			}
 			a.called[tp.ID] = true
 			a.release(tp.ID)
 		}
@@ -479,6 +545,9 @@ func (a *assembler) tool(place toolPlace, art a2a.ArtifactID, tp toolPart) {
 	if tp.ID != "" {
 		key := toolKey{place.source, tp.ID}
 		if a.snapshot == nil {
+			if !a.live[key] {
+				a.keep(len(tp.ID) + entryBytes)
+			}
 			a.live[key] = true
 		} else if last, ok := a.snapshot[key]; (ok && last != place) || a.live[key] {
 			return
@@ -486,7 +555,8 @@ func (a *assembler) tool(place toolPlace, art a2a.ArtifactID, tp toolPart) {
 	}
 	result := ToolResultEvent{ArtifactID: art, CallID: tp.ID, Name: tp.Name, Response: tp.Result}
 	if tp.ID != "" && !a.called[tp.ID] && (a.snapshot != nil || !a.fetchCall(tp.ID)) {
-		a.held = append(a.held, result)
+		a.keep(tp.size + entryBytes)
+		a.held = append(a.held, heldResult{result, tp.size + entryBytes})
 		return
 	}
 	a.emit(result)
@@ -503,8 +573,15 @@ func (a *assembler) seed(t *a2a.Task, approval bool) {
 	}
 	eachToolPart(t, func(place toolPlace, art a2a.ArtifactID, tp toolPart) {
 		if place.source == inArtifact {
-			a.sent[artifactPart{art, tp.says}]++
+			key := artifactPart{art, tp.says}
+			if _, known := a.sent[key]; !known {
+				a.keep(len(art) + entryBytes)
+			}
+			a.sent[key]++
 		} else {
+			if !a.placed[place] {
+				a.keep(len(place.owner) + entryBytes)
+			}
 			a.placed[place] = true
 		}
 	})
@@ -532,7 +609,8 @@ func (a *assembler) release(id string) {
 	a.held = nil
 	for _, r := range waiting {
 		if id == "" || r.CallID == id {
-			a.emit(r)
+			a.keep(-r.size)
+			a.emit(r.ToolResultEvent)
 		} else {
 			a.held = append(a.held, r)
 		}
