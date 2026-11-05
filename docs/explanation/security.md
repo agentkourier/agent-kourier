@@ -126,8 +126,18 @@ What bounds this is what the broker can read, and where it can connect:
 - **How many objects.** Write access to these kinds can also cost the broker capacity, not only data: each Binding is probed (two probes every 5 minutes, four at a time, each up to 10 seconds)
   and has its status written, and every object is held in the broker's memory. The caps (50 triggers in a Binding, 32 `extract` entries in a trigger, 32 headers in an AgentBackend)
   limit how big one object is, and nothing limits how many a namespace holds. Put a `ResourceQuota` in each tenant's namespace with `count/bindings.agentkourier.dev` and
-  `count/agentbackends.agentkourier.dev`: the API server refuses a create past it with `exceeded quota` (measured on kind 1.37.0). A quota limits the count and not the size
-  of what is stored, so it sits beside the caps and replaces none of them. The limits you can run into, with what happens past each, are on [Limits](../reference/limits.md).
+  `count/agentbackends.agentkourier.dev`: the API server refuses a create past it with `exceeded quota` (measured on kind 1.37.0). Add `count/secrets` too, to bound how many
+  Secrets the namespace holds, and so how many a Binding's token or an AgentBackend's header can name that exist (Kubernetes's own object-count quota for Secrets, not run here). It does
+  not bound what the broker follows: it follows each Secret that a served object names, by name and with an informer of its own, whether or not that Secret exists, and the caps and the
+  other two quotas bound those names. A quota limits the count and not the size of what is stored, so it sits beside the caps and replaces none of them. The limits you can run into, with what happens past each, are on [Limits](../reference/limits.md).
+- **What it holds of each object.** The broker keeps an object's `spec` and `status`, its name, namespace, uid, generation and creation time, and a Secret's type, resourceVersion and the keys that
+  the served objects name. It does not keep an object's labels, annotations, owner references, finalizers or managed fields (`slim` in `internal/config/crsource/source.go`), which the API server
+  limits only by the size of the object, or the other keys of a Secret, which a namespace may fill up to Kubernetes's 1 MiB for one Secret (`trimTo` in `internal/config/k8ssecrets/keys.go`). The
+  figures are from a test process, not a pod, 16 objects held at once: an AgentBackend of 1.27 MiB of JSON that is 80,458 labels and 200 KiB of annotations took 5.7 MiB of heap each when
+  labels and annotations were kept, and under 0.1 MiB each now. A Secret of 100,000 keys of 2 bytes took about 9 MiB when every key was kept, and about 1 KiB with one key kept. What is in the
+  `spec` is still held in full, and it costs more than its JSON: an AgentBackend of 1.37 MiB that is 358,300 one-letter entries of `allowedNamespaces` took 10.9 MiB each, and nothing bounds that list
+  (see [what has no limit](../reference/limits.md#what-has-no-limit)). The informers' transform runs after client-go has decoded an object, so a large object still costs a burst of memory
+  when it is read, which these figures do not show and which was not measured.
 
 What a writer of a Binding and an AgentBackend sees of your conversations. The agent of a Binding receives each mention of the bot in the channel, each reply in a thread the Binding owns
 (with `chat.threadReplies: all`, the default, every reply in the thread, not only the ones that mention the bot), and with a `botMessage` trigger the messages of the bot that
