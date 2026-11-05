@@ -54,6 +54,19 @@ const (
 	maxHeaderNameLen = 256
 )
 
+// maxPromptTemplateLen, maxAgentNameLen and maxUserIDLen cap the free text of a Binding that nothing else bounds:
+// without a cap the apiserver stores a Binding of megabytes, and every broker keeps each one in memory, parses its
+// template and runs it. Each is also a maxLength in the schema, so the apiserver refuses a longer one and so does
+// a file loaded by the broker. They count bytes, as Validate does, and the schema counts characters, so the schema
+// is never the stricter of the two. A template of 8192 bytes is twice what the prompt keeps of its output
+// (MaxInstructionUnits in internal/render), a real agent name is a DNS name (253) and a real user ID is a login or
+// an e-mail address.
+const (
+	maxPromptTemplateLen = 8192
+	maxAgentNameLen      = 253
+	maxUserIDLen         = 256
+)
+
 // mentionName is what an agent writes after an "@"; its literal must equal ChatMention.Name's Pattern marker. mentionUser
 // is a Slack user ID, the only platform's; its literal must equal ChatMention.User's Pattern marker, and matches what the
 // Slack adapter makes a mention of.
@@ -94,6 +107,13 @@ func (p *problems) add(path, format string, args ...any) {
 func (p *problems) required(path, v string) {
 	if v == "" {
 		p.add(path, "required")
+	}
+}
+
+// maxBytes reports v if it is longer than limit bytes.
+func (p *problems) maxBytes(path, v string, limit int) {
+	if len(v) > limit {
+		p.add(path, "is %d bytes, longer than the %d byte limit", len(v), limit)
 	}
 }
 
@@ -185,9 +205,7 @@ func (a *AgentBackend) Validate() error {
 	for i, h := range s.Headers {
 		path := fmt.Sprintf("spec.headers[%d]", i)
 		p.required(path+".name", h.Name)
-		if len(h.Name) > maxHeaderNameLen {
-			p.add(path+".name", "is %d bytes, longer than the %d byte limit", len(h.Name), maxHeaderNameLen)
-		}
+		p.maxBytes(path+".name", h.Name, maxHeaderNameLen)
 		if IsReservedHeader(h.Name) {
 			p.add(path+".name", "header %q is reserved for the Binding identity (D14)", h.Name)
 		}
@@ -222,10 +240,12 @@ func (b *Binding) Validate() error {
 	s := &b.Spec
 	p.objectRef("spec.agent.backendRef", &s.Agent.BackendRef)
 	p.required("spec.agent.name", s.Agent.Name)
+	p.maxBytes("spec.agent.name", s.Agent.Name, maxAgentNameLen)
 	p.namespace("spec.agent.namespace", s.Agent.Namespace)
 	if s.Identity.UserID == "" && s.Identity.TokenSecretRef == nil {
 		p.add("spec.identity", "set userId, tokenSecretRef, or both")
 	}
+	p.maxBytes("spec.identity.userId", s.Identity.UserID, maxUserIDLen)
 	p.secretRef("spec.identity.tokenSecretRef", s.Identity.TokenSecretRef)
 	p.objectRef("spec.chat.connectionRef", &s.Chat.ConnectionRef)
 	if c := s.Chat.Channel; c == "" {
@@ -430,6 +450,8 @@ func (p *problems) botMessageTrigger(path string, t *Trigger) {
 	p.limits(path+".limits", t.Limits)
 	if t.PromptTemplate == "" {
 		p.add(path+".promptTemplate", "required")
+	} else if len(t.PromptTemplate) > maxPromptTemplateLen {
+		p.maxBytes(path+".promptTemplate", t.PromptTemplate, maxPromptTemplateLen) // refused unparsed
 	} else if err := checkPromptTemplate("promptTemplate", t.PromptTemplate, t.Extract); err != nil {
 		p.add(path+".promptTemplate", "invalid template: %v", err)
 	}

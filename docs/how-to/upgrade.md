@@ -342,6 +342,57 @@ the default `config.source: files` renders the objects it always has, and the po
   reload, and the last good config stays, as before; with custom resources it makes that Binding's `BackendReachable` say `CredentialsUnreadable` and stops nothing.
 - **New bounds on triggers, extract entries and headers** apply on both routes: see
   [the release that bounds them](#upgrade-to-the-release-that-bounds-triggers-extract-entries-and-headers), which also shows the check to run before you upgrade.
+- **A `promptTemplate` may no longer loop, define a template or use a variable, and three strings are bounded.** See
+  [the release that limits prompt templates](#upgrade-to-the-release-that-limits-prompt-templates).
 
 After you move to custom resources, rolling back to a release without them leaves the CRDs and every custom resource in the cluster, unread. Move back
 to the files route first, as in [Move back to the ConfigMap](migrate-config-source.md#move-back-to-the-configmap), then roll the chart back.
+
+## Upgrade to the release that limits prompt templates
+
+A `promptTemplate` is run when a Binding loads, and again for each message a trigger matches. This release refuses a template that could
+run for ever or build a string without bound, and bounds three strings that had no limit. A config that does neither loads as before.
+No example, recipe or kind tier config in this repository uses a construct below: they read `.Channel`, `.State`, `.Key` and `.Fields.<name>`.
+
+**What a template may use.** Text and comments, `if` (with `else if` and `else`), `with`, the view's fields (`.Channel`, `.State`, `.Key`,
+`.Link`, `.Source`), `.Fields.<name>` or `index .Fields "<name>"`, and the functions `and`, `eq`, `ge`, `gt`, `index`, `le`, `len`, `lt`, `ne`,
+`not`, `or` and `slice`. A template with anything else fails to load, whatever the route.
+
+| Refused | Example | Rewrite |
+|---|---|---|
+| `range` | `{{ range 3 }}x{{ end }}` | There is nothing to range over: `.Fields` cannot be read whole. Name each entry. |
+| `define`, `template`, `block` | `{{ define "a" }}...{{ end }}{{ template "a" }}` | Write the text where you use it. |
+| A variable, declared or assigned, also in `if` and `with` | `{{ $k := .Fields.alertname }}{{ $k }}` | Read the value where you use it: `{{ .Fields.alertname }}`. |
+| `print`, `printf`, `println` | `{{ printf "%s/%s" .Channel .Fields.alertname }}` | `{{ .Channel }}/{{ .Fields.alertname }}` |
+| `html`, `js`, `urlquery`, `call` | `{{ .Fields.alertname \| html }}` | Drop the call: a value is checked, by its characters, before the template sees it. |
+
+The error names the position and what is refused, as `dry-run` prints it for a template that starts with `{{ range 9000000000000000 }}{{ end }}`:
+
+```text
+b.yaml#1 Binding agent-kourier/ci-failures: spec.chat.triggers[0].promptTemplate: invalid template: promptTemplate:1:9: range is not allowed: a prompt template has no loops
+```
+
+The broker refuses the template before it runs it, so a template that would never return is refused at once.
+
+**What the template may write.** The load runs the template once over placeholder values of 64 bytes, and each render runs it over the message's values, through a
+buffer of 262144 bytes. A template that writes more fails, where before its output was built and then cut: at load, the Binding is invalid; at render, the trigger
+starts no turn, posts a note in the alert's thread, and is audited and counted in `agentkourier_trigger_refused_total` with the reason `render_error`. The prompt keeps
+only the first 4000 UTF-16 units of the template's output, so a template near the bound writes mostly what is thrown away.
+
+**Three strings are bounded.** They apply on both routes, and on the custom resource route the API server refuses a longer one when you create or
+update the object, with the CRD's `maxLength`, which counts characters where the broker counts bytes.
+
+| Where | Bound | The error |
+|---|---|---|
+| `promptTemplate` of a `botMessage` trigger | 8192 bytes | `spec.chat.triggers[1].promptTemplate: is 8193 bytes, longer than the 8192 byte limit` |
+| `spec.agent.name` of a Binding | 253 bytes | `spec.agent.name: is 254 bytes, longer than the 253 byte limit` |
+| `spec.identity.userId` of a Binding | 256 bytes | `spec.identity.userId: is 257 bytes, longer than the 256 byte limit` |
+
+A template over its bound is refused without being parsed. No example, recipe or kind tier config here has a template over 250 bytes, an agent name over 25 characters
+or a user ID over 25.
+
+**Check before you upgrade.** Run `agent-kourier dry-run` of the new release against your files, as in
+[the release that bounds triggers](#upgrade-to-the-release-that-bounds-triggers-extract-entries-and-headers). It loads them with the broker's loader and reports each of these
+errors without a token. It reads files, never the cluster, so on the custom resource route give it the YAML you applied.
+A custom resource that fails these checks after you upgrade is judged as
+[a bad object is](../explanation/config-routes.md#what-a-bad-object-does): the broker does not serve a new object that is invalid, and keeps serving the last good generation of one that is.

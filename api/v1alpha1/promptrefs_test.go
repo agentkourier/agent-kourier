@@ -45,18 +45,18 @@ func TestTemplateRefs(t *testing.T) {
 		},
 		{
 			name: "references as arguments of functions and in pipelines",
-			text: `{{ printf "%s/%s" .Channel .Fields.a | html }} {{ slice .Key 0 10 }} {{ len .State }}`,
+			text: `{{ slice .Key 0 10 }} {{ len .Fields.a }} {{ .State | len }} {{ index .Channel 0 }}`,
 			want: PromptRefs{View: []string{"Channel", "Key", "State"}, Fields: []string{"a"}},
 		},
 		{
-			name: "a variable that holds a checked reference",
-			text: `{{ $k := .Key }}{{ $k }} {{ $x := index .Fields "a" }}{{ $x }}`,
-			want: PromptRefs{View: []string{"Key"}, Fields: []string{"a"}},
+			name: "every function that is allowed, in conditions",
+			text: `{{ if and (eq .State "a") (ne .Key "b") (not (lt .Link "c")) }}{{ .Source }}{{ else if or (le .Channel "d") (gt .Link "e") (ge .Key "f") }}{{ .Fields.a }}{{ end }}`,
+			want: PromptRefs{View: []string{"Channel", "Key", "Link", "Source", "State"}, Fields: []string{"a"}},
 		},
 		{
-			name: "a defined template is walked too",
-			text: `{{ define "x" }}{{ .Fields.a }}{{ end }}{{ template "x" .Key }}`,
-			want: PromptRefs{View: []string{"Key"}, Fields: []string{"a"}},
+			name: "a comment and a constant of each kind",
+			text: `{{/* a note */}}{{ if eq .State "a" }}x{{ end }}{{ if eq (len .State) 3 }}x{{ end }}{{ if eq true false }}x{{ end }}`,
+			want: PromptRefs{View: []string{"State"}},
 		},
 
 		{
@@ -80,11 +80,6 @@ func TestTemplateRefs(t *testing.T) {
 			wantErr: "no field .Stat",
 		},
 		{
-			name:    "unknown top-level field in a defined template",
-			text:    `{{ define "x" }}{{ .Stat }}{{ end }}x`,
-			wantErr: "no field .Stat",
-		},
-		{
 			name:    "bare .Fields",
 			text:    "{{ .Fields }}",
 			wantErr: "name an entry",
@@ -92,7 +87,7 @@ func TestTemplateRefs(t *testing.T) {
 		{
 			name:    "range over .Fields",
 			text:    "{{ range $k, $v := .Fields }}{{ $v }}{{ end }}",
-			wantErr: "name an entry",
+			wantErr: "range is not allowed",
 		},
 		{
 			name:    "with .Fields",
@@ -101,7 +96,7 @@ func TestTemplateRefs(t *testing.T) {
 		},
 		{
 			name:    "bare .Fields passed to a function",
-			text:    `{{ printf "%v" .Fields }}`,
+			text:    `{{ len .Fields }}`,
 			wantErr: "name an entry",
 		},
 		{
@@ -112,11 +107,6 @@ func TestTemplateRefs(t *testing.T) {
 		{
 			name:    "bare .Fields through $",
 			text:    "{{ $.Fields }}",
-			wantErr: "name an entry",
-		},
-		{
-			name:    "bare .Fields stored in a variable",
-			text:    "{{ $f := .Fields }}{{ $f.alertname }}",
 			wantErr: "name an entry",
 		},
 		{
@@ -146,17 +136,12 @@ func TestTemplateRefs(t *testing.T) {
 		},
 		{
 			name:    "the whole view as dot inside a branch",
-			text:    `{{ if .State }}{{ printf "%v" . }}{{ end }}`,
+			text:    `{{ if .State }}{{ len . }}{{ end }}`,
 			wantErr: "the whole prompt view",
 		},
 		{
 			name:    "the whole view as $",
 			text:    "{{ $ }}",
-			wantErr: "the whole prompt view",
-		},
-		{
-			name:    "the whole view passed to a template",
-			text:    `{{ define "x" }}x{{ end }}{{ template "x" . }}`,
 			wantErr: "the whole prompt view",
 		},
 		{
@@ -168,6 +153,131 @@ func TestTemplateRefs(t *testing.T) {
 			name:    "a field of a text view field",
 			text:    "{{ .State.Name }}",
 			wantErr: "holds text, which has no field",
+		},
+		{
+			name:    "range over a number",
+			text:    "{{ range 3 }}x{{ end }}",
+			wantErr: "promptTemplate:1:9: range is not allowed",
+		},
+		{
+			name:    "range with an else",
+			text:    "{{ range .State }}x{{ else }}y{{ end }}",
+			wantErr: "range is not allowed",
+		},
+		{
+			name:    "range in the branch of an if",
+			text:    "{{ if .State }}{{ range 3 }}x{{ end }}{{ end }}",
+			wantErr: "range is not allowed",
+		},
+		{
+			name:    "define",
+			text:    `{{ define "x" }}x{{ end }}y`,
+			wantErr: "define is not allowed",
+		},
+		{
+			name:    "define holding a bad reference is refused as a define",
+			text:    `{{ define "x" }}{{ .Stat }}{{ end }}x`,
+			wantErr: "define is not allowed",
+		},
+		{
+			name:    "template",
+			text:    `{{ define "x" }}x{{ end }}{{ template "x" }}`,
+			wantErr: "template and block are not allowed",
+		},
+		{
+			name:    "template of a name that is never defined",
+			text:    `{{ template "x" }}`,
+			wantErr: "template and block are not allowed",
+		},
+		{
+			name:    "block",
+			text:    `{{ block "x" .Key }}x{{ end }}`,
+			wantErr: "template and block are not allowed",
+		},
+		{
+			name:    "a variable declared",
+			text:    `{{ $k := .Key }}{{ $k }}`,
+			wantErr: "promptTemplate:1:3: a variable is not allowed",
+		},
+		{
+			name:    "a variable assigned",
+			text:    `{{ $k := "x" }}{{ $k = "y" }}`,
+			wantErr: "a variable is not allowed",
+		},
+		{
+			name:    "a variable declared by if",
+			text:    `{{ if $k := .Key }}x{{ end }}`,
+			wantErr: "a variable is not allowed",
+		},
+		{
+			name:    "a variable declared by with",
+			text:    `{{ with $k := .Key }}x{{ end }}`,
+			wantErr: "a variable is not allowed",
+		},
+		{
+			name:    "a variable declared in parentheses",
+			text:    `{{ len ($k := .Key) }}`,
+			wantErr: "a variable is not allowed",
+		},
+		{
+			name:    "print",
+			text:    `{{ print .Key .Key }}`,
+			wantErr: "function print is not allowed",
+		},
+		{
+			name:    "printf, which a width specifier makes allocate",
+			text:    `{{ printf "%1000000000d" 1 }}`,
+			wantErr: "function printf is not allowed",
+		},
+		{
+			name:    "println",
+			text:    `{{ println .Key }}`,
+			wantErr: "function println is not allowed",
+		},
+		{
+			name:    "print at the end of a pipeline",
+			text:    `{{ .Key | print }}`,
+			wantErr: "function print is not allowed",
+		},
+		{
+			name:    "print as the condition of an if",
+			text:    `{{ if print .Key }}x{{ end }}`,
+			wantErr: "function print is not allowed",
+		},
+		{
+			name:    "print inside parentheses",
+			text:    `{{ len (print .Key) }}`,
+			wantErr: "function print is not allowed",
+		},
+		{
+			name:    "print as a bare argument",
+			text:    `{{ eq .State print }}`,
+			wantErr: "function print is not allowed",
+		},
+		{
+			name:    "html",
+			text:    `{{ html .Key }}`,
+			wantErr: "function html is not allowed",
+		},
+		{
+			name:    "js, which a pipeline of them makes grow without bound",
+			text:    `{{ .Key | js | js | js }}`,
+			wantErr: "function js is not allowed",
+		},
+		{
+			name:    "urlquery",
+			text:    `{{ urlquery .Key }}`,
+			wantErr: "function urlquery is not allowed",
+		},
+		{
+			name:    "call",
+			text:    `{{ call .Key }}`,
+			wantErr: "function call is not allowed",
+		},
+		{
+			name:    "the allowed functions are named",
+			text:    `{{ print .Key }}`,
+			wantErr: "use only and, eq, ge, gt, index, le, len, lt, ne, not, or and slice",
 		},
 	}
 	for _, tt := range tests {

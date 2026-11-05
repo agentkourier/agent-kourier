@@ -20,19 +20,32 @@ type PromptRefs struct {
 	Fields []string
 }
 
-// TemplateRefs walks the parse trees of tmpl, the template itself and every template it
-// defines, and returns what they read from a PromptView. A template that reads the view any
-// other way is refused, because the renderer (internal/render) checks the characters of exactly
-// the values a template names, and a value read in another way would escape that check. The
-// accepted forms are:
+// TemplateRefs walks the parse tree of tmpl and returns what it reads from a PromptView. It runs
+// before the template does, in the load-time check and in the renderer, and it is what keeps a
+// template from costing more than its length: a template is text, if and with, and values read
+// from the view, and nothing that loops, calls itself, keeps a value to build on or makes a
+// string longer than its arguments. Refused are:
+//
+//   - range, define, template and block, so no loop and no recursion (range 9000000000000000
+//     never returns);
+//   - a variable declared or assigned ({{ $x := ... }}, {{ $x = ... }}), so no value grows from
+//     one step to the next;
+//   - every function but and, eq, ge, gt, index, le, len, lt, ne, not, or and slice. Those
+//     return a value no longer than an argument. print, printf and println make one longer
+//     (printf "%2000000000d"), html, js and urlquery do as well, up to six times in a stage of a
+//     pipeline, and call has nothing to call.
+//
+// What it reads from the view must be checked by the renderer (internal/render), which checks
+// the characters of exactly the values a template names, so a value read in another way would
+// escape that check. The accepted forms are:
 //
 //   - .Channel, .State, .Key, .Link and .Source, or the same behind $ (as in $.State);
 //   - .Fields.name, or $.Fields.name, or index .Fields "name" with a constant string.
 //
-// Refused are a field that PromptView lacks, .Fields on its own (it could be ranged over or
-// printed whole), index .Fields with anything but one constant name, a field of a value that is
-// only text (.State.Name), and . or $ read as a value, which would be the whole view. The name
-// of an entry is not checked against the trigger's extract here, as that is the trigger's: see
+// Refused are a field that PromptView lacks, .Fields on its own (it could be printed whole),
+// index .Fields with anything but one constant name, a field of a value that is only text
+// (.State.Name), and . or $ read as a value, which would be the whole view. The name of an entry
+// is not checked against the trigger's extract here, as that is the trigger's: see
 // checkPromptTemplate. An error names the position as name:line:column.
 func TemplateRefs(tmpl *template.Template) (PromptRefs, error) {
 	w := newRefWalker(nil, false)
@@ -71,8 +84,16 @@ func (w *refWalker) refs() PromptRefs {
 	return PromptRefs{View: slices.Sorted(maps.Keys(w.seen)), Fields: slices.Sorted(maps.Keys(w.fields))}
 }
 
-// walkAll walks tmpl and the templates defined with it, in name order so that the error is the
-// same on every run.
+// allowedFuncs are the functions a template may call: each returns a value no longer than one of
+// its arguments, or a bool. Any other function of the template package is refused (see
+// TemplateRefs).
+var allowedFuncs = map[string]bool{
+	"and": true, "eq": true, "ge": true, "gt": true, "index": true, "le": true,
+	"len": true, "lt": true, "ne": true, "not": true, "or": true, "slice": true,
+}
+
+// walkAll walks tmpl, and refuses a template defined with it, in name order so that the error is
+// the same on every run.
 func (w *refWalker) walkAll(tmpl *template.Template) error {
 	all := tmpl.Templates()
 	slices.SortFunc(all, func(a, b *template.Template) int { return strings.Compare(a.Name(), b.Name()) })
@@ -81,6 +102,10 @@ func (w *refWalker) walkAll(tmpl *template.Template) error {
 			continue // a template named by {{ template }} and never defined
 		}
 		w.tree = t.Tree
+		if t.Name() != tmpl.Name() {
+			w.fail(t.Root, "define is not allowed: a prompt template is one template")
+			return w.err
+		}
 		w.node(t.Root)
 		if w.err != nil {
 			return w.err
@@ -109,24 +134,30 @@ func (w *refWalker) node(n parse.Node) {
 				w.node(c)
 			}
 		}
+	case *parse.TextNode, *parse.CommentNode:
 	case *parse.ActionNode:
 		w.node(n.Pipe)
 	case *parse.IfNode:
 		w.branch(&n.BranchNode)
-	case *parse.RangeNode:
-		w.branch(&n.BranchNode)
 	case *parse.WithNode:
 		w.branch(&n.BranchNode)
-	case *parse.TemplateNode:
-		if n.Pipe != nil {
-			w.node(n.Pipe)
-		}
+	case *parse.RangeNode:
+		w.fail(n, "range is not allowed: a prompt template has no loops")
+	case *parse.TemplateNode: // {{ template }}, and what {{ block }} leaves in its place
+		w.fail(n, "template and block are not allowed: a prompt template does not call another")
 	case *parse.PipeNode:
-		if n != nil {
-			for _, c := range n.Cmds {
-				w.command(c)
-			}
+		if n == nil {
+			return
 		}
+		if len(n.Decl) > 0 {
+			w.fail(n, "a variable is not allowed: read the value where you use it")
+			return
+		}
+		for _, c := range n.Cmds {
+			w.command(c)
+		}
+	default:
+		w.fail(n, "%s is not allowed in a prompt template", n)
 	}
 }
 
@@ -176,11 +207,17 @@ func (w *refWalker) isFields(n parse.Node) bool {
 // operand reads one argument of a command.
 func (w *refWalker) operand(n parse.Node) {
 	switch n := n.(type) {
+	case *parse.IdentifierNode:
+		if !allowedFuncs[n.Ident] {
+			w.fail(n, "function %s is not allowed: use only %s", n.Ident, allowedFuncList())
+		}
+	case *parse.StringNode, *parse.NumberNode, *parse.BoolNode:
 	case *parse.FieldNode:
 		w.field(n, n.Ident)
 	case *parse.VariableNode:
 		if n.Ident[0] != "$" {
-			return // a variable of the template: what it holds was read where it was set
+			w.fail(n, "a variable is not allowed: read the value where you use it")
+			return
 		}
 		if len(n.Ident) == 1 {
 			w.fail(n, "$ is the whole prompt view: name the field you want, such as .State")
@@ -193,7 +230,15 @@ func (w *refWalker) operand(n parse.Node) {
 		w.operand(n.Node)
 	case *parse.PipeNode:
 		w.node(n)
+	default: // nil, and any node a later Go version adds
+		w.fail(n, "%s is not allowed in a prompt template", n)
 	}
+}
+
+// allowedFuncList names the allowed functions, sorted, the last one after "and".
+func allowedFuncList() string {
+	names := slices.Sorted(maps.Keys(allowedFuncs))
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
 }
 
 // field reads a field chain from the view: its first name must be a PromptView field.
