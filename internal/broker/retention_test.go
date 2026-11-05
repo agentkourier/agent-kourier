@@ -7,12 +7,14 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"math"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
@@ -644,6 +646,60 @@ func TestRetentionPurgesSessionsPastTheirBindingsHorizon(t *testing.T) {
 				t.Errorf("PurgeExpiredSessions calls = %+v; want one, of a batch of 3, with the horizons %+v", calls, tc.want)
 			}
 		})
+	}
+}
+
+// A horizon saturates, whatever the threadTTLs and the grace: a threadTTL that the config forbids (it caps it at a year),
+// or a sum of it and the grace that overflows a Duration, must not turn into a horizon after now, past which every session of
+// a Binding that has left the config would be deleted, and must not shrink either: a horizon that is merely before now
+// would delete sessions that are far from their time. The largest Duration is about 292 years.
+func TestSessionHorizonsSaturate(t *testing.T) {
+	const maxDuration = time.Duration(math.MaxInt64)
+	for _, tc := range []struct {
+		name  string
+		ttl   time.Duration
+		grace time.Duration
+		want  time.Time // the horizon of ns/b
+		other time.Time // Otherwise: held to the longest threadTTL of the config, and to at least the default
+	}{
+		{"a threadTTL of the largest Duration", maxDuration, defaultSessionGrace, sweepNow.Add(-maxDuration), sweepNow.Add(-maxDuration)},
+		{"a sum of threadTTL and grace that overflows", maxDuration - defaultSessionGrace + 1, defaultSessionGrace, sweepNow.Add(-maxDuration), sweepNow.Add(-maxDuration)},
+		{"a sum of threadTTL and grace of exactly the largest Duration", maxDuration - defaultSessionGrace, defaultSessionGrace, sweepNow.Add(-maxDuration), sweepNow.Add(-maxDuration)},
+		{"a grace of the largest Duration", v1alpha1.DefaultThreadTTL, maxDuration, sweepNow.Add(-maxDuration), sweepNow.Add(-maxDuration)},
+		{"both of the largest Duration", maxDuration, maxDuration, sweepNow.Add(-maxDuration), sweepNow.Add(-maxDuration)},
+		{"a negative threadTTL counts as none", -time.Hour, defaultSessionGrace, sweepNow.Add(-defaultSessionGrace), sweepNow.Add(-v1alpha1.DefaultThreadTTL - defaultSessionGrace)},
+		{"the smallest Duration counts as none", time.Duration(math.MinInt64), defaultSessionGrace, sweepNow.Add(-defaultSessionGrace), sweepNow.Add(-v1alpha1.DefaultThreadTTL - defaultSessionGrace)},
+		{"a negative grace counts as none", time.Hour, -2 * time.Hour, sweepNow.Add(-time.Hour), sweepNow.Add(-v1alpha1.DefaultThreadTTL)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &retention{cfg: retentionConfig{SessionGrace: tc.grace}}
+			h := r.sessionHorizons(map[string]time.Duration{"ns/b": tc.ttl}, nil, sweepNow)
+			if got := h.ByBinding["ns/b"]; !got.Equal(tc.want) {
+				t.Errorf("the horizon of the Binding = %s, want %s", got, tc.want)
+			}
+			if !h.Otherwise.Equal(tc.other) {
+				t.Errorf("Otherwise = %s, want %s", h.Otherwise, tc.other)
+			}
+		})
+	}
+}
+
+// A Binding that exists and is not served is not in the config's threadTTLs, so it does not lengthen Otherwise: while it is
+// unserved, the orphans of a Binding that was deleted are held to the shorter reckoning of the rest, and sessions between the
+// two are past deleting. Its own sessions are skipped.
+func TestSessionHorizonsOtherwiseForgetsAnUnservedBinding(t *testing.T) {
+	r := &retention{cfg: retentionConfig{SessionGrace: defaultSessionGrace}}
+	year := v1alpha1.MaxThreadTTL
+	served := r.sessionHorizons(map[string]time.Duration{"ns/long": year}, nil, sweepNow)
+	unserved := r.sessionHorizons(map[string]time.Duration{}, []string{"ns/long"}, sweepNow)
+	if want := sweepNow.Add(-year - defaultSessionGrace); !served.Otherwise.Equal(want) {
+		t.Fatalf("Otherwise with the Binding served = %s, want %s", served.Otherwise, want)
+	}
+	if want := sweepNow.Add(-v1alpha1.DefaultThreadTTL - defaultSessionGrace); !unserved.Otherwise.Equal(want) {
+		t.Errorf("Otherwise with the Binding unserved = %s, want %s: the default's", unserved.Otherwise, want)
+	}
+	if got := unserved.ByBinding["ns/long"]; !got.Equal(neverPast) {
+		t.Errorf("the horizon of the unserved Binding = %s, want never past", got)
 	}
 }
 

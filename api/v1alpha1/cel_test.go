@@ -260,6 +260,8 @@ func TestCELLiteralsEqualTheBrokersConstants(t *testing.T) {
 			{"cooldown", ruleWith(t, thread, "duration('168h')"), []time.Duration{minThreadCooldown, maxThreadCooldown}},
 			{"maxIdle", ruleWith(t, thread, "duration('720h')"), []time.Duration{MaxThreadMaxIdle}},
 			{"rateLimit.per", ruleWith(t, bindings.at(t, trigger+".limits.rateLimit.per"), "duration('24h')"), []time.Duration{MinRateWindow, MaxLimitWindow}},
+			{"interactions.timeout", ruleWith(t, bindings.at(t, "spec.interactions.timeout"), "<="), []time.Duration{MaxInteractionTimeout}},
+			{"session.threadTTL", ruleWith(t, bindings.at(t, "spec.session.threadTTL"), "<="), []time.Duration{MaxThreadTTL}},
 		} {
 			if got := durationLiterals(t, tc.rule); !slices.Equal(got, tc.want) {
 				t.Errorf("%s: the rule names %v, the broker's bounds are %v", tc.what, got, tc.want)

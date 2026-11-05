@@ -267,7 +267,8 @@ digest or a root post, which no thread or reply names, and a notice that is post
 **The threadTTL is the Binding's**, read from the config at each sweep. A session whose Binding has left the config has no
 threadTTL to go by: it is held to the longest `threadTTL` of any Binding in the config (at least the 90-day default) plus the
 90 days, so that a Binding missing for a while, from a config that lost it and is mended, does not have its sessions deleted on
-a shorter reckoning than it would have kept them by. Nothing is deleted before a config has loaded.
+a shorter reckoning than it would have kept them by. A `threadTTL` is at most 365 days, so no such session is kept past its last activity by more than 455 days (365 plus the 90).
+When no Binding has a `threadTTL` over the default, it is 180 days (the default's 90 plus the 90). A Binding that exists in the cluster and is not served (on custom resources) keeps its own sessions, which are not deleted while it is not served, and is not counted in that longest: while it is unserved, the horizon of a deleted Binding's sessions is the one the served Bindings give. The holds below apply as to any session. Nothing is deleted before a config has loaded.
 
 **Never deleted, whatever its age**, while any of these holds, so that a session is not deleted from under work that still reads it:
 

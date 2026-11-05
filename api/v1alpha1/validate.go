@@ -138,7 +138,14 @@ func (p *problems) positive(path string, n int64) {
 	}
 }
 
-func (p *problems) duration(path string, d metav1.Duration) { p.positive(path, int64(d.Duration)) }
+// cappedDuration checks a duration that must be positive and at most limit.
+func (p *problems) cappedDuration(path string, d metav1.Duration, limit time.Duration) {
+	if d.Duration > limit {
+		p.add(path, "%s is out of range, must be at most %s", d.Duration, limit)
+		return
+	}
+	p.positive(path, int64(d.Duration))
+}
 
 // name checks a required DNS-1123 subdomain, the form the API server enforces on names.
 func (p *problems) name(path, v string) {
@@ -282,8 +289,8 @@ func (b *Binding) Validate() error {
 		p.add("spec.chat.maxMentionsPerTurn", "%d is out of range, must be from 1 to 10", n)
 	}
 	p.interactions("spec.interactions", s.Interactions)
-	p.duration("spec.interactions.timeout", s.Interactions.Timeout)
-	p.duration("spec.session.threadTTL", s.Session.ThreadTTL)
+	p.cappedDuration("spec.interactions.timeout", s.Interactions.Timeout, MaxInteractionTimeout)
+	p.cappedDuration("spec.session.threadTTL", s.Session.ThreadTTL, MaxThreadTTL)
 	return errors.Join(p...)
 }
 
