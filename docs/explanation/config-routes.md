@@ -127,7 +127,7 @@ For a Binding with `spec.chat.bogusField`, with kubectl 1.37.1 and Helm 4 (anoth
 | `kubectl apply --server-side` | Refused: `.spec.chat.bogusField: field not declared in schema` |
 | `kubectl apply --validate=warn` | Stored without the field, with `Warning: unknown field "spec.chat.bogusField"` |
 | `kubectl apply --validate=false` | Stored without the field, and no message |
-| `helm upgrade`, with the field in a `config.*` value | Refused: `field not declared in schema`, and the release goes to `failed` with the objects as they were |
+| `helm upgrade`, with the field in a `config.*` value | Refused: `field not declared in schema`, and the release goes to `failed`, after Helm has applied the objects ahead of it: on the move to custom resources that includes the Deployment ([what to do](../how-to/migrate-config-source.md#when-it-does-not-work)) |
 
 On the files route the loader refuses a file with a field it does not know, and so the whole config. On the custom resource route the API server's schema decides what an
 object may hold, and a client that asks it to refuse unknown fields is refused (the table); one that does not, such as `--validate=false`, has the field dropped silently, and the

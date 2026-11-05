@@ -66,7 +66,7 @@ tier's, with the token-refresh CronJob).
 | Role and RoleBinding `<fullname>-leader` | `store.type: postgres` (`rbac.create`) | `get` and `update` on that one Lease, in the release namespace; no `create`, which cannot be limited by name |
 | ConfigMap `<fullname>-config` | unless `config.existingConfigMap` or `config.source: crds` | one `*.yaml` file per resource, from `config.*` |
 | ChatConnection, AgentBackend and Binding custom resources | `config.source: crds` | one per entry of `config.*`, in its namespace (default: the release's), which must exist; deleted when the release stops rendering them |
-| CustomResourceDefinitions `agentbackends`, `bindings` and `chatconnections` of `agentkourier.dev` | `crds.install` (off) | the generated files of `files/crds`; kept on `helm uninstall` and when `crds.install` is turned off (`helm.sh/resource-policy: keep`) |
+| CustomResourceDefinitions `agentbackends`, `bindings` and `chatconnections` of `agentkourier.dev` | `crds.install` (off) | the generated files of `files/crds`; kept on `helm uninstall` and when `crds.install` is turned off (`helm.sh/resource-policy: keep`, which is Helm's; for Argo CD see [below](#custom-resources-instead-of-a-configmap)) |
 | ClusterRole and ClusterRoleBinding `<fullname>-<namespace>-crs` | `config.source: crds` (`rbac.create`) | `list` and `watch` on the three kinds, `patch` on `bindings/status`, `get` on the three CRDs by name; see Custom resources instead of a ConfigMap |
 | PersistentVolumeClaim `<fullname>-data` | `store.type: sqlite`, unless `persistence.existingClaim` | kept on `helm uninstall` (`persistence.retainOnUninstall`); none with Postgres |
 | Service | `service.enabled` | ClusterIP on the health and metrics port, and nothing else |
@@ -160,6 +160,11 @@ anything:
 
 Install the CRDs from one release only.
 
+**"Kept" is Helm's guarantee only.** Under Argo CD with prune, turning `crds.install` off, or deleting the Application, may delete the CRDs, and every team's
+Binding, AgentBackend and ChatConnection with them. The chart renders `argocd.argoproj.io/sync-options: Prune=false,Delete=false` on each CRD, which Argo CD's documentation says stops
+that; this is **unverified**, since Argo CD has not been run against this chart. Another tool that prunes needs its own way to be told to leave the CRDs, or the CRDs applied outside
+what it prunes.
+
 The documentation has the same move as a how-to, with the checks to run and the grant a team makes for its own Secrets:
 [Move the config between a ConfigMap and custom resources](https://agentkourier.dev/how-to/migrate-config-source/).
 
@@ -177,12 +182,12 @@ credentials of a `ChatConnection` you made by hand. That works because Agent Kou
 field selector), and Kubernetes authorizes `list` and `watch` by `resourceNames` for such a request: a list without the selector, a Secret the Role
 does not name, and a `get` are forbidden (measured on kind, Kubernetes 1.30.13 and 1.37.0). A namespace in `rbac.secretNamespaces` is still granted whole.
 A team that makes its own Bindings grants its own Secrets the same way, with a Role in its namespace and a RoleBinding to this ServiceAccount
-(here `agent-kourier` in namespace `agent-kourier`; without the binding the Role grants nothing, and `kubectl auth can-i` says no):
+(here `agent-kourier` in namespace `agent-kourier`; without the binding the Role grants nothing, and `kubectl auth can-i` says no). Give the Role a name the chart would not (`<fullname>-secrets` is the chart's own, which is `agent-kourier-secrets` here), so that the two never meet (a chart that renders its own Role of that name in the team's namespace, as `rbac.secretNamespaces` does, fails with `invalid ownership metadata` over a Role it did not make):
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
-metadata: {name: agent-kourier-secrets, namespace: team-a}
+metadata: {name: agent-kourier-team-a-secrets, namespace: team-a}
 rules:
   - apiGroups: [""]
     resources: [secrets]
@@ -191,8 +196,8 @@ rules:
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
-metadata: {name: agent-kourier-secrets, namespace: team-a}
-roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agent-kourier-secrets}
+metadata: {name: agent-kourier-team-a-secrets, namespace: team-a}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agent-kourier-team-a-secrets}
 subjects:
   - {kind: ServiceAccount, name: agent-kourier, namespace: agent-kourier}
 ```
@@ -353,8 +358,8 @@ it: the pod recovers when Slack does, and a not-ready pod would stall a rollout 
 For an AgentBackend whose front door verifies Dex ID tokens (the sandbox tier's, `ci/sandbox-values.yaml`),
 `tokenRefresh.enabled` adds an hourly CronJob that asks Dex for a token (the password grant) and patches it into the Secret named
 by `targetSecret` and `targetKey` in `targetNamespace` (default: the release's): the Binding's `identity.tokenSecretRef` and the
-Binding's namespace. With the config inline the render fails unless some Binding in that namespace names that Secret and key, so
-a token is never refreshed where nothing reads it. The Job's Role and RoleBinding are made in that namespace (the Job's
+Binding's namespace. With the config inline on the files route the render fails unless some Binding in that namespace names that Secret and key, so
+a token is never refreshed where nothing reads it. With `config.source: crds` the chart does not look (a team applies its own Binding, which the chart cannot see), so that check is yours. The Job's Role and RoleBinding are made in that namespace (the Job's
 ServiceAccount stays in the release's). The Secret must exist before Agent Kourier starts; make it with a placeholder, then run the
 first refresh by hand:
 
