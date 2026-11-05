@@ -285,7 +285,7 @@ The log of the leader, which the operator reads, has `config: a Binding is not a
 counts the Bindings in each reason, and `agentkourier_config_invalid_objects{kind="..."}` counts the invalid objects. With the files route none of this
 applies: a problem in one resource stops the whole config, as in [The pod exits with code 2 and the error says `load config`](#the-pod-exits-with-code-2-and-the-error-says-load-config).
 
-A Binding with no status at all, and empty `READY` and `REASON` columns, is either new (the broker writes its status within a few seconds) or names a ChatConnection
+A Binding with no status at all, and empty `READY` and `REASON` columns, is either new (the broker writes its status within about 10 seconds) or names a ChatConnection
 that exists and that no broker serves: nothing reads it. Point its `connectionRef` at the connection a broker serves, which is in that broker's
 `AGENTKOURIER_CHAT_CONNECTION`.
 

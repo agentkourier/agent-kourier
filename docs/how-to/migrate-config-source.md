@@ -86,7 +86,7 @@ kubectl -n agent-kourier rollout status deploy/agent-kourier
 
 The pod restarts: the Deployment now sets `AGENTKOURIER_CONFIG_SOURCE=crds` and `AGENTKOURIER_CHAT_CONNECTION`, mounts no
 ConfigMap, and the chart removes the ConfigMap it rendered. A session records its Binding as `namespace/name` and the move keeps
-the names, so a conversation continues where it was: a reply in a thread that began before the move is answered after it. For a few
+the names, so a conversation continues where it was: a reply in a thread that began before the move is answered after it. For about 15
 seconds a Binding reads `Unknown` with the reason `Pending`, and then `BackendReachable:Pending` until its first probes end.
 
 ### Move a ConfigMap you manage yourself
@@ -145,8 +145,8 @@ kubectl -n agent-kourier wait --for=condition=Ready akbinding/<name> --timeout=1
 
 `akbinding`, `akbackend` and `akconnection` are the short names; `bindings.agentkourier.dev` and so on also work, and
 `agentkourier` is the category that lists all three. **Never type `kubectl get bindings`.** That is the core Kubernetes `bindings`
-resource, which is something else. It answers `MethodNotAllowed` in a namespace and `NotFound` with `-A`, and the same goes for `kubectl patch binding`, `edit` and `delete` and every
-other short form of the name: use `akbinding` or `bindings.agentkourier.dev`.
+resource, which is something else. `kubectl get bindings -n <namespace>` answers `MethodNotAllowed` and with `-A` it answers `NotFound`, and a named `get`, `patch`, `edit` or `delete` of
+`binding/<name>` answers `NotFound`: use `akbinding` or `bindings.agentkourier.dev`.
 
 ```text
 NAMESPACE       NAME                           READY   REASON   CHANNEL   AGE
@@ -182,7 +182,7 @@ to do, and one is the team's.
    ```yaml
    apiVersion: rbac.authorization.k8s.io/v1
    kind: Role
-   metadata: {name: agent-kourier-secrets, namespace: team-a}
+   metadata: {name: agent-kourier-team-a-secrets, namespace: team-a}
    rules:
      - apiGroups: [""]
        resources: [secrets]
@@ -191,13 +191,13 @@ to do, and one is the team's.
    ---
    apiVersion: rbac.authorization.k8s.io/v1
    kind: RoleBinding
-   metadata: {name: agent-kourier-secrets, namespace: team-a}
-   roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agent-kourier-secrets}
+   metadata: {name: agent-kourier-team-a-secrets, namespace: team-a}
+   roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agent-kourier-team-a-secrets}
    subjects:
      - {kind: ServiceAccount, name: agent-kourier, namespace: agent-kourier}
    ```
 
-   The verbs are `list` and `watch`, not `get`. Check with `kubectl auth can-i list secrets/team-a-agent-token -n team-a --as
+   The verbs are `list` and `watch`, not `get`. Give the Role a name that the chart would not (`<release>-secrets` is its own), so that the two never meet. Check with `kubectl auth can-i list secrets/team-a-agent-token -n team-a --as
    system:serviceaccount:agent-kourier:agent-kourier`: it says `yes`, and `list secrets` without the name says `no`.
    Until the Role exists the Binding is `BackendReachable=False` with `CredentialsUnreadable`. It recovers on its own, with no restart, once the Role is
    applied.
@@ -227,15 +227,27 @@ crash-loops with exit code 2: `v1 serves exactly one ChatConnection, and the con
 
 ```sh
 kubectl get akconnection,akbackend,akbinding -A -o json |
-  jq -r '.items[] | "---", ({apiVersion, kind, metadata: {name: .metadata.name, namespace: .metadata.namespace}, spec} | tojson)' > resources.yaml
-kubectl -n agent-kourier create configmap my-config --from-file=resources.yaml
+  jq -r '.items[] | select(.kind != "Binding" or any(.status.conditions[]?; .type == "Accepted" and .status == "True")) | "---", ({apiVersion, kind, metadata: {name: .metadata.name, namespace: .metadata.namespace}, spec} | tojson)' > resources.yaml
+kubectl -n agent-kourier create configmap my-config --from-file=resources.yaml --dry-run=client -o yaml | kubectl apply -f -
 helm upgrade agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version <version> \
   -n agent-kourier -f my-values.yaml --set config.source=files,config.existingConfigMap=my-config
 ```
 
-The `jq` keeps only what a file may hold: a file that sets `status` is refused. The files route serves exactly one ChatConnection, so keep the one in
-`config.chatConnection` and the Bindings that name it, and drop the rest from `resources.yaml` before you create the ConfigMap. A ConfigMap that you name needs
-`rbac.secretNamespaces` for each namespace that holds one of its Secrets other than the release's: `rbac.secretNames` is ignored on this route.
+The `jq` keeps only what a file may hold, since a file that sets `status` is refused, and only the Bindings the broker accepted. **One refused entry stops the broker's
+start with exit code 2**, because on the files route one bad resource fails the whole config: a Binding that lost its channel (`is already bound by Binding ...`) or
+names an AgentBackend that does not exist (`... not found`) is served by nothing on the custom resource route, and in a file it would take every other Binding down with it.
+`agent-kourier dry-run` ([Check the values before you install](install-with-helm.md#check-the-values-before-you-install)) checks each resource, and not the references between them or a channel
+that two Bindings claim, so it does not find these; the filter does. The files route also serves exactly one ChatConnection, so keep the one in `config.chatConnection` and the
+Bindings that name it, and drop the rest from `resources.yaml` before you create the ConfigMap. The `kubectl apply` form replaces the ConfigMap of that name if it exists,
+which it does if you came through [Move a ConfigMap you manage yourself](#move-a-configmap-you-manage-yourself) and nobody has added resources since: then skip the dump.
+
+`config.existingConfigMap` is refused while `config.agentBackends`, `config.chatConnections` or `config.bindings` are set (`two ways to supply the same files: set one`). If your
+values rendered some resources and teams applied others, the dump holds both, so remove `config.*` from the values after the dump. The alternative is to
+leave the team's Bindings out of the ConfigMap and use plain `--set config.source=files`, which drops them.
+
+A Secret outside the release namespace needs a grant on this route, and `rbac.secretNames` is ignored. The Role that a team made for its own Secret stays after the move
+and is that grant. The other way is `rbac.secretNamespaces`, which replaces the chart's default of the release namespace, so list the release namespace as well; and if a team's Role has the name
+the chart would give its own there (`<release>-secrets`), delete it first, or the upgrade fails with `invalid ownership metadata`.
 
 Keep `crds.install: true` while you do; it does not need to change. What the move back does:
 
@@ -250,7 +262,7 @@ Keep `crds.install: true` while you do; it does not need to change. What the mov
 | Sessions, the outbox and the audit log | Kept, since they live in the store. A session of a Binding that is not in the config is not recovered, and a reply in its thread gets "This thread's agent is no longer set up, so I can't pass your messages on." Such a session is deleted once it has been idle for the longest `threadTTL` of any Binding (at least the default of 90 days) plus a grace of 90 days. |
 
 **Never delete a CRD to get out of a refusal.** Deleting it deletes every custom resource of that kind in the cluster, which is every team's. A broker that is
-running when its CRDs are deleted stops serving the Bindings: within 10 to 25 seconds their `agentkourier_binding_ready` series are gone and a new mention
+running when its CRDs are deleted stops serving the Bindings: within about 25 seconds their `agentkourier_binding_ready` series are gone and a new mention
 gets no answer, because the deletions reach the broker as deletions of the objects. It logs `custom resource informer cannot list or watch` and sets
 `agentkourier_config_stale` to 1, and a restart then exits with code 2.
 
@@ -273,7 +285,7 @@ delete the Binding.
 
 | What you see | Why, and what to do |
 |---|---|
-| `helm upgrade` fails with `config.source crds needs the CRDs ... to be installed before this release` | Step 1 was skipped, or the CRDs were deleted. Install them first. Nothing changed. |
+| `helm upgrade` fails with `config.source crds needs the CRDs` | Step 1 was skipped, or the CRDs were deleted. Install them first. Nothing changed. |
 | `helm upgrade` fails with `config.source crds needs Kubernetes 1.33 or later` | The API server is older. The ConfigMap route has no minimum: stay on it. With `helm template`, pass the cluster's version with `--kube-version`. |
 | The pod crash-loops and `kubectl logs` says `ChatConnection agent-kourier/slack was not found` (exit code 2) | The broker owns one ChatConnection, named by `AGENTKOURIER_CHAT_CONNECTION`, and does not start without it. Apply it, or name the one that exists in `config.chatConnection`. Once the resources exist the pod starts at its next restart, with nothing else to do. |
 | `helm upgrade` fails with `conflict with "kubectl-patch"` or another manager | Someone edited a chart-rendered resource by hand, and Helm will not overwrite a field another manager set. Put the change in your values. To discard the hand edit, add `--force-conflicts`. |

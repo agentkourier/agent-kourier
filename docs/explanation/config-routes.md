@@ -87,7 +87,7 @@ this page was checked against. See the same comment in how-to/migrate-config-sou
   deleted, and the Bindings of that connection and the AgentBackends they use with it, until the connection returns or the broker
   restarts. That is what lets a move back to the ConfigMap keep answering while the old pods end. A Binding deleted alone, while its connection exists,
   stops at the next reload, within about 10 seconds; one deleted while its connection is held stays held, so bring the connection back first.
-- **Deleting a CRD deletes every object of the kind, and the Bindings stop being served.** Within 10 to 25 seconds the `agentkourier_binding_ready` series of the
+- **Deleting a CRD deletes every object of the kind, and the Bindings stop being served.** Within about 25 seconds the `agentkourier_binding_ready` series of the
   Bindings are gone and a new mention gets no answer, since the deletions reach the broker as deletions of the objects. The broker sets
   `agentkourier_config_stale` to 1 and logs that its informers cannot list; a restart exits with code 2.
 

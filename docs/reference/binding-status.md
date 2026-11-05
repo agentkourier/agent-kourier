@@ -64,7 +64,7 @@ whose winner is in another namespace says `already bound by a Binding in another
 
 `Ready` is `False` with the reason `Accepted:<reason>` for a Binding that is not accepted, with `Accepted`'s message and generation.
 Otherwise it is the probes' result (below), with the reason `<type>:<reason>` of the first condition that holds it back, such as
-`BackendReachable:AgentNotFound`. For the few seconds after a broker starts, before its prober has listed the Binding, `Ready` is `Unknown` with the bare reason
+`BackendReachable:AgentNotFound`. For about 15 seconds after a broker starts, before its prober has listed the Binding, `Ready` is `Unknown` with the bare reason
 `Pending`; then it is `BackendReachable:Pending` until the first probes end.
 
 ### `BackendReachable` and `ChannelJoined`
@@ -93,8 +93,8 @@ the status does not. A condition whose `observedGeneration` is lower than the Bi
 `Accepted` reaches the new generation within a few seconds, up to about 20, while `BackendReachable`, `ChannelJoined` and `Ready` still say what they said about
 the old spec, and the `READY` column still says `True`. The probes catch up when the next pass runs, and that takes longer. A write of a Binding's status waits for 10 seconds
 from the end of the last one, and the writer looks for work each second. A pass does not begin within 30 seconds of the start of the last, the prober looks for work each 5 seconds, and
-it probes 4 Bindings at a time, each for up to 10 seconds, so a pass over many slow backends takes longer than one over a few. Add the write after the pass and
-the delay is about a minute for one Binding, and more for many. A Binding that was edited into something that can no longer work shows `False` only after that.
+it runs 4 probes at a time, two for each Binding, each for up to 10 seconds, so a pass over many slow backends takes longer than one over a few. Add the write after the pass and
+the delay is up to about a minute for one Binding, and more for many. It is often much less, when the last pass is long past. A Binding that was edited into something that can no longer work shows `False` only after that.
 
 `kubectl wait --for=condition=Ready` waits for the condition to describe the generation it is waiting on, with kubectl 1.37.1. A kubectl that ignores
 `observedGeneration` would return at once on the old `True`.
@@ -102,7 +102,7 @@ the delay is about a minute for one Binding, and more for many. A Binding that w
 ### A Binding made again
 
 A Binding that was deleted and created again with the same name is a new object, with generation 1 and no status. The broker picks it up at
-its next look at the config, which is within 10 seconds, and writes the new status then. Until it does, the `READY` and `REASON` columns are empty,
+its next look at the config, which is within about 10 seconds, and writes the new status then. Until it does, the `READY` and `REASON` columns are empty,
 and then `Unknown` with the reason `Pending` and `BackendReachable:Pending` until the probes end. The broker never carries the old object's status over: a
 condition made for another object is `Pending` for this one.
 

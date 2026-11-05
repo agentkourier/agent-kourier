@@ -101,16 +101,19 @@ What bounds this is what the broker can read, and where it can connect:
 - **Where the pod may connect.** The `url` is fetched from the broker's pod. The chart's NetworkPolicy is off by default. Turned on, it allows egress to DNS, the API
   server, the database, what you list in `networkPolicy.extraEgress`, and Slack's rule, which is port 443 to every address outside the private ranges. So a backend
   at a private address, such as an in-cluster Service, is unreachable until you list it in `extraEgress`, but any public HTTPS host stays reachable
-  unless you set `networkPolicy.slack.cidrs` to `[]` and send Slack and the backends through an egress proxy that you list in `extraEgress`. Without the
+  unless you set `networkPolicy.slack.cidrs` to `[]`. Slack's HTTP client honours the proxy environment variables (set them in `extraEnv`), but a backend's
+  connection never does, so a backend's `url` must itself name a reverse proxy or an address that you list in `extraEgress`. Without the
   policy a `url` can name anything the pod reaches.
 - **`allowedNamespaces`.** A Binding may use an AgentBackend or ChatConnection of another namespace only if that object lists the Binding's
   namespace. It lists none by default.
 
-What a writer of a Binding and an AgentBackend sees of your conversations. The agent of a Binding receives the messages that start its turns, and those are everything people
-write to it: each mention of the bot in the channel, each reply in a thread the Binding owns (with `chat.threadReplies: all`, the default, every reply
-in the thread, not only the ones that mention the bot), and with a `botMessage` trigger the messages of the bot that the trigger names. Each comes with the sender's name,
-ID and email, where the chat platform gives them. That holds for any channel the bot is in, private channels too. The agent also posts to the channel as the bot. Whoever chooses the AgentBackend's `url`
-therefore also chooses who reads those conversations.
+What a writer of a Binding and an AgentBackend sees of your conversations. The agent of a Binding receives each mention of the bot in the channel, each reply in a thread the Binding owns
+(with `chat.threadReplies: all`, the default, every reply in the thread, not only the ones that mention the bot), and with a `botMessage` trigger the messages of the bot that
+the trigger names. Each comes with the sender's name, ID and email, where the chat platform gives them. That holds for any channel the bot is in, private channels too. Two
+things add more. With `chat.threadReplies: mention`, a mentioned turn carries the thread's other replies as context. And on any Binding a mention of the bot by another bot or a
+webhook makes the agent receive the thread from its root, every author's messages, whatever `threadReplies` says; that is on by default (`chat.botMentions: any`), and
+`chat.botMentions: none` stops it ([Stored data](../reference/stored-data.md) describes what is kept). The agent also posts to the channel as the bot. Whoever chooses the
+AgentBackend's `url` therefore also chooses who reads those conversations.
 
 Other things a writer of a Binding can do:
 
