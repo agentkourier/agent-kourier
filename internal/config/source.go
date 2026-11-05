@@ -18,7 +18,10 @@ import (
 type Source interface {
 	// Set reads the objects and returns them with the fingerprint of the state it read them
 	// from. It returns the fingerprint on an error too, so that a state that fails to read is
-	// recognised on the next poll and not tried again until it changes. The Set is the caller's:
+	// recognised on the next poll and not tried again until it changes. The fingerprint names the state that the Set was read from,
+	// not the state of the source when Set returned: a Reloader that is PerObject publishes the Set under it and finds what
+	// changed meanwhile at the next poll, so a source it reads must be able to say which state it read (a directory of files
+	// cannot, which is why a Reloader that is not PerObject reads again when the source moved). The Set is the caller's:
 	// Resolve takes ownership of it and the Snapshot keeps pointers into it, so each call must
 	// return a Set of its own, never one that is read or changed again.
 	Set(ctx context.Context) (*Set, string, error)

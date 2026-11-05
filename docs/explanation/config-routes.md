@@ -55,6 +55,7 @@ file and field. On a reload it keeps the last good config, logs `config reload f
 | A Binding names a ChatConnection that exists and that no broker serves | Nothing reads the Binding and nothing writes its status: `READY` stays empty. Point `connectionRef` at a connection that a broker serves. |
 | A Binding's Secret is missing, unreadable or lacks the key | Keeps the Binding served. `BackendReachable` says `CredentialsUnreadable`. |
 | Two Bindings on one channel | The older holds it. The other has `ChannelConflict`. |
+| An object is edited again and again | Serves each read as it was when the read began, and reads again at the next check, so what it serves is at most one read behind. One team editing its Binding in a loop does not hold back another's. This was measured only in a test against a fake API server in the test process, with an edit every 10 ms of a Binding of about 1 MiB; it was not measured against a real API server. |
 | The caches have not synced, or the API server is out | Publishes nothing new. An empty or failed cache never reads as "everything was removed". |
 | The CRDs are not installed at start | The broker exits with code 2. |
 | The broker's own ChatConnection is missing or invalid at start | The broker exits with code 2. While it runs, it keeps the last good one and says so in its log and in a metric, including after the object is deleted. |

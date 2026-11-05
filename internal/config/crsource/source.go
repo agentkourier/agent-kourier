@@ -66,6 +66,15 @@
 // resourceVersion and not generation, and a source that moved with it would start a reload, a probe pass and a status write
 // for every status write.
 //
+// Set reads every object from one listing of the three caches, and returns that listing's fingerprint: the Set is the state
+// the fingerprint names, however long the decoding takes and whatever the caches do meanwhile. That is what lets a
+// config.Reloader that is PerObject publish a read without checking that the source held still while it was made: an edit that
+// landed after the listing is not in the Set, and is found at the next poll, which compares the fingerprint of the caches with
+// that of the read. A tenant that edits an object in a loop gets, at most, a reload at each poll, each one read behind.
+// The three caches are listed one after another, Bindings first, and not at one instant, so a Set can hold objects of
+// different kinds from slightly different moments. Each object in it is a whole object of its cache, and what an edit that
+// landed between the lists changed is found at the next poll too, as it is for any edit after the listing.
+//
 // # RBAC
 //
 // The ServiceAccount needs list and watch on bindings, agentbackends and chatconnections of agentkourier.dev, in every
