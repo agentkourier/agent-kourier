@@ -145,8 +145,8 @@ func TestFindTaskGivesUpOnAListThatNeverEnds(t *testing.T) {
 			n++
 			return listOf(fmt.Sprint("page", n), holding("t1", a2a.TaskStateCompleted, "x")), nil
 		}
-		if _, _, err := memAgent(t, m, nil).FindTask(t.Context(), "c1", "turn"); err == nil || n != maxListPages {
-			t.Errorf("err = %v after %d pages, want an error at the bound of %d", err, n, maxListPages)
+		if _, _, err := memAgent(t, m, nil).FindTask(t.Context(), "c1", "turn"); err == nil || n != 200 {
+			t.Errorf("err = %v after %d pages, want an error at the bound of 200 (the number the documentation names)", err, n)
 		}
 	})
 }

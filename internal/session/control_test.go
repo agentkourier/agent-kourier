@@ -243,6 +243,13 @@ func pausedFirst(t *testing.T, answer func(*a2a.Message, agent.Handler) error) (
 	t.Helper()
 	f := newFixture(t)
 	sink := f.live()
+	pausedFirstOn(t, f, sink, answer)
+	return f, sink
+}
+
+// pausedFirstOn is pausedFirst on a fixture that is already live, for a test that set up what the manager logs and counts first.
+func pausedFirstOn(t *testing.T, f *fixture, sink *fakeSink, answer func(*a2a.Message, agent.Handler) error) {
+	t.Helper()
 	f.agent.script = pauseFirst
 	f.agent.answer = answer
 	f.agent.get = func(id a2a.TaskID) (*a2a.Task, error) { return working(t0)(id) }
@@ -254,7 +261,6 @@ func pausedFirst(t *testing.T, answer func(*a2a.Message, agent.Handler) error) (
 	waitFinal(t, sink)
 	f.nextSent()
 	eventually(t, "the runner to park", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return f.m.convos[key].parked == "t1" })
-	return f, sink
 }
 
 // answerMsg is the reply the dialect builds for the pause of task t1.
