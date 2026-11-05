@@ -32,7 +32,7 @@ WORKFLOWS=("$@")
 # in the name, as security.yml and codeql.yml define it. Together they are the status checks the main
 # ruleset requires. Keep these lists in lockstep with the workflows and the ruleset: a renamed or
 # missing required job must stop a release until this gate is reviewed with that change.
-CI_REQUIRED_JOBS=(lint test test-testhooks docs-agent)
+CI_REQUIRED_JOBS=(lint test test-testhooks docs-agent 'crd-corpus (1.37)' 'crd-corpus (1.33)')
 SECURITY_REQUIRED_JOBS=(
   'govulncheck (root)'
   'govulncheck (ax)'

@@ -77,8 +77,10 @@ not a required check yet. If you change the store or a migration, run it locally
 dry-run creates, and thousands of variations of valid objects that it generates. It fails if the generated schema, with
 its CEL rules, refuses an object that `Default` and `Validate` accept, if an entry's `# schema:` flag no longer says what
 the schema does with it or its refusal names another field, or if the corpus has lost an entry or an entry reports more
-than one problem. It is not a required check yet. If you change an API type, a marker or a rule of
-`api/v1alpha1/validate.go`, run `make crds` and then `make crd-corpus` locally; it needs Docker, `kind` and `kubectl`
+than one problem. It runs on two Kubernetes versions, as the required checks `crd-corpus (1.37)` and `crd-corpus (1.33)`: the
+node image the kind tiers use, and the oldest Kubernetes the chart admits. If you change an API type, a marker or a rule of
+`api/v1alpha1/validate.go`, run `make crds` and then `make crd-corpus` locally, and `CRD_CORPUS_NODE=min make crd-corpus` for the
+oldest; it needs Docker, `kind` and `kubectl`
 (or `CRD_CORPUS_KUBECONFIG`, a kubeconfig for a local cluster you made), and takes a minute or two once the node image
 is pulled. A new field or rule gets an entry in `test/crdcorpus/testdata/invalid`, whose `# broker-only:` line says why
 the CRD leaves it to the broker if no marker or CEL rule refuses it, and, if you write a CEL rule, an entry in

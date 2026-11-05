@@ -63,6 +63,18 @@
       "enabled": false
     },
     {
+      "description": "NODE_IMAGE_MIN in hack/kind/lib.sh is the oldest Kubernetes the chart admits and stays on its minor (test/kindmanifests guards this); it moves by hand with the chart's minimum. Its patch and digest updates arrive. NODE_IMAGE is the same repository and is not held",
+      "matchDepNames": [
+        "kindest/node"
+      ],
+      "matchCurrentValue": "/^v1\\.33\\./",
+      "matchUpdateTypes": [
+        "minor",
+        "major"
+      ],
+      "enabled": false
+    },
+    {
       "matchManagers": [
         "github-actions"
       ],
