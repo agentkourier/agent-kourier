@@ -114,7 +114,7 @@ func (p *apiPackage) page(kind, apiVersion, from string) string {
 	fmt.Fprintf(&b, "# %s\n\n", kind)
 	fmt.Fprintf(&b, "This page lists every field of the %s resource, as the Go types in `%s` define it.", kind, from)
 	if p.hasStatus(kind) {
-		b.WriteString(" You do not set `status`: it is the observed state.")
+		fmt.Fprintf(&b, " You do not set `status`: it is the observed state, described in [%s status](%s-status.md).", kind, strings.ToLower(kind))
 	}
 	b.WriteString("\n\nThe Default column shows what happens when a field is omitted. None means no default is supplied.\n\n")
 	fmt.Fprintf(&b, "`apiVersion: %s` · `kind: %s`\n\n", apiVersion, kind)

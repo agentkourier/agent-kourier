@@ -335,11 +335,11 @@ the default `config.source: files` renders the objects it always has, and the po
 - **New values.** `config.source` (`files` or `crds`), `config.chatConnection`, `crds.install` and `rbac.secretNames`. To move, see
   [Move the config between a ConfigMap and custom resources](migrate-config-source.md). The route needs Kubernetes 1.33 or later, and only the
   route: the files route has no minimum.
-- **`--reuse-values` from 0.1.6 works.** The chart reads the values it adds as unset when the old values lack them (measured: a release made
-  by the chart of 0.1.6 upgraded to this one with `--reuse-values`, on the files route, and its pod ran).
+- **`--reuse-values` from 0.1.6 works.** The chart reads the values it adds as unset when the old values lack them (a release made by
+  the chart of 0.1.6 upgrades to this one with `--reuse-values`).
 - **A reload can add a Secret in a namespace the broker was not watching, with no restart.** The broker follows each Secret the config names
-  with an informer of its own, so a new namespace works as long as its Role grants `list` and `watch` on the Secret. A Secret it may not read fails the
-  reload, and the last good config stays, as before.
+  with an informer of its own, so a new namespace works as long as its Role grants `list` and `watch` on the Secret. With the files route, a Secret it may not read fails the
+  reload, and the last good config stays, as before; with custom resources it makes that Binding's `BackendReachable` say `CredentialsUnreadable` and stops nothing.
 - **New bounds on triggers, extract entries and headers** apply on both routes: see
   [the release that bounds them](#upgrade-to-the-release-that-bounds-triggers-extract-entries-and-headers), which also shows the check to run before you upgrade.
 

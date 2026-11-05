@@ -109,8 +109,7 @@ at a time, so that teams can own their Bindings; there is no reconciliation cont
 leader writes each Binding's `status`. The two routes are never merged. [Choose a config route](config-routes.md) says how they differ. Secret
 access uses Kubernetes RBAC; cross-namespace resource references use configured namespace allowlists.
 
-On the files route the config must hold exactly one `ChatConnection`; the broker refuses to start with none or with more. With custom resources a
-cluster may hold several, and the broker serves the one named by `AGENTKOURIER_CHAT_CONNECTION`. Multiple bindings
+A broker serves one `ChatConnection`: see [One ChatConnection](config-routes.md#one-chatconnection) for how it is chosen on each route. Multiple bindings
 can route its channels to different agents and backends. The store is SQLite with
 one replica, or Postgres with one or two replicas (two are active and passive) (see
 [High availability](high-availability.md)); the broker is never active-active.

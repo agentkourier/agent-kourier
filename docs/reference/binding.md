@@ -1,6 +1,6 @@
 # Binding
 
-This page lists every field of the Binding resource, as the Go types in `api/v1alpha1` define it. You do not set `status`: it is the observed state.
+This page lists every field of the Binding resource, as the Go types in `api/v1alpha1` define it. You do not set `status`: it is the observed state, described in [Binding status](binding-status.md).
 
 The Default column shows what happens when a field is omitted. None means no default is supplied.
 

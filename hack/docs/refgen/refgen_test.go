@@ -66,7 +66,7 @@ func TestAPIReferenceHeaderAndDoc(t *testing.T) {
 // TestAPIReferenceSaysStatusIsNotSet checks the sentence that tells a reader of a page with a status that it is not
 // theirs to set: the page of a kind that has a status has it, and the page of one that has none does not.
 func TestAPIReferenceSaysStatusIsNotSet(t *testing.T) {
-	const sentence = "You do not set `status`: it is the observed state."
+	const sentence = "You do not set `status`: it is the observed state, described in ["
 	if page := fixturePages(t)["Widget"]; !strings.Contains(page, sentence) {
 		t.Errorf("the page of a Widget, which has a status, lacks %q:\n%s", sentence, page)
 	}

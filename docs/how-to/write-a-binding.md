@@ -81,10 +81,10 @@ kubectl apply --dry-run=server -f binding.yaml   # the schema and CEL rules of t
 kubectl apply -f binding.yaml
 ```
 
-It needs three things from the platform team: your namespace in the `allowedNamespaces` of the ChatConnection (and of the
-AgentBackend, if it is in another namespace), and, for your token Secret, a Role that names it and a RoleBinding to the broker's
-ServiceAccount ([the how-to](migrate-config-source.md#let-a-team-add-its-own-binding) has both). Until they are made the status says
-`NamespaceNotAllowed` or `CredentialsUnreadable`.
+It needs two things. The platform team lists your namespace in the `allowedNamespaces` of the ChatConnection (and of the AgentBackend, if it is in another
+namespace). You make, in your own namespace, a Role that names your token Secret and a RoleBinding to the broker's ServiceAccount
+([the how-to](migrate-config-source.md#let-a-team-add-its-own-binding) has both). Until they exist the status says `NamespaceNotAllowed` or
+`CredentialsUnreadable`. A `connectionRef` to a connection of another namespace names that namespace.
 
 ## Check it
 
@@ -104,11 +104,9 @@ kubectl -n payments wait --for=condition=Ready akbinding/payments-assistant --ti
 
 The leader also checks the Binding by itself, within about 30 seconds of the reload or when a pass already running ends: `agentkourier_binding_ready{binding="<namespace>/<name>"}` is 1 when the agent's card can be fetched and the bot is in the channel. If it is 0, see [A Binding is not ready](troubleshoot.md#a-binding-is-not-ready).
 
-One channel takes one Binding, on both routes, and what happens to a second one differs. With files, a second Binding for the same
-channel on the same connection makes the whole config fail to load: a reload keeps the last good config, and a fresh start fails. The error names the
-Binding that already holds the channel. With custom resources the older Binding, by creation time, holds the channel, and the second one is not served and
-says `ChannelConflict`; the rest carry on. Age alone decides, so an older Binding that you edit onto a younger one's channel displaces it
-([Who holds a channel](../explanation/config-routes.md#who-holds-a-channel)).
+One channel takes one Binding, on both routes, and what happens to a second one differs: with files the whole config fails to load, and with custom
+resources the younger Binding says `ChannelConflict` and the rest carry on. [Who holds a channel](../explanation/config-routes.md#who-holds-a-channel)
+says how it is decided, and what an older Binding that you edit onto a younger one's channel does.
 
 ## Variations
 

@@ -49,7 +49,9 @@ file and field. On a reload it keeps the last good config, logs `config reload f
 | An invalid new object | Does not serve it. A Binding has `Accepted=False`. |
 | An object is deleted | Removes it. |
 | A Binding names an AgentBackend or ChatConnection that does not exist, or that does not allow its namespace | Drops the Binding from routing, with a condition (`BackendNotFound`, `ConnectionNotFound`, `NamespaceNotAllowed`). |
-| A Binding names an AgentBackend or ChatConnection that is invalid | Serves the object's last good generation, or drops the Binding if it has none, with `BackendRejected` or `ConnectionRejected`. |
+| A Binding names an AgentBackend that is invalid | Serves the AgentBackend's last good generation, or drops the Binding if it has none, with `BackendRejected`. |
+| The broker's own ChatConnection is edited into something invalid | Keeps serving its last good generation, and each of its Bindings says `ConnectionRejected`. |
+| A Binding names a ChatConnection that exists and that no broker serves | Nothing reads the Binding and nothing writes its status: `READY` stays empty. Point `connectionRef` at a connection that a broker serves. |
 | A Binding's Secret is missing, unreadable or lacks the key | Keeps the Binding served. `BackendReachable` says `CredentialsUnreadable`. |
 | Two Bindings on one channel | The older holds it. The other has `ChannelConflict`. |
 | The caches have not synced, or the API server is out | Publishes nothing new. An empty or failed cache never reads as "everything was removed". |
@@ -67,8 +69,7 @@ On both routes one channel of a ChatConnection takes one Binding. On files two c
 reload is refused, and the error names the Binding that already holds the channel. On custom resources the older Binding, by `creationTimestamp` and then by
 namespace and name, holds the channel, and the other is not served and says `ChannelConflict`. A later Binding cannot take a channel from an older one.
 
-**Age alone decides.** An older Binding that is edited onto a younger one's channel displaces it (measured: the older Binding became Ready on the channel and the younger one
-went to `Accepted=False`, within 25 seconds), and so does an older Binding whose broken reference heals. A reply in a thread that the displaced Binding started gets "This thread's agent is no longer set up, so I can't pass your messages on." A new mention in the channel is answered by the Binding that holds it now.
+**Age alone decides.** An older Binding that is edited onto a younger one's channel displaces it, and so does an older Binding whose broken reference heals. A reply in a thread that the displaced Binding started, or one already queued, gets "This thread's agent is no longer set up, so I can't pass your messages on." A new mention in the channel is answered by the Binding that holds it now.
 
 ### What the custom resource route does not promise
 
@@ -80,12 +81,15 @@ went to `Accepted=False`, within 25 seconds), and so does an older Binding whose
   broker makes does not, so read the log or `agentkourier_config_invalid_objects` after changing an AgentBackend or a ChatConnection.
 - **A Binding that is not served keeps its sessions.** Retention skips the sessions of a Binding that exists and was refused, until it is served
   again or deleted, so a Binding left broken keeps its sessions indefinitely.
+<!-- CHECK AFTER THE HOLD FIX MERGES, THEN DELETE THIS COMMENT, which must not reach main: the next bullet states a fix that is not in the code
+this page was checked against. See the same comment in how-to/migrate-config-source.md. -->
 - **Deleting a ChatConnection does not stop routing.** A broker holds its own ChatConnection at its last good generation after it is
   deleted, and the Bindings of that connection and the AgentBackends they use with it, until the connection returns or the broker
-  restarts. That is what lets a move back to the ConfigMap keep answering while the old pods end. To stop a Binding, delete the Binding alone
-  while its connection exists: it stops at the next reload, within about 10 seconds.
-- **Deleting a CRD deletes every object of the kind.** A broker that is running keeps serving what it had and sets `agentkourier_config_stale` to 1;
-  a restart exits with code 2.
+  restarts. That is what lets a move back to the ConfigMap keep answering while the old pods end. A Binding deleted alone, while its connection exists,
+  stops at the next reload, within about 10 seconds; one deleted while its connection is held stays held, so bring the connection back first.
+- **Deleting a CRD deletes every object of the kind, and the Bindings stop being served.** Within 10 to 25 seconds the `agentkourier_binding_ready` series of the
+  Bindings are gone and a new mention gets no answer, since the deletions reach the broker as deletions of the objects. The broker sets
+  `agentkourier_config_stale` to 1 and logs that its informers cannot list; a restart exits with code 2.
 
 ## What is checked, and where
 
@@ -98,7 +102,7 @@ nothing is accepted on the file route that the schema refuses.
 $ kubectl apply -f bad.yaml
 The Binding "bad" is invalid:
 * spec.chat.channel: Invalid value: "general": spec.chat.channel in body should match '^[CG][A-Z0-9]+$'
-* spec.identity: Invalid value: set userId, tokenSecretRef, or both
+* spec.identity: Invalid value: "object": set userId, tokenSecretRef, or both
 ```
 
 **Refused at apply** by the schema or a CEL rule: the wrong type, a value outside an enum, a pattern or a length, a missing required field, a
@@ -111,12 +115,12 @@ over 512 bytes; and every rule that spans objects: that the AgentBackend and Cha
 one Binding holds the channel, and that a Secret has its key.
 
 The caps (50 triggers in a Binding, 32 `extract` entries in a trigger, 32 headers and 256 bytes of a header's name in an AgentBackend) apply on
-both routes, because the schema has them. [Upgrade](../how-to/upgrade.md#upgrade-to-the-release-that-bounds-triggers-extract-entries-and-headers) says how to find a config over one before you upgrade.
+both routes, because the schema and the broker's own validation both have them. [Upgrade](../how-to/upgrade.md#upgrade-to-the-release-that-bounds-triggers-extract-entries-and-headers) says how to find a config over one before you upgrade.
 
 ### Unknown fields
 
-A field that the schema does not have is **refused by default** when you use `kubectl`, and the API server drops it when the client does not ask it to refuse. Measured with
-kubectl 1.37.1 on Kubernetes 1.37.0, for a Binding with `spec.chat.bogusField`:
+A field that the schema does not have is **refused by default** when you use `kubectl` or Helm 4, and the API server drops it when the client does not ask it to refuse.
+For a Binding with `spec.chat.bogusField`, with kubectl 1.37.1 and Helm 4 (another kubectl may differ):
 
 | Client | Result |
 |---|---|
@@ -124,11 +128,11 @@ kubectl 1.37.1 on Kubernetes 1.37.0, for a Binding with `spec.chat.bogusField`:
 | `kubectl apply --server-side` | Refused: `.spec.chat.bogusField: field not declared in schema` |
 | `kubectl apply --validate=warn` | Stored without the field, with `Warning: unknown field "spec.chat.bogusField"` |
 | `kubectl apply --validate=false` | Stored without the field, and no message |
-| `helm upgrade` (Helm 4.3.0), with the field in a `config.*` value | Refused: `field not declared in schema`, and the release goes to `failed` with the objects as they were |
+| `helm upgrade`, with the field in a `config.*` value | Refused: `field not declared in schema`, and the release goes to `failed` with the objects as they were |
 
-So the promise that a removed field "fails strict decoding" holds for the file route. On the custom resource route it holds for a client that asks the API server to
-refuse unknown fields, and not for one that does not: with `--validate=false` the field is dropped silently, and the object runs without it. What Argo CD does with an unknown field was
-not run here.
+On the files route the loader refuses a file with a field it does not know. On the custom resource route that holds for a client that asks the API server to
+refuse unknown fields, and not for one that does not: with `--validate=false` the field is dropped silently, and the object runs without it, so a field
+that a release removed is ignored without an error. What Argo CD does with an unknown field is not covered here.
 
 ## One ChatConnection
 
