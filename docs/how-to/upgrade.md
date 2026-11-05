@@ -581,12 +581,12 @@ never the cluster, so on the custom resource route give it the YAML you applied,
 
 An earlier release has no cap, so after a [rollback](#roll-back) a config over one loads again. Sessions deleted after you lowered a `threadTTL` stay deleted.
 
-## Upgrade to the release that bounds namespaces, chat IDs, URLs and header values
+## Upgrade to the release that bounds namespaces, chat IDs, URLs, header values and durations
 
 These fields had no bound in the schema or in the broker's own validation, so one namespace writer could store an object as large as the API server allows, and every
 broker keeps each object in memory. This release refuses a config over the bounds below and loads a config within them as before. No example, recipe, kind tier config or test fixture in this
 repository comes near one: the longest URL is under 100 characters, a header value is under 20, an `allowedNamespaces` list has one namespace, and a channel, a sender and a user group ID are 11
-characters. [Limits](../reference/limits.md) lists every limit you can run into, and [Security](../explanation/security.md#what-the-people-who-write-these-objects-can-do) says what the bounds do and do not cap.
+characters, and a duration is written in at most 5 (`2160h`). [Limits](../reference/limits.md) lists every limit you can run into, and [Security](../explanation/security.md#what-the-people-who-write-these-objects-can-do) says what the bounds do and do not cap.
 
 | Where | Bound | The error |
 |---|---|---|
@@ -598,14 +598,20 @@ characters. [Limits](../reference/limits.md) lists every limit you can run into,
 | `from.id` of a trigger | 32 bytes | `spec.chat.triggers[1].from.id: is 33 bytes, longer than the 32 byte limit` |
 | An entry of `spec.interactions.approverGroups` | 32 bytes | `spec.interactions.approverGroups[0]: is 33 bytes, longer than the 32 byte limit` |
 | `spec.chat.acknowledgment.emoji` | 100 bytes | `spec.chat.acknowledgment.emoji: is 101 bytes, longer than the 100 byte limit` |
-| The name of an `extract` entry, and so of a `closeWhen` key | 63 bytes | `spec.chat.triggers[1].extract: has an entry named with 64 bytes, longer than the 63 byte limit` |
+| The name of an `extract` entry, and so of a `closeWhen` key | 63 bytes | `spec.chat.triggers[1].extract: entry 1, in name order, is named with 64 bytes, longer than the 63 byte limit` |
 | A value of `thread.closeWhen` | 256 bytes | `spec.chat.triggers[1].thread.closeWhen.state: is 257 bytes, longer than the 256 byte limit` |
+| The text of a duration: `interactions.timeout`, `session.threadTTL`, `thread.cooldown`, `thread.maxIdle`, `rateLimit.per` | 64 characters | `spec.session.threadTTL: is 65 characters, longer than the 64 character limit` |
 
 A mention's `name` over 63 characters and its `user` over 21 were refused before, by their patterns. The message now says the length, as the rows above do, and shows no value.
 
+**The text of a duration.** The schema's pattern let through any run of numbers and units (`0h0h0h` and on), and the broker read the value whatever the length of the text, so a duration could be as
+long as the object. The broker now reads the text of the five durations before it becomes a duration, on both routes, and refuses one of more than 64 characters, whatever its value, without showing it.
+A duration that is written the usual way is a few characters.
+
 **A `url` with a query or a fragment.** Before, such an AgentBackend loaded and passed the API server, and every connection to it failed when the broker built the endpoint, so no probe and no turn
-on it could succeed. It is now refused when it is read or written. The rule is wider than the connection's: a `?` or a `#` anywhere in the `url` is refused, even one with nothing after it
-(`http://host/a2a?`), which the endpoint check accepted and which worked. If the agent accepts it, move a token that rode in a query to a header with `valueSecretRef`; drop a fragment, which an HTTP client does not send.
+on it could succeed. It is now refused when it is read or written. The rule is wider than the connection's: a `?` or a `#` anywhere in the `url` is refused, even one with nothing after it.
+A bare `?` failed before too: the endpoint check kept it, and the card was fetched at a URL whose query held the path. A bare `#` worked, because the endpoint drops it, and is now refused.
+If the agent accepts it, move a token that rode in a query to a header with `valueSecretRef`; drop a fragment, which an HTTP client does not send.
 
 A config over a bound is an invalid config, and the broker treats it as it treats the one in
 [the release that bounds triggers](#upgrade-to-the-release-that-bounds-triggers-extract-entries-and-headers): with files it exits at start-up with [code 2](../reference/cli.md#exit-codes) and names the field,
@@ -619,4 +625,4 @@ stops the start with exit code 2. Edit such an object before you upgrade: whethe
 [the release that bounds triggers](#upgrade-to-the-release-that-bounds-triggers-extract-entries-and-headers). It reports each of these errors without a token. It reads files, never the cluster, so on the
 custom resource route give it the YAML you applied, and look in the cluster for a URL with a query or fragment (`kubectl get akbackend -A -o yaml | grep -E 'url: .*[?#]'`).
 
-An earlier release has none of these bounds, so after a [rollback](#roll-back) a config over one loads again, and an AgentBackend with a query or fragment in its `url` loads and fails each connection.
+An earlier release has none of these bounds, so after a [rollback](#roll-back) a config over one loads again, and an AgentBackend with a query or a fragment in its `url` loads again, and fails each connection unless the fragment is a bare `#`.

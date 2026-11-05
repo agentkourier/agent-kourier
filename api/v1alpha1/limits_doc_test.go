@@ -46,6 +46,7 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Count(t, "headerValue", maxHeaderValueLen)
 	limitsdoc.Count(t, "extractName", maxExtractNameLen)
 	limitsdoc.Count(t, "closeWhenValue", maxCloseWhenValueLen)
+	limitsdoc.Count(t, "durationText", maxDurationTextLen)
 
 	limitsdoc.Duration(t, "cooldownMin", minThreadCooldown)
 	limitsdoc.Duration(t, "cooldownMax", maxThreadCooldown)

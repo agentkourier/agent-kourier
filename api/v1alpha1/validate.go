@@ -520,8 +520,8 @@ func (p *problems) botMessageTrigger(path string, t *Trigger) {
 	if len(t.Extract) > maxExtract {
 		p.add(path+".extract", "has %d entries, maximum is %d", len(t.Extract), maxExtract)
 	}
-	for _, name := range slices.Sorted(maps.Keys(t.Extract)) {
-		if p.longName(path+".extract", name) {
+	for i, name := range slices.Sorted(maps.Keys(t.Extract)) {
+		if p.longName(path+".extract", i, name) {
 			continue
 		}
 		p.extract(path+".extract."+name, name, t.Extract[name])
@@ -538,12 +538,13 @@ func (p *problems) botMessageTrigger(path string, t *Trigger) {
 }
 
 // longName reports whether the name of an entry of a map is over the cap of an extract name, and if it is, adds a problem
-// that does not show it: a path has the name in it, and so would every message below it.
-func (p *problems) longName(path, name string) bool {
+// that does not show it: a path has the name in it, and so would every message below it. It says which entry by its place
+// in the sorted names, counted from 0, which the caller passes.
+func (p *problems) longName(path string, index int, name string) bool {
 	if len(name) <= maxExtractNameLen {
 		return false
 	}
-	p.add(path, "has an entry named with %d bytes, longer than the %d byte limit", len(name), maxExtractNameLen)
+	p.add(path, "entry %d, in name order, is named with %d bytes, longer than the %d byte limit", index, len(name), maxExtractNameLen)
 	return true
 }
 
@@ -614,8 +615,8 @@ func (p *problems) thread(path string, th *TriggerThread, extract map[string]Ext
 			p.add(path+".maxIdle", "%s is out of range, must be between twice the cooldown (%s) and %s", d, floor, MaxThreadMaxIdle)
 		}
 	}
-	for _, name := range slices.Sorted(maps.Keys(th.CloseWhen)) {
-		if p.longName(path+".closeWhen", name) {
+	for i, name := range slices.Sorted(maps.Keys(th.CloseWhen)) {
+		if p.longName(path+".closeWhen", i, name) {
 			continue
 		}
 		at := path + ".closeWhen." + name

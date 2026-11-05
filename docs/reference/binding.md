@@ -132,8 +132,8 @@ TriggerThread decides which thread a message joins and when it closes the thread
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `by` | string | No | None | By is key: messages with the same extracted "key" share a thread. One of `key`. |
-| `cooldown` | duration | No | None | Cooldown is how long after a turn the same key starts no new turn. Required with by, and between 1m and 168h. Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. |
-| `maxIdle` | duration | No | Larger of `24h` and twice the cooldown | MaxIdle is how long an open thread may go without a message of its key before Agent Kourier counts it abandoned, so that the key's next fire starts a new investigation instead of a note. It covers a resolve that never arrived. It needs by, is at least twice the cooldown, and is at most 720h; unset means the larger of 24h and twice the cooldown. It must be longer than the sender's repeat interval (Alertmanager's repeat_interval): an alert that keeps firing repeats at that interval, and a maxIdle shorter than it counts a live alert abandoned between two repeats and starts a second investigation for it. Twice the cooldown covers that only for a 4h cooldown against Alertmanager's 4h repeat_interval; a longer repeat_interval needs a maxIdle set above it. Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. |
+| `cooldown` | duration | No | None | Cooldown is how long after a turn the same key starts no new turn. Required with by, and between 1m and 168h. Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. At most 64 characters. |
+| `maxIdle` | duration | No | Larger of `24h` and twice the cooldown | MaxIdle is how long an open thread may go without a message of its key before Agent Kourier counts it abandoned, so that the key's next fire starts a new investigation instead of a note. It covers a resolve that never arrived. It needs by, is at least twice the cooldown, and is at most 720h; unset means the larger of 24h and twice the cooldown. It must be longer than the sender's repeat interval (Alertmanager's repeat_interval): an alert that keeps firing repeats at that interval, and a maxIdle shorter than it counts a live alert abandoned between two repeats and starts a second investigation for it. Twice the cooldown covers that only for a 4h cooldown against Alertmanager's 4h repeat_interval; a longer repeat_interval needs a maxIdle set above it. Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. At most 64 characters. |
 | `closeWhen` | map[string]string | No | None | CloseWhen maps an extracted field to the value that closes the thread: Agent Kourier posts a note and starts no turn. Every entry must equal. It names only extracted fields, so it holds at most as many entries as extract does, 32. A value is at most 256 bytes. |
 
 ## TriggerLimits
@@ -152,7 +152,7 @@ RateLimit allows MaxRuns agent runs per window and MaxConcurrent at once.
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `maxRuns` | integer | Yes | None | Minimum 1. |
-| `per` | duration | Yes | None | Per is the window length. Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. |
+| `per` | duration | Yes | None | Per is the window length. Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. At most 64 characters. |
 | `maxConcurrent` | integer | Yes | None | Minimum 1. |
 
 ## ChatMention
@@ -173,7 +173,7 @@ Interactions configures agent pauses that wait on a person.
 | `askUser` | boolean | No | `false` | AskUser lets the agent ask questions in the thread. Defaults to false. |
 | `toolApprovals` | boolean | No | `false` | ToolApprovals lets the agent ask a person to approve tool calls in the thread. Defaults to false. |
 | `approverGroups` | []string | No | None | ApproverGroups names the platform's user groups whose members may decide a tool approval, by the platform's ID (Slack: `S…`). An empty list allows any non-bot channel member. At most 10 groups may be named. Group IDs start with S and contain uppercase letters and digits, at most 32 bytes; duplicates and empty entries are refused. |
-| `timeout` | duration | No | `30m` | Timeout is how long a pause waits for an answer. Defaults to 30m. At most 168h (7 days); a longer one is refused. Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. |
+| `timeout` | duration | No | `30m` | Timeout is how long a pause waits for an answer. Defaults to 30m. At most 168h (7 days); a longer one is refused. Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. At most 64 characters. |
 
 ## Feedback
 
@@ -189,7 +189,7 @@ Session configures thread-to-session mapping.
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `threadTTL` | duration | No | `2160h` | ThreadTTL is how long a thread keeps its session after its last activity. Defaults to 2160h (90 days). At most 8760h (365 days); a longer one is refused. Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. |
+| `threadTTL` | duration | No | `2160h` | ThreadTTL is how long a thread keeps its session after its last activity. Defaults to 2160h (90 days). At most 8760h (365 days); a longer one is refused. Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. At most 64 characters. |
 
 ## BindingStatus
 

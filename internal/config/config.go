@@ -278,6 +278,11 @@ func scanDecode(j []byte, obj any) (paths []string, other []error, err error) {
 			other = append(other, e)
 		}
 	}
+	// A Duration is decoded from its text, and Validate sees only the result, so the cap on the text is checked here, on the
+	// document, for both routes.
+	if _, isBinding := obj.(*v1alpha1.Binding); isBinding {
+		other = append(other, v1alpha1.DurationTextProblems(j)...)
+	}
 	return paths, other, nil
 }
 

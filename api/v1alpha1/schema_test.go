@@ -377,30 +377,32 @@ func TestSchemaCapsEqualTheBrokersCaps(t *testing.T) {
 			t.Errorf("%s: schema %s = %d, Go rule = %d", tc.name, tc.key, got, tc.want)
 		}
 	}
+	// The text of a duration is capped by the decoder (DurationTextProblems), which sees it before it is a Duration.
+	for _, f := range durationFields {
+		if got := crdSchema(t, f.plural).at(t, f.path).num("maxLength"); got != maxDurationTextLen {
+			t.Errorf("%s: schema maxLength = %d, maxDurationTextLen = %d", f.path, got, maxDurationTextLen)
+		}
+	}
 }
 
 // TestEverySpecStringListAndMapIsBounded fails for a string, list or map of a spec that has no bound in the schema: a field
 // that nothing bounds lets one namespace writer make an object as large as the apiserver allows, and every broker keeps
-// each object in memory. A string is bounded by an enum, a maxLength, or, for a value of a map, a rule of the map that
-// compares its size; a list by maxItems; a map by maxProperties. A field that is bounded in no other way goes in
-// textBoundedElsewhere with the reason, which is the list of what remains.
+// each object in memory. A string is bounded by an enum or a maxLength, or, for a value of a map, by a rule of the map that
+// compares its size; a list by maxItems; a map by maxProperties, and its keys by a rule of the map that bounds them
+// (their size, or a list they must be in), or by the one rule below that ties them to another map's keys.
 func TestEverySpecStringListAndMapIsBounded(t *testing.T) {
-	// A Duration is decoded before Validate sees it, so its text has no length cap there, and the schema's cap on it
-	// would refuse what the file route accepts (spec D50). The pattern bounds what the text may be made of, not how long.
-	textBoundedElsewhere := map[string]string{}
-	for _, f := range durationFields {
-		textBoundedElsewhere[f.plural+" "+f.path] = "a Duration: Validate reads it decoded, so a cap on its text has no twin"
+	// A map whose keys are bounded by a rule on another node, with the node and a piece of the rule, so that taking the rule
+	// out fails here too. A closeWhen key must be the name of an extract entry, which has a bound of its own.
+	keysByOtherRule := map[string]struct{ node, rule string }{
+		"bindings spec.chat.triggers[].thread.closeWhen": {"spec.chat.triggers[]", "closeWhen.all(k, has(self.extract) && k in self.extract)"},
 	}
-	used := map[string]bool{}
+	usedOtherRule := map[string]bool{}
 	var walk func(plural, path string, n schema, parentRules []celRule, mapValue bool)
 	walk = func(plural, path string, n schema, parentRules []celRule, mapValue bool) {
 		key := plural + " " + path
 		switch n.str("type") {
 		case "string":
-			_, listed := textBoundedElsewhere[key]
 			switch {
-			case listed:
-				used[key] = true
 			case n["enum"] != nil || n.num("maxLength") >= 0:
 			case mapValue && slices.ContainsFunc(parentRules, func(r celRule) bool { return strings.Contains(r.Rule, "size(self[k]) <= ") }):
 			default:
@@ -411,8 +413,21 @@ func TestEverySpecStringListAndMapIsBounded(t *testing.T) {
 				t.Errorf("%s: a list with no maxItems", key)
 			}
 		case "object":
-			if _, hasProps := n["properties"]; !hasProps && n.num("maxProperties") < 0 {
+			if _, hasProps := n["properties"]; hasProps {
+				break
+			}
+			if n.num("maxProperties") < 0 {
 				t.Errorf("%s: a map with no maxProperties", key)
+			}
+			if other, ok := keysByOtherRule[key]; ok {
+				usedOtherRule[key] = true
+				if !slices.ContainsFunc(crdSchema(t, plural).at(t, other.node).rules(), func(r celRule) bool { return strings.Contains(r.Rule, other.rule) }) {
+					t.Errorf("%s: its keys are bounded by a rule of %s containing %q, which is gone", key, other.node, other.rule)
+				}
+			} else if !slices.ContainsFunc(n.rules(), func(r celRule) bool {
+				return strings.Contains(r.Rule, "size(k)") || strings.Contains(r.Rule, "k in [")
+			}) {
+				t.Errorf("%s: a map whose keys have no rule that bounds them (size(k), or k in [list])", key)
 			}
 		}
 		if props, ok := n["properties"].(map[string]any); ok {
@@ -430,9 +445,9 @@ func TestEverySpecStringListAndMapIsBounded(t *testing.T) {
 	for _, plural := range []string{"agentbackends", "chatconnections", "bindings"} {
 		walk(plural, "spec", crdSchema(t, plural).child(t, "", "properties").child(t, "", "spec"), nil, false)
 	}
-	for key := range textBoundedElsewhere {
-		if !used[key] {
-			t.Errorf("%s is listed as bounded elsewhere, and is not a string of the schema", key)
+	for key := range keysByOtherRule {
+		if !usedOtherRule[key] {
+			t.Errorf("%s is listed as bounded by a rule elsewhere, and is not a map of the schema", key)
 		}
 	}
 }

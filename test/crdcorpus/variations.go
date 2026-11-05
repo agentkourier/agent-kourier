@@ -141,6 +141,10 @@ func durations() func(*rand.Rand) any {
 		".5h", "5.h", "1h30m", "100ms", "1µs", "1μs", "1ns", "-0.0000000001ns", "0.0000000001ns", "1e3s", "1d", "", "banana",
 		"1 h", "s", ".s", "99999999999h", "9223372036854775807ns", "2562047h47m16.854775807s", "2562047h47m16.854775808s",
 		"-2562047h47m16.854775808s", "00000000000001h", "+30m", "-30m", "1h1h", "0.5h", "4h", "8h", "336h",
+		// The cap on the text, 64 characters: at it and over it in ASCII, and in micro signs, whose bytes are more than their characters.
+		strings.Repeat("0", 62) + "1h", strings.Repeat("0", 63) + "1h", strings.Repeat("0h", 32), strings.Repeat("0h", 33),
+		strings.Repeat("0", 61) + "1µs", strings.Repeat("0", 62) + "1µs", strings.Repeat("0", 61) + "1μs", strings.Repeat("0", 62) + "1μs",
+		strings.Repeat("0", 60) + "1000µs", strings.Repeat("0", 58) + "1000µs",
 	}
 	pieces := []string{"0", "1", "2", "5", "10", "30", ".", "-", "+", "s", "m", "h", "ms", "us", "µs", "μs", "ns", "d", "x"}
 	return func(r *rand.Rand) any {
@@ -167,7 +171,7 @@ func urls() func(*rand.Rand) any {
 		"http://ka\"gent", "http://ka<gent>", "http://ka'gent", "http://ka%41gent", "http://ka%zzgent", "http://ka%gent", "http://bücher.de/",
 		"http://kagent:80:80", "http://kagent:port", "https://a.b.c.d.example.com:8443/a/b/c?d=e#f", "http://kagent/\x7f", "http://\x7fkagent",
 		"http://kagent/?", "http://kagent/#", "http://kagent/p?", "http://kagent/p#", "http://kagent/p?a=b", "http://kagent/p#a=b", "http://kagent/a2a",
-		"http://" + strings.Repeat("a", 2048-7), "http://" + strings.Repeat("a", 2048-6), "http://" + strings.Repeat("é", 1024-3), "http://" + strings.Repeat("é", 1024-2),
+		"http://" + strings.Repeat("a", 2048-7), "http://" + strings.Repeat("a", 2048-6), "http://" + strings.Repeat("é", 1024-3), "http://" + strings.Repeat("é", 1024-2), "http://a" + strings.Repeat("é", 1020),
 	}
 	pieces := []string{"http", "HTTPS", "ftp", "://", ":", "/", "@", "u", "h", ".", "80", "[::1]", "[", "]", " ", "#", "?", "%", "%41", "\\", "\t", "\n", "\r", "\x7f", "é", "{", "|", "^", "`", "#", "#"}
 	return func(r *rand.Rand) any {

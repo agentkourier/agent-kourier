@@ -72,6 +72,7 @@ Counts are of entries. A length in bytes is of bytes.
 | `chat.acknowledgment.emoji` | `100`<!--limit:emoji--> bytes | Refused at load, and by the API server. | None |
 | The name of an `extract` entry. The keys of `thread.closeWhen` are extract names, so the same number bounds them. | `63`<!--limit:extractName--> bytes | Refused at load, and by the API server. | None |
 | A value of `thread.closeWhen` | `256`<!--limit:closeWhenValue--> bytes | Refused at load, and by the API server. | None |
+| The text of a duration (`interactions.timeout`, `session.threadTTL`, `thread.cooldown`, `thread.maxIdle`, `rateLimit.per`) | `64`<!--limit:durationText--> characters, whatever the value that it writes | Refused at load, and by the API server. The broker reads the text before it becomes a duration, so the file route refuses it too. | None |
 | `thread.cooldown` of a trigger | From `1m`<!--limit:cooldownMin--> to `168h`<!--limit:cooldownMax--> | Refused at load, and by the API server. | The field itself |
 | `thread.maxIdle` of a trigger | At least twice the cooldown and at most `720h`<!--limit:maxIdleMax-->. Unset, it is the larger of `24h`<!--limit:maxIdleDefault--> and twice the cooldown. | Refused at load, and by the API server. | The field itself |
 | `rateLimit.per` of a trigger | From `10s`<!--limit:rateWindowMin--> to `24h`<!--limit:rateWindowMax--> | Refused at load, and by the API server. | The field itself |
@@ -229,6 +230,5 @@ The broker does not bound these, and the code confirms it. Where the number can 
 | The length of a stream, and the text a stream carries in all | A stream runs as long as its turn. The broker holds only up to the reply bound, and a stream that sends text that is thrown away can run as long as its context. |
 | Threads, sessions and turns at once | Each thread runs one turn at a time and queues the rest. Nothing bounds how many threads run turns at once, or how many replies queue in a thread. |
 | A person's mentions | A `mention` trigger has no limit. A rate limit applies to bots only. |
-| The text of a duration (`interactions.timeout`, `session.threadTTL`, `thread.cooldown`, `thread.maxIdle`, `rateLimit.per`) | The value is bounded, but not the length of the text that writes it: the schema's pattern accepts any run of numbers and units, such as `0h0h0h` repeated for as long as the API server allows, and a value that is out of range is refused whatever its length. |
 | The audit log and the votes | The audit log is kept for ever unless you set `auditRetention`. Nothing deletes a vote, and `auditRetention` does not reach them. |
 | The upper bound of `rateLimit.maxRuns`, `maxConcurrent` and `maxRunsPerDay` | Only a lower bound is checked. |

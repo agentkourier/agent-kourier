@@ -175,6 +175,7 @@ type TriggerThread struct {
 	// Cooldown is how long after a turn the same key starts no new turn. Required with by,
 	// and between 1m and 168h.
 	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=64
 	// +kubebuilder:validation:Pattern=`^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`
 	// +optional
 	Cooldown metav1.Duration `json:"cooldown,omitzero"`
@@ -188,6 +189,7 @@ type TriggerThread struct {
 	// against Alertmanager's 4h repeat_interval; a longer repeat_interval needs a maxIdle set
 	// above it.
 	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=64
 	// +kubebuilder:validation:Pattern=`^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`
 	// +optional
 	// +doc:default=Larger of `24h` and twice the cooldown

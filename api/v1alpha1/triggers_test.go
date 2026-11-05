@@ -430,7 +430,7 @@ func TestTriggersValidate(t *testing.T) {
 		{"an extract name over the length cap", func(o *Binding) {
 			name := strings.Repeat("e", maxExtractNameLen+1)
 			bot(o).Extract[name] = Extract{Field: FieldText, Regex: "(?P<" + name + ">x)"}
-		}, at + fmt.Sprintf(".extract: has an entry named with %d bytes, longer than the %d byte limit", maxExtractNameLen+1, maxExtractNameLen)},
+		}, at + fmt.Sprintf(".extract: entry 1, in name order, is named with %d bytes, longer than the %d byte limit", maxExtractNameLen+1, maxExtractNameLen)},
 		{"an extra extract is fine", func(o *Binding) {
 			bot(o).Extract["env"] = Extract{Field: FieldText, Regex: `env=(?P<env>\w+)`}
 		}, ""},
@@ -461,7 +461,7 @@ func TestTriggersValidate(t *testing.T) {
 			at + fmt.Sprintf(".thread.closeWhen.state: is %d bytes, longer than the %d byte limit", maxCloseWhenValueLen+1, maxCloseWhenValueLen)},
 		{"a closeWhen key over the length cap", func(o *Binding) {
 			bot(o).Thread.CloseWhen[strings.Repeat("e", maxExtractNameLen+1)] = "x"
-		}, at + fmt.Sprintf(".thread.closeWhen: has an entry named with %d bytes, longer than the %d byte limit", maxExtractNameLen+1, maxExtractNameLen)},
+		}, at + fmt.Sprintf(".thread.closeWhen: entry 0, in name order, is named with %d bytes, longer than the %d byte limit", maxExtractNameLen+1, maxExtractNameLen)},
 		{"closeWhen on an extra extracted field", func(o *Binding) {
 			bot(o).Extract["env"] = Extract{Field: FieldText, Regex: `env=(?P<env>\w+)`}
 			bot(o).Thread.CloseWhen = map[string]string{"env": "dev"}

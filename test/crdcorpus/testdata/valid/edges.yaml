@@ -1092,3 +1092,33 @@ spec:
   interactions:
     toolApprovals: true
     approverGroups: [S0000000000000000000000000000000]
+---
+# The longest text of every duration: 64 characters each, written with leading zeros.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: edges-longest-durations
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: "000000000000000000000000000000000000000000000000000000000000002h", maxIdle: "000000000000000000000000000000000000000000000000000000000000005h", closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: "000000000000000000000000000000000000000000000000000000000000010m", maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+  interactions: {timeout: "000000000000000000000000000000000000000000000000000000000000030m"}
+  session: {threadTTL: "000000000000000000000000000000000000000000000000000000000002160h"}

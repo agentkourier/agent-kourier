@@ -414,6 +414,7 @@ type RateLimit struct {
 	MaxRuns int32 `json:"maxRuns"`
 	// Per is the window length.
 	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=64
 	// +kubebuilder:validation:Pattern=`^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`
 	// +kubebuilder:validation:XValidation:rule="duration(self) >= duration('10s') && duration(self) <= duration('24h')",message="is out of range, must be between 10s and 24h"
 	Per metav1.Duration `json:"per"`
@@ -443,6 +444,7 @@ type Interactions struct {
 	ApproverGroups []string `json:"approverGroups,omitempty"`
 	// Timeout is how long a pause waits for an answer. Defaults to 30m. At most 168h (7 days); a longer one is refused.
 	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=64
 	// +kubebuilder:default="30m"
 	// +kubebuilder:validation:Pattern=`^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`
 	// +kubebuilder:validation:XValidation:rule="duration(self) >= duration('0s')",message="must be positive; leave it out, or write 0, for the default"
@@ -466,6 +468,7 @@ type Session struct {
 	// ThreadTTL is how long a thread keeps its session after its last activity. Defaults to 2160h
 	// (90 days). At most 8760h (365 days); a longer one is refused.
 	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=64
 	// +kubebuilder:default="2160h"
 	// +kubebuilder:validation:Pattern=`^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`
 	// +kubebuilder:validation:XValidation:rule="duration(self) >= duration('0s')",message="must be positive; leave it out, or write 0, for the default"

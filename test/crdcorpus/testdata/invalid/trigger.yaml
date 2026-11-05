@@ -2149,7 +2149,7 @@ spec:
         promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
 ---
 # rule: trigger/spec.chat.triggers[].extract: a name over 63 characters
-# want: spec.chat.triggers[1].extract: has an entry named with 64 bytes, longer than the 63 byte limit
+# want: spec.chat.triggers[1].extract: entry 0, in name order, is named with 64 bytes, longer than the 63 byte limit
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
@@ -2208,4 +2208,97 @@ spec:
           key: {field: fallback, regex: "(?P<key>.+)"}
         thread: {by: key, cooldown: 2h, closeWhen: {state: vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv}}
         limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].thread.cooldown: text over 64 characters
+# want: spec.chat.triggers[1].thread.cooldown: is 65 characters, longer than the 64 character limit
+# field: spec.chat.triggers[1].thread.cooldown
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: "0000000000000000000000000000000000000000000000000000000000000002h", maxIdle: "5h", closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: "10m", maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].thread.maxIdle: text over 64 characters
+# want: spec.chat.triggers[1].thread.maxIdle: is 65 characters, longer than the 64 character limit
+# field: spec.chat.triggers[1].thread.maxIdle
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: "2h", maxIdle: "0000000000000000000000000000000000000000000000000000000000000005h", closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: "10m", maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
+---
+# rule: trigger/spec.chat.triggers[].limits.rateLimit.per: text over 64 characters
+# want: spec.chat.triggers[1].limits.rateLimit.per: is 65 characters, longer than the 64 character limit
+# field: spec.chat.triggers[1].limits.rateLimit.per
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0123456789}
+        match: {title: "^FIRING"}
+        extract:
+          state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
+          key: {field: fallback, regex: "(?P<key>.+)"}
+        thread: {by: key, cooldown: "2h", maxIdle: "5h", closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 5, per: "0000000000000000000000000000000000000000000000000000000000000010m", maxConcurrent: 2}, maxRunsPerDay: 20}
         promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
