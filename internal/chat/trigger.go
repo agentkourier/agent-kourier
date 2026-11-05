@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/config"
@@ -44,6 +45,27 @@ type TriggerMatch struct {
 	// Mention says the match is a bot's mention and not a botMessage trigger's: the turn belongs in the thread the mention
 	// is in, and carries the thread.
 	Mention bool
+}
+
+// maxMatchedFieldBytes is how much of a message field the regexes of a trigger see: its first 16 KiB, cut on a character
+// boundary. A match, an exclude and an extract all read the same head, so what a regex reads of a long field is the same
+// to each of them, and a group's offsets are into that head. It bounds what a regex costs to try on a message: the cost
+// of a search is its program's size times the text's length, and the text is sent by whoever may post in the channel.
+const maxMatchedFieldBytes = 16 << 10
+
+// matched is the head of s that the regexes read: s if it is at most maxMatchedFieldBytes, else its first
+// maxMatchedFieldBytes bytes, less the bytes of a character that the cut would split.
+func matched(s string) string {
+	if len(s) <= maxMatchedFieldBytes {
+		return s
+	}
+	n := maxMatchedFieldBytes
+	// s[n] is the first byte left out: if it continues a character, that character started before it, and is left out whole.
+	// A run of bytes that is no UTF-8 has no start to back up to, so the walk is bounded by the longest character.
+	for i := 0; i < utf8.UTFMax-1 && !utf8.RuneStart(s[n]); i++ {
+		n--
+	}
+	return s[:n]
 }
 
 // fieldRegex is one match or exclude entry, or the regex of an extract, compiled.
@@ -110,7 +132,7 @@ func compileTrigger(index int, t *v1alpha1.Trigger) (botTrigger, error) {
 
 // evaluate applies the trigger to m: it is for m's bot, every match regex matches, no exclude regex does, and
 // every extract finds its group; it returns the extracted values. A regex is a search, not anchored unless it
-// says so, on the raw text of its field; a field the message lacks is empty. An extract's value is its group's
+// says so, on the raw text of its field, the first maxMatchedFieldBytes bytes of it; a field the message lacks is empty. An extract's value is its group's
 // text, which may be empty if the group took part in the match; a group that took no part (an optional one) is
 // a miss, like a regex that does not match, so that no message gets an empty key by default.
 func (t *botTrigger) evaluate(m Inbound) (map[string]string, bool) {
@@ -143,18 +165,18 @@ func (t *botTrigger) check(m Inbound) (map[string]string, miss) {
 		return nil, miss{kind: missBot}
 	}
 	for _, f := range t.match {
-		if !f.re.MatchString(m.Field(f.field)) {
+		if !f.re.MatchString(matched(m.Field(f.field))) {
 			return nil, miss{missMatch, string(f.field)}
 		}
 	}
 	for _, f := range t.exclude {
-		if f.re.MatchString(m.Field(f.field)) {
+		if f.re.MatchString(matched(m.Field(f.field))) {
 			return nil, miss{missExclude, string(f.field)}
 		}
 	}
 	fields := make(map[string]string, len(t.extract))
 	for _, e := range t.extract {
-		text := m.Field(e.field)
+		text := matched(m.Field(e.field))
 		loc := e.re.FindStringSubmatchIndex(text)
 		// No match, or a match in which the entry's group took no part (an optional group): both are a miss.
 		// A group that took part and matched empty text is a match, with an empty value.
@@ -182,23 +204,44 @@ func (tt triggerTable) match(m Inbound) (t *botTrigger, fields map[string]string
 
 // tableCache holds the trigger tables of one routing table, compiled the first time a Binding needs its own.
 // When the Snapshot changes, which a reload does, it starts again, so a Binding's table is never older than
-// the Snapshot that was asked about.
+// the Snapshot that was asked about. Its lock is held to find a Binding's entry and never while one compiles: a
+// Binding's compile blocks only the callers that ask for the same Binding, which wait for it and share its table.
 type tableCache struct {
 	mu     sync.Mutex
 	snap   *config.Snapshot
-	tables map[*v1alpha1.Binding]triggerTable
+	tables map[*v1alpha1.Binding]*tableEntry
+	// compile compiles one trigger; compileTrigger if nil. A test sets it.
+	compile func(index int, t *v1alpha1.Trigger) (botTrigger, error)
+}
+
+// tableEntry is the table of one Binding, compiled once.
+type tableEntry struct {
+	once  sync.Once
+	table triggerTable
 }
 
 // table returns the compiled botMessage triggers of b, which snap holds. A trigger that does not compile,
 // which load should have rejected, is left out and logged at WARN, once per routing table.
 func (c *tableCache) table(snap *config.Snapshot, b *v1alpha1.Binding, log *slog.Logger) triggerTable {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.snap != snap {
-		c.snap, c.tables = snap, map[*v1alpha1.Binding]triggerTable{}
+		c.snap, c.tables = snap, map[*v1alpha1.Binding]*tableEntry{}
 	}
-	if t, ok := c.tables[b]; ok {
-		return t
+	e, ok := c.tables[b]
+	if !ok {
+		e = &tableEntry{}
+		c.tables[b] = e
+	}
+	c.mu.Unlock()
+	e.once.Do(func() { e.table = c.build(b, log) })
+	return e.table
+}
+
+// build compiles the botMessage triggers of b.
+func (c *tableCache) build(b *v1alpha1.Binding, log *slog.Logger) triggerTable {
+	compile := compileTrigger
+	if c.compile != nil {
+		compile = c.compile
 	}
 	var t triggerTable
 	for i := range b.Spec.Chat.Triggers {
@@ -206,13 +249,12 @@ func (c *tableCache) table(snap *config.Snapshot, b *v1alpha1.Binding, log *slog
 		if tr.Type != v1alpha1.TriggerBotMessage || tr.From == nil {
 			continue
 		}
-		bt, err := compileTrigger(i, tr)
+		bt, err := compile(i, tr)
 		if err != nil {
 			log.Warn("chat: a botMessage trigger does not compile and never matches", "binding", v1alpha1.NamespacedName(b.Namespace, b.Name), "trigger", i, "err", err)
 			continue
 		}
 		t = append(t, bt)
 	}
-	c.tables[b] = t
 	return t
 }

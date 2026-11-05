@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"regexp/syntax"
 	"slices"
 	"strings"
 	"time"
@@ -36,8 +37,16 @@ var extractName = regexp.MustCompile(`^[a-z][A-Za-z0-9_]*$`)
 // restart a turn on every message.
 const (
 	maxTriggerRegexLen = 512
-	minThreadCooldown  = time.Minute
-	maxThreadCooldown  = 7 * 24 * time.Hour
+	// maxRegexInstructions and maxBindingRegexInstructions bound what the regexes of a trigger cost: the instructions of
+	// the program each compiles to (regexp/syntax, after Simplify, the fail and match instructions included), and the
+	// sum over all the regexes of a Binding. The byte cap does not bound that cost: a regex of 504 bytes of
+	// .{0,1000} repeats compiles to 112002 instructions, and the time to try a regex grows with its program and the text.
+	// The schema cannot count instructions, so these are refused by the broker only. The regexes of this repository's
+	// example Bindings are 10 to 98 instructions, and the largest Binding's total is 375.
+	maxRegexInstructions        = 2000
+	maxBindingRegexInstructions = 5000
+	minThreadCooldown           = time.Minute
+	maxThreadCooldown           = 7 * 24 * time.Hour
 	// maxApproverGroups keeps each approval press within a bounded number of uncached group lookups.
 	maxApproverGroups = 10
 	// maxMentions bounds the names a Binding declares, each of which the agent is told of in its first prompt.
@@ -336,9 +345,18 @@ func (p *problems) interactions(path string, in Interactions) {
 	}
 }
 
-// regex checks that expr is a non-empty RE2 expression within the length cap, and returns it
-// compiled, or nil if it is not.
-func (p *problems) regex(path, expr string) *regexp.Regexp {
+// regexBudget is what the regexes of one Binding have used of maxBindingRegexInstructions. A regex that is refused for its
+// cost ends the check of the regexes after it: each costs compile time, and a Binding can hold 2156 of them.
+type regexBudget struct {
+	used    int
+	refused bool
+}
+
+// regex checks that expr is a non-empty RE2 expression within the length cap and the instruction limits, and returns the
+// names of its groups (regexp.Regexp.SubexpNames), or nil if it is not. It is regexp.Compile in its parts, so that the
+// program is counted before anything is built from it: a regex over maxRegexInstructions, or one that takes the Binding past
+// maxBindingRegexInstructions, is refused and ends the check of the regexes after it (b.refused), which return nil unchecked.
+func (p *problems) regex(path, expr string, b *regexBudget) []string {
 	if expr == "" {
 		p.add(path, "required")
 		return nil
@@ -347,12 +365,32 @@ func (p *problems) regex(path, expr string) *regexp.Regexp {
 		p.add(path, "regular expression is %d bytes, longer than the %d byte limit", len(expr), maxTriggerRegexLen)
 		return nil
 	}
-	re, err := regexp.Compile(expr)
+	if b.refused {
+		return nil
+	}
+	re, err := syntax.Parse(expr, syntax.Perl)
 	if err != nil {
 		p.add(path, "invalid regular expression: %v", err)
 		return nil
 	}
-	return re
+	prog, err := syntax.Compile(re.Simplify())
+	if err != nil {
+		p.add(path, "invalid regular expression: %v", err)
+		return nil
+	}
+	n := len(prog.Inst)
+	switch {
+	case n > maxRegexInstructions:
+		b.refused = true
+		p.add(path, "regular expression compiles to %d instructions, more than the %d instruction limit; the regular expressions after it are not checked", n, maxRegexInstructions)
+		return nil
+	case b.used+n > maxBindingRegexInstructions:
+		b.refused = true
+		p.add(path, "the regular expressions of the Binding compile to %d instructions with this one, more than the %d instruction limit for a Binding; the regular expressions after it are not checked", b.used+n, maxBindingRegexInstructions)
+		return nil
+	}
+	b.used += n
+	return re.CapNames()
 }
 
 // messageField checks that f names a field of a chat message.
@@ -367,11 +405,11 @@ func (p *problems) messageField(path string, f MessageField) {
 }
 
 // fieldRegexes checks a match or exclude map: known fields, each with a valid regex.
-func (p *problems) fieldRegexes(path string, m map[MessageField]string) {
+func (p *problems) fieldRegexes(path string, m map[MessageField]string, b *regexBudget) {
 	for _, f := range slices.Sorted(maps.Keys(m)) {
 		at := path + "." + string(f)
 		p.messageField(at, f)
-		p.regex(at, m[f])
+		p.regex(at, m[f], b)
 	}
 }
 
@@ -382,10 +420,11 @@ func (p *problems) triggers(path string, ts []Trigger) {
 		p.add(path, "has %d items, maximum is %d", len(ts), maxTriggers)
 	}
 	seen := map[string]int{}
+	var budget regexBudget
 	for i := range ts {
 		at := fmt.Sprintf("%s[%d]", path, i)
 		t := &ts[i]
-		p.trigger(at, t)
+		p.trigger(at, t, &budget)
 		// A trigger with the same bot, match, exclude and extract as an earlier one matches the
 		// same messages, so the later one would never run. Extract counts because an extract
 		// that does not match means the trigger does not match.
@@ -402,13 +441,13 @@ func (p *problems) triggers(path string, ts []Trigger) {
 	}
 }
 
-func (p *problems) trigger(path string, t *Trigger) {
+func (p *problems) trigger(path string, t *Trigger, b *regexBudget) {
 	p.oneOf(path+".type", string(t.Type), string(TriggerMention), string(TriggerBotMessage))
 	switch t.Type {
 	case TriggerMention:
 		p.mentionTrigger(path, t)
 	case TriggerBotMessage:
-		p.botMessageTrigger(path, t)
+		p.botMessageTrigger(path, t, b)
 	}
 }
 
@@ -431,7 +470,7 @@ func (p *problems) mentionTrigger(path string, t *Trigger) {
 	}
 }
 
-func (p *problems) botMessageTrigger(path string, t *Trigger) {
+func (p *problems) botMessageTrigger(path string, t *Trigger, b *regexBudget) {
 	switch {
 	case t.From == nil || t.From.ID == "":
 		p.add(path+".from.id", "required")
@@ -445,13 +484,13 @@ func (p *problems) botMessageTrigger(path string, t *Trigger) {
 			p.oneOf(path+".from.kind", string(t.From.Kind), string(SenderKindBot))
 		}
 	}
-	p.fieldRegexes(path+".match", t.Match)
-	p.fieldRegexes(path+".exclude", t.Exclude)
+	p.fieldRegexes(path+".match", t.Match, b)
+	p.fieldRegexes(path+".exclude", t.Exclude, b)
 	if len(t.Extract) > maxExtract {
 		p.add(path+".extract", "has %d entries, maximum is %d", len(t.Extract), maxExtract)
 	}
 	for _, name := range slices.Sorted(maps.Keys(t.Extract)) {
-		p.extract(path+".extract."+name, name, t.Extract[name])
+		p.extract(path+".extract."+name, name, t.Extract[name], b)
 	}
 	p.thread(path+".thread", &t.Thread, t.Extract)
 	p.limits(path+".limits", t.Limits)
@@ -466,14 +505,14 @@ func (p *problems) botMessageTrigger(path string, t *Trigger) {
 
 // extract checks one extract entry: a known field and a regex with a group named like the
 // entry, which is where the value comes from.
-func (p *problems) extract(path, name string, e Extract) {
+func (p *problems) extract(path, name string, e Extract, b *regexBudget) {
 	validName := extractName.MatchString(name)
 	if !validName {
 		p.add(path, "invalid extract name %q: must start with a lower-case letter and use only letters, digits and '_', so a template can read .Fields.%s", name, name)
 	}
 	p.messageField(path+".field", e.Field)
-	re := p.regex(path+".regex", e.Regex)
-	if re != nil && validName && !slices.Contains(re.SubexpNames(), name) {
+	groups := p.regex(path+".regex", e.Regex, b)
+	if groups != nil && validName && !slices.Contains(groups, name) {
 		p.add(path+".regex", "must have a named group (?P<%s>...) that supplies the value", name)
 	}
 }

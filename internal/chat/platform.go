@@ -106,7 +106,8 @@ type ThreadReader interface {
 	ThreadFromStart(ctx context.Context, t Target, before string, limit int) (msgs []HistoryMessage, dropped int, err error)
 }
 
-// Sink receives what Platform.Run decodes.
+// Sink receives what Platform.Run decodes. A platform may call it from several goroutines at once, so a Sink is safe for
+// concurrent use; a platform keeps the events of one channel in order and calls for one channel one at a time.
 type Sink interface {
 	// Message takes m. An error means it was not taken, and the platform delivers it again.
 	Message(ctx context.Context, m Inbound) error

@@ -104,7 +104,9 @@ In the Binding's `chat` block:
    list: without it, a mention starts nothing.
 2. The alert messages' `bot_id`. `from.kind` defaults to `bot`, the only value, so it is left out.
 3. Each entry's regex has a named group with the entry's name, which supplies the value. A message in which an extract
-   does not match does not match the trigger.
+   does not match does not match the trigger. The regexes of a Binding may compile to 5000 instructions together, and
+   this trigger's come to 346, so a Binding can hold 14 triggers of this size (the bounded repeat `{1,32}` of the bracket
+   tag is about half of the cost: [Limits](../reference/limits.md#write-a-binding-an-agentbackend-or-a-chatconnection)).
 4. Messages with the same `key` share a thread, anchored to the first.
 5. Required. A `botMessage` trigger without `limits.rateLimit` (all of `maxRuns`, `per` and `maxConcurrent`) or without
    `limits.maxRunsPerDay` does not load, and the error names the missing field. `maxRunsPerDay: 0` is no daily cap,
