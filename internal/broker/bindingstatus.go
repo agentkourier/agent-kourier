@@ -92,9 +92,11 @@ var acceptedReasonOrder = []config.RejectionReason{
 	config.ReasonConnectionRejected, config.ReasonNamespaceNotAllowed, config.ReasonChannelConflict,
 }
 
-// boundBy finds the Binding that holds a channel in the message of a ChannelConflict (config's resolve), which names it as
-// "already bound by Binding <namespace>/<name>". A test holds this to what resolution writes.
-var boundBy = regexp.MustCompile(`already bound by Binding ([^/\s]+)/\S+$`)
+// boundBy finds the Binding that holds a channel in the message of a ChannelConflict, which names it as "already bound by
+// Binding <namespace>/<name>". Resolution writes that, and the report adds words after it when the holder is a Binding that is
+// deleted and held (" (that Binding is deleted, and held until its connection is back)"), so the name ends at the first space and
+// what follows is kept. A test holds this to what resolution writes.
+var boundBy = regexp.MustCompile(`already bound by Binding ([^/\s]+)/\S+`)
 
 var bindingsGVR = schema.GroupVersionResource{Group: v1alpha1.Group, Version: v1alpha1.Version, Resource: "bindings"}
 
@@ -590,7 +592,7 @@ func ownNamespaceText(r config.Rejection) string {
 	if r.Message[m[2]:m[3]] == r.Namespace {
 		return r.Message
 	}
-	return r.Message[:m[0]] + "already bound by a Binding in another namespace"
+	return r.Message[:m[0]] + "already bound by a Binding in another namespace" + r.Message[m[1]:]
 }
 
 // probedCondition is the condition of the Prober c as a condition of the status of a Binding served at generation, and with uid.

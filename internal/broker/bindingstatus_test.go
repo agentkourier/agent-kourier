@@ -1276,6 +1276,35 @@ func TestABindingThatLeavesTheReportIsForgotten(t *testing.T) {
 	}
 }
 
+// A Binding that the source holds after its deletion is served and has no object: the writer finds it in no cache, and writes
+// nothing for it, says nothing and counts no failure, while the Binding that does have an object is written as it is.
+func TestAHeldBindingWithNoObjectIsNotWrittenSaidOrCounted(t *testing.T) {
+	c := newStatusCluster(t, storedBinding("sre/kept", 1)) // sre/held has no object: it was deleted, and is held
+	r := newStatusRig(t, c, map[string]int64{"sre/kept": 1, "sre/held": 1})
+	r.set("sre/kept", probe(1)...)
+	r.set("sre/held", probe(1)...)
+	r.reconcile()
+	r.advance(time.Minute)
+	r.set("sre/held", probe(1, bindingcheck.BackendReachable)...)
+	r.reconcile()
+	for _, a := range c.snapshotApplies() {
+		if a.Name == "held" {
+			t.Errorf("a status was written for the held Binding: %+v", a)
+		}
+	}
+	if strings.Contains(r.logs.String(), "level=WARN") || strings.Contains(r.logs.String(), "level=ERROR") {
+		t.Errorf("the writer said something about a Binding that is held:\n%s", r.logs.String())
+	}
+	for _, w := range r.writes {
+		if w == "failed" {
+			t.Error("a failed write was counted for a Binding that is held")
+		}
+	}
+	if len(r.writes) == 0 {
+		t.Error("the Binding that has an object was not written either, so the test shows nothing")
+	}
+}
+
 // Nothing is written while no config has loaded: an empty report is not every Binding removed, and writes nothing for one.
 func TestNothingIsWrittenBeforeTheConfigHasLoaded(t *testing.T) {
 	c := newStatusCluster(t, storedBinding(sreAlerts, 1))
@@ -1978,6 +2007,30 @@ func TestAChannelConflictFailsClosedWhenItsWordsMove(t *testing.T) {
 		Message: "spec.chat.channel: C1 is held by team-b/secret-project-payroll"})
 	if strings.Contains(got, "team-b") || strings.Contains(got, "payroll") || !strings.Contains(got, "already bound by another Binding") {
 		t.Errorf("message = %q, want one that names no Binding", got)
+	}
+}
+
+// The words that the report adds after the winner of a channel, when it is a Binding that is deleted and held, are kept in what
+// the Binding's own namespace reads, and the name of a winner in another namespace is not: the anchor of the match is no longer the
+// end of the message.
+func TestAChannelHeldByAHeldBindingKeepsTheWordsThatSaySo(t *testing.T) {
+	const held = " (that Binding is deleted, and held until its connection is back)"
+	for _, tc := range []struct {
+		name, message, want string
+	}{
+		{"the same namespace", "spec.chat.channel: C1 on ChatConnection ns/c is already bound by Binding team-a/ghost" + held,
+			"spec.chat.channel: C1 on ChatConnection ns/c is already bound by Binding team-a/ghost" + held},
+		{"another namespace", "spec.chat.channel: C1 on ChatConnection ns/c is already bound by Binding team-b/ghost" + held,
+			"spec.chat.channel: C1 on ChatConnection ns/c is already bound by a Binding in another namespace" + held},
+		{"another namespace, as before", "spec.chat.channel: C1 on ChatConnection ns/c is already bound by Binding team-b/ghost",
+			"spec.chat.channel: C1 on ChatConnection ns/c is already bound by a Binding in another namespace"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ownNamespaceText(config.Rejection{Namespace: "team-a", Name: "alerts", Reason: config.ReasonChannelConflict, Message: tc.message})
+			if got != tc.want {
+				t.Errorf("message = %q; want %q", got, tc.want)
+			}
+		})
 	}
 }
 

@@ -441,9 +441,12 @@ func TestTheOwnConnectionIsHeldWhenDeleted(t *testing.T) {
 	if len(s.ChatConnections) != 1 || !inv.Deleted || inv.Served != 1 || inv.Name != "slack-main" {
 		t.Errorf("connections %d, Invalid %+v; want the connection held, deleted, generation 1", len(s.ChatConnections), inv)
 	}
-	// A backend that is deleted is not held: only the connection is.
+	// The backend that the Bindings of the held connection name is held too, when it goes during the hold.
 	backend := find(objs, "kagent-pilot")
-	until(t, func() { c.remove(backend) }, func() bool { s, _ := set(t, src); return len(s.AgentBackends) == 0 })
+	until(t, func() { c.remove(backend) }, func() bool { s, _ := set(t, src); return len(s.Invalid) == 2 })
+	if s, _ := set(t, src); len(s.AgentBackends) != 1 {
+		t.Errorf("%d backends; want the one that the live Bindings of the held connection name, held", len(s.AgentBackends))
+	}
 }
 
 // With no CRD the API server does not serve the resource, and Start says so, naming it, and the error is the operator's.
