@@ -367,3 +367,36 @@ spec:
     channel: C0123456789
     triggers:
       - {type: botMessage, from: {id: B0000000200}, promptTemplate: x, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}, extract: {key: {field: title, regex: "(?P<key>.+)"}, state: {field: text, regex: "(?P<state>.+)"}, kind: {field: body, regex: "(?P<kind>.+)"}}, thread: {by: key, cooldown: 2h, closeWhen: {state: RESOLVED, kind: resolved}}}
+---
+# Binding: the pause timeout and the thread TTL at their caps, 168h and 8760h.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: cel-caps-0, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: k8s-agent, namespace: kagent}
+  identity: {userId: u}
+  chat: {connectionRef: {name: slack}, channel: C0123456789}
+  interactions: {timeout: 168h}
+  session: {threadTTL: 8760h}
+---
+# Binding: the pause timeout and the thread TTL at their caps, spelt in minutes.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: cel-caps-1, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: k8s-agent, namespace: kagent}
+  identity: {userId: u}
+  chat: {connectionRef: {name: slack}, channel: C0123456789}
+  interactions: {timeout: 10080m}
+  session: {threadTTL: 525600m}
+---
+# Binding: the pause timeout and the thread TTL a second under their caps.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: cel-caps-2, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: k8s-agent, namespace: kagent}
+  identity: {userId: u}
+  chat: {connectionRef: {name: slack}, channel: C0123456789}
+  interactions: {timeout: 167h59m59s}
+  session: {threadTTL: 8759h59m59s}

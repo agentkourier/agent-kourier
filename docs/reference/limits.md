@@ -67,6 +67,8 @@ Counts are of entries. A length in bytes is of bytes.
 | `thread.cooldown` of a trigger | From `1m`<!--limit:cooldownMin--> to `168h`<!--limit:cooldownMax--> | Refused at load, and by the API server. | The field itself |
 | `thread.maxIdle` of a trigger | At least twice the cooldown and at most `720h`<!--limit:maxIdleMax-->. Unset, it is the larger of `24h`<!--limit:maxIdleDefault--> and twice the cooldown. | Refused at load, and by the API server. | The field itself |
 | `rateLimit.per` of a trigger | From `10s`<!--limit:rateWindowMin--> to `24h`<!--limit:rateWindowMax--> | Refused at load, and by the API server. | The field itself |
+| `interactions.timeout` of a Binding | At most `7d`<!--limit:interactionTimeoutMax--> (168 hours) | Refused at load, and by the API server. | None |
+| `session.threadTTL` of a Binding | At most `365d`<!--limit:threadTTLMax--> (8760 hours) | Refused at load, and by the API server. | None |
 | `rateLimit.maxRuns`, `rateLimit.maxConcurrent` and `maxRunsPerDay` | At least 1 for the first two, and 0 or more for the last (0 is no cap). No upper bound. | Refused at load, and by the API server. | The fields themselves |
 | Names of Bindings, AgentBackends, ChatConnections and Secrets (Kubernetes names) | `253`<!--limit:nameLen--> characters | Refused at load, and by the API server. | None |
 | Namespaces, and the names of `chat.mentions` | `63`<!--limit:namespaceLen--> characters for a namespace, `63`<!--limit:mentionNameLen--> for a mention name | Refused at load, and by the API server. | None |
@@ -156,7 +158,7 @@ task is cancelled, and the refusal is audited. [The agent contract](agent-contra
 | The arguments of one tool in an approval prompt | `3000`<!--limit:approvalArgs--> UTF-16 units | Unusable, because the approver would not see what runs. | None |
 | All of an approval prompt's argument text | `3600`<!--limit:approvalTotal--> UTF-16 units | Unusable. | None |
 | The Block Kit JSON of an approval prompt | `16000`<!--limit:approvalBlocks--> UTF-16 units | Unusable. | None |
-| How long a pause waits for an answer | `30m`<!--limit:interactionTimeout--> by default, with no upper bound | A question's task is cancelled and the thread told. An approval is denied for every tool, with the reason that no one decided in time, and the prompt shows a timed-out ending. | `interactions.timeout` of the Binding |
+| How long a pause waits for an answer | `30m`<!--limit:interactionTimeout--> by default | A question's task is cancelled and the thread told. An approval is denied for every tool, with the reason that no one decided in time, and the prompt shows a timed-out ending. | `interactions.timeout` of the Binding |
 
 ## Start investigations: triggers, rates and probes
 
@@ -198,7 +200,7 @@ The durations here are the ones people notice. [Stored data](stored-data.md) has
 
 | Limit | Value | Past it | Setting |
 |---|---|---|---|
-| How long a thread keeps its session after its last activity | `90d`<!--limit:threadTTL--> by default, with no upper bound | The session is expired. A reply that the Binding takes gets the notice that the conversation has expired. An unmentioned reply with `chat.threadReplies: mention` gets none, and neither does a bot's mention. | `session.threadTTL` of the Binding |
+| How long a thread keeps its session after its last activity | `90d`<!--limit:threadTTL--> by default | The session is expired. A reply that the Binding takes gets the notice that the conversation has expired. An unmentioned reply with `chat.threadReplies: mention` gets none, and neither does a bot's mention. | `session.threadTTL` of the Binding |
 | How long an expired session is kept | `90d`<!--limit:sessionGrace--> after its `threadTTL` has run out | The session is deleted with every row that belongs to it, except its votes, which are kept for good. | None |
 | A reply that was never delivered | `30d`<!--limit:strandedReply--> | Dropped, with its text. | None |
 | A post that was never posted | `7d`<!--limit:outboxRetention--> | Abandoned with the reason `expired`, and its text dropped. A failed post is retried from `5s`<!--limit:outboxRetryBase--> doubling up to `5m`<!--limit:outboxRetryMax-->, and each call to the chat platform is bounded at `30s`<!--limit:outboxCall-->. | None |
@@ -222,4 +224,4 @@ The broker does not bound these, and the code confirms it. Where the number can 
 | A person's mentions | A `mention` trigger has no limit. A rate limit applies to bots only. |
 | The size of an AgentBackend's `url` and of a header's value | Only the number and the name of headers are bounded. |
 | The audit log and the votes | The audit log is kept for ever unless you set `auditRetention`. Nothing deletes a vote, and `auditRetention` does not reach them. |
-| The upper bound of `interactions.timeout`, `session.threadTTL` and of `rateLimit.maxRuns`, `maxConcurrent` and `maxRunsPerDay` | Only a lower bound is checked. |
+| The upper bound of `rateLimit.maxRuns`, `maxConcurrent` and `maxRunsPerDay` | Only a lower bound is checked. |

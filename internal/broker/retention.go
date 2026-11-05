@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"slices"
 	"time"
 
@@ -308,6 +309,17 @@ func (r *retention) clearAcknowledgments(ctx context.Context, rows []store.Reply
 // before the epoch. It is how the sessions of a Binding that exists and is not served are skipped.
 var neverPast = time.Unix(0, 0).UTC()
 
+// horizon is the time ttl and grace before now. It saturates: a negative term counts as zero and a sum past the largest
+// Duration is the largest Duration (about 292 years), so a threadTTL that no config would hold never
+// wraps round to a horizon after now, which would make every session before it past deleting.
+func horizon(now time.Time, ttl, grace time.Duration) time.Time {
+	ttl, grace = max(ttl, 0), max(grace, 0)
+	if ttl > math.MaxInt64-grace {
+		return now.Add(-math.MaxInt64)
+	}
+	return now.Add(-(ttl + grace))
+}
+
 // sessionHorizons is when each Binding's sessions are past deleting: its threadTTL and the grace after now. A session
 // whose Binding is not in the config has no threadTTL to go by, and is held to the longest that any Binding has, and to no
 // less than the default: a Binding that is missing for a while (a config that lost it, and is mended) must not have its
@@ -321,10 +333,10 @@ func (r *retention) sessionHorizons(ttls map[string]time.Duration, unserved []st
 	h := store.SessionHorizons{ByBinding: make(map[string]time.Time, len(ttls)+len(unserved))}
 	longest := v1alpha1.DefaultThreadTTL
 	for name, ttl := range ttls {
-		h.ByBinding[name] = now.Add(-ttl - r.cfg.SessionGrace)
+		h.ByBinding[name] = horizon(now, ttl, r.cfg.SessionGrace)
 		longest = max(longest, ttl)
 	}
-	h.Otherwise = now.Add(-longest - r.cfg.SessionGrace)
+	h.Otherwise = horizon(now, longest, r.cfg.SessionGrace)
 	for _, name := range unserved {
 		if _, served := ttls[name]; !served {
 			h.ByBinding[name] = neverPast
