@@ -391,8 +391,8 @@ func TestAnswerOfUnknownOutcomeWhoseTaskCannotBeRead(t *testing.T) {
 			t.Fatal(err)
 		}
 		eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) >= 1 })
-		if got := sink.noticesOf(NoticeFailed); got[0].Detail != tooLargeSentence {
-			t.Errorf("notice = %q; want %q", got[0].Detail, tooLargeSentence)
+		if got := sink.noticesOf(NoticeFailed); got[0].Detail != tooLargeAnswerSentence {
+			t.Errorf("notice = %q; want %q", got[0].Detail, tooLargeAnswerSentence)
 		}
 		eventually(t, "the cancel", func() bool { return len(f.cancelled()) >= 1 }) // the thread is told first
 		if got := f.cancelled(); len(got) != 1 || got[0] != "t1" {

@@ -33,7 +33,9 @@ const entryBytes = 128
 // by which it tells a repeat (placed, sent, said, called, live) grow with what the agent sends, and a stream's length is
 // bounded by nothing but its context, so each is charged to one budget, limit bytes (keep). One event or response is
 // bounded by the transport (dialect.MaxEventBytes, dialect.MaxResponseBytes), and so are the task kept as the final one
-// and the paused task of an answer. When the budget is spent, over is set to an error that wraps
+// and the paused task of an answer. The entries that seed notes of that paused task, in placed and sent, are the exception: they
+// are not charged, since the turn that paused made them and they are bounded by the response that held the task, which is
+// by the transport, not by what this turn's agent sends. When the budget is spent, over is set to an error that wraps
 // dialect.ErrResponseTooLarge and the assembler goes silent: it keeps and emits nothing more, and the caller ends the
 // send with that error.
 type assembler struct {

@@ -95,6 +95,7 @@ func (m *Manager) recoverKey(key Key) {
 	turnRow := store.Reply{ID: recoveredPrefix + sess.TaskID, Key: key, MessageRef: sess.Turn.MessageRef, Acknowledgment: sess.Turn.Acknowledgment}
 	headIsTask := false
 	if herr == nil && sess.ContextID != "" {
+		warned := false
 		for attempt := 1; ; attempt++ { // asked again until it answers: a fallback would render t's output twice
 			task, _, err := backend.Agent.FindTask(m.ctx, sess.ContextID, head.ID)
 			if errors.Is(err, agent.ErrLookupUnsupported) {
@@ -113,9 +114,10 @@ func (m *Manager) recoverKey(key Key) {
 				log.Warn("recover: the agent's list of tasks could not be read in full, so the queued head is not looked up", "head", head.ID, "task", sess.TaskID, "binding", sess.Binding, "error", err)
 				break
 			}
-			if errors.Is(err, dialect.ErrCardTooLarge) && attempt == 1 {
+			if errors.Is(err, dialect.ErrCardTooLarge) && !warned {
 				// No connection can be made, and the same comes again until the card is fixed: it is asked again after a backoff, which
-				// is no reason to say it each time.
+				// is no reason to say it each time. Once for the thread in this run of Recover, whenever the card is first met.
+				warned = true
 				log.Warn("recover: the agent's card is too large to read, so the queued head cannot be looked up; it is asked again until the card is fixed", "head", head.ID, "task", sess.TaskID, "binding", sess.Binding, "error", err)
 			}
 			if err == nil {

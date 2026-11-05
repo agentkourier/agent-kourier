@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,6 +23,10 @@ import (
 // answer, the reply, or the tasks of a list. It is fixed, true for each of them, and names neither the backend nor a size: the test
 // pins the words, so that a change of them is a decision.
 const tooLargeSentence = "the agent sent more than Agent Kourier can read or hold, so the turn stopped"
+
+// tooLargeAnswerSentence is tooLargeSentence for the turn of an answer to a paused task: it says the task is being cancelled, and that the
+// agent may have acted on the answer. Pinned for the same reason.
+const tooLargeAnswerSentence = "what the agent sent after the answer was more than Agent Kourier can read or hold, so the turn stopped and its task is being cancelled. The agent may have acted on the answer."
 
 // errTooLarge is what the agent package returns for a reply past a bound: dialect.ErrResponseTooLarge, with where it
 // was found in its text.
@@ -66,7 +71,7 @@ func TestResponseTooLargeStopsTheTurnAndCancelsTheTask(t *testing.T) {
 			eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= 1 })
 			f.retired(t)
 			got := sink.noticesOf(NoticeFailed)
-			if len(got) != 1 || got[0].Detail != tooLargeSentence || got[0].ID != taskNoticeID(key, "t1", NoticeFailed) || got[0].MessageRef != "1" {
+			if len(got) != 1 || got[0].Detail != tooLargeSentence || got[0].ID != taskNoticeID(key, "t1", noticeTooLarge) || got[0].MessageRef != "1" {
 				t.Errorf("failed notices = %+v; want one, about message 1, saying %q", got, tooLargeSentence)
 			}
 			if strings.Contains(got[0].Detail, "refused") {
@@ -222,8 +227,8 @@ func TestResponseTooLargeOfAnAnswer(t *testing.T) {
 	if id, want := f.nextSent(), inbound("2").MessageID; id != want {
 		t.Errorf("sent %s after the answer; want %s", id, want)
 	}
-	if got := sink.noticesOf(NoticeFailed); len(got) != 1 || got[0].Detail != tooLargeSentence {
-		t.Errorf("failed notices = %+v; want one saying %q", got, tooLargeSentence)
+	if got := sink.noticesOf(NoticeFailed); len(got) != 1 || got[0].Detail != tooLargeAnswerSentence {
+		t.Errorf("failed notices = %+v; want one saying %q", got, tooLargeAnswerSentence)
 	}
 	if got := f.cancelled(); len(got) != 1 || got[0] != "t1" {
 		t.Errorf("cancelled %v; want t1 once", got)
@@ -329,8 +334,8 @@ func TestResponseTooLargeOfAnAnswerBeforeTheTaskIsNamed(t *testing.T) {
 				t.Errorf("sent %s after the answer; want %s: the queue goes on", id, want)
 			}
 			got := sink.noticesOf(NoticeFailed)
-			if len(got) != 1 || got[0].Detail != tooLargeSentence || got[0].ID != taskNoticeID(key, "t1", NoticeFailed) {
-				t.Errorf("failed notices = %+v; want one saying %q, named after the task", got, tooLargeSentence)
+			if len(got) != 1 || got[0].Detail != tooLargeAnswerSentence || got[0].ID != taskNoticeID(key, "t1", noticeTooLarge) {
+				t.Errorf("failed notices = %+v; want one saying %q, named after the task", got, tooLargeAnswerSentence)
 			}
 			if got := f.cancelled(); len(got) != 1 || got[0] != "t1" {
 				t.Errorf("cancelled %v; want t1 once", got)
@@ -377,7 +382,7 @@ func TestResponseTooLargeOfAMessageReplyCancelsNothing(t *testing.T) {
 		f.retired(t)
 	}
 	got := sink.noticesOf(NoticeFailed)
-	if len(got) != 2 || got[0].ID != ins[0].MessageID+"/failed" || got[1].ID != ins[1].MessageID+"/failed" || got[0].Detail != tooLargeSentence {
+	if len(got) != 2 || got[0].ID != ins[0].MessageID+"/too_large" || got[1].ID != ins[1].MessageID+"/too_large" || got[0].Detail != tooLargeSentence {
 		t.Errorf("failed notices = %+v; want one for each turn, named after it, saying %q", got, tooLargeSentence)
 	}
 	if got := f.cancelled(); len(got) != 0 {
@@ -425,5 +430,92 @@ func TestResponseTooLargeSettlesTheRetryStateOfTheThread(t *testing.T) {
 	}
 	if c.tries != 0 || !c.since.IsZero() {
 		t.Errorf("tries = %d, since = %v; want both cleared: the turn is over", c.tries, c.since)
+	}
+}
+
+// The outbox keeps one row for a notice ID, and a second notice of the same ID is dropped (ON CONFLICT (id) DO NOTHING, in both stores). A
+// task that a card too large left followed by no one, and that a restart found too large to read once the card was fixed, has two things
+// to tell the thread, and they are two notices: the second must not be the first's name, or it is never posted and the thread is left
+// with an explanation that is no longer true. Each is named after the task, and stays the same across restarts, so a restart that finds
+// the same again raises the same post.
+func TestCardAndTooLargeNoticesOfOneTaskAreTwoPosts(t *testing.T) {
+	f, sink := restarted(t)
+	f.agent.get = func(a2a.TaskID) (*a2a.Task, error) { return nil, fmt.Errorf("get task t1: %w", errCard) }
+	f.recover(t)
+	eventually(t, "the card's notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+	f.retired(t)
+	var gets atomic.Int32
+	f.agent.mu.Lock()
+	f.agent.get = tooLargeGet(&gets) // the card is fixed, and the task is too large to read
+	f.agent.mu.Unlock()
+	f.recover(t) // a restart
+	eventually(t, "the cancel", func() bool { return len(f.cancelled()) == 1 })
+	f.retired(t)
+	got := sink.noticesOf(NoticeFailed)
+	if len(got) != 2 || got[0].Detail != cardTooLargeDetail || got[1].Detail != tooLargeSentence {
+		t.Fatalf("failed notices = %+v; want the card's, then the one for what the agent sent", got)
+	}
+	if got[0].ID == got[1].ID {
+		t.Errorf("both notices are named %q: the outbox keeps one row for it, and the second is never posted", got[0].ID)
+	}
+	if want := taskNoticeID(key, "t1", noticeCardTooLarge); got[0].ID != want || got[0].ID == taskNoticeID(key, "t1", NoticeFailed) {
+		t.Errorf("the card's notice is named %q; want %q, which is not the name of a refusal's (a card, then a refusal after a restart, are two posts too)", got[0].ID, want)
+	}
+	if want := taskNoticeID(key, "t1", noticeTooLarge); got[1].ID != want {
+		t.Errorf("the notice for what the agent sent is named %q; want %q, after the task and the thread", got[1].ID, want)
+	}
+}
+
+// An answer that could not be sent because the agent's card is too large is no reply that was too large: no connection was made, and nothing
+// was sent or read. It is not ended as one is (dialect.AnswerTooLarge leaves the card out): the pause is reopened, so that the person can
+// answer once the card is fixed, nothing is cancelled, and the thread is told that the answer could not be delivered.
+func TestAnswerThatMeetsAnOversizedCardReopensThePauseAndCancelsNothing(t *testing.T) {
+	f, sink := pausedFirst(t, func(*a2a.Message, agent.Handler) error {
+		return fmt.Errorf("%w: %w", agent.ErrNotSent, errCard)
+	})
+	if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) >= 1 })
+	eventually(t, "the pause to reopen", func() bool {
+		f.m.mu.Lock()
+		defer f.m.mu.Unlock()
+		c := f.m.convos[key]
+		return c != nil && c.parked == "t1" && !c.released
+	})
+	got := sink.noticesOf(NoticeFailed)
+	if len(got) != 1 || got[0].Detail != "the answer could not be delivered" {
+		t.Errorf("failed notices = %+v; want one, saying the answer could not be delivered", got)
+	}
+	if got := f.cancelled(); len(got) != 0 {
+		t.Errorf("cancelled %v; want none: no connection was made, and the task still waits", got)
+	}
+}
+
+// A shutdown that cuts an answer's stream is no reply that was too large, even if the error says so: nothing is told of the task and it is
+// not cancelled, as for any send that a shutdown cut. The task stays recorded, for the restart.
+func TestAnswerCutByAShutdownIsNotEndedAsTooLarge(t *testing.T) {
+	f, sink := pausedFirst(t, func(*a2a.Message, agent.Handler) error {
+		return fmt.Errorf("%w: %w", agent.ErrOutcomeUnknown, errTooLarge)
+	})
+	f.agent.mu.Lock()
+	f.agent.answer = func(*a2a.Message, agent.Handler) error {
+		f.m.stop() // the shutdown comes while the answer is sent
+		return fmt.Errorf("%w: %w", agent.ErrOutcomeUnknown, errTooLarge)
+	}
+	f.agent.get = func(a2a.TaskID) (*a2a.Task, error) { return nil, errors.New("shutting down") }
+	f.agent.mu.Unlock()
+	if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the runner to stop", func() bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return len(f.agent.answers) == 1 })
+	time.Sleep(50 * time.Millisecond)
+	for _, n := range sink.noticesOf(NoticeFailed) {
+		if n.Detail == tooLargeAnswerSentence || n.Detail == tooLargeSentence {
+			t.Errorf("notice %+v; want none for a reply that was too large: the shutdown cut the send", n)
+		}
+	}
+	if got := f.cancelled(); len(got) != 0 {
+		t.Errorf("cancelled %v; want none: a shutdown cancels no task", got)
 	}
 }
