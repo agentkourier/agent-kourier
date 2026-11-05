@@ -111,14 +111,18 @@ What bounds this is what the broker can read, and where it can connect:
 - **`allowedNamespaces`.** A Binding may use an AgentBackend or ChatConnection of another namespace only if that object lists the Binding's
   namespace. It lists none by default.
 - **How much it reads.** The broker reads at most 1 MiB of an agent card, 4 MiB of the answer to a call (`GetTask`, `CancelTask`, `ListTasks`) and 2 MiB of one event of a
-  stream, and a turn holds at most 341 KiB of the agent's reply in memory. A response past a bound is an error, never a shortened read. A stream's length is not limited. A turn whose reply passes a bound
-  ends with the outcome `response_too_large`: the thread is told, in one fixed sentence, that the agent's reply was larger than Agent Kourier holds, what it
+  stream, and a turn holds at most 341 KiB of the agent's reply in memory. No setting changes them. A response past a bound is an error, never a shortened read. A stream's length is not limited. A turn whose
+  reply passes a bound ends with the outcome `response_too_large`: the thread is told, in one fixed sentence, that the agent sent more than Agent Kourier can read or hold, what it
   had shown stays, and Agent Kourier cancels the task at the agent, once and within 30 seconds. A cancel that fails is logged and leaves the task recorded, for the
-  Stop control or a restart to reconcile. A reply that is too large before the agent names a task ends the turn the same way, with no task to cancel, and
-  the message is not sent again. The bounds do not add up across turns: several large events read at once are held at once, and a stream that is open keeps a read
-  buffer about twice the size of the largest event it has carried. Nothing limits how many streams or calls are open at once, so the bounds give each one a
-  size, not the broker a total. In a test process (not a pod), 32 to 48 open streams that had each carried an event of 2 MiB reached 256 MiB, and 17 to 32 answers of 4 MiB read at once did (the ranges span `GOMEMLIMIT` off and on)
-  (see [the release that lowers the bounds](../how-to/upgrade.md#upgrade-to-the-release-that-lowers-the-bounds-on-what-it-reads)).
+  Stop control or a restart to reconcile; one whose own answer is the task, too large to read, counts as done. A reply that is too large before the agent names a task ends the turn the same way, with no task to cancel, and
+  the message is not sent again. On kagent 1.0 the final task holds every tool call and result of the turn again, so the tool output of a whole turn has to fit 2 MiB, though no
+  result is that large. A lookup of a turn whose page of tasks is too large is asked again at smaller sizes, and if it still cannot be read the message is not sent, since the agent may have it: the turn
+  ends with the outcome `lookup_too_large` and the thread is told (see [the upgrade note](../how-to/upgrade.md#upgrade-to-the-release-that-lowers-the-bounds-on-what-it-reads)).
+  **The bounds are of bytes, not of memory.** The memory it takes to read a response depends on the shape of its JSON, which the backend chooses: in a test process (not a pod), one
+  event of 2 MiB took about 9 MiB of heap as one string and about 106 MiB as a data part of small objects, and one answer of 4 MiB took about 18 MiB as one string and about 210 MiB as
+  small objects. Two or three such responses at once pass the default memory limit of 256Mi, and a stream that is open keeps buffers of about twice the largest event it has carried. Nothing limits how many streams or calls are
+  open at once. So an AgentBackend has to be trusted as code that runs in the broker's pod, or given a broker of its own: a restart recovers the sessions, but it interrupts every turn of every
+  tenant on that broker. A budget on what is decoded is not built.
 - **How many objects.** Write access to these kinds can also cost the broker capacity, not only data: each Binding is probed (two probes every 5 minutes, four at a time, each up to 10 seconds)
   and has its status written, and every object is held in the broker's memory. The caps (50 triggers in a Binding, 32 `extract` entries in a trigger, 32 headers in an AgentBackend)
   limit how big one object is, and nothing limits how many a namespace holds. Put a `ResourceQuota` in each tenant's namespace with `count/bindings.agentkourier.dev` and

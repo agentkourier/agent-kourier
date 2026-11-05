@@ -39,6 +39,60 @@ Copy the `AK-` troubleshooting reference from the Slack notice and search the Ag
 `session` context ID when one is available. Use those IDs to find the corresponding agent or controller log entries;
 the backend's own logs may have details Agent Kourier deliberately leaves out.
 
+## The thread says the agent sent more than Agent Kourier can read or hold
+
+```text
+the agent sent more than Agent Kourier can read or hold, so the turn stopped
+```
+
+Agent Kourier reads a bounded amount of what an agent sends: 2 MiB of one event, 4 MiB of the answer to a call such as `GetTask`, and 341 KiB of the reply it holds for a
+turn. The agent sent more than one of them, so the turn stopped, and no setting raises any of them. The sentence is the same whichever bound it was, and whatever the reply's size:
+it names no host and no size. What the thread had shown stays, and Agent Kourier cancels the task at the agent, once.
+
+What it leaves in the log, the audit log and the metrics, with the `binding` and the IDs of the turn on each:
+
+- WARN `session turn stopped: what the agent sent was more than Agent Kourier can read or hold`, with `task`, `turn` and an `error` that names the bound. When the cancel did not
+  take, it is ERROR `session turn failed` with the same `error`, and WARN `session: could not cancel a task whose reply was too large; it stays recorded`.
+- INFO `session turn ended` with `outcome=response_too_large`, and the counter `agentkourier_turn_outcomes_total{outcome="response_too_large"}`, which you can alert on.
+- An audit row `cancel: failed response_too_large` when the cancel's own answer was the task, too large to read; that cancel took, and the row says the answer was not read.
+
+Read the `error` to find which bound it was:
+
+| The `error` says | What passed it |
+|---|---|
+| `an event of more than 2097152 bytes` | One event of the stream: a tool result, a chunk of text, or the final task, which holds the whole turn. |
+| `more than 4194304 bytes` | The answer to a call: the task read back with its history after a lost stream or a restart, the answer to a cancel, or a page of the list of tasks. |
+| `a reply of more than 349184 bytes` | The text the turn holds: the artifacts' text, tool results that wait for their call, and the bookkeeping of each tool part. |
+
+**Few words shown, many tool steps before them, and `an event of more than 2097152 bytes`: the tool output added up.** On kagent 1.0 the final task holds every tool call and result of the turn
+again in its artifacts (read in `test/fixtures/kagent/approval/02-approve.response.sse`), and it arrives as one event. No single result has to be large: in a test with results of 300 KiB,
+results adding up to 1800 KiB passed, and eight of them, 2400 KiB, ended the turn at the final event with a reply of a few bytes. Add up what the agent's tools returned in the turn (its own log has it).
+
+**What to do.** Have the agent's tools return what the model needs: filter, summarise or page a result, and cap it in the tool. Keep a task's tool output well under 2 MiB in all.
+If the `error` says `more than 4194304 bytes` after a restart, the task's history has grown past what is read; trim the tools the same way. Agent Kourier cannot read it, so it cancels it.
+
+## The thread says Agent Kourier could not check whether the agent already started this message
+
+```text
+Agent Kourier could not check whether the agent already started this message, because the agent's list of tasks is too large to read, so it did not send it again. The agent may have started it; post the message again to run it once more.
+```
+
+Before it sends a message again (after a restart, or when the agent was busy, or when the outcome of the first send was unknown), Agent Kourier lists the tasks of the thread's context and looks
+for one that holds the message. Each task in a page of that list carries its history, and a page of more than 4 MiB is not read: Agent Kourier asks again at half the size, down to
+three tasks. If the list still cannot be read, and no page before it held the message, it does not know whether the agent has it, and it does not send it, because a message sent again
+into a context is not deduplicated and the agent could run it twice. The agent may have started it.
+
+What it leaves:
+
+- WARN `session turn failed`, with `reason` set to the sentence above and an `error` that ends with `response from the backend is too large: more than 4194304 bytes`.
+  After a restart there is a WARN `recover: the agent's list of tasks is too large to read, so the queued head is not looked up` first.
+- An audit row `find_task: failed response_too_large`, with the context and message IDs as its subject.
+- The turn outcome `lookup_too_large`: `agentkourier_turn_outcomes_total{outcome="lookup_too_large"}`. Any increase means a message was not sent for this reason, which is worth an alert.
+
+**What to do.** Look at the agent for a task for that message (for kagent, its task list for the context). If there is one, it is running or has ended and the thread needs nothing more. If there is not, post the message again.
+Then keep the thread's tasks small, since their histories are what made the list large: trim the tools' output, or start a new thread for a new investigation. An agent that cannot list tasks
+(A2A 0.3, kagent 0.9.x) does not give this notice: Agent Kourier sends the turn without asking, and it may run twice (see [below](#an-agent-on-kagent-09x-answers-but-the-answer-can-appear-twice)).
+
 ## The pod exits with code 1
 
 ```text

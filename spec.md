@@ -829,12 +829,17 @@ single run (one history message, one artifact); whether the model was called a s
 time is not measured. A resend carrying a `contextId` (a crash during a thread reply) is not
 deduplicated (WP-03): while the task runs it gets `-32004`, not a live join, and after the
 task ends it starts a second full task. Agent Kourier never blindly resends into an existing
-context, except to an agent that cannot list tasks (6.3). Before resending a turn whose task it has not recorded, it calls `ListTasks` with
+context, except to an agent that cannot list tasks (6.3); an agent whose list cannot be read is not one of those: see below. Before resending a turn whose task it has not recorded, it calls `ListTasks` with
 the `contextId`, follows `nextPageToken` to the end, and looks for a task whose history
 holds the turn's `messageId` (kagent records it there). Found: reconcile as in 8.3
 (`GetTask`, then `SubscribeToTask` if not terminal). Absent: send. A `-32004` on that send
 means some task is active, possibly an `input-required` pause, so the turn is queued as
-below and the lookup repeats when the active task ends. Whether the model runs twice for a
+below and the lookup repeats when the active task ends. A page of the list past the bound on a response (4 MiB; each task carries its
+history) is asked for again at half the size, down to 3 tasks, and the pages after it at the size that fit; a holder found on an earlier
+page is the answer when a later page cannot be read at any size. When no holder is known and a page cannot be read, the turn is not sent,
+since the agent may have it and a resend into a context is not deduplicated: it fails (the turn outcome `lookup_too_large`), the thread is
+told that the agent may have started it and that posting the message again runs it once more, the lookup is audited as failed with
+`response_too_large`, and recovery does not ask again. Whether the model runs twice for a
 duplicate task is not measured; the second task runs in full. An expired session is kept for a grace period (90 days) after its threadTTL has run out, so that
 Agent Kourier can tell a reply in an expired thread (notice) from a reply in a thread it never owned (ignored). After the grace the
 session is deleted with every row that belongs to it, and the thread is one Agent Kourier never owned: a reply without an @mention is
@@ -875,7 +880,7 @@ the active task from the thread; the stop control calls `CancelTask`, and queued
 `slack:<connection>:<channel>:<ts>`, so the `app_mention` and `message` events for one
 message are one turn. When `-32004` comes from a task Agent Kourier did not record, Agent Kourier
 resends with backoff (at most 60 s apart), repeating the lookup before each resend, and
-never drops the reply.
+never drops the reply, except that a lookup whose list cannot be read fails the turn with a notice (8.2).
 
 **Failed task notices.** A failed task always gets a notice, even if it streamed a partial answer. Agent Kourier reads at
 most 4096 bytes of the status message's text and recognizes only known context-limit, rate-limit, authentication,
