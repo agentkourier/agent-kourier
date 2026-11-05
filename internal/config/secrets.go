@@ -84,6 +84,10 @@ func secretNames(refs []secretRef) []SecretName {
 // SecretNames returns the sorted Secrets that set refers to, each once, which are the ones a SecretWatcher must follow.
 func (s *Set) SecretNames() []SecretName { return secretNames(s.secretRefs()) }
 
+// SecretReads returns the sorted Secrets that set refers to, each once, with the keys that its objects read: what a
+// KeyedSecretWatcher is told to follow.
+func (s *Set) SecretReads() []SecretRead { return secretReads(s.secretRefs()) }
+
 // SecretRead is one Secret that objects of a Set refer to, and the keys of it that they read.
 type SecretRead struct {
 	SecretName

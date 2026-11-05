@@ -302,7 +302,7 @@ looks like a credential (key, token, secret, auth, cookie, password), which belo
   `watch` on named Secrets instead. The chart's Roles name no Secret, so each reads every Secret in its namespace, although Agent
   Kourier keeps in memory only the Opaque ones that the config names, and of each only the keys that the config names (a Secret's other
   keys are not kept), and with Postgres the DSN's with every key, plus, until the next reload, any
-  other that a turn begun under an earlier config still reads (internal/config/k8ssecrets documents it). The chart grants the Role only in namespaces that hold a Secret the config names. Give Agent Kourier's Secrets a
+  other Secret, or other key of one, that a turn begun under an earlier config still reads (internal/config/k8ssecrets documents it). The chart grants the Role only in namespaces that hold a Secret the config names. Give Agent Kourier's Secrets a
   namespace of their own when the namespace is shared. With Postgres the DSN's Secret is in the release namespace, which therefore gets this Role too.
 - `klogVerbosity` stays 0 (the schema caps it at 7): at 8 and above client-go logs response bodies, Secret lists included.
 - **NetworkPolicy** (`networkPolicy.enabled`, which needs a CNI that enforces it): egress to DNS, to the API server (you give

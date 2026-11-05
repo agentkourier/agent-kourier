@@ -130,11 +130,13 @@ What bounds this is what the broker can read, and where it can connect:
   Secrets the namespace holds, and so how many a Binding's token or an AgentBackend's header can name that exist (Kubernetes's own object-count quota for Secrets, not run here). It does
   not bound what the broker follows: it follows each Secret that a served object names, by name and with an informer of its own, whether or not that Secret exists, and the caps and the
   other two quotas bound those names. A quota limits the count and not the size of what is stored, so it sits beside the caps and replaces none of them. The limits you can run into, with what happens past each, are on [Limits](../reference/limits.md).
-- **What it holds of each object.** The broker keeps an object's `spec` and `status`, its name, namespace, uid, generation and creation time, and a Secret's type, resourceVersion and the keys that
-  the served objects name. It does not keep an object's labels, annotations, owner references, finalizers or managed fields (`slim` in `internal/config/crsource/source.go`), which the API server
-  limits only by the size of the object, or the other keys of a Secret, which a namespace may fill up to Kubernetes's 1 MiB for one Secret (`trimTo` in `internal/config/k8ssecrets/keys.go`). The
-  figures are from a test process, not a pod, 16 objects held at once: an AgentBackend of 1.27 MiB of JSON that is 80,458 labels and 200 KiB of annotations took 5.7 MiB of heap each when
-  labels and annotations were kept, and under 0.1 MiB each now. A Secret of 100,000 keys of 2 bytes took about 9 MiB when every key was kept, and about 1 KiB with one key kept. What is in the
+- **What it holds of each object.** The broker keeps an object's `spec` and `status` and the whole of its metadata except the labels, annotations, owner references, finalizers and managed
+  fields (`slim` in `internal/config/crsource/source.go`), which the API server limits only by the size of the object. Of a Secret it keeps the type, the resourceVersion and the keys that
+  the served objects name, not its other keys, which a namespace may fill up to Kubernetes's 1 MiB for one Secret (`trimTo` in `internal/config/k8ssecrets/keys.go`). The figures are heap
+  that a test holds, measured in a test process and not a pod (`TestWhatTheCacheHoldsOfAnObjectAtTheLargestSize` and `TestAMegabyteOfUnreferencedKeysCostsAlmostNothing`, which log them), on
+  Go 1.27.3 with GOMAXPROCS 8, on a macOS machine that other jobs were loading (load average about 28), 16 objects held at once for the AgentBackends and 4 copies of the Secret.
+  An AgentBackend of 1.27 MiB of JSON that is 80,458 labels and 200 KiB of annotations took 5.7 MiB of heap each when labels and annotations were kept, and about 0.001 MiB each now. A Secret of 100,000
+  keys of 2 bytes took about 9 MiB of heap per copy when every key was kept, and about 1 KiB with one key kept. What is in the
   `spec` is still held in full, and it costs more than its JSON: an AgentBackend of 1.37 MiB that is 358,300 one-letter entries of `allowedNamespaces` took 10.9 MiB each, and nothing bounds that list
   (see [what has no limit](../reference/limits.md#what-has-no-limit)). The informers' transform runs after client-go has decoded an object, so a large object still costs a burst of memory
   when it is read, which these figures do not show and which was not measured.

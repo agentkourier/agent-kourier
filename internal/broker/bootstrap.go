@@ -115,7 +115,7 @@ func Bootstrap(ctx context.Context, client kubernetes.Interface, opts BootstrapO
 		secrets.Stop()
 		return nil, fmt.Errorf("start the secret resolver: %w", err)
 	}
-	if err := secrets.Watch(syncCtx, set.SecretNames()); err != nil {
+	if err := secrets.WatchKeys(syncCtx, set.SecretReads()); err != nil {
 		secrets.Stop()
 		return nil, fmt.Errorf("start the secret resolver: %w", err)
 	}

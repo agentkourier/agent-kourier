@@ -62,8 +62,9 @@
 // serving until it has: a reload that adds a reference to another key of a Secret does not cut off the keys that are read. Until
 // the new informer has listed, Keys answers ErrNotSynced, as for a cache that has not synced, and does not answer that a key
 // is missing which the Secret has; the Watch that asked for the keys waits for the list, at most as long as it was given. A key
-// is let go the same way, by the Retain of the snapshot that no longer reads it, and a key that a Value asked for that no Watch or
-// Retain named stays kept until the Secret is let go. A read of a key that is not kept, which a holder of an older snapshot's
+// is let go the same way, by the Retain of the snapshot that no longer reads it, and so is a key that a Value asked for that no Watch or
+// Retain named: it stays kept until the next Retain, and a read of it after that fetches it again, as a read of a Secret that a Retain let
+// go does. A read of a key that is not kept, which a holder of an older snapshot's
 // Binding makes, waits for the list that keeps it, as a read of a Secret that is not followed does.
 //
 // The Opaque values of the followed Secrets stay resident for the life of the process, or until
@@ -156,8 +157,9 @@ type entry struct {
 	next     *informer // being filled with the keys that are wanted now; replaces the embedded informer when it has synced
 	pinned   bool      // followed until Stop, whatever the config says; all its keys are kept
 	retained bool      // named by the latest published snapshot, which is what readiness is about
-	// The keys that something asks to be kept, by who asks: the latest Watch, the latest Retain, and the reads of Value that no
-	// Watch or Retain named, which last until the Secret is let go. What an informer keeps is their union, and all of them if pinned.
+	// The keys that something asks to be kept, by who asks: the latest Watch, the latest Retain, and the reads of Value that neither
+	// named, which last until the next Retain (or until the Secret is let go). What an informer keeps is their union, and all of them
+	// if pinned.
 	watched, kept, demanded keySet
 }
 
@@ -531,6 +533,7 @@ func (r *Resolver) retain(reads []read) {
 	for n, e := range r.entries {
 		keys, named := keep[n]
 		e.retained, e.kept = named, keys
+		e.demanded = keySet{} // what a holder of an older snapshot read is let go with that snapshot, as a Secret is
 		if !named && !e.pinned {
 			delete(r.entries, n)
 			ended = append(ended, e)
@@ -678,8 +681,10 @@ func keepsKey(key string) func(*entry) bool {
 	return func(e *entry) bool { return e.keys.has(key) }
 }
 
-// keepsWanted is the enough of a read of the keys that the config reads: all those that are wanted of the entry.
-func keepsWanted(e *entry) bool { return e.keys.covers(e.wantLocked()) }
+// keepsWanted is the enough of Keys, which answers for what the config reads: the keys of the latest Watch and Retain. A key that
+// only a holder of an older snapshot asked for (demanded) is not one of them, so that fetching it does not make Keys fail and a reload
+// that resolves fail with it.
+func keepsWanted(e *entry) bool { return e.keys.covers(e.watched.union(e.kept)) }
 
 // getWaiting reads the Secret as get does, but for a Secret that is not followed, whose cache has not synced, or that does not keep
 // the key, it follows the Secret with the key and waits for the cache, and tries again if the informer was let go meanwhile, until the
@@ -698,7 +703,8 @@ func (r *Resolver) getWaiting(parent context.Context, namespace, name, key strin
 		if ferr != nil {
 			return nil, fmt.Errorf("secret %s/%s: %w", namespace, name, ferr)
 		}
-		if aerr := r.await(ctx, es); aerr != nil && !errors.Is(aerr, ErrNotWatched) {
+		aerr := r.await(ctx, es)
+		if (aerr != nil && !errors.Is(aerr, ErrNotWatched)) || ctx.Err() != nil { // the bound is this function's, whatever await answers
 			s, err = r.get(namespace, name, keepsKey(key)) // get says why the Secret cannot be read: not synced, or denied
 			if err != nil && parent.Err() != nil && (errors.Is(err, ErrNotSynced) || errors.Is(err, ErrNotWatched)) {
 				// The caller's context ended, not only the on-demand wait: keep that visible, as Pool.Check needs it to tell
@@ -706,6 +712,10 @@ func (r *Resolver) getWaiting(parent context.Context, namespace, name, key strin
 				err = fmt.Errorf("%w: %w", err, context.Cause(parent))
 			}
 			return s, err
+		}
+		select { // await found the cache ready, or the entry let go, and get still cannot answer: look again after a poll, not at once
+		case <-ctx.Done():
+		case <-time.After(syncPoll):
 		}
 	}
 }
@@ -751,7 +761,7 @@ func (r *Resolver) SecretVersion(_ context.Context, namespace, name string) (str
 // out, the read fails (ErrAccessDenied, or ErrNotSynced once the wait ends), where a cache of the
 // whole namespace would have served what it held. So is a Secret that is followed without the key:
 // one that no WatchKeys or RetainKeys named, which a holder of a dropped Binding reads, is kept from
-// now until the Secret is let go, and Value waits for the list that keeps it, where a cache of
+// now until the next Retain, and Value waits for the list that keeps it, where a cache of
 // the whole Secret would have had it. A Value of a Secret whose cache another read is
 // waiting for waits for it too. If the cache has not synced by then, or access was denied, it
 // fails as get does.

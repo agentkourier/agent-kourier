@@ -51,6 +51,17 @@ func manyKeys(namespace, name string, n, size int) *corev1.Secret {
 	return s
 }
 
+// settled waits until no informer is being filled for the Secret: whatever swap its keys called for has been made. A swap runs in the
+// background, and WatchKeys returns before it has, so a test of what the cache keeps looks only after this.
+func settled(t *testing.T, r *Resolver, n config.SecretName) {
+	t.Helper()
+	waitFor(t, "the swap of informers to settle", func() bool {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		return r.entries[n].next == nil
+	})
+}
+
 // cachedData returns the keys the cache of the Secret holds, sorted.
 func cachedData(t *testing.T, r *Resolver, n config.SecretName) []string {
 	t.Helper()
@@ -233,12 +244,88 @@ func TestValueOfAKeyNoWatchNamedFetchesItInsteadOfAnsweringMissing(t *testing.T)
 		t.Error("the Value replaced the entry; want the same entry, with its informer swapped")
 	}
 
-	// The next reload that does not name the key lets it go again, and a read after that fetches it once more.
-	if err := r.WatchKeys(t.Context(), []config.SecretRead{readOf("sre", "creds", "a")}); err != nil {
+	// A Watch that does not name the key leaves it kept, for the snapshot that was read under is still the one that is served, and a
+	// Retain of the snapshot that is published lets it go: a read after that fetches it once more.
+	reads := []config.SecretRead{readOf("sre", "creds", "a")}
+	if err := r.WatchKeys(t.Context(), reads); err != nil {
 		t.Fatal(err)
+	}
+	settled(t, r, sn("sre", "creds"))
+	if got := cachedData(t, r, sn("sre", "creds")); !slices.Equal(got, []string{"a", "c"}) {
+		t.Errorf("the cache holds %v after a Watch that did not name c; want a and c, until the Retain", got)
+	}
+	r.RetainKeys(reads)
+	settled(t, r, sn("sre", "creds"))
+	if got := cachedData(t, r, sn("sre", "creds")); !slices.Equal(got, []string{"a"}) {
+		t.Errorf("the cache holds %v after a Retain that did not name c; want a alone", got)
 	}
 	if v, err := r.Value(t.Context(), "sre", "creds", "c"); err != nil || v.Reveal() != "value-c" {
 		t.Errorf("Value after the key was let go = %q, %v", v.Reveal(), err)
+	}
+}
+
+// A key that only a holder of an older snapshot reads is not one the config reads: while it is fetched, Keys still answers for the keys
+// of the config, so that a reload that resolves does not fail with a cache that "has not synced".
+func TestFetchingAKeyForAnOlderSnapshotDoesNotFailKeys(t *testing.T) {
+	client := newAPI(t, manyKeys("sre", "creds", 5, 10))
+	r := keyed(t, client, readOf("sre", "creds", "a"))
+	gate, started := make(chan struct{}), make(chan struct{}, 4)
+	client.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, k8sruntime.Object, error) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-gate
+		return false, nil, nil
+	})
+	done := make(chan error, 1)
+	go func() { _, err := r.Value(t.Context(), "sre", "creds", "c"); done <- err }()
+	<-started
+	if keys, err := r.Keys(t.Context(), "sre", "creds"); err != nil || !slices.Equal(keys, []string{"a"}) {
+		t.Errorf("Keys while a key is fetched for an older snapshot = %v, %v; want a, answered from the cache that serves", keys, err)
+	}
+	close(gate)
+	if err := <-done; err != nil {
+		t.Errorf("Value: %v", err)
+	}
+}
+
+// A swap ends the informer that it replaces, with its watch, and does not leave it running for the life of the Resolver: a reference that
+// flaps between keys would pile up a watch and a cache for each flap.
+func TestASwapEndsTheInformerItReplaces(t *testing.T) {
+	client := newAPI(t, manyKeys("sre", "creds", 5, 10))
+	n := sn("sre", "creds")
+	ab, a := []config.SecretRead{readOf("sre", "creds", "a", "b")}, []config.SecretRead{readOf("sre", "creds", "a")}
+	r := keyed(t, client, a...)
+	r.RetainKeys(a)
+	var replaced []*informer
+	for _, reads := range [][]config.SecretRead{ab, a, ab, a} {
+		r.mu.Lock()
+		replaced = append(replaced, r.entries[n].informer)
+		r.mu.Unlock()
+		if err := r.WatchKeys(t.Context(), reads); err != nil {
+			t.Fatal(err)
+		}
+		r.RetainKeys(reads)
+		settled(t, r, n)
+	}
+	for i, inf := range replaced {
+		waitFor(t, fmt.Sprintf("informer %d to be told to end", i), func() bool {
+			select {
+			case <-inf.done:
+				return true
+			default:
+				return false
+			}
+		})
+	}
+	r.mu.Lock()
+	live := r.entries[n].informer
+	r.mu.Unlock()
+	select {
+	case <-live.done:
+		t.Error("the informer that serves was ended")
+	default:
 	}
 }
 
@@ -270,8 +357,12 @@ func TestAFailedReloadKeepsTheKeysOfTheLastGoodSnapshot(t *testing.T) {
 	if err := r.WatchKeys(t.Context(), []config.SecretRead{readOf("sre", "creds", "a")}); err != nil {
 		t.Fatal(err)
 	}
+	settled(t, r, sn("sre", "creds")) // a Watch that dropped the keys would swap in an informer without them, and the swap is in the background
 	if got := cachedData(t, r, sn("sre", "creds")); !slices.Equal(got, []string{"a", "b"}) {
 		t.Errorf("the cache holds the keys %v after a Watch that named fewer; want the retained snapshot's a and b", got)
+	}
+	if v, err := r.Value(t.Context(), "sre", "creds", "b"); err != nil || v.Reveal() != "value-b" {
+		t.Errorf("Value of a key of the last good snapshot = %q, %v", v.Reveal(), err)
 	}
 }
 
@@ -384,6 +475,7 @@ func TestAMegabyteOfUnreferencedKeysCostsAlmostNothing(t *testing.T) {
 		}
 		return s
 	}
+	t.Logf("%s, GOMAXPROCS %d of %d CPUs; 4 copies of the Secret held at once", runtime.Version(), runtime.GOMAXPROCS(0), runtime.NumCPU())
 	for _, shape := range []struct {
 		name string
 		make func() *corev1.Secret // a Secret as the informer has just decoded it, which nothing keeps once it is trimmed
