@@ -88,6 +88,7 @@ type Reloader struct {
 	lastAttempt     time.Time
 	failures        int             // consecutive failed reloads
 	reported        map[string]bool // what the latest report said, so that a recheck stays silent about it
+	approvalWarned  map[string]bool // the Bindings whose approval policy the latest warning named, so that a change elsewhere stays silent
 }
 
 // errConfigMoving means the config source changed during two loads in a row, so neither
@@ -220,16 +221,23 @@ func (r *Reloader) reload(ctx context.Context, force bool) error {
 	return err
 }
 
-// warnToolApprovalPolicies reports the enabled approval policy that leaves every non-bot channel member eligible.
-// The warning belongs to the config load, so it is emitted even before a Binding is used by the broker.
+// warnToolApprovalPolicies reports the enabled approval policy that leaves every non-bot channel member eligible, once for each
+// Binding that has it: a changed read that leaves the Binding's policy as it was says nothing, so that one team editing in a
+// loop does not repeat the warning about another's Binding at every poll. A Binding that fixes its policy and enables it again
+// is warned of again. The warning belongs to the config load, so it is emitted even before a Binding is used by the broker.
 func (r *Reloader) warnToolApprovalPolicies(snap *Snapshot) {
+	now := map[string]bool{}
 	for _, rb := range snap.Bindings() {
 		in := rb.Binding.Spec.Interactions
 		if in.ToolApprovals && len(in.ApproverGroups) == 0 {
-			r.log.Warn("config: tool approvals are enabled without approver groups; any non-bot channel member may decide",
-				"binding", rb.Binding.Namespace+"/"+rb.Binding.Name)
+			name := rb.Binding.Namespace + "/" + rb.Binding.Name
+			now[name] = true
+			if !r.approvalWarned[name] {
+				r.log.Warn("config: tool approvals are enabled without approver groups; any non-bot channel member may decide", "binding", name)
+			}
 		}
 	}
+	r.approvalWarned = now
 }
 
 // build reads the config from the source and resolves it. A PerObject Reloader resolves the one read it makes and returns it with

@@ -16,7 +16,12 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/config"
+	"github.com/agentkourier/agent-kourier/internal/config/crsource"
 )
+
+// weightyBinding is how many triggers the Binding that the edit loop edits has: enough that a read of the Set takes longer than the
+// pause between edits, and few enough that a run under the race detector, where a read takes seconds, stays short.
+const weightyBinding = 20
 
 // weightyTriggers is what the caps allow of one Binding with regexes that are long and harmless: it makes the Binding costly
 // to decode, so that a read of the Set takes longer than the pause between two edits of it.
@@ -76,10 +81,14 @@ func TestAnEditLoopDoesNotFreezeTheConfigOrStopAStart(t *testing.T) {
 		return u
 	}
 	heavy := mk("tenant-loop", "CLOOP")
-	if err := unstructured.SetNestedSlice(heavy.Object, weightyTriggers(t, 50), "spec", "chat", "triggers"); err != nil {
+	if err := unstructured.SetNestedSlice(heavy.Object, weightyTriggers(t, weightyBinding), "spec", "chat", "triggers"); err != nil {
 		t.Fatal(err)
 	}
 
+	raw, err := json.Marshal(heavy.Object)
+	if err != nil {
+		t.Fatal(err)
+	}
 	c := newCluster(t, append(objs, heavy)...)
 	src := c.start(t)
 	begin := time.Now()
@@ -92,11 +101,11 @@ func TestAnEditLoopDoesNotFreezeTheConfigOrStopAStart(t *testing.T) {
 		t.Fatalf("a read of the Set takes %s; the test needs it to take longer than the pause between edits (%s) to mean anything", read, pause)
 	}
 
-	newReloader := func(poll time.Duration) *config.Reloader {
+	newReloader := func(src *crsource.Source, poll time.Duration) *config.Reloader {
 		return config.NewReloader(config.ReloaderConfig{Source: src, Secrets: noSecrets{}, PollInterval: poll, SecretsInterval: time.Hour,
 			Logger: slog.New(slog.DiscardHandler), PerObject: true})
 	}
-	r := newReloader(100 * time.Millisecond)
+	r := newReloader(src, 100*time.Millisecond)
 	ctx, stop := context.WithCancel(t.Context())
 	defer stop()
 	if err := r.Start(ctx); err != nil {
@@ -106,6 +115,7 @@ func TestAnEditLoopDoesNotFreezeTheConfigOrStopAStart(t *testing.T) {
 	defer stop()
 
 	var edits atomic.Int64
+	loopBegan := time.Now()
 	loop, endLoop := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
@@ -121,11 +131,14 @@ func TestAnEditLoopDoesNotFreezeTheConfigOrStopAStart(t *testing.T) {
 	}()
 	defer func() { endLoop(); <-done }()
 	for edits.Load() < 5 {
+		if time.Since(loopBegan) > 30*time.Second+10*read {
+			t.Fatalf("the edit loop made %d edits in %s", edits.Load(), time.Since(loopBegan))
+		}
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	// A broker that starts in the middle of the loop starts.
-	r2 := newReloader(time.Hour)
+	// A broker that starts in the middle of the loop starts. Its source is its own, as a new process's is, and syncs under the loop.
+	r2 := newReloader(c.start(t), time.Hour)
 	sctx, scancel := context.WithCancel(t.Context())
 	defer scancel()
 	if err := r2.Start(sctx); err != nil {
@@ -140,7 +153,8 @@ func TestAnEditLoopDoesNotFreezeTheConfigOrStopAStart(t *testing.T) {
 	other := mk("other-tenants-new-binding", "COTHER")
 	c.apply(other)
 	since := time.Now()
-	for time.Since(since) < 20*time.Second {
+	bound := max(20*time.Second, 10*read) // a read takes seconds under the race detector
+	for time.Since(since) < bound {
 		if _, ok := r.Current().Binding(other.GetNamespace(), other.GetName()); ok {
 			break
 		}
@@ -152,5 +166,6 @@ func TestAnEditLoopDoesNotFreezeTheConfigOrStopAStart(t *testing.T) {
 	if st := r.Status(); st.Stale || st.Errors != 0 {
 		t.Errorf("Status during an edit loop = %+v; want a reload that worked", st)
 	}
-	t.Logf("served %s after it was added, with %d edits made by then; a read takes %s", time.Since(since), edits.Load(), read)
+	t.Logf("a Binding of %.2f MiB, a read of the Set takes %s; served %s after it was added; %d edits in %s, %.0f a second",
+		float64(len(raw))/(1<<20), read, time.Since(since), edits.Load(), time.Since(loopBegan), float64(edits.Load())/time.Since(loopBegan).Seconds())
 }

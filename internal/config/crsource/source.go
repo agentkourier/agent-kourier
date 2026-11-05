@@ -491,9 +491,9 @@ func ConditionsOf(u *unstructured.Unstructured) []metav1.Condition {
 	return out
 }
 
-// Set reads the objects as of one moment, decodes each, and returns them with the fingerprint of what it read. See the
-// package comment for what it leaves out and what it keeps. It fails only when the caches have not synced or the source is
-// stopped. Each call returns a Set of its own.
+// Set reads the objects from one listing of the caches (see "Change detection"), decodes each, and returns them with the
+// fingerprint of that listing. See the package comment for what it leaves out and what it keeps. It fails only when the caches
+// have not synced or the source is stopped. Each call returns a Set of its own.
 func (s *Source) Set(context.Context) (*config.Set, string, error) {
 	l, err := s.list()
 	if err != nil {
@@ -898,7 +898,8 @@ func (s *Source) owns(l listing, u *unstructured.Unstructured) bool {
 	return ref == s.own || !l.hasConnection[ref]
 }
 
-// listing is what the three caches held at one moment.
+// listing is what the three caches held when they were listed, one after another (Bindings first, then AgentBackends, then
+// ChatConnections), not at one instant.
 type listing struct {
 	bindings, backends, connections []*unstructured.Unstructured
 	hasConnection                   map[key]bool
