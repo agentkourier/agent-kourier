@@ -103,16 +103,20 @@ func TestFindTaskThatTakesLongerThanItsDeadlineIsIncompleteAndTheCallersEndIsNot
 	}
 }
 
-// Whether a server continues a page token with another page size is not known. An error on the first call at a size the walk lowered
-// itself to is therefore incomplete, and the same error with no shrink before it is an error as any other, which is retried.
-func TestFindTaskCallThatFailsRightAfterAShrinkIsIncomplete(t *testing.T) {
+// Whether a server continues a page token with another page size is not known. A refusal on the first call at a size the walk lowered itself
+// to (a 4xx, or an error the agent answered with) is therefore incomplete. A 5xx is no sign of a token that was not read: it is the error
+// it is, which is retried, so that one 503 does not fail a turn for good. Nor is a refusal with no shrink before it.
+func TestFindTaskCallThatIsRefusedRightAfterAShrinkIsIncomplete(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		firstIsBig bool
+		status     int // the HTTP status the server answers the later calls with, or 0 for a JSON-RPC error
 		wantIncomp bool
 	}{
-		{"after a shrink", true, true},
-		{"with no shrink before it", false, false},
+		{"a 400 after a shrink", true, http.StatusBadRequest, true},
+		{"a JSON-RPC error after a shrink", true, 0, true},
+		{"a 503 after a shrink", true, http.StatusServiceUnavailable, false},
+		{"a 400 with no shrink before it", false, http.StatusBadRequest, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var mu sync.Mutex
@@ -128,15 +132,18 @@ func TestFindTaskCallThatFailsRightAfterAShrinkIsIncomplete(t *testing.T) {
 				mu.Lock()
 				sizes = append(sizes, p.PageSize)
 				mu.Unlock()
-				if tc.firstIsBig && p.PageSize == 0 {
+				switch {
+				case tc.firstIsBig && p.PageSize == 0:
 					_, _ = w.Write(oversizedAnswer())
-					return
+				case tc.status == 0:
+					_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":"1","error":{"code":-32602,"message":"invalid params"}}`))
+				default:
+					http.Error(w, "bad page", tc.status) // as a server might answer a token it does not read at this size
 				}
-				http.Error(w, "bad page", http.StatusBadRequest) // as a server might answer a token it does not read at this size
 			})
 			_, _, err := fa.agentViaWith(t, generic.New(0), quick).FindTask(t.Context(), "c-1", "m-1")
-			if err == nil || errors.Is(err, ErrLookupIncomplete) != tc.wantIncomp || httpStatus(err) != http.StatusBadRequest {
-				t.Fatalf("FindTask = %v; want a 400, and incomplete = %v", err, tc.wantIncomp)
+			if err == nil || errors.Is(err, ErrLookupIncomplete) != tc.wantIncomp || (tc.status != 0 && httpStatus(err) != tc.status) {
+				t.Fatalf("FindTask = %v; want the failure of the later call, and incomplete = %v", err, tc.wantIncomp)
 			}
 			mu.Lock()
 			defer mu.Unlock()

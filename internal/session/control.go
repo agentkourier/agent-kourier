@@ -19,7 +19,8 @@ import (
 // conversation is not paused on the task named.
 var ErrNotPaused = errors.New("session: the conversation is not paused on that task")
 
-// Stop is the thread's stop control (spec 8.2): it cancels the task taskID, the one the control
+// Stop is the thread's stop control (spec 8.2), which is specified and not built: nothing calls it in production, and the Slack adapter handles
+// no stop press. It cancels the task taskID, the one the control
 // was rendered for, and the queued replies then go on. It reports false, without calling the
 // agent, when that is not the task recorded for the thread, so an old button cannot stop a newer
 // task. The caller has already checked that by may press the button (D12). A running task's stream

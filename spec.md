@@ -880,7 +880,8 @@ reaches a terminal state, or when a pause ends (answered, timed out or cancelled
 sent while an interaction is pending is held the same way, and is not its answer, unless the question takes
 text replies (the `a2a` dialect's single free-text question): then the first such reply after the question is
 its answer, decided with a button's checks and audit (8.4), and never sent as a turn. A user can stop
-the active task from the thread; the stop control calls `CancelTask`, and queued replies then proceed. A turn's `messageId` is
+the active task from the thread; the stop control calls `CancelTask`, and queued replies then proceed (specified, not built: `Manager.Stop` has no
+caller and the Slack adapter handles no stop press, so a task that nothing follows is released by a restart). A turn's `messageId` is
 `slack:<connection>:<channel>:<ts>`, so the `app_mention` and `message` events for one
 message are one turn. When `-32004` comes from a task Agent Kourier did not record, Agent Kourier
 resends with backoff (at most 60 s apart), repeating the lookup before each resend, and

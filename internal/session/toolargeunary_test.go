@@ -551,6 +551,7 @@ func TestLookupThatMeetsAnOversizedCardIsRetriedNotFailed(t *testing.T) {
 // task stays recorded.
 func TestFollowThatMeetsAnOversizedCardSaysSoAndKeepsTheTask(t *testing.T) {
 	f, sink := restarted(t)
+	f.agent.get = func(a2a.TaskID) (*a2a.Task, error) { return nil, fmt.Errorf("get task t1: %w", errCard) } // a real Agent meets the card on every call
 	f.agent.follow = func(a2a.TaskID, agent.Handler) error { return fmt.Errorf("follow task t1: %w", errCard) }
 	f.recover(t)
 	eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })

@@ -602,16 +602,18 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 				}
 			case errors.Is(err, agent.ErrLookupIncomplete):
 				// The agent can list tasks, but the list could not be read in full (a page is more than Agent Kourier reads at any
-				// size it asked for, the walk took too long or ran on, or a server did not answer at the size it was lowered to), and
-				// asking again gets the same: whether the agent has this turn is not known, and never will be.
+				// size it asked for, the walk took too long or ran on, or a server refused the size it was lowered to). It is not
+				// asked again: a page that is too large or a token that comes again comes again, and a walk that took too long
+				// may end sooner another time but nothing says it will. Whether the agent has this turn is not known.
 				if sess.TaskID != "" { // a task of the session runs: this turn is behind it, and asked again when that ends
 					return idle, hold
 				}
 				if fresh && !prev.unknown && hold == nil {
-					// This process queued the turn, and no attempt of its left the agent's answer unknown: every one was refused
-					// (-32004, not ready, not sent) or never left, as a turn held behind a task never does. The agent does not have
-					// it, so there is nothing to find, and sending it is no blind resend. A send whose outcome is unknown, a turn
-					// that an earlier process queued, and one the agent took and that was not recorded (hold) are not this.
+					// This process queued the turn, and no attempt of its left the agent's answer unknown: every one was refused as
+					// busy or not ready (-32004), or never left (not sent; held behind a task, as a turn never sent is). The agent does
+					// not have it, so there is nothing to find, and sending it is no blind resend. Any other failure before a task
+					// was named (a JSON-RPC error such as -32603, say) is recorded as unknown by unsent, a turn that an earlier
+					// process queued is not fresh, and one the agent took and that was not recorded (hold) is not this either.
 					m.cfg.Logger.Warn("session turn not looked up: the agent's list of tasks could not be read in full, and the agent has not taken the turn", "key", key, "binding", sess.Binding, "turn", r.ID, "error", err)
 					break
 				}
@@ -1281,8 +1283,11 @@ const tooLargeDetail = "the agent sent more than Agent Kourier can read or hold,
 const lookupIncompleteDetail = "Agent Kourier could not tell if the agent already started this message, as its task list could not be read in full, so it did not send it. The agent may be running it. To run it, post it again."
 
 // cardTooLargeDetail is what the thread is told when a task cannot be followed because the connection to the agent could not be opened: its
-// agent card is past the bound. Nothing was refused and nothing was read of the task, which stays at the agent.
-const cardTooLargeDetail = "Agent Kourier could not open a connection to the agent, because its agent card is too large to read, so the turn stopped. The task stays at the agent."
+// agent card is past the bound. Nothing was refused and nothing was read of the task, which stays at the agent, recorded and followed by no one
+// (the outcome is TurnRefused, as for any connection that fails on a follow). Nothing follows it again by itself: once the card is fixed, a restart
+// takes it up (recovery reads it and follows it). No control of the thread does: Manager.Stop has no caller in production, and the Slack adapter
+// handles no stop. The sentence says restart, and no more.
+const cardTooLargeDetail = "Agent Kourier could not connect to the agent: its agent card is too large to read, so the turn stopped. The task stays at the agent. Once the card is fixed, restart Agent Kourier."
 
 // answerUnknownDetail is what the thread is told when the outcome of an answer was unknown and the task cannot be read to tell.
 const answerUnknownDetail = "Agent Kourier could not tell whether the agent took the answer"
@@ -1307,7 +1312,8 @@ const cancelTimeout = 30 * time.Second
 // delivered, or the head would be looked up, followed and ended again, with a second notice. When the cancel took, the turn
 // is over and the cause is logged, and the queue behind it goes on: a runner that is handed an error retires. A cancel that fails
 // does not change what the thread is told: the task stays recorded, for reconciliation, as after a refusal, and the error is
-// returned. The Stop control can cancel it from the thread, and a restart follows it again, meets the same, and cancels again.
+// returned. A restart follows it again, meets the same, and cancels again (a thread control that cancels it, Manager.Stop, has no caller in
+// production yet).
 func (m *Manager) tooLarge(t *tstate, err error) (outcome, error) {
 	t.c.follow = nil
 	m.drives(t.c, "")
@@ -1416,6 +1422,11 @@ func (m *Manager) resume(c *convo) (out outcome, err error) {
 		// is gone, once the turn is over.
 		t.handed = t.handed || t.recovered
 		return m.lost(t, err)
+	case errors.Is(err, dialect.ErrCardTooLarge):
+		// Every call of a real Agent meets the card, this read first: it is no read to retry until the task counts as wedged, and a thread
+		// that is told nothing for an hour. lost tells it (cardTooLargeDetail). As for a task too large to read, the sink is given a turn.
+		t.handed = t.handed || t.recovered
+		return m.lost(t, err)
 	case errors.Is(err, agent.ErrCredentialsRejected), errors.Is(err, agent.ErrAgentForbidden), errors.Is(err, a2a.ErrTaskNotFound):
 		return m.lost(t, err)
 	case err == nil && m.wedgedByAge(c, task), err != nil && m.cfg.Now().Sub(c.since) > m.cfg.MaxWorkingAge:
@@ -1488,8 +1499,8 @@ func running(t *a2a.Task) bool {
 // the session; one that cannot be cancelled has ended, so it is read once more and its end
 // rendered; a refused credential or identity fails; anything else is retried until SendGiveUp,
 // then reported. Every way out lets the queue go on, except where the task stays recorded and
-// the turns behind it stay held until the Stop control or a restart's reconciliation releases
-// the session.
+// the turns behind it stay held until a restart's reconciliation releases
+// the session (Manager.Stop would too, but nothing calls it in production yet).
 func (m *Manager) wedged(t *tstate) (outcome, error) {
 	c := t.c
 	if c.cancelFrom.IsZero() {
@@ -1520,7 +1531,7 @@ func (m *Manager) wedged(t *tstate) (outcome, error) {
 	case kind == cancelForbidden, m.cfg.Now().Sub(c.cancelFrom) >= m.cfg.SendGiveUp:
 		m.audit(t, t.call(err))
 		c.follow = nil
-		return m.fail(t, TurnUncancellable, "the wedged task could not be cancelled; stop it from the thread, or restart agent-kourier to reconcile it", err)
+		return m.fail(t, TurnUncancellable, "the wedged task could not be cancelled; restart agent-kourier to reconcile it", err)
 	}
 	c.tries++
 	return blocked, fmt.Errorf("cancel wedged task %s: %w", t.taskID, err)
@@ -1579,6 +1590,12 @@ func (m *Manager) unsent(t *tstate, err error) (outcome, error) {
 		m.mu.Unlock()
 		return m.retry(t, err)
 	}
+	// Any other failure before a task was named, a JSON-RPC error that is not busy such as -32603 among them, says nothing of whether the
+	// agent took the message: it may have started the task and failed on its way back. The outcome is unknown, so that a lookup that cannot be
+	// answered fails the turn and does not send it again.
+	m.mu.Lock()
+	m.attempted[t.key] = attempt{id: t.r.ID, unknown: true}
+	m.mu.Unlock()
 	return ended, fmt.Errorf("send turn %s: %w", t.r.ID, err)
 }
 
