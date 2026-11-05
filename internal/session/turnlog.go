@@ -47,15 +47,19 @@ const (
 	TurnRefused TurnOutcome = "refused"
 	// TurnNoFinal is a turn whose stream ended cleanly with no final task, which a real client never does.
 	TurnNoFinal TurnOutcome = "no_final"
-	// TurnResponseTooLarge is a turn that stopped because the agent's reply was larger than Agent Kourier holds
-	// (dialect.ErrResponseTooLarge): the task is cancelled, if it was named, and the reply is not read on.
+	// TurnResponseTooLarge is a turn that stopped because what the agent sent was more than Agent Kourier can read or hold: an
+	// event, an answer to a call, the reply of the turn (dialect.ErrResponseTooLarge). The task is cancelled, if it was named, and
+	// the reply is not read on.
 	TurnResponseTooLarge TurnOutcome = "response_too_large"
+	// TurnLookupTooLarge is a turn that was not sent again, because it had to be looked up first and the agent's list of tasks was too
+	// large to read, so that it could not be known whether the agent already had it (dialect.ErrResponseTooLarge). Nothing was sent.
+	TurnLookupTooLarge TurnOutcome = "lookup_too_large"
 )
 
 // TurnOutcomes returns every outcome a turn can have.
 func TurnOutcomes() []TurnOutcome {
 	return []TurnOutcome{TurnCompleted, TurnFailed, TurnRejected, TurnCanceled, TurnCredentialsRejected, TurnForbidden, TurnUnreachable,
-		TurnSessionGone, TurnBindingGone, TurnWedged, TurnUncancellable, TurnPauseEnded, TurnAnswerRejected, TurnRefused, TurnNoFinal, TurnResponseTooLarge}
+		TurnSessionGone, TurnBindingGone, TurnWedged, TurnUncancellable, TurnPauseEnded, TurnAnswerRejected, TurnRefused, TurnNoFinal, TurnResponseTooLarge, TurnLookupTooLarge}
 }
 
 // Valid reports whether o is one of TurnOutcomes.

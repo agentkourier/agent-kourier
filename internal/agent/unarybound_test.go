@@ -25,7 +25,7 @@ func oversizedAnswer() []byte {
 // ends the turn with its notice, not a lost stream: the agent would send the same answer again, so the call is made once
 // and never again, and nothing waits for a pause between tries. The cases are the callers of GetTask (the call, a follow, a
 // resume after a lost stream, the read after a stream that ended with the task settled and no final task), of CancelTask,
-// and of ListTasks (the lookup of a turn).
+// and of ListTasks (the lookup of a turn), which asks for the page at each size down to the floor, once each, and no more.
 func TestUnaryAnswerPastTheBoundIsTooLargeAndMadeOnce(t *testing.T) {
 	big := oversizedAnswer()
 	lost := func(w http.ResponseWriter) { write(w, []byte(wireWorking)); drop() }
@@ -35,14 +35,15 @@ func TestUnaryAnswerPastTheBoundIsTooLargeAndMadeOnce(t *testing.T) {
 		stream func(w http.ResponseWriter)
 		call   func(a *Agent, h Handler) error
 		method string // the unary method that carried the answer
+		calls  int    // how many times the answer is read: once, or for ListTasks once at each page size down to the floor
 	}{
-		{"GetTask", nil, func(a *Agent, _ Handler) error { _, err := a.GetTask(t.Context(), "t-1"); return err }, "GetTask"},
-		{"CancelTask", nil, func(a *Agent, _ Handler) error { _, err := a.CancelTask(t.Context(), "t-1"); return err }, "CancelTask"},
-		{"FindTask", nil, func(a *Agent, _ Handler) error { _, _, err := a.FindTask(t.Context(), "c-1", "m-1"); return err }, "ListTasks"},
-		{"Follow", nil, func(a *Agent, h Handler) error { return a.Follow(t.Context(), "t-1", h) }, "GetTask"},
-		{"Send, after a lost stream", lost, func(a *Agent, h Handler) error { return a.Send(t.Context(), message("go"), h) }, "GetTask"},
+		{"GetTask", nil, func(a *Agent, _ Handler) error { _, err := a.GetTask(t.Context(), "t-1"); return err }, "GetTask", 1},
+		{"CancelTask", nil, func(a *Agent, _ Handler) error { _, err := a.CancelTask(t.Context(), "t-1"); return err }, "CancelTask", 1},
+		{"FindTask", nil, func(a *Agent, _ Handler) error { _, _, err := a.FindTask(t.Context(), "c-1", "m-1"); return err }, "ListTasks", 5},
+		{"Follow", nil, func(a *Agent, h Handler) error { return a.Follow(t.Context(), "t-1", h) }, "GetTask", 1},
+		{"Send, after a lost stream", lost, func(a *Agent, h Handler) error { return a.Send(t.Context(), message("go"), h) }, "GetTask", 1},
 		{"Send, after a stream that ended with the task settled and no final task", settledNoTask,
-			func(a *Agent, h Handler) error { return a.Send(t.Context(), message("go"), h) }, "GetTask"},
+			func(a *Agent, h Handler) error { return a.Send(t.Context(), message("go"), h) }, "GetTask", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fa := newFakeAgent(t, func(call rpc, w http.ResponseWriter) {
@@ -61,8 +62,8 @@ func TestUnaryAnswerPastTheBoundIsTooLargeAndMadeOnce(t *testing.T) {
 			if errors.Is(err, ErrStreamLost) {
 				t.Errorf("err = %v: an answer that is too large is no lost stream", err)
 			}
-			if n := fa.count(tc.method); n != 1 {
-				t.Errorf("%s called %d times, want once: the same answer comes again", tc.method, n)
+			if n := fa.count(tc.method); n != tc.calls {
+				t.Errorf("%s called %d times, want %d: the same answer comes again", tc.method, n, tc.calls)
 			}
 			if n := fa.count("SubscribeToTask"); n != 0 {
 				t.Errorf("SubscribeToTask called %d times: a task that cannot be read is not followed", n)

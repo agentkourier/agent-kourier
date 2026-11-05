@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -12,8 +13,17 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 )
 
-// maxListPages bounds FindTask's walk, so a server that never ends its pages cannot hold it.
-const maxListPages = 100
+// maxListPages bounds FindTask's walk, so a server that never ends its pages cannot hold it. A page that had to be asked for
+// smaller than the server's own is shorter, so the walk may need more of them; the bound is 200 of the smallest (minListPageSize).
+const maxListPages = 200
+
+// A page of ListTasks that is over dialect.MaxResponseBytes is asked for again at half the size, down to minListPageSize. The
+// protocol's default page is 50 tasks (UNCONFIRMED for every backend: kagent's is named in the comment of FindTask), and the
+// server's own is not known, so the first retry is half of it. Each retry reads up to the bound again, so there are few.
+const (
+	defaultListPageSize = 50
+	minListPageSize     = 3
+)
 
 // FindTask returns the task in contextID whose history holds messageID, or nil if there is
 // none, and the IDs of every task that holds it, the returned one first. More than one ID
@@ -29,9 +39,15 @@ const maxListPages = 100
 // returns one that has not ended, else the earliest, and lists the rest in that order. A
 // task that shows on two pages, as the list shifts, counts once, as its newest copy. Each
 // page is a unary call under UnaryTimeout. A page token seen before fails the lookup at
-// once. A page past dialect.MaxResponseBytes fails the lookup with an error that wraps dialect.ErrResponseTooLarge, which
-// the agent sends again: the lookup can never answer, as it cannot of an agent with no task list. UNCONFIRMED: WP-03 measured the lookup on a context of three tasks; paging past
-// kagent's page size of 50 is not measured.
+// once.
+//
+// A page past dialect.MaxResponseBytes (each task of it carries its history) is asked for again at half the size, down to
+// minListPageSize, and the pages after it at the size that fit. If a page does not fit even then, and an earlier page held
+// the turn, the holders found so far are the answer: the agent has the turn. If none did, the lookup fails with an error that
+// wraps dialect.ErrResponseTooLarge, and the caller does not know whether the agent has the turn: the agent sends the same page
+// again, so the lookup can never answer, and the caller must not send the turn again to find out. UNCONFIRMED: WP-03 measured
+// the lookup on a context of three tasks; paging past kagent's page size of 50 is not measured, nor is a page token
+// continued with another page size.
 func (a *Agent) FindTask(ctx context.Context, contextID, messageID string) (telemetryResult0 *a2a.Task, telemetryResult1 []a2a.TaskID, telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.agent.find")
 	defer func() { finishAgent(op, telemetryErr) }()
@@ -49,7 +65,10 @@ func (a *Agent) FindTask(ctx context.Context, contextID, messageID string) (tele
 	seen := map[string]bool{}
 	req := &a2a.ListTasksRequest{ContextID: contextID}
 	for range maxListPages {
-		page, err := a.listTasks(ctx, conn, req)
+		page, err := a.listPage(ctx, conn, req)
+		if tooLarge(err) && len(holders) > 0 {
+			return preferred(holders)
+		}
 		if err != nil {
 			return nil, nil, err
 		}
@@ -95,6 +114,22 @@ func preferred(holders []*a2a.Task) (*a2a.Task, []a2a.TaskID, error) {
 		ids[i] = h.ID
 	}
 	return holders[0], ids, nil
+}
+
+// listPage reads the page req asks for, and asks for it again at half the size while it is over the bound, down to
+// minListPageSize. The size that worked stays in req, for the pages after it.
+func (a *Agent) listPage(ctx context.Context, conn Conn, req *a2a.ListTasksRequest) (*a2a.ListTasksResponse, error) {
+	for {
+		page, err := a.listTasks(ctx, conn, req)
+		if !tooLarge(err) {
+			return page, err
+		}
+		half := cmp.Or(req.PageSize, defaultListPageSize) / 2
+		if half < minListPageSize {
+			return nil, err
+		}
+		req.PageSize = half
+	}
 }
 
 func (a *Agent) listTasks(ctx context.Context, conn Conn, req *a2a.ListTasksRequest) (telemetryResult0 *a2a.ListTasksResponse, telemetryErr error) {

@@ -352,6 +352,8 @@ func TestAgentCall(t *testing.T) {
 		{"token required (D34, never downgrade)", Call{Op: OpSend, MessageID: "m1", Err: fmt.Errorf("binding ns/b: %w", agent.ErrTokenRequired)}, "message=m1", "send: failed token_required"},
 		{"pool closed", Call{Op: OpSend, MessageID: "m1", Err: agent.ErrPoolClosed}, "message=m1", "send: failed pool_closed"},
 		{"streaming unsupported", Call{Op: OpSend, MessageID: "m1", Err: fmt.Errorf("agent ns/a: %w", agent.ErrStreamingUnsupported)}, "message=m1", "send: failed streaming_unsupported"},
+		{"find task whose page is too large to read", Call{Op: OpFindTask, ContextID: "c1", MessageID: "m1", Err: fmt.Errorf("list tasks of context c1: %w", dialect.ErrResponseTooLarge)},
+			"context=c1 message=m1", "find_task: failed response_too_large"},
 		{"cancel not cancelable", Call{Op: OpCancel, TaskID: "t1", Err: a2a.ErrTaskNotCancelable}, "task=t1", "cancel: failed task_not_cancelable"},
 		{"cancel task not found", Call{Op: OpCancel, TaskID: "t1", Err: a2a.ErrTaskNotFound}, "task=t1", "cancel: failed task_not_found"},
 		{"answer rejected and its cancel failed (R17)", Call{Op: OpAnswer, TaskID: "t1", Err: errors.Join(agent.ErrAnswerRejected, a2a.ErrTaskNotCancelable)}, "task=t1",

@@ -11,6 +11,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/audit"
+	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -93,6 +94,12 @@ func classifyCancel(err error) cancelKind {
 		return cancelCredentials
 	case errors.Is(err, agent.ErrForbidden), errors.Is(err, agent.ErrAgentForbidden):
 		return cancelForbidden
+	case errors.Is(err, dialect.ErrResponseTooLarge):
+		// The agent answered the cancel with the task, and the task is more than Agent Kourier reads: an a2a-go server
+		// answers a cancel, and a repeat of one that took, with the whole task, where a refusal is a small JSON-RPC error. So
+		// the cancel reached the agent, and asking again gets the same answer, never the refusal that would say it ended.
+		// The audit row still says the answer was not read.
+		return cancelDone
 	}
 	return cancelTransient
 }
@@ -147,7 +154,9 @@ func (m *Manager) cancelActive(ctx context.Context, key Key, id a2a.TaskID, by s
 	}
 	switch kind {
 	case cancelEnded:
-		if task, gerr := backend.Agent.GetTask(ctx, id); gerr != nil || !task.Status.State.Terminal() {
+		// The task is read to see that it ended. One too large to read has been cancelled, as the cancel's own answer is: the
+		// agent says it cannot cancel it again because it ended, and a read that fails for its size is no sign it still runs.
+		if task, gerr := backend.Agent.GetTask(ctx, id); !errors.Is(gerr, dialect.ErrResponseTooLarge) && (gerr != nil || !task.Status.State.Terminal()) {
 			return false, false, fmt.Errorf("cancel task %s: %w", id, cerr)
 		}
 	case cancelGone:

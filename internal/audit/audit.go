@@ -672,6 +672,8 @@ func errorTags(err error) []string {
 		{agent.ErrForbidden, "forbidden"}, {agent.ErrAgentForbidden, "agent_forbidden"}, {agent.ErrAnswerRejected, "answer_rejected"}, {agent.ErrCancelFailed, "cancel_failed"}, {agent.ErrTokenRequired, "token_required"},
 		{agent.ErrTokenUnreadable, "token_unreadable"}, {agent.ErrHeaderUnreadable, "header_unreadable"},
 		{agent.ErrPoolClosed, "pool_closed"}, {agent.ErrStreamingUnsupported, "streaming_unsupported"},
+		// What the broker would not read or hold of a response (an event, an answer, a page of tasks, a reply).
+		{dialect.ErrResponseTooLarge, "response_too_large"},
 		// Answer's automatic cancel (R17) can fail and is joined to ErrAnswerRejected: a wedged task must not read as cleared.
 		{a2a.ErrTaskNotCancelable, "task_not_cancelable"}, {a2a.ErrTaskNotFound, "task_not_found"},
 		{context.Canceled, "canceled"}, {context.DeadlineExceeded, "deadline_exceeded"},

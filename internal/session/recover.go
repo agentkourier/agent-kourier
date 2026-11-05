@@ -58,13 +58,6 @@ func (m *Manager) Recover(ctx context.Context) error {
 	return nil
 }
 
-// lookupNeverAnswers reports whether err says that FindTask cannot answer, however often it is asked: the agent has no task
-// list, or a page of it is past dialect.MaxResponseBytes, which the agent sends again. A caller that needs the answer takes
-// it as no information, since waiting for it would not end.
-func lookupNeverAnswers(err error) bool {
-	return errors.Is(err, agent.ErrLookupUnsupported) || errors.Is(err, dialect.ErrResponseTooLarge)
-}
-
 // recoverKey takes up one conversation.
 func (m *Manager) recoverKey(key Key) {
 	defer m.wg.Done()
@@ -104,13 +97,20 @@ func (m *Manager) recoverKey(key Key) {
 	if herr == nil && sess.ContextID != "" {
 		for attempt := 1; ; attempt++ { // asked again until it answers: a fallback would render t's output twice
 			task, _, err := backend.Agent.FindTask(m.ctx, sess.ContextID, head.ID)
-			if lookupNeverAnswers(err) {
-				// The agent has no task list (A2A 0.3, kagent 0.9.x), or a page of it is more than Agent Kourier reads,
-				// so asking again would never answer. The head is taken as not the task's own turn: the task is
-				// followed first, and the head is sent after it. A head that was the task's own, after a crash in the
-				// narrow gap between recording the task and marking the turn delivered, runs a second time; the
-				// alternative was to wait for ever.
-				log.Warn("recover: the agent's list of tasks cannot answer, so the queued head is not looked up", "head", head.ID, "task", sess.TaskID, "error", err)
+			if errors.Is(err, agent.ErrLookupUnsupported) {
+				// The agent has no task list (A2A 0.3, kagent 0.9.x), so asking again would never answer. The head
+				// is taken as not the task's own turn: the task is followed first, and the head is sent after it.
+				// A head that was the task's own, after a crash in the narrow gap between recording the task and
+				// marking the turn delivered, runs a second time; the alternative was to wait for ever.
+				log.Warn("recover: the agent cannot list tasks, so the queued head is not looked up", "head", head.ID, "task", sess.TaskID)
+				break
+			}
+			if errors.Is(err, dialect.ErrResponseTooLarge) {
+				// A page of the agent's list is more than Agent Kourier reads at any size it asked for, and comes again, so asking
+				// again would never answer either. The recorded task is followed first, as above, and the head stays queued: the
+				// runner looks it up when it takes it up, finds the same, and fails it without sending it (unverified), for the
+				// agent may have it. Nothing is sent from here, and nothing is asked for ever.
+				log.Warn("recover: the agent's list of tasks is too large to read, so the queued head is not looked up", "head", head.ID, "task", sess.TaskID, "error", err)
 				break
 			}
 			if err == nil {

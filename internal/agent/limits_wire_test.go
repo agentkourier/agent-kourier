@@ -255,6 +255,15 @@ func TestCheckBoundsTheCard(t *testing.T) {
 	}
 }
 
+// The budget of a turn's reply is a number the documentation states (341 KiB, in docs/explanation/security.md and
+// docs/how-to/upgrade.md), and no setting reaches it. Like the bounds of the dialect, it is pinned by a literal, so that a
+// change of it is a change of the documentation too (see TestBoundsAreWhatTheDocumentationStates).
+func TestDefaultMaxReplyBytesIsWhatTheDocumentationStates(t *testing.T) {
+	if DefaultMaxReplyBytes != 341<<10 {
+		t.Errorf("DefaultMaxReplyBytes = %d, the documentation says %d (341 KiB): change it there too, and say so in the upgrade note", DefaultMaxReplyBytes, 341<<10)
+	}
+}
+
 // The budget leaves room for the final task that repeats the reply, and it leaves it for the worst honest text. The final
 // task of a stream holds the reply up to three times (the artifact, the status message and a message of the history), and
 // JSON may double the size of a text: a newline or a quote is two bytes on the wire (an agent that escapes what is not

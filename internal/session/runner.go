@@ -290,6 +290,9 @@ func (m *Manager) parked(key Key, c *convo) (outcome, error) {
 			if errors.Is(err, a2a.ErrTaskNotFound) {
 				return m.releasePause(key, c)
 			}
+			if errors.Is(err, dialect.ErrResponseTooLarge) && m.ctx.Err() == nil {
+				return m.pauseTooLarge(c, err) // the same answer comes again: not a read to try after every backoff
+			}
 			if err != nil {
 				if errors.Is(err, agent.ErrCredentialsRejected) && !c.textRejected {
 					c.textRejected = true
@@ -354,6 +357,28 @@ func (m *Manager) parked(key Key, c *convo) (outcome, error) {
 	case <-m.ctx.Done():
 		return ended, nil
 	}
+}
+
+// pauseTooLarge ends the pause of a task that cannot be read for its size, which the read for a person's text reply found: the
+// turn that paused ends as any whose task is too large does (lost): the thread is told, the task is cancelled and, once it is, ended.
+// The pause is released without the turn being counted again as one whose pause ended, and the reply that was read stays queued, to go
+// out as a turn of its own.
+func (m *Manager) pauseTooLarge(c *convo, err error) (outcome, error) {
+	over := c.paused
+	out, lerr := m.lost(over, err)
+	m.mu.Lock()
+	c.parked, c.released, c.paused = "", false, nil
+	select {
+	case <-c.resume:
+	default:
+	}
+	select {
+	case <-c.answers:
+	default:
+	}
+	m.mu.Unlock()
+	m.discardAnswer(c)
+	return out, lerr
 }
 
 // releasePause clears a pause once, without requeueing its end signal.
@@ -566,14 +591,26 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 		if sess.ContextID != "" {
 			task, holders, err := backend.Agent.FindTask(telemetry.Restore(m.ctx, r.TraceParent, r.TraceState), sess.ContextID, r.ID)
 			switch {
-			case lookupNeverAnswers(err):
-				// The agent has no task list (A2A 0.3, kagent 0.9.x), or a page of it is more than Agent Kourier reads:
-				// this turn cannot be looked up, and asking again changes nothing. It is treated as absent, as a lookup
-				// that found nothing is: a duplicate run is possible after a resend, a turn that waits for ever is not.
-				m.cfg.Logger.Warn("session turn not looked up: the agent's list of tasks cannot answer", "key", key, "turn", r.ID, "error", err)
+			case errors.Is(err, agent.ErrLookupUnsupported):
+				// The agent has no task list (A2A 0.3, kagent 0.9.x): this turn cannot be looked up, and asking
+				// again changes nothing. It is treated as absent, as a lookup that found nothing is: a duplicate
+				// run is possible after a resend, a turn that waits for ever is not.
+				m.cfg.Logger.Warn("session turn not looked up: the agent cannot list tasks", "key", key, "turn", r.ID)
 				if sess.TaskID != "" { // a task of the session runs: this turn is behind it
 					return idle, hold
 				}
+			case errors.Is(err, dialect.ErrResponseTooLarge):
+				// The agent can list tasks, but a page of its list is more than Agent Kourier reads, at any size it asked for, and
+				// the page comes again: whether the agent has this turn is not known, and never will be. It is not sent: the
+				// agent may have it, and a resend into a context is not deduplicated (spec 8.2). The turn fails, and a person
+				// decides whether to post it again.
+				if sess.TaskID != "" { // a task of the session runs: this turn is behind it, and asked again when that ends
+					return idle, hold
+				}
+				if first && c.left == nil {
+					t.handed, c.left = true, t // as a failed lookup does: what an earlier process left is ended with the turn
+				}
+				return m.unverified(t, err)
 			case err != nil:
 				c.patient = c.patient || hold != nil // a turn the agent took is never failed
 				if first && c.left == nil {
@@ -1121,6 +1158,11 @@ func (m *Manager) readAnswered(t *tstate, refused error, waiting string) (outcom
 	}
 	task, err := t.b.Agent.GetTask(m.ctx, t.taskID)
 	switch {
+	case errors.Is(err, dialect.ErrResponseTooLarge) && m.ctx.Err() == nil:
+		return m.lost(t, err) // the same answer comes again: the turn ends as any whose task is too large does
+	case err != nil && !busy:
+		// The outcome of the answer was unknown, and the task cannot be read to tell: the agent may have taken it.
+		return m.repark(t, "Agent Kourier could not tell whether the agent took the answer"), nil
 	case err != nil:
 		return m.repark(t, "the answer could not be delivered"), nil
 	case task.Status.State.Terminal():
@@ -1213,31 +1255,58 @@ func (m *Manager) lost(t *tstate, err error) (outcome, error) {
 	return ended, fmt.Errorf("send turn %s: %w", t.r.ID, err)
 }
 
-// tooLargeDetail is what the thread is told when the agent's reply passed what Agent Kourier holds (dialect.ErrResponseTooLarge).
-// It is fixed: it names no backend, no size and nothing the agent sent.
-const tooLargeDetail = "the agent's reply was larger than Agent Kourier holds, so the turn stopped"
+// tooLargeDetail is what the thread is told when what the agent sent passed what Agent Kourier reads or holds
+// (dialect.ErrResponseTooLarge): one event, an answer to a call, the reply of the turn, or the tasks of a list. It is fixed,
+// and true for each of them, a reply of sixteen bytes after tool results that add up to megabytes included: it names no
+// backend, no size and nothing the agent sent.
+const tooLargeDetail = "the agent sent more than Agent Kourier can read or hold, so the turn stopped"
+
+// lookupTooLargeDetail is what the thread is told when the turn was not sent again, because the agent's list of tasks is too
+// large to read and so Agent Kourier cannot tell whether the agent already has the turn. It says what happened, that the agent
+// may have started it, and what a person does: it names no backend, no size and nothing the agent sent.
+const lookupTooLargeDetail = "Agent Kourier could not check whether the agent already started this message, because the agent's list of tasks is too large to read, so it did not send it again. The agent may have started it; post the message again to run it once more."
+
+// unverified ends a turn that is not sent, since the agent's list of tasks is too large to say whether it has the turn: the
+// thread is told (lookupTooLargeDetail), the lookup is audited as failed with response_too_large, the turn is logged as failed
+// with the error and counted as TurnLookupTooLarge, which an operator can alert on. Nothing is sent, and nothing is asked again.
+func (m *Manager) unverified(t *tstate, cause error) (outcome, error) {
+	m.audit(t, audit.Call{Op: audit.OpFindTask, ContextID: t.sess.ContextID, MessageID: t.r.ID, Err: cause})
+	return m.fail(t, TurnLookupTooLarge, lookupTooLargeDetail, cause)
+}
 
 // cancelTimeout bounds the cancel of a task whose reply was too large, as the agent's own bound on a cancel
 // (agent.Config.UnaryTimeout) does: this is the backstop for an AgentAPI that does not keep to it.
 const cancelTimeout = 30 * time.Second
 
-// tooLarge handles a task whose reply, after it was named, passed what Agent Kourier holds. The agent refused nothing: the
-// broker stopped reading. The turn ends, the thread is told in fixed words (what it was already shown stays), and the
-// task is cancelled, so that it does not run on at the agent with nobody reading it. A cancel that fails does not change
-// any of that: the task stays recorded, for reconciliation, as after a refusal. The Stop control can cancel it from the
-// thread, and a restart follows it again, which meets the same reply and cancels it again.
+// tooLarge handles a task whose reply, after it was named, passed what Agent Kourier reads or holds. The agent refused nothing:
+// the broker stopped reading. The turn ends, the thread is told in fixed words (what it was already shown stays), and the
+// task is cancelled, so that it does not run on at the agent with nobody reading it. The turn's own queue row, if the task
+// came from one that nothing marked (recovery found the head to be the task's own, in the gap after a crash), is marked
+// delivered, or the head would be looked up, followed and ended again, with a second notice. When the cancel took, the turn
+// is over and the cause is logged, and the queue behind it goes on: a runner that is handed an error retires. A cancel that fails
+// does not change what the thread is told: the task stays recorded, for reconciliation, as after a refusal, and the error is
+// returned. The Stop control can cancel it from the thread, and a restart follows it again, meets the same, and cancels again.
 func (m *Manager) tooLarge(t *tstate, err error) (outcome, error) {
 	t.c.follow = nil
 	m.drives(t.c, "")
 	// Named after the task and the thread, as the notice of a refusal is: a restart that follows the task again raises the same post.
 	m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: taskNoticeID(t.key, t.taskID, NoticeFailed), Kind: NoticeFailed, MessageRef: t.r.MessageRef, Detail: tooLargeDetail})
+	if merr := m.cfg.Store.MarkReplyDelivered(context.WithoutCancel(m.ctx), t.r.ID, m.cfg.Now()); merr != nil && !errors.Is(merr, store.ErrNotFound) {
+		m.cfg.Logger.WarnContext(m.ctx, "session: could not mark the turn of a task whose reply was too large delivered", "key", t.key, "turn", t.r.ID, "error", merr)
+	}
 	var endErr error
-	if m.cancelOversized(t) {
+	cancelled := m.cancelOversized(t)
+	if cancelled {
 		t.c.settle()
 		endErr = m.end(context.WithoutCancel(m.ctx), t.key, t.c.ttl)
 	}
 	m.finish(t, TurnResponseTooLarge)
-	return ended, errors.Join(fmt.Errorf("send turn %s: %w", t.r.ID, err), endErr)
+	cause := fmt.Errorf("send turn %s: %w", t.r.ID, err)
+	if cancelled && endErr == nil {
+		m.cfg.Logger.WarnContext(m.ctx, "session turn stopped: what the agent sent was more than Agent Kourier can read or hold", "key", t.key, "turn", t.r.ID, "task", string(t.taskID), "error", cause)
+		return ended, nil
+	}
+	return ended, errors.Join(cause, endErr)
 }
 
 // cancelOversized cancels the task whose reply was too large, once, within cancelTimeout, and reports whether the task is
@@ -1318,8 +1387,13 @@ func (m *Manager) resume(c *convo) (out outcome, err error) {
 	}
 	task, err := t.b.Agent.GetTask(m.ctx, t.taskID)
 	switch {
-	case errors.Is(err, agent.ErrCredentialsRejected), errors.Is(err, agent.ErrAgentForbidden), errors.Is(err, a2a.ErrTaskNotFound),
-		errors.Is(err, dialect.ErrResponseTooLarge): // the same answer comes again: not a read to retry until the task counts as wedged
+	case errors.Is(err, dialect.ErrResponseTooLarge):
+		// The same answer comes again: not a read to retry until the task counts as wedged. A task that a restart found was shown by
+		// the process before it, and nothing here has given the sink a turn to end that message with: it is, as for a task that
+		// is gone, once the turn is over.
+		t.handed = t.handed || t.recovered
+		return m.lost(t, err)
+	case errors.Is(err, agent.ErrCredentialsRejected), errors.Is(err, agent.ErrAgentForbidden), errors.Is(err, a2a.ErrTaskNotFound):
 		return m.lost(t, err)
 	case err == nil && m.wedgedByAge(c, task), err != nil && m.cfg.Now().Sub(c.since) > m.cfg.MaxWorkingAge:
 		return m.wedged(t)
