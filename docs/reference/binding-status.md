@@ -72,7 +72,8 @@ Otherwise it is the probes' result (below), with the reason `<type>:<reason>` of
 Each has `OK` when `True`, `Pending` while its first probe has not ended, and a reason from a closed set. The reasons, what each
 means and what to do are in [A Binding is not ready](../how-to/troubleshoot.md#a-binding-is-not-ready). `ProbeTimeout` and `ProbeFailed` are the
 prober's own, and the same for both. A probe that could not tell is `Unknown` and not `False`: the chat platform's rate limit or deadline, an agent's 408, 425 or 429,
-and a probe that ran past the prober's own 10 seconds (`ProbeTimeout`). A backend that does not answer is `False` with `Unreachable`.
+and a probe that ran past the prober's own 10 seconds (`ProbeTimeout`). A backend that does not answer is `False` with `Unreachable`. A card of more
+than 1 MiB is `False` with `InvalidAgentCard`, and the probe stops reading at that size.
 
 How a probe is made, and how often, is under [Binding verification](metrics.md#binding-verification): when the leader starts, when the config or a
 Secret the Binding refers to changes (at most once every 30 seconds), and every 5 minutes.

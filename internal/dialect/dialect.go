@@ -93,6 +93,29 @@ var (
 	// is not a usable agent card (an SSO login page, say), or with a card whose interfaces name no protocol version
 	// this client speaks. It says the front door answered; a dial failure or a status error is not it.
 	ErrInvalidAgentCard = errors.New("agent card is invalid")
+	// ErrResponseTooLarge is what a dialect's transport returns for a response from the backend that is larger than
+	// the bound its kind has (MaxCardBytes, MaxResponseBytes, MaxEventBytes), as the request's error or the body's
+	// read error, never a truncated body that parses: an agent card, a call's answer, or one event of a stream. The
+	// agent package returns it too for a reply that is more than a turn holds (agent.Config.MaxReplyBytes). The
+	// text says the bound and never anything the backend sent. A backend that does it again does it every time, so
+	// it is not retried as a lost stream.
+	ErrResponseTooLarge = errors.New("response from the backend is too large")
+)
+
+// The most a dialect's transport reads of a backend's response, by what the response is. The backend of a Binding may
+// be a tenant's, and an unbounded read would let it fill the memory of the leader. None bounds how long a stream may
+// run or how much text it carries in all; the agent package bounds what a turn holds (agent.DefaultMaxReplyBytes).
+const (
+	// MaxCardBytes is the most of an agent card, which is a few kilobytes in practice.
+	MaxCardBytes = 1 << 20
+	// MaxResponseBytes is the most of the answer to a call that is not a stream (GetTask, CancelTask, ListTasks), or
+	// of a JSON answer to a call that asked for a stream, which is a single JSON-RPC response and may hold a task
+	// with its whole history.
+	MaxResponseBytes = 16 << 20
+	// MaxEventBytes is the most of one event of a stream: the lines of it, line breaks included, up to the blank line
+	// that ends it. It is the bound a2a-go puts on one line (10 MiB), so that an event split over lines cannot hold
+	// more than an event of one line.
+	MaxEventBytes = 10 << 20
 )
 
 type freshConnectionKey struct{}

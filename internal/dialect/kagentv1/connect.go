@@ -35,7 +35,8 @@ const (
 
 // New returns a Dialect whose calls must get their response headers within responseTimeout;
 // zero means DefaultResponseTimeout. That bounds each call's start, not its length: a
-// stream (SendStreamingMessage, SubscribeToTask) is bounded only by its caller's context.
+// stream (SendStreamingMessage, SubscribeToTask) is bounded only by its caller's context in length, and in size by event
+// (dialect.MaxEventBytes), as a card and an answer are bounded in all (dialect.MaxCardBytes, dialect.MaxResponseBytes).
 // oauth2-proxy's --upstream-timeout (10m in the pilot) bounds the wait for response
 // headers, not a stream's length (medium-high confidence, from review; not measured). What
 // to do when a stream ends early is the caller's concern (WP-27).
@@ -185,7 +186,8 @@ func (d *Dialect) httpClient(creds dialect.Credentials, frontDoor *url.URL) *htt
 }
 
 // authTransport authenticates each request, on a copy, before sending it to the front door,
-// and turns a response that is not 2xx into a dialect.HTTPStatusError. A request whose context
+// and turns a response that is not 2xx into a dialect.HTTPStatusError. A response body is bounded as boundOf says, and one
+// past its bound fails with dialect.ErrResponseTooLarge. A request whose context
 // came from dialect.WithFreshConnection goes through fresh instead of next. The same holds on both paths:
 // the host check runs before the choice, so the identity goes only to the front door, and a redirect is not
 // followed, because a 3xx is such a response: RoundTrip returns the error, so the client never reads a Location.
@@ -207,6 +209,7 @@ func (t authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.URL.Scheme != t.frontDoor.Scheme || !strings.EqualFold(req.URL.Host, t.frontDoor.Host) {
 		return refuse(fmt.Errorf("refusing to send credentials to %s://%s, which is not the front door", req.URL.Scheme, req.URL.Host))
 	}
+	asked := req.Header.Get("Accept") // the SDK's, before Authenticate adds the AgentBackend's headers (see boundOf)
 	req = req.Clone(req.Context())
 	if err := t.dialect.Authenticate(req, t.creds); err != nil {
 		return refuse(err)
@@ -223,7 +226,7 @@ func (t authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		_ = resp.Body.Close()
 		return nil, &dialect.HTTPStatusError{Code: resp.StatusCode, RetryAfter: retryAfter(resp.Header)}
 	}
-	return resp, nil
+	return limited(resp, boundOf(req, asked, resp))
 }
 
 // retryAfter reads a Retry-After header, which is a number of seconds or an HTTP date. It

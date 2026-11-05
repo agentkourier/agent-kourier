@@ -22,6 +22,8 @@ import (
 //   - The agent's own answer comes back at once, typed as for Send: errors.Is(err,
 //     a2a.ErrTaskNotFound) when it no longer knows the task (the session may be gone),
 //     ErrForbidden when the caller does not own it.
+//   - A reply that is too large (dialect.ErrResponseTooLarge: an event or an answer past the dialect's bound, or more
+//     than MaxReplyBytes held) comes back at once, and is no lost stream: the agent would send the same again.
 //   - A stream that drops is resumed up to MaxReconnects times in a row, then Follow returns
 //     a *StreamLostError carrying the task ID, so the caller may follow again later. That
 //     includes a 408, 429 or 503 that outlasts the reconnects.
@@ -44,7 +46,7 @@ func (a *Agent) Follow(ctx context.Context, id a2a.TaskID, h Handler) (telemetry
 		return fmt.Errorf("connect to agent: %w", typed(err, false))
 	}
 	asm := newAssembler(h)
-	asm.interaction = a.cfg.ParseInteraction
+	asm.interaction, asm.limit = a.cfg.ParseInteraction, a.cfg.MaxReplyBytes
 	asm.taskID = id
 	defer asm.release("")           // a result still waiting for its call has no later assembler to deliver it
 	fail := func(err error) error { // the agent answered, or refused, or the caller gave up
