@@ -88,7 +88,10 @@ adapter flattens its native message into them. The Slack adapter reads the messa
 `fallback`. All are raw, as delivered. Later attachments are not read. A field the message lacks is empty.
 
 **Regexes** are RE2 (linear time), at most 512 bytes, and compile at load, as do the named groups and the template. A
-Binding that fails any of them is rejected.
+Binding that fails any of them is rejected. A regex is also held to the size of the program it compiles to: at most
+2000 instructions each, and 20000 for all the regexes of a Binding (see [Limits](limits.md#write-a-binding-an-agentbackend-or-a-chatconnection)),
+because the time to try a regex on a message grows with that size and the message's length. A regex reads the first
+16 KiB of its field and nothing past it. The check ends at the first regex it refuses.
 
 ## What a matched message does to its thread
 

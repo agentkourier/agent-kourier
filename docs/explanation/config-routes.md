@@ -108,7 +108,7 @@ The Binding "bad" is invalid:
 count over a cap, and most of the rules between the fields of one object.
 
 **Left to the broker**, which reports them as `Accepted=False` after the object is stored: a regex in a trigger's `match`, `exclude` or `extract` that
-does not compile; a trigger's `promptTemplate` that does not parse, names an extract the trigger lacks, or fails when it runs; a duplicate trigger; the
+does not compile, or compiles to more than 2000 instructions, or takes the regexes of a Binding past 20000 instructions together; a trigger's `promptTemplate` that does not parse, names an extract the trigger lacks, or fails when it runs; a duplicate trigger; the
 parts of a URL that only Go's parser refuses (a bad percent escape, port or bracket); a `match` or `exclude` value of 512 characters or fewer that is
 over 512 bytes; and every rule that spans objects: that the AgentBackend and ChatConnection exist and allow the namespace, that the dialect has an adapter, that
 one Binding holds the channel, and that a Secret has its key.
