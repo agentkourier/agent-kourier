@@ -126,7 +126,7 @@ func Root() (string, error) {
 
 // InvalidEntries is how many entries the invalid half has. Both tests hold the corpus to it, so an entry cannot be
 // dropped, or added, without this changing in the same commit.
-const InvalidEntries = 168
+const InvalidEntries = 172
 
 // MinValidEntries is the fewest valid entries the valid half may have: the repository's resources change, so this is a
 // floor and not a count. It is under what the roots hold today (see TestEveryValidEntryIsAcceptedByTheBroker), and

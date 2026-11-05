@@ -69,7 +69,8 @@ this kind, with its AgentBackend, ChatConnection and checks.
 
 1. Keep this if people should also be able to mention the bot. A list that names triggers is the whole list.
 2. The sender's ID: on Slack, the alert messages' `bot_id`, never a display name. `from.kind` is `bot`, its default and only value; leave it out.
-3. Every `match` entry must match, and no `exclude` entry may. Regexes are RE2, at most 512 bytes.
+3. Every `match` entry must match, and no `exclude` entry may. Regexes are RE2, at most 512 bytes and
+   a program of at most 2000 instructions (see [Limits](../reference/limits.md#write-a-binding-an-agentbackend-or-a-chatconnection)); they read the first 16 KiB of a field.
 4. Each entry's regex has a named group with the entry's name, which supplies the value. A message in which an
    extract does not match does not match the trigger.
 5. Messages with the same `key` share one thread. A fire while the thread is open, or within the cooldown, adds a note and reopens a closed thread; a message whose `state`

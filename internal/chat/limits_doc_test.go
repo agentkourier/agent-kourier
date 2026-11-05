@@ -6,9 +6,11 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/limitsdoc"
 )
 
-// TestLimitsPage holds the page docs/reference/limits.md to the mark of a cut and to the fixed limits of a bot's mention.
+// TestLimitsPage holds the page docs/reference/limits.md to the mark of a cut, to the head of a field that a trigger reads, and
+// to the fixed limits of a bot's mention.
 func TestLimitsPage(t *testing.T) {
 	limitsdoc.Text(t, "truncatedMark", Truncated)
+	limitsdoc.Bytes(t, "matchedField", maxMatchedFieldBytes)
 
 	limits := botMentionLimits()
 	limitsdoc.Count(t, "botRuns", int(limits.RateLimit.MaxRuns))
