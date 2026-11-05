@@ -18,7 +18,7 @@ func TestLimitsPage(t *testing.T) {
 
 	limitsdoc.Count(t, "toolName", maxToolName)
 	limitsdoc.Count(t, "toolArgs", maxToolArgs)
-	limitsdoc.Count(t, "noticeDetail", maxNoticeDetail)
+	limitsdoc.Count(t, "noticeDetail", MaxNoticeDetail)
 
 	limitsdoc.Count(t, "threadReplies", MaxThreadReplies)
 	limitsdoc.Count(t, "threadReplyUnits", MaxThreadReplyUnits)
