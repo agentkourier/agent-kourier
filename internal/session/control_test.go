@@ -706,6 +706,45 @@ func TestStopAfterARunnerExitThatLeftTheTaskRecorded(t *testing.T) {
 	})
 }
 
+// A control that reads the session while the pause is open, and looks at the runner only after another control has ended the pause
+// and the runner has cleared the record and retired, finds no runner, which on its own means a conversation after a restart, and
+// used to cancel the task a second time. It reads the record again once it has seen no runner, finds the pause gone and does
+// nothing: one cancel, one audit row, and ErrNotPaused for the caller, who tells the thread nothing.
+func TestACancelThatReadTheSessionBeforeAnotherControlEndedThePauseDoesNotCancelAgain(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.agent.script = pauseFirst
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	waitFinal(t, sink)
+	f.nextSent()
+
+	f.m.afterSessionRead = func() {
+		// Called by the Cancel just before it looks at the runner, after every read of the session that comes before the look (a
+		// Stop does not come through here): a person stops the task now.
+		if did, err := f.m.Stop(t.Context(), key, "t1", "U9"); err != nil || !did {
+			t.Errorf("Stop = %v, %v; want it to stop the task", did, err)
+		}
+		eventually(t, "the runner to clear the record and retire", func() bool {
+			f.m.mu.Lock()
+			defer f.m.mu.Unlock()
+			return len(f.m.convos) == 0 && f.taskID() == ""
+		})
+	}
+	if err := f.m.Cancel(t.Context(), key, "t1", "interaction timed out"); !errors.Is(err, ErrNotPaused) {
+		t.Errorf("Cancel = %v; want ErrNotPaused: the pause was ended by the stop", err)
+	}
+	if got := f.cancelled(); len(got) != 1 {
+		t.Errorf("the agent was asked to cancel %v; want the stop's one only", got)
+	}
+	f.amu.Lock()
+	defer f.amu.Unlock()
+	if len(f.audits) != 1 || f.actors[0].User != "U9" {
+		t.Errorf("audits %+v by %+v; want the stop's cancel alone", f.audits, f.actors)
+	}
+}
+
 // Cancel is for a pause. A task that streams is not one, and is left alone.
 func TestCancelRefusesAStreamingTask(t *testing.T) {
 	f := newFixture(t)
