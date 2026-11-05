@@ -667,6 +667,70 @@ func TestAPressIsTiedToTheMessageItWasMadeOn(t *testing.T) {
 	})
 }
 
+// The row of a turn's reply is made before the message is posted, and the message's place is written to it after the platform
+// answers, so for a moment the message is on the platform, with its buttons, and the row has no place for it. A press in that
+// moment is not one on another message: it is kept for another try, with nothing recorded and no one told, and counts as soon as
+// the place is written. Before, it was ignored for good, and the vote was lost without a word.
+func TestAPressBeforeTheMessageIsRecordedIsKeptUntilItIs(t *testing.T) {
+	const unposted = "unposted-turn"
+	setup := func(t *testing.T) (*rig, chat.Interaction, string) {
+		r := newRig(t)
+		id := outbox.ID(unposted, store.OutboxReply)
+		if _, err := r.st.CreateOutbox(t.Context(), store.OutboxEntry{ID: id, EventID: unposted, Role: store.OutboxReply, Channel: key.Channel, Thread: key.Thread, CreatedAt: t0}); err != nil {
+			t.Fatal(err)
+		}
+		i := press("UALICE1", store.FeedbackInvestigation, store.VerdictUseful)
+		i.PromptID = feedback.Value{Kind: store.FeedbackInvestigation, Verdict: store.VerdictUseful, Thread: key.Thread, Turn: unposted}.String()
+		return r, i, id
+	}
+
+	t.Run("it is tried again, and counts once the place is written", func(t *testing.T) {
+		r, i, id := setup(t)
+		res, err := r.vote(t, i)
+		if res != interact.Retry || err != nil {
+			t.Fatalf("Process = %v, %v; want Retry and no error: the place is not wrong, it is not yet written", res, err)
+		}
+		if len(r.votes(t)) != 0 || len(r.eph.list()) != 0 || r.waiting(t) != 1 {
+			t.Errorf("votes %+v, told %+v, %d waiting; want nothing but the press kept", r.votes(t), r.eph.list(), r.waiting(t))
+		}
+		if err := r.st.RecordMessageRef(t.Context(), id, "100.9"); err != nil {
+			t.Fatal(err)
+		}
+		presses, _ := r.st.ListPresses(t.Context())
+		if res, err := r.h.Process(r.tel.Ctx, presses[0]); err != nil || res != interact.Done {
+			t.Fatalf("the retry = %v, %v; want Done", res, err)
+		}
+		if got := r.votes(t); len(got) != 1 || got[0].Verdict != store.VerdictUseful || got[0].Turn != unposted {
+			t.Errorf("votes %+v; want the vote, on the turn", got)
+		}
+		if r.waiting(t) != 0 || r.count(t, "KubePodCrashLooping", store.VerdictUseful) != 1 {
+			t.Errorf("%d waiting, counted %v; want the press finished and the vote counted once", r.waiting(t), r.count(t, "KubePodCrashLooping", store.VerdictUseful))
+		}
+	})
+
+	t.Run("a press on another message is still ignored when the place is written", func(t *testing.T) {
+		r, i, id := setup(t)
+		if err := r.st.RecordMessageRef(t.Context(), id, "100.9"); err != nil {
+			t.Fatal(err)
+		}
+		i.At.ID = "200.2"
+		if res, err := r.vote(t, i); err != nil || res != interact.Done {
+			t.Fatalf("Process = %v, %v; want Done", res, err)
+		}
+		if len(r.votes(t)) != 0 || r.waiting(t) != 0 || len(r.eph.list()) != 0 {
+			t.Errorf("votes %+v, %d waiting, told %+v; want nothing", r.votes(t), r.waiting(t), r.eph.list())
+		}
+	})
+
+	t.Run("a reply posted again holds the place while the first row has none", func(t *testing.T) {
+		r, i, _ := setup(t)
+		r.message(t, key, outbox.RepostedSource(unposted), "100.9")
+		if res, err := r.vote(t, i); err != nil || res != interact.Done || len(r.votes(t)) != 1 {
+			t.Errorf("Process = %v, %v, %d votes; want Done and the vote: the second row's place is the press's", res, err, len(r.votes(t)))
+		}
+	})
+}
+
 // A vote is not lost for a record that cannot be written, nor an unacknowledged person for a told that fails.
 func TestAFailedAuditOrTellingDoesNotCostTheVote(t *testing.T) {
 	r := newRig(t)
