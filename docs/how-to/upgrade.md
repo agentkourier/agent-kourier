@@ -443,6 +443,16 @@ The current values, and what else the broker bounds, are on [Limits](../referenc
   are many, says it is the sum.
 - **A reply that adds up to more than 341 KiB** in the text the turn holds ends the turn the same way, however many events it came in. Before, the same reply was held
   up to 2 MiB.
+- **A person's answer to a paused task** is held to the same bounds, with these differences. What it reads of the paused task first, to tell what is new in the answer (the
+  tool calls and results of the turn that paused), is not counted against the 341 KiB, so the answer's own stream can be read for a task that paused after many tool steps (in a test, one
+  artifact of call and result pairs with 40-byte call IDs, the old charge passed the budget at about 600 pairs). That holds for the answer's stream only: **a follow reads the task with no such allowance**,
+  and a follow is what comes after a restart, after a lost stream past the reconnect limit, and after an answer that the agent refused as busy or whose outcome is unknown. In the same test a follow's
+  first snapshot passed 341 KiB at about 350 pairs, and a live turn at about 400, so a task of some 350 pairs or more that paused and then met a restart is stopped as too large and cancelled. The notes
+  the answer keeps of the paused task cost memory, held for the whole answer and for each answer in flight: 4.2 MiB or 5.2 MiB for a task of 53,847 of the smallest tool parts (78 bytes each on the wire, the most
+  that 4 MiB holds), measured in a test process, besides the memory to decode it. And a reply to the
+  answer that is too large before the agent names the task again ends the turn as any other does: Agent Kourier cancels the task that was answered, once, and the answer is not sent again. The task is not read first,
+  and not parked again for a person to answer into the same reply. The thread is told a sentence of its own, `what the agent sent after the answer was more than Agent Kourier can read or hold, so the turn stopped and its task is being
+  cancelled. The agent may have acted on the answer.`: the agent may have taken the answer, and what it sent after it was not read.
 - **An answer over 4 MiB** is not read either. The answer to `GetTask` carries the task with its whole history, so a long task with large tool results can pass it. The
   turn ends in the same way wherever it reads its task: after a lost stream, after a stream that ended with the task settled and no final task, when it follows a
   task again after a restart, when a person's answer or text reply to a paused task reads the task, and when the read after an answer of unknown outcome meets it. The task is

@@ -35,8 +35,13 @@ func TestFindTaskWhosePagesNeverEndIsIncomplete(t *testing.T) {
 	if !errors.Is(err, ErrLookupIncomplete) || task != nil || holders != nil {
 		t.Fatalf("FindTask = %v, %v, %v; want an incomplete lookup", task, holders, err)
 	}
-	if n := calls.Load(); n != maxListPages {
-		t.Errorf("%d pages read, want %d and no more", n, maxListPages)
+	// The literal, not the constant: the documentation says 200 pages (docs/how-to/troubleshoot.md, docs/explanation/security.md, and the
+	// limits page, which TestLimitsPage holds to the constant), and the error is the text that troubleshoot.md tells an operator to look for.
+	if n := calls.Load(); n != 200 {
+		t.Errorf("%d pages read, want 200 and no more", n)
+	}
+	if !strings.Contains(err.Error(), "ran past 200 pages") {
+		t.Errorf("err = %v; want it to say `ran past 200 pages`", err)
 	}
 }
 
@@ -178,5 +183,43 @@ func TestACardThatIsTooLargeIsNotAnAnswerThatIs(t *testing.T) {
 				t.Errorf("err = %v is taken for an answer that is too large, an incomplete lookup, or a lost stream", err)
 			}
 		})
+	}
+}
+
+// A refusal is taken for a page token that was not continued at another size only on the first call at a size the walk lowered. Once a
+// call at that size has worked, the size is the walk's own and a refusal of a later page is the error it is (a 400 is not retried, but it
+// is not an incomplete list either): the walk is no longer in the doubt that the shrink brought.
+func TestFindTaskRefusalAfterASizeThatWorkedIsNotIncomplete(t *testing.T) {
+	var mu sync.Mutex
+	var tokens []string
+	fa := newFakeAgent(t, func(call rpc, w http.ResponseWriter) {
+		if call.Method != "ListTasks" {
+			return
+		}
+		var p struct {
+			PageSize  int    `json:"pageSize"`
+			PageToken string `json:"pageToken"`
+		}
+		_ = json.Unmarshal(call.Params, &p)
+		mu.Lock()
+		tokens = append(tokens, p.PageToken)
+		mu.Unlock()
+		switch {
+		case p.PageSize == 0:
+			_, _ = w.Write(oversizedAnswer()) // the first call: too large, so the walk lowers the size
+		case p.PageToken == "":
+			_, _ = w.Write([]byte(listPage("p2"))) // at the lowered size, the first page works
+		default:
+			http.Error(w, "bad page", http.StatusBadRequest) // the second page is refused at a size that has worked
+		}
+	})
+	_, _, err := fa.agentViaWith(t, generic.New(0), quick).FindTask(t.Context(), "c-1", "m-1")
+	if err == nil || errors.Is(err, ErrLookupIncomplete) || httpStatus(err) != http.StatusBadRequest {
+		t.Fatalf("FindTask = %v; want the 400 of the second page, and no claim that the list could not be read in full", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []string{"", "", "p2"}; !slices.Equal(tokens, want) {
+		t.Errorf("page tokens asked = %q, want %q", tokens, want)
 	}
 }
