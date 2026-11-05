@@ -96,10 +96,11 @@ func TestATurnTheAgentTookAndNobodyRecordedIsNotSentWhenTheListCannotBeRead(t *t
 	}
 }
 
-// A task followed by no one, after a card too large, is taken up once the card is fixed by the Stop control, which cancels it and lets the
-// queued reply go out. Nothing follows it by itself (the notice says so, and says what to do). Every call of a real Agent meets the card, the read
+// A task followed by no one, after a card too large, is not followed by itself; once the card is fixed the session can cancel it (Manager.Stop,
+// which has no caller in production yet: the notice names a restart, which TestRestartFollowsTheTaskLeftByACardOnceItIsFixed covers) and the
+// queued reply goes out. Every call of a real Agent meets the card, the read
 // of the task first, so the fake fails that too: the thread is told at once, and the task is not read again and again until it counts as wedged.
-func TestTaskLeftByACardThatIsTooLargeIsTakenUpByStopOnceTheCardIsFixed(t *testing.T) {
+func TestTaskLeftByACardThatIsTooLargeIsReadOnceAndCancellableOnceTheCardIsFixed(t *testing.T) {
 	f, sink := restarted(t)
 	f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, 4*time.Millisecond
 	var bad atomic.Bool
@@ -125,10 +126,8 @@ func TestTaskLeftByACardThatIsTooLargeIsTakenUpByStopOnceTheCardIsFixed(t *testi
 	if got := sink.noticesOf(NoticeFailed); got[0].Detail != cardTooLargeDetail {
 		t.Errorf("notice = %q; want %q", got[0].Detail, cardTooLargeDetail)
 	}
-	for _, words := range []string{"press Stop", "restart Agent Kourier"} {
-		if !strings.Contains(cardTooLargeDetail, words) {
-			t.Errorf("the notice %q does not say what to do once the card is fixed (%q)", cardTooLargeDetail, words)
-		}
+	if !strings.Contains(cardTooLargeDetail, "restart Agent Kourier") || strings.Contains(strings.ToLower(cardTooLargeDetail), "stop") && strings.Contains(cardTooLargeDetail, "press") {
+		t.Errorf("the notice %q must say to restart once the card is fixed, and name no control that does not exist", cardTooLargeDetail)
 	}
 	if n := gets.Load(); n != 1 {
 		t.Errorf("the task was read %d times; want once: a card is no read to retry until the task counts as wedged", n)

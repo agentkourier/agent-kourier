@@ -56,7 +56,6 @@ What it leaves in the log, the audit log and the metrics. The lines below name t
 - INFO `session turn ended` with `outcome=response_too_large`, and the counter `agentkourier_turn_outcomes_total{outcome="response_too_large"}`, which you can alert on.
 - An audit row `cancel: failed response_too_large` when the cancel's own answer was too large to read. Agent Kourier counts that cancel as done and clears the task's record, **without verifying it**: a real a2a-go
   server answers every cancel with the whole task (shown in a test, not confirmed on kagent), but an error with a large body reads the same. A WARN says so: `session: the answer to a cancel was too large to read, so the cancel is counted as done without being verified`.
-  When the Stop control ends a pause that way, the thread is told that Agent Kourier cannot tell whether the task stopped.
 
 Read the `error` to find which bound it was:
 
@@ -71,10 +70,10 @@ Read the `error` to find which bound it was:
 again in its artifacts (read in `test/fixtures/kagent/approval/02-approve.response.sse`), and it arrives as one event. No single result has to be large: in a test with results of 300 KiB,
 results adding up to 1800 KiB passed, and eight of them, 2400 KiB, ended the turn at the final event with a reply of a few bytes. Add up what the agent's tools returned in the turn (its own log has it).
 
-A card that is too large is told apart from these: a follow, or the read of a task that comes before it, that meets it says `Agent Kourier could not connect to the agent: its agent card is too large to read, so the turn stopped. The task stays at the agent. Once the card is fixed, press Stop or restart Agent Kourier.`, cancels nothing, and leaves
+A card that is too large is told apart from these: a follow, or the read of a task that comes before it, that meets it says `Agent Kourier could not connect to the agent: its agent card is too large to read, so the turn stopped. The task stays at the agent. Once the card is fixed, restart Agent Kourier.`, cancels nothing, and leaves
 the task recorded and followed by no one (the turn outcome is `refused`, as for any connection that fails on a follow). A lookup or a send that meets it is retried like any that could not reach the agent. The Binding's `BackendReachable` condition names the card.
-Trim the card. Nothing follows the task again by itself: once the card is fixed, press **Stop** on the thread, which cancels the task and lets a reply that waits behind it go out, or restart Agent Kourier, which follows it. A reply that was queued behind it
-stays queued until one of the two.
+Trim the card. Nothing follows the task again by itself, and no control of the thread takes it up: once the card is fixed, **restart Agent Kourier**. Recovery then reads the recorded task and follows it, and a reply that waited behind it goes out
+when the task ends. A restart interrupts every turn of every tenant on that broker while it runs. Until then the reply stays queued.
 
 **What to do.** Have the agent's tools return what the model needs: filter, summarise or page a result, and cap it in the tool. Keep a task's tool output well under 2 MiB in all.
 If the `error` says `more than 4194304 bytes` after a restart, the task's history has grown past what is read; trim the tools the same way. Agent Kourier cannot read it, so it cancels it.

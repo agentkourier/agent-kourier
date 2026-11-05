@@ -447,11 +447,10 @@ grow past 4 MiB, needs a build with other constants.
   read once and not tried again, since the same answer would come again. A person's answer to a paused task also reads the task first, to tell what is new in the reply:
   when that read is too large, the answer is sent without it.
 - **A cancel whose answer is over 4 MiB** is counted as cancelled, and it is not verified. An a2a-go server answers every cancel, and a repeat of one that already took, with the whole
-  task, and only a refusal is a small error (shown in a test against a real a2a-go handler; **not confirmed on kagent**). So Agent Kourier counts such a cancel as done, and the Stop control does
-  too: the task is ended and the record cleared, which a thread held behind a task that was over for good would otherwise stay. What it read of the answer is only that it was too large, and
+  task, and only a refusal is a small error (shown in a test against a real a2a-go handler; **not confirmed on kagent**). So Agent Kourier counts such a cancel as done, and so does the cancel of a pause that timed out or was cancelled:
+  the task is ended and the record cleared, which a thread held behind a task that was over for good would otherwise stay. What it read of the answer is only that it was too large, and
   an error that carries a large body (a 200 with a JSON-RPC error whose data is large, say) reads the same, so nothing is claimed of what became of the task. The audit log records the cancel as
-  `failed response_too_large`, a WARN says that the cancel is counted as done without being verified, and when Stop ends a pause this way the thread is told `I asked the agent to stop the task, but what it answered
-  was too large to read, so I can't tell whether it stopped. This thread no longer waits for it.` The same goes for a cancel that the agent refuses as "cannot be cancelled" when the task is then too large to read.
+  `failed response_too_large`, a WARN says that the cancel is counted as done without being verified. The same goes for a cancel that the agent refuses as "cannot be cancelled" when the task is then too large to read.
 - **A lookup that cannot read the list of tasks in full** does not send the turn. Before a message is sent again whose outcome is unknown, or that an earlier process queued, the agent's list of the
   context's tasks is read for one that holds it. Each task of a page carries its history, so a page over 4 MiB is asked for again at half the size, down to three tasks, and the pages after
   it at the size that fit (whether a backend continues a page token with another page size was not measured: an error on the first call after the size was lowered is taken as the list not read).
@@ -463,7 +462,7 @@ grow past 4 MiB, needs a build with other constants.
   this case, since the agent may have started the task and failed on the way back.
 - **An agent card over 1 MiB** is no answer. It is read when a connection is opened, so a call that had to open one (a lookup, a cancel, a follow) can meet it, with nothing sent and nothing read of any task. It
   is not counted as an answer past a bound: a cancel that met it is not done, a lookup that met it is retried like any lookup that could not reach the agent, and a follow that met it tells the thread
-  `Agent Kourier could not connect to the agent: its agent card is too large to read, so the turn stopped. The task stays at the agent. Once the card is fixed, press Stop or restart Agent Kourier.` The task stays recorded and nothing follows it again by itself: once the card is fixed, the Stop control cancels it, and a restart follows it. The Binding's `BackendReachable` condition reports the card.
+  `Agent Kourier could not connect to the agent: its agent card is too large to read, so the turn stopped. The task stays at the agent. Once the card is fixed, restart Agent Kourier.` The task stays recorded and nothing follows it again by itself, and no control of the thread takes it up: once the card is fixed, a restart reads it and follows it (recovery), and it interrupts every turn of every tenant on that broker while it runs. The Binding's `BackendReachable` condition reports the card.
 
 **What the thread shows.** When a turn stops, text that arrived before the bound was passed stays shown, cut to what a message holds as it always was (12000 UTF-16 units in the
 Slack adapter, with a mark where it is cut). Then the thread gets one fixed sentence, `the agent sent more than Agent Kourier can read or hold, so the turn stopped`, and the

@@ -315,8 +315,8 @@ func (a *Agent) GetTask(ctx context.Context, id a2a.TaskID) (telemetryResult0 *a
 	return a.getTask(ctx, conn, id)
 }
 
-// CancelTask cancels the task and returns it as the agent left it. It backs the thread's
-// stop control, and Answer calls it for a wedged task (R17). UnaryTimeout bounds it,
+// CancelTask cancels the task and returns it as the agent left it. It backs the session's
+// cancels (the interaction timeout's, the wedged task's; a thread stop control is not built), and Answer calls it for a wedged task (R17). UnaryTimeout bounds it,
 // resolving the connection included.
 func (a *Agent) CancelTask(ctx context.Context, id a2a.TaskID) (telemetryResult0 *a2a.Task, telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.agent.cancel")
