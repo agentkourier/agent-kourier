@@ -570,3 +570,43 @@ never the cluster, so on the custom resource route give it the YAML you applied,
 (`kubectl get akbinding -A -o yaml`).
 
 An earlier release has no cap, so after a [rollback](#roll-back) a config over one loads again. Sessions deleted after you lowered a `threadTTL` stay deleted.
+
+## Upgrade to the release that bounds namespaces, chat IDs, URLs and header values
+
+These fields had no bound in the schema or in the broker's own validation, so one namespace writer could store an object as large as the API server allows, and every
+broker keeps each object in memory. This release refuses a config over the bounds below and loads a config within them as before. No example, recipe, kind tier config or test fixture in this
+repository comes near one: the longest URL is under 100 characters, a header value is under 20, an `allowedNamespaces` list has one namespace, and a channel, a sender and a user group ID are 11
+characters. [Limits](../reference/limits.md) lists every limit you can run into, and [Security](../explanation/security.md#what-the-people-who-write-these-objects-can-do) says what the bounds do and do not cap.
+
+| Where | Bound | The error |
+|---|---|---|
+| `spec.allowedNamespaces` of an AgentBackend or a ChatConnection | 256 namespaces | `spec.allowedNamespaces: has 257 items, maximum is 256` |
+| `spec.url` of an AgentBackend | 2048 bytes | `spec.url: is 2049 bytes, longer than the 2048 byte limit` |
+| `spec.url` of an AgentBackend | no `?` and no `#` | `spec.url: must not have a query or fragment` |
+| The `value` of a header | 4096 bytes | `spec.headers[0].value: is 4097 bytes, longer than the 4096 byte limit` |
+| `spec.chat.channel` of a Binding | 32 bytes | `spec.chat.channel: is 33 bytes, longer than the 32 byte limit` |
+| `from.id` of a trigger | 32 bytes | `spec.chat.triggers[1].from.id: is 33 bytes, longer than the 32 byte limit` |
+| An entry of `spec.interactions.approverGroups` | 32 bytes | `spec.interactions.approverGroups[0]: is 33 bytes, longer than the 32 byte limit` |
+| `spec.chat.acknowledgment.emoji` | 100 bytes | `spec.chat.acknowledgment.emoji: is 101 bytes, longer than the 100 byte limit` |
+| The name of an `extract` entry, and so of a `closeWhen` key | 63 bytes | `spec.chat.triggers[1].extract: has an entry named with 64 bytes, longer than the 63 byte limit` |
+| A value of `thread.closeWhen` | 256 bytes | `spec.chat.triggers[1].thread.closeWhen.state: is 257 bytes, longer than the 256 byte limit` |
+
+A mention's `name` over 63 characters and its `user` over 21 were refused before, by their patterns. The message now says the length, as the rows above do, and shows no value.
+
+**A `url` with a query or a fragment.** Before, such an AgentBackend loaded and passed the API server, and every connection to it failed when the broker built the endpoint, so no probe and no turn
+on it could succeed. It is now refused when it is read or written. The rule is wider than the connection's: a `?` or a `#` anywhere in the `url` is refused, even one with nothing after it
+(`http://host/a2a?`), which the endpoint check accepted and which worked. If the agent accepts it, move a token that rode in a query to a header with `valueSecretRef`; drop a fragment, which an HTTP client does not send.
+
+A config over a bound is an invalid config, and the broker treats it as it treats the one in
+[the release that bounds triggers](#upgrade-to-the-release-that-bounds-triggers-extract-entries-and-headers): with files it exits at start-up with [code 2](../reference/cli.md#exit-codes) and names the field,
+and on a reload it keeps its last good config. With custom resources the API server refuses the object when you create or update it, and an object already stored over a bound is not removed or changed.
+The broker judges it one object at a time, as [What a bad object does](../explanation/config-routes.md#what-a-bad-object-does) says: a Binding over a bound that the broker has no earlier generation of is not served
+(`Accepted=False`, `InvalidSpec`), a Binding that names an AgentBackend over a bound is dropped with `BackendRejected` unless the broker holds that AgentBackend's last good generation, and the broker's own ChatConnection over a bound
+stops the start with exit code 2. Edit such an object before you upgrade: whether the API server lets you change another field of a stored object that breaks a rule depends on its version (see
+[the chart's README](https://github.com/agentkourier/agent-kourier/blob/main/charts/agent-kourier/README.md)), so lower the value in the same edit.
+
+**Check before you upgrade.** Run `agent-kourier dry-run` of the new release against your files, as in
+[the release that bounds triggers](#upgrade-to-the-release-that-bounds-triggers-extract-entries-and-headers). It reports each of these errors without a token. It reads files, never the cluster, so on the
+custom resource route give it the YAML you applied, and look in the cluster for a URL with a query or fragment (`kubectl get akbackend -A -o yaml | grep -E 'url: .*[?#]'`).
+
+An earlier release has none of these bounds, so after a [rollback](#roll-back) a config over one loads again, and an AgentBackend with a query or fragment in its `url` loads and fails each connection.

@@ -23,10 +23,11 @@ func urlRule(t *testing.T, rule string) (re *regexp.Regexp, refusesMatch bool) {
 	return re, m[1] == "!"
 }
 
-// TestCELURLRulesRefuseOnlyWhatURLParseRefuses holds the four URL rules to url.Parse, which Validate calls, on a few
+// TestCELURLRulesRefuseOnlyWhatURLParseRefuses holds the five URL rules to url.Parse, which Validate calls, on a few
 // hundred thousand seeded strings, with no cluster. An apiserver evaluates the rules as these regexes (the cluster
 // test sends objects to one), so this finds an over-refusal in seconds: the control character rule once read past a
-// "#", which url.Parse cuts off before it checks, and refused "http://h#\n", which Validate accepts.
+// "#", which url.Parse cuts off before it checks, and refused "http://h#\n", which Validate then accepted. Validate
+// refuses a "#" and a "?" now, so no URL it accepts has one.
 func TestCELURLRulesRefuseOnlyWhatURLParseRefuses(t *testing.T) {
 	type rule struct {
 		re      *regexp.Regexp
@@ -37,8 +38,8 @@ func TestCELURLRulesRefuseOnlyWhatURLParseRefuses(t *testing.T) {
 		re, refuses := urlRule(t, r.Rule)
 		rules = append(rules, rule{re, refuses})
 	}
-	if len(rules) != 4 {
-		t.Fatalf("want 4 url rules, found %d", len(rules))
+	if len(rules) != 5 {
+		t.Fatalf("want 5 url rules, found %d", len(rules))
 	}
 	refusedByRules := func(u string) bool {
 		return slices.ContainsFunc(rules, func(r rule) bool { return r.re.MatchString(u) == r.refuses })
@@ -53,7 +54,7 @@ func TestCELURLRulesRefuseOnlyWhatURLParseRefuses(t *testing.T) {
 	pieces := []string{"h", "kagent", ".", ":", ":80", "/", "//", "@", "u:p@", "#", "?", "%", "%41", "%zz", "[::1]", "[", "]", " ", "\t", "\n", "\x00", "\x7f",
 		"\\", "^", "`", "{", "}", "|", "<", ">", "\"", "'", "é", "!", "$", "&", "(", ")", "*", "+", ",", ";", "=", "~", "_", "-"}
 	r := rand.New(rand.NewPCG(1, 2)) // seeded, so that a failure repeats
-	var accepted, refused, ctlAfterFragment int
+	var accepted, refused int
 	for range 300000 {
 		var b strings.Builder
 		if r.IntN(10) < 9 {
@@ -72,15 +73,12 @@ func TestCELURLRulesRefuseOnlyWhatURLParseRefuses(t *testing.T) {
 			t.Errorf("the rules refuse %q, which Validate accepts", u)
 		case ok:
 			accepted++
-			if i := strings.Index(u, "#"); i >= 0 && strings.ContainsAny(u[i:], "\x00\t\n\x7f") {
-				ctlAfterFragment++
-			}
 		case refusedByRules(u):
 			refused++
 		}
 	}
-	t.Logf("%d URLs accepted by Validate (%d with a control character after a #), %d refused by Validate and the rules", accepted, ctlAfterFragment, refused)
-	if accepted < 2000 || ctlAfterFragment < 20 || refused < 5000 {
-		t.Errorf("the generator no longer reaches both sides: accepted %d, with a control character after a #: %d, refused by the rules %d", accepted, ctlAfterFragment, refused)
+	t.Logf("%d URLs accepted by Validate, %d refused by Validate and the rules", accepted, refused)
+	if accepted < 2000 || refused < 5000 {
+		t.Errorf("the generator no longer reaches both sides: accepted %d, refused by the rules %d", accepted, refused)
 	}
 }

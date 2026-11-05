@@ -166,6 +166,8 @@ func urls() func(*rand.Rand) any {
 		"http://kagent ", "http://ka^gent", "http://ka{gent", "http://ka|gent", "http://ka}gent", "http://ka\\gent", "http://ka`gent",
 		"http://ka\"gent", "http://ka<gent>", "http://ka'gent", "http://ka%41gent", "http://ka%zzgent", "http://ka%gent", "http://bücher.de/",
 		"http://kagent:80:80", "http://kagent:port", "https://a.b.c.d.example.com:8443/a/b/c?d=e#f", "http://kagent/\x7f", "http://\x7fkagent",
+		"http://kagent/?", "http://kagent/#", "http://kagent/p?", "http://kagent/p#", "http://kagent/p?a=b", "http://kagent/p#a=b", "http://kagent/a2a",
+		"http://" + strings.Repeat("a", 2048-7), "http://" + strings.Repeat("a", 2048-6), "http://" + strings.Repeat("é", 1024-3), "http://" + strings.Repeat("é", 1024-2),
 	}
 	pieces := []string{"http", "HTTPS", "ftp", "://", ":", "/", "@", "u", "h", ".", "80", "[::1]", "[", "]", " ", "#", "?", "%", "%41", "\\", "\t", "\n", "\r", "\x7f", "é", "{", "|", "^", "`", "#", "#"}
 	return func(r *rand.Rand) any {
@@ -235,14 +237,15 @@ func extractRegexes(name string) func(*rand.Rand) any {
 func variationTemplates() []template {
 	dur := durations()
 	messageFields := of("text", "title", "link", "fallback", "footer", "body", "subject", "Text", "")
-	extractNames := of("key", "state", "a", "aB_9", "State", "1a", "a-b", "a b", "_a", "kéy")
+	extractNames := of("key", "state", "a", "aB_9", "State", "1a", "a-b", "a b", "_a", "kéy", strings.Repeat("e", 63), strings.Repeat("e", 64), "k"+strings.Repeat("é", 31))
 	return []template{
 		{kind: "AgentBackend", doc: backendDoc, mutations: []mutation{
 			{"spec.url", urls()},
 			{"spec.url", urls()},
 			{"spec.headers.0.name", headerNames()},
 			{"spec.headers.0.name", headerNames()},
-			{"spec.headers.0.value", of("v", "", absent{}, nil)},
+			{"spec.headers.0.value", of("v", "", absent{}, nil, strings.Repeat("v", 4096), strings.Repeat("v", 4097), strings.Repeat("é", 2048), strings.Repeat("é", 2049))},
+			{"spec.allowedNamespaces", of(absent{}, []any{}, namespaceList(256), namespaceList(257), namespaceList(1))},
 			{"spec.headers.0.valueSecretRef", of(nil, nil)},
 			{"spec.headers.0.valueSecretRef", of(map[string]any{"name": "s"}, map[string]any{"name": "s", "key": "k"}, absent{}, map[string]any{"name": "s", "key": ""})},
 			{"spec.headers.1.name", headerNames()},
@@ -286,17 +289,20 @@ func bindingMutations(dur, messageFields, extractNames func(*rand.Rand) any) []m
 		{"spec.chat.triggers.0", of(map[string]any{"type": "mention", "from": nil, "match": nil, "thread": nil, "limits": nil, "promptTemplate": nil})},
 		{"spec.identity.tokenSecretRef", of(nil, map[string]any{"name": "s", "key": nil})},
 		{"spec.identity.userId", of("u", "", absent{}, nil)},
+		{"spec.chat.channel", of("C0123456789", "C"+strings.Repeat("0", 31), "C"+strings.Repeat("0", 32), "G"+strings.Repeat("A", 31), "#"+strings.Repeat("x", 32), "C"+strings.Repeat("é", 20))},
+		{"spec.chat.acknowledgment.emoji", of("eyes", "+1", "-1", strings.Repeat("a", 100), strings.Repeat("a", 101), strings.Repeat("é", 60), absent{})},
 		{"spec.identity.tokenSecretRef", of(absent{}, map[string]any{"name": "s"}, map[string]any{"name": "s", "key": ""})},
 		{"spec.identity", of(map[string]any{}, map[string]any{"userId": ""}, map[string]any{"userId": "u"})},
 		{"spec.interactions.toolApprovals", of(true, false, absent{})},
-		{"spec.interactions.approverGroups", of(absent{}, []any{}, []any{"S0123456789"})},
+		{"spec.interactions.approverGroups", of(absent{}, []any{}, []any{"S0123456789"}, []any{"S" + strings.Repeat("0", 31)}, []any{"S" + strings.Repeat("0", 32)})},
 		{"spec.interactions.timeout", dur},
 		{"spec.session.threadTTL", dur},
 		{"spec.chat.mentions", of(absent{}, []any{map[string]any{"name": "here", "user": "U0123456789"}}, []any{map[string]any{"name": "ok", "user": "U0123456789"}},
-			[]any{map[string]any{"name": "channel", "user": "U0123456789"}}, []any{map[string]any{"name": "everyone", "user": "U0123456789"}})},
+			[]any{map[string]any{"name": "channel", "user": "U0123456789"}}, []any{map[string]any{"name": "everyone", "user": "U0123456789"}},
+			[]any{map[string]any{"name": strings.Repeat("m", 63), "user": "U" + strings.Repeat("0", 20)}}, []any{map[string]any{"name": strings.Repeat("m", 64), "user": "U" + strings.Repeat("0", 21)}})},
 		{t + "type", of("botMessage", "botMessage", "botMessage", "mention", "")},
 		{t + "from", of(absent{}, map[string]any{"id": "B0123456789"}, map[string]any{"id": "B0123456789", "kind": "bot"}, map[string]any{"id": "B0123456789", "kind": ""})},
-		{t + "from.id", of("B0123456789", "", "b1", "Bx", "B")},
+		{t + "from.id", of("B0123456789", "", "b1", "Bx", "B", "B"+strings.Repeat("0", 31), "B"+strings.Repeat("0", 32))},
 		{t + "match", of(absent{}, map[string]any{}, map[string]any{"title": "^FIRING"})},
 		{t + "match." + "text", regexes()},
 		{t + "match." + "title", regexes()},
@@ -322,7 +328,8 @@ func bindingMutations(dur, messageFields, extractNames func(*rand.Rand) any) []m
 		{t + "thread.cooldown", dur},
 		{t + "thread.maxIdle", dur},
 		{t + "thread.closeWhen", of(absent{}, map[string]any{}, map[string]any{"state": "RESOLVED"}, map[string]any{"state": ""}, map[string]any{"other": "x"}, map[string]any{"key": "x"},
-			map[string]any{"state": "x", "key": "y"})},
+			map[string]any{"state": "x", "key": "y"}, map[string]any{"state": strings.Repeat("v", 256)}, map[string]any{"state": strings.Repeat("v", 257)},
+			map[string]any{"state": strings.Repeat("é", 128)}, map[string]any{"state": strings.Repeat("é", 129)}, map[string]any{strings.Repeat("e", 64): "x"})},
 		{t + "promptTemplate", of(absent{}, "", "x", "{{ .Fields.state }}", "{{ .Fields.nope }}", "{{")},
 		{t + "limits", of(absent{}, map[string]any{}, map[string]any{"maxRunsPerDay": int64(0)}, map[string]any{"rateLimit": map[string]any{"maxRuns": int64(1), "per": "10s", "maxConcurrent": int64(1)}})},
 		{t + "limits.rateLimit.per", dur},
@@ -352,6 +359,15 @@ func botTrigger(id, kind string) map[string]any {
 		"type": "botMessage", "from": from, "promptTemplate": "x",
 		"limits": map[string]any{"rateLimit": map[string]any{"maxRuns": int64(1), "per": "10s", "maxConcurrent": int64(1)}, "maxRunsPerDay": int64(0)},
 	}
+}
+
+// namespaceList is n namespace names.
+func namespaceList(n int) []any {
+	out := make([]any, n)
+	for i := range out {
+		out[i] = "t" + strconv.Itoa(i)
+	}
+	return out
 }
 
 func withPrompt(t map[string]any, prompt string) map[string]any {

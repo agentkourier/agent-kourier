@@ -31,9 +31,25 @@ func TestInvalidURLMessageShowsOnlyTheSchemeAndHost(t *testing.T) {
 			}
 		})
 	}
-	a := load[AgentBackend](t, "agentbackend.yaml")
-	a.Spec.URL = "https://kagent.example/?x=1"
-	if err := a.Validate(); err != nil {
-		t.Errorf("a valid URL with a query is refused: %v", err)
+}
+
+// A URL with a query or a fragment is refused, and the message does not show it: a token rides there.
+func TestQueryAndFragmentMessageShowsNeitherAndTheLengthMessageNotTheURL(t *testing.T) {
+	for _, tc := range []struct{ name, url, want string }{
+		{"a query", "https://kagent.example/a2a?token=s3cret", "spec.url: must not have a query or fragment"},
+		{"a fragment", "https://kagent.example/a2a#access_token=s3cret", "spec.url: must not have a query or fragment"},
+		{"a URL over the length cap, with a token in the host", "https://s3cret" + strings.Repeat("x", maxURLLen), "spec.url: is "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := load[AgentBackend](t, "agentbackend.yaml")
+			a.Spec.URL = tc.url
+			err := a.Validate()
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Validate = %v; want it to say %q", err, tc.want)
+			}
+			if strings.Contains(err.Error(), "s3cret") {
+				t.Errorf("Validate = %v; the token is in the message", err)
+			}
+		})
 	}
 }

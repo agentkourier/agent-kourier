@@ -135,23 +135,28 @@ type AgentBackendSpec struct {
 	// fragment; getHostname() is empty for a host that is only a port). url.Parse cuts the fragment off before it
 	// checks anything, so a rule that reads past a "#" refuses what the broker accepts: each rule stops at the first
 	// "#" (and the authority ends at "/", "?" or "#"). A URL that this parse refuses and the rules let through is
-	// refused when the broker reads it. (Not in the doc comment below, which the reference pages print, while no CRD
-	// ships.)
+	// refused when the broker reads it. Validate refuses any "?" or "#" in the URL, so the last rule, which says so with no
+	// parse, refuses nothing it accepts. (Not in the doc comment below, which
+	// the reference pages print, while no CRD ships.)
 
 	// URL is the http or https base URL for kagent-v1, or the exact JSON-RPC endpoint for a2a.
 	// The a2a card must be served at URL + "/.well-known/agent-card.json", as AX does.
+	// At most 2048 bytes, with no query and no fragment.
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=2048
 	// +kubebuilder:validation:XValidation:rule=`self.matches('(?i)^https?://[^/?#]')`,message="must be an http or https URL with a host"
 	// +kubebuilder:validation:XValidation:rule=`!self.matches('(?i)^https?://[^/?#]*@')`,message="must not contain credentials; identity comes from the Binding"
 	// +kubebuilder:validation:XValidation:rule=`!self.matches(r'^[^#]*[\x00-\x1f\x7f]')`,message="invalid URL: must not contain control characters"
 	// +kubebuilder:validation:XValidation:rule=`!self.matches(r'(?i)^https?://[^/?#]*[ \\^\x60{|}]')`,message="invalid URL: the host must not contain a space, backslash, caret, backtick, brace or bar"
+	// +kubebuilder:validation:XValidation:rule=`!self.matches('[?#]')`,message="must not have a query or fragment"
 	URL string `json:"url"`
 	// Headers are sent on every request. Omitted headers add no static headers. At most 32.
 	// +kubebuilder:validation:MaxItems=32
 	// +doc:default=Empty list
 	Headers []Header `json:"headers,omitempty"`
 	// AllowedNamespaces lists the other namespaces whose Bindings may reference this backend. Each is a DNS-1123 label.
-	// An empty list permits references only from the backend's own namespace.
+	// An empty list permits references only from the backend's own namespace. At most 256.
+	// +kubebuilder:validation:MaxItems=256
 	// +kubebuilder:validation:items:MaxLength=63
 	// +kubebuilder:validation:items:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	// +doc:default=Empty list
@@ -175,7 +180,9 @@ type Header struct {
 	// +kubebuilder:validation:MaxLength=256
 	// +kubebuilder:validation:XValidation:rule="size(bytes(self)) <= 256",message="is longer than the 256 byte limit"
 	// +kubebuilder:validation:XValidation:rule="!(self.lowerAscii() in ['authorization', 'proxy-authorization', 'cookie', 'x-user-id', 'x-agent-name', 'x-share-token', 'x-kagent-insecure-runtime-identity'])",message="header is reserved for the Binding identity"
-	Name           string        `json:"name"`
+	Name string `json:"name"`
+	// Value is the header's value, at most 4096 bytes. A secret goes in valueSecretRef.
+	// +kubebuilder:validation:MaxLength=4096
 	Value          string        `json:"value,omitempty"`
 	ValueSecretRef *SecretKeyRef `json:"valueSecretRef,omitempty"`
 }
@@ -208,7 +215,8 @@ type ChatConnectionSpec struct {
 	// CredentialsSecretRef names one Secret with the fixed keys botToken and appToken (Socket Mode).
 	CredentialsSecretRef SecretRef `json:"credentialsSecretRef"`
 	// AllowedNamespaces lists the other namespaces whose Bindings may reference this connection. Each is a DNS-1123 label.
-	// An empty list permits references only from the connection's own namespace.
+	// An empty list permits references only from the connection's own namespace. At most 256.
+	// +kubebuilder:validation:MaxItems=256
 	// +kubebuilder:validation:items:MaxLength=63
 	// +kubebuilder:validation:items:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	// +doc:default=Empty list
@@ -299,7 +307,8 @@ type Identity struct {
 // ChatBinding places the Binding in a channel.
 type ChatBinding struct {
 	ConnectionRef ObjectRef `json:"connectionRef"`
-	// Channel is the platform's channel ID, not its name (Slack: `C…` or `G…`).
+	// Channel is the platform's channel ID, not its name (Slack: `C…` or `G…`). At most 32 bytes.
+	// +kubebuilder:validation:MaxLength=32
 	// +kubebuilder:validation:Pattern=`^[CG][A-Z0-9]+$`
 	Channel string `json:"channel"`
 	// Output defaults to live.
@@ -373,10 +382,12 @@ func (c ChatBinding) MentionCap() int {
 type ChatMention struct {
 	// Name is what the agent writes, after an `@`: lowercase letters, digits and `-`, starting with a letter, at most 63
 	// characters. `here`, `channel` and `everyone` are refused.
+	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^[a-z][a-z0-9-]{0,62}$`
 	// +kubebuilder:validation:XValidation:rule="!(self in ['here', 'channel', 'everyone'])",message="a broadcast name (here, channel or everyone) is reserved and cannot be declared"
 	Name string `json:"name"`
 	// User is the platform's user ID of the person (Slack: `U…` or `W…`). It comes only from here, never from the agent.
+	// +kubebuilder:validation:MaxLength=21
 	// +kubebuilder:validation:Pattern=`^[UW][A-Z0-9]{2,20}$`
 	User string `json:"user"`
 }
@@ -390,7 +401,8 @@ type ChatAcknowledgment struct {
 	Enabled *bool `json:"enabled,omitempty"`
 	// Emoji is the reaction name without colons. Left empty, the platform's own acknowledgment reaction is used
 	// (Slack: hourglass_flowing_sand). The API fills in no default, so a stored Binding does not carry one platform's
-	// reaction.
+	// reaction. At most 100 bytes.
+	// +kubebuilder:validation:MaxLength=100
 	// +kubebuilder:validation:Pattern=`^(?:[a-z0-9][a-z0-9+_-]*|[+-][a-z0-9][a-z0-9+_-]*)?$`
 	// +optional
 	Emoji string `json:"emoji,omitempty"`
@@ -422,8 +434,9 @@ type Interactions struct {
 	ToolApprovals bool `json:"toolApprovals,omitempty"`
 	// ApproverGroups names the platform's user groups whose members may decide a tool approval, by the platform's ID (Slack: `S…`).
 	// An empty list allows any non-bot channel member. At most 10 groups may be named. Group IDs start with S and contain
-	// uppercase letters and digits; duplicates and empty entries are refused.
+	// uppercase letters and digits, at most 32 bytes; duplicates and empty entries are refused.
 	// +kubebuilder:validation:MaxItems=10
+	// +kubebuilder:validation:items:MaxLength=32
 	// +kubebuilder:validation:items:Pattern=`^S[A-Z0-9]+$`
 	// +listType=set
 	// +optional
