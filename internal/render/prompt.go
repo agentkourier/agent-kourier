@@ -1,7 +1,6 @@
 package render
 
 import (
-	"bytes"
 	"fmt"
 	"strings"
 	"text/template"
@@ -82,8 +81,9 @@ type Prompt struct {
 
 // NewPrompt parses text as a trigger's promptTemplate with v1alpha1.ParsePromptTemplate, the parse
 // the load-time check uses, and finds with v1alpha1.TemplateRefs what it reads of a PromptView.
-// It fails on a template that does not parse and on one that reads the view in a way the check of
-// its values cannot cover (see TemplateRefs).
+// It fails on a template that does not parse and on one that TemplateRefs refuses: one that reads
+// the view in a way the check of its values cannot cover, or that could loop, recurse or grow
+// without bound. It runs nothing.
 func NewPrompt(name, text string) (*Prompt, error) {
 	tmpl, err := v1alpha1.ParsePromptTemplate(name, text)
 	if err != nil {
@@ -101,20 +101,21 @@ func NewPrompt(name, text string) (*Prompt, error) {
 // pass its check (see PromptView in api/v1alpha1), and the first that does not, in the order
 // Channel, Key, Link, Source, State and then the entries by name, gives a *RefusedError and no
 // prompt. A value the template does not read is not checked, and it is not shown to the
-// template either. Render also fails if the template reads an entry that view lacks, or fails to
-// run. The last two are template faults, not hostile text: a slice longer than a real value
-// passes the load check, whose placeholders are long, and fails here, so the caller treats a
-// render error as it does a refusal and starts no turn.
+// template either. Render also fails if the template reads an entry that view lacks, fails to
+// run, or writes more than v1alpha1.MaxPromptOutput bytes. These are template faults, not
+// hostile text: a slice longer than a real value passes the load check, whose placeholders are
+// long, and fails here, so the caller treats a render error as it does a refusal and starts no
+// turn.
 func (p *Prompt) Render(view v1alpha1.PromptView, msg TriggerMessage) (string, error) {
 	safe, err := p.safeView(view)
 	if err != nil {
 		return "", err
 	}
-	var out bytes.Buffer
-	if err := p.tmpl.Execute(&out, safe); err != nil {
+	out, err := v1alpha1.ExecutePrompt(p.tmpl, safe)
+	if err != nil {
 		return "", fmt.Errorf("render prompt template: %w", err)
 	}
-	instruction := chat.Truncate(strings.TrimSpace(out.String()), MaxInstructionUnits)
+	instruction := chat.Truncate(strings.TrimSpace(out), MaxInstructionUnits)
 	if instruction == "" {
 		return untrustedSection(msg), nil
 	}

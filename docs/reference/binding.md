@@ -36,7 +36,7 @@ AgentRef names the agent on a backend.
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `backendRef` | [ObjectRef](#objectref) | Yes | None |  |
-| `name` | string | Yes | None | Name is the agent's name on the backend. At least 1 character. |
+| `name` | string | Yes | None | Name is the agent's name on the backend, at most 253 bytes. At least 1 character. At most 253 characters. |
 | `namespace` | string | Yes | None | Namespace is the agent's namespace on the backend: a DNS-1123 label of at most 63 lowercase letters, digits or '-', starting and ending with a letter or digit. Pattern `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`. At most 63 characters. |
 
 ## ObjectRef
@@ -54,7 +54,7 @@ Identity is the service identity every turn in the Binding runs as, whoever wrot
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `userId` | string | No | None | UserID is sent as X-User-Id when the backend runs in insecure mode. |
+| `userId` | string | No | None | UserID is sent as X-User-Id when the backend runs in insecure mode. At most 256 bytes. At most 256 characters. |
 | `tokenSecretRef` | [SecretKeyRef](#secretkeyref) | No | None | TokenSecretRef holds the OIDC bearer token. |
 
 ## SecretKeyRef
@@ -104,7 +104,7 @@ Trigger is one way an event in the bound channel starts or continues a turn. Tri
 | `exclude` | map[string]string | No | None | Exclude maps a message field to a regex; a message matching any entry is ignored. Keys: `text`, `title`, `link`, `fallback`, `footer`, `body`. |
 | `extract` | map[string][Extract](#extract) | No | None | Extract names the values to pull out of a message. A message in which one of these regexes does not match does not match the trigger. At most 32. |
 | `thread` | [TriggerThread](#triggerthread) | No | None | Thread ties messages that share an extracted key to one thread. |
-| `promptTemplate` | string | No | None | PromptTemplate is a Go template over the trigger's view of the message (.Channel, .State, .Key, .Fields, .Link, .Source). Required for botMessage. |
+| `promptTemplate` | string | No | None | PromptTemplate is a Go template over the trigger's view of the message (.Channel, .State, .Key, .Fields, .Link, .Source). Required for botMessage. At most 8192 bytes; it has no loops, variables or defined templates, and calls only and, eq, ge, gt, index, le, len, lt, ne, not, or and slice. At most 8192 characters. |
 | `limits` | [TriggerLimits](#triggerlimits) | No | None | Limits bounds how many investigations the trigger starts (rate, concurrency and a daily cap). Required for botMessage: both rateLimit and maxRunsPerDay. |
 
 ## BotSource

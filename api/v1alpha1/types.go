@@ -273,8 +273,9 @@ type BindingStatus struct {
 // AgentRef names the agent on a backend.
 type AgentRef struct {
 	BackendRef ObjectRef `json:"backendRef"`
-	// Name is the agent's name on the backend.
+	// Name is the agent's name on the backend, at most 253 bytes.
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
 	Name string `json:"name"`
 	// Namespace is the agent's namespace on the backend: a DNS-1123 label of at most 63 lowercase letters, digits or
 	// '-', starting and ending with a letter or digit.
@@ -288,7 +289,8 @@ type AgentRef struct {
 //
 // +kubebuilder:validation:XValidation:rule=`(has(self.userId) && self.userId != "") || has(self.tokenSecretRef)`,message="set userId, tokenSecretRef, or both"
 type Identity struct {
-	// UserID is sent as X-User-Id when the backend runs in insecure mode.
+	// UserID is sent as X-User-Id when the backend runs in insecure mode. At most 256 bytes.
+	// +kubebuilder:validation:MaxLength=256
 	UserID string `json:"userId,omitempty"`
 	// TokenSecretRef holds the OIDC bearer token.
 	TokenSecretRef *SecretKeyRef `json:"tokenSecretRef,omitempty"`

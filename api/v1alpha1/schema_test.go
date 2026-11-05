@@ -355,6 +355,10 @@ func TestSchemaCapsEqualTheBrokersCaps(t *testing.T) {
 		{"headers", backends.at(t, "spec.headers"), "maxItems", maxHeaders},
 		{"header name", backends.at(t, "spec.headers[].name"), "maxLength", maxHeaderNameLen},
 		// The broker counts bytes and the schema characters, so the schema is never the stricter of the two.
+		{"prompt template", bindings.at(t, trigger+".promptTemplate"), "maxLength", maxPromptTemplateLen},
+		{"agent name", bindings.at(t, "spec.agent.name"), "maxLength", maxAgentNameLen},
+		{"user ID", bindings.at(t, "spec.identity.userId"), "maxLength", maxUserIDLen},
+		// The broker counts bytes and the schema characters, so the schema is never the stricter of the two.
 		{"extract regex", bindings.at(t, trigger+".extract.{}.regex"), "maxLength", maxTriggerRegexLen},
 		{"extract regex minimum", bindings.at(t, trigger+".extract.{}.regex"), "minLength", 1},
 	} {

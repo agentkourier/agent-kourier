@@ -73,7 +73,7 @@ on each regex, is in [Investigate Alertmanager alerts](../how-to/investigate-ale
 | `thread.cooldown` | 1m to 168h. No new turn for a key inside the window, which runs from the message that started the turn. Required with `thread.by`. |
 | `thread.closeWhen` | Extracted field to value, for example `{state: RESOLVED}`. A matching message posts a note and starts no turn. |
 | `thread.maxIdle` | At least twice the cooldown, at most 720h; unset, the larger of 24h and twice the cooldown. An open thread with no message of its key for this long is abandoned, and the next fire starts a new investigation. It must be longer than the sender's repeat interval. |
-| `promptTemplate` | A Go template over the trigger's view of the message (below). Parsed and run once at load against a placeholder view, so a mistyped field rejects the Binding. |
+| `promptTemplate` | A Go template over the trigger's view of the message (below). Parsed and run once at load against a placeholder view, so a mistyped field rejects the Binding. It may use text, `if`, `with`, the fields below and the functions `and`, `eq`, `ge`, `gt`, `index`, `le`, `len`, `lt`, `ne`, `not`, `or` and `slice`; a loop, a variable, a defined template or any other function rejects the Binding. At most 8192 bytes. |
 | `limits.rateLimit` | Required. `maxRuns` starts in any `per` (10s to 24h), and `maxConcurrent` investigations at once; all three are set. |
 | `limits.maxRunsPerDay` | Required. Starts in any 24 hours. An explicit `0` is no cap. |
 
