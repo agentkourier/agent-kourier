@@ -29,7 +29,8 @@ const maxListPages = 100
 // returns one that has not ended, else the earliest, and lists the rest in that order. A
 // task that shows on two pages, as the list shifts, counts once, as its newest copy. Each
 // page is a unary call under UnaryTimeout. A page token seen before fails the lookup at
-// once. UNCONFIRMED: WP-03 measured the lookup on a context of three tasks; paging past
+// once. A page past dialect.MaxResponseBytes fails the lookup with an error that wraps dialect.ErrResponseTooLarge, which
+// the agent sends again: the lookup can never answer, as it cannot of an agent with no task list. UNCONFIRMED: WP-03 measured the lookup on a context of three tasks; paging past
 // kagent's page size of 50 is not measured.
 func (a *Agent) FindTask(ctx context.Context, contextID, messageID string) (telemetryResult0 *a2a.Task, telemetryResult1 []a2a.TaskID, telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.agent.find")

@@ -247,7 +247,7 @@ var errInactive = errors.New("agent: no event within the inactivity timeout")
 // A stream that ends cleanly after a status update that settled the task, without the full
 // task (as the a2a-sdk Python server has been seen to end its streams), is not a drop: one GetTask on conn,
 // at once, supplies the final task. Only if that fails, or finds the task unsettled, does
-// read return io.ErrUnexpectedEOF.
+// read return io.ErrUnexpectedEOF; an answer that is too large (dialect.ErrResponseTooLarge) is returned as it is.
 func (a *Agent) read(ctx context.Context, conn Conn, asm *assembler, open func(context.Context) iter.Seq2[a2a.Event, error]) error {
 	if asm.over != nil { // the seed of an answer, or the snapshot a resume opened with, spent the budget
 		return asm.over
@@ -278,7 +278,11 @@ func (a *Agent) read(ctx context.Context, conn Conn, asm *assembler, open func(c
 	case err != nil:
 		return err
 	case ctx.Err() == nil && settled(asm.state) && asm.taskID != "":
-		if task, gerr := a.getTask(ctx, conn, asm.taskID); gerr == nil {
+		task, gerr := a.getTask(ctx, conn, asm.taskID)
+		if tooLarge(gerr) { // no lost stream: a reconnect reads the same answer
+			return gerr
+		}
+		if gerr == nil {
 			asm.apply(task)
 			if asm.over != nil {
 				return asm.over

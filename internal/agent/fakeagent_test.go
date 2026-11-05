@@ -124,8 +124,13 @@ func (fa *fakeAgent) agentWith(t *testing.T, cfg Config) *Agent {
 // agentVia returns an Agent that connects the way production does: a Pool of d fetches fa's card and
 // builds the client from it, so the dialect's own handling of the card and of the protocol version is in the path.
 func (fa *fakeAgent) agentVia(t *testing.T, d dialect.Dialect) *Agent {
+	return fa.agentViaWith(t, d, Config{})
+}
+
+// agentViaWith is agentVia with cfg, for a test that must not wait out the default pause of a reconnect.
+func (fa *fakeAgent) agentViaWith(t *testing.T, d dialect.Dialect, cfg Config) *Agent {
 	t.Helper()
-	p := NewPool(d, Config{})
+	p := NewPool(d, cfg)
 	t.Cleanup(p.Close)
 	return p.Agent(Target{
 		Binding:     "team/sre",

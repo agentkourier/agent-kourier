@@ -23,7 +23,10 @@ const tooLargeSentence = "the agent's reply was larger than Agent Kourier holds,
 
 // errTooLarge is what the agent package returns for a reply past a bound: dialect.ErrResponseTooLarge, with where it
 // was found in its text.
-var errTooLarge = fmt.Errorf("%w: an event of more than %d bytes", dialect.ErrResponseTooLarge, 10<<20)
+var errTooLarge = fmt.Errorf("%w: an event of more than %d bytes", dialect.ErrResponseTooLarge, dialect.MaxEventBytes)
+
+// errAnswerTooLarge is the same for the answer to a call that is not a stream: GetTask, CancelTask or ListTasks.
+var errAnswerTooLarge = fmt.Errorf("%w: more than %d bytes", dialect.ErrResponseTooLarge, dialect.MaxResponseBytes)
 
 // oversized makes turn 0 name the task t1, say something, and then fail as agent.Send does when the reply passes a bound:
 // no StreamLostError, for the agent would send the same again.

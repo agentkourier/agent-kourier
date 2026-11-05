@@ -110,12 +110,17 @@ const (
 	MaxCardBytes = 1 << 20
 	// MaxResponseBytes is the most of the answer to a call that is not a stream (GetTask, CancelTask, ListTasks), or
 	// of a JSON answer to a call that asked for a stream, which is a single JSON-RPC response and may hold a task
-	// with its whole history.
-	MaxResponseBytes = 16 << 20
+	// with its whole history. It is twice an event: the final task of a reply at the budget, three copies of it
+	// escaped, is half of an answer (agent.DefaultMaxReplyBytes), which leaves the rest for the history. An answer
+	// is decoded whole, and takes about three and a half times its size at its peak (measured in a test process).
+	MaxResponseBytes = 4 << 20
 	// MaxEventBytes is the most of one event of a stream: the lines of it, line breaks included, up to the blank line
-	// that ends it. It is the bound a2a-go puts on one line (10 MiB), so that an event split over lines cannot hold
-	// more than an event of one line.
-	MaxEventBytes = 10 << 20
+	// that ends it. It is under the bound a2a-go puts on one line (10 MiB), so that an event split over lines cannot hold
+	// more than an event of one line, and a line is never the bound. a2a-go reads an event with a buffer that doubles
+	// from 64 KiB to the size of the largest event the stream has sent and keeps it while the stream is open, and
+	// decodes it at about four and a half times its size (measured in a test process), so what an open stream holds
+	// grows with this number, and a power of two wastes none of the doubling.
+	MaxEventBytes = 2 << 20
 )
 
 type freshConnectionKey struct{}

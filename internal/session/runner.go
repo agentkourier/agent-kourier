@@ -566,11 +566,11 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 		if sess.ContextID != "" {
 			task, holders, err := backend.Agent.FindTask(telemetry.Restore(m.ctx, r.TraceParent, r.TraceState), sess.ContextID, r.ID)
 			switch {
-			case errors.Is(err, agent.ErrLookupUnsupported):
-				// The agent has no task list (A2A 0.3, kagent 0.9.x): this turn cannot be looked up, and asking
-				// again changes nothing. It is treated as absent, as a lookup that found nothing is: a duplicate
-				// run is possible after a resend, a turn that waits for ever is not.
-				m.cfg.Logger.Warn("session turn not looked up: the agent cannot list tasks", "key", key, "turn", r.ID)
+			case lookupNeverAnswers(err):
+				// The agent has no task list (A2A 0.3, kagent 0.9.x), or a page of it is more than Agent Kourier reads:
+				// this turn cannot be looked up, and asking again changes nothing. It is treated as absent, as a lookup
+				// that found nothing is: a duplicate run is possible after a resend, a turn that waits for ever is not.
+				m.cfg.Logger.Warn("session turn not looked up: the agent's list of tasks cannot answer", "key", key, "turn", r.ID, "error", err)
 				if sess.TaskID != "" { // a task of the session runs: this turn is behind it
 					return idle, hold
 				}
@@ -1318,7 +1318,8 @@ func (m *Manager) resume(c *convo) (out outcome, err error) {
 	}
 	task, err := t.b.Agent.GetTask(m.ctx, t.taskID)
 	switch {
-	case errors.Is(err, agent.ErrCredentialsRejected), errors.Is(err, agent.ErrAgentForbidden), errors.Is(err, a2a.ErrTaskNotFound):
+	case errors.Is(err, agent.ErrCredentialsRejected), errors.Is(err, agent.ErrAgentForbidden), errors.Is(err, a2a.ErrTaskNotFound),
+		errors.Is(err, dialect.ErrResponseTooLarge): // the same answer comes again: not a read to retry until the task counts as wedged
 		return m.lost(t, err)
 	case err == nil && m.wedgedByAge(c, task), err != nil && m.cfg.Now().Sub(c.since) > m.cfg.MaxWorkingAge:
 		return m.wedged(t)

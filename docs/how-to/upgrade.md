@@ -357,7 +357,9 @@ limit of 256Mi gives 214748364. The runtime then collects more often as its memo
 while the new pod starts; with Postgres (`RollingUpdate`) the new pod starts beside the old one and takes over when the old one stops.
 
 - **It is soft.** It caps nothing. Memory that is live stays, so a number of large replies from agents read at the same time (each event of up to
-  10 MiB takes several times its size while it is decoded) can still pass the container's limit and be OOM-killed. Raise `resources.limits.memory` for that.
+  2 MiB takes several times its size while it is decoded, and a stream that is open keeps buffers of about twice the largest event it has carried: see
+  [the release that lowers the bounds](#upgrade-to-the-release-that-lowers-the-bounds-on-what-it-reads)) can still pass the container's limit and be OOM-killed.
+  Raise `resources.limits.memory` for that.
 - **Your own wins.** A `GOMEMLIMIT` in `extraEnv` is the only one rendered, as you wrote it. The runtime reads a number of bytes, optionally with `B`, `KiB`, `MiB`,
   `GiB` or `TiB` after it (`100MiB`), and 9223372036854775807, its default, turns the limit off.
 - **No variable** is rendered without a memory limit, for a limit that is an exponent or in milli-bytes, or under 1Mi.
@@ -410,3 +412,71 @@ or a user ID over 25.
 errors without a token. It reads files, never the cluster, so on the custom resource route give it the YAML you applied.
 A custom resource that fails these checks after you upgrade is judged as
 [a bad object is](../explanation/config-routes.md#what-a-bad-object-does): the broker does not serve a new object that is invalid, and keeps serving the last good generation of one that is.
+
+## Upgrade to the release that lowers the bounds on what it reads
+
+This release lowers what Agent Kourier reads from an agent, so that a backend that sends large events costs the broker less memory. The three bounds that moved:
+
+| What | Before | Now |
+|---|---|---|
+| One event of a stream (the lines of it, up to the blank line that ends it) | 10 MiB | 2 MiB |
+| The answer to a call that is not a stream: `GetTask`, `CancelTask`, `ListTasks`, or a JSON answer to a call that asked for a stream | 16 MiB | 4 MiB |
+| What one turn holds of the agent's reply (the text of its artifacts, tool results that wait for their call, the bookkeeping of each tool part) | 2 MiB | 341 KiB |
+
+The agent card stays at 1 MiB. **There is no setting for any of them**: they are constants of the binary, and no chart value, file or custom resource field reaches them, so
+a reply that is over them cannot be let through by configuration. Nothing in the chart's values changes.
+
+**What an agent that sends more sees.**
+
+- **An event over 2 MiB** is not read. The read fails as the event passes the bound, never as a shortened event that parses, and the turn ends with the outcome
+  `response_too_large`. A tool result sits in one event, so one of more than 2 MiB (a large log dump, say) ends the turn.
+- **A reply that adds up to more than 341 KiB** in the text the turn holds ends the turn the same way, however many events it came in. Before, the same reply was held
+  up to 2 MiB.
+- **An answer over 4 MiB** is not read either. The answer to `GetTask` carries the task with its whole history, so a long task with large tool results can pass it. The
+  turn ends in the same way wherever it reads its task: after a lost stream, after a stream that ended with the task settled and no final task, and when it follows a
+  task again after a restart. The task is read once and not tried again, since the same answer would come again. A person's answer to a paused task reads the task first
+  to tell what is new in the reply; that read is skipped when the task is too large, and the answer is sent without it. The two other reads that a reply to a paused task
+  makes do not end the turn (read in the code, not run): the one that finds out how an answer that may not have been delivered went reopens the pause with a note that the
+  answer could not be delivered, and the one that reads a text reply is tried again after a backoff until the pause ends.
+- **A page of `ListTasks` over 4 MiB** makes the lookup of a turn after a crash or a resend unable to answer, as it is for an agent that has no task list: the lookup is
+  skipped, the turn is sent (after the recorded task is followed, if there is one), and a turn that the agent had already run can run a second time. The broker logs
+  `the agent's list of tasks cannot answer`, with the error.
+- **A cancel whose answer is over 4 MiB** is a cancel that Agent Kourier cannot tell took. When it is the cancel of a turn that stopped for a reply that was too large, the task
+  stays recorded and the turns behind it in that thread wait. The Stop control cancels again and then reads the task to see that it ended, which is over the bound too, so it
+  reports the failure (read in the code, not run). A restart follows the task, meets the same answer, cancels again, is told the task cannot be cancelled because it
+  ended, and clears the record, so nothing repeats in between.
+
+**What the thread shows.** Text that arrived before the bound was passed stays shown, cut to what a message holds as it always was (12000 UTF-16 units in the Slack adapter,
+with a mark where it is cut). Then the thread gets one fixed sentence, `the agent's reply was larger than Agent Kourier holds, so the turn stopped`, and the
+turn has no final answer. The difference from before is for a reply between 341 KiB and 2 MiB: it used to end as any turn does, with the cut text, and now the turn stops with
+the sentence, and Agent Kourier cancels the task at the agent, once and within 30 seconds, so the agent's later work is lost. The text past 341 KiB was never in the thread:
+what the lower budget keeps out of it is the turn's ending.
+
+**What to do.** Make the agent send less in one piece: have its tools trim what they return to what the model needs (a result of 2 MiB is on the order of half a million tokens,
+an estimate that is past the context of most models), and keep a reply to what a person will read. There is no counter of replies that are between the old bounds and the new
+ones before you upgrade. After it, `agentkourier_turn_outcomes_total` with `outcome="response_too_large"` counts the turns that ended this way. A backend that sends
+events of more than 2 MiB, or whose tasks grow past 4 MiB, needs a build with other constants.
+
+**What the lower bounds buy, measured.** This is a test process, not a pod: the Go test binary on a laptop (macOS), with the fake agent and the client in one process and a
+baseline of about 40 MiB of resident memory. Each stream sent one event of exactly the bound, through the broker's own client path (a `Pool`, the `generic` dialect and the
+transport that enforces the bounds), all at once, and stayed open; each call read an answer of exactly the bound, all at once. The counts are the number that took the
+process to 256 MiB of resident memory, the chart's default limit, with `GOMEMLIMIT` off and at 214748364 bytes (80% of it), over three runs of each size.
+
+| | Before | Now |
+|---|---|---|
+| Heap one open stream keeps after one event of the bound | 20 MiB | 4 MiB |
+| Heap at the peak of reading one event of the bound | about 50 MiB | about 9 MiB |
+| Heap at the peak of reading one answer of the bound | about 56 MiB | about 18 MiB |
+| Open streams that reach 256 MiB, `GOMEMLIMIT` off | 5 | 32 to 40 |
+| Open streams that reach 256 MiB, `GOMEMLIMIT` at 214748364 | 6 to 8 | 40 to 48 |
+| Answers read at once that reach 256 MiB, `GOMEMLIMIT` off | 4 | 17 to 24 |
+| Answers read at once that reach 256 MiB, `GOMEMLIMIT` at 214748364 | 5 to 8 | 25 to 32 |
+
+Streams that ended right after their event, instead of staying open, reached 256 MiB in some runs from 32 streams and in others not by 64: their buffers are freed as they end,
+and what the process holds then depends on when the garbage collector runs.
+
+Each stream now costs about a fifth of what it did, and each answer about a third. **Nothing bounds how many streams or calls are open at once.** The `rateLimit.maxConcurrent` of
+a `botMessage` trigger limits only the investigations that trigger starts. So a backend that is made to open enough streams can still pass the default limit of 256Mi, in the
+tens of streams where it was a handful. A pod's own baseline and its cgroup accounting were not measured. Size `resources.limits.memory` for the number of agents that can
+answer at once, with about 4 MiB for each open stream and about 9 MiB for each event being read, and see
+[the release that sets GOMEMLIMIT](#upgrade-to-the-release-that-sets-gomemlimit).
