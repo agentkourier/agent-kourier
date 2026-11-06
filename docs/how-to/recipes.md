@@ -60,13 +60,19 @@ narrowed to one receiver, and `askUser` on. Replace `CREPLACESRE` and `B0REPLACE
 --8<-- "sre-triage/kourier/chatconnection.yaml"
 ```
 
-Put the directory in a ConfigMap and point the chart at it with `config.existingConfigMap`; the chart needs
-`rbac.secretNamespaces` to find the Secrets `slack` and `sre-triage-token`. The recipe's README has the commands.
+Apply the directory as custom resources (`kubectl apply -f examples/recipes/sre-triage/kourier/`, into the namespace
+`agent-kourier`, which must exist): each resource sits in that namespace and names the others without one. The chart
+reads them with `config.source: crds` and `config.chatConnection: agent-kourier/slack`, and `rbac.secretNames` grants
+the Secrets `slack` and `sre-triage-token`, since the chart cannot see the Secrets of resources you apply yourself. The
+CRDs go in first, with an install of their own, because the chart refuses to render `config.source: crds` before the
+cluster serves them. The recipe's README has the values and the commands, in order. The other recipes' resources work
+the same way.
 
-To read the recipe's resources as custom resources instead, apply the same YAML (`kubectl apply -f examples/recipes/sre-triage/kourier/`, with the CRDs installed and the namespace `agent-kourier`
-existing): it applies as written, since each resource sits in that namespace and names the others without one. What changes is the chart's values: no `config.existingConfigMap`, `config.source: crds`,
-`config.chatConnection: agent-kourier/slack`, and `rbac.secretNames` for the Secrets the YAML names (the chart cannot read what you apply yourself) in place of `rbac.secretNamespaces`.
-[Move the config between a ConfigMap and custom resources](migrate-config-source.md) has the steps. The other recipes' resources work the same way.
+This route needs a chart release that has custom resources, and Kubernetes 1.33 or later. Release 0.1.6 does not have
+it: `crds` and `config.source` are not among its values. On 0.1.6, or to stay on a ConfigMap, the same files load as
+one, with `config.existingConfigMap` and `rbac.secretNamespaces: [agent-kourier]`;
+[Move the config between a ConfigMap and custom resources](migrate-config-source.md) moves an install from one to the
+other.
 
 ### The agent
 
@@ -148,8 +154,8 @@ Binding, and the host `REPLACE-ME` in the AgentBackend's `url`.
 ```
 
 A `botMessage` trigger does not load without `limits`, and the limits are what bound a storm of failing pipelines,
-which would otherwise start as many investigations. The recipe's README has the commands to create the Secret, load the
-directory into the chart and replay the channel's history through the trigger first.
+which would otherwise start as many investigations. The recipe's README has the commands to create the Secret, replay
+the channel's history through the trigger first, and apply the directory as custom resources.
 
 ### Check it
 
@@ -217,7 +223,7 @@ The agent runs as one pod. The key comes from a Secret that you create; no crede
 
 The recipe's [README](https://github.com/agentkourier/agent-kourier/blob/main/examples/recipes/docs-agent/README.md) has
 the steps in order: build the image, make the Secrets, apply the manifests (which include a NetworkPolicy that lets only
-pods in the namespace `agent-kourier` reach the agent, where the network plugin enforces NetworkPolicy) and load the Agent Kourier resources into the chart.
+pods in the namespace `agent-kourier` reach the agent, where the network plugin enforces NetworkPolicy) and apply the Agent Kourier resources as custom resources.
 
 ### Check it
 
