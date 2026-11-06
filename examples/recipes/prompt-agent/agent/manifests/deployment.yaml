@@ -1,0 +1,78 @@
+# The prompt agent: one pod that serves A2A on 8080 and calls a model and the MCP servers agent.yaml names.
+#
+# Apply it into the namespace prompt-agent, which the AgentBackend in ../../kourier names (kubectl create namespace
+# prompt-agent, then kubectl apply -n prompt-agent -f manifests/). The files name no namespace, so the Service lands next
+# to it. Build the image with make prompt-agent-image and load or push it where your nodes pull from.
+#
+# Two Secrets are referenced here and not created here; make them before the pod can start (a missing one leaves the pod
+# in CreateContainerConfigError):
+#   prompt-agent-model, key api-key: the model provider's key, in the variable the provider reads. This file sets
+#     ANTHROPIC_API_KEY, for the example's model: anthropic:...; change the variable's name with the model: line.
+#   prompt-agent-mcp, key token: the bearer token for the MCP server, which agent.yaml writes as ${RUNBOOKS_MCP_TOKEN}.
+# Both reach the agent as environment variables, so a changed value needs a restart of the pod.
+#
+# One replica on purpose: what the agent remembers of a conversation lives in the pod's memory, and the Service does not
+# pin a thread to a pod. With two, a follow-up can reach the pod that has not seen the conversation, and it starts over.
+# A restart does the same.
+#
+# By default the agent accepts every caller, and every caller spends your model key. To require the Binding's token, put
+# it in a Secret you create, mount the Secret as a file, and set PROMPT_AGENT_TOKEN_FILE to the file's path (the commented
+# lines below); the agent then answers 401 to any other caller. It reads the file on every request, so a rotated token
+# works without a restart. networkpolicy.yaml lets only Agent Kourier's namespace reach the agent, where the network
+# plugin enforces it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prompt-agent
+  labels: {app.kubernetes.io/name: prompt-agent}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: prompt-agent}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: prompt-agent}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: prompt-agent
+          image: agent-kourier-prompt-agent:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: a2a, containerPort: 8080}
+          env:
+            - {name: PROMPT_AGENT_URL, value: "http://prompt-agent:8080"} # the URL the agent card names; Agent Kourier ignores it
+            - {name: PROMPT_AGENT_SPEC, value: /etc/prompt-agent/agent.yaml} # the ConfigMap in configmap.yaml
+            - name: ANTHROPIC_API_KEY
+              valueFrom: {secretKeyRef: {name: prompt-agent-model, key: api-key}}
+            - name: RUNBOOKS_MCP_TOKEN
+              valueFrom: {secretKeyRef: {name: prompt-agent-mcp, key: token}}
+            # - {name: PROMPT_AGENT_TOKEN_FILE, value: /etc/prompt-agent-token/token}
+          volumeMounts:
+            - {name: spec, mountPath: /etc/prompt-agent, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+            # - {name: bearer, mountPath: /etc/prompt-agent-token, readOnly: true}
+          readinessProbe:
+            tcpSocket: {port: a2a}
+          livenessProbe:
+            tcpSocket: {port: a2a}
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 50m, memory: 192Mi}
+            limits: {memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+      volumes:
+        - name: spec
+          configMap: {name: prompt-agent}
+        - name: tmp
+          emptyDir: {}
+        # - name: bearer
+        #   secret: {secretName: prompt-agent-bearer}

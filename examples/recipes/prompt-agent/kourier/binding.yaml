@@ -1,0 +1,30 @@
+# prompt-agent: a mention of the Agent Kourier bot in the channel starts a thread and a session with the prompt agent, which
+# answers from its prompt, its model and the MCP tools its agent.yaml lists. Replace CREPLACEPROMPT with the channel's ID
+# (C..., or G... for an older private channel), not its name. It is not the placeholder of the other recipes: each recipe
+# has a channel of its own, so that no two Bindings share one.
+#
+# triggers is the whole list: only a mention starts a session. A reply in the thread that the mention started
+# continues the session (chat.threadReplies defaults to all).
+#
+# interactions.askUser lets the agent ask the thread a question and wait for the answer: the agent has an ask_user tool
+# of its own. There are no tool approvals: the agent's tools are the MCP tools agent.yaml lists, and it never asks to
+# approve a call.
+#
+# identity.userId is sent to the agent as X-User-Id, for an agent that trusts its network. The agent spends a model key
+# for every caller it accepts, so use identity.tokenSecretRef instead and turn on the agent's bearer check (the
+# commented lines in agent/manifests/deployment.yaml) when the network is not enough.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: prompt-chat, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {name: prompt-agents}
+    name: prompt-agent         # on the a2a dialect the backend url alone selects the agent and these are labels;
+    namespace: prompt-agent    # the Binding needs them either way
+  identity: {userId: agent-kourier-prompt}
+  chat:
+    connectionRef: {name: slack}
+    channel: CREPLACEPROMPT
+    triggers:
+      - type: mention
+  interactions: {askUser: true}

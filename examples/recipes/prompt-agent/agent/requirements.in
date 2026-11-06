@@ -1,0 +1,7 @@
+# What the agent runs on. Compile with:
+#   uv pip compile examples/recipes/prompt-agent/agent/requirements.in --generate-hashes --universal --python-version 3.14 -o examples/recipes/prompt-agent/agent/requirements.txt
+a2a-sdk[http-server]==1.2.2
+uvicorn==0.54.0  # the ASGI server; a2a-sdk[http-server] brings Starlette but no server
+# One extra per model provider family: openai (openai:, openai-chat:, openrouter:, ollama:), anthropic and bedrock.
+# spec reads agent.yaml; mcp is the MCP client.
+pydantic-ai-slim[spec,mcp,openai,anthropic,bedrock]==2.57.0

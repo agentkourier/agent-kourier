@@ -1,0 +1,8 @@
+line-length = 120
+target-version = "py314"
+
+[lint]
+select = ["E", "F", "I", "B", "UP", "S", "SIM"]
+
+[lint.per-file-ignores]
+"{test_*,conftest,harness}.py" = ["S101", "S105"]  # asserts and a fake token constant are what tests are made of
