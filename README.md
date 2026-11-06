@@ -22,6 +22,14 @@ breaking a Slack `Binding`. Agents speak only A2A, so a new platform needs no ch
 > [Install with Helm](docs/how-to/install-with-helm.md). The `v1alpha1` resource format can change before 1.0. See
 > [Status](#status).
 
+<p align="center">
+  <img src="docs/assets/clip/install.gif" width="100%" alt="A terminal: kubectl creates the namespace and the Slack Secret from environment variables, helm installs the agent-kourier chart, vim fills in the four lines marked yours in my-resources.yaml, kubectl applies it after a server-side dry run, and kubectl get akbinding shows the Binding go from no status to Unknown Pending to True OK. Then Slack: a mention of the bot in the channel, and the agent's answer in the thread.">
+</p>
+
+The custom resource install of [Install with Helm](docs/how-to/install-with-helm.md#install-on-custom-resources),
+recorded on a kind cluster with the [echo agent](examples/recipes/echo-agent/agent/README.md). The wait for the Binding
+to turn Ready, about 20 seconds here, is cut.
+
 ## What it looks like
 
 https://github.com/user-attachments/assets/1af66d63-78cd-437d-a3a2-2e178904d177
