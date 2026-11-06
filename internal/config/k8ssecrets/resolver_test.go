@@ -112,13 +112,51 @@ func newAPI(t *testing.T, objects ...runtime.Object) *api {
 		a.mu.Lock()
 		a.watches[n]++
 		a.mu.Unlock()
-		return true, watch.Filter(w, func(e watch.Event) (watch.Event, bool) {
+		return true, filterWatch(w, func(e watch.Event) bool {
 			o, isObj := e.Object.(metav1.Object)
-			return e, isObj && o.GetName() == n.Name
+			return isObj && o.GetName() == n.Name
 		}), nil
 	})
 	return a
 }
+
+// filteredWatch passes on the events of a watch that keep accepts. Unlike watch.Filter, its goroutine ends when Stop is called even
+// while it is blocked sending an event nobody reads any more, which is what an informer that stops leaves behind (watch.Filter's
+// goroutine then lives for ever, and goleak fails the run).
+type filteredWatch struct {
+	upstream watch.Interface
+	result   chan watch.Event
+	stop     chan struct{}
+	once     sync.Once
+}
+
+// filterWatch returns w limited to the events that keep accepts.
+func filterWatch(w watch.Interface, keep func(watch.Event) bool) watch.Interface {
+	f := &filteredWatch{upstream: w, result: make(chan watch.Event), stop: make(chan struct{})}
+	go func() {
+		defer close(f.result)
+		for e := range w.ResultChan() {
+			if !keep(e) {
+				continue
+			}
+			select {
+			case f.result <- e:
+			case <-f.stop:
+				return
+			}
+		}
+	}()
+	return f
+}
+
+func (f *filteredWatch) Stop() {
+	f.once.Do(func() {
+		close(f.stop)
+		f.upstream.Stop()
+	})
+}
+
+func (f *filteredWatch) ResultChan() <-chan watch.Event { return f.result }
 
 // count returns how many lists and watches of n the API has answered.
 func (a *api) count(n config.SecretName) (lists, watches int) {
