@@ -75,6 +75,18 @@
 // different kinds from slightly different moments. Each object in it is a whole object of its cache, and what an edit that
 // landed between the lists changed is found at the next poll too, as it is for any edit after the listing.
 //
+// # What a read costs
+//
+// A read decodes, defaults and validates an object only if the informer has replaced the one the last read decoded: the result
+// is kept with the pointer of the cached object it came from (see decodedObject), so a read that finds nothing changed decodes
+// nothing, and one that finds an object edited decodes that one. A refusal is kept too. What is kept goes when no read uses the
+// object any more. The decoded object is the one that every Set is made from: a Set holds a copy of its struct and shares what it
+// holds (strings, slices and maps) with the decoded object and with the Sets before it, so nothing may change a Set's objects, as
+// config.Source says; and config.ResolvePartial makes the Snapshot copy the structs of the Bindings and backends it serves, so that
+// the Snapshot keeps alive only those and not the slices of the Set. Every AgentBackend of the cluster is decoded, and the decoded
+// copy of each is kept, whether or not a Binding names it, and so is that of every Binding the broker owns, among them those that
+// name no connection that exists, which every broker owns and none serves. A decoded Binding has no status: the informer holds it.
+//
 // # RBAC
 //
 // The ServiceAccount needs list and watch on bindings, agentbackends and chatconnections of agentkourier.dev, in every
@@ -167,14 +179,38 @@ type key struct{ kind, namespace, name string }
 // goodObject is the last generation of an object that passed Default and Validate. It holds the object as the informer's cache
 // held it, a pointer and not a copy, so that an object that is still the cache's costs nothing more than the cache: only a
 // generation that was refused, or an object that is gone, keeps one the cache no longer has. It is read only (nothing may
-// change a cached object), and it is decoded again for each Set, so that no Set shares memory with another.
+// change a cached object). typed is the object decoded from it, a pointer to the type of the kind: the very one that the Sets are
+// made from (see decodedObject).
 type goodObject struct {
 	uid        types.UID
 	generation int64
 	obj        *unstructured.Unstructured
+	typed      any
 	goneAt     time.Time // when a read first found the object gone, zero while it is there
 	settledAt  time.Time // when the deletion took effect, zero while it is deferred (served as if still there) or the object is there
 	held       bool      // the hold took it: it stays until the connection is back
+}
+
+// decodedObject is what decoding and validating one object of an informer's cache came to, kept so that a read decodes only
+// what changed. An object is decoded, defaulted and validated on its own, so the result depends on that object and on this
+// binary and on nothing else: not on what it refers to, not on which broker owns it, not on the connection that is held. A
+// reference to another object is checked by the resolution, at every read.
+//
+// The object is told by its pointer, and not by uid and generation: the API server defaults a field onto an object it serves
+// when a CRD changes, with no change of generation (and none of resourceVersion), and a cache replaces the object that it
+// holds whenever the informer sees it again, as an update or a list. A cached object is never changed, so the same pointer is
+// the same object, and src, which this keeps alive, cannot be the address of another.
+//
+// obj is the decoded object (a pointer to the type of the kind), nil when it was refused. It is the one that goodObject holds
+// and that every Set copies the struct of, so a Set shares with it, and with the Sets before it, what the object holds
+// (strings, slices, maps): a read of an unchanged object allocates its struct and nothing more, and the cache is not a second
+// copy of what is served. Nothing may change a decoded object after it is made, as nothing may change a Snapshot's.
+type decodedObject struct {
+	src     *unstructured.Unstructured
+	obj     any
+	unknown []string // the paths of the fields the type does not have, see noteUnknown
+	message string   // the problems that refused it, capped, as Invalid.Message says them
+	readNo  uint64   // the Set that last used it, so that the objects no Set read are forgotten
 }
 
 // goneGrace is how long an object whose deletion has taken effect is kept, not served, so that a connection deleted just after
@@ -205,6 +241,9 @@ type Source struct {
 	stores  [3]cache.Store // bindings, backends, connections
 	synced  [3]cache.InformerSynced
 	good    map[key]goodObject
+	decoded map[key]decodedObject    // what decoding each object that a Set read came to, see decodedObject
+	decodes int                      // how many objects have been decoded, which a test counts
+	readNo  uint64                   // the Set being read
 	warned  map[key]warnedGeneration // the generation of each object whose unknown fields the log has named
 	started bool
 
@@ -232,7 +271,7 @@ func New(opts Options) (*Source, error) {
 		return nil, errors.New("crsource: Options.Connection must name a ChatConnection as namespace and name")
 	}
 	s := &Source{
-		client: opts.Client, log: cmp.Or(opts.Logger, slog.Default()), good: map[key]goodObject{}, warned: map[key]warnedGeneration{},
+		client: opts.Client, log: cmp.Or(opts.Logger, slog.Default()), good: map[key]goodObject{}, decoded: map[key]decodedObject{}, warned: map[key]warnedGeneration{},
 		own: key{config.KindChatConnection, opts.Connection.Namespace, opts.Connection.Name}, now: time.Now,
 		probeEvery: probeEvery, probeTimeout: probeTimeout,
 	}
@@ -493,7 +532,8 @@ func ConditionsOf(u *unstructured.Unstructured) []metav1.Condition {
 
 // Set reads the objects from one listing of the caches (see "Change detection"), decodes each, and returns them with the
 // fingerprint of that listing. See the package comment for what it leaves out and what it keeps. It fails only when the caches
-// have not synced or the source is stopped. Each call returns a Set of its own.
+// have not synced or the source is stopped. Each call returns a Set of its own, whose slices are its own and whose objects share
+// what they hold with the source's decoded objects: see "What a read costs".
 func (s *Source) Set(context.Context) (*config.Set, string, error) {
 	l, err := s.list()
 	if err != nil {
@@ -503,6 +543,7 @@ func (s *Source) Set(context.Context) (*config.Set, string, error) {
 	defer s.mu.Unlock()
 	set := &config.Set{}
 	live := map[key]bool{}
+	s.readNo++
 	read(s, config.KindAgentBackend, l.backends, live, func(*unstructured.Unstructured) bool { return true }, &set.AgentBackends, &set.Invalid)
 	read(s, config.KindChatConnection, l.connections, live,
 		func(u *unstructured.Unstructured) bool { return keyOf(config.KindChatConnection, u) == s.own }, &set.ChatConnections, &set.Invalid)
@@ -510,6 +551,11 @@ func (s *Source) Set(context.Context) (*config.Set, string, error) {
 	for k := range s.warned { // what is not read now has no generation to be told of again
 		if !live[k] {
 			delete(s.warned, k)
+		}
+	}
+	for k, d := range s.decoded { // nor a decoding to keep: an object that no read used is gone, or is another broker's
+		if d.readNo != s.readNo {
+			delete(s.decoded, k)
 		}
 	}
 
@@ -520,7 +566,7 @@ func (s *Source) Set(context.Context) (*config.Set, string, error) {
 	if !live[s.own] {
 		if g, ok := s.good[s.own]; ok {
 			ownGood = g
-			ownConn, _, _ = decodeObject[v1alpha1.ChatConnection](g.obj)
+			ownConn = typedOf[v1alpha1.ChatConnection](g)
 		}
 	}
 	now := s.clock()
@@ -601,11 +647,11 @@ func (s *Source) serveDeferred(l listing, set *config.Set) {
 		}
 		switch k.kind {
 		case config.KindBinding:
-			if b, _, _ := decodeObject[v1alpha1.Binding](g.obj); b != nil {
+			if b := typedOf[v1alpha1.Binding](g); b != nil {
 				set.Bindings = append(set.Bindings, *b)
 			}
 		case config.KindAgentBackend:
-			if be, _, _ := decodeObject[v1alpha1.AgentBackend](g.obj); be != nil {
+			if be := typedOf[v1alpha1.AgentBackend](g); be != nil {
 				set.AgentBackends = append(set.AgentBackends, *be)
 			}
 		}
@@ -687,7 +733,7 @@ func (s *Source) hold(l listing, live map[key]bool, set *config.Set) (bindings, 
 		if refOf(config.KindChatConnection, g.obj, "spec", "chat", "connectionRef") != s.own {
 			continue
 		}
-		b, _, _ := decodeObject[v1alpha1.Binding](g.obj)
+		b := typedOf[v1alpha1.Binding](g)
 		if b == nil {
 			continue
 		}
@@ -711,7 +757,7 @@ func (s *Source) hold(l listing, live map[key]bool, set *config.Set) (bindings, 
 		if !ok || !gone(k, config.KindAgentBackend) {
 			continue
 		}
-		be, _, _ := decodeObject[v1alpha1.AgentBackend](g.obj)
+		be := typedOf[v1alpha1.AgentBackend](g)
 		if be == nil {
 			continue
 		}
@@ -769,14 +815,14 @@ func read[T any, PT interface {
 		if !mine && !same {
 			continue
 		}
-		obj, unknown, errs := decodeObject[T, PT](u)
-		s.noteUnknown(k, u, unknown)
-		if obj != nil {
+		d := decodeCached[T, PT](s, k, u)
+		s.noteUnknown(k, u, d.unknown)
+		if obj, _ := d.obj.(*T); obj != nil {
 			if !mine { // a valid edit to another broker's connection: the Binding is that broker's now, and the pruning forgets it
 				continue
 			}
 			live[k] = true
-			s.good[k] = goodObject{uid: u.GetUID(), generation: u.GetGeneration(), obj: u}
+			s.good[k] = goodObject{uid: u.GetUID(), generation: u.GetGeneration(), obj: u, typed: obj}
 			*dst = append(*dst, *obj)
 			continue
 		}
@@ -789,12 +835,12 @@ func read[T any, PT interface {
 		if hasGood && !same { // another object of the name than the one that was last good: that one is gone for good
 			delete(s.good, k)
 		}
-		inv := config.Invalid{Kind: kind, Namespace: u.GetNamespace(), Name: u.GetName(), Generation: u.GetGeneration(), Message: config.CapMessage(joinErrors(errs))}
+		inv := config.Invalid{Kind: kind, Namespace: u.GetNamespace(), Name: u.GetName(), Generation: u.GetGeneration(), Message: d.message}
 		if kind != config.KindBinding {
 			inv.AllowedNamespaces, _, _ = unstructured.NestedStringSlice(u.Object, "spec", "allowedNamespaces")
 		}
 		if same {
-			if last, _, _ := decodeObject[T, PT](g.obj); last != nil {
+			if last := typedOf[T](g); last != nil {
 				*dst = append(*dst, *last)
 				inv.Served = g.generation
 			}
@@ -814,6 +860,42 @@ func decodeObject[T any, PT interface {
 		return nil, nil, []error{err}
 	}
 	return config.DecodeObject[T, PT](j)
+}
+
+// typedOf returns the decoded object of the last good generation g, or nil if it holds none.
+func typedOf[T any](g goodObject) *T {
+	t, _ := g.typed.(*T)
+	return t
+}
+
+// decodeCached decodes u as T, unless a read already decoded this very object, which it answers from: see
+// decodedObject. The caller holds s.mu.
+func decodeCached[T any, PT interface {
+	*T
+	Default()
+	Validate() error
+}](s *Source, k key, u *unstructured.Unstructured) decodedObject {
+	if d, ok := s.decoded[k]; ok && d.src == u {
+		d.readNo = s.readNo
+		s.decoded[k] = d
+		return d
+	}
+	s.decodes++
+	d := decodedObject{src: u, readNo: s.readNo}
+	obj, unknown, errs := decodeObject[T, PT](u)
+	d.unknown = unknown
+	if obj == nil {
+		d.message = config.CapMessage(joinErrors(errs))
+	} else {
+		if b, ok := any(obj).(*v1alpha1.Binding); ok {
+			// A Binding's status is the informer's to hold, and the status writer reads it there (BindingStatus). The Set's
+			// Binding is read for its spec, and a status kept here would be the one that the generation had when it was first read.
+			b.Status = v1alpha1.BindingStatus{}
+		}
+		d.obj = obj
+	}
+	s.decoded[k] = d
+	return d
 }
 
 // slimmed lists the fields of metadata that the informers do not keep. The API server limits none of them in total beyond the
