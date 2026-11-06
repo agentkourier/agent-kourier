@@ -751,8 +751,8 @@ and is not harmful: a name listed twice is granted once.
 
 - **A new grant on upgrade.** An install on `crds` that sets `config.chatConnection` gains `list` and `watch` on one more Secret by name: the one named like the connection, or `config.chatConnectionSecret`.
   Nothing changes when `rbac.secretNames` already lists it or when `config.chatConnections` renders that connection (its `credentialsSecretRef` is granted instead, and no second Secret is added).
-  The Secret may not exist, for instance when the connection reads a Secret of another name that `rbac.secretNames` lists: the grant then covers nothing, and the broker's informer for it reports not found.
-  Set `config.chatConnectionSecret` to the real name to keep the grant on the Secret that is read. Check the render with `helm template ... | grep -A8 'kind: Role'`.
+  The Secret may not exist, for instance when the connection reads a Secret of another name that `rbac.secretNames` lists: the broker never reads that Secret, because only the chart knows the derived name and the broker reads the ChatConnection's own `credentialsSecretRef`, so the grant goes unused and covers no Secret until
+  one of that name is created in that namespace. Set `config.chatConnectionSecret` to the real name, so that the grant is on the Secret that is read. Check the render with `helm template ... | grep -A8 'kind: Role'`.
 - **A connection in another namespace.** With `config.chatConnection: other-ns/name`, the chart now renders a Role and RoleBinding named `<fullname>-secrets` in `other-ns`, which it did not before when
   nothing else of yours named a Secret there. If a Role of that name exists there already, made by hand, the upgrade fails with `invalid ownership metadata`: delete the hand-made Role first, or give it
   another name (the name the chart uses is `agent-kourier-secrets` for a release called `agent-kourier`).
@@ -761,5 +761,5 @@ and is not harmful: a name listed twice is granted once.
 - **A clearer status.** A Binding whose Secret cannot be read still says `CredentialsUnreadable`, and its message now says which cause it is, and for a Secret in the Binding's namespace names the Secret and,
   when the API server denied the read, the `list` and `watch` that Agent Kourier's ServiceAccount needs: [Binding status](../reference/binding-status.md).
 
-After a [rollback](#roll-back) to a release without the derived grant, an install that dropped the `rbac.secretNames` entry for the ChatConnection's Secret has no Role for it, and the pod exits with
-[code 3](../reference/cli.md#exit-codes) in a loop. Keep the entry until you are sure not to roll back.
+Remove `config.chatConnectionSecret` from the values before a [rollback](#roll-back) to a release without the derived grant: that release's values schema refuses a `config` key it does not have. An install that dropped the `rbac.secretNames` entry for the ChatConnection's Secret has no Role for it after the rollback, so restore the entry in the same change, or the pod exits with
+[code 3](../reference/cli.md#exit-codes) in a loop. Keeping the entry until you are sure not to roll back avoids both steps.

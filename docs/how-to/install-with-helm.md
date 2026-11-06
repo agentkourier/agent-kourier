@@ -64,7 +64,7 @@ kubectl create namespace agent-kourier
 ```
 
 The ChatConnection's Secret holds two keys with exactly these names. It is named `slack`, like the ChatConnection below, so that the
-chart finds it (see [Install on custom resources](#install-on-custom-resources)):
+Role the chart makes names it (see [Install on custom resources](#install-on-custom-resources)):
 
 ```sh
 kubectl -n agent-kourier create secret generic slack \

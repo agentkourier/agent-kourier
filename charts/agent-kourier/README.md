@@ -226,7 +226,7 @@ A team that makes its own Bindings grants its own Secrets the same way, with a R
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
-metadata: {name: agent-kourier-team-a-secrets, namespace: team-a}
+metadata: {name: agent-kourier-secrets-team-a, namespace: team-a}
 rules:
   - apiGroups: [""]
     resources: [secrets]
@@ -235,8 +235,8 @@ rules:
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
-metadata: {name: agent-kourier-team-a-secrets, namespace: team-a}
-roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agent-kourier-team-a-secrets}
+metadata: {name: agent-kourier-secrets-team-a, namespace: team-a}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agent-kourier-secrets-team-a}
 subjects:
   - {kind: ServiceAccount, name: agent-kourier, namespace: agent-kourier}
 ```

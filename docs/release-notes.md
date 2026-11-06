@@ -5,15 +5,16 @@ What changed in each release, newest first, and what you must do about it. The s
 
 ## Version 0.2.1 (unreleased)
 
-The chart now grants the served ChatConnection's Secret by itself, so the install on custom resources needs `config.chatConnection` and nothing else in
-`rbac`, and a team grants its own Secrets in its own namespace. Read [the upgrade section](how-to/upgrade.md#upgrade-to-the-release-that-grants-the-chatconnections-secret) before you upgrade.
+The chart now grants the served ChatConnection's Secret by itself, so the install on custom resources needs `config.chatConnection` and no `rbac.secretNames` entry for that Secret
+(a Binding's token in the release namespace still needs one), and a team grants its own Secrets in its own namespace. Read [the upgrade section](how-to/upgrade.md#upgrade-to-the-release-that-grants-the-chatconnections-secret) before you upgrade.
 
 - **New value `config.chatConnectionSecret`.** With `config.source: crds` and `config.chatConnection` set, the chart grants `list` and `watch` on one Secret by name, in the
   connection's namespace: the Secret named like the connection, or the one `config.chatConnectionSecret` names. Before, the same install needed an `rbac.secretNames` entry for that Secret, or the pod
   exited with code 3 in a loop. An existing entry keeps working, and a Secret named twice is granted once. The value is ignored with `config.source: files`, when
   `config.chatConnection` is empty, and when `config.chatConnections` renders that connection (its `credentialsSecretRef` is granted instead).
-- **One new named grant on upgrade.** An install on `crds` that sets `config.chatConnection` gains `list` and `watch` on one more Secret: the one named like the connection, unless an entry or
-  `config.chatConnectionSecret` already names it. The Secret may not exist (for a connection that reads a Secret of another name), and then the grant covers nothing.
+- **One new named grant on upgrade.** An install on `crds` that sets `config.chatConnection` gains `list` and `watch` on one more Secret: the one named like the connection, or the one `config.chatConnectionSecret` names, unless an `rbac.secretNames` entry already names it or
+  `config.chatConnections` renders that connection. When the connection reads a Secret of another name, the derived Secret may not exist: the broker never reads it, so the grant covers no Secret until one of that name is created
+  in that namespace. Set `config.chatConnectionSecret` to the real name.
 - **A Role in the connection's namespace.** With `config.chatConnection: other-ns/name`, the chart now renders the Role and RoleBinding `<fullname>-secrets` in `other-ns`. A Role of that
   name that someone made by hand there conflicts: the upgrade fails with `invalid ownership metadata` until you delete it or rename it.
 - **A team grants its own Secrets.** The documentation now leads with the team's own Role and RoleBinding in its namespace, two `kubectl` commands, in
