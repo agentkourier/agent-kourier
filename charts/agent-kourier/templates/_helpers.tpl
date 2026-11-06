@@ -184,7 +184,7 @@ Checks that no values file can get past. Included by the Deployment, which every
 {{- /* The minimum is 1.33, the first minor on which the status write of a stored-invalid Binding ratchets (measured; it is refused on 1.30 to 1.32). The -0 lets a
        vendor suffix (v1.33.1-gke.1, v1.33.0-eks-abc) pass. */ -}}
 {{- if not (semverCompare ">=1.33.0-0" .Capabilities.KubeVersion.Version) -}}
-{{- fail (printf "config.source crds (the chart's default unless your values set it) needs Kubernetes 1.33 or later: the API server is %s. 1.33 is the first minor tried on which a status write of a Binding that a rule of the CRDs now refuses is accepted (it is refused on 1.30 to 1.32). To install on this cluster, set config.source: files: the ConfigMap route has no minimum. With helm template, pass the cluster's version (--kube-version): Helm's default is its own" .Capabilities.KubeVersion.Version) -}}
+{{- fail (printf "config.source crds needs Kubernetes 1.33 or later (it is the chart's default unless your values set it): the API server is %s. 1.33 is the first minor tried on which a status write of a Binding that a rule of the CRDs now refuses is accepted (it is refused on 1.30 to 1.32). To install on this cluster, set config.source: files: the ConfigMap route has no minimum. With helm template, pass the cluster's version (--kube-version): Helm's default is its own" .Capabilities.KubeVersion.Version) -}}
 {{- end -}}
 {{- /* A CRD and the custom resources of it in one release can fail where Helm maps the kind, so the CRDs come first: they must already be served
        when the chart renders. A render that does not ask the cluster (helm template, helm install --dry-run=client) has only the versions it is given.

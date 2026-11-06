@@ -349,7 +349,7 @@ slack: socket mode connected
 `config route` is the first line, and it is how the log says which of [the two routes](../explanation/config-routes.md) the broker reads: its `config_source` field is
 `crds` or `files`. With `crds` it also has a `connection` field, the namespace/name of the ChatConnection the broker is set to serve
 (`AGENTKOURIER_CHAT_CONNECTION`), and the later `serving a ChatConnection` line confirms that the cluster has it. With `files` there is no `connection` field: the one
-ChatConnection of the directory is named by `serving a ChatConnection` alone. A log with no `config route` line is from a release older than the one that added it. The order of the first five lines is read from the code and was checked, on both
+ChatConnection of the directory is named by `serving a ChatConnection` alone. The line is logged at `info`: at the default level, the log of a container that has just started and has no `config route` line is from a release older than the one that added it. With `logLevel: warn` or `error` no start line is shown, and a log that kubelet has rotated no longer has its first lines. The order of the first five lines is read from the code and was checked, on both
 routes, against the broker started with a fake cluster; the three `slack:` lines were not re-run against a cluster for this page.
 
 `ready` means the config loaded and the store opened. It does not mean Slack connected: wait for the last line. It

@@ -2,11 +2,75 @@ package broker
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
+
+// A ChatConnection that is not a namespace and a name Kubernetes could hold is refused before anything is logged, and the refusal never shows
+// the value: a token pasted in its place would otherwise reach the log with the route line.
+func TestValidateRefusesAChatConnectionKubernetesCannotHold(t *testing.T) {
+	const canary = "xoxb-FAKE-LEAK-CANARY"
+	for name, conn := range map[string]v1alpha1.ObjectRef{
+		"a token as the namespace":  {Namespace: canary, Name: "slack-main"},
+		"a token as the name":       {Namespace: "agent-kourier", Name: canary},
+		"capitals in the namespace": {Namespace: "Agent-Kourier", Name: "slack-main"},
+		"a dot in the namespace":    {Namespace: "agent.kourier", Name: "slack-main"},
+		"an underscore in the name": {Namespace: "agent-kourier", Name: "slack_main"},
+		"a name of 254 characters":  {Namespace: "agent-kourier", Name: strings.Repeat("a", 254)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := valid(t)
+			c.ConfigSource, c.ConfigDir, c.ChatConnection = SourceCRDs, "", conn
+			err := c.validate()
+			if !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), "DNS-1123") {
+				t.Fatalf("validate = %v; want an ErrWiring that says the name is not a DNS-1123 one", err)
+			}
+			if strings.Contains(err.Error(), conn.Name) || strings.Contains(err.Error(), conn.Namespace) {
+				t.Errorf("validate = %q; want a refusal that does not show the value", err)
+			}
+		})
+	}
+	// A subdomain is a valid name, and a label is a valid namespace.
+	c := valid(t)
+	c.ConfigSource, c.ConfigDir, c.ChatConnection = SourceCRDs, "", v1alpha1.ObjectRef{Namespace: "a-1", Name: "slack.main-1"}
+	if err := c.validate(); err != nil {
+		t.Errorf("validate = %v; want nil for a namespace that is a label and a name that is a subdomain", err)
+	}
+}
+
+// With tracing on, the exporter and the SDK can log warnings of their own as Run starts (here, a timeout it cannot parse); the route line still
+// comes before all of them.
+func TestRunNamesTheConfigRouteBeforeTheExporterSpeaks(t *testing.T) {
+	quietOTel(t)
+	t.Setenv("OTEL_EXPORTER_OTLP_TIMEOUT", "NOT-A-DURATION")
+	out := &logBuffer{}
+	c := startConfig(t)
+	c.Logger = slog.New(slog.NewJSONHandler(out, nil))
+	c.Telemetry = telemetry.Config{Endpoint: "https://collector.example/v1/traces", ServiceName: "test", SampleRatio: 0}
+	r := start(t, c)
+	r.until("/readyz", http.StatusOK)
+
+	recs := logRecords(t, out)
+	otelAt := -1
+	for i, rec := range recs {
+		if msg, _ := rec["msg"].(string); strings.HasPrefix(msg, "otel: ") {
+			otelAt = i
+			break
+		}
+	}
+	if otelAt < 0 {
+		t.Fatalf("no otel: line was logged, so this does not test the order:\n%s", out.String())
+	}
+	if recs[0]["msg"] != "config route" || otelAt == 0 {
+		t.Errorf("the first line is %q and the first otel: line is number %d; want the route first", recs[0]["msg"], otelAt)
+	}
+}
 
 // logRecords parses what a JSON slog handler wrote into one map per line.
 func logRecords(t *testing.T, out *logBuffer) []map[string]any {
