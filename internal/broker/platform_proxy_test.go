@@ -33,7 +33,7 @@ func TestSlackClientHonoursTheProxyEnvironment(t *testing.T) {
 	}))
 	defer proxy.Close()
 
-	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestSlackClientSendsThroughTheProxyEnvironment$") //nolint:gosec // this test binary
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestSlackClientSendsThroughTheProxyEnvironment$")
 	for _, kv := range os.Environ() {
 		if k, _, _ := strings.Cut(kv, "="); !strings.Contains(strings.ToLower(k), "proxy") {
 			cmd.Env = append(cmd.Env, kv)
