@@ -3,8 +3,8 @@
        metadata.name field selector, never get. Kubernetes authorizes such a request by resourceName, so a Role can name single
        Secrets. With config.source files these Roles are namespace-wide, which grants every Secret in the namespace, although Agent
        Kourier keeps in memory only the Opaque ones its config refers to (internal/config/k8ssecrets). Keep those namespaces to ones
-       that hold Agent Kourier's. With crds each Role names the Secrets that the chart can see (agentkourier.secretNames), except in a
-       namespace of rbac.secretNamespaces, which stays namespace-wide. */ -}}
+       that hold Agent Kourier's. With crds each Role names the Secrets that the chart can see (agentkourier.secretNames: config.*, the served
+       ChatConnection's Secret, the DSN's and rbac.secretNames), except in a namespace of rbac.secretNamespaces, which stays namespace-wide. */ -}}
 {{- $named := dict }}
 {{- $namespaces := include "agentkourier.secretNamespaces" . | fromJsonArray }}
 {{- if include "agentkourier.crMode" . }}

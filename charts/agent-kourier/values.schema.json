@@ -38,6 +38,7 @@
       "properties": {
         "source": {"enum": ["files", "crds"], "description": "crds (the default): Binding, AgentBackend and ChatConnection custom resources, read from the cluster; files: the ConfigMap route, for a proof of concept"},
         "chatConnection": {"type": "string", "pattern": "^(([a-z0-9]([-a-z0-9]*[a-z0-9])?)/)?[a-z0-9]([-a-z0-9.]*[a-z0-9])?$|^$", "maxLength": 253, "description": "with source crds: the one ChatConnection this broker serves, namespace/name or name (in the release namespace); empty is the one entry of chatConnections"},
+        "chatConnectionSecret": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$|^$", "maxLength": 253, "description": "with source crds: the name of the Secret the served ChatConnection reads, in the connection's namespace, when it is not named like the connection; empty is the connection's own name"},
         "existingConfigMap": {"type": "string"},
         "agentBackends": {"$ref": "#/definitions/resources"},
         "chatConnections": {"$ref": "#/definitions/resources"},

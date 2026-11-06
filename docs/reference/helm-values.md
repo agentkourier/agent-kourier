@@ -107,6 +107,7 @@ A commented first-install file for any A2A agent, to download and fill in, is th
 |---|---|---|
 | `config.source` | `crds` | crds or files. The route is chosen at start and a reload cannot change it: switching is an upgrade of the release, and with resources in config.\* the CRDs come first (crds.install below, and the chart README). The chart passes AGENTKOURIER_CONFIG_SOURCE only for crds, and reads an unset source as files, so `helm upgrade --reuse-values` from a release that had none keeps the route it had. |
 | `config.chatConnection` | `""` | With source crds, the one ChatConnection this broker serves, as namespace/name or, for one in the release's namespace, name (AGENTKOURIER_CHAT_CONNECTION). A cluster may hold the connections of several brokers, and this one owns only the Bindings whose connectionRef names its connection. Empty is allowed when chatConnections below has exactly one entry: that is the connection. Ignored with files, which serves the one ChatConnection of its directory, so a rollback to files may keep it set. |
+| `config.chatConnectionSecret` | `""` | With source crds and chatConnection set, the Secret that connection reads, by name, in the connection's namespace: the chart cannot see the ChatConnection you apply, and a broker that cannot read its Secret exits at start, so the chart grants this one Secret (rbac below). Empty is the connection's own name: a ChatConnection `slack` whose credentialsSecretRef names the Secret `slack` needs nothing here. Set it when the Secret is named otherwise. Ignored when chatConnections below renders the connection (its credentialsSecretRef is granted instead), when chatConnection is empty, and with files. |
 | `config.existingConfigMap` | `""` |  |
 | `config.agentBackends` | `{}` |  |
 | `config.chatConnections` | `{}` |  |
@@ -236,7 +237,7 @@ The memory limit sets GOMEMLIMIT too: when limits.memory is a plain quantity (a 
 
 Agent Kourier reads the Secrets that its config names, and the Postgres DSN's, through the API (list and watch, in a namespace-scoped Role; it never issues a get). Roles are made in each namespace that holds a referenced Secret, found from config.\* above, and the release namespace with store.type postgres.
 
-With config.source files, such a Role covers every Secret of its namespace. With config.source crds it covers only the Secrets that the chart can name: the ones config.\* and the Postgres DSN refer to, and rbac.secretNames, which list and watch authorize by resourceNames because Agent Kourier's requests carry a metadata.name field selector. Teams that make their own Bindings grant their own Secrets the same way (a Role with resourceNames in their namespace, bound to this ServiceAccount), or you name their namespace in secretNamespaces.
+With config.source files, such a Role covers every Secret of its namespace. With config.source crds it covers only the Secrets that the chart can name: the ones config.\* and the Postgres DSN refer to, the one the served ChatConnection reads (config.chatConnection, and config.chatConnectionSecret when the Secret is not named like it), and rbac.secretNames, which list and watch authorize by resourceNames because Agent Kourier's requests carry a metadata.name field selector. Teams that make their own Bindings grant their own Secrets the same way (a Role with resourceNames in their namespace, bound to this ServiceAccount), or you name their namespace in secretNamespaces.
 
 With crds the chart also makes a ClusterRole (list and watch on the three kinds, patch on bindings/status, get on the three CRDs by name), and binds it to the ServiceAccount, unless rbac.create is false. For example, secretNames: {agent-kourier: [slack-main]} grants the one Secret slack-main of namespace agent-kourier.
 
@@ -244,7 +245,7 @@ With crds the chart also makes a ClusterRole (list and watch on the three kinds,
 |---|---|---|
 | `rbac.create` | `true` |  |
 | `rbac.secretNamespaces` | `[]` | More namespaces to grant the Role in, for every Secret of the namespace. Needed with config.existingConfigMap, which the chart cannot read. With crds a namespace listed here is namespace-wide, whatever rbac.secretNames says of it. |
-| `rbac.secretNames` | `{}` | With config.source crds, more Secrets to grant by name, as a map of namespace to Secret names. Needed for what the chart cannot see: the Secrets of a ChatConnection or a Binding that you make by hand. Ignored with files, whose Roles are namespace-wide, so a rollback to files may keep it set. |
+| `rbac.secretNames` | `{}` | With config.source crds, more Secrets to grant by name, as a map of namespace to Secret names. For Secrets that the chart cannot see and that the platform owns outside the served ChatConnection's (which config.chatConnection already grants): a Binding's token in the release namespace, say. A team's own Secrets are the team's to grant with a Role in its namespace. Ignored with files, whose Roles are namespace-wide, so a rollback to files may keep it set. |
 
 ## service
 

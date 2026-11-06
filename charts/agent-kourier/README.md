@@ -58,20 +58,19 @@ first apply (see below):
 ```yaml
 config:
   chatConnection: agent-kourier/slack
-rbac:
-  secretNames:
-    agent-kourier: [agent-kourier-slack]   # the Secret the ChatConnection reads
 ```
 
 ```sh
 helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.2.0 \
   -n agent-kourier --create-namespace -f my-values.yaml
-kubectl apply -f my-resources.yaml   # a ChatConnection slack, an AgentBackend and a Binding, in namespace agent-kourier
+kubectl apply -f my-resources.yaml   # a ChatConnection slack (reading the Secret slack), an AgentBackend and a Binding, in namespace agent-kourier
 kubectl -n agent-kourier get akbinding
 ```
 
-`rbac.secretNames` is not optional there. With `config.*` empty the chart sees no Secret to name and renders no Role for Secrets, so the broker could not read the
-ChatConnection's Secret and would exit with code 3 in a loop.
+With `config.*` empty the chart cannot see the ChatConnection's Secret, but it knows which connection the broker serves, so it renders a Role in that connection's
+namespace that names one Secret: the one called like the connection (`slack` here). A ChatConnection whose `credentialsSecretRef` names another Secret needs
+`config.chatConnectionSecret` set to that name; otherwise the broker could not read it and would exit with code 3 in a loop. Any other Secret that the chart
+cannot see, such as a Binding's token in the release namespace, still needs a line in `rbac.secretNames` or a Role of its own.
 
 [Install with Helm](https://agentkourier.dev/how-to/install-with-helm/#write-the-values) walks through each field, the
 Secrets, and a dry run that finds a misspelt field before the pod does. The published chart has `image.repository` and
@@ -88,7 +87,7 @@ tier's, with the token-refresh CronJob).
 | Object | When | Notes |
 |---|---|---|
 | Deployment `<fullname>` | always | one container, config at `/etc/agent-kourier` (the ConfigMap of `config.source: files`; the default, `crds`, mounts none), SQLite at `/data` (with `store.type: sqlite`, strategy Recreate), `/tmp` an emptyDir; with Postgres strategy RollingUpdate (one surge, none unavailable) |
-| ServiceAccount, and a Role and RoleBinding for Secrets | always (`rbac.create`) | one Role in each namespace that holds a Secret the config names (with `config.source: crds`, only the Secrets the chart can name: `config.*` and `rbac.secretNames`, so none for `config.*` empty and no `rbac.secretNames`), and in the release namespace with Postgres (the DSN's Secret). It covers every Secret of the namespace; with `config.source: crds` it names the Secrets (`resourceNames`), except in the namespaces of `rbac.secretNamespaces` |
+| ServiceAccount, and a Role and RoleBinding for Secrets | always (`rbac.create`) | one Role in each namespace that holds a Secret the config names (with `config.source: crds`, only the Secrets the chart can name: `config.*`, the served ChatConnection's Secret (`config.chatConnection`, named like it unless `config.chatConnectionSecret` says otherwise) and `rbac.secretNames`), and in the release namespace with Postgres (the DSN's Secret). It covers every Secret of the namespace; with `config.source: crds` it names the Secrets (`resourceNames`), except in the namespaces of `rbac.secretNamespaces` |
 | Lease `<fullname>-leader` | `store.type: postgres` | empty; the replicas elect their leader with it. Kept on `helm uninstall` (`helm.sh/resource-policy: keep`), with its release annotations, so a reinstall under the same release name adopts it; only another release that renders the same name (`fullnameOverride`) would conflict. Do not delete it while Agent Kourier runs: Agent Kourier may not create a Lease, so leadership stops until `helm upgrade` recreates it |
 | Role and RoleBinding `<fullname>-leader` | `store.type: postgres` (`rbac.create`) | `get` and `update` on that one Lease, in the release namespace; no `create`, which cannot be limited by name |
 | ConfigMap `<fullname>-config` | `config.source: files`, unless `config.existingConfigMap` | one `*.yaml` file per resource, from `config.*` |
@@ -117,7 +116,7 @@ NetworkPolicy in another namespace for instance, needs the real name, or you set
   resource's spec exactly as the [resource reference](../../docs/reference/binding.md) describes it (the chart does not interpret it; Agent Kourier's loader validates it at start).
   `namespace` defaults to the release's. Or `config.existingConfigMap`, a ConfigMap you manage, with `rbac.secretNamespaces` to say where
   its Secrets are. Not both.
-- `config.source` (`crds`, the default, or `files`), `config.chatConnection` and `crds.install` (unset: true with `crds`, false with `files`): where Agent Kourier reads those resources from
+- `config.source` (`crds`, the default, or `files`), `config.chatConnection`, `config.chatConnectionSecret` and `crds.install` (unset: true with `crds`, false with `files`): where Agent Kourier reads those resources from
   (see Custom resources instead of a ConfigMap). An install of the ConfigMap route that upgrades with the values it had gets the default: set `config.source: files` to keep it.
 - `store.type` (`sqlite`, the default, or `postgres`) and, with Postgres, `store.postgres.dsnSecret` and `store.postgres.timeouts` (see Store).
 - `replicaCount` (2 with Postgres for a standby) and `leaderElection.*`, the Lease's timings (see High availability).
@@ -158,6 +157,10 @@ What the route needs:
 - **`config.chatConnection`**: the one `ChatConnection` this broker serves, as `namespace/name` (or `name`, in the release namespace). It may be
   left empty when `config.chatConnections` has exactly one entry. A cluster may hold the connections of several brokers, and each owns only the
   Bindings whose `connectionRef` names its connection.
+- **`config.chatConnectionSecret`**: the name of the Secret that connection reads, in the connection's namespace, when it is not named like the connection
+  (empty, the default, is the connection's own name). With `config.source: crds` and `config.chatConnection` set, the chart grants `list` and `watch` on that
+  one Secret by name, since it cannot read the ChatConnection you apply. It is skipped when `config.chatConnections` renders that connection (its
+  `credentialsSecretRef` is granted instead), and ignored with `files` or an empty `config.chatConnection`.
 - **Namespaces that exist.** A file can name a namespace that does not exist; a custom resource cannot.
 
 Move a running install of the ConfigMap route to it in two upgrades, each a working install, and back by the same values (keep `crds: {install: true}` in the values
@@ -179,7 +182,7 @@ kubectl get akbinding,akbackend,akconnection -A
 `kubectl get akbinding`, `akbackend` and `akconnection` (or `bindings.agentkourier.dev` and so on, and `kubectl get agentkourier` for all
 three) list them. **Never `kubectl get bindings`**: that is the core `bindings` resource, which is something else and fails. Going back, with
 `config.source=files`: the ConfigMap returns from the same values, and Helm deletes the custom resources the chart rendered (it stops rendering
-them), while the ones made by hand stay in the cluster, unread, as do the CRDs. The values of the route (`config.chatConnection`, `rbac.secretNames`)
+them), while the ones made by hand stay in the cluster, unread, as do the CRDs. The values of the route (`config.chatConnection`, `config.chatConnectionSecret`, `rbac.secretNames`)
 may stay set: with `files` they are ignored, so going back is the same values with `config.source: files`. `helm uninstall` likewise deletes the
 rendered resources and keeps the CRDs, and with them every custom resource of the cluster: **never delete a CRD to get out of a refusal**, since
 that deletes every team's resources. A reinstall under another release name (or in another namespace) with `crds.install: true`, which is what an unset value is on the default route, is refused by
@@ -212,8 +215,9 @@ The documentation has the same move as a how-to, with the checks to run and the 
 | `get` on the three CRDs, by name | the broker compares, at start and every minute, the annotation `agentkourier.dev/schema-sha256` of each CRD with the hash it was built with, and says the result in its log (when a CRD's result changes) and in `agentkourier_crd_schema_state`. The generated CRD files carry the annotation (their SHA-256 without that line), so a Helm install and a `kubectl apply` apply it (measured), and a GitOps tool that applies the files should too (a statement of what such a tool should do; none has been run). A mismatch warns and stops nothing: update the CRDs the way they were installed, to those of the chart release that matches the image: `helm upgrade` with `crds.install` for CRDs that Helm made, `kubectl apply --server-side -f` of that release's `files/crds` for CRDs that `kubectl` made, and the next minute's comparison says so. What was measured on kind is a forced server-side apply of the files over Helm-made CRDs, which cleared a mismatch; it also moves those fields to `kubectl`, which a later `helm upgrade` may conflict with (not measured). The annotation is a statement by whoever wrote the CRD, not proof of what the API server serves: a CRD edited by hand keeps its hash. A CRD from an older chart or file has none and is reported as `unannotated`, which is not a fault; one the broker may not get is `unknown` |
 
 The Secret Roles change too: with `crds` each names the Secrets the chart can see (`resourceNames`) instead of the whole namespace: those that
-`config.*` and the Postgres DSN refer to, and `rbac.secretNames` (a map of namespace to Secret names) for the ones it cannot, such as the
-credentials of a `ChatConnection` you made by hand. That works because Agent Kourier's informers ask for each Secret by name (a `metadata.name`
+`config.*` and the Postgres DSN refer to, the one the served `ChatConnection` reads (`config.chatConnection`: the Secret of the same name, or
+`config.chatConnectionSecret`, in the connection's namespace), and `rbac.secretNames` (a map of namespace to Secret names) for the ones it cannot
+see, such as a Binding's token in the release namespace. That works because Agent Kourier's informers ask for each Secret by name (a `metadata.name`
 field selector), and Kubernetes authorizes `list` and `watch` by `resourceNames` for such a request: a list without the selector, a Secret the Role
 does not name, and a `get` are forbidden (measured on kind, Kubernetes 1.30.13 and 1.37.0). A namespace in `rbac.secretNamespaces` is still granted whole.
 A team that makes its own Bindings grants its own Secrets the same way, with a Role in its namespace and a RoleBinding to this ServiceAccount

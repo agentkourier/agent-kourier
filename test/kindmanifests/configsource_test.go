@@ -164,14 +164,15 @@ func TestTheTiersRefuseASourceTheyDoNotKnow(t *testing.T) {
 
 // TestTheCustomResourceOverlayRoutesTheTiersConfig: the overlay turns the route on, says which connection the broker serves (the tier's, in its
 // namespace), keeps the CRDs under the release and grants each Secret of the tier by name, with no namespace as a whole, so that what is read is authorized by
-// resourceNames alone. The connection it names is the one in the tier's files, and every Secret the tier's config refers to is granted.
+// resourceNames alone. The connection it names is the one in the tier's files, and every Secret the tier's config refers to is granted: the connection's
+// own by the chart, which derives it from the connection's name (the tier names the two alike), and the others in rbac.secretNames.
 func TestTheCustomResourceOverlayRoutesTheTiersConfig(t *testing.T) {
 	raw, err := os.ReadFile("../../hack/kind/crds-values.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(raw)
-	for _, want := range []string{"source: crds", `existingConfigMap: ""`, "chatConnection: agent-kourier/slack-fast", "install: true", "secretNamespaces: []", "agent-kourier: [slack-fast, agent-kourier-agent-token]"} {
+	for _, want := range []string{"source: crds", `existingConfigMap: ""`, "chatConnection: agent-kourier/slack-fast", "install: true", "secretNamespaces: []", "agent-kourier: [agent-kourier-agent-token]"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("crds-values.yaml lacks %q", want)
 		}
@@ -185,8 +186,13 @@ func TestTheCustomResourceOverlayRoutesTheTiersConfig(t *testing.T) {
 	if granted == nil {
 		t.Fatal("no grant for namespace agent-kourier")
 	}
+	// The chart grants the served connection's Secret, named like the connection, without a line in rbac.secretNames.
+	derived := regexp.MustCompile(`chatConnection: agent-kourier/([a-z0-9-]+)`).FindStringSubmatch(text)
+	if derived == nil {
+		t.Fatal("crds-values.yaml names no chatConnection in namespace agent-kourier")
+	}
 	for _, name := range set {
-		if !strings.Contains(granted[1], name) {
+		if name != derived[1] && !strings.Contains(granted[1], name) {
 			t.Errorf("the tier's config reads the Secret %s, which crds-values.yaml does not grant", name)
 		}
 	}
