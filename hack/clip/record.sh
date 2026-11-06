@@ -24,7 +24,10 @@
 # server by the cluster's internal address.
 #
 # The chart is the published one of the version in charts/agent-kourier/Chart.yaml, so a take for a new release is
-# made after its tag is published. my-values.yaml and my-resources.yaml are extracted from the blocks of those names in
+# made after its tag is published. To record before the final tag, so that the tag's tree carries the clip, set
+# CLIP_CHART_VERSION to a release candidate of that version built from the same code (0.2.1-rc.1 for 0.2.1): the tape
+# still types the version in Chart.yaml, and a helm function in the recorder's hidden setup installs the candidate in
+# its place. Say so in the pull request that brings the clip. my-values.yaml and my-resources.yaml are extracted from the blocks of those names in
 # the page's "Install on custom resources" section at each take; the commands of install.tape follow that section but
 # are written in the tape, so a change to them on the page needs the same change there.
 set -euo pipefail
@@ -119,12 +122,15 @@ extract() {
 
 # record ENV_FILE CHANNEL READY_REGEX OUT
 record() {
-  local env_file=$1 channel=$2 ready=$3 out=$4 work=${STATE}/work tape version
+  local env_file=$1 channel=$2 ready=$3 out=$4 work=${STATE}/work tape version installed
   version=$(sed -n 's/^version: //p' "${ROOT}/charts/agent-kourier/Chart.yaml")
   [ -n "${version}" ] || die "no version in charts/agent-kourier/Chart.yaml"
+  installed=${CLIP_CHART_VERSION:-${version}}
+  [[ ${installed} == "${version}" || ${installed} =~ ^${version//./\\.}-rc\.[0-9]+$ ]] ||
+    die "CLIP_CHART_VERSION must be ${version} or a release candidate of it (${version}-rc.N), not ${installed}"
   # Before reset, so a take for an unpublished version leaves the cluster as it was.
-  helm show chart "${CHART}" --version "${version}" >/dev/null ||
-    die "no chart ${CHART} ${version} is published yet: a take is made after the release's tag publishes it"
+  helm show chart "${CHART}" --version "${installed}" >/dev/null ||
+    die "no chart ${CHART} ${installed} is published yet: a take is made after a tag publishes it"
   docker build -q -t "${RECORDER}" "${HERE}" >/dev/null
   reset
   rm -rf "${work}" && mkdir -p "${work}" "${out}"
@@ -140,11 +146,18 @@ record() {
   tape=${tape//@CHANNEL@/"${channel}"}
   tape=${tape//@READY@/"${ready}"}
   printf '%s\n' "${tape}" >"${STATE}/install.tape"
+  # The hidden setup sources this file. It is empty unless a candidate stands in for the typed version.
+  : >"${STATE}/setup.sh"
+  if [ "${installed}" != "${version}" ]; then
+    printf 'helm() { local a=() x; for x in "$@"; do [ "$x" = %q ] && x=%q; a+=("$x"); done; command helm "${a[@]}"; }\n' \
+      "${version}" "${installed}" >"${STATE}/setup.sh"
+    echo "record.sh: the tape types --version ${version}; the take installs ${installed}" >&2
+  fi
 
   docker run --rm --network kind \
     -e KUBECONFIG=/kube/config -v "${KCFG_INTERNAL}:/kube/config:ro" \
     --env-file "${env_file}" \
-    -v "${work}:/work" -v "${out}:/vhs/out" -v "${STATE}/install.tape:/vhs/install.tape:ro" \
+    -v "${work}:/work" -v "${out}:/vhs/out" -v "${STATE}/install.tape:/vhs/install.tape:ro" -v "${STATE}/setup.sh:/vhs/setup.sh:ro" \
     "${RECORDER}" install.tape
   ls -l "${out}"
 }
