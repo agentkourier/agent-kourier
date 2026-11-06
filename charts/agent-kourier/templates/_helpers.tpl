@@ -200,7 +200,7 @@ Checks that no values file can get past. Included by the Deployment, which every
 {{- end -}}
 {{- end -}}
 {{- $_ := include "agentkourier.chatConnection" . -}}
-{{- /* With files, config.chatConnection and rbac.secretNames are ignored, and the chart does not refuse them: a rollback to files keeps the values
+{{- /* With files, config.chatConnection, config.chatConnectionSecret and rbac.secretNames are ignored, and the chart does not refuse them: a rollback to files keeps the values
        it had, in an incident, and they are harmless there. */ -}}
 {{- end -}}
 {{- if and .Values.serviceMonitor.enabled (not .Values.service.enabled) -}}
@@ -293,8 +293,9 @@ says where its Secrets are). With none of these, the release namespace.
 
 {{/*
 With config.source crds, the Secrets that the chart can name, by namespace, as a JSON object of sorted lists: the ChatConnections'
-credentials, the Bindings' identity tokens, the AgentBackends' header values, the Postgres DSN's (in the release namespace) and
-rbac.secretNames. The Roles of the Secrets name exactly these (resourceNames). It parallels agentkourier.secretNamespaces, which files
+credentials, the Bindings' identity tokens, the AgentBackends' header values, the Postgres DSN's (in the release namespace), the Secret
+of the served ChatConnection when config.chatConnection names it (see below) and rbac.secretNames. The Roles of the Secrets name exactly
+these (resourceNames). It parallels agentkourier.secretNamespaces, which files
 mode keeps as it is: test/chart holds the two to the same references.
 */}}
 {{- define "agentkourier.secretNames" -}}
@@ -318,6 +319,23 @@ mode keeps as it is: test/chart holds the two to the same references.
 {{- end -}}
 {{- if eq .Values.store.type "postgres" -}}
 {{- include "agentkourier.addSecret" (dict "found" $found "namespace" $.Release.Namespace "name" .Values.store.postgres.dsnSecret.name) -}}
+{{- end -}}
+{{- /* The chart cannot see a ChatConnection that is applied by hand, but it knows which one the broker serves, and a broker that cannot read
+       its Secret exits at start. A reference is namespace-local, so the Secret is in the connection's namespace: config.chatConnectionSecret,
+       or the connection's own name when that is empty. A connection that config.chatConnections renders is granted by its own
+       credentialsSecretRef above, and a derived name would only add a second Secret to the grant. */ -}}
+{{- if .Values.config.chatConnection -}}
+{{- $served := include "agentkourier.chatConnection" . -}}
+{{- $rendered := false -}}
+{{- range $name, $r := .Values.config.chatConnections -}}
+{{- if eq $served (printf "%s/%s" (default $.Release.Namespace $r.namespace) $name) -}}
+{{- $rendered = true -}}
+{{- end -}}
+{{- end -}}
+{{- if not $rendered -}}
+{{- $parts := splitList "/" $served -}}
+{{- include "agentkourier.addSecret" (dict "found" $found "namespace" (first $parts) "name" (default (last $parts) .Values.config.chatConnectionSecret)) -}}
+{{- end -}}
 {{- end -}}
 {{- range $ns, $names := .Values.rbac.secretNames -}}
 {{- range $name := $names -}}
