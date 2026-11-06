@@ -796,6 +796,42 @@ func TestCRModeRefusals(t *testing.T) {
 	}
 }
 
+// TestRefusalsDoNotCallTheRouteTheDefaultOfAValuesFileThatSetIt: the values the chart sees hold crds whether the file said so or the chart's
+// own values did, and no template can tell the two apart (the default is filled in before it runs; with --reuse-values an unset value reads
+// as files instead). So a refusal that names the default says it is the default unless the values set the route, which is true either way,
+// and never "(the chart's default)" outright, which told an operator who had set config.source: crds on purpose that he had not.
+func TestRefusalsDoNotCallTheRouteTheDefaultOfAValuesFileThatSetIt(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	image := "image.repository=registry.example.test/agent-kourier"
+	const unless = "the chart's default unless your values set it"
+	for _, set := range []struct{ name, route string }{{"config.source unset", ""}, {"config.source crds set", ",config.source=crds"}} {
+		for _, tc := range []struct {
+			name string
+			args []string
+		}{
+			{"no connection named", []string{"--set", image + set.route}},
+			{"a ConfigMap of its own", []string{"--set", image + set.route + ",config.chatConnection=c,config.existingConfigMap=mine"}},
+			{"Kubernetes 1.32", []string{"--set", image + set.route + ",config.chatConnection=c", "--kube-version", "v1.32.9"}},
+			{"the CRDs are not served", []string{"--set", image + set.route + ",config.chatConnection=c,crds.install=false", "--kube-version", "v1.34.0"}},
+		} {
+			t.Run(set.name+", "+tc.name, func(t *testing.T) {
+				t.Parallel()
+				_, err := render(t.Context(), t, "agent-kourier", "agent-kourier", tc.args...)
+				if err == nil {
+					t.Fatal("the chart rendered; want a refusal")
+				}
+				if !strings.Contains(err.Error(), unless) {
+					t.Errorf("render error = %v; want one that says the route is %q", err, unless)
+				}
+				if strings.Contains(err.Error(), "default)") {
+					t.Errorf("render error = %v; want no parenthesis that ends in \"default)\"", err)
+				}
+			})
+		}
+	}
+}
+
 // TestCRModeKubeVersions: the minimum is 1.33 and a vendor suffix does not turn a good version away; helm's own default for a render that
 // names no version (this helm's, which is newer) is above it.
 func TestCRModeKubeVersions(t *testing.T) {
