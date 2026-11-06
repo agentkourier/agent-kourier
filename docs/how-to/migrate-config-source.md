@@ -1,13 +1,16 @@
 # Move the config between a ConfigMap and custom resources
 
-By default Agent Kourier reads its `ChatConnection`, `AgentBackend` and `Binding` resources from files, usually a ConfigMap.
-The Helm chart can instead have it read them from the cluster as custom resources, so that each team owns its own
-Bindings. This page moves a running install from the ConfigMap to custom resources and back. At the end, `kubectl get
-akbinding` lists your Bindings with their status, and you know what a move back keeps and what it deletes.
+Agent Kourier reads its `ChatConnection`, `AgentBackend` and `Binding` resources from the cluster as custom resources, which is the
+Helm chart's default and the route to run on Kubernetes, so that each team owns its own Bindings. Or it reads them from files, usually a
+ConfigMap, which is the quick route for a proof of concept. This page moves a running install from the ConfigMap to custom resources and
+back. At the end, `kubectl get akbinding` lists your Bindings with their status, and you know what a move back keeps and what it deletes.
 
 Read [Choose a config route](../explanation/config-routes.md) first if you have not decided which route fits. The short
-version: the ConfigMap is the simple route for one team, and custom resources are for several teams that each write their
-own Bindings.
+version: the ConfigMap is the simple route for one team or a trial, and custom resources are for several teams that each write their
+own Bindings and for an install that is meant to last.
+
+**An install that was made on the ConfigMap route, and should stay there,** needs no move. Its values file says `config.source: files`: the chart's default is custom resources, and an upgrade with the old values
+gets it. [Upgrade](upgrade.md#upgrade-to-the-release-that-makes-custom-resources-the-default) lists what the chart refuses and says.
 
 ## Before you start
 
@@ -52,9 +55,12 @@ manifest (`helm get manifest` shows none), so a later chart upgrade does not cha
 
 ```sh
 helm upgrade agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version <version> \
-  -n agent-kourier -f my-values.yaml --set crds.install=true
+  -n agent-kourier -f my-values.yaml --set config.source=files,crds.install=true
 kubectl get crd | grep agentkourier.dev
 ```
+
+`config.source=files` is there because the chart's default is custom resources: a values file from before that says nothing about the route, and without it
+this upgrade would be refused, with the message that says to set it. Put `config.source: files` in the values file and take it out in step 2.
 
 The `grep` prints three lines: `agentbackends.agentkourier.dev`, `bindings.agentkourier.dev` and `chatconnections.agentkourier.dev`.
 The broker still reads its files. The pod does not restart if the chart release is the one you already run: `--version` of another release carries that release's image
@@ -147,14 +153,14 @@ the Postgres DSN's, stop the start (exit code 3) when they cannot be read.
 
 ### Apply the CRDs yourself
 
-An installer that may not create CRDs leaves `crds.install` off, and an administrator applies the CRDs once, from the chart:
+An installer that may not create CRDs sets `crds.install: false` (unset, it is true with custom resources), and an administrator applies the CRDs once, from the chart:
 
 ```sh
 helm pull oci://ghcr.io/agentkourier/charts/agent-kourier --version <version> --untar
 kubectl apply --server-side -f agent-kourier/files/crds
 ```
 
-Choose one owner for the CRDs. Helm will not take over CRDs that `kubectl` made (`invalid ownership metadata`), and two releases
+Choose one owner for the CRDs. Helm will not take over CRDs that `kubectl` made (`invalid ownership metadata`), so a release on a cluster that has them from `kubectl` needs `crds.install: false`, and two releases
 that render the same CRD conflict.
 
 ## Check that it worked
@@ -307,7 +313,7 @@ A Secret outside the release namespace needs a grant on this route, and `rbac.se
 and is that grant. The other way is `rbac.secretNamespaces`, which replaces the chart's default of the release namespace, so list the release namespace as well; and if a team's Role has the name
 the chart would give its own there (`<fullname>-secrets`, which is `agent-kourier-secrets` for the release on this page), delete it first, or the upgrade fails with `invalid ownership metadata`.
 
-Keep `crds.install: true` while you do; it does not need to change. What the move back does:
+Keep `crds.install: true` while you do, in the values file: unset it is false with `files`, and the release would stop rendering the CRDs. What the move back does:
 
 | | After the move back |
 |---|---|
@@ -342,6 +348,7 @@ is held, a Binding that is deleted stays held, and leaves by itself once the con
 
 | What you see | Why, and what to do |
 |---|---|
+| `helm upgrade` fails with `config.existingConfigMap is for config.source files, and config.source is crds` | The values still name a ConfigMap and say nothing of the route, which defaults to custom resources. To stay on the ConfigMap, set `config.source: files`. To move, follow [Move a ConfigMap you manage yourself](#move-a-configmap-you-manage-yourself). Nothing changed. |
 | `helm upgrade` fails with `config.source crds needs the CRDs` | Step 1 was skipped, or the CRDs were deleted. Install them first. Nothing changed. |
 | `helm upgrade` fails with `config.source crds needs Kubernetes 1.33 or later` | The API server is older. The ConfigMap route has no minimum: stay on it. With `helm template`, pass the cluster's version with `--kube-version`. |
 | The pod crash-loops and `kubectl logs` says `ChatConnection agent-kourier/slack was not found` (exit code 2) | The broker owns one ChatConnection, named by `AGENTKOURIER_CHAT_CONNECTION`, and does not start without it. Apply it, or name the one that exists in `config.chatConnection`. Once the resources exist the pod starts at its next restart, with nothing else to do. |

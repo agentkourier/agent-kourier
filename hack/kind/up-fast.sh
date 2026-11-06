@@ -27,7 +27,7 @@
 # uses to freeze or kill the leader's process. The rest of the suite runs on two replicas too. Without it, or with 1, there is one replica and
 # no signaler, and S16 skips. Re-running with another E2E_REPLICAS changes the replicas in place.
 #
-# E2E_CONFIG_SOURCE=crds runs Agent Kourier on custom resources instead of the ConfigMap (the default, files): the CRDs are installed first, with
+# E2E_CONFIG_SOURCE=crds runs Agent Kourier on custom resources instead of the ConfigMap (the tier default, files, which the tiers' values name with config.source files: the chart's own default is crds): the CRDs are installed first, with
 # the release still on the ConfigMap route, then the same config is applied as Binding, AgentBackend and ChatConnection resources and the release is
 # upgraded to read them (lib.sh's deploy_agentkourier, with hack/kind/crds-values.yaml): the move the chart README gives. The E2E suite is the same on
 # either, and the scenarios that are about the custom resources (the CR_ tests) skip on the ConfigMap route. Re-running with the other value moves

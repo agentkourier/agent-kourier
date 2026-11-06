@@ -171,7 +171,7 @@ With custom resources that never stops the broker: a bad object is left out and 
 The API server refused the pod access to Secrets, or, with `config.source: crds`, to the custom resources. The pod reads
 each Secret its config names through an informer of its own. What a refusal does depends on the route:
 
-- **Files (`config.source: files`, the default).** A `forbidden` or `unauthorized` answer for any Secret the config names ends the start at
+- **Files (`config.source: files`).** A `forbidden` or `unauthorized` answer for any Secret the config names ends the start at
   once with `the API server denied access to Secrets` and exit code 3. The same answer for a Secret that a later config change names does not
   stop the pod: that reload fails with the same message, the log says `config reload failed; keeping the last good snapshot`, and the last good
   config stays in force.

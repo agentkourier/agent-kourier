@@ -236,7 +236,7 @@ func firstDifference(want, got string) string {
 func TestRefusals(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
-	image := "image.repository=registry.example.test/agent-kourier"
+	image := "image.repository=registry.example.test/agent-kourier,config.source=files"
 	tests := []struct {
 		name string
 		args []string
@@ -259,7 +259,7 @@ func TestRefusals(t *testing.T) {
 		{"a Secret name with a slash", []string{"--set", image, "--set", "store.type=postgres,store.postgres.dsnSecret.name=a/b,store.postgres.dsnSecret.key=dsn"}, "store.postgres.dsnSecret.name"},
 		{"a DSN with a password in the values", []string{"--set", image, "--set-json", `extraEnv=[{"name":"X","value":"postgres://agentkourier:hunter2@db:5432/agentkourier"}]`}, "looks like a Postgres DSN with a password"},
 		{"a postgresql:// URL with a percent-encoded password", []string{"--set", image, "--set-json", `config.chatConnections={"c":{"spec":{"note":"postgresql://u:p%40ss@db/x"}}}`}, "looks like a Postgres DSN with a password"},
-		{"no image", nil, "image.repository is required"},
+		{"no image", []string{"--set", "config.source=files"}, "image.repository is required"},
 		{"a config two ways", []string{"--set", image, "--set", "config.existingConfigMap=mine", "-f", values("minimal")}, "set one"},
 		{"a monitor without its Service", []string{"--set", image, "--set", "serviceMonitor.enabled=true"}, "serviceMonitor.enabled needs service.enabled"},
 		{"a NetworkPolicy without the API server", []string{"--set", image, "--set", "networkPolicy.enabled=true"}, "networkPolicy.kubeApiServer.cidrs"},
@@ -299,7 +299,7 @@ func TestRefusals(t *testing.T) {
 func TestLookalikeNamesRender(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
-	image := "image.repository=registry.example.test/agent-kourier"
+	image := "image.repository=registry.example.test/agent-kourier,config.source=files"
 	for _, tc := range []struct{ name, setJSON string }{
 		{"a Secret named taxapp-slack", `config.chatConnections={"c":{"spec":{"platform":"slack","tokenSecretRef":{"name":"taxapp-slack"}}}}`},
 		{"a namespace named linuxapp-prod", `config.bindings={"b":{"namespace":"linuxapp-prod","spec":{"note":"xoxbox-prod"}}}`},
@@ -365,16 +365,16 @@ func TestLivenessProbeDefaultsAndOverride(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
 	var d appsv1.Deployment
-	find(t, mustRender(t, "agent-kourier", "agent-kourier", "--set", "image.repository=agent-kourier"), "Deployment", "agent-kourier", &d)
+	find(t, mustRender(t, "agent-kourier", "agent-kourier", "--set", "image.repository=agent-kourier,config.source=files"), "Deployment", "agent-kourier", &d)
 	if lp := d.Spec.Template.Spec.Containers[0].LivenessProbe; lp.PeriodSeconds != 10 || lp.FailureThreshold != 3 {
 		t.Errorf("default liveness probe %+v; want ten seconds and three misses", lp)
 	}
-	find(t, mustRender(t, "agent-kourier", "agent-kourier", "--set", "image.repository=agent-kourier,livenessProbe.periodSeconds=5,livenessProbe.failureThreshold=8"), "Deployment", "agent-kourier", &d)
+	find(t, mustRender(t, "agent-kourier", "agent-kourier", "--set", "image.repository=agent-kourier,config.source=files,livenessProbe.periodSeconds=5,livenessProbe.failureThreshold=8"), "Deployment", "agent-kourier", &d)
 	if lp := d.Spec.Template.Spec.Containers[0].LivenessProbe; lp.PeriodSeconds != 5 || lp.FailureThreshold != 8 {
 		t.Errorf("liveness probe %+v; want the values' five seconds and eight misses", lp)
 	}
 	for _, bad := range []string{"livenessProbe.failureThreshold=0", "livenessProbe.periodSeconds=0", "livenessProbe.failureThreshold=x"} {
-		if _, err := render(t.Context(), t, "agent-kourier", "agent-kourier", "--set", "image.repository=agent-kourier,"+bad); err == nil {
+		if _, err := render(t.Context(), t, "agent-kourier", "agent-kourier", "--set", "image.repository=agent-kourier,config.source=files,"+bad); err == nil {
 			t.Errorf("--set %s rendered; want it refused", bad)
 		}
 	}
@@ -425,7 +425,7 @@ func TestPostgresStore(t *testing.T) {
 	bindingInSRE := `config.bindings={"b":{"namespace":"sre","spec":{"identity":{"tokenSecretRef":{"name":"t"}}}}}`
 	postgres := []string{"--set", "store.type=postgres,store.postgres.dsnSecret.name=agent-kourier-pg,store.postgres.dsnSecret.key=dsn", "--set-json", bindingInSRE}
 	deployment := func(args ...string) (appsv1.Deployment, []object, map[string]string) {
-		objs := mustRender(t, "agent-kourier", "agent-kourier-system", append([]string{"--set", "image.repository=agent-kourier"}, args...)...)
+		objs := mustRender(t, "agent-kourier", "agent-kourier-system", append([]string{"--set", "image.repository=agent-kourier,config.source=files"}, args...)...)
 		var d appsv1.Deployment
 		find(t, objs, "Deployment", "agent-kourier", &d)
 		env := map[string]string{}
@@ -503,7 +503,7 @@ func TestPostgresStore(t *testing.T) {
 func TestLeaderElection(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
-	pg := []string{"--set", "image.repository=agent-kourier,store.type=postgres,store.postgres.dsnSecret.name=pg,store.postgres.dsnSecret.key=dsn,replicaCount=2"}
+	pg := []string{"--set", "image.repository=agent-kourier,config.source=files,store.type=postgres,store.postgres.dsnSecret.name=pg,store.postgres.dsnSecret.key=dsn,replicaCount=2"}
 	objs := mustRender(t, "agent-kourier", "agent-kourier-system", append(pg, "--set", "podDisruptionBudget.enabled=true,podDisruptionBudget.minAvailable=1")...)
 
 	var d appsv1.Deployment
@@ -581,7 +581,7 @@ func TestLeaderElection(t *testing.T) {
 	if objs := mustRender(t, "agent-kourier", "agent-kourier-system", append(pg, "--set", "rbac.create=false")...); slices.ContainsFunc(objs, func(o object) bool { return o.kind() == "Role" || o.kind() == "RoleBinding" }) || !slices.Contains(kinds(objs), "Lease/agent-kourier-system/agent-kourier-leader") {
 		t.Errorf("rbac.create=false rendered %v; want the Lease and no Role", kinds(objs))
 	}
-	objs = mustRender(t, "agent-kourier", "agent-kourier-system", "--set", "image.repository=agent-kourier")
+	objs = mustRender(t, "agent-kourier", "agent-kourier-system", "--set", "image.repository=agent-kourier,config.source=files")
 	if slices.ContainsFunc(objs, func(o object) bool { return o.name() == "agent-kourier-leader" }) {
 		t.Errorf("SQLite rendered the Lease or its Role: %v", kinds(objs))
 	}
@@ -897,7 +897,7 @@ func TestNetworkPolicyAllowsThePostgresDatabase(t *testing.T) {
 func TestExistingClaimAndConfigMapAreNotRendered(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
-	objs := mustRender(t, "agent-kourier", "agent-kourier", "--set", "image.repository=agent-kourier", "--set", "config.existingConfigMap=mine", "--set", "persistence.existingClaim=mine-data")
+	objs := mustRender(t, "agent-kourier", "agent-kourier", "--set", "image.repository=agent-kourier,config.source=files", "--set", "config.existingConfigMap=mine", "--set", "persistence.existingClaim=mine-data")
 	for _, o := range objs {
 		if o.kind() == "ConfigMap" || o.kind() == "PersistentVolumeClaim" {
 			t.Errorf("rendered %s %s, which the values say the operator manages", o.kind(), o.name())
@@ -1082,7 +1082,9 @@ func TestRenderedConfigLoadsLikeTheTiers(t *testing.T) {
 			vals := filepath.Join(t.TempDir(), "values.json")
 			writeJSON(t, vals, map[string]any{
 				"image": map[string]any{"repository": "agent-kourier"},
+				"crds":  map[string]any{"install": false},
 				"config": map[string]any{
+					"source":          "files",
 					"agentBackends":   entries(want.AgentBackends, func(o v1alpha1.AgentBackend) (string, string, any) { return o.Name, o.Namespace, o.Spec }),
 					"chatConnections": entries(want.ChatConnections, func(o v1alpha1.ChatConnection) (string, string, any) { return o.Name, o.Namespace, o.Spec }),
 					"bindings":        entries(want.Bindings, func(o v1alpha1.Binding) (string, string, any) { return o.Name, o.Namespace, o.Spec }),

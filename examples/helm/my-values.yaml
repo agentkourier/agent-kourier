@@ -5,7 +5,12 @@
 # Change the four lines marked "yours", then install with -f my-values.yaml. The steps around it (the Secrets, a dry
 # run that checks this file, the install) are in https://agentkourier.dev/how-to/install-with-helm/.
 # Keep the file: an upgrade passes it again.
+#
+# This file is the quick route for a proof of concept: the chart writes the resources below into a ConfigMap. The chart's default,
+# and the route to run on Kubernetes, reads them as custom resources instead (config.source crds), which other
+# teams can add to; https://agentkourier.dev/explanation/config-routes/ says which to choose.
 config:
+  source: files
   # How Agent Kourier talks to Slack. The Secret holds the bot token and the app-level token under the keys botToken
   # and appToken, in the release's namespace.
   chatConnections:

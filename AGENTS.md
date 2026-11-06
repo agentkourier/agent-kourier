@@ -72,7 +72,7 @@ golangci-lint runs as `go tool golangci-lint`, never a global install.
   `e2e-full-down`, `e2e-ax-down` and `e2e-down` (all) tear them down. `e2e-fast` / `e2e-full` / `e2e-ax` run the E2E tests in that tier
   as an in-cluster Job (`hack/kind/e2e-run.sh`).
 - `E2E_CONFIG_SOURCE=crds make e2e-fast-up` (or `e2e-full-up`) runs the tier on custom resources: the CRDs first, then the same config as CRs and the
-  release upgraded with `hack/kind/crds-values.yaml`, as the chart README says to move. The default, `files`, is the ConfigMap route. The bring-up moves a tier
+  release upgraded with `hack/kind/crds-values.yaml`, as the chart README says to move. The default, `files`, is the ConfigMap route, which each tier's values name (`config.source: files`) because the chart's own default is `crds`. The bring-up moves a tier
   between the two in place; `e2e-run.sh` reads the source from the Deployment, and the `CR_` tests skip on files. Run `make e2e-fast` on each source before
   a change to `internal/config`, the chart or `hack/kind`.
 - `make e2e-crs-scenarios` runs what the Job cannot, because its image has no kubectl or Helm (`hack/kind/crs-scenarios.sh`; the fast tier up on

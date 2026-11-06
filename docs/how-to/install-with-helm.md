@@ -14,7 +14,20 @@ thing to wire.
   the nodes need no pull Secret.
 - A Slack app with a bot token and an app-level token, invited to a channel: see [Configure Slack](configure-slack.md).
 - `helm`, which pulls the chart from an OCI registry, and `kubectl`.
-- For the check before you install: `yq`, and `docker` to run the image.
+- For custom resources, the chart's default route: Kubernetes 1.33 or later, and a right to create CustomResourceDefinitions (they are
+  cluster-scoped), or an administrator who applies them once ([Apply the CRDs yourself](migrate-config-source.md#apply-the-crds-yourself)).
+- For the check before you install a ConfigMap: `yq`, and `docker` to run the image.
+
+## Choose the route
+
+Agent Kourier reads its `ChatConnection`, `AgentBackend` and `Binding` resources from one of two places, and the chart's default is the first.
+
+- **Custom resources** (`config.source: crds`, the default) are the route to run on Kubernetes. The chart installs the CRDs and the broker, and you apply the
+  three resources with `kubectl` or a GitOps tool, so that each team can own its Bindings and see what became of them in `kubectl get akbinding`. It needs Kubernetes 1.33 or later.
+- **A ConfigMap** (`config.source: files`) is the quick route for a proof of concept. The chart writes the resources of your values file into a ConfigMap, which needs
+  no CRDs, no cluster-scoped right and no minimum version. The starter file and `agent-kourier init` below write this route.
+
+[Choose a config route](../explanation/config-routes.md) says how they differ when something is wrong.
 
 ## The release
 
@@ -71,6 +84,90 @@ kubectl -n agent-kourier create secret generic agent-kourier-agent-token --from-
 ```
 
 Tokens never go in the values file. The chart refuses a value that looks like a Slack token.
+
+## Install on custom resources
+
+The chart installs the CRDs and the broker, and you apply the resources. They are two steps because a release that renders the CRDs and
+resources of them fails in its first apply (Helm cannot map a kind that is not yet served), so the chart refuses to render
+`config.chatConnections`, `config.agentBackends` or `config.bindings` as custom resources into a release that is installing their CRDs. A release with none of them renders no custom resource, and installs the CRDs itself.
+
+The values name the ChatConnection the broker serves, as `namespace/name`, and grant the Secrets its resources name. The chart cannot see the Secrets of
+resources you apply yourself, so a Role that names each one is made from `rbac.secretNames`:
+
+```yaml title="my-values.yaml"
+config:
+  chatConnection: agent-kourier/slack
+rbac:
+  secretNames:
+    agent-kourier: [agent-kourier-slack]   # add agent-kourier-agent-token if the agent verifies tokens
+```
+
+```sh
+helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.6 \
+  -n agent-kourier -f my-values.yaml
+```
+
+The pod exits with code 2 and restarts until the ChatConnection it is told to serve exists (`ChatConnection agent-kourier/slack was not found`), so it
+is not ready yet. Apply the resources. They are the starter file's, as objects; change the four lines marked `yours`:
+
+```yaml title="my-resources.yaml"
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: slack
+  namespace: agent-kourier
+spec:
+  platform: slack
+  credentialsSecretRef: {name: agent-kourier-slack}
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: agent
+  namespace: agent-kourier
+spec:
+  dialect: a2a
+  url: http://my-agent.my-namespace.svc.cluster.local:8083/a2a/ # yours: the agent's A2A URL
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: my-binding
+  namespace: agent-kourier
+spec:
+  agent:
+    backendRef: {name: agent}
+    namespace: my-namespace # yours: the agent's namespace
+    name: my-agent # yours: the agent's name
+  identity:
+    userId: agent-kourier
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789 # yours: the channel's ID (starts with C), not its name
+    output: live
+  interactions: {askUser: false}
+```
+
+```sh
+kubectl apply --dry-run=server -f my-resources.yaml
+kubectl apply -f my-resources.yaml
+kubectl -n agent-kourier get akbinding
+```
+
+The dry run asks the API server to check each object against the CRDs' schema, and names the field of a refusal. The checks that only the broker
+makes show afterwards in the Binding's status: [Check that it worked](migrate-config-source.md#check-that-it-worked) reads it. The pod starts at its
+next restart after the ChatConnection exists, which Kubernetes does by itself. [Let a team add its own Binding](migrate-config-source.md#let-a-team-add-its-own-binding)
+says what a team needs to write its own.
+
+If the chart refuses with `config.source crds needs Kubernetes 1.33 or later`, the cluster is older: install the ConfigMap route below, which has no minimum.
+An installer that may not create CRDs sets `crds.install: false` (unset, it is true with custom resources), and an administrator applies them first. So does a second broker in the same cluster: the CRDs are
+the first release's, and a second release that renders them is refused by Helm (`invalid ownership metadata`).
+
+## The ConfigMap route
+
+[Write the values](#write-the-values), [Check the values before you install](#check-the-values-before-you-install) and [Install the chart](#install-the-chart)
+install the ConfigMap route, which the starter file and `agent-kourier init` name with `config.source: files`. With `files`, `crds.install` is false unless you set it, so they install no CRDs.
+Moving to custom resources later is [the how-to's](migrate-config-source.md).
 
 ## Write the values
 
@@ -164,9 +261,9 @@ it reads the Binding's channel, and it exits 1 if Slack rejects the token. It do
 resources or the Secrets: those errors show only when the pod starts. Reading the rest of its output is in
 [Tune triggers with a dry run](tune-triggers.md).
 
-This checks the files of the default route. With custom resources (`config.source: crds`) the chart renders no ConfigMap and the
+This checks the files of the ConfigMap route. With custom resources (`config.source: crds`, the default) the chart renders no ConfigMap and the
 resources are objects: check each against the CRDs' schema with `kubectl apply --dry-run=server -f <file>`, which names the field of a
-refusal. The checks that only the broker makes show afterwards, in the Binding's status
+refusal, as [above](#install-on-custom-resources). The checks that only the broker makes show afterwards, in the Binding's status
 ([Move the config between a ConfigMap and custom resources](migrate-config-source.md)).
 
 ## Install the chart
@@ -179,9 +276,9 @@ helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --ver
 The defaults run one replica with SQLite on a 1 GiB volume. For Postgres and a standby, see
 [Run two replicas (high availability)](high-availability.md).
 
-The defaults also read the resources from a ConfigMap. The chart can instead install custom resource definitions and have the broker read the resources
-from the cluster, so that other teams write their own Bindings: [Choose a config route](../explanation/config-routes.md) says when that is worth it, and
-[Move the config between a ConfigMap and custom resources](migrate-config-source.md) does it on a running install.
+The starter file names `config.source: files`, so this install reads the resources from a ConfigMap and installs no CRDs. To run on custom resources
+instead, so that other teams write their own Bindings, use [Install on custom resources](#install-on-custom-resources) for a new install, and
+[Move the config between a ConfigMap and custom resources](migrate-config-source.md) on a running one; [Choose a config route](../explanation/config-routes.md) says when that is worth it.
 
 If the nodes may pull only from your own registry, copy the image there by digest and pass
 `--set image.repository=<registry>/<repo>/agent-kourier`. The chart keeps its pinned digest, so the copy must have the
@@ -236,7 +333,7 @@ kubectl -n agent-kourier get pods
 kubectl -n agent-kourier logs deploy/agent-kourier
 ```
 
-A healthy start logs these lines, in this order:
+A healthy start logs these lines, in this order (the first is read from the shared reload code and was not run on custom resources, where `kubectl get akbinding` is the check of the config):
 
 ```text
 config reloaded

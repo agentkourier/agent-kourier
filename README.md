@@ -118,13 +118,12 @@ A team adds a binding to connect an agent to a channel. Multiple bindings can sh
 a backend and messaging connection. Cross-namespace references require the owning
 resource to allow the referring namespace.
 
-The resources below look like Kubernetes objects, and by default they are **configuration files**, loaded from
-`AGENTKOURIER_CONFIG_DIR`, usually through a mounted ConfigMap. GitOps can manage the
-ConfigMap, Secrets, and Deployment. The Helm chart can instead install the CRDs and have the broker read the
-resources from the cluster as custom resources (`config.source: crds`, which needs Kubernetes 1.33 or later; see
-the [chart README](charts/agent-kourier/README.md) and [how to move a running install](docs/how-to/migrate-config-source.md)).
-There is no controller: the broker reads them with informers, and the leader writes each Binding's status. The two routes are
-never merged.
+The resources below are Kubernetes objects. On Kubernetes the Helm chart installs the CRDs and the broker reads the resources from the
+cluster as **custom resources** (`config.source: crds`, the chart's default, which needs Kubernetes 1.33 or later; see
+the [chart README](charts/agent-kourier/README.md)). There is no controller: the broker reads them with informers, and the leader writes each Binding's status.
+For a quick proof of concept the chart can instead write them into a ConfigMap, as **configuration files** loaded from
+`AGENTKOURIER_CONFIG_DIR` (`config.source: files`), which GitOps can manage with the Secrets and the Deployment; [how to move a running install](docs/how-to/migrate-config-source.md)
+goes from one to the other. The two routes are never merged.
 
 For example, this configuration connects a payments agent hosted by kagent to a
 Slack channel through shared infrastructure:
