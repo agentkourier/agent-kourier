@@ -33,7 +33,7 @@ team-a      late          False   Accepted:ChannelConflict     C1        1m
 - **Secrets are followed one at a time.** The broker watches each Secret the config names, not a whole namespace, so a reload can add a
   Secret in a namespace it was not watching, with no restart, as long as its Role grants `list` and `watch`.
 - **The start line names the route.** The first line of the log is an INFO `config route` with `config_source` (`crds` or `files`) and, with
-  `crds`, the `connection` the broker is configured to serve (`internal/broker/run.go`). A pod moved from one route to the other is told apart from its old one by it.
+  `crds`, the `connection` the broker is configured to serve, so a pod's log says which route it reads.
 - **A bad ChatConnection name stops the start.** With `crds`, `AGENTKOURIER_CHAT_CONNECTION` must be a namespace that is a DNS-1123 label and a
   name that is a DNS-1123 subdomain. Anything else exits with code 2, with a message that does not show the value. The chart sets it from `config.chatConnection`.
 - **Move between the routes.** [Move the config between a ConfigMap and custom resources](how-to/migrate-config-source.md) is a
