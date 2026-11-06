@@ -94,7 +94,13 @@ func clientConfig(fake *fakeslack.Server) slack.Config {
 // run starts c.Run, which the end of the test cancels. wait returns Run's error.
 func run(t *testing.T, c *slack.Client, sk slack.Sink) (cancel context.CancelFunc, wait func() error) {
 	t.Helper()
-	ctx, cancel := context.WithCancel(t.Context())
+	return runIn(t.Context(), t, c, sk)
+}
+
+// runIn is run under parent, such as a context that carries an observer.
+func runIn(parent context.Context, t *testing.T, c *slack.Client, sk slack.Sink) (cancel context.CancelFunc, wait func() error) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(parent)
 	done := make(chan error, 1)
 	go func() { done <- c.Run(ctx, sk) }()
 	wait = sync.OnceValue(func() error { return <-done })
