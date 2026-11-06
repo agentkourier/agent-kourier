@@ -175,6 +175,26 @@ Other things a writer of a Binding can do:
   ([Who holds a channel](config-routes.md#who-holds-a-channel)).
 - **Set their own limits.** `interactions.toolApprovals`, its approver groups and the spend limits of a trigger are fields of the Binding, and so the writer's to set.
 
+**Bindings that name one AgentBackend share it.** An AgentBackend is one door to everything behind its `url`, and each Binding that names it
+goes through that door. What they share, and what they do not:
+
+- **Shared.** The `url`. With `dialect: kagent-v1` the agent is named in the request path (`<url>/agents/<namespace>/<name>`), and `agent.name` and `agent.namespace` of a Binding
+  are whatever its writer types, checked for their shape and never against a list of agents, so every agent that the backend serves is in reach. With `dialect: a2a` the URL is the
+  exact endpoint and the agent name is not sent, so the backend is that one agent. The dialect. And the static `headers`, whose Secret values are read in the AgentBackend's namespace
+  and sent with every request of every Binding that names it, and with every probe. A Binding's writer cannot read those values, but each request they cause carries them.
+- **Not shared.** The identity. Each Binding presents its own: the token of its own `identity.tokenSecretRef`, read in its own namespace, or its own `userId`. The connection
+  to the agent is kept per Binding and agent, and a session belongs to its Binding.
+- **So** a team that may write a Binding in a namespace that the AgentBackend allows can reach, with the Binding's identity and the shared headers, whatever the backend serves
+  at that `url`. Where the backend verifies that token and authorizes it for each agent, that check is the bound. Where it does not (a backend that takes `identity.userId`
+  as the caller, or one whose static headers hold an API key that is the only credential), the bound is the AgentBackend itself.
+- **A tenant can tell which agents exist, on `kagent-v1`, where the backend answers an unknown agent with a 404.** A Binding that names an agent makes the leader's probe ask the backend for
+  its card, and a 404 is `AgentNotFound` in the Binding's status. A backend that authorizes first and answers 403 (`AgentForbidden`) reveals only the agents that the Binding's identity may use.
+  This matters most when the tenant cannot read the token's Secret themselves.
+
+Use one AgentBackend per trust boundary: teams that must not reach each other's agents get separate AgentBackends, each with its own headers and Secrets, and each lists
+in `allowedNamespaces` only the namespaces of the teams that may use it. The list is empty by default, which allows the AgentBackend's own namespace and no other. Agent Kourier does
+not restrict which agents a Binding may name on a backend it is allowed to use.
+
 What a status tells a tenant, and what it does not. A Binding's `status` is read by whoever can read the Binding, and it is written for them:
 
 - It never quotes the text of an object of another namespace, so it does not tell a tenant what another team's AgentBackend or ChatConnection says. An object

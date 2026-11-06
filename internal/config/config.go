@@ -1,6 +1,16 @@
-// Package config loads Agent Kourier's resources (AgentBackend, ChatConnection, Binding) from YAML
-// files (D30, spec section 7). It checks one object at a time; cross-object checks belong to
-// the snapshot builder.
+// Package config turns Agent Kourier's resources (AgentBackend, ChatConnection, Binding) into the routing table the broker serves,
+// whichever route they came by. Load reads them from YAML files (all or nothing: one bad file fails the load), and DecodeObject
+// decodes one object that a custom resource source read from the cluster (internal/config/crsource), tolerating fields it does not
+// know. Both run Default and Validate on one object at a time, and the objects are collected in a Set.
+//
+// Resolve and ResolvePartial then check the references between the objects of a Set (a namespace other than the referrer's needs
+// allowedNamespaces, one Binding per channel) and build a Snapshot. Resolve is all or nothing, as the files are, and also requires
+// each Secret that an object names to exist with its keys. ResolvePartial leaves out the Bindings that fail and returns a Rejection
+// for each, for a source whose objects have different owners; it checks no Secret.
+//
+// A Reloader polls a Source (a directory of files, or the custom resource source, behind one interface), resolves the Set it reads
+// when the source's fingerprint moves or the Secrets may have changed, and publishes the latest good Snapshot, keeping the last one
+// when a read or a resolution fails. Alongside each Snapshot it publishes a Report, which names the objects that are not served as written (none for files).
 package config
 
 import (
