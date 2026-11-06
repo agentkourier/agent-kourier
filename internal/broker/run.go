@@ -43,6 +43,14 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		return err
 	}
 	log := slog.New(telemetry.LogHandler{Handler: cfg.logger().Handler()})
+	// The first line of a log, before the exporter or klog can say anything: the two routes read the same way after it, and a pod that was moved from one to the other is told
+	// apart from its old one by it. With crds the connection is the one the broker is configured to serve, which "serving a
+	// ChatConnection" confirms once it is read; with files it is whichever the directory holds, and only that later line names it.
+	if cfg.source() == SourceCRDs {
+		log.InfoContext(ctx, "config route", "config_source", string(SourceCRDs), "connection", v1alpha1.NamespacedName(cfg.ChatConnection.Namespace, cfg.ChatConnection.Name))
+	} else {
+		log.InfoContext(ctx, "config route", "config_source", string(SourceFiles))
+	}
 	provider := cfg.TracerProvider
 	if provider == nil {
 		var shutdown func(context.Context) error

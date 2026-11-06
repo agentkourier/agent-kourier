@@ -149,7 +149,7 @@ it cannot use. A restart fails the same way. The text after `the broker cannot b
   same way as the files' `load config` problems below.
 - `the custom resource definitions are not installed`: the custom resource route, and the CRDs are not in the cluster. Install them first, as in
   [Move the config between a ConfigMap and custom resources](migrate-config-source.md#1-install-the-crds-still-on-the-configmap-route).
-- `AGENTKOURIER_CHAT_CONNECTION is required with AGENTKOURIER_CONFIG_SOURCE=crds`, `AGENTKOURIER_CHAT_CONNECTION is "x", want namespace/name`,
+- `AGENTKOURIER_CHAT_CONNECTION is required with AGENTKOURIER_CONFIG_SOURCE=crds`, `AGENTKOURIER_CHAT_CONNECTION is not namespace/name (its value is not shown)`, `ChatConnection is not a namespace that is a DNS-1123 label and a name that is a DNS-1123 subdomain ...`,
   `is set with AGENTKOURIER_CONFIG_SOURCE=files, which serves the one ChatConnection of its directory: unset it`, and
   `AGENTKOURIER_CONFIG_SOURCE is "...", want files or crds`: the variables disagree. The chart sets them from `config.source` and
   `config.chatConnection`; check `extraEnv` for one of your own.

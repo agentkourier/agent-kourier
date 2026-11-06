@@ -13,6 +13,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 
 	"go.opentelemetry.io/otel/trace"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -146,6 +147,10 @@ func (c RunConfig) validateSource() error {
 	case SourceCRDs:
 		if c.ChatConnection.Namespace == "" || c.ChatConnection.Name == "" {
 			return fmt.Errorf("%w: ChatConnection must be set to a namespace and a name with the %s config source: a cluster may hold the connections of several brokers, and this one serves only the one it is told", ErrWiring, SourceCRDs)
+		}
+		// Neither part is echoed: the value is logged with the route at start, and a token pasted in its place must not follow it there.
+		if len(validation.IsDNS1123Label(c.ChatConnection.Namespace)) > 0 || len(validation.IsDNS1123Subdomain(c.ChatConnection.Name)) > 0 {
+			return fmt.Errorf("%w: ChatConnection is not a namespace that is a DNS-1123 label and a name that is a DNS-1123 subdomain, which are all Kubernetes can hold (its value is not shown)", ErrWiring)
 		}
 	default:
 		return fmt.Errorf("%w: unknown config source %q, want %q or %q", ErrWiring, c.ConfigSource, SourceFiles, SourceCRDs)
