@@ -1045,7 +1045,7 @@ func TestFilesRouteHasNoMinimumVersion(t *testing.T) {
 
 // TestUpgradeFromAReleaseThatLacksTheNewValues: `helm upgrade --reuse-values` from release 0.1.6 hands the chart the values of that release, which
 // have no crds, config.source, config.chatConnection or rbac.secretNames, and the chart must read each as unset: it renders, and renders what the
-// defaults render. (A release made with those values at the defaults is the same render.) Measured for real on kind, from the released chart.
+// defaults render. (A release made with those values at the defaults is the same render.) The first version of this case was run on kind, from the released chart, with Helm 4.3.0, while the default was still files (the commit that added the route's chart); with the default now crds, the case is simulated by these renders with the key set to null, and what Helm hands the chart under `--reuse-values` is not measured.
 func TestUpgradeFromAReleaseThatLacksTheNewValues(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
