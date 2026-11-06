@@ -161,6 +161,7 @@ evals/
 
     ```yaml
     config:
+      source: files
       existingConfigMap: ci-failures-config
     rbac:
       secretNamespaces: [agent-kourier]

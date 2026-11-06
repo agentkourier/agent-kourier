@@ -11,7 +11,7 @@ removing a Binding from the values is the other.
 Agent Kourier does nothing without its resources: a ChatConnection, an AgentBackend and a Binding. **The chart's default,
 and the route to run on Kubernetes, reads them as custom resources** (`config.source: crds`, with the CRDs installed by `crds.install`, which follows the route and is true with this one),
 so that each team owns its own Bindings: see [Custom resources instead of a ConfigMap](#custom-resources-instead-of-a-configmap), which also says what it needs
-(Kubernetes 1.33 or later, and a ChatConnection to name). **The quick route for a proof of concept is a ConfigMap** that the chart writes from the resources under
+(Kubernetes 1.33 or later, a ChatConnection to name, and a grant of the Secret it reads). **The quick route for a proof of concept is a ConfigMap** that the chart writes from the resources under
 `config` (`config.source: files`), which needs none of that. The starter file below is that route. Put the resources in a values file,
 `my-values.yaml`: download the commented starter and change the lines it marks `yours`:
 
@@ -55,12 +55,23 @@ For the default route, give the chart no resources, name the ChatConnection the 
 `config.chatConnections`, `config.agentBackends` or `config.bindings` as custom resources in the release that installs their CRDs, since Helm cannot map a kind in the same
 first apply (see below):
 
+```yaml
+config:
+  chatConnection: agent-kourier/slack
+rbac:
+  secretNames:
+    agent-kourier: [agent-kourier-slack]   # the Secret the ChatConnection reads
+```
+
 ```sh
 helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.6 \
-  -n agent-kourier --create-namespace --set config.chatConnection=agent-kourier/slack
+  -n agent-kourier --create-namespace -f my-values.yaml
 kubectl apply -f my-resources.yaml   # a ChatConnection slack, an AgentBackend and a Binding, in namespace agent-kourier
 kubectl -n agent-kourier get akbinding
 ```
+
+`rbac.secretNames` is not optional there. With `config.*` empty the chart sees no Secret to name and renders no Role for Secrets, so the broker could not read the
+ChatConnection's Secret and would exit with code 3 in a loop.
 
 [Install with Helm](https://agentkourier.dev/how-to/install-with-helm/#write-the-values) walks through each field, the
 Secrets, and a dry run that finds a misspelt field before the pod does. The published chart has `image.repository` and
@@ -77,7 +88,7 @@ tier's, with the token-refresh CronJob).
 | Object | When | Notes |
 |---|---|---|
 | Deployment `<fullname>` | always | one container, config at `/etc/agent-kourier` (the ConfigMap of `config.source: files`; the default, `crds`, mounts none), SQLite at `/data` (with `store.type: sqlite`, strategy Recreate), `/tmp` an emptyDir; with Postgres strategy RollingUpdate (one surge, none unavailable) |
-| ServiceAccount, and a Role and RoleBinding for Secrets | always (`rbac.create`) | one Role in each namespace that holds a Secret the config names, and in the release namespace with Postgres (the DSN's Secret). It covers every Secret of the namespace; with `config.source: crds` it names the Secrets (`resourceNames`), except in the namespaces of `rbac.secretNamespaces` |
+| ServiceAccount, and a Role and RoleBinding for Secrets | always (`rbac.create`) | one Role in each namespace that holds a Secret the config names (with `config.source: crds`, only the Secrets the chart can name: `config.*` and `rbac.secretNames`, so none for `config.*` empty and no `rbac.secretNames`), and in the release namespace with Postgres (the DSN's Secret). It covers every Secret of the namespace; with `config.source: crds` it names the Secrets (`resourceNames`), except in the namespaces of `rbac.secretNamespaces` |
 | Lease `<fullname>-leader` | `store.type: postgres` | empty; the replicas elect their leader with it. Kept on `helm uninstall` (`helm.sh/resource-policy: keep`), with its release annotations, so a reinstall under the same release name adopts it; only another release that renders the same name (`fullnameOverride`) would conflict. Do not delete it while Agent Kourier runs: Agent Kourier may not create a Lease, so leadership stops until `helm upgrade` recreates it |
 | Role and RoleBinding `<fullname>-leader` | `store.type: postgres` (`rbac.create`) | `get` and `update` on that one Lease, in the release namespace; no `create`, which cannot be limited by name |
 | ConfigMap `<fullname>-config` | `config.source: files`, unless `config.existingConfigMap` | one `*.yaml` file per resource, from `config.*` |
@@ -171,11 +182,11 @@ three) list them. **Never `kubectl get bindings`**: that is the core `bindings` 
 them), while the ones made by hand stay in the cluster, unread, as do the CRDs. The values of the route (`config.chatConnection`, `rbac.secretNames`)
 may stay set: with `files` they are ignored, so going back is the same values with `config.source: files`. `helm uninstall` likewise deletes the
 rendered resources and keeps the CRDs, and with them every custom resource of the cluster: **never delete a CRD to get out of a refusal**, since
-that deletes every team's resources. A reinstall under another release name (or in another namespace) with `crds.install: true` is refused by
-Helm (`invalid ownership metadata`), because the kept CRDs name the release that made them. There are two ways on, neither of which deletes
+that deletes every team's resources. A reinstall under another release name (or in another namespace) with `crds.install: true`, which is what an unset value is on the default route, is refused by
+Helm (`invalid ownership metadata`), because the kept CRDs name the release that made them. The same holds for a second broker in the same cluster, which sets `crds.install: false`. There are two ways on, neither of which deletes
 anything:
 
-- Install the new release with `crds.install: false`. The CRDs are used as they are, and nothing then upgrades them, so a later chart that changes
+- Install the new release with `crds.install: false` (a second broker does this too). The CRDs are used as they are, and nothing then upgrades them, so a later chart that changes
   a schema needs one of the next.
 - Hand the CRDs to the new release, then install it with `crds.install: true`: `kubectl annotate crd agentbackends.agentkourier.dev
   bindings.agentkourier.dev chatconnections.agentkourier.dev --overwrite meta.helm.sh/release-name=<new release>

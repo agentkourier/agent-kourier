@@ -63,7 +63,7 @@ func podEnv(d appsv1.Deployment) map[string]string {
 func TestDefaultsAreTheCRRoute(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
-	objs := mustRender(t, "agent-kourier", "agent-kourier", "--set", "image.repository=agent-kourier,config.chatConnection=platform/slack")
+	objs := mustRender(t, "agent-kourier", "agent-kourier", "--kube-version", "v1.33.2", "--set", "image.repository=agent-kourier,config.chatConnection=platform/slack")
 	var crds []string
 	for _, o := range objs {
 		switch {
@@ -97,7 +97,7 @@ func TestDefaultsAreTheCRRoute(t *testing.T) {
 func TestDefaultsWithNoConfigAreRefusedWithAWayOut(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
-	_, err := render(t.Context(), t, "agent-kourier", "agent-kourier", "--set", "image.repository=agent-kourier")
+	_, err := render(t.Context(), t, "agent-kourier", "agent-kourier", "--kube-version", "v1.33.2", "--set", "image.repository=agent-kourier")
 	if err == nil {
 		t.Fatal("the chart rendered an install with no values; want a refusal that names config.chatConnection")
 	}
@@ -154,6 +154,54 @@ func TestAnUpgradeThatKeepsTheOldValuesIsRefusedWithAWayOut(t *testing.T) {
 	objs := mustRender(t, "agent-kourier", "agent-kourier", append(crMode("--set", image), "--set-json", inline)...)
 	if !slices.Contains(kinds(objs), "ChatConnection/agent-kourier/slack") || slices.ContainsFunc(objs, func(o object) bool { return o.kind() == "ConfigMap" }) {
 		t.Errorf("objects %v; want the ChatConnection as a custom resource and no ConfigMap", kinds(objs))
+	}
+}
+
+// TestDocumentedDefaultRouteInstallsGrantTheConnectionsSecret: the install the chart README and Install with Helm give for the default route names the
+// ChatConnection and applies the resources themselves, so the chart sees no Secret to name. Their values must carry the grant (rbac.secretNames), or the
+// render has no Role for the Secret and the broker, which cannot read its own ChatConnection's Secret, exits with code 3 in a loop.
+func TestDocumentedDefaultRouteInstallsGrantTheConnectionsSecret(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	install, err := os.ReadFile("../../docs/how-to/install-with-helm.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The Secret the documented ChatConnection reads, from the resources the page applies.
+	m := regexp.MustCompile(`(?s)kind: ChatConnection\n.*?credentialsSecretRef: \{name: ([a-z0-9-]+)\}`).FindSubmatch(install)
+	if m == nil {
+		t.Fatal("Install with Helm has no ChatConnection with a credentialsSecretRef")
+	}
+	secret := string(m[1])
+	for _, doc := range []string{"../../docs/how-to/install-with-helm.md", chartReadme} {
+		t.Run(filepath.Base(doc), func(t *testing.T) {
+			t.Parallel()
+			raw, err := os.ReadFile(doc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var block string
+			for _, part := range strings.Split(string(raw), "```yaml")[1:] {
+				body, _, _ := strings.Cut(part, "\n```")
+				if strings.Contains(body, "chatConnection: agent-kourier/slack") {
+					_, block, _ = strings.Cut(body, "\n")
+					break
+				}
+			}
+			if block == "" {
+				t.Fatalf("%s has no values block that names config.chatConnection agent-kourier/slack", doc)
+			}
+			file := filepath.Join(t.TempDir(), "my-values.yaml")
+			if err := os.WriteFile(file, []byte(block), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			objs := mustRender(t, "agent-kourier", "agent-kourier", "--kube-version", "v1.33.2", "--set", "image.repository=agent-kourier", "-f", file)
+			var role rbacv1.Role
+			find(t, objs, "Role", "agent-kourier-secrets", &role)
+			if role.Namespace != "agent-kourier" || len(role.Rules) != 1 || !slices.Contains(role.Rules[0].ResourceNames, secret) {
+				t.Errorf("Role %+v in %q; want one rule that names the Secret %s in agent-kourier", role.Rules, role.Namespace, secret)
+			}
+		})
 	}
 }
 

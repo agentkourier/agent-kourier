@@ -60,7 +60,7 @@ narrowed to one receiver, and `askUser` on. Replace `CREPLACESRE` and `B0REPLACE
 --8<-- "sre-triage/kourier/chatconnection.yaml"
 ```
 
-Put the directory in a ConfigMap and point the chart at it with `config.existingConfigMap`; the chart needs
+Put the directory in a ConfigMap and point the chart at it with `config.source: files` and `config.existingConfigMap`; the chart needs
 `rbac.secretNamespaces` to find the Secrets `slack` and `sre-triage-token`. The recipe's README has the commands.
 
 To read the recipe's resources as custom resources instead, apply the same YAML (`kubectl apply -f examples/recipes/sre-triage/kourier/`, with the CRDs installed and the namespace `agent-kourier`

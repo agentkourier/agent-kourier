@@ -159,6 +159,7 @@ model quota, so keep that policy; it works only if your cluster's network plugin
 
    ```yaml
    config:
+     source: files
      existingConfigMap: docs-agent-config
    rbac:
      secretNamespaces: [agent-kourier]

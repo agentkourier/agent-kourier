@@ -160,13 +160,14 @@ next restart after the ChatConnection exists, which Kubernetes does by itself. [
 says what a team needs to write its own.
 
 If the chart refuses with `config.source crds needs Kubernetes 1.33 or later`, the cluster is older: install the ConfigMap route below, which has no minimum.
-An installer that may not create CRDs sets `crds.install: false` (unset, it is true with custom resources), and an administrator applies them first.
+An installer that may not create CRDs sets `crds.install: false` (unset, it is true with custom resources), and an administrator applies them first. So does a second broker in the same cluster: the CRDs are
+the first release's, and a second release that renders them is refused by Helm (`invalid ownership metadata`).
 
 ## The ConfigMap route
 
 [Write the values](#write-the-values), [Check the values before you install](#check-the-values-before-you-install) and [Install the chart](#install-the-chart)
-install the ConfigMap route, which the starter file and `agent-kourier init` name with `config.source: files`. With `files`, `crds.install` is false unless you set it, so they leave
-the CRDs out, so a later move to custom resources is [the how-to's](migrate-config-source.md).
+install the ConfigMap route, which the starter file and `agent-kourier init` name with `config.source: files`. With `files`, `crds.install` is false unless you set it, so they install no CRDs.
+Moving to custom resources later is [the how-to's](migrate-config-source.md).
 
 ## Write the values
 

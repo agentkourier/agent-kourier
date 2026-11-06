@@ -81,6 +81,7 @@ needs, its tokens are in a Kubernetes Secret, and a ChatConnection points at it.
 
     ```yaml
     config:
+      source: files # the ConfigMap route
       chatConnections:
         slack:
           spec:

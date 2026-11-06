@@ -334,6 +334,7 @@ trial"), `make sandbox-alert` then fires the alert of one of the faults.
 
    ```yaml title="sre-triage-values.yaml"
    config:
+     source: files
      existingConfigMap: sre-triage-config
    rbac:
      secretNamespaces: [agent-kourier]
@@ -379,6 +380,7 @@ trial"), `make sandbox-alert` then fires the alert of one of the faults.
 
    ```yaml
    config:
+     source: files
      existingConfigMap: sre-triage-config
    rbac:
      secretNamespaces: [agent-kourier]

@@ -64,7 +64,7 @@ extraEnv: []
 # files, custom resources in the cluster are ignored.
 #
 # An install of the ConfigMap route that upgrades with its old values gets the default, crds: set config.source files to keep it. The chart refuses the cases it can tell are wrong (existingConfigMap, a cluster below 1.33, CRDs not yet served
-# for resources it would render) and says so; docs/how-to/upgrade.md has the rest.
+# for resources it would render) and says so; https://agentkourier.dev/how-to/upgrade/ has the rest.
 #
 # Each entry is keyed by its name and holds the resource's spec exactly as the resource reference describes it (the chart does
 # not interpret it) and, optionally, the namespace (default: the release's; with crds it must exist). Secrets are referenced by name
