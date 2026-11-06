@@ -35,6 +35,11 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Duration(t, "probeGap", minRevisionGap)
 	limitsdoc.Count(t, "threadWindow", threadFetchLimit)
 	limitsdoc.Count(t, "statusMessage", maxStatusMessage)
+	limitsdoc.Duration(t, "statusGap", statusGap)
+	limitsdoc.Duration(t, "statusTick", statusTick)
+	limitsdoc.Duration(t, "statusBackoffCap", statusBackoffCap)
+	limitsdoc.Count(t, "fightPutBacks", fightPutBacks)
+	limitsdoc.Count(t, "fightWindow", fightWindow)
 	limitsdoc.Duration(t, "auditRetentionMin", MinAuditRetention)
 
 	// The leader builds the retention loop without a reply age or a session grace, so the loop's defaults are the values.
