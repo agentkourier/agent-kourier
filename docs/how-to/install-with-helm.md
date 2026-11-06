@@ -87,6 +87,12 @@ Tokens never go in the values file. The chart refuses a value that looks like a 
 
 ## Install on custom resources
 
+![A terminal: kubectl creates the namespace and the Slack Secret from environment variables, helm installs the agent-kourier chart, vim fills in the four lines marked yours in my-resources.yaml, kubectl applies it after a server-side dry run, and kubectl get akbinding shows the Binding go from no status to Unknown Pending to True OK. Then Slack: a mention of the bot in the channel, and the agent's answer in the thread.](../assets/clip/install.gif)
+
+The steps below, recorded on a kind cluster with the
+[echo agent](https://github.com/agentkourier/agent-kourier/blob/main/examples/recipes/echo-agent/agent/README.md), a plain A2A agent
+with no model. The wait for the Binding to turn Ready, about 20 seconds here, is cut.
+
 The chart installs the CRDs and the broker, and you apply the resources. They are two steps because a release that renders the CRDs and
 resources of them fails in its first apply (Helm cannot map a kind that is not yet served), so the chart refuses to render
 `config.chatConnections`, `config.agentBackends` or `config.bindings` as custom resources into a release that is installing their CRDs. A release with none of them renders no custom resource, and installs the CRDs itself.

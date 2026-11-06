@@ -52,6 +52,13 @@ is that image by digest. Nothing is released by hand.
 5. `git tag vX.Y.Z <the release pull request's commit on main>` and `git push origin vX.Y.Z`.
 6. Watch the `release` workflow. Its job summary and the GitHub Release body name the pushed image and chart
    digests. A GitHub Release is created only after both signatures verify.
+7. Re-record the install clip that the README and Install with Helm show (`docs/assets/clip/install.gif`), since it
+   types the version: `make docs-check` reads the pages, not the GIF, so nothing else catches a clip of an old
+   release. `hack/clip/record.sh` says how (`up`, `take` with the published chart, a screenshot of the Slack answer,
+   `stitch`, `down`); open a pull request with the new GIF, and update the sentence under it in both pages, which
+   says how long the cut wait for Ready was in that take. The new clip reaches `main`, so the site's `dev/` shows it, but
+   never the tag: `make docs-site` builds each tag from its own tree, so a tag's docs show the clip of the release
+   before it, typing that release's version, and a tag cut before the clip existed shows none.
 
 If a first release attempt fails before its GitHub Release is created, rerun that tag after fixing the failure.
 Once a published or draft GitHub Release exists for the tag, the read-only gate refuses to rebuild it.
