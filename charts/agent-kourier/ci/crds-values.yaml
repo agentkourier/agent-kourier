@@ -7,7 +7,7 @@ image:
   repository: registry.example.test/agent-kourier
   tag: v0.1.0
 
-# The platform installs the CRDs itself, so the chart does not render them (crds.install defaults to true).
+# The platform installs the CRDs itself, so the chart does not render them (crds.install is true when unset with crds, so the file says false).
 crds:
   install: false
 

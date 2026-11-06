@@ -9,7 +9,7 @@ chart refuses `replicaCount` above 1 with it. With `store.type: postgres`, `repl
 removing a Binding from the values is the other.
 
 Agent Kourier does nothing without its resources: a ChatConnection, an AgentBackend and a Binding. **The chart's default,
-and the route to run on Kubernetes, reads them as custom resources** (`config.source: crds`, with the CRDs installed by `crds.install`, which is on by default),
+and the route to run on Kubernetes, reads them as custom resources** (`config.source: crds`, with the CRDs installed by `crds.install`, which follows the route and is true with this one),
 so that each team owns its own Bindings: see [Custom resources instead of a ConfigMap](#custom-resources-instead-of-a-configmap), which also says what it needs
 (Kubernetes 1.33 or later, and a ChatConnection to name). **The quick route for a proof of concept is a ConfigMap** that the chart writes from the resources under
 `config` (`config.source: files`), which needs none of that. The starter file below is that route. Put the resources in a values file,
@@ -19,11 +19,9 @@ so that each team owns its own Bindings: see [Custom resources instead of a Conf
 curl -fsSLo my-values.yaml https://raw.githubusercontent.com/agentkourier/agent-kourier/main/examples/helm/my-values.yaml
 ```
 
-It holds the same resources as this, and says the route (the ConfigMap, and no CRDs) in its first lines:
+It holds the same resources as this, and says the route (the ConfigMap, which installs no CRDs) in its first lines:
 
 ```yaml
-crds:
-  install: false
 config:
   source: files
   chatConnections:
@@ -84,7 +82,7 @@ tier's, with the token-refresh CronJob).
 | Role and RoleBinding `<fullname>-leader` | `store.type: postgres` (`rbac.create`) | `get` and `update` on that one Lease, in the release namespace; no `create`, which cannot be limited by name |
 | ConfigMap `<fullname>-config` | `config.source: files`, unless `config.existingConfigMap` | one `*.yaml` file per resource, from `config.*` |
 | ChatConnection, AgentBackend and Binding custom resources | `config.source: crds` (the default), and an entry in `config.*` | one per entry of `config.*`, in its namespace (default: the release's), which must exist; deleted when the release stops rendering them |
-| CustomResourceDefinitions `agentbackends`, `bindings` and `chatconnections` of `agentkourier.dev` | `crds.install` (on), with either route | the generated files of `files/crds`; kept on `helm uninstall` and when `crds.install` is turned off (`helm.sh/resource-policy: keep`, which is Helm's; for Argo CD see [below](#custom-resources-instead-of-a-configmap)) |
+| CustomResourceDefinitions `agentbackends`, `bindings` and `chatconnections` of `agentkourier.dev` | `crds.install`: unset, true with `config.source: crds` and false with `files`; an explicit value wins | the generated files of `files/crds`; kept on `helm uninstall` and when `crds.install` is turned off (`helm.sh/resource-policy: keep`, which is Helm's; for Argo CD see [below](#custom-resources-instead-of-a-configmap)) |
 | ClusterRole and ClusterRoleBinding `<fullname>-<namespace>-crs` | `config.source: crds`, the default (`rbac.create`) | `list` and `watch` on the three kinds, `patch` on `bindings/status`, `get` on the three CRDs by name; see Custom resources instead of a ConfigMap |
 | PersistentVolumeClaim `<fullname>-data` | `store.type: sqlite`, unless `persistence.existingClaim` | kept on `helm uninstall` (`persistence.retainOnUninstall`); none with Postgres |
 | Service | `service.enabled` | ClusterIP on the health and metrics port, and nothing else |
@@ -108,9 +106,8 @@ NetworkPolicy in another namespace for instance, needs the real name, or you set
   resource's spec exactly as the [resource reference](../../docs/reference/binding.md) describes it (the chart does not interpret it; Agent Kourier's loader validates it at start).
   `namespace` defaults to the release's. Or `config.existingConfigMap`, a ConfigMap you manage, with `rbac.secretNamespaces` to say where
   its Secrets are. Not both.
-- `config.source` (`crds`, the default, or `files`), `config.chatConnection` and `crds.install` (on by default): where Agent Kourier reads those resources from
-  (see Custom resources instead of a ConfigMap). An install of the ConfigMap route that upgrades with the values it had gets the default: set `config.source: files`, and
-  `crds.install: false` to leave the CRDs out, to keep it.
+- `config.source` (`crds`, the default, or `files`), `config.chatConnection` and `crds.install` (unset: true with `crds`, false with `files`): where Agent Kourier reads those resources from
+  (see Custom resources instead of a ConfigMap). An install of the ConfigMap route that upgrades with the values it had gets the default: set `config.source: files` to keep it.
 - `store.type` (`sqlite`, the default, or `postgres`) and, with Postgres, `store.postgres.dsnSecret` and `store.postgres.timeouts` (see Store).
 - `replicaCount` (2 with Postgres for a standby) and `leaderElection.*`, the Lease's timings (see High availability).
 - `logLevel`, `syncTimeout`, `auditRetention` (empty keeps the audit log for ever; a duration of at least 24h purges older entries), `extraEnv` (OpenTelemetry settings go here), `resources`, `persistence.*` (SQLite's volume).
@@ -127,9 +124,9 @@ reads `Binding`, `AgentBackend` and `ChatConnection` custom resources of group `
 a resource that fails validation is left out (or, if it had a good generation, that generation keeps serving) and the others carry on. **`files`, the quick route
 for a proof of concept,** is the ConfigMap (or your own) of the sections above, loaded all or nothing. The two are never merged and there is no
 fallback: with `files`, custom resources in the cluster are ignored, and with `crds` there is no ConfigMap and no config directory. The route is
-chosen at start; moving between them is an upgrade of the release. With `config.source: files` and `crds.install: false`, the chart renders the objects it rendered when
+chosen at start; moving between them is an upgrade of the release. With `config.source: files`, the chart renders the objects it rendered when
 the ConfigMap was the default and the route adds nothing to the pod's template (`test/chart` pins eight values files against golden files, each naming its route).
-`crds.install` is on by default and also renders the three CRDs with `files`, where they are inert.
+`crds.install`, unset, follows the route: true with `crds` and false with `files`. An explicit value wins: `true` with `files` renders the three CRDs, inert there, which is the first step of a move, and `false` with `crds` is for an installer that applied them itself.
 
 **An install of the ConfigMap route that upgrades with the values it had.** It gets the default route, and the chart refuses it where it can tell, with a message that
 names the way out: `config.existingConfigMap` with the default (set `config.source: files`, or move by the how-to below), a cluster older than 1.33, and `config.*` resources that
@@ -144,7 +141,7 @@ What the route needs:
 - **The CRDs installed before a release that renders custom resources from `config.*`.** A first install that renders the CRDs and custom resources of them in
   one release fails (measured: `resource mapping not found ... ensure CRDs are installed first`), so the chart refuses to render the custom
   resources unless the cluster already serves `agentkourier.dev/v1alpha1`, and says what to do. A release with nothing in `config.*` renders no custom resource, so it may install the
-  CRDs itself (`crds.install`, on by default): that is the first install above. `crds.install: true` renders the CRDs, from the
+  CRDs itself (`crds.install`, true with this route unless you set it): that is the first install above. `crds.install: true` renders the CRDs, from the
   generated files in `files/crds`; or apply those files yourself (`kubectl apply --server-side -f charts/agent-kourier/files/crds`) and set it
   to `false`, which is the way for an installer that may not create CRDs. Helm will not take over CRDs that `kubectl` made (`invalid ownership metadata`), so choose one of the two and keep to it.
 - **`config.chatConnection`**: the one `ChatConnection` this broker serves, as `namespace/name` (or `name`, in the release namespace). It may be

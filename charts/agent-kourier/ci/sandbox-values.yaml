@@ -8,7 +8,7 @@ image:
   tag: dev
   pullPolicy: Never
 
-# The ConfigMap route, named: config.source defaults to crds and crds.install to true.
+# The ConfigMap route, named: config.source defaults to crds. crds.install is false here as well, though unset it would be false with files.
 crds:
   install: false
 

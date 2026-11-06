@@ -74,7 +74,7 @@ func TestDefaultsAreTheCRRoute(t *testing.T) {
 		}
 	}
 	if want := []string{"agentbackends.agentkourier.dev", "bindings.agentkourier.dev", "chatconnections.agentkourier.dev"}; !slices.Equal(crds, want) {
-		t.Errorf("CRDs %v; want %v: crds.install is on by default", crds, want)
+		t.Errorf("CRDs %v; want %v: crds.install follows the route, which is crds", crds, want)
 	}
 	if !slices.Contains(kinds(objs), "ClusterRole//agent-kourier-agent-kourier-crs") {
 		t.Errorf("objects %v; want the ClusterRole that reads the custom resources", kinds(objs))
@@ -123,7 +123,7 @@ func TestAnUpgradeThatKeepsTheOldValuesIsRefusedWithAWayOut(t *testing.T) {
 		want []string
 	}{
 		{"a ConfigMap of its own", []string{"--set", image + ",config.existingConfigMap=mine"},
-			[]string{"config.existingConfigMap is for config.source files", "set config.source: files", "how-to/migrate-config-source/", "crds.install: false"}},
+			[]string{"config.existingConfigMap is for config.source files", "set config.source: files", "how-to/migrate-config-source/"}},
 		{"config in the values, on a cluster that does not serve the CRDs", []string{"--set", image, "--set-json", inline},
 			[]string{"config.source: files", "how-to/migrate-config-source/"}},
 		{"config in the values, and the CRDs are being installed with it", []string{"--set", image + ",crds.install=true", "--set-json", inline},
@@ -157,9 +157,61 @@ func TestAnUpgradeThatKeepsTheOldValuesIsRefusedWithAWayOut(t *testing.T) {
 	}
 }
 
+// TestCRDsInstallFollowsTheRoute: an unset crds.install is true with config.source crds and false with files, and an explicit value wins. The
+// four cases that matter: files leaves the CRDs out; crds installs them; files with true installs them, which is step 1 of the move; and crds
+// with false installs none and so needs them served, which the chart checks.
+func TestCRDsInstallFollowsTheRoute(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	image := "image.repository=registry.example.test/agent-kourier"
+	crdNames := func(objs []object) (names []string) {
+		for _, o := range objs {
+			if o.kind() == "CustomResourceDefinition" {
+				names = append(names, o.name())
+			}
+		}
+		return names
+	}
+	three := []string{"agentbackends.agentkourier.dev", "bindings.agentkourier.dev", "chatconnections.agentkourier.dev"}
+	for _, tc := range []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{"files, crds.install unset", []string{"--set", image + ",config.source=files,config.existingConfigMap=mine"}, nil},
+		{"crds, crds.install unset", []string{"--set", image + ",config.chatConnection=platform/slack"}, three},
+		{"files, crds.install true: step 1 of the move", []string{"--set", image + ",config.source=files,crds.install=true,config.existingConfigMap=mine"}, three},
+		{"crds, crds.install false, the CRDs served", crMode("--set", image+",crds.install=false,config.chatConnection=platform/slack"), nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := crdNames(mustRender(t, "agent-kourier", "agent-kourier", tc.args...)); !slices.Equal(got, tc.want) {
+				t.Errorf("CRDs %v; want %v", got, tc.want)
+			}
+		})
+	}
+	// With false on the route of custom resources the release installs no CRD, so they must be served already: the check that an unset value
+	// skips for a release with no config.* runs. It names the way out.
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"nothing in config.*", []string{"--set", image + ",crds.install=false,config.chatConnection=platform/slack"}},
+		{"a resource in config.*", []string{"--set", image + ",crds.install=false", "-f", values("crds")}},
+	} {
+		t.Run("crds, crds.install false, not served, "+tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := render(t.Context(), t, "agent-kourier", "agent-kourier", tc.args...)
+			if err == nil || !strings.Contains(err.Error(), "needs the CRDs (group agentkourier.dev, version v1alpha1) to be installed before this release") {
+				t.Errorf("render error = %v; want the refusal that the CRDs are not served", err)
+			}
+		})
+	}
+}
+
 // TestTierValuesNameTheirRoute: the default route moved, so every values file of the repository that means the ConfigMap route says so, and
-// leaves the CRDs out, and the one that means custom resources says so too. A values file that leans on the default would change which route
-// a kind tier or a golden file runs.
+// does not ask for the CRDs, and the one that means custom resources says so too. A values file that leans on the default would change which
+// route a kind tier or a golden file runs.
 func TestTierValuesNameTheirRoute(t *testing.T) {
 	t.Parallel()
 	files, err := filepath.Glob(filepath.Join(chartDir, "ci", "*-values.yaml"))
@@ -194,8 +246,13 @@ func TestTierValuesNameTheirRoute(t *testing.T) {
 			if v.Config.Source != want {
 				t.Errorf("config.source = %q; want %q, named in the file", v.Config.Source, want)
 			}
-			if v.CRDs.Install == nil || *v.CRDs.Install {
-				t.Errorf("crds.install = %v; want false, named in the file: the CRDs are the default's and these files render what they always did", v.CRDs.Install)
+			// An unset crds.install follows the route, so a file on files may leave it out; it must never say true, which would add the CRDs to what the
+			// file renders. The file of custom resources says false: its platform applies the CRDs itself.
+			if want == "files" && v.CRDs.Install != nil && *v.CRDs.Install {
+				t.Errorf("crds.install = true; want it unset or false: these files render the ConfigMap route and no CRD")
+			}
+			if want == "crds" && (v.CRDs.Install == nil || *v.CRDs.Install) {
+				t.Errorf("crds.install = %v; want false, named in the file: the platform installs the CRDs itself", v.CRDs.Install)
 			}
 		})
 	}

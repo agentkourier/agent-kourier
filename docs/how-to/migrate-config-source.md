@@ -9,8 +9,7 @@ Read [Choose a config route](../explanation/config-routes.md) first if you have 
 version: the ConfigMap is the simple route for one team or a trial, and custom resources are for several teams that each write their
 own Bindings and for an install that is meant to last.
 
-**An install that was made on the ConfigMap route, and should stay there,** needs no move. Its values file says `config.source: files` (and
-`crds.install: false`, unless the chart is to install the CRDs): the chart's default is custom resources, and an upgrade with the old values
+**An install that was made on the ConfigMap route, and should stay there,** needs no move. Its values file says `config.source: files`: the chart's default is custom resources, and an upgrade with the old values
 gets it. [Upgrade](upgrade.md#upgrade-to-the-release-that-makes-custom-resources-the-default) lists what the chart refuses and says.
 
 ## Before you start
@@ -154,7 +153,7 @@ the Postgres DSN's, stop the start (exit code 3) when they cannot be read.
 
 ### Apply the CRDs yourself
 
-An installer that may not create CRDs sets `crds.install: false` (it is on by default), and an administrator applies the CRDs once, from the chart:
+An installer that may not create CRDs sets `crds.install: false` (unset, it is true with custom resources), and an administrator applies the CRDs once, from the chart:
 
 ```sh
 helm pull oci://ghcr.io/agentkourier/charts/agent-kourier --version <version> --untar
@@ -314,7 +313,7 @@ A Secret outside the release namespace needs a grant on this route, and `rbac.se
 and is that grant. The other way is `rbac.secretNamespaces`, which replaces the chart's default of the release namespace, so list the release namespace as well; and if a team's Role has the name
 the chart would give its own there (`<fullname>-secrets`, which is `agent-kourier-secrets` for the release on this page), delete it first, or the upgrade fails with `invalid ownership metadata`.
 
-Keep `crds.install: true` while you do; it does not need to change. What the move back does:
+Keep `crds.install: true` while you do, in the values file: unset it is false with `files`, and the release would stop rendering the CRDs. What the move back does:
 
 | | After the move back |
 |---|---|

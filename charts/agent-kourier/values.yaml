@@ -55,7 +55,7 @@ extraEnv: []
 # What Agent Kourier reads, and from where. config.source picks the route (AGENTKOURIER_CONFIG_SOURCE). With crds, the default and the route
 # to run on Kubernetes, it reads Binding, AgentBackend and ChatConnection custom resources of the cluster with informers: other teams may make
 # their own, and one bad resource does not stop the others. The resources below, if you give any, are rendered as custom resources and not as a
-# ConfigMap. That needs Kubernetes 1.33 or later, the CRDs (crds.install below, on by default, or yours) installed BEFORE a release that renders any
+# ConfigMap. That needs Kubernetes 1.33 or later, the CRDs (crds.install below, which follows this route, or yours) installed BEFORE a release that renders any
 # resource below (a release that gives none installs them with it, and you apply the resources yourself), and a ChatConnection for the broker to
 # serve (config.chatConnection below, or the only one of chatConnections). The pod then mounts no ConfigMap, and a config change does not roll
 # it. With files, the quick route for a proof of concept, it reads the resources below, which the chart writes into a ConfigMap mounted at
@@ -63,8 +63,7 @@ extraEnv: []
 # bad resource is not loaded: all or nothing; and files has no Kubernetes minimum. The two routes are never merged and there is no fallback: with
 # files, custom resources in the cluster are ignored.
 #
-# An install of the ConfigMap route that upgrades with its old values gets the default, crds: set config.source files to keep it (and crds.install
-# false to leave the CRDs out). The chart refuses the cases it can tell are wrong (existingConfigMap, a cluster below 1.33, CRDs not yet served
+# An install of the ConfigMap route that upgrades with its old values gets the default, crds: set config.source files to keep it. The chart refuses the cases it can tell are wrong (existingConfigMap, a cluster below 1.33, CRDs not yet served
 # for resources it would render) and says so; docs/how-to/upgrade.md has the rest.
 #
 # Each entry is keyed by its name and holds the resource's spec exactly as the resource reference describes it (the chart does
@@ -112,9 +111,11 @@ config:
 
 # The CustomResourceDefinitions of Binding, AgentBackend and ChatConnection (group agentkourier.dev), which config.source crds reads. They are
 # generated from the API types (make crds) and rendered from the chart's templates, not its crds/ directory, which Helm's documentation says it
-# installs once and never upgrades or deletes, so a chart upgrade carries a changed schema. On by default, because the default route reads them. It
-# renders them with config.source files too, where they are inert. Creating a CRD needs a cluster-scoped right that a namespace-scoped installer
-# lacks, so an installer without it sets this to false, and the ConfigMap route needs none of the CRDs. A platform team can install the CRDs once
+# installs once and never upgrades or deletes, so a chart upgrade carries a changed schema.
+#
+# Unset (null), the default, this follows the route: true with config.source crds, which reads the CRDs, and false with files, which needs none. An
+# explicit true or false always wins: true with files is the first step of a move to custom resources, and false with crds is for an installer that
+# may not create CRDs (creating one needs a cluster-scoped right that a namespace-scoped installer lacks). A platform team can install the CRDs once
 # itself (kubectl apply --server-side -f charts/agent-kourier/files/crds) and set this to false: Helm will not take over CRDs that kubectl made
 # (invalid ownership metadata). Render them from one release only: two releases that render the same CRD conflict.
 #
@@ -124,14 +125,14 @@ config:
 #
 # They carry helm.sh/resource-policy: keep, so uninstalling the release, or turning this off, leaves them there, and with them every custom
 # resource: deleting a CRD deletes its resources too. Nor does a release that has this off upgrade them: a chart upgrade that changes a schema
-# needs it set, so keep it in the values file for as long as the chart is meant to look after the CRDs.
+# needs it set, so a release that goes back to files keeps it true in the values file for as long as the chart is meant to look after the CRDs.
 #
 # "Kept" is Helm's guarantee only. Under Argo CD with prune, turning this off, or deleting the Application, may delete the CRDs, and every team's
 # Binding, AgentBackend and ChatConnection with them. The chart also renders argocd.argoproj.io/sync-options: Prune=false,Delete=false on each CRD,
 # which Argo CD's documentation says stops that (unverified: Argo CD has not been run against this chart). Another tool that prunes needs its own
 # way to be told to leave the CRDs, or the CRDs applied outside what it prunes.
 crds:
-  install: true
+  install: null
 
 # Where Agent Kourier keeps its state. SQLite is one file on a volume (persistence below), for one replica. Postgres is
 # a database you run (the chart does not install one), for more than one replica: they elect a leader (leaderElection below).

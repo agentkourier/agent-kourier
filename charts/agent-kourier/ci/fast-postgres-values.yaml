@@ -9,7 +9,7 @@ image:
 extraEnv:
   - {name: AGENTKOURIER_SLACK_API_URL, value: "http://fakeslack.e2e.svc.cluster.local:8080/"}
 
-# The tier's ConfigMap route, named: config.source defaults to crds and crds.install to true. E2E_CONFIG_SOURCE=crds layers hack/kind/crds-values.yaml
+# The tier's ConfigMap route, named: config.source defaults to crds. crds.install is false here as well, though unset it would be false with files. E2E_CONFIG_SOURCE=crds layers hack/kind/crds-values.yaml
 # over this file, which sets both.
 crds:
   install: false
