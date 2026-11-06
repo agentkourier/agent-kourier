@@ -83,7 +83,7 @@ kubectl apply -f binding.yaml
 
 It needs two things, and the first is yours.
 
-1. **You let the broker read the Secrets your Binding or AgentBackend names.** Skip this only when neither names one (no `tokenSecretRef`, no header with a `valueSecretRef`). In your own namespace, make a Role that names each Secret and a
+1. **You let the broker read the Secrets that your Binding, or an AgentBackend in your namespace, names.** Skip this only when neither names one (no `tokenSecretRef`, no header with a `valueSecretRef`). In your own namespace, make a Role that names each Secret and a
    RoleBinding to the broker's ServiceAccount. The commands name the ServiceAccount `agent-kourier` in the namespace `agent-kourier`; ask the platform team for the real ones:
 
    ```sh
@@ -92,7 +92,7 @@ It needs two things, and the first is yours.
    ```
 
    The Role gives `list` and `watch` on the Secrets it names, and no other (repeat `--resource-name` for a second one). It needs nothing from the platform team's release or values. It is a grant to the broker, not to your Binding:
-   the broker may use that Secret for any Binding or AgentBackend in your namespace, so name only Secrets you mean it to use. [The how-to](migrate-config-source.md#let-a-team-add-its-own-binding)
+   the broker may use those Secrets for any Binding or AgentBackend in your namespace, so name only Secrets you mean it to use. [The how-to](migrate-config-source.md#let-a-team-add-its-own-binding)
    has the same objects as YAML, and how to check them with `kubectl auth can-i`.
 2. **The platform team lists your namespace** in the `allowedNamespaces` of the ChatConnection (and of the AgentBackend, if it is in another
    namespace).
