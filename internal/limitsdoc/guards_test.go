@@ -8,6 +8,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,13 +18,17 @@ import (
 var guardNames = map[string]bool{"Count": true, "Bytes": true, "Duration": true, "Text": true}
 
 // guardCalls returns, for each limit ID that a test of the repository holds to the code, a file that does, and the problems
-// of the calls it read: an ID that is not a string literal, and a value that is a literal, which would be a copy of the page
-// in the test and not what the code has. A test file with a build constraint, or for another platform, is not read: its tests
-// do not run in every test run, so they hold nothing. In another package a call is limitsdoc.Count(t, "id", value); in this one
-// it is Count(t, "id", value), and the IDs that begin with "selftest." are this package's own and may be given literals.
+// of the calls it read: an ID that is not a string literal, a value that is a literal, which would be a copy of the page in the
+// test and not what the code has, a value that is a constant declared in a test file, which is a copy as well, and a call that
+// no test run reaches: one under `if false`, or in a function that is neither a Test function nor called by name from a test file
+// of its package (a function that only dead code calls is not seen). A test file with a build constraint, or for another
+// platform, is not read: its tests do not run in every test run, so they hold nothing. In another package a call is
+// limitsdoc.Count(t, "id", value); in this one it is Count(t, "id", value), and the IDs that begin with "selftest." are this
+// package's own and may be given literals.
 func guardCalls(t *testing.T, top string) (guarded map[string]string, problems []string) {
 	t.Helper()
 	guarded = map[string]string{}
+	var files []testFile
 	fset := token.NewFileSet()
 	err := filepath.WalkDir(top, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -61,49 +66,156 @@ func guardCalls(t *testing.T, top string) (guarded map[string]string, problems [
 				}
 			}
 		}
-		own := filepath.Dir(path) == filepath.Join(top, "internal", "limitsdoc")
-		ast.Inspect(file, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			var name string
-			switch fun := call.Fun.(type) {
-			case *ast.SelectorExpr:
-				if x, ok := fun.X.(*ast.Ident); ok && x.Name == "limitsdoc" {
-					name = fun.Sel.Name
-				}
-			case *ast.Ident:
-				if own {
-					name = fun.Name
-				}
-			}
-			if !guardNames[name] || len(call.Args) != 3 {
-				return true
-			}
-			at := fset.Position(call.Pos()).String()
-			lit, ok := call.Args[1].(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
-				problems = append(problems, at+": the ID of a limit must be a string literal, so that the page can be matched to the test")
-				return true
-			}
-			id, err := strconv.Unquote(lit.Value)
-			if err != nil {
-				problems = append(problems, at+": "+err.Error())
-				return true
-			}
-			if onlyLiterals(call.Args[2]) && !strings.HasPrefix(id, "selftest.") {
-				problems = append(problems, at+": the limit "+strconv.Quote(id)+" is given a literal: pass the constant or the default that the code uses, or the test holds the page to a copy of it")
-			}
-			guarded[id] = path
-			return true
-		})
+		files = append(files, testFile{path, file})
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	// What each package's test files declare and call, which a guard is judged against.
+	testConsts, called := map[string]map[string]bool{}, map[string]map[string]bool{}
+	for _, f := range files {
+		dir := filepath.Dir(f.path)
+		if testConsts[dir] == nil {
+			testConsts[dir], called[dir] = map[string]bool{}, map[string]bool{}
+		}
+		ast.Inspect(f.file, func(n ast.Node) bool {
+			switch n := n.(type) {
+			case *ast.GenDecl:
+				if n.Tok == token.CONST {
+					for _, spec := range n.Specs {
+						for _, name := range spec.(*ast.ValueSpec).Names {
+							testConsts[dir][name.Name] = true
+						}
+					}
+				}
+			case *ast.CallExpr:
+				switch fun := n.Fun.(type) {
+				case *ast.Ident:
+					called[dir][fun.Name] = true
+				case *ast.SelectorExpr:
+					called[dir][fun.Sel.Name] = true
+				}
+			}
+			return true
+		})
+	}
+	for _, f := range files {
+		dir := filepath.Dir(f.path)
+		own := dir == filepath.Join(top, "internal", "limitsdoc")
+		for _, decl := range f.file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			reached := isTestFunc(fn) || called[dir][fn.Name.Name]
+			var visit func(n ast.Node, live bool)
+			visit = func(root ast.Node, live bool) {
+				ast.Inspect(root, func(n ast.Node) bool {
+					if ifs, ok := n.(*ast.IfStmt); ok {
+						if cond, isIdent := ifs.Cond.(*ast.Ident); isIdent && cond.Name == "false" {
+							visit(ifs.Body, false) // nothing in the body runs
+							if ifs.Else != nil {
+								visit(ifs.Else, live)
+							}
+							return false
+						}
+					}
+					call, ok := n.(*ast.CallExpr)
+					if !ok {
+						return true
+					}
+					var name string
+					switch fun := call.Fun.(type) {
+					case *ast.SelectorExpr:
+						if x, ok := fun.X.(*ast.Ident); ok && x.Name == "limitsdoc" {
+							name = fun.Sel.Name
+						}
+					case *ast.Ident:
+						if own {
+							name = fun.Name
+						}
+					}
+					if !guardNames[name] || len(call.Args) != 3 {
+						return true
+					}
+					at := fset.Position(call.Pos()).String()
+					lit, ok := call.Args[1].(*ast.BasicLit)
+					if !ok || lit.Kind != token.STRING {
+						problems = append(problems, at+": the ID of a limit must be a string literal, so that the page can be matched to the test")
+						return true
+					}
+					id, err := strconv.Unquote(lit.Value)
+					if err != nil {
+						problems = append(problems, at+": "+err.Error())
+						return true
+					}
+					selftest := strings.HasPrefix(id, "selftest.")
+					switch {
+					case !live:
+						problems = append(problems, at+": the guard of the limit "+strconv.Quote(id)+" is under `if false`, so no test run reaches it")
+						return true
+					case !reached:
+						problems = append(problems, at+": the guard of the limit "+strconv.Quote(id)+" is in the function "+fn.Name.Name+", which is not a test and which no test file of its package calls, so no test run reaches it")
+						return true
+					case onlyLiterals(call.Args[2]) && !selftest:
+						problems = append(problems, at+": the limit "+strconv.Quote(id)+" is given a literal: pass the constant or the default that the code uses, or the test holds the page to a copy of it")
+					case !selftest && namesAny(call.Args[2], testConsts[dir]):
+						problems = append(problems, at+": the limit "+strconv.Quote(id)+" is given a constant that a test file declares: pass the constant or the default that the code uses, or the test holds the page to a copy of it")
+					}
+					guarded[id] = f.path
+					return true
+				})
+			}
+			visit(fn.Body, true)
+		}
+	}
 	return guarded, problems
+}
+
+// testFile is a test file that guardCalls reads.
+type testFile struct {
+	path string
+	file *ast.File
+}
+
+// isTestFunc reports whether fn is a Test function of package testing: a name that begins with Test and a *testing.T parameter.
+func isTestFunc(fn *ast.FuncDecl) bool {
+	if fn.Recv != nil || !strings.HasPrefix(fn.Name.Name, "Test") || fn.Type.Params == nil || len(fn.Type.Params.List) != 1 {
+		return false
+	}
+	star, ok := fn.Type.Params.List[0].Type.(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	sel, ok := star.X.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	return ok && pkg.Name == "testing" && sel.Sel.Name == "T"
+}
+
+// namesAny reports whether e uses an identifier that is in names, as a value: the field of a selector (cfg.Limit) and the name
+// of a function that is called are not.
+func namesAny(e ast.Expr, names map[string]bool) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.SelectorExpr:
+			found = found || namesAny(n.X, names)
+			return false
+		case *ast.CallExpr:
+			for _, a := range n.Args {
+				found = found || namesAny(a, names)
+			}
+			return false
+		case *ast.Ident:
+			found = found || names[n.Name]
+		}
+		return true
+	})
+	return found
 }
 
 // onlyLiterals reports whether e is a number written out: literals, and the units of package time, joined by arithmetic, in
@@ -178,8 +290,9 @@ func TestGuardCallsReadsTheSyntax(t *testing.T) {
 	top := t.TempDir()
 	mustWrite(t, filepath.Join(top, "go.mod"), "module x\n")
 	pkg := filepath.Join(top, "p")
-	mustWrite(t, filepath.Join(pkg, "a_test.go"), "package p\n\nfunc f() {\n\t// limitsdoc.Count(t, \"incomment\", maxTriggers)\n\tlimitsdoc.Count(t, \"good\", maxTriggers)\n\tlimitsdoc.Count(t, \"copied\", 50)\n\tlimitsdoc.Count(t, id, maxTriggers)\n}\n")
-	mustWrite(t, filepath.Join(pkg, "typed_test.go"), "package p\n\nfunc k() {\n\tlimitsdoc.Count(t, \"paren\", (50))\n\tlimitsdoc.Duration(t, \"units\", 90*24*time.Hour)\n\tlimitsdoc.Count(t, \"conv\", int(24*time.Hour))\n\tlimitsdoc.Count(t, \"sum\", 40+10)\n\tlimitsdoc.Duration(t, \"dur\", time.Duration(5)*time.Second)\n\tlimitsdoc.Count(t, \"named\", maxTriggers+1)\n\tlimitsdoc.Count(t, \"field\", cfg.Limit)\n\tlimitsdoc.Count(t, \"call\", len(f()))\n\tlimitsdoc.Count(t, \"convnamed\", int(maxTriggers))\n}\n")
+	mustWrite(t, filepath.Join(pkg, "a_test.go"), "package p\n\nfunc TestF(t *testing.T) {\n\t// limitsdoc.Count(t, \"incomment\", maxTriggers)\n\tlimitsdoc.Count(t, \"good\", maxTriggers)\n\tlimitsdoc.Count(t, \"copied\", 50)\n\tlimitsdoc.Count(t, id, maxTriggers)\n}\n")
+	mustWrite(t, filepath.Join(pkg, "typed_test.go"), "package p\n\nfunc TestK(t *testing.T) {\n\tlimitsdoc.Count(t, \"paren\", (50))\n\tlimitsdoc.Duration(t, \"units\", 90*24*time.Hour)\n\tlimitsdoc.Count(t, \"conv\", int(24*time.Hour))\n\tlimitsdoc.Count(t, \"sum\", 40+10)\n\tlimitsdoc.Duration(t, \"dur\", time.Duration(5)*time.Second)\n\tlimitsdoc.Count(t, \"named\", maxTriggers+1)\n\tlimitsdoc.Count(t, \"field\", cfg.Limit)\n\tlimitsdoc.Count(t, \"call\", len(f()))\n\tlimitsdoc.Count(t, \"convnamed\", int(maxTriggers))\n}\n")
+	mustWrite(t, filepath.Join(pkg, "reach_test.go"), "package p\n\nconst copiedLimit = 50\n\nfunc TestReach(t *testing.T) {\n\tconst local = 7\n\tlimitsdoc.Count(t, \"testconst\", copiedLimit)\n\tlimitsdoc.Count(t, \"localconst\", local+1)\n\tlimitsdoc.Count(t, \"prodconst\", maxTriggers)\n\tif false {\n\t\tlimitsdoc.Count(t, \"underfalse\", maxTriggers)\n\t}\n\tif true {\n\t\tlimitsdoc.Count(t, \"undertrue\", maxTriggers)\n\t} else if false {\n\t\tlimitsdoc.Count(t, \"elsefalse\", maxTriggers)\n\t}\n\tcalledHelper(t)\n}\n\nfunc calledHelper(t *testing.T) { limitsdoc.Count(t, \"calledhelper\", maxTriggers) }\n\nfunc uncalledHelper(t *testing.T) { limitsdoc.Count(t, \"uncalled\", maxTriggers) }\n")
 	mustWrite(t, filepath.Join(pkg, "testdata", "x_test.go"), "package p\n\nfunc d() { limitsdoc.Count(t, \"intestdata\", maxTriggers) }\n")
 	mustWrite(t, filepath.Join(top, "nested", "go.mod"), "module nested\n")
 	mustWrite(t, filepath.Join(top, "nested", "n_test.go"), "package n\n\nfunc n() { limitsdoc.Count(t, \"innested\", maxTriggers) }\n")
@@ -205,7 +318,28 @@ func TestGuardCallsReadsTheSyntax(t *testing.T) {
 			t.Errorf("the value of %q is the code's own and was refused: %q", id, problems)
 		}
 	}
-	if !strings.Contains(joined, "must be a string literal") || len(problems) != 7 {
-		t.Errorf("problems = %q, want six values written out and one ID that is not a literal", problems)
+	for id, want := range map[string]string{
+		"testconst":  "is given a constant that a test file declares",
+		"localconst": "is given a constant that a test file declares",
+		"underfalse": "is under `if false`",
+		"elsefalse":  "is under `if false`",
+		"uncalled":   "which is not a test and which no test file of its package calls",
+	} {
+		if !slices.ContainsFunc(problems, func(p string) bool { return strings.Contains(p, strconv.Quote(id)) && strings.Contains(p, want) }) {
+			t.Errorf("%q was not refused with %q: %q", id, want, problems)
+		}
+	}
+	for _, id := range []string{"prodconst", "undertrue", "calledhelper"} {
+		if _, ok := guarded[id]; !ok || strings.Contains(joined, strconv.Quote(id)) {
+			t.Errorf("%q is the code's own, in a test that runs: guarded = %v, and problems %q", id, ok, problems)
+		}
+	}
+	for _, id := range []string{"underfalse", "elsefalse", "uncalled"} {
+		if _, ok := guarded[id]; ok {
+			t.Errorf("%q is guarded, but no test run reaches its call", id)
+		}
+	}
+	if !strings.Contains(joined, "must be a string literal") || len(problems) != 12 {
+		t.Errorf("problems = %q, want six values written out, one ID that is not a literal, two constants of test files, two guards under `if false`, and one in a function that nothing calls", problems)
 	}
 }
