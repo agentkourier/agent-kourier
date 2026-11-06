@@ -745,6 +745,37 @@ func TestACancelThatReadTheSessionBeforeAnotherControlEndedThePauseDoesNotCancel
 	}
 }
 
+// A control that has ended the pause sets the runner's released flag before it clears the record (releasePause, then m.end). A Cancel
+// whose look finds the runner still parked on the task, but released, is looking at a pause that is closing: it asks the agent for
+// nothing and answers ErrNotPaused, where it would cancel the task a second time.
+func TestACancelThatFindsAReleasedPauseDoesNotCancel(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.agent.script = pauseFirst
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	waitFinal(t, sink)
+	f.nextSent()
+
+	f.m.afterSessionRead = func() {
+		f.m.mu.Lock()
+		defer f.m.mu.Unlock()
+		c := f.m.convos[key]
+		if c == nil || c.parked != "t1" {
+			t.Errorf("the runner is not parked on t1: %+v", c)
+			return
+		}
+		c.released = true // as releasePause does, while another control ends the pause, before the record is cleared
+	}
+	if err := f.m.Cancel(t.Context(), key, "t1", "interaction timed out"); !errors.Is(err, ErrNotPaused) {
+		t.Errorf("Cancel = %v; want ErrNotPaused: another control is ending the pause", err)
+	}
+	if got := f.cancelled(); len(got) != 0 {
+		t.Errorf("the agent was asked to cancel %v; want nothing from this Cancel", got)
+	}
+}
+
 // Cancel is for a pause. A task that streams is not one, and is left alone.
 func TestCancelRefusesAStreamingTask(t *testing.T) {
 	f := newFixture(t)
