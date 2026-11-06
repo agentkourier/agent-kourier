@@ -22,8 +22,10 @@ type Source interface {
 	// not the state of the source when Set returned: a Reloader that is PerObject publishes the Set under it and finds what
 	// changed meanwhile at the next poll, so a source it reads must be able to say which state it read (a directory of files
 	// cannot, which is why a Reloader that is not PerObject reads again when the source moved). The Set is the caller's:
-	// Resolve takes ownership of it and the Snapshot keeps pointers into it, so each call must
-	// return a Set of its own, never one that is read or changed again.
+	// Resolve takes ownership of it and reorders its slices, so each call must return a Set whose slices are its own, and are never
+	// read or changed again by the source. What the objects hold (strings, slices, maps) may be shared with the Sets before it and
+	// with the source, which can keep what it decoded of an object that did not change, so nothing may change it: a Snapshot is
+	// read-only in the same way.
 	Set(ctx context.Context) (*Set, string, error)
 	// Fingerprint summarizes the source's current state without reading the objects, so that
 	// the Reloader can poll it cheaply. It is equal to what Set returned for the same state and

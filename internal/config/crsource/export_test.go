@@ -73,3 +73,26 @@ func (s *Source) SetProbeExitHookForTest(f func()) { s.probeExited = f }
 func SlimForTest(u *unstructured.Unstructured) {
 	_, _ = slim(u)
 }
+
+// DecodesForTest counts the objects that Set has decoded and validated: a read that finds an object as it decoded it last does not
+// count it.
+func (s *Source) DecodesForTest() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.decodes
+}
+
+// DecodedForTest returns the decoded object (a pointer to the type of the kind) that the source remembers for the object, and nil if
+// it remembers none or the object was refused.
+func (s *Source) DecodedForTest(kind, namespace, name string) any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.decoded[key{kind, namespace, name}].obj
+}
+
+// DecodedEntriesForTest is how many objects the source remembers a decoding of, whether it was good or refused.
+func (s *Source) DecodedEntriesForTest() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.decoded)
+}

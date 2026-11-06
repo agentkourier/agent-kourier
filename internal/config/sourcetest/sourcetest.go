@@ -293,7 +293,8 @@ func fingerprintHolds(t *testing.T, f Factory, c Corpus) {
 }
 
 // setsAreIndependent: resolving takes ownership of a Set and reorders its Bindings, so a source must never hand one Set's
-// memory to a second.
+// slices to a second, and a change of the fields of one Set's objects must not show in another. What those fields hold (a slice
+// or a map) may be shared, and is for nobody to change.
 func setsAreIndependent(t *testing.T, f Factory, c Corpus) {
 	src := f(t, c)
 	first, _ := read(t, src)
