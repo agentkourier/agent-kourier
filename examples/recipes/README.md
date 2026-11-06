@@ -22,6 +22,17 @@ All three also need a Slack app with a bot token and an app-level token, and the
 `agent-kourier-slack` as that guide and [Install with Helm](../../docs/how-to/install-with-helm.md) do; each recipe's
 Secret step says so.
 
+## How the resources reach Agent Kourier
+
+Each recipe applies its `kourier/` files as custom resources (`kubectl apply -f <recipe>/kourier/`), and the chart has
+Agent Kourier read them from the cluster: `config.source: crds`, the chart's default route, which installs the
+CustomResourceDefinitions with the release.
+That needs a chart release that has custom resources, and Kubernetes 1.33 or later. Release 0.1.6 does not have that
+route: `crds` and `config.source` are not among its values. Each recipe's README has the values and the commands, in
+order. On 0.1.6, or to stay on a ConfigMap, the same files load as one (`config.existingConfigMap`, with
+`rbac.secretNamespaces`, and `config.source: files` on a release that has custom resources); [Move the config between a ConfigMap and custom
+resources](../../docs/how-to/migrate-config-source.md) moves an install from one to the other.
+
 ## Placeholders
 
 A recipe's files load as they are. Where a value has to be yours, the file holds a placeholder that still passes the
@@ -38,22 +49,27 @@ name in `docs-agent`); each recipe's "What to change" lists them.
 
 ## Applying several recipes
 
-Agent Kourier reads one config directory and serves exactly one ChatConnection (it refuses to start with more). To run
-more than one recipe, copy each recipe's `kourier/` files into that one directory under names that do not collide
-(`sre-triage-binding.yaml`, not `binding.yaml` twice). Then:
+A broker serves exactly one ChatConnection, the one `config.chatConnection` names, and the Bindings whose
+`connectionRef` names it. To run more than one recipe on one broker, apply each recipe's `kourier/` directory. Then:
 
-- **Keep one ChatConnection.** Every recipe ships the same one: `slack` in the namespace `agent-kourier`, whose Secret
-  `slack` holds the keys `botToken` and `appToken`. Two copies make two documents with one identity, and the load
-  refuses the duplicate (`duplicate of <file>#<n>`), so delete all but one. You create the Secret once.
-- **One channel each.** A channel of a ChatConnection belongs to at most one Binding. A second Binding for the same
-  connection and channel fails the resolve with `<channel> on ChatConnection <namespace>/<name> is already bound by
-  Binding <namespace>/<name>`. Each recipe ships its own channel placeholder, so replace each with a channel of its own,
-  and invite the bot to each channel.
+- **One ChatConnection.** Every recipe ships the same one: `slack` in the namespace `agent-kourier`, whose Secret
+  `slack` holds the keys `botToken` and `appToken`. The copies are one object, so applying a second recipe leaves it as
+  it is. You create the Secret once.
+- **One channel each.** A channel of a ChatConnection belongs to at most one Binding. The older Binding keeps it, and a
+  second one for the same connection and channel is not served: `kubectl get akbinding -A` shows it `False` with the
+  reason `Accepted:ChannelConflict`. Each recipe ships its own channel placeholder, so replace each with a channel of
+  its own, and invite the bot to each channel.
 - **The other objects are named apart.** No two recipes use the same kind, namespace and name.
+- **Grant every Secret.** `rbac.secretNames` lists the Secrets of all the recipes you apply: `slack`, and
+  `sre-triage-token` for `sre-triage`.
 
-At start-up any of these problems stops Agent Kourier. While it runs, a reload with a load or resolve problem keeps the
-last good config and marks it stale. If you want a ChatConnection of another name or another Secret, change it in every
-recipe you apply.
+A Binding that is not served stops only itself; the others stay served, and its status says why. If you want a
+ChatConnection of another name or another Secret, change it in every recipe you apply, in `config.chatConnection`, and
+in `rbac.secretNames`.
+
+On a ConfigMap, the files of several recipes go in one directory under names that do not collide
+(`sre-triage-binding.yaml`, not `binding.yaml` twice), with one copy of the ChatConnection: the load refuses a second
+(`duplicate of <file>#<n>`).
 
 ## Writing or changing a recipe
 
@@ -75,11 +91,14 @@ examples/recipes/
       scenarios/     quality cases for the agent, as data for a person to read an answer against; nothing runs them yet
 ```
 
-`kourier/` and `agent/` are separate because Agent Kourier loads every `*.yaml` and `*.yml` file directly inside its
-config directory (subdirectories are not read) and refuses any document whose `apiVersion` is not
-`agentkourier.dev/v1alpha1` or whose `kind` is not `AgentBackend`, `ChatConnection` or `Binding`. A kagent `Agent`, a
-`RemoteMCPServer`, a `Role` or a Deployment in that directory makes the whole load fail. So the files you give to
-Agent Kourier live in `kourier/`, and everything the agent needs lives in `agent/` and is applied by its own tooling.
+`kourier/` and `agent/` are separate so that `kubectl apply -f <recipe>/kourier/` applies Agent Kourier's three kinds and
+nothing else, and so that the same directory also loads as a ConfigMap. Agent Kourier's file loader, which the tests
+use, reads every `*.yaml` and `*.yml` file directly inside its config directory (subdirectories are not read) and
+refuses any document whose `apiVersion` is not `agentkourier.dev/v1alpha1` or whose `kind` is not `AgentBackend`,
+`ChatConnection` or `Binding`. A kagent `Agent`, a `RemoteMCPServer`, a `Role` or a Deployment in that directory makes
+the whole load fail. So the files you give to Agent Kourier live in `kourier/`, each with `apiVersion`, `kind`,
+`metadata.name`, `metadata.namespace` and `spec`, and everything the agent needs lives in `agent/` and is applied by its
+own tooling.
 
 A Secret is not one of the three kinds either, so a recipe cannot ship one. Its README names the Secrets the resources
 refer to, and you create them yourself.

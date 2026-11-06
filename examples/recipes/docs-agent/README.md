@@ -66,8 +66,12 @@ and the buttons are the Binding's `feedback.enabled`.
 
 - **Slack.** A Slack app with a bot token and an app-level token, and the bot invited to the help channel:
   [Configure Slack](../../../docs/how-to/configure-slack.md). You need the channel's ID.
-- **Agent Kourier running** in a namespace that can reach the agent's Service
-  ([Install with Helm](../../../docs/how-to/install-with-helm.md)).
+- **Agent Kourier, from a chart release that has custom resources,** in a namespace that can reach the agent's
+  Service. Step 3 installs it with `config.source: crds`, on Kubernetes 1.33 or later (the chart refuses that route on an
+  older API server); [Install with Helm](../../../docs/how-to/install-with-helm.md) has the rest. Release 0.1.6 does
+  not have the route: `crds` and `config.source` are not among its values. Check the chart you will install with
+  `helm show values oci://ghcr.io/agentkourier/charts/agent-kourier --version <version> | grep -A1 '^crds:'`.
+  Installing the CRDs needs the right to create CustomResourceDefinitions, which are cluster-scoped.
 - **A model provider and a key.** The agent speaks to a model through the Chat Completions API of OpenRouter
   (`MODEL_PROVIDER=openrouter`) or of OpenAI, or any OpenAI-compatible HTTPS endpoint (`MODEL_PROVIDER=openai` with
   `MODEL_BASE_URL`). It takes a model that supports tool calls. Bedrock and Anthropic's own API are not supported by
@@ -136,8 +140,8 @@ model quota, so keep that policy; it works only if your cluster's network plugin
 ### 3. Agent Kourier's resources
 
 1. In `kourier/binding.yaml`, replace `CREPLACEDOCS` with the help channel's ID. The three resources are in
-   namespace `agent-kourier`; if yours is another, change `metadata.namespace` in all three and the namespace in
-   `agent/manifests/networkpolicy.yaml`.
+   namespace `agent-kourier`; if yours is another, change `metadata.namespace` in all three, the namespace in
+   `agent/manifests/networkpolicy.yaml`, and the namespace in `config.chatConnection` and `rbac.secretNames` in step 3.
 2. Make the Secret the ChatConnection names, `slack`, in namespace `agent-kourier`, with the keys `botToken` and
    `appToken`. **These recipes call it `slack`; the [Configure Slack](../../../docs/how-to/configure-slack.md) and
    [Install with Helm](../../../docs/how-to/install-with-helm.md) guides call it `agent-kourier-slack`. Use the recipe's
@@ -150,14 +154,52 @@ model quota, so keep that policy; it works only if your cluster's network plugin
    ```
 
    Agent Kourier serves one ChatConnection. This recipe's `slack` is the same resource as the one in
-   [`sre-triage`](../sre-triage/README.md); if you run both, load it once and give each Binding its own channel.
-3. Put the directory in a ConfigMap and install the chart on it, naming the namespace that holds the Secret:
+   [`sre-triage`](../sre-triage/README.md); if you run both, they share it, and each Binding needs its own channel.
+3. Apply the directory as custom resources, and install the chart to read them. The values below replace the inline
+   `config` of the values file in Install with Helm; the rest of that guide applies. If Agent Kourier already runs on a
+   ConfigMap, move it with
+   [Move the config between a ConfigMap and custom resources](../../../docs/how-to/migrate-config-source.md) instead.
 
-   ```sh
-   kubectl -n agent-kourier create configmap docs-agent-config --from-file=examples/recipes/docs-agent/kourier
+   ```yaml title="docs-agent-values.yaml"
+   config:
+     source: crds
+     chatConnection: agent-kourier/slack
+   rbac:
+     secretNames:
+       agent-kourier: [slack]
    ```
 
-   ```yaml
+   `config.chatConnection` names the one ChatConnection the broker serves, and `rbac.secretNames` grants its Secret: the
+   chart cannot see the Secrets of resources you apply yourself. Do not also set `config.chatConnections`,
+   `config.agentBackends` or `config.bindings`: the chart would render them as custom resources of its own. Then, in
+   this order:
+
+   ```sh
+   helm upgrade --install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version <version> \
+     -n agent-kourier -f docs-agent-values.yaml --set replicaCount=0
+   kubectl apply --dry-run=server -f examples/recipes/docs-agent/kourier/
+   kubectl apply -f examples/recipes/docs-agent/kourier/
+   helm upgrade --install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version <version> \
+     -n agent-kourier -f docs-agent-values.yaml
+   kubectl -n agent-kourier wait --for=condition=Ready akbinding/docs-help --timeout=120s
+   ```
+
+   The first `helm` command installs the CRDs with the release, with no broker running (`replicaCount=0`). On this route
+   the chart installs them unless `crds.install` says otherwise, and with `config.*` empty it renders no custom resource
+   of its own that would need them served first. The server-side dry run checks each resource against the CRDs' schema
+   and names the field of a refusal. The resources go in before the broker starts, because a broker that finds no
+   ChatConnection does not start. If the cluster has the CRDs already from another release, such as a second broker's,
+   or from `kubectl apply` (`kubectl get crd bindings.agentkourier.dev` finds one), add `crds.install: false` to the
+   values: two owners of one CRD conflict. A Binding that is not `Ready` says why in
+   `kubectl -n agent-kourier get akbinding docs-help -o yaml`; [Binding status](../../../docs/reference/binding-status.md)
+   explains each reason.
+
+   **To stay on a ConfigMap, or on release 0.1.6,** use this values file alone, in place of the one above. Put the
+   directory in a ConfigMap and install the chart on it, naming the namespace that holds the Secret (the chart cannot
+   read a ConfigMap you manage). `config.source: files` keeps the ConfigMap route: on its default route the chart
+   refuses `config.existingConfigMap`.
+
+   ```yaml title="docs-agent-configmap-values.yaml"
    config:
      source: files
      existingConfigMap: docs-agent-config
@@ -165,8 +207,17 @@ model quota, so keep that policy; it works only if your cluster's network plugin
      secretNamespaces: [agent-kourier]
    ```
 
-   Those values replace the inline `config` of the values file in Install with Helm; the rest of that guide applies.
-   Do not also set `config.chatConnections`, `config.agentBackends` or `config.bindings`: the chart refuses both.
+   ```sh
+   kubectl -n agent-kourier create configmap docs-agent-config --from-file=examples/recipes/docs-agent/kourier
+   helm upgrade --install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version <version> \
+     -n agent-kourier -f docs-agent-configmap-values.yaml
+   ```
+
+   Release 0.1.6 has only the ConfigMap route, and its values schema refuses keys it does not have, `config.source`
+   among them: delete the `source: files` line and install with `--version 0.1.6`.
+
+   [Move the config between a ConfigMap and custom resources](../../../docs/how-to/migrate-config-source.md) moves it
+   to custom resources later.
 
 Then mention the bot in the channel and ask a question, for example "How do I connect a generic A2A agent?". The bot
 adds a reaction while it works, and the answer streams into a thread under your message.
