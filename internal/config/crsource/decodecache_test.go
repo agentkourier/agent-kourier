@@ -10,6 +10,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/config"
+	"github.com/agentkourier/agent-kourier/internal/config/crsource"
 )
 
 // firstTrigger is the address of the first trigger of the Binding, which two Bindings that share their triggers share.
@@ -22,7 +23,7 @@ func firstTrigger(t *testing.T, s *config.Set, name string) *v1alpha1.Trigger {
 	return &s.Bindings[i].Spec.Chat.Triggers[0]
 }
 
-// A read decodes and validates only the objects whose uid or generation changed since the last read, and its Set shares what the
+// A read decodes and validates only the objects that the informer replaced since the last read, and its Set shares what the
 // decoded object holds with the one before, so that the cache that makes this possible is the object that is served and not a
 // second copy of it.
 func TestAReadDecodesOnlyWhatChanged(t *testing.T) {
@@ -127,5 +128,32 @@ func TestTheDecodedObjectsOfDeletedObjectsAreDropped(t *testing.T) {
 	until(t, func() { c.apply(again) }, func() bool { s, _ := set(t, src); return slices.Contains(bindingNames(s), "sre/chat-only") })
 	if n := src.DecodesForTest(); n <= before {
 		t.Error("an object made again under its name, with a new uid, was served from what its predecessor left")
+	}
+}
+
+// A Binding's status is the informer's to hold: neither the decoded object the source keeps nor the Binding of the Set carries it,
+// whatever the cluster's object holds, so that a status that a writer of bindings/status fills adds nothing to them.
+func TestADecodedBindingHasNoStatus(t *testing.T) {
+	leakCheck(t)
+	objs := corpus(t)
+	full := find(objs, "sre-alerts")
+	if err := unstructured.SetNestedSlice(full.Object, []any{map[string]any{
+		"type": "Ready", "status": "True", "reason": "Ready", "message": "a status that a writer filled", "lastTransitionTime": "2026-11-04T12:00:00Z", "observedGeneration": int64(1),
+	}}, "status", "conditions"); err != nil {
+		t.Fatal(err)
+	}
+	objs[slices.IndexFunc(objs, func(u *unstructured.Unstructured) bool { return u.GetName() == "sre-alerts" })] = full
+	src := newCluster(t, objs...).start(t)
+	if status := src.CachedObjectForTest(config.KindBinding, "sre", "sre-alerts"); len(crsource.ConditionsOf(status)) != 1 {
+		t.Fatal("the informer does not hold the status that the test gave the Binding")
+	}
+	s, _ := set(t, src)
+	decoded, ok := src.DecodedForTest(config.KindBinding, "sre", "sre-alerts").(*v1alpha1.Binding)
+	if !ok {
+		t.Fatal("the source remembers no decoded Binding")
+	}
+	i := slices.IndexFunc(s.Bindings, func(b v1alpha1.Binding) bool { return b.Name == "sre-alerts" })
+	if !reflect.DeepEqual(decoded.Status, v1alpha1.BindingStatus{}) || !reflect.DeepEqual(s.Bindings[i].Status, v1alpha1.BindingStatus{}) {
+		t.Errorf("the decoded Binding has status %+v and the Set's %+v; want none", decoded.Status, s.Bindings[i].Status)
 	}
 }

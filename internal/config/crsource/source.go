@@ -889,7 +889,9 @@ func decodeCached[T any, PT interface {
 	} else {
 		if b, ok := any(obj).(*v1alpha1.Binding); ok {
 			// A Binding's status is the informer's to hold, and the status writer reads it there (BindingStatus). The Set's
-			// Binding is read for its spec, and a status kept here would be the one that the generation had when it was first read.
+			// Binding is read for its spec, and nothing reads a status from it. A status kept here would only cost memory, up to
+			// the CRD's bounds, and for the last good typed object that a refused generation is served from, which is never replaced
+			// by a status write, it would be the status the object had when it was last good.
 			b.Status = v1alpha1.BindingStatus{}
 		}
 		d.obj = obj
