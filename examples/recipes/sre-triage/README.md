@@ -118,7 +118,7 @@ which this repository does not check against your install.
   the CRDs needs the right to create CustomResourceDefinitions, which are cluster-scoped.
 - **To run the dry run (step 2.2): Go and a checkout, or Docker instead of Go.** The dry run is a subcommand of the
   `agent-kourier` binary. Run it with Go at the version in `go.mod`, from a checkout of this repository, as below; or
-  with Docker, using the released image `ghcr.io/agentkourier/agent-kourier:v0.2.0`, whose entrypoint is that binary.
+  with Docker, using the released image `ghcr.io/agentkourier/agent-kourier:v0.2.1`, whose entrypoint is that binary.
   Either way you run it from the checkout, since the command reads this recipe's `kourier/` directory.
 
 ## Alerts on the kind full tier
@@ -274,7 +274,7 @@ trial"), `make sandbox-alert` then fires the alert of one of the faults.
 
    ```sh
    docker run --rm -e SLACK_BOT_TOKEN -v "$PWD/examples/recipes/sre-triage/kourier:/config:ro" \
-     ghcr.io/agentkourier/agent-kourier:v0.2.0 dry-run --config /config --binding agent-kourier/sre-triage
+     ghcr.io/agentkourier/agent-kourier:v0.2.1 dry-run --config /config --binding agent-kourier/sre-triage
    ```
 
    Each alert should come out `matched`. If you left `B0REPLACEME` in place, they come out `other_bot` and the `SENDER`
