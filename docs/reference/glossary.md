@@ -45,8 +45,8 @@ ChatConnection
     Owned by the platform team.
 
 Config route
-:   Where the broker reads its resources from, chosen when it starts: `files` (the default, usually a ConfigMap, all or nothing) or `crds`
-    (custom resources, one object at a time). See [Choose a config route](../explanation/config-routes.md).
+:   Where the broker reads its resources from, chosen when it starts: `files` (usually a ConfigMap, all or nothing) or `crds`
+    (custom resources, one object at a time), which is the chart's default. See [Choose a config route](../explanation/config-routes.md).
 
 Context
 :   The A2A `contextId` that a session maps to. Agent Kourier resumes the same context for every turn of a thread.

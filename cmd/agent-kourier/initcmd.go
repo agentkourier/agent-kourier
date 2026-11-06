@@ -33,7 +33,7 @@ import (
 // initUsage is what `agent-kourier init --help` prints.
 const initUsage = `usage: agent-kourier init [options]
 
-Writes a first-install values file for the Helm chart (one Slack connection, one agent, one channel), checks it, and
+Writes a first-install values file for the Helm chart's ConfigMap route, config.source files (one Slack connection, one agent, one channel), checks it, and
 prints the commands that create the Secrets and install the chart. It posts nothing and changes nothing in Slack or in
 a cluster. A value that no option gives is asked for on standard input.
 
@@ -361,7 +361,14 @@ const initValuesTemplate = `# A first install of the Agent Kourier Helm chart: o
 # Written by "agent-kourier init". The steps around it (the Secrets, a dry run that checks this file, the install) are in
 # https://agentkourier.dev/how-to/install-with-helm/.
 # Keep the file: an upgrade passes it again.
+#
+# This file is the quick route for a proof of concept: the chart writes the resources below into a ConfigMap. The chart's default,
+# and the route to run on Kubernetes, reads them as custom resources instead (config.source crds, crds.install true), which other
+# teams can add to; https://agentkourier.dev/explanation/config-routes/ says which to choose.
+crds:
+  install: false
 config:
+  source: files
   # How Agent Kourier talks to Slack. The Secret holds the bot token and the app-level token under the keys botToken
   # and appToken, in the release's namespace.
   chatConnections:
@@ -449,10 +456,16 @@ func yamlScalar(s string) string {
 // in namespace unless the entry has one, and the files are loaded with the loader of the broker, which defaults and
 // validates them. The error is the loader's, which names the file, the resource and the field.
 func loadInitValues(ctx context.Context, values []byte, namespace string) (*config.Set, error) {
+	type entries map[string]struct {
+		Namespace string         `json:"namespace"`
+		Spec      map[string]any `json:"spec"`
+	}
+	// config.source, and the other keys of the section that are no resource, are the chart's to read.
 	var doc struct {
-		Config map[string]map[string]struct {
-			Namespace string         `json:"namespace"`
-			Spec      map[string]any `json:"spec"`
+		Config struct {
+			AgentBackends   entries `json:"agentBackends"`
+			ChatConnections entries `json:"chatConnections"`
+			Bindings        entries `json:"bindings"`
 		} `json:"config"`
 	}
 	if err := yaml.Unmarshal(values, &doc); err != nil {
@@ -463,8 +476,11 @@ func loadInitValues(ctx context.Context, values []byte, namespace string) (*conf
 		return nil, fmt.Errorf("make a directory for the check: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
-	for _, k := range []struct{ key, kind string }{{"agentBackends", "AgentBackend"}, {"chatConnections", "ChatConnection"}, {"bindings", "Binding"}} {
-		for name, entry := range doc.Config[k.key] {
+	for _, k := range []struct {
+		entries entries
+		kind    string
+	}{{doc.Config.AgentBackends, "AgentBackend"}, {doc.Config.ChatConnections, "ChatConnection"}, {doc.Config.Bindings, "Binding"}} {
+		for name, entry := range k.entries {
 			obj := map[string]any{
 				"apiVersion": resourceAPIVersion, "kind": k.kind,
 				"metadata": map[string]any{"name": name, "namespace": cmp.Or(entry.Namespace, namespace)},

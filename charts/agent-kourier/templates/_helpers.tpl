@@ -48,9 +48,18 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- default (printf "%s-config" (include "agentkourier.fullname" .)) .Values.config.existingConfigMap -}}
 {{- end -}}
 
-{{/* True (non-empty) when Agent Kourier reads its resources from custom resources (config.source crds), not from files. */}}
+{{/*
+True (non-empty) when Agent Kourier reads its resources from custom resources (config.source crds), not from files. The chart's default is crds. An
+unset source reads as files: `helm upgrade --reuse-values` from a release that had no config.source hands the chart no such key, and that release
+read files.
+*/}}
 {{- define "agentkourier.crMode" -}}
 {{- if eq (default "files" .Values.config.source) "crds" -}}true{{- end -}}
+{{- end -}}
+
+{{/* True (non-empty) when config.* holds a resource of any kind, which the chart renders as a custom resource with config.source crds. */}}
+{{- define "agentkourier.inlineResources" -}}
+{{- if or .Values.config.agentBackends .Values.config.chatConnections .Values.config.bindings -}}true{{- end -}}
 {{- end -}}
 
 {{/*
@@ -62,7 +71,7 @@ the connections of several brokers, so a second entry is no guess to make.
 {{- $ref := .Values.config.chatConnection -}}
 {{- if not $ref -}}
 {{- if ne (len .Values.config.chatConnections) 1 -}}
-{{- fail "config.source crds needs config.chatConnection: the namespace/name of the one ChatConnection this broker serves. A cluster may hold the connections of several brokers, so it is left out only when config.chatConnections has exactly one entry" -}}
+{{- fail "config.source crds (the chart's default) needs config.chatConnection: the namespace/name of the one ChatConnection this broker serves. A cluster may hold the connections of several brokers, so it is left out only when config.chatConnections has exactly one entry. To supply the config as a ConfigMap instead, set config.source: files (and crds.install: false, unless you want the CRDs too); https://agentkourier.dev/how-to/install-with-helm/ describes both routes" -}}
 {{- end -}}
 {{- range $name, $r := .Values.config.chatConnections -}}
 {{- $ref = printf "%s/%s" (default $.Release.Namespace $r.namespace) $name -}}
@@ -156,20 +165,25 @@ Checks that no values file can get past. Included by the Deployment, which every
 {{- end -}}
 {{- if include "agentkourier.crMode" . -}}
 {{- if .Values.config.existingConfigMap -}}
-{{- fail "config.existingConfigMap is for config.source files: with crds Agent Kourier reads custom resources and mounts no ConfigMap, so it would be ignored" -}}
+{{- fail "config.existingConfigMap is for config.source files, and config.source is crds (the chart's default): Agent Kourier would read custom resources, mount no ConfigMap and ignore it. To keep reading your ConfigMap, set config.source: files (crds.install is on by default and renders the CRDs with files too, so set crds.install: false to leave them out). To move to custom resources instead, remove config.existingConfigMap and follow https://agentkourier.dev/how-to/migrate-config-source/#move-a-configmap-you-manage-yourself" -}}
 {{- end -}}
 {{- /* The minimum is 1.33, the first minor on which the status write of a stored-invalid Binding ratchets (measured; it is refused on 1.30 to 1.32). The -0 lets a
        vendor suffix (v1.33.1-gke.1, v1.33.0-eks-abc) pass. */ -}}
 {{- if not (semverCompare ">=1.33.0-0" .Capabilities.KubeVersion.Version) -}}
-{{- fail (printf "config.source crds needs Kubernetes 1.33 or later: the API server is %s. 1.33 is the first minor tried on which a status write of a Binding that a rule of the CRDs now refuses is accepted (it is refused on 1.30 to 1.32). With helm template, pass the cluster's version (--kube-version): Helm's default is its own. config.source files has no minimum" .Capabilities.KubeVersion.Version) -}}
+{{- fail (printf "config.source crds needs Kubernetes 1.33 or later (it is the chart's default): the API server is %s. 1.33 is the first minor tried on which a status write of a Binding that a rule of the CRDs now refuses is accepted (it is refused on 1.30 to 1.32). To install on this cluster, set config.source: files (and crds.install: false): the ConfigMap route has no minimum. With helm template, pass the cluster's version (--kube-version): Helm's default is its own" .Capabilities.KubeVersion.Version) -}}
 {{- end -}}
 {{- /* A CRD and the custom resources of it in one release can fail where Helm maps the kind, so the CRDs come first: they must already be served
-       when the chart renders. A render that does not ask the cluster (helm template, helm install --dry-run=client) has only the versions it is given. */ -}}
+       when the chart renders. A render that does not ask the cluster (helm template, helm install --dry-run=client) has only the versions it is given.
+       With crds.install and nothing in config.* the release renders no custom resource, so there is nothing for Helm to map and the CRDs may come
+       with it: that is a first install of the default, where the teams apply their own resources. */ -}}
 {{- if not (.Capabilities.APIVersions.Has "agentkourier.dev/v1alpha1") -}}
 {{- if (.Values.crds).install -}}
-{{- fail "config.source crds needs the CRDs (group agentkourier.dev, version v1alpha1) to be installed before the release that renders custom resources, and the cluster does not serve them yet: crds.install installs them with this release, too late for it. In an earlier install or upgrade set crds.install=true with config.source files, then set config.source crds. With helm template, add --api-versions agentkourier.dev/v1alpha1 to render as if they were installed" -}}
+{{- if include "agentkourier.inlineResources" . -}}
+{{- fail "config.source crds needs the CRDs (group agentkourier.dev, version v1alpha1) to be installed before a release that renders config.agentBackends, config.chatConnections or config.bindings as custom resources, and the cluster does not serve them yet: crds.install installs them with this release, too late for the resources of it. To keep the ConfigMap route, set config.source: files (and crds.install: false); https://agentkourier.dev/how-to/migrate-config-source/ describes moving to custom resources. To use custom resources, install the CRDs first: in an earlier install or upgrade set crds.install=true with config.source files, or leave config.* empty here, name the ChatConnection in config.chatConnection and apply the resources with kubectl once the CRDs are in, then set config.source crds. With helm template, add --api-versions agentkourier.dev/v1alpha1 to render as if they were installed" -}}
 {{- end -}}
-{{- fail "config.source crds needs the CRDs (group agentkourier.dev, version v1alpha1) to be installed before this release, and the cluster does not serve them. In an earlier install or upgrade set crds.install=true with config.source files, or apply the chart's files/crds yourself (kubectl apply --server-side -f charts/agent-kourier/files/crds), then set config.source crds. With helm template, add --api-versions agentkourier.dev/v1alpha1 to render as if they were installed" -}}
+{{- else -}}
+{{- fail "config.source crds needs the CRDs (group agentkourier.dev, version v1alpha1) to be installed before this release, and the cluster does not serve them (config.source crds is the chart's default). To keep the ConfigMap route, set config.source: files; https://agentkourier.dev/how-to/migrate-config-source/ describes moving to custom resources. To use custom resources, in an earlier install or upgrade set crds.install=true with config.source files, or apply the chart's files/crds yourself (kubectl apply --server-side -f charts/agent-kourier/files/crds), then set config.source crds. With helm template, add --api-versions agentkourier.dev/v1alpha1 to render as if they were installed" -}}
+{{- end -}}
 {{- end -}}
 {{- $_ := include "agentkourier.chatConnection" . -}}
 {{- /* With files, config.chatConnection and rbac.secretNames are ignored, and the chart does not refuse them: a rollback to files keeps the values

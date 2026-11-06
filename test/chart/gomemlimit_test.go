@@ -15,7 +15,7 @@ import (
 func goMemLimit(t *testing.T, args ...string) []string {
 	t.Helper()
 	var d appsv1.Deployment
-	find(t, mustRender(t, "agent-kourier", "agent-kourier", append([]string{"--set", "image.repository=agent-kourier"}, args...)...), "Deployment", "agent-kourier", &d)
+	find(t, mustRender(t, "agent-kourier", "agent-kourier", append([]string{"--set", "image.repository=agent-kourier,config.source=files,crds.install=false"}, args...)...), "Deployment", "agent-kourier", &d)
 	var got []string
 	for _, e := range d.Spec.Template.Spec.Containers[0].Env {
 		if e.Name == "GOMEMLIMIT" {
@@ -97,7 +97,7 @@ func TestNoMemoryLimitRendersNoGoMemLimit(t *testing.T) {
 	for _, bad := range []string{"", "lots", "256MB", "-256Mi"} {
 		t.Run("not a quantity: "+bad, func(t *testing.T) {
 			t.Parallel()
-			out, err := render(t.Context(), t, "agent-kourier", "agent-kourier", "--set", "image.repository=agent-kourier", "--set-string", "resources.limits.memory="+bad)
+			out, err := render(t.Context(), t, "agent-kourier", "agent-kourier", "--set", "image.repository=agent-kourier,config.source=files,crds.install=false", "--set-string", "resources.limits.memory="+bad)
 			if err != nil {
 				t.Fatalf("a memory limit of %q failed the render: %v", bad, err)
 			}
@@ -119,7 +119,7 @@ func TestGoMemLimitInExtraEnvWins(t *testing.T) {
 		t.Errorf("GOMEMLIMIT = %q; want only the operator's 100MiB", got)
 	}
 	var d appsv1.Deployment
-	find(t, mustRender(t, "agent-kourier", "agent-kourier", append([]string{"--set", "image.repository=agent-kourier"}, args...)...), "Deployment", "agent-kourier", &d)
+	find(t, mustRender(t, "agent-kourier", "agent-kourier", append([]string{"--set", "image.repository=agent-kourier,config.source=files,crds.install=false"}, args...)...), "Deployment", "agent-kourier", &d)
 	var otel []corev1.EnvVar
 	for _, e := range d.Spec.Template.Spec.Containers[0].Env {
 		if e.Name == "OTEL_TRACES_EXPORTER" {

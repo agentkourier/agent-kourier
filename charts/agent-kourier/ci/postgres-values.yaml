@@ -3,7 +3,12 @@ image:
   repository: registry.example.test/agent-kourier
   tag: v0.1.0
 
+# The ConfigMap route, named: config.source defaults to crds, and crds.install to true, which this file's golden output must not pick up.
+crds:
+  install: false
+
 config:
+  source: files
   chatConnections:
     slack-main:
       spec:

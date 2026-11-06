@@ -23,8 +23,8 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/config"
 )
 
-// The chart's two config routes (spec D50): files, the default, which mounts a ConfigMap, and crds, which reads Binding, AgentBackend and
-// ChatConnection custom resources. These tests hold the default to what it always rendered, and the crds route to what the broker needs of it.
+// The chart's two config routes (spec D50): crds, the default, which reads Binding, AgentBackend and ChatConnection custom resources, and files,
+// which mounts a ConfigMap. These tests hold the default to what the broker needs of it, and the files route to what it always rendered.
 
 // crdsServed makes helm template render as if the cluster already served the CRDs on a Kubernetes that CR mode accepts: the render of
 // config.source crds refuses to go on otherwise (a CRD and the resources of it cannot be in one release's first apply).
@@ -56,11 +56,155 @@ func podEnv(d appsv1.Deployment) map[string]string {
 	return env
 }
 
-// TestDefaultsAreTheConfigMapRoute: with config.source and crds.install at their defaults, which every values file of the repository leaves, the
-// chart renders what it rendered before CR mode (the golden files say so object by object); this says what that means. No CRD, ClusterRole
-// or custom resource, no environment variable of CR mode, the ConfigMap mounted where the broker reads its directory, and naming the defaults
-// changes nothing, byte for byte.
-func TestDefaultsAreTheConfigMapRoute(t *testing.T) {
+// TestDefaultsAreTheCRRoute: with config.source and crds.install at their defaults, the chart is on the route of custom resources: the
+// three CRDs, the ClusterRole that reads them, the pod told which ChatConnection it serves and mounting no ConfigMap, and no custom resource
+// or ConfigMap, since the config.* values are empty and the teams apply their own. The CRDs are not served when helm template renders,
+// and the render goes on: nothing in it is a resource of those kinds, so nothing can fail where Helm maps one.
+func TestDefaultsAreTheCRRoute(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	objs := mustRender(t, "agent-kourier", "agent-kourier", "--set", "image.repository=agent-kourier,config.chatConnection=platform/slack")
+	var crds []string
+	for _, o := range objs {
+		switch {
+		case o.kind() == "CustomResourceDefinition":
+			crds = append(crds, o.name())
+		case o.kind() == "ConfigMap", strings.HasPrefix(str(o["apiVersion"]), "agentkourier.dev/"):
+			t.Errorf("the defaults rendered %s %s: the config.* values are empty, so no resource and no ConfigMap is the chart's to make", o.kind(), o.name())
+		}
+	}
+	if want := []string{"agentbackends.agentkourier.dev", "bindings.agentkourier.dev", "chatconnections.agentkourier.dev"}; !slices.Equal(crds, want) {
+		t.Errorf("CRDs %v; want %v: crds.install is on by default", crds, want)
+	}
+	if !slices.Contains(kinds(objs), "ClusterRole//agent-kourier-agent-kourier-crs") {
+		t.Errorf("objects %v; want the ClusterRole that reads the custom resources", kinds(objs))
+	}
+	d := deployment(t, objs)
+	env := podEnv(d)
+	if env["AGENTKOURIER_CONFIG_SOURCE"] != "crds" || env["AGENTKOURIER_CHAT_CONNECTION"] != "platform/slack" {
+		t.Errorf("AGENTKOURIER_CONFIG_SOURCE %q, AGENTKOURIER_CHAT_CONNECTION %q; want crds and platform/slack", env["AGENTKOURIER_CONFIG_SOURCE"], env["AGENTKOURIER_CHAT_CONNECTION"])
+	}
+	if _, has := env["AGENTKOURIER_CONFIG_DIR"]; has {
+		t.Errorf("the pod sets AGENTKOURIER_CONFIG_DIR with the default route: there is no directory to read")
+	}
+	if slices.ContainsFunc(d.Spec.Template.Spec.Volumes, func(v corev1.Volume) bool { return v.ConfigMap != nil }) {
+		t.Errorf("volumes %+v; want no ConfigMap mounted with custom resources", d.Spec.Template.Spec.Volumes)
+	}
+}
+
+// TestDefaultsWithNoConfigAreRefusedWithAWayOut: a first install that gives the chart nothing to serve has no ChatConnection for the broker, and the
+// render says so and names the route that needs no resource of its own, instead of rendering a pod that exits at start.
+func TestDefaultsWithNoConfigAreRefusedWithAWayOut(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	_, err := render(t.Context(), t, "agent-kourier", "agent-kourier", "--set", "image.repository=agent-kourier")
+	if err == nil {
+		t.Fatal("the chart rendered an install with no values; want a refusal that names config.chatConnection")
+	}
+	for _, want := range []string{"needs config.chatConnection", "config.source: files"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("render error = %v; want one containing %q", err, want)
+		}
+	}
+}
+
+// TestAnUpgradeThatKeepsTheOldValuesIsRefusedWithAWayOut: an install of the ConfigMap route that upgrades with the values it had, and so gets the
+// default route, must not be moved silently: where the chart can tell, it refuses, and the message names what keeps the install working
+// (config.source: files) and where the move is described. What no render can tell is the last case: the inline config, with the CRDs already
+// served, is the move itself.
+func TestAnUpgradeThatKeepsTheOldValuesIsRefusedWithAWayOut(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	image := "image.repository=registry.example.test/agent-kourier"
+	inline := `config.chatConnections={"slack":{"spec":{"platform":"slack","credentialsSecretRef":{"name":"s"}}}}`
+	tests := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{"a ConfigMap of its own", []string{"--set", image + ",config.existingConfigMap=mine"},
+			[]string{"config.existingConfigMap is for config.source files", "set config.source: files", "how-to/migrate-config-source/", "crds.install: false"}},
+		{"config in the values, on a cluster that does not serve the CRDs", []string{"--set", image, "--set-json", inline},
+			[]string{"config.source: files", "how-to/migrate-config-source/"}},
+		{"config in the values, and the CRDs are being installed with it", []string{"--set", image + ",crds.install=true", "--set-json", inline},
+			[]string{"crds.install installs them with this release, too late for the resources of it", "config.source: files"}},
+		{"Kubernetes 1.32", []string{"--set", image + ",config.chatConnection=c", "--kube-version", "v1.32.9"},
+			[]string{"needs Kubernetes 1.33 or later", "set config.source: files"}},
+		{"Kubernetes 1.32 and a ConfigMap of its own", []string{"--set", image + ",config.existingConfigMap=mine", "--kube-version", "v1.32.9"},
+			[]string{"config.existingConfigMap is for config.source files"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := render(t.Context(), t, "agent-kourier", "agent-kourier", tc.args...)
+			if err == nil {
+				t.Fatalf("the chart rendered; want a refusal containing %q", tc.want)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("render error = %v; want one containing %q", err, want)
+				}
+			}
+		})
+	}
+
+	// With the CRDs served the default route renders the inline config as custom resources, and the ConfigMap goes: this is the second step of the
+	// move on the migration page, and nothing in a render tells it from a first install of the route. A cluster whose CRDs are served has
+	// been prepared for it, and the page's dry run is how to check the objects before the upgrade.
+	objs := mustRender(t, "agent-kourier", "agent-kourier", append(crMode("--set", image), "--set-json", inline)...)
+	if !slices.Contains(kinds(objs), "ChatConnection/agent-kourier/slack") || slices.ContainsFunc(objs, func(o object) bool { return o.kind() == "ConfigMap" }) {
+		t.Errorf("objects %v; want the ChatConnection as a custom resource and no ConfigMap", kinds(objs))
+	}
+}
+
+// TestTierValuesNameTheirRoute: the default route moved, so every values file of the repository that means the ConfigMap route says so, and
+// leaves the CRDs out, and the one that means custom resources says so too. A values file that leans on the default would change which route
+// a kind tier or a golden file runs.
+func TestTierValuesNameTheirRoute(t *testing.T) {
+	t.Parallel()
+	files, err := filepath.Glob(filepath.Join(chartDir, "ci", "*-values.yaml"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no ci values files: %v", err)
+	}
+	for _, f := range files {
+		name := strings.TrimSuffix(filepath.Base(f), "-values.yaml")
+		if name == "fast-postgres-ha" { // an overlay on fast-postgres: it sets neither
+			continue
+		}
+		t.Run(name, func(t *testing.T) {
+			raw, err := os.ReadFile(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var v struct {
+				Config struct {
+					Source string `json:"source"`
+				} `json:"config"`
+				CRDs struct {
+					Install *bool `json:"install"`
+				} `json:"crds"`
+			}
+			if err := yaml.Unmarshal(raw, &v); err != nil {
+				t.Fatal(err)
+			}
+			want := "files"
+			if name == "crds" {
+				want = "crds"
+			}
+			if v.Config.Source != want {
+				t.Errorf("config.source = %q; want %q, named in the file", v.Config.Source, want)
+			}
+			if v.CRDs.Install == nil || *v.CRDs.Install {
+				t.Errorf("crds.install = %v; want false, named in the file: the CRDs are the default's and these files render what they always did", v.CRDs.Install)
+			}
+		})
+	}
+}
+
+// TestExplicitFilesRouteIsTheConfigMapRoute: with config.source files, which every values file that means it now says, the chart renders what it
+// rendered before the route of custom resources was the default (the golden files say so object by object); this says what that means. No
+// CRD, ClusterRole or custom resource, no environment variable of the other route, and the ConfigMap mounted where the broker reads its directory.
+func TestExplicitFilesRouteIsTheConfigMapRoute(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
 	for _, tc := range goldenCases {
@@ -69,29 +213,17 @@ func TestDefaultsAreTheConfigMapRoute(t *testing.T) {
 		}
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			args := []string{"-f", values(tc.name)}
-			plain, err := render(t.Context(), t, tc.release, tc.namespace, args...)
-			if err != nil {
-				t.Fatal(err)
-			}
-			named, err := render(t.Context(), t, tc.release, tc.namespace, append(args, "--set", "config.source=files,crds.install=false")...)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if plain != named {
-				t.Errorf("config.source=files and crds.install=false change the render:\n%s", firstDifference(plain, named))
-			}
-			objs := decode(t, plain)
+			objs := mustRender(t, tc.release, tc.namespace, "-f", values(tc.name))
 			for _, o := range objs {
 				if o.kind() == "CustomResourceDefinition" || o.kind() == "ClusterRole" || o.kind() == "ClusterRoleBinding" || strings.HasPrefix(str(o["apiVersion"]), "agentkourier.dev/") {
-					t.Errorf("the default rendered %s %s, which only the route of custom resources makes", o.kind(), o.name())
+					t.Errorf("the files route rendered %s %s, which only the route of custom resources makes", o.kind(), o.name())
 				}
 			}
 			d := deployment(t, objs)
 			env := podEnv(d)
 			for _, name := range []string{"AGENTKOURIER_CONFIG_SOURCE", "AGENTKOURIER_CHAT_CONNECTION"} {
 				if _, has := env[name]; has {
-					t.Errorf("the pod sets %s by default: its template would move for every install", name)
+					t.Errorf("the pod sets %s on the files route: its template would move for every install", name)
 				}
 			}
 			if env["AGENTKOURIER_CONFIG_DIR"] != "/etc/agent-kourier" {
@@ -533,7 +665,7 @@ func TestCRModeRefusals(t *testing.T) {
 		want string
 	}{
 		{"the CRDs are not served", []string{"-f", values("crds")}, "serve them"},
-		{"the CRDs are not served and crds.install is set", []string{"-f", values("crds"), "--set", "crds.install=true"}, "crds.install installs them with this release, too late for it"},
+		{"the CRDs are not served and crds.install is set", []string{"-f", values("crds"), "--set", "crds.install=true"}, "crds.install installs them with this release, too late for the resources of it"},
 		{"Kubernetes 1.32", []string{"-f", values("crds"), "--api-versions", "agentkourier.dev/v1alpha1", "--kube-version", "v1.32.9"}, "needs Kubernetes 1.33 or later"},
 		{"Kubernetes 1.30", []string{"-f", values("crds"), "--api-versions", "agentkourier.dev/v1alpha1", "--kube-version", "v1.30.2"}, "needs Kubernetes 1.33 or later"},
 		{"a vendor build of 1.32", []string{"-f", values("crds"), "--api-versions", "agentkourier.dev/v1alpha1", "--kube-version", "v1.32.14-gke.1"}, "needs Kubernetes 1.33 or later"},

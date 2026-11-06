@@ -317,7 +317,7 @@ install_agentkourier() {
   "${K[@]}" -n agent-kourier rollout restart deploy/agent-kourier >/dev/null
 }
 
-# require_config_source: die unless E2E_CONFIG_SOURCE is files (the default, the ConfigMap route) or crds (custom resources). Call it in a script's
+# require_config_source: die unless E2E_CONFIG_SOURCE is files (the tiers' default, the ConfigMap route: their values name it, since the chart's own default is crds) or crds (custom resources). Call it in a script's
 # preflight, before anything is changed.
 require_config_source() {
   case "${E2E_CONFIG_SOURCE:-files}" in
@@ -338,7 +338,7 @@ crds_held_by_release() {
 # tier's AgentBackend: the Bindings name it `agents` in both tiers. Each EXTRA_CONFIG_DIR adds the YAML files of a directory: the fast tier
 # passes the Bindings that reach the stub agent through the a2a dialect and those that verification checks against the stub, which the full
 # tier, with no stub, must not load.
-# E2E_CONFIG_SOURCE says where Agent Kourier reads that config from. files (the default) puts it in the ConfigMap agent-kourier-config, which the chart
+# E2E_CONFIG_SOURCE says where Agent Kourier reads that config from. files (the default of the tiers, whatever the chart's default is: the tiers' values set config.source files) puts it in the ConfigMap agent-kourier-config, which the chart
 # mounts. crds follows the move a user makes, in two upgrades: the CRDs first (the release as it was, with crds.install on), then the same files applied
 # as custom resources and the release upgraded with crds-values.yaml, so that the pod reads them and the ConfigMap is not mounted. The ConfigMap is still
 # made (a ConfigMap of a user's own is not touched by the move either), so that the tier can go back: running this again with files upgrades the release
