@@ -152,9 +152,9 @@ evals/
     sender's kind). A post of a bot the Binding does not name comes out `other_bot`, with its bot ID in the `SENDER`
     column. See [Tune triggers with a dry run](../../../docs/how-to/tune-triggers.md).
 4. Make the Secret the ChatConnection names, in namespace `agent-kourier` (`kubectl create namespace agent-kourier`
-   first if it does not exist). **These recipes call it `slack`, as
-   [Install with Helm](../../../docs/how-to/install-with-helm.md) does; the
-   [Configure Slack](../../../docs/how-to/configure-slack.md) guide calls it `agent-kourier-slack`. Use the recipe's
+   first if it does not exist). **These recipes call it `slack`, as the
+   [Configure Slack](../../../docs/how-to/configure-slack.md) and
+   [Install with Helm](../../../docs/how-to/install-with-helm.md) guides do. Use the recipe's
    name here, since `kourier/chatconnection.yaml` refers to it.** It holds the fixed keys `botToken` and `appToken`. If
    you applied `sre-triage` or `docs-agent`, which ship the same ChatConnection, it exists already.
 

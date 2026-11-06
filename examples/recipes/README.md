@@ -18,8 +18,8 @@ The [glossary](../../docs/reference/glossary.md) defines kind full tier, Agent S
 Each recipe's README defines them again where it first uses them.
 
 All three also need a Slack app with a bot token and an app-level token, and the bot invited to the channel:
-[Configure Slack](../../docs/how-to/configure-slack.md). The recipes call the Slack Secret `slack`, as
-[Install with Helm](../../docs/how-to/install-with-helm.md) does, not `agent-kourier-slack` as that guide does; each recipe's
+[Configure Slack](../../docs/how-to/configure-slack.md). The recipes call the Slack Secret `slack`, as that guide and
+[Install with Helm](../../docs/how-to/install-with-helm.md) do; each recipe's
 Secret step says so.
 
 ## How the resources reach Agent Kourier

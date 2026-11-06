@@ -156,7 +156,7 @@ metadata:
 spec:
   platform: slack
   credentialsSecretRef:
-    name: agent-kourier-slack
+    name: slack
   allowedNamespaces: [payments]
 ---
 apiVersion: agentkourier.dev/v1alpha1
@@ -187,7 +187,7 @@ spec:
 
 This example assumes the agent and authenticated backend endpoint already exist.
 Replace the endpoint, agent reference, and channel ID for your deployment. The
-`agent-kourier-slack` Secret belongs in `agent-kourier` with `botToken` and `appToken`
+`slack` Secret belongs in `agent-kourier` with `botToken` and `appToken`
 keys; `payments-agent-token` belongs in `payments` with a `token` key. Each binding
 uses a service identity for agent calls; individual Slack users do not supply the
 backend's authorization identity.

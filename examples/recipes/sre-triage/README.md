@@ -280,9 +280,9 @@ trial"), `make sandbox-alert` then fires the alert of one of the faults.
    Each alert should come out `matched`. If you left `B0REPLACEME` in place, they come out `other_bot` and the `SENDER`
    column shows the bot ID: put it in `binding.yaml` in place of `B0REPLACEME`, and run again.
 3. Make the two Secrets the resources name, in namespace `agent-kourier` (`kubectl create namespace agent-kourier`
-   first if it does not exist). **These recipes call the Slack Secret `slack`, as
-   [Install with Helm](../../../docs/how-to/install-with-helm.md) does; the
-   [Configure Slack](../../../docs/how-to/configure-slack.md) guide calls it `agent-kourier-slack`. Use the recipe's
+   first if it does not exist). **These recipes call the Slack Secret `slack`, as the
+   [Configure Slack](../../../docs/how-to/configure-slack.md) and
+   [Install with Helm](../../../docs/how-to/install-with-helm.md) guides do. Use the recipe's
    name here, since `kourier/chatconnection.yaml` refers to it.**
 
    ```sh

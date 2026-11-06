@@ -13,9 +13,9 @@ repository, so what you read here is what the repository holds.
 
 !!! warning "The recipes' Slack Secret is called `slack`"
 
-    The recipes' ChatConnection names a Secret `slack`, as [Install with Helm](install-with-helm.md) does.
-    [Configure Slack](configure-slack.md) creates `agent-kourier-slack`. Create the Secret under the name the
-    recipe's ChatConnection uses, or change the ChatConnection to match.
+    The recipes' ChatConnection names a Secret `slack`, the name [Install with Helm](install-with-helm.md) and
+    [Configure Slack](configure-slack.md) create. If yours has another name, create the Secret under the name the
+    recipe's ChatConnection uses, or change the ChatConnection to match and set `config.chatConnectionSecret` to the Secret's name.
 
 ## Triage Alertmanager alerts with a read-only agent
 
