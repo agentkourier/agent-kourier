@@ -32,6 +32,10 @@ team-a      late          False   Accepted:ChannelConflict     C1        1m
   what each case does, and [Choose a config route](explanation/config-routes.md) says which route fits.
 - **Secrets are followed one at a time.** The broker watches each Secret the config names, not a whole namespace, so a reload can add a
   Secret in a namespace it was not watching, with no restart, as long as its Role grants `list` and `watch`.
+- **The start line names the route.** The first line of the log is an INFO `config route` with `config_source` (`crds` or `files`) and, with
+  `crds`, the `connection` the broker is configured to serve (`internal/broker/run.go`). A pod moved from one route to the other is told apart from its old one by it.
+- **A bad ChatConnection name stops the start.** With `crds`, `AGENTKOURIER_CHAT_CONNECTION` must be a namespace that is a DNS-1123 label and a
+  name that is a DNS-1123 subdomain. Anything else exits with code 2, with a message that does not show the value. The chart sets it from `config.chatConnection`.
 - **Move between the routes.** [Move the config between a ConfigMap and custom resources](how-to/migrate-config-source.md) is a
   two-upgrade path in each direction. [Install with Helm](how-to/install-with-helm.md#install-on-custom-resources) is the path for a new install.
 - **Needs** Kubernetes 1.33 or later, and a right to create CustomResourceDefinitions (they are cluster-scoped). The ConfigMap route has no minimum version.
@@ -67,6 +71,8 @@ metrics and logs: see [Binding verification](reference/metrics.md#binding-verifi
 - **Kubernetes 1.33 or later is needed for the custom resource route.** The ConfigMap route has no minimum.
 - **The chart refuses these values on the default route.** The render fails before anything is applied, so nothing changes, and each
   message says how to keep the ConfigMap route or how to move:
+
+    The messages that name the default say "the chart's default unless your values set it", since the chart sees the same value whether your values say `config.source: crds` or leave it out.
 
     | Your values | Why it is refused |
     |---|---|
