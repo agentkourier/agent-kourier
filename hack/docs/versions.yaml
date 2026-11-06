@@ -6,4 +6,5 @@
 # minor version adds its line here before the tag exists. main is always published too, as dev. Remove a line to stop
 # publishing its tags.
 releases:
+  - "0.2"
   - "0.1"
