@@ -15,7 +15,8 @@ interface and its conformance suite, and the resource API takes a second platfor
 breaking a Slack `Binding`. Agents speak only A2A, so a new platform needs no change to them.
 
 [Documentation](https://agentkourier.dev) · [Try it in a kind sandbox](docs/tutorials/first-agent-in-slack.md) ·
-[Install with Helm](docs/how-to/install-with-helm.md) · [Architecture](docs/explanation/architecture.md)
+[Install with Helm](docs/how-to/install-with-helm.md) · [Architecture](docs/explanation/architecture.md) ·
+[Release notes](docs/release-notes.md)
 
 > **Status: v0.2.0.** Install the published chart and image with
 > [Install with Helm](docs/how-to/install-with-helm.md). The `v1alpha1` resource format can change before 1.0. See

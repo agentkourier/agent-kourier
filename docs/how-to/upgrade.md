@@ -7,6 +7,9 @@ Each release publishes a signed multi-arch image and a chart whose default image
 [Install with Helm](install-with-helm.md#the-release) describes. The current release is `0.2.0`. To run a build that is not
 released, see [Build from source](install-with-helm.md#build-from-source).
 
+The [release notes](../release-notes.md) say what each release changed and what is breaking. 0.2.0 makes custom resources the chart's default, so a
+ConfigMap install must name its route before it upgrades: see [the release that makes custom resources the default](#upgrade-to-the-release-that-makes-custom-resources-the-default).
+
 ## Upgrade the chart
 
 Pass the values file you installed with (`my-values.yaml` in [Install with Helm](install-with-helm.md#write-the-values)):

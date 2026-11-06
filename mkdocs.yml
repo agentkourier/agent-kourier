@@ -126,6 +126,7 @@ validation:
 
 nav:
   - Home: index.md
+  - Release notes: release-notes.md
   - Demo: demo/index.md
   - Tutorials:
       - tutorials/index.md
