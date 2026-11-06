@@ -11,8 +11,10 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 )
 
-// ResolvedBinding is a Binding with the backend and connection its references name. Its
-// pointers point into the Set that Resolve or ResolvePartial took over. Treat it as read-only.
+// ResolvedBinding is a Binding with the backend and connection its references name. Treat it as read-only. The Binding and
+// the backend are copies of the structs of the Set that Resolve or ResolvePartial took over, which share with the Set what
+// those hold (strings, slices, maps), so that a Snapshot keeps alive only the objects it serves and not the slices of the Set
+// they came from. The connection points into the Set.
 type ResolvedBinding struct {
 	Binding    *v1alpha1.Binding
 	Backend    *v1alpha1.AgentBackend
@@ -199,6 +201,7 @@ type resolver struct {
 	backends map[identity]*v1alpha1.AgentBackend
 	conns    map[identity]*v1alpha1.ChatConnection
 	snap     *Snapshot
+	served   map[*v1alpha1.AgentBackend]*v1alpha1.AgentBackend // the copy of each backend that a served Binding names
 	problems []problem
 }
 
@@ -208,6 +211,7 @@ func newResolver(set *Set) *resolver {
 		sources:  set.sources,
 		backends: index("AgentBackend", set.AgentBackends),
 		conns:    index("ChatConnection", set.ChatConnections),
+		served:   map[*v1alpha1.AgentBackend]*v1alpha1.AgentBackend{},
 		snap: &Snapshot{
 			bindings:  map[identity]ResolvedBinding{},
 			byChannel: map[channelKey]ResolvedBinding{},
@@ -276,7 +280,14 @@ func (r *resolver) binding(b *v1alpha1.Binding) {
 		return
 	}
 
-	rb := ResolvedBinding{b, backend, conn}
+	// The Snapshot takes copies of the structs, so that it does not point into the slices of the Set: a pointer into
+	// one keeps the whole backing array alive, and with it every object of the Set that was refused or is not used.
+	if r.served[backend] == nil {
+		be := *backend
+		r.served[backend] = &be
+	}
+	nb := *b
+	rb := ResolvedBinding{&nb, r.served[backend], conn}
 	key := channelKey{identity{"ChatConnection", conn.Namespace, conn.Name}, b.Spec.Chat.Channel}
 	if first, taken := r.snap.byChannel[key]; taken {
 		r.reject(from, ReasonChannelConflict, "spec.chat.channel", fmt.Errorf("%s on %s is already bound by %s",
