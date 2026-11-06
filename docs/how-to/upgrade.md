@@ -741,3 +741,25 @@ stops the start with exit code 2. Edit such an object before you upgrade: whethe
 custom resource route give it the YAML you applied, and look in the cluster for a URL with a query or fragment (`kubectl get akbackend -A -o yaml | grep -E 'url: .*[?#]'`).
 
 An earlier release has none of these bounds, so after a [rollback](#roll-back) a config over one loads again, and an AgentBackend with a query or a fragment in its `url` loads again, and fails each connection unless the fragment is a bare `#`.
+
+## Upgrade to the release that grants the ChatConnection's Secret
+
+On `config.source: crds`, the chart now grants `list` and `watch` on the one Secret that the served ChatConnection reads, by name, from `config.chatConnection` alone. The chart cannot read a
+ChatConnection that you apply yourself, so it takes the Secret's name from the connection's: the Secret `slack` for `config.chatConnection: agent-kourier/slack`, in the connection's namespace (the
+release's, when the value has no namespace). The new value `config.chatConnectionSecret` names the Secret when it is called something else. The `rbac.secretNames` entry for that Secret is no longer needed,
+and is not harmful: a name listed twice is granted once.
+
+- **A new grant on upgrade.** An install on `crds` that sets `config.chatConnection` gains `list` and `watch` on one more Secret by name: the one named like the connection, or `config.chatConnectionSecret`.
+  Nothing changes when `rbac.secretNames` already lists it or when `config.chatConnections` renders that connection (its `credentialsSecretRef` is granted instead, and no second Secret is added).
+  The Secret may not exist, for instance when the connection reads a Secret of another name that `rbac.secretNames` lists: the grant then covers nothing, and the broker's informer for it reports not found.
+  Set `config.chatConnectionSecret` to the real name to keep the grant on the Secret that is read. Check the render with `helm template ... | grep -A8 'kind: Role'`.
+- **A connection in another namespace.** With `config.chatConnection: other-ns/name`, the chart now renders a Role and RoleBinding named `<fullname>-secrets` in `other-ns`, which it did not before when
+  nothing else of yours named a Secret there. If a Role of that name exists there already, made by hand, the upgrade fails with `invalid ownership metadata`: delete the hand-made Role first, or give it
+  another name (the name the chart uses is `agent-kourier-secrets` for a release called `agent-kourier`).
+- **Nothing else derives a grant.** A Binding's token Secret and a header's Secret on a resource you apply yourself still need `rbac.secretNames`, a Role of your own, or the team's own Role in its
+  namespace: see [Let a team add its own Binding](migrate-config-source.md#let-a-team-add-its-own-binding).
+- **A clearer status.** A Binding whose Secret cannot be read still says `CredentialsUnreadable`, and its message now says which cause it is, and for a Secret in the Binding's namespace names the Secret and,
+  when the API server denied the read, the `list` and `watch` that Agent Kourier's ServiceAccount needs: [Binding status](../reference/binding-status.md).
+
+After a [rollback](#roll-back) to a release without the derived grant, an install that dropped the `rbac.secretNames` entry for the ChatConnection's Secret has no Role for it, and the pod exits with
+[code 3](../reference/cli.md#exit-codes) in a loop. Keep the entry until you are sure not to roll back.

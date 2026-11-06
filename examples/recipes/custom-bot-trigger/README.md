@@ -152,9 +152,9 @@ evals/
     sender's kind). A post of a bot the Binding does not name comes out `other_bot`, with its bot ID in the `SENDER`
     column. See [Tune triggers with a dry run](../../../docs/how-to/tune-triggers.md).
 4. Make the Secret the ChatConnection names, in namespace `agent-kourier` (`kubectl create namespace agent-kourier`
-   first if it does not exist). **These recipes call it `slack`; the
-   [Configure Slack](../../../docs/how-to/configure-slack.md) and
-   [Install with Helm](../../../docs/how-to/install-with-helm.md) guides call it `agent-kourier-slack`. Use the recipe's
+   first if it does not exist). **These recipes call it `slack`, as
+   [Install with Helm](../../../docs/how-to/install-with-helm.md) does; the
+   [Configure Slack](../../../docs/how-to/configure-slack.md) guide calls it `agent-kourier-slack`. Use the recipe's
    name here, since `kourier/chatconnection.yaml` refers to it.** It holds the fixed keys `botToken` and `appToken`. If
    you applied `sre-triage` or `docs-agent`, which ship the same ChatConnection, it exists already.
 
@@ -175,14 +175,13 @@ evals/
     config:
       source: crds
       chatConnection: agent-kourier/slack
-    rbac:
-      secretNames:
-        agent-kourier: [slack]
     ```
 
-    `config.chatConnection` names the one ChatConnection the broker serves. The chart cannot see the Secrets of
-    resources you apply yourself, so `rbac.secretNames` grants the one the ChatConnection names; add the Secret of
-    `identity.tokenSecretRef` there if you use one. Do not also set `config.chatConnections`, `config.agentBackends` or
+    `config.chatConnection` names the one ChatConnection the broker serves. The chart cannot see the resources you apply
+    yourself, but it grants the Secret that has the connection's name, `slack`, in the connection's namespace. A
+    ChatConnection that reads a Secret of another name needs `config.chatConnectionSecret` set to it. Nothing derives the
+    Secret of `identity.tokenSecretRef`, if you use one: add it under `rbac.secretNames` (`agent-kourier: [<the Secret>]`), or make a
+    Role for it ([the how-to](../../../docs/how-to/migrate-config-source.md#let-a-team-add-its-own-binding) has the two commands). Do not also set `config.chatConnections`, `config.agentBackends` or
     `config.bindings`: the chart would render them as custom resources of its own.
 
     Then, in this order:

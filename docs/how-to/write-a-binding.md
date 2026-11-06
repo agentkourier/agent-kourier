@@ -81,10 +81,30 @@ kubectl apply --dry-run=server -f binding.yaml   # the schema and CEL rules of t
 kubectl apply -f binding.yaml
 ```
 
-It needs two things. The platform team lists your namespace in the `allowedNamespaces` of the ChatConnection (and of the AgentBackend, if it is in another
-namespace). You make, in your own namespace, a Role that names your token Secret and a RoleBinding to the broker's ServiceAccount
-([the how-to](migrate-config-source.md#let-a-team-add-its-own-binding) has both). Until they exist the status says `NamespaceNotAllowed` or
-`CredentialsUnreadable`. A `connectionRef` to a connection of another namespace names that namespace.
+It needs two things, and the first is yours.
+
+1. **You let the broker read your token Secret.** Skip this when the Binding has no `tokenSecretRef`. In your own namespace, make a Role that names the Secret and a
+   RoleBinding to the broker's ServiceAccount. The commands name the ServiceAccount `agent-kourier` in the namespace `agent-kourier`; ask the platform team for the real ones:
+
+   ```sh
+   kubectl -n payments create role agent-kourier-secrets-payments --verb=list,watch --resource=secrets --resource-name=payments-agent-token
+   kubectl -n payments create rolebinding agent-kourier-secrets-payments --role=agent-kourier-secrets-payments --serviceaccount=agent-kourier:agent-kourier
+   ```
+
+   The Role gives `list` and `watch` on that one Secret, and no other. It needs nothing from the platform team's release or values. It is a grant to the broker, not to your Binding:
+   the broker may use that Secret for any Binding or AgentBackend in your namespace, so name only Secrets you mean it to use. [The how-to](migrate-config-source.md#let-a-team-add-its-own-binding)
+   has the same objects as YAML, and how to check them with `kubectl auth can-i`.
+2. **The platform team lists your namespace** in the `allowedNamespaces` of the ChatConnection (and of the AgentBackend, if it is in another
+   namespace).
+
+Until they exist the status says `CredentialsUnreadable` (the Role) or `NamespaceNotAllowed` (the list). The `CredentialsUnreadable` message names your Secret and says that
+Agent Kourier's ServiceAccount needs `list` and `watch` on it, when the API server denied the read:
+
+```sh
+kubectl -n payments get akbinding payments-assistant -o jsonpath='{.status.conditions[?(@.type=="BackendReachable")].message}'
+```
+
+A `connectionRef` to a connection of another namespace names that namespace.
 
 ## Check it
 

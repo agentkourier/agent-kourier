@@ -64,8 +64,9 @@ resource status. A Secret's value is held in a type whose every formatting path 
 watch on Secrets in each namespace that holds a Secret its config values name (a ChatConnection's credentials, a Binding's token, an AgentBackend's header
 value), in the release namespace with `store.type: postgres` (the DSN's Secret), and in each namespace of `rbac.secretNamespaces`; with `config.source: files` and none of these, in the
 release namespace. With `config.source: files` such a Role covers every Secret of its namespace. With `config.source: crds` it names the Secrets
-(`resourceNames`): the ones the config values and the DSN name, and the ones that `rbac.secretNames` lists for that namespace, and a namespace that only
-`rbac.secretNames` lists gets a Role for those names. A namespace of `rbac.secretNamespaces` stays namespace-wide there, whatever `rbac.secretNames` says of it (read from
+(`resourceNames`): the ones the config values and the DSN name, the one Secret that the served ChatConnection reads (the chart derives it from
+`config.chatConnection`: the Secret of the connection's name, or `config.chatConnectionSecret`, in the connection's namespace), and the ones that `rbac.secretNames` lists for that namespace, and a
+namespace that only `config.chatConnection` or `rbac.secretNames` names gets a Role for those names. A team's Secrets, which the chart cannot see, are granted by the team, with a Role in its own namespace. A namespace of `rbac.secretNamespaces` stays namespace-wide there, whatever `rbac.secretNames` says of it (read from
 `templates/rbac.yaml`). With `config.source: crds` the chart also makes a
 ClusterRole that lets the broker list and watch the three custom resource kinds, patch `bindings/status` and get the three CRDs by name. A rejected Binding token fails the turn, is re-read,
 audited and counted; nothing falls back.
@@ -99,7 +100,8 @@ What bounds this is what the broker can read, and where it can connect:
 
 - **The Secrets the broker may read.** With `config.source: crds` the chart's Roles name each Secret (`resourceNames`), and a team grants
   its own with a Role and RoleBinding ([the how-to](../how-to/migrate-config-source.md#let-a-team-add-its-own-binding)), so a Secret that nobody granted cannot be
-  read through a Binding. `rbac.secretNamespaces` grants a whole namespace and removes that bound for it, and so does every
+  read through a Binding. The Role is the grant to the broker, not to a Binding: every writer of a Binding or an AgentBackend in that namespace can have the broker use the Secrets it
+  names, so a team makes the Role for its token Secret only when that team's writers may do so. `rbac.secretNamespaces` grants a whole namespace and removes that bound for it, and so does every
   namespace-wide Role on the ConfigMap route, which is what the chart writes there.
   Removing a grant is not an immediate cut-off. The broker keeps a cache for each Secret it has read, and when a team deletes its Role, that cache goes on
   serving the value it holds: the broker logs the warning `secret informer cannot list or watch` for the Secret, and keeps calling the agent with the cached token, so the

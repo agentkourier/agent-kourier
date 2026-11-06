@@ -141,10 +141,10 @@ model quota, so keep that policy; it works only if your cluster's network plugin
 
 1. In `kourier/binding.yaml`, replace `CREPLACEDOCS` with the help channel's ID. The three resources are in
    namespace `agent-kourier`; if yours is another, change `metadata.namespace` in all three, the namespace in
-   `agent/manifests/networkpolicy.yaml`, and the namespace in `config.chatConnection` and `rbac.secretNames` in step 3.
+   `agent/manifests/networkpolicy.yaml`, and the namespace in `config.chatConnection` in step 3.
 2. Make the Secret the ChatConnection names, `slack`, in namespace `agent-kourier`, with the keys `botToken` and
-   `appToken`. **These recipes call it `slack`; the [Configure Slack](../../../docs/how-to/configure-slack.md) and
-   [Install with Helm](../../../docs/how-to/install-with-helm.md) guides call it `agent-kourier-slack`. Use the recipe's
+   `appToken`. **These recipes call it `slack`, as [Install with Helm](../../../docs/how-to/install-with-helm.md) does; the
+   [Configure Slack](../../../docs/how-to/configure-slack.md) guide calls it `agent-kourier-slack`. Use the recipe's
    name here, since `kourier/chatconnection.yaml` refers to it.**
 
    ```sh
@@ -164,13 +164,11 @@ model quota, so keep that policy; it works only if your cluster's network plugin
    config:
      source: crds
      chatConnection: agent-kourier/slack
-   rbac:
-     secretNames:
-       agent-kourier: [slack]
    ```
 
-   `config.chatConnection` names the one ChatConnection the broker serves, and `rbac.secretNames` grants its Secret: the
-   chart cannot see the Secrets of resources you apply yourself. Do not also set `config.chatConnections`,
+   `config.chatConnection` names the one ChatConnection the broker serves. The chart cannot see the resources you apply yourself, but it grants
+   the Secret that has the connection's name, `slack`, in the connection's namespace. A ChatConnection that reads a Secret of another name needs
+   `config.chatConnectionSecret` set to it. Do not also set `config.chatConnections`,
    `config.agentBackends` or `config.bindings`: the chart would render them as custom resources of its own. Then, in
    this order:
 
