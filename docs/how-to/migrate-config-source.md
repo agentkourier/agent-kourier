@@ -245,7 +245,7 @@ to do, and one is the team's.
    The verbs are `list` and `watch`, not `get`. Give the Role a name that the chart would not (`<fullname>-secrets` is its own: `agent-kourier-secrets` for the release on this page), so that the two never meet. Check with `kubectl auth can-i list secrets/team-a-agent-token -n team-a --as
    system:serviceaccount:agent-kourier:agent-kourier`: it says `yes`, and `list secrets` without the name says `no`.
    Until the Role exists the Binding is `BackendReachable=False` with `CredentialsUnreadable`. It recovers on its own, with no restart, once the Role is
-   applied.
+   applied: the broker asks for a denied Secret again at its next recheck of the config, which comes about once a minute ([Limits](../reference/limits.md)).
 
 The team then applies its resources, for example the Binding of [Write a Binding](write-a-binding.md) and an AgentBackend of its own. A Binding
 that names a ChatConnection of another namespace must say which, as `connectionRef: {namespace: agent-kourier, name: slack}`; without the namespace the

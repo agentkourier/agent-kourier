@@ -567,3 +567,63 @@ func TestAReloadThatNamesAnotherKeyOfAFollowedSecretResolves(t *testing.T) {
 		t.Errorf("Value of the new key = %v", err)
 	}
 }
+
+// A pinned Secret is Agent Kourier's own, such as the Postgres DSN's, and keeps every key: not the keys that a Watch or a Retain
+// names of it, and not fewer once a reload that names only some of them has come and gone.
+func TestAPinnedSecretKeepsEveryKeyWhateverTheConfigNames(t *testing.T) {
+	pg := sn("agent-kourier", "pg")
+	client := newAPI(t, manyKeys("agent-kourier", "pg", 3, 10), manyKeys("sre", "creds", 0, 0))
+	r := New(client, WithLogger(slog.New(slog.DiscardHandler)), WithPinned(pg))
+	t.Cleanup(r.Stop)
+	if err := r.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	all := []string{"a", "b", "c", "junk-000000", "junk-000001", "junk-000002"}
+	if got := cachedData(t, r, pg); !slices.Equal(got, all) {
+		t.Fatalf("after Start the cache holds %v; want every key %v", got, all)
+	}
+
+	narrow := []config.SecretRead{readOf("agent-kourier", "pg", "a")}
+	if err := r.WatchKeys(t.Context(), narrow); err != nil {
+		t.Fatal(err)
+	}
+	r.RetainKeys(narrow)
+	settled(t, r, pg)
+	if got := cachedData(t, r, pg); !slices.Equal(got, all) {
+		t.Errorf("after a Watch and a Retain that name key a the cache holds %v; want every key %v", got, all)
+	}
+
+	if err := r.WatchKeys(t.Context(), []config.SecretRead{readOf("sre", "creds", "a")}); err != nil { // lets go of what the last Watch asked of pg
+		t.Fatal(err)
+	}
+	r.RetainKeys(nil)
+	settled(t, r, pg)
+	if got := cachedData(t, r, pg); !slices.Equal(got, all) {
+		t.Errorf("after a Watch and a Retain that leave it out the cache holds %v; want every key %v", got, all)
+	}
+}
+
+// A Watch that names more keys of a retained Secret than the snapshot reads keeps them only until the next Watch: the next one
+// that does not name the Secret takes them back, and the informer that serves goes back to the keys that the snapshot reads.
+func TestWatchNarrowsARetainedSecretBackToTheKeysTheSnapshotReads(t *testing.T) {
+	creds := sn("sre", "creds")
+	client := newAPI(t, manyKeys("sre", "creds", 0, 0), manyKeys("sre", "other", 0, 0))
+	snapshot := []config.SecretRead{readOf("sre", "creds", "a", "b")}
+	r := keyed(t, client, snapshot...)
+	r.RetainKeys(snapshot)
+
+	if err := r.WatchKeys(t.Context(), []config.SecretRead{readOf("sre", "creds", "a", "b", "c")}); err != nil {
+		t.Fatal(err)
+	}
+	settled(t, r, creds)
+	if got := cachedData(t, r, creds); !slices.Equal(got, []string{"a", "b", "c"}) {
+		t.Fatalf("after a Watch that names c the cache holds %v; want a, b and c", got)
+	}
+
+	if err := r.WatchKeys(t.Context(), []config.SecretRead{readOf("sre", "other", "a")}); err != nil { // a candidate that leaves creds out
+		t.Fatal(err)
+	}
+	waitFor(t, "the cache to go back to the keys of the snapshot", func() bool {
+		return slices.Equal(cachedData(t, r, creds), []string{"a", "b"})
+	})
+}

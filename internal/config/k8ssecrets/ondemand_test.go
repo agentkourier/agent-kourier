@@ -107,10 +107,11 @@ func TestValueKeepsTheCallersCancellation(t *testing.T) {
 	}
 }
 
-// A Binding may be applied before the Role that lets Agent Kourier read its Secret. The informer of that Secret is denied, the config's
-// Watch says so, and the Binding's credentials are unreadable. The docs promise that it recovers on its own, with no restart, once the Role
-// is applied: nothing asks again (no Watch, no Retain, no new informer), and the informer that was denied keeps listing and syncs. The
-// denial it reported before stays on record, and must not be what a read of a synced cache answers.
+// A Binding may be applied before the Role that lets Agent Kourier read its Secret. The informer of that Secret is denied and ended, the
+// config's Watch says so, and the Binding's credentials are unreadable. It recovers with no restart once the Role is applied, at the
+// next recheck of the config that comes at least the retry interval after the informer was started: that Watch starts a new informer,
+// which replaces the denied one when it has synced. A Watch that comes sooner, because a config changed, asks nothing of the API.
+// The denial that was on record must not be what a read of the synced cache answers.
 func TestADeniedSecretIsReadOnceTheRoleIsApplied(t *testing.T) {
 	client := newAPI(t, secret("sre", "creds"))
 	var allowed atomic.Bool
@@ -120,7 +121,8 @@ func TestADeniedSecretIsReadOnceTheRoleIsApplied(t *testing.T) {
 		}
 		return false, nil, nil
 	})
-	r := New(client, WithLogger(slog.New(slog.DiscardHandler)))
+	const retry = 300 * time.Millisecond
+	r := New(client, WithLogger(slog.New(slog.DiscardHandler)), WithDeniedRetry(retry))
 	t.Cleanup(r.Stop)
 	names := []config.SecretName{sn("sre", "creds")}
 	if err := r.Watch(t.Context(), names); !errors.Is(err, ErrAccessDenied) {
@@ -132,14 +134,26 @@ func TestADeniedSecretIsReadOnceTheRoleIsApplied(t *testing.T) {
 	}
 	before := entryOf(r, names[0])
 	if before == nil {
-		t.Fatal("the denied Secret is not followed any more; the informer must go on listing")
+		t.Fatal("the denied Secret is not followed any more; it must be tried again at a recheck")
 	}
 	listsBefore, _ := client.count(names[0])
 
 	allowed.Store(true) // the team applies the Role
 
+	time.Sleep(retry / 3) // nothing asks the API again by itself, and a Watch that comes too soon does not either
+	if err := r.Watch(t.Context(), names); !errors.Is(err, ErrAccessDenied) {
+		t.Errorf("Watch sooner than the retry interval = %v, want the denial that is on record", err)
+	}
+	if _, err := r.Value(t.Context(), "sre", "creds", "token"); !errors.Is(err, ErrAccessDenied) {
+		t.Errorf("Value before a recheck = %v, want the denial that is on record", err)
+	}
+	if lists, _ := client.count(names[0]); lists != listsBefore {
+		t.Fatalf("%d lists of the denied Secret before the retry interval ended, want the %d of the first try", lists, listsBefore)
+	}
+
 	var v string
-	waitFor(t, "a Value of the Secret once the Role is applied", func() bool {
+	waitFor(t, "a Value of the Secret after a recheck once the Role is applied", func() bool {
+		_ = r.Watch(t.Context(), names) // the recheck
 		got, err := r.Value(t.Context(), "sre", "creds", "token")
 		if err == nil {
 			v = got.Reveal()
@@ -150,10 +164,10 @@ func TestADeniedSecretIsReadOnceTheRoleIsApplied(t *testing.T) {
 		t.Errorf("Value = %q, want the Secret's", v)
 	}
 	if after := entryOf(r, names[0]); after != before {
-		t.Error("the Secret has another informer than the one that was denied: it was started again, not recovered")
+		t.Error("the Secret has another entry than the one that was denied")
 	}
-	if lists, _ := client.count(names[0]); lists <= listsBefore {
-		t.Errorf("lists = %d after %d: the informer that was denied did not list again", lists, listsBefore)
+	if lists, _ := client.count(names[0]); lists != listsBefore+1 {
+		t.Errorf("lists = %d after %d: want exactly one try more", lists, listsBefore)
 	}
 	if _, err := r.SecretVersion(t.Context(), "sre", "creds"); err != nil {
 		t.Errorf("SecretVersion once the Secret has synced = %v", err)
