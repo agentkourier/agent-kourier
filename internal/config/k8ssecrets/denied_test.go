@@ -181,6 +181,22 @@ func TestTheTriesOfDeniedSecretsAtARecheckAreOnceEachAndPaced(t *testing.T) {
 	if took := time.Since(begin); took < time.Duration(names-deniedRetryBurst-2)*deniedRetryPace {
 		t.Errorf("all %d tries were made within %s; want them paced, one every %s after the first %d", names, took, deniedRetryPace, deniedRetryBurst)
 	}
+	// The interval runs from when a Secret is tried and not from when the recheck queued it, so the last of a long queue is not asked
+	// again sooner than the retry interval after it was asked.
+	var first, last time.Time
+	r.mu.Lock()
+	for _, e := range r.entries {
+		if first.IsZero() || e.attemptedAt.Before(first) {
+			first = e.attemptedAt
+		}
+		if e.attemptedAt.After(last) {
+			last = e.attemptedAt
+		}
+	}
+	r.mu.Unlock()
+	if spread := last.Sub(first); spread < time.Duration(names-deniedRetryBurst-2)*deniedRetryPace {
+		t.Errorf("the Secrets were last tried over %s; want the times they were tried, %s apart, and not the time of the recheck", spread, deniedRetryPace)
+	}
 	time.Sleep(retry / 2)
 	if more := api.triedSince(base, 3); more != 0 {
 		t.Errorf("%d Secrets were tried a second time before the next recheck", more)
