@@ -25,11 +25,12 @@ Secret step says so.
 ## How the resources reach Agent Kourier
 
 Each recipe applies its `kourier/` files as custom resources (`kubectl apply -f <recipe>/kourier/`), and the chart has
-Agent Kourier read them from the cluster: `config.source: crds`, with the CustomResourceDefinitions installed first.
+Agent Kourier read them from the cluster: `config.source: crds`, the chart's default route, which installs the
+CustomResourceDefinitions with the release.
 That needs a chart release that has custom resources, and Kubernetes 1.33 or later. Release 0.1.6 does not have that
 route: `crds` and `config.source` are not among its values. Each recipe's README has the values and the commands, in
 order. On 0.1.6, or to stay on a ConfigMap, the same files load as one (`config.existingConfigMap`, with
-`rbac.secretNamespaces`); [Move the config between a ConfigMap and custom
+`rbac.secretNamespaces`, and `config.source: files` on a release that has custom resources); [Move the config between a ConfigMap and custom
 resources](../../docs/how-to/migrate-config-source.md) moves an install from one to the other.
 
 ## Placeholders

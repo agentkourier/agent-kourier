@@ -36,7 +36,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "source": {"enum": ["files", "crds"], "description": "files (the default): the ConfigMap route; crds: Binding, AgentBackend and ChatConnection custom resources, read from the cluster"},
+        "source": {"enum": ["files", "crds"], "description": "crds (the default): Binding, AgentBackend and ChatConnection custom resources, read from the cluster; files: the ConfigMap route, for a proof of concept"},
         "chatConnection": {"type": "string", "pattern": "^(([a-z0-9]([-a-z0-9]*[a-z0-9])?)/)?[a-z0-9]([-a-z0-9.]*[a-z0-9])?$|^$", "maxLength": 253, "description": "with source crds: the one ChatConnection this broker serves, namespace/name or name (in the release namespace); empty is the one entry of chatConnections"},
         "existingConfigMap": {"type": "string"},
         "agentBackends": {"$ref": "#/definitions/resources"},
@@ -48,7 +48,7 @@
     "crds": {
       "type": "object",
       "additionalProperties": false,
-      "properties": {"install": {"type": "boolean", "description": "render the CustomResourceDefinitions of the three kinds, kept on uninstall; off by default, since creating a CRD needs a cluster-scoped right"}}
+      "properties": {"install": {"type": ["boolean", "null"], "description": "render the CustomResourceDefinitions of the three kinds, kept on uninstall; unset, it follows the route (true with config.source crds, false with files), and an explicit value wins: true with files is the first step of a move, false with crds is for an installer that may not create a CRD"}}
     },
     "store": {
       "type": "object",

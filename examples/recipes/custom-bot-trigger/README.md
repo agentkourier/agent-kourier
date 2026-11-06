@@ -172,8 +172,6 @@ evals/
    [Move the config between a ConfigMap and custom resources](../../../docs/how-to/migrate-config-source.md) instead.
 
     ```yaml title="ci-failures-values.yaml"
-    crds:
-      install: true
     config:
       source: crds
       chatConnection: agent-kourier/slack
@@ -191,7 +189,7 @@ evals/
 
     ```sh
     helm upgrade --install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version <version> \
-      -n agent-kourier -f ci-failures-values.yaml --set config.source=files --set replicaCount=0
+      -n agent-kourier -f ci-failures-values.yaml --set replicaCount=0
     kubectl apply --dry-run=server -f examples/recipes/custom-bot-trigger/kourier/
     kubectl apply -f examples/recipes/custom-bot-trigger/kourier/
     helm upgrade --install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version <version> \
@@ -199,23 +197,25 @@ evals/
     kubectl -n agent-kourier wait --for=condition=Ready akbinding/ci-failures --timeout=120s
     ```
 
-    The first `helm` command installs the CRDs, with no broker running (`replicaCount=0`): the chart refuses to render
-    `config.source: crds` before the cluster serves them. The server-side dry run checks each resource against the
+    The first `helm` command installs the CRDs with the release, with no broker running (`replicaCount=0`). On this
+    route the chart installs them unless `crds.install` says otherwise, and with `config.*` empty it renders no custom
+    resource of its own that would need them served first. The server-side dry run checks each resource against the
     CRDs' schema and names the field of a refusal. The resources go in before the broker starts, because a broker that
-    finds no ChatConnection does not start. If the cluster has the CRDs already from another release or from
-    `kubectl apply` (`kubectl get crd bindings.agentkourier.dev` finds one), take `crds` out of the values and skip the
-    first command: two owners of one CRD conflict. A Binding that is not `Ready` says why in
+    finds no ChatConnection does not start. If the cluster has the CRDs already from another release, such as a second
+    broker's, or from `kubectl apply` (`kubectl get crd bindings.agentkourier.dev` finds one), add `crds.install: false`
+    to the values: two owners of one CRD conflict. A Binding that is not `Ready` says why in
     `kubectl -n agent-kourier get akbinding ci-failures -o yaml`; [Binding status](../../../docs/reference/binding-status.md)
     explains each reason.
 
-    **On release 0.1.6, or to stay on a ConfigMap,** use this values file alone, in place of the one above: 0.1.6's
-    values schema refuses keys it does not have, and `crds`, `config.source`, `config.chatConnection` and
-    `rbac.secretNames` are among them. Put the directory in a ConfigMap and install the chart on it. The chart mounts a
-    `config.existingConfigMap` at the directory Agent Kourier reads, one key per file. It cannot read the ConfigMap to
-    find the namespace of the Secret the ChatConnection names, so `rbac.secretNamespaces` says it.
+    **To stay on a ConfigMap, or on release 0.1.6,** use this values file alone, in place of the one above. Put the
+    directory in a ConfigMap and install the chart on it. `config.source: files` keeps the ConfigMap route: on its
+    default route the chart refuses `config.existingConfigMap`. The chart mounts a `config.existingConfigMap` at the
+    directory Agent Kourier reads, one key per file. It cannot read the ConfigMap to find the namespace of the Secret
+    the ChatConnection names, so `rbac.secretNamespaces` says it.
 
     ```yaml title="ci-failures-configmap-values.yaml"
     config:
+      source: files
       existingConfigMap: ci-failures-config
     rbac:
       secretNamespaces: [agent-kourier]
@@ -224,9 +224,12 @@ evals/
     ```sh
     kubectl -n agent-kourier create configmap ci-failures-config \
       --from-file=examples/recipes/custom-bot-trigger/kourier
-    helm upgrade --install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.6 \
+    helm upgrade --install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version <version> \
       -n agent-kourier -f ci-failures-configmap-values.yaml
     ```
+
+    Release 0.1.6 has only the ConfigMap route, and its values schema refuses keys it does not have, `config.source`
+    among them: delete the `source: files` line and install with `--version 0.1.6`.
 
     [Move the config between a ConfigMap and custom resources](../../../docs/how-to/migrate-config-source.md) moves it
     to custom resources later.

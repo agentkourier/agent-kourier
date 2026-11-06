@@ -329,15 +329,16 @@ An earlier release has none of these four bounds, so after a [rollback](#roll-ba
 
 ## Upgrade to the release that serves custom resources
 
-This release can read `Binding`, `AgentBackend` and `ChatConnection` from custom resources instead of files. Nothing changes until you ask:
-the default `config.source: files` renders the objects it always has, and the route adds nothing to the pod's template (a release that also sets `GOMEMLIMIT` moves the
+This release can read `Binding`, `AgentBackend` and `ChatConnection` from custom resources instead of files, and the chart's default is that route: read
+[the release that makes custom resources the default](#upgrade-to-the-release-that-makes-custom-resources-the-default) first. With `config.source: files`, the chart renders the
+objects it always has, and the route adds nothing to the pod's template (a release that also sets `GOMEMLIMIT` moves the
 template for that reason: see [the release that sets GOMEMLIMIT](#upgrade-to-the-release-that-sets-gomemlimit)). Release 0.1.6 has none of it.
 
-- **New values.** `config.source` (`files` or `crds`), `config.chatConnection`, `crds.install` and `rbac.secretNames`. To move, see
+- **New values.** `config.source` (`crds`, the default, or `files`), `config.chatConnection`, `crds.install` and `rbac.secretNames`. To move, see
   [Move the config between a ConfigMap and custom resources](migrate-config-source.md). The route needs Kubernetes 1.33 or later, and only the
   route: the files route has no minimum.
-- **`--reuse-values` from 0.1.6 works.** The chart reads the values it adds as unset when the old values lack them (a release made by
-  the chart of 0.1.6 upgrades to this one with `--reuse-values`).
+- **`--reuse-values` from 0.1.6 works.** The chart reads the values it adds as unset when the old values lack them, and an unset `config.source` as `files` (a release made by
+  the chart of 0.1.6 upgrades to this one with `--reuse-values`; what Helm hands the chart for the new chart's defaults under `--reuse-values` is not measured here).
 - **A reload can add a Secret in a namespace the broker was not watching, with no restart.** The broker follows each Secret the config names
   with an informer of its own, so a new namespace works as long as its Role grants `list` and `watch` on the Secret. With the files route, a Secret it may not read fails the
   reload, and the last good config stays, as before; with custom resources it makes that Binding's `BackendReachable` say `CredentialsUnreadable` and stops nothing.
@@ -348,6 +349,47 @@ template for that reason: see [the release that sets GOMEMLIMIT](#upgrade-to-the
 
 After you move to custom resources, rolling back to a release without them leaves the CRDs and every custom resource in the cluster, unread. Move back
 to the files route first, as in [Move back to the ConfigMap](migrate-config-source.md#move-back-to-the-configmap), then roll the chart back.
+
+## Upgrade to the release that makes custom resources the default
+
+The chart's `config.source` now defaults to `crds`, and an unset `crds.install` follows the route: true with `crds`, false with `files`. A values file that names no route gets custom resources and the three CRDs. A new install should use it:
+[Install with Helm](install-with-helm.md#install-on-custom-resources) is the path, and the ConfigMap is the quick route for a proof of concept. An install that reads a ConfigMap
+and upgrades with the values it has gets the new default, so it must name its route.
+
+**What an existing ConfigMap install must set to keep working.** In the values file:
+
+```yaml
+config:
+  source: files
+```
+
+That is all: with `files`, `crds.install` is false unless you set it, so the render is the one the release made before, with no CRD (the chart's golden files pin it). Set `crds.install: true` only to have the chart install the CRDs
+with `files`, as step 1 of [the move](migrate-config-source.md) does; that needs a right to create CustomResourceDefinitions, which are cluster-scoped, and Helm refuses CRDs that `kubectl` made already (`invalid ownership metadata`).
+
+**What the chart refuses, and with what message.** The render fails before anything is applied, so nothing changes:
+
+| Your values | The message begins |
+|---|---|
+| `config.existingConfigMap`, and no `config.source` | `config.existingConfigMap is for config.source files, and config.source is crds (the chart's default): Agent Kourier would read custom resources, mount no ConfigMap and ignore it. To keep reading your ConfigMap, set config.source: files ...`, and it names [the move](migrate-config-source.md#move-a-configmap-you-manage-yourself) |
+| `config.agentBackends`, `config.chatConnections` or `config.bindings`, on a cluster that does not serve the CRDs, which is every cluster that has not had them installed | `config.source crds needs the CRDs (group agentkourier.dev, version v1alpha1) to be installed before a release that renders config.agentBackends, config.chatConnections or config.bindings as custom resources, and the cluster does not serve them yet: ... To keep the ConfigMap route, set config.source: files ...` |
+| A cluster older than Kubernetes 1.33 | `config.source crds needs Kubernetes 1.33 or later (it is the chart's default): the API server is v1.32.9 ... To install on this cluster, set config.source: files: the ConfigMap route has no minimum.` |
+| Neither `config.*` resources nor `config.chatConnection` | `config.source crds (the chart's default) needs config.chatConnection: the namespace/name of the one ChatConnection this broker serves ... To supply the config as a ConfigMap instead, set config.source: files ...` |
+
+The messages are the chart's, run with `helm template` (the Kubernetes version of the third from `--kube-version`; a real `helm upgrade` reads the cluster's). The second row is the one an install of this
+kind meets when it upgrades with its inline config: setting `config.source: files` is the fix.
+
+**What it does not refuse.** With `config.*` resources and no `config.source`, on Kubernetes 1.33 or later and a cluster that already serves the CRDs, the chart renders the resources as custom resources: the
+Deployment moves to `AGENTKOURIER_CONFIG_SOURCE=crds`, its ConfigMap goes, and the pod restarts. That is step 2 of [the move](migrate-config-source.md#2-switch-the-route), done by the upgrade, and a render cannot tell it from a
+first install. A cluster serves the CRDs when you made the first step of that move or applied them yourself (`kubectl get crd bindings.agentkourier.dev`). Resources the chart creates have a new `creationTimestamp`,
+so by [the age rule](../explanation/config-routes.md#who-holds-a-channel) they can lose a channel to a Binding that a team already made. If you want to stay on the ConfigMap, set `config.source: files`; if you mean to move,
+run the server-side check of [step 2](migrate-config-source.md#2-switch-the-route) before you upgrade.
+
+**To move instead of staying,** follow [Move the config between a ConfigMap and custom resources](migrate-config-source.md): two upgrades, the CRDs first with `config.source: files`, then the route.
+Its step 1 now says `config.source=files`, since a values file from before names no route.
+
+**Argo CD users should read the CRD note** in [Stop it and keep the data](install-with-helm.md#stop-it-and-keep-the-data): on the route of custom resources an Application of the chart renders the CRDs, and
+with prune, turning `crds.install` off later (or moving it to `files`, which stops rendering them unless `crds.install` says true), or deleting the Application, may delete them and every team's Binding, AgentBackend and ChatConnection. The chart sets `argocd.argoproj.io/sync-options: Prune=false,Delete=false` on each CRD,
+which Argo CD's documentation says stops that; it is unverified, since Argo CD has not been run against this chart.
 
 ## Upgrade to the release that sets GOMEMLIMIT
 

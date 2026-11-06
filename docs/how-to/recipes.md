@@ -62,16 +62,16 @@ narrowed to one receiver, and `askUser` on. Replace `CREPLACESRE` and `B0REPLACE
 
 Apply the directory as custom resources (`kubectl apply -f examples/recipes/sre-triage/kourier/`, into the namespace
 `agent-kourier`, which must exist): each resource sits in that namespace and names the others without one. Agent
-Kourier reads them from the cluster when the chart sets `config.source: crds` and `config.chatConnection:
+Kourier reads them from the cluster on the chart's default route, `config.source: crds`, with `config.chatConnection:
 agent-kourier/slack`, and `rbac.secretNames` grants the Secrets `slack` and `sre-triage-token`, since the chart cannot
-see the Secrets of resources you apply yourself. The
-CRDs go in first, with an install of their own, because the chart refuses to render `config.source: crds` before the
-cluster serves them. The recipe's README has the values and the commands, in order. The other recipes' resources work
-the same way.
+see the Secrets of resources you apply yourself. With `config.*` left empty, the release installs the CRDs itself, so
+they are served before you apply the resources. The recipe's README has the values and the commands, in order. The
+other recipes' resources work the same way.
 
 This route needs a chart release that has custom resources, and Kubernetes 1.33 or later. Release 0.1.6 does not have
 it: `crds` and `config.source` are not among its values. On 0.1.6, or to stay on a ConfigMap, the same files load as
-one, with `config.existingConfigMap` and `rbac.secretNamespaces: [agent-kourier]`;
+one, with `config.existingConfigMap` and `rbac.secretNamespaces: [agent-kourier]`, plus `config.source: files` on a
+release that has custom resources (it refuses `config.existingConfigMap` without it, and 0.1.6 refuses the key);
 [Move the config between a ConfigMap and custom resources](migrate-config-source.md) moves an install from one to the
 other.
 

@@ -55,7 +55,7 @@ spec:
 
 ## Load it
 
-The broker reads its resources from files, usually a ConfigMap, or, if the platform team chose it, from custom resources
+The broker reads its resources from custom resources, the chart's default, or, if the platform team chose the quick route, from files, usually a ConfigMap
 (see [Choose a config route](../explanation/config-routes.md)). Ask which. With the Helm chart, add the Binding under
 `config.bindings`, keyed by its name, with its namespace:
 
@@ -68,7 +68,7 @@ config:
         # the spec above
 ```
 
-Then `helm upgrade`. By default (`config.rollOnChange`) the chart rolls the pod when the config changes.
+Then `helm upgrade`. On the ConfigMap route, by default (`config.rollOnChange`), the chart rolls the pod when the config changes; with custom resources the chart renders the Binding as an object and the broker reads the change at its next check, every 10 seconds.
 
 If the platform team manages its own ConfigMap (`config.existingConfigMap`), add the Binding's YAML there as a file
 ending in `.yaml`, and ask them to list your namespace in `rbac.secretNamespaces` so the broker may read your Secret.

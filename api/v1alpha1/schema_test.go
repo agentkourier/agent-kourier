@@ -1,6 +1,9 @@
 package v1alpha1
 
 import (
+	"encoding/json"
+	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -385,70 +388,139 @@ func TestSchemaCapsEqualTheBrokersCaps(t *testing.T) {
 	}
 }
 
-// TestEverySpecStringListAndMapIsBounded fails for a string, list or map of a spec that has no bound in the schema: a field
-// that nothing bounds lets one namespace writer make an object as large as the apiserver allows, and every broker keeps
-// each object in memory. A string is bounded by an enum or a maxLength, or, for a value of a map, by a rule of the map that
-// compares its size; a list by maxItems; a map by maxProperties, and its keys by a rule of the map that bounds them
-// (their size, or a list they must be in), or by the one rule below that ties them to another map's keys.
-func TestEverySpecStringListAndMapIsBounded(t *testing.T) {
-	// A map whose keys are bounded by a rule on another node, with the node and a piece of the rule, so that taking the rule
-	// out fails here too. A closeWhen key must be the name of an extract entry, which has a bound of its own.
-	keysByOtherRule := map[string]struct{ node, rule string }{
-		"bindings spec.chat.triggers[].thread.closeWhen": {"spec.chat.triggers[]", "closeWhen.all(k, has(self.extract) && k in self.extract)"},
-	}
-	usedOtherRule := map[string]bool{}
-	var walk func(plural, path string, n schema, parentRules []celRule, mapValue bool)
-	walk = func(plural, path string, n schema, parentRules []celRule, mapValue bool) {
+// keysByOtherRule lists the maps whose keys are bounded by a rule on another node, with the node and a piece of the rule, so that
+// taking the rule out fails here too. A closeWhen key must be the name of an extract entry, which has a bound of its own.
+var keysByOtherRule = map[string]struct{ node, rule string }{
+	"bindings spec.chat.triggers[].thread.closeWhen": {"spec.chat.triggers[]", "closeWhen.all(k, has(self.extract) && k in self.extract)"},
+}
+
+// specBoundProblems walks the spec of the CRD whose whole schema is root and returns what it finds that the schema leaves
+// unbounded, one line each, and the entries of keysByOtherRule that it used. A node of the spec has a type, which is how the walk
+// knows what to ask of it: one with no type (an int-or-string, or a field that keeps unknown members) would pass every check
+// below with no bound at all, so it is a problem, as is x-kubernetes-preserve-unknown-fields anywhere in the spec, which lets a
+// writer add members that no bound sees. The spec has neither today, and so there is no allowance.
+func specBoundProblems(t *testing.T, plural string, root schema) (problems []string, usedOtherRule map[string]bool) {
+	t.Helper()
+	usedOtherRule = map[string]bool{}
+	var walk func(path string, n schema, parentRules []celRule, mapValue bool)
+	walk = func(path string, n schema, parentRules []celRule, mapValue bool) {
 		key := plural + " " + path
+		problem := func(format string, args ...any) { problems = append(problems, key+": "+fmt.Sprintf(format, args...)) }
+		if n.str("type") == "" {
+			problem("a node with no type: the bounds below are asked of a type, so a node without one (an int-or-string, or a field that keeps unknown members) is bounded by none")
+		}
+		if n["x-kubernetes-preserve-unknown-fields"] == true {
+			problem("x-kubernetes-preserve-unknown-fields: a writer can add members that no bound sees")
+		}
 		switch n.str("type") {
 		case "string":
 			switch {
 			case n["enum"] != nil || n.num("maxLength") >= 0:
 			case mapValue && slices.ContainsFunc(parentRules, func(r celRule) bool { return strings.Contains(r.Rule, "size(self[k]) <= ") }):
 			default:
-				t.Errorf("%s: a string with no enum, no maxLength and no size rule", key)
+				problem("a string with no enum, no maxLength and no size rule")
 			}
 		case "array":
 			if n.num("maxItems") < 0 {
-				t.Errorf("%s: a list with no maxItems", key)
+				problem("a list with no maxItems")
 			}
 		case "object":
 			if _, hasProps := n["properties"]; hasProps {
 				break
 			}
 			if n.num("maxProperties") < 0 {
-				t.Errorf("%s: a map with no maxProperties", key)
+				problem("a map with no maxProperties")
 			}
 			if other, ok := keysByOtherRule[key]; ok {
 				usedOtherRule[key] = true
-				if !slices.ContainsFunc(crdSchema(t, plural).at(t, other.node).rules(), func(r celRule) bool { return strings.Contains(r.Rule, other.rule) }) {
-					t.Errorf("%s: its keys are bounded by a rule of %s containing %q, which is gone", key, other.node, other.rule)
+				if !slices.ContainsFunc(root.at(t, other.node).rules(), func(r celRule) bool { return strings.Contains(r.Rule, other.rule) }) {
+					problem("its keys are bounded by a rule of %s containing %q, which is gone", other.node, other.rule)
 				}
 			} else if !slices.ContainsFunc(n.rules(), func(r celRule) bool {
 				return strings.Contains(r.Rule, "size(k)") || strings.Contains(r.Rule, "k in [")
 			}) {
-				t.Errorf("%s: a map whose keys have no rule that bounds them (size(k), or k in [list])", key)
+				problem("a map whose keys have no rule that bounds them (size(k), or k in [list])")
 			}
 		}
 		if props, ok := n["properties"].(map[string]any); ok {
-			for name, c := range props {
-				walk(plural, path+"."+name, schema(c.(map[string]any)), nil, false)
+			for _, name := range slices.Sorted(mapKeys(props)) {
+				walk(path+"."+name, schema(props[name].(map[string]any)), nil, false)
 			}
 		}
 		if items, ok := n["items"].(map[string]any); ok {
-			walk(plural, path+"[]", schema(items), nil, false)
+			walk(path+"[]", schema(items), nil, false)
 		}
 		if values, ok := n["additionalProperties"].(map[string]any); ok {
-			walk(plural, path+".{}", schema(values), n.rules(), true)
+			walk(path+".{}", schema(values), n.rules(), true)
 		}
 	}
+	walk("spec", root.child(t, "", "properties").child(t, "", "spec"), nil, false)
+	return problems, usedOtherRule
+}
+
+// TestEverySpecStringListAndMapIsBounded fails for a string, list or map of a spec that has no bound in the schema: a field
+// that nothing bounds lets one namespace writer make an object as large as the apiserver allows, and every broker keeps
+// each object in memory. A string is bounded by an enum or a maxLength, or, for a value of a map, by a rule of the map that
+// compares its size; a list by maxItems; a map by maxProperties, and its keys by a rule of the map that bounds them
+// (their size, or a list they must be in), or by the one rule in keysByOtherRule that ties them to another map's keys. A node
+// with no type, and x-kubernetes-preserve-unknown-fields, are failures too (see specBoundProblems).
+func TestEverySpecStringListAndMapIsBounded(t *testing.T) {
+	used := map[string]bool{}
 	for _, plural := range []string{"agentbackends", "chatconnections", "bindings"} {
-		walk(plural, "spec", crdSchema(t, plural).child(t, "", "properties").child(t, "", "spec"), nil, false)
+		problems, usedHere := specBoundProblems(t, plural, crdSchema(t, plural))
+		for _, p := range problems {
+			t.Error(p)
+		}
+		maps.Copy(used, usedHere)
 	}
 	for key := range keysByOtherRule {
-		if !usedOtherRule[key] {
+		if !used[key] {
 			t.Errorf("%s is listed as bounded by a rule elsewhere, and is not a map of the schema", key)
 		}
+	}
+}
+
+// clone returns a copy of s that can be changed without changing s.
+func (s schema) clone(t *testing.T) schema {
+	t.Helper()
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c schema
+	if err := json.Unmarshal(b, &c); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// TestTheBoundWalkRefusesWhatHasNoTypeInTheSpec shows the walk of TestEverySpecStringListAndMapIsBounded on a CRD that was
+// changed: a field of the spec with no type, an int-or-string, and a field that keeps unknown members each fail it, and a field
+// that is bounded does not.
+func TestTheBoundWalkRefusesWhatHasNoTypeInTheSpec(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		field map[string]any
+		want  string // a piece of the problem; "" means the walk finds none
+	}{
+		{"a bounded string", map[string]any{"type": "string", "maxLength": float64(10)}, ""},
+		{"no type, members kept", map[string]any{"x-kubernetes-preserve-unknown-fields": true}, "a node with no type"},
+		{"an int-or-string", map[string]any{"anyOf": []any{map[string]any{"type": "integer"}, map[string]any{"type": "string"}}, "x-kubernetes-int-or-string": true}, "a node with no type"},
+		{"an object that keeps unknown members", map[string]any{"type": "object", "x-kubernetes-preserve-unknown-fields": true, "properties": map[string]any{"a": map[string]any{"type": "string", "maxLength": float64(3)}}}, "x-kubernetes-preserve-unknown-fields"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := crdSchema(t, "agentbackends").clone(t)
+			root.child(t, "", "properties").child(t, "", "spec").child(t, "", "properties")["probe"] = tc.field
+			problems, _ := specBoundProblems(t, "agentbackends", root)
+			switch {
+			case tc.want == "" && len(problems) != 0:
+				t.Errorf("the walk found %q in a field that is bounded", problems)
+			case tc.want != "" && !slices.ContainsFunc(problems, func(p string) bool {
+				return strings.Contains(p, "agentbackends spec.probe: ") && strings.Contains(p, tc.want)
+			}):
+				t.Errorf("the walk found %q; want a problem at spec.probe with %q", problems, tc.want)
+			}
+		})
 	}
 }
 

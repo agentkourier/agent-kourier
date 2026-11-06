@@ -102,11 +102,11 @@ durable in the store; traces are exported only when configured.
 ## Configuration and deployment
 
 Agent Kourier reads three kinds of resource, `ChatConnection`, `AgentBackend` and `Binding`, from one of two places, chosen when
-it starts. By default it reads resource-shaped YAML files from `AGENTKOURIER_CONFIG_DIR`, which GitOps deploys as a ConfigMap alongside
-Secrets, the Agent Kourier Deployment and persistent storage. The reloader validates changes and, if a reload fails, keeps the last accepted
-configuration. With the chart's `config.source: crds` it reads the same three kinds from the cluster as custom resources, one object
+it starts. With the chart's `config.source: crds`, its default, it reads the three kinds from the cluster as custom resources, one object
 at a time, so that teams can own their Bindings; there is no reconciliation controller, since the broker watches them itself, and the elected
-leader writes each Binding's `status`. The two routes are never merged. [Choose a config route](config-routes.md) says how they differ. Secret
+leader writes each Binding's `status`. With `config.source: files`, the quick route for a proof of concept, it reads resource-shaped YAML files from `AGENTKOURIER_CONFIG_DIR`, which GitOps deploys as a ConfigMap alongside
+Secrets, the Agent Kourier Deployment and persistent storage; the reloader validates changes and, if a reload fails, keeps the last accepted
+configuration. The two routes are never merged. [Choose a config route](config-routes.md) says how they differ. Secret
 access uses Kubernetes RBAC; cross-namespace resource references use configured namespace allowlists.
 
 A broker serves one `ChatConnection`: see [One ChatConnection](config-routes.md#one-chatconnection) for how it is chosen on each route. Multiple bindings

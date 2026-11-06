@@ -1,13 +1,16 @@
 # Move the config between a ConfigMap and custom resources
 
-By default Agent Kourier reads its `ChatConnection`, `AgentBackend` and `Binding` resources from files, usually a ConfigMap.
-The Helm chart can instead have it read them from the cluster as custom resources, so that each team owns its own
-Bindings. This page moves a running install from the ConfigMap to custom resources and back. At the end, `kubectl get
-akbinding` lists your Bindings with their status, and you know what a move back keeps and what it deletes.
+Agent Kourier reads its `ChatConnection`, `AgentBackend` and `Binding` resources from the cluster as custom resources, which is the
+Helm chart's default and the route to run on Kubernetes, so that each team owns its own Bindings. Or it reads them from files, usually a
+ConfigMap, which is the quick route for a proof of concept. This page moves a running install from the ConfigMap to custom resources and
+back. At the end, `kubectl get akbinding` lists your Bindings with their status, and you know what a move back keeps and what it deletes.
 
 Read [Choose a config route](../explanation/config-routes.md) first if you have not decided which route fits. The short
-version: the ConfigMap is the simple route for one team, and custom resources are for several teams that each write their
-own Bindings.
+version: the ConfigMap is the simple route for one team or a trial, and custom resources are for several teams that each write their
+own Bindings and for an install that is meant to last.
+
+**An install that was made on the ConfigMap route, and should stay there,** needs no move. Its values file says `config.source: files`: the chart's default is custom resources, and an upgrade with the old values
+gets it. [Upgrade](upgrade.md#upgrade-to-the-release-that-makes-custom-resources-the-default) lists what the chart refuses and says.
 
 ## Before you start
 
@@ -52,9 +55,12 @@ manifest (`helm get manifest` shows none), so a later chart upgrade does not cha
 
 ```sh
 helm upgrade agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version <version> \
-  -n agent-kourier -f my-values.yaml --set crds.install=true
+  -n agent-kourier -f my-values.yaml --set config.source=files,crds.install=true
 kubectl get crd | grep agentkourier.dev
 ```
+
+`config.source=files` is there because the chart's default is custom resources: a values file from before that says nothing about the route, and without it
+this upgrade would be refused, with the message that says to set it. Put `config.source: files` in the values file and take it out in step 2.
 
 The `grep` prints three lines: `agentbackends.agentkourier.dev`, `bindings.agentkourier.dev` and `chatconnections.agentkourier.dev`.
 The broker still reads its files. The pod does not restart if the chart release is the one you already run: `--version` of another release carries that release's image
@@ -147,14 +153,14 @@ the Postgres DSN's, stop the start (exit code 3) when they cannot be read.
 
 ### Apply the CRDs yourself
 
-An installer that may not create CRDs leaves `crds.install` off, and an administrator applies the CRDs once, from the chart:
+An installer that may not create CRDs sets `crds.install: false` (unset, it is true with custom resources), and an administrator applies the CRDs once, from the chart:
 
 ```sh
 helm pull oci://ghcr.io/agentkourier/charts/agent-kourier --version <version> --untar
 kubectl apply --server-side -f agent-kourier/files/crds
 ```
 
-Choose one owner for the CRDs. Helm will not take over CRDs that `kubectl` made (`invalid ownership metadata`), and two releases
+Choose one owner for the CRDs. Helm will not take over CRDs that `kubectl` made (`invalid ownership metadata`), so a release on a cluster that has them from `kubectl` needs `crds.install: false`, and two releases
 that render the same CRD conflict.
 
 ## Check that it worked
@@ -245,7 +251,7 @@ to do, and one is the team's.
    The verbs are `list` and `watch`, not `get`. Give the Role a name that the chart would not (`<fullname>-secrets` is its own: `agent-kourier-secrets` for the release on this page), so that the two never meet. Check with `kubectl auth can-i list secrets/team-a-agent-token -n team-a --as
    system:serviceaccount:agent-kourier:agent-kourier`: it says `yes`, and `list secrets` without the name says `no`.
    Until the Role exists the Binding is `BackendReachable=False` with `CredentialsUnreadable`. It recovers on its own, with no restart, once the Role is
-   applied.
+   applied: the broker asks for a denied Secret again at its next recheck of the config, which comes about once a minute ([Limits](../reference/limits.md)).
 
 The team then applies its resources, for example the Binding of [Write a Binding](write-a-binding.md) and an AgentBackend of its own. A Binding
 that names a ChatConnection of another namespace must say which, as `connectionRef: {namespace: agent-kourier, name: slack}`; without the namespace the
@@ -307,7 +313,7 @@ A Secret outside the release namespace needs a grant on this route, and `rbac.se
 and is that grant. The other way is `rbac.secretNamespaces`, which replaces the chart's default of the release namespace, so list the release namespace as well; and if a team's Role has the name
 the chart would give its own there (`<fullname>-secrets`, which is `agent-kourier-secrets` for the release on this page), delete it first, or the upgrade fails with `invalid ownership metadata`.
 
-Keep `crds.install: true` while you do; it does not need to change. What the move back does:
+Keep `crds.install: true` while you do, in the values file: unset it is false with `files`, and the release would stop rendering the CRDs. What the move back does:
 
 | | After the move back |
 |---|---|
@@ -320,27 +326,29 @@ Keep `crds.install: true` while you do; it does not need to change. What the mov
 | Sessions, the outbox and the audit log | Kept, since they live in the store. A session of a Binding that is not in the config is not recovered, and a reply in its thread gets "This thread's agent is no longer set up, so I can't pass your messages on." Such a session is deleted once it has been idle for the longest `threadTTL` of any Binding (at least the default of 90 days) plus a grace of 90 days. |
 
 **Never delete a CRD to get out of a refusal.** Deleting it deletes every custom resource of that kind in the cluster, which is every team's. What a running
-broker does depends on what goes. Deleting the Bindings CRD alone stops every Binding, within about 20 seconds (about 80 at most, behind a stream of other deletions): their `agentkourier_binding_ready`
-series are gone and a new mention gets no answer. Deleting all three CRDs takes the ChatConnection too, and the broker then holds what went with it (below) and keeps routing.
+broker does depends on what goes. Deleting the Bindings CRD alone stops every Binding, within about 20 seconds (about 80 at most, behind a stream of other deletions): a new mention gets no answer from then. Their
+`agentkourier_binding_ready` series go at the next 5-second tick of the prober, after a pass that is running ends (it probes four Bindings at a time, each for up to 10 seconds), so a little later. The times come from the code, which reads the cluster every 10 seconds and holds a deletion back before it takes effect (below), and unit tests check that wait with a fake clock;
+no test deletes a CRD under a running broker. Deleting all three CRDs takes the ChatConnection too, and the broker then holds what went with it (below) and keeps routing.
 Either way the broker sets `agentkourier_config_stale` to 1 and logs `custom resource informer cannot list or watch`, and a restart exits with code 2, since the CRDs are not installed.
 
 **The move back keeps the old pods routing.** The chart deletes what it rendered one object after another while the old pods still run: the AgentBackend, the Bindings, the ChatConnection last.
 A broker that finds its own ChatConnection deleted holds it at its last good generation, and holds with it, at theirs, the Bindings that are gone and the AgentBackends that
 those Bindings and the Bindings still there use, until the connection is back or the broker restarts. So the old pods keep routing until they end, a failover keeps routing,
 and the new pods take over with the ConfigMap's config. A broker that restarts while it holds has no last good generation and fails at start. A deletion takes effect only at a read of
-the cluster that finds nothing newly gone, at least 8 seconds after the last read that did, so the deletes of one upgrade count as one change. A deletion that goes on for longer than a
-minute between its first object and the connection can still lose what went first: an AgentBackend deleted first leaves its Bindings not served. `agentkourier_config_held_objects`
+the cluster that finds nothing newly gone, at least 8 seconds after the last read that did, so the deletes of one upgrade count as one change. An object that is deleted is still taken into the hold for a minute after its deletion takes effect, which is 10 to 60 seconds after the read that found it gone (a read later, if one runs late),
+so a deletion that goes on for more than about a minute between its first object and the connection can lose what went first, and one past about 130 seconds does: an AgentBackend deleted first leaves its Bindings not served. `agentkourier_config_held_objects`
 says what is held ([Metrics](../reference/metrics.md#connection-configuration-and-turns)), and [Alert on what matters](export-telemetry.md#alert-on-what-matters) has a rule for it.
 This does not promise that no message is lost across the rollout: while no pod holds a Socket Mode connection, whether Slack delivers an event again is not something this page can tell you.
 
 **The cost.** Deleting a ChatConnection on purpose does not stop routing until the broker restarts. A Binding deleted alone, while its connection exists, stops in about 10 to
-20 seconds, later behind a stream of other deletions and after about 80 seconds at most. A Binding deleted in the minute before its connection is deleted comes back, held. While the connection
+20 seconds, later behind a stream of other deletions and after about 80 seconds at most. A Binding deleted in about the minute before its connection is deleted comes back, held. While the connection
 is held, a Binding that is deleted stays held, and leaves by itself once the connection is back. To stop a Binding that is still there, bring the connection back first, then delete it.
 
 ## When it does not work
 
 | What you see | Why, and what to do |
 |---|---|
+| `helm upgrade` fails with `config.existingConfigMap is for config.source files, and config.source is crds` | The values still name a ConfigMap and say nothing of the route, which defaults to custom resources. To stay on the ConfigMap, set `config.source: files`. To move, follow [Move a ConfigMap you manage yourself](#move-a-configmap-you-manage-yourself). Nothing changed. |
 | `helm upgrade` fails with `config.source crds needs the CRDs` | Step 1 was skipped, or the CRDs were deleted. Install them first. Nothing changed. |
 | `helm upgrade` fails with `config.source crds needs Kubernetes 1.33 or later` | The API server is older. The ConfigMap route has no minimum: stay on it. With `helm template`, pass the cluster's version with `--kube-version`. |
 | The pod crash-loops and `kubectl logs` says `ChatConnection agent-kourier/slack was not found` (exit code 2) | The broker owns one ChatConnection, named by `AGENTKOURIER_CHAT_CONNECTION`, and does not start without it. Apply it, or name the one that exists in `config.chatConnection`. Once the resources exist the pod starts at its next restart, with nothing else to do. |

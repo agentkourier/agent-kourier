@@ -248,3 +248,29 @@ func TestLargestObjectsAreWhatTheSecurityPageSays(t *testing.T) {
 		t.Errorf("the largest Binding is %d bytes of JSON and holds %.3f MiB; want 1 MiB to etcd's %d bytes and 1 to 4 MiB", bytes, held, etcdRequestLimit)
 	}
 }
+
+// TestTheInstructionLimitHoldsABindingToAboutHalfOfItsRegexes counts the regular expressions of the largest Binding, which the
+// instruction limit of a Binding (5000, summed) keeps from the 2156 that the other caps allow (49 triggers that take botMessage
+// events, each with 6 match, 6 exclude and 32 extract entries), and what the same limit allows when the cheapest ones go first.
+// The security page states both.
+func TestTheInstructionLimitHoldsABindingToAboutHalfOfItsRegexes(t *testing.T) {
+	const budget, triggers, perTrigger = 5000, 49, 6 + 6 + 32
+	b := largestBinding(t, 50)
+	held := 0
+	for _, tr := range b.Spec.Chat.Triggers {
+		held += len(tr.Match) + len(tr.Exclude) + len(tr.Extract)
+	}
+	// Each trigger needs "key" (thread.by), an extract entry; a match or exclude regex of the same text costs less, since it has no
+	// capture group. Spend the budget on the keys, then on the match and exclude entries, then on the other extract entries.
+	costMatch := regexInstructions(t, denseRegex("", ""))
+	costExtract := regexInstructions(t, denseRegex("(?P<e>", ")"))
+	left := budget - triggers*costExtract
+	matches := min(triggers*(6+6), left/costMatch)
+	left -= matches * costMatch
+	packed := triggers + matches + min(triggers*(perTrigger-6-6-1), left/costExtract)
+	t.Logf("the largest Binding holds %d of the %d regular expressions that the other caps allow (%.0f%%); with match and exclude first, the same limit allows %d (%.0f%%)",
+		held, triggers*perTrigger, 100*float64(held)/(triggers*perTrigger), packed, 100*float64(packed)/(triggers*perTrigger))
+	if held < 1000 || held > 1250 || packed <= held || packed > 1400 {
+		t.Errorf("the largest Binding holds %d regular expressions and packing match first gives %d; want about 1100 and about 1200", held, packed)
+	}
+}

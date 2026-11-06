@@ -171,7 +171,7 @@ With custom resources that never stops the broker: a bad object is left out and 
 The API server refused the pod access to Secrets, or, with `config.source: crds`, to the custom resources. The pod reads
 each Secret its config names through an informer of its own. What a refusal does depends on the route:
 
-- **Files (`config.source: files`, the default).** A `forbidden` or `unauthorized` answer for any Secret the config names ends the start at
+- **Files (`config.source: files`).** A `forbidden` or `unauthorized` answer for any Secret the config names ends the start at
   once with `the API server denied access to Secrets` and exit code 3. The same answer for a Secret that a later config change names does not
   stop the pod: that reload fails with the same message, the log says `config reload failed; keeping the last good snapshot`, and the last good
   config stays in force.
@@ -429,9 +429,9 @@ One failed probe holds the Binding at 0 until the next pass, up to about 5.5 min
 
 ### The status of a Binding keeps changing
 
-With the config read from custom resources, the leader writes the status of each Binding it serves, and writes it back if it differs. If something else keeps changing it, the two go on at each other every 10 seconds, and `agentkourier_binding_status_writes_total{result="put_back"}` climbs steadily. After three put-backs in a row, each within about a minute (five gaps) of the last, the leader's log says, once for the Binding, `something else keeps changing the status of a Binding, and this broker keeps putting it back`, and names it.
+With the config read from custom resources, the leader writes the status of each Binding it serves, and writes it back if it differs. If something else keeps changing it, the two go on at each other once each gap, and `agentkourier_binding_status_writes_total{result="put_back"}` climbs steadily. After three put-backs in a row, each within five gaps of the one before, the leader's log says, once for the Binding, `something else keeps changing the status of a Binding, and this broker keeps putting it back`, and names it.
 
-What else writes a Binding's status is either another Agent Kourier that serves the same Binding, or a controller of your own. The first happens when two installs name the same ChatConnection (`AGENTKOURIER_CHAT_CONNECTION`): give each its own connection, so that each serves its own Bindings. For the second, look at the `managedFields` of the Binding (`kubectl get akbinding <name> -n <namespace> -o yaml --show-managed-fields`): the manager `agent-kourier` owns the conditions of the types `Accepted`, `BackendReachable`, `ChannelJoined` and `Ready`, and any other manager that writes them is the one to stop. A person's edit is put back once and is no fight. A controller that writes the status once a minute or more slowly stays below the three, and shows only in the metric.
+What else writes a Binding's status is either another Agent Kourier that serves the same Binding, or a controller of your own. The first happens when two installs name the same ChatConnection (`AGENTKOURIER_CHAT_CONNECTION`): give each its own connection, so that each serves its own Bindings. For the second, look at the `managedFields` of the Binding (`kubectl get akbinding <name> -n <namespace> -o yaml --show-managed-fields`): the manager `agent-kourier` owns the conditions of the types `Accepted`, `BackendReachable`, `ChannelJoined` and `Ready`, and any other manager that writes them is the one to stop. A person's edit is put back once and is no fight. A controller that writes the status less often than once in five gaps stays below the three, and shows only in the metric. The numbers are on [Limits](../reference/limits.md#run-the-broker).
 
 ## An agent on kagent 0.9.x answers, but the answer can appear twice
 

@@ -74,7 +74,7 @@ output is in [Tune triggers with a dry run](../how-to/tune-triggers.md).
 
 ## `agent-kourier init`
 
-Writes a first-install Helm values file, checks it, and prints the commands that create the Secrets and install the
+Writes a first-install Helm values file for the ConfigMap route (`config.source: files`), checks it, and prints the commands that create the Secrets and install the
 chart. Releases before 0.1.3 do not have it. It posts nothing to Slack and changes nothing in a cluster. The step-by-step use
 is in [Install with Helm](../how-to/install-with-helm.md#write-it-with-init).
 

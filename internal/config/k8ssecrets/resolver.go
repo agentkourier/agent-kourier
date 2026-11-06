@@ -41,8 +41,25 @@
 //	    verbs: ["list", "watch"]
 //
 // A rule with resourceNames covers a list or watch only because the informer's requests carry the
-// field selector. An answer of forbidden for one Secret ends the wait for that Secret (see
+// field selector. An answer of forbidden or unauthorized for one Secret ends the wait for that Secret (see
 // ErrAccessDenied) and is reported for that Secret alone; what it means is the caller's to decide.
+//
+// # Denied Secrets
+//
+// client-go would retry a denied list for ever, 30 to 60 s apart once it has backed off, on the one rate limiter that every informer
+// of the client shares, and the names of Secrets are a tenant's to choose and not capped. So the Resolver does not let it. The
+// informer of a Secret that the API server answered forbidden or unauthorized is ended at the first answer, whether or not it had
+// synced (what it cached is served as it was). It is tried again only when the Reloader asks for the Secret again (Watch, WatchKeys:
+// its recheck, which is every SecretsInterval, 1 m unless set) and at least the retry interval after it was last tried
+// (WithDeniedRetry), and the tries are paced: the first deniedRetryBurst at once, then one every deniedRetryPace, so that they leave
+// the shared limiter room for the requests of everyone else. A reload that comes sooner than the interval, because a config changed,
+// does not try it. A Secret whose keys that are read change is tried at once, as a new informer for new keys always is. The
+// denial is logged once for each change of what it says (and the recovery, when the informer of a retry replaces the one that was
+// denied), not once for each try; another failure is logged each time, client-go backing off between them. One answer of forbidden or
+// unauthorized for every Secret at once, such as an expired token of the broker or an outage of the authorizer, ends every informer,
+// the broker's own too: what they cached is served, and a rotation is not seen until the retry reaches the Secret. A Secret that does not exist is not denied: the list answers with no items, the
+// informer is synced, and it holds one watch open, so it is not retried and costs no repeated request (the answer of the
+// API server to a list with a name selector, from its documented behaviour and the tests' fake; not run against a cluster here).
 //
 // # Values
 //
@@ -70,9 +87,10 @@
 // The Opaque values of the followed Secrets stay resident for the life of the process, or until
 // the Secret is no longer followed. That has these consequences for the deployment:
 //
-//   - klog verbosity is 0 and must stay so. Nothing calls klog.InitFlags, and nothing may
-//     expose -v. The transform runs after client-go has decoded the response, and client-go
-//     logs response bodies, Secret lists included, through klog at verbosity 8 and above.
+//   - klog verbosity must stay below 8. AGENTKOURIER_KLOG_V sets it (cmd/agent-kourier), and the
+//     binary holds it to 7, whatever it is given. The transform runs after client-go has decoded the
+//     response, and client-go logs response bodies, Secret lists included, through klog at
+//     verbosity 8 and above.
 //   - GOTRACEBACK=crash must never be set (a core dump holds the heap), and no heap-dump
 //     endpoint may be added. pprof heap profiles hold allocation sites only, not contents.
 package k8ssecrets
@@ -107,6 +125,17 @@ const defaultOnDemandWait = 10 * time.Second
 
 // syncPoll is how often a wait looks at whether its caches have synced, as client-go's own wait does.
 const syncPoll = 20 * time.Millisecond
+
+const (
+	// defaultDeniedRetry is the shortest time between two tries of a denied Secret unless WithDeniedRetry says otherwise. It is the
+	// config Reloader's default recheck, which is what asks.
+	defaultDeniedRetry = time.Minute
+	// deniedRetryBurst is how many denied Secrets one reload tries at once, and deniedRetryPace the time between the starts of the
+	// others. At 10 a second, a thousand denied names take under two minutes to go round and use a fifth of the 50 requests a second
+	// of the broker's client.
+	deniedRetryBurst = 10
+	deniedRetryPace  = 100 * time.Millisecond
+)
 
 var (
 	// ErrNotWatched is returned for a Secret the Resolver does not follow: it was never asked to
@@ -144,6 +173,10 @@ type informer struct {
 	lister  corelisters.SecretLister
 	synced  cache.InformerSynced
 	cause   error // the latest list or watch failure, guarded by Resolver.mu
+	// denied: the API server answered forbidden or unauthorized, and the informer was ended for it (guarded by Resolver.mu). fresh: it
+	// is a try of a denied Secret that the API server has not answered yet, and cause is still the denial before it, which is what a
+	// read says meanwhile.
+	denied, fresh bool
 }
 
 // entry is the follow of one Secret: the informer that serves it and, while the keys that must be kept have changed, the one that
@@ -161,6 +194,18 @@ type entry struct {
 	// named, which last until the next Retain (or until the Secret is let go). What an informer keeps is their union, and all of them
 	// if pinned.
 	watched, kept, demanded keySet
+	attemptedAt             time.Time // when the informer of the entry was last started, or its retry started: a denied Secret is tried again no sooner than the retry interval after
+	retryQueued             bool      // waiting in Resolver.retries
+	failing                 string    // what the latest reported denial said, so that the same one is reported once
+}
+
+// deniedLocked reports whether the newest informer of e, the one that is being filled or else the one that serves, was ended by a denial.
+func (e *entry) deniedLocked() bool {
+	l := e.next
+	if l == nil {
+		l = e.informer
+	}
+	return l != nil && l.denied
 }
 
 // wantLocked returns the keys that the entry's informer has to keep.
@@ -189,11 +234,15 @@ type Resolver struct {
 	log    *slog.Logger
 	pins   []config.SecretName
 	wait   time.Duration  // the bound of a Value's wait for a cache
-	swaps  sync.WaitGroup // the goroutines that wait for an informer to list and then put it in the place of the one that serves
+	retry  time.Duration  // the shortest time between two tries of a denied Secret
+	pace   time.Duration  // the time between the starts of the tries that do not go at once
+	swaps  sync.WaitGroup // the goroutines that wait for an informer to list and then put it in the place of the one that serves, and the one that paces the tries of denied Secrets (paceRetries)
 
 	mu      sync.Mutex
 	started bool
 	entries map[config.SecretName]*entry
+	retries []*entry // the denied Secrets whose turn to be tried has not come, in order
+	pacing  bool     // a goroutine is starting them
 }
 
 // Option configures a Resolver.
@@ -201,6 +250,16 @@ type Option func(*Resolver)
 
 // WithLogger sets where a failed list or watch is reported. The default is slog.Default().
 func WithLogger(l *slog.Logger) Option { return func(r *Resolver) { r.log = l } }
+
+// WithDeniedRetry sets the shortest time between two tries of a Secret that the API server denied: a Watch of it that comes sooner
+// does not try it. The Reloader's recheck is what asks regularly, so a value below its SecretsInterval only lets a reload that a changed config causes try it too. The default is 1 m.
+func WithDeniedRetry(d time.Duration) Option {
+	return func(r *Resolver) {
+		if d > 0 {
+			r.retry = d
+		}
+	}
+}
 
 // WithPinned names Secrets that Start follows and that stay followed until Stop, whatever Retain
 // is given: the ones that Agent Kourier itself reads and no resource of the config refers to,
@@ -212,7 +271,7 @@ func WithPinned(names ...config.SecretName) Option {
 // New returns a Resolver that follows Secrets through client. It follows none until Start (the
 // pinned ones) and Watch (the config's).
 func New(client kubernetes.Interface, opts ...Option) *Resolver {
-	r := &Resolver{client: client, log: slog.Default(), wait: defaultOnDemandWait, entries: map[config.SecretName]*entry{}}
+	r := &Resolver{client: client, log: slog.Default(), wait: defaultOnDemandWait, retry: defaultDeniedRetry, pace: deniedRetryPace, entries: map[config.SecretName]*entry{}}
 	for _, o := range opts {
 		o(r)
 	}
@@ -287,16 +346,88 @@ func (r *Resolver) follow(reads []read, by who) ([]*entry, error) {
 		}
 		out = append(out, e)
 	}
+	if by == byWatch {
+		r.queueRetriesLocked(time.Now())
+		retired = append(retired, r.startRetriesLocked(deniedRetryBurst)...)
+	}
 	r.mu.Unlock()
 	shutdown(retired)
 	return out, nil
+}
+
+// queueRetriesLocked queues each denied Secret that was last tried at least the retry interval before now, whether or not the Watch
+// that is being served names it: a pinned Secret, and a retained one that the config of this Watch leaves out, are tried too.
+func (r *Resolver) queueRetriesLocked(now time.Time) {
+	for _, e := range r.entries {
+		if e.retryQueued || !e.deniedLocked() || now.Sub(e.attemptedAt) < r.retry {
+			continue
+		}
+		e.retryQueued = true
+		r.retries = append(r.retries, e)
+	}
+}
+
+// startRetriesLocked tries up to n of the queued Secrets now and leaves the rest to a goroutine that starts one every pace. It returns
+// the informers that were given up, for the caller to shut down once it has let go of r.mu.
+func (r *Resolver) startRetriesLocked(n int) (retired []*informer) {
+	for n > 0 && len(r.retries) > 0 {
+		e := r.retries[0]
+		r.retries[0], r.retries = nil, r.retries[1:] // the slot must not keep the entry, and so its cache, alive
+		e.retryQueued = false
+		if r.entries[e.name] != e || !e.deniedLocked() {
+			continue // let go meanwhile, or tried already because its keys changed
+		}
+		n--
+		e.attemptedAt = time.Now() // the interval runs from when it is tried, which a long queue puts well after the recheck that queued it
+		denial := e.latestCauseLocked()
+		if e.next != nil {
+			e.next.stop()
+			retired, e.next = append(retired, e.next), nil
+		}
+		next := r.newInformer(e, e.wantLocked())
+		next.cause, next.fresh = denial, true // a read says denied until the API server says otherwise
+		e.next = next
+		r.swapWhenSynced(e, next)
+	}
+	if len(r.retries) == 0 {
+		r.retries = nil
+	}
+	if len(r.retries) > 0 && !r.pacing {
+		r.pacing = true
+		r.swaps.Go(r.paceRetries)
+	}
+	return retired
+}
+
+// paceRetries starts the queued tries of denied Secrets one every pace, until none is left or the Resolver stops.
+func (r *Resolver) paceRetries() {
+	t := time.NewTicker(r.pace)
+	defer t.Stop()
+	for {
+		select {
+		case <-r.ctx.Done():
+			return
+		case <-t.C:
+		}
+		r.mu.Lock()
+		retired := r.startRetriesLocked(1)
+		done := len(r.retries) == 0
+		if done {
+			r.pacing = false
+		}
+		r.mu.Unlock()
+		shutdown(retired)
+		if done {
+			return
+		}
+	}
 }
 
 // newEntry returns the entry of a Secret that is not followed yet, without an informer. The caller holds r.mu and has checked that r
 // is not stopped.
 func (r *Resolver) newEntry(n config.SecretName) *entry {
 	ctx, stop := context.WithCancel(r.ctx)
-	return &entry{name: n, ctx: ctx, stop: stop, ended: ctx.Done()}
+	return &entry{name: n, ctx: ctx, stop: stop, ended: ctx.Done(), attemptedAt: time.Now()}
 }
 
 // newInformer starts an informer of the entry's Secret that keeps the keys of keys. The caller holds r.mu.
@@ -313,7 +444,7 @@ func (r *Resolver) newInformer(e *entry, keys keySet) *informer {
 	inf := &informer{keys: keys, factory: f, stop: stop, done: ctx.Done(), lister: secrets.Lister(), synced: secrets.Informer().HasSynced}
 	// The handler replaces client-go's, which logs through klog. The only error is an
 	// informer that has started, and this one has not.
-	_ = secrets.Informer().SetWatchErrorHandler(func(_ *cache.Reflector, err error) { r.failed(inf, n, err) })
+	_ = secrets.Informer().SetWatchErrorHandler(func(_ *cache.Reflector, err error) { r.failed(e, inf, err) })
 	f.Start(ctx.Done())
 	return inf
 }
@@ -334,7 +465,7 @@ func (r *Resolver) alignLocked(e *entry) (retired []*informer) {
 	if e.keys.equal(want) {
 		return retired
 	}
-	e.next = r.newInformer(e, want)
+	e.next, e.attemptedAt = r.newInformer(e, want), time.Now()
 	r.swapWhenSynced(e, e.next)
 	return retired
 }
@@ -357,10 +488,13 @@ func (r *Resolver) swapWhenSynced(e *entry, next *informer) {
 			r.mu.Unlock()
 			return
 		}
-		old := e.informer
-		e.informer, e.next = next, nil
+		old, recovered := e.informer, e.failing != ""
+		e.informer, e.next, e.failing = next, nil, ""
 		r.mu.Unlock()
 		shutdown([]*informer{old})
+		if recovered {
+			r.log.Info("secret informer can list and watch again", "namespace", e.name.Namespace, "secret", e.name.Name)
+		}
 	})
 }
 
@@ -372,19 +506,42 @@ func shutdown(infs []*informer) {
 	}
 }
 
-// failed records why an informer's list or watch failed and reports it.
-func (r *Resolver) failed(inf *informer, n config.SecretName, err error) {
+// failed records why an informer's list or watch failed, ends the informer if the API server denied it (a retry loop that client-go
+// would run for ever at the cost of everyone who shares the client: see the package comment), and reports it: a denial once for each change of
+// what the denial says (see the package comment).
+func (r *Resolver) failed(e *entry, inf *informer, err error) {
+	deny := forbidden(err)
 	r.mu.Lock()
-	inf.cause = err
+	inf.cause, inf.fresh, inf.denied = err, false, inf.denied || deny
+	// Only a denial is reported once. Any other failure is one that client-go recovers from by itself, backing off between tries, and
+	// nothing tells us when it has, so a failure that is deduplicated would never be said again.
+	report := !deny || e.failing != err.Error()
+	if deny {
+		e.failing = err.Error()
+	}
 	r.mu.Unlock()
-	r.log.Warn("secret informer cannot list or watch", "namespace", n.Namespace, "secret", n.Name, "error", err)
+	if deny {
+		inf.stop() // what it cached stays and is served; Shutdown, when it is let go of, finds its goroutines gone
+	}
+	if !report {
+		return
+	}
+	if deny {
+		r.log.Warn("secret informer cannot list or watch", "namespace", e.name.Namespace, "secret", e.name.Name, "error", err, "retried", "at a recheck at least "+r.retry.String()+" from now")
+		return
+	}
+	r.log.Warn("secret informer cannot list or watch", "namespace", e.name.Namespace, "secret", e.name.Name, "error", err)
 }
 
 // denial returns the latest failure of e if the API server answered it with forbidden or unauthorized, and nil otherwise.
 func (r *Resolver) denial(e *entry) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if cause := e.latestCauseLocked(); forbidden(cause) {
+	l := e.next
+	if l == nil {
+		l = e.informer
+	}
+	if cause := e.latestCauseLocked(); forbidden(cause) && !l.fresh { // a try that has not been answered is waited for
 		return cause
 	}
 	return nil
@@ -738,8 +895,8 @@ func (r *Resolver) Keys(_ context.Context, namespace, name string) ([]string, er
 //
 // The cache is as current as its last good list or watch. While one is failing the version stays
 // where it was, as do the values Value and Keys return, and a Secret rotated meanwhile is not
-// seen until the list or watch succeeds again. Each failure is logged as a warning (see failed);
-// SecretVersion does not report it.
+// seen until the list or watch succeeds again, which for a denial is the next try at a recheck (see the package comment). A failure
+// is logged as a warning (a denial once for each change of what it says: see failed); SecretVersion does not report it.
 func (r *Resolver) SecretVersion(_ context.Context, namespace, name string) (string, error) {
 	s, err := r.get(namespace, name, nil)
 	if err != nil {

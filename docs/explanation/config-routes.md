@@ -6,9 +6,9 @@ supported. [Move the config between a ConfigMap and custom resources](../how-to/
 
 ## The two routes
 
-| | Files (the default) | Custom resources |
+| | Files (the quick route) | Custom resources (the chart's default) |
 |---|---|---|
-| Set with | `AGENTKOURIER_CONFIG_SOURCE=files`, or unset | `AGENTKOURIER_CONFIG_SOURCE=crds` (the chart's `config.source: crds`) |
+| Set with | `AGENTKOURIER_CONFIG_SOURCE=files`, or unset in the broker's environment (the chart's `config.source: files`) | `AGENTKOURIER_CONFIG_SOURCE=crds` (the chart's `config.source: crds`, which is its default) |
 | Where the resources are | YAML files in `AGENTKOURIER_CONFIG_DIR`, usually a mounted ConfigMap | `Binding`, `AgentBackend` and `ChatConnection` objects of the group `agentkourier.dev` in the cluster |
 | Who writes them | Whoever edits the ConfigMap or the values | Whoever Kubernetes RBAC lets write the objects in each namespace |
 | One bad object | The whole config is refused | That object is refused; the others carry on |
@@ -24,13 +24,14 @@ The two are never merged and there is no fallback. A broker on `files` ignores a
 
 ### Which to choose
 
-Use files when one team writes all the config. One reviewed ConfigMap is one artifact, a mistake is caught before anything serves it,
-and nothing needs a cluster-scoped grant. This is the simple default.
-
-Use custom resources when several teams each write their own Bindings. One team's typo then leaves the others serving, each team can
+Use custom resources for an install that is meant to last on Kubernetes, and when several teams each write their own Bindings. This is the chart's default.
+One team's typo then leaves the others serving, each team can
 see what became of its Binding without the operator's log, and RBAC decides who may write what. The price is the grants above, a
 Kubernetes of 1.33 or later, and the need to think about who may write which object (see
 [What the people who write these objects can do](security.md#what-the-people-who-write-these-objects-can-do)).
+
+Use files for a proof of concept, or when one team writes all the config. One reviewed ConfigMap is one artifact, a mistake is caught before anything serves it,
+and nothing needs a cluster-scoped grant or a Kubernetes version. It is the quick route, and you set it in the chart with `config.source: files`.
 
 ## What a bad object does
 
