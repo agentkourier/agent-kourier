@@ -307,6 +307,20 @@ agent that sends no such update sees no change.
 
 `progress: steps` shows no working update.
 
+## Upgrade to the release that lets another bot's mention start a turn
+
+This release adds `chat.botMentions`, and its default is `any`. At 0.1.6, a message from any other bot or app was ignored unless a `botMessage` trigger named its bot. Now, on a Binding with a
+`mention` trigger (which an empty `chat.triggers` is), a mention of Agent Kourier by **any bot or incoming webhook that can post in the channel** starts a turn in the mention's thread. The platform cannot tell an agent
+from any other bot, so every existing Binding with a mention trigger takes such mentions after the upgrade, with no change to its config. No Binding fails to load for it.
+
+- **To keep 0.1.6's behaviour,** set `chat.botMentions: none` on each Binding that should not take a bot's mention, before you upgrade.
+- **The turns are limited, per Binding and across every bot:** 3 in any 30 minutes, 1 at a time, and 20 in any 24 hours. A mention past a limit starts no turn and posts nothing in the thread. See
+  [A bot's mention](../reference/chat-triggers.md#a-bots-mention) and [Limits](../reference/limits.md).
+- **What it never takes:** Agent Kourier's own posts, an edit that adds a mention, a bot that a `botMessage` trigger of the Binding names (that trigger reads its posts), and any bot's mention in a channel shared with another workspace.
+- **A session a bot's mention began** takes a person's reply as a turn only if it mentions Agent Kourier, whatever `chat.threadReplies` says.
+
+[Let another agent start yours](any-bot-trigger.md#let-another-agent-start-yours) says what this does not bound.
+
 ## Upgrade to the release that bounds triggers, extract entries and headers
 
 Agent Kourier bounded none of these before. This release refuses a config that holds more than the bounds below, and
@@ -366,7 +380,7 @@ config:
   source: files
 ```
 
-That is all: with `files`, `crds.install` is false unless you set it, so the render is the one the release made before, with no CRD (the chart's golden files pin it). Set `crds.install: true` only to have the chart install the CRDs
+That is all: with `files`, `crds.install` is false unless you set it, so the render is 0.1.6's, plus the `GOMEMLIMIT` variable that [this release sets](#upgrade-to-the-release-that-sets-gomemlimit), with no CRD (the chart's golden files pin it). Set `crds.install: true` only to have the chart install the CRDs
 with `files`, as step 1 of [the move](migrate-config-source.md) does; that needs a right to create CustomResourceDefinitions, which are cluster-scoped, and Helm refuses CRDs that `kubectl` made already (`invalid ownership metadata`).
 
 **What the chart refuses, and with what message.** The render fails before anything is applied, so nothing changes:
@@ -462,16 +476,19 @@ A custom resource that fails these checks after you upgrade is judged as
 
 ## Upgrade to the release that lowers the bounds on what it reads
 
-This release lowers what Agent Kourier reads from an agent, so that a backend that sends large events costs the broker less memory. It does not bound the
-memory a backend can make it use: read [What the lower bounds buy](#what-the-lower-bounds-buy-and-what-they-do-not) before you rely on it. The three bounds that moved:
+This release bounds what Agent Kourier reads from an agent, so that a backend that sends large events costs the broker less memory. Release 0.1.6 had no bound of its own on any of
+these reads: the only limit was the A2A library's, which refuses one line of a stream over 10 MiB (`MaxSSETokenSize` in a2a-go v2.7.0, `internal/sse/sse.go`), and an event is many lines. The
+text a thread shows was cut at 12000 UTF-16 units, as it is now, but what the broker held of a reply was not bounded. It does not bound the
+memory a backend can make it use: read [What the lower bounds buy](#what-the-lower-bounds-buy-and-what-they-do-not) before you rely on it. The bounds:
 
-| What | Before | Now |
+| What | At 0.1.6 | Now |
 |---|---|---|
-| One event of a stream (the lines of it, up to the blank line that ends it) | 10 MiB | 2 MiB |
-| The answer to a call that is not a stream: `GetTask`, `CancelTask`, `ListTasks`, or a JSON answer to a call that asked for a stream | 16 MiB | 4 MiB |
-| What one turn holds of the agent's reply (the text of its artifacts, tool results that wait for their call, the bookkeeping of each tool part) | 2 MiB | 341 KiB |
+| One event of a stream (the lines of it, up to the blank line that ends it) | None on the event; 10 MiB on each line (a2a-go) | 2 MiB |
+| The answer to a call that is not a stream: `GetTask`, `CancelTask`, `ListTasks`, or a JSON answer to a call that asked for a stream | None | 4 MiB |
+| What one turn holds of the agent's reply (the text of its artifacts, tool results that wait for their call, the bookkeeping of each tool part) | None | 341 KiB |
+| The agent card | None | 1 MiB |
 
-The agent card stays at 1 MiB. **There is no setting for any of them**: they are constants of the binary, and no chart value, file or custom resource field reaches them, so
+**There is no setting for any of them**: they are constants of the binary, and no chart value, file or custom resource field reaches them, so
 a reply that is over them cannot be let through by configuration. Nothing in the chart's values changes. A backend that sends events of more than 2 MiB, or whose tasks
 grow past 4 MiB, needs a build with other constants.
 The current values, and what else the broker bounds, are on [Limits](../reference/limits.md#what-the-broker-reads-and-holds).
@@ -486,8 +503,7 @@ The current values, and what else the broker bounds, are on [Limits](../referenc
   made a final task of 1907 KiB, which is read; 2400 KiB (eight results) made 2543 KiB, which is not, and the turn ended at its final event with the reply already
   shown. The `error` of the log line says `an event of more than 2097152 bytes`, as it does for one large result; that the text shown is short, and the tool steps before it
   are many, says it is the sum.
-- **A reply that adds up to more than 341 KiB** in the text the turn holds ends the turn the same way, however many events it came in. Before, the same reply was held
-  up to 2 MiB.
+- **A reply that adds up to more than 341 KiB** in the text the turn holds ends the turn the same way, however many events it came in. At 0.1.6 the turn held a reply of any size.
 - **A person's answer to a paused task** is held to the same bounds, with these differences. What it reads of the paused task first, to tell what is new in the answer (the
   tool calls and results of the turn that paused), is not counted against the 341 KiB, so the answer's own stream can be read for a task that paused after many tool steps (in a test, one
   artifact of call and result pairs with 40-byte call IDs, the old charge passed the budget at about 600 pairs). That holds for the answer's stream only: **a follow reads the task with no such allowance**,
@@ -524,9 +540,9 @@ The current values, and what else the broker bounds, are on [Limits](../referenc
 **What the thread shows.** When a turn stops, text that arrived before the bound was passed stays shown, cut to what a message holds as it always was (12000 UTF-16 units in the
 Slack adapter, with a mark where it is cut). Then the thread gets one fixed sentence, `the agent sent more than Agent Kourier can read or hold, so the turn stopped`, and the
 turn has no final answer. The sentence is the same for a reply of sixteen bytes after tool results that add up to megabytes and for a reply of megabytes; it names no host and no
-size. The difference from before is for a reply between 341 KiB and 2 MiB: it used to end as any turn does, with the cut text, and now the turn stops with the sentence, and
-Agent Kourier cancels the task at the agent, once and within 30 seconds, so the agent's later work is lost. The text past 341 KiB was never in the thread: what the lower
-budget keeps out of it is the turn's ending.
+size. The difference from 0.1.6 is for a reply over 341 KiB: it used to end as any turn does, with the cut text, and now the turn stops with the sentence and, when the agent had named a task,
+Agent Kourier cancels that task at the agent, once and within 30 seconds, so the agent's later work is lost. A reply that named no task has none to cancel, and an agent card over 1 MiB cancels nothing (see above). The text past 12000 units was never in the thread: what the
+bound keeps out of it is the turn's ending.
 
 For a message that was not sent because the lookup could not be read in full, the thread gets: `Agent Kourier could not tell if the agent already started this message, as its task list could not be read in full, so it did not send it. The agent may be running it. To run it, post it again.` A person who posts it again sends a new message, which is sent
 without a lookup. The sentence is the same whichever way the list could not be read (too large at every page size, too slow, too many pages), and it is short enough for a thread to show whole: a notice's detail
@@ -552,9 +568,9 @@ All of this was measured in a test process, not a pod: the Go test binary on a l
 resident memory, through the broker's own client path (a `Pool`, the `generic` dialect and the transport that enforces the bounds). Each stream sent one event of exactly the bound and stayed open, all at
 once; each call read an answer of exactly the bound, all at once. Three runs of each. `GOMEMLIMIT` is off, or at 214748364 bytes (80% of 256 MiB).
 
-*Text, the shape the first table is of: one long string.* A pod's baseline and its cgroup accounting were not measured.
+*Text, the shape the first table is of: one long string.* A pod's baseline and its cgroup accounting were not measured. The columns headed "earlier" were measured with a 10 MiB event and a 16 MiB answer, the bounds of a build made before this release; 0.1.6 had no bound on an answer.
 
-| | Before | Now |
+| | Earlier bounds | Now |
 |---|---|---|
 | Heap one open stream keeps after one event of the bound | 20 MiB | 4 MiB |
 | Heap at the peak of reading one event of the bound | about 50 MiB | about 9 MiB |
@@ -566,7 +582,7 @@ once; each call read an answer of exactly the bound, all at once. Three runs of 
 
 *A data part of many small objects (`{"a":0},` repeated), at the bound: the shape that took the most memory of those tried.* Resident memory, over three runs:
 
-| At once | 2 MiB event, now | 4 MiB answer, now | 10 MiB event, before | 16 MiB answer, before |
+| At once | 2 MiB event, now | 4 MiB answer, now | 10 MiB event, earlier | 16 MiB answer, earlier |
 |---|---|---|---|---|
 | 1 | 136 to 142 MiB | 232 to 254 MiB | 563 to 612 MiB | 853 to 900 MiB |
 | 2 | 238 to 254 MiB | 434 to 457 MiB | 1095 to 1197 MiB | 1676 to 1798 MiB |
