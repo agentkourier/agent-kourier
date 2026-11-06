@@ -63,10 +63,11 @@ namespace exists.
 kubectl create namespace agent-kourier
 ```
 
-The ChatConnection's Secret holds two keys with exactly these names:
+The ChatConnection's Secret holds two keys with exactly these names. It is named `slack`, like the ChatConnection below, so that the
+Role the chart makes names it (see [Install on custom resources](#install-on-custom-resources)):
 
 ```sh
-kubectl -n agent-kourier create secret generic agent-kourier-slack \
+kubectl -n agent-kourier create secret generic slack \
   --from-literal=botToken="$SLACK_BOT_TOKEN" \
   --from-literal=appToken="$SLACK_APP_TOKEN"
 ```
@@ -97,15 +98,14 @@ The chart installs the CRDs and the broker, and you apply the resources. They ar
 resources of them fails in its first apply (Helm cannot map a kind that is not yet served), so the chart refuses to render
 `config.chatConnections`, `config.agentBackends` or `config.bindings` as custom resources into a release that is installing their CRDs. A release with none of them renders no custom resource, and installs the CRDs itself.
 
-The values name the ChatConnection the broker serves, as `namespace/name`, and grant the Secrets its resources name. The chart cannot see the Secrets of
-resources you apply yourself, so a Role that names each one is made from `rbac.secretNames`:
+The values name the ChatConnection the broker serves, as `namespace/name`. The chart cannot read the resources you apply yourself, but it knows which
+connection the broker serves, so it makes a Role in that connection's namespace that grants `list` and `watch` on one Secret by name: the Secret
+that has the connection's name (`slack` here). Without that Role the broker could not read the Secret and would exit with code 3 in a loop. If the
+ChatConnection's `credentialsSecretRef` names another Secret, set `config.chatConnectionSecret` to that name.
 
 ```yaml title="my-values.yaml"
 config:
   chatConnection: agent-kourier/slack
-rbac:
-  secretNames:
-    agent-kourier: [agent-kourier-slack]   # add agent-kourier-agent-token if the agent verifies tokens
 ```
 
 ```sh
@@ -124,7 +124,7 @@ metadata:
   namespace: agent-kourier
 spec:
   platform: slack
-  credentialsSecretRef: {name: agent-kourier-slack}
+  credentialsSecretRef: {name: slack}
 ---
 apiVersion: agentkourier.dev/v1alpha1
 kind: AgentBackend
@@ -158,6 +158,17 @@ spec:
 kubectl apply --dry-run=server -f my-resources.yaml
 kubectl apply -f my-resources.yaml
 kubectl -n agent-kourier get akbinding
+```
+
+The Role covers the one Secret `slack`. A Binding's token Secret, such as `agent-kourier-agent-token` above, is in no value the chart reads, so nothing
+grants it. If the agent verifies tokens, add `tokenSecretRef: {name: agent-kourier-agent-token}` under `identity` in the Binding, and name the Secret in
+`rbac.secretNames`, a map of namespace to Secret names, then run `helm upgrade` with the values (a Role of your own that names the Secret does the
+same, as [Let a team add its own Binding](migrate-config-source.md#let-a-team-add-its-own-binding) shows):
+
+```yaml
+rbac:
+  secretNames:
+    agent-kourier: [agent-kourier-agent-token]
 ```
 
 The dry run asks the API server to check each object against the CRDs' schema, and names the field of a refusal. The checks that only the broker

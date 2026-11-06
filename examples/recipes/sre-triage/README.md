@@ -280,9 +280,9 @@ trial"), `make sandbox-alert` then fires the alert of one of the faults.
    Each alert should come out `matched`. If you left `B0REPLACEME` in place, they come out `other_bot` and the `SENDER`
    column shows the bot ID: put it in `binding.yaml` in place of `B0REPLACEME`, and run again.
 3. Make the two Secrets the resources name, in namespace `agent-kourier` (`kubectl create namespace agent-kourier`
-   first if it does not exist). **These recipes call the Slack Secret `slack`; the
+   first if it does not exist). **These recipes call the Slack Secret `slack`, as the
    [Configure Slack](../../../docs/how-to/configure-slack.md) and
-   [Install with Helm](../../../docs/how-to/install-with-helm.md) guides call it `agent-kourier-slack`. Use the recipe's
+   [Install with Helm](../../../docs/how-to/install-with-helm.md) guides do. Use the recipe's
    name here, since `kourier/chatconnection.yaml` refers to it.**
 
    ```sh
@@ -329,8 +329,8 @@ trial"), `make sandbox-alert` then fires the alert of one of the faults.
    Renew the token before it expires. Use `sre-triage-token` and not Install with Helm's
    `agent-kourier-agent-token`: the Binding refers to the former.
 4. Apply the directory as custom resources, and install the chart to read them. `config.chatConnection` names the one
-   ChatConnection the broker serves. The chart cannot see the Secrets of resources you apply yourself, so
-   `rbac.secretNames` grants the two the resources name. Do not also set `config.chatConnections`,
+   ChatConnection the broker serves, and the chart grants the Secret that has its name, `slack`. The chart cannot see the other Secret the resources name,
+   so `rbac.secretNames` grants `sre-triage-token`. Do not also set `config.chatConnections`,
    `config.agentBackends` or `config.bindings`: the chart would render them as custom resources of its own.
 
    **On the kind full tier**, the release `agent-kourier` already exists in that namespace (the tier's own Agent
@@ -343,7 +343,7 @@ trial"), `make sandbox-alert` then fires the alert of one of the faults.
      chatConnection: agent-kourier/slack
    rbac:
      secretNames:
-       agent-kourier: [slack, sre-triage-token]
+       agent-kourier: [sre-triage-token]
    persistence:
      storageClassName: standard
    tokenRefresh:
@@ -428,7 +428,7 @@ trial"), `make sandbox-alert` then fires the alert of one of the faults.
      chatConnection: agent-kourier/slack
    rbac:
      secretNames:
-       agent-kourier: [slack, sre-triage-token]
+       agent-kourier: [sre-triage-token]
    ```
 
    ```sh

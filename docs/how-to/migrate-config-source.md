@@ -38,7 +38,7 @@ There are two ways to hold the resources on the custom resource route, and you c
   Bindings even when the platform team's resources are rendered.
 
 The chart reads `config.*` to work out which Secrets to grant, so for resources you apply yourself it cannot see their
-Secrets: see [Grant the Secrets](#grant-the-secrets).
+Secrets. It grants the one the served ChatConnection reads, and each team grants its own: see [Grant the Secrets](#grant-the-secrets).
 
 ## Move to custom resources
 
@@ -133,24 +133,34 @@ kubectl apply -f resources.yaml
 
 Apply them before step 2, because a broker that starts without its ChatConnection exits (see [When it does not work](#when-it-does-not-work)). Then
 in step 2 remove `config.existingConfigMap` (the chart refuses it with `config.source: crds`, since nothing would read it), and set
-`config.chatConnection` and `rbac.secretNames` as below. The ConfigMap itself is not deleted: the chart did not make it, and it
+`config.chatConnection` as below. The ConfigMap itself is not deleted: the chart did not make it, and it
 is the way back.
 
 ### Grant the Secrets
 
 With the ConfigMap route the chart grants `list` and `watch` on every Secret of each namespace that holds one its config names.
 With `config.source: crds` it names the Secrets instead (`resourceNames`): the ones in your `config.*` values and the Postgres
-DSN's. A Secret that only a resource you apply yourself names is not granted until you say so, with `rbac.secretNames`, a map of
-namespace to Secret names:
+DSN's, and, when you set `config.chatConnection`, the one Secret that connection reads. The chart cannot read a ChatConnection you apply
+yourself, so it takes that Secret's name from the connection's: the Secret `slack` for `config.chatConnection: agent-kourier/slack`, in the
+connection's namespace. If the ChatConnection's `credentialsSecretRef` names another Secret, set `config.chatConnectionSecret` to that name. Without a
+grant for it the broker could not read the ChatConnection's Secret and would exit with code 3.
+
+Every other Secret that a resource you apply yourself names is granted by whoever owns it:
+
+- **A team's Secret, in the team's namespace:** the team makes the Role, as [Let a team add its own Binding](#let-a-team-add-its-own-binding) shows. Nothing changes in
+  your values or your release.
+- **A Secret in the release namespace that nothing derives**, such as a Binding's token (`agent-kourier-agent-token`): name it in `rbac.secretNames`, a map of
+  namespace to Secret names, or make a Role of your own for it.
 
 ```yaml
 rbac:
   secretNames:
-    agent-kourier: [agent-kourier-slack, agent-kourier-agent-token]
+    agent-kourier: [agent-kourier-agent-token]
 ```
 
 `rbac.secretNamespaces` still grants a whole namespace, as before. A Binding whose Secret is not granted stays served, and its
-`BackendReachable` condition says `CredentialsUnreadable`. Only the Secrets the broker itself needs, the ChatConnection's tokens and
+`BackendReachable` condition says `CredentialsUnreadable`, with a message that names the Secret and the grant it needs when the Secret is in the
+Binding's namespace. Only the Secrets the broker itself needs, the ChatConnection's tokens and
 the Postgres DSN's, stop the start (exit code 3) when they cannot be read.
 
 ### Apply the CRDs yourself
@@ -230,12 +240,19 @@ to do, and one is the team's.
    rendered resources is `config.chatConnections.<name>.spec.allowedNamespaces` in your values. A Binding from another namespace reads
    `Accepted=False` with the reason `NamespaceNotAllowed` until it is listed.
 3. **The team lets the broker read its Secret.** The team makes a Role in its own namespace that names the Secret, and a RoleBinding to the
-   broker's ServiceAccount (here `agent-kourier` in the namespace `agent-kourier`):
+   broker's ServiceAccount (here `agent-kourier` in the namespace `agent-kourier`). It needs no change to the platform's release or values:
+
+   ```sh
+   kubectl -n team-a create role agent-kourier-secrets-team-a --verb=list,watch --resource=secrets --resource-name=team-a-agent-token
+   kubectl -n team-a create rolebinding agent-kourier-secrets-team-a --role=agent-kourier-secrets-team-a --serviceaccount=agent-kourier:agent-kourier
+   ```
+
+   The same two objects as YAML:
 
    ```yaml
    apiVersion: rbac.authorization.k8s.io/v1
    kind: Role
-   metadata: {name: agent-kourier-team-a-secrets, namespace: team-a}
+   metadata: {name: agent-kourier-secrets-team-a, namespace: team-a}
    rules:
      - apiGroups: [""]
        resources: [secrets]
@@ -244,15 +261,16 @@ to do, and one is the team's.
    ---
    apiVersion: rbac.authorization.k8s.io/v1
    kind: RoleBinding
-   metadata: {name: agent-kourier-team-a-secrets, namespace: team-a}
-   roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agent-kourier-team-a-secrets}
+   metadata: {name: agent-kourier-secrets-team-a, namespace: team-a}
+   roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agent-kourier-secrets-team-a}
    subjects:
      - {kind: ServiceAccount, name: agent-kourier, namespace: agent-kourier}
    ```
 
    The verbs are `list` and `watch`, not `get`. Give the Role a name that the chart would not (`<fullname>-secrets` is its own: `agent-kourier-secrets` for the release on this page), so that the two never meet. Check with `kubectl auth can-i list secrets/team-a-agent-token -n team-a --as
    system:serviceaccount:agent-kourier:agent-kourier`: it says `yes`, and `list secrets` without the name says `no`.
-   Until the Role exists the Binding is `BackendReachable=False` with `CredentialsUnreadable`. It recovers on its own, with no restart, once the Role is
+   Until the Role exists the Binding is `BackendReachable=False` with `CredentialsUnreadable`, and its message names the Secret, says that the API server denied Agent Kourier's
+   ServiceAccount access to it, and that the ServiceAccount needs `list` and `watch` on it (`kubectl -n team-a get akbinding <name> -o jsonpath='{.status.conditions[?(@.type=="BackendReachable")].message}'`). It recovers on its own, with no restart, once the Role is
    applied: the broker asks for a denied Secret again at its next recheck of the config, which comes about once a minute ([Limits](../reference/limits.md)).
 
 The team then applies its resources, for example the Binding of [Write a Binding](write-a-binding.md) and an AgentBackend of its own. A Binding

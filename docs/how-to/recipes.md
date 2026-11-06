@@ -13,9 +13,9 @@ repository, so what you read here is what the repository holds.
 
 !!! warning "The recipes' Slack Secret is called `slack`"
 
-    The recipes' ChatConnection names a Secret `slack`. [Configure Slack](configure-slack.md) and
-    [Install with Helm](install-with-helm.md) create `agent-kourier-slack`. Create the Secret under the name the
-    recipe's ChatConnection uses, or change the ChatConnection to match.
+    The recipes' ChatConnection names a Secret `slack`, the name [Install with Helm](install-with-helm.md) and
+    [Configure Slack](configure-slack.md) create. If yours has another name, create the Secret under the name the
+    recipe's ChatConnection uses, or change the ChatConnection to match and set `config.chatConnectionSecret` to the Secret's name.
 
 ## Triage Alertmanager alerts with a read-only agent
 
@@ -63,8 +63,8 @@ narrowed to one receiver, and `askUser` on. Replace `CREPLACESRE` and `B0REPLACE
 Apply the directory as custom resources (`kubectl apply -f examples/recipes/sre-triage/kourier/`, into the namespace
 `agent-kourier`, which must exist): each resource sits in that namespace and names the others without one. Agent
 Kourier reads them from the cluster on the chart's default route, `config.source: crds`, with `config.chatConnection:
-agent-kourier/slack`, and `rbac.secretNames` grants the Secrets `slack` and `sre-triage-token`, since the chart cannot
-see the Secrets of resources you apply yourself. With `config.*` left empty, the release installs the CRDs itself, so
+agent-kourier/slack`. The chart grants the Secret `slack` from that name, and `rbac.secretNames` grants `sre-triage-token`, since the chart cannot
+see the other Secrets of resources you apply yourself. With `config.*` left empty, the release installs the CRDs itself, so
 they are served before you apply the resources. The recipe's README has the values and the commands, in order. The
 other recipes' resources work the same way.
 

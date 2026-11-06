@@ -125,7 +125,7 @@ tests the bot token on its own: it exits 1 when Slack refuses it.
 Replace the Secret with the right tokens, then restart rather than wait out the crash loop's back-off:
 
 ```sh
-kubectl -n agent-kourier create secret generic agent-kourier-slack \
+kubectl -n agent-kourier create secret generic slack \
   --from-literal=botToken="$SLACK_BOT_TOKEN" --from-literal=appToken="$SLACK_APP_TOKEN" \
   --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n agent-kourier rollout restart deploy/agent-kourier
@@ -153,7 +153,7 @@ it cannot use. A restart fails the same way. The text after `the broker cannot b
   `is set with AGENTKOURIER_CONFIG_SOURCE=files, which serves the one ChatConnection of its directory: unset it`, and
   `AGENTKOURIER_CONFIG_SOURCE is "...", want files or crds`: the variables disagree. The chart sets them from `config.source` and
   `config.chatConnection`; check `extraEnv` for one of your own.
-- `ChatConnection agent-kourier/slack: read botToken of Secret agent-kourier/agent-kourier-slack:` (or `appToken`): the
+- `ChatConnection agent-kourier/slack: read botToken of Secret agent-kourier/slack:` (or `appToken`): the
   key is in the Secret but its value is empty. `kubectl create secret --from-literal=botToken="$SLACK_BOT_TOKEN"` stores an
   empty value when the variable is not set in that shell. Check that both variables are set, and replace the Secret as
   for [code 1](#the-pod-exits-with-code-1).
@@ -178,8 +178,10 @@ each Secret its config names through an informer of its own. What a refusal does
 - **Custom resources (`config.source: crds`).** Only the Secrets the broker itself needs, the connection's tokens and the Postgres DSN's, end the
   start with exit code 3, as does a refusal to list the custom resources. A Secret that a team's Binding or AgentBackend names, and that the
   ServiceAccount may not read, stops nothing and fails no reload: the Binding stays served, and the log says its `BackendReachable` condition is
-  false with the reason `CredentialsUnreadable`. The fix is a grant for that Secret: `rbac.secretNames` in the chart's values (namespace to Secret
-  names) for one the chart cannot see, or a Role and RoleBinding in the team's namespace for the ServiceAccount.
+  false with the reason `CredentialsUnreadable`. The condition's `message` names the Secret when it is in the Binding's namespace, and says that Agent Kourier's ServiceAccount needs `list`
+  and `watch` on it. The fix is a grant for that Secret: a Role and RoleBinding in the Secret's namespace for the ServiceAccount, which the team that owns the
+  Secret makes ([Let a team add its own Binding](migrate-config-source.md#let-a-team-add-its-own-binding) has the two commands), or `rbac.secretNames` in the
+  chart's values (namespace to Secret names), which the platform team sets.
 
 Check the grant as the pod's ServiceAccount:
 
@@ -197,7 +199,7 @@ kubectl auth can-i watch secrets/<secret-name> -n agent-kourier --as system:serv
 ```
 
 The chart grants `list` and `watch` in each namespace that holds a Secret the config names (for the Secrets named, with
-`config.source: crds`, which also takes `rbac.secretNames` for the ones the chart cannot see), and `rbac.secretNamespaces` adds more. A `config.existingConfigMap` needs `rbac.secretNamespaces`, because the chart cannot
+`config.source: crds`, which also names the served ChatConnection's Secret, and takes `rbac.secretNames` for the other ones the chart cannot see), and `rbac.secretNamespaces` adds more. A `config.existingConfigMap` needs `rbac.secretNamespaces`, because the chart cannot
 read the ConfigMap to find the namespaces.
 
 ## The pod exits with code 2 and the error says `load config`

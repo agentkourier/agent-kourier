@@ -18,8 +18,8 @@ The [glossary](../../docs/reference/glossary.md) defines kind full tier, Agent S
 Each recipe's README defines them again where it first uses them.
 
 All three also need a Slack app with a bot token and an app-level token, and the bot invited to the channel:
-[Configure Slack](../../docs/how-to/configure-slack.md). The recipes call the Slack Secret `slack`, not
-`agent-kourier-slack` as that guide and [Install with Helm](../../docs/how-to/install-with-helm.md) do; each recipe's
+[Configure Slack](../../docs/how-to/configure-slack.md). The recipes call the Slack Secret `slack`, as that guide and
+[Install with Helm](../../docs/how-to/install-with-helm.md) do; each recipe's
 Secret step says so.
 
 ## How the resources reach Agent Kourier
@@ -60,12 +60,12 @@ A broker serves exactly one ChatConnection, the one `config.chatConnection` name
   reason `Accepted:ChannelConflict`. Each recipe ships its own channel placeholder, so replace each with a channel of
   its own, and invite the bot to each channel.
 - **The other objects are named apart.** No two recipes use the same kind, namespace and name.
-- **Grant every Secret.** `rbac.secretNames` lists the Secrets of all the recipes you apply: `slack`, and
-  `sre-triage-token` for `sre-triage`.
+- **Grant every Secret.** The chart grants `slack` itself, from `config.chatConnection`: it is the Secret that has the connection's name. Nothing derives
+  the others, so `rbac.secretNames` lists the Secrets that the recipes you apply name besides it: `sre-triage-token` for `sre-triage`.
 
 A Binding that is not served stops only itself; the others stay served, and its status says why. If you want a
-ChatConnection of another name or another Secret, change it in every recipe you apply, in `config.chatConnection`, and
-in `rbac.secretNames`.
+ChatConnection of another name, change it in every recipe you apply, and in `config.chatConnection`. If its Secret has another name than the
+connection's, change it in every recipe too, and set `config.chatConnectionSecret` to it.
 
 On a ConfigMap, the files of several recipes go in one directory under names that do not collide
 (`sre-triage-binding.yaml`, not `binding.yaml` twice), with one copy of the ChatConnection: the load refuses a second

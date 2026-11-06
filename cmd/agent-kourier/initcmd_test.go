@@ -570,7 +570,7 @@ func TestNextSteps(t *testing.T) {
 	got := nextSteps(initOptions{out: "v.yaml", namespace: "team-a", agentToken: true}, "v0.1.1")
 	for _, w := range []string{
 		"kubectl create namespace team-a\n",
-		"kubectl -n team-a create secret generic agent-kourier-slack \\\n  --from-literal=botToken=\"$SLACK_BOT_TOKEN\" \\\n  --from-literal=appToken=\"$SLACK_APP_TOKEN\"\n",
+		"kubectl -n team-a create secret generic slack \\\n  --from-literal=botToken=\"$SLACK_BOT_TOKEN\" \\\n  --from-literal=appToken=\"$SLACK_APP_TOKEN\"\n",
 		"kubectl -n team-a create secret generic agent-kourier-agent-token --from-literal=token=\"$AGENT_TOKEN\"\n",
 		"helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.1 \\\n  -n team-a -f v.yaml\n",
 	} {

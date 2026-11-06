@@ -65,7 +65,7 @@ needs, its tokens are in a Kubernetes Secret, and a ChatConnection points at it.
     Make the Secret from the file:
 
     ```sh
-    kubectl -n agent-kourier create secret generic agent-kourier-slack \
+    kubectl -n agent-kourier create secret generic slack \
       --from-env-file="$HOME/.config/agent-kourier/slack-secret.env"
     ```
 
@@ -74,7 +74,7 @@ needs, its tokens are in a Kubernetes Secret, and a ChatConnection points at it.
 
     The path is only an example: any file that only you can read works, and Agent Kourier never reads it; kubectl does.
     If your cluster's Secrets come from a secrets manager (External Secrets, Sealed Secrets), create
-    `agent-kourier-slack` with the keys `botToken` and `appToken` that way instead, and skip the file; step 6 then
+    `slack` with the keys `botToken` and `appToken` that way instead, and skip the file; step 6 then
     needs `SLACK_BOT_TOKEN` set some other way.
 
     **5. Declare the connection.** In the chart's values:
@@ -86,7 +86,7 @@ needs, its tokens are in a Kubernetes Secret, and a ChatConnection points at it.
         slack:
           spec:
             platform: slack
-            credentialsSecretRef: {name: agent-kourier-slack}
+            credentialsSecretRef: {name: slack}
             allowedNamespaces: [payments] # (1)!
     ```
 
