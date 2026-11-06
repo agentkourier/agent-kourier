@@ -4,8 +4,9 @@
 #
 #   record.sh up        make the cluster (kourier-clip) and start the echo agent in it
 #   record.sh take      reset the cluster to no Agent Kourier, render install.tape, record bin/clip/out/install.{gif,mp4}
-#   record.sh practice  the same take with fake Slack tokens; it stops at the first `kubectl get akbinding` row, since a
-#                       broker with a fake token never connects and the Binding never gets to Ready
+#   record.sh practice  the same take with fake Slack tokens, into bin/clip/practice; it stops at the first
+#                       `kubectl get akbinding` row, since a broker with a fake token never connects and the Binding never
+#                       gets to Ready. It resets the cluster as take does, so it removes the broker of a real take
 #   record.sh stitch STILL
 #                       add STILL, a screenshot of the first answer in Slack, to the end of the take and write the
 #                       published GIF, docs/assets/clip/install.gif
@@ -39,6 +40,7 @@ KCFG_INTERNAL=${STATE}/kubeconfig.internal
 RECORDER=agent-kourier-clip-vhs:dev
 ECHO_IMAGE=agent-kourier-echo-agent:dev
 PAGE=${ROOT}/docs/how-to/install-with-helm.md
+CHART=oci://ghcr.io/agentkourier/charts/agent-kourier
 
 die() {
   echo "record.sh: $*" >&2
@@ -62,7 +64,8 @@ exists() {
 owned() {
   local nodes
   exists || return 1
-  kind get kubeconfig --name "${CLUSTER}" >"${KCFG}" 2>/dev/null || return 1
+  kind get kubeconfig --name "${CLUSTER}" >"${KCFG}" 2>/dev/null ||
+    die "kind lists the cluster ${CLUSTER} but could not give its kubeconfig; is Docker running?"
   nodes=$("${K[@]}" get nodes -l "${OWNER_LABEL}" -o name 2>/dev/null) ||
     die "the kind cluster ${CLUSTER} exists but its API server does not answer; is its node container running?"
   [ -n "${nodes}" ]
@@ -114,9 +117,14 @@ extract() {
   ' "${PAGE}"
 }
 
-# record ENV_FILE CHANNEL READY_REGEX
+# record ENV_FILE CHANNEL READY_REGEX OUT
 record() {
-  local env_file=$1 channel=$2 ready=$3 work=${STATE}/work out=${STATE}/out tape version
+  local env_file=$1 channel=$2 ready=$3 out=$4 work=${STATE}/work tape version
+  version=$(sed -n 's/^version: //p' "${ROOT}/charts/agent-kourier/Chart.yaml")
+  [ -n "${version}" ] || die "no version in charts/agent-kourier/Chart.yaml"
+  # Before reset, so a take for an unpublished version leaves the cluster as it was.
+  helm show chart "${CHART}" --version "${version}" >/dev/null ||
+    die "no chart ${CHART} ${version} is published yet: a take is made after the release's tag publishes it"
   docker build -q -t "${RECORDER}" "${HERE}" >/dev/null
   reset
   rm -rf "${work}" && mkdir -p "${work}" "${out}"
@@ -126,8 +134,6 @@ record() {
   done
   kind get kubeconfig --internal --name "${CLUSTER}" >"${KCFG_INTERNAL}"
 
-  version=$(sed -n 's/^version: //p' "${ROOT}/charts/agent-kourier/Chart.yaml")
-  [ -n "${version}" ] || die "no version in charts/agent-kourier/Chart.yaml"
   tape=$(<"${HERE}/install.tape")
   # Quoted replacements: bash 5.2's patsub_replacement would read & in them.
   tape=${tape//@VERSION@/"${version}"}
@@ -185,12 +191,12 @@ case "${1:-}" in
       grep -q "^${key}=." "${CLIP_ENV_FILE}" || die "${CLIP_ENV_FILE} has no ${key}= line"
     done
     [[ ${CLIP_CHANNEL} =~ ^[CG][A-Z0-9]+$ ]] || die "CLIP_CHANNEL must be a channel ID (C... or G...)"
-    record "${CLIP_ENV_FILE}" "${CLIP_CHANNEL}" 'True\s+OK'
+    record "${CLIP_ENV_FILE}" "${CLIP_CHANNEL}" 'True\s+OK' "${STATE}/out"
     ;;
   practice)
     # Values that Slack refuses; they are not shaped like tokens, so the secret scan has nothing to match.
     printf '%s=%s\n' SLACK_BOT_TOKEN not-a-token SLACK_APP_TOKEN not-a-token >"${STATE}/practice.env"
-    record "${STATE}/practice.env" C0123456789 'agent-kourier\s+my-binding'
+    record "${STATE}/practice.env" C0123456789 'agent-kourier\s+my-binding' "${STATE}/practice"
     ;;
   stitch)
     [ $# -eq 2 ] || die "usage: record.sh stitch STILL"
@@ -204,7 +210,7 @@ case "${1:-}" in
     rm -f "${KCFG}" "${KCFG_INTERNAL}"
     ;;
   *)
-    sed -n '2,12p' "$0" >&2
+    sed -n '2,13p' "$0" >&2
     exit 2
     ;;
 esac

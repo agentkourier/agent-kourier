@@ -56,7 +56,9 @@ is that image by digest. Nothing is released by hand.
    types the version: `make docs-check` reads the pages, not the GIF, so nothing else catches a clip of an old
    release. `hack/clip/record.sh` says how (`up`, `take` with the published chart, a screenshot of the Slack answer,
    `stitch`, `down`); open a pull request with the new GIF, and update the sentence under it in both pages, which
-   says how long the cut wait for Ready was in that take.
+   says how long the cut wait for Ready was in that take. The new clip reaches `main`, so the site's `dev/` shows it, but
+   never the tag: `make docs-site` builds each tag from its own tree, so a tag's docs show the clip of the release
+   before it, typing that release's version, and a tag cut before the clip existed shows none.
 
 If a first release attempt fails before its GitHub Release is created, rerun that tag after fixing the failure.
 Once a published or draft GitHub Release exists for the tag, the read-only gate refuses to rebuild it.
