@@ -120,7 +120,8 @@ func (s *Source) Credentials(ctx context.Context) (dialect.Credentials, error) {
 				err = checkValue(v, s.backend.Namespace, ref.Name, key)
 			}
 			if err != nil {
-				return dialect.Credentials{}, fmt.Errorf("%w: header %q: %w", agent.ErrHeaderUnreadable, h.Name, err)
+				return dialect.Credentials{}, fmt.Errorf("%w: header %q: %w", agent.ErrHeaderUnreadable, h.Name, &SecretError{
+					Namespace: s.backend.Namespace, Name: ref.Name, Key: key, Header: h.Name, BindingNamespace: s.spec.Namespace, Err: err})
 			}
 			val = v
 		}

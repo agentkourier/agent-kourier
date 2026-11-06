@@ -21,7 +21,9 @@ import (
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
@@ -30,7 +32,9 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/config"
+	"github.com/agentkourier/agent-kourier/internal/config/k8ssecrets"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/identity"
 	"github.com/agentkourier/agent-kourier/internal/secret"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/test/stubagent"
@@ -98,6 +102,88 @@ func TestClassifyAgentSaysWhatEachAnswerMeans(t *testing.T) {
 			}
 			if out.Message == "" {
 				t.Error("the outcome has no message")
+			}
+		})
+	}
+}
+
+// An unreadable credential says which it is, so that a team can act without asking whoever runs Agent Kourier: the Secret it must mend
+// or grant, and what is wrong with it. A Secret is named only when it is in the Binding's own namespace (a header's Secret belongs to the
+// AgentBackend, which may be another team's, and a status never says what is in another namespace). The reason stays
+// CredentialsUnreadable for every one, no message carries a value or the error's text, and the log has the cause.
+func TestClassifyAgentSaysWhichCredentialCannotBeRead(t *testing.T) {
+	const marker = "tok-SECRET-123"
+	read := func(ref identity.SecretError, cause error) error {
+		ref.Err = fmt.Errorf("secret %s/%s key %q: %s: %w", ref.Namespace, ref.Name, ref.Key, marker, cause)
+		sentinel := agent.ErrTokenUnreadable
+		if ref.Header != "" {
+			sentinel = agent.ErrHeaderUnreadable
+		}
+		return fmt.Errorf("resolve credentials of binding sre/oncall: %w: %w", sentinel, &ref)
+	}
+	token := identity.SecretError{Namespace: "sre", Name: "creds", Key: "token", BindingNamespace: "sre"}
+	ownHeader := identity.SecretError{Namespace: "sre", Name: "gw", Key: "api", Header: "X-Api-Key", BindingNamespace: "sre"}
+	otherHeader := identity.SecretError{Namespace: "platform", Name: "gw", Key: "api", Header: "X-Api-Key", BindingNamespace: "sre"}
+	gr := schema.GroupResource{Resource: "secrets"}
+	denied := fmt.Errorf("read key: %w: %w", k8ssecrets.ErrAccessDenied, apierrors.NewForbidden(gr, "creds", errors.New(marker)))
+	unauthorized := fmt.Errorf("read key: %w: %w", k8ssecrets.ErrAccessDenied, apierrors.NewUnauthorized(marker))
+	const grant = "the API server denied Agent Kourier's ServiceAccount access to it; it needs list and watch on it in namespace sre"
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string // the whole message
+	}{
+		{"token, no grant", read(token, denied),
+			`the token Secret "creds" cannot be read: ` + grant},
+		{"token, denied as unauthorized: no grant mends it", read(token, unauthorized),
+			`the token Secret "creds" cannot be read now; the operator's log has the cause`},
+		{"token, Secret missing", read(token, config.ErrSecretNotFound),
+			`the token Secret "creds" does not exist in namespace sre`},
+		{"token, key missing", read(token, secret.ErrKeyNotFound),
+			`the token Secret "creds" has no key "token"`},
+		{"token, empty value", read(token, secret.ErrEmptyValue),
+			`key "token" of the token Secret "creds" is empty`},
+		{"token, trailing newline", read(token, identity.ErrControlCharacter),
+			`key "token" of the token Secret "creds" holds a control character, such as the trailing newline that kubectl create secret --from-file keeps`},
+		{"token, not Opaque", read(token, secret.ErrUnsupportedType),
+			`the token Secret "creds" is not of type Opaque, the only type Agent Kourier reads`},
+		{"token, cache not synced", read(token, k8ssecrets.ErrNotSynced),
+			`the token Secret "creds" cannot be read now; the operator's log has the cause`},
+		{"token, an error nobody placed", read(token, errors.New(marker)),
+			`the token Secret "creds" cannot be read now; the operator's log has the cause`},
+		{"header of a backend in the Binding's namespace, no grant", read(ownHeader, denied),
+			`the Secret "gw" behind header "X-Api-Key" of the AgentBackend cannot be read: ` + grant},
+		{"header of a backend in the Binding's namespace, key missing", read(ownHeader, secret.ErrKeyNotFound),
+			`the Secret "gw" behind header "X-Api-Key" of the AgentBackend has no key "api"`},
+		{"header of a backend in another namespace, no grant", read(otherHeader, denied),
+			"a Secret behind a header of the AgentBackend cannot be read; the operator's log has the cause"},
+		{"header of a backend in another namespace, Secret missing", read(otherHeader, config.ErrSecretNotFound),
+			"a Secret behind a header of the AgentBackend cannot be read; the operator's log has the cause"},
+		{"token that is not told apart", fmt.Errorf("%w: %w", agent.ErrTokenUnreadable, errors.New(marker)),
+			"the Binding's token cannot be read; the operator's log has the cause"},
+		{"token of a source that returned an empty one", fmt.Errorf("%w: %w", agent.ErrTokenUnreadable, secret.ErrEmptyValue),
+			"the Binding's token cannot be read; the operator's log has the cause"},
+		{"header that is not told apart", fmt.Errorf("%w: header %q: %s", agent.ErrHeaderUnreadable, "X-Api-Key", marker),
+			"a Secret behind a header of the AgentBackend cannot be read; the operator's log has the cause"},
+		{"token required, none set", fmt.Errorf("binding sre/oncall: %w", agent.ErrTokenRequired),
+			"the Binding requires a bearer token and none was set"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, ok := classifyAgent(tc.err)
+			if !ok || out.Status != bindingcheck.False || out.Reason != bindingcheck.ReasonCredentialsUnreadable {
+				t.Fatalf("classifyAgent = %s/%s (placed %t); want False/CredentialsUnreadable", out.Status, out.Reason, ok)
+			}
+			if out.Message != tc.want {
+				t.Errorf("message = %q\n want %q", out.Message, tc.want)
+			}
+			if strings.Contains(out.Message, marker) || strings.Contains(out.Message, "forbidden") {
+				t.Errorf("the message %q holds the error's text", out.Message)
+			}
+			if errors.Is(tc.err, agent.ErrTokenRequired) {
+				return
+			}
+			if out.Cause == "" {
+				t.Error("no cause: the log would not say what could not be read")
 			}
 		})
 	}
@@ -301,6 +387,9 @@ func TestAgentCheckerAgainstARealBackend(t *testing.T) {
 		out, err := agentChecker{bindings: f.b, timeout: 5 * time.Second}.CheckAgent(t.Context(), "sre/oncall")
 		if err != nil || out.Status != bindingcheck.False || out.Reason != bindingcheck.ReasonCredentialsUnreadable {
 			t.Errorf("CheckAgent = %+v, %v; want False/CredentialsUnreadable", out, err)
+		}
+		if want := `key "token" of the token Secret "creds" is empty`; out.Message != want {
+			t.Errorf("message = %q, want %q", out.Message, want)
 		}
 	})
 	t.Run("an agent the stub agent does not have", func(t *testing.T) {

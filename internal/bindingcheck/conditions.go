@@ -156,7 +156,8 @@ type Condition struct {
 	// Reason is why the condition has this status.
 	Reason Reason `json:"reason"`
 	// Message is a short, redacted detail. It is for people and is not part of the closed set. It is what a status and a
-	// metric may carry, so it holds no text that came from outside: the reason's own sentence.
+	// metric may carry, so it holds no text that came from outside: the reason's own sentence. For CredentialsUnreadable that is one
+	// sentence for each cause, which may name a Secret, a key or a header of the Binding's own namespace.
 	Message string `json:"message"`
 	// Cause is what the checker found behind the Message, for the log only (Outcome.Cause). It is never copied into a status.
 	Cause string `json:"-"`
@@ -187,7 +188,9 @@ type Outcome struct {
 	Reason Reason
 	// Message is a short detail, already redacted: nothing in it may be a token or a Secret value. It reaches the status of
 	// the Binding, which its owner reads, so it names no host, address, port or other text of the namespaces it is probing:
-	// the same sentence for the same reason, which also lets a probe that finds the same twice be no change.
+	// the same sentence for the same finding, which also lets a probe that finds the same twice be no change. For
+	// CredentialsUnreadable the sentence is one for each cause, and may name a Secret, a key or a header of the Binding's own
+	// namespace and nothing of another.
 	Message string
 	// Cause is the detail that Message leaves out, such as the error of a failed request. It is for the log, which an operator
 	// reads, and is redacted like Message. It is not stored in a status or counted.
