@@ -52,6 +52,15 @@ func TestEnvConfigChoosesTheConfigSource(t *testing.T) {
 	}
 }
 
+// A connection that is not namespace/name is refused without its value: it is a variable a person may paste a token into.
+func TestEnvConfigDoesNotEchoABadChatConnection(t *testing.T) {
+	const canary = "xoxb-FAKE-LEAK-CANARY"
+	_, err := loadEnv(env{"AGENTKOURIER_CONFIG_SOURCE": "crds", "AGENTKOURIER_CHAT_CONNECTION": canary}.get)
+	if !errors.Is(err, broker.ErrWiring) || strings.Contains(err.Error(), canary) {
+		t.Errorf("loadEnv = %v; want an ErrWiring that does not show the value", err)
+	}
+}
+
 // A CRD that is not installed is the operator's to fix, so a usage error; a ServiceAccount that may not read them is RBAC,
 // as it is for Secrets.
 func TestExitCodesOfTheCustomResourceSource(t *testing.T) {

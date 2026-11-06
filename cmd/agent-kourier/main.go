@@ -178,7 +178,7 @@ func loadSourceEnv(getenv func(string) string) (broker.ConfigSource, v1alpha1.Ob
 		}
 		ns, name, ok := strings.Cut(ref, "/")
 		if !ok || ns == "" || name == "" || strings.Contains(name, "/") {
-			return "", conn, fmt.Errorf("%w: AGENTKOURIER_CHAT_CONNECTION is %q, want namespace/name", broker.ErrWiring, ref)
+			return "", conn, fmt.Errorf("%w: AGENTKOURIER_CHAT_CONNECTION is not namespace/name (its value is not shown)", broker.ErrWiring)
 		}
 		conn = v1alpha1.ObjectRef{Namespace: ns, Name: name}
 	default:

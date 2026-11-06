@@ -41,8 +41,18 @@ The count line says "alert messages" for any `botMessage` trigger, whatever the 
 To see it work without waiting for a real failure, post the made-up message through a Slack incoming webhook. Create the
 webhook in the Binding's channel (a webhook posts into the one channel you give it). The trigger accepts only the bot in
 `from.id`, so for the test `from.id` must be the webhook's bot ID: post once, read the `SENDER` of that post in the dry
-run (Apply it, step 3), set `from.id` to it, and update the ConfigMap (below). **Set `from.id` back to your CI bot's ID
-afterwards, and update the ConfigMap again.** Slack's behaviour with attachments is not checked by this repository.
+run (Apply it, step 3), set `from.id` to it, and apply the Binding again (below). **Set `from.id` back to your CI bot's
+ID afterwards, and apply it again.** Slack's behaviour with attachments is not checked by this repository.
+
+```sh
+kubectl apply -f examples/recipes/custom-bot-trigger/kourier/binding.yaml
+```
+
+Agent Kourier reads its custom resources from the cluster every 10 seconds (`internal/config/reload.go`) and serves the
+new generation without a restart. A generation it refuses leaves the last good one served, and the Binding's status
+says why: `kubectl -n agent-kourier get akbinding ci-failures`.
+
+On a ConfigMap (the end of step 5), update the ConfigMap instead:
 
 ```sh
 kubectl -n agent-kourier create configmap ci-failures-config \
@@ -53,7 +63,7 @@ The pod sees a change to a mounted ConfigMap only after the kubelet syncs it (Ku
 Agent Kourier then reloads the changed files by itself: it checks the config directory every 10 seconds
 (`internal/config/reload.go`) and keeps the last good config if the new one does not load. The chart's
 `config.rollOnChange` does not apply to a ConfigMap you manage (`config.existingConfigMap`), so the pod is not
-restarted. A reload cannot add a Secret namespace; that needs a restart.
+restarted.
 
 ```sh
 curl -X POST -H 'Content-Type: application/json' "$SLACK_WEBHOOK_URL" --data '{"attachments":[{
@@ -78,6 +88,12 @@ Post it twice for the "Fired again" note. Post `Pipeline PASSED - web-build` wit
   `X-User-Id` header, with no proof behind it. It works only if the agent, or a proxy in front of it, trusts that
   header. If your agent or its front door (a proxy in front of the agent that checks the bearer token) verifies tokens,
   use `identity.tokenSecretRef` instead: [Create the Binding identity](../../../docs/how-to/create-binding-identity.md).
+- **A chart release that has custom resources, and Kubernetes 1.33 or later.** Step 5 applies the resources as custom
+  resources, which the chart reads with `config.source: crds`. Release 0.1.6 does not have that route: `crds` and
+  `config.source` are not among its values. Check the chart you will install with
+  `helm show values oci://ghcr.io/agentkourier/charts/agent-kourier --version <version> | grep -A1 '^crds:'`. The chart
+  refuses to render `config.source: crds` for an older API server. Installing the CRDs needs the right to create
+  CustomResourceDefinitions, which are cluster-scoped.
 - **To run the dry run (step 3): Go and a checkout, or Docker instead of Go.** The dry run is a subcommand of the
   `agent-kourier` binary. Run it with Go at the version in `go.mod`, from a checkout of this repository, as below; or
   with Docker, using the released image `ghcr.io/agentkourier/agent-kourier:v0.2.0`, whose entrypoint is that binary.
@@ -150,16 +166,54 @@ evals/
 
     The Secret is not in the recipe's directory, since a recipe cannot ship one. If you use `identity.tokenSecretRef`,
     make that Secret too.
-5. Put the directory in a ConfigMap, in the namespace you install the chart into (`agent-kourier` in Install with
-   Helm), and install the chart on it. The chart mounts a `config.existingConfigMap` at the directory Agent Kourier
-   reads, one key per file:
+5. Apply the directory as custom resources, and install the chart to read them. The values below replace the inline
+   `config` of the values file in [Install with Helm](../../../docs/how-to/install-with-helm.md); the rest of that
+   guide applies as written. If Agent Kourier already runs on a ConfigMap, move it with
+   [Move the config between a ConfigMap and custom resources](../../../docs/how-to/migrate-config-source.md) instead.
 
-    ```sh
-    kubectl -n agent-kourier create configmap ci-failures-config \
-      --from-file=examples/recipes/custom-bot-trigger/kourier
+    ```yaml title="ci-failures-values.yaml"
+    config:
+      source: crds
+      chatConnection: agent-kourier/slack
+    rbac:
+      secretNames:
+        agent-kourier: [slack]
     ```
 
-    ```yaml
+    `config.chatConnection` names the one ChatConnection the broker serves. The chart cannot see the Secrets of
+    resources you apply yourself, so `rbac.secretNames` grants the one the ChatConnection names; add the Secret of
+    `identity.tokenSecretRef` there if you use one. Do not also set `config.chatConnections`, `config.agentBackends` or
+    `config.bindings`: the chart would render them as custom resources of its own.
+
+    Then, in this order:
+
+    ```sh
+    helm upgrade --install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version <version> \
+      -n agent-kourier -f ci-failures-values.yaml --set replicaCount=0
+    kubectl apply --dry-run=server -f examples/recipes/custom-bot-trigger/kourier/
+    kubectl apply -f examples/recipes/custom-bot-trigger/kourier/
+    helm upgrade --install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version <version> \
+      -n agent-kourier -f ci-failures-values.yaml
+    kubectl -n agent-kourier wait --for=condition=Ready akbinding/ci-failures --timeout=120s
+    ```
+
+    The first `helm` command installs the CRDs with the release, with no broker running (`replicaCount=0`). On this
+    route the chart installs them unless `crds.install` says otherwise, and with `config.*` empty it renders no custom
+    resource of its own that would need them served first. The server-side dry run checks each resource against the
+    CRDs' schema and names the field of a refusal. The resources go in before the broker starts, because a broker that
+    finds no ChatConnection does not start. If the cluster has the CRDs already from another release, such as a second
+    broker's, or from `kubectl apply` (`kubectl get crd bindings.agentkourier.dev` finds one), add `crds.install: false`
+    to the values: two owners of one CRD conflict. A Binding that is not `Ready` says why in
+    `kubectl -n agent-kourier get akbinding ci-failures -o yaml`; [Binding status](../../../docs/reference/binding-status.md)
+    explains each reason.
+
+    **To stay on a ConfigMap, or on release 0.1.6,** use this values file alone, in place of the one above. Put the
+    directory in a ConfigMap and install the chart on it. `config.source: files` keeps the ConfigMap route: on its
+    default route the chart refuses `config.existingConfigMap`. The chart mounts a `config.existingConfigMap` at the
+    directory Agent Kourier reads, one key per file. It cannot read the ConfigMap to find the namespace of the Secret
+    the ChatConnection names, so `rbac.secretNamespaces` says it.
+
+    ```yaml title="ci-failures-configmap-values.yaml"
     config:
       source: files
       existingConfigMap: ci-failures-config
@@ -167,10 +221,18 @@ evals/
       secretNamespaces: [agent-kourier]
     ```
 
-    The chart cannot read the ConfigMap to find the namespace of the Secret the ChatConnection names, so
-    `rbac.secretNamespaces` says it. Do not also set `config.chatConnections`, `config.agentBackends` or
-    `config.bindings`; the chart refuses both. Those values replace the inline `config` of the values file in
-    [Install with Helm](../../../docs/how-to/install-with-helm.md); the rest of that guide applies as written.
+    ```sh
+    kubectl -n agent-kourier create configmap ci-failures-config \
+      --from-file=examples/recipes/custom-bot-trigger/kourier
+    helm upgrade --install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version <version> \
+      -n agent-kourier -f ci-failures-configmap-values.yaml
+    ```
+
+    Release 0.1.6 has only the ConfigMap route, and its values schema refuses keys it does not have, `config.source`
+    among them: delete the `source: files` line and install with `--version 0.1.6`.
+
+    [Move the config between a ConfigMap and custom resources](../../../docs/how-to/migrate-config-source.md) moves it
+    to custom resources later.
 
 ## What to change
 
