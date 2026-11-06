@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
@@ -99,7 +100,9 @@ func (a agentChecker) CheckAgent(ctx context.Context, binding string) (bindingch
 
 // classifyAgent says what the error of a card fetch (agent.Pool.Check) means for BackendReachable. It is False when the answer
 // says a turn would fail now, and Unknown for the statuses that say nothing of the agent (408, 425 and 429). The Message names
-// the class and a status code, and never the text of a status error or a card, which can quote a response. A
+// the class and a status code, and never the text of a status error or a card, which can quote a response. The exception is
+// CredentialsUnreadable (credentialsOutcome): one sentence for each cause, which may name a Secret, a key or a header of the Binding's own
+// namespace and nothing of another. A
 // request that failed has its cause in Outcome.Cause, for the log only, as telemetry.LogText gives the error under the *url.Error (so
 // not the URL): that is what tells a name that does not resolve from a refused connection or a certificate that is not trusted. The
 // Message is one sentence, whatever the cause, because it reaches the Binding's status, which its owner reads, and a transport error names
@@ -167,7 +170,7 @@ func credentialsOutcome(err error) bindingcheck.Outcome {
 		}
 		out.Message = credentialsProblem(err, subject, ref.Key, ref.Namespace)
 	case errors.Is(err, agent.ErrHeaderUnreadable):
-		out.Message = "a Secret behind a header of the AgentBackend" + msgCredentialsElsewhere
+		out.Message = "a Secret behind a header of the AgentBackend cannot be read; the operator's log has the cause"
 	default:
 		out.Message = "the Binding's token cannot be read; the operator's log has the cause"
 	}
@@ -175,16 +178,13 @@ func credentialsOutcome(err error) bindingcheck.Outcome {
 	return out
 }
 
-// msgCredentialsElsewhere ends the message for a header's Secret that is not named: an AgentBackend of another namespace, or an error that
-// carries no Secret. The two say the same, so that the message does not tell which.
-const msgCredentialsElsewhere = " cannot be read; the operator's log has the cause"
-
 // credentialsProblem says what is wrong with the key of a Secret that subject names, in namespace, from the sentinel the read wrapped. A
-// denial says what grant mends it; the sentence for a cause it cannot tell (a cache not yet synced, an error nobody placed) says only
-// that the read failed. It is never the error's text.
+// denial that the API server answered forbidden says what grant mends it. ErrAccessDenied also covers unauthorized (the broker's own token
+// expired, or the authorizer is down), which no grant mends, so that and every cause it cannot tell (a cache not yet synced, an error
+// nobody placed) say only that the read failed. It is never the error's text.
 func credentialsProblem(err error, subject, key, namespace string) string {
 	switch {
-	case errors.Is(err, k8ssecrets.ErrAccessDenied):
+	case errors.Is(err, k8ssecrets.ErrAccessDenied) && apierrors.IsForbidden(err):
 		return fmt.Sprintf("%s cannot be read: the API server denied Agent Kourier's ServiceAccount access to it; it needs list and watch on it in namespace %s", subject, namespace)
 	case errors.Is(err, config.ErrSecretNotFound):
 		return fmt.Sprintf("%s does not exist in namespace %s", subject, namespace)

@@ -21,7 +21,9 @@ import (
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
@@ -122,7 +124,9 @@ func TestClassifyAgentSaysWhichCredentialCannotBeRead(t *testing.T) {
 	token := identity.SecretError{Namespace: "sre", Name: "creds", Key: "token", BindingNamespace: "sre"}
 	ownHeader := identity.SecretError{Namespace: "sre", Name: "gw", Key: "api", Header: "X-Api-Key", BindingNamespace: "sre"}
 	otherHeader := identity.SecretError{Namespace: "platform", Name: "gw", Key: "api", Header: "X-Api-Key", BindingNamespace: "sre"}
-	denied := fmt.Errorf("%w: %w", k8ssecrets.ErrAccessDenied, errors.New("secrets is forbidden: "+marker))
+	gr := schema.GroupResource{Resource: "secrets"}
+	denied := fmt.Errorf("read key: %w: %w", k8ssecrets.ErrAccessDenied, apierrors.NewForbidden(gr, "creds", errors.New(marker)))
+	unauthorized := fmt.Errorf("read key: %w: %w", k8ssecrets.ErrAccessDenied, apierrors.NewUnauthorized(marker))
 	const grant = "the API server denied Agent Kourier's ServiceAccount access to it; it needs list and watch on it in namespace sre"
 	for _, tc := range []struct {
 		name string
@@ -131,6 +135,8 @@ func TestClassifyAgentSaysWhichCredentialCannotBeRead(t *testing.T) {
 	}{
 		{"token, no grant", read(token, denied),
 			`the token Secret "creds" cannot be read: ` + grant},
+		{"token, denied as unauthorized: no grant mends it", read(token, unauthorized),
+			`the token Secret "creds" cannot be read now; the operator's log has the cause`},
 		{"token, Secret missing", read(token, config.ErrSecretNotFound),
 			`the token Secret "creds" does not exist in namespace sre`},
 		{"token, key missing", read(token, secret.ErrKeyNotFound),

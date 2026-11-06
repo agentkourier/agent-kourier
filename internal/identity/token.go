@@ -32,6 +32,7 @@ var ErrControlCharacter = errors.New("identity: the value contains a control cha
 // namespace: a header's Secret belongs to the AgentBackend, whose namespace may be another team's. It holds no value, and its text is
 // the text of Err, which the reader worded.
 type SecretError struct {
+	// Namespace and Name are the Secret's, and Key is the entry of it that was read (v1alpha1.DefaultSecretKey when the ref names none).
 	Namespace, Name, Key string
 	// Header is the name of the AgentBackend header whose Secret this is. It is empty for the Binding's token.
 	Header string
