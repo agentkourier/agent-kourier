@@ -383,10 +383,12 @@ trial"), `make sandbox-alert` then fires the alert of one of the faults.
    without the overrides, starts Agent Kourier. The resources go in before it starts, because a broker that finds no
    ChatConnection does not start. This is the order `make sandbox-up` uses for the token (`hack/kind/sandbox/up.sh`).
 
-   If the cluster has the CRDs already (`kubectl get crd bindings.agentkourier.dev` finds one: the tier was brought up
+   If the cluster has the CRDs already (`kubectl --context kind-agent-kourier-full get crd bindings.agentkourier.dev` finds one: the tier was brought up
    with `E2E_CONFIG_SOURCE=crds`, and its own release holds them), take `crds` out of the values and skip the first
    command: two releases that render the same CRD conflict. The tier's own broker serves its own ChatConnection, not
-   `slack`, so it leaves this recipe's Binding alone.
+   `slack`, so it leaves this recipe's Binding alone. The AgentBackend `agents` in `agent-kourier` is then the same
+   object as the tier's own (`hack/kind/full/agent-kourier/agentbackend.yaml`, applied as a custom resource), with the
+   same spec, so applying `kourier/` leaves its spec as it is.
 
    `make sandbox-up` applies the agent half (step 1), but then installs its own Agent Kourier with the sandbox's own
    ChatConnection and Binding (`hack/kind/sandbox/agent-kourier/config/`), not this recipe's files. If that Agent
@@ -394,12 +396,30 @@ trial"), `make sandbox-alert` then fires the alert of one of the faults.
    scale`, with the context option as above) or use a separate app, since two brokers on one app's Socket Mode
    connection would split its events (Slack's behaviour, not checked here). The tier's own Agent Kourier
    (`deploy/agent-kourier`) talks to the tier's fake Slack, so it does not compete for your workspace; `make sandbox-up`
-   still scales it to zero to keep one broker behind the front door, and you may do the same. Run `helm uninstall
-   agent-kourier-sre-triage -n agent-kourier` before `make e2e-full`, whose tests find Agent Kourier's pods by label.
-   The uninstall leaves the CRDs and this recipe's resources in the cluster (the chart keeps its CRDs). Before
-   `E2E_CONFIG_SOURCE=crds make e2e-full-up`, whose release installs the CRDs itself, delete them:
-   `kubectl delete -f examples/recipes/sre-triage/kourier/`, then
-   `kubectl delete crd agentbackends.agentkourier.dev bindings.agentkourier.dev chatconnections.agentkourier.dev`.
+   still scales it to zero to keep one broker behind the front door, and you may do the same.
+
+   Run `helm --kube-context kind-agent-kourier-full uninstall agent-kourier-sre-triage -n agent-kourier` before
+   `make e2e-full`, whose tests find Agent Kourier's pods by label. The uninstall leaves the CRDs (the chart keeps them)
+   and this recipe's resources. Before `E2E_CONFIG_SOURCE=crds make e2e-full-up`, whose release `agent-kourier`
+   installs the CRDs itself, ask which release holds them:
+
+   ```sh
+   kubectl --context kind-agent-kourier-full get crd bindings.agentkourier.dev \
+     -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}'
+   ```
+
+   If it prints `agent-kourier-sre-triage`, delete the CRDs, since two releases that render the same CRD conflict.
+   Deleting a CRD deletes every resource of its kind, so this recipe's go with them:
+
+   ```sh
+   kubectl --context kind-agent-kourier-full delete crd \
+     agentbackends.agentkourier.dev bindings.agentkourier.dev chatconnections.agentkourier.dev
+   ```
+
+   If it prints `agent-kourier`, the tier holds them: leave them, and remove only this recipe's Binding and
+   ChatConnection with `kubectl --context kind-agent-kourier-full -n agent-kourier delete akbinding/sre-triage
+   akconnection/slack`. Not `kubectl delete -f examples/recipes/sre-triage/kourier/`, which would also delete the
+   AgentBackend `agents` that the tier shares.
 
    **Elsewhere**, use these values in place of the inline `config` of the values file in
    [Install with Helm](../../../docs/how-to/install-with-helm.md); the rest of that guide (the image, the checks)
@@ -430,11 +450,58 @@ trial"), `make sandbox-alert` then fires the alert of one of the faults.
 
    As on the kind tier, leave out `crds` and the first command if the cluster has the CRDs already.
 
-   **On release 0.1.6, or to stay on a ConfigMap,** the same files load as one:
-   `kubectl -n agent-kourier create configmap sre-triage-config --from-file=examples/recipes/sre-triage/kourier`, then
-   `config.existingConfigMap: sre-triage-config` and `rbac.secretNamespaces: [agent-kourier]` in place of `config` and
-   `rbac` above. [Move the config between a ConfigMap and custom resources](../../../docs/how-to/migrate-config-source.md)
-   moves it later.
+   **On release 0.1.6, or to stay on a ConfigMap,** use the values files below alone, in place of the ones above:
+   0.1.6's values schema refuses keys it does not have, and `crds`, `config.source`, `config.chatConnection` and
+   `rbac.secretNames` are among them. Put the directory in a ConfigMap and install the chart on it. The chart cannot read
+   a ConfigMap you manage, so `rbac.secretNamespaces` names the namespace that holds the Secrets.
+
+   On the kind full tier, with the token order above (no replicas, the first token Job, then the start):
+
+   ```yaml title="sre-triage-configmap-values.yaml"
+   config:
+     existingConfigMap: sre-triage-config
+   rbac:
+     secretNamespaces: [agent-kourier]
+   persistence:
+     storageClassName: standard
+   tokenRefresh:
+     enabled: true
+     targetSecret: sre-triage-token
+     dex:
+       tokenURL: http://dex.dex.svc.cluster.local:5556/dex/token
+       clientId: agent-kourier-binding
+       credentialsSecret: agent-kourier-dex-client
+   ```
+
+   ```sh
+   kubectl --context kind-agent-kourier-full -n agent-kourier create configmap sre-triage-config --from-file=examples/recipes/sre-triage/kourier
+   helm --kube-context kind-agent-kourier-full upgrade --install agent-kourier-sre-triage oci://ghcr.io/agentkourier/charts/agent-kourier \
+     --version 0.1.6 --namespace agent-kourier -f sre-triage-configmap-values.yaml --set replicaCount=0
+   kubectl --context kind-agent-kourier-full -n agent-kourier delete job first-token --ignore-not-found
+   kubectl --context kind-agent-kourier-full -n agent-kourier create job first-token \
+     --from=cronjob/agent-kourier-sre-triage-token-refresh
+   kubectl --context kind-agent-kourier-full -n agent-kourier wait --for=condition=Complete job/first-token --timeout=120s
+   helm --kube-context kind-agent-kourier-full upgrade --install agent-kourier-sre-triage oci://ghcr.io/agentkourier/charts/agent-kourier \
+     --version 0.1.6 --namespace agent-kourier -f sre-triage-configmap-values.yaml
+   ```
+
+   Elsewhere, in place of the inline `config` of Install with Helm's values file:
+
+   ```yaml title="sre-triage-configmap-values.yaml"
+   config:
+     existingConfigMap: sre-triage-config
+   rbac:
+     secretNamespaces: [agent-kourier]
+   ```
+
+   ```sh
+   kubectl -n agent-kourier create configmap sre-triage-config --from-file=examples/recipes/sre-triage/kourier
+   helm upgrade --install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.6 \
+     -n agent-kourier -f sre-triage-configmap-values.yaml
+   ```
+
+   [Move the config between a ConfigMap and custom resources](../../../docs/how-to/migrate-config-source.md) moves it
+   to custom resources later.
 
 Then wait for the next alert on the receiver, or post a test alert as shown above. A thread opens under it and the
 investigation streams in.

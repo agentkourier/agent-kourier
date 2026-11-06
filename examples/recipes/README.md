@@ -63,7 +63,8 @@ A broker serves exactly one ChatConnection, the one `config.chatConnection` name
   `sre-triage-token` for `sre-triage`.
 
 A Binding that is not served stops only itself; the others stay served, and its status says why. If you want a
-ChatConnection of another name or another Secret, change it in every recipe you apply, and in `config.chatConnection`.
+ChatConnection of another name or another Secret, change it in every recipe you apply, in `config.chatConnection`, and
+in `rbac.secretNames`.
 
 On a ConfigMap, the files of several recipes go in one directory under names that do not collide
 (`sre-triage-binding.yaml`, not `binding.yaml` twice), with one copy of the ChatConnection: the load refuses a second

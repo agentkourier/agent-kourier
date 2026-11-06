@@ -52,6 +52,19 @@ Agent Kourier reads its custom resources from the cluster every 10 seconds (`int
 new generation without a restart. A generation it refuses leaves the last good one served, and the Binding's status
 says why: `kubectl -n agent-kourier get akbinding ci-failures`.
 
+On a ConfigMap (the end of step 5), update the ConfigMap instead:
+
+```sh
+kubectl -n agent-kourier create configmap ci-failures-config \
+  --from-file=examples/recipes/custom-bot-trigger/kourier --dry-run=client -o yaml | kubectl apply -f -
+```
+
+The pod sees a change to a mounted ConfigMap only after the kubelet syncs it (Kubernetes behaviour, not checked here).
+Agent Kourier then reloads the changed files by itself: it checks the config directory every 10 seconds
+(`internal/config/reload.go`) and keeps the last good config if the new one does not load. The chart's
+`config.rollOnChange` does not apply to a ConfigMap you manage (`config.existingConfigMap`), so the pod is not
+restarted.
+
 ```sh
 curl -X POST -H 'Content-Type: application/json' "$SLACK_WEBHOOK_URL" --data '{"attachments":[{
   "title":"Pipeline FAILED - web-build",
@@ -195,11 +208,28 @@ evals/
     `kubectl -n agent-kourier get akbinding ci-failures -o yaml`; [Binding status](../../../docs/reference/binding-status.md)
     explains each reason.
 
-    **On release 0.1.6, or to stay on a ConfigMap,** the same files load as one:
-    `kubectl -n agent-kourier create configmap ci-failures-config --from-file=examples/recipes/custom-bot-trigger/kourier`,
-    then `config.existingConfigMap: ci-failures-config` and `rbac.secretNamespaces: [agent-kourier]`.
+    **On release 0.1.6, or to stay on a ConfigMap,** use this values file alone, in place of the one above: 0.1.6's
+    values schema refuses keys it does not have, and `crds`, `config.source`, `config.chatConnection` and
+    `rbac.secretNames` are among them. Put the directory in a ConfigMap and install the chart on it. The chart mounts a
+    `config.existingConfigMap` at the directory Agent Kourier reads, one key per file. It cannot read the ConfigMap to
+    find the namespace of the Secret the ChatConnection names, so `rbac.secretNamespaces` says it.
+
+    ```yaml title="ci-failures-configmap-values.yaml"
+    config:
+      existingConfigMap: ci-failures-config
+    rbac:
+      secretNamespaces: [agent-kourier]
+    ```
+
+    ```sh
+    kubectl -n agent-kourier create configmap ci-failures-config \
+      --from-file=examples/recipes/custom-bot-trigger/kourier
+    helm upgrade --install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.6 \
+      -n agent-kourier -f ci-failures-configmap-values.yaml
+    ```
+
     [Move the config between a ConfigMap and custom resources](../../../docs/how-to/migrate-config-source.md) moves it
-    later.
+    to custom resources later.
 
 ## What to change
 

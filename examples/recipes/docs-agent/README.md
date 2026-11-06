@@ -195,11 +195,26 @@ model quota, so keep that policy; it works only if your cluster's network plugin
    `kubectl -n agent-kourier get akbinding docs-help -o yaml`; [Binding status](../../../docs/reference/binding-status.md)
    explains each reason.
 
-   **On release 0.1.6, or to stay on a ConfigMap,** the same files load as one:
-   `kubectl -n agent-kourier create configmap docs-agent-config --from-file=examples/recipes/docs-agent/kourier`, then
-   `config.existingConfigMap: docs-agent-config` and `rbac.secretNamespaces: [agent-kourier]`.
+   **On release 0.1.6, or to stay on a ConfigMap,** use this values file alone, in place of the one above: 0.1.6's
+   values schema refuses keys it does not have, and `crds`, `config.source`, `config.chatConnection` and
+   `rbac.secretNames` are among them. Put the directory in a ConfigMap and install the chart on it, naming the
+   namespace that holds the Secret (the chart cannot read a ConfigMap you manage):
+
+   ```yaml title="docs-agent-configmap-values.yaml"
+   config:
+     existingConfigMap: docs-agent-config
+   rbac:
+     secretNamespaces: [agent-kourier]
+   ```
+
+   ```sh
+   kubectl -n agent-kourier create configmap docs-agent-config --from-file=examples/recipes/docs-agent/kourier
+   helm upgrade --install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.6 \
+     -n agent-kourier -f docs-agent-configmap-values.yaml
+   ```
+
    [Move the config between a ConfigMap and custom resources](../../../docs/how-to/migrate-config-source.md) moves it
-   later.
+   to custom resources later.
 
 Then mention the bot in the channel and ask a question, for example "How do I connect a generic A2A agent?". The bot
 adds a reaction while it works, and the answer streams into a thread under your message.
