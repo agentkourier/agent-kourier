@@ -156,6 +156,17 @@ What bounds this is what the broker can read, and where it can connect:
   Binding's token or an AgentBackend's header can name that exist (Kubernetes's own object-count quota for Secrets, not run here). It does not bound what the broker follows: it follows each Secret that a served
   object names, by name and with an informer of its own, whether or not that Secret exists, and the bounds and the other two quotas bound those names. A quota limits the count and not the size of what is stored, so it sits beside the bounds and replaces none of them.
   Nothing limits how many objects a namespace holds without one. The limits you can run into, with what happens past each, are on [Limits](../reference/limits.md).
+- **Names of Secrets that the broker may not read.** A team can name as many Secrets in its Bindings and AgentBackends as it likes, and the broker follows each name with an informer
+  of its own, whether it exists or not and whether the ServiceAccount may read it or not. Nothing caps the names per namespace, and the `count/secrets` quota does not reach them, because the Secrets need not exist.
+  What a denied name costs the other tenants comes out of one budget: all of the informers share one client, with a limiter of 50 requests a second. The first try of each name is not
+  paced: it is two requests, and a thousand denied names take about 40 s of the limiter to be asked once, during which another tenant's request, a read of a Secret that no informer follows yet,
+  queues behind them (inferred from how the limiter queues; not measured). After that the broker does not let client-go retry a denial for ever, as it would at a Secret every 30 to 60 s: it ends the informer
+  at the first forbidden or unauthorized answer and asks for the Secret again only at a recheck of the config, once a minute, at 10 Secrets at once and then one every 100 ms, which is at most about 20 requests a second
+  in all, however many names are denied. It logs a denial once for each Secret, not once for each try. A review measured the behaviour before this, with 1650 denied names, in a Go test that runs the broker's Secret
+  informers against a local API server with the broker's limiter (not a cluster): about 97 requests and 50 warnings a second for as long as it ran, client-side waits of 30 to 65 s, and, on a server that does not stream lists,
+  another tenant's first read of a Secret failing with `cache not synced` after its 10 s. The same test after: the first two requests of each of the 1650 names took about 40 s and 1650 warnings in all, then 20.6 requests a second and no more
+  warnings while a recheck went round, and another tenant's first read of a Secret took 41 ms. What remains is that bounded stream of requests, the open watch of each name that exists, and the first request of each name; the fix
+  for a hostile tenant is to remove its Bindings or to quota them. The limits are on [Limits](../reference/limits.md).
 
 What a writer of a Binding and an AgentBackend sees of your conversations. The agent of a Binding receives each mention of the bot in the channel, each reply in a thread the Binding owns
 (with `chat.threadReplies: all`, the default, every reply in the thread, not only the ones that mention the bot), and with a `botMessage` trigger the messages of the bot that

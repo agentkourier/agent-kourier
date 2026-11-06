@@ -893,4 +893,13 @@ func TestDeniedWatchIsReported(t *testing.T) {
 	if _, err := r.Keys(t.Context(), "sre", "creds"); err != nil {
 		t.Errorf("the synced cache is still served: %v", err)
 	}
+	e := entryOf(r, sn("sre", "creds"))
+	r.mu.Lock()
+	inf := e.informer
+	r.mu.Unlock()
+	select {
+	case <-inf.done:
+	case <-time.After(5 * time.Second):
+		t.Error("the informer whose watch was denied is still running; client-go would retry it for ever, and it is tried again at a recheck instead")
+	}
 }

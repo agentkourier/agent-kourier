@@ -11,4 +11,5 @@ import (
 func TestLimitsPage(t *testing.T) {
 	limitsdoc.Bytes(t, "configFile", maxFileSize)
 	limitsdoc.Duration(t, "reloadPoll", NewReloader(ReloaderConfig{}).poll)
+	limitsdoc.Duration(t, "secretsRecheck", NewReloader(ReloaderConfig{}).secretsEvery)
 }
