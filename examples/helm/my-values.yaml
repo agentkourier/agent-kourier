@@ -17,7 +17,7 @@ config:
     slack:
       spec:
         platform: slack
-        credentialsSecretRef: {name: agent-kourier-slack}
+        credentialsSecretRef: {name: slack}
 
   # Where the agent is: its A2A endpoint, called exactly as written (keep a trailing slash if the route has one).
   agentBackends:

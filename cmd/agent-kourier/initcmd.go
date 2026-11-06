@@ -60,7 +60,7 @@ const defaultInitNamespace = "agent-kourier"
 
 // The names the generated values and the printed commands use; they are the ones the install guide and the starter file use.
 const (
-	slackSecretName      = "agent-kourier-slack"       //nolint:gosec // G101: the name of a Secret, not a credential
+	slackSecretName      = "slack"
 	agentTokenSecretName = "agent-kourier-agent-token" //nolint:gosec // G101: the name of a Secret, not a credential
 	chartReference       = "oci://ghcr.io/agentkourier/charts/agent-kourier"
 	initBindingName      = "my-binding"
@@ -373,7 +373,7 @@ config:
     slack:
       spec:
         platform: slack
-        credentialsSecretRef: {name: agent-kourier-slack}
+        credentialsSecretRef: {name: slack}
 
   # {{ .BackendComment }}
   agentBackends:

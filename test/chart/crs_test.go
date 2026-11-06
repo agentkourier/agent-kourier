@@ -173,10 +173,10 @@ func TestDocumentedDefaultRouteInstallsGrantTheConnectionsSecret(t *testing.T) {
 	if m == nil {
 		t.Fatal("Install with Helm has no ChatConnection with a credentialsSecretRef")
 	}
-	// The chart README carries no resources of its own: its snippet relies on the chart naming the Secret after the connection (slack).
-	secrets := map[string]string{"../../docs/how-to/install-with-helm.md": string(m[1]), chartReadme: "slack"}
+	// The chart README carries no resources of its own: its snippet relies on the chart naming the Secret after the connection, which is the Secret
+	// that Install with Helm's ChatConnection reads, so both documents are held to the same one.
+	secret := string(m[1])
 	for _, doc := range []string{"../../docs/how-to/install-with-helm.md", chartReadme} {
-		secret := secrets[doc]
 		t.Run(filepath.Base(doc), func(t *testing.T) {
 			t.Parallel()
 			raw, err := os.ReadFile(doc)

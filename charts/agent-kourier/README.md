@@ -28,7 +28,7 @@ config:
     slack:
       spec:
         platform: slack
-        credentialsSecretRef: {name: agent-kourier-slack}   # a Secret with botToken and appToken keys
+        credentialsSecretRef: {name: slack}   # a Secret with botToken and appToken keys
   agentBackends:
     agent:
       spec:
