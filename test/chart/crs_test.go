@@ -158,8 +158,9 @@ func TestAnUpgradeThatKeepsTheOldValuesIsRefusedWithAWayOut(t *testing.T) {
 }
 
 // TestDocumentedDefaultRouteInstallsGrantTheConnectionsSecret: the install the chart README and Install with Helm give for the default route names the
-// ChatConnection and applies the resources themselves, so the chart sees no Secret to name. Their values must carry the grant (rbac.secretNames), or the
-// render has no Role for the Secret and the broker, which cannot read its own ChatConnection's Secret, exits with code 3 in a loop.
+// ChatConnection and applies the resources themselves, so the chart sees no Secret reference. Their values must still render a Role for the connection's
+// Secret (named in rbac.secretNames, or derived from the connection's name), or the broker, which cannot read its own ChatConnection's Secret, exits with
+// code 3 in a loop.
 func TestDocumentedDefaultRouteInstallsGrantTheConnectionsSecret(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
@@ -172,8 +173,10 @@ func TestDocumentedDefaultRouteInstallsGrantTheConnectionsSecret(t *testing.T) {
 	if m == nil {
 		t.Fatal("Install with Helm has no ChatConnection with a credentialsSecretRef")
 	}
-	secret := string(m[1])
+	// The chart README carries no resources of its own: its snippet relies on the chart naming the Secret after the connection (slack).
+	secrets := map[string]string{"../../docs/how-to/install-with-helm.md": string(m[1]), chartReadme: "slack"}
 	for _, doc := range []string{"../../docs/how-to/install-with-helm.md", chartReadme} {
+		secret := secrets[doc]
 		t.Run(filepath.Base(doc), func(t *testing.T) {
 			t.Parallel()
 			raw, err := os.ReadFile(doc)
@@ -758,6 +761,140 @@ func TestCRModeSecretRolesCoverEveryReference(t *testing.T) {
 	}
 }
 
+// secretRoles returns, by namespace, the resourceNames of each Secret Role of a render (an empty list is a Role for the whole namespace).
+func secretRoles(t *testing.T, objs []object) map[string][]string {
+	t.Helper()
+	out := map[string][]string{}
+	for _, o := range objs {
+		if o.kind() == "Role" && strings.HasSuffix(o.name(), "-secrets") {
+			var r rbacv1.Role
+			find(t, []object{o}, "Role", o.name(), &r)
+			if len(r.Rules) != 1 {
+				t.Fatalf("Role %s/%s has %d rules", r.Namespace, r.Name, len(r.Rules))
+			}
+			out[r.Namespace] = r.Rules[0].ResourceNames
+		}
+	}
+	return out
+}
+
+// TestCRModeGrantsTheServedConnectionsSecret: the chart cannot see the ChatConnection a team applies, but it knows which one the broker serves, and a
+// broker that cannot read that connection's Secret exits at start. So config.chatConnection alone derives a Role that names one Secret: the
+// connection's name, or config.chatConnectionSecret, in the connection's namespace (a reference is namespace-local). It is de-duplicated against
+// rbac.secretNames and skipped when config.chatConnections renders the connection, whose own credentialsSecretRef the chart already names.
+func TestCRModeGrantsTheServedConnectionsSecret(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	oneEntry := func(ns, secret string) string {
+		nsField := ""
+		if ns != "" {
+			nsField = `"namespace":"` + ns + `",`
+		}
+		return `config.chatConnections={"slack":{` + nsField + `"spec":{"platform":"slack","credentialsSecretRef":{"name":"` + secret + `"}}}}`
+	}
+	tests := []struct {
+		name string
+		set  string
+		json []string
+		want map[string][]string
+	}{
+		{"a name alone: the Secret of that name in the release namespace", "config.chatConnection=slack", nil,
+			map[string][]string{"rel-ns": {"slack"}}},
+		{"namespace and name: the Role is in the connection's namespace", "config.chatConnection=platform/slack", nil,
+			map[string][]string{"platform": {"slack"}}},
+		{"chatConnectionSecret names another Secret", "config.chatConnection=slack,config.chatConnectionSecret=slack-bot", nil,
+			map[string][]string{"rel-ns": {"slack-bot"}}},
+		{"chatConnectionSecret in the connection's namespace", "config.chatConnection=platform/slack,config.chatConnectionSecret=slack-bot", nil,
+			map[string][]string{"platform": {"slack-bot"}}},
+		{"an empty chatConnectionSecret is the default", "config.chatConnection=slack,config.chatConnectionSecret=", nil,
+			map[string][]string{"rel-ns": {"slack"}}},
+		{"rbac.secretNames adds to it", "config.chatConnection=slack",
+			[]string{`rbac.secretNames={"rel-ns":["agent-token"],"team-a":["team-token"]}`},
+			map[string][]string{"rel-ns": {"agent-token", "slack"}, "team-a": {"team-token"}}},
+		{"a name that rbac.secretNames repeats is named once", "config.chatConnection=slack",
+			[]string{`rbac.secretNames={"rel-ns":["slack","agent-token"]}`},
+			map[string][]string{"rel-ns": {"agent-token", "slack"}}},
+		{"the same name in another namespace is another grant", "config.chatConnection=platform/slack",
+			[]string{`rbac.secretNames={"rel-ns":["slack"]}`},
+			map[string][]string{"platform": {"slack"}, "rel-ns": {"slack"}}},
+		{"rbac.secretNamespaces still grants the namespace whole", "config.chatConnection=slack,rbac.secretNamespaces={rel-ns}", nil,
+			map[string][]string{"rel-ns": nil}},
+		{"a rendered connection of that name is granted by its own reference, not the derived one", "config.chatConnection=slack",
+			[]string{oneEntry("", "slack-main")},
+			map[string][]string{"rel-ns": {"slack-main"}}},
+		{"a rendered connection in the connection's namespace", "config.chatConnection=platform/slack",
+			[]string{oneEntry("platform", "slack-main")},
+			map[string][]string{"platform": {"slack-main"}}},
+		{"chatConnectionSecret does not rename a rendered connection's Secret", "config.chatConnection=slack,config.chatConnectionSecret=slack-bot",
+			[]string{oneEntry("", "slack-main")},
+			map[string][]string{"rel-ns": {"slack-main"}}},
+		{"no chatConnection, one rendered connection: its own reference only", "", []string{oneEntry("", "slack-main")},
+			map[string][]string{"rel-ns": {"slack-main"}}},
+		{"a rendered connection of another namespace is not the served one", "config.chatConnection=slack",
+			[]string{oneEntry("platform", "slack-main")},
+			map[string][]string{"platform": {"slack-main"}, "rel-ns": {"slack"}}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			args := crMode("--set", "image.repository=agent-kourier,config.source=crds")
+			if tc.set != "" {
+				args = append(args, "--set", tc.set)
+			}
+			for _, j := range tc.json {
+				args = append(args, "--set-json", j)
+			}
+			got := secretRoles(t, mustRender(t, "agent-kourier", "rel-ns", args...))
+			if len(got) != len(tc.want) {
+				t.Errorf("Secret Roles %v; want %v", got, tc.want)
+			}
+			for ns, names := range tc.want {
+				if g, has := got[ns]; !has || !slices.Equal(g, names) {
+					t.Errorf("Secret Role in %s names %v (present %v); want %v (Roles %v)", ns, g, has, names, got)
+				}
+			}
+		})
+	}
+}
+
+// TestKindOverlayGrantsTheTiersSecretsByName: the kind tiers' overlay for the custom-resource route lists only the Binding's token in rbac.secretNames; the
+// connection's Secret, slack-fast, is the chart's to derive from config.chatConnection. Rendered over the fast tier's values, the namespace's Role names
+// both and is not namespace-wide.
+func TestKindOverlayGrantsTheTiersSecretsByName(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	objs := mustRender(t, "agent-kourier", "agent-kourier", crMode("-f", values("fast"), "-f", "../../hack/kind/crds-values.yaml")...)
+	got := secretRoles(t, objs)
+	if want := []string{"agent-kourier-agent-token", "slack-fast"}; !slices.Equal(got["agent-kourier"], want) {
+		t.Errorf("Secret Roles %v; want agent-kourier to name %v", got, want)
+	}
+}
+
+// TestCRModeConnectionSecretNameIsChecked: config.chatConnectionSecret is a Secret name, so the schema holds it to a DNS-1123 subdomain, as it does
+// the names in rbac.secretNames, and the empty string (the default) is allowed.
+func TestCRModeConnectionSecretNameIsChecked(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	image := "image.repository=agent-kourier,config.source=crds,config.chatConnection=slack"
+	for _, bad := range []string{"Slack", "a/b", "-a", "a-", "a_b", strings.Repeat("a", 254)} {
+		t.Run("refuses "+bad[:min(len(bad), 12)], func(t *testing.T) {
+			t.Parallel()
+			_, err := render(t.Context(), t, "agent-kourier", "agent-kourier", crMode("--set", image+",config.chatConnectionSecret="+bad)...)
+			if err == nil || !strings.Contains(err.Error(), "chatConnectionSecret") {
+				t.Errorf("render error = %v; want a refusal of config.chatConnectionSecret", err)
+			}
+		})
+	}
+	for _, good := range []string{"", "slack", "slack.bot-1", strings.Repeat("a", 253)} {
+		t.Run("allows "+good[:min(len(good), 12)], func(t *testing.T) {
+			t.Parallel()
+			if _, err := render(t.Context(), t, "agent-kourier", "agent-kourier", crMode("--set", image+",config.chatConnectionSecret="+good)...); err != nil {
+				t.Errorf("config.chatConnectionSecret=%q: %v; want it to render", good, err)
+			}
+		})
+	}
+}
+
 // TestCRModeRefusals: what a values file must not get past with config.source crds, and what it must not set with files.
 func TestCRModeRefusals(t *testing.T) {
 	t.Parallel()
@@ -1012,14 +1149,17 @@ func TestCRModeRBACFollowsTheValues(t *testing.T) {
 }
 
 // TestCRModeNeedsNoConfig: custom resources that teams make are the point of the route, so a release with none of its own renders: no
-// resource of the three kinds, the connection by name, and no Secret Role (nothing is named), but the ClusterRole.
+// resource of the three kinds, the connection by name, the one Secret Role that the connection's name derives (and no other), and the ClusterRole.
 func TestCRModeNeedsNoConfig(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
 	objs := mustRender(t, "agent-kourier", "agent-kourier", crMode("--set", "image.repository=agent-kourier,config.source=crds,config.chatConnection=platform/slack")...)
 	for _, o := range objs {
-		if strings.HasPrefix(str(o["apiVersion"]), "agentkourier.dev/") || o.kind() == "ConfigMap" || o.kind() == "Role" || o.kind() == "RoleBinding" {
+		if strings.HasPrefix(str(o["apiVersion"]), "agentkourier.dev/") || o.kind() == "ConfigMap" {
 			t.Errorf("rendered %s %s from values that have no config", o.kind(), o.name())
+		}
+		if (o.kind() == "Role" || o.kind() == "RoleBinding") && o.namespace() != "platform" {
+			t.Errorf("rendered %s %s in %q; want only the connection's Secret Role in platform", o.kind(), o.name(), o.namespace())
 		}
 	}
 	if !slices.Contains(kinds(objs), "ClusterRole//agent-kourier-agent-kourier-crs") {
@@ -1082,7 +1222,7 @@ func TestFilesRouteIgnoresTheCRModeValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := render(t.Context(), t, "agent-kourier", "agent-kourier", append(slices.Clone(base), "--set", "config.source=files,config.chatConnection=agent-kourier/slack-main",
+	got, err := render(t.Context(), t, "agent-kourier", "agent-kourier", append(slices.Clone(base), "--set", "config.source=files,config.chatConnection=agent-kourier/slack-main,config.chatConnectionSecret=slack-bot",
 		"--set-json", `rbac.secretNames={"agent-kourier":["slack-main"]}`)...)
 	if err != nil {
 		t.Fatalf("files with the values of the CR route: %v", err)
