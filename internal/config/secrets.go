@@ -84,6 +84,53 @@ func secretNames(refs []secretRef) []SecretName {
 // SecretNames returns the sorted Secrets that set refers to, each once, which are the ones a SecretWatcher must follow.
 func (s *Set) SecretNames() []SecretName { return secretNames(s.secretRefs()) }
 
+// SecretReads returns the sorted Secrets that set refers to, each once, with the keys that its objects read: what a
+// KeyedSecretWatcher is told to follow.
+func (s *Set) SecretReads() []SecretRead { return secretReads(s.secretRefs()) }
+
+// SecretRead is one Secret that objects of a Set refer to, and the keys of it that they read.
+type SecretRead struct {
+	SecretName
+	Keys []string // sorted and unique; never empty for a Secret that a reference names
+}
+
+// secretReads returns the Secrets that refs name, sorted and each once, with the keys that any of the refs reads, sorted and unique.
+func secretReads(refs []secretRef) []SecretRead {
+	byName := map[SecretName][]string{}
+	for _, ref := range refs {
+		n := SecretName{ref.from.namespace, ref.name}
+		byName[n] = append(byName[n], ref.keys...)
+	}
+	reads := make([]SecretRead, 0, len(byName))
+	for n, keys := range byName {
+		slices.Sort(keys)
+		reads = append(reads, SecretRead{n, slices.Compact(keys)})
+	}
+	slices.SortFunc(reads, func(a, b SecretRead) int {
+		return cmp.Or(cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name))
+	})
+	return reads
+}
+
+// ChatCredentialKeys returns the keys that a ChatConnection's credentials Secret must hold (spec section 7), sorted.
+func ChatCredentialKeys() []string { return []string{keyAppToken, keyBotToken} }
+
+// KeyedSecretWatcher is a resolver that follows Secrets as a SecretWatcher does, and keeps in memory of each Secret only the keys
+// that it is told are read: a Secret may hold a megabyte of keys that nothing refers to, and the namespace's writers choose them.
+// The Reloader calls it in place of a SecretWatcher's Watch and Retain, with the keys that the config's objects name, so that a
+// reload that adds a reference to another key of a Secret already followed leaves the keys that were served readable meanwhile and
+// makes the new one readable before Resolve asks for it.
+//
+// Keys answers for the keys that were named. While the keys of a Secret that were named last have not been fetched it fails, as it
+// does for a cache that has not synced, and never says that a key is missing which the Secret has.
+type KeyedSecretWatcher interface {
+	// WatchKeys is Watch for Secrets of which only the keys are kept: it follows each of reads, and waits until its keys are
+	// readable.
+	WatchKeys(ctx context.Context, reads []SecretRead) error
+	// RetainKeys is Retain for Secrets of which only the keys are kept.
+	RetainKeys(reads []SecretRead)
+}
+
 // SecretWatcher is an optional interface of a SecretResolver that follows Secrets one by one, as the cluster-backed one
 // does. The Reloader calls it around each reload, so that a Secret that a reload adds is readable without a restart and
 // the resolver holds the Secrets of the config and what it was told to keep, and little else.

@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/config/crsource"
 )
 
 // This file measures what the largest object that Validate accepts holds in an informer cache, which is where the sizes on
@@ -34,8 +35,9 @@ func sizeHeapAlloc() uint64 {
 	return m.HeapAlloc
 }
 
-// sizeHeldMiB decodes body n times as an informer's cache holds an object, and returns the heap that each copy holds, in MiB:
-// the growth of the live heap over the n copies, which are kept until it is read.
+// sizeHeldMiB decodes body n times as an informer's cache holds an object (decoded, and then slimmed by the informers' transform, as
+// every object is before the cache keeps it), and returns the heap that each copy holds, in MiB: the growth of the live heap over the n
+// copies, which are kept until it is read.
 func sizeHeldMiB(t *testing.T, body []byte, n int) float64 {
 	t.Helper()
 	before := sizeHeapAlloc()
@@ -45,6 +47,7 @@ func sizeHeldMiB(t *testing.T, body []byte, n int) float64 {
 		if err := u.UnmarshalJSON(body); err != nil {
 			t.Fatal(err)
 		}
+		crsource.SlimForTest(u)
 		keep[i] = u
 	}
 	after := sizeHeapAlloc()

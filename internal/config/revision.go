@@ -29,14 +29,23 @@ type SecretVersioner interface {
 type published struct {
 	snap        *Snapshot
 	fingerprint string       // of the config files the snapshot was built from
-	secrets     []SecretName // the Secrets the snapshot's objects refer to, sorted and unique
+	reads       []SecretRead // the Secrets the snapshot's objects refer to, sorted and unique, with the keys they read
 	report      Report       // what a source that fails one object at a time refused; only the Snapshot for files
+}
+
+// names returns the Secrets the snapshot's objects refer to, sorted and unique.
+func (p *published) names() []SecretName {
+	names := make([]SecretName, len(p.reads))
+	for i, r := range p.reads {
+		names[i] = r.SecretName
+	}
+	return names
 }
 
 // newPublished returns the published form of snap, built from the config files that
 // fingerprint describes, with the Secrets that refs name.
 func newPublished(snap *Snapshot, fingerprint string, refs []secretRef) *published {
-	return &published{snap: snap, fingerprint: fingerprint, secrets: secretNames(refs), report: Report{Snapshot: snap}}
+	return &published{snap: snap, fingerprint: fingerprint, reads: secretReads(refs), report: Report{Snapshot: snap}}
 }
 
 // Revision returns an opaque digest of what the current snapshot was built from: the
@@ -74,7 +83,7 @@ func (r *Reloader) Revision(ctx context.Context) string {
 	} else {
 		fmt.Fprintf(&b, "config %q\n", p.fingerprint)
 		if v, ok := r.secrets.(SecretVersioner); ok {
-			for _, k := range p.secrets {
+			for _, k := range p.reads {
 				state := "missing"
 				version, err := v.SecretVersion(ctx, k.Namespace, k.Name)
 				switch {

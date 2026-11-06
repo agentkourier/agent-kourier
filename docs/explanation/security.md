@@ -131,9 +131,12 @@ What bounds this is what the broker can read, and where it can connect:
   Binding cannot hold most of the 2156 that the other bounds allow. The largest Binding that `Validate` accepts is about 1.3 MiB of JSON, which is under what the API server takes in one write (etcd's default limit for a request is
   1.5 MiB, from its documentation and not checked here), so the bounds and not that limit are what size it. That figure depends on the instruction limit: a regex can be as dense as one character class of 512 bytes,
   which costs a few instructions, so the limit bounds how many regexes there are and not how much text. The bounds do not reach the metadata of an object: the API server checks each label on its own and limits neither how many an object has nor their total size
-  (stated from Kubernetes' behaviour, not checked here).
-  What an object holds in the broker's cache was measured by building the largest object that `Validate` accepts and decoding it as the cache does (an unstructured object), taking the growth of the live heap after a
-  collection over several copies, in a test process and not in a pod. `TestLargestObjectsAreWhatTheSecurityPageSays` in `internal/config/crsource` does it and logs the figures with `-v`. On one run:
+  (stated from Kubernetes' behaviour, not checked here). So the broker does not keep the labels, annotations, owner references, finalizers or managed fields of what it caches
+  (`slim` in `internal/config/crsource/source.go`), and keeps the rest of the metadata and the `spec` and `status`.
+  What an object holds in the broker's cache was measured by building the largest object that `Validate` accepts and decoding it as the cache does (an unstructured object, after the transform that drops what is above),
+  taking the growth of the live heap after a collection over several copies, in a test process and not in a pod. `TestLargestObjectsAreWhatTheSecurityPageSays` in `internal/config/crsource` does it and logs
+  the figures with `-v`. These objects carry no labels or annotations, so what is dropped does not change their figures. On one run, on Go 1.27.3 with GOMAXPROCS 8, on a macOS machine that other jobs were loading
+  (load average about 28):
 
   | Object | JSON | Held by the cache | Copies that fill 205 MiB |
   |---|---|---|---|
@@ -142,9 +145,16 @@ What bounds this is what the broker can read, and where it can connect:
   | The largest Binding | 1.28 MiB | 1.8 MiB | about 115 |
 
   The 205 MiB is what the chart's `GOMEMLIMIT` allows with the default memory limit of 256Mi. The figures are of the cache alone, and not of everything the broker holds, so they are bounds and not predictions.
+  What the broker does not hold of an object is what its metadata can add. `TestWhatTheCacheHoldsOfAnObjectWhoseSizeIsItsLabelsAndAnnotations` builds an AgentBackend of 1.27 MiB of JSON that is 80,458 labels and 200 KiB of
+  annotations (16 held at once, same conditions): it took 5.7 MiB of heap each when labels and annotations were kept, and about 0.001 MiB each now. Of a Secret the broker keeps the type, the resourceVersion and the keys that the
+  served objects name, not its other keys, which a namespace may fill up to Kubernetes's 1 MiB for one Secret (`trimTo` in `internal/config/k8ssecrets/keys.go`; `TestAMegabyteOfUnreferencedKeysCostsAlmostNothing`, 4 copies held at once):
+  a Secret of 100,000 keys of 2 bytes took about 9 MiB of heap per copy when every key was kept, and about 1 KiB with one key kept. The informers' transform runs after client-go has decoded an object,
+  so a large object still costs a burst of memory when it is read, which these figures do not show and which was not measured.
   So a namespace with a quota of N Bindings can have the broker hold up to about N times 1.8 MiB for them: 50 Bindings of the largest size are about 90 MiB, and 115 of them are all of the 205 MiB.
   Put a `ResourceQuota` in each tenant's namespace with `count/bindings.agentkourier.dev` and `count/agentbackends.agentkourier.dev`: the API server refuses a create past it
-  with `exceeded quota` (measured on kind 1.37.0), and set `resources.limits.memory` for the quotas you give out. A quota limits the count and not the size of what is stored, so it sits beside the bounds and replaces none of them.
+  with `exceeded quota` (measured on kind 1.37.0), and set `resources.limits.memory` for the quotas you give out. Add `count/secrets` too, to bound how many Secrets the namespace holds, and so how many a
+  Binding's token or an AgentBackend's header can name that exist (Kubernetes's own object-count quota for Secrets, not run here). It does not bound what the broker follows: it follows each Secret that a served
+  object names, by name and with an informer of its own, whether or not that Secret exists, and the bounds and the other two quotas bound those names. A quota limits the count and not the size of what is stored, so it sits beside the bounds and replaces none of them.
   Nothing limits how many objects a namespace holds without one. The limits you can run into, with what happens past each, are on [Limits](../reference/limits.md).
 
 What a writer of a Binding and an AgentBackend sees of your conversations. The agent of a Binding receives each mention of the bot in the channel, each reply in a thread the Binding owns
