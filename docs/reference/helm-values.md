@@ -245,7 +245,7 @@ With crds the chart also makes a ClusterRole (list and watch on the three kinds,
 |---|---|---|
 | `rbac.create` | `true` |  |
 | `rbac.secretNamespaces` | `[]` | More namespaces to grant the Role in, for every Secret of the namespace. Needed with config.existingConfigMap, which the chart cannot read. With crds a namespace listed here is namespace-wide, whatever rbac.secretNames says of it. |
-| `rbac.secretNames` | `{}` | With config.source crds, more Secrets to grant by name, as a map of namespace to Secret names. For Secrets that the chart cannot see and that the platform owns outside the served ChatConnection's (which config.chatConnection already grants): a Binding's token in the release namespace, say. A team's own Secrets are the team's to grant with a Role in its namespace. Ignored with files, whose Roles are namespace-wide, so a rollback to files may keep it set. |
+| `rbac.secretNames` | `{}` | With config.source crds, more Secrets to grant by name, as a map of namespace to Secret names. For Secrets the chart cannot see, other than the served ChatConnection's (which config.chatConnection already grants): a Binding's token in the release namespace, say. A team's own Secrets are the team's to grant with a Role in its namespace. Ignored with files, whose Roles are namespace-wide, so a rollback to files may keep it set. |
 
 ## service
 

@@ -68,8 +68,8 @@ kubectl -n agent-kourier get akbinding
 ```
 
 With `config.*` empty the chart cannot see the ChatConnection's Secret, but it knows which connection the broker serves, so it renders a Role in that connection's
-namespace that names one Secret: the one called like the connection (`slack` here). A ChatConnection whose `credentialsSecretRef` names another Secret needs
-`config.chatConnectionSecret` set to that name; otherwise the broker could not read it and would exit with code 3 in a loop. Any other Secret that the chart
+namespace that names one Secret: the Secret of the same name as the connection (`slack` here). A ChatConnection whose `credentialsSecretRef` names another Secret needs
+`config.chatConnectionSecret` set to that name (an `rbac.secretNames` entry for it works too); otherwise the broker could not read it and would exit with code 3 in a loop. Any other Secret that the chart
 cannot see, such as a Binding's token in the release namespace, still needs a line in `rbac.secretNames` or a Role of its own.
 
 [Install with Helm](https://agentkourier.dev/how-to/install-with-helm/#write-the-values) walks through each field, the
