@@ -97,7 +97,9 @@ helm template agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --ve
 
 It prints one `serverside-applied (server dry run)` line for each object the API server takes, and for one it refuses it names the object and the
 field and exits 1, for instance `.spec.chat.bogusField: field not declared in schema` or `spec.chat.channel: Invalid value: "general"`, or
-`namespaces "team-a" not found` for a Binding in a namespace that does not exist. `--force-conflicts` is for the dry run only: Helm owns fields of the objects
+`namespaces "team-a" not found` for a Binding in a namespace that does not exist. On an object that Argo CD applied before (and, by inference, one that a client-side `kubectl apply` did: it writes the same annotation; that was not run), the check also
+prints a warning for each such object, `failed to migrate kubectl.kubernetes.io/last-applied-configuration`. It is harmless: the object still gets its `serverside-applied (server dry run)` line, and the dry run writes nothing. The warning was observed
+on a cluster managed by Argo CD v3.3.7, with `kubectl`, and only there; it is not read from this repository's code, and which `kubectl` versions print it was not checked. `--force-conflicts` is for the dry run only: Helm owns fields of the objects
 it made (without the flag the Secret Role reports `conflict with "helm": .rules`), and nothing is written. Do not use `helm upgrade --dry-run=server` for this: it
 did not report an unknown field or a channel the schema refuses (measured, Helm 4.3.1).
 

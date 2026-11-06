@@ -129,7 +129,7 @@ func TestAnUpgradeThatKeepsTheOldValuesIsRefusedWithAWayOut(t *testing.T) {
 		{"config in the values, and the CRDs are being installed with it", []string{"--set", image + ",crds.install=true", "--set-json", inline},
 			[]string{"crds.install installs them with this release, too late for the resources of it", "config.source: files"}},
 		{"Kubernetes 1.32", []string{"--set", image + ",config.chatConnection=c", "--kube-version", "v1.32.9"},
-			[]string{"needs Kubernetes 1.33 or later", "set config.source: files"}},
+			[]string{"config.source crds needs Kubernetes 1.33 or later (it is the chart's default unless your values set it): the API server is v1.32.9", "set config.source: files"}},
 		{"Kubernetes 1.32 and a ConfigMap of its own", []string{"--set", image + ",config.existingConfigMap=mine", "--kube-version", "v1.32.9"},
 			[]string{"config.existingConfigMap is for config.source files"}},
 	}
@@ -793,6 +793,104 @@ func TestCRModeRefusals(t *testing.T) {
 				t.Errorf("render error = %v; want one containing %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// TestRefusalsDoNotCallTheRouteTheDefaultOfAValuesFileThatSetIt: the values the chart sees hold crds whether the file said so or the chart's
+// own values did, and no template can tell the two apart (the default is filled in before it runs; with --reuse-values an unset value reads
+// as files instead). So a refusal that names the default says it is the default unless the values set the route, which is true either way,
+// and never "(the chart's default)" outright, which told an operator who had set config.source: crds on purpose that he had not.
+func TestRefusalsDoNotCallTheRouteTheDefaultOfAValuesFileThatSetIt(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	image := "image.repository=registry.example.test/agent-kourier"
+	const unless = "the chart's default unless your values set it"
+	for _, set := range []struct{ name, route string }{{"config.source unset", ""}, {"config.source crds set", ",config.source=crds"}} {
+		for _, tc := range []struct {
+			name string
+			args []string
+		}{
+			{"no connection named", []string{"--set", image + set.route}},
+			{"a ConfigMap of its own", []string{"--set", image + set.route + ",config.chatConnection=c,config.existingConfigMap=mine"}},
+			{"Kubernetes 1.32", []string{"--set", image + set.route + ",config.chatConnection=c", "--kube-version", "v1.32.9"}},
+			{"the CRDs are not served", []string{"--set", image + set.route + ",config.chatConnection=c,crds.install=false", "--kube-version", "v1.34.0"}},
+		} {
+			t.Run(set.name+", "+tc.name, func(t *testing.T) {
+				t.Parallel()
+				_, err := render(t.Context(), t, "agent-kourier", "agent-kourier", tc.args...)
+				if err == nil {
+					t.Fatal("the chart rendered; want a refusal")
+				}
+				if !strings.Contains(err.Error(), unless) {
+					t.Errorf("render error = %v; want one that says the route is %q", err, unless)
+				}
+				if strings.Contains(err.Error(), "default)") {
+					t.Errorf("render error = %v; want no parenthesis that ends in \"default)\"", err)
+				}
+			})
+		}
+	}
+}
+
+// TestDocsQuoteOnlyRefusalsTheChartPrints: a page that quotes how a refusal of the config route begins quotes what _helpers.tpl prints. A quote is a
+// code span that starts one of the refusals, cut at its first " ..." (the pages elide the middle); it must be the start of a refusal, up to the %s of
+// one that has an argument. A reworded refusal fails here and not in a reader's terminal, where the page's search would no longer find it.
+func TestDocsQuoteOnlyRefusalsTheChartPrints(t *testing.T) {
+	t.Parallel()
+	tpl, err := os.ReadFile(filepath.Join(chartDir, "templates", "_helpers.tpl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var refusals []string
+	for _, m := range regexp.MustCompile(`fail (?:\(printf )?"((?:[^"\\]|\\.)*)"`).FindAllStringSubmatch(string(tpl), -1) {
+		refusals = append(refusals, m[1])
+	}
+	if len(refusals) == 0 {
+		t.Fatal("no refusal found in _helpers.tpl")
+	}
+	starts := []string{"config.source crds needs", "config.source crds (", "config.existingConfigMap is for"}
+	quote := regexp.MustCompile("`([^`\n]+)`")
+	quoted := 0
+	files := []string{"../../README.md", chartReadme}
+	if err := filepath.WalkDir("../../docs", func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && (d.Name() == "brand" || d.Name() == "spikes") {
+			return filepath.SkipDir
+		}
+		if strings.HasSuffix(path, ".md") {
+			files = append(files, path)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range quote.FindAllStringSubmatch(string(raw), -1) {
+			span := m[1]
+			if !slices.ContainsFunc(starts, func(s string) bool { return strings.HasPrefix(span, s) }) {
+				continue
+			}
+			quoted++
+			head, _, _ := strings.Cut(span, " ...")
+			head = strings.TrimRight(head, " ")
+			if !slices.ContainsFunc(refusals, func(r string) bool {
+				if before, _, ok := strings.Cut(r, "%s"); ok && strings.HasPrefix(head, before) {
+					return true
+				}
+				return strings.HasPrefix(r, head)
+			}) {
+				t.Errorf("%s quotes %q, which no refusal in _helpers.tpl begins with", file, head)
+			}
+		}
+	}
+	if quoted < 6 {
+		t.Errorf("%d quotes of a refusal found in the docs; want at least 6, so the search has not stopped finding them", quoted)
 	}
 }
 
