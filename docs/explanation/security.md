@@ -61,10 +61,13 @@ never falls back to `userId` when the token cannot be read.
 
 Secrets are read from Kubernetes Secrets by reference, through the API, and never written to logs, the audit table or
 resource status. A Secret's value is held in a type whose every formatting path redacts. The chart grants list and
-watch on Secrets only in the namespaces that hold a Secret the chart's config values name, plus `rbac.secretNamespaces`
-and the release namespace. With `config.source: crds` those Roles name the Secrets (`resourceNames`)
-instead of the namespace, except in `rbac.secretNamespaces`, the namespaces of `rbac.secretNames` get a Role for the names listed there, and a
-ClusterRole lets the broker list and watch the three custom resource kinds, patch `bindings/status` and get the three CRDs by name. A rejected Binding token fails the turn, is re-read,
+watch on Secrets in each namespace that holds a Secret its config values name (a ChatConnection's credentials, a Binding's token, an AgentBackend's header
+value), in the release namespace with `store.type: postgres` (the DSN's Secret), and in each namespace of `rbac.secretNamespaces`; with `config.source: files` and none of these, in the
+release namespace. With `config.source: files` such a Role covers every Secret of its namespace. With `config.source: crds` it names the Secrets
+(`resourceNames`): the ones the config values and the DSN name, and the ones that `rbac.secretNames` lists for that namespace, and a namespace that only
+`rbac.secretNames` lists gets a Role for those names. A namespace of `rbac.secretNamespaces` stays namespace-wide there, whatever `rbac.secretNames` says of it (read from
+`templates/rbac.yaml`). With `config.source: crds` the chart also makes a
+ClusterRole that lets the broker list and watch the three custom resource kinds, patch `bindings/status` and get the three CRDs by name. A rejected Binding token fails the turn, is re-read,
 audited and counted; nothing falls back.
 
 ## What the people who write these objects can do
@@ -127,8 +130,9 @@ What bounds this is what the broker can read, and where it can connect:
   and has its status written, and every object is held in the broker's memory. Every string, list and map in the `spec` of the three kinds has a bound, in the schema and in `Validate`,
   and the keys of a map are bounded too ([Limits](../reference/limits.md) has each; a test fails for a field that has none). Those bounds hold an AgentBackend to about 156 KiB of JSON (32 headers of 4096 bytes, 256 allowed
   namespaces, a URL of 2048 bytes) and a ChatConnection to about 17 KiB. A Binding's bounds multiply: 50 triggers, each with 6 `match` and 6 `exclude` regular expressions and up to 32 `extract` entries of 512 bytes,
-  32 `closeWhen` values of 256 bytes and a template of 8192 bytes, would allow about 2.1 MiB of JSON. What keeps a Binding well under that is the limit on what its regular expressions cost: 5000 instructions in all, so a
-  Binding cannot hold most of the 2156 that the other bounds allow. The largest Binding that `Validate` accepts is about 1.3 MiB of JSON, which is under what the API server takes in one write (etcd's default limit for a request is
+  32 `closeWhen` values of 256 bytes and a template of 8192 bytes, would allow about 2.1 MiB of JSON. What keeps a Binding well under that is the limit on what its regular expressions cost: 5000 instructions in all, so the
+  largest Binding holds 1117 of the 2156 regular expressions that the other bounds allow (52%), and one that spends the budget on `match` and `exclude` entries before `extract` entries can hold about
+  1235 (57%); `TestTheInstructionLimitHoldsABindingToAboutHalfOfItsRegexes` logs both. The largest Binding that `Validate` accepts is about 1.3 MiB of JSON, which is under what the API server takes in one write (etcd's default limit for a request is
   1.5 MiB, from its documentation and not checked here), so the bounds and not that limit are what size it. That figure depends on the instruction limit: a regex can be as dense as one character class of 512 bytes,
   which costs a few instructions, so the limit bounds how many regexes there are and not how much text. The bounds do not reach the metadata of an object: the API server checks each label on its own and limits neither how many an object has nor their total size
   (stated from Kubernetes' behaviour, not checked here). So the broker does not keep the labels, annotations, owner references, finalizers or managed fields of what it caches
@@ -142,20 +146,61 @@ What bounds this is what the broker can read, and where it can connect:
   |---|---|---|---|
   | The largest AgentBackend | 155.5 KiB | 0.17 MiB | about 1200 |
   | The largest ChatConnection | 17.1 KiB | 0.03 MiB | about 7900 |
-  | The largest Binding | 1.28 MiB | 1.8 MiB | about 115 |
+  | The largest Binding | 1.28 MiB | 1.75 MiB | about 117 |
 
-  The 205 MiB is what the chart's `GOMEMLIMIT` allows with the default memory limit of 256Mi. The figures are of the cache alone, and not of everything the broker holds, so they are bounds and not predictions.
+  The 205 MiB is what the chart's `GOMEMLIMIT` allows with the default memory limit of 256Mi. These figures are of the informer's cache alone; what the broker holds beyond it is below.
   What the broker does not hold of an object is what its metadata can add. `TestWhatTheCacheHoldsOfAnObjectWhoseSizeIsItsLabelsAndAnnotations` builds an AgentBackend of 1.27 MiB of JSON that is 80,458 labels and 200 KiB of
   annotations (16 held at once, same conditions): it took 5.7 MiB of heap each when labels and annotations were kept, and about 0.001 MiB each now. Of a Secret the broker keeps the type, the resourceVersion and the keys that the
   served objects name, not its other keys, which a namespace may fill up to Kubernetes's 1 MiB for one Secret (`trimTo` in `internal/config/k8ssecrets/keys.go`; `TestAMegabyteOfUnreferencedKeysCostsAlmostNothing`, 4 copies held at once):
   a Secret of 100,000 keys of 2 bytes took about 9 MiB of heap per copy when every key was kept, and about 1 KiB with one key kept. The informers' transform runs after client-go has decoded an object,
   so a large object still costs a burst of memory when it is read, which these figures do not show and which was not measured.
-  So a namespace with a quota of N Bindings can have the broker hold up to about N times 1.8 MiB for them: 50 Bindings of the largest size are about 90 MiB, and 115 of them are all of the 205 MiB.
+  The cache is not all that the broker holds of an object. A read of the config decodes each object the broker owns, keeps what it decoded for as long as the informer holds the same object, and resolves the Bindings into the
+  Snapshot that the broker serves from. `TestWhatABrokerHoldsForEachLargestOwnedBinding` reads six of the largest Binding that way, with the same method and under the same conditions, and
+  `TestWhatTheDecodedLargestAgentBackendHolds` and `TestWhatAFullBindingStatusAddsToTheCache` measure the other two figures below:
+
+  | What the broker holds | For each of the largest Bindings |
+  |---|---|
+  | The informer's copy (the table above) | 1.75 MiB |
+  | The decoded object, which the source keeps so that a read decodes only what changed, and which the Snapshot serves: the Snapshot copies the struct and shares the rest | 1.44 MiB |
+  | The trigger table that the intake compiles for a Binding it serves (`chat.NewReplay`) | 0.63 MiB |
+  | While a reload that found the Binding edited is built, the previous Snapshot, if something still holds it | 1.42 MiB more |
+
+  So a Binding costs about 3.2 MiB (1.75 and 1.44) when it is not served and 3.8 MiB when it is, and the reload adds 1.4 MiB for each Binding it found edited until the previous Snapshot is released.
+  By those figures about 54 of the largest Bindings, served, fill the 205 MiB, and about 39 do while a reload finds all of them edited (computed from the table, not measured). The Snapshot keeps only what it serves: a Binding that resolution leaves out (for
+  instance one that names an AgentBackend that does not exist) and an AgentBackend that no served Binding names are not in it (`TestTheSnapshotRetainsOnlyWhatItServes` in `internal/config`). The source's decoded copy is another matter: it keeps one for
+  every object it decoded, served or not. That is every AgentBackend of the cluster, whether or not a Binding names it (0.16 MiB for the largest, beside the informer's 0.17), and every Binding the broker owns. **Every broker
+  owns the Bindings that name a ChatConnection that does not exist**, so that one of them reports each (it is the Binding's status that says so); such a Binding is served by none and costs every broker
+  its informer copy and its decoded copy, about 3.2 MiB if it is the largest. A Binding that names another ChatConnection that exists is that connection's broker's: the informer of every broker holds it (1.75 MiB), and only its own broker decodes it.
+  A Binding's decoded copy has no status, because the informer holds it. The figures assume an empty status. A grant on `bindings/status` can fill it, up to the CRD's bounds of 16 conditions with a message of up to 32768 bytes each: that adds 0.50 MiB
+  (508 KiB in the test) to the informer's copy of each Binding the grant reaches, and nothing to the decoded one.
+  So a namespace with a quota of N Bindings can have the broker hold up to about N times 3.2 MiB for them whether or not they are served, and 3.8 MiB when they are: 50 Bindings of the largest size are about 160 MiB and 190 MiB.
+
+  **A read costs CPU in proportion to what changed.** The Reloader checks the source's fingerprint (the uid and generation of every object of the cluster, never of one broker's alone) every 10 seconds and reads again when it differs, and once a minute whatever it
+  is, so a change to any object of the cluster makes a read on every broker. A read decodes, defaults and validates an object only if the informer has replaced the one the last read decoded. An edit does, and so does a status write (by the broker's leader, or by anyone who is granted `bindings/status`) or an update of metadata alone: the fingerprint does not move for those, and the next read, at the latest the once-a-minute one, decodes that one object again. A fresh list of the informer replaces every object (stated from client-go's behaviour, not tested here). In the same test the first
+  read of the six Bindings took 146 ms (24 ms for each), a read after none had changed took 24 µs, and one after all six were edited took 135 ms (Go 1.27.3, GOMAXPROCS 8, a loaded macOS machine,
+  not under `-race`). By the first figure the largest 50 Bindings cost about 1.2 seconds of CPU to decode, once, and again for each one that is edited. The resolution that follows each read runs on every read.
+
+  **A Binding's regular expressions cost CPU for each message.** The limit on their instructions bounds that cost and does not make it small: `BenchmarkRegexCost` in `internal/chat` took 0.67 s for one message whose six fields are 16 KiB each, against a Binding at the budget of 5000 instructions with `.` regular expressions, and 0.81 s with `\pL`
+  (the figures of [the upgrade page](../how-to/upgrade.md#upgrade-to-the-release-that-bounds-what-a-triggers-regular-expressions-cost), from its run, which says the machine and the load; they swing with the load). The events
+  of one channel run one at a time on a lane of their own, and the lanes of different channels run at the same time, so a channel whose messages are such text can keep a core busy, and many of them slow the acknowledgments of the others. Whoever controls the text of that bot's messages chooses it. That page has the cases and the reasoning.
+
   Put a `ResourceQuota` in each tenant's namespace with `count/bindings.agentkourier.dev` and `count/agentbackends.agentkourier.dev`: the API server refuses a create past it
   with `exceeded quota` (measured on kind 1.37.0), and set `resources.limits.memory` for the quotas you give out. Add `count/secrets` too, to bound how many Secrets the namespace holds, and so how many a
   Binding's token or an AgentBackend's header can name that exist (Kubernetes's own object-count quota for Secrets, not run here). It does not bound what the broker follows: it follows each Secret that a served
   object names, by name and with an informer of its own, whether or not that Secret exists, and the bounds and the other two quotas bound those names. A quota limits the count and not the size of what is stored, so it sits beside the bounds and replaces none of them.
   Nothing limits how many objects a namespace holds without one. The limits you can run into, with what happens past each, are on [Limits](../reference/limits.md).
+- **Names of Secrets that the broker may not read.** A team can name as many Secrets in its Bindings and AgentBackends as it likes, and the broker follows each name with an informer
+  of its own, whether it exists or not and whether the ServiceAccount may read it or not. Nothing caps the names per namespace, and the `count/secrets` quota does not reach them, because the Secrets need not exist.
+  What a denied name costs the other tenants comes out of one budget: all of the informers share one client, with a limiter of 50 requests a second. The first try of each name is not
+  paced: it is two requests, and a thousand denied names take about 40 s of the limiter to be asked once, during which another tenant's request, a read of a Secret that no informer follows yet,
+  queues behind them (inferred from how the limiter queues; not measured). After that the broker does not let client-go retry a denial for ever, as it would at a Secret every 30 to 60 s: it ends the informer
+  at the first forbidden or unauthorized answer and asks for the Secret again only at a recheck of the config, once a minute, at 10 Secrets at once and then one every 100 ms, which is at most about 20 requests a second
+  in all, however many names are denied. It logs a denial once for each Secret, not once for each try. The same rule applies to a Secret that was readable: a single forbidden or unauthorized answer for every Secret at once, from an expired or rotated token of the broker or an outage of the authorizer,
+  ends every Secret informer, the broker's own included. Cached values are served and turns and readiness are unaffected, but a rotation of a Secret is not seen until a try reaches it, about 1 m 10 s later, plus 0.1 s for each denied Secret beyond the first 10 (read from `internal/config/k8ssecrets/resolver.go`; not run against a cluster). A review measured the behaviour before this, with 1650 denied names, in a Go test that runs the broker's Secret
+  informers against a local API server with the broker's limiter (not a cluster): about 97 requests and 50 warnings a second for as long as it ran, client-side waits of 30 to 65 s, and, on a server that does not stream lists,
+  another tenant's first read of a Secret failing with `cache not synced` after its 10 s. The same test after: the first two requests of each of the 1650 names took about 40 s and 1650 warnings in all, then 20.6 requests a second and no more
+  warnings while a recheck went round, and another tenant's first read of a Secret took 41 ms. What remains is that bounded stream of requests, the open watch of each name that exists, and the first request of each name; the fix
+  for a hostile tenant is to remove its Bindings or to quota them. The limits are on [Limits](../reference/limits.md).
 
 What a writer of a Binding and an AgentBackend sees of your conversations. The agent of a Binding receives each mention of the bot in the channel, each reply in a thread the Binding owns
 (with `chat.threadReplies: all`, the default, every reply in the thread, not only the ones that mention the bot), and with a `botMessage` trigger the messages of the bot that

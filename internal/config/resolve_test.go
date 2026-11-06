@@ -131,7 +131,7 @@ func TestResolveEmptyNamespaceMeansReferrers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rb, ok := snap.Binding("agent-kourier-system", "sre-alerts"); !ok || rb.Backend != be || rb.Connection != c {
+	if rb, ok := snap.Binding("agent-kourier-system", "sre-alerts"); !ok || rb.Backend.Namespace != be.Namespace || rb.Backend.Name != be.Name || rb.Connection != c {
 		t.Errorf("Binding = %+v, %v; want it resolved to the backend and connection in its own namespace", rb, ok)
 	}
 }

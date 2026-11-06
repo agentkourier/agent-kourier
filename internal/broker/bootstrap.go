@@ -107,7 +107,7 @@ func Bootstrap(ctx context.Context, client kubernetes.Interface, opts BootstrapO
 	if err != nil {
 		return nil, wiring(fmt.Errorf("load config: %w", err))
 	}
-	secrets := k8ssecrets.New(client, k8ssecrets.WithLogger(log), k8ssecrets.WithPinned(opts.ExtraSecrets...))
+	secrets := k8ssecrets.New(client, k8ssecrets.WithLogger(log), k8ssecrets.WithPinned(opts.ExtraSecrets...), k8ssecrets.WithDeniedRetry(opts.SecretsInterval))
 	syncCtx, cancel := context.WithTimeout(ctx, cmp.Or(opts.SyncTimeout, defaultSyncTimeout))
 	defer cancel()
 	// One bound for both waits, so Secrets that never sync cost the sync timeout once.
@@ -142,7 +142,7 @@ func bootstrapCRDs(ctx context.Context, client kubernetes.Interface, opts Bootst
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrWiring, err)
 	}
-	secrets := k8ssecrets.New(client, k8ssecrets.WithLogger(log), k8ssecrets.WithPinned(opts.ExtraSecrets...))
+	secrets := k8ssecrets.New(client, k8ssecrets.WithLogger(log), k8ssecrets.WithPinned(opts.ExtraSecrets...), k8ssecrets.WithDeniedRetry(opts.SecretsInterval))
 	failed := func() { src.Stop(); secrets.Stop() }
 	syncCtx, cancel := context.WithTimeout(ctx, cmp.Or(opts.SyncTimeout, defaultSyncTimeout))
 	defer cancel()
