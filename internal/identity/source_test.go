@@ -550,3 +550,44 @@ func TestIdentityNamesTheTokenSecretOrTheUserID(t *testing.T) {
 		t.Errorf("Identity with a userId only = %q, want it", got)
 	}
 }
+
+// TestUnreadableSecretErrorsSayWhichSecret: the error of an unreadable token or header Secret carries which Secret, which key, which
+// header and whether the Secret is in the Binding's namespace, as a *SecretError, so that a status can name a Secret of the Binding's own
+// namespace and no other. The error's text is the reader's, unchanged.
+func TestUnreadableSecretErrorsSayWhichSecret(t *testing.T) {
+	header := v1alpha1.Header{Name: "X-Api-Key", ValueSecretRef: &v1alpha1.SecretKeyRef{Name: "gw", Key: "api"}}
+	for _, tc := range []struct {
+		name    string
+		backend string // the AgentBackend's namespace
+		vals    map[string]string
+		want    SecretError
+	}{
+		{"token", "platform", map[string]string{"platform/gw/api": "k"},
+			SecretError{Namespace: "sre", Name: "creds", Key: "token", BindingNamespace: "sre"}},
+		{"header of a backend in another namespace", "platform", map[string]string{"sre/creds/token": "t"},
+			SecretError{Namespace: "platform", Name: "gw", Key: "api", Header: "X-Api-Key", BindingNamespace: "sre"}},
+		{"header of a backend in the Binding's namespace", "sre", map[string]string{"sre/creds/token": "t"},
+			SecretError{Namespace: "sre", Name: "gw", Key: "api", Header: "X-Api-Key", BindingNamespace: "sre"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, v1alpha1.Identity{TokenSecretRef: tokenRef()}, header)
+			f.backend.Namespace = tc.backend
+			f.reader.vals = tc.vals
+			_, err := f.source().Credentials(t.Context())
+			var got *SecretError
+			if !errors.As(err, &got) {
+				t.Fatalf("Credentials err = %v, want a *SecretError in its chain", err)
+			}
+			if got.Namespace != tc.want.Namespace || got.Name != tc.want.Name || got.Key != tc.want.Key ||
+				got.Header != tc.want.Header || got.BindingNamespace != tc.want.BindingNamespace {
+				t.Errorf("SecretError = %+v, want %+v", got, tc.want)
+			}
+			if !errors.Is(err, secret.ErrKeyNotFound) {
+				t.Errorf("err = %v, want it to wrap the reader's secret.ErrKeyNotFound", err)
+			}
+			if got.Error() != got.Err.Error() || strings.Count(err.Error(), tc.want.Namespace+"/"+tc.want.Name) != 1 {
+				t.Errorf("error text %q repeats what the reader said", err)
+			}
+		})
+	}
+}

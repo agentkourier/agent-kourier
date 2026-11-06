@@ -36,7 +36,8 @@ only. No other type is written.
 
 - `message` is one line of at most 1024 bytes, redacted, with `…` where it was cut. It is empty when the condition is `True`.
   A probe's message is a fixed sentence that never names a host, address, port or the text of another
-  namespace's object, because the person who reads a status may not own what it probed. The log of the leader has the cause
+  namespace's object, because the person who reads a status may not own what it probed. The one that names anything is
+  `CredentialsUnreadable`: it names a Secret and a key of the Binding's own namespace, and never a Secret of another. The log of the leader has the cause
   (a `cause` attribute), and a status points there: "the operator's log has the cause".
 - `lastTransitionTime` is when `status` last changed. A new reason or message with the same status does not move it.
 - There is no `lastProbeTime`. A status that changed every few minutes would be watch traffic for everyone who watches Bindings, so

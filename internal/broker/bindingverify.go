@@ -19,6 +19,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/bindingcheck"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/config"
+	"github.com/agentkourier/agent-kourier/internal/config/k8ssecrets"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/identity"
 	"github.com/agentkourier/agent-kourier/internal/secret"
@@ -117,7 +118,7 @@ func classifyAgent(err error) (bindingcheck.Outcome, bool) {
 	var notOK *agentcard.ErrStatusNotOK
 	switch {
 	case errors.Is(err, agent.ErrTokenUnreadable), errors.Is(err, agent.ErrHeaderUnreadable), errors.Is(err, agent.ErrTokenRequired):
-		return fail(bindingcheck.ReasonCredentialsUnreadable, "the Binding's token, or a Secret behind a header of the backend, cannot be read")
+		return credentialsOutcome(err), true
 	case errors.As(err, &status):
 		return classifyStatus(status.Code), true
 	case errors.As(err, &notOK):
@@ -143,6 +144,60 @@ func classifyAgent(err error) (bindingcheck.Outcome, bool) {
 		return out, ok
 	}
 	return bindingcheck.Outcome{}, false
+}
+
+// credentialsOutcome is the BackendReachable outcome for a token or a header Secret that cannot be read, or a token the Binding requires
+// and does not have: False/CredentialsUnreadable, with a Message that says which, so that a team can mend it without asking whoever runs
+// Agent Kourier. The message names the Secret, the key and what is wrong with it (credentialsProblem) when the Secret is in the Binding's own
+// namespace: the token's always is, a header's is when the AgentBackend is in the Binding's namespace. A header's Secret in another
+// namespace is not named, nor is what is wrong with it: a status says nothing of what another namespace holds (spec D50). An
+// error that carries no Secret (a token source that is not the Secret's) and one that has no cause credentialsProblem knows get a
+// sentence that names none. No message has the text of the error, which the log has, redacted, as the Cause.
+func credentialsOutcome(err error) bindingcheck.Outcome {
+	out := bindingcheck.Outcome{Status: bindingcheck.False, Reason: bindingcheck.ReasonCredentialsUnreadable}
+	var ref *identity.SecretError
+	switch {
+	case errors.Is(err, agent.ErrTokenRequired):
+		out.Message = "the Binding requires a bearer token and none was set"
+		return out
+	case errors.As(err, &ref) && ref.Namespace == ref.BindingNamespace:
+		subject := fmt.Sprintf("the token Secret %q", ref.Name)
+		if ref.Header != "" {
+			subject = fmt.Sprintf("the Secret %q behind header %q of the AgentBackend", ref.Name, ref.Header)
+		}
+		out.Message = credentialsProblem(err, subject, ref.Key, ref.Namespace)
+	case errors.Is(err, agent.ErrHeaderUnreadable):
+		out.Message = "a Secret behind a header of the AgentBackend" + msgCredentialsElsewhere
+	default:
+		out.Message = "the Binding's token cannot be read; the operator's log has the cause"
+	}
+	out.Cause = causeText(err)
+	return out
+}
+
+// msgCredentialsElsewhere ends the message for a header's Secret that is not named: an AgentBackend of another namespace, or an error that
+// carries no Secret. The two say the same, so that the message does not tell which.
+const msgCredentialsElsewhere = " cannot be read; the operator's log has the cause"
+
+// credentialsProblem says what is wrong with the key of a Secret that subject names, in namespace, from the sentinel the read wrapped. A
+// denial says what grant mends it; the sentence for a cause it cannot tell (a cache not yet synced, an error nobody placed) says only
+// that the read failed. It is never the error's text.
+func credentialsProblem(err error, subject, key, namespace string) string {
+	switch {
+	case errors.Is(err, k8ssecrets.ErrAccessDenied):
+		return fmt.Sprintf("%s cannot be read: the API server denied Agent Kourier's ServiceAccount access to it; it needs list and watch on it in namespace %s", subject, namespace)
+	case errors.Is(err, config.ErrSecretNotFound):
+		return fmt.Sprintf("%s does not exist in namespace %s", subject, namespace)
+	case errors.Is(err, secret.ErrKeyNotFound):
+		return fmt.Sprintf("%s has no key %q", subject, key)
+	case errors.Is(err, secret.ErrEmptyValue):
+		return fmt.Sprintf("key %q of %s is empty", key, subject)
+	case errors.Is(err, identity.ErrControlCharacter):
+		return fmt.Sprintf("key %q of %s holds a control character, such as the trailing newline that kubectl create secret --from-file keeps", key, subject)
+	case errors.Is(err, secret.ErrUnsupportedType):
+		return subject + " is not of type Opaque, the only type Agent Kourier reads"
+	}
+	return subject + " cannot be read now; the operator's log has the cause"
 }
 
 // classifyStatus is classifyAgent for an HTTP status the card fetch got. A 2xx other than 200 is what the card resolver refuses
