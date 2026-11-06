@@ -292,7 +292,7 @@ func TestGuardCallsReadsTheSyntax(t *testing.T) {
 	pkg := filepath.Join(top, "p")
 	mustWrite(t, filepath.Join(pkg, "a_test.go"), "package p\n\nfunc TestF(t *testing.T) {\n\t// limitsdoc.Count(t, \"incomment\", maxTriggers)\n\tlimitsdoc.Count(t, \"good\", maxTriggers)\n\tlimitsdoc.Count(t, \"copied\", 50)\n\tlimitsdoc.Count(t, id, maxTriggers)\n}\n")
 	mustWrite(t, filepath.Join(pkg, "typed_test.go"), "package p\n\nfunc TestK(t *testing.T) {\n\tlimitsdoc.Count(t, \"paren\", (50))\n\tlimitsdoc.Duration(t, \"units\", 90*24*time.Hour)\n\tlimitsdoc.Count(t, \"conv\", int(24*time.Hour))\n\tlimitsdoc.Count(t, \"sum\", 40+10)\n\tlimitsdoc.Duration(t, \"dur\", time.Duration(5)*time.Second)\n\tlimitsdoc.Count(t, \"named\", maxTriggers+1)\n\tlimitsdoc.Count(t, \"field\", cfg.Limit)\n\tlimitsdoc.Count(t, \"call\", len(f()))\n\tlimitsdoc.Count(t, \"convnamed\", int(maxTriggers))\n}\n")
-	mustWrite(t, filepath.Join(pkg, "reach_test.go"), "package p\n\nconst copiedLimit = 50\n\nfunc TestReach(t *testing.T) {\n\tconst local = 7\n\tlimitsdoc.Count(t, \"testconst\", copiedLimit)\n\tlimitsdoc.Count(t, \"localconst\", local+1)\n\tlimitsdoc.Count(t, \"prodconst\", maxTriggers)\n\tif false {\n\t\tlimitsdoc.Count(t, \"underfalse\", maxTriggers)\n\t}\n\tif true {\n\t\tlimitsdoc.Count(t, \"undertrue\", maxTriggers)\n\t} else if false {\n\t\tlimitsdoc.Count(t, \"elsefalse\", maxTriggers)\n\t}\n\tcalledHelper(t)\n}\n\nfunc calledHelper(t *testing.T) { limitsdoc.Count(t, \"calledhelper\", maxTriggers) }\n\nfunc uncalledHelper(t *testing.T) { limitsdoc.Count(t, \"uncalled\", maxTriggers) }\n")
+	mustWrite(t, filepath.Join(pkg, "reach_test.go"), "package p\n\nconst copiedLimit = 50\n\nfunc TestReach(t *testing.T) {\n\tconst local = 7\n\tlimitsdoc.Count(t, \"testconst\", copiedLimit)\n\tlimitsdoc.Count(t, \"localconst\", local+1)\n\tlimitsdoc.Count(t, \"prodconst\", maxTriggers)\n\tif false {\n\t\tlimitsdoc.Count(t, \"underfalse\", maxTriggers)\n\t}\n\tif true {\n\t\tlimitsdoc.Count(t, \"undertrue\", maxTriggers)\n\t} else if false {\n\t\tlimitsdoc.Count(t, \"elsefalse\", maxTriggers)\n\t}\n\tif false {\n\t} else {\n\t\tlimitsdoc.Count(t, \"elselive\", maxTriggers)\n\t}\n\tcalledHelper(t)\n}\n\nfunc calledHelper(t *testing.T) { limitsdoc.Count(t, \"calledhelper\", maxTriggers) }\n\nfunc uncalledHelper(t *testing.T) { limitsdoc.Count(t, \"uncalled\", maxTriggers) }\n")
 	mustWrite(t, filepath.Join(pkg, "testdata", "x_test.go"), "package p\n\nfunc d() { limitsdoc.Count(t, \"intestdata\", maxTriggers) }\n")
 	mustWrite(t, filepath.Join(top, "nested", "go.mod"), "module nested\n")
 	mustWrite(t, filepath.Join(top, "nested", "n_test.go"), "package n\n\nfunc n() { limitsdoc.Count(t, \"innested\", maxTriggers) }\n")
@@ -329,7 +329,7 @@ func TestGuardCallsReadsTheSyntax(t *testing.T) {
 			t.Errorf("%q was not refused with %q: %q", id, want, problems)
 		}
 	}
-	for _, id := range []string{"prodconst", "undertrue", "calledhelper"} {
+	for _, id := range []string{"prodconst", "undertrue", "elselive", "calledhelper"} {
 		if _, ok := guarded[id]; !ok || strings.Contains(joined, strconv.Quote(id)) {
 			t.Errorf("%q is the code's own, in a test that runs: guarded = %v, and problems %q", id, ok, problems)
 		}

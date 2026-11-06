@@ -112,7 +112,7 @@ condition made for another object is `Pending` for this one.
 Every replica reads the three kinds, so a standby can take over, but only the leader writes status, with a server-side apply on the status subresource
 under the field manager `agent-kourier`. With SQLite there is no election and the one replica writes. Notes:
 
-- A write is made only when the status would change, at most once every 10 seconds for one Binding. A failed write is tried again after 10 seconds, then after twice the wait before, up to 5 minutes, and then every 5 minutes for as long as it fails.
+- A write is made only when the status would change, at most once each gap for one Binding. A failed write is tried again after one gap, then after twice the wait before, up to the backoff cap, and then at that interval for as long as it fails.
   The writer looks for work each second. These values are on [Limits](limits.md#run-the-broker).
 - If the status of a Binding the broker serves is changed by someone else, the broker writes its own words back. One edit is put back once. A status that is
   changed again and again is a fight: see [The status of a Binding keeps changing](../how-to/troubleshoot.md#the-status-of-a-binding-keeps-changing).

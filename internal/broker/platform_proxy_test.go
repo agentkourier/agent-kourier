@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
@@ -33,7 +35,10 @@ func TestSlackClientHonoursTheProxyEnvironment(t *testing.T) {
 	}))
 	defer proxy.Close()
 
-	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestSlackClientSendsThroughTheProxyEnvironment$")
+	// The child has a deadline of its own (-test.timeout), and the parent's context ends it at the same length, so that a hang fails the test.
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestSlackClientSendsThroughTheProxyEnvironment$", "-test.timeout=30s")
 	for _, kv := range os.Environ() {
 		if k, _, _ := strings.Cut(kv, "="); !strings.Contains(strings.ToLower(k), "proxy") {
 			cmd.Env = append(cmd.Env, kv)
@@ -67,7 +72,9 @@ func TestSlackClientSendsThroughTheProxyEnvironment(t *testing.T) {
 		t.Fatalf("newPlatform = %v; client config %+v", err, saw)
 	}
 	defer built.closeIdle()
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://slack.proxy-test.invalid/api/auth.test", nil)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://slack.proxy-test.invalid/api/auth.test", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
