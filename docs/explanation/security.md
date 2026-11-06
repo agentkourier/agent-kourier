@@ -187,8 +187,9 @@ goes through that door. What they share, and what they do not:
 - **So** a team that may write a Binding in a namespace that the AgentBackend allows can reach, with the Binding's identity and the shared headers, whatever the backend serves
   at that `url`. Where the backend verifies that token and authorizes it for each agent, that check is the bound. Where it does not (a backend that takes `identity.userId`
   as the caller, or one whose static headers hold an API key that is the only credential), the bound is the AgentBackend itself.
-- **A tenant can tell which agents exist, on `kagent-v1`.** A Binding that names an agent makes the leader's probe ask the backend for its card, and a 404 is `AgentNotFound` in the
-  Binding's status.
+- **A tenant can tell which agents exist, on `kagent-v1`, where the backend answers an unknown agent with a 404.** A Binding that names an agent makes the leader's probe ask the backend for
+  its card, and a 404 is `AgentNotFound` in the Binding's status. A backend that authorizes first and answers 403 (`AgentForbidden`) reveals only the agents that the Binding's identity may use.
+  This matters most when the tenant cannot read the token's Secret themselves.
 
 Use one AgentBackend per trust boundary: teams that must not reach each other's agents get separate AgentBackends, each with its own headers and Secrets, and each lists
 in `allowedNamespaces` only the namespaces of the teams that may use it. The list is empty by default, which allows the AgentBackend's own namespace and no other. Agent Kourier does

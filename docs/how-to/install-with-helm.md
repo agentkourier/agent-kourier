@@ -210,7 +210,7 @@ extraEnv:
 |---|---|
 | Slack Web API calls and the Socket Mode websocket | Yes |
 | The Kubernetes API server: the Secret and custom resource informers, status writes and the leader Lease | Yes |
-| OTLP trace export, when `OTEL_EXPORTER_OTLP_ENDPOINT` is set | Yes |
+| OTLP trace export, when `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is set | Yes |
 | Agents: the card, calls and streams to an AgentBackend's `url` | No. The connection is made directly, on purpose, so that an environment variable cannot redirect a Binding's token |
 | The database | No |
 
@@ -218,15 +218,16 @@ What to put in `NO_PROXY`:
 
 - **The Kubernetes API server.** The broker dials the address in `KUBERNETES_SERVICE_HOST`, which Kubernetes sets in every pod: the cluster IP of the `kubernetes`
   Service in the `default` namespace (`kubectl -n default get service kubernetes`), not the control plane's own address. Put that IP, or the cluster's service CIDR, in `NO_PROXY`; a CIDR is read
-  by both the Kubernetes client and Go's own proxy code. Without it the broker's requests to the API server go to the proxy. If the proxy does not carry them, the Secret caches never sync and the pod exits with code 4 at the end of
-  its sync wait (`AGENTKOURIER_SYNC_TIMEOUT`, 30 seconds by default), as in [the pod exits with code 4](troubleshoot.md#the-pod-exits-with-code-4-and-never-becomes-ready)
+  by both the Kubernetes client and Go's own proxy code. Without it the broker's requests to the API server go to the proxy. If the proxy does not carry them, the pod exits with code 4, at the latest when its sync wait (`AGENTKOURIER_SYNC_TIMEOUT`, 30 seconds by default) ends: the Secret
+  caches never sync, and on `config.source: crds` the first list of the custom resources fails as soon as the proxy refuses the connection. See [the pod exits with code 4](troubleshoot.md#the-pod-exits-with-code-4-and-never-becomes-ready)
   (read from the clients' code and not run through a proxy here).
 - **An in-cluster OTLP collector.** Add its domain suffix (`.svc` and `.cluster.local` above), or the spans go to the proxy.
 - **Agents need no entry.** They never go to the proxy, so a `NO_PROXY` rule changes nothing for them. An agent that is reachable only through a proxy needs a reverse proxy
   that its AgentBackend's `url` names.
 
 With `networkPolicy.enabled`, egress to the proxy's address has to be allowed in `networkPolicy.extraEgress`, and `networkPolicy.slack.cidrs` can then be narrowed to `[]`
-(see [`networkPolicy`](../reference/helm-values.md#networkpolicy)). The policy's `networkPolicy.kubeApiServer` rule still has to name the control plane's addresses, since the policy sees them after the Service's translation.
+(see [`networkPolicy`](../reference/helm-values.md#networkpolicy)). Narrowing it removes the only rule that allows port 443 to public addresses, and agents never use
+the proxy, so an AgentBackend at a public address then needs an `extraEgress` rule of its own. The policy's `networkPolicy.kubeApiServer` rule still has to name the control plane's addresses, since the policy sees them after the Service's translation.
 
 ## Check it
 
