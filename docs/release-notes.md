@@ -38,7 +38,7 @@ team-a      late          False   Accepted:ChannelConflict     C1        1m
   With `rbac.create`, the chart also makes a ClusterRole, bound to the ServiceAccount: `list` and `watch` on the three kinds in every namespace,
   `patch` on `bindings/status`, and `get` on the three CRDs by name (`charts/agent-kourier/templates/rbac.yaml`). With `rbac.create: false`, the operator creates it.
   The Secret Roles name single Secrets by `resourceNames`, so the Secrets of a team's own Binding, which the chart cannot see in `config.*`, need
-  `rbac.secretNames`, `rbac.secretNamespaces` or a Role the team makes ([Install with Helm](how-to/install-with-helm.md#install-on-custom-resources)).
+  `rbac.secretNames`, `rbac.secretNamespaces` or a Role the team makes; a namespace in `rbac.secretNamespaces` keeps a namespace-wide Role ([Install with Helm](how-to/install-with-helm.md#install-on-custom-resources)).
 
 The status is written only on this route. On the ConfigMap route, the leader still probes each Binding and reports the result in
 metrics and logs: see [Binding verification](reference/metrics.md#binding-verification) and
@@ -82,7 +82,7 @@ metrics and logs: see [Binding verification](reference/metrics.md#binding-verifi
   ConfigMap route a config over a bound fails at start-up (the broker exits with code 2) and a reload keeps the last good config. On the
   custom resource route a Binding over a bound is not served after the upgrade and says `Accepted=False` with the reason
   `InvalidSpec`. Run `agent-kourier dry-run` of the new release against your config before you upgrade
-  ([how](how-to/install-with-helm.md#check-the-values-before-you-install)). What changed:
+  ([how](how-to/install-with-helm.md#check-the-values-before-you-install); a values file from 0.1.6 needs `config.source: files` first). What changed:
     - [Triggers, extract entries and headers](how-to/upgrade.md#upgrade-to-the-release-that-bounds-triggers-extract-entries-and-headers) are capped.
     - [A `promptTemplate`](how-to/upgrade.md#upgrade-to-the-release-that-limits-prompt-templates) may use only text, comments, `if`, `with`, the view's fields,
       `.Fields.<name>` and a short list of functions. `range`, `define`, `template`, `block`, variables, `print`, `printf`, `println`, `html`, `js`,
@@ -100,13 +100,13 @@ metrics and logs: see [Binding verification](reference/metrics.md#binding-verifi
   stream, and a reply was shown cut at 12000 UTF-16 units. Now one event of a stream is read up to 2 MiB, the answer to a call that is not a
   stream up to 4 MiB, what a turn holds of the agent's reply is 341 KiB, and the agent card is 1 MiB (`internal/dialect/dialect.go`, `MaxCardBytes`).
   A turn past one of the first three ends with the new outcome `response_too_large`, the thread is told, and, when the agent had named a task,
-  the task is cancelled once; a reply that named no task has none to cancel. An agent card over 1 MiB fails the probe of the Binding and a follow
-  of a task, and cancels nothing. A message that is sent again, whose outcome is unknown, is not sent when the agent's list of tasks cannot be read in
+  the task is cancelled once; a reply that named no task has none to cancel. An agent card over 1 MiB fails every call to that agent, so the Binding takes no turn and its probe
+  reports it; a follow of a task that meets it cancels nothing. A message that is sent again, whose outcome is unknown, is not sent, for an agent that can list tasks, when the list cannot be read in
   full: the turn ends with the new outcome `lookup_incomplete`. See
   [the release that bounds what it reads](how-to/upgrade.md#upgrade-to-the-release-that-lowers-the-bounds-on-what-it-reads).
 - **Another bot's mention now starts a turn.** `chat.botMentions` defaults to `any`, so every existing Binding with a `mention` trigger takes the
   mentions of Agent Kourier by other bots and incoming webhooks that can post in its channel, held to fixed limits. At 0.1.6 they were ignored. To keep
-  that, set `chat.botMentions: none`. See [the release that lets another bot's mention start a turn](how-to/upgrade.md#upgrade-to-the-release-that-lets-another-bots-mention-start-a-turn).
+  that, set `chat.botMentions: none` in the config you upgrade with, in the same upgrade, since 0.1.6 refuses the field. See [the release that lets another bot's mention start a turn](how-to/upgrade.md#upgrade-to-the-release-that-lets-another-bots-mention-start-a-turn).
 
 ### Features
 

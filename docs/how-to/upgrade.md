@@ -313,7 +313,7 @@ This release adds `chat.botMentions`, and its default is `any`. At 0.1.6, a mess
 `mention` trigger (which an empty `chat.triggers` is), a mention of Agent Kourier by **any bot or incoming webhook that can post in the channel** starts a turn in the mention's thread. The platform cannot tell an agent
 from any other bot, so every existing Binding with a mention trigger takes such mentions after the upgrade, with no change to its config. No Binding fails to load for it.
 
-- **To keep 0.1.6's behaviour,** set `chat.botMentions: none` on each Binding that should not take a bot's mention, before you upgrade.
+- **To keep 0.1.6's behaviour,** set `chat.botMentions: none` on each Binding that should not take a bot's mention, in the config you upgrade with, in the same `helm upgrade` (or the same apply of the custom resources). Do not set it before: 0.1.6 refuses a field it does not know, so a config that has `botMentions` fails to load on it, and a pod that restarts on it does not become Ready.
 - **The turns are limited, per Binding and across every bot:** 3 in any 30 minutes, 1 at a time, and 20 in any 24 hours. A mention past a limit starts no turn and posts nothing in the thread. See
   [A bot's mention](../reference/chat-triggers.md#a-bots-mention) and [Limits](../reference/limits.md).
 - **What it never takes:** Agent Kourier's own posts, an edit that adds a mention, a bot that a `botMessage` trigger of the Binding names (that trigger reads its posts), and any bot's mention in a channel shared with another workspace.

@@ -124,5 +124,5 @@ Know what this does not bound:
 - **The agent is told only what the thread holds.** There is no field for a job: put what the agent should do in its own instructions.
 - **Same thread only.** This starts no thread in another channel.
 
-A [dry run](tune-triggers.md) replays history, which has no mention events, so it does not show these. A Binding that took no bots' mentions before takes them after an upgrade; set `chat.botMentions: none` first if it should not.
+A [dry run](tune-triggers.md) replays history, which has no mention events, so it does not show these. A Binding that took no bots' mentions before takes them after an upgrade; set `chat.botMentions: none` in the config you upgrade with, not before: 0.1.6 refuses a field it does not know.
 
