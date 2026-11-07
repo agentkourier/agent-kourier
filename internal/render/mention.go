@@ -41,7 +41,9 @@ type MentionScan struct {
 // after white space and, outside a block, one list marker or one quote mark (fenceLine has the forms), opens a block, and
 // any fence line closes it, whatever else is on it (a mark before a closing run counts only if it is the kind its opener had: fenceLine), what follows a
 // closing run is read as a line of its own (a fence line there opens a block), a block that never closes runs to the end, and a span closes at the next run of backticks or not
-// at all. A pipe table, which that adapter shows as code, is read as prose: a name in a table is said. A name that ends where the
+// at all. A stream whose state the adapter cannot tell (a blind one) is sent with its fences as they came, not as blocks, so a
+// name read as code here may show as text there. A pipe table, which that adapter shows as code, is read as prose: a name in a
+// table is said. A name that ends where the
 // text was cut (chat.Truncated), or in a ".", ":" or "/" just before it, may be the start of something longer, so it is no name.
 // A place where the two readings still differ can only notify a declared person or not, within the cap: the adapter counts its limit
 // in escaped text, so it can cut sooner than body was. With nothing declared there is nothing to scan for, and nothing is counted.
@@ -89,7 +91,8 @@ const (
 // "- ```", "1) ```", ">```" and "> ```" are fence lines, and "- - ```", "> > ```", "> - ```" and "-```" are not: a second
 // mark, or a marker with no white space after it, makes the line prose. So does a mark, then backticks (not tildes), whose
 // next run of backticks is as long as the first, which makes a span: "1. ```make test``` first" is a list item with a code
-// span, as a backtick fence's info string has no backtick in CommonMark. The rest of a fence line put back to be read (reread)
+// span, as a backtick fence's info string has no backtick in CommonMark. That is outside a block only: in one, such a line
+// closes it, as any closing line does. The rest of a fence line put back to be read (reread)
 // has no marks, as it did not before them.
 //
 // In a block that a fence line after a list marker opened (opener markList) a line may close it with a list marker before the
@@ -123,7 +126,7 @@ func fenceLine(line string, code bool, opener mark, reread bool) (ch byte, run i
 	}
 	run = runOf(body, body[0])
 	rest = body[run:]
-	if mk != markNone && body[0] == '`' && run >= 3 && closingRun(rest, run) >= 0 {
+	if !code && mk != markNone && body[0] == '`' && run >= 3 && closingRun(rest, run) >= 0 {
 		return 0, 0, body, markNone // a code span in a list item or a quote, not a fence line
 	}
 	return body[0], run, rest, mk

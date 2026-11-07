@@ -152,10 +152,11 @@ func (m *mdText) step(final bool, o *mdOut) bool {
 // start reads the start of a line, which is either a fence line or the white space before the rest of it.
 func (m *mdText) start(line string, complete bool, o *mdOut) bool {
 	h := readFence(line, m.code, m.opener, m.reread)
-	if h.run >= 3 && h.mark != markNone && h.ch == '`' && complete && closesSpan(h.rest, h.run) {
+	if !m.code && h.run >= 3 && h.mark != markNone && h.ch == '`' && complete && closesSpan(h.rest, h.run) {
 		// A mark, then a run of backticks, then a run of as many: a list item or a quote that holds a code span, not a block of
 		// one line, as a backtick fence's info string has no backtick in CommonMark. The line is prose, and the span rule reads
-		// it. It is not decided before the line is complete: a longer run may be coming.
+		// it. It is not decided before the line is complete: a longer run may be coming. In a block there is no span to open: a
+		// line with a mark that Agent Kourier reads as a closer closes it, as any closing line does.
 		h.run, h.pending = 0, false
 	}
 	switch {
@@ -214,8 +215,8 @@ type fenceHead struct {
 // space and, outside a block, one list marker or one quote mark and white space again. So "- ```", "1) ```", ">```" and
 // "> ```" are fence lines, and "- - ```", "> > ```", "> - ```" and "-```" are not: a second mark, or a marker with no white
 // space after it, leaves the line prose, which escapes the run. So does a mark, then backticks (not tildes), whose next run of
-// backticks is as long as the first, which makes a span: "1. ```make test``` first" is a list item with a code span (start
-// decides that, when the line is complete). The rest of a fence line put back to be read (reread) has no marks, as it did not
+// backticks is as long as the first, which makes a span: "1. ```make test``` first" is a list item with a code span, outside
+// a block (start decides that, when the line is complete; in a block such a line closes it). The rest of a fence line put back to be read (reread) has no marks, as it did not
 // before them.
 //
 // The mark is dropped from the opener's line, and the lines of its block lose indent characters of white space: those before

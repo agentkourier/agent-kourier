@@ -91,6 +91,8 @@ func TestMentions(t *testing.T) {
 		{name: "the inner text of a one-line block has no list marker", body: "- ~~~ - ``` ~~~\n@lee", max: 2, made: []string{"lee"}},
 		{name: "the first line of a block has no list marker", body: "- ~~~ - ``` x\n  y\n  ~~~\n@lee", max: 2, made: []string{"lee"}},
 		{name: "a list item with backticks of another length is a block of one line", body: "- ```@sam```` x\n@lee", max: 2, made: []string{"lee"}},
+		{name: "a span-shaped line with a list marker closes a list block", body: "- ```\n  x\n- ```@sam``` @lee\n  ```\n@kim", max: 3, made: []string{"sam", "lee"}},
+		{name: "a span-shaped line with a quote mark closes a quote block", body: "> ```\n> x\n> ```@sam``` @lee\n> ```\n@kim", max: 3, made: []string{"sam", "lee"}},
 		{name: "a column 0 block of one line keeps its rule", body: "  ```x``` ask @sam\n@lee", max: 2, made: []string{"sam", "lee"}},
 		{name: "a quote mark line in a list block is code", body: "- ```\n  > ```\n  @sam\n  ```\n@lee", max: 2, made: []string{"lee"}},
 		{name: "a list goes on after its block", body: "- ```\n  @sam\n  ```\n- ask @lee", max: 2, made: []string{"lee"}},

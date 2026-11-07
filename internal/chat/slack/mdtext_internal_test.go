@@ -83,6 +83,8 @@ var markdownCases = []struct {
 	{"a tilde fence after a marker, a one-line block with a tail", "1. ~~~echo hi~~~ and <b>", "```\necho hi\n```\nand &lt;b&gt;"},
 	{"a backtick in an info string, no closing run, is a fence line", "- ```x`y\n  z\n  ```", "```\nz\n```"},
 	{"a list item with backticks of another length is a block of one line", "- ```@sam```` x", "```\n@sam\n```\nx"},
+	{"a span-shaped line with a list marker closes a list block", "- ```\n  x\n- ```@sam``` @lee\n  ```\n@kim", "```\nx\n```\n@sam\\`\\`\\` @lee\n```\n@kim"},
+	{"a span-shaped line with a quote mark closes a quote block", "> ```\n> x\n> ```@sam``` @lee\n> ```\n@kim", "```\nx\n```\n@sam\\`\\`\\` @lee\n```\n@kim"},
 	{"a fence at column 0 and a one-line block keep their rule", "  ```echo hi``` and <b>", "```\necho hi\n```\nand &lt;b&gt;"},
 	{"a fence after a marker, a first line on the fence line", "- ```kubectl get pods\n  x\n  ```", "```\nkubectl get pods\nx\n```"},
 	{"a fence after a marker keeps tokens out of its code", "- ```\n  <@U1> <!here> <#C1>\n  ```", "```\n&lt;@U1> &lt;!here> &lt;#C1>\n```"},
