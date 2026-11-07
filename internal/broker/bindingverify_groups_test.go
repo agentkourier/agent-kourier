@@ -522,3 +522,39 @@ func TestAProbeThatWaitedForAReadThatPanickedReadsItself(t *testing.T) {
 		}
 	})
 }
+
+// A probe whose own bound has ended makes no read: it is told the platform did not answer in time, whether it finds no read of the group
+// or a read that was cut short, which it would otherwise make again with a context that cannot carry it.
+func TestAProbeWhoseBoundHasEndedMakesNoRead(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), time.Nanosecond)
+	defer cancel()
+	<-ctx.Done()
+	cut := &groupRead{done: make(chan struct{}), cut: true}
+	close(cut.done)
+	for name, reads := range map[string]map[string]*groupRead{"no read": {}, "a cut read": {"S0SHARED000": cut}} {
+		f := &groupsFake{}
+		err := (&groupReads{reads: reads}).readable(ctx, f, "S0SHARED000")
+		if f.count() != 0 || !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("%s: readable = %v after %d reads; want the deadline, and no read", name, err, f.count())
+		}
+	}
+}
+
+// A probe woken by a cut read that is still in the map, as it is between its reader's close and delete if they run in that order, reads
+// the group itself at once: the waiter takes the cut read out, so the order of the reader's two steps does not matter.
+func TestAProbeWokenByACutReadStillInTheMapReadsItself(t *testing.T) {
+	cut := &groupRead{done: make(chan struct{}), cut: true}
+	close(cut.done)
+	r := &groupReads{reads: map[string]*groupRead{"S0SHARED000": cut}}
+	f := &groupsFake{}
+	done := make(chan error, 1)
+	go func() { done <- r.readable(t.Context(), f, "S0SHARED000") }()
+	select {
+	case err := <-done:
+		if err != nil || f.count() != 1 {
+			t.Errorf("readable = %v after %d reads; want nil from one read of its own", err, f.count())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the probe is still waiting on a read that was cut short")
+	}
+}

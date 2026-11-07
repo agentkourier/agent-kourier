@@ -408,12 +408,20 @@ type groupRead struct {
 
 // readable reads group on platform, as GroupsReadable of that group alone, or is told what another probe of the pass read of it. A probe
 // that finds a read under way waits for it, but no longer than its own ctx: when ctx ends first, the error is one of a platform that did
-// not answer in time, as its own read's would be. A nil r reads every time.
+// not answer in time, as its own read's would be, and a probe whose ctx has ended makes no read. The wait counts against the probe's own
+// bound even when the read it waited for is then cut short, so a probe can run out of time on a read that another probe began with less
+// time left. A nil r reads every time.
 func (r *groupReads) readable(ctx context.Context, platform groupReader, group string) error {
 	if r == nil {
 		return platform.GroupsReadable(ctx, []string{group})
 	}
+	waited := func() error {
+		return &chat.GroupError{Group: group, Err: fmt.Errorf("waiting for another probe's read of the group: %w", ctx.Err())}
+	}
 	for {
+		if ctx.Err() != nil {
+			return waited()
+		}
 		r.mu.Lock()
 		read, found := r.reads[group]
 		if !found {
@@ -429,8 +437,15 @@ func (r *groupReads) readable(ctx context.Context, platform groupReader, group s
 			if !read.cut {
 				return read.err
 			}
+			// The reader takes a cut read out of the map too; taking it out here as well means a waiter never finds it again, whichever
+			// of the reader's delete and close comes first.
+			r.mu.Lock()
+			if r.reads[group] == read {
+				delete(r.reads, group)
+			}
+			r.mu.Unlock()
 		case <-ctx.Done():
-			return &chat.GroupError{Group: group, Err: fmt.Errorf("waiting for another probe's read of the group: %w", ctx.Err())}
+			return waited()
 		}
 	}
 }
@@ -440,8 +455,6 @@ func (r *groupReads) readable(ctx context.Context, platform groupReader, group s
 func (r *groupReads) read(ctx context.Context, platform groupReader, group string, read *groupRead) error {
 	read.cut = true // until the platform answers
 	defer func() {
-		// The delete comes before the close: a waiter that wakes to a cut read and finds it still in the map would wait on it again,
-		// spinning until the delete.
 		if read.cut {
 			r.mu.Lock()
 			delete(r.reads, group)
