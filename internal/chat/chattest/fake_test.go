@@ -281,6 +281,41 @@ func TestGroupMembershipFailsClosed(t *testing.T) {
 	}
 }
 
+func TestGroupsReadable(t *testing.T) {
+	f := NewFake()
+	f.SetGroup("G1", "U1")
+	f.SetGroup("G2")
+	for _, tc := range []struct {
+		name   string
+		groups []string
+		failed string // the group the error names, if any
+	}{
+		{"no groups", nil, ""},
+		{"groups the fake was told of, one with no one in it", []string{"G1", "G2"}, ""},
+		{"a group the fake was not told of", []string{"G1", "G404", "G2"}, "G404"},
+	} {
+		err := f.GroupsReadable(ctx, tc.groups)
+		var ge *chat.GroupError
+		switch {
+		case tc.failed == "" && err != nil:
+			t.Errorf("%s: GroupsReadable(%v) = %v, want nil", tc.name, tc.groups, err)
+		case tc.failed != "" && (!errors.As(err, &ge) || ge.Group != tc.failed || !errors.Is(err, chat.ErrGroupNotFound) || !errors.Is(err, chat.ErrGroupsMisconfigured)):
+			t.Errorf("%s: GroupsReadable(%v) = %v, want a *chat.GroupError for %s that wraps chat.ErrGroupNotFound and chat.ErrGroupsMisconfigured", tc.name, tc.groups, err, tc.failed)
+		}
+	}
+	// An injected failure is returned as it is: a plain one may pass on a retry, one that wraps the scope sentinel never will.
+	f.FailNext("GroupsReadable", errors.New("boom"), fmt.Errorf("scope: %w", chat.ErrMissingScope))
+	if err := f.GroupsReadable(ctx, []string{"G1"}); err == nil || errors.Is(err, chat.ErrMissingScope) || errors.Is(err, chat.ErrGroupsMisconfigured) {
+		t.Errorf("GroupsReadable with an injected plain failure = %v; want an error that is not the permanent kind", err)
+	}
+	if err := f.GroupsReadable(ctx, []string{"G1"}); !errors.Is(err, chat.ErrMissingScope) {
+		t.Errorf("GroupsReadable with an injected missing scope = %v; want chat.ErrMissingScope", err)
+	}
+	if err := f.GroupsReadable(ctx, []string{"G1"}); err != nil {
+		t.Errorf("GroupsReadable after the failures = %v; want nil", err)
+	}
+}
+
 func TestChannelAccess(t *testing.T) {
 	f := NewFake()
 	f.SetAccess("CJOINED", chat.Access{Member: true})

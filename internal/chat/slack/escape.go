@@ -25,7 +25,8 @@ import (
 // that Agent Kourier writes (mdtext.go):
 //
 //   - Agent Kourier decides what is code, and writes every fence and every code span itself, in one form, so a fence the
-//     agent indented in a list item is a block, and a span is one pair of backticks;
+//     agent indented in a list item, or opened after a list marker or a quote mark, is a block, and a span is one pair of
+//     backticks;
 //   - every other backtick, and every tilde of a run of three or more, is escaped with a backslash, which Slack
 //     honours in prose, so it can never open code by itself, and Agent Kourier's view of what is code and Slack's
 //     cannot differ, whatever the agent wrote;

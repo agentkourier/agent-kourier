@@ -56,9 +56,13 @@ is that image by digest. Nothing is released by hand.
    types the version: `make docs-check` reads the pages, not the GIF, so nothing else catches a clip of an old
    release. `hack/clip/record.sh` says how (`up`, `take` with the published chart, a screenshot of the Slack answer,
    `stitch`, `down`); open a pull request with the new GIF, and update the sentence under it in both pages, which
-   says how long the cut wait for Ready was in that take. The new clip reaches `main`, so the site's `dev/` shows it, but
-   never the tag: `make docs-site` builds each tag from its own tree, so a tag's docs show the clip of the release
-   before it, typing that release's version, and a tag cut before the clip existed shows none.
+   says how long the cut wait for Ready was in that take. `make docs-site` builds each tag from its own tree, so a clip
+   recorded after the tag reaches `main` and the site's `dev/` but never that tag: the tag's docs show the clip of the
+   release before it, and a tag cut before the clip existed shows none. For the tag to carry its own clip, record it
+   before the final tag: tag a release candidate (`vX.Y.Z-rc.N`) on the release commit, run `take` with
+   `CLIP_CHART_VERSION=X.Y.Z-rc.N`, merge the clip's pull request, and tag `vX.Y.Z` on that merge commit once its
+   checks pass. The take still types `--version X.Y.Z`; the recorder installs the candidate in its place and hides the
+   two lines helm prints naming the pulled chart and its digest. Say so in the clip's pull request.
 
 If a first release attempt fails before its GitHub Release is created, rerun that tag after fixing the failure.
 Once a published or draft GitHub Release exists for the tag, the read-only gate refuses to rebuild it.

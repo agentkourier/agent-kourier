@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"net"
 	"net/url"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
@@ -274,13 +276,8 @@ var _ bindingcheck.ChannelChecker = channelChecker{}
 func (c channelChecker) CheckChannel(ctx context.Context, channel string) (bindingcheck.Outcome, error) {
 	cctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	switch c.creds.check(cctx) {
-	case credentialsChanged:
-		return bindingcheck.Outcome{Status: bindingcheck.Unknown, Reason: bindingcheck.ReasonChatCredentialsChanged,
-			Message: "the chat credentials changed after the connection started: restart Agent Kourier to use the new ones"}, nil
-	case credentialsUnusable:
-		return bindingcheck.Outcome{Status: bindingcheck.Unknown, Reason: bindingcheck.ReasonChatCredentialsUnusable,
-			Message: "the chat credentials Secret, or a key of it, is gone or empty, or the Secret is of a type that is never read: the connection still uses the tokens it read, and a restart fails until the Secret is mended"}, nil
+	if out, held := c.creds.hold(cctx); held {
+		return out, nil
 	}
 	access, err := c.platform.ChannelAccess(cctx, channel)
 	if err != nil {
@@ -322,6 +319,187 @@ func (c channelChecker) classifyError(err error) bindingcheck.Outcome {
 	case v.Class == chat.FatalAuth:
 		return bindingcheck.Outcome{Status: bindingcheck.False, Reason: bindingcheck.ReasonChatCredentialsRejected,
 			Message: "the chat platform rejected the bot's token: replace it and restart Agent Kourier"}
+	case v.RetryAfter > 0:
+		return unavailable("the chat platform rate-limited the read")
+	case errors.Is(err, context.DeadlineExceeded):
+		return unavailable("the chat platform did not answer the read in time")
+	}
+	out := unavailable(msgChatReadFailed)
+	out.Cause = telemetry.LogText(err)
+	return out
+}
+
+// groupReader is what the group checker needs of the chat platform: chat.Platform's GroupsReadable and Classify.
+type groupReader interface {
+	GroupsReadable(ctx context.Context, groups []string) error
+	Classify(op chat.Op, err error) chat.Verdict
+}
+
+// platformReader is what the verification needs of the chat platform: both reads, so that every Binding the writer expects an
+// ApproversReadable for has a prober that tracks it.
+type platformReader interface {
+	channelReader
+	groupReader
+}
+
+// groupChecker is the bindingcheck.GroupChecker of a running broker. Like channelChecker it answers for the bot of the connection the
+// broker serves, so the Targets it is given hold only Bindings on that connection (bindingTargets). The Prober makes one for each pass
+// (ForPass), whose probes share their reads of a group.
+type groupChecker struct {
+	platform groupReader
+	timeout  time.Duration
+	creds    credentialsWatch
+	reads    *groupReads // the reads of the pass, shared by its probes; nil: each probe reads its groups itself
+}
+
+var _ bindingcheck.PassGroupChecker = groupChecker{}
+
+// ForPass implements bindingcheck.PassGroupChecker with forPass.
+func (c groupChecker) ForPass() bindingcheck.GroupChecker { return c.forPass() }
+
+// forPass returns the checker of a pass, which reads each group once for all the pass's probes.
+func (c groupChecker) forPass() groupChecker {
+	c.reads = &groupReads{reads: map[string]*groupRead{}}
+	return c
+}
+
+// CheckGroups implements bindingcheck.GroupChecker. It makes no call when the connection's credentials differ from the tokens the broker
+// is using, for the reason given at CheckChannel (credentialsWatch.hold). A call the Prober's context ended is no verdict and comes back as
+// an error; the deadline of the checker's own bound is a chat platform that does not answer, Unknown/ChatUnavailable. One call reads all
+// of a Binding's groups, at most 10 (the API's validation caps them), one request to the platform each, in the Binding's order, and stops at
+// the first it cannot read, so a second bad group is told once the first is mended. In a pass, a group another probe has read or is
+// reading is not read again (groupReads.readable), so the reads of a pass are at most one for each group its Bindings name, unless a
+// read is cut short (its probe's bound, the Prober's context, a panic): the next probe that needs the group then reads it again.
+func (c groupChecker) CheckGroups(ctx context.Context, groups []string) (bindingcheck.Outcome, error) {
+	cctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	if out, held := c.creds.hold(cctx); held {
+		return out, nil
+	}
+	var err error
+	for _, g := range groups {
+		if err = c.reads.readable(cctx, c.platform, g); err != nil {
+			break
+		}
+	}
+	if err == nil {
+		return bindingcheck.Outcome{Status: bindingcheck.True, Reason: bindingcheck.ReasonOK}, nil
+	}
+	if ctx.Err() != nil {
+		return bindingcheck.Outcome{}, fmt.Errorf("the probe ended before the chat platform answered: %w", err)
+	}
+	return c.classifyError(groups, err), nil
+}
+
+// groupReads is what the probes of one pass have read of approver groups, by group ID, so that a group several Bindings name is read
+// once in the pass. Only the platform's answers are kept: a read that its own probe's bound or the Prober's context cut short says nothing
+// of the group, and is forgotten.
+type groupReads struct {
+	mu    sync.Mutex
+	reads map[string]*groupRead
+}
+
+// groupRead is one read of a group: done is closed when it has ended, and then err is what the platform answered, unless cut is set.
+type groupRead struct {
+	done chan struct{}
+	err  error
+	cut  bool // the reader's context ended the read, which is no answer: a probe that waited for it reads the group itself
+}
+
+// readable reads group on platform, as GroupsReadable of that group alone, or is told what another probe of the pass read of it. A probe
+// that finds a read under way waits for it, but no longer than its own ctx: when ctx ends first, the error is one of a platform that did
+// not answer in time, as its own read's would be, and a probe whose ctx has ended makes no read. The wait counts against the probe's own
+// bound even when the read it waited for is then cut short, so a probe can run out of time on a read that another probe began with less
+// time left. A nil r reads every time.
+func (r *groupReads) readable(ctx context.Context, platform groupReader, group string) error {
+	if r == nil {
+		return platform.GroupsReadable(ctx, []string{group})
+	}
+	waited := func() error {
+		return &chat.GroupError{Group: group, Err: fmt.Errorf("waiting for another probe's read of the group: %w", ctx.Err())}
+	}
+	for {
+		if ctx.Err() != nil {
+			return waited()
+		}
+		r.mu.Lock()
+		read, found := r.reads[group]
+		if !found {
+			read = &groupRead{done: make(chan struct{})}
+			r.reads[group] = read
+		}
+		r.mu.Unlock()
+		if !found {
+			return r.read(ctx, platform, group, read)
+		}
+		select {
+		case <-read.done:
+			if !read.cut {
+				return read.err
+			}
+			// The reader takes a cut read out of the map too; taking it out here as well means a waiter never finds it again, whichever
+			// of the reader's delete and close comes first.
+			r.mu.Lock()
+			if r.reads[group] == read {
+				delete(r.reads, group)
+			}
+			r.mu.Unlock()
+		case <-ctx.Done():
+			return waited()
+		}
+	}
+}
+
+// read makes the read of group that readable registered as read, and ends it for the probes waiting on it. A read that ctx cut short, or
+// one the platform panicked in (which the Prober recovers), is no answer: it is forgotten, and a probe that waited for it reads again.
+func (r *groupReads) read(ctx context.Context, platform groupReader, group string, read *groupRead) error {
+	read.cut = true // until the platform answers
+	defer func() {
+		if read.cut {
+			r.mu.Lock()
+			delete(r.reads, group)
+			r.mu.Unlock()
+		}
+		close(read.done)
+	}()
+	read.err = platform.GroupsReadable(ctx, []string{group})
+	read.cut = read.err != nil && ctx.Err() != nil
+	return read.err
+}
+
+// classifyError says what an error of GroupsReadable means for ApproversReadable: a group that is not there, a missing scope, and
+// any other refusal that no retry mends (a plan without user groups, a token of a type the read does not take) are False, a
+// credential the platform rejects is False/ChatCredentialsRejected, and anything else is Unknown/ChatUnavailable, worded as
+// channelChecker.classifyError words it. Which group failed is told by its place in the Binding's own list and its ID, which are the
+// Binding's words and no one else's: an error that names a group the Binding does not have, which the platform does not do, names none.
+// The platform's own words are in the Cause, for the log.
+func (c groupChecker) classifyError(groups []string, err error) bindingcheck.Outcome {
+	which := "an approver group"
+	var ge *chat.GroupError
+	if errors.As(err, &ge) {
+		if i := slices.Index(groups, ge.Group); i >= 0 {
+			which = fmt.Sprintf("approver group spec.interactions.approverGroups[%d] (%s)", i, groups[i])
+		}
+	}
+	switch {
+	case errors.Is(err, chat.ErrGroupNotFound):
+		return bindingcheck.Outcome{Status: bindingcheck.False, Reason: bindingcheck.ReasonGroupNotFound,
+			Message: which + " does not exist, or is disabled, or the bot cannot see it"}
+	case errors.Is(err, chat.ErrMissingScope):
+		return bindingcheck.Outcome{Status: bindingcheck.False, Reason: bindingcheck.ReasonMissingScope, Message: "the app lacks the permission to read user groups"}
+	}
+	unavailable := func(msg string) bindingcheck.Outcome {
+		return bindingcheck.Outcome{Status: bindingcheck.Unknown, Reason: bindingcheck.ReasonChatUnavailable, Message: msg}
+	}
+	v := c.platform.Classify(chat.OpOther, err)
+	switch {
+	case v.Class == chat.FatalAuth:
+		return bindingcheck.Outcome{Status: bindingcheck.False, Reason: bindingcheck.ReasonChatCredentialsRejected,
+			Message: "the chat platform rejected the bot's token: replace it and restart Agent Kourier"}
+	case errors.Is(err, chat.ErrGroupsMisconfigured):
+		return bindingcheck.Outcome{Status: bindingcheck.False, Reason: bindingcheck.ReasonGroupsUnreadable,
+			Message: "the chat platform refuses to let the bot read " + which + ": the workspace may have no user groups, or the app's token may not be allowed to read them; the operator's log has the cause",
+			Cause:   telemetry.LogText(err)}
 	case v.RetryAfter > 0:
 		return unavailable("the chat platform rate-limited the read")
 	case errors.Is(err, context.DeadlineExceeded):
@@ -382,9 +560,32 @@ func (w credentialsWatch) check(ctx context.Context) credentialsChange {
 	return found
 }
 
+// hold is the outcome of a probe that the credentials hold back, and whether they do: Unknown/ChatCredentialsChanged when the Secret holds
+// other tokens than the connection is using, and Unknown/ChatCredentialsUnusable when it, or a key of it, is gone, empty or of a type that is
+// never read. The probe then makes no call, because what a bot the Secret no longer names sees is not a finding about the channel or the
+// groups. Both checkers that read with the connection's bot use it, so they word it alike.
+func (w credentialsWatch) hold(ctx context.Context) (bindingcheck.Outcome, bool) {
+	switch w.check(ctx) {
+	case credentialsChanged:
+		return bindingcheck.Outcome{Status: bindingcheck.Unknown, Reason: bindingcheck.ReasonChatCredentialsChanged,
+			Message: "the chat credentials changed after the connection started: restart Agent Kourier to use the new ones"}, true
+	case credentialsUnusable:
+		return bindingcheck.Outcome{Status: bindingcheck.Unknown, Reason: bindingcheck.ReasonChatCredentialsUnusable,
+			Message: "the chat credentials Secret, or a key of it, is gone or empty, or the Secret is of a type that is never read: the connection still uses the tokens it read, and a restart fails until the Secret is mended"}, true
+	}
+	return bindingcheck.Outcome{}, false
+}
+
+// asksForApprovers reports whether a Binding has an ApproversReadable condition: it asks for tool approvals, and from user groups. A
+// Binding that asks for approvals from anyone in the channel has no group to read, and the API refuses groups without approvals.
+func asksForApprovers(spec v1alpha1.BindingSpec) bool {
+	return spec.Interactions.ToolApprovals && len(spec.Interactions.ApproverGroups) > 0
+}
+
 // bindingTargets lists the Bindings to probe: those of snap whose ChatConnection is conn, the one this process serves. The
-// channel checker reads with that connection's bot, so a Binding on any other would be told the wrong bot's answer. A
-// Binding's key is namespace/name, which is what CheckAgent looks it up by.
+// channel and group checkers read with that connection's bot, so a Binding on any other would be told the wrong bot's answer. A
+// Binding's key is namespace/name, which is what CheckAgent looks it up by. A Binding that asks for tool approvals from user groups
+// (asksForApprovers) carries them in its Target, a copy of its own list.
 func bindingTargets(snap *config.Snapshot, conn v1alpha1.ObjectRef) []bindingcheck.Target {
 	if snap == nil {
 		return nil
@@ -394,12 +595,16 @@ func bindingTargets(snap *config.Snapshot, conn v1alpha1.ObjectRef) []bindingche
 		if rb.Connection.Namespace != conn.Namespace || rb.Connection.Name != conn.Name {
 			continue
 		}
-		out = append(out, bindingcheck.Target{
+		t := bindingcheck.Target{
 			Binding:    v1alpha1.NamespacedName(rb.Binding.Namespace, rb.Binding.Name),
 			Channel:    rb.Binding.Spec.Chat.Channel,
 			Generation: rb.Binding.Generation,
 			UID:        string(rb.Binding.UID),
-		})
+		}
+		if asksForApprovers(rb.Binding.Spec) {
+			t.ApproverGroups = slices.Clone(rb.Binding.Spec.Interactions.ApproverGroups)
+		}
+		out = append(out, t)
 	}
 	return out
 }
@@ -472,12 +677,18 @@ func (l bindingLog) pruned(names []string) {
 	}
 }
 
+// dropped is bindingcheck.Options.OnDrop: the line for a condition the Prober stops verifying because the Binding no longer asks for it (an
+// edit took its approver groups away). Its series go with it, so an alert on them would resolve without a word; this line is the word.
+func (l bindingLog) dropped(binding string, cond bindingcheck.ConditionType) {
+	l.log.Info("binding verification: stopped verifying a condition of a Binding: the Binding no longer asks for it", "binding", binding, "condition", string(cond))
+}
+
 // verification is what the verification of Bindings is built from.
 type verification struct {
-	// Bindings fetches agent cards (Bindings.CheckAgent), Platform reads the channel as the bot of Conn, and Snaps and Revision
-	// are the config (Reloader.Current and Reloader.Revision).
+	// Bindings fetches agent cards (Bindings.CheckAgent), Platform reads the channel and the approver groups as the bot of Conn, and Snaps
+	// and Revision are the config (Reloader.Current and Reloader.Revision).
 	Bindings agentProbe
-	Platform channelReader
+	Platform platformReader
 	Snaps    Snapshots
 	Revision func(context.Context) string
 	// Conn is the ChatConnection this process serves: the Bindings on any other are not probed, because Platform is Conn's bot. Its
@@ -531,6 +742,22 @@ func (f channelFunc) CheckChannel(ctx context.Context, channel string) (bindingc
 	return f(ctx, channel)
 }
 
+// timedGroups is a groupChecker whose probes the verification times under ApproversReadable, its passes' included.
+type timedGroups struct {
+	v verification
+	c groupChecker
+}
+
+// CheckGroups implements bindingcheck.GroupChecker.
+func (t timedGroups) CheckGroups(ctx context.Context, groups []string) (bindingcheck.Outcome, error) {
+	return t.v.timed(bindingcheck.ApproversReadable, func() (bindingcheck.Outcome, error) { return t.c.CheckGroups(ctx, groups) })
+}
+
+// ForPass implements bindingcheck.PassGroupChecker.
+func (t timedGroups) ForPass() bindingcheck.GroupChecker {
+	return timedGroups{v: t.v, c: t.c.forPass()}
+}
+
 // timed runs a check and observes how long it took under cond, whatever it found.
 func (v verification) timed(cond bindingcheck.ConditionType, check func() (bindingcheck.Outcome, error)) (bindingcheck.Outcome, error) {
 	began := time.Now()
@@ -557,6 +784,10 @@ func (v verification) newProber() *bindingcheck.Prober {
 		platform: v.Platform, timeout: innerBound(timeout),
 		creds: credentialsWatch{baseline: v.Conn.Credentials, secrets: v.Secrets, where: v.credentialsSecret},
 	}
+	groupsChecker := groupChecker{
+		platform: v.Platform, timeout: innerBound(timeout),
+		creds: credentialsWatch{baseline: v.Conn.Credentials, secrets: v.Secrets, where: v.credentialsSecret},
+	}
 	l := bindingLog{log: v.Log}
 	return bindingcheck.NewProber(bindingcheck.Options{
 		Targets:  func() []bindingcheck.Target { return bindingTargets(v.Snaps.Current(), v.Conn.Ref) },
@@ -567,8 +798,14 @@ func (v verification) newProber() *bindingcheck.Prober {
 		Channels: channelFunc(func(ctx context.Context, channel string) (bindingcheck.Outcome, error) {
 			return v.timed(bindingcheck.ChannelJoined, func() (bindingcheck.Outcome, error) { return channels.CheckChannel(ctx, channel) })
 		}),
+		Groups:   timedGroups{v: v, c: groupsChecker},
 		Interval: v.Interval, Tick: v.Tick, Timeout: timeout, MinRevisionGap: cmp.Or(v.MinRevisionGap, minRevisionGap),
 		OnTransition: func(tr bindingcheck.Transition) { v.Metrics.BindingCondition(tr); l.transition(tr); v.notifyStatus() },
+		OnDrop: func(binding string, cond bindingcheck.ConditionType) {
+			v.Metrics.BindingConditionDropped(binding, cond)
+			l.dropped(binding, cond)
+			v.notifyStatus()
+		},
 		OnPass:       v.notifyStatus,
 		OnProbeError: l.probeError,
 		OnPrune:      func(names []string) { v.Metrics.BindingsPruned(names); l.pruned(names) },

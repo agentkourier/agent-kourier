@@ -29,7 +29,7 @@ Set WaitTimeout 3m
 Set Theme { "name": "Agent Kourier", "background": "#0b1020", "foreground": "#e6e9f2", "cursor": "#5b8def", "selection": "#1e3a8a", "black": "#131a2b", "red": "#e5484d", "green": "#3fb27f", "yellow": "#e8b14c", "blue": "#5b8def", "magenta": "#b48cf2", "cyan": "#4cc2d9", "white": "#c9cfdf", "brightBlack": "#6b7590", "brightRed": "#ff6b70", "brightGreen": "#5fd39c", "brightYellow": "#f5c96b", "brightBlue": "#8aaeff", "brightMagenta": "#cdaefc", "brightCyan": "#7dd9ea", "brightWhite": "#ffffff" }
 
 Hide
-Type "export PS1='$ ' PS2='  ' && stty -echoctl && cd /work && clear"
+Type "export PS1='$ ' PS2='  ' && stty -echoctl && . /vhs/setup.sh && cd /work && clear"
 Enter
 Wait
 Show
@@ -46,7 +46,7 @@ Sleep 300ms
 Enter
 Wait
 Sleep 800ms
-Type `kubectl -n agent-kourier create secret generic agent-kourier-slack \`
+Type `kubectl -n agent-kourier create secret generic slack \`
 Enter
 Type `--from-literal=botToken="$SLACK_BOT_TOKEN" \`
 Enter

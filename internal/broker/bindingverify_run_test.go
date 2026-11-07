@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -27,6 +28,9 @@ type accessSlack struct {
 	mu     sync.Mutex
 	access map[string]chat.Access // by channel; one that is not here is a channel the bot is not in
 	calls  atomic.Int64
+
+	groupsErr  error // what GroupsReadable answers
+	groupCalls atomic.Int64
 }
 
 func (s *accessSlack) ChannelAccess(_ context.Context, channel string) (chat.Access, error) {
@@ -34,6 +38,21 @@ func (s *accessSlack) ChannelAccess(_ context.Context, channel string) (chat.Acc
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.access[channel], nil
+}
+
+// GroupsReadable is conversations-style: it answers with the error the test set, for any groups, and counts the calls.
+func (s *accessSlack) GroupsReadable(_ context.Context, _ []string) error {
+	s.groupCalls.Add(1)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.groupsErr
+}
+
+// setGroups makes the groups unreadable with err, or readable with nil.
+func (s *accessSlack) setGroups(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.groupsErr = err
 }
 
 func (s *accessSlack) set(channel string, a chat.Access) {
@@ -115,6 +134,67 @@ func TestRunReportsTheConditionsOfTheBindingsAsMetricsAndLogLines(t *testing.T) 
 	}
 	if strings.Contains(out, "xoxb-fake-bot") {
 		t.Errorf("the log holds a token\n%s", out)
+	}
+}
+
+// A Binding that asks for tool approvals from a user group has ApproversReadable, probed with the served connection's bot: False while
+// the group cannot be read, True once it can, counted in the probe-duration histogram under its own condition, and counted toward the
+// Binding's readiness. A Binding that names no group has none. An edit that takes the group away deletes the Binding's ApproversReadable
+// series and leaves the others, and the probes of groups stop; the log says so once.
+func TestRunProbesTheApproverGroupsOfABindingThatNamesThem(t *testing.T) {
+	c, slk, logs := verifyWorld(t)
+	c.reloadPoll = 10 * time.Millisecond
+	file := filepath.Join(c.ConfigDir, "binding.yaml")
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const asks = "  interactions:\n    askUser: true\n"
+	if !strings.Contains(string(raw), asks) {
+		t.Fatal("the example Binding has no interactions to add approvals to")
+	}
+	withGroups := strings.Replace(string(raw), asks, asks+"    toolApprovals: true\n    approverGroups: [S0123456789]\n", 1)
+	if err := os.WriteFile(file, []byte(withGroups), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	slk.setGroups(&chat.GroupError{Group: "S0123456789", Err: fmt.Errorf("fake: %w: %w", chat.ErrGroupNotFound, chat.ErrGroupsMisconfigured)})
+	r := start(t, c)
+
+	series := func(binding, status string) string {
+		return `agentkourier_binding_condition{binding="` + binding + `",condition="ApproversReadable",status="` + status + `"} `
+	}
+	r.waitMetric(series(verifiedBinding, "false") + "1")
+	r.waitMetric(`agentkourier_binding_ready{binding="` + verifiedBinding + `"} 0`)
+	if _, body := r.get("/metrics"); strings.Contains(body, `binding="`+unverifiedBinding+`",condition="ApproversReadable"`) {
+		t.Errorf("a Binding that names no group has an ApproversReadable series:\n%s", body)
+	}
+	slk.setGroups(nil)
+	r.waitMetric(series(verifiedBinding, "true") + "1")
+	r.waitMetric(`agentkourier_binding_ready{binding="` + verifiedBinding + `"} 1`)
+	if r.probeCount("ApproversReadable") == 0 {
+		t.Error("no probe of ApproversReadable was timed")
+	}
+
+	if err := os.WriteFile(file, raw, 0o600); err != nil { // the edit that takes the group away
+		t.Fatal(err)
+	}
+	eventually(t, 10*time.Second, "the ApproversReadable series was not deleted after the groups were taken away", func() bool {
+		_, body := r.get("/metrics")
+		return !strings.Contains(body, `binding="`+verifiedBinding+`",condition="ApproversReadable"`)
+	})
+	r.waitMetric(`agentkourier_binding_ready{binding="` + verifiedBinding + `"} 1`)
+	r.waitMetric(`agentkourier_binding_condition{binding="` + verifiedBinding + `",condition="ChannelJoined",status="true"} 1`)
+	calls := slk.groupCalls.Load()
+	r.waitMoreProbes("ChannelJoined", 4)
+	if after := slk.groupCalls.Load(); after != calls {
+		t.Errorf("%d reads of groups after the Binding stopped naming any; want none", after-calls)
+	}
+	out := logs.String()
+	if n := countOf(out, "level=WARN", "a condition is false", "binding="+verifiedBinding, "condition=ApproversReadable", "reason=GroupNotFound"); n != 1 {
+		t.Errorf("%d warnings that the group is not found; want one\n%s", n, out)
+	}
+	if n := countOf(out, "level=INFO", "stopped verifying a condition", "binding="+verifiedBinding, "condition=ApproversReadable"); n != 1 {
+		t.Errorf("%d notices that the condition was dropped; want one\n%s", n, out)
 	}
 }
 

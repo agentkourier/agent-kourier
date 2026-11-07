@@ -316,9 +316,10 @@ func TestMembershipErrorsNameNoToken(t *testing.T) {
 	_, memberErr := c.IsChannelMember(t.Context(), "C1", "U1")
 	_, botErr := c.IsBot(t.Context(), "U1")
 	_, groupErr := c.IsInAnyUserGroup(t.Context(), []string{"S1"}, "U1")
+	readableErr := c.GroupsReadable(t.Context(), []string{"S1"})
 	_, accessErr := c.ChannelAccess(t.Context(), "C1")
 	ephErr := c.PostEphemeral(t.Context(), "C1", "", "U1", slack.Content{Text: "x"})
-	for name, err := range map[string]error{"IsChannelMember": memberErr, "IsBot": botErr, "IsInAnyUserGroup": groupErr, "ChannelAccess": accessErr, "PostEphemeral": ephErr} {
+	for name, err := range map[string]error{"IsChannelMember": memberErr, "IsBot": botErr, "IsInAnyUserGroup": groupErr, "GroupsReadable": readableErr, "ChannelAccess": accessErr, "PostEphemeral": ephErr} {
 		if err == nil {
 			t.Fatalf("%s succeeded through a failing transport", name)
 		}
