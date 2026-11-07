@@ -51,13 +51,13 @@ func Mentions(body string, declared []v1alpha1.ChatMention, limit int, already .
 		return scan
 	}
 	limit -= len(already)
-	code, held, opener := false, body, markNone
+	code, held, opener, reread := false, body, markNone, false
 	for held != "" {
 		line, _, _ := strings.Cut(held, "\n")
 		after := held[len(line):] // the line break, if any, and the lines after it
-		ch, run, rest, mk := fenceLine(line, code, opener)
+		ch, run, rest, mk := fenceLine(line, code, opener, reread)
 		if run >= 3 {
-			held = afterFence(code, ch, run, rest, after)
+			held, reread = afterFence(code, ch, run, rest, after)
 			opener = mk // what stood before the run of the opener of the block that is open
 			if code {
 				opener = markNone
@@ -65,6 +65,7 @@ func Mentions(body string, declared []v1alpha1.ChatMention, limit int, already .
 			code = !code
 			continue
 		}
+		reread = false
 		if !code {
 			scan.line(line, declared, limit)
 		}
@@ -87,14 +88,18 @@ const (
 // is, what follows it, and what stood before it besides white space. The line is no fence line if run is under 3. So
 // "- ```", "1) ```", ">```" and "> ```" are fence lines, and "- - ```", "> > ```", "> - ```" and "-```" are not: a second
 // mark, or a marker with no white space after it, makes the line prose. So does a mark, then backticks (not tildes), whose
-// rest holds a closing run of backticks: "1. ```make test``` first" is a list item with a code span, as a backtick fence's info
-// string has no backtick in CommonMark.
+// next run of backticks is as long as the first, which makes a span: "1. ```make test``` first" is a list item with a code
+// span, as a backtick fence's info string has no backtick in CommonMark. The rest of a fence line put back to be read (reread)
+// has no marks, as it did not before them.
 //
 // In a block that a fence line after a list marker opened (opener markList) a line may close it with a list marker before the
 // run, and in one that a fence line after a quote mark opened (markQuote) every line first loses a quote mark, if it has one,
 // and one character of white space after it. A mark before a closing run counts only if it is the kind its opener had: a block
 // opened with white space alone, indented or not, takes only white space there, and a list block takes no quote mark.
-func fenceLine(line string, code bool, opener mark) (ch byte, run int, rest string, mk mark) {
+func fenceLine(line string, code bool, opener mark, reread bool) (ch byte, run int, rest string, mk mark) {
+	if reread {
+		opener = markNone // the rest of a fence line put back has no marks: they count at the start of a line of the text only
+	}
 	if code && opener == markQuote {
 		if t := strings.TrimLeftFunc(line, unicode.IsSpace); strings.HasPrefix(t, ">") {
 			line = t[1:] // the white space after the mark is trimmed below, as the adapter's readFence drops it
@@ -104,9 +109,9 @@ func fenceLine(line string, code bool, opener mark) (ch byte, run int, rest stri
 	n := 0
 	if body != "" && body[0] != '`' && body[0] != '~' {
 		switch {
-		case body[0] == '>' && !code:
+		case body[0] == '>' && !code && !reread:
 			n, mk = 1, markQuote
-		case !code || opener == markList:
+		case (!code && !reread) || opener == markList:
 			if n = listMarker(body); n > 0 {
 				mk = markList
 			}
@@ -118,7 +123,7 @@ func fenceLine(line string, code bool, opener mark) (ch byte, run int, rest stri
 	}
 	run = runOf(body, body[0])
 	rest = body[run:]
-	if at, _ := closingFence(rest, '`', run); mk != markNone && body[0] == '`' && run >= 3 && at >= 0 {
+	if mk != markNone && body[0] == '`' && run >= 3 && closingRun(rest, run) >= 0 {
 		return 0, 0, body, markNone // a code span in a list item or a quote, not a fence line
 	}
 	return body[0], run, rest, mk
@@ -161,17 +166,20 @@ func listMarker(body string) int {
 // the line, and the rest is prose. One that opens a block drops a single word as its info string, and otherwise the rest is
 // the block's first line, unless it holds a closing run: then it is the block's one line, and a closing fence with what
 // followed the run.
-func afterFence(code bool, ch byte, run int, rest, after string) string {
+//
+// It says too whether the first line of what is left is that rest put back, not the start of a line of the text: no mark counts
+// in it (fenceLine).
+func afterFence(code bool, ch byte, run int, rest, after string) (held string, reread bool) {
 	if code {
-		return strings.TrimLeftFunc(rest, unicode.IsSpace) + after
+		return strings.TrimLeftFunc(rest, unicode.IsSpace) + after, true
 	}
 	if at, n := closingFence(rest, ch, run); at >= 0 {
-		return strings.TrimSpace(rest[:at]) + "\n```" + rest[at+n:] + after
+		return strings.TrimSpace(rest[:at]) + "\n```" + rest[at+n:] + after, true
 	}
 	if !strings.ContainsFunc(strings.TrimSpace(rest), unicode.IsSpace) {
-		return strings.TrimPrefix(after, "\n")
+		return strings.TrimPrefix(after, "\n"), false
 	}
-	return strings.TrimLeftFunc(rest, unicode.IsSpace) + after
+	return strings.TrimLeftFunc(rest, unicode.IsSpace) + after, true
 }
 
 // closingFence is where in s the first run of at least atLeast of c starts, and how long it is, or -1.

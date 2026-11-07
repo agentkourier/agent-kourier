@@ -139,7 +139,9 @@ func TestMentionsAndTheAdapterAgreeOnWhatIsCode(t *testing.T) {
 	}
 	lines := []string{"", "  ", "   ", "> ", ">", "- ", "  - ", "  > ", "1. "} // what stands before a line of the block
 	closers := []string{"", "  ", "    ", "> ", ">", "- ", "  - ", "1. ", "> > ", "> - ", "  > "}
-	tails := []string{"", " tail @joe", " ```x``` @zed"} // what follows a closing run
+	tails := []string{"", " tail @joe", " ```x``` @zed", " - ``` @joe\n```\n@zed", " > ``` @joe\n```"} // what follows a closing run
+	conts := []string{"", "  ", "    ", "      "}                                                      // what stands before the line after the closer
+	blanks := []string{"", "\n"}
 	var n, bad int
 	compare := func(in string) {
 		n++
@@ -159,8 +161,8 @@ func TestMentionsAndTheAdapterAgreeOnWhatIsCode(t *testing.T) {
 							// The second block opens after the first, with a mark taken from the lists, and its closer
 							// has a tail: both blocks of the text, and the prose between and after them, are compared.
 							open2, cl2 := openers[n%len(openers)], closers[n/7%len(closers)]
-							compare(fmt.Sprintf("before @ann\n%s%s%s\n%sowner @sam failed\n%scc @kim\n%s%s%s\nthen @lee please\n- @bob\n%s%s\nagain @joe\n%s%s\nlast @zed",
-								open, run, info, l1, l2, cl, run, tails[n%len(tails)], open2, run, cl2, run))
+							compare(fmt.Sprintf("before @ann\n%s%s%s\n%sowner @sam failed\n%scc @kim\n%s%s%s\n%s%sthen @lee please\n- @bob\n%s%s\nagain @joe\n%s%s\nlast @zed",
+								open, run, info, l1, l2, cl, run, tails[n%len(tails)], blanks[n/3%len(blanks)], conts[n/5%len(conts)], open2, run, cl2, run))
 						}
 					}
 				}
@@ -169,7 +171,7 @@ func TestMentionsAndTheAdapterAgreeOnWhatIsCode(t *testing.T) {
 	}
 	for _, open := range openers { // a block of one line, or a code span, on the line of the opener
 		for _, run := range []string{"```", "~~~", "````"} {
-			for _, inner := range []string{" @sam ", " x @sam ", "\u00a0@sam\u00a0", ""} {
+			for _, inner := range []string{" @sam ", " x @sam ", "\u00a0@sam\u00a0", "", " - ``` @sam ", " > ``` @sam "} {
 				for _, tail := range []string{"", " @lee", "\n@lee", "\n```\n@kim\n```\n@bob"} {
 					compare("before @ann\n" + open + run + inner + run + tail + "\nthen @joe\n")
 					compare("before @ann\n" + open + run + inner + run + "`" + tail + "\nthen @joe\n")
@@ -183,5 +185,27 @@ func TestMentionsAndTheAdapterAgreeOnWhatIsCode(t *testing.T) {
 	}
 	if n < 1000 {
 		t.Fatalf("only %d texts compared", n)
+	}
+}
+
+// After the block of a list marker the item's lines lose the item's content column, so that none that is less than four columns
+// past the item is indented four or more, which Slack reads as code after a blank line (row 23). The readers agree on the names
+// besides. Four columns past the item are code to Slack all the same, as they are at the top level, and a name in them counts.
+func TestAnItemsLinesAfterItsBlockAreNotIndentedCode(t *testing.T) {
+	for _, open := range []string{"- ", "* ", "+ ", "1. ", "9) ", "10. ", "123) ", "  - ", "    - ", "-   ", " 12.  "} {
+		col := len([]rune(open))
+		for _, blank := range []string{"", "\n", "\n\n"} {
+			for k := range 6 {
+				in := open + "```\n" + strings.Repeat(" ", col) + "x\n" + strings.Repeat(" ", col) + "```\n" + blank + strings.Repeat(" ", col+k) + "then ask @lee"
+				sent := markdown(in, math.MaxInt)
+				want := "```\nx\n```\n" + blank + strings.Repeat(" ", k) + "then ask @lee"
+				if sent != want {
+					t.Errorf("%q: sent %q, want %q", in, sent, want)
+				}
+				if got, made := proseNames(sent), madeNames(in); !slices.Equal(got, made) || !slices.Equal(made, []string{"lee"}) {
+					t.Errorf("%q: prose %v, Mentions made %v; want [lee]", in, got, made)
+				}
+			}
+		}
 	}
 }
