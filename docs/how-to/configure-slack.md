@@ -135,13 +135,13 @@ Every Slack call Agent Kourier makes, and the scope in the manifest that allows 
 | `conversations.members` | `channels:read`, `groups:read` |
 | `conversations.info`, made by the leader to [verify each Binding](troubleshoot.md#a-binding-is-not-ready) | `channels:read`, `groups:read` |
 | `conversations.list`, made only by `agent-kourier init`, to find the ID of a channel given by name | `channels:read`, `groups:read` |
-| `usergroups.users.list` | `usergroups:read` when a Binding sets `interactions.approverGroups` |
+| `usergroups.users.list`, made when someone presses a tool approval on a Binding that sets `interactions.approverGroups`, and by the leader to [verify each such Binding](troubleshoot.md#a-binding-is-not-ready) | `usergroups:read` when a Binding sets `interactions.approverGroups` |
 | Events `app_mention`, `message.channels`, `message.groups` | `app_mentions:read`, `channels:history`, `groups:history` |
 | Socket Mode | the app-level token, `connections:write` |
 
-The leader calls `conversations.info` once for each Binding's channel on each pass of [Binding verification](../reference/metrics.md#binding-verification). An app without the scope reads `False/MissingScope` on `ChannelJoined`; the call only reports, and turns still run.
+The leader calls `conversations.info` once for each Binding's channel on each pass of [Binding verification](../reference/metrics.md#binding-verification), and `usergroups.users.list` once for each approver group of each Binding that sets `interactions.approverGroups`. An app without the scope reads `False/MissingScope` on `ChannelJoined`, or on `ApproversReadable` for the groups; the calls only report, and turns still run.
 
-Agent Kourier reads `botToken` and `appToken` when it starts. A new token written to the Secret is not used until a restart, and until then `ChannelJoined` reads `Unknown/ChatCredentialsChanged` and the probe does not call Slack.
+Agent Kourier reads `botToken` and `appToken` when it starts. A new token written to the Secret is not used until a restart, and until then `ChannelJoined` (and `ApproversReadable`, for a Binding with approver groups) reads `Unknown/ChatCredentialsChanged` and the probe does not call Slack.
 
 While an agent investigates an alert thread, Agent Kourier calls `assistant.threads.setStatus`, which shows Slack's assistant
 status (`is working…`) in the thread. It does this only when `chat.progress` is not `steps` and `output` is `live`, and
@@ -184,7 +184,7 @@ printf 'header = "Authorization: Bearer %s"\n' "$(sed -n 's/^botToken=//p' ~/.co
 
 A workspace whose plan has no user groups cannot use `approverGroups`. Slack's page for `usergroups.users.list`, the
 method Agent Kourier calls on each press, lists the error `plan_upgrade_required`, and Agent Kourier treats that code as
-a permanent group-read failure.
+a permanent group-read failure. The Binding's `ApproversReadable` condition reads `False/GroupsUnreadable` for it. That a workspace without user groups gets this code has not been checked against a live workspace.
 
 ## Related
 

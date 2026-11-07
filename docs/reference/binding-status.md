@@ -23,7 +23,7 @@ object's age. A Binding that has no status yet shows empty `READY` and `REASON`.
 
 ## The conditions
 
-A Binding that the broker serves has four conditions, each with `type`, `status` (`True`, `False` or `Unknown`), `reason`,
+A Binding that the broker serves has four conditions, or five if it asks for tool approvals from user groups (`interactions.toolApprovals: true` and a non-empty `interactions.approverGroups`), each with `type`, `status` (`True`, `False` or `Unknown`), `reason`,
 `message`, `lastTransitionTime` and `observedGeneration`. A Binding that the broker does not serve has `Accepted` and `Ready`
 only. No other type is written.
 
@@ -32,12 +32,14 @@ only. No other type is written.
 | `Accepted` | The broker took the Binding as written: its spec passes the broker's checks, the AgentBackend and ChatConnection it names exist, are valid and allow its namespace, and no older Binding holds its channel. | What the config source refused. |
 | `BackendReachable` | A fresh fetch of the agent's card worked and the card is one Agent Kourier can use. | The leader's probe of the agent. |
 | `ChannelJoined` | The bot is in the Binding's channel, which exists and is not archived. | The leader's read of the channel. |
+| `ApproversReadable` | The bot can read every user group in `interactions.approverGroups`. A Binding that asks for no approvals, or for approvals from anyone, has no such condition. | The leader's read of the groups. |
 | `Ready` | Every other condition is `True`. | Derived. |
 
 - `message` is one line of at most 1024 bytes, redacted, with `…` where it was cut. It is empty when the condition is `True`.
   A probe's message is a fixed sentence that never names a host, address, port or the text of another
   namespace's object, because the person who reads a status may not own what it probed. The one that names anything is
-  `CredentialsUnreadable`: it names a Secret and a key of the Binding's own namespace, and never a Secret of another. The log of the leader has the cause
+  `CredentialsUnreadable`: it names a Secret and a key of the Binding's own namespace, and never a Secret of another. The other is `ApproversReadable`, whose message
+  names a group of the Binding's own `approverGroups` by its place in the list and its ID. The log of the leader has the cause
   (a `cause` attribute), and a status points there: "the operator's log has the cause".
 - `lastTransitionTime` is when `status` last changed. A new reason or message with the same status does not move it.
 - There is no `lastProbeTime`. A status that changed every few minutes would be watch traffic for everyone who watches Bindings, so
@@ -66,13 +68,15 @@ whose winner is in another namespace says `already bound by a Binding in another
 `Ready` is `False` with the reason `Accepted:<reason>` for a Binding that is not accepted, with `Accepted`'s message and generation.
 Otherwise it is the probes' result (below), with the reason `<type>:<reason>` of the first condition that holds it back, such as
 `BackendReachable:AgentNotFound`. For about 15 seconds after a broker starts, before its prober has listed the Binding, `Ready` is `Unknown` with the bare reason
-`Pending`; then it is `BackendReachable:Pending` until the first probes end.
+`Pending`; then it is `BackendReachable:Pending` until the first probes end. A Binding that an edit gives its first approver group is `Unknown` with `ApproversReadable:Pending`
+until the next pass reads the group, unless `Ready` is `False` for another reason, so a Binding is never `Ready` on the word of a probe that did not ask about its groups. An edit that takes the
+last group away removes `ApproversReadable` from the status at the next write, and `Ready` no longer counts it.
 
-### `BackendReachable` and `ChannelJoined`
+### `BackendReachable`, `ChannelJoined` and `ApproversReadable`
 
 Each has `OK` when `True`, `Pending` while its first probe has not ended, and a reason from a closed set. The reasons, what each
 means and what to do are in [A Binding is not ready](../how-to/troubleshoot.md#a-binding-is-not-ready). `ProbeTimeout` and `ProbeFailed` are the
-prober's own, and the same for both. A probe that could not tell is `Unknown` and not `False`: the chat platform's rate limit or deadline, an agent's 408, 425 or 429,
+prober's own, and the same for all three. A probe that could not tell is `Unknown` and not `False`: the chat platform's rate limit or deadline, an agent's 408, 425 or 429,
 and a probe that ran past the prober's own 10 seconds (`ProbeTimeout`). A backend that does not answer is `False` with `Unreachable`. A card of more
 than 1 MiB is `False` with `InvalidAgentCard`, and the probe stops reading at that size.
 
@@ -92,10 +96,10 @@ the status does not. A condition whose `observedGeneration` is lower than the Bi
 
 ### After an edit
 
-`Accepted` reaches the new generation within a few seconds, up to about 20, while `BackendReachable`, `ChannelJoined` and `Ready` still say what they said about
+`Accepted` reaches the new generation within a few seconds, up to about 20, while `BackendReachable`, `ChannelJoined`, `ApproversReadable` and `Ready` still say what they said about
 the old spec, and the `READY` column still says `True`. The probes catch up when the next pass runs, and that takes longer. A write of a Binding's status waits for 10 seconds
 from the end of the last one, and the writer looks for work each second. A pass does not begin within 30 seconds of the start of the last, the prober looks for work each 5 seconds, and
-it runs 4 probes at a time, two for each Binding, each for up to 10 seconds, so a pass over many slow backends takes longer than one over a few. Add the write after the pass and
+it runs 4 probes at a time, two for each Binding (three for one with approver groups), each for up to 10 seconds, so a pass over many slow backends takes longer than one over a few. Add the write after the pass and
 the delay is up to about a minute for one Binding, and more for many. It is often much less, when the last pass is long past. A Binding that was edited into something that can no longer work shows `False` only after that.
 
 `kubectl wait --for=condition=Ready` waits for the condition to describe the generation it is waiting on, with kubectl 1.37.1. A kubectl that ignores
