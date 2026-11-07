@@ -177,19 +177,19 @@ func (in *Intake) Message(ctx context.Context, m Inbound) (telemetryErr error) {
 		}
 		return nil
 	}
-	if !m.Direct && topLevel(m) {
-		d, err := in.personMessage(ctx, m)
-		if err != nil {
-			return err
-		}
-		if d != "ignored" {
-			disposition = d
-			if d == "trigger_matched" {
-				in.seen.add(seen)
-				in.matched.add(seen)
-			}
-			return nil
-		}
+	switch d, err := in.personMessage(ctx, m); {
+	case err != nil:
+		return err
+	case d == "trigger_matched":
+		disposition = d
+		in.seen.add(seen)
+		in.matched.add(seen)
+		return nil
+	case d != "ignored":
+		// Unmatched, and not remembered: the message's other event may say it mentions Agent Kourier, and then it is the
+		// mention trigger's. A redelivery is tried and counted again.
+		disposition = d
+		return nil
 	}
 	req := session.Inbound{
 		Key:        session.Key{Connection: in.conn, Channel: m.At.Channel, Thread: cmp.Or(m.At.Thread, m.At.ID)},
@@ -276,26 +276,30 @@ func (in *Intake) botMessage(ctx context.Context, m Inbound) (disposition string
 	return in.matchTriggers(ctx, snap, rb, m, "bot message", "bot", m.Bot.ID, "kind", m.Bot.Kind)
 }
 
-// personMessage tries a person's top-level message against the personMessage triggers of the Binding that owns its
-// channel, and returns the disposition for the intake metric. A channel with no Binding, a Binding with no personMessage
-// trigger, and a message that mentions Agent Kourier where the Binding has a mention trigger are ignored and not counted:
-// the last is that trigger's, so that a person who asks for the agent is not also a report that uses a place in the
-// personMessage trigger's limits. The adapter has already refused bots' messages that no trigger names and Agent Kourier's
-// own, and a reply inside a thread is not top-level and never gets here.
+// personMessage tries a person's message against the personMessage triggers of the Binding that owns its channel, if
+// triedAsPerson says it is one of their input, and returns the disposition for the intake metric. Any other message, and one
+// in a channel with no Binding, is ignored and not counted, and goes on as it would without the trigger. The adapter has
+// already refused bots' messages that no trigger names and Agent Kourier's own.
 func (in *Intake) personMessage(ctx context.Context, m Inbound) (disposition string, err error) {
 	snap := in.cfg.Snapshot()
 	if snap == nil {
 		return "ignored", nil
 	}
 	rb, ok := snap.BindingForChannel(in.cfg.Connection.Namespace, in.cfg.Connection.Name, m.At.Channel)
-	if !ok {
-		return "ignored", nil
-	}
-	triggers := rb.Binding.Spec.Chat.Triggers
-	if !slices.ContainsFunc(triggers, func(t v1alpha1.Trigger) bool { return t.Type == v1alpha1.TriggerPersonMessage }) || (m.Mentioned && mentionTriggerIn(triggers)) {
+	if !ok || !triedAsPerson(rb.Binding.Spec.Chat.Triggers, m) {
 		return "ignored", nil
 	}
 	return in.matchTriggers(ctx, snap, rb, m, "person message")
+}
+
+// triedAsPerson says whether m is the input of the personMessage triggers among triggers: a person's message at the top level of
+// the channel, not a direct message, in a Binding that has such a trigger. A message that mentions Agent Kourier, where the
+// Binding has a mention trigger, is that trigger's, so that a person who asks for the agent is not also a report that uses a
+// place in the personMessage trigger's limits. The intake and the dry run (Replay) both ask it, so they cannot disagree.
+func triedAsPerson(triggers []v1alpha1.Trigger, m Inbound) bool {
+	return m.Bot == nil && !m.Direct && topLevel(m) &&
+		slices.ContainsFunc(triggers, func(t v1alpha1.Trigger) bool { return t.Type == v1alpha1.TriggerPersonMessage }) &&
+		(!m.Mentioned || !mentionTriggerIn(triggers))
 }
 
 // matchTriggers tries a message that opens its own thread against the triggers of rb's Binding, in order, and decides
@@ -315,7 +319,7 @@ func (in *Intake) matchTriggers(ctx context.Context, snap *config.Snapshot, rb c
 		in.log.DebugContext(ctx, "chat: "+what+" matched no trigger", where...)
 		return "trigger_unmatched", nil
 	}
-	match := TriggerMatch{Binding: name, Index: trigger.index, Fields: fields, Thread: trigger.thread, Limits: trigger.limits, PromptTemplate: trigger.prompt, MessageID: in.messageID(m), Received: in.now(), Message: m}
+	match := TriggerMatch{Binding: name, Index: trigger.index, Fields: fields, Thread: trigger.thread, Limits: trigger.limits, PromptTemplate: trigger.prompt, MessageID: in.messageID(m), Received: in.now(), Message: m, Person: trigger.person}
 	in.log.InfoContext(ctx, "chat: "+what+" matched a trigger", append(where, "trigger", trigger.index)...)
 	out, err := in.decide(ctx, match)
 	if out.decision != "" {

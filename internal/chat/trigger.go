@@ -45,6 +45,9 @@ type TriggerMatch struct {
 	// Mention says the match is a bot's mention and not a botMessage trigger's: the turn belongs in the thread the mention
 	// is in, and carries the thread.
 	Mention bool
+	// Person says the match is a personMessage trigger's: a person wrote the message, so the turn is theirs, attributed to
+	// Message.User, and it holds its place in the trigger's limits for its own turn alone, as a bot's mention does.
+	Person bool
 }
 
 // maxMatchedFieldBytes is how much of a message field the regexes of a trigger see: its first 16 KiB, cut on a character
@@ -202,6 +205,12 @@ func (t *messageTrigger) takesSender(m Inbound) bool {
 	return m.Bot != nil && m.Bot.IsSender(t.from)
 }
 
+// messageTriggerOf says whether tr is a trigger of the table: a botMessage trigger with its sender, or a personMessage trigger.
+// The intake's table and the dry run's are made of the same.
+func messageTriggerOf(tr *v1alpha1.Trigger) bool {
+	return (tr.Type == v1alpha1.TriggerBotMessage && tr.From != nil) || tr.Type == v1alpha1.TriggerPersonMessage
+}
+
 // triggerTable is the botMessage and personMessage triggers of one Binding, compiled, in the order of its list.
 type triggerTable []messageTrigger
 
@@ -260,8 +269,7 @@ func (c *tableCache) build(b *v1alpha1.Binding, log *slog.Logger) triggerTable {
 	var t triggerTable
 	for i := range b.Spec.Chat.Triggers {
 		tr := &b.Spec.Chat.Triggers[i]
-		isBot := tr.Type == v1alpha1.TriggerBotMessage && tr.From != nil
-		if !isBot && tr.Type != v1alpha1.TriggerPersonMessage {
+		if !messageTriggerOf(tr) {
 			continue
 		}
 		bt, err := compile(i, tr)

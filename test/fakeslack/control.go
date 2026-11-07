@@ -50,6 +50,17 @@ func (s *Server) Mention(channel, user, text string) (UserMessage, error) {
 	return s.userMessage(channel, "", user, text)
 }
 
+// Say posts text at the top level of a channel as user and delivers a message
+// event for it: a person's message outside a thread. If the text mentions the
+// bot, an app_mention event comes first, as for a Mention. A D channel is
+// refused: use DM.
+func (s *Server) Say(channel, user, text string) (UserMessage, error) {
+	if s.channelType(channel) == "im" {
+		return UserMessage{}, invalid("fakeslack: %s is a direct message; use DM", channel)
+	}
+	return s.userMessage(channel, "", user, text)
+}
+
 // Reply posts text in the thread of a message in channel as user and delivers
 // a message event; the thread must exist, and threadTS names it. If the text
 // mentions the bot, in a channel that is not a direct message, an app_mention

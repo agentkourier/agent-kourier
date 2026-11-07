@@ -1,6 +1,7 @@
 package chat_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
 // personTrigger is a personMessage trigger, as the Binding loader would hand it on after defaulting. Its limits are the
@@ -82,9 +84,9 @@ func TestAPersonsTopLevelMessageMatchesAPersonMessageTrigger(t *testing.T) {
 				return
 			}
 			m := got[0]
-			if m.Message.At.ID != tt.msg.At.ID || m.Index != 0 || m.Binding != bindingName || m.Mention {
-				t.Errorf("match = binding %q trigger %d anchored to %q, mention %v; want %s trigger 0 anchored to the message itself",
-					m.Binding, m.Index, m.Message.At.ID, m.Mention, bindingName)
+			if m.Message.At.ID != tt.msg.At.ID || m.Index != 0 || m.Binding != bindingName || m.Mention || !m.Person || m.Message.User != tt.msg.User {
+				t.Errorf("match = binding %q trigger %d anchored to %q, mention %v, person %v by %q; want %s trigger 0 anchored to the message itself, a person's, by %q",
+					m.Binding, m.Index, m.Message.At.ID, m.Mention, m.Person, m.Message.User, bindingName, tt.msg.User)
 			}
 			if len(m.Fields) != 0 || m.Thread.By != "" || m.PromptTemplate != tt.trigger.PromptTemplate || m.Limits.RateLimit == nil {
 				t.Errorf("match = fields %v thread %+v prompt %q limits %+v; want no fields, no thread rules, the trigger's prompt and limits", m.Fields, m.Thread, m.PromptTemplate, m.Limits)
@@ -98,7 +100,7 @@ func TestAPersonsTopLevelMessageMatchesAPersonMessageTrigger(t *testing.T) {
 
 // Replies keep their way: one in a thread goes to the session manager whatever triggers the Binding has, and a
 // personMessage trigger starts nothing from it. The thread of a message the trigger started is one of those.
-func TestARepliesInAThreadIsNotAPersonMessageStart(t *testing.T) {
+func TestAReplyInAThreadIsNotAPersonMessageStart(t *testing.T) {
 	h := newTriggered(t, personTrigger(nil))
 	if err := h.in.Message(h.ctx, personPost("C1", "9.9", "", "checkout is down")); err != nil {
 		t.Fatal(err)
@@ -149,6 +151,50 @@ func TestBotAndPersonTriggersSideBySideTakeTheirOwnSenders(t *testing.T) {
 	if len(got) != 2 || got[0].Index != 0 || got[0].Message.At.ID != "9.9" || got[1].Index != 1 || got[1].Message.At.ID != "9.10" {
 		t.Fatalf("matches = %+v; want the bot's message by trigger 0, the person's by trigger 1", got)
 	}
+	if got[0].Person || !got[1].Person {
+		t.Errorf("person = %v and %v; want the bot's match a botMessage trigger's and the person's a personMessage trigger's", got[0].Person, got[1].Person)
+	}
+}
+
+// A person's message holds its place in the trigger's concurrency for its own turn alone: while that turn's task runs, a second
+// report is limited; once it has ended, a later turn in its thread (a person's mentioned reply, running or queued) holds no
+// place, so the next report starts. An alert's start, by contrast, counts every task of its thread
+// (TestMaxConcurrentCountsRunningInvestigations).
+func TestAPersonMessageHoldsItsConcurrencyPlaceForItsOwnTurnAlone(t *testing.T) {
+	h := newLimited(t, personTrigger(func(tr *v1alpha1.Trigger) {
+		tr.Limits.RateLimit = &v1alpha1.RateLimit{MaxRuns: 100, Per: metav1.Duration{Duration: time.Hour}, MaxConcurrent: 1}
+	}))
+	report := func(id string) {
+		t.Helper()
+		if err := h.in.Message(h.ctx, personPost("C1", id, "", "checkout is down "+id)); err != nil {
+			t.Fatal(err)
+		}
+		h.clk.advance(time.Second)
+	}
+	key := store.ConversationKey{Connection: conn, Channel: "C1", Thread: "9.1"}
+	report("9.1")
+	if err := h.st.UpsertSession(t.Context(), store.Session{Key: key, Binding: bindingName, Origin: store.Origin{Source: store.OriginPersonMessage}, LastActivity: h.clk.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	// The start's own task runs, as the session manager records it: the turn of the message that began the session.
+	if err := h.st.SetSessionTask(t.Context(), key, "c1", "t1", store.TaskTurn{ID: "slack:" + conn + ":C1:9.1", User: "U1", MessageRef: "9.1", Mention: "9.1"}); err != nil {
+		t.Fatal(err)
+	}
+	report("9.2")
+	// The start's task ended, and a person's mentioned reply in its thread runs a task of its own, with another queued behind it.
+	if err := h.st.SetSessionTask(t.Context(), key, "c1", "t2", store.TaskTurn{ID: "slack:" + conn + ":C1:9.5", User: "U2", MessageRef: "9.5"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.EnqueueReply(t.Context(), store.Reply{ID: "slack:" + conn + ":C1:9.6", Key: key, UserID: "U2", MessageRef: "9.6", Text: "and now?", EnqueuedAt: h.clk.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	report("9.3")
+	if got := h.started(); !slices.Equal(got, []string{"9.1", "9.3"}) {
+		t.Errorf("turns started for %v; want 9.1, and 9.3 once only later turns of its thread run", got)
+	}
+	if got := h.limitedCount(t, "0"); got["concurrent"] != 1 || len(got) != 1 {
+		t.Errorf("agentkourier_trigger_limited_total = %v; want one, for 9.2, by the concurrency limit", got)
+	}
 }
 
 // A top-level message that mentions Agent Kourier is the mention trigger's where the Binding has one, so a person who asks
@@ -181,6 +227,30 @@ func TestAMentionIsTheMentionTriggersWhereThereIsOne(t *testing.T) {
 				t.Errorf("submitted = %+v; want a new session for the mention: %v", subs, tt.wantAsk)
 			}
 		})
+	}
+}
+
+// A message no personMessage trigger takes is not remembered: its other event, if it says the message mentions Agent Kourier,
+// is still the mention trigger's, and a redelivery is tried, and counted unmatched, again.
+func TestAnUnmatchedPersonMessageIsNotRemembered(t *testing.T) {
+	h := newTriggered(t, v1alpha1.Trigger{Type: v1alpha1.TriggerMention}, personTrigger(func(tr *v1alpha1.Trigger) {
+		tr.Match = map[v1alpha1.MessageField]string{v1alpha1.FieldText: `(?i)down`}
+	}))
+	m := personPost("C1", "9.9", "", "please look")
+	for range 2 {
+		if err := h.in.Message(h.ctx, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := h.counter(t, "agentkourier_trigger_unmatched_total", bindingName); n != 2 || len(h.sub.submitted()) != 0 {
+		t.Fatalf("unmatched %v times and submitted %+v; want twice, and nothing", n, h.sub.submitted())
+	}
+	m.Mentioned = true
+	if err := h.in.Message(h.ctx, m); err != nil {
+		t.Fatal(err)
+	}
+	if subs := h.sub.submitted(); len(subs) != 1 || !subs[0].Create || subs[0].Key.Thread != "9.9" || len(h.got()) != 0 {
+		t.Errorf("submitted %+v and started %d; want the mention as a new session, and no trigger start", subs, len(h.got()))
 	}
 }
 
