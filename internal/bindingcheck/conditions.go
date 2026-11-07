@@ -3,7 +3,7 @@
 // groups can be read.
 //
 // The package does no I/O of its own and knows neither the agent client nor a chat platform. A Prober calls the
-// AgentChecker and ChannelChecker it is given, and records what they report in a State. The conditions are shaped
+// AgentChecker, ChannelChecker and GroupChecker it is given, and records what they report in a State. The conditions are shaped
 // like metav1.Condition so that they can be copied into a status: with the custom resource config source, the elected
 // leader's status writer (internal/broker) does, keeping each condition's own observedGeneration and leaving out
 // LastProbeTime and Cause.
@@ -21,7 +21,8 @@ const (
 	// ChannelJoined is True when the bot is a member of the Binding's channel, which exists and is not archived.
 	ChannelJoined ConditionType = "ChannelJoined"
 	// ApproversReadable is True when every approver group the Binding names can be read. It applies only to a Binding
-	// that asks for tool approvals from groups, so a State holds it only for those.
+	// that asks for tool approvals from groups: the Prober makes it Pending when a Binding's Target gains groups and removes
+	// it when the Target loses them, so a State holds it only for those.
 	ApproversReadable ConditionType = "ApproversReadable"
 	// Ready is True when every other condition the Binding has is True.
 	Ready ConditionType = "Ready"
@@ -103,24 +104,30 @@ const (
 	ReasonChannelArchived Reason = "ChannelArchived"
 	// ReasonMissingScope is a ChannelJoined or ApproversReadable reason: the chat token lacks the scope for the read.
 	ReasonMissingScope Reason = "MissingScope"
-	// ReasonChatCredentialsRejected is a False ChannelJoined reason: the chat platform rejected the bot's token, so
-	// reading the channel cannot work until an operator replaces it.
+	// ReasonChatCredentialsRejected is a False ChannelJoined or ApproversReadable reason: the chat platform rejected the
+	// bot's token, so reading the channel or a group cannot work until an operator replaces it.
 	ReasonChatCredentialsRejected Reason = "ChatCredentialsRejected"
-	// ReasonChatUnavailable is an Unknown ChannelJoined reason: the chat platform rate-limited or failed the read.
+	// ReasonChatUnavailable is an Unknown ChannelJoined or ApproversReadable reason: the chat platform rate-limited or
+	// failed the read.
 	ReasonChatUnavailable Reason = "ChatUnavailable"
-	// ReasonChatCredentialsChanged is an Unknown ChannelJoined reason: the chat credentials changed after the
+	// ReasonChatCredentialsChanged is an Unknown ChannelJoined or ApproversReadable reason: the chat credentials changed after the
 	// connection started, so a restart is needed before they are used. It is the changed-but-not-yet-restarted case,
 	// not the rejected one (ReasonChatCredentialsRejected), where the platform has refused the token the connection
 	// is using.
 	ReasonChatCredentialsChanged Reason = "ChatCredentialsChanged"
 
-	// ReasonChatCredentialsUnusable is an Unknown ChannelJoined reason: the Secret that holds the chat credentials, or a key of it, is
+	// ReasonChatCredentialsUnusable is an Unknown ChannelJoined or ApproversReadable reason: the Secret that holds the chat credentials, or a key of it, is
 	// gone or empty, or the Secret is of a type that is never read. The connection still uses the tokens it read, and a restart
 	// fails until the Secret is mended, which tells it from ReasonChatCredentialsChanged, where a restart is what is wanted.
 	ReasonChatCredentialsUnusable Reason = "ChatCredentialsUnusable"
 
 	// ReasonGroupNotFound is an ApproversReadable reason: a named approver group does not exist.
 	ReasonGroupNotFound Reason = "GroupNotFound"
+	// ReasonGroupsUnreadable is an ApproversReadable reason: the chat platform refuses to let the bot read a named group
+	// for a cause that is not a missing scope (ReasonMissingScope) or a group that is not there (ReasonGroupNotFound): the
+	// workspace's plan has no user groups, the token is of a type the read does not take, or it lacks the permission or
+	// is not allowed on this workspace. No retry mends it until an operator changes the workspace or the app.
+	ReasonGroupsUnreadable Reason = "GroupsUnreadable"
 )
 
 // reportable reports whether a checker may report r with the status s. OK goes only with True. A reason whose comment
@@ -139,7 +146,7 @@ func (r Reason) reportable(s Status) bool {
 		ReasonAgentNotReady, ReasonBackendError, ReasonUnexpectedStatus, ReasonInvalidAgentCard, ReasonStreamingUnsupported,
 		ReasonUnsupportedExtension, ReasonNoJSONRPCInterface,
 		ReasonNotInChannel, ReasonChannelNotFound, ReasonChannelArchived, ReasonMissingScope,
-		ReasonGroupNotFound:
+		ReasonGroupNotFound, ReasonGroupsUnreadable:
 		return s != True
 	}
 	return false

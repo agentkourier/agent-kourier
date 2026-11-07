@@ -180,6 +180,50 @@ func (c *Client) IsInAnyUserGroup(ctx context.Context, groups []string, user str
 	return false, nil
 }
 
+// GroupsReadable reports whether the bot can read the members of every one of the user groups, whose IDs are Slack's
+// (usergroups.users.list, one call per group, in order, the same call IsInAnyUserGroup makes), and asks nothing of who the
+// members are. The first group that cannot be read ends the call with a *chat.GroupError that names it, and no later group is read.
+// Nothing is cached. The bound is IsInAnyUserGroup's, 2 seconds for all the groups together or Config.AuthzTimeout. No groups is nil
+// with no call. Disabled groups are not asked for (include_disabled is not sent). The error holds no token. The app needs the
+// usergroups:read scope.
+//
+// An error wraps chat.ErrGroupsMisconfigured when Slack's code says the read cannot succeed until an operator changes something
+// (groupsMisconfiguredCode, as for IsInAnyUserGroup), and then also chat.ErrGroupNotFound for no_such_subteam and chat.ErrMissingScope
+// for missing_scope, so a caller can say which; the other codes (plan_upgrade_required, not_allowed_token_type, no_permission,
+// enterprise_is_restricted) wrap the first alone. Every other error, a timeout, a 5xx, a rate limit, a cancelled context, a token
+// Slack rejects, wraps none of them and may pass on another try. Classify(chat.OpOther, err) says FatalAuth for a rejected token, and
+// for a rate limit the wait Slack named.
+//
+// UNCONFIRMED(WP-04), as for IsInAnyUserGroup: that a disabled group, asked for without include_disabled, is no_such_subteam and
+// not a list (ErrGroupNotFound says it does not exist "or is disabled" on that reading), and that a free workspace gets
+// plan_upgrade_required.
+func (c *Client) GroupsReadable(ctx context.Context, groups []string) (telemetryErr error) {
+	if len(groups) == 0 {
+		return nil
+	}
+	ctx, op := telemetry.Start(ctx, "agentkourier.chat.GroupsReadable")
+	defer func() { finishChat(ctx, op, "GroupsReadable", telemetryErr) }()
+	ctx, cancel := context.WithTimeout(ctx, c.authz)
+	defer cancel()
+	for _, group := range groups {
+		if _, err := c.api.GetUserGroupMembersContext(ctx, group); err != nil {
+			err = c.scrub("usergroups.users.list", err)
+			code := groupsMisconfiguredCode(err)
+			if code != "" {
+				err = fmt.Errorf("%w: %w", chat.ErrGroupsMisconfigured, err)
+			}
+			switch code {
+			case "no_such_subteam":
+				err = fmt.Errorf("%w: %w", chat.ErrGroupNotFound, err)
+			case "missing_scope":
+				err = fmt.Errorf("%w: %w", chat.ErrMissingScope, err)
+			}
+			return &chat.GroupError{Group: group, Err: err}
+		}
+	}
+	return nil
+}
+
 // IsBot reports whether user is a bot (users.info is_bot), uncached: ResolveUser's cache does not
 // hold the flag. It fails closed too: on an error it is true, with the error, so a caller that does
 // not look at the error still refuses. It is bounded like IsChannelMember (2 seconds, or

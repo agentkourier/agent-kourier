@@ -282,6 +282,30 @@ func TestBindingsPrunedDeletesTheSeriesOfThoseBindingsOnly(t *testing.T) {
 	}
 }
 
+// Dropping a condition deletes that condition's series of that Binding, its three statuses, and nothing else: not the Binding's other
+// conditions, its ready gauge, or the same condition of another Binding.
+func TestBindingConditionDroppedDeletesThatConditionsSeriesOnly(t *testing.T) {
+	m := mustMetrics(t, nil)
+	for _, b := range []string{"a/one", "a/two"} {
+		for _, c := range []bindingcheck.ConditionType{bindingcheck.BackendReachable, bindingcheck.ApproversReadable, bindingcheck.Ready} {
+			m.BindingCondition(transition(b, c, bindingcheck.False))
+		}
+	}
+	m.BindingConditionDropped("a/one", bindingcheck.ApproversReadable)
+	got := strings.Join(seriesOf(t, m, "agentkourier_binding_"), "\n")
+	if strings.Contains(got, "binding=a/one,condition=ApproversReadable") {
+		t.Errorf("series after the drop:\n%s\nwant none of a/one's ApproversReadable", got)
+	}
+	for _, want := range []string{"binding=a/one,condition=BackendReachable,status=false} 1", "binding=a/one,condition=Ready,status=false} 1", "agentkourier_binding_ready{binding=a/one} 0",
+		"binding=a/two,condition=ApproversReadable,status=false} 1", "binding=a/two,condition=ApproversReadable,status=true} 0", "binding=a/two,condition=ApproversReadable,status=unknown} 0"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("series after the drop:\n%s\nwant %q still there", got, want)
+		}
+	}
+	// A condition with no series is no error.
+	m.BindingConditionDropped("a/nobody", bindingcheck.ApproversReadable)
+}
+
 // A probe's duration lands in the histogram of its condition.
 func TestBindingProbedObservesTheDurationByCondition(t *testing.T) {
 	m := mustMetrics(t, nil)

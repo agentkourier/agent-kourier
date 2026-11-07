@@ -366,6 +366,7 @@ func (m *markupPlatform) subject() Subject {
 			return nil
 		},
 		Channels:      m.arrangeChannel,
+		Groups:        m.arrangeGroup,
 		TooLarge:      &chat.Prompt{ID: "ix-big", Questions: make([]chat.Question, 500)},
 		ToolApprovals: !m.leaks.undeclaredTools,
 		TooLargeTools: &chat.Prompt{ID: "ix-big-tools", Tools: make([]chat.Tool, 500)},
@@ -977,5 +978,157 @@ func TestConformanceRefusesAChannelOfNoName(t *testing.T) {
 	}
 	if found == 0 {
 		t.Error("a Subject whose Channels names no channel gave no setup violation")
+	}
+}
+
+// groupLeaks are the ways a platform can break the contract of GroupsReadable.
+type groupLeaks struct {
+	noneIsAnError     bool // no groups is an error
+	readableFails     bool // a group that may be read is an error
+	unknownPlain      bool // an unknown group is a plain error, not a *chat.GroupError
+	unknownNoSentinel bool // an unknown group is a GroupError that does not wrap chat.ErrGroupNotFound
+	unknownRetryable  bool // an unknown group does not wrap chat.ErrGroupsMisconfigured, so a caller would retry it
+	unknownIsScope    bool // an unknown group also wraps chat.ErrMissingScope
+	scopeIsNotFound   bool // a missing scope wraps chat.ErrGroupNotFound instead of chat.ErrMissingScope
+	scopePlain        bool // a missing scope is a plain error
+	wrongGroup        bool // the error names the last group of the call, not the first that failed
+	cancelIsNotFound  bool // a cancelled context is reported as a missing group
+}
+
+// wrongGroups is the fake with GroupsReadable answered as leaks says.
+type wrongGroups struct {
+	*FakePlatform
+	leaks groupLeaks
+}
+
+func (w *wrongGroups) GroupsReadable(ctx context.Context, groups []string) error {
+	if w.leaks.cancelIsNotFound && ctx.Err() != nil {
+		return &chat.GroupError{Group: groups[0], Err: fmt.Errorf("gone: %w: %w", chat.ErrGroupNotFound, chat.ErrGroupsMisconfigured)}
+	}
+	if w.leaks.noneIsAnError && len(groups) == 0 {
+		return errors.New("no groups")
+	}
+	err := w.FakePlatform.GroupsReadable(ctx, groups)
+	var ge *chat.GroupError
+	switch {
+	case err == nil && w.leaks.readableFails && len(groups) == 1 && ctx.Err() == nil:
+		return &chat.GroupError{Group: groups[0], Err: fmt.Errorf("fake: %w", chat.ErrGroupsMisconfigured)}
+	case !errors.As(err, &ge):
+		return err
+	case errors.Is(err, chat.ErrGroupNotFound) && w.leaks.unknownPlain:
+		return errors.New(err.Error())
+	case errors.Is(err, chat.ErrGroupNotFound) && w.leaks.unknownNoSentinel:
+		return &chat.GroupError{Group: ge.Group, Err: fmt.Errorf("fake: %w", chat.ErrGroupsMisconfigured)}
+	case errors.Is(err, chat.ErrGroupNotFound) && w.leaks.unknownRetryable:
+		return &chat.GroupError{Group: ge.Group, Err: fmt.Errorf("fake: %w", chat.ErrGroupNotFound)}
+	case errors.Is(err, chat.ErrGroupNotFound) && w.leaks.unknownIsScope:
+		return &chat.GroupError{Group: ge.Group, Err: fmt.Errorf("fake: %w: %w: %w", chat.ErrGroupNotFound, chat.ErrMissingScope, chat.ErrGroupsMisconfigured)}
+	case errors.Is(err, chat.ErrMissingScope) && w.leaks.scopeIsNotFound:
+		return &chat.GroupError{Group: ge.Group, Err: fmt.Errorf("fake: %w: %w", chat.ErrGroupNotFound, chat.ErrGroupsMisconfigured)}
+	case errors.Is(err, chat.ErrMissingScope) && w.leaks.scopePlain:
+		return errors.New(err.Error())
+	case w.leaks.wrongGroup:
+		return &chat.GroupError{Group: groups[len(groups)-1], Err: ge.Err}
+	}
+	return err
+}
+
+func TestConformanceChecksGroupsReadableInEveryState(t *testing.T) {
+	t.Parallel()
+	var asked []GroupState
+	f := NewFake()
+	s := f.Subject()
+	arrange := s.Groups
+	s.Groups = func(st GroupState) string { asked = append(asked, st); return arrange(st) }
+	if vs := CheckWith(t.Context(), s, Options{Short: true}); len(vs) != 0 {
+		t.Fatalf("violations: %v", vs)
+	}
+	// The readable group is asked for again at the end, for the cancelled context.
+	want := []GroupState{GroupUnknown, GroupReadable, GroupScopeMissing, GroupReadable}
+	if !slices.Equal(asked, want) {
+		t.Errorf("the states arranged were %v, want %v", asked, want)
+	}
+}
+
+func TestConformanceFindsAGroupsReadableThatBreaksTheContract(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		leaks groupLeaks
+		bad   []string // the checks that find it
+	}{
+		"no groups an error":                          {groupLeaks{noneIsAnError: true}, []string{"no groups"}},
+		"a readable group that fails":                 {groupLeaks{readableFails: true}, []string{"readable"}},
+		"an unknown group that is a plain error":      {groupLeaks{unknownPlain: true}, []string{"unknown group"}},
+		"an unknown group without the sentinel":       {groupLeaks{unknownNoSentinel: true}, []string{"unknown group"}},
+		"an unknown group a caller would retry":       {groupLeaks{unknownRetryable: true}, []string{"unknown group"}},
+		"an unknown group that is also a scope":       {groupLeaks{unknownIsScope: true}, []string{"unknown group"}},
+		"a missing scope that is a missing group":     {groupLeaks{scopeIsNotFound: true}, []string{"missing scope"}},
+		"a missing scope that is a plain error":       {groupLeaks{scopePlain: true}, []string{"missing scope"}},
+		"an error that names the wrong group":         {groupLeaks{wrongGroup: true}, []string{"unknown group"}},
+		"a cancelled context taken for a missing one": {groupLeaks{cancelIsNotFound: true}, []string{"cancelled context"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := &wrongGroups{FakePlatform: NewFake(), leaks: tc.leaks}
+			s := w.Subject()
+			s.Platform = w
+			var found []string
+			for _, v := range CheckWith(t.Context(), s, Options{Short: true}) {
+				if v.Method == "GroupsReadable" {
+					if v.Rule != RuleContract {
+						t.Errorf("violation %v, want the contract rule", v)
+					}
+					found = append(found, v.Case)
+				}
+			}
+			if !slices.Equal(found, tc.bad) {
+				t.Errorf("GroupsReadable violations in %v, want only %q", found, tc.bad)
+			}
+		})
+	}
+}
+
+// Groups is required, like Channels: a subject without it would pass with GroupsReadable unchecked.
+func TestConformanceRefusesASubjectWithoutGroups(t *testing.T) {
+	t.Parallel()
+	s := NewFake().Subject()
+	s.Groups = nil
+	vs := Check(t.Context(), s)
+	if len(vs) != 1 || vs[0].Rule != RuleSetup || !strings.Contains(vs[0].Detail, "Groups") {
+		t.Errorf("Check of a subject with no Groups = %v, want one setup violation that names Groups", vs)
+	}
+}
+
+func TestConformanceRefusesAGroupOfNoName(t *testing.T) {
+	t.Parallel()
+	s := NewFake().Subject()
+	s.Groups = func(GroupState) string { return "" }
+	var found int
+	for _, v := range CheckWith(t.Context(), s, Options{Short: true}) {
+		if v.Rule == RuleSetup && v.Method == "GroupsReadable" {
+			found++
+		}
+	}
+	if found == 0 {
+		t.Error("a Subject whose Groups names no group gave no setup violation")
+	}
+}
+
+// A subject whose Groups resets every group before it arranges a state, which Subject.Groups allows, passes: the checks do not depend on
+// an earlier arrangement surviving the next.
+func TestConformanceAcceptsGroupsThatResetEveryGroup(t *testing.T) {
+	t.Parallel()
+	f := NewFake()
+	s := f.Subject()
+	arrange := s.Groups
+	s.Groups = func(st GroupState) string {
+		f.mu.Lock()
+		clear(f.groups)
+		f.mu.Unlock()
+		return arrange(st)
+	}
+	for _, v := range CheckWith(t.Context(), s, Options{Short: true}) {
+		if v.Method == "GroupsReadable" {
+			t.Errorf("violation: %v", v)
+		}
 	}
 }

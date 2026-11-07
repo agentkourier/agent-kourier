@@ -269,7 +269,8 @@ func (m *Metrics) Takeover() { m.takeovers.Inc() }
 // before any other Unknown, so the order in which the probes end does not matter) gets no series of its own and no ready gauge: the
 // Binding is not known to be unready, only not yet known, and a rule on == 0 would fire after every restart for the length of the slower
 // probe. A Binding that a first result has already found False has the series at once, with 0, which is true. The other conditions'
-// series are exported as they end. Ready never becomes Pending again.
+// series are exported as they end. Ready can be Pending again later (when an edit gives a Binding approver groups, or a Binding made again under its name drops a condition of the old one), and then its series keep the
+// last value they had until the probe of the groups ends.
 func (m *Metrics) BindingCondition(tr bindingcheck.Transition) {
 	if tr.New.Type == bindingcheck.Ready && tr.New.Pending() {
 		return
@@ -297,6 +298,14 @@ func (m *Metrics) BindingsPruned(names []string) {
 		m.bindingCond.DeletePartialMatch(prometheus.Labels{"binding": name})
 		m.bindingReady.DeleteLabelValues(name)
 	}
+}
+
+// BindingConditionDropped deletes the series of one condition of a Binding that stays in the config but no longer has that condition
+// (an edit took its approver groups away): bindingcheck.Options.OnDrop. The Prober calls it after the last transition it reports for
+// the condition, and after the change of Ready that the removal causes, so a series it deletes is not set again unless the Binding gains
+// groups later, when the condition is new and its series come back with its first result. The Binding's other series are untouched.
+func (m *Metrics) BindingConditionDropped(binding string, cond bindingcheck.ConditionType) {
+	m.bindingCond.DeletePartialMatch(prometheus.Labels{"binding": binding, "condition": string(cond)})
 }
 
 // BindingProbed observes how long a probe of a condition took.

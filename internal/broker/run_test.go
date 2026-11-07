@@ -96,6 +96,8 @@ func (idleSlack) IsInAnyUserGroup(context.Context, []string, string) (bool, erro
 	return false, nil
 }
 
+func (idleSlack) GroupsReadable(context.Context, []string) error { return nil }
+
 func (idleSlack) ChannelAccess(context.Context, string) (chat.Access, error) {
 	return chat.Access{}, nil
 }
