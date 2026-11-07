@@ -209,7 +209,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 		}
 	}
 	prober = verification{
-		Bindings: bindings, Platform: platform, Snaps: boot.Reloader, Revision: boot.Reloader.Revision, Conn: conn,
+		Bindings: bindings, Platform: platform, Groups: platform, Snaps: boot.Reloader, Revision: boot.Reloader.Revision, Conn: conn,
 		Secrets: boot.Secrets, Metrics: metrics, Log: log, Interval: cfg.probeEvery, Tick: cfg.probeTick, MinRevisionGap: cfg.probeGap,
 		Status: statusW,
 	}.newProber()

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -657,7 +658,7 @@ func TestARevisionThatPanicsCountsAsNoChangeAndIsReported(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		var panicked *PanicError
-		if len(perrs) == 0 || !errors.As(perrs[0].Err, &panicked) || panicked.Value != "revision boom" || perrs[0].Condition != "" || perrs[0].Target != (Target{}) {
+		if len(perrs) == 0 || !errors.As(perrs[0].Err, &panicked) || panicked.Value != "revision boom" || perrs[0].Condition != "" || !reflect.DeepEqual(perrs[0].Target, Target{}) {
 			t.Errorf("OnProbeError calls = %+v, want a PanicError for Revision with no condition or targets", perrs)
 		}
 	})
@@ -751,7 +752,7 @@ func TestAHookThatPanicsCannotStopTheProberAndOnProbeErrorDoesNotRecurse(t *test
 		var fromTransition bool
 		for _, pe := range perrs {
 			var panicked *PanicError
-			if errors.As(pe.Err, &panicked) && panicked.Value == "hook boom" && pe.Condition == BackendReachable && pe.Target == (Target{Binding: "a", Channel: "C1"}) {
+			if errors.As(pe.Err, &panicked) && panicked.Value == "hook boom" && pe.Condition == BackendReachable && reflect.DeepEqual(pe.Target, Target{Binding: "a", Channel: "C1"}) {
 				fromTransition = true
 			}
 		}
@@ -799,7 +800,7 @@ func TestARevisionThatEndsItsGoroutineIsReportedNotBelievedAndCalledAgain(t *tes
 		if agents.total() != 1 {
 			t.Errorf("probes = %d, want 1: the Goexit's empty answer was believed as a new revision", agents.total())
 		}
-		if errs := log.all(); len(errs) != 1 || errs[0].Err == nil || errs[0].Condition != "" || errs[0].Target != (Target{}) {
+		if errs := log.all(); len(errs) != 1 || errs[0].Err == nil || errs[0].Condition != "" || !reflect.DeepEqual(errs[0].Target, Target{}) {
 			t.Errorf("OnProbeError calls = %+v, want one for the Revision call that ended", errs)
 		}
 	})
@@ -830,7 +831,7 @@ func TestARevisionThatTimesOutIsReportedOncePerCall(t *testing.T) {
 	}, OnProbeError: log.add}, func(h *harness) {
 		h.advance(timeout)
 		errs := log.all()
-		if len(errs) != 1 || errs[0].Err == nil || errs[0].Condition != "" || errs[0].Target != (Target{}) {
+		if len(errs) != 1 || errs[0].Err == nil || errs[0].Condition != "" || !reflect.DeepEqual(errs[0].Target, Target{}) {
 			t.Errorf("OnProbeError calls = %+v, want one for the Revision call that timed out", errs)
 		}
 	})
@@ -894,7 +895,7 @@ func TestAnOnPrunePanicIsReported(t *testing.T) {
 		h.advance(tick)
 		errs := log.all()
 		var panicked *PanicError
-		if len(errs) != 1 || !errors.As(errs[0].Err, &panicked) || panicked.Value != "prune boom" || errs[0].Condition != "" || errs[0].Target != (Target{}) {
+		if len(errs) != 1 || !errors.As(errs[0].Err, &panicked) || panicked.Value != "prune boom" || errs[0].Condition != "" || !reflect.DeepEqual(errs[0].Target, Target{}) {
 			t.Errorf("OnProbeError calls = %+v, want one PanicError for OnPrune", errs)
 		}
 	})
@@ -919,7 +920,7 @@ func TestAnOnTransitionPanicDoesNotSkipTheTransitionsAndBindingsThatFollow(t *te
 		}
 		reported := map[string]bool{}
 		for _, pe := range log.all() {
-			if pe.Target != (Target{}) {
+			if !reflect.DeepEqual(pe.Target, Target{}) {
 				reported[pe.Target.Binding] = true
 			}
 		}

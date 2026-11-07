@@ -274,6 +274,7 @@ func slackSubject(t *testing.T) (chattest.Subject, *slack.Platform) {
 		},
 		Inert:    inertRequests(w),
 		Channels: slackChannels(fake),
+		Groups:   slackGroups(fake),
 		TooLarge: &chat.Prompt{ID: "ix-big", Questions: make([]chat.Question, 60)},
 		// A prompt of tools too large for one message: 30 tools take 62 blocks.
 		ToolApprovals: true,
@@ -325,6 +326,20 @@ func slackChannels(fake *fakeslack.Server) func(chattest.ChannelState) string {
 			return "C0ARCHIVED"
 		}
 		return "C0UNKNOWN"
+	}
+}
+
+// slackGroups puts the fake Slack in each state of a user group the contract of GroupsReadable names: the group exists, Slack has never
+// heard of it, or the app lacks the scope to read groups.
+func slackGroups(fake *fakeslack.Server) func(chattest.GroupState) string {
+	return func(state chattest.GroupState) string {
+		fake.SetMissingScope("usergroups.users.list", state == chattest.GroupScopeMissing)
+		switch state {
+		case chattest.GroupReadable, chattest.GroupScopeMissing:
+			fake.SetUserGroup("S0READABLE", "U1")
+			return "S0READABLE"
+		}
+		return "S0UNKNOWN"
 	}
 }
 

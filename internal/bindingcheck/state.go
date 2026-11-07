@@ -83,6 +83,35 @@ func (s *State) Set(binding string, at time.Time, conds ...Condition) []Transiti
 	return out
 }
 
+// Remove drops the probed condition t of binding (its namespace/name key) and recomputes Ready, which takes the change at at. It is for
+// a condition that stops applying to a Binding, not for one that failed. It reports whether the condition was there, and the
+// transitions: Ready's, when its status or reason changed. A type that is not probed (Ready is derived, and never removed alone), a
+// condition the Binding lacks and a Binding the State lacks change nothing. A Binding that is left with no probed condition is dropped
+// whole, since Ready has nothing to derive from, and reports no transition.
+func (s *State) Remove(binding string, at time.Time, t ConditionType) (bool, []Transition) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cur := s.bindings[binding]
+	if _, had := cur[t]; !had || !slices.Contains(probed, t) {
+		return false, nil
+	}
+	delete(cur, t)
+	if !slices.ContainsFunc(probed, func(p ConditionType) bool { _, ok := cur[p]; return ok }) {
+		delete(s.bindings, binding)
+		return true, nil
+	}
+	old, c := cur[Ready], derive(cur)
+	c.LastTransitionTime = at
+	if old.Status == c.Status {
+		c.LastTransitionTime = old.LastTransitionTime
+	}
+	cur[Ready] = c
+	if old.Status == c.Status && old.Reason == c.Reason {
+		return true, nil
+	}
+	return true, []Transition{{Binding: binding, Old: old, New: c}}
+}
+
 // derive computes the Ready condition from the probed conditions in cur. Ready is False when any is False, True when
 // all are, and Unknown otherwise; when it is not True it names the first condition that holds it back: a False one before any
 // Unknown, and for Unknown a Pending one before any other Unknown, so that Ready stays Pending (see Condition.Pending) for as long

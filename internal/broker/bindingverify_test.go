@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -852,12 +853,12 @@ func TestBindingTargetsAreTheServedConnectionsBindingsOnly(t *testing.T) {
 	snap := twoConnections(t)
 	got := bindingTargets(snap, v1alpha1.ObjectRef{Namespace: "platform", Name: "slack-a"})
 	want := []bindingcheck.Target{{Binding: "ops/oncall", Channel: "C2"}, {Binding: "sre/oncall", Channel: "C1"}}
-	if !slices.Equal(got, want) {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("targets of slack-a = %v; want %v", got, want)
 	}
 	got = bindingTargets(snap, v1alpha1.ObjectRef{Namespace: "platform", Name: "slack-b"})
 	want = []bindingcheck.Target{{Binding: "ops/also-other", Channel: "C3"}, {Binding: "sre/other-bot", Channel: "C1"}}
-	if !slices.Equal(got, want) {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("targets of slack-b = %v; want %v", got, want)
 	}
 	if got := bindingTargets(snap, v1alpha1.ObjectRef{Namespace: "platform", Name: "slack-c"}); len(got) != 0 {

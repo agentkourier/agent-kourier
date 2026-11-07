@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -296,6 +297,13 @@ func snapshotOf(t *testing.T, generations map[string]int64) *config.Snapshot {
 // snapshotWithUIDs is snapshotOf for Bindings that have the uids given, by key, and none where it has none.
 func snapshotWithUIDs(t *testing.T, generations map[string]int64, uids map[string]string) *config.Snapshot {
 	t.Helper()
+	return snapshotWith(t, generations, uids, nil)
+}
+
+// snapshotWith is snapshotWithUIDs for Bindings that also ask for tool approvals from the approver groups given, by key, and for none
+// where it has none.
+func snapshotWith(t *testing.T, generations map[string]int64, uids map[string]string, groups map[string][]string) *config.Snapshot {
+	t.Helper()
 	set := &config.Set{
 		AgentBackends:   []v1alpha1.AgentBackend{{ObjectMeta: metav1.ObjectMeta{Namespace: "sre", Name: "agent"}, Spec: v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectA2A}}},
 		ChatConnections: []v1alpha1.ChatConnection{{ObjectMeta: metav1.ObjectMeta{Namespace: "sre", Name: "slack"}}},
@@ -306,6 +314,9 @@ func snapshotWithUIDs(t *testing.T, generations map[string]int64, uids map[strin
 		b.Spec.Agent.BackendRef = v1alpha1.ObjectRef{Namespace: "sre", Name: "agent"}
 		b.Spec.Chat.ConnectionRef = v1alpha1.ObjectRef{Namespace: "sre", Name: "slack"}
 		b.Spec.Chat.Channel = "C-" + name
+		if g := groups[key]; len(g) > 0 {
+			b.Spec.Interactions.ToolApprovals, b.Spec.Interactions.ApproverGroups = true, g
+		}
 		set.Bindings = append(set.Bindings, b)
 	}
 	set.AgentBackends[0].Spec.AllowedNamespaces = []string{"sre", "other"}
@@ -1214,7 +1225,7 @@ func TestOnlyTheOwnedTypesAreWrittenAndTheyAreUnderTheSchemasCap(t *testing.T) {
 	r.set(sreAlerts, conds...)
 	r.reconcile()
 	got := c.last(t).conds()
-	if len(got) != len(statusTypes)-1 { // ApproversReadable is not set: nothing sets it yet
+	if len(got) != len(statusTypes)-1 { // ApproversReadable is not written: the Binding names no approver groups
 		t.Errorf("conditions written = %d, want %d", len(got), len(statusTypes)-1)
 	}
 	for typ := range got {
@@ -1444,7 +1455,7 @@ func TestTheBrokersProberTellsTheStatusWriterAtTheEndOfEachPass(t *testing.T) {
 // The Prober is given each Binding's generation, so that what it stamps is the generation the Binding had when the pass began.
 func TestBindingTargetsCarryTheGeneration(t *testing.T) {
 	got := bindingTargets(snapshotWithUIDs(t, map[string]int64{sreAlerts: 7}, map[string]string{sreAlerts: "uid-7"}), v1alpha1.ObjectRef{Namespace: "sre", Name: "slack"})
-	if want := []bindingcheck.Target{{Binding: sreAlerts, Channel: "C-alerts", Generation: 7, UID: "uid-7"}}; !slices.Equal(got, want) {
+	if want := []bindingcheck.Target{{Binding: sreAlerts, Channel: "C-alerts", Generation: 7, UID: "uid-7"}}; !reflect.DeepEqual(got, want) {
 		t.Errorf("targets = %v, want %v", got, want)
 	}
 }
@@ -1871,8 +1882,8 @@ func TestAFightOverTheStatusIsCountedAndSaidOnce(t *testing.T) {
 	})
 }
 
-// A condition of a type that the writer does not write, left by someone else (ApproversReadable, which nothing sets), is no
-// difference: it can never be equal to what is wanted and SSA cannot remove it, so comparing it would write for ever. A type that
+// A condition of a type that the writer does not write, left by someone else (ApproversReadable, on a Binding that names no approver
+// groups), is no difference: it can never be equal to what is wanted and SSA cannot remove it, so comparing it would write for ever. A type that
 // the writer wrote and no longer says (the probes of a Binding that stopped being served) is a difference, since SSA removes it.
 func TestAConditionOfATypeTheWriterDoesNotWriteIsNoDifference(t *testing.T) {
 	c := newStatusCluster(t, storedBinding(sreAlerts, 1,

@@ -71,6 +71,11 @@ type Subject struct {
 	// violation, so that a new adapter cannot pass with ChannelAccess unchecked. It may change what the platform answers for
 	// every channel, and the suite calls it again before it asks about the next state.
 	Channels func(ChannelState) string
+	// Groups puts the platform in each GroupState the contract of GroupsReadable names, and returns a group ID then in it:
+	// Conformance asks GroupsReadable of it. Like Channels it is required, so that a new adapter cannot pass with GroupsReadable
+	// unchecked, and it may change what the platform answers for every group: the suite calls it again before it asks about the
+	// next state.
+	Groups func(GroupState) string
 	// MentionUser is a user ID the platform shows as a mention, in a chat.Mention part, or "" if the platform has
 	// none: then a Mention shows its user as nothing but text. The checks send it, and require exactly one mention
 	// of it and nothing else the platform acts on; every other user ID they send is forged, and must never act.
@@ -103,6 +108,28 @@ func (s ChannelState) String() string {
 		return "missing scope"
 	}
 	return fmt.Sprintf("ChannelState(%d)", int(s))
+}
+
+// GroupState is a state the platform's user groups can be in, as GroupsReadable tells them apart.
+type GroupState int
+
+// The states Subject.Groups puts the platform in.
+const (
+	GroupReadable     GroupState = iota // a group that exists, which Agent Kourier may read
+	GroupUnknown                        // a group the platform has never heard of
+	GroupScopeMissing                   // any group, asked of an app that lacks the permission to read groups
+)
+
+func (s GroupState) String() string {
+	switch s {
+	case GroupReadable:
+		return "readable"
+	case GroupUnknown:
+		return "unknown group"
+	case GroupScopeMissing:
+		return "missing scope"
+	}
+	return fmt.Sprintf("GroupState(%d)", int(s))
 }
 
 // Concession is a construct of the kinds Kinds that the platform acts on in the text of the place Where
@@ -229,8 +256,8 @@ func ConformanceSharded(t *testing.T, shards int, newSubject func(t *testing.T) 
 
 // checkShard runs the checks of some places, and the contract if asked.
 func checkShard(ctx context.Context, s Subject, opts Options, places []placement, contract bool) []Violation {
-	if s.Platform == nil || s.Sent == nil || s.Inert == nil || s.Channels == nil {
-		return []Violation{{Rule: RuleSetup, Case: "subject", Detail: "Platform, Sent, Inert and Channels are all required"}}
+	if s.Platform == nil || s.Sent == nil || s.Inert == nil || s.Channels == nil || s.Groups == nil {
+		return []Violation{{Rule: RuleSetup, Case: "subject", Detail: "Platform, Sent, Inert, Channels and Groups are all required"}}
 	}
 	for _, cc := range s.Concessions {
 		if cc.Why == "" || len(cc.Kinds) == 0 {
@@ -346,6 +373,7 @@ func (c *checker) contract() {
 	}
 	c.busyContract()
 	c.accessContract(c.ctx)
+	c.groupsContract(c.ctx)
 	c.s.Sent() // the contract checks are not text checks
 	_ = c.s.Inert()
 }
@@ -430,6 +458,66 @@ func (c *checker) accessContract(ctx context.Context) {
 			} else if a != (chat.Access{}) {
 				c.add(RuleContract, 0, "ChannelAccess", "cancelled context", "gave the Access %+v with the error %v, want the zero Access", a, err)
 			}
+		}
+	}
+}
+
+// groupsContract checks what a platform promises of GroupsReadable (see the method): no groups is nil, a group it may read is nil,
+// and the first group it cannot read ends the call with a *chat.GroupError that names it and wraps chat.ErrGroupsMisconfigured, and
+// also chat.ErrGroupNotFound for a group that is not there and chat.ErrMissingScope for an app without the permission, and neither
+// of those for the other. A cancelled context, the one other failure the suite can force on every platform, wraps none of the three.
+// The states are reached through Subject.Groups, which every subject sets.
+func (c *checker) groupsContract(ctx context.Context) {
+	p := c.s.Platform
+	if err := p.GroupsReadable(ctx, nil); err != nil {
+		c.add(RuleContract, 0, "GroupsReadable", "no groups", "gave %v, want nil: no groups is no call and no error", err)
+	}
+	groupIn := func(st GroupState) (string, bool) {
+		g := c.s.Groups(st)
+		if g == "" {
+			c.add(RuleSetup, 0, "GroupsReadable", st.String(), "Subject.Groups named no group for the state")
+		}
+		return g, g != ""
+	}
+	// failed checks the error of a call over groups that must fail at the group named want, with the sentinel and no other.
+	failed := func(cs string, groups []string, want string, sentinel error) {
+		err := p.GroupsReadable(ctx, groups)
+		var ge *chat.GroupError
+		switch {
+		case !errors.As(err, &ge):
+			c.add(RuleContract, 0, "GroupsReadable", cs, "gave %v, want a *chat.GroupError", err)
+			return
+		case ge.Group != want:
+			c.add(RuleContract, 0, "GroupsReadable", cs, "the error names the group %q, want %q: the first group that cannot be read", ge.Group, want)
+		case !errors.Is(err, chat.ErrGroupsMisconfigured):
+			c.add(RuleContract, 0, "GroupsReadable", cs, "gave %v, want an error that wraps chat.ErrGroupsMisconfigured: no retry mends it", err)
+		}
+		for _, other := range []error{chat.ErrGroupNotFound, chat.ErrMissingScope} {
+			if errors.Is(err, other) != errors.Is(sentinel, other) {
+				c.add(RuleContract, 0, "GroupsReadable", cs, "gave %v, want an error that wraps %v and no other of the sentinels of GroupsReadable", err, sentinel)
+				return
+			}
+		}
+	}
+	readable, ok := groupIn(GroupReadable)
+	if ok {
+		if err := p.GroupsReadable(ctx, []string{readable}); err != nil {
+			c.add(RuleContract, 0, "GroupsReadable", GroupReadable.String(), "failed: %v, want nil for a group that may be read", err)
+		}
+	}
+	if unknown, ok2 := groupIn(GroupUnknown); ok && ok2 {
+		failed(GroupUnknown.String(), []string{readable, unknown, readable}, unknown, chat.ErrGroupNotFound)
+	}
+	if scope, ok := groupIn(GroupScopeMissing); ok {
+		failed(GroupScopeMissing.String(), []string{scope}, scope, chat.ErrMissingScope)
+	}
+	// A cancelled context is not a verdict on the group: it never says the group is missing, or the permission is.
+	if g, ok := groupIn(GroupReadable); ok {
+		cancelled, cancel := context.WithCancel(ctx)
+		cancel()
+		if err := p.GroupsReadable(cancelled, []string{g}); err != nil &&
+			(errors.Is(err, chat.ErrGroupNotFound) || errors.Is(err, chat.ErrMissingScope) || errors.Is(err, chat.ErrGroupsMisconfigured)) {
+			c.add(RuleContract, 0, "GroupsReadable", "cancelled context", "gave %v, want an error that wraps none of the sentinels of GroupsReadable", err)
 		}
 	}
 }
