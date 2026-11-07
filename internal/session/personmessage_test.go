@@ -3,6 +3,9 @@ package session
 import (
 	"context"
 	"testing"
+	"time"
+
+	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
@@ -113,24 +116,40 @@ func TestTheCallOfAPersonsMessageIsAuditedAsThePersons(t *testing.T) {
 }
 
 // The task that a person's message begins is recorded as that start's, for the limit on running starts of its trigger to read; a
-// later turn of the session, a mentioned reply, begins a task that is no start's.
+// later turn of the session, a mentioned reply, begins a task that is no start's. Each is read while its task runs, which the agent
+// holds: the session clears the turn when the task ends.
 func TestTheTaskOfAPersonsMessageIsTheStarts(t *testing.T) {
 	f := newFixture(t)
 	sink := f.live()
+	started := []chan struct{}{make(chan struct{}), make(chan struct{})}
+	release := []chan struct{}{make(chan struct{}), make(chan struct{})}
+	f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+		accepted(h, n)
+		close(started[n])
+		<-release[n]
+		return turn(h, n, a2a.TaskStateCompleted)
+	}
+	whileRunning := func(n int, what string, want func(store.TaskTurn) bool) {
+		t.Helper()
+		select {
+		case <-started[n]:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("the task of %s did not start", what)
+		}
+		if sess, err := f.session(); err != nil || sess.TaskID == "" || !want(sess.Turn) {
+			t.Errorf("session while the task of %s runs = %+v, %v", what, sess, err)
+		}
+		close(release[n])
+		waitFinal(t, sink)
+	}
 	if _, err := f.submit(personStart()); err != nil {
 		t.Fatal(err)
 	}
-	waitFinal(t, sink)
-	if sess, err := f.session(); err != nil || sess.Turn.Mention != key.Thread {
-		t.Fatalf("session = %+v, %v; want the task the start's, %s", sess, err, key.Thread)
-	}
+	whileRunning(0, "the person's message", func(turn store.TaskTurn) bool { return turn.Mention == key.Thread })
 	if _, err := f.submit(reply("1700.05", true)); err != nil {
 		t.Fatal(err)
 	}
-	waitFinal(t, sink)
-	if sess, err := f.session(); err != nil || sess.Turn.MessageRef != "1700.05" || sess.Turn.Mention != "" {
-		t.Errorf("session = %+v, %v; want the reply's task, no start's", sess, err)
-	}
+	whileRunning(1, "the reply", func(turn store.TaskTurn) bool { return turn.MessageRef == "1700.05" && turn.Mention == "" })
 }
 
 // The turn a task records holds a start's place if a bot's mention began it, or the person's message at the root of a session that
