@@ -74,7 +74,8 @@ type Subject struct {
 	// Groups puts the platform in each GroupState the contract of GroupsReadable names, and returns a group ID then in it:
 	// Conformance asks GroupsReadable of it. Like Channels it is required, so that a new adapter cannot pass with GroupsReadable
 	// unchecked, and it may change what the platform answers for every group: the suite calls it again before it asks about the
-	// next state.
+	// next state. The suite arranges GroupUnknown, then GroupReadable, and asks about the two groups together, so arranging a state
+	// may reset the others but must not make the unknown group readable.
 	Groups func(GroupState) string
 	// MentionUser is a user ID the platform shows as a mention, in a chat.Mention part, or "" if the platform has
 	// none: then a Mention shows its user as nothing but text. The checks send it, and require exactly one mention
@@ -499,13 +500,16 @@ func (c *checker) groupsContract(ctx context.Context) {
 			}
 		}
 	}
+	// The unknown group is arranged first and the readable one after it, and then both are asked for together, so that a Subject.Groups
+	// that resets every group when it arranges a state still has the readable group readable and the unknown one not there.
+	unknown, okUnknown := groupIn(GroupUnknown)
 	readable, ok := groupIn(GroupReadable)
 	if ok {
 		if err := p.GroupsReadable(ctx, []string{readable}); err != nil {
 			c.add(RuleContract, 0, "GroupsReadable", GroupReadable.String(), "failed: %v, want nil for a group that may be read", err)
 		}
 	}
-	if unknown, ok2 := groupIn(GroupUnknown); ok && ok2 {
+	if ok && okUnknown {
 		failed(GroupUnknown.String(), []string{readable, unknown, readable}, unknown, chat.ErrGroupNotFound)
 	}
 	if scope, ok := groupIn(GroupScopeMissing); ok {

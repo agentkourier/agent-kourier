@@ -1044,7 +1044,7 @@ func TestConformanceChecksGroupsReadableInEveryState(t *testing.T) {
 		t.Fatalf("violations: %v", vs)
 	}
 	// The readable group is asked for again at the end, for the cancelled context.
-	want := []GroupState{GroupReadable, GroupUnknown, GroupScopeMissing, GroupReadable}
+	want := []GroupState{GroupUnknown, GroupReadable, GroupScopeMissing, GroupReadable}
 	if !slices.Equal(asked, want) {
 		t.Errorf("the states arranged were %v, want %v", asked, want)
 	}
@@ -1110,5 +1110,25 @@ func TestConformanceRefusesAGroupOfNoName(t *testing.T) {
 	}
 	if found == 0 {
 		t.Error("a Subject whose Groups names no group gave no setup violation")
+	}
+}
+
+// A subject whose Groups resets every group before it arranges a state, which Subject.Groups allows, passes: the checks do not depend on
+// an earlier arrangement surviving the next.
+func TestConformanceAcceptsGroupsThatResetEveryGroup(t *testing.T) {
+	t.Parallel()
+	f := NewFake()
+	s := f.Subject()
+	arrange := s.Groups
+	s.Groups = func(st GroupState) string {
+		f.mu.Lock()
+		clear(f.groups)
+		f.mu.Unlock()
+		return arrange(st)
+	}
+	for _, v := range CheckWith(t.Context(), s, Options{Short: true}) {
+		if v.Method == "GroupsReadable" {
+			t.Errorf("violation: %v", v)
+		}
 	}
 }

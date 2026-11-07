@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/agentkourier/agent-kourier/internal/bindingcheck"
@@ -203,5 +204,49 @@ func TestABindingThatLosesItsGroupsDoesNotKeepAReadyThatCitesThem(t *testing.T) 
 	r.reconcile()
 	if got := c.last(t).conds()["Ready"]; got["reason"] != "BackendReachable:AgentNotFound" {
 		t.Errorf("Ready = %v; want BackendReachable:AgentNotFound", got)
+	}
+}
+
+// A new leader takes over a Binding whose status was written by a broker that did not know ApproversReadable: Accepted, the probes and
+// Ready are True at the generation served, and there is no ApproversReadable. The takeover rule keeps a Pending condition's old words, but
+// the Ready it would keep says nothing of the groups, which are Pending now, so Ready is Unknown on them until the first probe of them ends.
+func TestATakeoverDoesNotKeepAReadyThatSaysNothingOfNewlyPendingGroups(t *testing.T) {
+	pending := func(t bindingcheck.ConditionType) bindingcheck.Condition {
+		return bindingcheck.Condition{Type: t, Status: bindingcheck.Unknown, Reason: bindingcheck.ReasonPending, ObservedGeneration: 3}
+	}
+	for name, prober := range map[string][]bindingcheck.Condition{
+		"before the Prober's first Tick": nil,
+		"after it, with every first probe in flight": {
+			pending(bindingcheck.BackendReachable), pending(bindingcheck.ChannelJoined), pending(bindingcheck.ApproversReadable),
+			{Type: bindingcheck.Ready, Status: bindingcheck.Unknown, Reason: "BackendReachable:Pending", ObservedGeneration: 3},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := newStatusCluster(t, storedBinding(sreAlerts, 3,
+				cond("Accepted", metav1.ConditionTrue, "OK", 3, statusT0),
+				cond("BackendReachable", metav1.ConditionTrue, "OK", 3, statusT0),
+				cond("ChannelJoined", metav1.ConditionTrue, "OK", 3, statusT0),
+				cond("Ready", metav1.ConditionTrue, "OK", 3, statusT0)))
+			r := newStatusRig(t, c, nil)
+			r.serveGroups(map[string]int64{sreAlerts: 3}, statusGroups)
+			if prober != nil {
+				r.set(sreAlerts, prober...)
+			}
+			r.reconcile()
+			got := c.stored(t, sreAlerts)
+			if ap := got["ApproversReadable"]; ap.Status != metav1.ConditionUnknown || ap.Reason != "Pending" {
+				t.Fatalf("ApproversReadable = %s/%s; want Unknown/Pending", ap.Status, ap.Reason)
+			}
+			if rd := got["Ready"]; rd.Status != metav1.ConditionUnknown || rd.Reason != "ApproversReadable:Pending" || rd.ObservedGeneration != 3 {
+				t.Errorf("Ready = %s/%s at %d; want Unknown/ApproversReadable:Pending at 3, not the True of the old status", rd.Status, rd.Reason, rd.ObservedGeneration)
+			}
+			// The first probes end: the Prober's words are the status's.
+			r.set(sreAlerts, groupsProbe(3, bindingcheck.True, bindingcheck.ReasonOK, "")...)
+			r.advance(11 * time.Second)
+			r.reconcile()
+			if rd := c.stored(t, sreAlerts)["Ready"]; rd.Status != metav1.ConditionTrue {
+				t.Errorf("Ready = %s/%s after the probes ended; want True", rd.Status, rd.Reason)
+			}
+		})
 	}
 }

@@ -545,6 +545,14 @@ func (w *statusWriter) desire(keys map[string]bool, rejections map[string][]conf
 			}
 		}
 		conds = append(conds, readyCondition(accepted, ready, generation, uid, old))
+		if last := len(conds) - 1; conds[last].Status == metav1.ConditionTrue && groupsPending(conds) {
+			// The takeover rule gave back a Ready that the last status said was True, but that status had no ApproversReadable, and the
+			// one written now is not known: the Binding is not Ready on a word that did not ask about its groups.
+			conds[last] = metav1.Condition{
+				Type: string(bindingcheck.Ready), Status: metav1.ConditionUnknown, ObservedGeneration: generation,
+				Reason: string(bindingcheck.ApproversReadable) + ":" + string(bindingcheck.ReasonPending),
+			}
+		}
 		for i := range conds {
 			conds[i].LastTransitionTime = transitionTime(conds[i], old, chosen, at)
 		}
@@ -552,6 +560,13 @@ func (w *statusWriter) desire(keys map[string]bool, rejections map[string][]conf
 		out[key] = statusWant{conditions: conds, served: isServed, own: isServed || !othersToo(rejections[key]), uid: uid, observed: accepted.ObservedGeneration}
 	}
 	return out
+}
+
+// groupsPending reports whether conds holds an ApproversReadable that is Unknown and Pending.
+func groupsPending(conds []metav1.Condition) bool {
+	return slices.ContainsFunc(conds, func(c metav1.Condition) bool {
+		return c.Type == string(bindingcheck.ApproversReadable) && c.Status == metav1.ConditionUnknown && c.Reason == string(bindingcheck.ReasonPending)
+	})
 }
 
 // pendingOnGroups is the Ready of a Binding that asks for approvals from groups whose ApproversReadable the Prober has not yet listed

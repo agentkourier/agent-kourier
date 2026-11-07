@@ -293,7 +293,7 @@ type Platform interface {
 	// person presses. The groups are read at the call and never cached, in order, and the first that cannot be read ends the call
 	// with a *GroupError that names it (no later group is read, so one failure hides the ones after it until it is mended). An
 	// error wraps ErrGroupsMisconfigured when the platform says the read can never succeed until an operator fixes the
-	// configuration, and then also ErrGroupNotFound for a group that does not exist or is disabled, and ErrMissingScope for an
+	// configuration, and then also ErrGroupNotFound for a group that does not exist (a disabled group is expected to be the same, which is unconfirmed), and ErrMissingScope for an
 	// app without the permission to read groups; a caller that wants the other causes (a workspace without groups, a token of a
 	// type the read does not take) finds ErrGroupsMisconfigured and neither of those. Any other error (a timeout, a server
 	// error, a rate limit, a cancelled context, a credential the platform rejects, which Classify says is FatalAuth) may pass on

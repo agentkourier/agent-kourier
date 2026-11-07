@@ -302,8 +302,8 @@ func (m *Metrics) BindingsPruned(names []string) {
 
 // BindingConditionDropped deletes the series of one condition of a Binding that stays in the config but no longer has that condition
 // (an edit took its approver groups away): bindingcheck.Options.OnDrop. The Prober calls it after the last transition it reports for
-// the condition, and after the change of Ready that the removal causes, so a series it deletes is not set again. The Binding's other
-// series are untouched.
+// the condition, and after the change of Ready that the removal causes, so a series it deletes is not set again unless the Binding gains
+// groups later, when the condition is new and its series come back with its first result. The Binding's other series are untouched.
 func (m *Metrics) BindingConditionDropped(binding string, cond bindingcheck.ConditionType) {
 	m.bindingCond.DeletePartialMatch(prometheus.Labels{"binding": binding, "condition": string(cond)})
 }

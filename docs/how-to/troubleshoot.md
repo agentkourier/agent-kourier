@@ -424,9 +424,9 @@ One failed probe holds the Binding at 0 until the next pass, up to about 5.5 min
 
 ### `ApproversReadable`
 
-Only a Binding with `interactions.toolApprovals: true` and a non-empty `interactions.approverGroups` has this condition. The leader reads the groups in order, one request each, and stops at the first it cannot read, so the `message` names that group
-by its place in the list and its ID (`spec.interactions.approverGroups[1] (S0123456789)`), and another bad group is named once this one is mended. While a group is `False` here, a person's press on a tool approval of this Binding
-ends with a fixed message and decides nothing, unless they are in a group earlier in the list, which the check reaches first.
+Only a Binding with `interactions.toolApprovals: true` and a non-empty `interactions.approverGroups` has this condition. The leader reads the groups in order, one request each, and stops at the first it cannot read, so `GroupNotFound` and `GroupsUnreadable` name that group
+in the `message` by its place in the list and its ID (`spec.interactions.approverGroups[1] (S0123456789)`), and another bad group is named once this one is mended. (`MissingScope` names no group: the app cannot read any.) While the reason is `GroupNotFound`, `MissingScope` or `GroupsUnreadable`, a person's press on a tool approval of this Binding
+ends with a fixed message and decides nothing, unless they are in a group earlier in the list, which the check reaches first. Under any other reason a press is kept and tried again, as it is under `ChatCredentialsRejected`, where it waits until the token is replaced.
 
 | `reason` | Status | What happened | What to do |
 |---|---|---|---|

@@ -69,7 +69,7 @@ whose winner is in another namespace says `already bound by a Binding in another
 Otherwise it is the probes' result (below), with the reason `<type>:<reason>` of the first condition that holds it back, such as
 `BackendReachable:AgentNotFound`. For about 15 seconds after a broker starts, before its prober has listed the Binding, `Ready` is `Unknown` with the bare reason
 `Pending`; then it is `BackendReachable:Pending` until the first probes end. A Binding that an edit gives its first approver group is `Unknown` with `ApproversReadable:Pending`
-until the next pass reads the group, unless `Ready` is `False` for another reason, so a Binding is never `Ready` on the word of a probe that did not ask about its groups. An edit that takes the
+until the next pass reads the group, unless `Ready` is already `False` for another reason, or is already `Unknown` and Pending on another condition (such as `BackendReachable:Pending`), so a Binding is never `Ready` on the word of a probe that did not ask about its groups. An edit that takes the
 last group away removes `ApproversReadable` from the status at the next write. Until the prober has seen the edit, `Ready` reads `Unknown` with the reason `Pending` if the prober's `Ready` was held back
 by `ApproversReadable`, rather than naming a group the Binding no longer has; after that, `Ready` does not count the condition.
 
