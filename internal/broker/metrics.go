@@ -269,7 +269,7 @@ func (m *Metrics) Takeover() { m.takeovers.Inc() }
 // before any other Unknown, so the order in which the probes end does not matter) gets no series of its own and no ready gauge: the
 // Binding is not known to be unready, only not yet known, and a rule on == 0 would fire after every restart for the length of the slower
 // probe. A Binding that a first result has already found False has the series at once, with 0, which is true. The other conditions'
-// series are exported as they end. Ready is Pending again only when an edit gives a Binding approver groups, and then its series keep the
+// series are exported as they end. Ready can be Pending again later (when an edit gives a Binding approver groups, or a Binding made again under its name drops a condition of the old one), and then its series keep the
 // last value they had until the probe of the groups ends.
 func (m *Metrics) BindingCondition(tr bindingcheck.Transition) {
 	if tr.New.Type == bindingcheck.Ready && tr.New.Pending() {

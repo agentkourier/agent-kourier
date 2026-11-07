@@ -157,7 +157,7 @@ type Options struct {
 	// Transition.New.Type), and never for a probe that changed neither. The Pending a new Binding's probed conditions are stored
 	// with is not a transition, but Ready's can be: when the first probes end one at a time, Ready moves from being Pending on one
 	// condition to being Pending on the next, so a consumer that treats Ready as unknown only once it has a result tests
-	// Condition.Pending. Ready is also reported when a Binding gains approver groups (it is Pending on ApproversReadable) or loses them (it is
+	// Condition.Pending. A change of Ready is also reported when a Binding gains approver groups (Pending, on the first Pending condition, unless another is False) or loses them (it is
 	// recomputed without the condition), at the Tick that sees the edit, on Run's goroutine, when no probe is running. Calls are serialized with each other and with OnProbeError, otherwise run on a probe's goroutine and hold
 	// up the other probes' results while they run, so the hook must be quick and must not wait on the Prober. The
 	// Prober does not bound a hook, so one that blocks stops probing and delays shutdown. A hook that panics is

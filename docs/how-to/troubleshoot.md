@@ -425,8 +425,8 @@ One failed probe holds the Binding at 0 until the next pass, up to about 5.5 min
 ### `ApproversReadable`
 
 Only a Binding with `interactions.toolApprovals: true` and a non-empty `interactions.approverGroups` has this condition. The leader reads the groups in order, one request each, and stops at the first it cannot read, so `GroupNotFound` and `GroupsUnreadable` name that group
-in the `message` by its place in the list and its ID (`spec.interactions.approverGroups[1] (S0123456789)`), and another bad group is named once this one is mended. (`MissingScope` names no group: the app cannot read any.) While the reason is `GroupNotFound`, `MissingScope` or `GroupsUnreadable`, a person's press on a tool approval of this Binding
-ends with a fixed message and decides nothing, unless they are in a group earlier in the list, which the check reaches first. Otherwise the press runs its own check of the groups, and one that fails for another cause (a rate limit, a timeout, a token Slack rejects) is kept and tried again, for up to an hour after it was recorded; then it is given up and the person is told to press again.
+in the `message` by its place in the list and its ID (`spec.interactions.approverGroups[1] (S0123456789)`), and another bad group is named once this one is mended. (`MissingScope` names no group: the app cannot read any.) A press does not read this condition: it reads the groups itself, live, and when that read finds the cause behind `GroupNotFound`, `MissingScope` or `GroupsUnreadable`, a person's press on a tool approval of this Binding
+ends with a fixed message and decides nothing, unless they are in a group earlier in the list, which the check reaches first. So until the next pass a press can succeed while the status still shows the failure of a group fixed since, and a press can end while the status shows `True` for a group that broke since. A press whose read fails for another cause (a rate limit, a timeout, a token Slack rejects) is kept and tried again, for up to an hour after it was recorded; then it is given up and the person is told to press again.
 
 | `reason` | Status | What happened | What to do |
 |---|---|---|---|
