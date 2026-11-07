@@ -368,7 +368,8 @@ func (c groupChecker) forPass() groupChecker {
 // an error; the deadline of the checker's own bound is a chat platform that does not answer, Unknown/ChatUnavailable. One call reads all
 // of a Binding's groups, at most 10 (the API's validation caps them), one request to the platform each, in the Binding's order, and stops at
 // the first it cannot read, so a second bad group is told once the first is mended. In a pass, a group another probe has read or is
-// reading is not read again (groupReads.readable), so the reads of a pass are at most one for each group its Bindings name.
+// reading is not read again (groupReads.readable), so the reads of a pass are at most one for each group its Bindings name, unless a
+// read is cut short (its probe's bound, the Prober's context, a panic): the next probe that needs the group then reads it again.
 func (c groupChecker) CheckGroups(ctx context.Context, groups []string) (bindingcheck.Outcome, error) {
 	cctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
@@ -439,6 +440,8 @@ func (r *groupReads) readable(ctx context.Context, platform groupReader, group s
 func (r *groupReads) read(ctx context.Context, platform groupReader, group string, read *groupRead) error {
 	read.cut = true // until the platform answers
 	defer func() {
+		// The delete comes before the close: a waiter that wakes to a cut read and finds it still in the map would wait on it again,
+		// spinning until the delete.
 		if read.cut {
 			r.mu.Lock()
 			delete(r.reads, group)
