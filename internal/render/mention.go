@@ -40,7 +40,7 @@ type MentionScan struct {
 // Slack adapter writes it (internal/chat/slack/mdtext.go): a fence line, which has a run of three or more backticks or tildes
 // after white space and, outside a block, one list marker or one quote mark (fenceLine has the forms), opens a block, and
 // any fence line closes it, whatever else is on it (a mark before a closing run counts only if it is the kind its opener had: fenceLine), what follows a
-// closing run is prose, a block that never closes runs to the end, and a span closes at the next run of backticks or not
+// closing run is read as a line of its own (a fence line there opens a block), a block that never closes runs to the end, and a span closes at the next run of backticks or not
 // at all. A pipe table, which that adapter shows as code, is read as prose: a name in a table is said. A name that ends where the
 // text was cut (chat.Truncated), or in a ".", ":" or "/" just before it, may be the start of something longer, so it is no name.
 // A place where the two readings still differ can only notify a declared person or not, within the cap: the adapter counts its limit

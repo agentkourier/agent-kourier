@@ -25,8 +25,10 @@ const fenceMark = "```"
 //     mark dropped. The block's lines lose the white space of the opener and the width of a list marker before it, so that
 //     they start where the fence did; after a quote mark they lose a quote mark and its one optional space instead, if they
 //     have them, and then only the white space the opener had after that (row 22: a fence in a list item is not code to
-//     Slack, but one at column 0 is). The list or the quote goes on as prose after the block, and after a list marker's
-//     block the item's lines lose the item's content column while they are indented that far (cont);
+//     Slack, but one at column 0 is). The list or the quote goes on as prose after the block. The lines right after a block
+//     that opened on a list marker lose the item's content column, in characters (a tab is one), while they are indented
+//     that far, up to the item's next fence or table (cont); after that they keep their indent, which may be code to Slack
+//     (row 23);
 //   - in a block the text is raw (rows 01, 02, 19), but for "<" before "!", "@" or "#", which is written "&lt;" so
 //     that no broadcast, mention or channel token can be in it, whatever reads it;
 //   - a backtick run, then text with no backtick, then a run of the same length, in a line of prose, is a code span
