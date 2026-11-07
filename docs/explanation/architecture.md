@@ -146,14 +146,14 @@ sequenceDiagram
     par
         A->>S: acknowledge the event
     and
-        R-)S: reactions.add (hourglass_flowing_sand by default), from the outbox
+        R-)S: reactions.add (hourglass_flowing_sand by default), from the outbox, if on
     and
         M->>G: SendStreamingMessage as the Binding's identity,<br/>with the session's contextId (none on a first turn)
     end
     loop while the task runs
         G-->>M: task, status and artifact updates
         M->>R: output so far
-        R->>S: chat.startStream with the first text, chat.appendStream with what follows
+        R->>S: chat.startStream, then chat.appendStream as output arrives
         opt the stream drops or stays silent too long
             M->>G: GetTask
             M->>G: SubscribeToTask, if the task has not ended, and read on from there
@@ -161,7 +161,7 @@ sequenceDiagram
     end
     G-->>M: final status, such as completed, failed or input-required
     R->>S: chat.stopStream
-    R-)S: reactions.remove
+    R-)S: reactions.remove, if on
 ```
 
 A turn that no person wrote, such as the one an alert starts, has no one to show a stream to, so its reply is a
@@ -184,8 +184,11 @@ sequenceDiagram
     I->>I: check that the question is still open, channel membership and that the presser<br/>is not a bot. For an approval, check that the Binding still allows approvals<br/>and, if it names approver groups, that the presser is in one
     I->>I: decide, if the press came before the deadline
     I->>M: the answer
-    I->>S: take the controls off the question
-    M->>G: GetTask on the paused task, then SendStreamingMessage with its ID
+    par
+        I->>S: take the controls off the question
+    and
+        M->>G: GetTask on the paused task, then SendStreamingMessage with its ID
+    end
     G-->>M: the task streams again
 ```
 
@@ -193,9 +196,9 @@ If the agent rejects the answer with a JSON-RPC internal error (`-32603`), Agent
 posts a notice in the thread.
 
 A question that takes a typed answer is answered by a reply in the thread instead of a button. The reply comes in as
-a Socket Mode message event and Submit queues it. The waiting session reads the paused task and passes the reply to
-interactions, which check it as they check a press. A reply that is not taken as the answer stays queued as an
-ordinary turn.
+a Socket Mode message event and Submit queues it. A session waiting on the question reads the paused task and passes
+the reply to interactions, which check it as they check a press. A reply that is not taken as the answer stays queued
+as an ordinary turn, unless intake already tied it to the question.
 
 1. The messaging adapter feeds an inbound message to chat intake, which selects
    the binding and applies the channel and thread rules.
