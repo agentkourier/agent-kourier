@@ -216,7 +216,7 @@ type fenceHead struct {
 // "> ```" are fence lines, and "- - ```", "> > ```", "> - ```" and "-```" are not: a second mark, or a marker with no white
 // space after it, leaves the line prose, which escapes the run. So does a mark, then backticks (not tildes), whose next run of
 // backticks is as long as the first, which makes a span: "1. ```make test``` first" is a list item with a code span, outside
-// a block (start decides that, when the line is complete; in a block such a line closes it). The rest of a fence line put back to be read (reread) has no marks, as it did not
+// a block (start decides that, when the line is complete; in a block opened after the same kind of mark such a line closes it, and in any other block it is a line of the block). The rest of a fence line put back to be read (reread) has no marks, as it did not
 // before them.
 //
 // The mark is dropped from the opener's line, and the lines of its block lose indent characters of white space: those before

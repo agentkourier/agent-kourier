@@ -91,8 +91,8 @@ const (
 // "- ```", "1) ```", ">```" and "> ```" are fence lines, and "- - ```", "> > ```", "> - ```" and "-```" are not: a second
 // mark, or a marker with no white space after it, makes the line prose. So does a mark, then backticks (not tildes), whose
 // next run of backticks is as long as the first, which makes a span: "1. ```make test``` first" is a list item with a code
-// span, as a backtick fence's info string has no backtick in CommonMark. That is outside a block only: in one, such a line
-// closes it, as any closing line does. The rest of a fence line put back to be read (reread)
+// span, as a backtick fence's info string has no backtick in CommonMark. That is outside a block only: in a block opened after the same
+// kind of mark, such a line closes it, as any closing line does, and in any other block it is a line of the block. The rest of a fence line put back to be read (reread)
 // has no marks, as it did not before them.
 //
 // In a block that a fence line after a list marker opened (opener markList) a line may close it with a list marker before the
