@@ -5,6 +5,7 @@ import (
 	"context"
 	"html"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -117,7 +118,9 @@ const (
 
 // decode returns the Message that inner carries, and what to do with it (spec 8.2, D36).
 //   - A person's message is forwarded if it is plain, a thread_broadcast or a file_share, with a user, a
-//     channel, a ts and text. It is Mentioned if its text holds Agent Kourier's user token (mentionedIn).
+//     channel, a ts and text. It is Mentioned if its text holds Agent Kourier's user token (mentionedIn), or its blocks
+//     mention Agent Kourier where Slack registers a mention (mentionedInBlocks). Slackbot's posts are no person's, and are
+//     dropped (slackbotUser).
 //   - A bot's message (a message event with a bot_id and no subtype or bot_message) is forwarded with its
 //     content, for Run to ask the Sink whether a trigger names the bot. A message of Agent Kourier's own, by user ID
 //     or by bot ID, is never forwarded (ownPost): two bots would answer each other without end. A bot's message
@@ -165,10 +168,10 @@ func decode(me self, inner any) (Message, verdict) {
 				return Message{}, dropped
 			}
 			return m, forward // Mentioned stays false: a bot's mention arrives as its own app_mention event
-		case !keptSubtype(e.SubType) || e.BotID != "" || isOwn || m.User == "" || m.Text == "":
+		case !keptSubtype(e.SubType) || e.BotID != "" || isOwn || m.User == "" || m.User == slackbotUser || m.Text == "":
 			return Message{}, dropped
 		}
-		m.Mentioned = me.mentionedIn(e.Text)
+		m.Mentioned = me.mentionedIn(e.Text) || me.mentionedInBlocks(blocksOf(e))
 		return m, forward
 	}
 	return Message{}, dropped
@@ -187,6 +190,71 @@ func (me self) mentionedIn(text string) bool {
 		}
 	}
 	return false
+}
+
+// slackbotUser is the user ID Slack gives Slackbot in every workspace. Slackbot posts reminders and its own responses as a user,
+// with no bot ID, so without this its posts would be a person's. It is no person and no app a trigger can name.
+const slackbotUser = "USLACKBOT"
+
+// blocksOf is the blocks of a message event: its own, else those of the message it carries, as a history message's does.
+func blocksOf(e *slackevents.MessageEvent) slackgo.Blocks {
+	if len(e.Blocks.BlockSet) == 0 && e.Message != nil {
+		return e.Message.Blocks
+	}
+	return e.Blocks
+}
+
+// mentionedInBlocks reports whether a message's blocks mention Agent Kourier where Slack registers a mention, and sends an
+// app_mention for it, though the text may not hold the token: a rich_text block's user element of Agent Kourier, or its token
+// in the text of a section or context block (docs/spikes/slack-mention-probe.md). It makes a person's message event agree with
+// its app_mention, which may come before or after it.
+func (me self) mentionedInBlocks(blocks slackgo.Blocks) bool {
+	for _, block := range blocks.BlockSet {
+		switch b := block.(type) {
+		case *slackgo.SectionBlock:
+			if b.Text != nil && me.mentionedIn(b.Text.Text) {
+				return true
+			}
+			for _, f := range b.Fields {
+				if f != nil && me.mentionedIn(f.Text) {
+					return true
+				}
+			}
+		case *slackgo.ContextBlock:
+			for _, el := range b.ContextElements.Elements {
+				if t, ok := el.(*slackgo.TextBlockObject); ok && me.mentionedIn(t.Text) {
+					return true
+				}
+			}
+		case *slackgo.RichTextBlock:
+			for _, el := range b.Elements {
+				if me.mentionedInRichText(el) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// mentionedInRichText reports whether a rich_text element holds a user element of Agent Kourier, in a section, quote,
+// preformatted text or list.
+func (me self) mentionedInRichText(el slackgo.RichTextElement) bool {
+	var inline []slackgo.RichTextSectionElement
+	switch e := el.(type) {
+	case *slackgo.RichTextSection:
+		inline = e.Elements
+	case *slackgo.RichTextQuote:
+		inline = e.Elements
+	case *slackgo.RichTextPreformatted:
+		inline = e.Elements
+	case *slackgo.RichTextList:
+		return slices.ContainsFunc(e.Elements, me.mentionedInRichText)
+	}
+	return me.user != "" && slices.ContainsFunc(inline, func(p slackgo.RichTextSectionElement) bool {
+		u, ok := p.(*slackgo.RichTextSectionUserElement)
+		return ok && u.UserID == me.user
+	})
 }
 
 // botPost flattens e's first legacy attachment into the fields a trigger reads. A message with no

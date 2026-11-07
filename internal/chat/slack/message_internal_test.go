@@ -73,6 +73,50 @@ func TestDecodeMessageMentionedIsAgentKouriersUserTokenAnywhereInTheText(t *test
 	}
 }
 
+// A person's message whose mention of Agent Kourier is only in its blocks, which Slack sends an app_mention for, is Mentioned in its
+// message event too, so that whichever event comes first decides the same: a rich_text block's user element, and the token in a
+// section or context block's text. Another user named there, or Agent Kourier's ID as mere text, is no mention. Decoded from the
+// event's JSON, as Socket Mode delivers it.
+func TestDecodeAPersonsMentionInItsBlocksIsAMention(t *testing.T) {
+	me := self{user: "UME", bot: "BME"}
+	for _, tt := range []struct {
+		name, blocks string
+		want         bool
+	}{
+		{"a rich_text user element", `[{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"user","user_id":"UME"},{"type":"text","text":" look"}]}]}]`, true},
+		{"one in a list", `[{"type":"rich_text","elements":[{"type":"rich_text_list","style":"bullet","elements":[{"type":"rich_text_section","elements":[{"type":"user","user_id":"UME"}]}]}]}]`, true},
+		{"a section block's token", `[{"type":"section","text":{"type":"mrkdwn","text":"<@UME> look"}}]`, true},
+		{"a context block's token", `[{"type":"context","elements":[{"type":"mrkdwn","text":"<@UME|agent>"}]}]`, true},
+		{"another user", `[{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"user","user_id":"U1"}]}]}]`, false},
+		{"the ID as text", `[{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"text","text":"UME"}]}]}]`, false},
+		{"no blocks", `[]`, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var ev slackevents.MessageEvent
+			if err := json.Unmarshal([]byte(`{"type":"message","user":"U1","channel":"C1","ts":"1.1","channel_type":"channel","text":"please look","blocks":`+tt.blocks+`}`), &ev); err != nil {
+				t.Fatal(err)
+			}
+			m, v := decode(me, &ev)
+			if v != forward || m.Mentioned != tt.want {
+				t.Errorf("decode = Mentioned %v, verdict %v; want Mentioned %v and forwarded", m.Mentioned, v, tt.want)
+			}
+		})
+	}
+}
+
+// Slackbot is no person: its posts in a channel (reminders, its own responses) come as a user's message with no bot ID, under its
+// fixed user ID, and are dropped, so that no personMessage trigger and no thread takes them as a person's.
+func TestDecodeSlackbotIsNoPerson(t *testing.T) {
+	for _, ev := range []*slackevents.MessageEvent{
+		{Type: "message", User: "USLACKBOT", Channel: "C1", TimeStamp: "1.1", ChannelType: "channel", Text: "Reminder: standup."},
+		{Type: "message", User: "USLACKBOT", Channel: "C1", TimeStamp: "1.2", ThreadTimeStamp: "1.0", ChannelType: "channel", Text: "Reminder: look at this."},
+	} {
+		if _, v := decode(self{user: "UME", bot: "BME"}, ev); v != dropped {
+			t.Errorf("%q: verdict %v; want dropped", ev.Text, v)
+		}
+	}
+}
+
 // With no user ID to look for, nothing is a mention: an empty ID must not match an empty token (the pattern needs an ID).
 func TestDecodeMessageWithoutABotUserIDIsNeverMentioned(t *testing.T) {
 	for _, text := range []string{"<@> hi", "<@|x> hi", "<@UME> hi"} {
