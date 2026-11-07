@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"runtime/debug"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -77,8 +78,18 @@ type GroupChecker interface {
 	CheckGroups(ctx context.Context, groups []string) (Outcome, error)
 }
 
+// PassGroupChecker is a GroupChecker that can share its reads among the probes of one pass, so that a group several Targets name is
+// read once a pass and not once for each. At the start of each pass that has a group to probe, the Prober calls ForPass and makes every
+// group probe of that pass with the GroupChecker it returns, and none with the PassGroupChecker itself. The probes of a pass end before
+// the next pass begins, but a checker that outlasted the Timeout may still be running in its pass's checker when the next one is made.
+type PassGroupChecker interface {
+	GroupChecker
+	// ForPass returns the GroupChecker of a pass that is beginning. It must be quick, as the hooks must.
+	ForPass() GroupChecker
+}
+
 // PanicError is the error OnProbeError gets for a checker that panicked. For a panic of Targets, Revision,
-// OnTransition or OnPrune it is wrapped in the error (find it with errors.As).
+// OnTransition, OnPrune or ForPass it is wrapped in the error (find it with errors.As).
 type PanicError struct {
 	// Value is what was passed to panic. It may hold anything the panicking code had in hand, so redact it.
 	Value any
@@ -92,8 +103,8 @@ func (e *PanicError) Error() string { return fmt.Sprintf("panic: %v", e.Value) }
 // ProbeError is a failure the Prober reports to OnProbeError. Most are probes whose checker failed: it returned an
 // error, panicked, or reported an outcome with no usable status or reason. The condition is then Unknown/ProbeFailed
 // and its Message says nothing of Err. The others are failures of the caller's own code, which leave no condition
-// behind: Condition is empty and Target the zero Target when Targets, Revision or OnPrune panicked or Revision did
-// not answer in time or ended its goroutine (Targets is reported on every Tick it panics, Revision for every call
+// behind: Condition is empty and Target the zero Target when Targets, Revision, OnPrune or a PassGroupChecker's ForPass
+// panicked, ForPass returned nil, or Revision did not answer in time or ended its goroutine (Targets is reported on every Tick it panics, Revision for every call
 // that fails). When OnTransition panicked, Condition and Target are the probe whose result was being recorded, which
 // is the Binding whose transition it was.
 type ProbeError struct {
@@ -130,7 +141,8 @@ type Options struct {
 	Channels ChannelChecker
 	// Groups probes approver groups, one probe for each Target that has ApproverGroups, which is the only kind of Binding that has an
 	// ApproversReadable condition. Nil means ApproversReadable is not tracked, whatever the Targets name. Targets must hold only
-	// Bindings on the chat connection that Groups answers for (see GroupChecker).
+	// Bindings on the chat connection that Groups answers for (see GroupChecker). A Groups that is a PassGroupChecker probes each pass's
+	// groups with the checker ForPass returns for it.
 	Groups GroupChecker
 	// MinRevisionGap is the least time between the start of a pass and the start of one that only a change calls for: a change of
 	// Revision, or a Binding that is new in Targets (a reload that adds one is a change like any other). A change that comes inside
@@ -469,7 +481,8 @@ func (p *Prober) pending(t ConditionType, tracked bool, generation int64, uid st
 
 // pass probes every target once, p.o.Concurrency at a time, and returns when all the probes have ended. Each target
 // gets its own agent probe and its own channel probe, even when targets share a channel, and a target that has approver groups
-// one probe for all of them. The three kinds alternate, so backends that hang do not hold every channel or group probe back.
+// one probe for all of them, made with the pass's own checker when Groups is a PassGroupChecker. The three kinds alternate, so backends
+// that hang do not hold every channel or group probe back.
 func (p *Prober) pass(ctx context.Context, targets []Target) {
 	var agentJobs, channelJobs, groupJobs []func(context.Context)
 	if p.o.Agents != nil {
@@ -488,13 +501,14 @@ func (p *Prober) pass(ctx context.Context, targets []Target) {
 			})
 		}
 	}
-	if p.o.Groups != nil {
+	if p.o.Groups != nil && slices.ContainsFunc(targets, func(t Target) bool { return len(t.ApproverGroups) > 0 }) {
+		groups := p.passGroups()
 		for _, t := range targets {
 			if len(t.ApproverGroups) == 0 {
 				continue
 			}
 			groupJobs = append(groupJobs, func(ctx context.Context) {
-				res := p.probe(ctx, probeKey{ApproversReadable, t.Binding}, func(c context.Context) (Outcome, error) { return p.o.Groups.CheckGroups(c, t.ApproverGroups) })
+				res := p.probe(ctx, probeKey{ApproversReadable, t.Binding}, func(c context.Context) (Outcome, error) { return groups.CheckGroups(c, t.ApproverGroups) })
 				p.record(ctx, ApproversReadable, t, res)
 			})
 		}
@@ -529,6 +543,25 @@ feed:
 	}
 	close(work)
 	wg.Wait()
+}
+
+// passGroups returns the GroupChecker of a pass: the one a PassGroupChecker makes for it, or Groups. A ForPass that panics, or returns
+// nil, is reported to OnProbeError and the pass probes with Groups itself. It is called on Run's goroutine, when no probe is running.
+func (p *Prober) passGroups() GroupChecker {
+	pc, ok := p.o.Groups.(PassGroupChecker)
+	if !ok {
+		return p.o.Groups
+	}
+	var got GroupChecker
+	if err := guard(func() { got = pc.ForPass() }); err != nil {
+		p.fail(ProbeError{Err: fmt.Errorf("calling ForPass: %w", err)})
+		return p.o.Groups
+	}
+	if got == nil {
+		p.fail(ProbeError{Err: errors.New("ForPass returned no checker")})
+		return p.o.Groups
+	}
+	return got
 }
 
 // probeResult is what a probe has to record.

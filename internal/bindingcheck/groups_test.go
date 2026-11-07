@@ -439,3 +439,91 @@ func TestABindingThatGainsGroupsIsProbedAtTheNextTickWhateverTheRevision(t *test
 		wantCond(t, h.conds("b"), ApproversReadable, True, ReasonOK)
 	})
 }
+
+// passGroups is a PassGroupChecker that gives each pass a fakeGroups of its own, and fails a probe made outside a pass.
+type passGroups struct {
+	mu     sync.Mutex
+	passes []*fakeGroups
+}
+
+func (p *passGroups) CheckGroups(context.Context, []string) (Outcome, error) {
+	return Outcome{}, errors.New("probed outside a pass")
+}
+
+func (p *passGroups) ForPass() GroupChecker {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	f := &fakeGroups{}
+	p.passes = append(p.passes, f)
+	return f
+}
+
+func (p *passGroups) pass(i int) *fakeGroups {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if i >= len(p.passes) {
+		return nil
+	}
+	return p.passes[i]
+}
+
+func (p *passGroups) count() int { p.mu.Lock(); defer p.mu.Unlock(); return len(p.passes) }
+
+// A PassGroupChecker is asked for a checker of its own at the start of each pass that probes groups, and every group probe of the pass
+// goes to that checker, so that it can share a read between the Targets that name one group; a pass with no group to probe asks for none.
+func TestEachPassProbesGroupsWithTheCheckerOfThatPass(t *testing.T) {
+	g := &targets{}
+	g.set("r1",
+		Target{Binding: "a", Channel: "C1", ApproverGroups: []string{"S1"}},
+		Target{Binding: "b", Channel: "C2", ApproverGroups: []string{"S1", "S2"}},
+		Target{Binding: "none", Channel: "C3"})
+	groups := &passGroups{}
+	run(t, Options{Targets: g.Targets, Revision: g.Revision, Agents: &fakeAgents{}, Channels: &fakeChannels{}, Groups: groups}, func(h *harness) {
+		if groups.count() != 1 || groups.pass(0).count("S1") != 1 || groups.pass(0).count("S1", "S2") != 1 || groups.pass(0).total() != 2 {
+			t.Fatalf("after the first pass: %d checkers; want one, that probed each Binding with groups once", groups.count())
+		}
+		wantCond(t, h.conds("a"), ApproversReadable, True, ReasonOK)
+		wantCond(t, h.conds("b"), ApproversReadable, True, ReasonOK)
+
+		h.nextPass(groups.count)
+		if groups.count() != 2 || groups.pass(1).total() != 2 || groups.pass(0).total() != 2 {
+			t.Errorf("after the second pass: %d checkers; want a second, that probed both Bindings, and the first left alone", groups.count())
+		}
+	})
+
+	g = &targets{}
+	g.set("r1", Target{Binding: "none", Channel: "C3"})
+	groups = &passGroups{}
+	run(t, Options{Targets: g.Targets, Revision: g.Revision, Agents: &fakeAgents{}, Channels: &fakeChannels{}, Groups: groups}, func(*harness) {
+		if groups.count() != 0 {
+			t.Errorf("a pass with no group to probe asked for %d checkers; want none", groups.count())
+		}
+	})
+}
+
+// panickyPass is a PassGroupChecker whose ForPass panics.
+type panickyPass struct{ fakeGroups }
+
+func (*panickyPass) ForPass() GroupChecker { panic("no pass for you") }
+
+// A ForPass that panics is the caller's failure, reported with no condition, and the pass probes with the Groups it was given.
+func TestAForPassThatPanicsIsReportedAndThePassProbesWithGroups(t *testing.T) {
+	g := &targets{}
+	g.set("r1", Target{Binding: "a", Channel: "C1", ApproverGroups: []string{"S1"}})
+	groups := &panickyPass{}
+	var mu sync.Mutex
+	var errs []ProbeError
+	run(t, Options{Targets: g.Targets, Revision: g.Revision, Agents: &fakeAgents{}, Channels: &fakeChannels{}, Groups: groups,
+		OnProbeError: func(pe ProbeError) { mu.Lock(); errs = append(errs, pe); mu.Unlock() }}, func(h *harness) {
+		mu.Lock()
+		defer mu.Unlock()
+		var pe *PanicError
+		if len(errs) != 1 || errs[0].Condition != "" || !errors.As(errs[0].Err, &pe) || !strings.Contains(errs[0].Err.Error(), "ForPass") {
+			t.Errorf("OnProbeError calls = %+v; want one PanicError of ForPass with no condition", errs)
+		}
+		if groups.count("S1") != 1 {
+			t.Errorf("probes of Groups itself = %d; want 1", groups.total())
+		}
+		wantCond(t, h.conds("a"), ApproversReadable, True, ReasonOK)
+	})
+}

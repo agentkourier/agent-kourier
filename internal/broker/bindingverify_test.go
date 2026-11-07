@@ -430,14 +430,20 @@ type accessFake struct {
 	calls    int
 	channels []string
 
-	groupsErr   error      // what GroupsReadable answers
-	groupsCalls [][]string // the groups of each call to GroupsReadable
+	groupsErr   error            // what GroupsReadable answers
+	groupsErrs  map[string]error // what GroupsReadable answers for a call that reads this group, before groupsErr
+	groupsCalls [][]string       // the groups of each call to GroupsReadable
 }
 
 func (a *accessFake) GroupsReadable(_ context.Context, groups []string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.groupsCalls = append(a.groupsCalls, append([]string(nil), groups...))
+	for _, g := range groups {
+		if err := a.groupsErrs[g]; err != nil {
+			return err
+		}
+	}
 	return a.groupsErr
 }
 
