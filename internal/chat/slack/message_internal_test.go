@@ -105,14 +105,16 @@ func TestDecodeAPersonsMentionInItsBlocksIsAMention(t *testing.T) {
 }
 
 // Slackbot is no person: its posts in a channel (reminders, its own responses) come as a user's message with no bot ID, under its
-// fixed user ID, and are dropped, so that no personMessage trigger and no thread takes them as a person's.
+// fixed user ID, and are dropped, so that no personMessage trigger and no thread takes them as a person's. Its app_mention, for a
+// post that names Agent Kourier, is dropped too, so that it starts no turn as a person's mention.
 func TestDecodeSlackbotIsNoPerson(t *testing.T) {
-	for _, ev := range []*slackevents.MessageEvent{
-		{Type: "message", User: "USLACKBOT", Channel: "C1", TimeStamp: "1.1", ChannelType: "channel", Text: "Reminder: standup."},
-		{Type: "message", User: "USLACKBOT", Channel: "C1", TimeStamp: "1.2", ThreadTimeStamp: "1.0", ChannelType: "channel", Text: "Reminder: look at this."},
+	for name, ev := range map[string]any{
+		"a message":           &slackevents.MessageEvent{Type: "message", User: "USLACKBOT", Channel: "C1", TimeStamp: "1.1", ChannelType: "channel", Text: "Reminder: standup."},
+		"a reply in a thread": &slackevents.MessageEvent{Type: "message", User: "USLACKBOT", Channel: "C1", TimeStamp: "1.2", ThreadTimeStamp: "1.0", ChannelType: "channel", Text: "Reminder: look at this."},
+		"an app_mention":      &slackevents.AppMentionEvent{User: "USLACKBOT", Channel: "C1", TimeStamp: "1.3", Text: "Reminder: <@UME> check the deploy."},
 	} {
 		if _, v := decode(self{user: "UME", bot: "BME"}, ev); v != dropped {
-			t.Errorf("%q: verdict %v; want dropped", ev.Text, v)
+			t.Errorf("%s: verdict %v; want dropped", name, v)
 		}
 	}
 }

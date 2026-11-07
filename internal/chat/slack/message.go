@@ -145,7 +145,7 @@ func decode(me self, inner any) (Message, verdict) {
 			}
 			return m, forward
 		}
-		if e.User == me.user || e.User == "" || e.Text == "" {
+		if !me.person(e.User) || e.Text == "" {
 			return Message{}, dropped
 		}
 		return Message{Channel: e.Channel, TS: e.TimeStamp, ThreadTS: e.ThreadTimeStamp, User: e.User, Text: e.Text, Mentioned: true}, forward
@@ -168,7 +168,7 @@ func decode(me self, inner any) (Message, verdict) {
 				return Message{}, dropped
 			}
 			return m, forward // Mentioned stays false: a bot's mention arrives as its own app_mention event
-		case !keptSubtype(e.SubType) || e.BotID != "" || isOwn || m.User == "" || m.User == slackbotUser || m.Text == "":
+		case !keptSubtype(e.SubType) || e.BotID != "" || isOwn || !me.person(m.User) || m.Text == "":
 			return Message{}, dropped
 		}
 		m.Mentioned = me.mentionedIn(e.Text) || me.mentionedInBlocks(blocksOf(e))
@@ -195,6 +195,12 @@ func (me self) mentionedIn(text string) bool {
 // slackbotUser is the user ID Slack gives Slackbot in every workspace. Slackbot posts reminders and its own responses as a user,
 // with no bot ID, so without this its posts would be a person's. It is no person and no app a trigger can name.
 const slackbotUser = "USLACKBOT"
+
+// person says whether a post with no bot ID under user is a person's: it has a user, and the user is neither Agent Kourier nor
+// Slackbot. A message event and an app_mention both ask it, so that neither forwards what the other drops.
+func (me self) person(user string) bool {
+	return user != "" && user != me.user && user != slackbotUser
+}
 
 // blocksOf is the blocks of a message event: its own, else those of the message it carries, as a history message's does.
 func blocksOf(e *slackevents.MessageEvent) slackgo.Blocks {
