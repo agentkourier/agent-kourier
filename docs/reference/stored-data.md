@@ -17,7 +17,7 @@ Agent text that streams to a thread is never stored. Spans, metric labels and th
 | `interactions.request` | The agent's pause: its hint, the questions and choices, a tool's name and arguments, as JSON. Secrets are taken out before it is stored (below). | Until the interaction is settled and the grace has passed; then emptied. |
 | `interactions.answer` | The person's answer, free text included. | The same. |
 | `interactions` (the rest of the row) | IDs, kind, state, times, the decider's platform ID, the prompt's message ref. | No content. The row goes with its session (below). |
-| `reply_queue.text` | A thread reply, or an alert prompt, waiting for its turn. | Cleared when the turn is delivered. A reply that was never delivered is dropped, with its text, after 30 days (below). |
+| `reply_queue.text` | A thread reply, an alert prompt, or the prompt of a person's message that a `personMessage` trigger took, which holds what the person wrote, waiting for its turn. | Cleared when the turn is delivered. A reply that was never delivered is dropped, with its text, after 30 days (below). |
 | `interaction_presses.inputs` | What a person typed into a prompt. | Until the press is processed, or the worker gives up (an hour); purged an hour after the interaction's deadline at the latest. |
 | `outbox.payload` | The message to post. | Cleared once posted or abandoned. A row still unposted after 7 days is abandoned (reason `expired`) and its payload emptied; the row stays until its session is deleted. |
 | `sessions`, `reply_queue` (delivered), `interactions`, `interaction_presses`, `outbox` | IDs, keys, refs and times of a thread: no message text is left in them. The ID of an `outbox` row for a mention holds the platform user ID of the person mentioned, and logs and traces show that ID too, as `outbox_id` and `agentkourier.outbox.id`. | Until the session has been expired for 90 days, then all deleted together (below). `AGENTKOURIER_AUDIT_RETENTION` does not shorten this. |
@@ -28,7 +28,7 @@ Agent text that streams to a thread is never stored. Spans, metric labels and th
 
 ### Feedback
 
-The useful and not-useful buttons store one row for each person and message, in table `feedback` of both stores. The feedback adapter maps the origins `botMessage` (what every trigger start records) and `legacy` (migrated from the older session schema), with validated `alertname` subjects, to alert-name attribution. It also maps `alertmanager`, which Agent Kourier no longer writes: only sessions created before that origin was retired keep it, and their votes still count under their alert's name:
+The useful and not-useful buttons store one row for each person and message, in table `feedback` of both stores. The feedback adapter maps the origins `botMessage` (what a `botMessage` trigger's start records) and `legacy` (migrated from the older session schema), with validated `alertname` subjects, to alert-name attribution; a `personMessage` trigger's start records `personMessage`, which names no alert. It also maps `alertmanager`, which Agent Kourier no longer writes: only sessions created before that origin was retired keep it, and their votes still count under their alert's name:
 
 | Column | Holds |
 |---|---|
@@ -36,7 +36,7 @@ The useful and not-useful buttons store one row for each person and message, in 
 | `turn_id` | The turn whose output is the rated message. A thread's several answers are rated apart. |
 | `user_id` | The platform's ID of who voted (a pseudonym, not a name or an email). |
 | `binding`, `agent`, `alert_name` | The Binding, its agent (`namespace/name` on the backend) and the alert name of the thread, as they were at the person's first vote. |
-| `kind` | `investigation` (the final message of a thread that a trigger or an alert started) or `answer` (an answer to a person, on a Binding with `feedback.enabled`). |
+| `kind` | `investigation` (the final message of a thread that a `botMessage` trigger or an alert started) or `answer` (an answer to a person, a person's message that a `personMessage` trigger took or a bot's mention, on a Binding with `feedback.enabled`). |
 | `verdict` | `useful` or `not_useful`. A later press of the other button replaces it. |
 | `first_at`, `voted_at` | The first vote, and the latest. |
 
@@ -239,6 +239,11 @@ author's messages up to the mention; on a later one, every author's messages sin
 reaches the agent, and so its model provider, once a bot mentions Agent Kourier there, without anyone having mentioned it themselves. Set
 `chat.botMentions: none` to stop that. Those messages are cleaned, redacted, cut and not stored, as above; `reply_queue.text` holds the fixed prompt
 and the bot's post.
+
+A `personMessage` trigger sends what people post at the top level of the channel to the agent, and so to its model provider, without anyone
+mentioning Agent Kourier: each message it takes is in `reply_queue.text`, after the template's output, until the turn is delivered. Its thread takes
+only mentioned replies, whatever `chat.threadReplies` says, so a reply there reaches the agent only when someone later mentions Agent Kourier in the
+thread, and then as above.
 
 ### Sessions and what belongs to them
 

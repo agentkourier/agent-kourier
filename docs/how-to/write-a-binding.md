@@ -138,7 +138,7 @@ says how it is decided, and what an older Binding that you edit onto a younger o
 - **Investigate what people post to the channel, without a mention:** add a `personMessage` trigger. See
   [A person's message](../reference/chat-triggers.md#a-persons-message).
 - **Keep threads around for less than 90 days:** set `session.threadTTL`, for example `720h`.
-- **Rating buttons on answers:** set `feedback.enabled: true`. Investigations that a trigger started always carry them. A turn that another bot's mention started counts as an answer.
+- **Rating buttons on answers:** set `feedback.enabled: true`. Investigations that a `botMessage` trigger started always carry them. A turn that another bot's mention or a `personMessage` trigger started counts as an answer.
 - **Choose what a live reply shows while the agent works:** set `chat.progress` to `steps`, `steps-and-activity` (the
   default) or `activity`. The default adds a `Working…` card when 3 seconds pass with nothing new; `activity` shows one
   card (a line in an alert thread) that counts the steps and names no tool; `steps` is the cards and lines alone. See

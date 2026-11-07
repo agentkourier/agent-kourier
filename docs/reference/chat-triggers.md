@@ -11,12 +11,13 @@ These are the defaults, which a Binding with no `chat.triggers` gets.
 | Message | What happens |
 |---|---|
 | A mention in a bound channel, not in a thread | A new thread and a new session. |
-| A reply in a thread Agent Kourier owns | Continues that session. With `chat.threadReplies: mention`, only a reply that mentions Agent Kourier does; the rest are ignored, except a typed answer to a pending question that takes text replies. |
+| A reply in a thread Agent Kourier owns | Continues that session. With `chat.threadReplies: mention`, only a reply that mentions Agent Kourier does; the rest are ignored, except a typed answer to a pending question that takes text replies. A thread that [a bot's mention](#a-bots-mention) or [a person's message](#a-persons-message) began takes only mentioned replies, whatever the setting. |
 | A mention inside a thread Agent Kourier does not own, in a bound channel | A new session anchored to that thread, which Agent Kourier owns from then on. |
 | A reply without a mention in any other thread | Ignored. |
 | Any message Agent Kourier posted, including the edit events of its own posts | Ignored, always. |
 | A message from any other bot or app | Ignored, unless a `botMessage` trigger names its bot ID. |
 | A person's message that is not in a thread and does not mention Agent Kourier | Ignored, unless a `personMessage` trigger takes it. See [A person's message](#a-persons-message). |
+| A message Slackbot posts, such as a reminder | Ignored: Slackbot is no person, and no trigger can name it. |
 | A mention of Agent Kourier by any other bot or app | A turn in the thread that holds it, within fixed limits, unless the Binding says otherwise. See [A bot's mention](#a-bots-mention). |
 | An edit or deletion of any message, or another non-message subtype | Ignored. Plain messages, `thread_broadcast` and `file_share` (its text only) count as messages. |
 | A direct message | Not served yet. |
@@ -85,18 +86,21 @@ spec:
 | | |
 |---|---|
 | Fields | `match` and `exclude` read the message's `text` and no other field, because a person's message has no structured part. `promptTemplate` and `limits` are required as for a `botMessage` trigger (the limits are described [below](#limits-and-the-digest-line)). `from`, `extract` and `thread` are refused: there is no sender to name, nothing to extract a key from, and each message starts a thread of its own. |
-| Where the turn goes | The thread of the message, which the agent's answer goes into. A reply in that thread continues the session as in any thread Agent Kourier owns, by `chat.threadReplies`. |
+| Where the turn goes | The thread of the message, which the agent's answer goes into. |
+| Whose turn it is | The person's who wrote the message: the agent sees their name, ID and email in front of the prompt, as for a mention, the audit log names them, the answer is streamed to them, and the final message has rating buttons only with `feedback.enabled`, counted as an answer. |
+| Replies in the thread | A reply is a turn only if it mentions Agent Kourier, whatever `chat.threadReplies` says, and the final message says so: people discuss a report under it, and every reply would otherwise be a turn that no limit of the trigger holds. A mentioned reply carries the replies before it, which did not mention Agent Kourier, as untrusted data. |
 | What it takes | A message of a person with text that is not in a thread, or is the root of one: a plain message, or a file share with its text. |
-| What it never takes | Agent Kourier's own posts, a bot's message (a `botMessage` trigger reads those), a reply in a thread, an edit or deletion, and a direct message. |
-| A mention | Where the Binding has a `mention` trigger, a top-level message that mentions Agent Kourier is that trigger's, whatever the order of the list, and uses no place in the `personMessage` trigger's limits. Where it has none, the mention is a message like any other. |
-| Redelivery | A message that Slack delivers more than once is one start. |
-| A limit is reached | No turn and nothing in the thread. Counted, and in the digest line of its window, which says "messages" and not "bot messages". |
-| The prompt | The template's output, then the whole message in the untrusted block, as for a `botMessage` trigger. The template has no extract to read, so `.Fields` is empty and `.State` and `.Key` are empty; `.Source` is `personMessage`. The turn names no user. |
-| Who can start it | Anyone who can post in the channel, held to the trigger's limits. A message from a person of another workspace in a channel shared with it counts like any other. |
+| What it never takes | Agent Kourier's own posts, a bot's message (a `botMessage` trigger reads those), Slackbot's, a reply in a thread, even one also sent to the channel, an edit or deletion, and a direct message. |
+| A mention | Where the Binding has a `mention` trigger, a top-level message that mentions Agent Kourier is that trigger's, whatever the order of the list, and uses no place in the `personMessage` trigger's limits. Where it has none, the mention is a message like any other. A mention counts in the message's text or where Slack registers one in its blocks. |
+| Redelivery | A message that Slack delivers more than once is one start. A message no trigger takes is counted as unmatched each time it is delivered. |
+| Limits | The trigger's own. A start holds its place in `maxConcurrent` while its own turn is queued or running, including while it waits for a person's answer; a later turn in its thread does not hold it. |
+| A limit is reached | No turn and nothing in the thread. Counted, and in the digest line of its window. |
+| The prompt | The template's output, then the whole message in the untrusted block, as for a `botMessage` trigger. The template has no extract to read, so `.Fields` is empty and `.State` and `.Key` are empty; `.Source` is `personMessage`. |
+| Who can start it | Anyone who can post in the channel, held to the trigger's limits. A message from a person of another workspace in a channel shared with it counts like any other, as a mention from that person does. A message that an app posts with a person's token is that person's when Slack sends it with no bot ID. |
 | Slack | The app needs the `channels:history` scope, and `groups:history` for a private channel, and the events `message.channels` and `message.groups`. The [app manifest](../how-to/configure-slack.md) has them already, because replies in a thread need them too. |
 
-`agent-kourier dry-run` replays `botMessage` triggers only: it counts a person's message as `person` and does not try it against a
-`personMessage` trigger.
+`agent-kourier dry-run` replays a `personMessage` trigger as the intake runs it: a top-level message it takes is `matched`, one it
+turns away `unmatched` or `excluded` with the reason, and a mention that the `mention` trigger takes, or a reply in a thread, `person`.
 
 ## `botMessage` fields
 
@@ -158,11 +162,11 @@ of the message.
 
 Only a start is limited: a repeat, a close and a note never are. Rate and daily counts are sliding windows that survive
 a restart. Concurrency counts the trigger's investigations, started in the last 24 hours, that have an active task (running, or paused for a person)
-or a queued turn. When several limits are reached, the daily cap is reported first, then the rate, then the
+or a queued turn. For a `personMessage` trigger that is the start's own turn alone. When several limits are reached, the daily cap is reported first, then the rate, then the
 concurrency.
 
 Once for each window and trigger, one line at the top level of the channel counts the starts a limit stopped, for
-example "7 bot messages not investigated in the last 10m (rate limit)." (a `personMessage` trigger's says "messages"). A window opens with the first stopped start
+example "7 messages not investigated in the last 10m (rate limit)." A window opens with the first stopped start
 and lasts the trigger's `rateLimit.per`. The line holds a count, a length
 and a limit, never any text of an alert.
 

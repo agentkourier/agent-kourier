@@ -206,8 +206,8 @@ What bounds this is what the broker can read, and where it can connect:
 
 What a writer of a Binding and an AgentBackend sees of your conversations. The agent of a Binding receives each mention of the bot in the channel, each reply in a thread the Binding owns
 (with `chat.threadReplies: all`, the default, every reply in the thread, not only the ones that mention the bot), with a `botMessage` trigger the messages of the bot that
-the trigger names, and with a `personMessage` trigger every message a person posts outside a thread that the trigger takes. Each comes with the sender's name, ID and email, where the chat platform gives them. That holds for any channel the bot is in, private channels too. Two
-things add more. With `chat.threadReplies: mention`, a mentioned turn carries the thread's other replies as context. And on any Binding a mention of the bot by another bot or a
+the trigger names, and with a `personMessage` trigger every message a person posts outside a thread that the trigger takes. What a person wrote, a mention, a reply or such a message, comes with their name, ID and email, where the chat platform gives them; a bot's message comes with none. That holds for any channel the bot is in, private channels too. Two
+things add more. With `chat.threadReplies: mention`, and in the thread of a message a `personMessage` trigger took whatever it says, a mentioned turn carries the thread's other replies as context. And on any Binding a mention of the bot by another bot or a
 webhook makes the agent receive the thread from its root, every author's messages, whatever `threadReplies` says; that is on by default (`chat.botMentions: any`), and
 `chat.botMentions: none` stops it ([Stored data](../reference/stored-data.md) describes what is kept). The agent also posts to the channel as the bot. Whoever chooses the
 AgentBackend's `url` therefore also chooses who reads those conversations.
