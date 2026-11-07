@@ -139,6 +139,9 @@ Every Slack call Agent Kourier makes, and the scope in the manifest that allows 
 | Events `app_mention`, `message.channels`, `message.groups` | `app_mentions:read`, `channels:history`, `groups:history` |
 | Socket Mode | the app-level token, `connections:write` |
 
+The `message.channels` and `message.groups` events carry a person's replies in a thread Agent Kourier owns and, for a Binding with a
+[`personMessage` trigger](../reference/chat-triggers.md#a-persons-message), each message a person posts outside a thread; no other scope or event is needed for it.
+
 The leader calls `conversations.info` once for each Binding's channel on each pass of [Binding verification](../reference/metrics.md#binding-verification). An app without the scope reads `False/MissingScope` on `ChannelJoined`; the call only reports, and turns still run.
 
 Agent Kourier reads `botToken` and `appToken` when it starts. A new token written to the Secret is not used until a restart, and until then `ChannelJoined` reads `Unknown/ChatCredentialsChanged` and the probe does not call Slack.

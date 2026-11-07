@@ -14,7 +14,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/config"
 )
 
-// TriggerMatch is a bot message that a botMessage trigger of a Binding accepted (spec 8.2): which trigger, what
+// TriggerMatch is a message that a botMessage or personMessage trigger of a Binding accepted (spec 8.2): which trigger, what
 // it extracted, and the message as it came. The Intake decides what it does to the thread of its key (see
 // TriggerDecision), and hands it to IntakeConfig.OnStart if it starts a turn.
 type TriggerMatch struct {
@@ -81,11 +81,12 @@ type extractRegex struct {
 	fieldRegex
 }
 
-// botTrigger is a botMessage trigger with its regexes compiled, which load validated, so a failure to compile
-// here is a trigger that never matches rather than an error to return.
-type botTrigger struct {
+// messageTrigger is a botMessage or personMessage trigger with its regexes compiled, which load validated, so a failure to
+// compile here is a trigger that never matches rather than an error to return.
+type messageTrigger struct {
 	index          int                // in the Binding's trigger list
-	from           v1alpha1.BotSource // the sender the trigger accepts
+	person         bool               // a personMessage trigger: it takes a person's message and has no from
+	from           v1alpha1.BotSource // the sender a botMessage trigger accepts
 	thread         v1alpha1.TriggerThread
 	limits         v1alpha1.TriggerLimits
 	prompt         string
@@ -93,10 +94,13 @@ type botTrigger struct {
 	extract        []extractRegex
 }
 
-// compileTrigger compiles the regexes of a botMessage trigger, in the order of their field names, so that
+// compileTrigger compiles the regexes of a botMessage or personMessage trigger, in the order of their field names, so that
 // what is tried first does not depend on the order of a map.
-func compileTrigger(index int, t *v1alpha1.Trigger) (botTrigger, error) {
-	c := botTrigger{index: index, from: *t.From, thread: t.Thread, limits: t.Limits, prompt: t.PromptTemplate}
+func compileTrigger(index int, t *v1alpha1.Trigger) (messageTrigger, error) {
+	c := messageTrigger{index: index, person: t.Type == v1alpha1.TriggerPersonMessage, thread: t.Thread, limits: t.Limits, prompt: t.PromptTemplate}
+	if t.From != nil {
+		c.from = *t.From
+	}
 	compile := func(entries map[v1alpha1.MessageField]string) ([]fieldRegex, error) {
 		var out []fieldRegex
 		for _, f := range slices.Sorted(maps.Keys(entries)) {
@@ -110,32 +114,32 @@ func compileTrigger(index int, t *v1alpha1.Trigger) (botTrigger, error) {
 	}
 	var err error
 	if c.match, err = compile(t.Match); err != nil {
-		return botTrigger{}, fmt.Errorf("match %w", err)
+		return messageTrigger{}, fmt.Errorf("match %w", err)
 	}
 	if c.exclude, err = compile(t.Exclude); err != nil {
-		return botTrigger{}, fmt.Errorf("exclude %w", err)
+		return messageTrigger{}, fmt.Errorf("exclude %w", err)
 	}
 	for _, name := range slices.Sorted(maps.Keys(t.Extract)) {
 		e := t.Extract[name]
 		re, err := regexp.Compile(e.Regex)
 		if err != nil {
-			return botTrigger{}, fmt.Errorf("extract %s: %w", name, err)
+			return messageTrigger{}, fmt.Errorf("extract %s: %w", name, err)
 		}
 		group := re.SubexpIndex(name)
 		if group < 0 {
-			return botTrigger{}, fmt.Errorf("extract %s: no group of that name", name)
+			return messageTrigger{}, fmt.Errorf("extract %s: no group of that name", name)
 		}
 		c.extract = append(c.extract, extractRegex{name, group, fieldRegex{e.Field, re}})
 	}
 	return c, nil
 }
 
-// evaluate applies the trigger to m: it is for m's bot, every match regex matches, no exclude regex does, and
+// evaluate applies the trigger to m: it is for m's sender, every match regex matches, no exclude regex does, and
 // every extract finds its group; it returns the extracted values. A regex is a search, not anchored unless it
 // says so, on the raw text of its field, the first maxMatchedFieldBytes bytes of it; a field the message lacks is empty. An extract's value is its group's
 // text, which may be empty if the group took part in the match; a group that took no part (an optional one) is
 // a miss, like a regex that does not match, so that no message gets an empty key by default.
-func (t *botTrigger) evaluate(m Inbound) (map[string]string, bool) {
+func (t *messageTrigger) evaluate(m Inbound) (map[string]string, bool) {
 	fields, why := t.check(m)
 	return fields, why.kind == missNone
 }
@@ -145,7 +149,7 @@ type missKind int
 
 const (
 	missNone    missKind = iota // the trigger took the message
-	missBot                     // the message is not from the trigger's sender
+	missBot                     // the message is not from the trigger's sender: another bot, or a bot where the trigger takes a person's
 	missMatch                   // a match regex does not match
 	missExclude                 // an exclude regex matches
 	missExtract                 // an extract finds no group
@@ -160,8 +164,8 @@ type miss struct {
 
 // check is evaluate with the reason for a miss, which the dry run shows (Replay). The steps run here and
 // nowhere else, so that what the dry run reports is what the intake does.
-func (t *botTrigger) check(m Inbound) (map[string]string, miss) {
-	if m.Bot == nil || !m.Bot.IsSender(t.from) {
+func (t *messageTrigger) check(m Inbound) (map[string]string, miss) {
+	if !t.takesSender(m) {
 		return nil, miss{kind: missBot}
 	}
 	for _, f := range t.match {
@@ -188,12 +192,22 @@ func (t *botTrigger) check(m Inbound) (map[string]string, miss) {
 	return fields, miss{}
 }
 
-// triggerTable is the botMessage triggers of one Binding, compiled, in the order of its list.
-type triggerTable []botTrigger
+// takesSender says whether m is from the kind of sender the trigger takes: the one bot a botMessage trigger names, or a
+// person for a personMessage trigger. A person's message is one with no Bot and a user, which the adapter has decided
+// is not Agent Kourier's own.
+func (t *messageTrigger) takesSender(m Inbound) bool {
+	if t.person {
+		return m.Bot == nil && m.User != ""
+	}
+	return m.Bot != nil && m.Bot.IsSender(t.from)
+}
+
+// triggerTable is the botMessage and personMessage triggers of one Binding, compiled, in the order of its list.
+type triggerTable []messageTrigger
 
 // match returns the first trigger that matches m, in order, and what it extracted: one that does not match
 // (another bot, a filter, an exclude, an extract that misses) lets the next try.
-func (tt triggerTable) match(m Inbound) (t *botTrigger, fields map[string]string, ok bool) {
+func (tt triggerTable) match(m Inbound) (t *messageTrigger, fields map[string]string, ok bool) {
 	for i := range tt {
 		if fields, ok := tt[i].evaluate(m); ok {
 			return &tt[i], fields, true
@@ -211,7 +225,7 @@ type tableCache struct {
 	snap   *config.Snapshot
 	tables map[*v1alpha1.Binding]*tableEntry
 	// compile compiles one trigger; compileTrigger if nil. A test sets it.
-	compile func(index int, t *v1alpha1.Trigger) (botTrigger, error)
+	compile func(index int, t *v1alpha1.Trigger) (messageTrigger, error)
 }
 
 // tableEntry is the table of one Binding, compiled once.
@@ -220,7 +234,7 @@ type tableEntry struct {
 	table triggerTable
 }
 
-// table returns the compiled botMessage triggers of b, which snap holds. A trigger that does not compile,
+// table returns the compiled botMessage and personMessage triggers of b, which snap holds. A trigger that does not compile,
 // which load should have rejected, is left out and logged at WARN, once per routing table.
 func (c *tableCache) table(snap *config.Snapshot, b *v1alpha1.Binding, log *slog.Logger) triggerTable {
 	c.mu.Lock()
@@ -237,7 +251,7 @@ func (c *tableCache) table(snap *config.Snapshot, b *v1alpha1.Binding, log *slog
 	return e.table
 }
 
-// build compiles the botMessage triggers of b.
+// build compiles the botMessage and personMessage triggers of b.
 func (c *tableCache) build(b *v1alpha1.Binding, log *slog.Logger) triggerTable {
 	compile := compileTrigger
 	if c.compile != nil {
@@ -246,12 +260,13 @@ func (c *tableCache) build(b *v1alpha1.Binding, log *slog.Logger) triggerTable {
 	var t triggerTable
 	for i := range b.Spec.Chat.Triggers {
 		tr := &b.Spec.Chat.Triggers[i]
-		if tr.Type != v1alpha1.TriggerBotMessage || tr.From == nil {
+		isBot := tr.Type == v1alpha1.TriggerBotMessage && tr.From != nil
+		if !isBot && tr.Type != v1alpha1.TriggerPersonMessage {
 			continue
 		}
 		bt, err := compile(i, tr)
 		if err != nil {
-			log.Warn("chat: a botMessage trigger does not compile and never matches", "binding", v1alpha1.NamespacedName(b.Namespace, b.Name), "trigger", i, "err", err)
+			log.Warn("chat: a trigger does not compile and never matches", "binding", v1alpha1.NamespacedName(b.Namespace, b.Name), "trigger", i, "type", tr.Type, "err", err)
 			continue
 		}
 		t = append(t, bt)

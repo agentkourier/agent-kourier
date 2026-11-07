@@ -11,6 +11,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -32,6 +33,9 @@ type digestQueue interface {
 type triggerDigestConfig struct {
 	Store digestStore
 	Queue digestQueue
+	// Snapshot returns the current routing table, as config.Reloader.Current does. The line names what a trigger took,
+	// which only the table knows. Nil, or a trigger that the table no longer has, counts bot messages.
+	Snapshot func() *config.Snapshot
 	// Interval is how often windows are looked at (default 15 seconds). A line is posted within one Interval of
 	// its window ending.
 	Interval time.Duration
@@ -122,7 +126,7 @@ func (d *triggerDigest) post(ctx context.Context, dg store.TriggerDigest) {
 	source := strings.Join([]string{"trigger-digest", dg.Connection, dg.Binding, strconv.Itoa(dg.Trigger), strconv.FormatInt(dg.Start.UnixNano(), 10)}, "/")
 	_, err := d.cfg.Queue.Enqueue(ctx, outbox.Post{
 		Source: source, Role: store.OutboxDigest, Channel: dg.Channel,
-		Out: chat.Say(chat.Message{Fallback: digestText(dg)}),
+		Out: chat.Say(chat.Message{Fallback: digestText(dg, d.noun(dg))}),
 	})
 	if err != nil {
 		d.cfg.Logger.WarnContext(ctx, "triggers: a digest line could not be queued; it will be tried again", "binding", dg.Binding, "trigger", dg.Trigger, "err", err)
@@ -135,10 +139,25 @@ func (d *triggerDigest) post(ctx context.Context, dg store.TriggerDigest) {
 	d.cfg.Logger.InfoContext(ctx, "triggers: queued the digest line of a window of alerts that limits stopped", "binding", dg.Binding, "trigger", dg.Trigger, "channel", dg.Channel, "window", dg.End.Sub(dg.Start))
 }
 
-// digestText is the line: how many bot messages were not investigated, in how long, and which limit stopped them
-// ("7 bot messages not investigated in the last 10m (rate limit)."). When more than one limit did, each is counted. It is
-// Agent Kourier's own wording and numbers, and names no alert.
-func digestText(dg store.TriggerDigest) string {
+// noun is what the trigger of dg took, in the singular: "message" for a personMessage trigger, which takes people's, and
+// "bot message" for any other, which includes a trigger that a reload has removed since the window began.
+func (d *triggerDigest) noun(dg store.TriggerDigest) string {
+	if d.cfg.Snapshot != nil {
+		if snap := d.cfg.Snapshot(); snap != nil {
+			ns, name, _ := strings.Cut(dg.Binding, "/")
+			if rb, ok := snap.Binding(ns, name); ok && dg.Trigger >= 0 && dg.Trigger < len(rb.Binding.Spec.Chat.Triggers) &&
+				rb.Binding.Spec.Chat.Triggers[dg.Trigger].Type == v1alpha1.TriggerPersonMessage {
+				return "message"
+			}
+		}
+	}
+	return "bot message"
+}
+
+// digestText is the line: how many messages, which noun names ("bot message" or "message"), were not investigated, in how
+// long, and which limit stopped them ("7 bot messages not investigated in the last 10m (rate limit)."). When more than one
+// limit did, each is counted. It is Agent Kourier's own wording and numbers, and names no alert.
+func digestText(dg store.TriggerDigest, noun string) string {
 	reasons := []struct {
 		limit store.TriggerLimit
 		name  string
@@ -155,9 +174,8 @@ func digestText(dg store.TriggerDigest) string {
 	if len(names) > 1 {
 		why = strings.Join(counted, ", ")
 	}
-	noun := "bot messages"
-	if total == 1 {
-		noun = "bot message"
+	if total != 1 {
+		noun += "s"
 	}
 	return fmt.Sprintf("%d %s not investigated in the last %s (%s).", total, noun, compactDuration(dg.End.Sub(dg.Start)), why)
 }

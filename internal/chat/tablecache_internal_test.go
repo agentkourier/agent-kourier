@@ -30,7 +30,7 @@ func TestACompileDoesNotBlockAnotherBinding(t *testing.T) {
 	slow, fast := botBinding("slow"), botBinding("fast")
 	release := make(chan struct{})
 	started := make(chan struct{})
-	c := &tableCache{compile: func(i int, tr *v1alpha1.Trigger) (botTrigger, error) {
+	c := &tableCache{compile: func(i int, tr *v1alpha1.Trigger) (messageTrigger, error) {
 		if tr == &slow.Spec.Chat.Triggers[i] {
 			close(started)
 			<-release
@@ -64,7 +64,7 @@ func TestACompileDoesNotBlockAnotherBinding(t *testing.T) {
 func TestABindingIsCompiledOncePerRoutingTable(t *testing.T) {
 	b := botBinding("alerts")
 	var compiles atomic.Int32
-	c := &tableCache{compile: func(i int, tr *v1alpha1.Trigger) (botTrigger, error) {
+	c := &tableCache{compile: func(i int, tr *v1alpha1.Trigger) (messageTrigger, error) {
 		compiles.Add(1)
 		time.Sleep(20 * time.Millisecond) // long enough for every caller to arrive while it runs
 		return compileTrigger(i, tr)
