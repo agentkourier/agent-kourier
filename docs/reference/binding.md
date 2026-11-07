@@ -98,14 +98,14 @@ Trigger is one way an event in the bound channel starts or continues a turn. Tri
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `type` | string | Yes | None | Type is mention, a person @mentioning Agent Kourier, or botMessage, a message a bot posts. A mention trigger takes no other field. The key is type, not on: YAML 1.1 reads a bare on as the boolean true, and the loader's decoder follows it. One of `mention`, `botMessage`. |
+| `type` | string | Yes | None | Type is mention, a person @mentioning Agent Kourier, botMessage, a message a bot posts, or personMessage, a top-level message a person posts. A mention trigger takes no other field. The key is type, not on: YAML 1.1 reads a bare on as the boolean true, and the loader's decoder follows it. One of `mention`, `botMessage`, `personMessage`. |
 | `from` | [BotSource](#botsource) | No | None | From names the sender a botMessage trigger accepts. Required for botMessage. |
-| `match` | map[string]string | No | None | Match maps a message field to a regex it must match. Every entry must match. Keys: `text`, `title`, `link`, `fallback`, `footer`, `body`. |
-| `exclude` | map[string]string | No | None | Exclude maps a message field to a regex; a message matching any entry is ignored. Keys: `text`, `title`, `link`, `fallback`, `footer`, `body`. |
-| `extract` | map[string][Extract](#extract) | No | None | Extract names the values to pull out of a message. A message in which one of these regexes does not match does not match the trigger. At most 32, each named in at most 63 bytes. |
-| `thread` | [TriggerThread](#triggerthread) | No | None | Thread ties messages that share an extracted key to one thread. |
-| `promptTemplate` | string | No | None | PromptTemplate is a Go template over the trigger's view of the message (.Channel, .State, .Key, .Fields, .Link, .Source). Required for botMessage. At most 8192 bytes; it has no loops, variables or defined templates, and calls only and, eq, ge, gt, index, le, len, lt, ne, not, or and slice. At most 8192 characters. |
-| `limits` | [TriggerLimits](#triggerlimits) | No | None | Limits bounds how many investigations the trigger starts (rate, concurrency and a daily cap). Required for botMessage: both rateLimit and maxRunsPerDay. |
+| `match` | map[string]string | No | None | Match maps a message field to a regex it must match. Every entry must match. A personMessage trigger has the field text alone. Keys: `text`, `title`, `link`, `fallback`, `footer`, `body`. |
+| `exclude` | map[string]string | No | None | Exclude maps a message field to a regex; a message matching any entry is ignored. A personMessage trigger has the field text alone. Keys: `text`, `title`, `link`, `fallback`, `footer`, `body`. |
+| `extract` | map[string][Extract](#extract) | No | None | Extract names the values to pull out of a message. A message in which one of these regexes does not match does not match the trigger. At most 32, each named in at most 63 bytes. A personMessage trigger takes none. |
+| `thread` | [TriggerThread](#triggerthread) | No | None | Thread ties messages that share an extracted key to one thread. A personMessage trigger takes none: each message it matches is a thread of its own. |
+| `promptTemplate` | string | No | None | PromptTemplate is a Go template over the trigger's view of the message (.Channel, .State, .Key, .Fields, .Link, .Source). Required for botMessage and personMessage. At most 8192 bytes; it has no loops, variables or defined templates, and calls only and, eq, ge, gt, index, le, len, lt, ne, not, or and slice. At most 8192 characters. |
+| `limits` | [TriggerLimits](#triggerlimits) | No | None | Limits bounds how many investigations the trigger starts (rate, concurrency and a daily cap). Required for botMessage and personMessage: both rateLimit and maxRunsPerDay. |
 
 ## BotSource
 
@@ -138,12 +138,12 @@ TriggerThread decides which thread a message joins and when it closes the thread
 
 ## TriggerLimits
 
-TriggerLimits bounds how many investigations a botMessage trigger starts: a rate limit over a window and a cap for a day. A botMessage trigger sets both. Only a start is limited: a repeat, a close and a note never are.
+TriggerLimits bounds how many investigations a botMessage or personMessage trigger starts: a rate limit over a window and a cap for a day. Such a trigger sets both. Only a start is limited: a repeat, a close and a note never are.
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `rateLimit` | [RateLimit](#ratelimit) | No | None | RateLimit allows MaxRuns starts in any window of Per, and MaxConcurrent investigations running at once. Required for a botMessage trigger, with all three fields set. |
-| `maxRunsPerDay` | integer | No | None | MaxRunsPerDay caps starts in any 24 hours. Required for a botMessage trigger: an explicit 0 means no cap. Minimum 0. |
+| `rateLimit` | [RateLimit](#ratelimit) | No | None | RateLimit allows MaxRuns starts in any window of Per, and MaxConcurrent investigations running at once. Required for a botMessage or personMessage trigger, with all three fields set. |
+| `maxRunsPerDay` | integer | No | None | MaxRunsPerDay caps starts in any 24 hours. Required for a botMessage or personMessage trigger: an explicit 0 means no cap. Minimum 0. |
 
 ## RateLimit
 

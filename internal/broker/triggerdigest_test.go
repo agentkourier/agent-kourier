@@ -12,7 +12,10 @@ import (
 	"testing"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
@@ -238,10 +241,79 @@ func TestTheDigestSaysWhyAndHowLong(t *testing.T) {
 			Counts: map[store.TriggerLimit]int{store.LimitDaily: 1, store.LimitConcurrent: 2, store.LimitRate: 3}},
 			"6 bot messages not investigated in the last 10m (rate limit: 3, concurrency limit: 2, daily cap: 1)."},
 	} {
-		if got := digestText(tt.d); got != tt.want {
+		if got := digestText(tt.d, "bot message"); got != tt.want {
 			t.Errorf("%s: %q; want %q", tt.name, got, tt.want)
 		}
 	}
+}
+
+// The line counts the messages a trigger took, and says "messages" for a personMessage trigger, which takes people's: a
+// person reads it in the channel where they posted, and a "bot message" is not what they wrote. A trigger the table does not
+// have, such as one a reload removed, is counted as bot messages, as is any trigger when the digest has no table.
+func TestTheDigestNamesWhatTheTriggerTook(t *testing.T) {
+	triggers := []v1alpha1.Trigger{
+		{Type: v1alpha1.TriggerPersonMessage, PromptTemplate: "x", Limits: digestLimits()},
+		{Type: v1alpha1.TriggerBotMessage, From: &v1alpha1.BotSource{ID: "B0123456789", Kind: v1alpha1.SenderKindBot}, PromptTemplate: "x", Limits: digestLimits()},
+	}
+	snap := digestSnapshot(t, triggers)
+	for _, tt := range []struct {
+		name    string
+		snap    func() *config.Snapshot
+		trigger int
+		want    string
+	}{
+		{"a personMessage trigger", func() *config.Snapshot { return snap }, 0, "3 messages not investigated in the last 10m (rate limit)."},
+		{"a botMessage trigger", func() *config.Snapshot { return snap }, 1, "3 bot messages not investigated in the last 10m (rate limit)."},
+		{"a trigger the table lacks", func() *config.Snapshot { return snap }, 7, "3 bot messages not investigated in the last 10m (rate limit)."},
+		{"no table yet", func() *config.Snapshot { return nil }, 0, "3 bot messages not investigated in the last 10m (rate limit)."},
+		{"no table at all", nil, 0, "3 bot messages not investigated in the last 10m (rate limit)."},
+	} {
+		w := newDigestWorld(t, nil)
+		w.d.cfg.Snapshot = tt.snap
+		for i := range 4 {
+			w.stop(t, tt.trigger, fmt.Sprintf("%d.1", 100+i), onePlace)
+		}
+		w.advance(11 * time.Minute)
+		w.d.pass(t.Context())
+		posts := w.q.got()
+		if len(posts) != 1 || posts[0].Out.Message == nil || posts[0].Out.Message.Fallback != tt.want {
+			t.Errorf("%s: posts = %+v; want the line %q", tt.name, posts, tt.want)
+		}
+	}
+}
+
+func digestLimits() v1alpha1.TriggerLimits {
+	perDay := int32(0)
+	return v1alpha1.TriggerLimits{RateLimit: &v1alpha1.RateLimit{MaxRuns: 1, Per: metav1.Duration{Duration: 10 * time.Minute}, MaxConcurrent: 1}, MaxRunsPerDay: &perDay}
+}
+
+// digestSnapshot resolves the Binding digestBinding with triggers.
+func digestSnapshot(t *testing.T, triggers []v1alpha1.Trigger) *config.Snapshot {
+	t.Helper()
+	ns, name, _ := strings.Cut(digestBinding, "/")
+	set := &config.Set{
+		AgentBackends: []v1alpha1.AgentBackend{{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "platform", Name: "kagent"},
+			Spec:       v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectA2A, URL: "http://agent.example", AllowedNamespaces: []string{ns}},
+		}},
+		ChatConnections: []v1alpha1.ChatConnection{{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "platform", Name: "slack"},
+			Spec:       v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformSlack, CredentialsSecretRef: v1alpha1.SecretRef{Name: "slack"}, AllowedNamespaces: []string{ns}},
+		}},
+		Bindings: []v1alpha1.Binding{{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+			Spec: v1alpha1.BindingSpec{
+				Agent:    v1alpha1.AgentRef{BackendRef: v1alpha1.ObjectRef{Namespace: "platform", Name: "kagent"}, Name: "test-agent", Namespace: "kagent"},
+				Identity: v1alpha1.Identity{TokenSecretRef: &v1alpha1.SecretKeyRef{Name: "creds"}},
+				Chat:     v1alpha1.ChatBinding{ConnectionRef: v1alpha1.ObjectRef{Namespace: "platform", Name: "slack"}, Channel: digestChannel, Triggers: triggers},
+			},
+		}},
+	}
+	snap, err := config.Resolve(t.Context(), set, keys{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snap
 }
 
 func digestOf(window time.Duration, limit store.TriggerLimit, n int) store.TriggerDigest {

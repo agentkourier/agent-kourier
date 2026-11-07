@@ -18,9 +18,13 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
-// botMessageSource is the source every trigger start reports: the prompt view's Source and the session's origin
-// source.
-const botMessageSource = string(v1alpha1.TriggerBotMessage)
+// botMessageSource and personMessageSource are the sources a trigger start reports: the prompt view's Source and the
+// session's origin source. A start reports the type of the trigger that matched. Neither is an alert that feedback
+// attributes by name, except botMessage with an alertname.
+const (
+	botMessageSource    = string(v1alpha1.TriggerBotMessage)
+	personMessageSource = string(v1alpha1.TriggerPersonMessage)
+)
 
 // botMentionSource is the source a bot's mention reports. It is no alert, so feedback attributes no alert to it.
 const botMentionSource = store.OriginBotMention
@@ -47,9 +51,9 @@ type triggerStarterConfig struct {
 	Log  *slog.Logger
 }
 
-// triggerStarter turns a botMessage trigger's decision to start into an investigation (spec 8.2): it renders the
-// first prompt from the trigger's template and the matched message, and gives it to the session manager's own
-// intake, the durable path a mention takes, anchored to the alert's thread. It is the Intake's IntakeConfig.OnStart.
+// triggerStarter turns a botMessage or personMessage trigger's decision to start into an investigation (spec 8.2): it
+// renders the first prompt from the trigger's template and the matched message, and gives it to the session manager's own
+// intake, the durable path a mention takes, anchored to the matched message's thread. It is the Intake's IntakeConfig.OnStart.
 //
 // It runs on the platform's acknowledgement path, which has seconds, so it does local work only: a render, a few local
 // writes, and a wake. It calls no agent and no Slack API; the permalink comes from what the platform cached when it
@@ -109,8 +113,11 @@ func newTriggerStarter(cfg triggerStarterConfig) (*triggerStarter, error) {
 func (s *triggerStarter) OnStart(ctx context.Context, m chat.TriggerMatch) error {
 	at := m.Message.At
 	source := botMessageSource
-	if m.Mention {
+	switch {
+	case m.Mention:
 		source = botMentionSource
+	case m.Message.Bot == nil: // a personMessage trigger's match is the only one of a message without a bot
+		source = personMessageSource
 	}
 	view := v1alpha1.PromptView{
 		Channel: at.Channel, State: m.Fields["state"], Key: m.Fields["key"], Source: source, Fields: m.Fields,
