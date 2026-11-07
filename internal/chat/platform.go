@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
@@ -196,12 +197,32 @@ var (
 	// Binding or invites the bot. An error that does not wrap it may pass on another try, and a cancelled context is
 	// never wrapped in it.
 	ErrChannelNotFound = errors.New("chat: the platform has no such channel, or none that Agent Kourier can see")
-	// ErrMissingScope is wrapped by the error of a ChannelAccess that the platform refuses because the app was installed
-	// without the permission the read needs (Slack: missing_scope). A caller checks it with errors.Is and does not retry:
-	// only an operator who adds the permission and reinstalls the app mends it. An error that does not wrap it may pass
+	// ErrMissingScope is wrapped by the error of a ChannelAccess or a GroupsReadable that the platform refuses because the app
+	// was installed without the permission the read needs (Slack: missing_scope). A caller checks it with errors.Is and does not
+	// retry: only an operator who adds the permission and reinstalls the app mends it. An error that does not wrap it may pass
 	// on another try, and a cancelled context is never wrapped in it.
 	ErrMissingScope = errors.New("chat: the app lacks a permission the platform needs for this read")
+	// ErrGroupNotFound is wrapped by the error of a GroupsReadable for a group the platform says is not there, or not there for
+	// Agent Kourier (Slack: no_such_subteam; whether a disabled group is the same is not confirmed). It also wraps
+	// ErrGroupsMisconfigured. A caller checks it with errors.Is and does not retry: the same group is as missing on the next try,
+	// until an operator changes the Binding or the workspace. A cancelled context is never wrapped in it.
+	ErrGroupNotFound = errors.New("chat: the platform has no such group, or none that Agent Kourier can see")
 )
+
+// GroupError is the error of a GroupsReadable for one group: Group is the platform's ID of the group that could not be read, as the
+// caller gave it, and Err is why. A caller finds it with errors.As, and Err's sentinels with errors.Is on the GroupError.
+type GroupError struct {
+	// Group is the ID of the group that could not be read.
+	Group string
+	// Err is the platform's error for that group. It holds no token.
+	Err error
+}
+
+// Error describes the failure, with the group's ID.
+func (e *GroupError) Error() string { return fmt.Sprintf("group %s: %v", e.Group, e.Err) }
+
+// Unwrap returns the platform's error.
+func (e *GroupError) Unwrap() error { return e.Err }
 
 // Access is how Agent Kourier stands to one conversation, as Platform.ChannelAccess reads it.
 type Access struct {
@@ -267,6 +288,17 @@ type Platform interface {
 	// ever "yes". An empty groups, or an empty user, is false with no error and no call: what no groups
 	// means is the caller's to decide, and it asks only when groups are configured.
 	IsInAnyGroup(ctx context.Context, groups []string, user string) (bool, error)
+	// GroupsReadable says whether Agent Kourier can read the members of every one of groups, the platform's own group IDs as
+	// IsInAnyGroup takes them, without asking whose they are: it is the check that IsInAnyGroup would fail on, made before a
+	// person presses. The groups are read at the call and never cached, in order, and the first that cannot be read ends the call
+	// with a *GroupError that names it (no later group is read, so one failure hides the ones after it until it is mended). An
+	// error wraps ErrGroupsMisconfigured when the platform says the read can never succeed until an operator fixes the
+	// configuration, and then also ErrGroupNotFound for a group that does not exist (a disabled group is expected to be the same, which is unconfirmed), and ErrMissingScope for an
+	// app without the permission to read groups; a caller that wants the other causes (a workspace without groups, a token of a
+	// type the read does not take) finds ErrGroupsMisconfigured and neither of those. Any other error (a timeout, a server
+	// error, a rate limit, a cancelled context, a credential the platform rejects, which Classify says is FatalAuth) may pass on
+	// another try, and wraps none of the three. An empty groups is nil with no call.
+	GroupsReadable(ctx context.Context, groups []string) error
 	// ChannelAccess says how Agent Kourier itself stands to the conversation channel, read at the call and never cached:
 	// whether it is a member (Access.Member) and whether the conversation is archived (Access.Archived). It reads
 	// nothing else and posts nothing, and it does not page through the members of the channel to answer, so its cost

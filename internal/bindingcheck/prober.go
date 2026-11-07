@@ -41,6 +41,12 @@ type Target struct {
 	// stamped with the UID of its pass (Condition.UID), so that whoever reads it can tell whose it is while a pass that began
 	// before the change is still running.
 	UID string
+	// ApproverGroups are the approver groups the Binding names, by the chat platform's IDs, and only when the Binding asks for tool
+	// approvals: empty for one that does not, which has no ApproversReadable condition. The Prober reads it at each Tick, so an edit
+	// that adds the first group makes the condition Pending at once and probes it at the next pass, an edit that takes the last
+	// away removes the condition (and calls OnDrop), and an edit that changes the groups is probed at the next pass like any other
+	// change of the Revision. The checker is given the slice as it is: it must not change it.
+	ApproverGroups []string
 }
 
 // AgentChecker probes the agent backend of a Binding. It sets BackendReachable.
@@ -59,6 +65,16 @@ type ChannelChecker interface {
 	// CheckChannel reports whether the bot is in channel. It must honor ctx, which ends at the probe timeout. An
 	// error means the probe could not tell and leaves the condition Unknown.
 	CheckChannel(ctx context.Context, channel string) (Outcome, error)
+}
+
+// GroupChecker probes the approver groups of a Binding. It sets ApproversReadable for the Binding whose Target names the groups, one
+// probe for all of them. A GroupChecker answers for one bot, so Targets must hold only Bindings on that bot's chat connection (see
+// ChannelChecker).
+type GroupChecker interface {
+	// CheckGroups reports whether the bot can read every one of groups, the platform's own IDs, which are never empty. It must
+	// honor ctx, which ends at the probe timeout, and not change groups. An error means the probe could not tell and leaves the
+	// condition Unknown; a checker that can classify a failure returns it as an Outcome with a nil error.
+	CheckGroups(ctx context.Context, groups []string) (Outcome, error)
 }
 
 // PanicError is the error OnProbeError gets for a checker that panicked. For a panic of Targets, Revision,
@@ -112,6 +128,10 @@ type Options struct {
 	// Channels probes channels, one probe per Target. Nil means ChannelJoined is not tracked. Targets must hold only
 	// Bindings on the chat connection that Channels answers for (see ChannelChecker).
 	Channels ChannelChecker
+	// Groups probes approver groups, one probe for each Target that has ApproverGroups, which is the only kind of Binding that has an
+	// ApproversReadable condition. Nil means ApproversReadable is not tracked, whatever the Targets name. Targets must hold only
+	// Bindings on the chat connection that Groups answers for (see GroupChecker).
+	Groups GroupChecker
 	// MinRevisionGap is the least time between the start of a pass and the start of one that only a change calls for: a change of
 	// Revision, or a Binding that is new in Targets (a reload that adds one is a change like any other). A change that comes inside
 	// the gap is not lost: it waits, and the pass runs at the first Tick after the gap, for whatever the Revision and the Targets are
@@ -137,7 +157,8 @@ type Options struct {
 	// Transition.New.Type), and never for a probe that changed neither. The Pending a new Binding's probed conditions are stored
 	// with is not a transition, but Ready's can be: when the first probes end one at a time, Ready moves from being Pending on one
 	// condition to being Pending on the next, so a consumer that treats Ready as unknown only once it has a result tests
-	// Condition.Pending. Calls are serialized with each other and with OnProbeError, run on a probe's goroutine and hold
+	// Condition.Pending. A change of Ready is also reported when a Binding gains approver groups (Pending, on the first Pending condition, unless another is False) or loses them (it is
+	// recomputed without the condition), at the Tick that sees the edit, on Run's goroutine, when no probe is running. Calls are serialized with each other and with OnProbeError, otherwise run on a probe's goroutine and hold
 	// up the other probes' results while they run, so the hook must be quick and must not wait on the Prober. The
 	// Prober does not bound a hook, so one that blocks stops probing and delays shutdown. A hook that panics is
 	// recovered and the panic is reported to OnProbeError; the State is already updated.
@@ -151,6 +172,15 @@ type Options struct {
 	// Every OnTransition call for a Binding comes before the OnPrune call that names it, and none follows it. It
 	// must not block, for the reason given at OnTransition, and a panic is recovered and reported to OnProbeError.
 	OnPrune func(names []string)
+	// OnDrop is called on Run's goroutine with the key (namespace/name) of a Binding and the type of a condition (ApproversReadable) that
+	// the Prober has removed from the State because the Binding no longer asks for it: an edit took its groups away, or the Binding was
+	// deleted and made again without them. It is for a consumer that keeps something for each condition, such as a series. Every
+	// OnTransition call for that condition of that Binding comes before the OnDrop call, and none follows it until the Binding gains groups again, when the condition is new and its transitions begin anew. The change of Ready that
+	// the removal causes is reported to OnTransition first (when the removal leaves the Binding with no probed condition, it leaves the State, OnDrop
+	// fires with no Ready transition, and a consumer's Ready series is left as it was; the broker always sets the agent and channel checkers, so it cannot
+	// reach this), and a Binding that leaves Targets is pruned (OnPrune) and not dropped. It must not
+	// block, for the reason given at OnTransition, and a panic is recovered and reported to OnProbeError.
+	OnDrop func(binding string, cond ConditionType)
 	// OnPass is called on Run's goroutine when a pass has ended and its results are recorded, before the Prober looks at the
 	// next Tick. A probe that finds what it found before is no transition, but it moves the condition's ObservedGeneration, and
 	// this is how a consumer that writes conditions somewhere learns that. It must not block, as OnPrune must not, and a panic
@@ -175,7 +205,14 @@ type Prober struct {
 	started      sync.WaitGroup
 	revisionBusy atomic.Bool
 
-	known map[string]string // the UID of each Binding seen at the last Tick, by key; owned by Run's goroutine
+	known map[string]knownTarget // what was seen of each Binding at the last Tick, by key; owned by Run's goroutine
+}
+
+// knownTarget is what the Prober remembers of a Binding between Ticks: the object, and whether it had approver groups (and so an
+// ApproversReadable condition).
+type knownTarget struct {
+	uid    string
+	groups bool
 }
 
 // probeKey identifies a probe: a condition type and a Binding's key.
@@ -198,7 +235,7 @@ func NewProber(o Options) *Prober {
 	if o.Concurrency <= 0 {
 		o.Concurrency = defaultConcurrency
 	}
-	return &Prober{o: o, state: NewState(), apply: make(chan struct{}, 1), running: map[probeKey]bool{}, known: map[string]string{}}
+	return &Prober{o: o, state: NewState(), apply: make(chan struct{}, 1), running: map[probeKey]bool{}, known: map[string]knownTarget{}}
 }
 
 // State returns the State the Prober records into. Readers use Snapshot.
@@ -220,7 +257,7 @@ func jittered(interval time.Duration, r float64) time.Duration {
 // goroutine, so a checker that ignores its context may outlive Run, until it returns. During a run, such a checker's
 // probe is recorded as Unknown/ProbeTimeout when the Timeout ends and frees its place at once; the target is not
 // probed again for that condition while its checker is still running, even if the Binding has moved to another channel,
-// so at most one goroutine per condition of a target is lost, two for a target, and what it returns late is dropped.
+// so at most one goroutine per condition of a target is lost, three for a target that has approver groups, and what it returns late is dropped.
 func (p *Prober) Run(ctx context.Context) {
 	defer p.waitForGoroutines()
 	var (
@@ -350,8 +387,10 @@ func (p *Prober) hook(name string, cond ConditionType, target Target, fn func())
 	}
 }
 
-// sync brings the State in line with targets and reports whether a Binding is new since the last call. It drops
-// repeated Binding keys, marks a new Binding's conditions Pending, and prunes the Bindings that are gone.
+// sync brings the State in line with targets and reports whether a Binding is new since the last call, or has gained approver
+// groups. It drops repeated Binding keys, marks a new Binding's conditions Pending, and prunes the Bindings that are gone. A Binding of
+// the same object (UID) that gains groups gets a Pending ApproversReadable, and one that loses them has it removed (OnDrop); the
+// change of Ready that either causes is reported to OnTransition, which a new Binding's Pending conditions are not.
 func (p *Prober) sync(targets []Target) ([]Target, bool) {
 	var (
 		changed bool
@@ -366,12 +405,24 @@ func (p *Prober) sync(targets []Target) ([]Target, bool) {
 		}
 		seen[t.Binding] = true
 		kept, names = append(kept, t), append(names, t.Binding)
-		if uid, ok := p.known[t.Binding]; ok && uid == t.UID {
-			continue
+		groups := p.o.Groups != nil && len(t.ApproverGroups) > 0
+		prev, ok := p.known[t.Binding]
+		p.known[t.Binding] = knownTarget{uid: t.UID, groups: groups}
+		switch {
+		case ok && prev.uid == t.UID && prev.groups == groups:
+		case ok && prev.uid == t.UID && groups:
+			changed = true
+			p.report(t, p.state.Set(t.Binding, at, p.pending(ApproversReadable, true, t.Generation, t.UID)))
+		case ok && prev.uid == t.UID:
+			p.drop(t, at)
+		default:
+			changed = true
+			p.state.Set(t.Binding, at, p.pending(BackendReachable, p.o.Agents != nil, t.Generation, t.UID), p.pending(ChannelJoined, p.o.Channels != nil, t.Generation, t.UID),
+				p.pending(ApproversReadable, groups, t.Generation, t.UID))
+			if !groups {
+				p.drop(t, at) // another object of the name may have had some
+			}
 		}
-		p.known[t.Binding] = t.UID
-		changed = true
-		p.state.Set(t.Binding, at, p.pending(BackendReachable, p.o.Agents != nil, t.Generation, t.UID), p.pending(ChannelJoined, p.o.Channels != nil, t.Generation, t.UID))
 	}
 	for name := range p.known {
 		if !seen[name] {
@@ -384,6 +435,30 @@ func (p *Prober) sync(targets []Target) ([]Target, bool) {
 	return kept, changed
 }
 
+// report calls OnTransition for the change of Ready among trs, the only one that sync reports: the Pending condition that caused
+// it is not a transition (see Options.OnTransition).
+func (p *Prober) report(t Target, trs []Transition) {
+	for _, tr := range trs {
+		if tr.New.Type == Ready && p.o.OnTransition != nil {
+			p.hook("OnTransition", Ready, t, func() { p.o.OnTransition(tr) })
+		}
+	}
+}
+
+// drop removes the ApproversReadable condition of t from the State if it has one, reports the change of Ready, and then calls OnDrop.
+// A new Binding's conditions were set Pending by the caller, which does not report them, so the change of Ready is reported only when the
+// condition was there before.
+func (p *Prober) drop(t Target, at time.Time) {
+	removed, trs := p.state.Remove(t.Binding, at, ApproversReadable)
+	if !removed {
+		return
+	}
+	p.report(t, trs)
+	if p.o.OnDrop != nil {
+		p.hook("OnDrop", ApproversReadable, t, func() { p.o.OnDrop(t.Binding, ApproversReadable) })
+	}
+}
+
 // pending is the Pending condition of type t, or the zero Condition (which State.Set ignores) when t is not tracked.
 func (p *Prober) pending(t ConditionType, tracked bool, generation int64, uid string) Condition {
 	if !tracked {
@@ -393,10 +468,10 @@ func (p *Prober) pending(t ConditionType, tracked bool, generation int64, uid st
 }
 
 // pass probes every target once, p.o.Concurrency at a time, and returns when all the probes have ended. Each target
-// gets its own agent probe and its own channel probe, even when targets share a channel. Agent and channel probes
-// alternate, so backends that hang do not hold every channel probe back.
+// gets its own agent probe and its own channel probe, even when targets share a channel, and a target that has approver groups
+// one probe for all of them. The three kinds alternate, so backends that hang do not hold every channel or group probe back.
 func (p *Prober) pass(ctx context.Context, targets []Target) {
-	var agentJobs, channelJobs []func(context.Context)
+	var agentJobs, channelJobs, groupJobs []func(context.Context)
 	if p.o.Agents != nil {
 		for _, t := range targets {
 			agentJobs = append(agentJobs, func(ctx context.Context) {
@@ -413,13 +488,23 @@ func (p *Prober) pass(ctx context.Context, targets []Target) {
 			})
 		}
 	}
-	var jobs []func(context.Context)
-	for i := 0; i < len(agentJobs) || i < len(channelJobs); i++ {
-		if i < len(agentJobs) {
-			jobs = append(jobs, agentJobs[i])
+	if p.o.Groups != nil {
+		for _, t := range targets {
+			if len(t.ApproverGroups) == 0 {
+				continue
+			}
+			groupJobs = append(groupJobs, func(ctx context.Context) {
+				res := p.probe(ctx, probeKey{ApproversReadable, t.Binding}, func(c context.Context) (Outcome, error) { return p.o.Groups.CheckGroups(c, t.ApproverGroups) })
+				p.record(ctx, ApproversReadable, t, res)
+			})
 		}
-		if i < len(channelJobs) {
-			jobs = append(jobs, channelJobs[i])
+	}
+	var jobs []func(context.Context)
+	for i := 0; i < len(agentJobs) || i < len(channelJobs) || i < len(groupJobs); i++ {
+		for _, kind := range [][]func(context.Context){agentJobs, channelJobs, groupJobs} {
+			if i < len(kind) {
+				jobs = append(jobs, kind[i])
+			}
 		}
 	}
 

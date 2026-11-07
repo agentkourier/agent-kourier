@@ -136,7 +136,7 @@ func (f *FakePlatform) SetMembers(channel string, users ...string) {
 
 // SetGroup sets who is in the group with the platform ID id. A group the fake was not told of is unreadable: IsInAnyGroup
 // is false, with an error that wraps chat.ErrGroupsMisconfigured, as a platform's answer for a group that does not exist
-// does. FailNext("IsInAnyGroup", errors.New(...)) makes the other kind, an error that may pass on a retry, and
+// does, and GroupsReadable is a *chat.GroupError that also wraps chat.ErrGroupNotFound. FailNext("IsInAnyGroup", errors.New(...)) makes the other kind, an error that may pass on a retry, and
 // FailNext with an error that wraps chat.ErrGroupsMisconfigured makes the first for a group that is set.
 func (f *FakePlatform) SetGroup(id string, users ...string) {
 	f.mu.Lock()
@@ -600,6 +600,26 @@ func (f *FakePlatform) IsInAnyGroup(_ context.Context, groups []string, user str
 	return false, nil
 }
 
+// GroupsReadable implements chat.Platform: a group that SetGroup was told of is readable, whoever is in it, and the first one it
+// was not told of ends the call with a *chat.GroupError that wraps chat.ErrGroupNotFound and chat.ErrGroupsMisconfigured. The
+// context is not read, as in the fake's other reads. FailNext("GroupsReadable", err) injects a failure, returned as it is.
+func (f *FakePlatform) GroupsReadable(_ context.Context, groups []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(groups) == 0 {
+		return nil
+	}
+	if err := f.fail("GroupsReadable"); err != nil {
+		return err
+	}
+	for _, g := range groups {
+		if _, ok := f.groups[g]; !ok {
+			return &chat.GroupError{Group: g, Err: fmt.Errorf("fake platform: no such group: %w: %w", chat.ErrGroupNotFound, chat.ErrGroupsMisconfigured)}
+		}
+	}
+	return nil
+}
+
 // ChannelAccess implements chat.Platform: the Access that SetAccess set, and for a channel it was not told of, or for none,
 // an error that wraps chat.ErrChannelNotFound. The context is not read, as in the fake's other reads.
 func (f *FakePlatform) ChannelAccess(_ context.Context, channel string) (chat.Access, error) {
@@ -711,6 +731,7 @@ func (f *FakePlatform) Subject() Subject {
 		},
 		Inert:         func() error { return nil },
 		Channels:      f.arrangeChannel,
+		Groups:        f.arrangeGroup,
 		ToolApprovals: true,
 		TooLargeTools: &chat.Prompt{ID: "ix-big-tools", Tools: make([]chat.Tool, f.MaxTools+1)},
 	}
@@ -731,6 +752,19 @@ func (f *FakePlatform) arrangeChannel(state ChannelState) string {
 		f.FailNext("ChannelAccess", fmt.Errorf("fake platform: %w", chat.ErrMissingScope))
 	}
 	return channel // ChannelUnknown is a channel never set
+}
+
+// arrangeGroup is Subject.Groups of the fake: the group it returns is one the fake stands to as state says.
+func (f *FakePlatform) arrangeGroup(state GroupState) string {
+	group := "G0" + strings.ToUpper(strings.ReplaceAll(state.String(), " ", ""))
+	switch state {
+	case GroupReadable:
+		f.SetGroup(group, "U1")
+	case GroupScopeMissing:
+		f.SetGroup(group, "U1")
+		f.FailNext("GroupsReadable", &chat.GroupError{Group: group, Err: fmt.Errorf("fake platform: %w: %w", chat.ErrMissingScope, chat.ErrGroupsMisconfigured)})
+	}
+	return group // GroupUnknown is a group never set
 }
 
 // literal is s as the fake shows it at the place w.

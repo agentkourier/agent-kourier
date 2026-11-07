@@ -255,6 +255,8 @@ What a status tells a tenant, and what it does not. A Binding's `status` is read
   "the operator's log has the cause", and the person who runs Agent Kourier reads it.
 - A `ChannelJoined` reason tells the tenant whether the bot can see the channel they named, is in it, and whether it is archived. A private channel that the bot is not in looks like
   one that does not exist.
+- An `ApproversReadable` reason tells the tenant whether the bot can read each user group in the Binding's own `approverGroups`, and for `GroupNotFound` and `GroupsUnreadable` its message names the first group that fails by its place in
+  that list and its ID, which the tenant wrote; the other reasons name no group. A group that does not exist and one that the bot cannot see are one reason (`GroupNotFound`), and a disabled group is expected to read the same (unverified). It says nothing of who is in a group.
 - A secret value is never in a status. A condition's message is redacted and cut to 1024 bytes.
 
 ## Hostile text

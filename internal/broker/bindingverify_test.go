@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -428,6 +429,16 @@ type accessFake struct {
 	wait     bool // block until the context ends
 	calls    int
 	channels []string
+
+	groupsErr   error      // what GroupsReadable answers
+	groupsCalls [][]string // the groups of each call to GroupsReadable
+}
+
+func (a *accessFake) GroupsReadable(_ context.Context, groups []string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.groupsCalls = append(a.groupsCalls, append([]string(nil), groups...))
+	return a.groupsErr
 }
 
 func (a *accessFake) ChannelAccess(ctx context.Context, channel string) (chat.Access, error) {
@@ -852,12 +863,12 @@ func TestBindingTargetsAreTheServedConnectionsBindingsOnly(t *testing.T) {
 	snap := twoConnections(t)
 	got := bindingTargets(snap, v1alpha1.ObjectRef{Namespace: "platform", Name: "slack-a"})
 	want := []bindingcheck.Target{{Binding: "ops/oncall", Channel: "C2"}, {Binding: "sre/oncall", Channel: "C1"}}
-	if !slices.Equal(got, want) {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("targets of slack-a = %v; want %v", got, want)
 	}
 	got = bindingTargets(snap, v1alpha1.ObjectRef{Namespace: "platform", Name: "slack-b"})
 	want = []bindingcheck.Target{{Binding: "ops/also-other", Channel: "C3"}, {Binding: "sre/other-bot", Channel: "C1"}}
-	if !slices.Equal(got, want) {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("targets of slack-b = %v; want %v", got, want)
 	}
 	if got := bindingTargets(snap, v1alpha1.ObjectRef{Namespace: "platform", Name: "slack-c"}); len(got) != 0 {
@@ -1282,6 +1293,8 @@ type byChannel map[string]*accessFake
 func (b byChannel) ChannelAccess(ctx context.Context, channel string) (chat.Access, error) {
 	return b[channel].ChannelAccess(ctx, channel)
 }
+
+func (b byChannel) GroupsReadable(context.Context, []string) error { return nil }
 
 func (b byChannel) Classify(op chat.Op, err error) chat.Verdict {
 	for _, f := range b {

@@ -376,7 +376,7 @@ generation, while `Ready` is `False` with `Accepted:InvalidSpec`. A Binding with
 
 `agentkourier_binding_ready{binding="<namespace>/<name>"}` is 0, or the leader's log has a line that starts with `binding verification:`.
 
-The leader checks each Binding of the connection it serves: it fetches the agent's card, and it reads the channel as the bot. [Binding verification](../reference/metrics.md#binding-verification) says when. The result only reports: turns still run for a Binding that is not ready, and `/readyz` does not change.
+The leader checks each Binding of the connection it serves: it fetches the agent's card, it reads the channel as the bot, and, for a Binding that asks for tool approvals from user groups, it reads those groups. [Binding verification](../reference/metrics.md#binding-verification) says when. The result only reports: turns still run for a Binding that is not ready, and `/readyz` does not change.
 
 The metric names the condition, and the log line has the reason:
 
@@ -422,7 +422,23 @@ One failed probe holds the Binding at 0 until the next pass, up to about 5.5 min
 | `ChatCredentialsUnusable` | unknown | The Secret, or a key of it, is gone or empty, or the Secret is of a type that is never read. The connection keeps the tokens it read, and the read was not made. | Mend the Secret. A restart fails until you do. |
 | `ChatUnavailable` | unknown | Slack rate-limited the read, did not answer in time, or the read failed (`cause` has why, such as `no_permission` or `connection refused`). | Wait for the next pass. If it stays, read the cause. |
 
-### Either condition
+### `ApproversReadable`
+
+Only a Binding with `interactions.toolApprovals: true` and a non-empty `interactions.approverGroups` has this condition. The leader reads the groups in order, one request each, and stops at the first it cannot read, so `GroupNotFound` and `GroupsUnreadable` name that group
+in the `message` by its place in the list and its ID (`spec.interactions.approverGroups[1] (S0123456789)`), and another bad group is named once this one is mended. (`MissingScope` names no group: the app cannot read any.) A press does not read this condition: it reads the groups itself, live, and when that read finds the cause behind `GroupNotFound`, `MissingScope` or `GroupsUnreadable`, a person's press on a tool approval of this Binding
+ends with a fixed message and decides nothing, unless they are in a group earlier in the list, which the check reaches first. So until the next pass a press can succeed while the status still shows the failure of a group fixed since, and a press can end while the status shows `True` for a group that broke since. A press whose read fails for another cause (a rate limit, a timeout, a token Slack rejects) is kept and tried again, for up to an hour after it was recorded; then it is given up and the person is told to press again.
+
+| `reason` | Status | What happened | What to do |
+|---|---|---|---|
+| `GroupNotFound` | false | The group does not exist, is disabled, or the bot cannot see it. On Slack that is the code `no_such_subteam`; Slack's answer for a disabled group has not been measured. | Check the ID against `usergroups.list` (see [Configure Slack](configure-slack.md#what-the-app-is-allowed-to-do)), enable the group, or take it out of the list. |
+| `MissingScope` | false | The Slack app lacks `usergroups:read`. | Add `usergroups:read` and reinstall the app. See [Configure Slack](configure-slack.md). |
+| `GroupsUnreadable` | false | Slack refuses the read for a reason no retry mends and the two above do not name: a workspace whose plan has no user groups (`plan_upgrade_required`), a token of a type the method does not take (`not_allowed_token_type`), a token without the permission (`no_permission`), or an Enterprise grid the method is restricted on (`enterprise_is_restricted`). `cause` has Slack's code. Which code a workspace gets for each cause has not been measured. | Read the `cause`. A workspace with no user groups cannot use `approverGroups`: remove it, or change the plan. |
+| `ChatCredentialsRejected` | false | Slack rejected the bot's token. | Replace the token and restart Agent Kourier. |
+| `ChatCredentialsChanged` | unknown | The ChatConnection's Secret holds other tokens than the ones in use, so the read was not made. | Restart Agent Kourier to use the new tokens. |
+| `ChatCredentialsUnusable` | unknown | The Secret, or a key of it, is gone or empty, or the Secret is of a type that is never read. The connection keeps the tokens it read, and the read was not made. | Mend the Secret. A restart fails until you do. |
+| `ChatUnavailable` | unknown | Slack rate-limited the read, did not answer within the 8 seconds the read of all the groups is given, or the read failed (`cause` has why). | Wait for the next pass. If it stays, read the cause. |
+
+### Any condition
 
 | `reason` | Status | What happened | What to do |
 |---|---|---|---|
@@ -433,7 +449,7 @@ One failed probe holds the Binding at 0 until the next pass, up to about 5.5 min
 
 With the config read from custom resources, the leader writes the status of each Binding it serves, and writes it back if it differs. If something else keeps changing it, the two go on at each other once each gap, and `agentkourier_binding_status_writes_total{result="put_back"}` climbs steadily. After three put-backs in a row, each within five gaps of the one before, the leader's log says, once for the Binding, `something else keeps changing the status of a Binding, and this broker keeps putting it back`, and names it.
 
-What else writes a Binding's status is either another Agent Kourier that serves the same Binding, or a controller of your own. The first happens when two installs name the same ChatConnection (`AGENTKOURIER_CHAT_CONNECTION`): give each its own connection, so that each serves its own Bindings. For the second, look at the `managedFields` of the Binding (`kubectl get akbinding <name> -n <namespace> -o yaml --show-managed-fields`): the manager `agent-kourier` owns the conditions of the types `Accepted`, `BackendReachable`, `ChannelJoined` and `Ready`, and any other manager that writes them is the one to stop. A person's edit is put back once and is no fight. A controller that writes the status less often than once in five gaps stays below the three, and shows only in the metric. The numbers are on [Limits](../reference/limits.md#run-the-broker).
+What else writes a Binding's status is either another Agent Kourier that serves the same Binding, or a controller of your own. The first happens when two installs name the same ChatConnection (`AGENTKOURIER_CHAT_CONNECTION`): give each its own connection, so that each serves its own Bindings. For the second, look at the `managedFields` of the Binding (`kubectl get akbinding <name> -n <namespace> -o yaml --show-managed-fields`): the manager `agent-kourier` owns the conditions of the types `Accepted`, `BackendReachable`, `ChannelJoined`, `ApproversReadable` and `Ready`, and any other manager that writes them is the one to stop. A person's edit is put back once and is no fight. A controller that writes the status less often than once in five gaps stays below the three, and shows only in the metric. The numbers are on [Limits](../reference/limits.md#run-the-broker).
 
 ## An agent on kagent 0.9.x answers, but the answer can appear twice
 
