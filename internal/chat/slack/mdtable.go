@@ -118,7 +118,7 @@ func (m *mdText) table(final bool, o *mdOut) tableState {
 	if !o.put(fenceMark + "\n") {
 		return tableFull
 	}
-	m.code, m.indent = true, 0
+	m.code, m.indent, m.cont, m.reread = true, 0, 0, false
 	m.tbl = openTable{layout: l, raw: f.raw, out: utf8.RuneCountInString(text) + 1}
 	if !putCode(text, o) {
 		return tableFull
