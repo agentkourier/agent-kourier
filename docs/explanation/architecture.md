@@ -140,24 +140,24 @@ sequenceDiagram
     S->>A: Socket Mode event (message or app_mention)
     A->>M: Submit the turn to the Binding's session
     M->>M: write the session and queue the turn, keyed by message ID
-    M->>R: acknowledgment notice
+    M->>R: acknowledgment notice, if the Binding enables it
     M-->>A: queued, and the session's runner woken
     Note over S,M: Submit does not wait for the agent. If it returns an error, the event is left<br/>unacknowledged for Slack to send again. A message it rejects as invalid is dropped.
     par
         A->>S: acknowledge the event
     and
-        R-)S: reactions.add (hourglass), from the outbox
+        R-)S: reactions.add (hourglass by default), from the outbox
     and
         M->>G: SendStreamingMessage as the Binding's identity,<br/>with the session's contextId (none on a first turn)
     end
     loop while the task runs
         G-->>M: task, status and artifact updates
         M->>R: output so far
-        R->>S: chat.startStream, then chat.appendStream with the new text
-    end
-    opt the stream drops or stays silent too long
-        M->>G: GetTask
-        M->>G: SubscribeToTask, if the task has not ended
+        R->>S: chat.appendStream with the new text (chat.startStream the first time)
+        opt the stream drops or stays silent too long
+            M->>G: GetTask
+            M->>G: SubscribeToTask, if the task has not ended, and read on from there
+        end
     end
     G-->>M: final status, such as completed, failed or input-required
     R->>S: chat.stopStream
@@ -171,7 +171,7 @@ thread streams as above. With `output: final`, the reply is posted once, when th
 ```mermaid
 sequenceDiagram
     participant S as Slack
-    participant A as Slack adapter
+    participant A as Slack adapter and chat intake
     participant I as Interactions
     participant M as Session manager
     participant G as Agent
@@ -181,16 +181,21 @@ sequenceDiagram
     S->>A: Socket Mode interactive event (a button press)
     A->>I: record the press
     A->>S: acknowledge the event
-    I->>I: check channel membership, that the presser is not a bot, the deadline and,<br/>for an approval on a Binding that names them, approver groups
+    I->>I: check that the question is still open, channel membership and that the presser<br/>is not a bot. For an approval, check that the Binding still allows approvals<br/>and, if it names approver groups, that the presser is in one
+    I->>I: decide, if the press came before the deadline
     I->>M: the answer
-    M->>G: SendStreamingMessage with the paused task's ID
+    M->>G: GetTask on the paused task, then SendStreamingMessage with its ID
+    I->>S: take the controls off the question
     G-->>M: the task streams again
 ```
 
+If the agent rejects the answer with a JSON-RPC internal error (`-32603`), Agent Kourier cancels the paused task and
+posts a notice in the thread.
+
 A question that takes a typed answer is answered by a reply in the thread instead of a button. The reply comes in as
-a Socket Mode message event and Submit queues it. The waiting session reads the paused task and passes the reply to
-interactions, which check it as they check a press. A reply that is not taken as the answer stays queued as an
-ordinary turn.
+a Socket Mode message event and Submit queues it. Unless intake already matched the reply to the question, the
+waiting session reads the paused task first. It passes the reply to interactions, which check it as they check a
+press. A reply that is not taken as the answer stays queued as an ordinary turn.
 
 1. The messaging adapter feeds an inbound message to chat intake, which selects
    the binding and applies the channel and thread rules.
