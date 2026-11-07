@@ -594,9 +594,12 @@ func person(o *Binding) *Trigger {
 
 // A personMessage trigger is bounded like a botMessage trigger: it needs limits and a prompt template. A person's message has
 // no sender to name, no structured part to read and no key to thread by, so it takes no from, extract or thread, and match and
-// exclude read only text.
+// exclude read only text. A trigger that lacks its limits is pointed at the personMessage example, not the Alertmanager one.
 func TestPersonMessageTriggerValidate(t *testing.T) {
-	const at = "spec.chat.triggers[2]"
+	const (
+		at         = "spec.chat.triggers[2]"
+		personHint = "see the example in reference/chat-triggers (https://agentkourier.dev/reference/chat-triggers/#a-persons-message)"
+	)
 	runMutations[Binding](t, "binding.yaml", []mutation[Binding]{
 		{"a personMessage trigger ok", func(o *Binding) { person(o) }, ""},
 		{"with a match on text ok", func(o *Binding) { person(o).Match = map[MessageField]string{FieldText: "(?i)down"} }, ""},
@@ -623,9 +626,9 @@ func TestPersonMessageTriggerValidate(t *testing.T) {
 		{"with an exclude regex over the length cap", func(o *Binding) { person(o).Exclude = map[MessageField]string{FieldText: strings.Repeat("a", 513)} },
 			at + ".exclude.text: regular expression is 513 bytes, longer than the 512 byte limit"},
 		{"without a rate limit", func(o *Binding) { person(o).Limits.RateLimit = nil },
-			at + ".limits.rateLimit: required: set maxRuns, per and maxConcurrent; " + limitsHint},
+			at + ".limits.rateLimit: required: set maxRuns, per and maxConcurrent; " + personHint},
 		{"without a daily cap", func(o *Binding) { person(o).Limits.MaxRunsPerDay = nil },
-			at + ".limits.maxRunsPerDay: required: set the cap for a day, or 0 for no cap; " + limitsHint},
+			at + ".limits.maxRunsPerDay: required: set the cap for a day, or 0 for no cap; " + personHint},
 		{"with a rate window over a day", func(o *Binding) { person(o).Limits.RateLimit.Per = metav1.Duration{Duration: 25 * time.Hour} },
 			at + ".limits.rateLimit.per: 25h0m0s is out of range, must be between 10s and 24h0m0s"},
 		{"without a prompt template", func(o *Binding) { person(o).PromptTemplate = "" }, at + ".promptTemplate: required"},

@@ -166,7 +166,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	stops.add("trigger-threads", startLoop(runCtx, sweep.Run))
 	// The digest line of the alerts that a trigger's limits stopped is queued on the outbox, one for each window: the
 	// outbox posts it. The loop stops with the interactions' loops, before the outbox drain and the store.
-	digest, err := newTriggerDigest(triggerDigestConfig{Store: st, Queue: ob, Snapshot: boot.Reloader.Current, Interval: cfg.digestEvery, Logger: log})
+	digest, err := newTriggerDigest(triggerDigestConfig{Store: st, Queue: ob, Interval: cfg.digestEvery, Logger: log})
 	if err != nil {
 		return nil, fmt.Errorf("trigger digest: %w", err)
 	}

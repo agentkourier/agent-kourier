@@ -563,7 +563,7 @@ func (p *problems) personMessageTrigger(path string, t *Trigger, b *regexBudget)
 			}
 		}
 	}
-	p.limits(path+".limits", t.Limits)
+	p.limits(path+".limits", t.Limits, personLimitsHint)
 	p.promptTemplate(path+".promptTemplate", t.PromptTemplate, nil)
 }
 
@@ -595,7 +595,7 @@ func (p *problems) botMessageTrigger(path string, t *Trigger, b *regexBudget) {
 		p.extract(path+".extract."+name, name, t.Extract[name], b)
 	}
 	p.thread(path+".thread", &t.Thread, t.Extract)
-	p.limits(path+".limits", t.Limits)
+	p.limits(path+".limits", t.Limits, limitsHint)
 	p.promptTemplate(path+".promptTemplate", t.PromptTemplate, t.Extract)
 }
 
@@ -635,18 +635,23 @@ func (p *problems) extract(path, name string, e Extract, b *regexBudget) {
 	}
 }
 
-// limitsHint points a botMessage or personMessage trigger that lacks limits at the documented example, which sets both.
-const limitsHint = "see the example in how-to/investigate-alertmanager-alerts (https://agentkourier.dev/how-to/investigate-alertmanager-alerts/)"
+// limitsHint points a botMessage trigger that lacks limits at the documented example, which sets both, and personLimitsHint a
+// personMessage trigger at its own.
+const (
+	limitsHint       = "see the example in how-to/investigate-alertmanager-alerts (https://agentkourier.dev/how-to/investigate-alertmanager-alerts/)"
+	personLimitsHint = "see the example in reference/chat-triggers (https://agentkourier.dev/reference/chat-triggers/#a-persons-message)"
+)
 
 // limits checks the limits of a botMessage or personMessage trigger: it must set a rate limit and a daily cap, and a rate limit
 // set in part fails on each field it lacks. The window is bounded on both sides: see MinRateWindow and
-// MaxLimitWindow. A cap of 0 means none, and it must be written: leaving the cap out is refused.
-func (p *problems) limits(path string, l TriggerLimits) {
+// MaxLimitWindow. A cap of 0 means none, and it must be written: leaving the cap out is refused. hint says where an example
+// that sets both is.
+func (p *problems) limits(path string, l TriggerLimits, hint string) {
 	if l.RateLimit == nil {
-		p.add(path+".rateLimit", "required: set maxRuns, per and maxConcurrent; %s", limitsHint)
+		p.add(path+".rateLimit", "required: set maxRuns, per and maxConcurrent; %s", hint)
 	}
 	if l.MaxRunsPerDay == nil {
-		p.add(path+".maxRunsPerDay", "required: set the cap for a day, or 0 for no cap; %s", limitsHint)
+		p.add(path+".maxRunsPerDay", "required: set the cap for a day, or 0 for no cap; %s", hint)
 	}
 	if r := l.RateLimit; r != nil {
 		p.positive(path+".rateLimit.maxRuns", int64(r.MaxRuns))
