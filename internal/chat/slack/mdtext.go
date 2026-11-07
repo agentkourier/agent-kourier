@@ -20,9 +20,11 @@ const fenceMark = "```"
 //
 // It reads the text as Agent Kourier means to show it, and writes every fence and every code span itself, in one form:
 //
-//   - a line that starts, after white space, with three or more backticks or tildes is a fence line. Agent Kourier writes
-//     "```" alone at column 0 in its place, and the block's lines are dedented by the white space of the opener
-//     (row 22: a fence in a list item is not code to Slack, but one at column 0 is);
+//   - a line that starts, after white space and at most one list marker or quote mark, with three or more backticks or
+//     tildes is a fence line (readFence has the marks). Agent Kourier writes "```" alone at column 0 in its place, with the
+//     mark dropped, and the block's lines are dedented by the white space of the opener, and by the width of the list marker
+//     too, or lose a quote mark if they have one (row 22: a fence in a list item is not code to Slack, but one at column 0
+//     is). The list or the quote goes on as prose after the block;
 //   - in a block the text is raw (rows 01, 02, 19), but for "<" before "!", "@" or "#", which is written "&lt;" so
 //     that no broadcast, mention or channel token can be in it, whatever reads it;
 //   - a backtick run, then text with no backtick, then a run of the same length, in a line of prose, is a code span
@@ -34,9 +36,10 @@ const fenceMark = "```"
 //
 // Slack then sees code only where Agent Kourier wrote it, whatever the agent wrote.
 //
-// A line's start is held back until it is known not to be a fence line, a prose line is held back from its first
-// backtick to its end, and "<" at the end of code until the next character is known: the text reaches Slack a line
-// late at most, but for a table, and the end of the document (final) writes what is held.
+// A line's start is held back until it is known not to be a fence line (so a list marker or a quote mark, and the white
+// space after it, wait for the character that says), a prose line is held back from its first backtick to its end, and "<"
+// at the end of code until the next character is known: the text reaches Slack a line late at most, but for a table, and
+// the end of the document (final) writes what is held.
 //
 // A stream that Agent Kourier did not start in this process, or one that lost a call without an answer, is blind: Slack may be
 // inside a block that Agent Kourier does not know of, so everything is escaped, prose and code alike (escapeRune), and no code
@@ -44,7 +47,8 @@ const fenceMark = "```"
 type mdText struct {
 	code   bool      // inside a block that Agent Kourier opened
 	inLine bool      // past the start of the line that held begins in
-	indent int       // the white space of the opener, which the lines of the block lose
+	opener mark      // what stood before the run of the opener of the block that is open, besides white space
+	indent int       // the characters of white space the lines of the block lose: see readFence
 	held   string    // text not yet written: the cleaned input from the first thing that is not decided
 	blind  bool      // Slack's state is not known: escape everything (see above)
 	tbl    openTable // the table whose block is open, which the rows still to come are written in
@@ -141,35 +145,155 @@ func (m *mdText) step(final bool, o *mdOut) bool {
 
 // start reads the start of a line, which is either a fence line or the white space before the rest of it.
 func (m *mdText) start(line string, complete bool, o *mdOut) bool {
-	lead, ch, run, rest := readFence(line)
+	h := readFence(line, m.code, m.opener)
 	switch {
-	case run >= 3:
-		return complete && m.fence(line, lead, ch, run, rest, o) // the rest of the line says what it is
-	case !complete && rest == "" && (ch != 0 || lead == line):
+	case h.run >= 3:
+		return complete && m.fence(line, h, o) // the rest of the line says what it is
+	case !complete && h.pending:
 		return false // a fence may be coming
 	}
-	keep := lead
+	keep := h.lead
 	if m.code {
-		keep = dedent(lead, m.indent)
+		keep = dedent(h.lead, m.indent)
 	}
 	if !o.put(keep) {
 		return false
 	}
-	m.held = m.held[len(lead):]
+	m.held = m.held[h.drop+len(h.lead):]
 	m.inLine = true
 	return true
 }
 
-// readFence reads the white space at the start of line, then the run of backticks or tildes after it (ch is 0 if
-// the line has none, and run is how many there are, of the same character), and rest, which is what follows them.
-func readFence(line string) (lead string, ch byte, run int, rest string) {
-	body := strings.TrimLeftFunc(line, unicode.IsSpace)
-	lead = line[:len(line)-len(body)]
-	if body == "" || (body[0] != '`' && body[0] != '~') {
-		return lead, 0, 0, body
+// mark is what may stand before the run of a fence besides white space.
+type mark uint8
+
+const (
+	markNone  mark = iota // nothing
+	markList              // a list marker: "-", "*" or "+", or one to nine digits and "." or ")", and then white space
+	markQuote             // a quote mark: ">" and, if the next character is white space, that one character
+)
+
+// fenceHead is the start of a line, read for a fence.
+type fenceHead struct {
+	lead    string // the white space the line starts with, after the quote mark it loses (drop)
+	drop    int    // the bytes at the start of the line that are the quote mark of a line of a quoted block
+	run     int    // how many backticks or tildes (ch) start the line after the white space and the mark: 0 if none
+	ch      byte
+	rest    string // what follows the run, if the line has one of 3 or more
+	mark    mark   // what stands before the run
+	indent  int    // for a fence line: the indent of the block it opens (mdText.indent)
+	pending bool   // the line may become a fence line with more text: all it holds so far could be the start of one
+}
+
+// readFence reads the start of line as a fence line: three or more backticks or tildes (run, of one character, ch) after white
+// space and, outside a block, one list marker or one quote mark and white space again. So "- ```", "1) ```", ">```" and
+// "> ```" are fence lines, and "- - ```", "> > ```", "> - ```" and "-```" are not: a second mark, or a marker with no white
+// space after it, leaves the line prose, which escapes the run.
+//
+// The mark is dropped from the opener's line, and the lines of its block lose indent characters of white space: those before
+// the run, a list marker's among them. A quote mark is dropped from each line of its block instead, with the one character
+// of white space after it, so its indent is the white space after that, if the opener has any.
+//
+// In a block that Agent Kourier opened (code) after a list marker (opener markList), a line may close it with a list marker
+// before the run. After a quote mark (markQuote), every line first loses its quote mark, if it has one, and is then read as
+// in any block. A block opened with white space alone takes only white space before a closing run, as a mark in it is the
+// text of the block (rows 33, 36 and 37).
+func readFence(line string, code bool, opener mark) fenceHead {
+	var h fenceHead
+	if code && opener == markQuote {
+		if t := strings.TrimLeftFunc(line, unicode.IsSpace); strings.HasPrefix(t, ">") {
+			h.drop = len(line) - len(t) + 1 + spaceSize(t[1:])
+			line = line[h.drop:]
+		}
 	}
-	run = runLen(body, body[0])
-	return lead, body[0], run, body[run:]
+	body := strings.TrimLeftFunc(line, unicode.IsSpace)
+	h.lead = line[:len(line)-len(body)]
+	n, mk := 0, markNone
+	if body != "" && body[0] != '`' && body[0] != '~' {
+		switch {
+		case body[0] == '>' && !code:
+			n, mk = 1+spaceSize(body[1:]), markQuote
+		case !code || opener == markList:
+			var st markerState
+			switch n, st = listMarker(body); st {
+			case markerMaybe:
+				h.pending = true // the line so far could be a marker
+				return h
+			case markerYes:
+				mk = markList
+			}
+		}
+	}
+	around := body[n:]
+	after := strings.TrimLeftFunc(around, unicode.IsSpace)
+	switch {
+	case after == "":
+		h.pending = true // white space, or a mark and white space: a fence may follow
+		return h
+	case after[0] != '`' && after[0] != '~':
+		return h
+	}
+	h.ch, h.run = after[0], runLen(after, after[0])
+	h.rest = after[h.run:]
+	if h.run < 3 {
+		h.pending = h.rest == "" // a run that may go on
+		return h
+	}
+	h.mark = mk
+	h.indent = utf8.RuneCountInString(line[:len(line)-len(after)]) // white space and a list marker, up to the run
+	if mk == markQuote {
+		h.indent = utf8.RuneCountInString(around[:len(around)-len(after)]) // the white space after the quote mark
+	}
+	return h
+}
+
+// spaceSize is the size of the character of white space s starts with, or 0.
+func spaceSize(s string) int {
+	if r, size := utf8.DecodeRuneInString(s); size > 0 && unicode.IsSpace(r) {
+		return size
+	}
+	return 0
+}
+
+// markerState is what listMarker made of the start of a line.
+type markerState uint8
+
+const (
+	markerNo    markerState = iota // not a list marker
+	markerYes                      // a marker, followed by white space
+	markerMaybe                    // a marker if more text comes: the line ends in it, or in what may be one
+)
+
+// listMarker reads the list marker body starts with and says how long it is (white space after it not counted): a "-", "*" or
+// "+", or one to nine digits and a "." or ")", and then a character of white space.
+func listMarker(body string) (n int, st markerState) {
+	switch c := body[0]; {
+	case c == '-' || c == '*' || c == '+':
+		n = 1
+	case c >= '0' && c <= '9':
+		for n < len(body) && body[n] >= '0' && body[n] <= '9' {
+			n++
+		}
+		if n > 9 {
+			return 0, markerNo
+		}
+		if n == len(body) {
+			return 0, markerMaybe
+		}
+		if body[n] != '.' && body[n] != ')' {
+			return 0, markerNo
+		}
+		n++
+	default:
+		return 0, markerNo
+	}
+	switch {
+	case n == len(body):
+		return 0, markerMaybe
+	case spaceSize(body[n:]) > 0:
+		return n, markerYes
+	}
+	return 0, markerNo
 }
 
 // runLen is the length of the run of c that s starts with.
@@ -188,16 +312,17 @@ func runLen(s string, c byte) int {
 //
 // What follows the fence on its line is put back to be read in its turn, which is how the text of a one-line block
 // meets the rules of a block's lines: the line is rewritten into the lines it would be.
-func (m *mdText) fence(line, lead string, ch byte, run int, rest string, o *mdOut) bool {
+func (m *mdText) fence(line string, h fenceHead, o *mdOut) bool {
+	ch, run, rest := h.ch, h.run, h.rest
 	after := m.held[len(line):] // the line break, if any, and the lines after it
-	code, indent, held := false, m.indent, ""
+	code, opener, indent, held := false, markNone, m.indent, ""
 	if m.code {
 		held = strings.TrimLeftFunc(rest, unicode.IsSpace) + after
 		if strings.TrimSpace(rest) == "" {
 			held = strings.TrimPrefix(after, "\n") // a closing line with nothing else: its break is the one written
 		}
 	} else {
-		code, indent = true, utf8.RuneCountInString(lead)
+		code, opener, indent = true, h.mark, h.indent
 		switch at, n := closingRun(rest, ch, run); {
 		case at >= 0: // a block of one line: the inner text, then a closing line, with what follows the run after it
 			held = fenceMark + rest[at+n:] + after
@@ -210,14 +335,14 @@ func (m *mdText) fence(line, lead string, ch byte, run int, rest string, o *mdOu
 			held = strings.TrimLeftFunc(rest, unicode.IsSpace) + after
 		}
 	}
-	mark := fenceMark + "\n"
+	piece := fenceMark + "\n"
 	if held == "" && after == "" {
-		mark = fenceMark // the text ends with the fence, and with no line break after it
+		piece = fenceMark // the text ends with the fence, and with no line break after it
 	}
-	if !o.put(mark) {
+	if !o.put(piece) {
 		return false
 	}
-	m.code, m.indent, m.inLine, m.held = code, indent, false, held
+	m.code, m.opener, m.indent, m.inLine, m.held = code, opener, indent, false, held
 	return true
 }
 

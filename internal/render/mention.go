@@ -37,8 +37,10 @@ type MentionScan struct {
 // "://" in it is a name (endsURL). A ":" before a name is a label otherwise, as in "Owner:@sam". A letter of any alphabet is a letter here, so
 // "@josé" does not name "jos". Code is left out:
 // what is in a fence or a span is quoted, not said, so a log line that holds a name notifies nobody. What is code is read as the
-// Slack adapter writes it (internal/chat/slack/mdtext.go): any fence line opens or closes a block, whatever its marks, what
-// follows a closing run is prose, a block that never closes runs to the end, and a span closes at the next run of backticks or not
+// Slack adapter writes it (internal/chat/slack/mdtext.go): a fence line, which has a run of three or more backticks or tildes
+// after white space and, outside a block, one list marker or one quote mark (fenceLine has the forms), opens a block, and
+// any fence line closes it, whatever else is on it (but a mark in a block that opened at column 0 is its text), what follows a
+// closing run is prose, a block that never closes runs to the end, and a span closes at the next run of backticks or not
 // at all. A pipe table, which that adapter shows as code, is read as prose: a name in a table is said. A name that ends where the
 // text was cut (chat.Truncated), or in a ".", ":" or "/" just before it, may be the start of something longer, so it is no name.
 // A place where the two readings still differ can only notify a declared person or not, within the cap: the adapter counts its limit
@@ -49,13 +51,17 @@ func Mentions(body string, declared []v1alpha1.ChatMention, limit int, already .
 		return scan
 	}
 	limit -= len(already)
-	code, held := false, body
+	code, held, opener := false, body, markNone
 	for held != "" {
 		line, _, _ := strings.Cut(held, "\n")
 		after := held[len(line):] // the line break, if any, and the lines after it
-		ch, run, rest := fenceLine(line)
+		ch, run, rest, mk := fenceLine(line, code, opener)
 		if run >= 3 {
 			held = afterFence(code, ch, run, rest, after)
+			opener = mk // what stood before the run of the opener of the block that is open
+			if code {
+				opener = markNone
+			}
 			code = !code
 			continue
 		}
@@ -67,15 +73,81 @@ func Mentions(body string, declared []v1alpha1.ChatMention, limit int, already .
 	return scan
 }
 
-// fenceLine reads line as the adapter's readFence does: the mark of the run of backticks or tildes after the line's white space,
-// how long the run is, and what follows it. ch is 0 if the line has no such run.
-func fenceLine(line string) (ch byte, run int, rest string) {
-	s := strings.TrimLeftFunc(line, unicode.IsSpace)
-	if s == "" || (s[0] != '`' && s[0] != '~') {
-		return 0, 0, s
+// mark is what may stand before the run of a fence besides white space.
+type mark uint8
+
+const (
+	markNone  mark = iota // nothing
+	markList              // a list marker: "-", "*" or "+", or one to nine digits and "." or ")", and then white space
+	markQuote             // a quote mark: ">" and, if the next character is white space, that one character
+)
+
+// fenceLine reads line as the adapter's readFence does: the mark of the run of three or more backticks or tildes after the line's
+// white space and, outside a block (code is false), one list marker or one quote mark and white space again, how long the run
+// is, what follows it, and what stood before it besides white space. The line is no fence line if run is under 3. So
+// "- ```", "1) ```", ">```" and "> ```" are fence lines, and "- - ```", "> > ```", "> - ```" and "-```" are not: a second
+// mark, or a marker with no white space after it, makes the line prose.
+//
+// In a block that a fence line after a list marker opened (opener markList) a line may close it with a list marker before the
+// run, and in one that a fence line after a quote mark opened (markQuote) every line first loses a quote mark, if it has one,
+// and the one character of white space after it. A block opened with white space alone takes only white space before a closing
+// run, as a mark in it is the text of the block.
+func fenceLine(line string, code bool, opener mark) (ch byte, run int, rest string, mk mark) {
+	if code && opener == markQuote {
+		if t := strings.TrimLeftFunc(line, unicode.IsSpace); strings.HasPrefix(t, ">") {
+			line = t[1+spaceSize(t[1:]):]
+		}
 	}
-	run = runOf(s, s[0])
-	return s[0], run, s[run:]
+	body := strings.TrimLeftFunc(line, unicode.IsSpace)
+	n := 0
+	if body != "" && body[0] != '`' && body[0] != '~' {
+		switch {
+		case body[0] == '>' && !code:
+			n, mk = 1+spaceSize(body[1:]), markQuote
+		case !code || opener == markList:
+			if n = listMarker(body); n > 0 {
+				mk = markList
+			}
+		}
+	}
+	body = strings.TrimLeftFunc(body[n:], unicode.IsSpace)
+	if body == "" || (body[0] != '`' && body[0] != '~') {
+		return 0, 0, body, markNone
+	}
+	run = runOf(body, body[0])
+	return body[0], run, body[run:], mk
+}
+
+// spaceSize is the size of the character of white space s starts with, or 0.
+func spaceSize(s string) int {
+	if r, size := utf8.DecodeRuneInString(s); size > 0 && unicode.IsSpace(r) {
+		return size
+	}
+	return 0
+}
+
+// listMarker is the length of the list marker body starts with, white space after it not counted, or 0: a "-", "*" or "+", or
+// one to nine digits and a "." or ")", and then a character of white space.
+func listMarker(body string) int {
+	n := 0
+	switch c := body[0]; {
+	case c == '-' || c == '*' || c == '+':
+		n = 1
+	case c >= '0' && c <= '9':
+		for n < len(body) && body[n] >= '0' && body[n] <= '9' {
+			n++
+		}
+		if n > 9 || n == len(body) || (body[n] != '.' && body[n] != ')') {
+			return 0
+		}
+		n++
+	default:
+		return 0
+	}
+	if n == len(body) || spaceSize(body[n:]) == 0 {
+		return 0
+	}
+	return n
 }
 
 // afterFence is what is left to read after a fence line, with after being the lines that follow it, and it is the adapter's

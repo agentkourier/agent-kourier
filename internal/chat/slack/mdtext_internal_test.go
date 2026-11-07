@@ -43,7 +43,7 @@ var markdownCases = []struct {
 	{"07 a fence in a list item", "- item:\n  ```\n  x\n  ```\n- next", "- item:\n```\nx\n```\n- next"},
 	{"25 a fence in a numbered item", "1. step:\n   ```bash\n   x\n     y\n   ```\n2. next", "1. step:\n```\nx\n  y\n```\n2. next"},
 	{"22 a list, a fence at column 0, a list", "1. a\n```\nx\n```\n2. b", "1. a\n```\nx\n```\n2. b"},
-	{"39 a fence on the marker line is prose", "- ```\n  x", "- \\`\\`\\`\n  x"},
+	{"39 a fence on the list marker line is a block at column 0, the marker dropped", "- ```\n  x", "```\nx"},
 	{"08 a fence indented by 1", " ```\nx\n ```", "```\nx\n```"},
 	{"09 a fence indented by 3", "   ```\nx\n   ```", "```\nx\n```"},
 	{"09 a fence indented by 4 or a tab", "    ```\n    x\n    ```\n\t```\n\tx\n\t```", "```\nx\n```\n```\nx\n```"},
@@ -53,9 +53,61 @@ var markdownCases = []struct {
 	{"13 a tilde fence is written as a backtick one", "~~~\nx\n~~~", "```\nx\n```"},
 	{"13 a fence opened by tildes is closed by backticks", "~~~\nx\n```\ny", "```\nx\n```\ny"},
 	{"23 an indented block is prose", "a\n\n    x <y>", "a\n\n    x &lt;y&gt;"},
-	{"24 a fence in a quote is prose", "> ```\n> x\n> ```", "&gt; \\`\\`\\`\n&gt; x\n&gt; \\`\\`\\`"},
+	{"24 a fence in a quote is a block at column 0, the marks dropped", "> ```\n> x\n> ```", "```\nx\n```"},
 	{"30 a fence after a quote line", "> q\n```\nx\n```", "&gt; q\n```\nx\n```"},
 	{"31 a fence after an unclosed span", "a ` b\n```\nx\n```", "a \\` b\n```\nx\n```"},
+
+	// A fence after a list marker or a quote mark is a block at column 0: the marker is dropped, and the block's lines lose
+	// the item's content column, or a quote's mark. The list or the quote goes on as prose after the block.
+	{"a fence after a list marker, the issue's example", "- ```\n  owner @sam failed\n  ```\nthen @lee please", "```\nowner @sam failed\n```\nthen @lee please"},
+	{"a fence after a star", "* ```\n  x\n  ```", "```\nx\n```"},
+	{"a fence after a plus", "+ ```\n  x\n  ```", "```\nx\n```"},
+	{"a fence after a number and a dot", "1. ```bash\n   x\n     y\n   ```\n2. next", "```\nx\n  y\n```\n2. next"},
+	{"a fence after a number and a bracket", "1) ```\n   x\n   ```", "```\nx\n```"},
+	{"a fence after a long number", "123456789. ```\n           x\n           ```", "```\nx\n```"},
+	{"a fence after an indented marker", "  - ```\n    x\n    ```", "```\nx\n```"},
+	{"a fence after a marker and more white space", "-   ```\n    x\n    ```", "```\nx\n```"},
+	{"a tilde fence after a marker", "- ~~~\n  x\n  ~~~", "```\nx\n```"},
+	{"a fence after a marker, its lines indented less than the item", "- ```\nx\n y\n   z\n  ```", "```\nx\ny\n z\n```"},
+	{"a fence after a marker, the list goes on", "- a\n- ```\n  x\n  ```\n- b\n  c <d>", "- a\n```\nx\n```\n- b\n  c &lt;d&gt;"},
+	{"a fence after a marker, the block never closed", "- ```\n  x", "```\nx"},
+	{"a fence after a marker, then nothing", "- ```", "```"},
+	{"a fence after a marker, closed by a line with a marker of its own", "- ```\n  x\n- ```\ny", "```\nx\n```\ny"},
+	{"a fence after a marker, closed by a line with no indent", "- ```\n  x\n```\ny", "```\nx\n```\ny"},
+	{"a fence after a marker, what follows the closing run is prose", "- ```\n  x\n  ``` and <b>\n  y", "```\nx\n```\nand &lt;b&gt;\n  y"},
+	{"a fence after a marker, a one-line block", "- ```echo hi```", "```\necho hi\n```"},
+	{"a fence after a marker, a one-line block with a tail", "1. ```echo hi``` and <b>", "```\necho hi\n```\nand &lt;b&gt;"},
+	{"a fence after a marker, a first line on the fence line", "- ```kubectl get pods\n  x\n  ```", "```\nkubectl get pods\nx\n```"},
+	{"a fence after a marker keeps tokens out of its code", "- ```\n  <@U1> <!here> <#C1>\n  ```", "```\n&lt;@U1> &lt;!here> &lt;#C1>\n```"},
+	{"a fence after a marker, a marker line in its block is code", "- ```\n  - x\n  1. y\n  > z\n  ```", "```\n- x\n1. y\n> z\n```"},
+	{"a fence after a marker, a nested fence line with a quote mark is code", "- ```\n  > ```\n  x\n  ```", "```\n> ```\nx\n```"},
+	{"a marker line whose rest is not a fence is prose", "- a ```\n- `` x\n1. ~~ y", "- a \\`\\`\\`\n- \\`\\` x\n1. ~~ y"},
+	{"a marker with no white space after it is no marker", "-```\nx\n*```\n1.```", "-\\`\\`\\`\nx\n*\\`\\`\\`\n1.\\`\\`\\`"},
+	{"a number of ten digits is no marker", "1234567890. ```\nx", "1234567890. \\`\\`\\`\nx"},
+	{"a number with no dot is no marker", "1 ```\nx", "1 \\`\\`\\`\nx"},
+	{"a second marker is no fence line", "- - ```\n- > ```\n1. - ```", "- - \\`\\`\\`\n- &gt; \\`\\`\\`\n1. - \\`\\`\\`"},
+	{"a list marker line in a block that opened at column 0 is code", "```\nx\n- ```\ny\n```\nz", "```\nx\n- ```\ny\n```\nz"},
+	{"a fence after a marker, and a table after it", "- ```\n  x\n  ```\n| a |\n|---|\n| 1 |", "```\nx\n```\n```\n| a   |\n|-----|\n| 1   |\n```"},
+
+	{"a fence after a quote mark, the issue's example", "> ```\n> owner @sam failed\n> ```\nthen @lee please", "```\nowner @sam failed\n```\nthen @lee please"},
+	{"a quote with a mark on every line", "> ```\n> owner @sam failed\n> ```\n> then @lee please", "```\nowner @sam failed\n```\n&gt; then @lee please"},
+	{"a fence after a quote mark with no space", ">```\n>x\n>```", "```\nx\n```"},
+	{"a tilde fence after a quote mark", "> ~~~\n> x\n> ~~~", "```\nx\n```"},
+	{"a fence after a quote mark with a language", "> ```bash\n> x\n> ```", "```\nx\n```"},
+	{"a fence after an indented quote mark", "  > ```\n  > x\n  > ```", "```\nx\n```"},
+	{"a quote mark loses one space", "> ```\n>   x\n>x\n> ```", "```\n  x\nx\n```"},
+	{"a block in a quote with a line that has no mark", "> ```\n> x\ny\n> ```", "```\nx\ny\n```"},
+	{"a block in a quote closed by a line with no mark", "> ```\n> x\n```\ny", "```\nx\n```\ny"},
+	{"a block in a quote, a blank quote line", "> ```\n>\n> x\n> ```", "```\n\nx\n```"},
+	{"a block in a quote, a second quote mark is code", "> ```\n> > x\n> > ```\n> ```", "```\n> x\n> ```\n```"},
+	{"a block in a quote, a list marker line is code", "> ```\n> - ```\n> ```", "```\n- ```\n```"},
+	{"a block in a quote, the fence line's own white space is dedented", ">   ```\n>   x\n>  y\n> ```", "```\nx\ny\n```"},
+	{"a block in a quote keeps tokens out of its code", "> ```\n> <@U1> <!here>\n> ```", "```\n&lt;@U1> &lt;!here>\n```"},
+	{"a quote goes on as prose after its block", "> a\n> ```\n> x\n> ```\n> b <c>", "&gt; a\n```\nx\n```\n&gt; b &lt;c&gt;"},
+	{"a block in a quote never closed", "> ```\n> x\n> y", "```\nx\ny"},
+	{"a block in a quote, a one-line block", "> ```echo hi``` and <b>", "```\necho hi\n```\nand &lt;b&gt;"},
+	{"a quote mark line whose rest is not a fence is prose", "> a ```\n> `` x", "&gt; a \\`\\`\\`\n&gt; \\`\\` x"},
+	{"a second quote mark is no fence line", "> > ```\n>> ```", "&gt; &gt; \\`\\`\\`\n&gt;&gt; \\`\\`\\`"},
 
 	// What is inside a block is not a closer, but for a line that starts with a fence.
 	{"32 a fence mid-line in a block", "```\nfoo ``` bar\n```", "```\nfoo ``` bar\n```"},
@@ -87,8 +139,8 @@ var markdownCases = []struct {
 	{"a span with a backtick in it is no span", "``a`b``", "\\`\\`a\\`b\\`\\`"},
 	{"34 backticks mid-line", "a ``` b", "a \\`\\`\\` b"},
 	{"35 tildes mid-line", "a ~~~ b", "a \\~\\~\\~ b"},
-	{"42 tildes in a quote", "> ~~~", "&gt; \\~\\~\\~"},
-	{"43 backticks in a quote", "> ```", "&gt; \\`\\`\\`"},
+	{"42 tildes in a quote", "> a ~~~ b", "&gt; a \\~\\~\\~ b"},
+	{"43 backticks in a quote", "> a ``` b", "&gt; a \\`\\`\\` b"},
 	{"tildes of two are strikethrough", "~~x~~ and ~y~", "~~x~~ and ~y~"},
 	{"50 a stray run, then a span", "a `` b `[t](url) <@U1> 2>&1 <pod>`", "a \\`\\` b `[t](url) &lt;@U1> 2>&1 <pod>`"},
 	{"two spans in a line", "`a` and `b`", "`a` and `b`"},
@@ -203,6 +255,70 @@ func TestMarkdownStreamHoldsBackOnlyWhatIsUndecided(t *testing.T) {
 	}
 	if m.held != "" {
 		t.Fatalf("held %q at the end", m.held)
+	}
+}
+
+// A list marker or a quote mark at the start of a line, and the white space after it, are held back until a character says
+// whether a fence follows, and no longer: a line that turns out to be prose is written from there on as it comes.
+func TestMarkdownStreamHoldsBackAMarkUntilItIsKnownToBeProse(t *testing.T) {
+	var m mdText
+	steps := []struct {
+		in, want string
+		final    bool
+	}{
+		{"-", "", false},                // a list marker, if white space follows
+		{" ", "", false},                // a fence may follow the marker
+		{"item", "- item", false},       // it does not
+		{"\n12", "\n", false},           // the number of a marker
+		{")", "", false},                // and its bracket
+		{" `", "", false},               // a run that may go on
+		{"x", "12) ", false},            // not a fence line: from the backtick, the line waits for a span to close
+		{"`\n>", "`x`\n", false},        // a quote mark
+		{" ", "", false},                // and its space
+		{"q\n- ``", "&gt; q\n", false},  // the start of a fence line
+		{"`bash\n  x", "```\nx", false}, // is held to the end of the line, as one at column 0 is
+		{"\n  ``", "\n", false},         // a closer is too
+		{"`\n>", "```\n", false},        // the list is over, and a quote mark may start a fence line again
+		{" ```", "", false},
+		{"\n> y\n> ``", "```\ny\n", false}, // a quoted block loses the mark of each line
+		{"`\n>", "```\n", false},           // its closer has one
+		{"", "&gt;", true},                 // the end of the text writes what is held
+	}
+	for i, st := range steps {
+		if got := m.text(st.in, math.MaxInt, st.final); got != st.want {
+			t.Fatalf("step %d, %q: got %q, want %q", i, st.in, got, st.want)
+		}
+	}
+	if m.held != "" {
+		t.Fatalf("held %q at the end", m.held)
+	}
+}
+
+// In a block a line's start is held back only where it can matter: a block opened with white space alone takes no mark, so
+// each character of its lines is written as it comes; one opened after a list marker waits on a marker that may close it;
+// and one opened after a quote mark waits on the mark that each of its lines loses.
+func TestMarkdownStreamInABlockHoldsBackOnlyWhatMayCloseIt(t *testing.T) {
+	for _, tc := range []struct {
+		name, open, first, written, second, then string
+	}{
+		{"no mark", "```\n", "- ", "- ", "x", "x"},
+		{"no mark, a quote", "```\n", ">", ">", " x", " x"},
+		{"a list marker", "- ```\n", "  - ", "", "x", "- x"},
+		{"a list marker, a quote mark is code", "- ```\n", ">", ">", " x", " x"},
+		{"a quote mark", "> ```\n", "> ", "", "x", "x"},
+		{"a quote mark, a list marker is code", "> ```\n", "> - ", "- ", "x", "x"},
+		{"a quote mark, white space first", "> ```\n", "  ", "", "x", "  x"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var m mdText
+			m.text(tc.open, math.MaxInt, false)
+			if got := m.text(tc.first, math.MaxInt, false); got != tc.written {
+				t.Fatalf("after %q: got %q, want %q", tc.first, got, tc.written)
+			}
+			if got := m.text(tc.second, math.MaxInt, false); got != tc.then {
+				t.Fatalf("after %q: got %q, want %q", tc.second, got, tc.then)
+			}
+		})
 	}
 }
 
@@ -454,6 +570,11 @@ func TestMarkdownBlindEscapesEverything(t *testing.T) {
 	if got := m.text("```", math.MaxInt, true); got != "```" {
 		t.Fatalf("blind: later text read as %q", got)
 	}
+	// a fence after a list marker or a quote mark is no code to a blind stream either
+	m = mdText{blind: true}
+	if got, want := m.text("- ```\n  x <!here>\n  ```\n> ```\n> y\n> ```", math.MaxInt, true), "- ```\n  x &lt;!here&gt;\n  ```\n&gt; ```\n&gt; y\n&gt; ```"; got != want {
+		t.Fatalf("blind, marks: got %q, want %q", got, want)
+	}
 }
 
 // A cut leaves the state as what was sent, so what follows is read as Slack reads it.
@@ -470,6 +591,9 @@ func TestMarkdownCutLeavesTheStateAsSent(t *testing.T) {
 		{"after a span", "ab `c` gh", 6, "ab `c`", false},
 		{"before a run of tildes", "ab ~~~ cd", 5, "ab ", false},
 		{"in a block", "```\nabcdef\n```", 7, "```\nabc", true},
+		{"in a block after a list marker", "- ```\n  abcdef\n  ```", 7, "```\nabc", true},
+		{"in a block after a quote mark", "> ```\n> abcdef\n> ```", 7, "```\nabc", true},
+		{"before a fence after a marker", "- ```\n  abc\n  ```\nx", 8, "```\nabc\n", true},
 		{"before a fence", "```\nabc\n```\nx", 8, "```\nabc\n", true},
 		{"a fence is written with its line break, or not at all", "```\nabc\n```\nx", 11, "```\nabc\n", true},
 		{"after a block", "```\nabc\n```\nx", 12, "```\nabc\n```\n", false},
@@ -663,6 +787,8 @@ func markdownSeeds() []string {
 		"````\n```\nx\n````\n```` ````",
 		"```a``` ``` b ```` `c` ``d`e`` ~~~ ~~~x~~~",
 		"> ```\n    ```\n\t~~~\n```\n\t```\n   x",
+		"- ```\n  a\n- ```\n1) ~~~\n   b <!here>\n  ```\n  1. ```x```\n*```",
+		"> ```\n> a\n>\n```\n>```\n> > ```\n>   ```b```\n>",
 	}
 	for _, tc := range markdownCases {
 		seeds = append(seeds, tc.in)
