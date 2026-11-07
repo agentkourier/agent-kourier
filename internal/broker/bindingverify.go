@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/url"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
@@ -342,27 +343,44 @@ type platformReader interface {
 }
 
 // groupChecker is the bindingcheck.GroupChecker of a running broker. Like channelChecker it answers for the bot of the connection the
-// broker serves, so the Targets it is given hold only Bindings on that connection (bindingTargets).
+// broker serves, so the Targets it is given hold only Bindings on that connection (bindingTargets). The Prober makes one for each pass
+// (ForPass), whose probes share their reads of a group.
 type groupChecker struct {
 	platform groupReader
 	timeout  time.Duration
 	creds    credentialsWatch
+	reads    *groupReads // the reads of the pass, shared by its probes; nil: each probe reads its groups itself
 }
 
-var _ bindingcheck.GroupChecker = groupChecker{}
+var _ bindingcheck.PassGroupChecker = groupChecker{}
+
+// ForPass implements bindingcheck.PassGroupChecker with forPass.
+func (c groupChecker) ForPass() bindingcheck.GroupChecker { return c.forPass() }
+
+// forPass returns the checker of a pass, which reads each group once for all the pass's probes.
+func (c groupChecker) forPass() groupChecker {
+	c.reads = &groupReads{reads: map[string]*groupRead{}}
+	return c
+}
 
 // CheckGroups implements bindingcheck.GroupChecker. It makes no call when the connection's credentials differ from the tokens the broker
 // is using, for the reason given at CheckChannel (credentialsWatch.hold). A call the Prober's context ended is no verdict and comes back as
 // an error; the deadline of the checker's own bound is a chat platform that does not answer, Unknown/ChatUnavailable. One call reads all
-// of a Binding's groups, at most 10 (the API's validation caps them), one request to the platform each, and stops at the first it cannot
-// read, so a second bad group is told once the first is mended.
+// of a Binding's groups, at most 10 (the API's validation caps them), one request to the platform each, in the Binding's order, and stops at
+// the first it cannot read, so a second bad group is told once the first is mended. In a pass, a group another probe has read or is
+// reading is not read again (groupReads.readable), so the reads of a pass are at most one for each group its Bindings name.
 func (c groupChecker) CheckGroups(ctx context.Context, groups []string) (bindingcheck.Outcome, error) {
 	cctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	if out, held := c.creds.hold(cctx); held {
 		return out, nil
 	}
-	err := c.platform.GroupsReadable(cctx, groups)
+	var err error
+	for _, g := range groups {
+		if err = c.reads.readable(cctx, c.platform, g); err != nil {
+			break
+		}
+	}
 	if err == nil {
 		return bindingcheck.Outcome{Status: bindingcheck.True, Reason: bindingcheck.ReasonOK}, nil
 	}
@@ -370,6 +388,67 @@ func (c groupChecker) CheckGroups(ctx context.Context, groups []string) (binding
 		return bindingcheck.Outcome{}, fmt.Errorf("the probe ended before the chat platform answered: %w", err)
 	}
 	return c.classifyError(groups, err), nil
+}
+
+// groupReads is what the probes of one pass have read of approver groups, by group ID, so that a group several Bindings name is read
+// once in the pass. Only the platform's answers are kept: a read that its own probe's bound or the Prober's context cut short says nothing
+// of the group, and is forgotten.
+type groupReads struct {
+	mu    sync.Mutex
+	reads map[string]*groupRead
+}
+
+// groupRead is one read of a group: done is closed when it has ended, and then err is what the platform answered, unless cut is set.
+type groupRead struct {
+	done chan struct{}
+	err  error
+	cut  bool // the reader's context ended the read, which is no answer: a probe that waited for it reads the group itself
+}
+
+// readable reads group on platform, as GroupsReadable of that group alone, or is told what another probe of the pass read of it. A probe
+// that finds a read under way waits for it, but no longer than its own ctx: when ctx ends first, the error is one of a platform that did
+// not answer in time, as its own read's would be. A nil r reads every time.
+func (r *groupReads) readable(ctx context.Context, platform groupReader, group string) error {
+	if r == nil {
+		return platform.GroupsReadable(ctx, []string{group})
+	}
+	for {
+		r.mu.Lock()
+		read, found := r.reads[group]
+		if !found {
+			read = &groupRead{done: make(chan struct{})}
+			r.reads[group] = read
+		}
+		r.mu.Unlock()
+		if !found {
+			return r.read(ctx, platform, group, read)
+		}
+		select {
+		case <-read.done:
+			if !read.cut {
+				return read.err
+			}
+		case <-ctx.Done():
+			return &chat.GroupError{Group: group, Err: fmt.Errorf("waiting for another probe's read of the group: %w", ctx.Err())}
+		}
+	}
+}
+
+// read makes the read of group that readable registered as read, and ends it for the probes waiting on it. A read that ctx cut short, or
+// one the platform panicked in (which the Prober recovers), is no answer: it is forgotten, and a probe that waited for it reads again.
+func (r *groupReads) read(ctx context.Context, platform groupReader, group string, read *groupRead) error {
+	read.cut = true // until the platform answers
+	defer func() {
+		if read.cut {
+			r.mu.Lock()
+			delete(r.reads, group)
+			r.mu.Unlock()
+		}
+		close(read.done)
+	}()
+	read.err = platform.GroupsReadable(ctx, []string{group})
+	read.cut = read.err != nil && ctx.Err() != nil
+	return read.err
 }
 
 // classifyError says what an error of GroupsReadable means for ApproversReadable: a group that is not there, a missing scope, and
@@ -631,11 +710,10 @@ func (v verification) credentialsSecret() (namespace, name string, ok bool) {
 	return "", "", false
 }
 
-// agentFunc, channelFunc and groupFunc are the checker interfaces made of functions.
+// agentFunc and channelFunc are the checker interfaces made of functions.
 type (
 	agentFunc   func(ctx context.Context, binding string) (bindingcheck.Outcome, error)
 	channelFunc func(ctx context.Context, channel string) (bindingcheck.Outcome, error)
-	groupFunc   func(ctx context.Context, groups []string) (bindingcheck.Outcome, error)
 )
 
 // CheckAgent implements bindingcheck.AgentChecker.
@@ -648,9 +726,20 @@ func (f channelFunc) CheckChannel(ctx context.Context, channel string) (bindingc
 	return f(ctx, channel)
 }
 
+// timedGroups is a groupChecker whose probes the verification times under ApproversReadable, its passes' included.
+type timedGroups struct {
+	v verification
+	c groupChecker
+}
+
 // CheckGroups implements bindingcheck.GroupChecker.
-func (f groupFunc) CheckGroups(ctx context.Context, groups []string) (bindingcheck.Outcome, error) {
-	return f(ctx, groups)
+func (t timedGroups) CheckGroups(ctx context.Context, groups []string) (bindingcheck.Outcome, error) {
+	return t.v.timed(bindingcheck.ApproversReadable, func() (bindingcheck.Outcome, error) { return t.c.CheckGroups(ctx, groups) })
+}
+
+// ForPass implements bindingcheck.PassGroupChecker.
+func (t timedGroups) ForPass() bindingcheck.GroupChecker {
+	return timedGroups{v: t.v, c: t.c.forPass()}
 }
 
 // timed runs a check and observes how long it took under cond, whatever it found.
@@ -693,9 +782,7 @@ func (v verification) newProber() *bindingcheck.Prober {
 		Channels: channelFunc(func(ctx context.Context, channel string) (bindingcheck.Outcome, error) {
 			return v.timed(bindingcheck.ChannelJoined, func() (bindingcheck.Outcome, error) { return channels.CheckChannel(ctx, channel) })
 		}),
-		Groups: groupFunc(func(ctx context.Context, gs []string) (bindingcheck.Outcome, error) {
-			return v.timed(bindingcheck.ApproversReadable, func() (bindingcheck.Outcome, error) { return groupsChecker.CheckGroups(ctx, gs) })
-		}),
+		Groups:   timedGroups{v: v, c: groupsChecker},
 		Interval: v.Interval, Tick: v.Tick, Timeout: timeout, MinRevisionGap: cmp.Or(v.MinRevisionGap, minRevisionGap),
 		OnTransition: func(tr bindingcheck.Transition) { v.Metrics.BindingCondition(tr); l.transition(tr); v.notifyStatus() },
 		OnDrop: func(binding string, cond bindingcheck.ConditionType) {

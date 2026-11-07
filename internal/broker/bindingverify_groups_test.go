@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
@@ -28,15 +29,23 @@ type groupsFake struct {
 	mu      sync.Mutex
 	err     error
 	verdict chat.Verdict
-	wait    bool // block until the context ends
+	wait    bool          // block until the context ends
+	release chan struct{} // when set, block until it is closed or the context ends
 	calls   [][]string
 }
 
 func (g *groupsFake) GroupsReadable(ctx context.Context, groups []string) error {
 	g.mu.Lock()
 	g.calls = append(g.calls, append([]string(nil), groups...))
-	err, wait := g.err, g.wait
+	err, wait, release := g.err, g.wait, g.release
 	g.mu.Unlock()
+	if release != nil {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return &chat.GroupError{Group: groups[0], Err: fmt.Errorf("usergroups.users.list: %w", ctx.Err())}
+		}
+	}
 	if wait {
 		<-ctx.Done()
 		return &chat.GroupError{Group: groups[0], Err: fmt.Errorf("usergroups.users.list: %w", ctx.Err())}
@@ -103,8 +112,13 @@ func TestGroupCheckerSaysWhatTheErrorMeans(t *testing.T) {
 			if out.Message == "" && out.Status != bindingcheck.True {
 				t.Error("the outcome has no message")
 			}
-			if len(f.calls) != 1 || !reflect.DeepEqual(f.calls[0], approverGroups) {
-				t.Errorf("platform calls = %v; want one, over the Binding's groups in order", f.calls)
+			// The fake fails every read, so a failure is the first group's read and nothing is read after it.
+			want := [][]string{{approverGroups[0]}, {approverGroups[1]}, {approverGroups[2]}}
+			if tc.err != nil {
+				want = want[:1]
+			}
+			if !reflect.DeepEqual(f.calls, want) {
+				t.Errorf("platform calls = %v; want %v: a read of each group, in order, until one fails", f.calls, want)
 			}
 		})
 	}
@@ -187,8 +201,8 @@ func TestGroupCheckerWithholdsTheReadWhenTheChatCredentialsDiffer(t *testing.T) 
 	f := &groupsFake{}
 	same := credentialsWatch{baseline: tokens(bot, app), secrets: &secretStore{vals: map[string]string{"botToken": bot, "appToken": app}},
 		where: func() (string, string, bool) { return "agent-kourier-system", "slack-main", true }}
-	if out, err := (groupChecker{platform: f, timeout: time.Second, creds: same}).CheckGroups(t.Context(), approverGroups); err != nil || out.Status != bindingcheck.True || f.count() != 1 {
-		t.Errorf("CheckGroups with the same tokens = %+v, %v after %d calls; want True and one", out, err, f.count())
+	if out, err := (groupChecker{platform: f, timeout: time.Second, creds: same}).CheckGroups(t.Context(), approverGroups); err != nil || out.Status != bindingcheck.True || f.count() != len(approverGroups) {
+		t.Errorf("CheckGroups with the same tokens = %+v, %v after %d calls; want True and one for each group", out, err, f.count())
 	}
 }
 
@@ -281,12 +295,12 @@ func TestGroupCheckerThroughTheRealSlackClient(t *testing.T) {
 }
 
 // ApproversReadable is timed under its own bucket of the probe-duration histogram, whatever the probe found, and the Prober the broker
-// builds probes the groups of the Bindings that name them with the served connection's bot: one call over all of a Binding's groups,
-// none for a Binding with no groups.
+// builds probes the groups of the Bindings that name them with the served connection's bot: a read of each group in order up to the
+// first that fails, none for a Binding with no groups.
 func TestTheBrokersProberProbesApproverGroupsAndTimesThem(t *testing.T) {
 	current := &snaps{}
 	current.p.Store(snapshotWith(t, map[string]int64{"sre/with": 1, "sre/without": 1}, nil, map[string][]string{"sre/with": approverGroups}))
-	plat := &accessFake{access: chat.Access{Member: true}, groupsErr: groupErr(approverGroups[1], chat.ErrGroupNotFound, chat.ErrGroupsMisconfigured)}
+	plat := &accessFake{access: chat.Access{Member: true}, groupsErrs: map[string]error{approverGroups[1]: groupErr(approverGroups[1], chat.ErrGroupNotFound, chat.ErrGroupsMisconfigured)}}
 	m := mustMetrics(t, nil)
 	p := verification{
 		Bindings: probeFunc(func(context.Context, string) error { return nil }), Platform: plat, Snaps: current,
@@ -308,8 +322,8 @@ func TestTheBrokersProberProbesApproverGroupsAndTimesThem(t *testing.T) {
 	if r := got["sre/without"][bindingcheck.Ready]; r.Status != bindingcheck.True {
 		t.Errorf("Ready of the Binding with no groups = %s; want True", r.Status)
 	}
-	if len(plat.groupsCalls) != 1 || !reflect.DeepEqual(plat.groupsCalls[0], approverGroups) {
-		t.Errorf("platform calls = %v; want one, over the three groups of the one Binding that has them", plat.groupsCalls)
+	if want := [][]string{{approverGroups[0]}, {approverGroups[1]}}; !reflect.DeepEqual(plat.groupsCalls, want) {
+		t.Errorf("platform calls = %v; want %v: the groups of the one Binding that has them, up to the one that is not there", plat.groupsCalls, want)
 	}
 	if _, n := meanProbeSeconds(t, m, bindingcheck.ApproversReadable); n != 1 {
 		t.Errorf("%d observations in the ApproversReadable bucket of the probe-duration histogram; want 1", n)
@@ -363,4 +377,148 @@ func TestAskingForApproversNeedsToolApprovalsAndGroups(t *testing.T) {
 			t.Errorf("%s: asksForApprovers = %t, want %t", tc.name, got, tc.want)
 		}
 	}
+}
+
+// Two Bindings that name one group make a single read of it in a pass, and each keeps its own condition: the Binding whose second
+// group is not there is told so by its own place for it, and the one that names only the shared group is True.
+func TestTheBrokersProberReadsAGroupOnceAPassForEveryBindingThatNamesIt(t *testing.T) {
+	const shared, missing = "S0SHARED000", "S0MISSING00"
+	current := &snaps{}
+	current.p.Store(snapshotWith(t, map[string]int64{"sre/a": 1, "sre/b": 1, "sre/c": 1}, nil,
+		map[string][]string{"sre/a": {shared}, "sre/b": {shared, missing}, "sre/c": {missing, shared}}))
+	plat := &accessFake{access: chat.Access{Member: true}, groupsErrs: map[string]error{
+		missing: groupErr(missing, chat.ErrGroupNotFound, chat.ErrGroupsMisconfigured),
+	}}
+	p := verification{
+		Bindings: probeFunc(func(context.Context, string) error { return nil }), Platform: plat, Snaps: current,
+		Conn: Connection{Ref: v1alpha1.ObjectRef{Namespace: "sre", Name: "slack"}}, Metrics: mustMetrics(t, nil), Log: slog.New(slog.DiscardHandler),
+		Interval: time.Hour, Tick: 5 * time.Millisecond, Revision: func(context.Context) string { return "r" },
+	}.newProber()
+	got := settled(t, p, 3)
+
+	reads := map[string]int{}
+	for _, call := range plat.groupsCalls {
+		for _, g := range call {
+			reads[g]++
+		}
+	}
+	if want := map[string]int{shared: 1, missing: 1}; !reflect.DeepEqual(reads, want) {
+		t.Errorf("reads by group = %v (calls %v); want %v: one read of each group for the pass, whichever Bindings name it", reads, plat.groupsCalls, want)
+	}
+	if c := got["sre/a"][bindingcheck.ApproversReadable]; c.Status != bindingcheck.True {
+		t.Errorf("sre/a = %s/%s; want True", c.Status, c.Reason)
+	}
+	for binding, place := range map[string]string{"sre/b": "approverGroups[1] (" + missing + ")", "sre/c": "approverGroups[0] (" + missing + ")"} {
+		if c := got[binding][bindingcheck.ApproversReadable]; c.Status != bindingcheck.False || c.Reason != bindingcheck.ReasonGroupNotFound || !strings.Contains(c.Message, place) {
+			t.Errorf("%s = %s/%s %q; want False/GroupNotFound naming %s", binding, c.Status, c.Reason, c.Message, place)
+		}
+	}
+}
+
+// The checker of a pass shares each group's read: a probe that asks for a group another probe is reading waits for that read and is told
+// what it found, and a rate-limited answer is shared like any other, so the probes of a pass do not spend the method's budget again on it.
+// A checker made for the next pass reads again.
+func TestAPassReadsEachGroupOnceForAllItsProbes(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &groupsFake{release: make(chan struct{}), err: groupErr("S0SHARED000", errors.New("slack: ratelimited")),
+			verdict: chat.Verdict{Class: chat.Transient, RetryAfter: 30 * time.Second}}
+		pass := groupChecker{platform: f, timeout: 8 * time.Second}.ForPass()
+		outs := make([]bindingcheck.Outcome, 2)
+		var wg sync.WaitGroup
+		for i := range outs {
+			wg.Go(func() { outs[i], _ = pass.CheckGroups(t.Context(), []string{"S0SHARED000"}) })
+		}
+		synctest.Wait() // one probe is reading, the other waits for it
+		if f.count() != 1 {
+			t.Fatalf("%d reads while two probes ask for one group; want 1", f.count())
+		}
+		close(f.release)
+		wg.Wait()
+		for i, out := range outs {
+			if out.Status != bindingcheck.Unknown || out.Reason != bindingcheck.ReasonChatUnavailable || !strings.Contains(out.Message, "rate-limited") {
+				t.Errorf("probe %d = %+v; want the shared read's Unknown/ChatUnavailable, rate-limited", i, out)
+			}
+		}
+		if out, _ := pass.CheckGroups(t.Context(), []string{"S0SHARED000"}); f.count() != 1 || !strings.Contains(out.Message, "rate-limited") {
+			t.Errorf("a third probe in the pass read again (%d reads) or was told %+v; want the one read's answer", f.count(), out)
+		}
+		next := groupChecker{platform: f, timeout: 8 * time.Second}.ForPass()
+		if _, _ = next.CheckGroups(t.Context(), []string{"S0SHARED000"}); f.count() != 2 {
+			t.Errorf("%d reads after a probe of the next pass; want 2", f.count())
+		}
+	})
+}
+
+// Each probe keeps its own bound while it waits for another's read: one whose bound ends first is told the platform did not answer in
+// time, without a read of its own. A read that its reader's bound cut short is no answer about the group, so a probe that was waiting
+// for it and still has time reads the group itself.
+func TestAProbeThatWaitsForAnotherProbesReadKeepsItsOwnBound(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &groupsFake{wait: true}
+		reader := groupChecker{platform: f, timeout: 8 * time.Second}.forPass()
+		short := reader
+		short.timeout = time.Second
+		var wg sync.WaitGroup
+		var long bindingcheck.Outcome
+		wg.Go(func() { long, _ = reader.CheckGroups(t.Context(), []string{"S0SHARED000"}) })
+		synctest.Wait()
+		began := time.Now()
+		out, err := short.CheckGroups(t.Context(), []string{"S0SHARED000"})
+		if err != nil || out.Reason != bindingcheck.ReasonChatUnavailable || !strings.Contains(out.Message, "in time") || time.Since(began) != time.Second || f.count() != 1 {
+			t.Errorf("the waiting probe = %+v, %v after %s and %d reads; want Unknown/ChatUnavailable at its own 1s bound, and no read of its own", out, err, time.Since(began), f.count())
+		}
+
+		// A probe that begins 5s into the reader's 8s waits for its read, which the reader's bound ends at 8s, and reads again itself.
+		time.Sleep(4 * time.Second)
+		late := reader
+		began = time.Now()
+		out, err = late.CheckGroups(t.Context(), []string{"S0SHARED000"})
+		wg.Wait()
+		if long.Reason != bindingcheck.ReasonChatUnavailable || !strings.Contains(long.Message, "in time") {
+			t.Errorf("the reader = %+v; want Unknown/ChatUnavailable at its bound", long)
+		}
+		if err != nil || out.Reason != bindingcheck.ReasonChatUnavailable || time.Since(began) != 8*time.Second || f.count() != 2 {
+			t.Errorf("the late probe = %+v, %v after %s and %d reads; want a read of its own after the reader's was cut short, to its own 8s bound", out, err, time.Since(began), f.count())
+		}
+	})
+}
+
+// panicOnceReader is a groupReader whose first read waits for release and panics; the reads after it find every group readable.
+type panicOnceReader struct {
+	groupsFake
+	release chan struct{}
+}
+
+func (p *panicOnceReader) GroupsReadable(ctx context.Context, groups []string) error {
+	if p.count() == 0 {
+		_ = p.groupsFake.GroupsReadable(ctx, groups)
+		<-p.release
+		panic("platform bug")
+	}
+	return p.groupsFake.GroupsReadable(ctx, groups)
+}
+
+// A read the platform panicked in, which the Prober recovers, is no answer: a probe that was waiting for it reads the group itself and is
+// not held to its bound.
+func TestAProbeThatWaitedForAReadThatPanickedReadsItself(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &panicOnceReader{release: make(chan struct{})}
+		pass := groupChecker{platform: f, timeout: 8 * time.Second}.ForPass()
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			defer func() { _ = recover() }()
+			_, _ = pass.CheckGroups(t.Context(), []string{"S0SHARED000"})
+		})
+		synctest.Wait()
+		var out bindingcheck.Outcome
+		var err error
+		wg.Go(func() { out, err = pass.CheckGroups(t.Context(), []string{"S0SHARED000"}) })
+		synctest.Wait()
+		began := time.Now()
+		close(f.release)
+		wg.Wait()
+		if err != nil || out.Status != bindingcheck.True || f.count() != 2 || time.Since(began) != 0 {
+			t.Errorf("the waiting probe = %+v, %v after %d reads and %s; want True from a read of its own, at once", out, err, f.count(), time.Since(began))
+		}
+	})
 }
