@@ -158,3 +158,50 @@ func TestABindingThatLosesItsGroupsLosesTheCondition(t *testing.T) {
 		t.Error("the cluster still holds ApproversReadable after the write")
 	}
 }
+
+// The same edit when the condition the Prober holds is False: its Ready, derived from it, says "ApproversReadable:GroupNotFound" and names
+// a group the Binding no longer has, and the writer does not copy that to a status whose ApproversReadable is gone. Ready is not known
+// until the Prober has seen the edit, so it is Pending at the generation served; one that is False for another reason stays so.
+func TestABindingThatLosesItsGroupsDoesNotKeepAReadyThatCitesThem(t *testing.T) {
+	const named = "approver group spec.interactions.approverGroups[0] (S0AAAAAAAAA) does not exist, or is disabled, or the bot cannot see it"
+	c := newStatusCluster(t, storedBinding(sreAlerts, 1))
+	r := newStatusRig(t, c, nil)
+	r.serveGroups(map[string]int64{sreAlerts: 1}, statusGroups)
+	r.set(sreAlerts, groupsProbe(1, bindingcheck.False, bindingcheck.ReasonGroupNotFound, named)...)
+	r.reconcile()
+	if got := c.last(t).conds()["Ready"]; got["status"] != "False" || got["reason"] != "ApproversReadable:GroupNotFound" {
+		t.Fatalf("Ready = %v; want False/ApproversReadable:GroupNotFound while the Binding names the group", got)
+	}
+
+	c.edit(t, sreAlerts, 2)
+	r.serveGroups(map[string]int64{sreAlerts: 2}, nil)
+	r.advance(11 * time.Second)
+	r.reconcile() // the Prober still holds the False ApproversReadable and the Ready derived from it
+	got := c.last(t).conds()
+	if _, has := got["ApproversReadable"]; has {
+		t.Errorf("ApproversReadable is still written: %v", got["ApproversReadable"])
+	}
+	ready := got["Ready"]
+	if ready["status"] != "Unknown" || ready["reason"] != "Pending" || ready["observedGeneration"] != int64(2) || strings.Contains(ready["message"].(string), "S0AAAAAAAAA") {
+		t.Errorf("Ready = %v; want Unknown/Pending at generation 2, and no word of the group the Binding no longer has", ready)
+	}
+
+	// Once the Prober has seen the edit, its Ready is the one that counts again.
+	r.set(sreAlerts, probe(2)...)
+	r.advance(11 * time.Second)
+	r.reconcile()
+	if got := c.last(t).conds()["Ready"]; got["status"] != "True" || got["observedGeneration"] != int64(2) {
+		t.Errorf("Ready = %v; want True at generation 2", got)
+	}
+
+	// A Ready that is False for another reason is the Prober's to say, whatever it cites: it has no word of the groups.
+	failing := probe(2)
+	failing[0].Status, failing[0].Reason = bindingcheck.False, bindingcheck.ReasonAgentNotFound
+	failing[2].Status, failing[2].Reason = bindingcheck.False, "BackendReachable:AgentNotFound"
+	r.set(sreAlerts, failing...)
+	r.advance(11 * time.Second)
+	r.reconcile()
+	if got := c.last(t).conds()["Ready"]; got["reason"] != "BackendReachable:AgentNotFound" {
+		t.Errorf("Ready = %v; want BackendReachable:AgentNotFound", got)
+	}
+}

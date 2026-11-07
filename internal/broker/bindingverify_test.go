@@ -429,6 +429,16 @@ type accessFake struct {
 	wait     bool // block until the context ends
 	calls    int
 	channels []string
+
+	groupsErr   error      // what GroupsReadable answers
+	groupsCalls [][]string // the groups of each call to GroupsReadable
+}
+
+func (a *accessFake) GroupsReadable(_ context.Context, groups []string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.groupsCalls = append(a.groupsCalls, append([]string(nil), groups...))
+	return a.groupsErr
 }
 
 func (a *accessFake) ChannelAccess(ctx context.Context, channel string) (chat.Access, error) {
@@ -1283,6 +1293,8 @@ type byChannel map[string]*accessFake
 func (b byChannel) ChannelAccess(ctx context.Context, channel string) (chat.Access, error) {
 	return b[channel].ChannelAccess(ctx, channel)
 }
+
+func (b byChannel) GroupsReadable(context.Context, []string) error { return nil }
 
 func (b byChannel) Classify(op chat.Op, err error) chat.Verdict {
 	for _, f := range b {

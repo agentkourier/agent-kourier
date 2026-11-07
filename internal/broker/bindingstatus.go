@@ -540,6 +540,9 @@ func (w *statusWriter) desire(keys map[string]bool, rejections map[string][]conf
 			if groups && !seen[bindingcheck.ApproversReadable] {
 				ready = pendingOnGroups(ready, generation, uid)
 			}
+			if !groups {
+				ready = unlessCitesGroups(ready, generation, uid)
+			}
 		}
 		conds = append(conds, readyCondition(accepted, ready, generation, uid, old))
 		for i := range conds {
@@ -563,6 +566,17 @@ func pendingOnGroups(ready *bindingcheck.Condition, generation int64, uid string
 		Type: bindingcheck.Ready, Status: bindingcheck.Unknown, ObservedGeneration: generation, UID: uid,
 		Reason: bindingcheck.Reason(string(bindingcheck.ApproversReadable) + ":" + string(bindingcheck.ReasonPending)),
 	}
+}
+
+// unlessCitesGroups is the Ready of a Binding that asks for no approver groups, where ready is the Prober's: if the Prober has not yet seen
+// the edit that took the groups away, its Ready may still be held back by ApproversReadable (its reason starts with "ApproversReadable:"),
+// with a message about a group the Binding no longer has, and that is not copied to a status that has no such condition. It is not known
+// until the Prober has seen the edit, so it is Unknown and Pending at the generation served. Any other Ready is the Prober's.
+func unlessCitesGroups(ready *bindingcheck.Condition, generation int64, uid string) *bindingcheck.Condition {
+	if ready == nil || !strings.HasPrefix(string(ready.Reason), string(bindingcheck.ApproversReadable)+":") {
+		return ready
+	}
+	return &bindingcheck.Condition{Type: bindingcheck.Ready, Status: bindingcheck.Unknown, Reason: bindingcheck.ReasonPending, ObservedGeneration: generation, UID: uid}
 }
 
 // acceptedCondition composes the Accepted condition of a Binding from its Rejections, and generation is the one the source

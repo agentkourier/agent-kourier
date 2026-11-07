@@ -86,8 +86,8 @@ func (s *State) Set(binding string, at time.Time, conds ...Condition) []Transiti
 // Remove drops the probed condition t of binding (its namespace/name key) and recomputes Ready, which takes the change at at. It is for
 // a condition that stops applying to a Binding, not for one that failed. It reports whether the condition was there, and the
 // transitions: Ready's, when its status or reason changed. A type that is not probed (Ready is derived, and never removed alone), a
-// condition the Binding lacks and a Binding the State lacks change nothing. A Binding that is left with no probed condition is dropped
-// whole, since Ready has nothing to derive from, and reports no transition.
+// condition the Binding lacks and a Binding the State lacks change nothing. When Remove leaves a Binding with no probed condition, the Binding leaves the State with no Ready transition, so a
+// consumer's Ready series for it is left as it was (the broker always sets the agent and channel checkers, so it cannot reach this).
 func (s *State) Remove(binding string, at time.Time, t ConditionType) (bool, []Transition) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -176,7 +176,9 @@ type Options struct {
 	// the Prober has removed from the State because the Binding no longer asks for it: an edit took its groups away, or the Binding was
 	// deleted and made again without them. It is for a consumer that keeps something for each condition, such as a series. Every
 	// OnTransition call for that condition of that Binding comes before the OnDrop call, and none follows it. The change of Ready that
-	// the removal causes is reported to OnTransition first, and a Binding that leaves Targets is pruned (OnPrune) and not dropped. It must not
+	// the removal causes is reported to OnTransition first (when the removal leaves the Binding with no probed condition, it leaves the State, OnDrop
+	// fires with no Ready transition, and a consumer's Ready series is left as it was; the broker always sets the agent and channel checkers, so it cannot
+	// reach this), and a Binding that leaves Targets is pruned (OnPrune) and not dropped. It must not
 	// block, for the reason given at OnTransition, and a panic is recovered and reported to OnProbeError.
 	OnDrop func(binding string, cond ConditionType)
 	// OnPass is called on Run's goroutine when a pass has ended and its results are recorded, before the Prober looks at the

@@ -286,10 +286,10 @@ func TestGroupCheckerThroughTheRealSlackClient(t *testing.T) {
 func TestTheBrokersProberProbesApproverGroupsAndTimesThem(t *testing.T) {
 	current := &snaps{}
 	current.p.Store(snapshotWith(t, map[string]int64{"sre/with": 1, "sre/without": 1}, nil, map[string][]string{"sre/with": approverGroups}))
-	grp := &groupsFake{err: groupErr(approverGroups[1], chat.ErrGroupNotFound, chat.ErrGroupsMisconfigured)}
+	plat := &accessFake{access: chat.Access{Member: true}, groupsErr: groupErr(approverGroups[1], chat.ErrGroupNotFound, chat.ErrGroupsMisconfigured)}
 	m := mustMetrics(t, nil)
 	p := verification{
-		Bindings: probeFunc(func(context.Context, string) error { return nil }), Platform: &accessFake{access: chat.Access{Member: true}}, Groups: grp, Snaps: current,
+		Bindings: probeFunc(func(context.Context, string) error { return nil }), Platform: plat, Snaps: current,
 		Conn: Connection{Ref: v1alpha1.ObjectRef{Namespace: "sre", Name: "slack"}}, Metrics: m, Log: slog.New(slog.DiscardHandler),
 		Interval: time.Hour, Tick: 5 * time.Millisecond, Revision: func(context.Context) string { return "r" },
 	}.newProber()
@@ -308,28 +308,14 @@ func TestTheBrokersProberProbesApproverGroupsAndTimesThem(t *testing.T) {
 	if r := got["sre/without"][bindingcheck.Ready]; r.Status != bindingcheck.True {
 		t.Errorf("Ready of the Binding with no groups = %s; want True", r.Status)
 	}
-	if grp.count() != 1 || !reflect.DeepEqual(grp.calls[0], approverGroups) {
-		t.Errorf("platform calls = %v; want one, over the three groups of the one Binding that has them", grp.calls)
+	if len(plat.groupsCalls) != 1 || !reflect.DeepEqual(plat.groupsCalls[0], approverGroups) {
+		t.Errorf("platform calls = %v; want one, over the three groups of the one Binding that has them", plat.groupsCalls)
 	}
 	if _, n := meanProbeSeconds(t, m, bindingcheck.ApproversReadable); n != 1 {
 		t.Errorf("%d observations in the ApproversReadable bucket of the probe-duration histogram; want 1", n)
 	}
 	if series := strings.Join(seriesOf(t, m, "agentkourier_binding_condition"), "\n"); !strings.Contains(series, "binding=sre/with,condition=ApproversReadable,status=false} 1") {
 		t.Errorf("series:\n%s\nwant the ApproversReadable series of sre/with, false", series)
-	}
-}
-
-// Without a group reader the Prober tracks no ApproversReadable, whatever the Bindings name.
-func TestTheBrokersProberTracksNoApproversWithoutAGroupReader(t *testing.T) {
-	current := &snaps{}
-	current.p.Store(snapshotWith(t, map[string]int64{"sre/with": 1}, nil, map[string][]string{"sre/with": approverGroups}))
-	p := verification{
-		Bindings: probeFunc(func(context.Context, string) error { return nil }), Platform: &accessFake{access: chat.Access{Member: true}}, Snaps: current,
-		Conn: Connection{Ref: v1alpha1.ObjectRef{Namespace: "sre", Name: "slack"}}, Metrics: mustMetrics(t, nil), Log: slog.New(slog.DiscardHandler),
-		Interval: time.Hour, Tick: 5 * time.Millisecond, Revision: func(context.Context) string { return "r" },
-	}.newProber()
-	if _, has := settled(t, p, 1)["sre/with"][bindingcheck.ApproversReadable]; has {
-		t.Error("ApproversReadable is tracked without a group reader")
 	}
 }
 

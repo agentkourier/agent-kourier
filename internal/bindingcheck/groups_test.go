@@ -423,3 +423,19 @@ func TestAPrunedBindingIsNotDropped(t *testing.T) {
 		}
 	})
 }
+
+// An edit that gives a Binding its first group calls for a pass by itself, as a new Binding does: the Revision is the same here, so the
+// pass that probes the group is the one the gain calls for, at the next Tick, and not the one the Interval brings a minute later.
+func TestABindingThatGainsGroupsIsProbedAtTheNextTickWhateverTheRevision(t *testing.T) {
+	g := &targets{}
+	g.set("r1", Target{Binding: "b", Channel: "C1", UID: "u"})
+	groups := &fakeGroups{}
+	run(t, Options{Targets: g.Targets, Revision: g.Revision, Agents: &fakeAgents{}, Channels: &fakeChannels{}, Groups: groups}, func(h *harness) {
+		g.set("r1", Target{Binding: "b", Channel: "C1", UID: "u", ApproverGroups: []string{"S1"}}) // the Revision is still r1
+		h.advance(tick)
+		if groups.count("S1") != 1 {
+			t.Errorf("group probes after one Tick = %d, want 1: the gain must call for a pass", groups.count("S1"))
+		}
+		wantCond(t, h.conds("b"), ApproversReadable, True, ReasonOK)
+	})
+}

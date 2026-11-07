@@ -334,6 +334,13 @@ type groupReader interface {
 	Classify(op chat.Op, err error) chat.Verdict
 }
 
+// platformReader is what the verification needs of the chat platform: both reads, so that every Binding the writer expects an
+// ApproversReadable for has a prober that tracks it.
+type platformReader interface {
+	channelReader
+	groupReader
+}
+
 // groupChecker is the bindingcheck.GroupChecker of a running broker. Like channelChecker it answers for the bot of the connection the
 // broker serves, so the Targets it is given hold only Bindings on that connection (bindingTargets).
 type groupChecker struct {
@@ -583,12 +590,10 @@ func (l bindingLog) dropped(binding string, cond bindingcheck.ConditionType) {
 
 // verification is what the verification of Bindings is built from.
 type verification struct {
-	// Bindings fetches agent cards (Bindings.CheckAgent), Platform reads the channel as the bot of Conn, Groups reads the approver
-	// groups as the same bot (nil: ApproversReadable is not tracked, whatever the Bindings name), and Snaps and Revision are the config
-	// (Reloader.Current and Reloader.Revision).
+	// Bindings fetches agent cards (Bindings.CheckAgent), Platform reads the channel and the approver groups as the bot of Conn, and Snaps
+	// and Revision are the config (Reloader.Current and Reloader.Revision).
 	Bindings agentProbe
-	Platform channelReader
-	Groups   groupReader
+	Platform platformReader
 	Snaps    Snapshots
 	Revision func(context.Context) string
 	// Conn is the ChatConnection this process serves: the Bindings on any other are not probed, because Platform is Conn's bot. Its
@@ -674,15 +679,9 @@ func (v verification) newProber() *bindingcheck.Prober {
 		platform: v.Platform, timeout: innerBound(timeout),
 		creds: credentialsWatch{baseline: v.Conn.Credentials, secrets: v.Secrets, where: v.credentialsSecret},
 	}
-	var groups bindingcheck.GroupChecker
-	if v.Groups != nil {
-		checker := groupChecker{
-			platform: v.Groups, timeout: innerBound(timeout),
-			creds: credentialsWatch{baseline: v.Conn.Credentials, secrets: v.Secrets, where: v.credentialsSecret},
-		}
-		groups = groupFunc(func(ctx context.Context, gs []string) (bindingcheck.Outcome, error) {
-			return v.timed(bindingcheck.ApproversReadable, func() (bindingcheck.Outcome, error) { return checker.CheckGroups(ctx, gs) })
-		})
+	groupsChecker := groupChecker{
+		platform: v.Platform, timeout: innerBound(timeout),
+		creds: credentialsWatch{baseline: v.Conn.Credentials, secrets: v.Secrets, where: v.credentialsSecret},
 	}
 	l := bindingLog{log: v.Log}
 	return bindingcheck.NewProber(bindingcheck.Options{
@@ -694,7 +693,9 @@ func (v verification) newProber() *bindingcheck.Prober {
 		Channels: channelFunc(func(ctx context.Context, channel string) (bindingcheck.Outcome, error) {
 			return v.timed(bindingcheck.ChannelJoined, func() (bindingcheck.Outcome, error) { return channels.CheckChannel(ctx, channel) })
 		}),
-		Groups:   groups,
+		Groups: groupFunc(func(ctx context.Context, gs []string) (bindingcheck.Outcome, error) {
+			return v.timed(bindingcheck.ApproversReadable, func() (bindingcheck.Outcome, error) { return groupsChecker.CheckGroups(ctx, gs) })
+		}),
 		Interval: v.Interval, Tick: v.Tick, Timeout: timeout, MinRevisionGap: cmp.Or(v.MinRevisionGap, minRevisionGap),
 		OnTransition: func(tr bindingcheck.Transition) { v.Metrics.BindingCondition(tr); l.transition(tr); v.notifyStatus() },
 		OnDrop: func(binding string, cond bindingcheck.ConditionType) {
