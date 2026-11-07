@@ -27,7 +27,8 @@
 # made after its tag is published. To record before the final tag, so that the tag's tree carries the clip, set
 # CLIP_CHART_VERSION to a release candidate of that version built from the same code (0.2.1-rc.1 for 0.2.1): the tape
 # still types the version in Chart.yaml, and a helm function in the recorder's hidden setup installs the candidate in
-# its place. Say so in the pull request that brings the clip. my-values.yaml and my-resources.yaml are extracted from the blocks of those names in
+# its place and hides the two lines helm prints naming the pulled chart and its digest. Say both in the pull request
+# that brings the clip. my-values.yaml and my-resources.yaml are extracted from the blocks of those names in
 # the page's "Install on custom resources" section at each take; the commands of install.tape follow that section but
 # are written in the tape, so a change to them on the page needs the same change there.
 set -euo pipefail
@@ -146,12 +147,23 @@ record() {
   tape=${tape//@CHANNEL@/"${channel}"}
   tape=${tape//@READY@/"${ready}"}
   printf '%s\n' "${tape}" >"${STATE}/install.tape"
-  # The hidden setup sources this file. It is empty unless a candidate stands in for the typed version.
+  # The hidden setup sources this file. It is empty unless a candidate stands in for the typed version. Then a helm
+  # function swaps the version argument for the candidate and drops the two lines helm prints when it pulls a chart,
+  # "Pulled: <ref>" and "Digest: <digest>", which would name the candidate under the typed version. helm install
+  # prints them on stdout and helm template on stderr, so the function joins the two streams on stdout (the clip
+  # only shows a terminal) and passes every other line through in order; it returns helm's exit status.
   : >"${STATE}/setup.sh"
   if [ "${installed}" != "${version}" ]; then
-    printf 'helm() { local a=() x; for x in "$@"; do [ "$x" = %q ] && x=%q; a+=("$x"); done; command helm "${a[@]}"; }\n' \
-      "${version}" "${installed}" >"${STATE}/setup.sh"
-    echo "record.sh: the tape types --version ${version}; the take installs ${installed}" >&2
+    printf '__clip_typed=%q __clip_installed=%q\n' "${version}" "${installed}" >"${STATE}/setup.sh"
+    cat >>"${STATE}/setup.sh" <<'EOF'
+helm() {
+  local a=() x
+  for x in "$@"; do [ "$x" = "${__clip_typed}" ] && x=${__clip_installed}; a+=("$x"); done
+  command helm "${a[@]}" 2>&1 | grep -v -E '^(Pulled|Digest): '
+  return "${PIPESTATUS[0]}"
+}
+EOF
+    echo "record.sh: the tape types --version ${version}; the take installs ${installed} and hides helm's Pulled and Digest lines" >&2
   fi
 
   docker run --rm --network kind \
