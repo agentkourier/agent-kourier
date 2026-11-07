@@ -188,7 +188,8 @@ type fenceHead struct {
 // readFence reads the start of line as a fence line: three or more backticks or tildes (run, of one character, ch) after white
 // space and, outside a block, one list marker or one quote mark and white space again. So "- ```", "1) ```", ">```" and
 // "> ```" are fence lines, and "- - ```", "> > ```", "> - ```" and "-```" are not: a second mark, or a marker with no white
-// space after it, leaves the line prose, which escapes the run.
+// space after it, leaves the line prose, which escapes the run. So does a mark, then backticks (not tildes), whose rest holds a
+// closing run of backticks: "1. ```make test``` first" is a list item with a code span.
 //
 // The mark is dropped from the opener's line, and the lines of its block lose indent characters of white space: those before
 // the run, a list marker's among them. A quote mark is dropped from each line of its block instead, with the one character
@@ -237,6 +238,12 @@ func readFence(line string, code bool, opener mark) fenceHead {
 	h.rest = after[h.run:]
 	if h.run < 3 {
 		h.pending = h.rest == "" // a run that may go on
+		return h
+	}
+	if at, _ := closingRun(h.rest, '`', h.run); mk != markNone && h.ch == '`' && at >= 0 {
+		// A mark, then a run of backticks, then a closing run: a list item or a quote that holds a code span, not a block of one
+		// line, as a backtick fence's info string has no backtick in CommonMark. The line is prose, and the span rule reads it.
+		h.ch, h.run, h.rest = 0, 0, ""
 		return h
 	}
 	h.mark = mk

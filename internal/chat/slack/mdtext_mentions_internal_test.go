@@ -21,11 +21,11 @@ import (
 // The test is here because only the adapter, the broker and cmd may import the adapter, and this package may import render.
 
 var mentionsDeclared = []v1alpha1.ChatMention{
-	{Name: "ann", User: "U0ANN"}, {Name: "bob", User: "U0BOB"}, {Name: "kim", User: "U0KIM"},
-	{Name: "lee", User: "U0LEE"}, {Name: "sam", User: "U0SAM"},
+	{Name: "ann", User: "U0ANN"}, {Name: "bob", User: "U0BOB"}, {Name: "joe", User: "U0JOE"}, {Name: "kim", User: "U0KIM"},
+	{Name: "lee", User: "U0LEE"}, {Name: "sam", User: "U0SAM"}, {Name: "zed", User: "U0ZED"},
 }
 
-var nameInProse = regexp.MustCompile(`(?:^|[\s(])@([a-z]+)`)
+var nameInProse = regexp.MustCompile("(?:^|[\\s\\p{Z}(`~])@([a-z]+)")
 
 // proseNames is the declared names that the text the adapter sends has outside the blocks it writes (a line of "```" alone
 // opens or closes one, which is all the adapter writes as a fence) and the spans in its prose, sorted.
@@ -112,7 +112,11 @@ func TestMentionsAndTheAdapterReadTheSameCode(t *testing.T) {
 		{"a list marker in a block at column 0 is code", "```\n- ```\n@sam\n```\n@lee", []string{"lee"}},
 		{"a quote mark in a block at column 0 is code", "```\n> ```\n@sam\n```\n@lee", []string{"lee"}},
 		{"a block that never closes", "- ```\n  @sam\n  @lee", nil},
-		{"a one-line block", "- ``` @sam ```\n@lee", []string{"lee"}},
+		{"a list item with a span", "- ``` @sam ```\n@lee", []string{"lee"}},
+		{"a numbered item with a span, and a name after it", "1. ```make test``` first, then @sam", []string{"sam"}},
+		{"a quote with a span, and a name after it", "> ```x``` y @sam", []string{"sam"}},
+		{"a one-line block after tildes", "- ~~~ @sam ~~~\n@lee", []string{"lee"}},
+		{"a second block after the first", "- ```\n  @sam\n  ```\n> ```\n> @kim\n> ```\n@lee", []string{"lee"}},
 		{"a span", "see `@sam` and @lee", []string{"lee"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -130,27 +134,46 @@ func TestMentionsAndTheAdapterReadTheSameCode(t *testing.T) {
 func TestMentionsAndTheAdapterAgreeOnWhatIsCode(t *testing.T) {
 	openers := []string{ // what stands before the opener's run
 		"", "  ", "\t", "- ", "* ", "+ ", "1. ", "12) ", "  - ", "-   ", " 1.  ", "> ", ">", "  > ", ">   ",
-		"- - ", "- > ", "> > ", "> - ", "-", "1234567890. ", "1 ", "- ",
+		"- - ", "- > ", "> > ", "> - ", "-", "1234567890. ", "1 ",
+		"-\t", "-\u00a0", "1.\t", "1)\u00a0", ">\t", ">\u00a0", "- \t",
 	}
 	lines := []string{"", "  ", "   ", "> ", ">", "- ", "  - ", "  > ", "1. "} // what stands before a line of the block
 	closers := []string{"", "  ", "    ", "> ", ">", "- ", "  - ", "1. ", "> > ", "> - ", "  > "}
+	tails := []string{"", " tail @joe", " ```x``` @zed"} // what follows a closing run
 	var n, bad int
+	compare := func(in string) {
+		n++
+		sent := markdown(in, math.MaxInt)
+		if got, made := proseNames(sent), madeNames(in); !slices.Equal(got, made) {
+			if bad++; bad <= 10 {
+				t.Errorf("the adapter shows %v as prose, Mentions made %v\nin   %q\nsent %q", got, made, in, sent)
+			}
+		}
+	}
 	for _, open := range openers {
 		for _, run := range []string{"```", "~~~"} {
 			for _, info := range []string{"", "bash"} {
 				for _, l1 := range lines {
 					for _, l2 := range lines {
 						for _, cl := range closers {
-							in := fmt.Sprintf("before @ann\n%s%s%s\n%sowner @sam failed\n%scc @kim\n%s%s\nthen @lee please\n- @bob", open, run, info, l1, l2, cl, run)
-							n++
-							sent := markdown(in, math.MaxInt)
-							if got, made := proseNames(sent), madeNames(in); !slices.Equal(got, made) {
-								if bad++; bad <= 10 {
-									t.Errorf("the adapter shows %v as prose, Mentions made %v\nin   %q\nsent %q", got, made, in, sent)
-								}
-							}
+							// The second block opens after the first, with a mark taken from the lists, and its closer
+							// has a tail: both blocks of the text, and the prose between and after them, are compared.
+							open2, cl2 := openers[n%len(openers)], closers[n/7%len(closers)]
+							compare(fmt.Sprintf("before @ann\n%s%s%s\n%sowner @sam failed\n%scc @kim\n%s%s%s\nthen @lee please\n- @bob\n%s%s\nagain @joe\n%s%s\nlast @zed",
+								open, run, info, l1, l2, cl, run, tails[n%len(tails)], open2, run, cl2, run))
 						}
 					}
+				}
+			}
+		}
+	}
+	for _, open := range openers { // a block of one line, or a code span, on the line of the opener
+		for _, run := range []string{"```", "~~~", "````"} {
+			for _, inner := range []string{" @sam ", " x @sam ", "\u00a0@sam\u00a0", ""} {
+				for _, tail := range []string{"", " @lee", "\n@lee", "\n```\n@kim\n```\n@bob"} {
+					compare("before @ann\n" + open + run + inner + run + tail + "\nthen @joe\n")
+					compare("before @ann\n" + open + run + inner + run + "`" + tail + "\nthen @joe\n")
+					compare("before @ann\n" + open + run + inner + "\n@zed")
 				}
 			}
 		}

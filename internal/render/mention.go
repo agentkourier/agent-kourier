@@ -39,7 +39,7 @@ type MentionScan struct {
 // what is in a fence or a span is quoted, not said, so a log line that holds a name notifies nobody. What is code is read as the
 // Slack adapter writes it (internal/chat/slack/mdtext.go): a fence line, which has a run of three or more backticks or tildes
 // after white space and, outside a block, one list marker or one quote mark (fenceLine has the forms), opens a block, and
-// any fence line closes it, whatever else is on it (but a mark in a block that opened at column 0 is its text), what follows a
+// any fence line closes it, whatever else is on it (a mark before a closing run counts only if it is the kind its opener had: fenceLine), what follows a
 // closing run is prose, a block that never closes runs to the end, and a span closes at the next run of backticks or not
 // at all. A pipe table, which that adapter shows as code, is read as prose: a name in a table is said. A name that ends where the
 // text was cut (chat.Truncated), or in a ".", ":" or "/" just before it, may be the start of something longer, so it is no name.
@@ -86,16 +86,18 @@ const (
 // white space and, outside a block (code is false), one list marker or one quote mark and white space again, how long the run
 // is, what follows it, and what stood before it besides white space. The line is no fence line if run is under 3. So
 // "- ```", "1) ```", ">```" and "> ```" are fence lines, and "- - ```", "> > ```", "> - ```" and "-```" are not: a second
-// mark, or a marker with no white space after it, makes the line prose.
+// mark, or a marker with no white space after it, makes the line prose. So does a mark, then backticks (not tildes), whose
+// rest holds a closing run of backticks: "1. ```make test``` first" is a list item with a code span, as a backtick fence's info
+// string has no backtick in CommonMark.
 //
 // In a block that a fence line after a list marker opened (opener markList) a line may close it with a list marker before the
 // run, and in one that a fence line after a quote mark opened (markQuote) every line first loses a quote mark, if it has one,
-// and the one character of white space after it. A block opened with white space alone takes only white space before a closing
-// run, as a mark in it is the text of the block.
+// and one character of white space after it. A mark before a closing run counts only if it is the kind its opener had: a block
+// opened with white space alone, indented or not, takes only white space there, and a list block takes no quote mark.
 func fenceLine(line string, code bool, opener mark) (ch byte, run int, rest string, mk mark) {
 	if code && opener == markQuote {
 		if t := strings.TrimLeftFunc(line, unicode.IsSpace); strings.HasPrefix(t, ">") {
-			line = t[1+spaceSize(t[1:]):]
+			line = t[1:] // the white space after the mark is trimmed below, as the adapter's readFence drops it
 		}
 	}
 	body := strings.TrimLeftFunc(line, unicode.IsSpace)
@@ -103,7 +105,7 @@ func fenceLine(line string, code bool, opener mark) (ch byte, run int, rest stri
 	if body != "" && body[0] != '`' && body[0] != '~' {
 		switch {
 		case body[0] == '>' && !code:
-			n, mk = 1+spaceSize(body[1:]), markQuote
+			n, mk = 1, markQuote
 		case !code || opener == markList:
 			if n = listMarker(body); n > 0 {
 				mk = markList
@@ -115,7 +117,11 @@ func fenceLine(line string, code bool, opener mark) (ch byte, run int, rest stri
 		return 0, 0, body, markNone
 	}
 	run = runOf(body, body[0])
-	return body[0], run, body[run:], mk
+	rest = body[run:]
+	if at, _ := closingFence(rest, '`', run); mk != markNone && body[0] == '`' && run >= 3 && at >= 0 {
+		return 0, 0, body, markNone // a code span in a list item or a quote, not a fence line
+	}
+	return body[0], run, rest, mk
 }
 
 // spaceSize is the size of the character of white space s starts with, or 0.
