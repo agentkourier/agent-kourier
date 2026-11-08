@@ -11,7 +11,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
-func finishChat(ctx context.Context, op *telemetry.Operation, operation string, err error) {
+func (c *Client) finishChat(ctx context.Context, op *telemetry.Operation, operation string, err error) {
 	outcome := telemetry.ErrorClass(err)
 	var rate *slackgo.RateLimitedError
 	var response slackgo.SlackErrorResponse
@@ -32,7 +32,7 @@ func finishChat(ctx context.Context, op *telemetry.Operation, operation string, 
 		}
 	}
 	trace.SpanFromContext(ctx).SetAttributes(attribute.String("agentkourier.platform", "slack"), attribute.String("agentkourier.chat.operation", operation))
-	telemetry.Count(ctx, "agentkourier_chat_api_calls_total", operation, outcome)
+	telemetry.Count(ctx, "agentkourier_chat_api_calls_total", operation, outcome, c.conn)
 	if outcome == "not_streaming" {
 		op.FinishOutcome(nil, outcome)
 	} else {

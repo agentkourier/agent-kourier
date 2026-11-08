@@ -110,6 +110,7 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 	for name, st := range s.teams {
 		if !present[name] {
 			s.stop(ctx, name, st, "it is no longer served")
+			telemetry.ForgetConnection(ctx, name) // nothing of it runs now, so its series would only go stale
 			delete(s.teams, name)
 			delete(s.said, name)
 		}
@@ -179,7 +180,11 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 			if holder, taken := claimed[st.id.App]; taken {
 				st.refused = true
 				refused[name] = refusedMessage
+				ran := st.rt != nil
 				s.stop(ctx, name, st, "it is a second connection of the Slack app that "+holder+" uses")
+				if ran { // it is not served from here, so the series of its run would only go stale
+					telemetry.ForgetConnection(ctx, name)
+				}
 				s.say(ctx, name, "the ChatConnection is not served: it uses the same Slack app as the older ChatConnection "+holder+", and an app is served once", nil)
 				continue
 			}

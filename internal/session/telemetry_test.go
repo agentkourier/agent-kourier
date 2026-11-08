@@ -130,3 +130,28 @@ func TestRecoveredTaskLinksToStoredTrace(t *testing.T) {
 		t.Fatal("recovered attempt missing")
 	}
 }
+
+// A duplicate of a queued turn is counted under the connection of its key, so that two connections that share channel IDs count their own.
+func TestSubmitCountsDuplicatesByConnection(t *testing.T) {
+	f, ctx, _, reg := tracingFixture(t)
+	for _, conn := range []string{"slack", "team-a/slack"} {
+		in := inbound("1700.01")
+		in.Key.Connection = conn
+		in.MessageID = conn + ":C1:1700.01"
+		times := 2
+		if conn == "team-a/slack" {
+			times = 3
+		}
+		for range times { // the first queues the turn, the rest are duplicates of it
+			if _, err := f.m.Submit(ctx, in); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for conn, want := range map[string]float64{"slack": 1, "team-a/slack": 2} {
+		got := counter(t, reg, "agentkourier_intake_total", map[string]string{"source": "reply_queue", "disposition": "duplicate", "connection": conn})
+		if got != want {
+			t.Errorf("agentkourier_intake_total{source=reply_queue,disposition=duplicate,connection=%s} = %v; want %v", conn, got, want)
+		}
+	}
+}

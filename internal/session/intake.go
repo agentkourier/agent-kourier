@@ -165,7 +165,7 @@ func (m *Manager) queue(ctx context.Context, in Inbound) (Result, error) {
 		// A duplicate was already acknowledged by the original intake. Do not add a reaction again,
 		// especially after the original turn has already ended.
 		res.Acknowledgment = ""
-		telemetry.Count(ctx, "agentkourier_intake_total", "reply_queue", "duplicate")
+		telemetry.Count(ctx, "agentkourier_intake_total", "reply_queue", "duplicate", in.Key.Connection)
 	}
 	if enqueued { // this process made the row, so nothing has sent the turn yet
 		m.mu.Lock()

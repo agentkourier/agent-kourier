@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/store/storetest"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
@@ -157,4 +158,10 @@ func TestBacklogsPoolStatsAndInteractionWait(t *testing.T) {
 	if !found {
 		t.Fatal("interaction wait missing")
 	}
+}
+
+// The outbox gauges are one series for each connection that has unposted rows, as for the SQLite store.
+func TestOutboxGaugesAreByConnection(t *testing.T) {
+	s, _ := openFresh(t)
+	storetest.OutboxGaugesByConnection(t, s)
 }

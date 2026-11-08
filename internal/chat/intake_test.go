@@ -89,6 +89,12 @@ func newIntakeNotifying(t *testing.T, notice func(context.Context, session.Key, 
 // newIntakeModes is newIntakeNotifying with the chat.threadReplies of the Binding of C1 and of G1.
 func newIntakeModes(t *testing.T, notice func(context.Context, session.Key, session.Notice) error, c1, g1 v1alpha1.ThreadReplies) (*chat.Intake, *submitter) {
 	t.Helper()
+	return newIntakeOn(t, v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"}, notice, c1, g1)
+}
+
+// newIntakeOn is newIntakeModes for the Intake of the connection conn. The Bindings are the same, whichever connection it is.
+func newIntakeOn(t *testing.T, conn v1alpha1.ObjectRef, notice func(context.Context, session.Key, session.Notice) error, c1, g1 v1alpha1.ThreadReplies) (*chat.Intake, *submitter) {
+	t.Helper()
 	meta := func(ns, name string) metav1.ObjectMeta { return metav1.ObjectMeta{Namespace: ns, Name: name} }
 	bind := func(ns, name, channel string, mode v1alpha1.ThreadReplies) v1alpha1.Binding {
 		return v1alpha1.Binding{ObjectMeta: meta(ns, name), Spec: v1alpha1.BindingSpec{
@@ -106,7 +112,7 @@ func newIntakeModes(t *testing.T, notice func(context.Context, session.Key, sess
 	}
 	sub := &submitter{}
 	return chat.NewIntake(chat.IntakeConfig{
-		Connection: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"},
+		Connection: conn,
 		Snapshot:   func() *config.Snapshot { return snap }, Submitter: sub, Notice: notice,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}), sub
 }

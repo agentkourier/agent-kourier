@@ -148,7 +148,7 @@ func (in *Intake) Message(ctx context.Context, m Inbound) (telemetryErr error) {
 		if telemetryErr != nil {
 			disposition = "error"
 		}
-		telemetry.Count(ctx, "agentkourier_intake_total", "message", disposition)
+		telemetry.Count(ctx, "agentkourier_intake_total", "message", disposition, in.conn)
 		trace.SpanFromContext(ctx).SetAttributes(attribute.String("agentkourier.intake.disposition", disposition))
 		op.Finish(telemetryErr)
 	}()
@@ -248,7 +248,7 @@ func (in *Intake) Message(ctx context.Context, m Inbound) (telemetryErr error) {
 func (in *Intake) Interaction(ctx context.Context, i Interaction) (telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.intake", attribute.String("agentkourier.source", "interaction"))
 	defer func() {
-		telemetry.Count(ctx, "agentkourier_intake_total", "interaction", telemetry.ErrorClass(telemetryErr))
+		telemetry.Count(ctx, "agentkourier_intake_total", "interaction", telemetry.ErrorClass(telemetryErr), in.conn)
 		op.Finish(telemetryErr)
 	}()
 	if in.cfg.Interactions == nil {
