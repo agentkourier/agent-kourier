@@ -180,11 +180,10 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 			if holder, taken := claimed[st.id.App]; taken {
 				st.refused = true
 				refused[name] = refusedMessage
-				ran := st.rt != nil
 				s.stop(ctx, name, st, "it is a second connection of the Slack app that "+holder+" uses")
-				if ran { // it is not served from here, so the series of its run would only go stale
-					telemetry.ForgetConnection(ctx, name)
-				}
+				// Not served from here, so the series of its earlier run would only go stale. Not only when this entry ran: a restart that
+				// ends in a refusal (its Secret now holds another app's tokens) made this entry fresh, and the run it replaced left series.
+				telemetry.ForgetConnection(ctx, name)
 				s.say(ctx, name, "the ChatConnection is not served: it uses the same Slack app as the older ChatConnection "+holder+", and an app is served once", nil)
 				continue
 			}

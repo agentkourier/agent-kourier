@@ -618,3 +618,28 @@ func TestSupervisorDeletesTheSeriesOfAConnectionItStopsForAnOlderOfItsApp(t *tes
 		t.Error("the series of team-b are still there after it was stopped for the older connection of its app")
 	}
 }
+
+// A connection that restarts into a refusal is not served either: its Secret was rotated to the tokens of the Slack app that an older connection
+// uses, so its new entry never ran, and the series of the run it replaced go.
+func TestSupervisorDeletesTheSeriesOfAConnectionThatRestartsIntoARefusal(t *testing.T) {
+	w := newSeriesWorld(t)
+	w.ids["tok-a"] = appIdentity{App: "AA", Team: "T1", User: "UA", Bot: "BA"}
+	w.ids["tok-b"] = appIdentity{App: "AB", Team: "T1", User: "UB", Bot: "BB"}
+	w.ids["tok-b2"] = appIdentity{App: "AA", Team: "T1", User: "UA", Bot: "BA"}
+	a, b := team("team-a/slack", 1, "tok-a", 1), team("team-b/slack", 1, "tok-b", 2)
+
+	w.reconcile(a, b)
+	w.eventually("both connections to run", func() bool { return w.live.Load() == 3 })
+	w.record(ownName, "team-a/slack", "team-b/slack")
+
+	w.reconcile(a, team("team-b/slack", 2, "tok-b2", 2)) // team-b's Secret now holds the tokens of team-a's app
+	if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack"}) {
+		t.Fatalf("running = %v; want team-b stopped as a second connection of team-a's app", got)
+	}
+	if w.has("team-b/slack") {
+		t.Error("the series of team-b are still there after it restarted into a refusal")
+	}
+	if !w.has("team-a/slack") || !w.has(ownName) {
+		t.Error("the series of team-a or of the own connection went with team-b's")
+	}
+}

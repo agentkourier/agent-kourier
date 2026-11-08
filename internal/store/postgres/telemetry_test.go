@@ -90,7 +90,7 @@ func TestBacklogsPoolStatsAndInteractionWait(t *testing.T) {
 	}
 	ctx := telemetry.WithObserver(t.Context(), obs)
 	s, _ := openFresh(t)
-	if err := s.RegisterMetrics(reg); err != nil {
+	if err := s.RegisterMetrics(reg, nil); err != nil {
 		t.Fatal(err)
 	}
 	key := sessionKey("1")

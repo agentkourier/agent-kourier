@@ -11,20 +11,29 @@ names or error text.
 A broker serves one or more ChatConnections ([Limits](limits.md#run-the-broker): at most 16, its own included). The series that belong to
 one carry the label `connection`, the ChatConnection as `namespace/name`, so that one connection's numbers are not added to another's:
 `agentkourier_chat_connected`, `agentkourier_intake_total`, `agentkourier_chat_api_calls_total`, `agentkourier_slack_events_shed_total`,
-`agentkourier_slack_ack_duration_seconds`, `agentkourier_outbox_pending` and `agentkourier_outbox_oldest_age_seconds`. A broker with one connection has
-one value of the label, and no series has more than 16 (the outbox gauges can have one more, the empty value below). Series that belong to a Binding
+`agentkourier_slack_ack_duration_seconds`, `agentkourier_outbox_pending` and `agentkourier_outbox_oldest_age_seconds`. Series that belong to a Binding
 carry `binding`, and the rest are the broker's as a whole.
 
-- When the broker stops serving a ChatConnection while it runs (it left the set the broker serves: its ChatConnection was deleted, or one older than it pushed it past the limit;
-  or it is a second connection of a Slack app that an older one uses), it deletes that
-  connection's series of `agentkourier_intake_total`, `agentkourier_chat_api_calls_total`, `agentkourier_slack_events_shed_total` and
-  `agentkourier_slack_ack_duration_seconds`. If it serves the connection again, those counters start from zero. A connection that is restarted
-  because its ChatConnection or its Secret changed, and one whose credentials the platform rejected, keep theirs.
-- The two outbox gauges are read from the stored rows at each scrape, with one query grouped by connection: a connection has a series while it has
-  an unposted, nonabandoned row, and has none when it has no such row (the gauges said 0 before the label, and say nothing now; use
-  `sum(agentkourier_outbox_pending) or vector(0)` for a panel that must show 0). A row written before the broker recorded connections has
-  `connection=""` until the leader gives it to its own connection when it starts, and again after an older image has written rows. The rows of a
-  connection that is no longer served stay in its series until they are posted or abandoned.
+How many values of `connection` each family can have:
+
+- `agentkourier_intake_total`, `agentkourier_chat_api_calls_total`, `agentkourier_slack_events_shed_total` and `agentkourier_slack_ack_duration_seconds`:
+  one for each connection the broker serves, so at most 16. A connection that was never served has none.
+- `agentkourier_chat_connected`: one for each connection that has been built since the broker started. The broker does not delete the series of a connection
+  that it stops serving: it keeps saying 0.
+- `agentkourier_outbox_pending` and `agentkourier_outbox_oldest_age_seconds`: each connection served, which says 0 while it has no unposted row; the
+  empty value, for rows written before the broker recorded connections; and each connection that is no longer served but still has an unposted row, until
+  retention abandons the row.
+
+What the broker does to the series:
+
+- When the broker stops serving a ChatConnection while it runs, it deletes that connection's series of the first four families. A connection stops being served when
+  its ChatConnection is deleted, when an older ChatConnection pushed it past the limit, or when it is a second connection of a Slack app that an older one uses; the last holds
+  also when a rotated Secret turns a connection into the second of such an app. If it serves the connection again, those counters start from zero. A connection that is restarted
+  because its ChatConnection or its Secret changed, and one whose credentials the platform rejected, keep theirs. A connection also leaves the served set when its namespace is
+  taken off `AGENTKOURIER_CONNECTION_NAMESPACES`, but that list is read at start, so the restart that applies the change starts with no series of it.
+- The two outbox gauges are read from the stored rows at each scrape, with one query grouped by connection, and the broker adds a 0 for each connection it serves
+  that the query did not return. The replica that leads adds the team connections it serves (a refused second connection of an app is not one); a replica that does not lead names only its own. A row written
+  before the broker recorded connections has `connection=""` until the leader gives it to its own connection when it starts, and again after an older image has written rows.
 - Each connection's adapter has its own lanes, so the event limits on [Limits](limits.md) apply to each connection separately.
 
 ## Connection, configuration and turns
@@ -64,7 +73,7 @@ carry `binding`, and the rest are the broker's as a whole.
 | `agentkourier_stream_reconnects_total` | Completed reconnect attempts, by outcome |
 | `agentkourier_session_recovery_total` | Adopted tasks, recording failures and reconciliation diagnostic notices |
 | `agentkourier_reply_queue_depth` / `agentkourier_reply_queue_oldest_age_seconds` | Durable undelivered reply count and oldest age |
-| `agentkourier_outbox_pending` / `agentkourier_outbox_oldest_age_seconds` | Unposted, nonabandoned rows and oldest age, by `connection` (the connection whose app posts the row); includes incomplete stream rows. A connection with no such row has no series, as [Series by connection](#series-by-connection) says |
+| `agentkourier_outbox_pending` / `agentkourier_outbox_oldest_age_seconds` | Unposted, nonabandoned rows and oldest age, by `connection` (the connection whose app posts the row); includes incomplete stream rows. A served connection with no such row says 0, as [Series by connection](#series-by-connection) says |
 | `agentkourier_outbox_delivery_duration_seconds` | Row creation to successful delivery/adoption attempt; replay after a crash can produce another observation |
 | `agentkourier_render_final_total` | Final rendering outcomes: delivered, empty output, permanent failure, retry exhaustion, deadline exceeded or cancelled |
 | `agentkourier_retention_removed_total` | Stored content that retention removed, by `what`: `stranded_replies` (undelivered replies dropped after 30 days, a turn that was never sent: worth an alert on any increase), `cleared_interactions` (settled interactions whose request and answer were emptied), `audit_entries` (purged past `AGENTKOURIER_AUDIT_RETENTION`; an increase with the setting at `keep` is a fault), and `expired_sessions` with the rows that went with them, `session_replies`, `session_interactions`, `session_presses` and `session_outbox` (sessions deleted 90 days after their `threadTTL`), and `stale_tasks` with the `stale_task_interactions` cancelled with them (a task that a crash left on a session past that horizon, ended so that the session can be deleted; a standing increase means crashes). See [Stored data](stored-data.md) |

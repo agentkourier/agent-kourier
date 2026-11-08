@@ -12,17 +12,19 @@ import (
 // MetricsStore is a store that exports its backlog gauges, as the SQLite and Postgres stores do.
 type MetricsStore interface {
 	store.Store
-	RegisterMetrics(prometheus.Registerer) error
+	RegisterMetrics(reg prometheus.Registerer, connections func() []string) error
 }
 
 // OutboxGaugesByConnection holds a store's agentkourier_outbox_pending and agentkourier_outbox_oldest_age_seconds to what they say: one
 // series for each connection that has an unposted, nonabandoned row, with the count and the age of the oldest of that connection's rows, and
-// none for a connection that has none. A row that records no connection is the series whose connection label is empty. s is a fresh store.
+// for each connection the broker serves, which says 0 when it has none. A connection that is not served and has no unposted row has no series.
+// A row that records no connection is the series whose connection label is empty. s is a fresh store.
 func OutboxGaugesByConnection(t *testing.T, s MetricsStore) {
 	t.Helper()
 	ctx := t.Context()
 	reg := prometheus.NewRegistry()
-	if err := s.RegisterMetrics(reg); err != nil {
+	served := []string{"ns/a", "ns/b", "ns/idle"} // read at each scrape, so a step can change it
+	if err := s.RegisterMetrics(reg, func() []string { return served }); err != nil {
 		t.Fatalf("RegisterMetrics: %v", err)
 	}
 	now := time.Now()
@@ -43,8 +45,8 @@ func OutboxGaugesByConnection(t *testing.T, s MetricsStore) {
 	_, err := s.AbandonOutbox(ctx, "a-abandoned", now)
 	noErr(t, err, "AbandonOutbox")
 
-	// check reads both gauges: each connection with unposted rows has the count and age that want says (the age within a margin for the time the
-	// test takes), and no other has a series.
+	// check reads both gauges: each connection in want has the count and age that it says (the age within a margin for the time the test takes),
+	// and no other has a series.
 	check := func(step string, want map[string]gaugeWant) {
 		t.Helper()
 		pending, age := gaugeByConnection(t, reg, "agentkourier_outbox_pending"), gaugeByConnection(t, reg, "agentkourier_outbox_oldest_age_seconds")
@@ -60,12 +62,16 @@ func OutboxGaugesByConnection(t *testing.T, s MetricsStore) {
 			}
 		}
 	}
-	check("two connections and a row with none", map[string]gaugeWant{"ns/a": {2, 2 * time.Minute}, "ns/b": {1, 30 * time.Second}, "": {1, 10 * time.Second}})
+	check("two connections and a row with none", map[string]gaugeWant{"ns/a": {2, 2 * time.Minute}, "ns/b": {1, 30 * time.Second}, "": {1, 10 * time.Second}, "ns/idle": {0, 0}})
 
-	// A row that is posted leaves its connection's count, and a connection that has none left has no series.
+	// A row that is posted leaves its connection's count. A served connection that has none left says 0.
 	noErr(t, s.RecordMessageRef(ctx, "b-only", "9.3"), "RecordMessageRef b-only")
 	noErr(t, s.RecordMessageRef(ctx, "a-old", "9.4"), "RecordMessageRef a-old")
-	check("after b's row and a's oldest were posted", map[string]gaugeWant{"ns/a": {1, time.Minute}, "": {1, 10 * time.Second}})
+	check("after b's row and a's oldest were posted", map[string]gaugeWant{"ns/a": {1, time.Minute}, "ns/b": {0, 0}, "": {1, 10 * time.Second}, "ns/idle": {0, 0}})
+
+	// A connection that is no longer served and has no unposted row has no series.
+	served = []string{"ns/a", "ns/idle"}
+	check("after b was no longer served", map[string]gaugeWant{"ns/a": {1, time.Minute}, "": {1, 10 * time.Second}, "ns/idle": {0, 0}})
 }
 
 // gaugeWant is what the outbox gauges of one connection should say: the unposted rows, and the age of the oldest at least.

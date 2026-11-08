@@ -15,10 +15,12 @@ import (
 // RegisterMetrics exposes the pool's statistics and the durable backlog gauges, under the names the
 // SQLite store gives the gauges, so one dashboard reads either, and agentkourier_store_deposed_total, which only this store has. The queries use a short deadline and
 // report invalid metrics on failure, rather than false zeros.
-func (s *Store) RegisterMetrics(reg prometheus.Registerer) error { return s.a.registerMetrics(reg) }
+func (s *Store) RegisterMetrics(reg prometheus.Registerer, connections func() []string) error {
+	return s.a.registerMetrics(reg, connections)
+}
 
-func (s *adapter) registerMetrics(reg prometheus.Registerer) error {
-	for _, c := range []prometheus.Collector{&poolCollector{s: s}, &backlogCollector{s: s}, s.deposed} {
+func (s *adapter) registerMetrics(reg prometheus.Registerer, connections func() []string) error {
+	for _, c := range []prometheus.Collector{&poolCollector{s: s}, &backlogCollector{s: s, connections: connections}, s.deposed} {
 		if err := reg.Register(c); err != nil {
 			return err
 		}
@@ -70,7 +72,11 @@ func (c *poolCollector) Collect(ch chan<- prometheus.Metric) {
 	}
 }
 
-type backlogCollector struct{ s *adapter }
+type backlogCollector struct {
+	s *adapter
+	// connections are the ChatConnections the broker serves (RegisterMetrics); the outbox gauges say 0 for each that has no unposted row. Nil is none.
+	connections func() []string
+}
 
 // queueDescriptors are the backlogs that no connection splits: the reply queue and the interactions.
 func queueDescriptors() []*prometheus.Desc {
@@ -131,8 +137,8 @@ func (c *backlogCollector) collectQueues(ctx context.Context, ch chan<- promethe
 	}
 }
 
-// collectOutbox reports the unposted rows of each connection, from one grouped query, so that the series of a connection with none is absent and not
-// zero: the connections are whatever rows name, and a connection that was taken away leaves no series behind once its rows are posted or abandoned.
+// collectOutbox reports the unposted rows of each connection, from one grouped query. A connection that the broker serves (c.connections) and that has
+// none says 0, so that it always has a series; one it does not serve has a series only while rows name it, and none once they are posted or abandoned.
 func (c *backlogCollector) collectOutbox(ctx context.Context, ch chan<- prometheus.Metric, age func(*time.Time) float64) {
 	ds := outboxDescriptors()
 	fail := func() {
@@ -148,6 +154,7 @@ func (c *backlogCollector) collectOutbox(ctx context.Context, ch chan<- promethe
 	}
 	defer rows.Close()
 	var out []prometheus.Metric // held until the whole result is read, so that a failure part way reports no partial result
+	seen := map[string]bool{}
 	for rows.Next() {
 		var connection string
 		var n int64
@@ -156,12 +163,22 @@ func (c *backlogCollector) collectOutbox(ctx context.Context, ch chan<- promethe
 			fail()
 			return
 		}
+		seen[connection] = true
 		out = append(out, prometheus.MustNewConstMetric(ds[0], prometheus.GaugeValue, float64(n), connection),
 			prometheus.MustNewConstMetric(ds[1], prometheus.GaugeValue, age(oldest), connection))
 	}
 	if rows.Err() != nil {
 		fail()
 		return
+	}
+	if c.connections != nil {
+		for _, connection := range c.connections() {
+			if !seen[connection] {
+				seen[connection] = true
+				out = append(out, prometheus.MustNewConstMetric(ds[0], prometheus.GaugeValue, 0, connection),
+					prometheus.MustNewConstMetric(ds[1], prometheus.GaugeValue, 0, connection))
+			}
+		}
 	}
 	for _, m := range out {
 		ch <- m

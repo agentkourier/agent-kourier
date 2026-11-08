@@ -16,9 +16,10 @@ An AgentBackend on `dialect: kagent-v1` can now limit which agent namespaces its
 - **An earlier broker ignores the field on custom resources,** and serves every Binding with no limit, so remove `agents` before a rollback.
 - **Six series gain a `connection` label,** the ChatConnection as `namespace/name`, so that a broker that serves several connections keeps their numbers apart:
   `agentkourier_intake_total`, `agentkourier_chat_api_calls_total`, `agentkourier_slack_events_shed_total`, `agentkourier_slack_ack_duration_seconds`,
-  `agentkourier_outbox_pending` and `agentkourier_outbox_oldest_age_seconds`. A broker with one connection has one value of the label, so a query that sums over
-  the series, or selects by the labels it names, gives what it did; an expression that matches one of these series one to one with another metric, using `on(...)`, needs `connection` in the list once there are two connections.
-  The two outbox gauges have no series for a connection that has nothing unposted (they said 0 before): use `sum(agentkourier_outbox_pending) or vector(0)` where a 0 is needed.
+  `agentkourier_outbox_pending` and `agentkourier_outbox_oldest_age_seconds`. A query that sums over the series, or selects by the labels it names, gives what it did.
+  An expression that matches one of these series one to one with a metric that has no `connection` label, such as `agentkourier_outbox_pending + agentkourier_reply_queue_depth`,
+  stops matching at once and returns nothing: add `ignoring(connection)` or aggregate first. An `on(...)` list needs `connection` once the broker serves two connections.
+  A served connection always has its two outbox gauges (0 with nothing unposted), and a connection that is no longer served has them only while it has an unposted row.
   A connection the broker stops serving has its counter and histogram series deleted. [Metrics](reference/metrics.md#series-by-connection) has the rest.
 
 ## Version 0.2.1

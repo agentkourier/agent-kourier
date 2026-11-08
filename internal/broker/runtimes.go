@@ -262,6 +262,15 @@ func (h *runtimeHost) closeAll() {
 	}
 }
 
+// connectionNames are the names ("namespace/name") of conns.
+func connectionNames(conns []Connection) []string {
+	out := make([]string, 0, len(conns))
+	for _, c := range conns {
+		out = append(out, v1alpha1.NamespacedName(c.Ref.Namespace, c.Ref.Name))
+	}
+	return out
+}
+
 // errStopping is the error of building a runtime while the broker is stopping.
 var errStopping = errors.New("the broker is stopping")
 

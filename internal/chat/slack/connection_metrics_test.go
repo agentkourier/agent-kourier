@@ -55,13 +55,13 @@ func TestShedEventsAreCountedByConnection(t *testing.T) {
 	for conn, extra := range map[string]int{connA: 2, connB: 3} {
 		held, release := make(chan struct{}), make(chan struct{})
 		open := sync.OnceFunc(func() { close(release) })
-		t.Cleanup(open)
 		var first sync.Once
 		sk := &sink{fn: func(slack.Message) error {
 			first.Do(func() { close(held); <-release })
 			return nil
 		}}
 		fake, _ := connected(t, h, conn, sk)
+		t.Cleanup(open) // after connected's, so that it runs before the wait for Run: a failed check would otherwise leave the sink held
 		for i := range slack.MaxChannelBacklog {
 			send(t, fake, onChannel("C1", fmt.Sprintf("%d.1", i+1), "kept"))
 		}
