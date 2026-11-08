@@ -160,6 +160,9 @@ func TestPressRecordsAtAgentKouriersTimeAndReturns(t *testing.T) {
 	if len(presses) != 1 || presses[0].InteractionID != "ix-1" || presses[0].User != "UALICE1" || !presses[0].PressedAt.Equal(r.now) || len(r.got) != 1 {
 		t.Fatalf("presses %+v, notified %d times; want one, at Agent Kourier's own time, announced", presses, len(r.got))
 	}
+	if i.At.Conn == "" || presses[0].Connection != i.At.Conn {
+		t.Errorf("the press has connection %q; want the one it came in on, %q", presses[0].Connection, i.At.Conn)
+	}
 	if r.az.asked != 0 || len(r.eph.list()) != 0 || len(r.sess.answers()) != 0 {
 		t.Error("recording the press did the work of processing it, which keeps Slack waiting for its acknowledgement")
 	}

@@ -50,9 +50,9 @@ func (s *adapter) setMessageRef(ctx context.Context, table refTable, id, ref str
 
 // CreateOutbox implements store.Outbox.
 func (s *adapter) CreateOutbox(ctx context.Context, o store.OutboxEntry) (bool, error) {
-	n, err := s.exec(ctx, `INSERT INTO outbox (id, event_id, role, channel, thread_ts, created_at, payload, trace_parent, trace_state)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO NOTHING`,
-		o.ID, o.EventID, string(o.Role), o.Channel, o.Thread, o.CreatedAt, o.Payload, o.TraceParent, o.TraceState)
+	n, err := s.exec(ctx, `INSERT INTO outbox (id, event_id, role, connection, channel, thread_ts, created_at, payload, trace_parent, trace_state)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (id) DO NOTHING`,
+		o.ID, o.EventID, string(o.Role), o.Connection, o.Channel, o.Thread, o.CreatedAt, o.Payload, o.TraceParent, o.TraceState)
 	if err != nil {
 		return false, fmt.Errorf("create outbox %q: %w", o.ID, err)
 	}
@@ -68,14 +68,14 @@ func (s *adapter) RecordMessageRef(ctx context.Context, id, ref string) error {
 }
 
 // outboxColumns are the columns scanOutbox reads.
-const outboxColumns = `id, event_id, role, channel, thread_ts, created_at, message_ref, payload, abandoned_at, trace_parent, trace_state`
+const outboxColumns = `id, event_id, role, connection, channel, thread_ts, created_at, message_ref, payload, abandoned_at, trace_parent, trace_state`
 
 // scanOutbox reads one row selected with outboxColumns.
 func scanOutbox(r pgx.Row) (store.OutboxEntry, error) {
 	var o store.OutboxEntry
 	var created time.Time
 	var abandoned *time.Time
-	if err := r.Scan(&o.ID, &o.EventID, &o.Role, &o.Channel, &o.Thread, &created, &o.MessageRef, &o.Payload, &abandoned, &o.TraceParent, &o.TraceState); err != nil {
+	if err := r.Scan(&o.ID, &o.EventID, &o.Role, &o.Connection, &o.Channel, &o.Thread, &created, &o.MessageRef, &o.Payload, &abandoned, &o.TraceParent, &o.TraceState); err != nil {
 		return store.OutboxEntry{}, err
 	}
 	o.CreatedAt = utc(created)

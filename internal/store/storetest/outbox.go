@@ -2,6 +2,7 @@ package storetest
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -47,7 +48,7 @@ func outboxIDs(l []store.OutboxEntry) []string {
 
 // sameOutbox compares what an outbox row is, times as instants, leaving out its trace context.
 func sameOutbox(a, b store.OutboxEntry) bool {
-	return a.ID == b.ID && a.EventID == b.EventID && a.Role == b.Role && a.Channel == b.Channel && a.Thread == b.Thread &&
+	return a.ID == b.ID && a.EventID == b.EventID && a.Role == b.Role && a.Connection == b.Connection && a.Channel == b.Channel && a.Thread == b.Thread &&
 		a.CreatedAt.Equal(b.CreatedAt) && a.MessageRef == b.MessageRef && a.Payload == b.Payload && a.AbandonedAt.Equal(b.AbandonedAt)
 }
 
@@ -91,6 +92,37 @@ func (su suite) outbox(t *testing.T) {
 		if c, err := s.CreateOutbox(ctx, root); err != nil || !c {
 			t.Fatalf("a second row of the same event = %v, %v; want it created", c, err)
 		}
+	})
+
+	su.runReopen(t, "an outbox row keeps its connection, and a row made with none has none", func(t *testing.T, s store.Store, reopen func() store.Store) {
+		ctx := t.Context()
+		a := store.OutboxEntry{ID: "a", EventID: "e", Role: store.OutboxReply, Connection: "ns/a", Channel: "C1", Thread: "1.1", CreatedAt: t0, Payload: "{}"}
+		b := a
+		b.ID, b.Connection = "b", "ns/b" // the same channel and thread on another app
+		none := a
+		none.ID, none.Connection = "none", ""
+		for _, o := range []store.OutboxEntry{a, b, none} {
+			if c, err := s.CreateOutbox(ctx, o); err != nil || !c {
+				t.Fatalf("CreateOutbox(%s) = %v, %v", o.ID, c, err)
+			}
+		}
+		check := func(s store.Store) {
+			t.Helper()
+			for _, want := range []store.OutboxEntry{a, b, none} {
+				if got := getOutbox(t, s, want.ID); got.Connection != want.Connection || !sameOutbox(got, want) {
+					t.Errorf("GetOutbox(%s) = %+v; want connection %q", want.ID, got, want.Connection)
+				}
+			}
+			listed := map[string]string{}
+			for _, o := range unposted(t, s) {
+				listed[o.ID] = o.Connection
+			}
+			if want := (map[string]string{"a": "ns/a", "b": "ns/b", "none": ""}); !maps.Equal(listed, want) {
+				t.Errorf("ListUnposted connections = %v; want %v", listed, want)
+			}
+		}
+		check(s)
+		check(reopen())
 	})
 
 	su.run(t, "a new row is unposted and not abandoned whatever the caller says", func(t *testing.T, s store.Store) {

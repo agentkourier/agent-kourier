@@ -107,7 +107,7 @@ func (p *Pipeline) textReply(ctx context.Context, key store.ConversationKey, rep
 	if !row.DeliveredAt.IsZero() && row.Decider == reply.UserID {
 		return session.TextReplyConsumed, nil
 	}
-	press := store.Press{InteractionID: row.ID, User: reply.UserID, Channel: key.Channel, MessageRef: row.MessageRef, PressedAt: reply.EnqueuedAt}
+	press := store.Press{InteractionID: row.ID, User: reply.UserID, Connection: key.Connection, Channel: key.Channel, MessageRef: row.MessageRef, PressedAt: reply.EnqueuedAt}
 	if row.MessageRef == "" { // a legacy claim still waiting for its prompt
 		if p.cfg.Now().Sub(reply.EnqueuedAt) >= p.cfg.GiveUpAfter {
 			return textReplyResult(p.GiveUp(ctx, press))

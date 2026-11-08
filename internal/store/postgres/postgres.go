@@ -29,7 +29,8 @@
 //
 // The other operations that need one winner among concurrent callers do not rely on an isolation
 // level above READ COMMITTED. A press limit and the trigger limits count rows and then insert, so
-// they take one lock for all callers (RecordPress, AdmitTriggerRun): both are low-volume and brief. The
+// they take one lock for all callers (RecordPress, AdmitTriggerRun): both are low-volume and brief. So does the replace of the
+// served connections, which deletes against the set it read and would otherwise commit the union of two that ran together. The
 // rest are single statements that Postgres makes atomic by row, which is how ClaimEvent (FOR UPDATE SKIP
 // LOCKED), the fenced Complete and Fail, the first answer to an interaction, and the compare-and-set
 // of a message ref each have exactly one winner.
@@ -336,6 +337,7 @@ const (
 	lockAudit       int32 = 0x43520003
 	lockPresses     int32 = 0x43520004
 	lockTriggerRuns int32 = 0x43520005
+	lockServed      int32 = 0x43520006
 )
 
 // lock takes a transaction-level advisory lock, which waits for its holder and is released when the

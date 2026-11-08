@@ -85,9 +85,16 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	}
 	sd.add(stepPool, func(context.Context) { bindings.Close() })
 
+	// The rows that were written before connections were recorded are this connection's, and are named so before the outbox
+	// reconciles or a session recovers: nothing reads a row that belongs to nobody.
+	if err := attributeStoredRows(runCtx, st, log, connName); err != nil {
+		return nil, err
+	}
 	chatCtx, report, stopChat := WithAuthFailure(runCtx)
 	ob, err := outbox.New(outbox.Config{
 		Store: st, Platform: WatchAuth(platform, report), Logger: log, OnAbandon: metrics.OutboxAbandoned,
+		// The producers do not name a connection yet: the rows they make are the own connection's.
+		DefaultConnection: connName,
 	})
 	if err != nil {
 		return nil, err

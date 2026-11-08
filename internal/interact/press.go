@@ -129,7 +129,7 @@ func (p *Pipeline) Press(ctx context.Context, i chat.Interaction) error {
 	if err != nil {
 		return fmt.Errorf("interact: encode a press: %w", err)
 	}
-	press := store.Press{InteractionID: i.PromptID, User: i.User, Channel: i.At.Channel, MessageRef: i.At.ID, Inputs: inputs, PressedAt: p.cfg.Now()}
+	press := store.Press{InteractionID: i.PromptID, User: i.User, Connection: i.At.Conn, Channel: i.At.Channel, MessageRef: i.At.ID, Inputs: inputs, PressedAt: p.cfg.Now()}
 	press.TraceParent, press.TraceState = telemetry.Capture(ctx)
 	if press.Seq, err = p.cfg.Store.RecordPress(ctx, press, p.cfg.Limits); err != nil {
 		return fmt.Errorf("interact: record a press of %s: %w", i.PromptID, err)

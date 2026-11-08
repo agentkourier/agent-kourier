@@ -109,6 +109,10 @@ type Config struct {
 	LookupTimeoutFloor time.Duration
 	// PurgeInterval is how often Reconcile drops the text of expired rows (default 5 minutes).
 	PurgeInterval time.Duration
+	// DefaultConnection is the connection ("namespace/name") of a Post or a Reaction that names none: the broker's own, until
+	// every producer names its own. Empty stores such a row with no connection, as rows written before connections were
+	// recorded are.
+	DefaultConnection string
 	// OnAbandon is called once for each row that is abandoned, with its ID and the reason:
 	// a neutral reason (chat.Reason) or AbandonInvalid, AbandonLookupTimeout or AbandonExpired. It is for a
 	// metric, and runs under the delivery lock, so it must not block. Required: NoAbandon counts nothing.
@@ -121,8 +125,10 @@ func NoAbandon(_, _ string) {}
 // Post is one message to deliver. Source and Role give its ID: Source is the event, turn or
 // interaction it belongs to, and must differ for each message of one source and role.
 type Post struct {
-	Source          string
-	Role            store.OutboxRole
+	Source string
+	Role   store.OutboxRole
+	// Connection is the ChatConnection ("namespace/name") whose app posts the message; Config.DefaultConnection if empty.
+	Connection      string
 	Channel, Thread string // Thread is empty for a message in the channel
 	// Out is what to say, in the neutral model. It is stored as it is, so it must be valid (Validate), and a
 	// prompt must fit (Platform.Fits): one that does not is store.ErrInvalid, which no retry mends.
@@ -237,7 +243,7 @@ func (o *Outbox) Send(ctx context.Context, p Post) (chat.Ref, error) {
 // row returns the outbox row for p, with the message as its payload. A message that is not valid, or a prompt that
 // does not fit, is ErrInvalid: such a row would never be delivered, and would hold its ID for good.
 func (o *Outbox) row(p Post) (store.OutboxEntry, error) {
-	row := store.OutboxEntry{ID: ID(p.Source, p.Role), EventID: p.Source, Role: p.Role, Channel: p.Channel, Thread: p.Thread, CreatedAt: o.cfg.Now()}
+	row := store.OutboxEntry{ID: ID(p.Source, p.Role), EventID: p.Source, Role: p.Role, Connection: o.connection(p.Connection), Channel: p.Channel, Thread: p.Thread, CreatedAt: o.cfg.Now()}
 	if p.Role == store.OutboxReaction {
 		return store.OutboxEntry{}, fmt.Errorf("outbox post %s: a reaction is not a post, use EnqueueReaction: %w", row.ID, store.ErrInvalid)
 	}
@@ -286,6 +292,8 @@ func (o *Outbox) enqueue(ctx context.Context, row store.OutboxEntry) (string, er
 // and the removal of it share a Source: that is how they find each other.
 type Reaction struct {
 	Source, Channel, TS, Name string
+	// Connection is the ChatConnection ("namespace/name") whose app makes the reaction; Config.DefaultConnection if empty.
+	Connection string
 }
 
 // reactionPayload is a reaction row's payload. Remove makes it the removal of the reaction: a payload
@@ -307,7 +315,7 @@ func UnreactionID(source string) string { return source + "/unreaction" }
 // comes first is never undone by the reaction that comes after it.
 func (o *Outbox) EnqueueReaction(ctx context.Context, r Reaction) (string, error) {
 	id := ID(r.Source, store.OutboxReaction)
-	row, err := reactionRow(id, r, false, o.cfg.Now())
+	row, err := o.reactionRow(id, r, false)
 	if err != nil {
 		return "", err
 	}
@@ -329,7 +337,7 @@ func (o *Outbox) EnqueueReaction(ctx context.Context, r Reaction) (string, error
 // that was or may have been (see unreact). An empty field is ErrInvalid.
 func (o *Outbox) EnqueueUnreaction(ctx context.Context, r Reaction) (string, error) {
 	id := UnreactionID(r.Source)
-	row, err := reactionRow(id, r, true, o.cfg.Now())
+	row, err := o.reactionRow(id, r, true)
 	if err != nil {
 		return "", err
 	}
@@ -340,7 +348,7 @@ func (o *Outbox) EnqueueUnreaction(ctx context.Context, r Reaction) (string, err
 
 // reactionRow is the row id of r: the reaction to make, or with remove the removal of it. An empty field is
 // ErrInvalid.
-func reactionRow(id string, r Reaction, remove bool, now time.Time) (store.OutboxEntry, error) {
+func (o *Outbox) reactionRow(id string, r Reaction, remove bool) (store.OutboxEntry, error) {
 	if r.Source == "" || r.Channel == "" || r.TS == "" || r.Name == "" {
 		return store.OutboxEntry{}, fmt.Errorf("outbox reaction %s: the source, channel, ts and name are required: %w", id, store.ErrInvalid)
 	}
@@ -348,7 +356,15 @@ func reactionRow(id string, r Reaction, remove bool, now time.Time) (store.Outbo
 	if err != nil {
 		return store.OutboxEntry{}, fmt.Errorf("outbox reaction %s: %w", id, err)
 	}
-	return store.OutboxEntry{ID: id, EventID: r.Source, Role: store.OutboxReaction, Channel: r.Channel, CreatedAt: now, Payload: string(payload)}, nil
+	return store.OutboxEntry{ID: id, EventID: r.Source, Role: store.OutboxReaction, Connection: o.connection(r.Connection), Channel: r.Channel, CreatedAt: o.cfg.Now(), Payload: string(payload)}, nil
+}
+
+// connection is the connection of a row whose producer named c: c, or Config.DefaultConnection if it named none.
+func (o *Outbox) connection(c string) string {
+	if c != "" {
+		return c
+	}
+	return o.cfg.DefaultConnection
 }
 
 // Run drains the outbox until ctx ends, and returns its error. It drains at once, which recovers

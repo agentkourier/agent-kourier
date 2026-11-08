@@ -92,9 +92,8 @@ func RunPlatform(ctx context.Context, runner PlatformRunner, sink chat.Sink, p R
 // platform needs (platformKeys) read through secrets. With the custom resources own is the broker's own connection
 // (RunConfig.ChatConnection), found by its reference: the snapshot may hold the ChatConnections of the admitted namespaces
 // besides it, and those are not run yet, so their Secrets are not read here and none of them can fail this. With the files
-// own is the zero value, and the directory must hold exactly one ChatConnection, since the outbox has no connection column
-// (Phase 4). The connection must be on a platform that has an adapter (Slack, in Socket Mode). Anything else is an
-// error wrapping ErrWiring. The tokens are those of the snapshot at the call: Run reads them at start, and again when the
+// own is the zero value, and the directory must hold exactly one ChatConnection, as the broker serves one. The connection must be on a platform that has
+// an adapter (Slack, in Socket Mode). Anything else is an error wrapping ErrWiring. The tokens are those of the snapshot at the call: Run reads them at start, and again when the
 // leader half starts, since a standby may lead long after it started. A change of the connection or of its Secret applies
 // to a running leader on restart, and nothing flags it as a failed reload (the stale flag is for reloads that failed): the
 // verification of the Bindings tells of tokens that differ from these (ChatCredentialsChanged), and logs a Binding that a reload moved

@@ -42,6 +42,22 @@ func (f *fakeAdapter) AbandonOutbox(_ context.Context, _ string, _ time.Time) (b
 	return zero[bool](), f.err
 }
 
+func (f *fakeAdapter) ServedConnections(_ context.Context) ([]string, error) {
+	f.record("ServedConnections")
+	return zero[[]string](), f.err
+}
+
+func (f *fakeAdapter) ReplaceServedConnections(_ context.Context, a1 []string, _ time.Time) error {
+	f.record("ReplaceServedConnections")
+	f.row = a1
+	return f.err
+}
+
+func (f *fakeAdapter) AttributeConnection(_ context.Context, _ string) (store.AttributedRows, error) {
+	f.record("AttributeConnection")
+	return zero[store.AttributedRows](), f.err
+}
+
 func (f *fakeAdapter) AbandonOutboxBefore(_ context.Context, _ time.Time, _ time.Time) ([]string, error) {
 	f.record("AbandonOutboxBefore")
 	return zero[[]string](), f.err
