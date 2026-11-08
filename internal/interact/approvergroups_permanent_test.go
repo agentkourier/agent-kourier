@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
@@ -37,7 +38,7 @@ func brokenGroupRig(t *testing.T, err error, notify func(store.Press)) (*pressRi
 	if notify == nil {
 		notify = func(store.Press) {}
 	}
-	pl, perr := interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{groupBinding()}, Authorizer: r.az, Ephemerals: r.eph, Decider: r.d, Auditor: r.aud,
+	pl, perr := interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{groupBinding()}, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Decider: r.d, Auditor: r.aud,
 		Logger: slog.New(telemetry.NewJSONHandler(out, slog.LevelDebug)), Now: func() time.Time { return r.now }, Notify: notify}))
 	if perr != nil {
 		t.Fatal(perr)

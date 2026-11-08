@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -35,43 +36,43 @@ func TestConstructorsRefuseAnUnwiredHookAndNameIt(t *testing.T) {
 		build      func() error
 	}{
 		{"the intake", "OnApprovalOutcome", func() error {
-			_, err := interact.New(interact.Config{Store: inertStore{}, AuditReader: inertAuditLog{}, Lookup: inertLookup{}, Platform: inertFitter{}, Outbox: inertSender{}, Session: inertSession{}, Audit: inertAuditor{}})
+			_, err := interact.New(interact.Config{Store: inertStore{}, AuditReader: inertAuditLog{}, Lookup: inertLookup{}, Platforms: chattest.Same[interact.Fitter](inertFitter{}), Outbox: inertSender{}, Session: inertSession{}, Audit: inertAuditor{}})
 			return err
 		}},
 		{"the intake's AuditReader", "AuditReader", func() error {
-			_, err := interact.New(interact.Config{Store: inertStore{}, Lookup: inertLookup{}, Platform: inertFitter{}, Outbox: inertSender{}, Session: inertSession{}, Audit: inertAuditor{}, OnApprovalOutcome: func(string, interact.Outcome) {}})
+			_, err := interact.New(interact.Config{Store: inertStore{}, Lookup: inertLookup{}, Platforms: chattest.Same[interact.Fitter](inertFitter{}), Outbox: inertSender{}, Session: inertSession{}, Audit: inertAuditor{}, OnApprovalOutcome: func(string, interact.Outcome) {}})
 			return err
 		}},
 		{"the decider's Replacer", "Replacer", func() error {
-			_, err := interact.NewDecider(interact.DecideConfig{Store: inertStore{}, Auditor: inertAuditor{}, Ephemerals: inertShow{}, Session: inertSession{}, Sessions: inertReader{}, Outbox: inertEnqueuer{}, OnDecision: func(string) {}})
+			_, err := interact.NewDecider(interact.DecideConfig{Store: inertStore{}, Auditor: inertAuditor{}, Ephemerals: chattest.Same[interact.Ephemeral](inertShow{}), Session: inertSession{}, Sessions: inertReader{}, Outbox: inertEnqueuer{}, OnDecision: func(string) {}})
 			return err
 		}},
 		{"the decider's OnDecision", "OnDecision", func() error {
-			_, err := interact.NewDecider(interact.DecideConfig{Store: inertStore{}, Auditor: inertAuditor{}, Ephemerals: inertShow{}, Session: inertSession{}, Sessions: inertReader{}, Outbox: inertEnqueuer{}, Replacer: noReplace{}})
+			_, err := interact.NewDecider(interact.DecideConfig{Store: inertStore{}, Auditor: inertAuditor{}, Ephemerals: chattest.Same[interact.Ephemeral](inertShow{}), Session: inertSession{}, Sessions: inertReader{}, Outbox: inertEnqueuer{}, Replacer: noReplace{}})
 			return err
 		}},
 		{"the decider's OnApprovalOutcome", "OnApprovalOutcome", func() error {
-			_, err := interact.NewDecider(interact.DecideConfig{Store: inertStore{}, Auditor: inertAuditor{}, Ephemerals: inertShow{}, Session: inertSession{}, Sessions: inertReader{}, Outbox: inertEnqueuer{}, Replacer: noReplace{}, OnDecision: func(string) {}})
+			_, err := interact.NewDecider(interact.DecideConfig{Store: inertStore{}, Auditor: inertAuditor{}, Ephemerals: chattest.Same[interact.Ephemeral](inertShow{}), Session: inertSession{}, Sessions: inertReader{}, Outbox: inertEnqueuer{}, Replacer: noReplace{}, OnDecision: func(string) {}})
 			return err
 		}},
 		{"the press pipeline", "Notify", func() error {
-			_, err := interact.NewPipeline(interact.PressConfig{Store: inertPressStore{}, Sessions: inertReader{}, Lookup: inertLookup{}, Authorizer: inertAuthorizer{}, Ephemerals: inertShow{}, Decider: inertDecider{}, Auditor: inertAuditor{}})
+			_, err := interact.NewPipeline(interact.PressConfig{Store: inertPressStore{}, Sessions: inertReader{}, Lookup: inertLookup{}, Authorizers: chattest.Same[interact.Authorizer](inertAuthorizer{}), Ephemerals: chattest.Same[interact.Ephemeral](inertShow{}), Decider: inertDecider{}, Auditor: inertAuditor{}})
 			return err
 		}},
 		{"the sweeper", "OnTimeout", func() error {
-			_, err := interact.NewSweeper(interact.SweepConfig{Store: inertStore{}, Sessions: inertReader{}, Lookup: inertLookup{}, Session: inertSession{}, Updater: inertUpdater{}, Outbox: inertEnqueuer{}, Auditor: inertAuditor{}, Presses: inertPresses{}, OnApprovalOutcome: func(string, interact.Outcome) {}})
+			_, err := interact.NewSweeper(interact.SweepConfig{Store: inertStore{}, Sessions: inertReader{}, Lookup: inertLookup{}, Session: inertSession{}, Updaters: chattest.Same[interact.Updater](inertUpdater{}), Outbox: inertEnqueuer{}, Auditor: inertAuditor{}, Presses: inertPresses{}, OnApprovalOutcome: func(string, interact.Outcome) {}})
 			return err
 		}},
 		{"the sweeper's OnApprovalOutcome", "OnApprovalOutcome", func() error {
-			_, err := interact.NewSweeper(interact.SweepConfig{Store: inertStore{}, Sessions: inertReader{}, Lookup: inertLookup{}, Session: inertSession{}, Updater: inertUpdater{}, Outbox: inertEnqueuer{}, Auditor: inertAuditor{}, Presses: inertPresses{}, OnTimeout: func(string) {}})
+			_, err := interact.NewSweeper(interact.SweepConfig{Store: inertStore{}, Sessions: inertReader{}, Lookup: inertLookup{}, Session: inertSession{}, Updaters: chattest.Same[interact.Updater](inertUpdater{}), Outbox: inertEnqueuer{}, Auditor: inertAuditor{}, Presses: inertPresses{}, OnTimeout: func(string) {}})
 			return err
 		}},
 		{"the sweeper's Reopened", "Reopened", func() error {
-			_, err := interact.NewSweeper(interact.SweepConfig{Store: inertStore{}, Sessions: inertReader{}, Lookup: inertLookup{}, Session: inertSession{}, Updater: inertUpdater{}, Outbox: inertEnqueuer{}, Auditor: inertAuditor{}, Presses: inertPresses{}, OnTimeout: func(string) {}, OnApprovalOutcome: func(string, interact.Outcome) {}})
+			_, err := interact.NewSweeper(interact.SweepConfig{Store: inertStore{}, Sessions: inertReader{}, Lookup: inertLookup{}, Session: inertSession{}, Updaters: chattest.Same[interact.Updater](inertUpdater{}), Outbox: inertEnqueuer{}, Auditor: inertAuditor{}, Presses: inertPresses{}, OnTimeout: func(string) {}, OnApprovalOutcome: func(string, interact.Outcome) {}})
 			return err
 		}},
 		{"the sweeper's Lookup", "Lookup", func() error {
-			_, err := interact.NewSweeper(interact.SweepConfig{Store: inertStore{}, Sessions: inertReader{}, Session: inertSession{}, Updater: inertUpdater{}, Outbox: inertEnqueuer{}, Auditor: inertAuditor{}, Presses: inertPresses{}, OnTimeout: func(string) {}, OnApprovalOutcome: func(string, interact.Outcome) {}})
+			_, err := interact.NewSweeper(interact.SweepConfig{Store: inertStore{}, Sessions: inertReader{}, Session: inertSession{}, Updaters: chattest.Same[interact.Updater](inertUpdater{}), Outbox: inertEnqueuer{}, Auditor: inertAuditor{}, Presses: inertPresses{}, OnTimeout: func(string) {}, OnApprovalOutcome: func(string, interact.Outcome) {}})
 			return err
 		}},
 		{"the retention loop", "OnCleared", func() error {

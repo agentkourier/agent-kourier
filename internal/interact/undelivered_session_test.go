@@ -17,6 +17,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/audit"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/interact"
@@ -186,7 +187,7 @@ func (o oneBackend) Backend(string) (session.Backend, error) {
 
 type userIDs struct{}
 
-func (userIDs) ResolveUser(_ context.Context, id string) (dialect.User, error) {
+func (userIDs) ResolveUser(_ context.Context, _, id string) (dialect.User, error) {
 	return dialect.User{ID: id}, nil
 }
 
@@ -225,7 +226,7 @@ func start(t *testing.T, st *sqlite.Store, ag *scriptedAgent, clk *clockAt, watc
 	t.Helper()
 	p := &process{t: t, st: st, ag: ag, clk: clk, re: interact.NewReopened(st), sink: &recSink{}, calls: &callAudit{}, aud: &audits{}, slack: &poster{posted: map[string]string{}}}
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
-	ob := newOutbox(t, outbox.Config{Store: st, Platform: p.slack, Now: clk.now, CallTimeout: 30 * time.Second, Logger: quiet})
+	ob := newOutbox(t, outbox.Config{Store: st, Platforms: chattest.Same[outbox.Platform](p.slack), Now: clk.now, CallTimeout: 30 * time.Second, Logger: quiet})
 	b := interact.Binding{Dialect: kagentv1.New(0), Timeout: timeout, ToolApprovals: true}
 	count := func(binding string, o interact.Outcome) {
 		p.outsMu.Lock()
@@ -233,7 +234,7 @@ func start(t *testing.T, st *sqlite.Store, ag *scriptedAgent, clk *clockAt, watc
 		p.outsMu.Unlock()
 	}
 	late := &lateMgr{}
-	in, err := interact.New(interact.Config{Store: st, AuditReader: st, Lookup: lookup{b}, Platform: p.slack, Outbox: ob, Session: late, Audit: p.aud, OnApprovalOutcome: count, Now: clk.now, Logger: quiet})
+	in, err := interact.New(interact.Config{Store: st, AuditReader: st, Lookup: lookup{b}, Platforms: chattest.Same[interact.Fitter](p.slack), Outbox: ob, Session: late, Audit: p.aud, OnApprovalOutcome: count, Now: clk.now, Logger: quiet})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +252,7 @@ func start(t *testing.T, st *sqlite.Store, ag *scriptedAgent, clk *clockAt, watc
 	}
 	late.m = p.mgr
 	upd := &updates{}
-	if p.sw, err = interact.NewSweeper(interact.SweepConfig{Store: st, Sessions: st, Lookup: lookup{b}, Session: p.mgr, Updater: upd, Outbox: ob, Auditor: p.aud, Presses: st,
+	if p.sw, err = interact.NewSweeper(interact.SweepConfig{Store: st, Sessions: st, Lookup: lookup{b}, Session: p.mgr, Updaters: chattest.Same[interact.Updater](upd), Outbox: ob, Auditor: p.aud, Presses: st,
 		Reopened: p.re, Now: clk.now, Logger: quiet, OnTimeout: func(string) {}, OnApprovalOutcome: count}); err != nil {
 		t.Fatal(err)
 	}

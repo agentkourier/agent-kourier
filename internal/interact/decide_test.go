@@ -18,6 +18,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/interact"
@@ -223,7 +224,7 @@ func newDecideRig(t *testing.T) *decideRig {
 	r.st = &orderedStore{Store: st, log: r.calls, all: r.flow}
 	r.aud = &orderedAudit{audits: &audits{}, log: r.calls, all: r.flow}
 	r.d, err = interact.NewDecider(decideCfg(interact.DecideConfig{
-		Store: r.st, Auditor: r.aud, Ephemerals: r.eph, Session: r.sess, Sessions: r.st, Replacer: r.rep, Outbox: r.out, Logger: slog.New(slog.NewTextHandler(r.logs, nil)),
+		Store: r.st, Auditor: r.aud, Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Session: r.sess, Sessions: r.st, Replacer: r.rep, Outbox: r.out, Logger: slog.New(slog.NewTextHandler(r.logs, nil)),
 		OnDecision: func(result string) { r.mu.Lock(); r.hooks = append(r.hooks, result); r.mu.Unlock() },
 		OnApprovalOutcome: func(binding string, o interact.Outcome) {
 			r.mu.Lock()
@@ -707,7 +708,7 @@ func (f failingSessions) GetSession(context.Context, store.ConversationKey, time
 func TestASessionThatCannotBeReadRetriesTheAnswer(t *testing.T) {
 	r := newDecideRig(t)
 	r.pending(t)
-	d, err := interact.NewDecider(decideCfg(interact.DecideConfig{Store: r.st, Auditor: r.aud, Ephemerals: r.eph, Session: r.sess, Sessions: failingSessions{errBoom},
+	d, err := interact.NewDecider(decideCfg(interact.DecideConfig{Store: r.st, Auditor: r.aud, Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Session: r.sess, Sessions: failingSessions{errBoom},
 		Outbox: r.out, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}))
 	if err != nil {
 		t.Fatal(err)
@@ -761,11 +762,11 @@ func TestAHungEditDoesNotHoldUpThePress(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := &hangs{}
-	rp, err := interact.NewReplacer(interact.ReplacerConfig{Store: r.st, Updater: h, EditTimeout: 20 * time.Millisecond, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	rp, err := interact.NewReplacer(interact.ReplacerConfig{Store: r.st, Updaters: chattest.Same[interact.Editor](h), EditTimeout: 20 * time.Millisecond, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := interact.NewDecider(decideCfg(interact.DecideConfig{Store: r.st, Auditor: r.aud, Ephemerals: r.eph, Session: r.sess, Sessions: r.st, Replacer: rp, Outbox: r.out,
+	d, err := interact.NewDecider(decideCfg(interact.DecideConfig{Store: r.st, Auditor: r.aud, Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Session: r.sess, Sessions: r.st, Replacer: rp, Outbox: r.out,
 		Logger: slog.New(slog.NewTextHandler(r.logs, nil))}))
 	if err != nil {
 		t.Fatal(err)

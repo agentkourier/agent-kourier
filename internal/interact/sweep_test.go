@@ -18,6 +18,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/interact"
@@ -293,7 +294,7 @@ func (l *sweepLookup) Binding(name string) (interact.Binding, error) {
 func (r *sweepRig) sweeper(t *testing.T, mod func(*interact.SweepConfig)) *interact.Sweeper {
 	t.Helper()
 	cfg := interact.SweepConfig{
-		Store: r.st, Sessions: r.st, Lookup: r.look, Session: r.sess, Updater: r.upd, Outbox: r.enq, Auditor: r.aud, Presses: r.press, Reopened: r.reopened,
+		Store: r.st, Sessions: r.st, Lookup: r.look, Session: r.sess, Updaters: chattest.Same[interact.Updater](r.upd), Outbox: r.enq, Auditor: r.aud, Presses: r.press, Reopened: r.reopened,
 		Now:       func() time.Time { return *r.clock },
 		Logger:    slog.New(slog.NewTextHandler(r.logs, nil)),
 		OnTimeout: func(id string) { r.mu.Lock(); r.hooks = append(r.hooks, id); r.mu.Unlock() },
@@ -337,7 +338,7 @@ func newSweepRig(t *testing.T) *sweepRig {
 	r := &sweepRig{st: &flakyResolve{Store: st}, sess: &sweepSess{current: "task-1"}, upd: &updates{}, aud: &audits{}, clock: &now, press: &presses{waiting: map[string]bool{}},
 		look: &sweepLookup{bindings: map[string]interact.Binding{"ns/b": {Dialect: kagentv1.New(0), Timeout: timeout, ToolApprovals: true, Platform: dialect.Platform{ID: "slack", Name: "Slack"}}}}}
 	r.reopened = interact.NewReopened(st)
-	r.ob = newOutbox(t, outbox.Config{Store: st, Platform: &poster{posted: map[string]string{}}, Now: func() time.Time { return t0 }, CallTimeout: 30 * time.Second,
+	r.ob = newOutbox(t, outbox.Config{Store: st, Platforms: chattest.Same[outbox.Platform](&poster{posted: map[string]string{}}), Now: func() time.Time { return t0 }, CallTimeout: 30 * time.Second,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	r.enq = &flakyEnqueue{Outbox: r.ob}
 	r.calls, r.logs = &callLog{}, &logBuf{}

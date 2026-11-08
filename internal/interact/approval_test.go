@@ -34,7 +34,7 @@ func newReloadRig(t *testing.T, b interact.Binding) (*rig, *reloadLookup) {
 	l := &reloadLookup{b: b}
 	var err error
 	r.in, err = interact.New(intakeCfg(interact.Config{
-		Store: r.st, AuditReader: r.st, Lookup: l, Platform: fitter{r}, Outbox: r.outbox, Session: r.sess, Audit: r.audit,
+		Store: r.st, AuditReader: r.st, Lookup: l, Platforms: chattest.Same[interact.Fitter](fitter{r}), Outbox: r.outbox, Session: r.sess, Audit: r.audit,
 		OnApprovalOutcome: func(_ string, o interact.Outcome) { r.hook = append(r.hook, o) }, Now: func() time.Time { return t0.Add(time.Hour) },
 	}))
 	if err != nil {

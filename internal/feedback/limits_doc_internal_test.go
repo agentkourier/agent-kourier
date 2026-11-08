@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/limitsdoc"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -20,8 +21,8 @@ func (noEphemeral) Ephemeral(context.Context, chat.Target, string, chat.Message)
 // it and holds none: New only checks that one is set, and nothing is called.
 func TestLimitsPageOfThePressLimits(t *testing.T) {
 	h, err := New(Config{
-		Store: struct{ Store }{}, Sessions: struct{ interact.SessionReader }{}, Authorizer: struct{ interact.Authorizer }{},
-		Ephemerals: noEphemeral{}, Auditor: struct{ Auditor }{}, Notify: func(store.Press) {},
+		Store: struct{ Store }{}, Sessions: struct{ interact.SessionReader }{}, Authorizers: chattest.Same[interact.Authorizer](struct{ interact.Authorizer }{}),
+		Ephemerals: chattest.Same[interact.Ephemeral](noEphemeral{}), Auditor: struct{ Auditor }{}, Notify: func(store.Press) {},
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

@@ -31,12 +31,13 @@ type Editor interface {
 	Classify(op chat.Op, err error) chat.Verdict
 }
 
-// ReplacerConfig configures a Replacer. Store and Updater are required.
+// ReplacerConfig configures a Replacer. Store and Updaters are required.
 type ReplacerConfig struct {
-	Store   store.Interactions
-	Updater Editor
-	Now     func() time.Time // time.Now if nil
-	Logger  *slog.Logger     // slog.Default() if nil
+	Store store.Interactions
+	// Updaters gives the platform of an interaction's connection, which edits its prompt.
+	Updaters chat.Resolver[Editor]
+	Now      func() time.Time // time.Now if nil
+	Logger   *slog.Logger     // slog.Default() if nil
 	// Horizon is how far back the repair looks for interactions that ended (default RepairHorizon): the
 	// prompt of an older one that was never replaced stays as it is.
 	Horizon time.Duration
@@ -70,8 +71,8 @@ type Replacer struct {
 
 // NewReplacer returns a Replacer over cfg.
 func NewReplacer(cfg ReplacerConfig) (*Replacer, error) {
-	if cfg.Store == nil || cfg.Updater == nil {
-		return nil, errors.New("interact: Store and Updater are required")
+	if cfg.Store == nil || cfg.Updaters == nil {
+		return nil, errors.New("interact: Store and Updaters are required")
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -118,10 +119,14 @@ func (r *Replacer) Replace(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("interact: render the replacement of %s: %w", id, err)
 	}
+	u, err := r.cfg.Updaters.Platform(row.Key.Connection)
+	if err != nil {
+		return fmt.Errorf("interact: the platform to replace the prompt of %s: %w", id, err)
+	}
 	editCtx, cancel := context.WithTimeout(ctx, r.cfg.EditTimeout)
 	defer cancel()
-	if err := r.cfg.Updater.Update(editCtx, r.cfg.Updater.RefAt(row.Key.Channel, row.Key.Thread, row.MessageRef), out); err != nil {
-		return fmt.Errorf("interact: replace the prompt of %s: %w", id, err)
+	if err := u.Update(editCtx, u.RefAt(row.Key.Channel, row.Key.Thread, row.MessageRef), out); err != nil {
+		return &editFailed{err: fmt.Errorf("interact: replace the prompt of %s: %w", id, err), retryAfter: u.Classify(chat.OpPost, err).RetryAfter}
 	}
 	r.mu.Lock()
 	r.done[id] = struct{}{}
@@ -197,9 +202,14 @@ func (r *Replacer) Repair(ctx context.Context) error {
 		if err == nil {
 			continue
 		}
-		if retry := r.cfg.Updater.Classify(chat.OpPost, err).RetryAfter; retry > 0 { // the platform said when to come back
+		if errors.Is(err, chat.ErrConnectionDown) { // the prompt waits for its connection: no failure of an edit, and no place in the batch
+			tried--
+			continue
+		}
+		var failed *editFailed
+		if errors.As(err, &failed) && failed.retryAfter > 0 { // the platform said when to come back
 			r.mu.Lock()
-			r.waitUntil = r.cfg.Now().Add(max(retry, time.Second)) // from when it arrived: the pass may have been long
+			r.waitUntil = r.cfg.Now().Add(max(failed.retryAfter, time.Second)) // from when it arrived: the pass may have been long
 			r.mu.Unlock()
 			return errors.Join(errs...)
 		}
@@ -215,6 +225,16 @@ func (r *Replacer) isDone(id string) bool {
 	_, ok := r.done[id]
 	return ok
 }
+
+// editFailed is the error of an edit that the platform refused, with how long the platform asked the caller to wait.
+type editFailed struct {
+	err        error
+	retryAfter time.Duration
+}
+
+func (e *editFailed) Error() string { return e.err.Error() }
+
+func (e *editFailed) Unwrap() error { return e.err }
 
 // fail counts a failed edit of the prompt of id, and leaves the prompt once it has failed too often.
 func (r *Replacer) fail(ctx context.Context, id string, err error) {

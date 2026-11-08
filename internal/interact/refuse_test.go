@@ -12,6 +12,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/dialect/generic"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/interact"
@@ -222,7 +223,7 @@ func TestKnownSuccessfulCancelAuditDoesNotNeedReaderAfterCancel(t *testing.T) {
 			b := interact.Binding{Dialect: kagentv1.New(30 * time.Second), ToolApprovals: true, Timeout: timeout}
 			newIntake := func() *interact.Intake {
 				in, err := interact.New(intakeCfg(interact.Config{
-					Store: r.st, AuditReader: reader, Lookup: lookup{b}, Platform: fitter{r}, Outbox: r.outbox, Session: r.sess, Audit: r.audit,
+					Store: r.st, AuditReader: reader, Lookup: lookup{b}, Platforms: chattest.Same[interact.Fitter](fitter{r}), Outbox: r.outbox, Session: r.sess, Audit: r.audit,
 					Now: func() time.Time { return t0.Add(time.Hour) },
 				}))
 				if err != nil {
@@ -282,7 +283,7 @@ func TestAnAbandonedApprovalPromptIsRefusedAndClosed(t *testing.T) {
 	r := newRig(t, allowApprovals)
 	b := interact.Binding{Dialect: kagentv1.New(30 * time.Second), ToolApprovals: true, Timeout: timeout}
 	in, err := interact.New(intakeCfg(interact.Config{
-		Store: r.st, AuditReader: r.st, Lookup: lookup{b}, Platform: fitter{r}, Outbox: abandonedPromptSender{r.outbox}, Session: r.sess, Audit: r.audit,
+		Store: r.st, AuditReader: r.st, Lookup: lookup{b}, Platforms: chattest.Same[interact.Fitter](fitter{r}), Outbox: abandonedPromptSender{r.outbox}, Session: r.sess, Audit: r.audit,
 		OnApprovalOutcome: func(_ string, o interact.Outcome) { r.hook = append(r.hook, o) }, Now: func() time.Time { return t0.Add(time.Hour) },
 	}))
 	if err != nil {
@@ -328,7 +329,7 @@ func TestUnusablePromptClosesBeforeCancelling(t *testing.T) {
 			if abandoned {
 				b := interact.Binding{Dialect: kagentv1.New(30 * time.Second), ToolApprovals: true, Timeout: timeout}
 				var err error
-				r.in, err = interact.New(intakeCfg(interact.Config{Store: r.st, AuditReader: r.st, Lookup: lookup{b}, Platform: fitter{r}, Outbox: abandonedPromptSender{r.outbox}, Session: r.sess, Audit: r.audit,
+				r.in, err = interact.New(intakeCfg(interact.Config{Store: r.st, AuditReader: r.st, Lookup: lookup{b}, Platforms: chattest.Same[interact.Fitter](fitter{r}), Outbox: abandonedPromptSender{r.outbox}, Session: r.sess, Audit: r.audit,
 					OnApprovalOutcome: func(_ string, o interact.Outcome) { r.hook = append(r.hook, o) }, Now: func() time.Time { return t0.Add(time.Hour) }}))
 				if err != nil {
 					t.Fatal(err)
@@ -366,7 +367,7 @@ func TestUnusablePromptClosesBeforeCancelling(t *testing.T) {
 			if abandoned {
 				sender = abandonedPromptSender{r.outbox}
 			}
-			r.in, err = interact.New(intakeCfg(interact.Config{Store: r.st, AuditReader: r.st, Lookup: lookup{b}, Platform: fitter{r}, Outbox: sender, Session: r.sess, Audit: r.audit,
+			r.in, err = interact.New(intakeCfg(interact.Config{Store: r.st, AuditReader: r.st, Lookup: lookup{b}, Platforms: chattest.Same[interact.Fitter](fitter{r}), Outbox: sender, Session: r.sess, Audit: r.audit,
 				OnApprovalOutcome: func(_ string, o interact.Outcome) { r.hook = append(r.hook, o) }, Now: func() time.Time { return t0.Add(time.Hour) }}))
 			if err != nil {
 				t.Fatal(err)
@@ -436,7 +437,7 @@ func TestUnusableRecoveryScopesAuditByBinding(t *testing.T) {
 	bindings := bindingMap{"ns/one": b1, "ns/two": b2, "ns/three": b3}
 	newIntake := func() *interact.Intake {
 		in, err := interact.New(intakeCfg(interact.Config{
-			Store: r.st, AuditReader: r.st, Lookup: bindings, Platform: fitter{r}, Outbox: r.outbox, Session: r.sess, Audit: r.audit,
+			Store: r.st, AuditReader: r.st, Lookup: bindings, Platforms: chattest.Same[interact.Fitter](fitter{r}), Outbox: r.outbox, Session: r.sess, Audit: r.audit,
 			Now: func() time.Time { return t0.Add(time.Hour) },
 		}))
 		if err != nil {
@@ -512,7 +513,7 @@ func TestUnusablePromptNoticeFailureKeepsTheTaskPending(t *testing.T) {
 	ob := &failingRefusalNotice{Outbox: r.outbox, fail: true}
 	b := interact.Binding{Dialect: kagentv1.New(30 * time.Second), ToolApprovals: true, Timeout: timeout}
 	var err error
-	r.in, err = interact.New(intakeCfg(interact.Config{Store: r.st, AuditReader: r.st, Lookup: lookup{b}, Platform: fitter{r}, Outbox: ob, Session: r.sess, Audit: r.audit,
+	r.in, err = interact.New(intakeCfg(interact.Config{Store: r.st, AuditReader: r.st, Lookup: lookup{b}, Platforms: chattest.Same[interact.Fitter](fitter{r}), Outbox: ob, Session: r.sess, Audit: r.audit,
 		OnApprovalOutcome: func(_ string, o interact.Outcome) { r.hook = append(r.hook, o) }, Now: func() time.Time { return t0.Add(time.Hour) }}))
 	if err != nil {
 		t.Fatal(err)

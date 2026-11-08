@@ -15,6 +15,7 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -392,7 +393,7 @@ func TestRecordingAPressNeverWaitsForTheWorker(t *testing.T) {
 	f := &fakeProc{handle: func(context.Context, store.Press) (interact.Result, error) { <-gate; return interact.Done, nil }}
 	w, _, _ := startWorker(t, f, func(c *interact.WorkerConfig) { c.Workers = 1 })
 	t.Cleanup(func() { close(gate) }) // before the worker is stopped
-	pl, err := interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{}, Authorizer: r.az, Ephemerals: r.eph, Decider: r.d, Auditor: r.aud,
+	pl, err := interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{}, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Decider: r.d, Auditor: r.aud,
 		Limits: store.PressLimits{Total: 100, PerUser: 100}, Notify: w.Submit}))
 	if err != nil {
 		t.Fatal(err)

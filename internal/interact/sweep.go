@@ -87,9 +87,10 @@ type SweepConfig struct {
 	// Lookup gives the Binding of an approval's thread, whose dialect builds the denial that ends the approval.
 	Lookup  Lookup
 	Session Session
-	Updater Updater
-	Outbox  Enqueuer
-	Auditor Auditor
+	// Updaters gives the platform of an interaction's connection, which edits its prompt.
+	Updaters chat.Resolver[Updater]
+	Outbox   Enqueuer
+	Auditor  Auditor
 	// Presses is asked before an interaction is timed out: one with a press recorded by its
 	// deadline and not yet decided is left, because deciding a press can take longer than the
 	// grace, and cancelling the task under it would drop an answer that came in time.
@@ -143,8 +144,8 @@ type Sweeper struct {
 
 // NewSweeper returns a Sweeper over cfg.
 func NewSweeper(cfg SweepConfig) (*Sweeper, error) {
-	if cfg.Store == nil || cfg.Sessions == nil || cfg.Lookup == nil || cfg.Session == nil || cfg.Updater == nil || cfg.Outbox == nil || cfg.Auditor == nil || cfg.Presses == nil {
-		return nil, errors.New("interact: Store, Sessions, Lookup, Session, Updater, Outbox, Auditor and Presses are required")
+	if cfg.Store == nil || cfg.Sessions == nil || cfg.Lookup == nil || cfg.Session == nil || cfg.Updaters == nil || cfg.Outbox == nil || cfg.Auditor == nil || cfg.Presses == nil {
+		return nil, errors.New("interact: Store, Sessions, Lookup, Session, Updaters, Outbox, Auditor and Presses are required")
 	}
 	if cfg.OnTimeout == nil {
 		return nil, errors.New("interact: OnTimeout is required")
@@ -489,7 +490,11 @@ func (s *Sweeper) replace(ctx context.Context, row store.Interaction) error {
 	if err != nil {
 		return fmt.Errorf("interact: the ending of %s: %w", row.ID, err)
 	}
-	return s.cfg.Updater.Update(ctx, s.cfg.Updater.RefAt(row.Key.Channel, row.Key.Thread, row.MessageRef), chat.End(e))
+	u, err := s.cfg.Updaters.Platform(row.Key.Connection)
+	if err != nil {
+		return fmt.Errorf("interact: the platform to edit the prompt of %s: %w", row.ID, err)
+	}
+	return u.Update(ctx, u.RefAt(row.Key.Channel, row.Key.Thread, row.MessageRef), chat.End(e))
 }
 
 // notify enqueues the timeout's notice, text. Its ID comes from the interaction, so the same one is never posted twice.
@@ -499,7 +504,7 @@ func (s *Sweeper) notify(ctx context.Context, row store.Interaction, text string
 
 // notifyAs is notify with an outbox ID that comes from source, for a notice of the interaction that is not the timeout's.
 func (s *Sweeper) notifyAs(ctx context.Context, row store.Interaction, source, text string) error {
-	_, err := s.cfg.Outbox.Enqueue(ctx, outbox.Post{Source: source, Role: store.OutboxNotice, Channel: row.Key.Channel,
+	_, err := s.cfg.Outbox.Enqueue(ctx, outbox.Post{Source: source, Role: store.OutboxNotice, Connection: row.Key.Connection, Channel: row.Key.Channel,
 		Thread: row.Key.Thread, Out: chat.Say(render.Notice(text, ""))})
 	return err
 }

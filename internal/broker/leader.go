@@ -136,7 +136,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	// them, and the manager, which they feed.
 	stops := stopList{trace: cfg.stopTrace}
 	sd.add(stepInteractions, stops.run)
-	parts := interactionDeps{st: st, ob: ob, platform: platform, auditor: auditor, bindings: bindings, metrics: metrics, log: log, trace: cfg.startTrace}
+	parts := interactionDeps{st: st, ob: ob, platforms: platforms, auditor: auditor, bindings: bindings, metrics: metrics, log: log, trace: cfg.startTrace}
 	ix, err := parts.build(sink)
 	if err != nil {
 		return nil, err

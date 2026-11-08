@@ -54,14 +54,14 @@ func (l *lateSession) Cancel(ctx context.Context, key store.ConversationKey, id 
 // interactionDeps is what the interactions are built from: the parts of Run they share. Every part but trace is required
 // (check names the one that is missing).
 type interactionDeps struct {
-	st       store.Store
-	ob       *outbox.Outbox
-	platform builtPlatform // the chat platform: prompts, edits, who may answer, and what a person is told go through it
-	auditor  *audit.Writer
-	bindings *Bindings
-	metrics  *Metrics
-	log      *slog.Logger
-	trace    func(step string) // a test's: told as each step of startup is done. Optional.
+	st        store.Store
+	ob        *outbox.Outbox
+	platforms chat.Resolver[chat.Platform] // the chat platform of each connection: prompts, edits, who may answer, and what a person is told go through it
+	auditor   *audit.Writer
+	bindings  *Bindings
+	metrics   *Metrics
+	log       *slog.Logger
+	trace     func(step string) // a test's: told as each step of startup is done. Optional.
 }
 
 // check refuses a deps with a part left out, and names it: the interactions are built from these in two steps (build,
@@ -72,8 +72,8 @@ func (d interactionDeps) check() error {
 		return errors.New("interactions: st is required")
 	case d.ob == nil:
 		return errors.New("interactions: ob is required")
-	case d.platform.Platform == nil:
-		return errors.New("interactions: platform is required")
+	case d.platforms == nil:
+		return errors.New("interactions: platforms is required")
 	case d.auditor == nil:
 		return errors.New("interactions: auditor is required")
 	case d.bindings == nil:
@@ -125,18 +125,18 @@ func (d interactionDeps) build(inner session.Sink) (*interactionRuntime, error) 
 	}
 	late := &lateSession{}
 	intake, err := interact.New(interact.Config{
-		Store: d.st, AuditReader: d.st, Lookup: d.bindings, Platform: d.platform, Outbox: d.ob, Session: late, Audit: d.auditor,
+		Store: d.st, AuditReader: d.st, Lookup: d.bindings, Platforms: chat.Narrow[interact.Fitter](d.platforms), Outbox: d.ob, Session: late, Audit: d.auditor,
 		OnApprovalOutcome: d.metrics.ApprovalOutcome, Logger: d.log,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("interactions: the intake: %w", err)
 	}
-	replacer, err := interact.NewReplacer(interact.ReplacerConfig{Store: d.st, Updater: d.platform, Logger: d.log})
+	replacer, err := interact.NewReplacer(interact.ReplacerConfig{Store: d.st, Updaters: chat.Narrow[interact.Editor](d.platforms), Logger: d.log})
 	if err != nil {
 		return nil, fmt.Errorf("interactions: the replacer: %w", err)
 	}
 	decider, err := interact.NewDecider(interact.DecideConfig{
-		Store: d.st, Auditor: d.auditor, Ephemerals: d.platform, Session: late, Sessions: d.st, Outbox: d.ob, Replacer: replacer,
+		Store: d.st, Auditor: d.auditor, Ephemerals: chat.Narrow[interact.Ephemeral](d.platforms), Session: late, Sessions: d.st, Outbox: d.ob, Replacer: replacer,
 		OnDecision: d.metrics.InteractionDecision, OnApprovalOutcome: d.metrics.ApprovalOutcome, Logger: d.log,
 	})
 	if err != nil {
@@ -144,14 +144,14 @@ func (d interactionDeps) build(inner session.Sink) (*interactionRuntime, error) 
 	}
 	var worker *interact.Worker // Notify needs the worker and the worker the pipeline: the closure breaks the cycle (D2)
 	pipeline, err := interact.NewPipeline(interact.PressConfig{
-		Store: d.st, Sessions: d.st, Lookup: d.bindings, Authorizer: d.platform, Ephemerals: d.platform, Decider: decider, Auditor: d.auditor,
+		Store: d.st, Sessions: d.st, Lookup: d.bindings, Authorizers: chat.Narrow[interact.Authorizer](d.platforms), Ephemerals: chat.Narrow[interact.Ephemeral](d.platforms), Decider: decider, Auditor: d.auditor,
 		Notify: func(p store.Press) { worker.Submit(p) }, Logger: d.log,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("interactions: the press pipeline: %w", err)
 	}
 	votes, err := feedback.New(feedback.Config{
-		Store: d.st, Sessions: d.st, Authorizer: d.platform, Ephemerals: d.platform, Auditor: d.auditor,
+		Store: d.st, Sessions: d.st, Authorizers: chat.Narrow[interact.Authorizer](d.platforms), Ephemerals: chat.Narrow[interact.Ephemeral](d.platforms), Auditor: d.auditor,
 		Notify: func(p store.Press) { worker.Submit(p) }, Logger: d.log,
 	})
 	if err != nil {
@@ -178,7 +178,7 @@ func (d interactionDeps) build(inner session.Sink) (*interactionRuntime, error) 
 func (d interactionDeps) start(ctx context.Context, mgr *session.Manager, r *interactionRuntime, stops *stopList) (func(context.Context, chat.Interaction) error, error) {
 	tap, pipeline, votes, replacer, worker := r.tap, r.pipeline, r.votes, r.replacer, r.worker
 	sweeper, err := interact.NewSweeper(interact.SweepConfig{
-		Store: d.st, Sessions: d.st, Lookup: d.bindings, Session: mgr, Updater: d.platform, Outbox: d.ob, Auditor: d.auditor,
+		Store: d.st, Sessions: d.st, Lookup: d.bindings, Session: mgr, Updaters: chat.Narrow[interact.Updater](d.platforms), Outbox: d.ob, Auditor: d.auditor,
 		Presses: d.st, Reopened: r.reopened, OnTimeout: d.metrics.InteractionTimeout, OnApprovalOutcome: d.metrics.ApprovalOutcome, Logger: d.log,
 	})
 	if err != nil {
