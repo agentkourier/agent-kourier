@@ -180,6 +180,11 @@ One app installed in two workspaces gives one app ID, so its two connections cou
 That Slack gives an app's events to one socket was measured in one workspace; across the workspaces of one app it is not
 verified here.
 
+An older connection whose token Slack rejected when the broker asked whose bot it is holds no app while it is down, so a younger connection of the same app
+can be served meanwhile. When the older one's Secret is fixed, the broker asks again at its next look, the older connection takes the app, and in
+that same look the broker stops the younger one, as it stops any running second connection of an app, before it starts the older. The younger
+connection's Bindings then say `ConnectionNotServed`. An older connection that was running when Slack rejected its token keeps holding the app.
+
 The ChatConnection that is not run is not deleted, and it is served again if the older one goes away. The platform's own
 connection always comes first, so a team that copies the platform's tokens gets the second place.
 
