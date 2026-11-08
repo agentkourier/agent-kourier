@@ -258,17 +258,15 @@ type channelReader interface {
 	Classify(op chat.Op, err error) chat.Verdict
 }
 
-// channelChecker is the bindingcheck.ChannelChecker of a running broker. It answers for the bot of the connection the broker
-// serves, so the Targets it is given hold only Bindings on that connection (bindingTargets).
+// channelChecker reads a channel as the bot of one connection: the platform it holds. A running broker has one for each connection it
+// serves, which connectionChannels makes at the probe.
 type channelChecker struct {
 	platform channelReader
 	timeout  time.Duration
 	creds    credentialsWatch
 }
 
-var _ bindingcheck.ChannelChecker = channelChecker{}
-
-// CheckChannel implements bindingcheck.ChannelChecker. It makes no call when the connection's credentials Secret differs in any key
+// CheckChannel reads channel as the bot of c's connection. It makes no call when the connection's credentials Secret differs in any key
 // from the tokens the broker is using (ChatCredentialsChanged, or ChatCredentialsUnusable if it is gone or empty): the connection is
 // then not running on what the Secret holds, so the read is withheld on any difference, even in a key the call does not use (the app
 // token), and what the bot sees is not offered as a finding about the channel. A call the Prober's context ended is no verdict and comes back as an error; the
@@ -342,9 +340,8 @@ type platformReader interface {
 	groupReader
 }
 
-// groupChecker is the bindingcheck.GroupChecker of a running broker. Like channelChecker it answers for the bot of the connection the
-// broker serves, so the Targets it is given hold only Bindings on that connection (bindingTargets). The Prober makes one for each pass
-// (ForPass), whose probes share their reads of a group.
+// groupChecker reads approver groups as the bot of one connection, as channelChecker reads a channel. connectionGroups makes one for each
+// connection and pass (forPass), whose probes share their reads of a group.
 type groupChecker struct {
 	platform groupReader
 	timeout  time.Duration
@@ -352,18 +349,13 @@ type groupChecker struct {
 	reads    *groupReads // the reads of the pass, shared by its probes; nil: each probe reads its groups itself
 }
 
-var _ bindingcheck.PassGroupChecker = groupChecker{}
-
-// ForPass implements bindingcheck.PassGroupChecker with forPass.
-func (c groupChecker) ForPass() bindingcheck.GroupChecker { return c.forPass() }
-
 // forPass returns the checker of a pass, which reads each group once for all the pass's probes.
 func (c groupChecker) forPass() groupChecker {
 	c.reads = &groupReads{reads: map[string]*groupRead{}}
 	return c
 }
 
-// CheckGroups implements bindingcheck.GroupChecker. It makes no call when the connection's credentials differ from the tokens the broker
+// CheckGroups reads the groups as the bot of c's connection. It makes no call when the connection's credentials differ from the tokens the broker
 // is using, for the reason given at CheckChannel (credentialsWatch.hold). A call the Prober's context ended is no verdict and comes back as
 // an error; the deadline of the checker's own bound is a chat platform that does not answer, Unknown/ChatUnavailable. One call reads all
 // of a Binding's groups, at most 10 (the API's validation caps them), one request to the platform each, in the Binding's order, and stops at
@@ -582,21 +574,24 @@ func asksForApprovers(spec v1alpha1.BindingSpec) bool {
 	return spec.Interactions.ToolApprovals && len(spec.Interactions.ApproverGroups) > 0
 }
 
-// bindingTargets lists the Bindings to probe: those of snap whose ChatConnection is conn, the one this process serves. The
-// channel and group checkers read with that connection's bot, so a Binding on any other would be told the wrong bot's answer. A
-// Binding's key is namespace/name, which is what CheckAgent looks it up by. A Binding that asks for tool approvals from user groups
-// (asksForApprovers) carries them in its Target, a copy of its own list.
-func bindingTargets(snap *config.Snapshot, conn v1alpha1.ObjectRef) []bindingcheck.Target {
+// bindingTargets lists the Bindings to probe: those of snap whose ChatConnection is one of served, each naming its connection
+// ("namespace/name") so that its channel and groups are read with that connection's bot. A Binding on a connection the broker does
+// not serve is left out, as the files route can hold one. A Binding's key is namespace/name, which is what CheckAgent looks it up by.
+// A Binding that asks for tool approvals from user groups (asksForApprovers) carries them in its Target, a copy of its own list.
+func bindingTargets(snap *config.Snapshot, served []v1alpha1.ObjectRef) []bindingcheck.Target {
 	if snap == nil {
 		return nil
 	}
 	var out []bindingcheck.Target
 	for _, rb := range snap.Bindings() {
-		if rb.Connection.Namespace != conn.Namespace || rb.Connection.Name != conn.Name {
+		if !slices.ContainsFunc(served, func(c v1alpha1.ObjectRef) bool {
+			return rb.Connection.Namespace == c.Namespace && rb.Connection.Name == c.Name
+		}) {
 			continue
 		}
 		t := bindingcheck.Target{
 			Binding:    v1alpha1.NamespacedName(rb.Binding.Namespace, rb.Binding.Name),
+			Connection: v1alpha1.NamespacedName(rb.Connection.Namespace, rb.Connection.Name),
 			Channel:    rb.Binding.Spec.Chat.Channel,
 			Generation: rb.Binding.Generation,
 			UID:        string(rb.Binding.UID),
@@ -669,11 +664,11 @@ func (l bindingLog) probeError(pe bindingcheck.ProbeError) {
 }
 
 // pruned is bindingcheck.Options.OnPrune: the line for each Binding the Prober stops verifying because it left the Targets, which is
-// because a reload removed it or moved it to another ChatConnection than the one served. Its series go with it, so an alert on them
+// because a reload removed it or moved it to a ChatConnection the broker does not serve. Its series go with it, so an alert on them
 // would resolve without a word; this line is the word.
 func (l bindingLog) pruned(names []string) {
 	for _, name := range names {
-		l.log.Info("binding verification: stopped verifying a Binding: the config removed it, or moved it to another ChatConnection than the one served", "binding", name)
+		l.log.Info("binding verification: stopped verifying a Binding: the config removed it, or moved it to a ChatConnection the broker does not serve", "binding", name)
 	}
 }
 
@@ -685,15 +680,20 @@ func (l bindingLog) dropped(binding string, cond bindingcheck.ConditionType) {
 
 // verification is what the verification of Bindings is built from.
 type verification struct {
-	// Bindings fetches agent cards (Bindings.CheckAgent), Platform reads the channel and the approver groups as the bot of Conn, and Snaps
-	// and Revision are the config (Reloader.Current and Reloader.Revision).
+	// Bindings fetches agent cards (Bindings.CheckAgent), and Snaps and Revision are the config (Reloader.Current and Reloader.Revision).
 	Bindings agentProbe
-	Platform platformReader
 	Snaps    Snapshots
 	Revision func(context.Context) string
-	// Conn is the ChatConnection this process serves: the Bindings on any other are not probed, because Platform is Conn's bot. Its
-	// Credentials are the tokens Platform was built with, which Secrets is read against to tell a changed Secret.
-	Conn    Connection
+	// Platforms gives the platform that runs a connection, by "namespace/name": the channel and the approver groups of a Binding are
+	// read as the bot of the Binding's own connection, looked up at each probe. A connection it has none for (an error wrapping
+	// chat.ErrConnectionDown: it is not running yet, or it stopped) is not called, and the Binding's reads say so (connectionDownOutcome).
+	Platforms chat.Resolver[platformReader]
+	// Conns lists the connections the broker serves, running or not: the Bindings on any other are not probed. Credentials are the tokens
+	// the connection's platform was built with, which Secrets is read against to tell a changed Secret; a connection that is not
+	// running has none, and then no change is told. It is called from the probes, which run concurrently, so it must be safe for
+	// concurrent use. A connection that leaves it while a pass runs is read, by the probes that have not yet looked it up, with no
+	// baseline, so no change is told for it; its platform is whatever Platforms says then.
+	Conns   func() []Connection
 	Secrets identity.SecretReader // nil: a change of the chat credentials is not told
 	Metrics *Metrics
 	Log     *slog.Logger
@@ -711,25 +711,138 @@ type verification struct {
 	Status *statusWriter
 }
 
-// credentialsSecret is where the connection's credentials are in the current config: the Secret its ChatConnection names, in its
-// namespace. A reload that names another Secret is a change the connection does not see until a restart.
-func (v verification) credentialsSecret() (namespace, name string, ok bool) {
+// served lists the connections the broker serves.
+func (v verification) served() []Connection {
+	if v.Conns == nil {
+		return nil
+	}
+	return v.Conns()
+}
+
+// credentialsSecret is where the credentials of the connection conn are in the current config: the Secret its ChatConnection names, in its
+// namespace. A reload that names another Secret is a change the connection does not see until it restarts.
+func (v verification) credentialsSecret(conn v1alpha1.ObjectRef) (namespace, name string, ok bool) {
 	snap := v.Snaps.Current()
 	if snap == nil {
 		return "", "", false
 	}
 	for _, c := range snap.ChatConnections() {
-		if c.Namespace == v.Conn.Ref.Namespace && c.Name == v.Conn.Ref.Name {
+		if c.Namespace == conn.Namespace && c.Name == conn.Name {
 			return c.Namespace, c.Spec.CredentialsSecretRef.Name, true
 		}
 	}
 	return "", "", false
 }
 
+// chatOf returns what a read as the bot of the connection named conn is made with: its platform and the watch of its credentials. A
+// connection that is not running has no platform, and the error wraps chat.ErrConnectionDown; any other error is the resolver's, and
+// the probe cannot tell.
+func (v verification) chatOf(conn string) (platformReader, credentialsWatch, error) {
+	var zero credentialsWatch
+	if v.Platforms == nil {
+		return nil, zero, fmt.Errorf("no platform is wired to read the connection %q with: %w", conn, chat.ErrConnectionDown)
+	}
+	platform, err := v.Platforms.Platform(conn)
+	if err != nil {
+		return nil, zero, err
+	}
+	var ref v1alpha1.ObjectRef
+	var baseline map[string]secret.Value
+	for _, c := range v.served() {
+		if v1alpha1.NamespacedName(c.Ref.Namespace, c.Ref.Name) == conn {
+			ref, baseline = c.Ref, c.Credentials
+		}
+	}
+	return platform, credentialsWatch{baseline: baseline, secrets: v.Secrets, where: func() (string, string, bool) { return v.credentialsSecret(ref) }}, nil
+}
+
+// connectionDownOutcome is what a read as the bot of a connection that no platform runs comes to, with no call made: the verdict on
+// the channel or the groups cannot be had, which is Unknown and not False, since the Binding is not at fault and a restart is not
+// what mends it. The reason is ChatUnavailable, the closest the closed set has to a chat platform that cannot be read now, and the
+// message says so and points at the log, whose line for the transition carries err as the cause (it names the connection and holds no
+// token). It is the one place that tells a stopped connection's Bindings what became of the reads, so the outcomes a
+// connection can have for being down (stopped for a token the platform rejected, say) are told here, from the error that says why.
+func connectionDownOutcome(err error) bindingcheck.Outcome {
+	return bindingcheck.Outcome{Status: bindingcheck.Unknown, Reason: bindingcheck.ReasonChatUnavailable,
+		Message: "the chat connection is not running (it has not started, or it stopped), so the bot was not asked: the operator's log has why",
+		Cause:   telemetry.LogText(err)}
+}
+
+// connectionChannels is the bindingcheck.ChannelChecker of a running broker: it reads a channel as the bot of the connection of the
+// Binding that asks, found at each probe, and makes no call for a connection that is not running.
+type connectionChannels struct {
+	v       verification
+	timeout time.Duration
+}
+
+var _ bindingcheck.ChannelChecker = connectionChannels{}
+
+// CheckChannel implements bindingcheck.ChannelChecker.
+func (c connectionChannels) CheckChannel(ctx context.Context, connection, channel string) (bindingcheck.Outcome, error) {
+	platform, creds, err := c.v.chatOf(connection)
+	switch {
+	case errors.Is(err, chat.ErrConnectionDown):
+		return connectionDownOutcome(err), nil
+	case err != nil:
+		return bindingcheck.Outcome{}, fmt.Errorf("find the platform of connection %s: %w", connection, err)
+	}
+	return channelChecker{platform: platform, timeout: c.timeout, creds: creds}.CheckChannel(ctx, channel)
+}
+
+// connectionGroups is the bindingcheck.PassGroupChecker of a running broker: it reads approver groups as the bot of the connection of
+// the Binding that asks, as connectionChannels reads a channel. Outside a pass each probe reads its own groups. In a pass (ForPass)
+// the probes of one connection share their reads of a group, and the probes of two connections never do: a group's ID is read by each
+// app on its own, and one app may see what the other does not.
+type connectionGroups struct {
+	v       verification
+	timeout time.Duration
+	pass    *groupPass // nil outside a pass
+}
+
+// groupPass is the checker of each connection in one pass, made when the connection is first asked about in it.
+type groupPass struct {
+	mu     sync.Mutex
+	checks map[string]groupChecker
+}
+
+var _ bindingcheck.PassGroupChecker = connectionGroups{}
+
+// ForPass implements bindingcheck.PassGroupChecker with forPass.
+func (c connectionGroups) ForPass() bindingcheck.GroupChecker { return c.forPass() }
+
+// forPass returns the checker of a pass, which reads each group once for each connection for all the pass's probes.
+func (c connectionGroups) forPass() connectionGroups {
+	c.pass = &groupPass{checks: map[string]groupChecker{}}
+	return c
+}
+
+// CheckGroups implements bindingcheck.GroupChecker.
+func (c connectionGroups) CheckGroups(ctx context.Context, connection string, groups []string) (bindingcheck.Outcome, error) {
+	platform, creds, err := c.v.chatOf(connection)
+	switch {
+	case errors.Is(err, chat.ErrConnectionDown):
+		return connectionDownOutcome(err), nil
+	case err != nil:
+		return bindingcheck.Outcome{}, fmt.Errorf("find the platform of connection %s: %w", connection, err)
+	}
+	check := groupChecker{platform: platform, timeout: c.timeout, creds: creds}
+	if c.pass != nil {
+		c.pass.mu.Lock()
+		if shared, ok := c.pass.checks[connection]; ok {
+			check = shared
+		} else {
+			check = check.forPass()
+			c.pass.checks[connection] = check
+		}
+		c.pass.mu.Unlock()
+	}
+	return check.CheckGroups(ctx, groups)
+}
+
 // agentFunc and channelFunc are the checker interfaces made of functions.
 type (
 	agentFunc   func(ctx context.Context, binding string) (bindingcheck.Outcome, error)
-	channelFunc func(ctx context.Context, channel string) (bindingcheck.Outcome, error)
+	channelFunc func(ctx context.Context, connection, channel string) (bindingcheck.Outcome, error)
 )
 
 // CheckAgent implements bindingcheck.AgentChecker.
@@ -738,24 +851,33 @@ func (f agentFunc) CheckAgent(ctx context.Context, binding string) (bindingcheck
 }
 
 // CheckChannel implements bindingcheck.ChannelChecker.
-func (f channelFunc) CheckChannel(ctx context.Context, channel string) (bindingcheck.Outcome, error) {
-	return f(ctx, channel)
+func (f channelFunc) CheckChannel(ctx context.Context, connection, channel string) (bindingcheck.Outcome, error) {
+	return f(ctx, connection, channel)
 }
 
-// timedGroups is a groupChecker whose probes the verification times under ApproversReadable, its passes' included.
+// timedGroups is a connectionGroups whose probes the verification times under ApproversReadable, its passes' included.
 type timedGroups struct {
 	v verification
-	c groupChecker
+	c connectionGroups
 }
 
 // CheckGroups implements bindingcheck.GroupChecker.
-func (t timedGroups) CheckGroups(ctx context.Context, groups []string) (bindingcheck.Outcome, error) {
-	return t.v.timed(bindingcheck.ApproversReadable, func() (bindingcheck.Outcome, error) { return t.c.CheckGroups(ctx, groups) })
+func (t timedGroups) CheckGroups(ctx context.Context, connection string, groups []string) (bindingcheck.Outcome, error) {
+	return t.v.timed(bindingcheck.ApproversReadable, func() (bindingcheck.Outcome, error) { return t.c.CheckGroups(ctx, connection, groups) })
 }
 
 // ForPass implements bindingcheck.PassGroupChecker.
 func (t timedGroups) ForPass() bindingcheck.GroupChecker {
 	return timedGroups{v: t.v, c: t.c.forPass()}
+}
+
+// servedRefs is the references of conns.
+func servedRefs(conns []Connection) []v1alpha1.ObjectRef {
+	refs := make([]v1alpha1.ObjectRef, len(conns))
+	for i, c := range conns {
+		refs[i] = c.Ref
+	}
+	return refs
 }
 
 // timed runs a check and observes how long it took under cond, whatever it found.
@@ -780,25 +902,19 @@ func (v verification) notifyStatus() {
 func (v verification) newProber() *bindingcheck.Prober {
 	timeout := cmp.Or(v.Timeout, bindingProbeTimeout)
 	agents := agentChecker{bindings: v.Bindings, timeout: innerBound(timeout)}
-	channels := channelChecker{
-		platform: v.Platform, timeout: innerBound(timeout),
-		creds: credentialsWatch{baseline: v.Conn.Credentials, secrets: v.Secrets, where: v.credentialsSecret},
-	}
-	groupsChecker := groupChecker{
-		platform: v.Platform, timeout: innerBound(timeout),
-		creds: credentialsWatch{baseline: v.Conn.Credentials, secrets: v.Secrets, where: v.credentialsSecret},
-	}
+	channels := connectionChannels{v: v, timeout: innerBound(timeout)}
+	groups := connectionGroups{v: v, timeout: innerBound(timeout)}
 	l := bindingLog{log: v.Log}
 	return bindingcheck.NewProber(bindingcheck.Options{
-		Targets:  func() []bindingcheck.Target { return bindingTargets(v.Snaps.Current(), v.Conn.Ref) },
+		Targets:  func() []bindingcheck.Target { return bindingTargets(v.Snaps.Current(), servedRefs(v.served())) },
 		Revision: v.Revision,
 		Agents: agentFunc(func(ctx context.Context, binding string) (bindingcheck.Outcome, error) {
 			return v.timed(bindingcheck.BackendReachable, func() (bindingcheck.Outcome, error) { return agents.CheckAgent(ctx, binding) })
 		}),
-		Channels: channelFunc(func(ctx context.Context, channel string) (bindingcheck.Outcome, error) {
-			return v.timed(bindingcheck.ChannelJoined, func() (bindingcheck.Outcome, error) { return channels.CheckChannel(ctx, channel) })
+		Channels: channelFunc(func(ctx context.Context, connection, channel string) (bindingcheck.Outcome, error) {
+			return v.timed(bindingcheck.ChannelJoined, func() (bindingcheck.Outcome, error) { return channels.CheckChannel(ctx, connection, channel) })
 		}),
-		Groups:   timedGroups{v: v, c: groupsChecker},
+		Groups:   timedGroups{v: v, c: groups},
 		Interval: v.Interval, Tick: v.Tick, Timeout: timeout, MinRevisionGap: cmp.Or(v.MinRevisionGap, minRevisionGap),
 		OnTransition: func(tr bindingcheck.Transition) { v.Metrics.BindingCondition(tr); l.transition(tr); v.notifyStatus() },
 		OnDrop: func(binding string, cond bindingcheck.ConditionType) {

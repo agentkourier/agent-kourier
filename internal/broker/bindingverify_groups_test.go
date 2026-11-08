@@ -303,8 +303,8 @@ func TestTheBrokersProberProbesApproverGroupsAndTimesThem(t *testing.T) {
 	plat := &accessFake{access: chat.Access{Member: true}, groupsErrs: map[string]error{approverGroups[1]: groupErr(approverGroups[1], chat.ErrGroupNotFound, chat.ErrGroupsMisconfigured)}}
 	m := mustMetrics(t, nil)
 	p := verification{
-		Bindings: probeFunc(func(context.Context, string) error { return nil }), Platform: plat, Snaps: current,
-		Conn: Connection{Ref: v1alpha1.ObjectRef{Namespace: "sre", Name: "slack"}}, Metrics: m, Log: slog.New(slog.DiscardHandler),
+		Bindings: probeFunc(func(context.Context, string) error { return nil }), Platforms: soleBot(sreSlack, plat), Snaps: current,
+		Conns: soleConn(sreSlack), Metrics: m, Log: slog.New(slog.DiscardHandler),
 		Interval: time.Hour, Tick: 5 * time.Millisecond, Revision: func(context.Context) string { return "r" },
 	}.newProber()
 	got := settled(t, p, 2)
@@ -338,7 +338,7 @@ func TestTheBrokersProberProbesApproverGroupsAndTimesThem(t *testing.T) {
 func TestBindingTargetsCarryTheApproverGroupsOfABindingThatAsksForThem(t *testing.T) {
 	groups := map[string][]string{"sre/two": {"S0AAAAAAAAA", "S0BBBBBBBBB"}}
 	snap := snapshotWith(t, map[string]int64{"sre/two": 1, "sre/none": 1}, nil, groups)
-	got := bindingTargets(snap, v1alpha1.ObjectRef{Namespace: "sre", Name: "slack"})
+	got := bindingTargets(snap, []v1alpha1.ObjectRef{sreSlack})
 	if len(got) != 2 {
 		t.Fatalf("targets = %+v", got)
 	}
@@ -390,8 +390,8 @@ func TestTheBrokersProberReadsAGroupOnceAPassForEveryBindingThatNamesIt(t *testi
 		missing: groupErr(missing, chat.ErrGroupNotFound, chat.ErrGroupsMisconfigured),
 	}}
 	p := verification{
-		Bindings: probeFunc(func(context.Context, string) error { return nil }), Platform: plat, Snaps: current,
-		Conn: Connection{Ref: v1alpha1.ObjectRef{Namespace: "sre", Name: "slack"}}, Metrics: mustMetrics(t, nil), Log: slog.New(slog.DiscardHandler),
+		Bindings: probeFunc(func(context.Context, string) error { return nil }), Platforms: soleBot(sreSlack, plat), Snaps: current,
+		Conns: soleConn(sreSlack), Metrics: mustMetrics(t, nil), Log: slog.New(slog.DiscardHandler),
 		Interval: time.Hour, Tick: 5 * time.Millisecond, Revision: func(context.Context) string { return "r" },
 	}.newProber()
 	got := settled(t, p, 3)
@@ -422,7 +422,7 @@ func TestAPassReadsEachGroupOnceForAllItsProbes(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := &groupsFake{release: make(chan struct{}), err: groupErr("S0SHARED000", errors.New("slack: ratelimited")),
 			verdict: chat.Verdict{Class: chat.Transient, RetryAfter: 30 * time.Second}}
-		pass := groupChecker{platform: f, timeout: 8 * time.Second}.ForPass()
+		pass := groupChecker{platform: f, timeout: 8 * time.Second}.forPass()
 		outs := make([]bindingcheck.Outcome, 2)
 		var wg sync.WaitGroup
 		for i := range outs {
@@ -442,7 +442,7 @@ func TestAPassReadsEachGroupOnceForAllItsProbes(t *testing.T) {
 		if out, _ := pass.CheckGroups(t.Context(), []string{"S0SHARED000"}); f.count() != 1 || !strings.Contains(out.Message, "rate-limited") {
 			t.Errorf("a third probe in the pass read again (%d reads) or was told %+v; want the one read's answer", f.count(), out)
 		}
-		next := groupChecker{platform: f, timeout: 8 * time.Second}.ForPass()
+		next := groupChecker{platform: f, timeout: 8 * time.Second}.forPass()
 		if _, _ = next.CheckGroups(t.Context(), []string{"S0SHARED000"}); f.count() != 2 {
 			t.Errorf("%d reads after a probe of the next pass; want 2", f.count())
 		}
@@ -503,7 +503,7 @@ func (p *panicOnceReader) GroupsReadable(ctx context.Context, groups []string) e
 func TestAProbeThatWaitedForAReadThatPanickedReadsItself(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := &panicOnceReader{release: make(chan struct{})}
-		pass := groupChecker{platform: f, timeout: 8 * time.Second}.ForPass()
+		pass := groupChecker{platform: f, timeout: 8 * time.Second}.forPass()
 		var wg sync.WaitGroup
 		wg.Go(func() {
 			defer func() { _ = recover() }()

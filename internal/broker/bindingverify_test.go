@@ -790,8 +790,8 @@ func TestCredentialsWatchTellsNothingWithoutAReaderABaselineOrAConnection(t *tes
 func TestVerificationReadsTheCredentialsSecretTheCurrentConfigNames(t *testing.T) {
 	current := &snaps{}
 	current.p.Store(twoConnections(t))
-	v := verification{Snaps: current, Conn: Connection{Ref: v1alpha1.ObjectRef{Namespace: "platform", Name: "slack-a"}}}
-	if ns, name, ok := v.credentialsSecret(); !ok || ns != "platform" || name != "slack-a" {
+	v := verification{Snaps: current}
+	if ns, name, ok := v.credentialsSecret(refA); !ok || ns != "platform" || name != "slack-a" {
 		t.Errorf("credentialsSecret = %q, %q, %t; want platform, slack-a", ns, name, ok)
 	}
 	// A ChatConnection of the same name in another namespace is another connection, with its own Secret.
@@ -805,19 +805,16 @@ func TestVerificationReadsTheCredentialsSecretTheCurrentConfigNames(t *testing.T
 	}
 	current.p.Store(snap)
 	for _, ns := range []string{"platform", "other"} {
-		v.Conn.Ref.Namespace = ns
-		if got, name, ok := v.credentialsSecret(); !ok || got != ns || name != "creds-in-"+ns {
+		if got, name, ok := v.credentialsSecret(v1alpha1.ObjectRef{Namespace: ns, Name: "slack-a"}); !ok || got != ns || name != "creds-in-"+ns {
 			t.Errorf("credentialsSecret of slack-a in %s = %q, %q, %t; want %s, creds-in-%s", ns, got, name, ok, ns, ns)
 		}
 	}
-	v.Conn.Ref.Namespace = "platform"
 	current.p.Store(twoConnections(t))
-	v.Conn.Ref.Name = "slack-nope"
-	if _, _, ok := v.credentialsSecret(); ok {
+	if _, _, ok := v.credentialsSecret(v1alpha1.ObjectRef{Namespace: "platform", Name: "slack-nope"}); ok {
 		t.Error("credentialsSecret found a connection the config does not have")
 	}
 	current.p.Store(nil)
-	if _, _, ok := v.credentialsSecret(); ok {
+	if _, _, ok := v.credentialsSecret(refA); ok {
 		t.Error("credentialsSecret found a Secret before the first load")
 	}
 }
@@ -867,20 +864,20 @@ func twoConnectionsMoved(t *testing.T, moved map[string]string, without ...strin
 // ChatConnection, which Resolve allows to name the same channel, is left out: the bot would answer for a channel it was never asked about.
 func TestBindingTargetsAreTheServedConnectionsBindingsOnly(t *testing.T) {
 	snap := twoConnections(t)
-	got := bindingTargets(snap, v1alpha1.ObjectRef{Namespace: "platform", Name: "slack-a"})
-	want := []bindingcheck.Target{{Binding: "ops/oncall", Channel: "C2"}, {Binding: "sre/oncall", Channel: "C1"}}
+	got := bindingTargets(snap, []v1alpha1.ObjectRef{refA})
+	want := []bindingcheck.Target{{Binding: "ops/oncall", Connection: connA, Channel: "C2"}, {Binding: "sre/oncall", Connection: connA, Channel: "C1"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("targets of slack-a = %v; want %v", got, want)
 	}
-	got = bindingTargets(snap, v1alpha1.ObjectRef{Namespace: "platform", Name: "slack-b"})
-	want = []bindingcheck.Target{{Binding: "ops/also-other", Channel: "C3"}, {Binding: "sre/other-bot", Channel: "C1"}}
+	got = bindingTargets(snap, []v1alpha1.ObjectRef{refB})
+	want = []bindingcheck.Target{{Binding: "ops/also-other", Connection: connB, Channel: "C3"}, {Binding: "sre/other-bot", Connection: connB, Channel: "C1"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("targets of slack-b = %v; want %v", got, want)
 	}
-	if got := bindingTargets(snap, v1alpha1.ObjectRef{Namespace: "platform", Name: "slack-c"}); len(got) != 0 {
+	if got := bindingTargets(snap, []v1alpha1.ObjectRef{{Namespace: "platform", Name: "slack-c"}}); len(got) != 0 {
 		t.Errorf("targets of a connection no Binding names = %v; want none", got)
 	}
-	if got := bindingTargets(nil, v1alpha1.ObjectRef{Namespace: "platform", Name: "slack-a"}); got != nil {
+	if got := bindingTargets(nil, []v1alpha1.ObjectRef{refA}); got != nil {
 		t.Errorf("targets before the first load = %v; want none", got)
 	}
 }
@@ -914,9 +911,9 @@ func TestTheBrokersProberProbesTheServedConnectionAndPrunesWhatAReloadRemoves(t 
 	slk := &accessFake{access: chat.Access{Member: true}}
 	m := mustMetrics(t, nil)
 	p := verification{
-		Bindings: probeFunc(func(context.Context, string) error { time.Sleep(40 * time.Millisecond); return nil }), Platform: slk, Snaps: current,
+		Bindings: probeFunc(func(context.Context, string) error { time.Sleep(40 * time.Millisecond); return nil }), Platforms: soleBot(refA, slk), Snaps: current,
 		Revision: func(context.Context) string { return fmt.Sprint(current.p.Load()) },
-		Conn:     Connection{Ref: v1alpha1.ObjectRef{Namespace: "platform", Name: "slack-a"}},
+		Conns:    soleConn(refA),
 		Metrics:  m, Log: slog.New(slog.DiscardHandler), Interval: time.Hour, Tick: 5 * time.Millisecond, MinRevisionGap: time.Millisecond,
 	}.newProber()
 	runProber(t, p)
@@ -965,16 +962,16 @@ func TestTheBrokersProberProbesTheServedConnectionAndPrunesWhatAReloadRemoves(t 
 	}
 }
 
-// A reload that removes a Binding, or moves it to another ChatConnection than the one served, ends its verification, and its series go:
+// A reload that removes a Binding, or moves it to a ChatConnection the broker does not serve, ends its verification, and its series go:
 // an alert on them resolves without a word. Each such Binding gets one INFO line saying so, and a Binding still served gets none.
 func TestABindingTheReloadRemovedOrMovedAwayGetsALineWhenItsVerificationStops(t *testing.T) {
 	current := &snaps{}
 	current.p.Store(twoConnections(t))
 	var buf logBuffer
 	p := verification{
-		Bindings: probeFunc(func(context.Context, string) error { return nil }), Platform: &accessFake{access: chat.Access{Member: true}}, Snaps: current,
+		Bindings: probeFunc(func(context.Context, string) error { return nil }), Platforms: soleBot(refA, &accessFake{access: chat.Access{Member: true}}), Snaps: current,
 		Revision: func(context.Context) string { return fmt.Sprint(current.p.Load()) },
-		Conn:     Connection{Ref: v1alpha1.ObjectRef{Namespace: "platform", Name: "slack-a"}},
+		Conns:    soleConn(refA),
 		Metrics:  mustMetrics(t, nil), Log: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})),
 		Interval: time.Hour, Tick: 5 * time.Millisecond, MinRevisionGap: time.Millisecond,
 	}.newProber()
@@ -1001,9 +998,9 @@ func TestTheBrokersProberHoldsRevisionPassesToTheMinimumGap(t *testing.T) {
 	current.p.Store(twoConnections(t, "ops/oncall"))
 	var calls, revision atomic.Int64
 	p := verification{
-		Bindings: probeFunc(func(context.Context, string) error { calls.Add(1); return nil }), Platform: &accessFake{access: chat.Access{Member: true}},
+		Bindings: probeFunc(func(context.Context, string) error { calls.Add(1); return nil }), Platforms: soleBot(refA, &accessFake{access: chat.Access{Member: true}}),
 		Snaps: current, Revision: func(context.Context) string { return fmt.Sprint(revision.Add(1)) },
-		Conn:    Connection{Ref: v1alpha1.ObjectRef{Namespace: "platform", Name: "slack-a"}},
+		Conns:   soleConn(refA),
 		Metrics: mustMetrics(t, nil), Log: slog.New(slog.DiscardHandler), Interval: time.Hour, Tick: 2 * time.Millisecond,
 	}.newProber()
 	runProber(t, p)
@@ -1024,8 +1021,8 @@ func TestTheBrokersProberReportsAHungBackendAndAHungChatAsWhatTheyAreAndNotAsPro
 	current.p.Store(twoConnections(t, "ops/oncall"))
 	hungBackend := probeFunc(func(ctx context.Context, _ string) error { <-ctx.Done(); return fmt.Errorf("card: %w", ctx.Err()) })
 	p := verification{
-		Bindings: hungBackend, Platform: &accessFake{wait: true}, Snaps: current, Revision: func(context.Context) string { return "r" },
-		Conn:    Connection{Ref: v1alpha1.ObjectRef{Namespace: "platform", Name: "slack-a"}},
+		Bindings: hungBackend, Platforms: soleBot(refA, &accessFake{wait: true}), Snaps: current, Revision: func(context.Context) string { return "r" },
+		Conns:   soleConn(refA),
 		Metrics: mustMetrics(t, nil), Log: slog.New(slog.DiscardHandler), Timeout: 300 * time.Millisecond, Interval: time.Hour, Tick: 5 * time.Millisecond,
 	}.newProber()
 	runProber(t, p)
@@ -1280,7 +1277,7 @@ func TestEveryChannelOutcomeIsOneTheProberTakesFromAChecker(t *testing.T) {
 	}
 	p := bindingcheck.NewProber(bindingcheck.Options{
 		Targets:  func() []bindingcheck.Target { return targets },
-		Channels: channelChecker{platform: byChannel(fakes), timeout: time.Second},
+		Channels: soleChannels{channelChecker{platform: byChannel(fakes), timeout: time.Second}},
 		Tick:     5 * time.Millisecond, Interval: time.Hour,
 		OnProbeError: func(pe bindingcheck.ProbeError) { t.Errorf("a probe failed: %v", pe.Err) },
 	})
@@ -1329,7 +1326,7 @@ func TestABindingRemovedDuringAPassIsNeverFalseAndIsPruned(t *testing.T) {
 			}
 			return nil
 		})},
-		Channels: channelChecker{platform: &accessFake{access: chat.Access{Member: true}}, timeout: time.Second},
+		Channels: soleChannels{channelChecker{platform: &accessFake{access: chat.Access{Member: true}}, timeout: time.Second}},
 		Tick:     5 * time.Millisecond, Interval: 40 * time.Millisecond,
 		OnTransition: func(t bindingcheck.Transition) {
 			m.BindingCondition(t)

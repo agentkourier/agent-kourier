@@ -22,6 +22,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/audit"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/render"
@@ -146,7 +147,7 @@ func newFixture(t *testing.T) *fixture {
 	f.url = srv.URL
 	f.snaps.p.Store(snapshot(t, srv.URL, v1alpha1.DialectKagentV1, 36*time.Hour))
 	var err error
-	f.b, err = NewBindings(f.snaps, f.reader, f.audit, Options{OnRejected: func(b string) { f.metrics = append(f.metrics, b) }, AckReaction: platformAck})
+	f.b, err = NewBindings(f.snaps, f.reader, f.audit, Options{OnRejected: func(b string) { f.metrics = append(f.metrics, b) }, Platforms: chat.PlatformSet[platformCaps]{"platform/slack": capsFake{ack: platformAck}}})
 	if err != nil {
 		t.Fatalf("NewBindings = %v", err)
 	}
