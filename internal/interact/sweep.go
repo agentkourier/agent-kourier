@@ -224,7 +224,7 @@ func (s *Sweeper) Sweep(ctx context.Context) error {
 	}
 	done := 0
 	downNow := map[string]bool{} // the connections that do not run and have an interaction that is due, in this sweep
-	looked := true               // every due interaction was looked at
+	looked := err == nil         // every due interaction was looked at (none was, if the listing failed)
 	for _, row := range due {
 		if done == s.cfg.Batch {
 			looked = false
