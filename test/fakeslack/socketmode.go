@@ -115,11 +115,21 @@ func (s *Server) serveSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	c := &sockConn{ws: ws, app: app.AppID}
 	defer sk.remove(c)
+	if s.beforeSocketAdd != nil {
+		s.beforeSocketAdd()
+	}
 
 	// Register c and send hello under the write lock, so that a connection is
 	// counted before its client can see hello, and hello goes out first.
 	c.wmu.Lock()
 	if !sk.add(c) {
+		c.wmu.Unlock()
+		return
+	}
+	// The check at the top of this function and add are not atomic: SetRevoked may run between them, and its
+	// disconnect would not have seen c. Checked again now that c is in the list, a revocation either comes after
+	// this (and disconnect finds c) or is seen here.
+	if s.isRevoked(app.AppID) {
 		c.wmu.Unlock()
 		return
 	}
@@ -199,15 +209,25 @@ func (sk *sockets) remove(c *sockConn) {
 	_ = c.ws.Close()
 }
 
-// disconnect tells each connection of the app to go, with a disconnect envelope, and closes it. The handler of each
-// removes it from the list as its read fails.
+// disconnect takes the app's connections out of the list, so that nothing is sent to them or counted for them
+// from then on, and tells each to go with a disconnect envelope and closes it. The envelope and the close are
+// under the connection's write lock, so no other envelope can come between them.
 func (sk *sockets) disconnect(appID string) {
 	sk.mu.Lock()
-	conns := slices.DeleteFunc(slices.Clone(sk.conns), func(c *sockConn) bool { return c.app != appID })
+	var gone []*sockConn
+	sk.conns = slices.DeleteFunc(sk.conns, func(c *sockConn) bool {
+		if c.app == appID {
+			gone = append(gone, c)
+			return true
+		}
+		return false
+	})
 	sk.mu.Unlock()
-	for _, c := range conns {
-		_ = c.write(map[string]any{"type": "disconnect", "reason": "link_disabled"})
+	for _, c := range gone {
+		c.wmu.Lock()
+		_ = c.send(map[string]any{"type": "disconnect", "reason": "link_disabled"})
 		_ = c.ws.Close()
+		c.wmu.Unlock()
 	}
 }
 

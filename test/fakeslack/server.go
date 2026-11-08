@@ -189,6 +189,8 @@ type Server struct {
 	ownMu sync.Mutex
 
 	afterDispatch func() // a test hook, called between queueing a request's own events and sending them
+
+	beforeSocketAdd func() // a test hook, called when a websocket is open and has not yet been registered
 }
 
 // Option configures a Server.

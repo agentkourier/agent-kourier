@@ -73,7 +73,8 @@ func WithApp(a App) Option {
 
 // WithStrictTokens makes the fake refuse a well-formed token that no registered app owns with invalid_auth, where
 // it otherwise belongs to the default app. It applies once any app has a token (WithApp), so a Server with none
-// behaves as it always did. The default app has no tokens, so with this option it is reachable by none.
+// behaves as it always did. The default app owns no token unless WithApp gave it some (an App with the default
+// app's ID), so with this option it is reachable by none otherwise.
 //
 // UNCONFIRMED(MC-10): the code, which is invalid_auth as for any other token the fake does not accept.
 func WithStrictTokens() Option { return func(s *Server) { s.strictTokens = true } }

@@ -700,7 +700,14 @@ func TestARevokedAppIsRefusedAndItsSocketsClosed(t *testing.T) {
 		t.Fatalf("SetRevoked: %v", err)
 	}
 
-	// a's open socket is sent a disconnect and then closed, and b's is not.
+	// a's open socket is sent a disconnect and then closed, and b's is not. The count drops with the call, and
+	// nothing can be sent to the socket from then on.
+	if n := fake.AppConnections("AAPPA"); n != 0 {
+		t.Errorf("a has %d connections straight after SetRevoked, want 0", n)
+	}
+	if _, err := fake.SendEnvelopeTo("AAPPA", "slash_commands", slashCommand); !errors.Is(err, fakeslack.ErrNoConnection) {
+		t.Errorf("SendEnvelopeTo a after SetRevoked = %v, want ErrNoConnection", err)
+	}
 	_, msg, err := ws.ReadMessage()
 	if err != nil || !strings.Contains(string(msg), `"type":"disconnect"`) {
 		t.Fatalf("message after revoking = %s, %v; want a disconnect envelope", msg, err)
@@ -708,7 +715,6 @@ func TestARevokedAppIsRefusedAndItsSocketsClosed(t *testing.T) {
 	if _, _, err := ws.ReadMessage(); err == nil {
 		t.Error("a's socket is still open after the disconnect")
 	}
-	eventually(t, "a's connection to be dropped", func() bool { return fake.AppConnections("AAPPA") == 0 })
 	if n := fake.AppConnections("AAPPB"); n != 1 {
 		t.Errorf("b has %d connections, want 1", n)
 	}
