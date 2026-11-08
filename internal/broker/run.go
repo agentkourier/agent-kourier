@@ -97,7 +97,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 				return err
 			}
 		}
-		crds = &CRDSource{Client: dyn, Connection: cfg.ChatConnection}
+		crds = &CRDSource{Client: dyn, Connection: cfg.ChatConnection, ConnectionNamespaces: cfg.ConnectionNamespaces}
 		status = &statusSink{client: cfg.StatusClient, warnings: cmp.Or(cfg.statusWarnings, &warningCounter{})}
 		if status.client == nil {
 			if status.client, err = InClusterStatusClient(status.warnings); err != nil {
@@ -175,7 +175,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	schemaDone := startSchemaWatch(runCtx, crds, log, metrics)
 	sd.add(stepResolver, func(c context.Context) { cancel(); waitFor(c, schemaDone); boot.Reloader.Wait(); boot.Stop() }) // the Reloader stops before the resolver
 
-	conn, err := ChooseConnection(runCtx, boot.Reloader.Current(), boot.Secrets)
+	conn, err := ChooseConnection(runCtx, boot.Reloader.Current(), cfg.ChatConnection, boot.Secrets)
 	if err != nil {
 		return err
 	}
@@ -247,7 +247,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		}
 		// The connection and its Secrets as they are now: the startup read above only checks that the config can be served.
 		// Everything else the leader half uses (the Bindings, the config snapshot, the Secrets) it reads live.
-		current, err := ChooseConnection(runCtx, boot.Reloader.Current(), boot.Secrets)
+		current, err := ChooseConnection(runCtx, boot.Reloader.Current(), cfg.ChatConnection, boot.Secrets)
 		if err != nil {
 			leave()
 			leaderDone <- err

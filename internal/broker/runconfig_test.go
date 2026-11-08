@@ -83,6 +83,40 @@ func TestValidateRefusesWhatIsMissingAsAWiringError(t *testing.T) {
 	}
 }
 
+// The admission list is for the custom resources: the files source serves the one ChatConnection of its directory, and each item
+// of the list is a namespace name. The error names the item's position and not its value.
+func TestValidateChecksTheAdmissionList(t *testing.T) {
+	crds := func(c *RunConfig, namespaces ...string) {
+		c.ConfigSource, c.ChatConnection, c.ConnectionNamespaces = SourceCRDs, testConnection, namespaces
+	}
+	for name, tc := range map[string]struct {
+		mutate func(*RunConfig)
+		want   string // "" is accepted; otherwise a piece of the wiring error
+	}{
+		"none":                   {func(c *RunConfig) { crds(c) }, ""},
+		"some":                   {func(c *RunConfig) { crds(c, "team-a", "team-b") }, ""},
+		"files refuses a list":   {func(c *RunConfig) { c.ConnectionNamespaces = []string{"team-a"} }, "ConnectionNamespaces is set with the files config source"},
+		"a wildcard":             {func(c *RunConfig) { crds(c, "team-a", "*") }, "ConnectionNamespaces item 2"},
+		"uppercase":              {func(c *RunConfig) { crds(c, "Team-A") }, "ConnectionNamespaces item 1"},
+		"a namespace and a name": {func(c *RunConfig) { crds(c, "team-a/slack") }, "ConnectionNamespaces item 1"},
+		"an empty item":          {func(c *RunConfig) { crds(c, "") }, "ConnectionNamespaces item 1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := valid(t)
+			tc.mutate(&c)
+			err := c.validate()
+			switch {
+			case tc.want == "" && err != nil:
+				t.Errorf("validate = %v, want nil", err)
+			case tc.want != "" && (!errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), tc.want)):
+				t.Errorf("validate = %v, want an ErrWiring saying %q", err, tc.want)
+			case tc.want != "" && (strings.Contains(err.Error(), "team-a") || strings.Contains(err.Error(), "Team-A")):
+				t.Errorf("validate shows a value: %v", err)
+			}
+		})
+	}
+}
+
 // Agent Kourier reads Secrets and watches them through the API server it runs next to; a kubeconfig on a
 // laptop is never used, because it could point at any cluster.
 func TestInClusterClientRefusesOutsideACluster(t *testing.T) {
