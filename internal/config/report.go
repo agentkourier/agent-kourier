@@ -97,6 +97,9 @@ type UnservedConnection struct {
 	Reason UnservedReason
 	// Message says it in a sentence that a Binding's status can carry: it holds no word of the object's own.
 	Message string
+	// Bindings is the "namespace/name" of each Binding that exists and names this connection, sorted. None is in the Snapshot: they are
+	// what the status of the connection's Bindings and the retention of their sessions need.
+	Bindings []string
 }
 
 // Report is what a Reloader knows about the config it serves besides the Snapshot: the objects it refused and the

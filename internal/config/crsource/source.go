@@ -241,7 +241,8 @@ const settleFloor = 8 * time.Second
 
 // maxServedConnections is the most ChatConnections the broker serves, its own included. The own connection is always served and
 // counts first; the ChatConnections of the admitted namespaces are ordered by creationTimestamp (the oldest first), then
-// namespace, then name, and the first maxServedConnections-1 are served. An invalid connection counts too, so that which
+// namespace, then name (creationTimestamp has a resolution of one second, so connections made together tie and fall to namespace
+// and name), and the first maxServedConnections-1 are served. An invalid connection counts too, so that which
 // connections are served depends on the objects' ages and names and not on their specs. A connection past the limit is not served:
 // the Set lists it in UnservedConnections with the reason config.UnservedCap, the Bindings that name it are not read (they are
 // nobody's, until a status says so), and the source says once at Warn that it was left out and once at Info when it is served
@@ -604,6 +605,7 @@ func (s *Source) Set(context.Context) (*config.Set, string, error) {
 	now := s.clock()
 	s.markGone(l, live, now)
 	s.forget(l, live, now, ownConn == nil)
+	reselect := s.placeFreed(served)
 	if ownConn != nil {
 		set.ChatConnections = append(set.ChatConnections, *ownConn)
 		set.Invalid = append(set.Invalid, config.Invalid{Kind: s.own.kind, Namespace: s.own.namespace, Name: s.own.name, Served: ownGood.generation, Deleted: true})
@@ -615,7 +617,14 @@ func (s *Source) Set(context.Context) (*config.Set, string, error) {
 			s.log.Info("the ChatConnection of the broker is back; what was held with it and is still gone is gone")
 		}
 	}
-	return set, s.fingerprintLocked(l, now), nil
+	fp := s.fingerprintLocked(l, now)
+	if reselect {
+		// A deletion took effect at this read and freed a place for a connection that the cap left out, which the next read serves.
+		// Fingerprint does not carry the mark, so the Reloader's next poll finds the state changed and reads again, where it
+		// would otherwise wait for its recheck.
+		fp += "|reselect"
+	}
+	return set, fp, nil
 }
 
 // fingerprintLocked is the digest of the listing, and a mark if a deletion is due to take effect, so that the Reloader reads
@@ -1023,8 +1032,9 @@ func (s *Source) owns(l listing, served servedConnections, u *unstructured.Unstr
 // servedConnections is what one read serves of the ChatConnections: the keys of the own connection and of the team connections that
 // fit under maxServedConnections, and the ones that exist and do not fit.
 type servedConnections struct {
-	keys map[key]bool
-	left []config.UnservedConnection
+	keys     map[key]bool
+	left     []config.UnservedConnection
+	deferred []key // the deleted connections that still took a place in the choice
 }
 
 // selectServed chooses the connections to serve: the own, and the ChatConnections of the admitted namespaces in the order of
@@ -1053,6 +1063,9 @@ func (s *Source) selectServed(l listing) servedConnections {
 	})
 	out := servedConnections{keys: map[key]bool{s.own: true}}
 	for i, c := range cands {
+		if !c.listed {
+			out.deferred = append(out.deferred, c.k)
+		}
 		switch {
 		case i < maxServedConnections-1:
 			out.keys[c.k] = true
@@ -1061,7 +1074,37 @@ func (s *Source) selectServed(l listing) servedConnections {
 				Message: fmt.Sprintf("the broker serves at most %d chat connections", maxServedConnections)})
 		}
 	}
+	if len(out.left) > 0 {
+		out.nameBindings(l)
+	}
 	return out
+}
+
+// nameBindings gives each left-out connection the Bindings that name it, sorted, read from the raw objects: a Binding that is
+// invalid may still say which connection it means. They are in no Set, and the status and the retention of sessions need them.
+func (sc *servedConnections) nameBindings(l listing) {
+	byConn := map[key][]string{}
+	for _, u := range l.bindings {
+		ref := refOf(config.KindChatConnection, u, "spec", "chat", "connectionRef")
+		byConn[ref] = append(byConn[ref], u.GetNamespace()+"/"+u.GetName())
+	}
+	for i := range sc.left {
+		b := byConn[key{config.KindChatConnection, sc.left[i].Namespace, sc.left[i].Name}]
+		slices.Sort(b)
+		sc.left[i].Bindings = b
+	}
+}
+
+// placeFreed says whether this read let a deleted connection's deletion take effect while a connection is left out under the cap:
+// the deleted one still took its place in the choice, so the left-out one waits for the next read. The caller holds s.mu, after forget.
+func (s *Source) placeFreed(served servedConnections) bool {
+	if len(served.left) == 0 {
+		return false
+	}
+	return slices.ContainsFunc(served.deferred, func(k key) bool {
+		g, ok := s.good[k]
+		return !ok || !g.settledAt.IsZero()
+	})
 }
 
 // noteCapped says, once, that a connection is left out under maxServedConnections, at Warn, and, once, that one that was left out is

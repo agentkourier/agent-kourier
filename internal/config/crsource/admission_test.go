@@ -1,8 +1,10 @@
 package crsource_test
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -111,19 +113,30 @@ func TestTheServedSetIsTheOwnConnectionAndTheAdmittedNamespaces(t *testing.T) {
 // namespaces hold.
 func TestWithoutAnAdmissionListOnlyTheOwnConnectionIsServed(t *testing.T) {
 	leakCheck(t)
+	objs := corpus(t)
+	extra := []*unstructured.Unstructured{teamConnection(objs, "team-a", "slack", created), bindingOn(objs, "team-a", "on-a", "team-a", "slack")}
+	// What a broker with no list reads of a cluster that holds a team's objects is what it reads of one that does not: the whole Set.
+	aloneSrc, _ := newCluster(t, objs...).startAdmitted(t, nil)
+	alone, _ := set(t, aloneSrc)
+	var fingerprints []string
 	for name, namespaces := range map[string][]string{"nil": nil, "empty": {}} {
 		t.Run(name, func(t *testing.T) {
-			objs := corpus(t)
-			extra := []*unstructured.Unstructured{teamConnection(objs, "team-a", "slack", created), bindingOn(objs, "team-a", "on-a", "team-a", "slack")}
-			src, _ := newCluster(t, append(objs, extra...)...).startAdmitted(t, nil, namespaces...)
-			s, _ := set(t, src)
+			src, _ := newCluster(t, append(slices.Clone(objs), extra...)...).startAdmitted(t, nil, namespaces...)
+			s, fp := set(t, src)
+			fingerprints = append(fingerprints, fp)
 			if got := connectionNames(s); !slices.Equal(got, []string{"agent-kourier-system/slack-main"}) {
 				t.Errorf("connections = %v; want the own alone", got)
 			}
 			if got := bindingNames(s); !slices.Equal(got, []string{"sre/chat-only", "sre/sre-alerts"}) {
 				t.Errorf("Bindings = %v; want those of the own connection", got)
 			}
+			if !reflect.DeepEqual(s, alone) {
+				t.Errorf("the Set differs from that of a cluster without the team's objects:\n got  %+v\n want %+v", s, alone)
+			}
 		})
+	}
+	if len(fingerprints) == 2 && fingerprints[0] != fingerprints[1] {
+		t.Errorf("fingerprints %q and %q; want one for no list and an empty one", fingerprints[0], fingerprints[1])
 	}
 }
 
@@ -192,6 +205,12 @@ func TestTheOldestTeamConnectionsAreServedUpToTheCap(t *testing.T) {
 		name := fmt.Sprintf("c%02d", i)
 		extra = append(extra, teamConnection(objs, "teams", name, created.Add(-time.Duration(i)*time.Hour)), bindingOn(objs, "teams", "on-"+name, "teams", name))
 	}
+	// A Binding of another namespace names the connection that is left out too, and so does one the broker cannot read (invalid); both
+	// are the connection's, whatever they hold.
+	extra = append(extra, bindingOn(objs, "sre", "on-c01", "teams", "c01"))
+	broken := bindingOn(objs, "payments", "broken-on-c01", "teams", "c01")
+	_ = unstructured.SetNestedField(broken.Object, "#general", "spec", "chat", "channel")
+	extra = append(extra, broken)
 	src, logs := newCluster(t, append(objs, extra...)...).startAdmitted(t, nil, "teams")
 
 	s, _ := set(t, src)
@@ -210,9 +229,15 @@ func TestTheOldestTeamConnectionsAreServedUpToTheCap(t *testing.T) {
 	if got := bindingNames(s); slices.Contains(got, "teams/on-c01") || !slices.Contains(got, "teams/on-c02") || len(got) != 2+crsource.MaxServedConnections-1 {
 		t.Errorf("Bindings = %v; want the two of the own and one for each served team connection, not c01's", got)
 	}
+	// It names the Bindings that name it, sorted, the unreadable one too and none of another connection's.
+	wantBindings := []string{"payments/broken-on-c01", "sre/on-c01", "teams/on-c01"}
+	if got := s.UnservedConnections[0].Bindings; !slices.Equal(got, wantBindings) {
+		t.Errorf("the Bindings of the connection left out = %v; want %v", got, wantBindings)
+	}
 	// The report carries it for the status writer and the retention that come later.
-	if rep := report(t, src); !slices.Equal(unservedNames(rep.UnservedConnections), []string{"teams/c01 cap"}) {
-		t.Errorf("Report.UnservedConnections = %v; want c01, for the cap", unservedNames(rep.UnservedConnections))
+	rep := report(t, src)
+	if !slices.Equal(unservedNames(rep.UnservedConnections), []string{"teams/c01 cap"}) || !slices.Equal(rep.UnservedConnections[0].Bindings, wantBindings) {
+		t.Errorf("Report.UnservedConnections = %+v; want c01, for the cap, with its Bindings %v", rep.UnservedConnections, wantBindings)
 	}
 	// Said once, at Warn, however many reads follow.
 	set(t, src)
@@ -424,5 +449,42 @@ func TestTheOwnConnectionIsStillHeldWithAnAdmissionList(t *testing.T) {
 	}
 	if got := connectionNames(s); !slices.Equal(got, []string{"agent-kourier-system/slack-main", "team-a/slack"}) {
 		t.Errorf("connections = %v; want the held own and the team's", got)
+	}
+}
+
+// A place that a deletion frees is taken by the connection the cap left out at the poll after the one that settled the deletion, not at
+// the Reloader's recheck: the read that settles it still counted the deleted connection, and says that it must be read again. The
+// Reloader here has an hour between rechecks and polls every few milliseconds, so only the fingerprint can bring the second read.
+func TestAPlaceThatADeletionFreesIsTakenAtTheNextPoll(t *testing.T) {
+	leakCheck(t)
+	objs := corpus(t)
+	var extra []*unstructured.Unstructured
+	for i := 1; i <= crsource.MaxServedConnections; i++ { // c16 is the youngest, and is left out
+		extra = append(extra, teamConnection(objs, "teams", fmt.Sprintf("c%02d", i), created.Add(time.Duration(i)*time.Hour)))
+	}
+	c := newCluster(t, append(objs, extra...)...)
+	clock := &testClock{now: time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)}
+	src, _ := c.startAdmitted(t, clock, "teams")
+	r := config.NewReloader(config.ReloaderConfig{
+		Source: src, Secrets: noSecrets{}, PollInterval: 5 * time.Millisecond, SecretsInterval: time.Hour, Logger: slog.New(slog.DiscardHandler), PerObject: true,
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	if err := r.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cancel(); r.Wait() })
+	serves := func(name string) bool {
+		return slices.ContainsFunc(r.Current().ChatConnections(), func(c *v1alpha1.ChatConnection) bool { return c.Namespace == "teams" && c.Name == name })
+	}
+	if serves("c16") || !serves("c15") {
+		t.Fatal("the cap did not leave out c16 and serve c15 at the start")
+	}
+
+	until(t, func() { c.remove(extra[0]) }, func() bool { return src.CachedGenerationForTest("ChatConnection", "teams", "c01") < 0 })
+	until(t, func() {}, func() bool { return len(r.Report().UnservedConnections) == 1 && serves("c01") }) // the poll has read it: deferred, so c01 still serves
+	clock.advance(8 * time.Second)                                                                        // the deletion is due; the next poll settles it
+	until(t, func() {}, func() bool { return serves("c16") })
+	if serves("c01") || len(r.Report().UnservedConnections) != 0 {
+		t.Errorf("c01 served: %v, unserved %+v; want c01 gone and nothing left out", serves("c01"), r.Report().UnservedConnections)
 	}
 }
