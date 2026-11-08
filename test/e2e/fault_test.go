@@ -102,7 +102,7 @@ func TestFaultArmsAndDisarmsOnTheRealDeployment(t *testing.T) {
 	// The new Agent Kourier is up and has connected to the fake, which is how a scenario knows it can go on.
 	sl := NewSlack(env.SlackURL)
 	err = Wait(ctx, 30*time.Second, "Agent Kourier to connect to the fake Slack", func(ctx context.Context) (bool, error) {
-		n, err := sl.Connections(ctx)
+		n, err := sl.AppConnections(ctx, AppPlatform.AppID)
 		return n >= 1, err
 	})
 	if err != nil {

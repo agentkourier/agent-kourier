@@ -33,6 +33,7 @@ type sockets struct {
 	shutdown bool                 // set by Close, guarded by mu
 	closing  chan struct{}        // closed by Close, so that waits for acks end
 	waiters  atomic.Int32         // WaitAck calls about to block or blocked, for tests
+	opened   map[string]int       // per AppID, how many clients have connected in all, guarded by mu
 	issued   int                  // envelopes issued, guarded by mu
 	pending  map[string]*envelope // every envelope sent, by envelope_id; guarded by mu
 	wg       sync.WaitGroup       // the handler and ping goroutines
@@ -194,6 +195,10 @@ func (sk *sockets) add(c *sockConn) bool {
 		return false
 	}
 	sk.conns = append(sk.conns, c)
+	if sk.opened == nil {
+		sk.opened = map[string]int{}
+	}
+	sk.opened[c.app]++
 	return true
 }
 
@@ -260,6 +265,14 @@ func (s *Server) AppConnections(appID string) int {
 	s.sock.mu.Lock()
 	defer s.sock.mu.Unlock()
 	return s.sock.countLocked(appID)
+}
+
+// AppConnectionsOpened returns how many Socket Mode clients have connected as the app appID in all, the ones that have gone included: it moves when a client
+// reconnects, which AppConnections, a count of those there are, does not show if the new one replaces the old between two looks.
+func (s *Server) AppConnectionsOpened(appID string) int {
+	s.sock.mu.Lock()
+	defer s.sock.mu.Unlock()
+	return s.sock.opened[appID]
 }
 
 // countLocked is the number of connections of the app. The caller holds mu.

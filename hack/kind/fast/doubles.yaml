@@ -29,7 +29,18 @@ spec:
         - name: fakeslack
           image: agent-kourier-e2e/fast-doubles:dev
           imagePullPolicy: Never
-          command: ["/fakeslack", "-addr", "0.0.0.0:8080"]
+          # Two more Slack apps beside the default one, which answers every token that no -app owns (the tier's ChatConnection slack-fast, and every
+          # scenario of one app): team-a's and team-b's, for the scenarios of a broker that serves several ChatConnections (the MC_ tests, E2E_TWO_APPS=1
+          # in up-fast.sh). Their bots join only the channels a scenario puts them in. The tokens are fake constants; test/e2e's twoapps.go names the
+          # same ones, and test/kindmanifests pins that they agree.
+          command:
+            - /fakeslack
+            - -addr
+            - 0.0.0.0:8080
+            - -app
+            - app_id=ATEAMA,bot_user=UTEAMA,bot_id=BTEAMA,team_id=TTEAMA,team_name=team-a,bot_token=xoxb-fake-team-a-token,app_token=xapp-fake-team-a-token
+            - -app
+            - app_id=ATEAMB,bot_user=UTEAMB,bot_id=BTEAMB,team_id=TTEAMB,team_name=team-b,bot_token=xoxb-fake-team-b-token,app_token=xapp-fake-team-b-token
           ports: [{containerPort: 8080}]
           readinessProbe: {tcpSocket: {port: 8080}}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}

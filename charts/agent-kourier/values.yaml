@@ -95,9 +95,10 @@ config:
   # the CRDs come first (crds.install below, and the chart README). The chart passes AGENTKOURIER_CONFIG_SOURCE only for crds, and reads an unset
   # source as files, so `helm upgrade --reuse-values` from a release that had none keeps the route it had.
   source: crds
-  # With source crds, the one ChatConnection this broker serves, as namespace/name or, for one in the release's namespace, name
-  # (AGENTKOURIER_CHAT_CONNECTION). A cluster may hold the connections of several brokers, and this one owns only the Bindings whose
-  # connectionRef names its connection. Empty is allowed when chatConnections below has exactly one entry: that is the connection. Ignored
+  # With source crds, the broker's own ChatConnection, as namespace/name or, for one in the release's namespace, name
+  # (AGENTKOURIER_CHAT_CONNECTION). It is always served, and the broker owns the Bindings whose connectionRef names it, and those of the
+  # connections of connectionNamespaces below. A cluster may hold the connections of several brokers, and each serves only its own and the
+  # ones of the namespaces it admits. Empty is allowed when chatConnections below has exactly one entry: that is the connection. Ignored
   # with files, which serves the one ChatConnection of its directory, so a rollback to files may keep it set.
   chatConnection: ""
   # With source crds and chatConnection set, the Secret that connection reads, by name, in the connection's namespace: the chart cannot see the
@@ -245,7 +246,7 @@ resources:
 # config.* above, and the release namespace with store.type postgres.
 #
 # With config.source files, such a Role covers every Secret of its namespace. With config.source crds it covers only the Secrets that the
-# chart can name: the ones config.* and the Postgres DSN refer to, the one the served ChatConnection reads (config.chatConnection, and
+# chart can name: the ones config.* and the Postgres DSN refer to, the one the broker's own ChatConnection reads (config.chatConnection, and
 # config.chatConnectionSecret when the Secret is not named like it), and rbac.secretNames, which list and watch authorize by resourceNames
 # because Agent Kourier's requests carry a metadata.name field selector. Teams that make their own Bindings grant their own Secrets the same
 # way (a Role with resourceNames in their namespace, bound to this ServiceAccount), or you name their namespace in secretNamespaces.
@@ -259,7 +260,7 @@ rbac:
   # read. With crds a namespace listed here is namespace-wide, whatever rbac.secretNames says of it.
   secretNamespaces: []
   # With config.source crds, more Secrets to grant by name, as a map of namespace to Secret names. For Secrets the chart cannot
-  # see, other than the served ChatConnection's (which config.chatConnection already grants): a Binding's token in the release
+  # see, other than the broker's own ChatConnection's (which config.chatConnection already grants): a Binding's token in the release
   # namespace, say. A team's own Secrets are the team's to grant with a Role in its namespace. Ignored with files, whose Roles are
   # namespace-wide, so a rollback to files may keep it set.
   secretNames: {}

@@ -790,3 +790,18 @@ spec:
   The list holds at most 256 namespaces ([Limits](../reference/limits.md)).
 - **Before a rollback to an earlier release, remove `agents` and expect the limit to end.** An earlier broker ignores the field on custom resources and serves every Binding the AgentBackend would
   have admitted, in any agent namespace.
+
+## Upgrade to the release that serves team connections
+
+A team can bring its own Slack app: the platform team lists the team's namespace in the new value `config.connectionNamespaces`, and the broker serves the team's ChatConnection beside its own
+([Let a team bring its own Slack app](team-slack-app.md)). The broker serves nothing new until that list admits a namespace (the migration and the metric labels below apply to every install): the chart renders `AGENTKOURIER_CONNECTION_NAMESPACES` only for a
+non-empty list, and a broker without it serves its own connection alone.
+
+- **A database migration, 0029, runs at the first start.** On SQLite and on Postgres it adds a `connection` column to `outbox` and to `interaction_presses`, `NOT NULL DEFAULT ''`, replaces the index on the outbox's
+  channel and thread with one that starts at the connection, and makes the table `served_connections`. A row written before it, or by an older image after a rollback, has the empty connection; the leader gives
+  such rows to the broker's own connection each time it starts. An older image does not know the column and writes its rows with the default.
+- **Six series gain a `connection` label.** A dashboard or an alert that matches one of them one to one with a series that has none stops matching. The list, and the expressions to change, are in
+  the [release notes](../release-notes.md#version-030-unreleased) and [Metrics](../reference/metrics.md#series-by-connection).
+- **The CRDs come first, as always.** The ChatConnection CRD's description changed (its schema did not), so its schema hash moved: bring the CRDs and the image to the same release, or `agentkourier_crd_schema_state` reports a mismatch.
+- **Do not roll back past this release while team connections are served.** A post waiting for a team's connection would go out through the platform's app. The order that avoids it, and the chart value to remove, are in
+  [Let a team bring its own Slack app](team-slack-app.md#take-it-back).
