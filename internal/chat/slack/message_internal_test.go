@@ -246,8 +246,8 @@ func TestDecodeABotsAppMention(t *testing.T) {
 
 // The events Slack sent in docs/spikes/slack-user-token-and-slackbot-probe.md, with the IDs replaced, decode as that page says. An
 // app that posts with a person's user token sends its own bot ID, so its posts and mentions are a bot's, not the person's, and no
-// personMessage trigger takes them. Slackbot's reminders carry the bot ID B01, so they are a bot's posts, and a reminder that
-// mentions Agent Kourier is a bot's mention. The /remind command's own post, a user-token me_message and a Slackbot custom response
+// personMessage trigger takes them. Slackbot's reminders carry the bot ID B01 (in the workspace probed), so they are a bot's posts,
+// and a reminder that mentions Agent Kourier is a bot's mention. The /remind command's own post, a user-token me_message and a Slackbot custom response
 // (which has no bot ID) are subtypes, and dropped.
 func TestDecodeTheShapesSlackSent(t *testing.T) {
 	const (

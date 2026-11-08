@@ -705,7 +705,7 @@ How a bot message reaches the triggers:
   its own thread. A bot's message event is never a mention, whatever its text says.
 
 A `personMessage` trigger (D51) is tried against a person's message that is not in a thread, or is the root of one, and is no direct message, in a channel whose Binding has
-one; the Slack adapter already hands on a person's message, so it asks the intake nothing, and it drops a Slackbot post with no bot ID (`USLACKBOT`), which is no person. Slackbot's reminders carry a bot ID (`B01` in the workspace probed) and are a bot's posts (D51). It takes the fields above that a person's message has: `match` and `exclude` read
+one; the Slack adapter already hands on a person's message, so it asks the intake nothing, and it drops a Slackbot post with no bot ID (`USLACKBOT`), which is no person (a custom response as its subtype, `slackbot_response`). Slackbot's reminders carry a bot ID (`B01` in the workspace probed) and are a bot's posts (D51). It takes the fields above that a person's message has: `match` and `exclude` read
 `text` alone, and `promptTemplate` and `limits` are required. `from`, `extract` and `thread` are refused at load and by the CRD, because there is no sender to name and no key to thread by, so every
 fire is a start, held only by the limits, and the turn is anchored to the message as an alert's is. A top-level message that mentions Agent Kourier is the `mention`
 trigger's where the Binding has one, so that it uses no place in the limits of the `personMessage` trigger, and is tried against the triggers like any other where it has none. The Slack adapter
@@ -1921,12 +1921,12 @@ event the Slack app has not. What changed in this document:
 | Section 9, `sessions` and `trigger_runs` | `turn_mention` and `session_thread_ts` name a person's message too |
 | Section 10, People's message authenticity, and Spend; R2 | A row for the new trigger, `personMessage` among the triggers that must set limits, and its text in the untrusted block |
 
-### What Slack sends for a user-token post and a Slackbot reminder (2026-11-08)
+### What Slack sends for a user-token post and Slackbot's posts (2026-11-08)
 
-A probe in the sandbox workspace (`docs/spikes/slack-user-token-and-slackbot-probe.md`) measured two senders D51 had assumed. An app that posts
+A probe in the sandbox workspace (`docs/spikes/slack-user-token-and-slackbot-probe.md`) measured senders D51 had assumed. An app that posts
 with a person's user token sends its app's bot ID, `app_id` and `bot_profile` on the `message` and the `app_mention`, so the adapter already took
-it as a bot. Slackbot's reminders carry the bot ID `B01`, so they were a bot's posts before and after D51: a reminder that mentions Agent Kourier
-is a bot's mention (D49), and a `botMessage` trigger can name `B01`. No behaviour changed. What changed in this document:
+it as a bot. Slackbot's reminders carry the bot ID `B01` in the workspace probed, so they were a bot's posts before and after D51: a reminder that mentions Agent Kourier
+is a bot's mention (D49), and a `botMessage` trigger can name `B01`. A Slackbot custom response has no bot ID and is the subtype `slackbot_response`, which the adapter drops. No behaviour changed. What changed in this document:
 
 | Earlier text | Now |
 |---|---|
