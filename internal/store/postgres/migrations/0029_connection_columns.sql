@@ -12,9 +12,10 @@ DROP INDEX outbox_thread;
 CREATE INDEX outbox_thread ON outbox (connection, channel, thread_ts);
 -- A migration runs in a transaction, so the index is not built CONCURRENTLY: it holds writes to the outbox while it builds,
 -- which is brief at the size the table has (see applyMigration, which exempts a migration from the statement timeout).
--- The chat connections this broker served, as of the last time it recorded them: a restarted broker compares them with the
--- ones it serves now, to tell which it stopped serving. Nothing reads or writes the table yet. served_since is when the
--- connection first entered the set.
+-- The chat connections this broker serves, and those it served before that still exist in the cluster, as of the last time it
+-- recorded them: a restarted broker compares them with the ones it serves now, to tell which it stopped serving. The leader reads
+-- the table when it starts and replaces its rows as a whole when the set changes. served_since is when the connection first
+-- entered the set, and a connection that stays in it keeps it.
 CREATE TABLE served_connections (
     connection   text PRIMARY KEY,
     served_since timestamptz NOT NULL

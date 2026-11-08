@@ -182,7 +182,15 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	// left on sessions that have been expired for good, those sessions with what belongs to them, and audit entries past
 	// the operator's retention, if one is set. It writes to the store and the audit, and asks an agent to cancel a stale
 	// task, a call that is bounded and that its context ends, so it stops with the other loops.
-	retain, err := newRetention(retentionConfig{Store: st, Interval: cfg.retentionEvery, AuditRetention: cfg.AuditRetention, ThreadTTLsAndUnserved: bindings.ThreadTTLsAndUnserved,
+	// With the custom resources the record of the connections served (the status writer's, below) also tells the retention which Bindings
+	// belong to a connection this broker served before and does not now: their sessions are kept like those of any unserved Binding.
+	var served *servedRecord
+	retentionKnows := bindings.ThreadTTLsAndUnserved
+	if h.status != nil && boot.Source != nil {
+		served = newServedRecord(st, boot.Source.ConnectionBindings, nil)
+		retentionKnows = served.retentionKnows(runCtx, boot.Reloader.Report, log, retentionKnows)
+	}
+	retain, err := newRetention(retentionConfig{Store: st, Interval: cfg.retentionEvery, AuditRetention: cfg.AuditRetention, ThreadTTLsAndUnserved: retentionKnows,
 		Canceller: bindings, Audit: auditor, Holds: mgr.HoldsTask, OnRemoved: metrics.RetentionRemoved, Logger: log,
 		EnsureAcknowledgment: func(ctx context.Context, r store.Reply) error {
 			return sink.QueueNotice(ctx, r.Key, session.Notice{ID: session.AcknowledgmentID(r.ID), Kind: session.NoticeAcknowledged, MessageRef: r.MessageRef, Reaction: r.Acknowledgment})
@@ -209,7 +217,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 		}
 		statusW, err = newStatusWriter(statusConfig{
 			Client: h.status.client, Report: boot.Reloader.Report, Conditions: func() map[string][]bindingcheck.Condition { return prober.State().Snapshot() },
-			Observed: boot.Source.BindingStatus, Version: boot.Source.BindingEvents, Timeout: statusCallTimeout(h.cfg.Election, h.leaseFence != nil), Fence: h.leaseFence, Warnings: h.status.warnings, Log: log, OnWrite: metrics.StatusWrite,
+			Observed: boot.Source.BindingStatus, Version: boot.Source.BindingEvents, Served: served, Timeout: statusCallTimeout(h.cfg.Election, h.leaseFence != nil), Fence: h.leaseFence, Warnings: h.status.warnings, Log: log, OnWrite: metrics.StatusWrite,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("binding status: %w", err)
