@@ -72,7 +72,8 @@ func (s *Server) scopeMissing(method string) bool {
 }
 
 // conversationsInfo implements conversations.info
-// (https://docs.slack.dev/reference/methods/conversations.info/), read for the bot token's own view of a channel.
+// (https://docs.slack.dev/reference/methods/conversations.info/), read for the bot token's own view of a channel:
+// is_member is whether the calling app's bot user is among the members, so two apps see one channel differently.
 // Error code from the docs: channel_not_found, for a channel value that was invalid.
 //
 // UNCONFIRMED(BV-3): what Slack answers for a private channel the bot is not in (channel_not_found, or the channel with
@@ -82,7 +83,7 @@ func (s *Server) scopeMissing(method string) bool {
 // (channels.go, conversation.go).
 // That Slack sends is_member to a bot token at all is unconfirmed too: the page's example has none.
 // invalid_arguments for a call with no channel is also a guess: the page lists the code among its general ones.
-func (s *Server) conversationsInfo(form url.Values) (response, string) {
+func (s *Server) conversationsInfo(app App, form url.Values) (response, string) {
 	channel := form.Get("channel")
 	if channel == "" {
 		return nil, "invalid_arguments"
@@ -95,7 +96,7 @@ func (s *Server) conversationsInfo(form url.Values) (response, string) {
 		return nil, "channel_not_found"
 	}
 	return response{"channel": map[string]any{
-		"id": channel, "is_channel": true, "is_member": slices.Contains(users, s.bot.user), "is_archived": archived,
+		"id": channel, "is_channel": true, "is_member": slices.Contains(users, app.BotUser), "is_archived": archived,
 	}}, ""
 }
 

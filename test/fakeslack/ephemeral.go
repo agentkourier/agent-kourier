@@ -43,7 +43,7 @@ func (s *Server) Ephemerals(channel string) []Ephemeral {
 // is taken as it is, without checking the thread exists or marking its parent;
 // the message_ts in the response; and that ephemeral messages get no event,
 // and cannot be updated.
-func (s *Server) postEphemeral(form url.Values) (response, string) {
+func (s *Server) postEphemeral(app App, form url.Values) (response, string) {
 	channel := form.Get("channel")
 	if channel == "" {
 		return nil, "channel_not_found"
@@ -55,7 +55,7 @@ func (s *Server) postEphemeral(form url.Values) (response, string) {
 	if code := validateContent(form.Get("text"), form.Get("blocks"), true); code != "" {
 		return nil, code
 	}
-	m := s.botMessage(form.Get("text"), form.Get("thread_ts"))
+	m := botMessage(app, form.Get("text"), form.Get("thread_ts"))
 	m.Blocks = blocksOrNil(form.Get("blocks"))
 
 	s.mu.Lock()

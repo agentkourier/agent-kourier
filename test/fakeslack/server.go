@@ -21,9 +21,17 @@
 //     invalid_auth for the wrong token type, where Slack may say
 //     not_allowed_token_type.
 //   - Socket Mode (socketmode.go): the websocket path and its lack of a
-//     ticket; the content of hello; envelopes going to the newest connection
+//     ticket; the content of hello; envelopes going to an app's newest connection
 //     only, where Slack spreads them over up to 10; and unacked envelopes
 //     never being redelivered, where Slack retries.
+//   - Several apps (apps.go, WithApp): a registered app's events being the channels whose members
+//     include its bot, and the default app's being every channel's; the app parameter that
+//     tells a websocket whose connection it is; another app's posts reaching an app as message
+//     events of the same shape as its own, updates included (ownevents.go); cant_update_message
+//     for a message another app posted, message_not_in_streaming_state for another app's stream;
+//     and, with WithSocketSpread, each of an app's events going to one of its connections in
+//     turn; and, for a revoked app (SetRevoked), the code token_revoked and the reason of the
+//     disconnect envelope sent to its sockets.
 //   - User actions (control.go): the order of the app_mention and message
 //     events for a mention, in a thread too, and both being sent; the fields
 //     of each event, which are the ones Agent Kourier needs; a mention in a direct
@@ -119,6 +127,10 @@
 //     recipient; 12000 characters of markdown_text per call (msg_too_long);
 //     and blocks chunks going through the block rules. Q2 (rate limits) is
 //     out of a fake's reach.
+//
+// Not faked: not_in_channel. chat.postMessage and the other methods accept a post to any channel for
+// any app, whether or not its bot is among the channel's members; an app's membership shows only in
+// conversations.info and conversations.members and in which events it receives.
 package fakeslack
 
 import (
@@ -136,12 +148,15 @@ type Server struct {
 	srv *httptest.Server // nil when used only as a handler
 	now func() time.Time
 
-	pingEvery   time.Duration
-	bot         botIdentity // set by options, read-only after construction
-	noOwnEvents bool        // set by WithoutOwnPostEvents, read-only after construction
-	team        teamIdentity
-	sock        sockets
-	control     http.Handler // the /_control/ routes
+	pingEvery    time.Duration
+	apps         []App             // the default app first; set by options, read-only after construction (apps.go)
+	tokens       map[string]string // token to the AppID that owns it, built after the options
+	spread       bool              // set by WithSocketSpread, read-only after construction
+	strict       bool              // set by WithStrictMembership, read-only after construction
+	strictTokens bool              // set by WithStrictTokens, read-only after construction
+	noOwnEvents  bool              // set by WithoutOwnPostEvents, read-only after construction
+	sock         sockets
+	control      http.Handler // the /_control/ routes
 
 	mu       sync.Mutex
 	last     int64                 // microseconds of the last ts issued, guarded by mu
@@ -150,6 +165,8 @@ type Server struct {
 	users    map[string]User       // guarded by mu
 	members  map[string][]string   // guarded by mu
 	archived map[string]bool       // channels SetArchived marked archived, guarded by mu
+	dmOwner  map[string]string     // direct-message channel to the AppID it was opened with by DMApp, guarded by mu
+	revoked  map[string]bool       // AppIDs whose tokens SetRevoked revoked, guarded by mu
 
 	noScope map[string]bool // methods SetMissingScope makes answer missing_scope, guarded by mu
 
@@ -161,7 +178,7 @@ type Server struct {
 	ephemerals   map[string][]Ephemeral // per channel, in order, guarded by mu
 	statuses     []ThreadStatus         // the calls of assistant.threads.setStatus, in order, guarded by mu
 	ownPending   []ownEvent             // events queued by the request holding ownMu, for flushOwn; guarded by mu
-	ownSent      map[ownKey][]string    // envelope IDs of events sent for each bot message, guarded by mu
+	ownSent      map[ownKey]*ownRecord  // the events sent for each bot message, guarded by mu
 
 	// ownMu is held from dispatch to flushOwn by the methods that queue events, so one request's queue
 	// is its own. That includes flushOwn's writes to the socket, which have a 5 second deadline: a
@@ -172,6 +189,8 @@ type Server struct {
 	ownMu sync.Mutex
 
 	afterDispatch func() // a test hook, called between queueing a request's own events and sending them
+
+	beforeSocketAdd func() // a test hook, called when a websocket is open and has not yet been registered
 }
 
 // Option configures a Server.
@@ -187,20 +206,19 @@ func WithClock(now func() time.Time) Option { return func(s *Server) { s.now = n
 // bot_id, and the app_id. The defaults are UFAKEBOT, BFAKEBOT and AFAKEAPP.
 // Agent Kourier learns its own user and bot IDs from auth.test; slack-go does not
 // decode app_id on messages. Set at construction, read-only after.
+//
+// With several apps (WithApp) these configure the default app only, the one that tokens no registered app owns
+// belong to. An option later in the list replaces what an earlier one set, WithApp's included.
 func WithBot(user, botID, appID string) Option {
-	return func(s *Server) { s.bot = botIdentity{user: user, id: botID, app: appID} }
+	return func(s *Server) { s.apps[0].BotUser, s.apps[0].BotID, s.apps[0].AppID = user, botID, appID }
 }
 
 // WithTeam sets the workspace's team ID and name, which auth.test returns and
 // events and interactions carry. The defaults are TFAKE and fakeworkspace.
 // Set at construction, read-only after.
 func WithTeam(id, name string) Option {
-	return func(s *Server) { s.team = teamIdentity{id: id, name: name} }
+	return func(s *Server) { s.apps[0].TeamID, s.apps[0].TeamName = id, name }
 }
-
-type botIdentity struct{ user, id, app string }
-
-type teamIdentity struct{ id, name string }
 
 // NewHandler returns a Server for use as an http.Handler, with no listener of
 // its own. Mount it at / and reach it directly: the Socket Mode URL it hands
@@ -211,24 +229,28 @@ func NewHandler(opts ...Option) *Server {
 	s := &Server{
 		now:       time.Now,
 		pingEvery: defaultPingInterval,
-		bot:       botIdentity{user: "UFAKEBOT", id: "BFAKEBOT", app: "AFAKEAPP"},
-		team:      teamIdentity{id: "TFAKE", name: "fakeworkspace"},
-		sock:      sockets{pending: map[string]*envelope{}, closing: make(chan struct{})},
-		channels:  map[string][]*Message{},
-		users:     map[string]User{},
-		members:   map[string][]string{},
-		archived:  map[string]bool{},
-		noScope:   map[string]bool{},
+		apps: []App{{
+			TeamID: "TFAKE", TeamName: "fakeworkspace", BotUser: "UFAKEBOT", BotID: "BFAKEBOT", AppID: "AFAKEAPP",
+		}},
+		sock:     sockets{pending: map[string]*envelope{}, closing: make(chan struct{})},
+		channels: map[string][]*Message{},
+		users:    map[string]User{},
+		members:  map[string][]string{},
+		archived: map[string]bool{},
+		dmOwner:  map[string]string{},
+		revoked:  map[string]bool{},
+		noScope:  map[string]bool{},
 
 		usergroups: map[string][]string{},
 
 		channelTypes: map[string]string{},
 		ephemerals:   map[string][]Ephemeral{},
-		ownSent:      map[ownKey][]string{},
+		ownSent:      map[ownKey]*ownRecord{},
 	}
 	for _, o := range opts {
 		o(s)
 	}
+	s.finishApps()
 	s.control = s.newControlRoutes()
 	return s
 }
@@ -305,7 +327,8 @@ func (s *Server) dispatch(r *http.Request) (response, string) {
 		return nil, "invalid_arguments"
 	}
 	method := strings.TrimPrefix(r.URL.Path, "/")
-	if code := authenticate(r, tokenPrefix(method)); code != "" {
+	app, code := s.authenticate(r, tokenPrefix(method))
+	if code != "" {
 		return nil, code
 	}
 	if s.scopeMissing(method) {
@@ -313,19 +336,19 @@ func (s *Server) dispatch(r *http.Request) (response, string) {
 	}
 	switch method {
 	case "apps.connections.open":
-		return s.connectionsOpen(r)
+		return s.connectionsOpen(r, app)
 	case "auth.test":
-		return s.authTest()
+		return s.authTest(app)
 	case "chat.postEphemeral":
-		return s.postEphemeral(r.Form)
+		return s.postEphemeral(app, r.Form)
 	case "chat.postMessage":
-		return s.postMessage(r.Form)
+		return s.postMessage(app, r.Form)
 	case "chat.update":
-		return s.updateMessage(r.Form)
+		return s.updateMessage(app, r.Form)
 	case "reactions.add":
-		return s.addReaction(r.Form)
+		return s.addReaction(app, r.Form)
 	case "reactions.remove":
-		return s.removeReaction(r.Form)
+		return s.removeReaction(app, r.Form)
 	case "assistant.threads.setStatus":
 		return s.setThreadStatus(r.Form)
 	case "conversations.history":
@@ -333,17 +356,17 @@ func (s *Server) dispatch(r *http.Request) (response, string) {
 	case "conversations.replies":
 		return s.replies(r.Form)
 	case "chat.startStream":
-		return s.startStream(r.Form)
+		return s.startStream(app, r.Form)
 	case "chat.appendStream":
-		return s.streamChunk(r.Form, false)
+		return s.streamChunk(app, r.Form, false)
 	case "chat.stopStream":
-		return s.streamChunk(r.Form, true)
+		return s.streamChunk(app, r.Form, true)
 	case "users.info":
 		return s.usersInfo(r.Form)
 	case "conversations.members":
 		return s.conversationsMembers(r.Form)
 	case "conversations.info":
-		return s.conversationsInfo(r.Form)
+		return s.conversationsInfo(app, r.Form)
 	case "usergroups.users.list":
 		return s.usergroupsUsersList(r.Form)
 	default:
@@ -356,10 +379,10 @@ func (s *Server) dispatch(r *http.Request) (response, string) {
 // who it is: the bot's user and bot IDs and the team's.
 //
 // UNCONFIRMED(WP-04): the fields returned, and the placeholder url and user name.
-func (s *Server) authTest() (response, string) {
+func (s *Server) authTest(app App) (response, string) {
 	return response{
-		"url": "https://" + s.team.name + ".slack.com/", "team": s.team.name, "user": "fakebot",
-		"team_id": s.team.id, "user_id": s.bot.user, "bot_id": s.bot.id,
+		"url": "https://" + app.TeamName + ".slack.com/", "team": app.TeamName, "user": "fakebot",
+		"team_id": app.TeamID, "user_id": app.BotUser, "bot_id": app.BotID,
 	}, ""
 }
 
@@ -376,21 +399,30 @@ func tokenPrefix(method string) string {
 // authenticate checks for a token with the given prefix. Slack accepts it in
 // the Authorization header or in a token parameter, and slack-go uses the
 // latter for the Web API methods faked here and the former for
-// apps.connections.open (https://docs.slack.dev/authentication/tokens/).
+// apps.connections.open (https://docs.slack.dev/authentication/tokens/). It
+// returns the app that owns the token: a registered app's token is that app's,
+// and any other token with the right prefix is the default app's.
 //
 // UNCONFIRMED(WP-04): the not_authed and invalid_auth codes, that either
 // location works for every faked method, and that any token with the right
 // prefix is valid.
-func authenticate(r *http.Request, prefix string) string {
+func (s *Server) authenticate(r *http.Request, prefix string) (App, string) {
 	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if !ok {
 		token = r.Form.Get("token")
 	}
 	switch {
 	case token == "":
-		return "not_authed"
+		return App{}, "not_authed"
 	case !strings.HasPrefix(token, prefix):
-		return "invalid_auth"
+		return App{}, "invalid_auth"
 	}
-	return ""
+	app, ok := s.appForToken(token)
+	switch {
+	case !ok:
+		return App{}, "invalid_auth"
+	case s.isRevoked(app.AppID):
+		return App{}, "token_revoked"
+	}
+	return app, ""
 }

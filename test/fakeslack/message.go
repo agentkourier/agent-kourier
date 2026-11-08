@@ -111,11 +111,11 @@ func cloneValue(v any) any {
 	return v
 }
 
-// botMessage returns a new message from the bot, which carries the bot's user,
+// botMessage returns a new message from the bot of app, which carries the bot's user,
 // bot_id and app_id.
-func (s *Server) botMessage(text, threadTS string) *Message {
+func botMessage(app App, text, threadTS string) *Message {
 	return &Message{
-		Type: "message", User: s.bot.user, BotID: s.bot.id, AppID: s.bot.app,
+		Type: "message", User: app.BotUser, BotID: app.BotID, AppID: app.AppID,
 		Text: text, ThreadTS: threadTS,
 	}
 }

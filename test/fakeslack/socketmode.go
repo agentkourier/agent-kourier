@@ -3,6 +3,8 @@ package fakeslack
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,6 +29,7 @@ func WithPingInterval(d time.Duration) Option { return func(s *Server) { s.pingE
 type sockets struct {
 	mu       sync.Mutex
 	conns    []*sockConn          // oldest first; guarded by mu
+	turn     map[string]int       // per AppID, how many events WithSocketSpread has dealt out; guarded by mu
 	shutdown bool                 // set by Close, guarded by mu
 	closing  chan struct{}        // closed by Close, so that waits for acks end
 	waiters  atomic.Int32         // WaitAck calls about to block or blocked, for tests
@@ -39,6 +42,7 @@ type sockets struct {
 // wmu serializes them; pings go out through WriteControl, which is exempt.
 type sockConn struct {
 	ws  *websocket.Conn
+	app string // the AppID of the app this client connected as
 	wmu sync.Mutex
 }
 
@@ -60,21 +64,43 @@ func (c *sockConn) send(v any) error {
 
 // connectionsOpen implements apps.connections.open
 // (https://docs.slack.dev/reference/methods/apps.connections.open/): it points
-// the client at this server's websocket, on whatever host the request used.
-func (s *Server) connectionsOpen(r *http.Request) (response, string) {
+// the client at this server's websocket, on whatever host the request used. A
+// registered app's URL carries its app ID in an app parameter, which is how
+// the websocket knows whose connection it is; the default app's URL has none.
+// The parameter is not called ticket, because a gate in front of the fake may
+// add a ticket of its own, which the fake ignores (internal/chat/slack's tests do).
+//
+// UNCONFIRMED(MC-10): the app parameter. Slack's URL carries an opaque
+// ticket and no app, and nothing depends on this one's form.
+func (s *Server) connectionsOpen(r *http.Request, app App) (response, string) {
 	scheme := "ws"
 	if r.TLS != nil {
 		scheme = "wss"
 	}
-	return response{"url": scheme + "://" + r.Host + socketPath}, ""
+	u := scheme + "://" + r.Host + socketPath
+	if app.AppID != s.defaultApp().AppID {
+		u += "?" + url.Values{"app": {app.AppID}}.Encode()
+	}
+	return response{"url": u}, ""
 }
 
 // serveSocket accepts a Socket Mode client: it sends hello, then reads until
 // the client goes away or the Server closes.
 //
 // UNCONFIRMED(WP-04): the shape of hello (Slack's debug_info is filler here),
-// and that the connection needs no ticket.
+// and that the connection needs no ticket. The connection belongs to the app
+// named by the app parameter of the URL, which apps.connections.open hands
+// out, and to the default app without one; an app no Server hosts is refused.
 func (s *Server) serveSocket(w http.ResponseWriter, r *http.Request) {
+	app, err := s.appNamed(r.URL.Query().Get("app"))
+	if err != nil {
+		http.Error(w, "fakeslack: unknown app", http.StatusBadRequest)
+		return
+	}
+	if s.isRevoked(app.AppID) {
+		http.Error(w, "fakeslack: token_revoked", http.StatusUnauthorized)
+		return
+	}
 	sk := &s.sock
 	if !sk.begin() {
 		http.Error(w, "fakeslack: closing", http.StatusServiceUnavailable)
@@ -87,8 +113,11 @@ func (s *Server) serveSocket(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return // Upgrade has already replied
 	}
-	c := &sockConn{ws: ws}
+	c := &sockConn{ws: ws, app: app.AppID}
 	defer sk.remove(c)
+	if s.beforeSocketAdd != nil {
+		s.beforeSocketAdd()
+	}
 
 	// Register c and send hello under the write lock, so that a connection is
 	// counted before its client can see hello, and hello goes out first.
@@ -97,7 +126,14 @@ func (s *Server) serveSocket(w http.ResponseWriter, r *http.Request) {
 		c.wmu.Unlock()
 		return
 	}
-	err = c.send(s.hello())
+	// The check at the top of this function and add are not atomic: SetRevoked may run between them, and its
+	// disconnect would not have seen c. Checked again now that c is in the list, a revocation either comes after
+	// this (and disconnect finds c) or is seen here.
+	if s.isRevoked(app.AppID) {
+		c.wmu.Unlock()
+		return
+	}
+	err = c.send(hello(app))
 	c.wmu.Unlock()
 	if err != nil {
 		return
@@ -129,12 +165,12 @@ func (s *Server) serveSocket(w http.ResponseWriter, r *http.Request) {
 }
 
 // hello returns the hello message for a new connection.
-func (s *Server) hello() map[string]any {
+func hello(app App) map[string]any {
 	return map[string]any{
 		"type":            "hello",
 		"num_connections": 1,
 		"debug_info":      map[string]any{"host": "fakeslack", "build_number": 1, "approximate_connection_time": 18060},
-		"connection_info": map[string]any{"app_id": s.bot.app},
+		"connection_info": map[string]any{"app_id": app.AppID},
 	}
 }
 
@@ -173,6 +209,28 @@ func (sk *sockets) remove(c *sockConn) {
 	_ = c.ws.Close()
 }
 
+// disconnect takes the app's connections out of the list, so that nothing is sent to them or counted for them
+// from then on, and tells each to go with a disconnect envelope and closes it. The envelope and the close are
+// under the connection's write lock, so no other envelope can come between them.
+func (sk *sockets) disconnect(appID string) {
+	sk.mu.Lock()
+	var gone []*sockConn
+	sk.conns = slices.DeleteFunc(sk.conns, func(c *sockConn) bool {
+		if c.app == appID {
+			gone = append(gone, c)
+			return true
+		}
+		return false
+	})
+	sk.mu.Unlock()
+	for _, c := range gone {
+		c.wmu.Lock()
+		_ = c.send(map[string]any{"type": "disconnect", "reason": "link_disabled"})
+		_ = c.ws.Close()
+		c.wmu.Unlock()
+	}
+}
+
 // stop stops accepting clients, drops the connected ones, and waits for their
 // goroutines.
 func (sk *sockets) stop() {
@@ -188,10 +246,29 @@ func (sk *sockets) stop() {
 	sk.wg.Wait()
 }
 
-// Connections returns the number of Socket Mode clients connected, each of
-// which has been sent hello.
+// Connections returns the number of Socket Mode clients connected, whichever
+// app they are, each of which has been sent hello.
 func (s *Server) Connections() int {
 	s.sock.mu.Lock()
 	defer s.sock.mu.Unlock()
 	return len(s.sock.conns)
+}
+
+// AppConnections returns the number of Socket Mode clients connected as the
+// app appID, each of which has been sent hello.
+func (s *Server) AppConnections(appID string) int {
+	s.sock.mu.Lock()
+	defer s.sock.mu.Unlock()
+	return s.sock.countLocked(appID)
+}
+
+// countLocked is the number of connections of the app. The caller holds mu.
+func (sk *sockets) countLocked(appID string) int {
+	n := 0
+	for _, c := range sk.conns {
+		if c.app == appID {
+			n++
+		}
+	}
+	return n
 }

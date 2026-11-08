@@ -34,8 +34,10 @@ import (
 // message's blocks, as slack-go v0.29.0's MsgOptionBlocks() with no arguments
 // intends; a message that is still streaming cannot be updated
 // (cant_update_message), so the renderer's two paths (spec 8.3) cannot collide
-// on one message, though real Slack's behavior and code for it are unknown.
-func (s *Server) updateMessage(form url.Values) (response, string) {
+// on one message, though real Slack's behavior and code for it are unknown; and cant_update_message for a
+// message another app posted, which is Slack's code for a message the caller may not change, here also for
+// another app's, where Slack's code for that is not known.
+func (s *Server) updateMessage(app App, form url.Values) (response, string) {
 	channel, ts := form.Get("channel"), form.Get("ts")
 	switch {
 	case channel == "":
@@ -60,6 +62,9 @@ func (s *Server) updateMessage(form url.Values) (response, string) {
 		if m.TS != ts {
 			continue
 		}
+		if m.AppID != "" && m.AppID != app.AppID {
+			return nil, "cant_update_message"
+		}
 		if m.Streaming {
 			return nil, "cant_update_message"
 		}
@@ -76,7 +81,7 @@ func (s *Server) updateMessage(form url.Values) (response, string) {
 		if meta != nil {
 			m.Metadata = meta
 		}
-		m.Edited = &Edited{User: s.bot.user, TS: s.nextTSLocked()}
+		m.Edited = &Edited{User: app.BotUser, TS: s.nextTSLocked()}
 		s.queueOwnLocked(channel, &prev, m)
 		echo := m.clone()
 		echo.Metadata = nil // as for chat.postMessage
