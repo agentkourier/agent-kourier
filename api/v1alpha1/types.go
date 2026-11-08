@@ -227,7 +227,7 @@ type Header struct {
 	ValueSecretRef *SecretKeyRef `json:"valueSecretRef,omitempty"`
 }
 
-// ChatConnection is a workspace connection. Owned by the platform team.
+// ChatConnection is a workspace connection. The platform team owns the broker's own; a team may own one in a namespace the platform admits.
 //
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Namespaced,shortName=akconnection,categories=agentkourier
