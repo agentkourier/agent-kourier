@@ -104,6 +104,10 @@ type Intake struct {
 	// matched are the messages a trigger matched, so that a redelivery of one is a dedup decision and
 	// a redelivery of an unmatched one is not.
 	matched recent
+	// awaitingMention are the person's messages that a personMessage trigger matched and a limit stopped, on a Binding with a
+	// mention trigger: they are remembered, but an event of one that says it mentions Agent Kourier is still the mention
+	// trigger's, since the adapter may miss a mention that Slack registers and sends as an app_mention.
+	awaitingMention recent
 	// mentionless holds the Bindings that were said to have no mention trigger, so that it is said once.
 	mentionless sync.Map
 	// emptyKeyWarned are the triggers (namespace/name#index) that were warned of for an empty key.
@@ -142,8 +146,8 @@ func NewIntake(cfg IntakeConfig) *Intake {
 // A message is remembered once a turn is queued for it, or a notice written for it (see
 // IntakeConfig.Notice), so the second event of a mention (a platform may deliver it twice) is skipped; an
 // event that queued nothing, or whose notice failed to write, may be tried again. An unmentioned reply queued
-// nothing, so a later app_mention of the same message is still taken; so is a person's message that a personMessage
-// trigger matched and that started nothing (limited or not_started).
+// nothing, so a later app_mention of the same message is still taken; so is the mentioned event of a person's message that a
+// limit stopped a personMessage trigger from starting (see Intake.awaitingMention).
 func (in *Intake) Message(ctx context.Context, m Inbound) (telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.intake", attribute.String("agentkourier.source", "message"), attribute.String("agentkourier.platform", m.At.Platform))
 	disposition := "ignored"
@@ -156,7 +160,7 @@ func (in *Intake) Message(ctx context.Context, m Inbound) (telemetryErr error) {
 		op.Finish(telemetryErr)
 	}()
 	seen := [2]string{m.At.Channel, m.At.ID}
-	if in.seen.has(seen) {
+	if in.seen.has(seen) && !in.mentionOfLimited(m, seen) {
 		disposition = "duplicate"
 		if in.matched.has(seen) {
 			in.countDecision(ctx, m.At.Channel, DecisionDedup)
@@ -185,14 +189,13 @@ func (in *Intake) Message(ctx context.Context, m Inbound) (telemetryErr error) {
 		return err
 	case d == "trigger_matched":
 		disposition = d
-		if mentionMayTake {
-			// Not remembered: the message's app_mention, if Slack registers a mention the adapter did not see in this event,
-			// is still the mention trigger's. A redelivery is the same start in the store: trigger_runs and Submit both key
-			// it by the message.
-			return nil
-		}
-		in.seen.add(seen)
+		in.seen.add(seen) // a redelivery is a dedup: no late start once capacity is back, and no second refusal
 		in.matched.add(seen)
+		if mentionMayTake {
+			in.awaitingMention.add(seen)
+		} else {
+			in.awaitingMention.remove(seen)
+		}
 		return nil
 	case d != "ignored":
 		// Unmatched, and not remembered: the message's other event may say it mentions Agent Kourier, and then it is the
@@ -230,6 +233,7 @@ func (in *Intake) Message(ctx context.Context, m Inbound) (telemetryErr error) {
 	switch adm := res.Admission; adm.Kind {
 	case session.AdmitTurn, session.AdmitAnswer:
 		in.seen.add(seen)
+		in.awaitingMention.remove(seen) // the mention was taken: another of its events is a duplicate
 	case session.AdmitIgnored:
 		// Not remembered and not noticed: the message's app_mention may still come, and it counts.
 		if adm.Ignored == session.IgnoredBindingGone { // chatter in a thread nobody was asked into
@@ -243,6 +247,7 @@ func (in *Intake) Message(ctx context.Context, m Inbound) (telemetryErr error) {
 				return fmt.Errorf("notice %s%s: %w", req.MessageID, suffix, err)
 			}
 			in.seen.add(seen) // the mention's other event is the same message, and the same notice
+			in.awaitingMention.remove(seen)
 		}
 	default:
 		// A kind this Intake does not know is a mismatch with the session manager, and a reply dropped in silence
@@ -291,11 +296,11 @@ func (in *Intake) botMessage(ctx context.Context, m Inbound) (disposition string
 // in a channel with no Binding, is ignored and not counted, and goes on as it would without the trigger. The adapter has
 // already refused bots' messages that no trigger names and Agent Kourier's own.
 //
-// mentionMayTake says that the match started nothing (a limit stopped it, or its start was not made) and that the Binding's
-// mention trigger would take the message if its other event says it mentions Agent Kourier: the adapter may miss a mention
-// that Slack registers, and sends the app_mention as well. Such a message must not be remembered, or the person's mention is
-// lost as a duplicate. Where the Binding has no mention trigger, the app_mention is the same report, decided the same way, so
-// it is remembered, and a refused start is not refused, audited and counted twice.
+// mentionMayTake says that a limit stopped the match and that the Binding's mention trigger would take the message if its other
+// event says it mentions Agent Kourier: the adapter may miss a mention that Slack registers, and sends the app_mention as well.
+// That event must not be taken for a duplicate, or the person's mention is lost in silence (Intake.awaitingMention). A start
+// that was not made posted its note in the thread, so its app_mention is a duplicate, and no answer follows the note. Where the
+// Binding has no mention trigger, the app_mention is the same report, decided the same way.
 func (in *Intake) personMessage(ctx context.Context, m Inbound) (disposition string, mentionMayTake bool, err error) {
 	snap := in.cfg.Snapshot()
 	if snap == nil {
@@ -306,8 +311,7 @@ func (in *Intake) personMessage(ctx context.Context, m Inbound) (disposition str
 		return "ignored", false, nil
 	}
 	disposition, decision, err := in.matchTriggers(ctx, snap, rb, m, "person message")
-	startedNothing := decision == DecisionLimited || decision == DecisionNotStarted
-	return disposition, startedNothing && !m.Mentioned && mentionTriggerIn(rb.Binding.Spec.Chat.Triggers), err
+	return disposition, decision == DecisionLimited && mentionTriggerIn(rb.Binding.Spec.Chat.Triggers), err
 }
 
 // triedAsPerson says whether m is the input of the personMessage triggers among triggers: a person's message at the top level of
@@ -465,6 +469,21 @@ func (r *recent) has(k [2]string) bool {
 	_, inCur := r.cur[k]
 	_, inOld := r.old[k]
 	return inCur || inOld
+}
+
+// mentionOfLimited says whether m is a person's event that mentions Agent Kourier, of a message that a limit stopped a
+// personMessage trigger from starting on a Binding with a mention trigger: it is the mention trigger's, though the message is
+// remembered (Intake.awaitingMention).
+func (in *Intake) mentionOfLimited(m Inbound, seen [2]string) bool {
+	return m.Mentioned && m.Bot == nil && in.awaitingMention.has(seen)
+}
+
+// remove forgets k, in both generations.
+func (r *recent) remove(k [2]string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.cur, k)
+	delete(r.old, k)
 }
 
 func (r *recent) add(k [2]string) {

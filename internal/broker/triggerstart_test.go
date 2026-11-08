@@ -658,6 +658,17 @@ func TestAMentionALimitStoppedIsAudited(t *testing.T) {
 	}
 }
 
+// An alert's start that a limit stopped is counted and not audited, even if it reaches Limited.
+func TestAnAlertALimitStoppedIsNotAudited(t *testing.T) {
+	s := newStarter(t)
+	m := reported()
+	m.Person = false
+	s.Limited(s.tel.Ctx, m, store.LimitRate)
+	if len(s.aud.got) != 0 {
+		t.Errorf("audited %+v; want nothing for an alert", s.aud.got)
+	}
+}
+
 // A person's report that a limit stopped is audited under that person, by message, trigger and limit, so that a member who
 // spends the limits for everyone can be found; nothing they wrote is in it.
 func TestAPersonsReportALimitStoppedIsAuditedAsTheirs(t *testing.T) {
