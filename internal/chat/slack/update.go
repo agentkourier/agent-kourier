@@ -21,7 +21,7 @@ import (
 // message still streaming (the fake says cant_update_message).
 func (c *Client) Update(ctx context.Context, channel, ts string, content Content) (telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.Update")
-	defer func() { finishChat(ctx, op, "Update", telemetryErr) }()
+	defer func() { c.finishChat(ctx, op, "Update", telemetryErr) }()
 	opts, err := blockOptions(content.Blocks)
 	if err != nil {
 		return fmt.Errorf("slack update: %w", err)

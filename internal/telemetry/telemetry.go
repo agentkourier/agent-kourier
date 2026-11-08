@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,6 +25,12 @@ import (
 
 type observerKey struct{}
 
+// ConnectionLabel is the label that names the ChatConnection ("namespace/name") on every series that belongs to one: the series
+// of the Slack adapter and of the intake, and the durable outbox's backlog gauges (which the stores export). The set of its values is bounded by
+// the number of connections a broker serves; ForgetConnection deletes a connection's series when it is no longer served. Series
+// that are a Binding's carry the Binding's name instead, and the rest belong to the broker as a whole.
+const ConnectionLabel = "connection"
+
 // Observer owns the instruments for one running broker.
 type Observer struct {
 	tracer     trace.Tracer
@@ -31,6 +38,13 @@ type Observer struct {
 	counts     map[string]*prometheus.CounterVec
 	histograms map[string]*prometheus.HistogramVec
 	gauges     map[string]*prometheus.GaugeVec
+	// perConnection are the vectors that have the connection label, for ForgetConnection.
+	perConnection []connectionVec
+}
+
+// connectionVec is a metric vector that can delete the series that match some of its labels: every vector of the Prometheus client is one.
+type connectionVec interface {
+	DeletePartialMatch(labels prometheus.Labels) int
 }
 
 // New registers Agent Kourier's operation and domain instruments in reg.
@@ -48,7 +62,7 @@ func New(reg prometheus.Registerer, provider trace.TracerProvider) (*Observer, e
 		name, help string
 		labels     []string
 	}{
-		{"agentkourier_intake_total", "Inbound messages and presses by intake disposition.", []string{"source", "disposition"}},
+		{"agentkourier_intake_total", "Inbound messages and presses by intake disposition.", []string{"source", "disposition", ConnectionLabel}},
 		{"agentkourier_thread_unmentioned_total", "Replies in a thread Agent Kourier owns that a mention-only Binding ignored because they did not mention Agent Kourier, by Binding.", []string{"binding"}},
 		{"agentkourier_mentions_total", "What the declared names in a turn's reply came to, by Binding and outcome: made (a message that mentions the person was queued), undeclared (an @name no entry declares, which mentions nobody) and capped (a declared person past the Binding's cap, who is not mentioned).", []string{"binding", "outcome"}},
 		{"agentkourier_thread_context_total", "Thread contexts a mentioned turn of a mention-only Binding asked for, by Binding and outcome (read, empty, cut, failed, unsupported).", []string{"binding", "outcome"}},
@@ -61,21 +75,24 @@ func New(reg prometheus.Registerer, provider trace.TracerProvider) (*Observer, e
 		{"agentkourier_stream_reconnects_total", "Stream reconnect attempts by outcome.", []string{"outcome"}},
 		{"agentkourier_session_recovery_total", "Session recovery and reconciliation outcomes.", []string{"outcome"}},
 		{"agentkourier_render_final_total", "Final output delivery outcomes.", []string{"outcome"}},
-		{"agentkourier_chat_api_calls_total", "Chat API operations, including logical errors over HTTP 200.", []string{"operation", "outcome"}},
-		{"agentkourier_slack_events_shed_total", "Slack events left unacknowledged, so that Slack sends them again, because the adapter already held as many as it may: channel_backlog (one channel's lane was full) or adapter_backlog (all lanes were).", []string{"reason"}},
+		{"agentkourier_chat_api_calls_total", "Chat API operations, including logical errors over HTTP 200.", []string{"operation", "outcome", ConnectionLabel}},
+		{"agentkourier_slack_events_shed_total", "Slack events left unacknowledged, so that Slack sends them again, because the adapter already held as many as it may: channel_backlog (one channel's lane was full) or adapter_backlog (all lanes were).", []string{"reason", ConnectionLabel}},
 	} {
 		c := prometheus.NewCounterVec(prometheus.CounterOpts{Name: d.name, Help: d.help}, d.labels)
 		if err := reg.Register(c); err != nil {
 			return nil, err
 		}
 		o.counts[d.name] = c
+		if slices.Contains(d.labels, ConnectionLabel) {
+			o.perConnection = append(o.perConnection, c)
+		}
 	}
 	for _, d := range []struct {
 		name, help string
 		labels     []string
 	}{
 		{"http_client_request_duration_seconds", "HTTP client duration through response EOF or close.", []string{"http_request_method", "server_address", "http_response_status_code", "error_type"}},
-		{"agentkourier_slack_ack_duration_seconds", "Envelope receipt to acknowledgement attempt completion.", []string{"outcome"}},
+		{"agentkourier_slack_ack_duration_seconds", "Envelope receipt to acknowledgement attempt completion.", []string{"outcome", ConnectionLabel}},
 		{"agentkourier_turn_queue_wait_seconds", "Enqueue to the first execution attempt in this process.", []string{"binding"}},
 		{"agentkourier_agent_first_text_duration_seconds", "Execution attempt to its first nonempty text event; recovered snapshots excluded.", []string{"operation"}},
 		{"agentkourier_outbox_delivery_duration_seconds", "Durable row creation to successful delivery or adoption.", []string{"role", "mode"}},
@@ -86,6 +103,9 @@ func New(reg prometheus.Registerer, provider trace.TracerProvider) (*Observer, e
 			return nil, err
 		}
 		o.histograms[d.name] = h
+		if slices.Contains(d.labels, ConnectionLabel) {
+			o.perConnection = append(o.perConnection, h)
+		}
 	}
 	for _, d := range []struct {
 		name, help string
@@ -211,6 +231,18 @@ func Count(ctx context.Context, name string, labels ...string) {
 	if o := observer(ctx); o != nil {
 		if c := o.counts[name]; c != nil {
 			c.WithLabelValues(labels...).Inc()
+		}
+	}
+}
+
+// ForgetConnection deletes every series that carries the connection label with the value connection ("namespace/name"), so that a
+// connection that is no longer served leaves none behind. It is for the connection's removal: its counters start again from zero if it
+// is served again. A call that records for the connection afterwards makes a series again, so call it once nothing of the connection
+// runs. It does nothing without an Observer in ctx, or for a connection with no series.
+func ForgetConnection(ctx context.Context, connection string) {
+	if o := observer(ctx); o != nil {
+		for _, v := range o.perConnection {
+			v.DeletePartialMatch(prometheus.Labels{ConnectionLabel: connection})
 		}
 	}
 }

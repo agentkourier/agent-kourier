@@ -3,9 +3,12 @@ package broker
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -91,7 +94,7 @@ func RunPlatform(ctx context.Context, runner PlatformRunner, sink chat.Sink, p R
 // ChooseConnection returns the ChatConnection this broker runs, with the keys of its credentials Secret that its
 // platform needs (platformKeys) read through secrets. With the custom resources own is the broker's own connection
 // (RunConfig.ChatConnection), found by its reference: the snapshot may hold the ChatConnections of the admitted namespaces
-// besides it, and those are not run yet, so their Secrets are not read here and none of them can fail this. With the files
+// besides it, and this reads none of their Secrets and cannot fail for them (ChooseConnections reads them). With the files
 // own is the zero value, and the directory must hold exactly one ChatConnection, as the broker serves one. The connection must be on a platform that has
 // an adapter (Slack, in Socket Mode). Anything else is an error wrapping ErrWiring. The tokens are those of the snapshot at the call: Run reads them at start, and again when the
 // leader half starts, since a standby may lead long after it started. A change of the connection or of its Secret applies
@@ -117,7 +120,12 @@ func ChooseConnection(ctx context.Context, snap *config.Snapshot, own v1alpha1.O
 		}
 		return Connection{}, fmt.Errorf("%w: v1 serves exactly one ChatConnection, and the config has %d [%s]", ErrWiring, len(conns), strings.Join(names, ", "))
 	}
-	c := conns[0]
+	return connectionOf(ctx, conns[0], secrets)
+}
+
+// connectionOf is the Connection of c with its credentials read through secrets. A platform with no adapter is an error wrapping
+// ErrWiring, and so is a Secret, key or value that is missing; a Secret that cannot be read just now is not.
+func connectionOf(ctx context.Context, c *v1alpha1.ChatConnection, secrets identity.SecretReader) (Connection, error) {
 	name := v1alpha1.NamespacedName(c.Namespace, c.Name)
 	spec, ok := platformFor(c.Spec.Platform)
 	if !ok {
@@ -148,4 +156,80 @@ func ChooseConnection(ctx context.Context, snap *config.Snapshot, own v1alpha1.O
 		creds[key] = v
 	}
 	return Connection{Ref: v1alpha1.ObjectRef{Namespace: c.Namespace, Name: c.Name}, Platform: c.Spec.Platform, Credentials: creds}, nil
+}
+
+// Connections are the ChatConnections a broker runs: its own, and the team connections it serves besides (spec D51).
+type Connections struct {
+	// Own is the broker's own connection, which it always runs.
+	Own Connection
+	// Team are the other ChatConnections of the snapshot, the served ones of the admitted namespaces, oldest first (the order
+	// the source serves them in, and the one that decides which of two connections of one Slack app is served).
+	Team []TeamConnection
+}
+
+// TeamConnection is a served ChatConnection of an admitted namespace, with what starting it takes, or why it cannot start yet.
+type TeamConnection struct {
+	// Connection is the connection and its credentials. The credentials are empty when Err is set.
+	Connection
+	// UID, Generation and Created are the ChatConnection's metadata.uid, metadata.generation and creationTimestamp. The first two
+	// with the credentials say whether it is the connection a runtime was started for; the last is its age.
+	UID        string
+	Generation int64
+	Created    time.Time
+	// Err is why its credentials could not be read, or its platform is not one the broker has an adapter for. It is no failure of the
+	// broker: the connection is left to start later, when the Secret is there, or left out. It holds no Secret value.
+	Err error
+}
+
+// Name is "namespace/name", the connection as keys and rows name it.
+func (t TeamConnection) Name() string { return v1alpha1.NamespacedName(t.Ref.Namespace, t.Ref.Name) }
+
+// fingerprint says which ChatConnection and credentials a runtime was started with: a digest of the object's UID and generation, its
+// platform and credentials Secret, and the credentials themselves (their content, so that a rotated token is another fingerprint). It is
+// kept in memory and compared, never logged or stored.
+func (t TeamConnection) fingerprint() string {
+	h := sha256.New()
+	_, _ = fmt.Fprintf(h, "%q %d %q %q\n", t.UID, t.Generation, t.Platform, t.Name()) // a hash.Hash never fails to write
+	for _, key := range slices.Sorted(maps.Keys(t.Credentials)) {
+		v := t.Credentials[key].Reveal()
+		_, _ = fmt.Fprintf(h, "%q %d:%s", key, len(v), v)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// ChooseConnections returns the broker's own connection, as ChooseConnection does and with the failures it has (the own connection
+// missing or invalid, or its Secret missing, is an error wrapping ErrWiring; one that cannot be read is an error), and the team
+// connections of the snapshot besides it. It never fails for a team connection: one whose Secret is not readable now (a takeover
+// before the Secret informer has synced it, say), or whose platform has no adapter, comes back with its Err set, and the supervisor
+// starts it when it can. With the files there are none.
+func ChooseConnections(ctx context.Context, snap *config.Snapshot, own v1alpha1.ObjectRef, secrets identity.SecretReader) (Connections, error) {
+	ownConn, err := ChooseConnection(ctx, snap, own, secrets)
+	if err != nil {
+		return Connections{}, err
+	}
+	return Connections{Own: ownConn, Team: teamConnections(ctx, snap, ownConn.Ref, secrets)}, nil
+}
+
+// teamConnections are the ChatConnections of snap other than own, oldest first (creationTimestamp, then namespace and name, the
+// source's own rule), with their credentials read through secrets. A snapshot that is not loaded has none.
+func teamConnections(ctx context.Context, snap *config.Snapshot, own v1alpha1.ObjectRef, secrets identity.SecretReader) []TeamConnection {
+	if snap == nil {
+		return nil
+	}
+	var out []TeamConnection
+	for _, c := range snap.ChatConnections() {
+		if c.Namespace == own.Namespace && c.Name == own.Name {
+			continue
+		}
+		t := TeamConnection{UID: string(c.UID), Generation: c.Generation, Created: c.CreationTimestamp.Time}
+		t.Connection, t.Err = connectionOf(ctx, c, secrets)
+		if t.Err != nil {
+			t.Connection = Connection{Ref: v1alpha1.ObjectRef{Namespace: c.Namespace, Name: c.Name}, Platform: c.Spec.Platform}
+		}
+		out = append(out, t)
+	}
+	slices.SortStableFunc(out, func(a, b TeamConnection) int {
+		return cmp.Or(a.Created.Compare(b.Created), cmp.Compare(a.Ref.Namespace, b.Ref.Namespace), cmp.Compare(a.Ref.Name, b.Ref.Name))
+	})
+	return out
 }

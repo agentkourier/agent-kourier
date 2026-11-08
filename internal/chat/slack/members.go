@@ -33,7 +33,7 @@ const (
 // the error code for a recipient outside the channel (the fake says user_not_in_channel).
 func (c *Client) PostEphemeral(ctx context.Context, channel, threadTS, user string, content Content) (telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.PostEphemeral")
-	defer func() { finishChat(ctx, op, "PostEphemeral", telemetryErr) }()
+	defer func() { c.finishChat(ctx, op, "PostEphemeral", telemetryErr) }()
 	opts, err := blockOptions(content.Blocks)
 	if err != nil {
 		return fmt.Errorf("slack ephemeral: %w: %w", store.ErrInvalid, err)
@@ -61,7 +61,7 @@ func (c *Client) PostEphemeral(ctx context.Context, channel, threadTS, user stri
 // next_cursor to an empty one.
 func (c *Client) IsChannelMember(ctx context.Context, channel, user string) (telemetryResult0 bool, telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.IsChannelMember")
-	defer func() { finishChat(ctx, op, "IsChannelMember", telemetryErr) }()
+	defer func() { c.finishChat(ctx, op, "IsChannelMember", telemetryErr) }()
 	ctx, cancel := context.WithTimeout(ctx, c.authz)
 	defer cancel()
 	cursor := ""
@@ -113,7 +113,7 @@ func (c *Client) ChannelAccess(ctx context.Context, channel string) (telemetryRe
 		return chat.Access{}, fmt.Errorf("slack channel access: no channel: %w", chat.ErrChannelNotFound)
 	}
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.ChannelAccess")
-	defer func() { finishChat(ctx, op, "ChannelAccess", telemetryErr) }()
+	defer func() { c.finishChat(ctx, op, "ChannelAccess", telemetryErr) }()
 	ctx, cancel := context.WithTimeout(ctx, c.authz)
 	defer cancel()
 	info, err := c.api.GetConversationInfoContext(ctx, &slackgo.GetConversationInfoInput{ChannelID: channel})
@@ -161,7 +161,7 @@ func (c *Client) IsInAnyUserGroup(ctx context.Context, groups []string, user str
 		return false, nil
 	}
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.IsInAnyUserGroup")
-	defer func() { finishChat(ctx, op, "IsInAnyUserGroup", telemetryErr) }()
+	defer func() { c.finishChat(ctx, op, "IsInAnyUserGroup", telemetryErr) }()
 	ctx, cancel := context.WithTimeout(ctx, c.authz)
 	defer cancel()
 	for _, group := range groups {
@@ -202,7 +202,7 @@ func (c *Client) GroupsReadable(ctx context.Context, groups []string) (telemetry
 		return nil
 	}
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.GroupsReadable")
-	defer func() { finishChat(ctx, op, "GroupsReadable", telemetryErr) }()
+	defer func() { c.finishChat(ctx, op, "GroupsReadable", telemetryErr) }()
 	ctx, cancel := context.WithTimeout(ctx, c.authz)
 	defer cancel()
 	for _, group := range groups {
@@ -233,7 +233,7 @@ func (c *Client) GroupsReadable(ctx context.Context, groups []string) (telemetry
 // and what users.info says of a deactivated user.
 func (c *Client) IsBot(ctx context.Context, user string) (telemetryResult0 bool, telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.IsBot")
-	defer func() { finishChat(ctx, op, "IsBot", telemetryErr) }()
+	defer func() { c.finishChat(ctx, op, "IsBot", telemetryErr) }()
 	ctx, cancel := context.WithTimeout(ctx, c.authz)
 	defer cancel()
 	u, err := c.api.GetUserInfoContext(ctx, user)

@@ -51,7 +51,11 @@ func TestTheAcknowledgmentTimeIncludesTheWaitOnTheLane(t *testing.T) {
 			continue
 		}
 		for _, m := range f.Metric {
-			if labels := m.GetLabel(); len(labels) != 1 || labels[0].GetValue() != "acknowledged" {
+			labels := map[string]string{}
+			for _, l := range m.GetLabel() {
+				labels[l.GetName()] = l.GetValue()
+			}
+			if labels["outcome"] != "acknowledged" || labels["connection"] != intakeConn {
 				continue // the fake Slack's hello is withheld at once
 			}
 			// The first took one hold, and the second the first's and its own: three holds. Were the wait on the lane left

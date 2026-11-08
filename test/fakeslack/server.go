@@ -59,6 +59,8 @@
 //     Submit refusing a message whose interactive block has no block_id, where
 //     Slack makes one up.
 //   - auth.test: the fields returned, and its placeholder url and user name.
+//   - bots.info (botsInfo): the fields returned beyond id, app_id and user_id; the error codes bot_not_found and
+//     invalid_arguments; and the scope it needs.
 //   - Bot identity: a bot post carrying user, bot_id and app_id together, with
 //     no subtype.
 //   - Content limits (validate.go): 50 blocks; 40000 characters of message
@@ -137,6 +139,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -339,6 +343,8 @@ func (s *Server) dispatch(r *http.Request) (response, string) {
 		return s.connectionsOpen(r, app)
 	case "auth.test":
 		return s.authTest(app)
+	case "bots.info":
+		return s.botsInfo(r.Form)
 	case "chat.postEphemeral":
 		return s.postEphemeral(app, r.Form)
 	case "chat.postMessage":
@@ -384,6 +390,29 @@ func (s *Server) authTest(app App) (response, string) {
 		"url": "https://" + app.TeamName + ".slack.com/", "team": app.TeamName, "user": "fakebot",
 		"team_id": app.TeamID, "user_id": app.BotUser, "bot_id": app.BotID,
 	}, ""
+}
+
+// botsInfo implements bots.info (https://docs.slack.dev/reference/methods/bots.info/), which Agent Kourier asks for the bot that auth.test
+// names, to learn which app it belongs to: the answer's bot has the id of the bot, the user it posts as and the app_id of its app. Any
+// registered app's bot is known, whichever app asks, as in a workspace; the calls are held to the token rules of every method (strict
+// tokens, token_revoked), and SetMissingScope("bots.info") makes it answer missing_scope.
+//
+// UNCONFIRMED(MC-4): that bots.info needs the users:read scope (the method's page says so), the fields returned beyond id, app_id and
+// user_id (name, deleted and the empty icons are placeholders), bot_not_found for a bot nobody has, invalid_arguments for no bot ID, and that a
+// bot of another workspace is as known as one in the caller's.
+func (s *Server) botsInfo(form url.Values) (response, string) {
+	id := form.Get("bot")
+	if id == "" {
+		return nil, "invalid_arguments"
+	}
+	i := slices.IndexFunc(s.apps, func(a App) bool { return a.BotID == id })
+	if i < 0 {
+		return nil, "bot_not_found"
+	}
+	a := s.apps[i]
+	return response{"bot": map[string]any{
+		"id": a.BotID, "deleted": false, "name": "fakebot", "updated": 0, "app_id": a.AppID, "user_id": a.BotUser, "icons": map[string]any{},
+	}}, ""
 }
 
 // tokenPrefix returns the prefix of the token type a method accepts: an
