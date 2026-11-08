@@ -5,10 +5,12 @@ import (
 	"time"
 )
 
-// ConnectionServing records which chat connections this broker served, so that a restarted broker can tell which it stopped
-// serving: it compares the recorded set with the one it serves now.
+// ConnectionServing records which chat connections this broker serves and which it served before and that still exist in the
+// cluster, so that a restarted broker can tell which it stopped serving: it compares the recorded set with the one it serves now. The
+// store holds whatever set it is given; the broker decides what the record means (a connection stays in it until it is served again
+// or its ChatConnection is deleted).
 type ConnectionServing interface {
-	// ServedConnections returns the recorded connections ("namespace/name"), sorted byte for byte; none if none are recorded.
+	// ServedConnections returns the recorded connections ("namespace/name"): those served now and those served before that still exist, sorted byte for byte; none if none are recorded.
 	ServedConnections(ctx context.Context) ([]string, error)
 	// ReplaceServedConnections makes the recorded set exactly connections, in one transaction: a connection that is not in it
 	// is removed, a new one is added as served from now (the time of the call), and one that is in both keeps the time it has been served since. A

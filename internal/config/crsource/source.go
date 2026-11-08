@@ -530,6 +530,34 @@ func (s *Source) BindingStatus(namespace, name string) (BindingStatus, bool, err
 	return BindingStatus{UID: u.GetUID(), Generation: u.GetGeneration(), ResourceVersion: u.GetResourceVersion(), Conditions: ConditionsOf(u)}, true, nil
 }
 
+// ConnectionBindings is what ConnectionBindings finds of one ChatConnection.
+type ConnectionBindings struct {
+	// Exists says whether the ChatConnection exists, whether or not the broker serves it.
+	Exists bool
+	// Bindings is the "namespace/name" of each Binding that names it, sorted, an invalid one too.
+	Bindings []string
+	// Admitted is the part of Bindings that the connection allows: those of its own namespace, and those of a namespace its
+	// spec.allowedNamespaces lists. Only these may be told anything of the connection (a Binding of another namespace learns no more of
+	// an object than that it exists and allows it).
+	Admitted []string
+}
+
+// ConnectionBindings reads the ChatConnection namespace/name and the Bindings that name it from the caches, whether or not the broker
+// serves it, so the connection need not be one the Set lists: it is how the broker finds the Bindings of a connection it served before
+// and does not now (a namespace taken off the admission list), which no read of the Set names. A Binding that is invalid still says
+// which connection it means, as for UnservedConnection.Bindings. It fails with ErrNotSynced until the caches have synced, and with
+// ErrStopped after Stop.
+func (s *Source) ConnectionBindings(namespace, name string) (ConnectionBindings, error) {
+	l, err := s.list()
+	if err != nil {
+		return ConnectionBindings{}, err
+	}
+	want := key{config.KindChatConnection, namespace, name}
+	out := ConnectionBindings{Exists: l.hasConnection[want]}
+	out.Bindings, out.Admitted = l.bindingsOf(want)
+	return out, nil
+}
+
 // BindingEvents counts the events (an object added, changed or deleted) that the Binding informer has delivered, and only grows.
 // A reader of the statuses that sees it unchanged since it last looked knows that no Binding has changed since: the cache is
 // updated before the event is counted, so a change that the count has not caught up with yet is seen at the next look. It reads
@@ -1084,16 +1112,32 @@ func (s *Source) selectServed(l listing) servedConnections {
 // nameBindings gives each left-out connection the Bindings that name it, sorted, read from the raw objects: a Binding that is
 // invalid may still say which connection it means. They are in no Set, and the status and the retention of sessions need them.
 func (sc *servedConnections) nameBindings(l listing) {
-	byConn := map[key][]string{}
-	for _, u := range l.bindings {
-		ref := refOf(config.KindChatConnection, u, "spec", "chat", "connectionRef")
-		byConn[ref] = append(byConn[ref], u.GetNamespace()+"/"+u.GetName())
-	}
 	for i := range sc.left {
-		b := byConn[key{config.KindChatConnection, sc.left[i].Namespace, sc.left[i].Name}]
-		slices.Sort(b)
-		sc.left[i].Bindings = b
+		sc.left[i].Bindings, sc.left[i].Admitted = l.bindingsOf(key{config.KindChatConnection, sc.left[i].Namespace, sc.left[i].Name})
 	}
+}
+
+// bindingsOf returns the Bindings that name the connection conn, sorted, and those of them that the connection admits: its own
+// namespace's, and the namespaces of its spec.allowedNamespaces, read from the raw object, which is readable when it is invalid.
+func (l listing) bindingsOf(conn key) (bindings, admitted []string) {
+	var allowed []string
+	for _, u := range l.connections {
+		if keyOf(config.KindChatConnection, u) == conn {
+			allowed, _, _ = unstructured.NestedStringSlice(u.Object, "spec", "allowedNamespaces")
+			break
+		}
+	}
+	for _, u := range l.bindings {
+		if refOf(config.KindChatConnection, u, "spec", "chat", "connectionRef") != conn {
+			continue
+		}
+		name := u.GetNamespace() + "/" + u.GetName()
+		bindings = append(bindings, name)
+		if u.GetNamespace() == conn.namespace || slices.Contains(allowed, u.GetNamespace()) {
+			admitted = append(admitted, name)
+		}
+	}
+	return bindings, admitted
 }
 
 // placeFreed says whether this read let a deleted connection's deletion take effect while a connection is left out under the cap:

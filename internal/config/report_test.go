@@ -244,6 +244,21 @@ func TestReportUnserved(t *testing.T) {
 	}
 }
 
+// A Binding that names a ChatConnection the broker leaves out exists and is not in the Snapshot: its sessions are as much an unserved
+// Binding's as a rejected one's. Report.Unserved counts it, once, whether or not a Rejection names it too.
+func TestReportUnservedCountsTheBindingsOfAConnectionLeftOut(t *testing.T) {
+	r := Report{
+		Rejections: []Rejection{{Namespace: "sre", Name: "b", Reason: ReasonInvalidSpec}},
+		UnservedConnections: []UnservedConnection{
+			{Namespace: "teams", Name: "c16", Reason: UnservedCap, Bindings: []string{"teams/on-c16", "sre/b"}},
+			{Namespace: "teams", Name: "c17", Reason: UnservedCap},
+		},
+	}
+	if got := r.Unserved(); !slices.Equal(got, []string{"sre/b", "teams/on-c16"}) {
+		t.Errorf("Unserved = %v; want [sre/b teams/on-c16]", got)
+	}
+}
+
 func TestCapMessage(t *testing.T) {
 	if got := CapMessage("short"); got != "short" {
 		t.Errorf("CapMessage(short) = %q", got)
