@@ -27,8 +27,10 @@ const defaultSuperviseEvery = 5 * time.Second
 // restart (spec D50 (6)), and it is only counted first when two connections are of one Slack app.
 //
 // Its loop is one goroutine, and everything in the struct but the host is its own. A failure of a team connection stops that connection only: its
-// run ends, it leaves the table, and nothing else is told; it runs again when its fingerprint changes (failure isolation is not complete: the
-// connection's Bindings are not yet told why, and its metric is not deleted).
+// run ends, it leaves the table, and the table keeps why (a rejected credential, or a Secret that cannot be used), which the verification of its
+// Bindings tells them; one WARN names the connection and the platform's code, agentkourier_chat_connected says 0 for it, and nothing else is touched.
+// It runs again when its fingerprint changes, which is its Secret or its ChatConnection. A connection that leaves the Snapshot is gone: its metric
+// series is deleted (removed).
 type supervisor struct {
 	host     *runtimeHost
 	log      *slog.Logger
@@ -47,6 +49,13 @@ type supervisor struct {
 	changes *atomic.Uint64
 	// gone is told the connection of a runtime that was stopped, so that the parts that keep state for it let go (the outbox's lane).
 	gone func(conn string)
+	// removed is told a connection that is not served: the Snapshot no longer has it, or it was stopped as a second connection of a Slack app
+	// (once, when that begins). It is not told of a restart, nor of a connection stopped for its credentials, which are still served. The
+	// parts that keep a metric series per connection delete it (Metrics.ConnectionRemoved). Nil is no one. Told after the runtime has stopped.
+	removed func(ctx context.Context, conn string)
+	// recover is told a connection whose runtime has started, so that the turns that were left while it did not run are taken up
+	// (session.Manager.RecoverConnection). It is asked again at the next pass if it returned an error. Nil is no one.
+	recover func(ctx context.Context, conn string) error
 
 	done chan struct{}
 	// passes counts the passes made, for a test that waits for one to be sure the supervisor has looked.
@@ -55,8 +64,15 @@ type supervisor struct {
 	ownKnown bool
 	// refusedNow is the connections the latest pass refused, for publish.
 	refusedNow map[string]string
+	// reasonsPub is why each connection was down when publish last ran, so that a change of it counts as a change of what is published.
+	reasonsPub map[string]string
 	teams      map[string]*teamRuntime
-	said       map[string]string // the last line said of each connection, so that a state is said once
+	// seen is every connection a pass has found in desired and that has not left since, whether or not it has an entry in teams (a connection
+	// whose Secret cannot be read has none), so that a connection that leaves is removed (removed, clearDown).
+	seen map[string]bool
+	// lives is the span each connection that is served has been served in (connLife), so that retiring it reaches every runtime it has had.
+	lives map[string]*connLife
+	said  map[string]string // the last line said of each connection, so that a state is said once
 }
 
 // teamRuntime is what the supervisor knows of one team connection.
@@ -70,9 +86,11 @@ type teamRuntime struct {
 	rt *connRuntime
 	// failed says starting it failed for fp, which is not tried again until fp changes.
 	failed bool
-	// rejected says Slack refused the credentials of fp when the identity was asked: it is not asked again until fp changes. MC-5 is where the
-	// connection's Bindings are told (ChatCredentialsRejected); here it is the place where it is first known.
+	// rejected says Slack refused the credentials of fp when the identity was asked: it is not asked again until fp changes. The table keeps it as
+	// the reason the connection is down (runtimeTable.setDown), which is how the connection's Bindings are told (ChatCredentialsRejected).
 	rejected bool
+	// recovering says the turns the connection's runtime left are not taken up yet (supervisor.recover).
+	recovering bool
 	// refused says it was found to be a second connection of a Slack app, and not run for it. It stays refused while its credentials cannot be read.
 	refused bool
 }
@@ -106,14 +124,25 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 	present := map[string]bool{}
 	for _, t := range desired {
 		present[t.Name()] = true
+		s.seen[t.Name()] = true
 	}
-	for name, st := range s.teams {
-		if !present[name] {
-			s.stop(ctx, name, st, "it is no longer served")
-			telemetry.ForgetConnection(ctx, name) // nothing of it runs now, so its series would only go stale
-			delete(s.teams, name)
-			delete(s.said, name)
+	// A connection that leaves is removed whether or not it ever had a runtime or an entry in teams: one whose Secret never existed has a metric
+	// series and a reason in the table too.
+	for name := range s.seen {
+		if present[name] {
+			continue
 		}
+		if st := s.teams[name]; st != nil {
+			s.retire(name)
+			s.stop(ctx, name, st, "it is no longer served")
+		}
+		s.host.table.clearDown(name)
+		if s.removed != nil {
+			s.removed(ctx, name)
+		}
+		delete(s.teams, name)
+		delete(s.said, name)
+		delete(s.seen, name)
 	}
 	if len(desired) == 0 {
 		s.refusals.set(nil)
@@ -149,6 +178,18 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 			}
 			if st == nil || st.rt == nil {
 				s.say(ctx, name, "the ChatConnection is not started yet: its credentials cannot be used", t.Err)
+				if st == nil || !st.refused { // a refused connection is not served, and its series is not for this branch to bring back
+					s.host.metrics.ChatConnected(name, false) // served and not connected: the series says so from the first look
+				}
+				// A Secret that is gone, empty or of a type never read is for the operator to mend: its Bindings say so. A read that failed for a
+				// moment (a cache that has not synced) is no finding. A rejection of the credentials it had stays, until they change.
+				switch {
+				case st != nil && st.rejected:
+				case secretUnusable(t.Err):
+					s.host.table.setDown(name, &connectionStopped{conn: name, cause: t.Err})
+				default:
+					s.host.table.clearUnusable(name)
+				}
 			}
 			continue
 		}
@@ -158,7 +199,10 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 			}
 			st = &teamRuntime{fp: fp}
 			s.teams[name] = st
+			s.host.table.clearDown(name) // the credentials or the ChatConnection changed: whatever kept it down is for the new ones to show
 			delete(s.said, name)
+		} else {
+			s.host.table.clearUnusable(name) // its Secret can be read now
 		}
 		if st.rejected {
 			continue
@@ -168,6 +212,9 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 			if err != nil {
 				if errors.Is(err, errCredentialsRejected) {
 					st.rejected = true
+					code, _ := rejectionCode(err)
+					s.host.table.setDown(name, &connectionStopped{conn: name, rejected: true, code: code})
+					s.host.metrics.ChatConnected(name, false)
 					s.say(ctx, name, "the platform rejected the ChatConnection's credentials, so it is not started until its ChatConnection or its Secret changes", err)
 					continue
 				}
@@ -178,12 +225,16 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 		}
 		if st.id.known() {
 			if holder, taken := claimed[st.id.App]; taken {
+				newly := !st.refused
 				st.refused = true
 				refused[name] = refusedMessage
+				s.retire(name)
 				s.stop(ctx, name, st, "it is a second connection of the Slack app that "+holder+" uses")
 				// Not served from here, so the series of its earlier run would only go stale. Not only when this entry ran: a restart that
 				// ends in a refusal (its Secret now holds another app's tokens) made this entry fresh, and the run it replaced left series.
-				telemetry.ForgetConnection(ctx, name)
+				if newly && s.removed != nil {
+					s.removed(ctx, name)
+				}
 				s.say(ctx, name, "the ChatConnection is not served: it uses the same Slack app as the older ChatConnection "+holder+", and an app is served once", nil)
 				continue
 			}
@@ -205,6 +256,29 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 	for _, name := range toStart {
 		s.start(ctx, byName[name], s.teams[name])
 	}
+	for name, st := range s.teams {
+		if st.recovering {
+			s.recoverTurns(ctx, name, st)
+		}
+	}
+}
+
+// recoverTurns asks for the turns that were left while the connection did not run to be taken up, now that it runs, and asks again at the next
+// pass if that failed. A connection that stopped again before it was asked keeps the question until its fingerprint changes and a new entry
+// replaces this one.
+func (s *supervisor) recoverTurns(ctx context.Context, name string, st *teamRuntime) {
+	if s.recover == nil || st.rt == nil {
+		st.recovering = false
+		return
+	}
+	if ctx.Err() != nil || !s.host.table.runs(name) {
+		return
+	}
+	if err := s.recover(ctx, name); err != nil {
+		s.log.WarnContext(ctx, "chat connection: the turns it left while it did not run are not taken up yet; they are tried again", "connection", name, "error", telemetry.LogText(err))
+		return
+	}
+	st.recovering = false
 }
 
 // start builds and runs the runtime of t.
@@ -230,6 +304,8 @@ func (s *supervisor) start(ctx context.Context, t TeamConnection, st *teamRuntim
 		return
 	}
 	st.rt = rt
+	rt.life.Store(s.lifeOf(name))
+	st.recovering = true
 	s.host.run(rt, sink, s.ended)
 	delete(s.said, name)
 	s.log.InfoContext(ctx, "serving a ChatConnection", "connection", name)
@@ -241,7 +317,30 @@ func (s *supervisor) ended(rt *connRuntime, err error) {
 	if rt.halted.Load() {
 		return
 	}
-	s.log.Warn("chat connection: its run ended and it is not served until its ChatConnection or its Secret changes", "connection", rt.name, "error", telemetry.LogText(err))
+	code, rejected := rejectionCode(err)
+	if !rejected { // not a rejection the platform made: the run ended for a reason this does not know
+		s.log.Warn("chat connection: its run ended and it is not served until its ChatConnection or its Secret changes", "connection", rt.name, "error", telemetry.LogText(err))
+		return
+	}
+	s.log.Warn("chat connection: the platform rejected its credentials, so its run ended and it is not served until its ChatConnection or its Secret changes", "connection", rt.name, "code", code, "error", telemetry.LogText(err))
+}
+
+// lifeOf is the span of the connection name being served that a runtime started now belongs to: every runtime of the connection, those that a
+// restart replaced included, until it stops being served.
+func (s *supervisor) lifeOf(name string) *connLife {
+	if s.lives[name] == nil {
+		s.lives[name] = &connLife{}
+	}
+	return s.lives[name]
+}
+
+// retire says the connection is not served any more (it was removed, or refused as a second connection of a Slack app): what holds the platform of any
+// of its runtimes fails fast from here. A restart does not retire. If the connection is served again it has a new span.
+func (s *supervisor) retire(name string) {
+	if l := s.lives[name]; l != nil {
+		l.retired.Store(true)
+		delete(s.lives, name)
+	}
 }
 
 // stop stops the runtime of st, if it has one, and says why. The connection is down from here.
@@ -282,7 +381,7 @@ func (s *supervisor) say(ctx context.Context, name, msg string, err error) {
 // probed: they are told they are not served. The list is built whole and never changed after it is stored, because the probes read it from
 // several goroutines; nothing in them reads the supervisor's own state. It is called at the end of every pass, so it is as old as the last.
 //
-// A change of the list, which is a connection that started, restarted or stopped, counts in changes, and the verification adds the count to the
+// A change of the list, which is a connection that started, restarted or stopped, or of why a connection is down (the table's reasons), counts in changes, and the verification adds the count to the
 // revision of the config it watches: a rotated Secret moves the config's revision, so a pass runs while the connection still runs on the old tokens and
 // tells its Bindings the credentials changed, and the restart that follows moves nothing the revision names, so without the count no pass
 // would run until the next interval to clear it.
@@ -302,8 +401,10 @@ func (s *supervisor) publish(desired []TeamConnection) {
 		}
 		list = append(list, c)
 	}
-	if old := s.conns.Load(); old == nil || !sameConnections(*old, list) {
+	reasons := s.host.table.reasons()
+	if old := s.conns.Load(); old == nil || !sameConnections(*old, list) || !maps.Equal(reasons, s.reasonsPub) {
 		s.conns.Store(&list)
+		s.reasonsPub = reasons
 		if s.changes != nil {
 			s.changes.Add(1)
 		}
