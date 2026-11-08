@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -375,14 +376,14 @@ func TestCheckFailsWhereATurnsHeldConnectionStillWorks(t *testing.T) {
 			t.Cleanup(p.Close)
 			tg := targetFor(fa, "team/sre", token("t"))
 			ag := p.Agent(tg)
-			if err := ag.Send(t.Context(), message("hi"), nil); err != nil {
+			if err := sendThenPool(t, ag); err != nil {
 				t.Fatal(err)
 			}
 			if err := p.Check(t.Context(), tg); err != nil {
 				t.Fatalf("Check while the front door is up: %v", err)
 			}
 			_ = fa.Listener.Close() // no new connection from here on; the turn's stays served
-			if err := ag.Send(t.Context(), message("hi"), nil); err != nil {
+			if err := sendThenPool(t, ag); err != nil {
 				t.Fatalf("Send over the held connection: %v", err)
 			}
 			if err := p.Check(t.Context(), tg); err == nil || errors.Is(err, ErrPoolClosed) {
@@ -392,6 +393,51 @@ func TestCheckFailsWhereATurnsHeldConnectionStillWorks(t *testing.T) {
 				t.Errorf("Send after the failed probe: %v", err)
 			}
 		})
+	}
+}
+
+// sendThenPool sends over ag and returns once every connection the send took is back in the client's idle pool, so
+// the next send rides it. net/http pools a connection on the transport's read goroutine after the body's EOF, which
+// can come after Send returns; a send made before then dials, and a closed listener refuses it. A connection that
+// is closed instead of pooled fails the test, as does a send whose context never reached an HTTP request.
+func sendThenPool(t *testing.T, ag *Agent) error {
+	t.Helper()
+	var mu sync.Mutex
+	took, out := 0, 0
+	var notPooled error
+	ctx := httptrace.WithClientTrace(t.Context(), &httptrace.ClientTrace{
+		GotConn: func(httptrace.GotConnInfo) {
+			mu.Lock()
+			defer mu.Unlock()
+			took++
+			out++
+		},
+		PutIdleConn: func(err error) {
+			mu.Lock()
+			defer mu.Unlock()
+			out--
+			if err != nil {
+				notPooled = err
+			}
+		},
+	})
+	if err := ag.Send(ctx, message("hi"), nil); err != nil {
+		return err
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		mu.Lock()
+		took, out, notPooled := took, out, notPooled
+		mu.Unlock()
+		switch {
+		case took == 0:
+			t.Fatal("sendThenPool: the send's context reached no HTTP request, so it cannot tell when the connection is pooled")
+		case notPooled != nil:
+			t.Fatalf("sendThenPool: the send's connection was not pooled: %v", notPooled)
+		case out == 0:
+			return nil
+		case time.Now().After(deadline):
+			t.Fatalf("sendThenPool: %d of the send's connections still out of the pool after 5s", out)
+		}
 	}
 }
 
