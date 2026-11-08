@@ -247,7 +247,8 @@ func TestDecodeABotsAppMention(t *testing.T) {
 // The events Slack sent in docs/spikes/slack-user-token-and-slackbot-probe.md, with the IDs replaced, decode as that page says. An
 // app that posts with a person's user token sends its own bot ID, so its posts and mentions are a bot's, not the person's, and no
 // personMessage trigger takes them. Slackbot's reminders carry the bot ID B01, so they are a bot's posts, and a reminder that
-// mentions Agent Kourier is a bot's mention. The /remind command's own post and a user-token me_message are subtypes, and dropped.
+// mentions Agent Kourier is a bot's mention. The /remind command's own post, a user-token me_message and a Slackbot custom response
+// (which has no bot ID) are subtypes, and dropped.
 func TestDecodeTheShapesSlackSent(t *testing.T) {
 	const (
 		probeProfile = `"bot_profile":{"id":"BPROBE","app_id":"APROBE","name":"Kourier User-Token Probe","team_id":"TSAND","deleted":false,"updated":1794161711}`
@@ -272,6 +273,8 @@ func TestDecodeTheShapesSlackSent(t *testing.T) {
 		{"a user-token me_message", `{"type":"message","subtype":"me_message","channel":"C1","channel_type":"channel","user":"UPERSON","bot_id":"BPROBE","app_id":"APROBE","text":"probe U7",` + plainBlock + `,"ts":"1.7","event_ts":"1.7"}`,
 			dropped, "", "", false},
 		{"the /remind command's post", `{"type":"message","subtype":"reminder_add","channel":"C1","channel_type":"channel","user":"UPERSON","text":" set up a reminder “check @Agent Kourier ” in this channel at 1:18PM today.","ts":"1.8","event_ts":"1.8"}`,
+			dropped, "", "", false},
+		{"Slackbot's custom response", `{"type":"message","subtype":"slackbot_response","channel":"C1","channel_type":"channel","user":"USLACKBOT","text":"kourierprobe pong &lt;@UME&gt;","ts":"1.95","event_ts":"1.95"}`,
 			dropped, "", "", false},
 		{"Slackbot's reminder", `{"type":"message","channel":"C1","channel_type":"channel","user":"USLACKBOT","bot_id":"B01","team":"TSAND","text":"Reminder: check.",` + plainBlock + `,` + reminderMeta + `,"ts":"1.9","event_ts":"1.9"}`,
 			forward, "B01", "USLACKBOT", false},

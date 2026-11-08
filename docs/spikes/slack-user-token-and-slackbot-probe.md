@@ -1,8 +1,9 @@
 # Slack user-token and Slackbot reminder probe (2026-11-08)
 
-What Slack sends when an app posts with a person's user token, and when Slackbot posts a reminder. The `personMessage`
-trigger counts any message with a `user` and no `bot_id` as a person's, and drops Slackbot (`USLACKBOT`) on both the
-`message` and the `app_mention` event. Neither assumption about these two senders had been measured.
+What Slack sends when an app posts with a person's user token, and when Slackbot posts a reminder or a custom response.
+The adapter takes a plain message with a `user`, text and no `bot_id` (not Agent Kourier's own) as a person's, which a
+`personMessage` trigger may then take, and drops Slackbot (`USLACKBOT`) on both the `message` and the `app_mention`
+event. Neither assumption about these senders had been measured.
 
 ## Setup
 
@@ -16,8 +17,11 @@ trigger counts any message with a `user` and no `bot_id` as a person's, and drop
   `chat.meMessage`.
 - **Reminders:** the same person typed `/remind #channel "… @Agent Kourier" in 1 minute` (the mention picked from the
   composer's autocomplete) and a second `/remind` with no mention, in the web client.
-- Each recorded payload was then passed through the adapter's own `decode` (and `fromAnotherWorkspace`) in a test that
-  was not kept, to see what the code does with it.
+- **Custom response:** a workspace admin added a Slackbot automated message (Customize workspace, Automated Messages)
+  whose reply held Agent Kourier's raw token `<@U_KOURIER>`, triggered it once by typing in the web client and once
+  through the user-token app, then removed it.
+- Each recorded payload was then passed through the adapter's own `decode` (and `fromAnotherWorkspace`).
+  `TestDecodeTheShapesSlackSent` in `internal/chat/slack` holds `decode` to them.
 
 IDs are redacted: `U_PERSON` (the person), `T_SANDBOX` (the workspace), `C_CHAN`, `A_PROBE` and `B_PROBE` (the
 user-token app and the bot ID Slack gave it), `U_KOURIER` (the mentioned app's bot user). `USLACKBOT` and `B01` are
@@ -37,6 +41,8 @@ Slack's own and are as received. `bot_profile.icons` is cut.
 | R0 | the `/remind` command itself, both reminders | `message` | `U_PERSON` | none | none | no | `reminder_add` | dropped (subtype) |
 | R1 | Slackbot's reminder with the mention | `message`, `app_mention` | `USLACKBOT` | **`B01`** on both | none | no | none | a bot's post; a bot's mention |
 | R2 | Slackbot's reminder with no mention | `message` | `USLACKBOT` | **`B01`** | none | no | none | a bot's post |
+| S1 | Slackbot's custom response, after a person's post and after a user-token post | `message` | `USLACKBOT` | **none** | none | no | `slackbot_response` | dropped (subtype) |
+| P1 | the person typing in the web client (S1's trigger), for contrast | `message` | `U_PERSON` | none | none | no | none (`client_msg_id`) | a person's message |
 
 No event of any case carried `user_team` or `source_team`. The user-token posts and the reminders carried `team`
 (`T_SANDBOX`); the `reminder_add` events did not.
@@ -83,6 +89,22 @@ reader sees the person, while the event says app.
 Its `app_mention` holds the same fields, with `type: app_mention` and no `channel_type`. There is no `app_id`, no
 `bot_profile` and no subtype.
 
+### Slackbot's custom response (S1)
+
+```json
+{
+  "type": "message", "subtype": "slackbot_response",
+  "channel": "C_CHAN", "channel_type": "channel",
+  "user": "USLACKBOT",
+  "text": "kourierprobe pong &lt;@U_KOURIER&gt;",
+  "ts": "1794164740.152319", "event_ts": "1794164740.152319"
+}
+```
+
+No `bot_id`, `team` or blocks. Slack escaped the token typed into the response, so it is text, the client shows it
+literally, and no `app_mention` came. The client shows the response under the workspace's name and icon. Slackbot
+answered the user-token app's post as it answered the person's.
+
 ### The `/remind` command (R0)
 
 ```json
@@ -103,7 +125,7 @@ The mention is plain text here, with no token, and Slack sent no `app_mention` f
   even with no bot scope, and sends it, with `app_id` and `bot_profile`, on the `message` and the `app_mention`, for an
   immediate and a scheduled post, at the top level and in a thread. `decode` takes the bot branch before it looks at
   the user: the post is a bot's message that only a `botMessage` trigger naming `B_PROBE` takes, and its mention is a
-  bot's mention, held to the fixed bot-mention limits and refused in a channel shared with another workspace. A
+  bot's mention, held to the fixed bot-mention limits and dropped in a channel shared with another workspace. A
   `personMessage` trigger never sees it, and Agent Kourier's own posts are told apart by bot ID as before.
 - **Slackbot's reminders are a bot's posts too, under the bot ID `B01`.** The `USLACKBOT` check in `self.person` is
   never reached for them: `decode` sends a message or `app_mention` with a `bot_id` down the bot branch first, both
@@ -115,20 +137,26 @@ The mention is plain text here, with no token, and Slack sent no `app_mention` f
     (the pattern `^B[A-Z0-9]+$` accepts it).
 - **What is wrong today:** the triggers reference says a Slackbot reminder is ignored and that no trigger can name
   Slackbot; the spec's `personMessage` decision, the comment on `slackbotUser` and `TestDecodeSlackbotIsNoPerson` say
-  Slackbot posts with no bot ID. Reminders carry one. The `USLACKBOT` check is only a defence for a Slackbot post
-  without a bot ID, which this probe did not see.
+  Slackbot posts with no bot ID. Reminders carry one. A custom response has none, but its subtype
+  (`slackbot_response`) drops it before the `USLACKBOT` check matters. That check is a defence for a plain Slackbot post
+  with no bot ID, which this probe did not see.
 - `chat.meMessage` with a user token arrives as subtype `me_message` with a bot ID and no `bot_profile`, and is dropped
   like any subtype that is not kept.
 
 ## Not probed
 
-- A channel shared with another workspace (the sandbox has no Slack Connect partner), so whether `user_team` or
-  `source_team` names another workspace's person is still unmeasured. Neither field appeared on any event here.
+- A channel shared with another workspace, so whether `user_team` or `source_team` names another workspace's person is
+  still unmeasured. Neither field appeared on any event here. The sandbox invited a second workspace to a shared
+  channel, but that workspace is on the free plan, and Slack asks a free workspace to start a paid trial before it can
+  accept, so the probe stopped there.
 - A classic app, a legacy test token, or a tool that posts with a Slack client session token (`xoxc-`, as browser
   automation does). A client session's post would look like the person typing it, and nothing in the event could tell
   them apart.
-- Slackbot's other posts: custom responses (a workspace setting), and a reminder in a thread or in a private channel.
+- Slackbot's other posts: a reminder in a thread or in a private channel, and a reminder to oneself (in the Slackbot
+  direct message).
 - `files.upload` with a user token (the probe app had no `files:write`). A `file_share` with a `bot_id` is dropped by
   `decode` either way.
-- Whether `B01` is Slackbot's bot ID in every workspace or only in this one.
+- Whether `B01` is Slackbot's bot ID in every workspace or only in this one. The second workspace was at its free
+  plan's app limit, so no app could read its events without removing one, and the shared channel that would have carried
+  its Slackbot's reminder was not accepted.
 - Enterprise Grid, and mobile clients' rendering of a user-token post.

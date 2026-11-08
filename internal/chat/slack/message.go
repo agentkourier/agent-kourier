@@ -192,10 +192,11 @@ func (me self) mentionedIn(text string) bool {
 	return false
 }
 
-// slackbotUser is the user ID Slack gives Slackbot in every workspace. A Slackbot post that comes with no bot ID would otherwise be
-// a person's, and Slackbot is no person. Its reminders do carry a bot ID (B01), so decode takes them, and a reminder's app_mention,
-// as a bot's before it asks this (docs/spikes/slack-user-token-and-slackbot-probe.md). So does a post an app makes with a person's
-// user token: Slack sends it with the app's bot ID.
+// slackbotUser is the user ID Slack gives Slackbot in every workspace. A plain Slackbot post that comes with no bot ID would
+// otherwise be a person's, and Slackbot is no person. Its reminders carry a bot ID (B01 in the workspace probed), so decode takes
+// them, and a reminder's app_mention, as a bot's before it asks this; its custom responses carry none but are the subtype
+// slackbot_response, which decode drops first (docs/spikes/slack-user-token-and-slackbot-probe.md). A post an app makes with a
+// person's user token carries the app's bot ID, and is a bot's too.
 const slackbotUser = "USLACKBOT"
 
 // person says whether a post with no bot ID under user is a person's: it has a user, and the user is neither Agent Kourier nor
