@@ -331,6 +331,8 @@ func TestRetentionIsKeptWhileAnotherConnectionHangs(t *testing.T) {
 			t.Errorf("row %s = %+v, %v; want it abandoned with its text dropped", id, row, err)
 		}
 	}
+	// The later row may be posted after the old ones are abandoned: wait for its post, then check it was the only one.
+	eventually(t, "b to post the row that is not past Retention", func() bool { posts, _ := b.counts(); return posts >= 1 })
 	if posts, _ := b.counts(); posts != 1 {
 		t.Errorf("b posted %d times; want only the row that is not past Retention", posts)
 	}
