@@ -60,6 +60,7 @@ is written today.
 | `ConnectionNotFound` | `spec.chat.connectionRef` names no ChatConnection. No broker owns such a Binding, so the leader of any broker that sees it writes this. |
 | `ConnectionRejected` | The ChatConnection it names is invalid. If it had a good generation, that generation is what runs, and `message` says which. |
 | `NamespaceNotAllowed` | The AgentBackend or ChatConnection is in another namespace and its `allowedNamespaces` does not list this Binding's. The answer is the same for a valid object and an invalid one, so it says nothing of the object but that it exists. |
+| `AgentNamespaceNotAllowed` | The AgentBackend it names sets `agents`, and `spec.agent.namespace` is neither the Binding's own namespace, with `sameNamespace: true`, nor listed in `namespaces`. The Binding is not served. `message` names the AgentBackend and the agent namespace, and nothing else of the AgentBackend's spec. When the AgentBackend's newest generation is invalid, or it was deleted and is held, `message` adds that the limit is that of the generation being served, and which generation that is; the problems of an invalid generation are added only for a Binding in the AgentBackend's own namespace. |
 | `ChannelConflict` | Another Binding on the same ChatConnection holds the channel. The older one, by `creationTimestamp`, then by namespace and name, holds it. |
 
 A `message` about an AgentBackend or ChatConnection of another namespace never quotes that object's problems. A `ChannelConflict`

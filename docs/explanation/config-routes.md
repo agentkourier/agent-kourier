@@ -51,6 +51,7 @@ file and field. On a reload it keeps the last good config, logs `config reload f
 | An invalid new object | Does not serve it. A Binding has `Accepted=False`. |
 | An object is deleted | Removes it. |
 | A Binding names an AgentBackend or ChatConnection that does not exist, or that does not allow its namespace | Drops the Binding from routing, with a condition (`BackendNotFound`, `ConnectionNotFound`, `NamespaceNotAllowed`). |
+| A Binding names an agent namespace that its AgentBackend's `agents` field does not allow | Drops the Binding from routing, with `AgentNamespaceNotAllowed`. |
 | A Binding names an AgentBackend that is invalid | Serves the AgentBackend's last good generation, or drops the Binding if it has none, with `BackendRejected`. |
 | The broker's own ChatConnection is edited into something invalid | Keeps serving its last good generation, and each of its Bindings says `ConnectionRejected`. |
 | A Binding names a ChatConnection that exists and that no broker serves | Nothing reads the Binding and nothing writes its status: `READY` stays empty. Point `connectionRef` at a connection that a broker serves. |
@@ -112,7 +113,7 @@ count over a cap, and most of the rules between the fields of one object.
 **Left to the broker**, which reports them as `Accepted=False` after the object is stored: a regex in a trigger's `match`, `exclude` or `extract` that
 does not compile, or compiles to more than 2000 instructions, or takes the regexes of a Binding past 5000 instructions together; a trigger's `promptTemplate` that does not parse, names an extract the trigger lacks, or fails when it runs; a duplicate trigger; the
 parts of a URL that only Go's parser refuses (a bad percent escape, port or bracket); a `match` or `exclude` value of 512 characters or fewer that is
-over 512 bytes; and every rule that spans objects: that the AgentBackend and ChatConnection exist and allow the namespace, that the dialect has an adapter, that
+over 512 bytes; and every rule that spans objects: that the AgentBackend and ChatConnection exist and allow the namespace, that the AgentBackend's `agents` field allows the agent namespace, that the dialect has an adapter, that
 one Binding holds the channel, and that a Secret has its key.
 
 The caps (50 triggers in a Binding, 32 `extract` entries in a trigger, 32 headers and 256 bytes of a header's name in an AgentBackend) apply on
@@ -155,25 +156,11 @@ resources a cluster can hold the connections of several brokers, so each broker 
 required. It serves the Bindings whose `connectionRef` names that connection, and no others. That also lets two releases share a cluster. A Binding whose `connectionRef` names a connection that does not exist is
 reported by the leader of every broker that sees it, as `ConnectionNotFound`, since none owns it.
 
-### A team's own chat app
+### A second chat app
 
-A `ChatConnection` belongs to whoever owns the chat app and the broker that serves it. That is usually the platform team. A team that
-wants its own app, with its own bot and its own tokens, runs its own broker for it, on custom resources:
-
-1. The team puts its `ChatConnection`, and the Secret with the app's tokens, in its own namespace. Its Bindings there name the connection
-   without `allowedNamespaces`, which only a reference from another namespace needs.
-2. It installs another release of the chart with `crds.install: false` and `config.chatConnection` naming that connection. The CRDs, and
-   their upgrades, stay with the release that installed them ([chart README](https://github.com/agentkourier/agent-kourier/blob/main/charts/agent-kourier/README.md#custom-resources-instead-of-a-configmap)).
-3. Its Bindings may still name the platform team's `AgentBackend`, which must then list the team's namespace in its `allowedNamespaces`.
-
-Channels are held per connection, so the team's app and the platform's app can each have a Binding in the same channel.
-
-The team's broker is not confined to the team's namespace:
-
-- It lists and watches all three kinds in every namespace, so the chart gives each release (with `rbac.create`, the default) a ClusterRole for that and
-  for patching `bindings/status` in every namespace. A team's broker can read every other team's Bindings, AgentBackends and ChatConnections (not their Secrets, which
-  stay under Roles in their own namespaces). It writes the status of its own connection's Bindings, and of any Binding whose
-  `connectionRef` names a connection that does not exist.
-- `rbac.create: false` does not narrow this: the broker's list is cluster-wide, and a Role in one namespace does not authorize it.
-- The release creates that ClusterRole and its ClusterRoleBinding, which a namespace admin usually may not create, so someone with
-  cluster rights installs the release or creates them.
+A broker serves one `ChatConnection`, so each chat app, a team's own included, needs a broker of its own: another release of the chart, with
+`crds.install: false` in a cluster that already has the CRDs (the [chart README](https://github.com/agentkourier/agent-kourier/blob/main/charts/agent-kourier/README.md#custom-resources-instead-of-a-configmap)
+says why). That broker is not confined to its team's namespaces. It lists and watches the three kinds in every namespace, under a ClusterRole that
+also lets it patch the status of any Binding; it writes the status of its own connection's Bindings, and of any Binding whose `connectionRef`
+names a connection that does not exist. It cannot read other teams' Secrets, which stay under Roles in their own namespaces. `rbac.create: false`
+does not narrow this, and a namespace admin usually may not create the ClusterRole.

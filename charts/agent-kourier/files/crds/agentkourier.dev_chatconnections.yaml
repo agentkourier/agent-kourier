@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    agentkourier.dev/schema-sha256: 58e73a9265f5804b7673ccee45ad47f8dd1e03dcb18534876d7978e7bd4ed9bc
+    agentkourier.dev/schema-sha256: fff5906b6e7540de68223cbfde531ee37fa3c1d62fc43c280e68eaf8bac9050c
     controller-gen.kubebuilder.io/version: v0.23.0
   name: chatconnections.agentkourier.dev
 spec:
@@ -22,9 +22,8 @@ spec:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: |-
-          ChatConnection is a workspace connection, served by one broker. Owned by whoever owns the chat app and that broker: usually
-          the platform team, or a team that runs its own chat app.
+        description: ChatConnection is a workspace connection. Owned by the platform
+          team.
         properties:
           apiVersion:
             description: |-

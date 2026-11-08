@@ -120,7 +120,7 @@ Three resource types describe the wiring:
 | Resource | Configures | Typical owner |
 |---|---|---|
 | `AgentBackend` | The agent endpoint, protocol dialect, and namespaces allowed to use it | Platform team |
-| `ChatConnection` | The messaging connection and its Secret references | Platform team, or a team that [runs its own chat app](docs/explanation/config-routes.md#a-teams-own-chat-app) |
+| `ChatConnection` | The messaging connection and its Secret references | Platform team |
 | `Binding` | An agent, its service identity, and the channel connected to it | Application team |
 
 A team adds a binding to connect an agent to a channel. Multiple bindings can share

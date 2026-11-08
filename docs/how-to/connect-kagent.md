@@ -39,6 +39,10 @@ Binding's turns reach one of its agents.
             allowedNamespaces: [payments]
     ```
 
+    When teams share the backend and each should name only the agents of its own namespace, add
+    `agents: {sameNamespace: true}` to the spec. Without `agents` a Binding may name an agent in any namespace of the kagent install. See
+    [Security](../explanation/security.md#what-the-people-who-write-these-objects-can-do) for what the field does and does not bound.
+
     **4. Give each Binding its own token.** A Binding's `identity.tokenSecretRef` names a Secret with an OIDC token the
     front door accepts. [Create the Binding identity](create-binding-identity.md) shows how to provision the account
     and issue the first token with Dex. In the tested 1.0.0-alpha5 OIDC setup, kagent binds a session to the identity

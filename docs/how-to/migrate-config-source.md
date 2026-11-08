@@ -104,7 +104,7 @@ it made (without the flag the Secret Role reports `conflict with "helm": .rules`
 did not report an unknown field or a channel the schema refuses (measured, Helm 4.3.1).
 
 The check reads the objects as the schema and the CEL rules do, and no more. It does not find what only the broker decides: a `match` regex that does not compile, a
-`promptTemplate` that does not parse, an AgentBackend or ChatConnection that the Binding names and that does not exist or does not allow its namespace, a channel that another Binding holds,
+`promptTemplate` that does not parse, an AgentBackend or ChatConnection that the Binding names and that does not exist or does not allow its namespace, an agent namespace that the AgentBackend's `agents` field does not allow, a channel that another Binding holds,
 or a Secret that is missing or not granted. Those leave the Binding `Accepted=False` or `BackendReachable=False` after the upgrade and stop nothing else: see [Check that it worked](#check-that-it-worked). It also does not
 see a refusal that only the installer's own right causes, since it runs as the identity of your `kubectl` and Helm may run as another.
 
