@@ -87,6 +87,27 @@ func (i Invalid) rejectionFor(from, path string, rejected RejectionReason) (Reje
 // Binding in i's own namespace.
 func (i Invalid) describedTo(from string) string { return i.describe(i.Namespace == from, true) }
 
+// UnservedReason says why a ChatConnection that exists is not served.
+type UnservedReason string
+
+// UnservedCap is the reason of a connection left out because the broker serves at most so many (crsource's maxServedConnections),
+// and this one is not among the oldest.
+const UnservedCap UnservedReason = "cap"
+
+// UnservedConnection says that a ChatConnection of a namespace the broker reads is not served, and why. It is not an Invalid: the
+// object may be valid, and nothing in it is wrong. The Bindings that name it are not this broker's to serve or to report.
+type UnservedConnection struct {
+	// Namespace and Name identify the ChatConnection.
+	Namespace, Name string
+	// Reason is the rule that left it out.
+	Reason UnservedReason
+	// Message says it in a sentence that a Binding's status can carry: it holds no word of the object's own.
+	Message string
+	// Bindings is the "namespace/name" of each Binding that exists and names this connection, sorted. None is in the Snapshot: they are
+	// what the status of the connection's Bindings and the retention of their sessions need.
+	Bindings []string
+}
+
 // Report is what a Reloader knows about the config it serves besides the Snapshot: the objects it refused and the
 // Bindings that are not served or are served from an older generation. The status writer and the metrics read it. The
 // Snapshot is the one the report was made with, so the two are consistent. A Reloader that reads files reports none. A Report is shared by every
@@ -99,6 +120,10 @@ type Report struct {
 	Rejections []Rejection
 	// Invalid lists every object, of any kind, that failed Default or Validate, sorted by kind, namespace and name.
 	Invalid []Invalid
+	// UnservedConnections lists the ChatConnections that the source read and left out of the Snapshot for a reason that is not the
+	// object's own (UnservedConnection), sorted by namespace and name. The Bindings that name one are not in the Snapshot and are
+	// in no Rejection: they are not this broker's.
+	UnservedConnections []UnservedConnection
 }
 
 // Unserved returns the "namespace/name" of each Binding that exists and is not in the Snapshot, sorted. Its sessions
