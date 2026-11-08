@@ -2444,3 +2444,327 @@ spec:
         extract: {state: {field: text, regex: '(?P<state>x)'}}
         limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
         promptTemplate: "An alert."
+---
+# rule: trigger/spec.chat.triggers[].from: not allowed with type personMessage
+# want: spec.chat.triggers[1].from: not allowed with type: personMessage
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: personMessage
+        from: {id: B0123456789}
+        limits: {rateLimit: {maxRuns: 6, per: 30m, maxConcurrent: 2}, maxRunsPerDay: 50}
+        promptTemplate: "A person reported something in {{ .Channel }}."
+---
+# rule: trigger/spec.chat.triggers[].extract: not allowed with type personMessage
+# want: spec.chat.triggers[1].extract: not allowed with type: personMessage
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: personMessage
+        extract: {key: {field: text, regex: "(?P<key>.+)"}}
+        limits: {rateLimit: {maxRuns: 6, per: 30m, maxConcurrent: 2}, maxRunsPerDay: 50}
+        promptTemplate: "A person reported something in {{ .Channel }}."
+---
+# rule: trigger/spec.chat.triggers[].thread.by: not allowed with type personMessage
+# want: spec.chat.triggers[1].thread: not allowed with type: personMessage
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: personMessage
+        thread: {by: key}
+        limits: {rateLimit: {maxRuns: 6, per: 30m, maxConcurrent: 2}, maxRunsPerDay: 50}
+        promptTemplate: "A person reported something in {{ .Channel }}."
+---
+# rule: trigger/spec.chat.triggers[].thread.cooldown: not allowed with type personMessage
+# want: spec.chat.triggers[1].thread: not allowed with type: personMessage
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: personMessage
+        thread: {cooldown: 1h}
+        limits: {rateLimit: {maxRuns: 6, per: 30m, maxConcurrent: 2}, maxRunsPerDay: 50}
+        promptTemplate: "A person reported something in {{ .Channel }}."
+---
+# rule: trigger/spec.chat.triggers[].thread.maxIdle: not allowed with type personMessage
+# want: spec.chat.triggers[1].thread: not allowed with type: personMessage
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: personMessage
+        thread: {maxIdle: 48h}
+        limits: {rateLimit: {maxRuns: 6, per: 30m, maxConcurrent: 2}, maxRunsPerDay: 50}
+        promptTemplate: "A person reported something in {{ .Channel }}."
+---
+# rule: trigger/spec.chat.triggers[].thread.closeWhen: not allowed with type personMessage
+# want: spec.chat.triggers[1].thread: not allowed with type: personMessage
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: personMessage
+        thread: {closeWhen: {state: RESOLVED}}
+        limits: {rateLimit: {maxRuns: 6, per: 30m, maxConcurrent: 2}, maxRunsPerDay: 50}
+        promptTemplate: "A person reported something in {{ .Channel }}."
+---
+# rule: trigger/spec.chat.triggers[].match: a field a person's message lacks
+# want: spec.chat.triggers[1].match.title: a person's message has only the field text
+# schema: refuses
+# field: spec.chat.triggers[1].match
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: personMessage
+        match: {title: "^FIRING"}
+        limits: {rateLimit: {maxRuns: 6, per: 30m, maxConcurrent: 2}, maxRunsPerDay: 50}
+        promptTemplate: "A person reported something in {{ .Channel }}."
+---
+# rule: trigger/spec.chat.triggers[].exclude: a field a person's message lacks
+# want: spec.chat.triggers[1].exclude.body: a person's message has only the field text
+# schema: refuses
+# field: spec.chat.triggers[1].exclude
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: personMessage
+        exclude: {body: "^FIRING"}
+        limits: {rateLimit: {maxRuns: 6, per: 30m, maxConcurrent: 2}, maxRunsPerDay: 50}
+        promptTemplate: "A person reported something in {{ .Channel }}."
+---
+# rule: trigger/spec.chat.triggers[].promptTemplate: required with personMessage
+# want: spec.chat.triggers[1].promptTemplate: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: personMessage
+        limits: {rateLimit: {maxRuns: 6, per: 30m, maxConcurrent: 2}, maxRunsPerDay: 50}
+---
+# rule: trigger/spec.chat.triggers[].limits.rateLimit: required with personMessage
+# want: spec.chat.triggers[1].limits.rateLimit: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: personMessage
+        limits: {maxRunsPerDay: 20}
+        promptTemplate: "A person reported something in {{ .Channel }}."
+---
+# rule: trigger/spec.chat.triggers[].limits.maxRunsPerDay: required with personMessage
+# want: spec.chat.triggers[1].limits.maxRunsPerDay: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: personMessage
+        limits: {rateLimit: {maxRuns: 6, per: 30m, maxConcurrent: 2}}
+        promptTemplate: "A person reported something in {{ .Channel }}."
+---
+# rule: trigger/spec.chat.triggers[].promptTemplate: personMessage names an extract it cannot have
+# want: is not an extract of this trigger
+# schema: accepts
+# broker-only: a Go text/template check (parse, walk, run once) that CEL cannot do; a personMessage trigger takes no extract, so it can read none
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: personMessage
+        limits: {rateLimit: {maxRuns: 6, per: 30m, maxConcurrent: 2}, maxRunsPerDay: 50}
+        promptTemplate: "{{ .Fields.alertname }}"
+---
+# rule: trigger/spec.chat.triggers[].match: personMessage regex that does not compile
+# want: spec.chat.triggers[1].match.text: invalid regular expression
+# schema: accepts
+# broker-only: CEL has no compile check of its own: ''.matches(v) throws on a pattern that does not compile, but it compiles with the apiserver's Go, whose syntax differs from the broker's across versions (a named group written (?<name>) needs Go 1.22)
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - type: personMessage
+        match: {text: "("}
+        limits: {rateLimit: {maxRuns: 6, per: 30m, maxConcurrent: 2}, maxRunsPerDay: 50}
+        promptTemplate: "A person reported something in {{ .Channel }}."

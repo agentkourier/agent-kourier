@@ -251,11 +251,12 @@ func TestCELLiteralsEqualTheBrokersConstants(t *testing.T) {
 	})
 
 	t.Run("names the rules compare to", func(t *testing.T) {
-		if string(TriggerMention) != "mention" || string(TriggerBotMessage) != "botMessage" || string(ThreadByKey) != "key" || extractKey != "key" {
+		if string(TriggerMention) != "mention" || string(TriggerBotMessage) != "botMessage" || string(TriggerPersonMessage) != "personMessage" ||
+			string(FieldText) != "text" || string(ThreadByKey) != "key" || extractKey != "key" {
 			t.Fatal("a name that the rules write out as a literal has changed: update the rules")
 		}
 		node := bindings.at(t, trigger)
-		for _, f := range []string{"'mention'", "'botMessage'", "thread.by == 'key'", "'key' in self.extract"} {
+		for _, f := range []string{"'mention'", "'botMessage'", "'personMessage'", "k == 'text'", "thread.by == 'key'", "'key' in self.extract"} {
 			if !slices.ContainsFunc(node.rules(), func(r celRule) bool { return strings.Contains(r.Rule, f) }) {
 				t.Errorf("no rule of the trigger has %s", f)
 			}

@@ -47,8 +47,10 @@ type Session struct {
 // paused and answered, the answer. ID names the outbox row of the output (and so the message, a stream's included), and User
 // is the platform's ID of the person it is shown to, which a stream needs. MessageRef and Acknowledgment preserve the
 // source message and reaction for recovery. AcknowledgmentID names the accepted chat reply that owns
-// that reaction when it differs from the output ID (as it does for a typed answer). Mention is the message of the bot's mention
-// whose turn began the task, which an answer does not change, and is empty for any other. The zero value is none.
+// that reaction when it differs from the output ID (as it does for a typed answer). Mention is the message of the trigger's start
+// whose turn began the task, for a start that holds its place in the trigger's limits for its own turn alone: a bot's mention, or a
+// person's message that a personMessage trigger took. An answer does not change it, and it is empty for any other turn, an
+// alert's included. The zero value is none.
 type TaskTurn struct {
 	ID, User         string
 	MessageRef       string

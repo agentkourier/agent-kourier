@@ -360,3 +360,22 @@ spec:
   chat: {connectionRef: {name: slack}, channel: C0123456789}
   interactions: {timeout: 167h59m59s}
   session: {threadTTL: 8759h59m59s}
+---
+# personMessage triggers at the edges of what the rules for their type refuse: no from, an empty extract and exclude, a thread that is all zeros, a match and an exclude on text alone, and the limits at the edges of their ranges.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: cel-person-message, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: k8s-agent, namespace: kagent}
+  identity: {userId: u}
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    triggers:
+      - {type: mention}
+      - {type: personMessage, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}, promptTemplate: "x"}
+      - {type: personMessage, match: {text: "down"}, limits: {rateLimit: {maxRuns: 1, per: 24h, maxConcurrent: 1}, maxRunsPerDay: 0}, promptTemplate: "x"}
+      - {type: personMessage, exclude: {text: "^ok"}, limits: {rateLimit: {maxRuns: 1, per: 1440m, maxConcurrent: 1}, maxRunsPerDay: 1}, promptTemplate: "x"}
+      - {type: personMessage, match: {text: "a"}, exclude: {text: "b"}, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}, promptTemplate: "x"}
+      - {type: personMessage, match: {text: "e"}, exclude: {}, extract: {}, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}, promptTemplate: "{{ .Channel }} {{ .Link }}", thread: {}}
+      - {type: personMessage, match: {text: "d"}, limits: {rateLimit: {maxRuns: 1, per: 10s, maxConcurrent: 1}, maxRunsPerDay: 0}, promptTemplate: "x", thread: {by: "", cooldown: "0s", maxIdle: "0", closeWhen: {}}}

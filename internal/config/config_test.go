@@ -218,7 +218,7 @@ func TestLoadRejectsBadTriggers(t *testing.T) {
 		{
 			name:     "bare on, which YAML reads as true",
 			triggers: "      - on: mention\n",
-			want:     who + "spec.chat.triggers[0].true: unknown field\n" + who + "spec.chat.triggers[0].type: unsupported value \"\", must be one of mention, botMessage",
+			want:     who + "spec.chat.triggers[0].true: unknown field\n" + who + "spec.chat.triggers[0].type: unsupported value \"\", must be one of mention, botMessage, personMessage",
 		},
 		{
 			name:     "regex that does not compile",
