@@ -136,9 +136,9 @@ The mention is plain text here, with no token, and Slack sent no `app_mention` f
     limits of a bot's mention. It did the same before the change.
   - A reminder with no mention is a bot's message from `B01`, which a `botMessage` trigger with `from: B01` takes
     (the pattern `^B[A-Z0-9]+$` accepts it).
-- **What was wrong before this change:** the triggers reference says a Slackbot reminder is ignored and that no trigger can name
-  Slackbot; the spec's `personMessage` decision, the comment on `slackbotUser` and `TestDecodeSlackbotIsNoPerson` say
-  Slackbot posts with no bot ID. Reminders carry one. A custom response has none, but its subtype
+- **What was wrong before this probe's corrections:** the triggers reference said a Slackbot reminder is ignored and that no
+  trigger can name Slackbot; the spec's `personMessage` decision, the comment on `slackbotUser` and
+  `TestDecodeSlackbotIsNoPerson` said Slackbot posts with no bot ID. Reminders carry one. A custom response has none, but its subtype
   (`slackbot_response`) drops it before the `USLACKBOT` check matters. That check is a defence for a plain Slackbot post
   with no bot ID, which this probe did not see.
 - `chat.meMessage` with a user token arrives as subtype `me_message` with a bot ID and no `bot_profile`, and is dropped
@@ -151,8 +151,8 @@ The mention is plain text here, with no token, and Slack sent no `app_mention` f
   channel, but that workspace is on the free plan, and Slack asks a free workspace to start a paid trial before it can
   accept, so the probe stopped there.
 - A classic app, a legacy test token, or a tool that posts with a Slack client session token (`xoxc-`, as browser
-  automation does). A client session's post would look like the person typing it, and nothing in the event could tell
-  them apart.
+  automation does). A client session's post would likely look like the person typing it, with nothing in the event to
+  tell them apart (not measured).
 - Slackbot's other posts: a reminder in a thread or in a private channel, and a reminder to oneself (in the Slackbot
   direct message).
 - `files.upload` with a user token (the probe app had no `files:write`). A `file_share` with a `bot_id` is dropped by

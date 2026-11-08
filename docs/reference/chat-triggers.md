@@ -17,7 +17,7 @@ These are the defaults, which a Binding with no `chat.triggers` gets.
 | Any message Agent Kourier posted, including the edit events of its own posts | Ignored, always. |
 | A message from any other bot or app | Ignored, unless a `botMessage` trigger names its bot ID. |
 | A person's message that is not in a thread and does not mention Agent Kourier | Ignored, unless a `personMessage` trigger takes it. See [A person's message](#a-persons-message). |
-| A reminder Slackbot posts in the channel | Slack sends it as a bot's message, under Slackbot's bot ID (`B01` in the one workspace where this was measured, for a reminder at the top level of a public channel): ignored, unless a `botMessage` trigger names that ID. Its text is `Reminder: ` and then what the person who set it wrote, with a mention as `<@ID|name>`. A reminder that mentions Agent Kourier is [a bot's mention](#a-bots-mention). A Slackbot post that comes with no bot ID, such as a custom response, is ignored. |
+| A reminder Slackbot posts in the channel | Slack sends it as a bot's message, under Slackbot's bot ID (`B01` in the one workspace where this was measured, for a reminder at the top level of a public channel): ignored, unless a `botMessage` trigger names that ID. Its text is `Reminder: ` and then what the person who set it wrote, with a mention of an app as `<@ID|name>` (as measured). A reminder that mentions Agent Kourier is [a bot's mention](#a-bots-mention), unless a `botMessage` trigger names Slackbot's bot ID. A Slackbot post that comes with no bot ID, such as a custom response, is ignored. |
 | A mention of Agent Kourier by any other bot or app | A turn in the thread that holds it, within fixed limits, unless the Binding says otherwise. See [A bot's mention](#a-bots-mention). |
 | An edit or deletion of any message, or another non-message subtype | Ignored. Plain messages, `thread_broadcast` and `file_share` (its text only) count as messages. |
 | A direct message | Not served yet. |
@@ -38,8 +38,10 @@ Any bot or incoming webhook that can post in a bound channel can start a turn by
 agent from any other bot. This is on by default for a Binding with a `mention` trigger, including one with no `chat.triggers`.
 Set `chat.botMentions: none` to turn it off. A Binding whose list leaves out the `mention` trigger takes no bot's mention either.
 A Slackbot reminder, or a post that an app makes with a person's user token (as measured for an app with granular scopes), that
-mentions Agent Kourier comes from Slack as a bot's mention, under Slackbot's bot ID (`B01` where this was measured) or the app's own. So anyone in the channel can schedule a
-turn with `/remind`: it runs as a bot's turn that names no person, within the limits below. `chat.botMentions: none` stops it, as does a `botMessage` trigger that names Slackbot's bot ID, which then reads the reminder instead.
+mentions Agent Kourier comes from Slack as a bot's mention, under Slackbot's bot ID (`B01` where this was measured) or the
+app's own. So anyone in the channel can schedule a turn with `/remind`: it runs as a bot's turn that names no person, within
+the limits below. `chat.botMentions: none` stops it, as does a `botMessage` trigger that names Slackbot's bot ID: that
+trigger's `match` and `exclude` alone then decide whether a reminder starts a turn.
 
 | | |
 |---|---|
