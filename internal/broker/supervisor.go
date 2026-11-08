@@ -38,6 +38,8 @@ type supervisor struct {
 	// intake builds the Sink of a connection's platform.
 	intake   func(ref v1alpha1.ObjectRef) (chat.Sink, error)
 	refusals *refusals
+	// conns is where the supervisor publishes the connections the verification probes the Bindings of (see publish).
+	conns *atomic.Pointer[[]Connection]
 	// gone is told the connection of a runtime that was stopped, so that the parts that keep state for it let go (the outbox's lane).
 	gone func(conn string)
 
@@ -46,8 +48,10 @@ type supervisor struct {
 	passes   atomic.Int64
 	ownID    appIdentity
 	ownKnown bool
-	teams    map[string]*teamRuntime
-	said     map[string]string // the last line said of each connection, so that a state is said once
+	// refusedNow is the connections the latest pass refused, for publish.
+	refusedNow map[string]string
+	teams      map[string]*teamRuntime
+	said       map[string]string // the last line said of each connection, so that a state is said once
 }
 
 // teamRuntime is what the supervisor knows of one team connection.
@@ -92,6 +96,8 @@ func (s *supervisor) run(ctx context.Context, initial []TeamConnection) {
 // connection first, then the team connections oldest first, since the order of desired is the age), and then starts what is to run, so that a younger
 // connection of an app is stopped before the older one starts.
 func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
+	s.refusedNow = nil
+	defer func() { s.publish(desired) }()
 	present := map[string]bool{}
 	for _, t := range desired {
 		present[t.Name()] = true
@@ -182,6 +188,7 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 		}
 	}
 	s.refusals.set(refused)
+	s.refusedNow = refused
 	byName := map[string]TeamConnection{}
 	for _, t := range desired {
 		byName[t.Name()] = t
@@ -258,4 +265,28 @@ func (s *supervisor) say(ctx context.Context, name, msg string, err error) {
 		return
 	}
 	s.log.WarnContext(ctx, msg, "connection", name)
+}
+
+// publish makes the list of connections the verification of the Bindings goes by: the own connection, with its credentials, and every team
+// connection the Snapshot serves that the pass did not refuse, with the credentials of its runtime if one is running and none otherwise (a
+// connection that is not running has no baseline to tell a changed Secret against). A refused connection is left out, so its Bindings are not
+// probed: they are told they are not served. The list is built whole and never changed after it is stored, because the probes read it from
+// several goroutines; nothing in them reads the supervisor's own state. It is called at the end of every pass, so it is as old as the last.
+func (s *supervisor) publish(desired []TeamConnection) {
+	if s.conns == nil {
+		return
+	}
+	list := []Connection{s.own}
+	for _, t := range desired {
+		name := t.Name()
+		if _, refused := s.refusedNow[name]; refused {
+			continue
+		}
+		c := Connection{Ref: t.Ref, Platform: t.Platform}
+		if st := s.teams[name]; st != nil && st.rt != nil && !isClosed(st.rt.done) {
+			c = st.rt.conn
+		}
+		list = append(list, c)
+	}
+	s.conns.Store(&list)
 }

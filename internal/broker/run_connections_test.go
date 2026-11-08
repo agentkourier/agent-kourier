@@ -38,6 +38,7 @@ type connWorld struct {
 
 	mu     sync.Mutex
 	live   map[string]int         // the connections up, by bot token
+	probed map[string][]string    // the channels each bot token was asked for its access to, by bot token
 	sinks  map[string]slack.Sink  // what each token's Run was given last
 	events []string               // runs that ended, shutdown steps and transports that closed, in order
 	ids    map[string]appIdentity // by bot token; a token with none is its own app
@@ -61,7 +62,7 @@ func (s *syncBuffer) String() string { s.mu.Lock(); defer s.mu.Unlock(); return 
 
 func newConnWorld(t *testing.T, edit func([]*unstructured.Unstructured)) *connWorld {
 	t.Helper()
-	w := &connWorld{t: t, live: map[string]int{}, sinks: map[string]slack.Sink{}, ids: map[string]appIdentity{}}
+	w := &connWorld{t: t, live: map[string]int{}, probed: map[string][]string{}, sinks: map[string]slack.Sink{}, ids: map[string]appIdentity{}}
 	w.c = crStartConfig(t, func(objs []*unstructured.Unstructured) {
 		_ = unstructured.SetNestedStringSlice(objs[0].Object, []string{"sre", "payments", "team-a", "team-b"}, "spec", "allowedNamespaces")
 		if edit != nil {
@@ -130,10 +131,27 @@ func (l *liveSlack) Run(ctx context.Context, sink slack.Sink) error {
 	return ctx.Err()
 }
 
+// ChannelAccess records who was asked for which channel: the verification of a Binding reads its channel as the bot of its connection.
+func (l *liveSlack) ChannelAccess(_ context.Context, channel string) (chat.Access, error) {
+	l.w.mu.Lock()
+	l.w.probed[l.token] = append(l.w.probed[l.token], channel)
+	l.w.mu.Unlock()
+	return chat.Access{Member: true}, nil
+}
+
+func (w *connWorld) probedBy(token string) []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return slices.Clone(w.probed[token])
+}
+
 // secret puts the credentials Secret of a team connection in the cluster, or changes it.
-func (w *connWorld) secret(ns, bot string) {
+func (w *connWorld) secret(ns, bot string) { w.t.Helper(); w.secretOf(ns, bot, "app-"+bot) }
+
+// secretOf is secret for a Secret whose app token is app.
+func (w *connWorld) secretOf(ns, bot, app string) {
 	w.t.Helper()
-	s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "creds"}, Data: map[string][]byte{"botToken": []byte(bot), "appToken": []byte("app-" + bot)}}
+	s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "creds"}, Data: map[string][]byte{"botToken": []byte(bot), "appToken": []byte(app)}}
 	_, err := w.kube.CoreV1().Secrets(ns).Update(w.t.Context(), s, metav1.UpdateOptions{})
 	if apierrors.IsNotFound(err) {
 		_, err = w.kube.CoreV1().Secrets(ns).Create(w.t.Context(), s, metav1.CreateOptions{})
@@ -342,5 +360,31 @@ func TestARunServesTheOlderOfTwoConnectionsOfOneSlackAppAndTellsTheOthersBinding
 	}
 	if a := cluster.stored(t, "team-a/on-a")["Accepted"]; a.Status != metav1.ConditionFalse || !strings.Contains(a.Message, "an app is served once") {
 		t.Errorf("Accepted = %+v; want False, with why", a)
+	}
+}
+
+// The Bindings of a team connection are verified as the bot of their own connection, and not as the own connection's: the channel of a team
+// Binding is read through the team's platform and the own Binding's through the own, and a refused connection's Binding is not probed at all.
+func TestATeamBindingIsProbedWithItsOwnBot(t *testing.T) {
+	w := newConnWorld(t, nil)
+	w.c.probeEvery, w.c.probeTick, w.c.probeGap = 50*time.Millisecond, 10*time.Millisecond, time.Millisecond
+	app := w.ids[ownToken]
+	w.ids["tok-twin"] = app // a second connection of the own connection's app is refused
+	w.team("team-a", "tok-a")
+	w.binding("team-a", "on-a", "C0TEAMA0001")
+	w.team("team-b", "tok-twin")
+	w.binding("team-b", "on-b", "C0TEAMB0001")
+	r := start(t, w.c)
+	r.until("/readyz", http.StatusOK)
+
+	w.eventually("team-a's channel to be read by team-a's bot", func() bool { return slices.Contains(w.probedBy("tok-a"), "C0TEAMA0001") })
+	w.eventually("the own Binding's channel to be read by the own bot", func() bool { return slices.Contains(w.probedBy(ownToken), "G0123456789") })
+	for tok, other := range map[string]string{ownToken: "C0TEAMA0001", "tok-a": "G0123456789"} {
+		if slices.Contains(w.probedBy(tok), other) {
+			t.Errorf("the bot of %s was asked about the channel %s, which is another connection's", tok, other)
+		}
+	}
+	if w.up("tok-twin") != 0 || len(w.probedBy("tok-twin")) != 0 || slices.Contains(w.probedBy(ownToken), "C0TEAMB0001") {
+		t.Errorf("the refused connection's Binding was probed (its bot: %v, the own bot: %v)", w.probedBy("tok-twin"), w.probedBy(ownToken))
 	}
 }

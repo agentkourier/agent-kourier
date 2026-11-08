@@ -372,7 +372,7 @@ func TestBindingReadyHasNoSeriesWhileItIsStillPendingInEitherProbeOrder(t *testi
 					}
 					return outcome(status[bindingcheck.BackendReachable]), nil
 				}),
-				Channels: channelFunc(func(_ context.Context, _ string) (bindingcheck.Outcome, error) {
+				Channels: channelFunc(func(_ context.Context, _, _ string) (bindingcheck.Outcome, error) {
 					if tc.first != bindingcheck.ChannelJoined {
 						<-release
 					}

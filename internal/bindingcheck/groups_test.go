@@ -18,7 +18,7 @@ type fakeGroups struct {
 	fn    func(ctx context.Context, groups []string) (Outcome, error)
 }
 
-func (f *fakeGroups) CheckGroups(ctx context.Context, groups []string) (Outcome, error) {
+func (f *fakeGroups) CheckGroups(ctx context.Context, _ string, groups []string) (Outcome, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, slices.Clone(groups))
 	f.mu.Unlock()
@@ -446,7 +446,7 @@ type passGroups struct {
 	passes []*fakeGroups
 }
 
-func (p *passGroups) CheckGroups(context.Context, []string) (Outcome, error) {
+func (p *passGroups) CheckGroups(context.Context, string, []string) (Outcome, error) {
 	return Outcome{}, errors.New("probed outside a pass")
 }
 

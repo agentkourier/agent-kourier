@@ -116,6 +116,7 @@ func newSupWorld(t *testing.T) *supWorld {
 			w.idented = append(w.idented, tok)
 			return w.ids[tok], w.idErr[tok]
 		},
+		conns:  new(atomic.Pointer[[]Connection]),
 		intake: func(v1alpha1.ObjectRef) (chat.Sink, error) { return nil, nil },
 		gone:   func(conn string) { w.mu.Lock(); w.gone = append(w.gone, conn); w.mu.Unlock() },
 	}
@@ -474,5 +475,49 @@ func TestTheTableTakesNoRuntimeOnceTheShutdownHasHaltedThem(t *testing.T) {
 	}
 	if got := w.running(); !slices.Equal(got, []string{ownName}) {
 		t.Errorf("table = %v; want the runtime that was there and no more", got)
+	}
+}
+
+// The supervisor publishes the connections the verification probes the Bindings of: the own connection with its credentials, and each team
+// connection the Snapshot serves that was not refused, with the credentials of its runtime if it runs and none if it does not (a connection that is not
+// running has no baseline to tell a changed Secret against). A refused connection is left out, so its Bindings are not probed. The list is replaced
+// whole at each pass, and the one a reader holds is never changed.
+func TestSupervisorPublishesTheConnectionsToVerify(t *testing.T) {
+	w := newSupWorld(t)
+	app := appIdentity{App: "AAPP", Team: "T1", User: "UAPP", Bot: "BAPP"}
+	w.ids["tok-a"], w.ids["tok-twin"], w.ids["tok-b"] = app, app, appIdentity{App: "AB", Team: "T1", User: "UB", Bot: "BB"}
+	published := func() map[string]string { // the connections, with the bot token each has
+		out := map[string]string{}
+		for _, c := range *w.sup.conns.Load() {
+			out[c.Ref.Namespace+"/"+c.Ref.Name] = c.Credentials["botToken"].Reveal()
+		}
+		return out
+	}
+
+	w.reconcile(team("team-a/slack", 1, "tok-a", 1), team("team-b/slack", 1, "tok-twin", 2), unready("team-c/slack", 1, 3), team("team-d/slack", 1, "tok-b", 4))
+	first := *w.sup.conns.Load()
+	got := published()
+	want := map[string]string{ownName: "own-token", "team-a/slack": "tok-a", "team-c/slack": "", "team-d/slack": "tok-b"}
+	if len(got) != len(want) {
+		t.Fatalf("published = %v; want %v: the refused connection left out, the unready one in with no credentials", got, want)
+	}
+	for conn, tok := range want {
+		if g, ok := got[conn]; !ok || g != tok {
+			t.Errorf("published = %v; want %v", got, want)
+			break
+		}
+	}
+
+	w.reconcile(team("team-a/slack", 2, "tok-a2", 1)) // changed, and the others gone
+	if got := published(); len(got) != 2 || got["team-a/slack"] != "tok-a2" {
+		t.Errorf("published = %v; want the own connection and team-a on its new token", got)
+	}
+	if first[1].Credentials["botToken"].Reveal() != "tok-a" || len(first) != 4 {
+		t.Errorf("the list a reader held changed: %+v", first)
+	}
+
+	w.reconcile()
+	if got := published(); len(got) != 1 || got[ownName] != "own-token" {
+		t.Errorf("published = %v with no team connection; want the own alone", got)
 	}
 }

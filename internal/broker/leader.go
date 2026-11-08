@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/audit"
@@ -83,11 +84,10 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	if err != nil {
 		return nil, err
 	}
-	platform := ownRT.platform
 	var platforms chat.Resolver[chat.Platform] = table
-	// The Bindings take the platform's own acknowledgment reaction, so the platform is built first.
+	// The Bindings take the acknowledgment reaction of the platform of their own connection, so the platform is built first.
 	bindings, err := NewBindings(boot.Reloader, boot.Secrets, auditor, Options{
-		OnRejected: metrics.CredentialRejected, AckReaction: platform.Capabilities().AckReaction, fence: h.leaseFence})
+		OnRejected: metrics.CredentialRejected, Platforms: chat.Narrow[platformCaps](platforms), fence: h.leaseFence})
 	if err != nil {
 		host.closeAll()
 		return nil, err
@@ -225,6 +225,10 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	// The connections the supervisor does not run because they are a second connection of one Slack app are in the Snapshot, and so are
 	// their Bindings: the report that the writer reads says those Bindings are not served (refusals.overlay).
 	refused := &refusals{}
+	// The connections the verification probes the Bindings of: the supervisor publishes the list after each of its passes (supervisor.publish),
+	// and until the first the own connection's alone.
+	var connsServed atomic.Pointer[[]Connection]
+	connsServed.Store(&[]Connection{conn})
 	if h.status != nil {
 		if boot.Source == nil {
 			return nil, errors.New("binding status: the config has no custom resource source to read the statuses from")
@@ -238,8 +242,8 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 		}
 	}
 	prober = verification{
-		Bindings: bindings, Platform: platform, Snaps: boot.Reloader, Revision: boot.Reloader.Revision, Conn: conn,
-		Secrets: boot.Secrets, Metrics: metrics, Log: log, Interval: cfg.probeEvery, Tick: cfg.probeTick, MinRevisionGap: cfg.probeGap,
+		Bindings: bindings, Platforms: chat.Narrow[platformReader](platforms), Conns: func() []Connection { return *connsServed.Load() },
+		Snaps: boot.Reloader, Revision: boot.Reloader.Revision, Secrets: boot.Secrets, Metrics: metrics, Log: log, Interval: cfg.probeEvery, Tick: cfg.probeTick, MinRevisionGap: cfg.probeGap,
 		Status: statusW,
 	}.newProber()
 	if statusW != nil {
@@ -286,7 +290,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	// looks. A team connection that cannot start yet (its Secret has not synced) starts when it can, and none fails this start.
 	sup := &supervisor{
 		host: host, log: log, every: cmp.Or(cfg.superviseEvery, defaultSuperviseEvery), snapshot: boot.Reloader.Current, secrets: boot.Secrets,
-		own: conn, identify: cfg.identityOf, intake: newIntake, refusals: refused, gone: ob.Forget,
+		own: conn, identify: cfg.identityOf, intake: newIntake, refusals: refused, conns: &connsServed, gone: ob.Forget,
 		done: make(chan struct{}), teams: map[string]*teamRuntime{}, said: map[string]string{},
 	}
 	supCtx, stopSup := context.WithCancel(runCtx)

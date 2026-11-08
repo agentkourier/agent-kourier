@@ -1459,9 +1459,9 @@ func TestTheBrokersProberTellsTheStatusWriterAtTheEndOfEachPass(t *testing.T) {
 	var calls atomic.Int64
 	r := newStatusRig(t, newStatusCluster(t), nil)
 	p := verification{
-		Bindings: probeFunc(func(context.Context, string) error { calls.Add(1); return nil }), Platform: &accessFake{access: chat.Access{Member: true}},
+		Bindings: probeFunc(func(context.Context, string) error { calls.Add(1); return nil }), Platforms: soleBot(refA, &accessFake{access: chat.Access{Member: true}}),
 		Snaps: current, Revision: func(context.Context) string { return "r" }, Status: r.w,
-		Conn:    Connection{Ref: v1alpha1.ObjectRef{Namespace: "platform", Name: "slack-a"}},
+		Conns:   soleConn(refA),
 		Metrics: mustMetrics(t, nil), Log: slog.New(slog.DiscardHandler), Interval: 20 * time.Millisecond, Tick: 2 * time.Millisecond,
 	}.newProber()
 	runProber(t, p)
@@ -1476,8 +1476,8 @@ func TestTheBrokersProberTellsTheStatusWriterAtTheEndOfEachPass(t *testing.T) {
 
 // The Prober is given each Binding's generation, so that what it stamps is the generation the Binding had when the pass began.
 func TestBindingTargetsCarryTheGeneration(t *testing.T) {
-	got := bindingTargets(snapshotWithUIDs(t, map[string]int64{sreAlerts: 7}, map[string]string{sreAlerts: "uid-7"}), v1alpha1.ObjectRef{Namespace: "sre", Name: "slack"})
-	if want := []bindingcheck.Target{{Binding: sreAlerts, Channel: "C-alerts", Generation: 7, UID: "uid-7"}}; !reflect.DeepEqual(got, want) {
+	got := bindingTargets(snapshotWithUIDs(t, map[string]int64{sreAlerts: 7}, map[string]string{sreAlerts: "uid-7"}), []v1alpha1.ObjectRef{sreSlack})
+	if want := []bindingcheck.Target{{Binding: sreAlerts, Connection: "sre/slack", Channel: "C-alerts", Generation: 7, UID: "uid-7"}}; !reflect.DeepEqual(got, want) {
 		t.Errorf("targets = %v, want %v", got, want)
 	}
 }
