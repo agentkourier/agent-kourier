@@ -154,8 +154,60 @@ func TestRunnerCRRoles(t *testing.T) {
 			t.Errorf("the Secret %s of a scenario is not named in Role e2e-runner-team", want)
 		}
 	}
-	// Three Roles in all: the two of the doubles and Agent Kourier, and this one. A Role in another namespace would let the runner write there.
-	if len(roles) != 3 {
-		t.Errorf("the manifest has %d Roles, want 3 (e2e, agent-kourier, %s)", len(roles), TeamNamespace)
+	// Six Roles in all: the two of the doubles and Agent Kourier, this one, and the three of the Slack apps' namespaces (TestRunnerConnectionRoles). A Role in
+	// another namespace would let the runner write there.
+	if len(roles) != 6 {
+		t.Errorf("the manifest has %d Roles, want 6 (e2e, agent-kourier, %s, %s, %s, %s)", len(roles), TeamNamespace, MultiTeamNamespace, ScratchNamespace, ScratchNamespace2)
+	}
+}
+
+// TestRunnerConnectionRoles pins what the scenarios of several Slack apps may do. In team-a, which the tier fills, the runner reads Bindings and
+// ChatConnections and patches the one Secret of the Slack tokens, by name: it can never read a Secret, there or anywhere. In team-b and team-c it plays a
+// team as it does in e2e-team, and may also make and delete ChatConnections, with the Secrets of a case (mc-slack and mc-token) the only ones it may list,
+// watch or delete.
+func TestRunnerConnectionRoles(t *testing.T) {
+	roles := runnerRolesByName(t)
+	a, ok := roles[MultiTeamNamespace+"/e2e-runner-team-a"]
+	if !ok {
+		t.Fatalf("the manifest has no Role e2e-runner-team-a in %s", MultiTeamNamespace)
+	}
+	if got, want := grants([]rbacv1.Role{a}), map[string]bool{"bindings:get": true, "bindings:list": true, "chatconnections:get": true, "chatconnections:list": true, "secrets:patch": true}; len(got) != len(want) {
+		t.Errorf("Role e2e-runner-team-a grants %v, want exactly %v", got, want)
+	} else {
+		for g := range want {
+			if !got[g] {
+				t.Errorf("Role e2e-runner-team-a lacks %s", g)
+			}
+		}
+	}
+	for _, rule := range a.Rules {
+		if slices.Contains(rule.Resources, "secrets") && fmt.Sprint(rule.ResourceNames) != "[slack-team-a]" {
+			t.Errorf("rule %v on secrets in %s names %v; want the Slack tokens, slack-team-a, and nothing else", rule.Verbs, MultiTeamNamespace, rule.ResourceNames)
+		}
+	}
+	for _, ns := range []string{ScratchNamespace, ScratchNamespace2} {
+		r, ok := roles[ns+"/e2e-runner-"+ns]
+		if !ok {
+			t.Fatalf("the manifest has no Role e2e-runner-%s in %s", ns, ns)
+		}
+		got := grants([]rbacv1.Role{r})
+		for _, want := range []string{"chatconnections:create", "chatconnections:delete", "chatconnections:get", "bindings:create", "bindings:delete", "bindings:get", "agentbackends:create", "agentbackends:delete", "secrets:create", "secrets:delete", "secrets:list", "secrets:watch", "roles:create", "rolebindings:create", "roles:delete", "rolebindings:delete"} {
+			if !got[want] {
+				t.Errorf("Role %s in %s lacks %s", r.Name, ns, want)
+			}
+		}
+		for _, never := range []string{"secrets:get", "secrets:update", "secrets:patch", "roles:get", "bindings:patch"} {
+			if got[never] {
+				t.Errorf("Role %s in %s grants %s, which no scenario uses", r.Name, ns, never)
+			}
+		}
+		for _, rule := range r.Rules {
+			if !slices.Contains(rule.Resources, "secrets") || slices.Equal(rule.Verbs, []string{"create"}) && len(rule.ResourceNames) == 0 {
+				continue
+			}
+			if fmt.Sprint(rule.ResourceNames) != "[mc-slack mc-token]" {
+				t.Errorf("rule %v on secrets in %s names %v; want mc-slack and mc-token, the Secrets of a case", rule.Verbs, ns, rule.ResourceNames)
+			}
+		}
 	}
 }

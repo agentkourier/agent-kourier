@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -26,11 +27,22 @@ const TeamNamespace = "e2e-team"
 // "agent-kourier" of the tiers, in Agent Kourier's namespace.
 const AgentKourierServiceAccount = "agent-kourier"
 
-// ErrWriteRefused is returned, wrapped, for a write outside [TeamNamespace].
-var ErrWriteRefused = errors.New("kube: refusing to write outside " + TeamNamespace)
+// The namespaces of the scenarios of a broker that serves several Slack apps (hack/kind/fast/two-apps, hack/kind/e2e/runner.yaml): MultiTeamNamespace holds
+// a ChatConnection, a Binding and the Slack tokens that the tier makes and the runner only reads and fixes; ScratchNamespace and ScratchNamespace2 are empty,
+// where a case adds a ChatConnection while the broker runs. All three are on the platform's admission list.
+const (
+	MultiTeamNamespace = "team-a"
+	ScratchNamespace   = "team-b"
+	ScratchNamespace2  = "team-c"
+)
+
+// ErrWriteRefused is returned, wrapped, for a write outside the namespace a [CRs] was made for: [TeamNamespace], or the one [CRs.In] chose.
+var ErrWriteRefused = errors.New("kube: refusing to write outside the scenario's team namespace")
 
 // The kinds of group agentkourier.dev the scenarios make and read.
 var (
+	// ChatConnectionGVR is the ChatConnection resource.
+	ChatConnectionGVR = schema.GroupVersionResource{Group: "agentkourier.dev", Version: "v1alpha1", Resource: "chatconnections"}
 	// BindingGVR is the Binding resource: `kubectl get akbinding`, never `bindings`, which is the core resource of that name.
 	BindingGVR = schema.GroupVersionResource{Group: "agentkourier.dev", Version: "v1alpha1", Resource: "bindings"}
 	// AgentBackendGVR is the AgentBackend resource.
@@ -38,9 +50,11 @@ var (
 )
 
 // CRs plays a team for the scenarios of the custom resources route: it makes and changes Bindings and AgentBackends, a token Secret, and the Role and
-// RoleBinding that let Agent Kourier read that Secret, all in [TeamNamespace]; and it reads the three kinds anywhere the runner's Roles allow, as the
-// table `kubectl get` prints. [NewCRsInCluster] is the only way to build one outside this package's tests, so the in-cluster guard cannot be skipped.
+// RoleBinding that let Agent Kourier read that Secret, all in [TeamNamespace] (or the namespace [CRs.In] chose); and it reads the three kinds anywhere the
+// runner's Roles allow, as the table `kubectl get` prints. [NewCRsInCluster] is the only way to build one outside this package's tests, so the in-cluster
+// guard cannot be skipped.
 type CRs struct {
+	ns   string // the one namespace it writes in
 	dyn  dynamic.Interface
 	core kubernetes.Interface
 	raw  func(ctx context.Context, path, accept string) ([]byte, error) // a GET of an API path with an Accept header, which the typed clients cannot send
@@ -72,8 +86,27 @@ func newCRsInCluster(inClusterConfig func() (*rest.Config, error), namespaceFile
 }
 
 func newCRs(dyn dynamic.Interface, core kubernetes.Interface) *CRs {
-	return &CRs{dyn: dyn, core: core}
+	return &CRs{ns: TeamNamespace, dyn: dyn, core: core}
 }
+
+// ErrNoSuchTeamNamespace is returned, wrapped, by [CRs.In] for a namespace the runner has no Role to play a team in.
+var ErrNoSuchTeamNamespace = errors.New("kube: not a namespace the scenarios play a team in")
+
+// In returns the same client for writes in another namespace of the scenarios: [TeamNamespace], [MultiTeamNamespace], [ScratchNamespace] or
+// [ScratchNamespace2]. What the runner may do there is the Role of that namespace (hack/kind/e2e/runner.yaml); this only keeps a case from asking
+// for another namespace by mistake.
+func (c *CRs) In(namespace string) (*CRs, error) {
+	switch namespace {
+	case TeamNamespace, MultiTeamNamespace, ScratchNamespace, ScratchNamespace2:
+		in := *c
+		in.ns = namespace
+		return &in, nil
+	}
+	return nil, fmt.Errorf("%w: %q", ErrNoSuchTeamNamespace, namespace)
+}
+
+// Namespace is the namespace the client writes in.
+func (c *CRs) Namespace() string { return c.ns }
 
 // Get returns the object, wherever the runner may read it.
 func (c *CRs) Get(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error) {
@@ -84,34 +117,34 @@ func (c *CRs) Get(ctx context.Context, gvr schema.GroupVersionResource, namespac
 	return obj, nil
 }
 
-// Create makes the object, which must be in [TeamNamespace], and returns it as the API server stored it.
+// Create makes the object, which must be in the client's namespace, and returns it as the API server stored it.
 func (c *CRs) Create(ctx context.Context, gvr schema.GroupVersionResource, obj *unstructured.Unstructured) (*unstructured.Unstructured, error) {
-	if obj.GetNamespace() != TeamNamespace {
+	if obj.GetNamespace() != c.ns {
 		return nil, fmt.Errorf("%w: %s", ErrWriteRefused, obj.GetNamespace())
 	}
-	got, err := c.dyn.Resource(gvr).Namespace(TeamNamespace).Create(ctx, obj, metav1.CreateOptions{})
+	got, err := c.dyn.Resource(gvr).Namespace(c.ns).Create(ctx, obj, metav1.CreateOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("create %s %s/%s: %w", gvr.Resource, obj.GetNamespace(), obj.GetName(), err)
 	}
 	return got, nil
 }
 
-// Replace puts obj in place of the object of its name, which must be in [TeamNamespace]: what a team's `kubectl apply` of an edited file does, and
+// Replace puts obj in place of the object of its name, which must be in the client's namespace: what a team's `kubectl apply` of an edited file does, and
 // like it, against whatever is there now. The status writer updates the same object, so a write that finds it changed under it (a Conflict) reads it
 // again and goes on. It returns the object as stored, so its generation says whether the change counted as one.
 func (c *CRs) Replace(ctx context.Context, gvr schema.GroupVersionResource, obj *unstructured.Unstructured) (*unstructured.Unstructured, error) {
-	if obj.GetNamespace() != TeamNamespace {
+	if obj.GetNamespace() != c.ns {
 		return nil, fmt.Errorf("%w: %s", ErrWriteRefused, obj.GetNamespace())
 	}
 	var got *unstructured.Unstructured
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		live, err := c.dyn.Resource(gvr).Namespace(TeamNamespace).Get(ctx, obj.GetName(), metav1.GetOptions{})
+		live, err := c.dyn.Resource(gvr).Namespace(c.ns).Get(ctx, obj.GetName(), metav1.GetOptions{})
 		if err != nil {
 			return err
 		}
 		next := obj.DeepCopy()
 		next.SetResourceVersion(live.GetResourceVersion())
-		got, err = c.dyn.Resource(gvr).Namespace(TeamNamespace).Update(ctx, next, metav1.UpdateOptions{})
+		got, err = c.dyn.Resource(gvr).Namespace(c.ns).Update(ctx, next, metav1.UpdateOptions{})
 		return err
 	})
 	if err != nil {
@@ -120,23 +153,23 @@ func (c *CRs) Replace(ctx context.Context, gvr schema.GroupVersionResource, obj 
 	return got, nil
 }
 
-// Purge deletes every object of the resource in [TeamNamespace], whoever made it: the start of a case that finds what a run killed by its timeout left.
+// Purge deletes every object of the resource in the client's namespace, whoever made it: the start of a case that finds what a run killed by its timeout left.
 func (c *CRs) Purge(ctx context.Context, gvr schema.GroupVersionResource) error {
-	list, err := c.dyn.Resource(gvr).Namespace(TeamNamespace).List(ctx, metav1.ListOptions{})
+	list, err := c.dyn.Resource(gvr).Namespace(c.ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return fmt.Errorf("list %s in %s: %w", gvr.Resource, TeamNamespace, err)
+		return fmt.Errorf("list %s in %s: %w", gvr.Resource, c.ns, err)
 	}
 	for i := range list.Items {
-		if err := c.Delete(ctx, gvr, TeamNamespace, list.Items[i].GetName()); err != nil {
+		if err := c.Delete(ctx, gvr, c.ns, list.Items[i].GetName()); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// Delete removes the object of that name in [TeamNamespace]; one that is not there is not an error, so that a scenario cleans up whatever it got to.
+// Delete removes the object of that name in the client's namespace; one that is not there is not an error, so that a scenario cleans up whatever it got to.
 func (c *CRs) Delete(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) error {
-	if namespace != TeamNamespace {
+	if namespace != c.ns {
 		return fmt.Errorf("%w: %s", ErrWriteRefused, namespace)
 	}
 	err := c.dyn.Resource(gvr).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{})
@@ -212,11 +245,24 @@ func parseTable(body []byte) (Table, error) {
 	return t, nil
 }
 
-// CreateSecret makes an Opaque Secret in [TeamNamespace]. Its values are the caller's fake constants.
+// CreateSecret makes an Opaque Secret in the client's namespace. Its values are the caller's fake constants.
 func (c *CRs) CreateSecret(ctx context.Context, name string, data map[string]string) error {
-	s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: TeamNamespace}, StringData: data, Type: corev1.SecretTypeOpaque}
-	if _, err := c.core.CoreV1().Secrets(TeamNamespace).Create(ctx, s, metav1.CreateOptions{}); err != nil {
-		return fmt.Errorf("create secret %s/%s: %w", TeamNamespace, name, err)
+	s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: c.ns}, StringData: data, Type: corev1.SecretTypeOpaque}
+	if _, err := c.core.CoreV1().Secrets(c.ns).Create(ctx, s, metav1.CreateOptions{}); err != nil {
+		return fmt.Errorf("create secret %s/%s: %w", c.ns, name, err)
+	}
+	return nil
+}
+
+// SetSecretData changes the values of the keys given in a Secret of the client's namespace that exists, as a team does that fixes a token: a merge
+// patch, so the other keys stay. The runner's Role allows it for the named Secret only. The values are the caller's fake constants.
+func (c *CRs) SetSecretData(ctx context.Context, name string, data map[string]string) error {
+	patch, err := json.Marshal(map[string]any{"stringData": data})
+	if err != nil {
+		return fmt.Errorf("encode the patch of secret %s/%s: %w", c.ns, name, err)
+	}
+	if _, err := c.core.CoreV1().Secrets(c.ns).Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		return fmt.Errorf("patch secret %s/%s: %w", c.ns, name, err)
 	}
 	return nil
 }
@@ -224,40 +270,40 @@ func (c *CRs) CreateSecret(ctx context.Context, name string, data map[string]str
 // roleName is the name of the Role and RoleBinding that grant Agent Kourier one Secret.
 func roleName(secret string) string { return "agent-kourier-reads-" + secret }
 
-// GrantSecret does what a team must do to let Agent Kourier read a Secret of its namespace (chart README, "Custom resources instead of a ConfigMap"):
+// GrantSecret does what a team must do to let Agent Kourier read a Secret of the client's namespace (chart README, "Custom resources instead of a ConfigMap"):
 // a Role that lets list and watch that Secret by name, and a RoleBinding of it to Agent Kourier's ServiceAccount. Without the binding the Role grants
 // nothing.
 func (c *CRs) GrantSecret(ctx context.Context, secret string) error {
 	role := &rbacv1.Role{
-		ObjectMeta: metav1.ObjectMeta{Name: roleName(secret), Namespace: TeamNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: roleName(secret), Namespace: c.ns},
 		Rules:      []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"secrets"}, ResourceNames: []string{secret}, Verbs: []string{"list", "watch"}}},
 	}
-	if _, err := c.core.RbacV1().Roles(TeamNamespace).Create(ctx, role, metav1.CreateOptions{}); err != nil {
-		return fmt.Errorf("create role %s/%s: %w", TeamNamespace, role.Name, err)
+	if _, err := c.core.RbacV1().Roles(c.ns).Create(ctx, role, metav1.CreateOptions{}); err != nil {
+		return fmt.Errorf("create role %s/%s: %w", c.ns, role.Name, err)
 	}
 	binding := &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: roleName(secret), Namespace: TeamNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: roleName(secret), Namespace: c.ns},
 		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: role.Name},
 		Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: AgentKourierServiceAccount, Namespace: AgentKourierNamespace}},
 	}
-	if _, err := c.core.RbacV1().RoleBindings(TeamNamespace).Create(ctx, binding, metav1.CreateOptions{}); err != nil {
-		return fmt.Errorf("create rolebinding %s/%s: %w", TeamNamespace, binding.Name, err)
+	if _, err := c.core.RbacV1().RoleBindings(c.ns).Create(ctx, binding, metav1.CreateOptions{}); err != nil {
+		return fmt.Errorf("create rolebinding %s/%s: %w", c.ns, binding.Name, err)
 	}
 	return nil
 }
 
-// RemoveSecret deletes the Secret, and the Role and RoleBinding that grant it; whichever is not there is not an error.
+// RemoveSecret deletes the Secret of the client's namespace, and the Role and RoleBinding that grant it; whichever is not there is not an error.
 func (c *CRs) RemoveSecret(ctx context.Context, secret string) error {
 	var errs []error
 	for _, del := range []func() error{
 		func() error {
-			return c.core.CoreV1().Secrets(TeamNamespace).Delete(ctx, secret, metav1.DeleteOptions{})
+			return c.core.CoreV1().Secrets(c.ns).Delete(ctx, secret, metav1.DeleteOptions{})
 		},
 		func() error {
-			return c.core.RbacV1().RoleBindings(TeamNamespace).Delete(ctx, roleName(secret), metav1.DeleteOptions{})
+			return c.core.RbacV1().RoleBindings(c.ns).Delete(ctx, roleName(secret), metav1.DeleteOptions{})
 		},
 		func() error {
-			return c.core.RbacV1().Roles(TeamNamespace).Delete(ctx, roleName(secret), metav1.DeleteOptions{})
+			return c.core.RbacV1().Roles(c.ns).Delete(ctx, roleName(secret), metav1.DeleteOptions{})
 		},
 	} {
 		if err := del(); err != nil && !apierrors.IsNotFound(err) {
@@ -265,7 +311,7 @@ func (c *CRs) RemoveSecret(ctx context.Context, secret string) error {
 		}
 	}
 	if err := errors.Join(errs...); err != nil {
-		return fmt.Errorf("remove secret %s/%s and its grant: %w", TeamNamespace, secret, err)
+		return fmt.Errorf("remove secret %s/%s and its grant: %w", c.ns, secret, err)
 	}
 	return nil
 }

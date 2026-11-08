@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -210,6 +211,54 @@ func TestSlackSetsUpUsersAndMembers(t *testing.T) {
 	}
 	if m, _, err := f.bot.GetUsersInConversation(&slack.GetUsersInConversationParameters{ChannelID: "C1"}); err != nil || len(m) != 2 {
 		t.Errorf("conversations.members = %v, %v", m, err)
+	}
+}
+
+// The control client puts the bot of another app in a channel, counts the connections of one app, and revokes an app's tokens, as the scenarios of
+// several Slack apps do.
+func TestSlackDrivesSeveralApps(t *testing.T) {
+	teamA := fakeslack.App{AppID: "ATEAMA", BotUser: "UTEAMA", BotID: "BTEAMA", BotToken: "xoxb-fake-team-a-token", AppToken: "xapp-fake-team-a-token"}
+	fake := fakeslack.New(fakeslack.WithApp(teamA))
+	t.Cleanup(fake.Close)
+	sl, ctx := NewSlack(fake.URL()), t.Context()
+
+	if err := sl.Join(ctx, "C1", "ATEAMA"); err != nil {
+		t.Fatal(err)
+	}
+	bot := slack.New(teamA.BotToken, slack.OptionAPIURL(fake.URL()+"/"))
+	if m, _, err := bot.GetUsersInConversation(&slack.GetUsersInConversationParameters{ChannelID: "C1"}); err != nil || len(m) != 1 || m[0] != "UTEAMA" {
+		t.Errorf("conversations.members = %v, %v; want team-a's bot only", m, err)
+	}
+	var se *StatusError
+	if err := sl.Join(ctx, "C1", "ANOSUCHAPP"); !errors.As(err, &se) || se.Status != http.StatusNotFound {
+		t.Errorf("Join of an app the fake does not host = %v; want a 404", err)
+	}
+
+	if n, err := sl.AppConnections(ctx, "ATEAMA"); err != nil || n != 0 {
+		t.Errorf("AppConnections before a client = %d, %v; want 0", n, err)
+	}
+	connectSocket(t, slack.New(teamA.BotToken, slack.OptionAPIURL(fake.URL()+"/"), slack.OptionAppLevelToken(teamA.AppToken)), true)
+	if n, err := sl.AppConnections(ctx, "ATEAMA"); err != nil || n != 1 {
+		t.Errorf("AppConnections with a client = %d, %v; want 1", n, err)
+	}
+	if n, err := sl.AppConnections(ctx, "AFAKEAPP"); err != nil || n != 0 {
+		t.Errorf("AppConnections of the default app = %d, %v; want 0: the client is team-a's", n, err)
+	}
+
+	if err := sl.SetRevoked(ctx, "ATEAMA", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bot.AuthTestContext(ctx); err == nil || !strings.Contains(err.Error(), "token_revoked") {
+		t.Errorf("auth.test with a revoked token = %v; want token_revoked", err)
+	}
+	if err := sl.SetRevoked(ctx, "ATEAMA", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bot.AuthTestContext(ctx); err != nil {
+		t.Errorf("auth.test after the tokens were given back = %v", err)
+	}
+	if err := sl.SetRevoked(ctx, "ANOSUCHAPP", true); !errors.As(err, &se) || se.Status != http.StatusNotFound {
+		t.Errorf("SetRevoked of an app the fake does not host = %v; want a 404", err)
 	}
 }
 

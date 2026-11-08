@@ -119,6 +119,18 @@ func (s *Slack) SetMembers(ctx context.Context, channel string, users ...string)
 	return s.c.do(ctx, http.MethodPost, "/_control/members", map[string]any{"channel": channel, "users": users}, nil)
 }
 
+// Join puts the bot of the app appID in channel, which registers the channel as SetMembers does, and leaves the members it has. The fake answers 404 for an
+// app it does not host.
+func (s *Slack) Join(ctx context.Context, channel, appID string) error {
+	return s.c.do(ctx, http.MethodPost, "/_control/join", map[string]string{"channel": channel, "app": appID}, nil)
+}
+
+// SetRevoked revokes the tokens of the app appID, or gives them back: while revoked its Web API calls and its Socket Mode connections are refused, and
+// revoking it ends the connections it has (fakeslack.Server.SetRevoked).
+func (s *Slack) SetRevoked(ctx context.Context, appID string, revoked bool) error {
+	return s.c.do(ctx, http.MethodPost, "/_control/revoked", map[string]any{"app": appID, "revoked": revoked}, nil)
+}
+
 // SetArchived marks channel archived, or not, for conversations.info. It does not register the channel: SetMembers does, and the
 // fake reports channel_not_found for a channel it was not given.
 func (s *Slack) SetArchived(ctx context.Context, channel string, archived bool) error {
@@ -136,6 +148,15 @@ func (s *Slack) Connections(ctx context.Context) (int, error) {
 		Connections int `json:"connections"`
 	}
 	err := s.c.do(ctx, http.MethodGet, "/_control/connections", nil, &out)
+	return out.Connections, err
+}
+
+// AppConnections returns how many Socket Mode clients of the app appID are connected.
+func (s *Slack) AppConnections(ctx context.Context, appID string) (int, error) {
+	var out struct {
+		Connections int `json:"connections"`
+	}
+	err := s.c.do(ctx, http.MethodGet, "/_control/connections?"+url.Values{"app": {appID}}.Encode(), nil, &out)
 	return out.Connections, err
 }
 
