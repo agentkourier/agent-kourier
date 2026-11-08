@@ -605,7 +605,7 @@ func TestAReloadDuringTheAppMentionCannotStartTheLimitedReport(t *testing.T) {
 	if err := h.in.Message(h.ctx, appMention); err != nil {
 		t.Fatal(err)
 	}
-	if got := h.started(); !slices.Equal(got, []string{"8.8"}) {
-		t.Errorf("turns started for %v; want 8.8 alone, and no late start of 9.9", got)
+	if got := h.started(); !slices.Equal(got, []string{"8.8"}) || len(h.sub.submitted()) != 0 {
+		t.Errorf("turns started for %v and %d submitted; want 8.8 alone, and nothing for 9.9", got, len(h.sub.submitted()))
 	}
 }
