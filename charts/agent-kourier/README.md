@@ -162,10 +162,12 @@ What the route needs:
   one Secret by name, since it cannot read the ChatConnection you apply. It is skipped when `config.chatConnections` renders that connection (its
   `credentialsSecretRef` is granted instead), and ignored with `files` or an empty `config.chatConnection`.
 - **`config.connectionNamespaces`**: the admission list, a list of namespace names (empty, the default). The broker serves the `ChatConnection`s of these namespaces
-  beside its own, at most 16 connections in all with its own counted first and the others oldest first; no setting changes the 16. The chart renders the list as
+  beside its own, at most 16 connections in all with its own counted first and the others oldest first; no setting changes the 16. Two
+  `ChatConnection`s of one Slack app (one app ID, even in two workspaces) are not both served: the older is. The chart renders the list as
   `AGENTKOURIER_CONNECTION_NAMESPACES` (comma-joined) and renders nothing when it is empty, and it refuses a non-empty list with `config.source: files`. The ClusterRole
   above already reads the three kinds in every namespace, so the list adds no rule, and the chart grants no Secret of a listed namespace: each team grants the credentials
-  Secret of its connection to the ServiceAccount with a Role of its own that names it (`resourceNames`, as for a Binding's token below), or you name it in `rbac.secretNames`.
+  Secret of its connection to the ServiceAccount with a Role of its own that names it (`resourceNames`, as for a Binding's token below), or you name it in `rbac.secretNames`
+  or its namespace in `rbac.secretNamespaces`. A team connection whose Secret the broker cannot read yet is started once it can, and never stops the broker.
 - **Namespaces that exist.** A file can name a namespace that does not exist; a custom resource cannot.
 
 Move a running install of the ConfigMap route to it in two upgrades, each a working install, and back by the same values (keep `crds: {install: true}` in the values

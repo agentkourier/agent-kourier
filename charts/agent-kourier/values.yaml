@@ -111,9 +111,11 @@ config:
   # first (creationTimestamp, then namespace and name); a connection past the 16 is not served, and no setting changes the 16. Each item
   # is a namespace name (a DNS-1123 label, no wildcard). Empty, the default, serves the own connection alone. The broker reads the list at
   # start, and a change to it changes the pod's environment. Listing a namespace is the platform's consent to the ChatConnections created
-  # there. Each team grants the credentials Secret of its connection to this chart's ServiceAccount with a Role of its own in its
-  # namespace that names the Secret (resourceNames), as it grants its Binding tokens (see rbac below); rbac.secretNames may name it
-  # instead. The chart refuses a non-empty list with files, which serves the one ChatConnection of its directory.
+  # there. Two ChatConnections of one Slack app (one app ID, even in two workspaces) are not both served: the older is. Each team grants
+  # the credentials Secret of its connection to this chart's ServiceAccount with a Role of its own in its namespace that names the
+  # Secret (resourceNames), as it grants its Binding tokens (see rbac below); rbac.secretNames or rbac.secretNamespaces may grant it
+  # instead. A team connection whose Secret the broker cannot read yet is started once it can, and never stops the broker. The chart
+  # refuses a non-empty list with files, which serves the one ChatConnection of its directory.
   connectionNamespaces: []
   existingConfigMap: ""
   agentBackends: {}
