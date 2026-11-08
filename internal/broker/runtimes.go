@@ -156,6 +156,21 @@ func (t *runtimeTable) botOwner(botID string) (string, bool) {
 	return "", false
 }
 
+// botUserOwner implements botOwners for the user a bot posts as.
+func (t *runtimeTable) botUserOwner(user string) (string, bool) {
+	if user == "" {
+		return "", false
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	for name, rt := range t.rts {
+		if rt.id.User == user {
+			return name, true
+		}
+	}
+	return "", false
+}
+
 // all returns the runtimes in the table, in no order.
 func (t *runtimeTable) all() []*connRuntime {
 	t.mu.RLock()

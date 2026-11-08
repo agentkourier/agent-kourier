@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -62,15 +63,19 @@ func newGuardRig(t *testing.T, triggers ...v1alpha1.Trigger) *guardRig {
 		Connection: v1alpha1.ObjectRef{Namespace: "team-a", Name: "slack"}, Snapshot: func() *config.Snapshot { return snap }, Submitter: noSubmit{},
 		OnStart: func(_ context.Context, m chat.TriggerMatch) error {
 			g.mu.Lock()
-			g.start = append(g.start, m.Message.Bot.ID)
+			who := m.Message.User
+			if m.Message.Bot != nil {
+				who = m.Message.Bot.ID
+			}
+			g.start = append(g.start, who)
 			g.mu.Unlock()
 			return nil
 		},
 	})
 	table := newRuntimeTable()
-	table.add(&connRuntime{name: "platform/slack", id: appIdentity{Bot: "BOWN"}})
-	table.add(&connRuntime{name: "team-a/slack", id: appIdentity{Bot: "BTEAMA"}})
-	table.add(&connRuntime{name: "team-b/slack", id: appIdentity{Bot: "BTEAMB"}})
+	table.add(&connRuntime{name: "platform/slack", id: appIdentity{Bot: "BOWN", User: "UOWN"}})
+	table.add(&connRuntime{name: "team-a/slack", id: appIdentity{Bot: "BTEAMA", User: "UTEAMA"}})
+	table.add(&connRuntime{name: "team-b/slack", id: appIdentity{Bot: "BTEAMB", User: "UTEAMB"}})
 	g.guard = botGuard{in: in, self: "team-a/slack", bots: table, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	return g
 }
@@ -138,5 +143,37 @@ func TestABotThatATriggerNamesIsTakenByTheTrigger(t *testing.T) {
 	}
 	if g.guard.AcceptsBotMention("C1", "BOWN") {
 		t.Error("AcceptsBotMention(BOWN) = true; want the bot of another connection dropped")
+	}
+}
+
+// A personMessage trigger reads a post with no bot ID as a person's. Slack's posts of another app carry a bot ID, so the post of another connection's
+// bot that arrives without one is not expected; were it to, the broker's two apps would answer each other through the trigger as they would through a
+// mention, so the guard drops a post whose user is another connection's bot. A person's message goes through to the trigger.
+func TestAPersonMessageTriggerIsNotFedByAnotherConnectionsBot(t *testing.T) {
+	trigger := v1alpha1.Trigger{Type: v1alpha1.TriggerPersonMessage, PromptTemplate: "A person wrote in {{ .Channel }}.",
+		Limits: v1alpha1.TriggerLimits{
+			RateLimit:     &v1alpha1.RateLimit{MaxRuns: 1000, Per: metav1.Duration{Duration: time.Hour}, MaxConcurrent: 1000},
+			MaxRunsPerDay: new(int32(0)),
+		}}
+	g := newGuardRig(t, trigger)
+	post := func(user, ts string) chat.Inbound {
+		return chat.Inbound{At: chat.Ref{Platform: "slack", Conn: "team-a/slack", Channel: "C1", ID: ts}, User: user, Text: "checkout is down"}
+	}
+	for _, user := range []string{"UOWN", "UTEAMB"} {
+		if err := g.guard.Message(t.Context(), post(user, "100."+user)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := g.started(); len(got) != 0 {
+		t.Fatalf("posts as %v started something; want the bots of the broker's other connections not to feed the trigger", got)
+	}
+	if err := g.guard.Message(t.Context(), post("UPERSON", "101.1")); err != nil {
+		t.Fatal(err)
+	}
+	if got := g.started(); len(got) != 1 || got[0] != "UPERSON" {
+		t.Errorf("started by %v; want the person's message to reach the trigger", got)
+	}
+	if err := g.guard.Message(t.Context(), post("UTEAMA", "102.1")); err != nil { // the connection's own bot is the adapter's to refuse, not the guard's
+		t.Fatal(err)
 	}
 }
