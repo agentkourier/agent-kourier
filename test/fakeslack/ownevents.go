@@ -1,7 +1,7 @@
 package fakeslack
 
 import (
-	"regexp"
+	"encoding/json"
 	"slices"
 	"strings"
 )
@@ -91,7 +91,8 @@ func (s *Server) queueOwnLocked(channel string, prev, cur *Message) {
 // that is in the channel (recipients), each over its own connection and in an
 // envelope made for it. The others see the post as a bot message: a message
 // event with the poster's user, bot_id and app_id, and one whose bot the post
-// mentions is sent an app_mention with the same fields before it.
+// mentions is sent an app_mention with the same fields before it. That order is the fake's choice: both events carry the same ts, and the probe found no fixed
+// order between them, so no client may rely on one.
 //
 // UNCONFIRMED(WP-04): a message event for each bot post with no subtype, and
 // with bot_id and app_id; that blocks are included and metadata is not; a
@@ -140,24 +141,71 @@ func (s *Server) flushOwn() {
 	}
 }
 
-// userInBlocks finds a user element of blocks, which a mention in rich text is: "user_id":"U...".
-var userInBlocks = regexp.MustCompile(`"user_id"\s*:\s*"([A-Z0-9]+)"`)
+// blockOf is the part of a Block Kit block that a mention can be in: the mrkdwn text of a section or the mrkdwn elements of a context block, which is how
+// render.MentionMessage mentions a bot.
+type blockOf struct {
+	Type     string            `json:"type"`
+	Text     *blockText        `json:"text"`
+	Fields   []blockText       `json:"fields"`
+	Elements []json.RawMessage `json:"elements"`
+}
 
-// mentionsBot says whether the bot post e mentions the bot of app a: <@U...> in its text, or a user element naming it in its blocks. A direct message
-// gets no app_mention, as a person's does not (Mention).
+type blockText struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+// tokenFor says whether text holds the user token of bot, <@U> or <@U|label>.
+func tokenFor(text, bot string) bool {
+	return strings.Contains(text, "<@"+bot+">") || strings.Contains(text, "<@"+bot+"|")
+}
+
+// mentionsBot says whether Slack sends the app an app_mention for the bot post e, by the rule that docs/spikes/slack-mention-probe.md ("What a second app
+// receives", 2026-11-03) measured:
+//   - a token in the top-level text gives one (rows B, C, D), whatever the blocks;
+//   - a token in the mrkdwn text of a section or context block gives one (rows A, F), but only when the post has no rich_text and no markdown block: with one
+//     the token in a block gives none (row E, a markdown block);
+//   - a rich_text user element gives none (row G), and a token of another user none (row H).
 //
-// UNCONFIRMED(MC-S): that Slack sends an app_mention for a bot's post that mentions the app (docs/spikes/slack-mention-probe.md says it does for a text
-// mention), and, for a post whose blocks mention the app and whose text does not, that it does so for the user element of a rich_text block; the fake does.
+// A direct message gets no app_mention, as a person's does not (Mention). An edit gets none here: Slack sends an app_mention with edited set for a bot's edit
+// that adds a mention (row I), and the fake does not, a known departure; the adapter drops an edited mention.
+//
+// UNCONFIRMED(MC-S): the cases the probe did not cover: a Slack Connect channel, Enterprise Grid, an app that mentions itself, a token in the fields of a
+// section block (read like its text), and any block type but section, context, rich_text and markdown.
 func mentionsBot(e ownEvent, a App) bool {
 	if e.prev != nil || strings.HasPrefix(e.channel, "D") {
 		return false
 	}
-	if strings.Contains(e.cur.Text, "<@"+a.BotUser+">") || strings.Contains(e.cur.Text, "<@"+a.BotUser+"|") {
+	if tokenFor(e.cur.Text, a.BotUser) {
 		return true
 	}
-	for _, m := range userInBlocks.FindAllSubmatch(e.cur.Blocks, -1) {
-		if string(m[1]) == a.BotUser {
-			return true
+	var blocks []blockOf
+	if len(e.cur.Blocks) == 0 || json.Unmarshal(e.cur.Blocks, &blocks) != nil {
+		return false
+	}
+	for _, b := range blocks {
+		if b.Type == "rich_text" || b.Type == "markdown" {
+			return false
+		}
+	}
+	for _, b := range blocks {
+		switch b.Type {
+		case "section":
+			if b.Text != nil && b.Text.Type == "mrkdwn" && tokenFor(b.Text.Text, a.BotUser) {
+				return true
+			}
+			for _, f := range b.Fields {
+				if f.Type == "mrkdwn" && tokenFor(f.Text, a.BotUser) {
+					return true
+				}
+			}
+		case "context":
+			for _, raw := range b.Elements {
+				var el blockText
+				if json.Unmarshal(raw, &el) == nil && el.Type == "mrkdwn" && tokenFor(el.Text, a.BotUser) {
+					return true
+				}
+			}
 		}
 	}
 	return false
@@ -165,7 +213,7 @@ func mentionsBot(e ownEvent, a App) bool {
 
 // appMentionBody builds the app_mention event for the bot post e: the message's own fields, with the poster's user, bot_id and app_id.
 //
-// UNCONFIRMED(MC-S): the fields of an app_mention for a bot's post beyond the message's own (user, bot_id, app_id, text, ts, channel).
+// UNCONFIRMED(MC-S): the fields of an app_mention for a bot's post beyond the message's own (user, bot_id, app_id, text, ts, channel); the probe lists bot_profile too.
 func (s *Server) appMentionBody(e ownEvent) map[string]any {
 	ev := map[string]any{
 		"type": "app_mention", "user": e.cur.User, "bot_id": e.cur.BotID, "app_id": e.cur.AppID, "text": e.cur.Text,

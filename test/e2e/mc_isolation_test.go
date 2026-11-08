@@ -35,14 +35,16 @@ func (m *mc) fixTeamA(team *kube.CRs) error {
 // team-a's Secret, which restarts the connection once more.
 func (m *mc) restoreTeamA(team *kube.CRs) error {
 	ctx := context.WithoutCancel(m.ctx)
-	opened, err := m.slack.AppConnectionsOpened(ctx, AppTeamA.AppID)
-	if err != nil {
-		return err
-	}
 	if err := m.slack.SetRevoked(ctx, AppTeamA.AppID, false); err != nil { // idempotent: a case that ended before the fix left the app revoked
 		return err
 	}
 	if err := m.slack.RotateTokens(ctx, AppTeamA.AppID, AppTeamA.BotToken, AppTeamA.AppToken); err != nil {
+		return err
+	}
+	// The baseline is read once the app's tokens are the first pair: a client that connects before this is on the pair of the fix, or an old one that came back
+	// while that pair was valid, and must not satisfy the wait below.
+	opened, err := m.slack.AppConnectionsOpened(ctx, AppTeamA.AppID)
+	if err != nil {
 		return err
 	}
 	if err := team.SetSecretData(ctx, "slack-team-a", map[string]string{"botToken": AppTeamA.BotToken, "appToken": AppTeamA.AppToken}); err != nil {
@@ -127,7 +129,8 @@ func TestMC_ARejectedTokenStopsOnlyThatConnection(t *testing.T) {
 
 // TestMC_ALiveReplyOfARecoveredTeamTurnIsFinished: a turn is held on a gate in each connection's channel, with live output (a stream), and the leader is killed.
 // The replica that takes over recovers both turns, and each thread ends with the one whole reply, posted by the bot of its app. Team-a's connection is started
-// after the leader has begun to recover, so the turn's first writes find no platform for it: the reply must still end.
+// usually after the leader has begun to recover (the supervisor starts a team connection on its own clock, a moment after a takeover), so the turn's first writes
+// may find no platform for it: the reply must end either way.
 //
 // The fast tier on Postgres with two replicas (see TestMC_FailoverServesBothConnections). Before the broker left a recovered turn of a connection that is not
 // running until it runs, the platform's thread ended and team-a's stayed "Holding on gate G." streaming: the log said 'live: the turn's connection is not

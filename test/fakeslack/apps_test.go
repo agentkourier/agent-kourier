@@ -977,24 +977,31 @@ func TestARotatedAwayTokenIsRevokedEvenUnderStrictTokens(t *testing.T) {
 	}
 }
 
-// A bot's post that mentions another app's bot gets that app an app_mention, as a person's post does, and then the message event; an app the post does not
-// mention gets the message event alone, and the poster neither hears itself mentioned.
+// A bot's post that mentions another app's bot gets that app an app_mention, as a person's post does, by the rule that docs/spikes/slack-mention-probe.md
+// ("What a second app receives") measured, and then the message event; an app the post does not mention gets the message event alone, and the poster neither
+// hears itself mentioned. The rows are the probe's.
 func TestABotPostThatMentionsAnotherAppsBotIsAnAppMentionForIt(t *testing.T) {
 	fake := twoApps(t)
 	smcA, smcB := socketAs(t, fake, appA), socketAs(t, fake, appB)
 	fake.SetMembers("C1", "UBOTA", "UBOTB")
+	mrkdwn := func(s string) *slack.TextBlockObject { return slack.NewTextBlockObject("mrkdwn", s, false, false) }
+	richUser := slack.NewRichTextBlock("rt", &slack.RichTextSection{Type: slack.RTESection, Elements: []slack.RichTextSectionElement{slack.NewRichTextSectionUserElement("UBOTB", nil)}})
+	both, onlyMessage := []string{"app_mention", "message"}, []string{"message"}
 
 	for name, msg := range map[string]struct {
 		opts     []slack.MsgOption
 		wantType []string // what b is sent, in order
 	}{
-		"a text mention":      {[]slack.MsgOption{text("<@UBOTB> look at this")}, []string{"app_mention", "message"}},
-		"a labelled mention":  {[]slack.MsgOption{text("<@UBOTB|botb> look at this")}, []string{"app_mention", "message"}},
-		"no mention":          {[]slack.MsgOption{text("nothing to see")}, []string{"message"}},
-		"a mention of itself": {[]slack.MsgOption{text("<@UBOTA> me")}, []string{"message"}},
-		"a blocks-only mention": {[]slack.MsgOption{text("see below"), slack.MsgOptionBlocks(slack.NewRichTextBlock("rt",
-			&slack.RichTextSection{Type: slack.RTESection, Elements: []slack.RichTextSectionElement{slack.NewRichTextSectionUserElement("UBOTB", nil)}}))},
-			[]string{"app_mention", "message"}},
+		"B: a token in the text":                                             {[]slack.MsgOption{text("<@UBOTB> look at this")}, both},
+		"B: a labelled token in the text":                                    {[]slack.MsgOption{text("<@UBOTB|botb> look at this")}, both},
+		"J: no mention":                                                      {[]slack.MsgOption{text("nothing to see")}, onlyMessage},
+		"a mention of itself":                                                {[]slack.MsgOption{text("<@UBOTA> me")}, onlyMessage},
+		"A: a context block's mrkdwn token, none in text":                    {[]slack.MsgOption{text("fallback words"), slack.MsgOptionBlocks(slack.NewContextBlock("c", mrkdwn("<@UBOTB> and words")))}, both},
+		"F: a section block's mrkdwn token, none in text":                    {[]slack.MsgOption{text("fallback words"), slack.MsgOptionBlocks(slack.NewSectionBlock(mrkdwn("<@UBOTB>"), nil, nil))}, both},
+		"C: a token in the text and in a context block":                      {[]slack.MsgOption{text("<@UBOTB> here"), slack.MsgOptionBlocks(slack.NewContextBlock("c", mrkdwn("<@UBOTB>")))}, both},
+		"H: a context block with another user's token":                       {[]slack.MsgOption{text("fallback words"), slack.MsgOptionBlocks(slack.NewContextBlock("c", mrkdwn("<@UOTHER>")))}, onlyMessage},
+		"G: a rich_text user element, none in text":                          {[]slack.MsgOption{text("see below"), slack.MsgOptionBlocks(richUser)}, onlyMessage},
+		"E (as its markdown block): a mrkdwn token beside a rich_text block": {[]slack.MsgOption{text("see below"), slack.MsgOptionBlocks(slack.NewSectionBlock(mrkdwn("<@UBOTB>"), nil, nil), richUser)}, onlyMessage},
 	} {
 		_, ts, err := webAs(fake, appA).PostMessage("C1", msg.opts...)
 		if err != nil {
