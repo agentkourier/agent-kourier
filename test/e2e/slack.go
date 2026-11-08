@@ -191,6 +191,16 @@ func (s *Slack) AppConnections(ctx context.Context, appID string) (int, error) {
 	return out.Connections, err
 }
 
+// AppConnectionsOpened returns how many Socket Mode clients have connected as the app appID in all, the ones that have gone included: it is what moves when a
+// client reconnects, however quickly the new one replaces the old.
+func (s *Slack) AppConnectionsOpened(ctx context.Context, appID string) (int, error) {
+	var out struct {
+		Opened int `json:"opened"`
+	}
+	err := s.c.do(ctx, http.MethodGet, "/_control/connections?"+url.Values{"app": {appID}}.Encode(), nil, &out)
+	return out.Opened, err
+}
+
 // Messages returns everything stored in channel, in order.
 func (s *Slack) Messages(ctx context.Context, channel string) ([]fakeslack.MessageView, error) {
 	return s.read(ctx, "/_control/messages?"+url.Values{"channel": {channel}}.Encode())

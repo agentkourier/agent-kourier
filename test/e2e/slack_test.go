@@ -241,6 +241,9 @@ func TestSlackDrivesSeveralApps(t *testing.T) {
 	if n, err := sl.AppConnections(ctx, "ATEAMA"); err != nil || n != 1 {
 		t.Errorf("AppConnections with a client = %d, %v; want 1", n, err)
 	}
+	if n, err := sl.AppConnectionsOpened(ctx, "ATEAMA"); err != nil || n != 1 {
+		t.Errorf("AppConnectionsOpened with one client = %d, %v; want 1", n, err)
+	}
 	if n, err := sl.AppConnections(ctx, "AFAKEAPP"); err != nil || n != 0 {
 		t.Errorf("AppConnections of the default app = %d, %v; want 0: the client is team-a's", n, err)
 	}

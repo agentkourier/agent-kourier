@@ -246,7 +246,11 @@ func (s *Server) newControlRoutes() controlRoutes {
 			}
 			n = s.AppConnections(id)
 		}
-		writeControl(w, http.StatusOK, map[string]int{"connections": n})
+		out := map[string]int{"connections": n}
+		if id := r.URL.Query().Get("app"); id != "" {
+			out["opened"] = s.AppConnectionsOpened(id)
+		}
+		writeControl(w, http.StatusOK, out)
 	})
 	// messages lists a channel's, or with the app parameter only those the app posted.
 	mux.HandleFunc("GET /_control/messages", func(w http.ResponseWriter, r *http.Request) {

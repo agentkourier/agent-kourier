@@ -14,17 +14,6 @@ import (
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
-// The scenarios that wait for MC-5, the failure isolation of a team connection. They are written and skip until the change is in the broker. To turn them on,
-// delete the skip constants and the t.Skip line of each test, and run them (E2E_RUN='TestMC_(ARejectedToken|ALiveReply)') on the tier of the other MC_ tests.
-const (
-	// mcWaitsForMC5 is the reason of the case about a token that Slack rejects: today a rejected token ends the connection's run and nothing else is
-	// told, so no Binding says so and the series stays.
-	mcWaitsForMC5 = "waits for the broker to stop only a team connection whose token Slack rejects (MC-5): remove this skip, and mcWaitsForMC5, once it is in"
-	// mcWaitsForRecovery is the reason of the case about a turn recovered before its team connection runs: its live writes fail for as long as the renderer
-	// tries, and are given up on, after the connection runs. MC-5 is to make Recover leave the turns of a connection that is not running until it runs.
-	mcWaitsForRecovery = "waits for MC-5: a live reply of a turn that a new leader recovers before the team's connection runs is never finished (the renderer's writes fail with 'no platform is running the connection' for ten seconds, after the connection is up, and are given up on); remove this skip once Recover leaves the turn until the connection runs"
-)
-
 // fixTeamA does what an operator does after Slack rejected team-a's tokens: it gets a new pair for the app (the fake rotates it: the old pair is refused for
 // good, so a pair that the connection was started with cannot work again) and puts it in team-a's Secret. The pair is new each time, so that the Secret
 // differs from what the connection last ran with, which is what starts a connection whose credentials were rejected: the supervisor's fingerprint of a
@@ -46,24 +35,40 @@ func (m *mc) fixTeamA(team *kube.CRs) error {
 // team-a's Secret, which restarts the connection once more.
 func (m *mc) restoreTeamA(team *kube.CRs) error {
 	ctx := context.WithoutCancel(m.ctx)
+	opened, err := m.slack.AppConnectionsOpened(ctx, AppTeamA.AppID)
+	if err != nil {
+		return err
+	}
 	if err := m.slack.SetRevoked(ctx, AppTeamA.AppID, false); err != nil { // idempotent: a case that ended before the fix left the app revoked
 		return err
 	}
 	if err := m.slack.RotateTokens(ctx, AppTeamA.AppID, AppTeamA.BotToken, AppTeamA.AppToken); err != nil {
 		return err
 	}
-	return team.SetSecretData(ctx, "slack-team-a", map[string]string{"botToken": AppTeamA.BotToken, "appToken": AppTeamA.AppToken})
+	if err := team.SetSecretData(ctx, "slack-team-a", map[string]string{"botToken": AppTeamA.BotToken, "appToken": AppTeamA.AppToken}); err != nil {
+		return err
+	}
+	// The case after this one must not meet the old connection on its way out, whose client would count as the app's and lose an event sent to it: wait for
+	// a client that connected after the Secret changed, which is the connection started again on the first pair.
+	return Wait(ctx, 2*time.Minute, "a client of the app "+AppTeamA.AppID+" that connected after the first tokens were put back", func(ctx context.Context) (bool, error) {
+		now, err := m.slack.AppConnectionsOpened(ctx, AppTeamA.AppID)
+		if err != nil || now <= opened {
+			return false, err
+		}
+		n, err := m.slack.AppConnections(ctx, AppTeamA.AppID)
+		return n >= 1, err
+	})
 }
 
 // TestMC_ARejectedTokenStopsOnlyThatConnection: Slack revokes team-a's tokens. The connection stops and says so, and nothing else does: its
 // agentkourier_chat_connected is 0, its Binding's ChannelJoined is False with the reason ChatCredentialsRejected, the platform's connection stays up and its
-// Binding keeps answering through the platform's app, and the broker is not restarted. When the team fixes its Secret the connection starts again by itself:
+// Binding keeps answering through the platform's app, and the broker is not restarted. When the team fixes its Secret the connection starts again by itself,
+// at the supervisor's next look (it looks every few seconds):
 // the series is 1, the app has its client, the Binding is ready and answers through team-a's app.
 //
 // "Fixed" is what a team does: the app gets new tokens (the fake rotates them, fixTeamA) and the team puts them in its Secret. The pair then in the Secret
 // is not the one the tier was brought up with; the case puts the first pair back at its end.
 func TestMC_ARejectedTokenStopsOnlyThatConnection(t *testing.T) {
-	t.Skip(mcWaitsForMC5)
 	m := newMC(t)
 	before := m.restarts()
 	team, err := m.crs.In(kube.MultiTeamNamespace)
@@ -124,11 +129,10 @@ func TestMC_ARejectedTokenStopsOnlyThatConnection(t *testing.T) {
 // The replica that takes over recovers both turns, and each thread ends with the one whole reply, posted by the bot of its app. Team-a's connection is started
 // after the leader has begun to recover, so the turn's first writes find no platform for it: the reply must still end.
 //
-// The fast tier on Postgres with two replicas (see TestMC_FailoverServesBothConnections). On main before MC-5 the platform's thread ends and team-a's stays
-// "Holding on gate G." streaming: the log says 'live: the turn's connection is not running; its writes fail until it is', and the writes go on failing with
-// 'chat: no platform is running the connection' after the connection is serving, until the renderer gives up on the message.
+// The fast tier on Postgres with two replicas (see TestMC_FailoverServesBothConnections). Before the broker left a recovered turn of a connection that is not
+// running until it runs, the platform's thread ended and team-a's stayed "Holding on gate G." streaming: the log said 'live: the turn's connection is not
+// running; its writes fail until it is', and the writes went on failing with 'chat: no platform is running the connection' after the connection was serving.
 func TestMC_ALiveReplyOfARecoveredTeamTurnIsFinished(t *testing.T) {
-	t.Skip(mcWaitsForRecovery)
 	m, f := newMCFailover(t)
 	type turn struct {
 		app     FakeApp

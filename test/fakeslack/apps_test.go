@@ -1020,3 +1020,26 @@ func TestABotPostThatMentionsAnotherAppsBotIsAnAppMentionForIt(t *testing.T) {
 		quiet(t, "b", smcB)
 	}
 }
+
+func TestAppConnectionsOpenedCountsEveryClientThatConnected(t *testing.T) {
+	fake := twoApps(t)
+	if n := fake.AppConnectionsOpened("AAPPA"); n != 0 {
+		t.Fatalf("opened before any client = %d, want 0", n)
+	}
+	socketAs(t, fake, appA)
+	socketAs(t, fake, appA)
+	socketAs(t, fake, appB)
+	if got := fake.AppConnectionsOpened("AAPPA"); got != 2 {
+		t.Errorf("a has opened %d clients, want 2", got)
+	}
+	// Revoking ends a's clients, while the revocation lasts they cannot come back, and the count of those opened does not drop with them.
+	if err := fake.SetRevoked("AAPPA", true); err != nil {
+		t.Fatal(err)
+	}
+	if got, now := fake.AppConnectionsOpened("AAPPA"), fake.AppConnections("AAPPA"); got < 2 || now != 0 {
+		t.Errorf("a has opened %d clients and %d are connected after the revocation, want at least 2 opened and none connected", got, now)
+	}
+	if got := fake.AppConnectionsOpened("AAPPB"); got != 1 {
+		t.Errorf("b has opened %d clients, want 1", got)
+	}
+}

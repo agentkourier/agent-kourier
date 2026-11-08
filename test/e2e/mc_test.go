@@ -28,7 +28,7 @@ import (
 // messages in a thread: each app has its own.
 //
 // The cases that change the platform's admission list with Helm are mc_admission_test.go's (hack/kind/two-apps.sh runs them), and the ones about a token
-// that Slack rejects are mc_after_mc5_test.go's.
+// that Slack rejects are mc_isolation_test.go's.
 
 // mcUser is the person who talks to the bots in these cases.
 const mcUser = "UMC"
