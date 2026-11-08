@@ -148,8 +148,9 @@ func requireTold(t *testing.T, w *connWorld, cluster *statusCluster, r *running)
 		c := cluster.stored(t, "team-a/on-a")["ChannelJoined"]
 		return c.Status == "False" && c.Reason == "ChatCredentialsRejected"
 	})
-	asked := len(w.probedBy("tok-a"))
-	time.Sleep(300 * time.Millisecond) // six probe intervals
+	asked, others := len(w.probedBy("tok-a")), len(w.probedBy("tok-b"))
+	// Probe passes go on for the connection that runs: wait for several of them, and the rejected one must have had its chance to be asked.
+	w.eventually("more probe passes", func() bool { return len(w.probedBy("tok-b")) >= others+5 })
 	if n := len(w.probedBy("tok-a")); n != asked {
 		t.Errorf("team-a's bot was asked %d more times after its Binding was told the credentials were rejected; want no call", n-asked)
 	}
@@ -229,7 +230,10 @@ func TestTheTurnsOfATeamConnectionAreTakenUpWhenItRuns(t *testing.T) {
 	r.until("/readyz", http.StatusOK)
 	w.eventually("the own connection to run", func() bool { return w.up(ownToken) == 1 })
 
-	time.Sleep(500 * time.Millisecond) // many looks of the supervisor
+	// A negative: nothing the test can wait on says "the agent was not asked". Recover's goroutines ask within milliseconds of the start (the
+	// control for it is the files-route test above), so this wait is long for them; the supervisor cannot be waited for, since it is held in
+	// this connection's identity call, which is the point.
+	time.Sleep(500 * time.Millisecond)
 	if log.saw("GetTask") {
 		t.Fatal("the agent was asked about the task of a connection that does not run")
 	}

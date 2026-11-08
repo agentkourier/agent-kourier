@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/secret"
 )
 
@@ -258,8 +259,7 @@ func TestARemovedConnectionsMetricSeriesIsDeleted(t *testing.T) {
 	}
 }
 
-// A connection that a pass refuses (a second connection of a Slack app) or that stops for its credentials keeps its series at 0: it is still in
-// the Snapshot.
+// A connection that stops for its credentials keeps its series at 0: it is still in the Snapshot.
 func TestAStoppedConnectionKeepsItsMetricSeries(t *testing.T) {
 	w := newSupWorld(t)
 	w.apps("tok-a")
@@ -294,5 +294,90 @@ func TestTheSupervisorAsksForTheTurnsOfAConnectionOnceItRuns(t *testing.T) {
 	defer w.mu.Unlock()
 	if want := []string{"team-a/slack", "team-a/slack"}; !slices.Equal(w.recov, want) {
 		t.Errorf("asked for the turns of %v; want %v: the failed ask repeated once, and the connection that never ran not at all", w.recov, want)
+	}
+}
+
+// A connection whose Secret cannot be read has no runtime and no entry of its own in the supervisor, yet it has a series and a reason in the table: when
+// it leaves the Snapshot both go, or an alert on chat_connected == 0 fires for a connection that is not there.
+func TestAConnectionWhoseSecretWasNeverThereLeavesNoSeriesOrReasonWhenRemoved(t *testing.T) {
+	w := newSupWorld(t)
+	typo := unready("team-c/slack", 1, 1)
+	typo.Err = fmt.Errorf("ChatConnection team-c/slack: read botToken of Secret team-c/creds: %w", config.ErrSecretNotFound)
+	w.reconcile(typo)
+	if got := samples(t, w.host.metrics); !slices.Contains(got, connectedSeries("team-c/slack")+"0") {
+		t.Fatalf("samples = %v; want a series at 0 for the served connection that cannot start", got)
+	}
+	_ = w.stoppedBecause("team-c/slack")
+
+	w.reconcile()
+	if got := samples(t, w.host.metrics); slices.ContainsFunc(got, func(s string) bool { return strings.HasPrefix(s, connectedSeries("team-c/slack")) }) {
+		t.Errorf("samples = %v; want the series of the removed connection deleted", got)
+	}
+	if reasons := w.table.reasons(); len(reasons) != 0 {
+		t.Errorf("the table still says why %v are down", reasons)
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !slices.Equal(w.removed, []string{"team-c/slack"}) {
+		t.Errorf("removed = %v; want the connection, once", w.removed)
+	}
+	if len(w.sup.seen) != 0 {
+		t.Errorf("the supervisor still remembers %v", w.sup.seen)
+	}
+}
+
+// A platform resolved before the connection was rejected, which a turn holds for its length, fails fast after it: the error is the typed one, and
+// the call is not made on the platform. So does one resolved before the connection restarted, whose transport was closed.
+func TestAPlatformResolvedBeforeTheConnectionStoppedFailsFastAfter(t *testing.T) {
+	w := newSupWorld(t)
+	w.apps("tok-a", "tok-a2")
+	w.reconcile(team("team-a/slack", 1, "tok-a", 1))
+	w.eventually("two runs", func() bool { return w.live.Load() == 2 })
+	held, err := w.table.Platform("team-a/slack") // as the renderer resolves it, once per turn
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := w.openedFor("tok-a")
+	old.failWith("Post", errRejected)
+	if _, err := held.Post(t.Context(), chat.Target{Channel: "C1"}, chat.Outgoing{}, "id"); !errors.Is(err, errRejected) {
+		t.Fatalf("Post = %v; want the platform's own error", err)
+	}
+
+	for _, call := range []func() error{
+		func() error {
+			_, err := held.Post(t.Context(), chat.Target{Channel: "C1"}, chat.Outgoing{}, "id")
+			return err
+		},
+		func() error { return held.Update(t.Context(), chat.Ref{Channel: "C1", ID: "1.1"}, chat.Outgoing{}) },
+		func() error { _, err := held.Stream(t.Context(), chat.Target{Channel: "C1"}, "U1", "hi"); return err },
+		func() error { return held.StreamAt(chat.Ref{Channel: "C1", ID: "1.1"}).Append(t.Context(), "more") },
+	} {
+		var stopped *connectionStopped
+		if err := call(); !errors.Is(err, chat.ErrConnectionDown) || !errors.As(err, &stopped) || !stopped.rejected {
+			t.Errorf("a call on the held platform after the rejection = %v; want the typed error", err)
+		}
+	}
+	if n := old.called("Post"); n != 1 {
+		t.Errorf("the platform saw %d posts; want only the one that found the rejection", n)
+	}
+	if n := old.called("Update") + old.called("Stream") + old.called("Append"); n != 0 {
+		t.Errorf("the platform saw %d more calls after the rejection; want none", n)
+	}
+
+	// A restart: the platform held from before it fails fast, and the new one works.
+	w.reconcile(team("team-a/slack", 1, "tok-a2", 1))
+	w.eventually("team-a to run again", func() bool { return w.live.Load() == 2 && slices.Contains(w.running(), "team-a/slack") })
+	held2, err := w.table.Platform("team-a/slack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.reconcile(team("team-a/slack", 2, "tok-a2", 1)) // restarted again
+	w.eventually("the restart", func() bool { return len(w.tokens()) == 4 })
+	prev := w.openedFor("tok-a2")
+	if err := held2.Update(t.Context(), chat.Ref{Channel: "C1", ID: "1.1"}, chat.Outgoing{}); !errors.Is(err, chat.ErrConnectionDown) {
+		t.Errorf("a call on the platform of the replaced runtime = %v; want it down", err)
+	}
+	if n := prev.called("Update"); n != 0 {
+		t.Errorf("the replaced runtime's platform saw %d calls after it was closed; want none", n)
 	}
 }

@@ -42,8 +42,9 @@ type fakeConn struct {
 	// onConn is the adapter's OnConnection, which Run calls when its connection is up.
 	onConn func(bool)
 
-	mu   sync.Mutex
-	errs map[string]error // the error each call of the platform answers with, by name: "Post", "Stream", "Update", "Ephemeral", "IsMember"
+	mu    sync.Mutex
+	calls map[string]int
+	errs  map[string]error // the error each call of the platform answers with, by name: "Post", "Stream", "Update", "Ephemeral", "IsMember"
 }
 
 // failWith makes the call op of the platform answer with err from now on.
@@ -56,7 +57,15 @@ func (f *fakeConn) failWith(op string, err error) {
 func (f *fakeConn) answer(op string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.calls[op]++
 	return f.errs[op]
+}
+
+// called is how many times the call op reached the platform.
+func (f *fakeConn) called(op string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls[op]
 }
 
 func (f *fakeConn) Post(context.Context, chat.Target, chat.Outgoing, string) (chat.Ref, error) {
@@ -66,6 +75,7 @@ func (f *fakeConn) Update(context.Context, chat.Ref, chat.Outgoing) error { retu
 func (f *fakeConn) Stream(context.Context, chat.Target, string, string) (chat.Stream, error) {
 	return nil, f.answer("Stream")
 }
+func (f *fakeConn) StreamAt(chat.Ref) chat.Stream { return fakeStream{f} }
 func (f *fakeConn) Ephemeral(context.Context, chat.Target, string, chat.Message) error {
 	return f.answer("Ephemeral")
 }
@@ -126,7 +136,7 @@ func newSupWorld(t *testing.T) *supWorld {
 		cfg: RunConfig{transportClosed: func(conn string) { w.mu.Lock(); w.closed = append(w.closed, conn); w.mu.Unlock() }},
 		log: log, metrics: newTestMetrics(t), table: w.table, parent: t.Context(),
 		open: func(c Connection, onConn func(bool)) (builtPlatform, error) {
-			f := &fakeConn{token: c.Credentials["botToken"].Reveal(), live: &w.live, reject: make(chan struct{}), onConn: onConn, errs: map[string]error{}}
+			f := &fakeConn{token: c.Credentials["botToken"].Reveal(), live: &w.live, reject: make(chan struct{}), onConn: onConn, errs: map[string]error{}, calls: map[string]int{}}
 			w.mu.Lock()
 			defer w.mu.Unlock()
 			if err := w.openErr[f.token]; err != nil {
@@ -146,7 +156,7 @@ func newSupWorld(t *testing.T) *supWorld {
 	w.host.run(ownRT, nil, nil)
 	w.sup = &supervisor{
 		host: w.host, log: log, every: time.Hour, own: own, refusals: &refusals{}, done: make(chan struct{}),
-		teams: map[string]*teamRuntime{}, said: map[string]string{},
+		teams: map[string]*teamRuntime{}, seen: map[string]bool{}, said: map[string]string{},
 		identify: func(_ context.Context, c Connection) (appIdentity, error) {
 			tok := c.Credentials["botToken"].Reveal()
 			w.mu.Lock()
@@ -596,4 +606,14 @@ func TestSupervisorCountsAChangeOfThePublishedConnections(t *testing.T) {
 			t.Errorf("after %s: counted a change = %t; want %t", st.what, changed, st.counts)
 		}
 	}
+}
+
+// fakeStream is the stream of a fakeConn: its Append answers as the platform's "Append".
+type fakeStream struct{ f *fakeConn }
+
+func (s fakeStream) Ref() chat.Ref                         { return chat.Ref{} }
+func (s fakeStream) Append(context.Context, string) error  { return s.f.answer("Append") }
+func (s fakeStream) Step(context.Context, chat.Step) error { return s.f.answer("Step") }
+func (s fakeStream) Stop(context.Context, string, chat.Message, string) error {
+	return s.f.answer("Stop")
 }

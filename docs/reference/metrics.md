@@ -10,7 +10,7 @@ names or error text.
 
 | Metric | Type | Labels | Definition |
 |---|---|---|---|
-| `agentkourier_chat_connected` | gauge | `connection` | 1 while the chat connection (Slack Socket Mode) is up, else 0, by ChatConnection. `/readyz` does not say this. |
+| `agentkourier_chat_connected` | gauge | `connection` | 1 while the chat connection (Slack Socket Mode) is up, else 0, by ChatConnection. A connection that is stopped, or that cannot start, says 0. The series of a connection is deleted when the broker stops serving it (the ChatConnection is deleted, or is no longer one the broker serves). `/readyz` does not say this. |
 | `agentkourier_turn_outcomes_total` | counter | `binding`, `outcome` | Turns that ended, by Binding and how: the terminal state of the task, or the class of what stopped it. `outcome` is one of `completed`, `failed`, `rejected`, `canceled`, `credentials_rejected`, `forbidden`, `unreachable`, `session_gone`, `binding_gone`, `wedged`, `uncancellable`, `pause_ended`, `answer_rejected`, `refused`, `no_final`, `response_too_large`, `lookup_incomplete`. It is counted before the `session turn ended` log line. |
 | `agentkourier_config_stale` | gauge | | 1 before the first config load, and while the running config may lag its source: the latest reload failed, or the source says it cannot be reached. |
 | `agentkourier_config_reload_errors_total` | counter | | Config reloads that failed. |

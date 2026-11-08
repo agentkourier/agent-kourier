@@ -31,6 +31,18 @@ func (e *authRejected) Is(target error) bool { return target == ErrSlackAuth }
 type authWatch struct {
 	chat.Platform
 	report func(code string)
+	// stopped, if set, says the platform can no longer be used (a runtime whose credentials were rejected, or whose transport was closed): it
+	// returns the error every call then fails with, and no call is made. A part that resolved the platform before that, and holds it for the
+	// length of a turn, fails fast like one that resolves it after.
+	stopped func() error
+}
+
+// gate returns the error a call fails with without being made, or nil.
+func (w authWatch) gate() error {
+	if w.stopped == nil {
+		return nil
+	}
+	return w.stopped()
 }
 
 // WatchAuth returns p with one addition: when a call of it fails with an error that the platform classifies as a credential it
@@ -41,28 +53,45 @@ type authWatch struct {
 // connection is up would otherwise leave Agent Kourier running and failing every call; the report is how the call side tells the run policy
 // (see WithAuthFailure).
 func WatchAuth(p chat.Platform, report func(code string)) chat.Platform {
-	return authWatch{p, report}
+	return authWatch{Platform: p, report: report}
+}
+
+// watchRuntime is WatchAuth for the platform of a runtime: its calls also fail at once, with no call made, once stopped says so.
+func watchRuntime(p chat.Platform, report func(code string), stopped func() error) chat.Platform {
+	return authWatch{Platform: p, report: report, stopped: stopped}
 }
 
 func (w authWatch) Post(ctx context.Context, t chat.Target, o chat.Outgoing, tag string) (chat.Ref, error) {
+	if err := w.gate(); err != nil {
+		return chat.Ref{}, err
+	}
 	ref, err := w.Platform.Post(ctx, t, o, tag)
 	w.check(chat.OpPost, err)
 	return ref, err
 }
 
 func (w authWatch) Find(ctx context.Context, t chat.Target, tag string, since time.Time) (chat.Ref, bool, error) {
+	if err := w.gate(); err != nil {
+		return chat.Ref{}, false, err
+	}
 	ref, found, err := w.Platform.Find(ctx, t, tag, since)
 	w.check(chat.OpPost, err)
 	return ref, found, err
 }
 
 func (w authWatch) Update(ctx context.Context, r chat.Ref, o chat.Outgoing) error {
+	if err := w.gate(); err != nil {
+		return err
+	}
 	err := w.Platform.Update(ctx, r, o)
 	w.check(chat.OpPost, err)
 	return err
 }
 
 func (w authWatch) Stream(ctx context.Context, t chat.Target, to, markdown string) (chat.Stream, error) {
+	if err := w.gate(); err != nil {
+		return nil, err
+	}
 	s, err := w.Platform.Stream(ctx, t, to, markdown)
 	w.check(chat.OpPost, err)
 	if err != nil {
@@ -77,66 +106,99 @@ func (w authWatch) StreamAt(r chat.Ref) chat.Stream {
 }
 
 func (w authWatch) Ephemeral(ctx context.Context, t chat.Target, user string, m chat.Message) error {
+	if err := w.gate(); err != nil {
+		return err
+	}
 	err := w.Platform.Ephemeral(ctx, t, user, m)
 	w.check(chat.OpPost, err)
 	return err
 }
 
 func (w authWatch) React(ctx context.Context, r chat.Ref, name string) error {
+	if err := w.gate(); err != nil {
+		return err
+	}
 	err := w.Platform.React(ctx, r, name)
 	w.check(chat.OpReact, err)
 	return err
 }
 
 func (w authWatch) Unreact(ctx context.Context, r chat.Ref, name string) error {
+	if err := w.gate(); err != nil {
+		return err
+	}
 	err := w.Platform.Unreact(ctx, r, name)
 	w.check(chat.OpReact, err)
 	return err
 }
 
 func (w authWatch) IsMember(ctx context.Context, channel, user string) (bool, error) {
+	if err := w.gate(); err != nil {
+		return false, err
+	}
 	ok, err := w.Platform.IsMember(ctx, channel, user)
 	w.check(chat.OpOther, err)
 	return ok, err
 }
 
 func (w authWatch) IsInAnyGroup(ctx context.Context, groups []string, user string) (bool, error) {
+	if err := w.gate(); err != nil {
+		return false, err
+	}
 	ok, err := w.Platform.IsInAnyGroup(ctx, groups, user)
 	w.check(chat.OpOther, err)
 	return ok, err
 }
 
 func (w authWatch) GroupsReadable(ctx context.Context, groups []string) error {
+	if err := w.gate(); err != nil {
+		return err
+	}
 	err := w.Platform.GroupsReadable(ctx, groups)
 	w.check(chat.OpOther, err)
 	return err
 }
 
 func (w authWatch) ChannelAccess(ctx context.Context, channel string) (chat.Access, error) {
+	if err := w.gate(); err != nil {
+		return chat.Access{}, err
+	}
 	a, err := w.Platform.ChannelAccess(ctx, channel)
 	w.check(chat.OpOther, err)
 	return a, err
 }
 
 func (w authWatch) IsBot(ctx context.Context, user string) (bool, error) {
+	if err := w.gate(); err != nil {
+		return true, err
+	}
 	ok, err := w.Platform.IsBot(ctx, user)
 	w.check(chat.OpOther, err)
 	return ok, err
 }
 
 func (w authWatch) ResolveUser(ctx context.Context, id string) (chat.User, error) {
+	if err := w.gate(); err != nil {
+		return chat.User{}, err
+	}
 	u, err := w.Platform.ResolveUser(ctx, id)
 	w.check(chat.OpOther, err)
 	return u, err
 }
 
 func (w authWatch) MarkBusy(ctx context.Context, t chat.Target, busy bool) error {
+	if err := w.gate(); err != nil {
+		return err
+	}
 	err := w.Platform.MarkBusy(ctx, t, busy)
 	w.check(chat.OpOther, err)
 	return err
 }
 
 func (w authWatch) ThreadBetween(ctx context.Context, t chat.Target, after, before string, limit int) ([]chat.HistoryMessage, int, error) {
+	if err := w.gate(); err != nil {
+		return nil, 0, err
+	}
 	msgs, dropped, err := w.Platform.ThreadBetween(ctx, t, after, before, limit)
 	w.check(chat.OpOther, err)
 	return msgs, dropped, err
@@ -158,18 +220,27 @@ type watchedStream struct {
 }
 
 func (s watchedStream) Append(ctx context.Context, markdown string) error {
+	if err := s.w.gate(); err != nil {
+		return err
+	}
 	err := s.Stream.Append(ctx, markdown)
 	s.w.check(chat.OpPost, err)
 	return err
 }
 
 func (s watchedStream) Step(ctx context.Context, st chat.Step) error {
+	if err := s.w.gate(); err != nil {
+		return err
+	}
 	err := s.Stream.Step(ctx, st)
 	s.w.check(chat.OpPost, err)
 	return err
 }
 
 func (s watchedStream) Stop(ctx context.Context, markdown string, final chat.Message, tag string) error {
+	if err := s.w.gate(); err != nil {
+		return err
+	}
 	err := s.Stream.Stop(ctx, markdown, final, tag)
 	s.w.check(chat.OpPost, err)
 	return err

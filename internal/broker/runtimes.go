@@ -40,8 +40,9 @@ type connRuntime struct {
 	// run was called, since a runtime that never ran has nothing to wait for.
 	done chan struct{}
 	ran  atomic.Bool
-	// closeOnce makes closing the transport once, whoever asks.
+	// closeOnce makes closing the transport once, whoever asks. closed says it was done.
 	closeOnce sync.Once
+	closed    atomic.Bool
 }
 
 // halt ends the run of the runtime on purpose and does not wait for it (wait does).
@@ -58,6 +59,19 @@ func (rt *connRuntime) rejection() (code string, rejected bool) {
 		return ar.code, true
 	}
 	return "", false
+}
+
+// stopped is the error a call through the runtime's platform fails with once it can no longer be used, and nil while it can: the platform
+// rejected the credentials (a *connectionStopped, from the call that found out), or the transport was closed because the runtime was stopped or
+// replaced (down). The shutdown's final drain posts through a halted runtime, which is closed only after it.
+func (rt *connRuntime) stopped() error {
+	if code, rejected := rt.rejection(); rejected {
+		return &connectionStopped{conn: rt.name, rejected: true, code: code}
+	}
+	if rt.closed.Load() {
+		return downError(rt.name)
+	}
+	return nil
 }
 
 // connGauge sets agentkourier_chat_connected of one runtime, and stops doing so once the runtime is retired: a late report of the adapter's
@@ -306,7 +320,8 @@ func (h *runtimeHost) build(conn Connection, id appIdentity) (*connRuntime, erro
 		return nil, err
 	}
 	ctx, report, stop := WithAuthFailure(h.parent)
-	rt := &connRuntime{name: name, conn: conn, id: id, platform: p, watched: WatchAuth(p.Platform, report), report: report, gauge: gauge, ctx: ctx, stop: stop, done: make(chan struct{})}
+	rt := &connRuntime{name: name, conn: conn, id: id, platform: p, report: report, gauge: gauge, ctx: ctx, stop: stop, done: make(chan struct{})}
+	rt.watched = watchRuntime(p.Platform, report, rt.stopped)
 	if !h.table.add(rt) {
 		h.closeTransport(rt)
 		return nil, errStopping
@@ -337,6 +352,7 @@ func (h *runtimeHost) run(rt *connRuntime, sink chat.Sink, onEnd func(rt *connRu
 // platform: one that a later call opens closes when idle (the transport's own timeout), and nothing closes it sooner.
 func (h *runtimeHost) closeTransport(rt *connRuntime) {
 	rt.closeOnce.Do(func() {
+		rt.closed.Store(true)
 		rt.platform.closeIdle()
 		rt.gauge.retire()
 		if h.cfg.transportClosed != nil {

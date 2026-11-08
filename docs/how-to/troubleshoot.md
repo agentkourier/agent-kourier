@@ -113,8 +113,10 @@ The five minutes and the 200 pages are constants of the binary (`agent.DefaultLo
 agent-kourier: slack rejected the tokens: invalid_auth
 ```
 
-Slack refused a token for good, so Agent Kourier stops rather than retry. The word at the end is Slack's own code:
-`invalid_auth`, `not_authed`, `token_revoked` or `account_inactive`. The usual cause is a token copied incompletely or
+Slack refused a token of the broker's own connection for good, so Agent Kourier stops rather than retry. (A team ChatConnection whose
+token Slack refuses does not end the process: that connection stops, its `agentkourier_chat_connected` says 0, the log has a WARN that
+names it and Slack's code, and its Bindings show `ChatCredentialsRejected` on `ChannelJoined`. It starts again by itself when its Secret
+or ChatConnection changes.) The word at the end is Slack's own code: `invalid_auth`, `not_authed`, `token_revoked`, `token_expired` or `account_inactive`. The usual cause is a token copied incompletely or
 from another Slack app, or one that has been revoked since.
 
 Agent Kourier checks the bot token before it opens the Socket Mode connection with the app token. At the default `info`

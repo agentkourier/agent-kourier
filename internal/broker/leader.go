@@ -297,7 +297,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 		host: host, log: log, every: cmp.Or(cfg.superviseEvery, defaultSuperviseEvery), snapshot: boot.Reloader.Current, secrets: boot.Secrets,
 		own: conn, identify: cfg.identityOf, intake: newIntake, refusals: refused, conns: &connsServed, changes: &connsChanged, gone: ob.Forget,
 		removed: metrics.ConnectionRemoved, recover: mgr.RecoverConnection,
-		done: make(chan struct{}), teams: map[string]*teamRuntime{}, said: map[string]string{},
+		done: make(chan struct{}), teams: map[string]*teamRuntime{}, seen: map[string]bool{}, said: map[string]string{},
 	}
 	supCtx, stopSup := context.WithCancel(runCtx)
 	go sup.run(supCtx, chosen.Team)

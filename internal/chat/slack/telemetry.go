@@ -19,7 +19,7 @@ func finishChat(ctx context.Context, op *telemetry.Operation, operation string, 
 		outcome = "rate_limited"
 	} else if errors.As(err, &response) {
 		switch response.Err {
-		case "invalid_auth", "not_authed", "account_inactive", "token_revoked":
+		case "invalid_auth", "not_authed", "account_inactive", "token_revoked", "token_expired":
 			outcome = "auth_rejected"
 		case "channel_not_found", "not_in_channel", "is_archived":
 			outcome = "channel_gone"

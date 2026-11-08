@@ -66,7 +66,10 @@ type supervisor struct {
 	// reasonsPub is why each connection was down when publish last ran, so that a change of it counts as a change of what is published.
 	reasonsPub map[string]string
 	teams      map[string]*teamRuntime
-	said       map[string]string // the last line said of each connection, so that a state is said once
+	// seen is every connection a pass has found in desired and that has not left since, whether or not it has an entry in teams (a connection
+	// whose Secret cannot be read has none), so that a connection that leaves is removed (removed, clearDown).
+	seen map[string]bool
+	said map[string]string // the last line said of each connection, so that a state is said once
 }
 
 // teamRuntime is what the supervisor knows of one team connection.
@@ -118,17 +121,24 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 	present := map[string]bool{}
 	for _, t := range desired {
 		present[t.Name()] = true
+		s.seen[t.Name()] = true
 	}
-	for name, st := range s.teams {
-		if !present[name] {
-			s.stop(ctx, name, st, "it is no longer served")
-			s.host.table.clearDown(name)
-			if s.removed != nil {
-				s.removed(name)
-			}
-			delete(s.teams, name)
-			delete(s.said, name)
+	// A connection that leaves is removed whether or not it ever had a runtime or an entry in teams: one whose Secret never existed has a metric
+	// series and a reason in the table too.
+	for name := range s.seen {
+		if present[name] {
+			continue
 		}
+		if st := s.teams[name]; st != nil {
+			s.stop(ctx, name, st, "it is no longer served")
+		}
+		s.host.table.clearDown(name)
+		if s.removed != nil {
+			s.removed(name)
+		}
+		delete(s.teams, name)
+		delete(s.said, name)
+		delete(s.seen, name)
 	}
 	if len(desired) == 0 {
 		s.refusals.set(nil)
@@ -164,7 +174,9 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 			}
 			if st == nil || st.rt == nil {
 				s.say(ctx, name, "the ChatConnection is not started yet: its credentials cannot be used", t.Err)
-				s.host.metrics.ChatConnected(name, false) // served and not connected: the series says so from the first look
+				if st == nil || !st.refused { // a refused connection is not served, and its series is not for this branch to bring back
+					s.host.metrics.ChatConnected(name, false) // served and not connected: the series says so from the first look
+				}
 				// A Secret that is gone, empty or of a type never read is for the operator to mend: its Bindings say so. A read that failed for a
 				// moment (a cache that has not synced) is no finding. A rejection of the credentials it had stays, until they change.
 				switch {
@@ -293,7 +305,11 @@ func (s *supervisor) ended(rt *connRuntime, err error) {
 	if rt.halted.Load() {
 		return
 	}
-	code, _ := rejectionCode(err) // "" when the run ended for another reason, which only the broker's own stop is
+	code, rejected := rejectionCode(err)
+	if !rejected { // not a rejection the platform made: the run ended for a reason this does not know
+		s.log.Warn("chat connection: its run ended and it is not served until its ChatConnection or its Secret changes", "connection", rt.name, "error", telemetry.LogText(err))
+		return
+	}
 	s.log.Warn("chat connection: the platform rejected its credentials, so its run ended and it is not served until its ChatConnection or its Secret changes", "connection", rt.name, "code", code, "error", telemetry.LogText(err))
 }
 
