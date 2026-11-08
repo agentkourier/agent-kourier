@@ -234,6 +234,10 @@ func TestTheOldestTeamConnectionsAreServedUpToTheCap(t *testing.T) {
 	if got := s.UnservedConnections[0].Bindings; !slices.Equal(got, wantBindings) {
 		t.Errorf("the Bindings of the connection left out = %v; want %v", got, wantBindings)
 	}
+	// The connection allows no other namespace, so only the Binding of its own is one the status may tell.
+	if got := s.UnservedConnections[0].Admitted; !slices.Equal(got, []string{"teams/on-c01"}) {
+		t.Errorf("the Bindings the connection admits = %v; want its own namespace's alone", got)
+	}
 	// The report carries it for the status writer and the retention that come later.
 	rep := report(t, src)
 	if !slices.Equal(unservedNames(rep.UnservedConnections), []string{"teams/c01 cap"}) || !slices.Equal(rep.UnservedConnections[0].Bindings, wantBindings) {
@@ -489,8 +493,9 @@ func TestAPlaceThatADeletionFreesIsTakenAtTheNextPoll(t *testing.T) {
 	}
 }
 
-// ConnectionBindings answers for any ChatConnection of the cluster, served or not: whether it exists, and the Bindings that name it,
-// sorted, the unreadable one too. The broker asks it of a connection it served before and does not now, which no read of the Set lists.
+// ConnectionBindings answers for any ChatConnection of the cluster, served or not: whether it exists, the Bindings that name it,
+// sorted, the unreadable one too, and which of them the connection admits (its own namespace's, and those it lists in
+// allowedNamespaces). The broker asks it of a connection it served before and does not now, which no read of the Set lists.
 func TestConnectionBindingsNamesTheBindingsOfAnyConnection(t *testing.T) {
 	leakCheck(t)
 	objs := corpus(t)
@@ -498,7 +503,7 @@ func TestConnectionBindingsNamesTheBindingsOfAnyConnection(t *testing.T) {
 	_ = unstructured.SetNestedField(broken.Object, "#general", "spec", "chat", "channel")
 	extra := []*unstructured.Unstructured{
 		teamConnection(objs, "team-a", "slack", created),
-		teamConnection(objs, "team-c", "slack", created), // not admitted
+		teamConnection(objs, "team-c", "slack", created, "sre"), // not admitted to the broker, and allows sre only
 		bindingOn(objs, "team-c", "on-c", "team-c", "slack"),
 		bindingOn(objs, "sre", "also-on-c", "team-c", "slack"),
 		broken,
@@ -509,18 +514,19 @@ func TestConnectionBindingsNamesTheBindingsOfAnyConnection(t *testing.T) {
 
 	for name, tc := range map[string]struct {
 		namespace, name string
-		want            []string
-		exists          bool
+		want            crsource.ConnectionBindings
 	}{
-		"a connection that is not admitted": {"team-c", "slack", []string{"payments/broken-on-c", "sre/also-on-c", "team-c/on-c"}, true},
-		"a connection that is served":       {"team-a", "slack", []string{"team-a/on-a"}, true},
-		"the own connection":                {"agent-kourier-system", "slack-main", []string{"sre/chat-only", "sre/sre-alerts"}, true},
-		"one that does not exist":           {"team-z", "gone", []string{"sre/dangling"}, false},
+		"a connection that is not admitted": {"team-c", "slack", crsource.ConnectionBindings{Exists: true,
+			Bindings: []string{"payments/broken-on-c", "sre/also-on-c", "team-c/on-c"}, Admitted: []string{"sre/also-on-c", "team-c/on-c"}}},
+		"a connection that is served": {"team-a", "slack", crsource.ConnectionBindings{Exists: true, Bindings: []string{"team-a/on-a"}, Admitted: []string{"team-a/on-a"}}},
+		"the own connection": {"agent-kourier-system", "slack-main", crsource.ConnectionBindings{Exists: true,
+			Bindings: []string{"sre/chat-only", "sre/sre-alerts"}, Admitted: []string{"sre/chat-only", "sre/sre-alerts"}}},
+		"one that does not exist": {"team-z", "gone", crsource.ConnectionBindings{Bindings: []string{"sre/dangling"}}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got, exists, err := src.ConnectionBindings(tc.namespace, tc.name)
-			if err != nil || exists != tc.exists || !slices.Equal(got, tc.want) {
-				t.Errorf("ConnectionBindings(%s/%s) = %v, %v, %v; want %v, %v", tc.namespace, tc.name, got, exists, err, tc.want, tc.exists)
+			got, err := src.ConnectionBindings(tc.namespace, tc.name)
+			if err != nil || !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("ConnectionBindings(%s/%s) = %+v, %v; want %+v", tc.namespace, tc.name, got, err, tc.want)
 			}
 		})
 	}

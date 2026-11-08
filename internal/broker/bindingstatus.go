@@ -26,7 +26,6 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/config/crsource"
 	"github.com/agentkourier/agent-kourier/internal/redact"
-	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
@@ -171,12 +170,10 @@ type statusConfig struct {
 	// OnWrite is told the result of each write, "written", "put_back" (the status was written again to the words it already had)
 	// or "failed", for a metric. Nil means none.
 	OnWrite func(result string)
-	// Served and ConnectionBindings, both or neither, give the writer the served set (see servedRecord): Served is where the leader records the
-	// chat connections it serves, and ConnectionBindings finds the Bindings of a ChatConnection ((*crsource.Source).ConnectionBindings). Without
-	// them the writer tells the Bindings of the connections that the report lists as left out, and cannot tell those of a connection that
-	// a restart stopped serving.
-	Served             store.ConnectionServing
-	ConnectionBindings func(namespace, name string) (bindings []string, exists bool, err error)
+	// Served, when set, is the leader's record of the chat connections it serves (servedRecord), which the writer updates at each pass and
+	// from which it tells the Bindings of the connections the broker served before and does not now. Without it the writer tells only
+	// the Bindings of the connections that the report lists as left out.
+	Served *servedRecord
 	// Gap, Tick, Slow and Timeout default to statusGap, statusTick, statusSlow and statusTimeout; a test passes less. Now is
 	// time.Now if nil.
 	Gap, Tick, Slow, Timeout time.Duration
@@ -238,7 +235,6 @@ type statusWriter struct {
 
 	// What follows belongs to the goroutine that runs reconcile.
 	keys         map[string]*statusKey
-	served       *servedRecord    // nil without the served set
 	recordFailed bool             // the failure to read or write the record has been logged
 	unsynced     bool             // the cache's not being synced has been logged
 	lastSnap     *config.Snapshot // the Snapshot of the last pass
@@ -284,18 +280,12 @@ func newStatusWriter(cfg statusConfig) (*statusWriter, error) {
 		return nil, errors.New("broker: Observed is required for the status writer: it is the status that each Binding has")
 	case cfg.Log == nil:
 		return nil, errors.New("broker: Log is required for the status writer")
-	case (cfg.Served == nil) != (cfg.ConnectionBindings == nil):
-		return nil, errors.New("broker: Served and ConnectionBindings go together for the status writer: the record of the served connections and the way to find the Bindings of one")
 	}
 	cfg.Gap, cfg.Tick, cfg.Slow, cfg.Timeout = cmp.Or(cfg.Gap, statusGap), cmp.Or(cfg.Tick, statusTick), cmp.Or(cfg.Slow, statusSlow), cmp.Or(cfg.Timeout, statusTimeout)
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	w := &statusWriter{cfg: cfg, wake: make(chan struct{}, 1), keys: map[string]*statusKey{}}
-	if cfg.Served != nil {
-		w.served = newServedRecord(cfg.Served, cfg.ConnectionBindings, cfg.Now)
-	}
-	return w, nil
+	return &statusWriter{cfg: cfg, wake: make(chan struct{}, 1), keys: map[string]*statusKey{}}, nil
 }
 
 // statusCallTimeout is how long a leader's write may take before the client stops waiting: the default, or half of the margin that the
@@ -465,8 +455,8 @@ func (w *statusWriter) reconcile(ctx context.Context) {
 // pass; what the record could find stands. The caller leaves out the Bindings that the Snapshot serves and that a Rejection is about.
 func (w *statusWriter) unservedBindings(ctx context.Context, rep config.Report) map[string]config.Rejection {
 	left := rep.UnservedConnections
-	if w.served != nil {
-		stopped, err := w.served.update(ctx, rep)
+	if w.cfg.Served != nil {
+		stopped, err := w.cfg.Served.update(ctx, rep)
 		switch {
 		case err != nil && !w.recordFailed:
 			w.recordFailed = true
@@ -480,7 +470,7 @@ func (w *statusWriter) unservedBindings(ctx context.Context, rep config.Report) 
 	out := map[string]config.Rejection{}
 	for _, u := range left {
 		message := fmt.Sprintf("spec.chat.connectionRef: ChatConnection %s/%s is not served by this broker: %s", u.Namespace, u.Name, u.Message)
-		for _, key := range u.Bindings {
+		for _, key := range u.Admitted { // a Binding that the connection does not admit is told nothing of it
 			namespace, name, _ := strings.Cut(key, "/")
 			out[key] = config.Rejection{Namespace: namespace, Name: name, Reason: config.ReasonConnectionNotServed, Message: message}
 		}

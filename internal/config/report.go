@@ -116,6 +116,9 @@ type UnservedConnection struct {
 	// Bindings is the "namespace/name" of each Binding that exists and names this connection, sorted. None is in the Snapshot: they are
 	// what the status of the connection's Bindings and the retention of their sessions need.
 	Bindings []string
+	// Admitted is the part of Bindings whose namespace the connection allows (its own namespace, or one in its allowedNamespaces). The
+	// status may name the connection to these and no others; the retention of sessions needs all of Bindings.
+	Admitted []string
 }
 
 // Report is what a Reloader knows about the config it serves besides the Snapshot: the objects it refused and the

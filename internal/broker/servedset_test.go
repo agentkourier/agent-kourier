@@ -3,6 +3,8 @@ package broker
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"maps"
 	"os"
 	"regexp"
@@ -16,6 +18,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/config"
+	"github.com/agentkourier/agent-kourier/internal/config/crsource"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
@@ -67,12 +70,13 @@ func (s *recordedServed) fail(read, put error) {
 }
 
 // namedBindings is what the source knows of the cluster for the writer: each ChatConnection that exists ("namespace/name") and the
-// Bindings that name it, which is statusConfig.ConnectionBindings.
+// Bindings that name it, which is (*crsource.Source).ConnectionBindings; the connection admits all of them. A test changes the map
+// between passes as the cluster changes.
 type namedBindings map[string][]string
 
-func (n namedBindings) of(namespace, name string) ([]string, bool, error) {
+func (n namedBindings) of(namespace, name string) (crsource.ConnectionBindings, error) {
 	b, ok := n[namespace+"/"+name]
-	return slices.Clone(b), ok, nil
+	return crsource.ConnectionBindings{Exists: ok, Bindings: slices.Clone(b), Admitted: slices.Clone(b)}, nil
 }
 
 // servedSnapshot resolves the Bindings of each connection in served (the "namespace/name" of a connection, and that of each Binding
@@ -139,7 +143,7 @@ type servedRig struct {
 func newServedRig(t *testing.T, c *statusCluster, served map[string][]string, record *recordedServed, named namedBindings) *servedRig {
 	t.Helper()
 	r := &servedRig{record: record, statusRig: newStatusRigWith(t, c, nil, func(cfg *statusConfig) {
-		cfg.Served, cfg.ConnectionBindings = record, named.of
+		cfg.Served = newServedRecord(record, named.of, cfg.Now)
 	})}
 	r.serving(t, served)
 	return r
@@ -236,8 +240,8 @@ func TestABindingOfAConnectionTakenOutOfTheSetIsToldOnceAndNotPutBack(t *testing
 	if _, probed := got["BackendReachable"]; probed {
 		t.Errorf("a Binding that is not served has the probes of a served one: %v", got)
 	}
-	if got, want := record.recorded(), []string{ownConn}; !slices.Equal(got, want) {
-		t.Errorf("the record = %v; want the own connection alone", got)
+	if got, want := record.recorded(), []string{ownConn, teamConn}; !slices.Equal(got, want) {
+		t.Errorf("the record = %v; want it to keep the connection that stopped, which still exists", got)
 	}
 	if appliesTo(c, sreAlerts) != 1 || appliesTo(c, teamBind) != 2 {
 		t.Errorf("writes: own Binding %d, team Binding %d; want 1 and 2 (served, then told)", appliesTo(c, sreAlerts), appliesTo(c, teamBind))
@@ -266,11 +270,13 @@ func TestABindingOfAConnectionTakenOutOfTheSetIsToldOnceAndNotPutBack(t *testing
 
 // The admission list is read when the broker starts, so a namespace taken off it takes effect at a restart, and the broker that
 // restarts cannot remember what it served. The store does: a connection that its record has and the set has not, and that still
-// exists, tells its Bindings, once. The record is then the set that is served, so a second restart forgets it, and says nothing again.
-func TestABindingOfAConnectionTakenOffTheListWhileTheBrokerWasDownIsToldAfterARestart(t *testing.T) {
+// exists, tells its Bindings, once. It stays in the record, so that every later start finds it stopped too, and a Binding made on it
+// afterwards is told as well. It leaves the record when it is served again (it stays, as served) or when it is deleted.
+func TestABindingOfAConnectionTakenOffTheListWhileTheBrokerWasDownIsToldAfterEachRestart(t *testing.T) {
 	c := newStatusCluster(t, storedBinding(sreAlerts, 1), storedBinding(teamBind, 1, servedStatus(1)...))
 	record := &recordedServed{set: []string{ownConn, teamConn}} // what the broker before it recorded
-	r := newServedRig(t, c, ownServed(), record, bothExist())
+	named := bothExist()
+	r := newServedRig(t, c, ownServed(), record, named)
 	r.reconcile()
 
 	got := c.stored(t, teamBind)
@@ -280,8 +286,8 @@ func TestABindingOfAConnectionTakenOffTheListWhileTheBrokerWasDownIsToldAfterARe
 	if rd := got["Ready"]; rd.Status != metav1.ConditionFalse || rd.Reason != "Accepted:ConnectionNotServed" {
 		t.Errorf("Ready = %+v; want False, Accepted:ConnectionNotServed", rd)
 	}
-	if got, want := record.recorded(), []string{ownConn}; !slices.Equal(got, want) {
-		t.Errorf("the record = %v; want the set that is served now", got)
+	if want := []string{ownConn, teamConn}; !slices.Equal(record.recorded(), want) || record.replaces != 0 {
+		t.Errorf("the record = %v after %d writes; want it as it was: the stopped connection stays", record.recorded(), record.replaces)
 	}
 	writes := appliesTo(c, teamBind)
 	for range 3 {
@@ -291,17 +297,52 @@ func TestABindingOfAConnectionTakenOffTheListWhileTheBrokerWasDownIsToldAfterARe
 		t.Errorf("writes = %d after more passes; want %d: once, and not put back", appliesTo(c, teamBind), writes)
 	}
 
-	// A broker that starts again has a record of the own connection alone: it has nothing to compare, and leaves the words as they are.
-	again := newServedRig(t, c, ownServed(), record, bothExist())
+	// A broker that starts again finds the connection stopped as well: the words are as they were and no write is made, and a Binding
+	// made on the connection since is told.
+	later := "team-a/later"
+	if err := c.add(storedBinding(later, 1)); err != nil {
+		t.Fatal(err)
+	}
+	named[teamConn] = []string{teamBind, later}
+	again := newServedRig(t, c, ownServed(), record, named)
 	again.reconcile()
 	again.pass()
 	if appliesTo(c, teamBind) != writes || c.stored(t, teamBind)["Accepted"].Reason != "ConnectionNotServed" {
 		t.Errorf("after a second restart: %d writes, Accepted %+v; want the words as they were, written by none", appliesTo(c, teamBind), c.stored(t, teamBind)["Accepted"])
 	}
+	if a := c.stored(t, later)["Accepted"]; a.Reason != "ConnectionNotServed" {
+		t.Errorf("a Binding made on the stopped connection since says Accepted %+v; want ConnectionNotServed", a)
+	}
+	if want := []string{ownConn, teamConn}; !slices.Equal(record.recorded(), want) {
+		t.Errorf("the record = %v after the second restart; want %v", record.recorded(), want)
+	}
+
+	// Deleted, the connection leaves the record, and its Bindings are told nothing: they are ConnectionNotFound, everyone's to say.
+	delete(named, teamConn)
+	deleted := newServedRig(t, c, ownServed(), record, named)
+	deleted.reconcile()
+	if want := []string{ownConn}; !slices.Equal(record.recorded(), want) {
+		t.Errorf("the record = %v after the connection was deleted; want it pruned to %v", record.recorded(), want)
+	}
+}
+
+// A connection that the record has and that is served again is served, and stays in the record.
+func TestAStoppedConnectionThatIsServedAgainStaysRecorded(t *testing.T) {
+	c := newStatusCluster(t, storedBinding(sreAlerts, 1), storedBinding(teamBind, 1))
+	record := &recordedServed{set: []string{ownConn, teamConn}}
+	r := newServedRig(t, c, bothServed(), record, bothExist())
+	r.reconcile()
+	r.pass()
+	if want := []string{ownConn, teamConn}; !slices.Equal(record.recorded(), want) || record.replaces != 0 {
+		t.Errorf("the record = %v after %d writes; want it unchanged", record.recorded(), record.replaces)
+	}
+	if got := c.stored(t, teamBind)["Accepted"]; got.Status != metav1.ConditionTrue {
+		t.Errorf("Accepted = %+v; want True: the connection is served", got)
+	}
 }
 
 // A connection in the record that no longer exists was deleted, not left out: its Bindings are everyone's to report as
-// ConnectionNotFound, and the broker says nothing of it.
+// ConnectionNotFound, and the broker says nothing of it. It leaves the record.
 func TestADeletedConnectionIsNotToldNotServed(t *testing.T) {
 	c := newStatusCluster(t, storedBinding(sreAlerts, 1), storedBinding(teamBind, 1, servedStatus(1)...))
 	record := &recordedServed{set: []string{ownConn, teamConn}}
@@ -312,7 +353,73 @@ func TestADeletedConnectionIsNotToldNotServed(t *testing.T) {
 		t.Errorf("%d writes to the Binding of a connection that was deleted; want none", appliesTo(c, teamBind))
 	}
 	if got, want := record.recorded(), []string{ownConn}; !slices.Equal(got, want) {
-		t.Errorf("the record = %v; want the set that is served now", got)
+		t.Errorf("the record = %v; want the deleted connection pruned", got)
+	}
+}
+
+// The status of a Binding says a ChatConnection exists and is not served only if the connection admits the Binding's namespace: a Binding
+// that it does not admit learns no more of it than that it does not exist for it, and is left alone, whatever way the connection came to
+// be left out.
+func TestABindingTheConnectionDoesNotAdmitIsToldNothing(t *testing.T) {
+	const outsider = "other/outsider"
+	c := newStatusCluster(t, storedBinding(sreAlerts, 1), storedBinding(teamBind, 1, servedStatus(1)...), storedBinding(outsider, 1, servedStatus(1)...))
+	record := &recordedServed{set: []string{ownConn, teamConn}}
+	named := func(ns, name string) (crsource.ConnectionBindings, error) {
+		if ns+"/"+name == teamConn {
+			return crsource.ConnectionBindings{Exists: true, Bindings: []string{outsider, teamBind}, Admitted: []string{teamBind}}, nil
+		}
+		return crsource.ConnectionBindings{Exists: true}, nil
+	}
+	r := &servedRig{record: record, statusRig: newStatusRigWith(t, c, nil, func(cfg *statusConfig) { cfg.Served = newServedRecord(record, named, cfg.Now) })}
+	r.serving(t, ownServed())
+	r.reconcile()
+	if c.stored(t, teamBind)["Accepted"].Reason != "ConnectionNotServed" || appliesTo(c, outsider) != 0 {
+		t.Errorf("the admitted Binding says %+v and the outsider was written %d times; want the first told and the second left alone",
+			c.stored(t, teamBind)["Accepted"], appliesTo(c, outsider))
+	}
+}
+
+// The retention keeps the sessions of a Binding of a connection the broker served before and does not now, after a restart, as it
+// keeps those of any Binding that exists and is not served: their threadTTL is not known, and may exceed the longest that is served.
+// Those of a Binding that was deleted, as old, go. Against the real store, which also holds the record.
+func TestRetentionKeepsTheSessionsOfAStoppedConnectionsBindingAfterARestart(t *testing.T) {
+	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if err := st.ReplaceServedConnections(t.Context(), []string{ownConn, teamConn}, sweepNow.Add(-time.Hour)); err != nil { // the broker before
+		t.Fatal(err)
+	}
+	day := 24 * time.Hour
+	stopped := store.ConversationKey{Connection: teamConn, Channel: "C1", Thread: "1.1"}
+	deleted := store.ConversationKey{Connection: teamConn, Channel: "C1", Thread: "2.2"}
+	for k, binding := range map[store.ConversationKey]string{stopped: teamBind, deleted: "team-a/long-gone"} {
+		if err := st.UpsertSession(t.Context(), store.Session{Key: k, Binding: binding, LastActivity: sweepNow.Add(-400 * day)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snap := servedSnapshot(t, ownServed())
+	report := func() config.Report { return config.Report{Snapshot: snap} }
+	record := newServedRecord(st, bothExist().of, func() time.Time { return sweepNow })
+	known := record.retentionKnows(t.Context(), report, slog.New(slog.NewTextHandler(io.Discard, nil)), func() (map[string]time.Duration, []string, bool) {
+		return map[string]time.Duration{sreAlerts: 24 * time.Hour}, nil, true
+	})
+	newSessionRetention(t, &fakeRetentionStore{}, func(c *retentionConfig) {
+		c.Store, c.ThreadTTLs, c.ThreadTTLsAndUnserved = st, nil, known
+	}).purgeSessions(t.Context())
+	for k, want := range map[store.ConversationKey]bool{stopped: true, deleted: false} {
+		_, err := st.GetSession(t.Context(), k, 100*365*day, sweepNow)
+		if present := err == nil; present != want {
+			t.Errorf("session %s present = %v (%v); want %v", k.Thread, present, err, want)
+		}
+	}
+
+	// A record that cannot be read leaves the retention knowing nothing, so that it deletes nothing: the stopped connections are unknown.
+	broken := newServedRecord(&recordedServed{failRead: errors.New("store is down")}, bothExist().of, nil)
+	if _, _, ok := broken.retentionKnows(t.Context(), report, slog.New(slog.NewTextHandler(io.Discard, nil)),
+		func() (map[string]time.Duration, []string, bool) { return nil, nil, true })(); ok {
+		t.Error("the retention is told it knows the Bindings while the record cannot be read")
 	}
 }
 
@@ -333,12 +440,13 @@ func TestAMoreSpecificRejectionIsNotReplacedByNotServed(t *testing.T) {
 // of a connection it stopped serving: once, not put back.
 func TestABindingOfAnOverCapConnectionIsToldOnceAndNotPutBack(t *testing.T) {
 	over := "teams/on-c16"
-	c := newStatusCluster(t, storedBinding(sreAlerts, 1), storedBinding(over, 3))
+	const outsider = "other/outsider" // names the connection too, which does not admit its namespace
+	c := newStatusCluster(t, storedBinding(sreAlerts, 1), storedBinding(over, 3), storedBinding(outsider, 1))
 	r := newStatusRig(t, c, map[string]int64{sreAlerts: 1})
 	r.set(sreAlerts, probe(1)...)
 	r.mu.Lock()
 	r.report.UnservedConnections = []config.UnservedConnection{{Namespace: "teams", Name: "c16", Reason: config.UnservedCap,
-		Message: "the broker serves at most 16 chat connections", Bindings: []string{over}}}
+		Message: "the broker serves at most 16 chat connections", Bindings: []string{over, outsider}, Admitted: []string{over}}}
 	r.mu.Unlock()
 	r.reconcile()
 
@@ -349,6 +457,9 @@ func TestABindingOfAnOverCapConnectionIsToldOnceAndNotPutBack(t *testing.T) {
 	}
 	if rd := got["Ready"]; rd.Reason != "Accepted:ConnectionNotServed" {
 		t.Errorf("Ready = %+v; want Accepted:ConnectionNotServed", rd)
+	}
+	if appliesTo(c, outsider) != 0 {
+		t.Errorf("a Binding the connection does not admit was written %d times; want none", appliesTo(c, outsider))
 	}
 	if err := c.update(storedBinding(over, 3, servedStatus(3)...), "teams"); err != nil {
 		t.Fatal(err)
