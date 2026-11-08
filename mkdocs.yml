@@ -138,6 +138,7 @@ nav:
       - Configure Slack: how-to/configure-slack.md
       - Create the Binding identity: how-to/create-binding-identity.md
       - Write a Binding: how-to/write-a-binding.md
+      - Let a team bring its own Slack app: how-to/team-slack-app.md
       - Move the config between a ConfigMap and custom resources: how-to/migrate-config-source.md
       - Investigate Alertmanager alerts: how-to/investigate-alertmanager-alerts.md
       - Start investigations from any bot's messages: how-to/any-bot-trigger.md
