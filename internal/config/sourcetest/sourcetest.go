@@ -365,6 +365,10 @@ var crossCases = []crossCase{
 		config.ReasonNamespaceNotAllowed, "AgentBackend agent-kourier-system/kagent-pilot does not allow namespace sre"},
 	{"a namespace that the connection does not allow", "chatconnection.yaml", `allowedNamespaces: ["sre", "payments"]`, `allowedNamespaces: ["payments"]`,
 		config.ReasonNamespaceNotAllowed, "ChatConnection agent-kourier-system/slack-main does not allow namespace sre"},
+	{"an agent namespace that the backend does not list", "agentbackend.yaml", `allowedNamespaces: ["sre", "payments"]`, "allowedNamespaces: [\"sre\", \"payments\"]\n  agents: {namespaces: [payments]}",
+		config.ReasonAgentNamespaceNotAllowed, "spec.agent.namespace: AgentBackend agent-kourier-system/kagent-pilot does not allow agents in namespace kagent"},
+	{"an agent namespace that is only the Binding's own is allowed", "agentbackend.yaml", `allowedNamespaces: ["sre", "payments"]`, "allowedNamespaces: [\"sre\", \"payments\"]\n  agents: {sameNamespace: true}",
+		config.ReasonAgentNamespaceNotAllowed, "spec.agent.namespace: AgentBackend agent-kourier-system/kagent-pilot does not allow agents in namespace kagent"},
 	{"a channel that two Bindings claim", "binding-minimal.yaml", "channel: G0123456789", "channel: C0123456789", config.ReasonChannelConflict,
 		"is already bound by Binding sre/"},
 }

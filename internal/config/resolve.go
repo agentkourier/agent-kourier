@@ -77,7 +77,8 @@ func (s *Snapshot) ChatConnections() []*v1alpha1.ChatConnection {
 
 // Resolve checks the references between the objects of set and builds a Snapshot. Empty
 // namespaces in references mean the referrer's. A reference into another namespace needs the
-// target to list the referrer's namespace in allowedNamespaces. One connection channel belongs to at most one Binding,
+// target to list the referrer's namespace in allowedNamespaces, and a backend that sets agents must allow the Binding's
+// agent.namespace. One connection channel belongs to at most one Binding,
 // the first of them in set. Through secrets it also
 // requires every referenced Secret to exist with the keys it needs, without reading values.
 //
@@ -125,6 +126,9 @@ const (
 	ReasonNamespaceNotAllowed RejectionReason = "NamespaceNotAllowed"
 	// ReasonBackendRejected: the AgentBackend is itself invalid. Today that is a dialect the broker has no adapter for.
 	ReasonBackendRejected RejectionReason = "BackendRejected"
+	// ReasonAgentNamespaceNotAllowed: the AgentBackend sets agents, and the Binding's agent.namespace is neither the
+	// Binding's own namespace, with sameNamespace, nor listed in namespaces.
+	ReasonAgentNamespaceNotAllowed RejectionReason = "AgentNamespaceNotAllowed"
 	// ReasonChannelConflict: another Binding owns the channel on the connection.
 	ReasonChannelConflict RejectionReason = "ChannelConflict"
 	// ReasonInvalidSpec: the Binding does not pass Default and Validate. ResolvePartial never gives it, since a Set holds
@@ -155,7 +159,7 @@ type Rejection struct {
 
 // ResolvePartial checks the references between the objects of set as Resolve does, and builds a Snapshot of what is
 // sound. A Binding whose backendRef or connectionRef cannot be followed, whose backend is on a dialect that is not
-// built, or that lost its channel to another Binding is left out of the Snapshot and has a Rejection. The Rejections are
+// built, whose agent.namespace the backend's agents field does not allow, or that lost its channel to another Binding is left out of the Snapshot and has a Rejection. The Rejections are
 // sorted by Namespace and Name, and a Binding's own are in the order of its fields.
 //
 // Where two Bindings claim a channel of a connection the oldest creationTimestamp wins, then the smaller namespace and
@@ -271,6 +275,13 @@ func (r *resolver) binding(b *v1alpha1.Binding) {
 	if backend != nil && backend.Spec.Dialect != v1alpha1.DialectKagentV1 && backend.Spec.Dialect != v1alpha1.DialectA2A {
 		r.reject(from, ReasonBackendRejected, "spec.agent.backendRef", fmt.Errorf("%s uses the %q dialect, supported dialects are %q and %q",
 			identity{"AgentBackend", backend.Namespace, backend.Name}, backend.Spec.Dialect, v1alpha1.DialectKagentV1, v1alpha1.DialectA2A))
+		backend = nil
+	}
+	// The backend is looked at only once the Binding may use it, so that a Binding it does not allow learns nothing of its
+	// agents field, and the message names the backend and the namespace and nothing else of the backend's spec.
+	if backend != nil && !backend.Spec.Agents.Allows(b.Namespace, b.Spec.Agent.Namespace) {
+		r.reject(from, ReasonAgentNamespaceNotAllowed, "spec.agent.namespace", fmt.Errorf("%s does not allow agents in namespace %s",
+			identity{"AgentBackend", backend.Namespace, backend.Name}, b.Spec.Agent.Namespace))
 		backend = nil
 	}
 	conn, reason, err := find(r.conns, "ChatConnection", ReasonConnectionNotFound, from, b.Spec.Chat.ConnectionRef,

@@ -1111,6 +1111,14 @@ func TestSeveralRejectionsGiveOneAcceptedReasonInAFixedOrder(t *testing.T) {
 			[]config.Rejection{rej(config.ReasonNamespaceNotAllowed, 2), rej(config.ReasonConnectionNotFound, 2)}, 0,
 			metav1.ConditionFalse, "ConnectionNotFound", "spec.connectionnotfound; spec.namespacenotallowed", 2,
 		},
+		"an agent namespace the backend does not allow comes after the namespaces the Binding is not allowed into, and before the channel": {
+			[]config.Rejection{rej(config.ReasonChannelConflict, 2), rej(config.ReasonAgentNamespaceNotAllowed, 2), rej(config.ReasonNamespaceNotAllowed, 2)}, 0,
+			metav1.ConditionFalse, "NamespaceNotAllowed", "spec.namespacenotallowed; spec.agentnamespacenotallowed; " + channelConflictMessage, 2,
+		},
+		"an agent namespace the backend does not allow": {
+			[]config.Rejection{rej(config.ReasonAgentNamespaceNotAllowed, 2)}, 0,
+			metav1.ConditionFalse, "AgentNamespaceNotAllowed", "spec.agentnamespacenotallowed", 2,
+		},
 		"a reason that is not known": {
 			[]config.Rejection{rej("Weird Reason!", 2)}, 0, metav1.ConditionFalse, "Rejected", "spec.weird reason!", 2,
 		},
