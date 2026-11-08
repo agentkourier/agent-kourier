@@ -8,7 +8,7 @@ event. Neither assumption about these senders had been measured.
 ## Setup
 
 - The sandbox workspace, in a public channel that the mentioned app (Agent Kourier, a Socket Mode app) is a member of.
-- Three Socket Mode listeners on the mentioned app, connected at once, recorded every envelope raw and acknowledged it.
+- Three Socket Mode listeners on the mentioned app, started together, recorded every envelope raw and acknowledged it.
   Each `hello` frame counts the connections at the moment it is sent (1, 1 and 2 here, as the three came up). No Agent
   Kourier broker was connected to the app (no kind tier was up), and every case's events arrived once, at one of the
   three.
@@ -136,7 +136,7 @@ The mention is plain text here, with no token, and Slack sent no `app_mention` f
     limits of a bot's mention. It did the same before the change.
   - A reminder with no mention is a bot's message from `B01`, which a `botMessage` trigger with `from: B01` takes
     (the pattern `^B[A-Z0-9]+$` accepts it).
-- **What is wrong today:** the triggers reference says a Slackbot reminder is ignored and that no trigger can name
+- **What was wrong before this change:** the triggers reference says a Slackbot reminder is ignored and that no trigger can name
   Slackbot; the spec's `personMessage` decision, the comment on `slackbotUser` and `TestDecodeSlackbotIsNoPerson` say
   Slackbot posts with no bot ID. Reminders carry one. A custom response has none, but its subtype
   (`slackbot_response`) drops it before the `USLACKBOT` check matters. That check is a defence for a plain Slackbot post
