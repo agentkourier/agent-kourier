@@ -1250,3 +1250,131 @@ func TestTokenRefreshInCRModeDoesNotNeedTheBindingInTheValues(t *testing.T) {
 		t.Errorf("the files route with the same values: %v; want the refusal that no Binding reads the Secret", err)
 	}
 }
+
+// TestConnectionNamespaces: config.connectionNamespaces is the platform's admission list. With crds the pod gets it as
+// AGENTKOURIER_CONNECTION_NAMESPACES, comma-joined, right after the variable that names its own connection. Empty (the default, and an explicit empty
+// list) it renders nothing and the render is what it was before the value existed. A list changes that one line and nothing else: the ClusterRole is the
+// same, and the chart grants no Secret of a listed namespace, since each team grants its own.
+func TestConnectionNamespaces(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	const key = "AGENTKOURIER_CONNECTION_NAMESPACES"
+	base := crMode("-f", values("crds"))
+	renderWith := func(more ...string) string {
+		t.Helper()
+		out, err := render(t.Context(), t, "agent-kourier", "agent-kourier", append(slices.Clone(base), more...)...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	unset := renderWith()
+	if strings.Contains(unset, key) {
+		t.Errorf("%s is in the render with the list unset; want it absent", key)
+	}
+	if empty := renderWith("--set-json", "config.connectionNamespaces=[]"); empty != unset {
+		t.Errorf("an empty list changes the render:\n%s", firstDifference(unset, empty))
+	}
+
+	tests := []struct {
+		name string
+		json string
+		want string
+	}{
+		{"one namespace", `["team-a"]`, "team-a"},
+		{"several, in the order given", `["team-b","team-a","platform"]`, "team-b,team-a,platform"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			listed := renderWith("--set-json", "config.connectionNamespaces="+tc.json)
+			d := deployment(t, decode(t, listed))
+			if got, has := podEnv(d)[key]; !has || got != tc.want {
+				t.Errorf("%s = %q (set: %v); want %q", key, got, has, tc.want)
+			}
+			var names []string
+			for _, e := range d.Spec.Template.Spec.Containers[0].Env {
+				names = append(names, e.Name)
+			}
+			if i := slices.Index(names, "AGENTKOURIER_CHAT_CONNECTION"); i < 0 || i+1 >= len(names) || names[i+1] != key {
+				t.Errorf("environment %v; want %s right after AGENTKOURIER_CHAT_CONNECTION", names, key)
+			}
+			var rest []string
+			for _, line := range strings.Split(listed, "\n") {
+				if !strings.Contains(line, key) {
+					rest = append(rest, line)
+				}
+			}
+			if got := strings.Join(rest, "\n"); got != unset {
+				t.Errorf("the list changes more than its variable (the ClusterRole and the Secret Roles are the unset render's):\n%s", firstDifference(unset, got))
+			}
+		})
+	}
+}
+
+// TestConnectionNamespacesAreRefusedWithFiles: the file route serves the one ChatConnection of its directory and a pod on it would silently
+// stop serving the ChatConnections of the listed namespaces, so the chart refuses the list there, naming the route. An unset config.source reads as files
+// (a release upgraded with --reuse-values), so it is refused the same. An empty list is no setting and renders.
+func TestConnectionNamespacesAreRefusedWithFiles(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	list := []string{"--set-json", `config.connectionNamespaces=["team-a"]`}
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"files", append([]string{"-f", values("minimal"), "--set", "config.source=files"}, list...)},
+		{"config.source nulled, which reads as files", append([]string{"-f", values("minimal"), "--set", "config.source=null"}, list...)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := render(t.Context(), t, "agent-kourier", "agent-kourier", tc.args...)
+			if err == nil || !strings.Contains(err.Error(), "config.connectionNamespaces is for config.source crds") || !strings.Contains(err.Error(), "config.source: files") {
+				t.Errorf("render error = %v; want the refusal that names config.connectionNamespaces and config.source: files", err)
+			}
+		})
+	}
+	if _, err := render(t.Context(), t, "agent-kourier", "agent-kourier", "-f", values("minimal"), "--set", "config.source=files", "--set-json", "config.connectionNamespaces=[]"); err != nil {
+		t.Errorf("files with an empty list: %v; want it to render", err)
+	}
+}
+
+// TestConnectionNamespacesSchema: each item is a namespace name, a DNS-1123 label of at most 63 characters, and the items are unique.
+func TestConnectionNamespacesSchema(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	label63 := strings.Repeat("a", 63)
+	for _, tc := range []struct {
+		name string
+		json string
+		ok   bool
+	}{
+		{"a label", `["team-a"]`, true},
+		{"digits first", `["1team"]`, true},
+		{"63 characters", `["` + label63 + `"]`, true},
+		{"64 characters", `["` + label63 + `a"]`, false},
+		{"capitals", `["Team"]`, false},
+		{"an underscore", `["team_a"]`, false},
+		{"a dot", `["team.a"]`, false},
+		{"a leading hyphen", `["-team"]`, false},
+		{"a trailing hyphen", `["team-"]`, false},
+		{"a wildcard", `["*"]`, false},
+		{"a namespace/name", `["team-a/slack"]`, false},
+		{"empty", `[""]`, false},
+		{"a repeat", `["team-a","team-a"]`, false},
+		{"a string, not a list", `"team-a"`, false},
+		{"a number in the list", `[1]`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := render(t.Context(), t, "agent-kourier", "agent-kourier", crMode("-f", values("crds"), "--set-json", "config.connectionNamespaces="+tc.json)...)
+			switch {
+			case tc.ok && err != nil:
+				t.Errorf("%s: %v; want it to render", tc.json, err)
+			case !tc.ok && (err == nil || !strings.Contains(err.Error(), "config.connectionNamespaces")):
+				t.Errorf("%s: render error = %v; want the schema to refuse config.connectionNamespaces", tc.json, err)
+			}
+		})
+	}
+}
