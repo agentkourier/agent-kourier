@@ -17,4 +17,5 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Duration(t, "botPer", limits.RateLimit.Per.Duration)
 	limitsdoc.Count(t, "botConcurrent", int(limits.RateLimit.MaxConcurrent))
 	limitsdoc.Count(t, "botPerDay", int(*limits.MaxRunsPerDay))
+	limitsdoc.Count(t, "toldLimited", maxToldLimited)
 }

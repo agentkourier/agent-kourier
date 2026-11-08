@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"slices"
 	"strings"
@@ -42,9 +41,54 @@ type fakeConn struct {
 	token  string
 	live   *atomic.Int32
 	reject chan struct{} // closed: Run returns the rejection
+	// onConn is the adapter's OnConnection, which Run calls when its connection is up.
+	onConn func(bool)
+
+	mu    sync.Mutex
+	calls map[string]int
+	errs  map[string]error // the error each call of the platform answers with, by name: "Post", "Stream", "Update", "Ephemeral", "IsMember"
+}
+
+// failWith makes the call op of the platform answer with err from now on.
+func (f *fakeConn) failWith(op string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.errs[op] = err
+}
+
+func (f *fakeConn) answer(op string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls[op]++
+	return f.errs[op]
+}
+
+// called is how many times the call op reached the platform.
+func (f *fakeConn) called(op string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls[op]
+}
+
+func (f *fakeConn) Post(context.Context, chat.Target, chat.Outgoing, string) (chat.Ref, error) {
+	return chat.Ref{}, f.answer("Post")
+}
+func (f *fakeConn) Update(context.Context, chat.Ref, chat.Outgoing) error { return f.answer("Update") }
+func (f *fakeConn) Stream(context.Context, chat.Target, string, string) (chat.Stream, error) {
+	return nil, f.answer("Stream")
+}
+func (f *fakeConn) StreamAt(chat.Ref) chat.Stream { return fakeStream{f} }
+func (f *fakeConn) Ephemeral(context.Context, chat.Target, string, chat.Message) error {
+	return f.answer("Ephemeral")
+}
+func (f *fakeConn) IsMember(context.Context, string, string) (bool, error) {
+	return false, f.answer("IsMember")
 }
 
 func (f *fakeConn) Run(ctx context.Context, _ chat.Sink) error {
+	if f.onConn != nil { // before the count, so that a test that waits for the count sees the connection up
+		f.onConn(true)
+	}
 	f.live.Add(1)
 	defer f.live.Add(-1)
 	select {
@@ -71,9 +115,13 @@ type supWorld struct {
 	live  atomic.Int32
 
 	mu      sync.Mutex
-	opened  []*fakeConn            // every platform built, in order
-	closed  []string               // the connections whose transport was closed, in order
-	gone    []string               // the connections the supervisor told were gone
+	opened  []*fakeConn // every platform built, in order
+	closed  []string    // the connections whose transport was closed, in order
+	gone    []string    // the connections the supervisor told were gone
+	removed []string    // the connections the supervisor told were removed
+	recov   []string    // the connections the supervisor asked to have their turns taken up, in order
+	recErr  error       // what that answers
+	logs    syncBuffer
 	ids     map[string]appIdentity // by bot token
 	idErr   map[string]error       // by bot token
 	openErr map[string]error       // by bot token: building the platform fails
@@ -85,12 +133,12 @@ const ownName = "platform/slack"
 func newSupWorld(t *testing.T) *supWorld {
 	t.Helper()
 	w := &supWorld{t: t, table: newRuntimeTable(), ids: map[string]appIdentity{}, idErr: map[string]error{}, openErr: map[string]error{}}
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	log := slog.New(slog.NewTextHandler(&w.logs, nil))
 	w.host = &runtimeHost{
 		cfg: RunConfig{transportClosed: func(conn string) { w.mu.Lock(); w.closed = append(w.closed, conn); w.mu.Unlock() }},
 		log: log, metrics: newTestMetrics(t), table: w.table, parent: t.Context(),
-		open: func(c Connection, _ func(bool)) (builtPlatform, error) {
-			f := &fakeConn{token: c.Credentials["botToken"].Reveal(), live: &w.live, reject: make(chan struct{})}
+		open: func(c Connection, onConn func(bool)) (builtPlatform, error) {
+			f := &fakeConn{token: c.Credentials["botToken"].Reveal(), live: &w.live, reject: make(chan struct{}), onConn: onConn, errs: map[string]error{}, calls: map[string]int{}}
 			w.mu.Lock()
 			defer w.mu.Unlock()
 			if err := w.openErr[f.token]; err != nil {
@@ -110,7 +158,7 @@ func newSupWorld(t *testing.T) *supWorld {
 	w.host.run(ownRT, nil, nil)
 	w.sup = &supervisor{
 		host: w.host, log: log, every: time.Hour, own: own, refusals: &refusals{}, done: make(chan struct{}),
-		teams: map[string]*teamRuntime{}, said: map[string]string{},
+		teams: map[string]*teamRuntime{}, seen: map[string]bool{}, lives: map[string]*connLife{}, said: map[string]string{},
 		identify: func(_ context.Context, c Connection) (appIdentity, error) {
 			tok := c.Credentials["botToken"].Reveal()
 			w.mu.Lock()
@@ -121,6 +169,18 @@ func newSupWorld(t *testing.T) *supWorld {
 		conns: new(atomic.Pointer[[]Connection]), changes: new(atomic.Uint64),
 		intake: func(v1alpha1.ObjectRef) (chat.Sink, error) { return nil, nil },
 		gone:   func(conn string) { w.mu.Lock(); w.gone = append(w.gone, conn); w.mu.Unlock() },
+		removed: func(ctx context.Context, conn string) {
+			w.mu.Lock()
+			w.removed = append(w.removed, conn)
+			w.mu.Unlock()
+			w.host.metrics.ConnectionRemoved(ctx, conn)
+		},
+		recover: func(_ context.Context, conn string) error {
+			w.mu.Lock()
+			defer w.mu.Unlock()
+			w.recov = append(w.recov, conn)
+			return w.recErr
+		},
 	}
 	t.Cleanup(func() {
 		w.host.haltAll(context.Background())
@@ -548,6 +608,16 @@ func TestSupervisorCountsAChangeOfThePublishedConnections(t *testing.T) {
 			t.Errorf("after %s: counted a change = %t; want %t", st.what, changed, st.counts)
 		}
 	}
+}
+
+// fakeStream is the stream of a fakeConn: its Append answers as the platform's "Append".
+type fakeStream struct{ f *fakeConn }
+
+func (s fakeStream) Ref() chat.Ref                         { return chat.Ref{} }
+func (s fakeStream) Append(context.Context, string) error  { return s.f.answer("Append") }
+func (s fakeStream) Step(context.Context, chat.Step) error { return s.f.answer("Step") }
+func (s fakeStream) Stop(context.Context, string, chat.Message, string) error {
+	return s.f.answer("Stop")
 }
 
 // seriesWorld is a supWorld that records under an observer, for the tests of what the supervisor does to a connection's series.

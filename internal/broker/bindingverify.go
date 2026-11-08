@@ -315,8 +315,7 @@ func (c channelChecker) classifyError(err error) bindingcheck.Outcome {
 	v := c.platform.Classify(chat.OpOther, err)
 	switch {
 	case v.Class == chat.FatalAuth:
-		return bindingcheck.Outcome{Status: bindingcheck.False, Reason: bindingcheck.ReasonChatCredentialsRejected,
-			Message: "the chat platform rejected the bot's token: replace it and restart Agent Kourier"}
+		return c.creds.rejected()
 	case v.RetryAfter > 0:
 		return unavailable("the chat platform rate-limited the read")
 	case errors.Is(err, context.DeadlineExceeded):
@@ -486,8 +485,7 @@ func (c groupChecker) classifyError(groups []string, err error) bindingcheck.Out
 	v := c.platform.Classify(chat.OpOther, err)
 	switch {
 	case v.Class == chat.FatalAuth:
-		return bindingcheck.Outcome{Status: bindingcheck.False, Reason: bindingcheck.ReasonChatCredentialsRejected,
-			Message: "the chat platform rejected the bot's token: replace it and restart Agent Kourier"}
+		return c.creds.rejected()
 	case errors.Is(err, chat.ErrGroupsMisconfigured):
 		return bindingcheck.Outcome{Status: bindingcheck.False, Reason: bindingcheck.ReasonGroupsUnreadable,
 			Message: "the chat platform refuses to let the bot read " + which + ": the workspace may have no user groups, or the app's token may not be allowed to read them; the operator's log has the cause",
@@ -521,6 +519,9 @@ type credentialsWatch struct {
 	// where says which Secret the connection's credentials are in now, by the current config: false when the config no longer has the
 	// connection, which the check cannot tell anything of.
 	where func() (namespace, name string, ok bool)
+	// selfRestarting says the connection is a team connection, which the supervisor restarts by itself when its Secret holds other tokens: the
+	// outcomes that advise a restart of Agent Kourier say that instead. The own connection takes new tokens at a restart of Agent Kourier.
+	selfRestarting bool
 }
 
 // check compares the tokens in the Secret now with the baseline. A Secret that does not exist, a key that is missing or empty, and a
@@ -544,8 +545,7 @@ func (w credentialsWatch) check(ctx context.Context) credentialsChange {
 			if subtle.ConstantTimeCompare([]byte(now.Reveal()), []byte(was.Reveal())) != 1 {
 				found = max(found, credentialsChanged)
 			}
-		case err == nil, errors.Is(err, secret.ErrKeyNotFound), errors.Is(err, secret.ErrEmptyValue), errors.Is(err, secret.ErrUnsupportedType),
-			errors.Is(err, config.ErrSecretNotFound):
+		case err == nil, secretUnusable(err):
 			found = credentialsUnusable
 		}
 	}
@@ -559,13 +559,29 @@ func (w credentialsWatch) check(ctx context.Context) credentialsChange {
 func (w credentialsWatch) hold(ctx context.Context) (bindingcheck.Outcome, bool) {
 	switch w.check(ctx) {
 	case credentialsChanged:
-		return bindingcheck.Outcome{Status: bindingcheck.Unknown, Reason: bindingcheck.ReasonChatCredentialsChanged,
-			Message: "the chat credentials changed after the connection started: restart Agent Kourier to use the new ones"}, true
+		msg := "the chat credentials changed after the connection started: restart Agent Kourier to use the new ones"
+		if w.selfRestarting {
+			msg = "the chat credentials changed after the connection started: the connection restarts by itself to use the new ones"
+		}
+		return bindingcheck.Outcome{Status: bindingcheck.Unknown, Reason: bindingcheck.ReasonChatCredentialsChanged, Message: msg}, true
 	case credentialsUnusable:
-		return bindingcheck.Outcome{Status: bindingcheck.Unknown, Reason: bindingcheck.ReasonChatCredentialsUnusable,
-			Message: "the chat credentials Secret, or a key of it, is gone or empty, or the Secret is of a type that is never read: the connection still uses the tokens it read, and a restart fails until the Secret is mended"}, true
+		msg := "the chat credentials Secret, or a key of it, is gone or empty, or the Secret is of a type that is never read: the connection still uses the tokens it read, and a restart fails until the Secret is mended"
+		if w.selfRestarting {
+			msg = "the chat credentials Secret, or a key of it, is gone or empty, or the Secret is of a type that is never read: the connection still uses the tokens it read, and restarts by itself once the Secret holds others"
+		}
+		return bindingcheck.Outcome{Status: bindingcheck.Unknown, Reason: bindingcheck.ReasonChatCredentialsUnusable, Message: msg}, true
 	}
 	return bindingcheck.Outcome{}, false
+}
+
+// rejected is the outcome of a read that the platform refused because the bot's token is not valid: False/ChatCredentialsRejected. A team
+// connection stops when it sees one, and starts again when its Secret changes, which the message says.
+func (w credentialsWatch) rejected() bindingcheck.Outcome {
+	msg := "the chat platform rejected the bot's token: replace it and restart Agent Kourier"
+	if w.selfRestarting {
+		msg = "the chat platform rejected the bot's token: replace it in the credentials Secret, and the connection starts again by itself"
+	}
+	return bindingcheck.Outcome{Status: bindingcheck.False, Reason: bindingcheck.ReasonChatCredentialsRejected, Message: msg}
 }
 
 // asksForApprovers reports whether a Binding has an ApproversReadable condition: it asks for tool approvals, and from user groups. A
@@ -688,6 +704,9 @@ type verification struct {
 	// read as the bot of the Binding's own connection, looked up at each probe. A connection it has none for (an error wrapping
 	// chat.ErrConnectionDown: it is not running yet, or it stopped) is not called, and the Binding's reads say so (connectionDownOutcome).
 	Platforms chat.Resolver[platformReader]
+	// Own is the broker's own connection. Every other connection is a team connection, which the supervisor restarts by itself, and its
+	// Bindings are told so where the own connection's are told to restart Agent Kourier. The zero value means no connection is a team's.
+	Own v1alpha1.ObjectRef
 	// Conns lists the connections the broker serves, running or not: the Bindings on any other are not probed. Credentials are the tokens
 	// the connection's platform was built with, which Secrets is read against to tell a changed Secret; a connection that is not
 	// running has none, and then no change is told. It is called from the probes, which run concurrently, so it must be safe for
@@ -753,16 +772,31 @@ func (v verification) chatOf(conn string) (platformReader, credentialsWatch, err
 			ref, baseline = c.Ref, c.Credentials
 		}
 	}
-	return platform, credentialsWatch{baseline: baseline, secrets: v.Secrets, where: func() (string, string, bool) { return v.credentialsSecret(ref) }}, nil
+	team := v.Own != (v1alpha1.ObjectRef{}) && conn != v1alpha1.NamespacedName(v.Own.Namespace, v.Own.Name)
+	return platform, credentialsWatch{baseline: baseline, secrets: v.Secrets, selfRestarting: team,
+		where: func() (string, string, bool) { return v.credentialsSecret(ref) }}, nil
 }
 
 // connectionDownOutcome is what a read as the bot of a connection that no platform runs comes to, with no call made: the verdict on
-// the channel or the groups cannot be had, which is Unknown and not False, since the Binding is not at fault and a restart is not
-// what mends it. The reason is ChatUnavailable, the closest the closed set has to a chat platform that cannot be read now, and the
-// message says so and points at the log, whose line for the transition carries err as the cause (it names the connection and holds no
-// token). It is the one place that tells a stopped connection's Bindings what became of the reads, so the outcomes a
-// connection can have for being down (stopped for a token the platform rejected, say) are told here, from the error that says why.
+// the channel or the groups cannot be had. When err says why the connection is down (a *connectionStopped) the outcome says it: the platform
+// rejected its credentials, which is False/ChatCredentialsRejected as for a read the platform refused, or its credentials Secret cannot be used,
+// which is Unknown/ChatCredentialsUnusable. A team connection starts again by itself when the Secret changes, which the messages say. Any other
+// connection that is down (it has not started, or it stopped) is Unknown and not False, since the Binding is not at fault and a restart is not
+// what mends it. The reason is ChatUnavailable, the closest the closed set has to a chat platform that cannot be read now, and the message says
+// so and points at the log, whose line for the transition carries err as the cause (it names the connection and holds no token). It is the one
+// place that tells a stopped connection's Bindings what became of the reads, so the outcomes a connection can have for being down are told here,
+// from the error that says why.
 func connectionDownOutcome(err error) bindingcheck.Outcome {
+	var stopped *connectionStopped
+	if errors.As(err, &stopped) {
+		out := credentialsWatch{selfRestarting: true}.rejected()
+		if !stopped.rejected {
+			out = bindingcheck.Outcome{Status: bindingcheck.Unknown, Reason: bindingcheck.ReasonChatCredentialsUnusable,
+				Message: "the chat credentials Secret, or a key of it, is gone or empty, or the Secret is of a type that is never read, so the connection has not started: it starts by itself once the Secret is mended"}
+		}
+		out.Cause = telemetry.LogText(err)
+		return out
+	}
 	return bindingcheck.Outcome{Status: bindingcheck.Unknown, Reason: bindingcheck.ReasonChatUnavailable,
 		Message: "the chat connection is not running (it has not started, or it stopped), so the bot was not asked: the operator's log has why",
 		Cause:   telemetry.LogText(err)}

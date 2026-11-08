@@ -27,14 +27,81 @@ import (
 // cancelled), or is gone (the session is reset). Sessions past their threadTTL, and ones whose
 // Binding left the config, are left exactly as they are. A queued turn of a conversation with a
 // context may have been sent before the crash, so it is looked up before it is sent.
+//
+// The conversations of a connection that does not run (Config.ConnectionRunning) are left as they are, and RecoverConnection takes
+// them up once it does.
 func (m *Manager) Recover(ctx context.Context) error {
+	keys, err := m.recoverable(ctx)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return errors.New("session: the manager is closed")
+	}
+	for _, k := range keys {
+		if !m.runs(k.Connection) {
+			m.skipped[k.Connection] = true
+			continue
+		}
+		m.wg.Add(1)
+		go m.recoverKey(k) //nolint:contextcheck // the goroutine belongs to the manager, and outlives the caller
+	}
+	return nil
+}
+
+// RecoverConnection takes up the conversations of the connection conn that Recover left because it did not run
+// (Config.ConnectionRunning), the same way Recover does, and returns at once. The broker calls it when the connection has started. It
+// starts nothing for a connection Recover did not skip (one that ran when Recover looked, or has no conversation), so a connection that
+// restarts does not have its running turns taken up a second time, and nothing while the connection still does not run: the
+// conversations stay skipped for the next call.
+func (m *Manager) RecoverConnection(ctx context.Context, conn string) error {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return errors.New("session: the manager is closed")
+	}
+	if !m.skipped[conn] || !m.runs(conn) {
+		m.mu.Unlock()
+		return nil
+	}
+	delete(m.skipped, conn)
+	m.mu.Unlock()
+	keys, err := m.recoverable(ctx)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err != nil || m.closed {
+		m.skipped[conn] = true // not taken up: the next call does it
+		if err == nil {
+			err = errors.New("session: the manager is closed")
+		}
+		return err
+	}
+	for _, k := range keys {
+		if k.Connection == conn {
+			m.wg.Add(1)
+			go m.recoverKey(k) //nolint:contextcheck // the goroutine belongs to the manager, and outlives the caller
+		}
+	}
+	return nil
+}
+
+// runs says whether the connection conn runs, by Config.ConnectionRunning. The caller holds m.mu.
+func (m *Manager) runs(conn string) bool {
+	return m.cfg.ConnectionRunning == nil || m.cfg.ConnectionRunning(conn)
+}
+
+// recoverable lists the conversations a restart left to take up: the sessions with an active task, then those with a queued reply that the
+// first list did not hold.
+func (m *Manager) recoverable(ctx context.Context) ([]Key, error) {
 	active, err := m.cfg.Store.ListActiveSessions(ctx)
 	if err != nil {
-		return fmt.Errorf("list active sessions: %w", err)
+		return nil, fmt.Errorf("list active sessions: %w", err)
 	}
 	queued, err := m.cfg.Store.ListQueuedSessions(ctx)
 	if err != nil {
-		return fmt.Errorf("list queued sessions: %w", err)
+		return nil, fmt.Errorf("list queued sessions: %w", err)
 	}
 	seen := map[Key]bool{}
 	var keys []Key
@@ -46,16 +113,7 @@ func (m *Manager) Recover(ctx context.Context) error {
 			keys = append(keys, k)
 		}
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closed {
-		return errors.New("session: the manager is closed")
-	}
-	for _, k := range keys {
-		m.wg.Add(1)
-		go m.recoverKey(k) //nolint:contextcheck // the goroutine belongs to the manager, and outlives the caller
-	}
-	return nil
+	return keys, nil
 }
 
 // recoverKey takes up one conversation.

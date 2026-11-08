@@ -20,7 +20,7 @@ An AgentBackend on `dialect: kagent-v1` can now limit which agent namespaces its
   An expression that matches one of these series one to one with a metric that has no `connection` label, such as `agentkourier_outbox_pending + agentkourier_reply_queue_depth`,
   stops matching at once and returns nothing: add `ignoring(connection)` or aggregate first. An `on(...)` list needs `connection` once the broker serves two connections.
   A served connection always has its two outbox gauges on the leader (0 with nothing unposted), and a connection that is no longer served has them only while it has an unposted row.
-  A connection the broker stops serving has its counter and histogram series deleted. [Metrics](reference/metrics.md#series-by-connection) has the rest.
+  A connection the broker stops serving has its counter and histogram series deleted, and its `agentkourier_chat_connected` series too, which used to stay at 0: an alert on `agentkourier_chat_connected == 0` no longer fires for a connection that was removed or is not served. [Metrics](reference/metrics.md#series-by-connection) has the rest.
 
 ## Version 0.2.1
 
