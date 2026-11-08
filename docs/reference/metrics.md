@@ -18,18 +18,19 @@ How many values of `connection` each family can have:
 
 - `agentkourier_intake_total`, `agentkourier_chat_api_calls_total`, `agentkourier_slack_events_shed_total` and `agentkourier_slack_ack_duration_seconds`:
   one for each connection the broker serves, so at most 16 (a call that is still in flight when a connection is removed can bring one of its series back, stale). A connection that was never served has none.
-- `agentkourier_chat_connected`: one for each connection that has been built since the broker started. The broker does not delete the series of a connection
-  that it stops serving: it keeps saying 0.
+- `agentkourier_chat_connected`: at most one for each connection the broker serves, so at most 16. It says 0 for a connection that is not connected: one that stopped
+  because the platform rejected its credentials, one whose Secret cannot be read or whose credentials the platform rejected when it was asked whose bot it is, so that it never
+  started, and one that is starting. A connection that is waiting for the platform to say whose bot it is has no series yet, unless its Secret could not be read before it waited, which set the 0.
 - `agentkourier_outbox_pending` and `agentkourier_outbox_oldest_age_seconds`: each connection served, which says 0 while it has no unposted row; the
   empty value, for rows written before the broker recorded connections; and each connection that is no longer served but still has an unposted row, until
   retention abandons the row.
 
 What the broker does to the series:
 
-- When the broker stops serving a ChatConnection while it runs, it deletes that connection's series of the first four families. A connection stops being served when
+- When the broker stops serving a ChatConnection while it runs, it deletes that connection's series of the first four families and its `agentkourier_chat_connected` series. A connection stops being served when
   its ChatConnection is deleted, when an older ChatConnection pushed it past the limit, or when it is a second connection of a Slack app that an older one uses; the last holds
-  also when a rotated Secret turns a connection into the second of such an app. If it serves the connection again, those counters start from zero. A connection that is restarted
-  because its ChatConnection or its Secret changed, and one whose credentials the platform rejected, keep theirs. A connection also leaves the served set when its namespace is
+  also when a rotated Secret turns a connection into the second of such an app. If it serves the connection again, those counters start from zero, and `agentkourier_chat_connected` is back at 0 and then 1 when it is up. A connection that is restarted
+  because its ChatConnection or its Secret changed, and one whose credentials the platform rejected, keep theirs (a rejected one says 0). A connection also leaves the served set when its namespace is
   taken off `AGENTKOURIER_CONNECTION_NAMESPACES`, but that list is read at start, so the restart that applies the change starts with no series of it.
 - The two outbox gauges are read from the stored rows at each scrape, with one query grouped by connection, and the broker adds a 0 for each connection it serves
   that the query did not return. The replica that leads adds the team connections it serves (a refused second connection of an app is not one); a replica that does not lead names only its own. A row written
@@ -40,7 +41,7 @@ What the broker does to the series:
 
 | Metric | Type | Labels | Definition |
 |---|---|---|---|
-| `agentkourier_chat_connected` | gauge | `connection` | 1 while the chat connection (Slack Socket Mode) is up, else 0, by ChatConnection. `/readyz` does not say this. |
+| `agentkourier_chat_connected` | gauge | `connection` | 1 while the chat connection (Slack Socket Mode) is up, else 0, by ChatConnection. A connection that is stopped, or that cannot start, says 0. The series of a connection is deleted when the broker stops serving it (the ChatConnection is deleted, or is no longer one the broker serves). `/readyz` does not say this. |
 | `agentkourier_turn_outcomes_total` | counter | `binding`, `outcome` | Turns that ended, by Binding and how: the terminal state of the task, or the class of what stopped it. `outcome` is one of `completed`, `failed`, `rejected`, `canceled`, `credentials_rejected`, `forbidden`, `unreachable`, `session_gone`, `binding_gone`, `wedged`, `uncancellable`, `pause_ended`, `answer_rejected`, `refused`, `no_final`, `response_too_large`, `lookup_incomplete`. It is counted before the `session turn ended` log line. |
 | `agentkourier_config_stale` | gauge | | 1 before the first config load, and while the running config may lag its source: the latest reload failed, or the source says it cannot be reached. |
 | `agentkourier_config_reload_errors_total` | counter | | Config reloads that failed. |
@@ -100,7 +101,7 @@ A probe is not retried. One failure holds `agentkourier_binding_ready` at 0 unti
 The reason for a result is not a label; it is in the log line of the change. [Troubleshoot an install](../how-to/troubleshoot.md#a-binding-is-not-ready) lists each reason and what to do about it.
 
 - a WARN `a condition is false` for a condition that went false;
-- a WARN `a condition is unknown` for `ChatCredentialsChanged` (the chat credentials Secret holds other tokens than the ones in use: restart Agent Kourier) and for `ChatCredentialsUnusable` (the Secret, or a key of it, is gone or empty, or the Secret is of a type that is never read: the connection keeps the tokens it read, and a restart fails until the Secret is mended);
+- a WARN `a condition is unknown` for `ChatCredentialsChanged` (the chat credentials Secret holds other tokens than the ones in use: restart Agent Kourier for the broker's own connection; a team connection restarts by itself) and for `ChatCredentialsUnusable` (the Secret, or a key of it, is gone or empty, or the Secret is of a type that is never read: the connection keeps the tokens it read, and for the own connection a restart fails until the Secret is mended);
 - an INFO `a condition is unknown` for any other result that is not yet known: for the agent, a 408, 425 or 429; for the chat platform, a rate limit, a deadline, or `the chat platform read failed`, with its cause in the line's `cause` attribute (for Slack, its code such as `no_permission` when it answered, or the transport's error such as `connection refused` when it did not);
 - an INFO `a condition is now true`, with the reason it had before in `was`, for a condition that was false, or unknown after a first result. A first result that is true has no line.
 

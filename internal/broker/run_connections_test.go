@@ -44,6 +44,14 @@ type connWorld struct {
 	ids    map[string]appIdentity // by bot token; a token with none is its own app
 	ob     *outbox.Outbox
 	logs   syncBuffer
+
+	// kill is, by bot token, the channel a test sends to to make that token's Run return the error (a connection the platform drops for good).
+	kill map[string]chan error
+	// faults is the error each call of a token's client answers with, by token and call ("Post", "StartStream", "Update").
+	faults map[string]error
+	// idErr is the error asking whose bot a token is answers with, by token; idHold holds that call back until its channel is closed.
+	idErr  map[string]error
+	idHold map[string]chan struct{}
 }
 
 // syncBuffer is a buffer a logger writes to while a test reads it.
@@ -62,7 +70,8 @@ func (s *syncBuffer) String() string { s.mu.Lock(); defer s.mu.Unlock(); return 
 
 func newConnWorld(t *testing.T, edit func([]*unstructured.Unstructured)) *connWorld {
 	t.Helper()
-	w := &connWorld{t: t, live: map[string]int{}, probed: map[string][]string{}, sinks: map[string]slack.Sink{}, ids: map[string]appIdentity{}}
+	w := &connWorld{t: t, live: map[string]int{}, probed: map[string][]string{}, sinks: map[string]slack.Sink{}, ids: map[string]appIdentity{},
+		kill: map[string]chan error{}, faults: map[string]error{}, idErr: map[string]error{}, idHold: map[string]chan struct{}{}}
 	w.c = crStartConfig(t, func(objs []*unstructured.Unstructured) {
 		_ = unstructured.SetNestedStringSlice(objs[0].Object, []string{"sre", "payments", "team-a", "team-b"}, "spec", "allowedNamespaces")
 		if edit != nil {
@@ -74,11 +83,26 @@ func newConnWorld(t *testing.T, edit func([]*unstructured.Unstructured)) *connWo
 	w.c.ConnectionNamespaces = []string{"team-a", "team-b"}
 	w.c.Logger = slog.New(slog.NewTextHandler(&w.logs, nil))
 	w.c.superviseEvery, w.c.reloadPoll = 10*time.Millisecond, 20*time.Millisecond
-	w.c.newSlack = func(sc slack.Config) slackAPI { return &liveSlack{w: w, token: sc.BotToken.Reveal()} }
-	w.c.identify = func(_ context.Context, c Connection) (appIdentity, error) {
+	w.c.newSlack = func(sc slack.Config) slackAPI {
+		return &liveSlack{w: w, token: sc.BotToken.Reveal(), onConn: sc.OnConnection}
+	}
+	w.c.identify = func(ctx context.Context, c Connection) (appIdentity, error) {
 		tok := c.Credentials["botToken"].Reveal()
 		w.mu.Lock()
+		hold := w.idHold[tok]
+		w.mu.Unlock()
+		if hold != nil {
+			select {
+			case <-hold:
+			case <-ctx.Done():
+				return appIdentity{}, ctx.Err()
+			}
+		}
+		w.mu.Lock()
 		defer w.mu.Unlock()
+		if err := w.idErr[tok]; err != nil {
+			return appIdentity{}, err
+		}
 		if id, ok := w.ids[tok]; ok {
 			return id, nil
 		}
@@ -116,19 +140,31 @@ type liveSlack struct {
 	idleSlack
 	w     *connWorld
 	token string
+	// onConn is the adapter's OnConnection, which the client tells when its connection is up and when it is not.
+	onConn func(bool)
 }
 
 func (l *liveSlack) Run(ctx context.Context, sink slack.Sink) error {
 	l.w.mu.Lock()
 	l.w.live[l.token]++
 	l.w.sinks[l.token] = sink
+	kill := l.w.killChan(l.token)
 	l.w.mu.Unlock()
-	<-ctx.Done()
+	if l.onConn != nil {
+		l.onConn(true)
+		defer l.onConn(false)
+	}
+	var err error
+	select {
+	case <-ctx.Done():
+		err = ctx.Err()
+	case err = <-kill:
+	}
 	l.w.mu.Lock()
 	l.w.live[l.token]--
 	l.w.events = append(l.w.events, "run-ended:"+l.token)
 	l.w.mu.Unlock()
-	return ctx.Err()
+	return err
 }
 
 // ChannelAccess records who was asked for which channel: the verification of a Binding reads its channel as the bot of its connection.
@@ -237,6 +273,7 @@ func TestARunAddsChangesAndRemovesATeamConnection(t *testing.T) {
 	for _, conn := range []string{"agent-kourier-system/slack-main", "team-b/slack", "team-c/slack"} {
 		r.waitMetric(`agentkourier_outbox_pending{connection="` + conn + `"} 0`)
 	}
+	r.waitMetric(`agentkourier_chat_connected{connection="team-a/slack"} 1`)
 	// A post on the connection makes its lane; the double's Post fails, which leaves the row pending and the lane kept.
 	_, _ = w.ob.Send(t.Context(), outbox.Post{Source: "x", Role: store.OutboxReply, Connection: "team-a/slack", Channel: "C1", Thread: "1.1", Out: chat.Say(chat.Message{Fallback: "hi"})})
 	if got := w.lanes(); got != lanes+1 {
@@ -256,6 +293,9 @@ func TestARunAddsChangesAndRemovesATeamConnection(t *testing.T) {
 		}
 	}
 	w.eventually("team-a and team-c to stop and team-a's lane to go", func() bool { return w.up("tok-a2") == 0 && w.up("tok-c") == 0 && w.lanes() == lanes })
+	// The series of a connection that is away is deleted, not left at 0; the others' stay.
+	r.waitNoMetric(`agentkourier_chat_connected{connection="team-a/slack"}`)
+	r.waitMetric(`agentkourier_chat_connected{connection="team-b/slack"} 1`)
 	if w.up("tok-b") != 1 || w.up(ownToken) != 1 {
 		t.Errorf("up: team-b %d, own %d; want them running", w.up("tok-b"), w.up(ownToken))
 	}

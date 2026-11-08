@@ -816,3 +816,87 @@ func TestRunnerKeepsAHeadBehindTheRecordedTaskWhenTheAgentCannotList(t *testing.
 		t.Errorf("calls = %v, %d sends; want the task followed before the one send", f.agent.seq, len(f.agent.msgs))
 	}
 }
+
+// The conversations of a connection that does not run are left as they are by Recover, whatever state they are in, and the ones of the
+// connections that run are taken up. RecoverConnection takes them up once their connection runs, once: a second call finds nothing parked.
+func TestRecoverLeavesTheConversationsOfAConnectionThatIsDownUntilItRuns(t *testing.T) {
+	f, sink := restarted(t)
+	other := Key{Connection: "other", Channel: "C2", Thread: "1700.02"}
+	if err := f.st.UpsertSession(t.Context(), store.Session{Key: other, ContextID: "c2", TaskID: "t2", Binding: "ns/b1", LastActivity: t0}); err != nil {
+		t.Fatal(err)
+	}
+	var running atomic.Bool
+	f.m.cfg.ConnectionRunning = func(conn string) bool { return conn == "other" || running.Load() }
+
+	f.recover(t)
+	waitFinal(t, sink)
+	f.wait(t)
+	if _, _, fo := f.agent.counts(); fo != 1 {
+		t.Fatalf("%d follows after Recover with %q down; want one: the connection that runs is taken up, and %q is not", fo, key.Connection, key.Connection)
+	}
+	if got := f.taskIDOf(other); got != "" {
+		t.Errorf("the task of the running connection's conversation = %q; want it followed to its end", got)
+	}
+	if got := f.taskID(); got != "t1" {
+		t.Errorf("the task of the conversation of the connection that is down = %q; want it left as recorded (t1)", got)
+	}
+
+	if err := f.m.RecoverConnection(t.Context(), key.Connection); err != nil {
+		t.Fatal(err)
+	}
+	f.wait(t)
+	if _, _, fo := f.agent.counts(); fo != 1 {
+		t.Errorf("%d follows after RecoverConnection with the connection still down; want none new", fo)
+	}
+
+	running.Store(true)
+	if err := f.m.RecoverConnection(t.Context(), key.Connection); err != nil {
+		t.Fatal(err)
+	}
+	waitFinal(t, sink)
+	eventually(t, "the task of the connection that now runs to be cleared", func() bool { return f.taskID() == "" })
+	if err := f.m.RecoverConnection(t.Context(), key.Connection); err != nil {
+		t.Fatal(err)
+	}
+	f.wait(t)
+	if _, _, fo := f.agent.counts(); fo != 2 {
+		t.Errorf("%d follows in all; want two, one for each conversation, and none for the second call", fo)
+	}
+}
+
+// A connection that ran when Recover looked has nothing parked: RecoverConnection for it, as for one that never had a session, starts nothing, so a
+// connection that restarts does not have its running turns taken up a second time.
+func TestRecoverConnectionStartsNothingForAConnectionRecoverDidNotSkip(t *testing.T) {
+	f, sink := restarted(t)
+	f.m.cfg.ConnectionRunning = func(string) bool { return true }
+	f.recover(t)
+	waitFinal(t, sink)
+	eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
+	f.retired(t)
+	f.seed("ns/b1", 0) // a task that is recorded again, which only a second take-up would follow
+	if err := f.m.RecoverConnection(t.Context(), key.Connection); err != nil {
+		t.Fatal(err)
+	}
+	f.wait(t)
+	if _, _, fo := f.agent.counts(); fo != 1 {
+		t.Errorf("%d follows; want the one of Recover", fo)
+	}
+}
+
+// wait waits for the goroutines of the manager that are not runners of a turn still working.
+func (f *fixture) wait(t *testing.T) {
+	t.Helper()
+	drained := make(chan struct{})
+	go func() { f.m.wg.Wait(); close(drained) }()
+	select {
+	case <-drained:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the recovery did not finish")
+	}
+}
+
+// taskIDOf is the task recorded for key k.
+func (f *fixture) taskIDOf(k Key) string {
+	sess, _ := f.st.GetSession(f.t.Context(), k, readAll, t0)
+	return sess.TaskID
+}

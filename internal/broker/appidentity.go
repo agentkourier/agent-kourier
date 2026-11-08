@@ -88,7 +88,7 @@ func identifyError(method string, err error) error {
 	switch {
 	case errors.As(err, &resp):
 		if slices.Contains(rejectedCodes, resp.Err) {
-			return fmt.Errorf("%s: Slack answered %q: %w", method, resp.Err, errCredentialsRejected)
+			return &credentialsRejectedError{method: method, code: resp.Err}
 		}
 		return fmt.Errorf("%s: Slack answered %q", method, resp.Err)
 	case errors.Is(err, context.DeadlineExceeded):

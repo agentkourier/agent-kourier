@@ -48,7 +48,7 @@ timings mean for a takeover.
 | Code | Meaning |
 |---|---|
 | 0 | Stopped after a signal. |
-| 1 | Slack rejected the tokens. A restart would be rejected again. |
+| 1 | Slack rejected the tokens of the broker's own connection. A restart would be rejected again. A team ChatConnection whose tokens Slack rejects does not end the process: that connection stops, and its Bindings say `ChatCredentialsRejected`. |
 | 2 | The config, the wiring, or an environment variable is wrong. With `crds` also: the CRDs are not installed, or the broker's own ChatConnection is missing or invalid at start. |
 | 3 | The API server denied access to Secrets, or, with `crds`, to the custom resources. |
 | 4 | Any other failure, such as the Secret caches not syncing. |

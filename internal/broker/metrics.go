@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"slices"
@@ -17,6 +18,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
 // otherLabel is the value of a label whose input is outside the fixed set it takes.
@@ -246,6 +248,17 @@ func (m *Metrics) ChatConnected(connection string, up bool) {
 		v = 1
 	}
 	m.chatUp.WithLabelValues(connection).Set(v)
+}
+
+// ConnectionRemoved is told that the ChatConnection named connection ("namespace/name") is not served by this broker: it was taken out of
+// the config or out of the set the broker serves, or it was stopped as a second connection of a Slack app another connection uses. It deletes the
+// series the connection has: agentkourier_chat_connected, which would otherwise say 0 for a connection that is not served, and the ones that
+// carry its name in the telemetry (telemetry.ForgetConnection). It is the one place that lists them, so a series that gains a connection label is
+// deleted here. A connection that restarts, or is stopped for its credentials, is still served and keeps its series. A connection with no series
+// is no error.
+func (m *Metrics) ConnectionRemoved(ctx context.Context, connection string) {
+	m.chatUp.DeleteLabelValues(connection)
+	telemetry.ForgetConnection(ctx, connection)
 }
 
 // Leader sets agentkourier_leader: 1 once this replica does Agent Kourier's work, 0 while it waits to.

@@ -76,7 +76,7 @@ func RunPlatform(ctx context.Context, runner PlatformRunner, sink chat.Sink, p R
 			return stopped(ctx)
 		}
 		if v := runner.Classify(chat.OpOther, err); v.Class == chat.FatalAuth {
-			return fmt.Errorf("%w: %s", ErrSlackAuth, v.Code)
+			return &authRejected{code: v.Code}
 		}
 		if now().Sub(started) >= reset {
 			pause = min(base, limit)
