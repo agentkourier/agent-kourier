@@ -125,6 +125,35 @@ func TestResolvePerObject(t *testing.T) {
 					Message: "spec.chat.connectionRef: " + conn + " generation 7 is invalid, with no earlier generation to serve"},
 			},
 			nil},
+		{"a backend in the Binding's own namespace, whose newest generation is invalid, tells its owner the problems and which limit is in force",
+			func(s *Set) {
+				s.AgentBackends[0].Namespace = "sre"
+				s.AgentBackends[0].Spec.AllowedNamespaces = nil
+				s.AgentBackends[0].Spec.Agents = &v1alpha1.AgentNamespaces{Namespaces: []string{"payments"}}
+				for i := range s.Bindings {
+					s.Bindings[i].Spec.Agent.BackendRef.Namespace = ""
+				}
+				s.Invalid = []Invalid{{Kind: KindAgentBackend, Namespace: "sre", Name: "kagent-pilot", Generation: 5, Served: 4, Message: "spec.url: required"}}
+			},
+			[]Rejection{
+				{Namespace: "sre", Name: "chat-only", Reason: ReasonAgentNamespaceNotAllowed, Generation: 2,
+					Message: "spec.agent.namespace: AgentBackend sre/kagent-pilot does not allow agents in namespace kagent (the limit is that of the generation being served: AgentBackend sre/kagent-pilot generation 5 is invalid, serving generation 4: spec.url: required)"},
+				{Namespace: "sre", Name: "sre-alerts", Reason: ReasonAgentNamespaceNotAllowed, Generation: 2,
+					Message: "spec.agent.namespace: AgentBackend sre/kagent-pilot does not allow agents in namespace kagent (the limit is that of the generation being served: AgentBackend sre/kagent-pilot generation 5 is invalid, serving generation 4: spec.url: required)"},
+			},
+			nil},
+		{"a backend that was deleted and is held leaves a Binding out for its limit and says so",
+			func(s *Set) {
+				s.AgentBackends[0].Spec.Agents = &v1alpha1.AgentNamespaces{Namespaces: []string{"payments"}}
+				s.Invalid = []Invalid{{Kind: KindAgentBackend, Namespace: "agent-kourier-system", Name: "kagent-pilot", Served: 4, Deleted: true}}
+			},
+			[]Rejection{
+				{Namespace: "sre", Name: "chat-only", Reason: ReasonAgentNamespaceNotAllowed, Generation: 2,
+					Message: "spec.agent.namespace: " + backend + " does not allow agents in namespace kagent (the limit is that of the generation being served: " + backend + " was deleted, serving generation 4)"},
+				{Namespace: "sre", Name: "sre-alerts", Reason: ReasonAgentNamespaceNotAllowed, Generation: 2,
+					Message: "spec.agent.namespace: " + backend + " does not allow agents in namespace kagent (the limit is that of the generation being served: " + backend + " was deleted, serving generation 4)"},
+			},
+			nil},
 		{"a connection that was deleted and is held says so",
 			func(s *Set) {
 				s.Invalid = []Invalid{{Kind: KindChatConnection, Namespace: "agent-kourier-system", Name: "slack-main", Served: 6, Deleted: true}}

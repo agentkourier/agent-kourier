@@ -257,7 +257,8 @@ spec:
   the check runs each time the broker reads the config, so setting or narrowing `agents` drops the Bindings that no longer match at the next read, and the others keep running. **On the files route** the whole config
   fails to resolve, so nothing is dropped: at start the broker exits with code 2 and serves nothing (the chart's `config.rollOnChange` restarts the pod when the ConfigMap changes, and with SQLite the old pod is already stopped), and on a reload the broker keeps serving
   every Binding under the last good config, which has the old limit or none, and sets `agentkourier_config_stale` to 1. The message names the AgentBackend and the agent namespace
-  and nothing else of the backend's spec. A Binding that the backend does not let in at all (`allowedNamespaces`) is told only `NamespaceNotAllowed`.
+  and nothing else of the backend's spec. When the AgentBackend's newest generation is invalid, or it was deleted and is held, it adds that the limit is that of the generation being served; the problems of an
+  invalid generation go only to a Binding in the AgentBackend's own namespace. A Binding that the backend does not let in at all (`allowedNamespaces`) is told only `NamespaceNotAllowed`.
 - **Setting nothing is refused.** An `agents` value that allows no namespace (no `sameNamespace: true` and no `namespaces`) would reject every Binding, so the object is invalid. Leave `agents` out to impose no limit.
   `namespaces` holds at most 256 entries ([Limits](../reference/limits.md)).
 - **An older broker ignores it.** On custom resources a broker from before the field does not know it and serves the Bindings with no limit ([a broker older than its CRDs](config-routes.md#unknown-fields)),

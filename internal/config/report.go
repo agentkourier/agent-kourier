@@ -128,8 +128,10 @@ func CapMessage(s string) string {
 // naming the reason: its own spec (InvalidSpec), its backend (BackendRejected) or its connection (ConnectionRejected). A
 // Binding that is left out for a reference that is not found, where the target exists but is refused, has the Rejection
 // with that reason instead of NotFound. A Binding that is refused and has no last good generation is left out, and is
-// rejected as InvalidSpec. A Binding left out by the agents limit of a backend whose newer generation is refused says that the
-// limit is the served generation's.
+// rejected as InvalidSpec. A Binding left out by the agents limit of a backend whose newest generation is refused, or that was
+// deleted and is held, has the sentence "(the limit is that of the generation being served: <the object's description>)" added to
+// its message: the description says which generation is invalid and which is served, and holds the problems found only when the
+// Binding is in the backend's own namespace.
 func resolvePerObject(set *Set) (*Snapshot, []Rejection) {
 	invalid := make(map[identity]Invalid, len(set.Invalid))
 	for _, inv := range set.Invalid {

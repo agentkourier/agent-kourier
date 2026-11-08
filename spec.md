@@ -428,7 +428,9 @@ Binding which may use the backend may name). Left out, a Binding may name an age
 `agent.namespace` must be its own namespace, with `sameNamespace`, or listed; any other Binding is rejected with the
 resolution reason `AgentNamespaceNotAllowed` at `spec.agent.namespace`, in the same way as `NamespaceNotAllowed` (CRs: not
 served and `Accepted=False`; files: the load fails). The message names the AgentBackend and the agent namespace and nothing
-else of the backend, and a Binding the backend's `allowedNamespaces` does not admit is told only `NamespaceNotAllowed`. A value that
+else of the backend's spec, except that when the backend's newest generation is invalid, or it was deleted and is held, the
+CR source adds that the limit is that of the generation being served, with the problems of the invalid generation only for a
+Binding in the backend's own namespace. A Binding the backend's `allowedNamespaces` does not admit is told only `NamespaceNotAllowed`. A value that
 allows nothing is invalid, and so is the field on an `a2a` backend, where the URL names the agent and `agent.namespace` is never sent.
 
 Ownership split: the platform team owns `AgentBackend` and `ChatConnection`. Application
