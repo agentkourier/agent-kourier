@@ -307,6 +307,10 @@ func (r *Reloader) buildPerObject(ctx context.Context, set *Set, fp string) *pub
 		return cmp.Or(cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name))
 	})
 	pub.report.Rejections, pub.report.Invalid = rejections, invalid
+	pub.report.UnservedConnections = slices.Clone(set.UnservedConnections)
+	slices.SortFunc(pub.report.UnservedConnections, func(a, b UnservedConnection) int {
+		return cmp.Or(cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name))
+	})
 	return pub
 }
 
