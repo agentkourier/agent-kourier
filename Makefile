@@ -4,7 +4,7 @@ LDFLAGS := -X main.version=$(VERSION)
 LINT    := go tool golangci-lint
 
 .DEFAULT_GOAL := help
-.PHONY: help fmt lint test test-race test-testhooks test-scripts test-postgres lint-workflows security security-govulncheck security-gitleaks security-image-scan build tidy crds crd-corpus image image-testhooks image-check release-image e2e-fast-up e2e-fast e2e-fast-down e2e-full-up e2e-full-down e2e-full e2e-down e2e-crs-scenarios e2e-crs-migration sandbox-up sandbox-down sandbox-heal sandbox-alert
+.PHONY: help fmt lint test test-race test-testhooks test-scripts test-postgres lint-workflows security security-govulncheck security-gitleaks security-image-scan build tidy crds crd-corpus image image-testhooks image-check release-image e2e-fast-up e2e-fast e2e-fast-down e2e-full-up e2e-full-down e2e-full e2e-down e2e-crs-scenarios e2e-crs-migration e2e-two-apps sandbox-up sandbox-down sandbox-heal sandbox-alert
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z0-9-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -79,7 +79,7 @@ image-check: image image-testhooks ## Prove the production image's binary lacks 
 release-image: ## Build the multi-arch release image to bin/release (VERSION=vX.Y.Z); PUSH=1 REGISTRY=<repo> CHART_REGISTRY=oci://<repo> also pushes; see RELEASING.md
 	VERSION="$(VERSION)" REGISTRY="$(REGISTRY)" CHART_REGISTRY="$(CHART_REGISTRY)" PUSH="$(PUSH)" hack/release/release.sh
 
-e2e-fast-up: ## Bring up the fast E2E tier (kind, Alertmanager, fake Slack, stub agent, sink); E2E_STORE=postgres runs Agent Kourier on Postgres, with E2E_REPLICAS=2 on two replicas (S16, failover); E2E_CONFIG_SOURCE=crds reads the config from custom resources, not the ConfigMap
+e2e-fast-up: ## Bring up the fast E2E tier (kind, Alertmanager, fake Slack, stub agent, sink); E2E_STORE=postgres runs Agent Kourier on Postgres, with E2E_REPLICAS=2 on two replicas (S16, failover); E2E_CONFIG_SOURCE=crds reads the config from custom resources, not the ConfigMap, and with E2E_TWO_APPS=1 serves a team's Slack app beside the platform's (the MC_ tests)
 	hack/kind/up-fast.sh
 
 e2e-fast: ## Run the E2E tests in the fast tier, as a Job (the tier must be up)
@@ -105,6 +105,9 @@ e2e-crs-scenarios: ## The custom resource scenarios that need kubectl or Helm: u
 
 e2e-crs-migration: ## Move the fast tier between the ConfigMap and the custom resources with Helm, and back, with a session in flight (the tier up on Postgres, two replicas, files)
 	hack/kind/crs-migration.sh
+
+e2e-two-apps: ## Take a team off the platform's admission list with Helm, and put it back (the MC_ phases the Job cannot run): the fast tier up on E2E_TWO_APPS=1 E2E_CONFIG_SOURCE=crds
+	hack/kind/two-apps.sh
 
 sandbox-up: ## Dogfood tier on the full tier: Agent Kourier on a real Slack, a read-only SRE agent on a real model, seeded faults (secrets file: SANDBOX_ENV)
 	hack/kind/sandbox/up.sh

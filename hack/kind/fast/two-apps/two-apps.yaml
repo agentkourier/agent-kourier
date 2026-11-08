@@ -1,0 +1,107 @@
+# The fast tier's second Slack app (E2E_TWO_APPS=1 in up-fast.sh, on custom resources): a team, team-a, that brings its own Slack app to the broker the
+# way a team does, and the platform's Binding beside it. lib.sh's deploy_two_apps applies this file and makes the Secrets it names (fake constants: the
+# Slack tokens of the app ATEAMA that the fake Slack hosts, and an agent token the stub agent accepts). test/e2e's MC_ tests drive it; its channels, apps
+# and names are pinned by test/kindmanifests.
+#
+# The namespaces team-a, team-b and team-c are made by deploy_two_apps first, with team-a's Secrets. They are the platform's admission list
+# (hack/kind/two-apps-values.yaml): team-a's connection is in the tier from the start, and team-b and team-c are empty, for the scenarios that add a
+# connection while the broker runs.
+# What a team must do for the broker to read its Secrets: a Role in its own namespace that names them, bound to the broker's ServiceAccount. The
+# platform grants a team nothing.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: agent-kourier-reads-team-a, namespace: team-a}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [slack-team-a, team-a-agent-token]
+    verbs: [list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: agent-kourier-reads-team-a, namespace: team-a}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agent-kourier-reads-team-a}
+subjects: [{kind: ServiceAccount, name: agent-kourier, namespace: agent-kourier}]
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: team-a, namespace: team-a}
+spec:
+  platform: slack
+  credentialsSecretRef: {name: slack-team-a}
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: agents, namespace: team-a}
+spec:
+  dialect: kagent-v1
+  url: http://stubagent.e2e.svc.cluster.local:8080
+---
+# team-a's Binding: channel CMCTEAMA, answered by the stub's scenario-gated, which says "No gate named, not holding." to any text and holds on a gate
+# the text names ("gate:G"), so that one Binding serves both the plain answer and the held turn of a failover.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: team-a, namespace: team-a}
+spec:
+  agent:
+    backendRef: {name: agents}
+    namespace: kagent
+    name: scenario-gated
+  identity:
+    userId: team-a
+    tokenSecretRef: {name: team-a-agent-token}
+  chat:
+    connectionRef: {name: team-a}
+    channel: CMCTEAMA
+    output: live
+---
+# The platform's Binding on the tier's own connection (slack-fast, the default app of the fake Slack), the same agent, in a channel of its own.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: mc-platform, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {namespace: agent-kourier, name: agents}
+    namespace: kagent
+    name: scenario-gated
+  identity:
+    userId: agent-kourier-fast
+    tokenSecretRef: {name: agent-kourier-agent-token}
+  chat:
+    connectionRef: {namespace: agent-kourier, name: slack-fast}
+    channel: CMCPLATFORM
+    output: live
+---
+# The same two Bindings with the output final: the reply is one post through the outbox when the turn ends, not a live stream, which is the path a leader
+# that is killed with a turn running leaves to the next leader (TestMC_OutboxRowsPostThroughTheirOwnAppAfterAKill). A channel each.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: team-a-final, namespace: team-a}
+spec:
+  agent:
+    backendRef: {name: agents}
+    namespace: kagent
+    name: scenario-gated
+  identity:
+    userId: team-a
+    tokenSecretRef: {name: team-a-agent-token}
+  chat:
+    connectionRef: {name: team-a}
+    channel: CMCTEAMAFINAL
+    output: final
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: mc-platform-final, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {namespace: agent-kourier, name: agents}
+    namespace: kagent
+    name: scenario-gated
+  identity:
+    userId: agent-kourier-fast
+    tokenSecretRef: {name: agent-kourier-agent-token}
+  chat:
+    connectionRef: {namespace: agent-kourier, name: slack-fast}
+    channel: CMCPLATFINAL
+    output: final

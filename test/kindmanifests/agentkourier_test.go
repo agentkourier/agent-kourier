@@ -339,7 +339,7 @@ func TestTheRunnerJobRunsEveryE2ETest(t *testing.T) {
 		t.Errorf("found %d e2e tests; the scan is not looking at them", seen)
 	}
 	// Each family the files hold has a test the pattern selects, named here: a family that is dropped from the pattern fails even if the scan misses it.
-	for _, name := range []string{"TestSmoke", "TestFault_X", "TestS1_X", "TestAX_X", "TestA2A_APlainPodThatRestartedAnswersAThreadFromAFreshContext", "TestVerify_BindingsThatCannotBeServedAreNotReadyAndTheLeaderSaysWhy", "TestCR_X"} {
+	for _, name := range []string{"TestSmoke", "TestFault_X", "TestS1_X", "TestAX_X", "TestA2A_APlainPodThatRestartedAnswersAThreadFromAFreshContext", "TestVerify_BindingsThatCannotBeServedAreNotReadyAndTheLeaderSaysWhy", "TestCR_X", "TestMC_X"} {
 		if !re.MatchString(name) {
 			t.Errorf("the Job's pattern %q does not select %s, so it would never run", pattern, name)
 		}
