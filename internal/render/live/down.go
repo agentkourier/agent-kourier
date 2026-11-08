@@ -82,11 +82,12 @@ func (s downStream) fail(what string) error { return fmt.Errorf("live: stream %s
 // A Ref made while the connection was down does not name the platform, and is made again by the platform that runs it. A stream that
 // the earlier runtime started is not continued: the new platform's stream of the message is blind to what the old one sent (the
 // adapter's StreamAt), so the turn does what it does for a stream it lost (takeOver): the new platform stops the stream, and the
-// message is edited to the whole text, with the steps. The outbox row of the stream has the message's ts already. It is the goroutine's.
-func (u *Run) reresolve(ctx context.Context, ref *chat.Ref) {
+// message is edited to the whole text, with the steps. The outbox row of the stream has the message's ts already. It returns the
+// error of the lookup, nil if it worked. It is the goroutine's.
+func (u *Run) reresolve(ctx context.Context, ref *chat.Ref) error {
 	p, err := u.cfg.Platforms.Platform(u.turn.Connection)
 	if err != nil {
-		return
+		return err
 	}
 	u.platform, u.caps = p, p.Capabilities()
 	u.busy.follow(p)
@@ -97,7 +98,8 @@ func (u *Run) reresolve(ctx context.Context, ref *chat.Ref) {
 		*ref = u.stream.Ref()
 		u.streaming, u.adopted, u.adoptStop, u.sent = false, true, true, ""
 		u.cfg.Logger.WarnContext(ctx, "live: the stream was started on a runtime of the connection that is gone; it is stopped and the message edited to the whole text", "connection", u.turn.Connection, "channel", u.turn.Channel)
-		return
+		return nil
 	}
 	u.cfg.Logger.InfoContext(ctx, "live: the turn's connection runs; the turn goes on through its platform", "connection", u.turn.Connection, "channel", u.turn.Channel)
+	return nil
 }

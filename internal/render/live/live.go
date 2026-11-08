@@ -907,10 +907,15 @@ func (u *Run) run(ctx context.Context) {
 				// The platform the run holds is not the connection's now: none ran the connection when the turn started, or the runtime
 				// it holds was retired, or its credential was rejected after a restart halted it, which no report can end for the
 				// runtime. The connection may run on another platform by the next try.
+				waiting := down
 				if down || verdict.Class == chat.FatalAuth {
-					u.reresolve(ctx, &ref)
+					// A rejected credential whose connection is down is the gap of a restart: the old runtime is out of the table
+					// and the new one is not in it yet, so the try is a wait for the connection, not an attempt.
+					if lookup := u.reresolve(ctx, &ref); verdict.Class == chat.FatalAuth && errors.Is(lookup, chat.ErrConnectionDown) {
+						waiting = true
+					}
 				}
-				if down {
+				if waiting {
 					// Waiting for the connection is no attempt, as a rate limit is none: a restart of a connection takes longer than
 					// Attempts tries. It is bounded by the final's deadline (sleep) and by the turn's end.
 					if !downLogged {

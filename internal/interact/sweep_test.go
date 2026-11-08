@@ -729,6 +729,13 @@ func TestSweepLeavesAnInteractionOfAConnectionThatIsDownUntilItRuns(t *testing.T
 		t.Errorf("updates %q; want none: ix-up was never posted, and ix-down waits", got)
 	}
 
+	if err := sw.Sweep(t.Context()); err != nil { // and again: the operator is told once
+		t.Fatal(err)
+	}
+	if got := strings.Count(r.logs.String(), "level=WARN msg=\"interact: the chat connection of interactions that are due is not running"); got != 1 {
+		t.Errorf("%d warnings that the connection is not running; want one, naming it:\n%s", got, r.logs.String())
+	}
+
 	running[key.Connection] = r.upd
 	if err := sw.Sweep(t.Context()); err != nil {
 		t.Fatal(err)

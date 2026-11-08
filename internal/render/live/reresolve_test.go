@@ -242,7 +242,7 @@ func TestATurnThatStartsWhileItsConnectionIsDownFinishesThroughTheRuntimeThatCom
 		row, err := a.store.GetOutbox(t.Context(), outbox.ID("turn-1", store.OutboxReply))
 		return err == nil && row.Payload != ""
 	})
-	time.Sleep(100 * time.Millisecond) // many tries, far more than Attempts
+	waitFor(t, "many tries, far more than Attempts", func() bool { return a.table.asked.Load() > 5 })
 	a.table.set(appConn, rt)
 	waitFor(t, "the first words to be posted by the connection that runs", func() bool { return len(a.fake.Messages()) == 1 })
 
@@ -320,7 +320,7 @@ func TestAStreamIsLeftForTheRuntimeThatComesUpAfterTheConnectionWasRemoved(t *te
 	a.table.mu.Unlock()
 	run.Handle(text("a", "Hello world"))
 	run.Handle(agent.FinalEvent{})
-	time.Sleep(100 * time.Millisecond) // many tries, far more than Attempts
+	waitFor(t, "many tries, far more than Attempts", func() bool { return a.table.asked.Load() > 5 })
 	select {
 	case <-run.Done():
 		t.Fatal("the turn gave up while its connection was down, inside the final deadline")
@@ -393,12 +393,43 @@ func TestARecoveredTurnWhoseMessageWasNamedWhileItsConnectionWasDownEditsItOnceI
 	turn.Recovered = true
 	run := a.live.Start(t.Context(), turn)
 	run.Handle(agent.FinalEvent{}) // the turn ended with nothing to show
-	time.Sleep(50 * time.Millisecond)
+	waitFor(t, "the turn to have tried while the connection is down", func() bool { return a.table.asked.Load() >= 2 })
 	a.table.set(appConn, rt)
 	a.end(t, run)
 
 	msgs := a.fake.Messages()
 	if len(msgs) != 1 || msgs[0].Streaming || msgs[0].Updates != 1 {
 		t.Errorf("the app holds %+v; want the one message stopped and edited once", msgs)
+	}
+}
+
+// TestATurnWhoseTokenWasRevokedWaitsOutTheGapOfTheRestart: the old runtime is out of the table and the new one is not in it yet, so the
+// lookup that follows the rejected credential says the connection is down. That is a wait for the connection, as any down is, and not
+// an attempt: the final text outlasts more tries than Attempts, and goes out through the runtime that comes up.
+func TestATurnWhoseTokenWasRevokedWaitsOutTheGapOfTheRestart(t *testing.T) {
+	a, old := newApp(t, live.Config{Attempts: 2, FinalDeadline: 20 * time.Second}, true)
+	run := a.live.Start(t.Context(), a.turn(v1alpha1.OutputLive, ""))
+	run.Handle(text("a", "one"))
+	waitFor(t, "the first words to be posted", func() bool { return len(a.fake.Messages()) == 1 })
+
+	old.revoked.Store(true)
+	a.table.mu.Lock()
+	delete(a.table.m, appConn)
+	a.table.mu.Unlock()
+	run.Handle(text("a", "one and two"))
+	run.Handle(agent.FinalEvent{})
+	waitFor(t, "many tries, far more than Attempts", func() bool { return a.table.asked.Load() > 5 })
+	select {
+	case <-run.Done():
+		t.Fatal("the turn gave up in the gap of a restart, inside the final deadline")
+	default:
+	}
+	fresh := a.newRuntime()
+	a.table.set(appConn, fresh)
+	a.end(t, run)
+
+	a.only(t, "one and two")
+	if fresh.updates.Load() == 0 {
+		t.Error("no edit went through the runtime that runs on the new token")
 	}
 }

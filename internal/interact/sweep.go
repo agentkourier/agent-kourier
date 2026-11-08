@@ -130,6 +130,8 @@ type Sweeper struct {
 	cfg SweepConfig
 	mu  sync.Mutex     // one sweep at a time
 	try map[string]int // sweeps that have failed at a step, by interaction; guarded by mu
+	// downSaid is the connections whose due interactions were left because they do not run, for which a WARN was logged; guarded by mu.
+	downSaid map[string]bool
 	// audited is the timeout decision audit written before a tool-approval denial reaches the
 	// session. It is process-local because a restart may write the audit again while the row is
 	// still pending; the interaction row remains the durable first-complete decision point.
@@ -171,7 +173,7 @@ func NewSweeper(cfg SweepConfig) (*Sweeper, error) {
 	if cfg.Grace <= 0 {
 		cfg.Grace = 5 * time.Second
 	}
-	return &Sweeper{cfg: cfg, try: map[string]int{}, audited: map[string]timeoutAudit{}, taken: map[string]pauseEnd{}, undelivered: map[string]*undelivered{}}, nil
+	return &Sweeper{cfg: cfg, try: map[string]int{}, downSaid: map[string]bool{}, audited: map[string]timeoutAudit{}, taken: map[string]pauseEnd{}, undelivered: map[string]*undelivered{}}, nil
 }
 
 // Run sweeps at once and then every Interval until ctx ends, and returns its error.
@@ -250,13 +252,18 @@ func (s *Sweeper) Sweep(ctx context.Context) error {
 // denied and the agent goes on, and its output is rendered into the connection's thread, which no platform can reach. The prompt's
 // edit and the notice are for that thread too. The interaction stays pending, and is timed out by the first sweep after the
 // connection runs (its deadline has passed already); the turn stays paused until then, as a connection's turns are not resumed until
-// it runs (session.Manager.Recover). A platform that cannot be had for another reason is not waited for: the timeout goes on, and its
+// it runs (session.Manager.Recover). It says so once for each connection, at WARN, until a due interaction of it finds it running.
+// A platform that cannot be had for another reason is not waited for: the timeout goes on, and its
 // edit fails and is tried again as before.
 func (s *Sweeper) down(ctx context.Context, row store.Interaction) bool {
 	if _, err := s.cfg.Updaters.Platform(row.Key.Connection); !errors.Is(err, chat.ErrConnectionDown) {
+		delete(s.downSaid, row.Key.Connection) // it runs: a later outage is said again
 		return false
 	}
-	s.cfg.Logger.DebugContext(ctx, "interact: the connection of an interaction that is due is not running; its timeout waits for it", "interaction", row.ID, "connection", row.Key.Connection)
+	if !s.downSaid[row.Key.Connection] {
+		s.downSaid[row.Key.Connection] = true
+		s.cfg.Logger.WarnContext(ctx, "interact: the chat connection of interactions that are due is not running; they are not timed out until it runs", "connection", row.Key.Connection, "interaction", row.ID)
+	}
 	return true
 }
 
