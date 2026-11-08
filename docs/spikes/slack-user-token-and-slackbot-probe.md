@@ -8,9 +8,10 @@ event. Neither assumption about these senders had been measured.
 ## Setup
 
 - The sandbox workspace, in a public channel that the mentioned app (Agent Kourier, a Socket Mode app) is a member of.
-- Three Socket Mode listeners on the mentioned app recorded every envelope raw and acknowledged it. No Agent Kourier
-  broker was connected to the app (no kind tier was up, and the `hello` frames counted one to two connections, all
-  ours), so every event of every case was recorded once.
+- Three Socket Mode listeners on the mentioned app, connected at once, recorded every envelope raw and acknowledged it.
+  Each `hello` frame counts the connections at the moment it is sent (1, 1 and 2 here, as the three came up). No Agent
+  Kourier broker was connected to the app (no kind tier was up), and every case's events arrived once, at one of the
+  three.
 - **User token:** a new app made for this probe from a manifest with one user scope, `chat:write`, no bot scope, no
   bot user, installed by a person of the workspace. `auth.test` on its `xoxp-` token returns the person's user ID and
   no `bot_id`. The app posted with `chat.postMessage` (default `as_user` for a user token), `chat.scheduleMessage` and
