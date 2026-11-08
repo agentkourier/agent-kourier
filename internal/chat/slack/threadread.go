@@ -60,7 +60,7 @@ func (c *Client) readThread(ctx context.Context, conn, channel, threadTS, after,
 		return nil, nil, 0, nil
 	}
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.ThreadBetween")
-	defer func() { finishChat(ctx, op, "ThreadBetween", err) }()
+	defer func() { c.finishChat(ctx, op, "ThreadBetween", err) }()
 	auth, err := c.api.AuthTestContext(ctx)
 	if err != nil {
 		return nil, nil, 0, c.scrub("auth.test", err)

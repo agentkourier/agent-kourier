@@ -23,7 +23,7 @@ func TestTheStoreKeepsItsOptionalInterfaces(t *testing.T) {
 		t.Errorf("Lead with no holder = %v; want store.ErrInvalid", err)
 	}
 	if _, ok := s.(interface {
-		RegisterMetrics(prometheus.Registerer) error
+		RegisterMetrics(prometheus.Registerer, func() []string) error
 	}); !ok {
 		t.Error("the store has no RegisterMetrics")
 	}

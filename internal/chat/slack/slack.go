@@ -27,6 +27,11 @@ import (
 type Config struct {
 	// BotToken (xoxb-) calls the Web API; AppToken (xapp-) opens the Socket Mode connection.
 	BotToken, AppToken secret.Value
+	// Connection is the ChatConnection ("namespace/name") the client belongs to: the value of the connection label of the series it
+	// records (agentkourier_chat_api_calls_total, agentkourier_slack_events_shed_total and agentkourier_slack_ack_duration_seconds), which
+	// is how a broker that serves several connections tells their adapters apart. Empty for a client that belongs to no connection, as
+	// in the dry run.
+	Connection string
 	// APIURL is the Web API base URL with a trailing slash; Slack's by default. A test sets the fake's.
 	APIURL string
 	Logger *slog.Logger // slog.Default() if nil
@@ -58,6 +63,7 @@ type Config struct {
 type Client struct {
 	api      *slackgo.Client
 	log      *slog.Logger
+	conn     string       // Config.Connection
 	bot, app secret.Value // kept as Values: they are revealed only to scrub them from an error
 	now      func() time.Time
 	ttl      time.Duration
@@ -102,7 +108,7 @@ func New(cfg Config) *Client {
 		cfg.Now = time.Now
 	}
 	return &Client{
-		api: slackgo.New(cfg.BotToken.Reveal(), opts...), log: cmp.Or(cfg.Logger, slog.Default()), bot: cfg.BotToken, app: cfg.AppToken,
+		api: slackgo.New(cfg.BotToken.Reveal(), opts...), log: cmp.Or(cfg.Logger, slog.Default()), conn: cfg.Connection, bot: cfg.BotToken, app: cfg.AppToken,
 		now: cfg.Now, ttl: cmp.Or(cfg.UserTTL, time.Hour), timeout: cmp.Or(cfg.UserTimeout, 5*time.Second), max: cmp.Or(cfg.UserCacheSize, 1000),
 		users: map[string]cachedUser{}, pageSize: cmp.Or(cfg.PageLimit, 200),
 		membersPage: cmp.Or(cfg.PageLimit, membersPage), authz: positiveOr(cfg.AuthzTimeout, authzTimeout),
@@ -206,7 +212,7 @@ type shedLog struct {
 // shed counts an event that the lanes would not take, which is left unacknowledged, and logs it (shedLog) with where it was
 // and what kind of envelope it was, and never what it said.
 func (c *Client) shed(ctx context.Context, l *shedLog, reason, channel string, ev socketmode.Event) {
-	telemetry.Count(ctx, "agentkourier_slack_events_shed_total", reason)
+	telemetry.Count(ctx, "agentkourier_slack_events_shed_total", reason, c.conn)
 	if now := c.now(); l.last.IsZero() || now.Sub(l.last) >= shedLogEvery {
 		c.log.WarnContext(ctx, "slack: an event was left unacknowledged for Slack to send again; the adapter holds as many events as it may",
 			"reason", reason, "channel", channel, "type", ev.Type, "alsoShedSinceLastLine", l.suppressed)
@@ -238,7 +244,7 @@ func (c *Client) handle(ctx context.Context, smc *socketmode.Client, me self, si
 	ctx, op := telemetry.Start(ctx, "agentkourier.slack.envelope", attribute.String("agentkourier.platform", "slack"))
 	outcome := "withheld"
 	defer func() {
-		telemetry.Observe(ctx, "agentkourier_slack_ack_duration_seconds", time.Since(received), outcome)
+		telemetry.Observe(ctx, "agentkourier_slack_ack_duration_seconds", time.Since(received), outcome, c.conn)
 		op.FinishOutcome(nil, outcome)
 	}()
 	switch ev.Type {

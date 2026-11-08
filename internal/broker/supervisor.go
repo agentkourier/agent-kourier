@@ -49,9 +49,10 @@ type supervisor struct {
 	changes *atomic.Uint64
 	// gone is told the connection of a runtime that was stopped, so that the parts that keep state for it let go (the outbox's lane).
 	gone func(conn string)
-	// removed is told a connection that the Snapshot no longer serves: it is not restarting, it is away. The parts that keep a metric series per
-	// connection delete it (Metrics.ConnectionRemoved). Nil is no one. Told once, after the runtime has stopped.
-	removed func(conn string)
+	// removed is told a connection that is not served: the Snapshot no longer has it, or it was stopped as a second connection of a Slack app
+	// (once, when that begins). It is not told of a restart, nor of a connection stopped for its credentials, which are still served. The
+	// parts that keep a metric series per connection delete it (Metrics.ConnectionRemoved). Nil is no one. Told after the runtime has stopped.
+	removed func(ctx context.Context, conn string)
 	// recover is told a connection whose runtime has started, so that the turns that were left while it did not run are taken up
 	// (session.Manager.RecoverConnection). It is asked again at the next pass if it returned an error. Nil is no one.
 	recover func(ctx context.Context, conn string) error
@@ -134,7 +135,7 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 		}
 		s.host.table.clearDown(name)
 		if s.removed != nil {
-			s.removed(name)
+			s.removed(ctx, name)
 		}
 		delete(s.teams, name)
 		delete(s.said, name)
@@ -221,9 +222,15 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 		}
 		if st.id.known() {
 			if holder, taken := claimed[st.id.App]; taken {
+				newly := !st.refused
 				st.refused = true
 				refused[name] = refusedMessage
 				s.stop(ctx, name, st, "it is a second connection of the Slack app that "+holder+" uses")
+				// Not served from here, so the series of its earlier run would only go stale. Not only when this entry ran: a restart that
+				// ends in a refusal (its Secret now holds another app's tokens) made this entry fresh, and the run it replaced left series.
+				if newly && s.removed != nil {
+					s.removed(ctx, name)
+				}
 				s.say(ctx, name, "the ChatConnection is not served: it uses the same Slack app as the older ChatConnection "+holder+", and an app is served once", nil)
 				continue
 			}

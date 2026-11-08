@@ -24,7 +24,7 @@ func startObservedRun(t *testing.T, sk slack.Sink) (fake *fakeslack.Server, h *t
 	fake = newFake(t)
 	h = telemetrytest.New(t)
 	logs = &syncBuffer{}
-	cfg := slack.Config{BotToken: secret.New(botToken), AppToken: secret.New(appToken), APIURL: fake.URL() + "/",
+	cfg := slack.Config{BotToken: secret.New(botToken), AppToken: secret.New(appToken), APIURL: fake.URL() + "/", Connection: intakeConn,
 		Logger: slog.New(slog.NewTextHandler(logs, nil))}
 	cancel, wait = runIn(h.Ctx, t, slack.New(cfg), sk)
 	waitConnected(t, fake)
@@ -148,7 +148,7 @@ func TestAnEventPastTheChannelBacklogIsLeftUnacknowledged(t *testing.T) {
 	}
 	// The other channels still work.
 	waitAck(t, fake, send(t, fake, onChannel("C2", "5.1", "other")))
-	for deadline := time.Now().Add(5 * time.Second); h.Counter(t, "agentkourier_slack_events_shed_total", map[string]string{"reason": "channel_backlog"}) < extra; time.Sleep(time.Millisecond) {
+	for deadline := time.Now().Add(5 * time.Second); h.Counter(t, "agentkourier_slack_events_shed_total", map[string]string{"reason": "channel_backlog", "connection": intakeConn}) < extra; time.Sleep(time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatalf("the shed events were not counted: %s", h.Exported(t))
 		}
@@ -160,7 +160,7 @@ func TestAnEventPastTheChannelBacklogIsLeftUnacknowledged(t *testing.T) {
 			t.Errorf("a shed event %s was acknowledged", id)
 		}
 	}
-	if got := h.Counter(t, "agentkourier_slack_events_shed_total", map[string]string{"reason": "channel_backlog"}); got != extra {
+	if got := h.Counter(t, "agentkourier_slack_events_shed_total", map[string]string{"reason": "channel_backlog", "connection": intakeConn}); got != extra {
 		t.Errorf("shed events counted = %v, want %d", got, extra)
 	}
 	log := logs.String()

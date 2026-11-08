@@ -381,3 +381,52 @@ func TestAPlatformResolvedBeforeTheConnectionStoppedFailsFastAfter(t *testing.T)
 		t.Errorf("the replaced runtime's platform saw %d calls after it was closed; want none", n)
 	}
 }
+
+// A connection stopped because an older connection of its Slack app turned up is not served, and its agentkourier_chat_connected series is deleted,
+// once, and not brought back by the passes that find it refused again, even with its Secret unreadable meanwhile. So is one that restarts into a
+// refusal. The older connection's series stays.
+func TestARefusedConnectionsChatConnectedSeriesIsDeleted(t *testing.T) {
+	w := newSupWorld(t)
+	app := appIdentity{App: "AAPP", Team: "T1", User: "UAPP", Bot: "BAPP"}
+	w.ids["tok-old"], w.ids["tok-young"] = app, app
+	has := func(conn string) bool {
+		return slices.ContainsFunc(samples(t, w.host.metrics), func(s string) bool { return strings.HasPrefix(s, connectedSeries(conn)) })
+	}
+	old, young := team("team-a/slack", 1, "tok-old", 1), team("team-b/slack", 1, "tok-young", 2)
+
+	w.reconcile(young)
+	w.eventually("the younger connection to run", func() bool { return w.live.Load() == 2 })
+	if !has("team-b/slack") {
+		t.Fatal("the running connection has no series")
+	}
+	w.reconcile(old, young) // the older connection of the app turns up
+	if has("team-b/slack") {
+		t.Errorf("samples = %v; want the series of the refused connection deleted", samples(t, w.host.metrics))
+	}
+	if !has("team-a/slack") || !has(ownName) {
+		t.Errorf("samples = %v; want the served connections' series kept", samples(t, w.host.metrics))
+	}
+	unreadable := unready("team-b/slack", 1, 2)
+	w.reconcile(old, unreadable) // refused, and its Secret cannot be read just now
+	w.reconcile(old, young)
+	if has("team-b/slack") {
+		t.Errorf("samples = %v; a pass that found the refused connection again brought its series back", samples(t, w.host.metrics))
+	}
+	w.mu.Lock()
+	removed := slices.Clone(w.removed)
+	w.mu.Unlock()
+	if !slices.Equal(removed, []string{"team-b/slack"}) {
+		t.Errorf("removed = %v; want the refused connection once, and not the ones that restarted or were rejected", removed)
+	}
+
+	// A connection that restarts into a refusal: its Secret now holds the tokens of the older connection's app.
+	w2 := newSupWorld(t)
+	w2.ids["tok-a"], w2.ids["tok-b"], w2.ids["tok-b2"] = appIdentity{App: "AA", Team: "T1", User: "UA", Bot: "BA"}, appIdentity{App: "AB", Team: "T1", User: "UB", Bot: "BB"}, appIdentity{App: "AA", Team: "T1", User: "UA", Bot: "BA"}
+	a, b := team("team-a/slack", 1, "tok-a", 1), team("team-b/slack", 1, "tok-b", 2)
+	w2.reconcile(a, b)
+	w2.eventually("both connections to run", func() bool { return w2.live.Load() == 3 })
+	w2.reconcile(a, team("team-b/slack", 2, "tok-b2", 2))
+	if slices.ContainsFunc(samples(t, w2.host.metrics), func(s string) bool { return strings.HasPrefix(s, connectedSeries("team-b/slack")) }) {
+		t.Errorf("samples = %v; want the series of the connection that restarted into a refusal deleted", samples(t, w2.host.metrics))
+	}
+}

@@ -162,7 +162,7 @@ func TestStaleEpochIsDeposed(t *testing.T) {
 		t.Errorf("the deposed hook ran %d times; want once", told.Load())
 	}
 	reg := prometheus.NewPedanticRegistry()
-	if err := a.RegisterMetrics(reg); err != nil {
+	if err := a.RegisterMetrics(reg, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := testutil.ToFloat64(a.a.deposed); got != 1 {

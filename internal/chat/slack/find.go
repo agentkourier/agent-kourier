@@ -32,7 +32,7 @@ const lookupSkew = 5 * time.Minute
 // that five minutes allows for the clock skew.
 func (c *Client) Find(ctx context.Context, channel, threadTS, outboxID string, since time.Time) (ts string, found bool, err error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.Find")
-	defer func() { finishChat(ctx, op, "Find", err) }()
+	defer func() { c.finishChat(ctx, op, "Find", err) }()
 	auth, err := c.api.AuthTestContext(ctx)
 	if err != nil {
 		return "", false, c.scrub("auth.test", err)
