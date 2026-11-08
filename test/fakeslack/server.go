@@ -154,7 +154,9 @@ type Server struct {
 
 	pingEvery    time.Duration
 	apps         []App             // the default app first; set by options, read-only after construction (apps.go)
+	tokenMu      sync.RWMutex      // guards tokens and retired once the Server runs (RotateTokens)
 	tokens       map[string]string // token to the AppID that owns it, built after the options
+	retired      map[string]string // token to the AppID it was rotated away from: refused with token_revoked, guarded by tokenMu
 	spread       bool              // set by WithSocketSpread, read-only after construction
 	strict       bool              // set by WithStrictMembership, read-only after construction
 	strictTokens bool              // set by WithStrictTokens, read-only after construction
@@ -171,6 +173,7 @@ type Server struct {
 	archived map[string]bool       // channels SetArchived marked archived, guarded by mu
 	dmOwner  map[string]string     // direct-message channel to the AppID it was opened with by DMApp, guarded by mu
 	revoked  map[string]bool       // AppIDs whose tokens SetRevoked revoked, guarded by mu
+	holds    map[string]*postHold  // AppIDs whose chat.postMessage calls HoldPosts holds, guarded by mu
 
 	noScope map[string]bool // methods SetMissingScope makes answer missing_scope, guarded by mu
 
@@ -280,6 +283,7 @@ func (s *Server) URL() string {
 // shuts down a Server started with New. Call it on a Server from NewHandler
 // too.
 func (s *Server) Close() {
+	s.releaseAllPosts()
 	s.sock.stop()
 	if s.srv != nil {
 		s.srv.Close()
@@ -298,6 +302,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case isControlPath(r.URL.Path):
 		s.control.ServeHTTP(w, r)
+		return
+	}
+	// A held post waits here, before it takes its turn, so that it holds up no other call.
+	if !s.waitPostHold(r) {
 		return
 	}
 	// Requests that queue events for the bot's own posts take turns, from
@@ -445,6 +453,9 @@ func (s *Server) authenticate(r *http.Request, prefix string) (App, string) {
 		return App{}, "not_authed"
 	case !strings.HasPrefix(token, prefix):
 		return App{}, "invalid_auth"
+	}
+	if s.isRetired(token) { // first: a token that was rotated away from is revoked, not unknown, whatever WithStrictTokens says of unowned ones
+		return App{}, "token_revoked"
 	}
 	app, ok := s.appForToken(token)
 	switch {

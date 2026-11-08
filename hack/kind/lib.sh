@@ -343,8 +343,9 @@ crds_held_by_release() {
 # as custom resources and the release upgraded with crds-values.yaml, so that the pod reads them and the ConfigMap is not mounted. The ConfigMap is still
 # made (a ConfigMap of a user's own is not touched by the move either), so that the tier can go back: running this again with files upgrades the release
 # to the ConfigMap route, and the custom resources stay in the cluster, unread, as the chart README says. Either way the config is the same files.
-# The Secrets are fake constants made here and never committed, and the agent token (Secret agent-kourier-agent-token) is the caller's to
-# make: it differs by tier. Needs HERE, ROOT, K, H.
+# The array AGENTKOURIER_CRDS_ARGS, if the caller set it, holds more helm arguments for the route upgrade of crds only (the platform's admission list of
+# the tier with two Slack apps: a value the ConfigMap route refuses). The Secrets are fake constants made here and never committed, and the agent
+# token (Secret agent-kourier-agent-token) is the caller's to make: it differs by tier. Needs HERE, ROOT, K, H.
 deploy_agentkourier() {
   local config dir source=${E2E_CONFIG_SOURCE:-files} values=${AGENTKOURIER_VALUES:-${ROOT}/charts/agent-kourier/ci/fast-values.yaml}
   require_config_source
@@ -383,9 +384,73 @@ deploy_agentkourier() {
       # file the CRDs refuse stops here with the apiserver's words.
       "${K[@]}" apply --dry-run=server -f "${config}" >/dev/null
       "${K[@]}" apply -f "${config}" >/dev/null
-      install_agentkourier "${values}" ${AGENTKOURIER_HELM_ARGS[@]+"${AGENTKOURIER_HELM_ARGS[@]}"} -f "${HERE}/crds-values.yaml"
+      install_agentkourier "${values}" ${AGENTKOURIER_HELM_ARGS[@]+"${AGENTKOURIER_HELM_ARGS[@]}"} -f "${HERE}/crds-values.yaml" ${AGENTKOURIER_CRDS_ARGS[@]+"${AGENTKOURIER_CRDS_ARGS[@]}"}
       ;;
   esac
+}
+
+# unsigned_jwt EMAIL: an unsigned JWT with an email claim, which is all the stub agent (-require-auth) asks of a bearer. A fake constant.
+unsigned_jwt() {
+  local header claims
+  header=$(printf %s '{"alg":"none"}' | base64 | tr -d '=\n' | tr '/+' '_-')
+  claims=$(printf %s "{\"email\":\"$1\"}" | base64 | tr -d '=\n' | tr '/+' '_-')
+  printf '%s.%s.' "${header}" "${claims}"
+}
+
+# fake_slack_app_connections APP_ID: how many Socket Mode clients of that app of the fake Slack are connected (/_control/apps), or nothing when it
+# could not be read. Asked from a throwaway pod in e2e, since the fake's control surface is published nowhere. Needs K, jq.
+fake_slack_app_connections() {
+  local pod=probe-apps-${RANDOM} out
+  out=$("${K[@]}" -n e2e run "${pod}" --rm -i --quiet --restart=Never --image="${CURL_IMAGE}" --command -- \
+    curl -sf -m 10 http://fakeslack.e2e.svc.cluster.local:8080/_control/apps 2>/dev/null) || out=
+  jq -r --arg app "$1" '.[] | select(.app_id == $app) | .connections' <<<"${out}" 2>/dev/null || true
+}
+
+# seat_two_apps_bots: put the bots in the channels of the Bindings of hack/kind/fast/two-apps in the fake Slack, before the Bindings are made: the bot of the
+# default app (UFAKEBOT) in the platform's, team-a's (ATEAMA) in its own, and both in CMCLOOP. A Binding's first probe then finds its channel joined; one probed
+# before the bot is in it is probed again only at the next pass (every five minutes), which a case that waits for Ready would wait for. The fake keeps this in
+# memory, so a restarted fake has to be told again, which the MC_ tests do for their channels. test/e2e's twoapps.go names the channels. Needs K.
+seat_two_apps_bots() {
+  local pod=seat-bots-${RANDOM} fs=http://fakeslack.e2e.svc.cluster.local:8080/_control
+  # shellcheck disable=SC2016 # the script runs in the pod
+  "${K[@]}" -n e2e run "${pod}" --rm -i --quiet --restart=Never --image="${CURL_IMAGE}" --command -- sh -c '
+    set -e
+    fs=$1
+    post() { curl -sf -m 10 -X POST -H "Content-Type: application/json" -d "$2" "$fs/$1" >/dev/null; }
+    post members "{\"channel\":\"CMCPLATFORM\",\"users\":[\"UFAKEBOT\"]}"
+    post members "{\"channel\":\"CMCPLATFINAL\",\"users\":[\"UFAKEBOT\"]}"
+    post members "{\"channel\":\"CMCLOOP\",\"users\":[\"UFAKEBOT\",\"UTEAMA\"]}"
+    post join "{\"channel\":\"CMCTEAMA\",\"app\":\"ATEAMA\"}"
+    post join "{\"channel\":\"CMCTEAMAFINAL\",\"app\":\"ATEAMA\"}"' sh "${fs}" >/dev/null || die "could not put the bots of the two apps in their channels in the fake Slack"
+}
+
+# deploy_two_apps: the tier's second Slack app (E2E_TWO_APPS=1; custom resources only): the namespaces team-a, team-b and team-c, team-a's Secrets (the
+# Slack tokens of the app ATEAMA that the fake Slack hosts, and an agent token), and hack/kind/fast/two-apps/two-apps.yaml: team-a's Role,
+# ChatConnection, AgentBackend and Binding, and the platform's Binding mc-platform. It returns once the fake Slack has a Socket Mode client of team-a's app,
+# which is the broker serving the connection, and dies if none comes in three minutes (each look is a pod, so the bound is the clock's). The Secrets are made with apply from a pipe, as deploy_agentkourier
+# makes the tier's. Needs HERE, K, jq, and the CRDs served (deploy_agentkourier with crds).
+deploy_two_apps() {
+  local ns deadline connected=
+  for ns in team-a team-b team-c; do
+    "${K[@]}" create namespace "${ns}" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  done
+  "${K[@]}" -n team-a create secret generic slack-team-a --from-literal=botToken=xoxb-fake-team-a-token \
+    --from-literal=appToken=xapp-fake-team-a-token --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  "${K[@]}" -n team-a create secret generic team-a-agent-token --from-literal=token="$(unsigned_jwt team-a@example.test)" \
+    --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  seat_two_apps_bots
+  "${K[@]}" apply -f "${HERE}/fast/two-apps/two-apps.yaml" >/dev/null
+  deadline=$((SECONDS + 180))
+  while [ "${SECONDS}" -lt "${deadline}" ]; do
+    connected=$(fake_slack_app_connections ATEAMA)
+    [ "${connected:-0}" -ge 1 ] 2>/dev/null && break
+    sleep 2
+  done
+  [ "${connected:-0}" -ge 1 ] 2>/dev/null || {
+    "${K[@]}" -n agent-kourier logs deploy/agent-kourier --tail=40 >&2 || true
+    die "the broker never connected team-a's Slack app to the fake Slack; is team-a in config.connectionNamespaces, and does team-a's Role name its Secret?"
+  }
+  echo "ok: team-a's Slack app is connected to the fake Slack"
 }
 
 # apply_signaler: the container signaler (fast/signaler.yaml, in namespace e2e), which S16 uses to freeze or kill an Agent Kourier replica; the fast
