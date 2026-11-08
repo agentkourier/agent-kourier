@@ -777,13 +777,15 @@ spec:
     namespaces: [shared]       # and any Binding that may use this backend may name one in shared
 ```
 
-- **Set it only after the CRDs and the image are both new.** On the custom resource route the AgentBackend CRD changes (its schema hash with it). The chart applies it with the release when `crds.install` is true; if you apply the CRDs yourself,
+- **Set it only after the CRDs and the image are both new.** On the custom resource route the AgentBackend CRD changes (its schema hash with it). The chart applies it with the release when `crds.install` is true, or unset on `config.source: crds`; if you apply the CRDs yourself,
   apply `charts/agent-kourier/files/crds` again. A CRD that does not have the field refuses it from `kubectl` and Helm 4, and drops it silently from a client that does not ask the API server to refuse unknown fields
   ([Unknown fields](../explanation/config-routes.md#unknown-fields)). A broker older than this release ignores `spec.agents` on custom resources, so the Bindings are served with no limit: check
   `agentkourier_crd_schema_state` and the broker's version before you rely on it. On the files route an older broker refuses the file as a whole, because it does not know the field.
-- **A Binding that no longer matches stops being served.** Setting or narrowing `agents` takes effect when the broker next reads the config: a Binding whose `agent.namespace` is not allowed is
-  left out and says `AgentNamespaceNotAllowed` ([Binding status](../reference/binding-status.md)). List every namespace your Bindings name before you apply it:
-  `kubectl get akbinding -A -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,AGENT:.spec.agent.namespace,BACKEND:.spec.agent.backendRef.name`. On the files route the load fails instead: the broker exits with [code 2](../reference/cli.md#exit-codes) at start, and a reload keeps the last good config.
+- **A Binding that no longer matches stops being served, on custom resources.** Setting or narrowing `agents` takes effect when the broker next reads the config: a Binding whose `agent.namespace` is not allowed is
+  left out and says `AgentNamespaceNotAllowed` ([Binding status](../reference/binding-status.md)), and the others keep running. List every namespace your Bindings name before you apply it:
+  `kubectl get akbinding -A -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,BACKEND-NS:.spec.agent.backendRef.namespace,BACKEND:.spec.agent.backendRef.name,AGENT-NS:.spec.agent.namespace`.
+  **On the files route** nothing is dropped, because the config resolves all or nothing: a broker that starts on it exits with [code 2](../reference/cli.md#exit-codes) and serves nothing, and a broker that reloads it keeps serving every Binding
+  under the last good config, with the old limit or none, and sets `agentkourier_config_stale` to 1. Make sure every Binding's `agent.namespace` is allowed before you change the file.
 - **A value that allows nothing is refused.** `agents: {}`, or `sameNamespace: false` with no `namespaces`, is invalid, and so is the field on an `a2a` AgentBackend. Both are refused by the API server and at load.
   The list holds at most 256 namespaces ([Limits](../reference/limits.md)).
 - **Before a rollback to an earlier release, remove `agents` and expect the limit to end.** An earlier broker ignores the field on custom resources and serves every Binding the AgentBackend would
