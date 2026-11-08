@@ -872,3 +872,93 @@ func TestBotsInfoAnswersTheAppOfTheBot(t *testing.T) {
 		t.Errorf("bots.info as b about a's revoked bot = %+v, %v; want the bot still known to b", got, err)
 	}
 }
+
+func TestRotatedTokensReplaceTheAppsPairAndTheOldPairIsRefused(t *testing.T) {
+	fake := twoApps(t)
+	smc := socketAs(t, fake, appA)
+	_ = smc
+	eventually(t, "a to be connected", func() bool { return fake.AppConnections("AAPPA") == 1 })
+	rotated := fakeslack.App{BotToken: "xoxb-app-a-rotated", AppToken: "xapp-app-a-rotated"}
+
+	if err := fake.RotateTokens("AAPPA", rotated.BotToken, rotated.AppToken); err != nil {
+		t.Fatalf("RotateTokens: %v", err)
+	}
+	// The new pair is the app's: its identity, its Web API and apps.connections.open. A socket opened with the old one stays open.
+	if got, err := webAs(fake, rotated).AuthTest(); err != nil || got.UserID != "UBOTA" {
+		t.Errorf("auth.test with the new bot token = %+v, %v; want a's bot", got, err)
+	}
+	if _, _, err := webAs(fake, rotated).StartSocketModeContext(t.Context()); err != nil {
+		t.Errorf("apps.connections.open with the new app token = %v", err)
+	}
+	if n := fake.AppConnections("AAPPA"); n != 1 {
+		t.Errorf("a has %d connections after the rotation, want the 1 it had", n)
+	}
+	// The old pair is refused, with the code and not with a token in the message, though the app is not revoked, and is not the default app's.
+	_, authErr := webAs(fake, appA).AuthTest()
+	_, _, openErr := webAs(fake, appA).StartSocketModeContext(t.Context())
+	for name, err := range map[string]error{"auth.test": authErr, "apps.connections.open": openErr} {
+		if err == nil || err.Error() != "token_revoked" {
+			t.Errorf("%s with the old token = %v, want token_revoked", name, err)
+		}
+	}
+	// Revoking the app and restoring it leaves the pair as it was: the old one stays refused and the new one works.
+	if err := fake.SetRevoked("AAPPA", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := webAs(fake, rotated).AuthTest(); err == nil || err.Error() != "token_revoked" {
+		t.Errorf("auth.test with the new token while the app is revoked = %v, want token_revoked", err)
+	}
+	if err := fake.SetRevoked("AAPPA", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := webAs(fake, rotated).AuthTest(); err != nil {
+		t.Errorf("auth.test with the new token after the app is restored = %v", err)
+	}
+	if _, err := webAs(fake, appA).AuthTest(); err == nil || err.Error() != "token_revoked" {
+		t.Errorf("auth.test with the old token after the app is restored = %v, want token_revoked", err)
+	}
+	// The pair it had before may be given again, and then the new pair is the one refused. Giving the pair it holds changes nothing.
+	if err := fake.RotateTokens("AAPPA", rotated.BotToken, rotated.AppToken); err != nil {
+		t.Errorf("RotateTokens to the pair it holds = %v", err)
+	}
+	if err := fake.RotateTokens("AAPPA", appA.BotToken, appA.AppToken); err != nil {
+		t.Fatalf("RotateTokens back: %v", err)
+	}
+	if _, err := webAs(fake, appA).AuthTest(); err != nil {
+		t.Errorf("auth.test with the first pair, given again = %v", err)
+	}
+	if _, err := webAs(fake, rotated).AuthTest(); err == nil || err.Error() != "token_revoked" {
+		t.Errorf("auth.test with the rotated pair after it was replaced = %v, want token_revoked", err)
+	}
+	// Another app is untouched.
+	if got, err := webAs(fake, appB).AuthTest(); err != nil || got.UserID != "UBOTB" {
+		t.Errorf("auth.test as b = %+v, %v; want b working", got, err)
+	}
+}
+
+func TestRotateTokensRefusesWhatNoAppCouldHold(t *testing.T) {
+	fake := twoApps(t)
+	for name, tc := range map[string]struct {
+		app, bot, app2 string
+		want           error
+	}{
+		"a bot token without its prefix":  {"AAPPA", "xapp-wrong", "xapp-app-a-rotated", fakeslack.ErrInvalid},
+		"an app token without its prefix": {"AAPPA", "xoxb-app-a-rotated", "xoxb-wrong", fakeslack.ErrInvalid},
+		"another app's token":             {"AAPPA", appB.BotToken, "xapp-app-a-rotated", fakeslack.ErrInvalid},
+		"an app the fake does not host":   {"ANOBODY", "xoxb-new", "xapp-new", fakeslack.ErrNotFound},
+	} {
+		if err := fake.RotateTokens(tc.app, tc.bot, tc.app2); !errors.Is(err, tc.want) {
+			t.Errorf("%s: RotateTokens = %v, want %v", name, err, tc.want)
+		}
+	}
+	if _, err := webAs(fake, appA).AuthTest(); err != nil {
+		t.Errorf("a's own pair stopped working after refused rotations: %v", err)
+	}
+	// A pair another app rotated away from is not a pair to take.
+	if err := fake.RotateTokens("AAPPB", "xoxb-app-b-rotated", "xapp-app-b-rotated"); err != nil {
+		t.Fatal(err)
+	}
+	if err := fake.RotateTokens("AAPPA", appB.BotToken, "xapp-app-a-rotated"); !errors.Is(err, fakeslack.ErrInvalid) {
+		t.Errorf("RotateTokens to a token b rotated away from = %v, want ErrInvalid", err)
+	}
+}

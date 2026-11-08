@@ -75,6 +75,12 @@ type (
 		App     string `json:"app"`
 		Revoked bool   `json:"revoked"`
 	}
+	rotateReq struct {
+		// App is the AppID of the app; empty is the default app.
+		App      string `json:"app"`
+		BotToken string `json:"bot_token"`
+		AppToken string `json:"app_token"`
+	}
 	archivedReq struct {
 		Channel  string `json:"channel"`
 		Archived bool   `json:"archived"`
@@ -165,6 +171,9 @@ func (s *Server) newControlRoutes() controlRoutes {
 	}))
 	mux.HandleFunc("POST /_control/revoked", post(func(q revokedReq) (any, error) {
 		return struct{}{}, s.SetRevoked(s.appID(q.App), q.Revoked)
+	}))
+	mux.HandleFunc("POST /_control/rotate", post(func(q rotateReq) (any, error) {
+		return struct{}{}, s.RotateTokens(s.appID(q.App), q.BotToken, q.AppToken)
 	}))
 	mux.HandleFunc("POST /_control/usergroups", post(func(q usergroupReq) (any, error) {
 		if q.Usergroup == "" {

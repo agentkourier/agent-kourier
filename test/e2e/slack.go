@@ -131,6 +131,12 @@ func (s *Slack) SetRevoked(ctx context.Context, appID string, revoked bool) erro
 	return s.c.do(ctx, http.MethodPost, "/_control/revoked", map[string]any{"app": appID, "revoked": revoked}, nil)
 }
 
+// RotateTokens gives the app appID a new pair of tokens: the pair it had is refused from then on, even when the app is not revoked, and giving the old pair
+// again brings it back (fakeslack.Server.RotateTokens). It is how an operator replaces the tokens of a Slack app that has been revoked.
+func (s *Slack) RotateTokens(ctx context.Context, appID, botToken, appToken string) error {
+	return s.c.do(ctx, http.MethodPost, "/_control/rotate", map[string]string{"app": appID, "bot_token": botToken, "app_token": appToken}, nil)
+}
+
 // SetArchived marks channel archived, or not, for conversations.info. It does not register the channel: SetMembers does, and the
 // fake reports channel_not_found for a channel it was not given.
 func (s *Slack) SetArchived(ctx context.Context, channel string, archived bool) error {

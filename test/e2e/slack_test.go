@@ -260,6 +260,22 @@ func TestSlackDrivesSeveralApps(t *testing.T) {
 	if err := sl.SetRevoked(ctx, "ANOSUCHAPP", true); !errors.As(err, &se) || se.Status != http.StatusNotFound {
 		t.Errorf("SetRevoked of an app the fake does not host = %v; want a 404", err)
 	}
+
+	if err := sl.RotateTokens(ctx, "ATEAMA", "xoxb-fake-team-a-rotated", "xapp-fake-team-a-rotated"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bot.AuthTestContext(ctx); err == nil || !strings.Contains(err.Error(), "token_revoked") {
+		t.Errorf("auth.test with the old token after a rotation = %v; want token_revoked", err)
+	}
+	if got, err := slack.New("xoxb-fake-team-a-rotated", slack.OptionAPIURL(fake.URL()+"/")).AuthTestContext(ctx); err != nil || got.UserID != "UTEAMA" {
+		t.Errorf("auth.test with the new token = %+v, %v; want team-a's bot", got, err)
+	}
+	if err := sl.RotateTokens(ctx, "ATEAMA", "xapp-wrong", "xapp-fake-team-a-rotated"); !errors.As(err, &se) || se.Status != http.StatusBadRequest {
+		t.Errorf("RotateTokens with a bad bot token = %v; want a 400", err)
+	}
+	if err := sl.RotateTokens(ctx, "ANOSUCHAPP", "xoxb-new", "xapp-new"); !errors.As(err, &se) || se.Status != http.StatusNotFound {
+		t.Errorf("RotateTokens of an app the fake does not host = %v; want a 404", err)
+	}
 }
 
 // The control client archives a channel and puts it back, as conversations.info shows.

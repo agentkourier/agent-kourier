@@ -154,7 +154,9 @@ type Server struct {
 
 	pingEvery    time.Duration
 	apps         []App             // the default app first; set by options, read-only after construction (apps.go)
+	tokenMu      sync.RWMutex      // guards tokens and retired once the Server runs (RotateTokens)
 	tokens       map[string]string // token to the AppID that owns it, built after the options
+	retired      map[string]string // token to the AppID it was rotated away from: refused with token_revoked, guarded by tokenMu
 	spread       bool              // set by WithSocketSpread, read-only after construction
 	strict       bool              // set by WithStrictMembership, read-only after construction
 	strictTokens bool              // set by WithStrictTokens, read-only after construction
@@ -450,7 +452,7 @@ func (s *Server) authenticate(r *http.Request, prefix string) (App, string) {
 	switch {
 	case !ok:
 		return App{}, "invalid_auth"
-	case s.isRevoked(app.AppID):
+	case s.isRevoked(app.AppID), s.isRetired(token):
 		return App{}, "token_revoked"
 	}
 	return app, ""

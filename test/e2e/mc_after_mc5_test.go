@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -24,10 +25,31 @@ const (
 	mcWaitsForRecovery = "waits for MC-5: a live reply of a turn that a new leader recovers before the team's connection runs is never finished (the renderer's writes fail with 'no platform is running the connection' for ten seconds, after the connection is up, and are given up on); remove this skip once Recover leaves the turn until the connection runs"
 )
 
-// mcFixedSecret is what a team puts in team-a's Secret to fix it: the tokens, and a key that was not there, so that the Secret differs from the one the
-// connection was started with.
-func mcFixedSecret() map[string]string {
-	return map[string]string{"botToken": AppTeamA.BotToken, "appToken": AppTeamA.AppToken, "fixed": time.Now().UTC().Format(time.RFC3339Nano)}
+// fixTeamA does what an operator does after Slack rejected team-a's tokens: it gets a new pair for the app (the fake rotates it: the old pair is refused for
+// good, so a pair that the connection was started with cannot work again) and puts it in team-a's Secret. The pair is new each time, so that the Secret
+// differs from what the connection last ran with, which is what starts a connection whose credentials were rejected: the supervisor's fingerprint of a
+// connection holds the values of the keys it references, not the Secret's version.
+func (m *mc) fixTeamA(team *kube.CRs) error {
+	ctx := context.WithoutCancel(m.ctx)
+	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
+	bot, app := "xoxb-fake-team-a-"+suffix, "xapp-fake-team-a-"+suffix
+	if err := m.slack.RotateTokens(ctx, AppTeamA.AppID, bot, app); err != nil {
+		return err
+	}
+	if err := m.slack.SetRevoked(ctx, AppTeamA.AppID, false); err != nil {
+		return err
+	}
+	return team.SetSecretData(ctx, "slack-team-a", map[string]string{"botToken": bot, "appToken": app})
+}
+
+// restoreTeamA puts the pair of tokens that the tier was brought up with back, in the fake (rotating to a pair the app held before brings it back) and in
+// team-a's Secret, which restarts the connection once more.
+func (m *mc) restoreTeamA(team *kube.CRs) error {
+	ctx := context.WithoutCancel(m.ctx)
+	if err := m.slack.RotateTokens(ctx, AppTeamA.AppID, AppTeamA.BotToken, AppTeamA.AppToken); err != nil {
+		return err
+	}
+	return team.SetSecretData(ctx, "slack-team-a", map[string]string{"botToken": AppTeamA.BotToken, "appToken": AppTeamA.AppToken})
 }
 
 // TestMC_ARejectedTokenStopsOnlyThatConnection: Slack revokes team-a's tokens. The connection stops and says so, and nothing else does: its
@@ -35,9 +57,8 @@ func mcFixedSecret() map[string]string {
 // Binding keeps answering through the platform's app, and the broker is not restarted. When the team fixes its Secret the connection starts again by itself:
 // the series is 1, the app has its client, the Binding is ready and answers through team-a's app.
 //
-// "Fixed" is what a team does: the Secret changes (a new token in Slack, for a real app) and the revoked app's tokens work again. The fake gives an app one
-// pair of tokens for good, so the change here is a key the Secret did not have, beside the same tokens: if the broker restarts a connection only when a
-// token in the Secret changed, give the fake a second pair for the app and patch these.
+// "Fixed" is what a team does: the app gets new tokens (the fake rotates them, fixTeamA) and the team puts them in its Secret. The pair then in the Secret
+// is not the one the tier was brought up with; the case puts the first pair back at its end.
 func TestMC_ARejectedTokenStopsOnlyThatConnection(t *testing.T) {
 	t.Skip(mcWaitsForMC5)
 	m := newMC(t)
@@ -46,13 +67,15 @@ func TestMC_ARejectedTokenStopsOnlyThatConnection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { // the app's tokens must work again whatever happened, and its connection, which stays down until its Secret changes, must start again
-		ctx := context.WithoutCancel(m.ctx)
-		if err := m.slack.SetRevoked(ctx, AppTeamA.AppID, false); err != nil {
-			t.Errorf("give team-a's tokens back at the end: %v", err)
+	fixed := false
+	t.Cleanup(func() { // the tier is left as it was brought up: the pair of tokens the other cases use (ChannelMCDuplicate's connection holds it), and a running connection
+		if !fixed { // a case that ended before the fix: the connection stays down until its Secret changes
+			if err := m.fixTeamA(team); err != nil {
+				t.Errorf("fix team-a at the end: %v", err)
+			}
 		}
-		if err := team.SetSecretData(ctx, "slack-team-a", mcFixedSecret()); err != nil {
-			t.Errorf("fix team-a's Secret at the end: %v", err)
+		if err := m.restoreTeamA(team); err != nil {
+			t.Errorf("put team-a's first tokens back at the end: %v", err)
 		}
 	})
 
@@ -79,11 +102,9 @@ func TestMC_ARejectedTokenStopsOnlyThatConnection(t *testing.T) {
 		t.Errorf("the replicas were %s before the revocation and %s after: a team's rejected token must not restart the broker", before, after)
 	}
 
-	// The team fixes its Secret, and the tokens work again.
-	if err := m.slack.SetRevoked(m.ctx, AppTeamA.AppID, false); err != nil {
-		t.Fatal(err)
-	}
-	if err := team.SetSecretData(m.ctx, "slack-team-a", mcFixedSecret()); err != nil {
+	// The team fixes its Secret, with new tokens, and the app works again.
+	fixed = true
+	if err := m.fixTeamA(team); err != nil {
 		t.Fatal(err)
 	}
 	m.waitApp(AppTeamA, 3*time.Minute)
