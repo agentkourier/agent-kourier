@@ -74,3 +74,75 @@ func TestRunRejectsUnknownFlags(t *testing.T) {
 		t.Fatal("run with an unknown flag = nil, want an error")
 	}
 }
+
+func TestRunHostsTheAppsItIsGiven(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	out := make(lineWriter, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- run(ctx, []string{
+			"-addr", "127.0.0.1:0", "-strict-membership", "-socket-spread",
+			"-app", "app_id=ATEAM,bot_user=UTEAM,bot_id=BTEAM,team_id=TTEAM,team_name=team,bot_token=xoxb-team-token,app_token=xapp-team-token",
+		}, out)
+	}()
+	addr, ok := strings.CutPrefix(<-out, "fakeslack: listening on ")
+	if !ok {
+		t.Fatal("run did not announce its address")
+	}
+
+	for token, want := range map[string]string{"xoxb-team-token": "UTEAM", "xoxb-someone-else": "UFAKEBOT"} {
+		auth := call(t, http.MethodPost, "http://"+addr+"/auth.test", nil, http.Header{"Authorization": {"Bearer " + token}})
+		if auth["ok"] != true || auth["user_id"] != want {
+			t.Errorf("auth.test with %s = %v, want user_id %s", token, auth, want)
+		}
+	}
+	apps := func() []any {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+addr+"/_control/apps", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		var out []any
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}()
+	if len(apps) != 2 {
+		t.Errorf("/_control/apps = %v, want the default app and the one given", apps)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run after cancel = %v, want nil", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("run did not return after its context ended")
+	}
+}
+
+func TestRunRejectsAnAppItCannotUseWithoutRepeatingIt(t *testing.T) {
+	for name, app := range map[string]string{
+		"no key=value":    "xoxb-secret-token",
+		"unknown key":     "app_id=A1,bot_user=U1,bot_id=B1,colour=xoxb-secret-token",
+		"missing ids":     "bot_token=xoxb-secret-token",
+		"wrong token tag": "app_id=A1,bot_user=U1,bot_id=B1,bot_token=secret-token",
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := run(t.Context(), []string{"-addr", "127.0.0.1:0", "-app", app}, io.Discard)
+			if err == nil {
+				t.Fatal("run = nil, want an error")
+			}
+			if strings.Contains(err.Error(), "secret-token") {
+				t.Errorf("error %q repeats the token", err)
+			}
+		})
+	}
+}

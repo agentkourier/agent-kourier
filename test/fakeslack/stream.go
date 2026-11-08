@@ -30,7 +30,7 @@ import (
 // parameter, which this method is not known to take, is ignored. Metadata
 // matters for spec 8.6, where the outbox tags each post, so Agent Kourier should set
 // it on chat.stopStream and never rely on it here.
-func (s *Server) startStream(form url.Values) (response, string) {
+func (s *Server) startStream(app App, form url.Values) (response, string) {
 	channel := form.Get("channel")
 	dm := strings.HasPrefix(channel, "D")
 	switch {
@@ -57,7 +57,7 @@ func (s *Server) startStream(form url.Values) (response, string) {
 	if runes(text) > maxMessageText {
 		return nil, "msg_too_long"
 	}
-	m := s.botMessage(text, form.Get("thread_ts"))
+	m := botMessage(app, text, form.Get("thread_ts"))
 	m.Chunks, m.Streaming, m.mode = chunks, true, mode
 
 	s.mu.Lock()
@@ -82,7 +82,7 @@ func (s *Server) startStream(form url.Values) (response, string) {
 // parses a metadata parameter and discards it; and that task_update,
 // plan_update and blocks chunks are accepted and kept on the message without
 // being rendered into its text.
-func (s *Server) streamChunk(form url.Values, stop bool) (response, string) {
+func (s *Server) streamChunk(app App, form url.Values, stop bool) (response, string) {
 	channel, ts := form.Get("channel"), form.Get("ts")
 	switch {
 	case channel == "":
@@ -121,7 +121,7 @@ func (s *Server) streamChunk(form url.Values, stop bool) (response, string) {
 		if m.TS != ts {
 			continue
 		}
-		if !m.Streaming {
+		if !m.Streaming || (m.AppID != "" && m.AppID != app.AppID) {
 			return nil, "message_not_in_streaming_state"
 		}
 		if m.mode != "" && mode != "" && m.mode != mode {
