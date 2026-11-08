@@ -188,7 +188,7 @@ kubectl get akbinding,akbackend,akconnection -A
 three) list them. **Never `kubectl get bindings`**: that is the core `bindings` resource, which is something else and fails. Going back, with
 `config.source=files`: the ConfigMap returns from the same values, and Helm deletes the custom resources the chart rendered (it stops rendering
 them), while the ones made by hand stay in the cluster, unread, as do the CRDs. The values of the route (`config.chatConnection`, `config.chatConnectionSecret`, `rbac.secretNames`)
-may stay set: with `files` they are ignored, so going back is the same values with `config.source: files`. `helm uninstall` likewise deletes the
+may stay set: with `files` they are ignored, so going back is the same values with `config.source: files`, except `config.connectionNamespaces`, which the chart refuses with `files`: set it to `[]` in the same upgrade. `helm uninstall` likewise deletes the
 rendered resources and keeps the CRDs, and with them every custom resource of the cluster: **never delete a CRD to get out of a refusal**, since
 that deletes every team's resources. A reinstall under another release name (or in another namespace) with `crds.install: true`, which is what an unset value is on the default route, is refused by
 Helm (`invalid ownership metadata`), because the kept CRDs name the release that made them. The same holds for a second broker in the same cluster, which sets `crds.install: false`. There are two ways on, neither of which deletes

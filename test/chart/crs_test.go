@@ -1312,8 +1312,8 @@ func TestConnectionNamespaces(t *testing.T) {
 	}
 }
 
-// TestConnectionNamespacesAreRefusedWithFiles: the file route serves the one ChatConnection of its directory and the broker refuses the variable
-// with it, so the chart refuses the list there, naming the route, rather than render a pod that does not start. An unset config.source reads as files
+// TestConnectionNamespacesAreRefusedWithFiles: the file route serves the one ChatConnection of its directory and a pod on it would silently
+// stop serving the ChatConnections of the listed namespaces, so the chart refuses the list there, naming the route. An unset config.source reads as files
 // (a release upgraded with --reuse-values), so it is refused the same. An empty list is no setting and renders.
 func TestConnectionNamespacesAreRefusedWithFiles(t *testing.T) {
 	t.Parallel()

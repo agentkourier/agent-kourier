@@ -178,7 +178,7 @@ Checks that no values file can get past. Included by the Deployment, which every
 {{- fail "config.existingConfigMap and config.agentBackends/chatConnections/bindings are two ways to supply the same files: set one" -}}
 {{- end -}}
 {{- if and .Values.config.connectionNamespaces (not (include "agentkourier.crMode" .)) -}}
-{{- fail "config.connectionNamespaces is for config.source crds, and config.source is files (or unset, which reads as files): with config.source: files the broker serves the one ChatConnection of its directory, refuses AGENTKOURIER_CONNECTION_NAMESPACES and would not start. To serve the ChatConnections of those namespaces, set config.source: crds; otherwise remove config.connectionNamespaces" -}}
+{{- fail "config.connectionNamespaces is for config.source crds, and config.source is files (or unset, which reads as files): with config.source: files the broker serves only the one ChatConnection of its directory, so the ChatConnections of these namespaces would stop being served. To serve the ChatConnections of those namespaces, set config.source: crds; otherwise remove config.connectionNamespaces" -}}
 {{- end -}}
 {{- if include "agentkourier.crMode" . -}}
 {{- if .Values.config.existingConfigMap -}}
@@ -204,7 +204,8 @@ Checks that no values file can get past. Included by the Deployment, which every
 {{- end -}}
 {{- $_ := include "agentkourier.chatConnection" . -}}
 {{- /* With files, config.chatConnection, config.chatConnectionSecret and rbac.secretNames are ignored, and the chart does not refuse them: a rollback to files keeps the values
-       it had, in an incident, and they are harmless there. */ -}}
+       it had, in an incident, and they are harmless there. config.connectionNamespaces is the exception and is refused above: ignoring it would silently stop serving the ChatConnections of the
+       admitted namespaces, which is not harmless, so a rollback to files sets it to [] in the same upgrade. */ -}}
 {{- end -}}
 {{- if and .Values.serviceMonitor.enabled (not .Values.service.enabled) -}}
 {{- fail "serviceMonitor.enabled needs service.enabled: the ServiceMonitor selects the metrics Service" -}}
