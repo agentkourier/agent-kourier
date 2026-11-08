@@ -690,7 +690,9 @@ type verification struct {
 	Platforms chat.Resolver[platformReader]
 	// Conns lists the connections the broker serves, running or not: the Bindings on any other are not probed. Credentials are the tokens
 	// the connection's platform was built with, which Secrets is read against to tell a changed Secret; a connection that is not
-	// running has none, and then no change is told.
+	// running has none, and then no change is told. It is called from the probes, which run concurrently, so it must be safe for
+	// concurrent use. A connection that leaves it while a pass runs is read, by the probes that have not yet looked it up, with no
+	// baseline, so no change is told for it; its platform is whatever Platforms says then.
 	Conns   func() []Connection
 	Secrets identity.SecretReader // nil: a change of the chat credentials is not told
 	Metrics *Metrics
@@ -757,11 +759,13 @@ func (v verification) chatOf(conn string) (platformReader, credentialsWatch, err
 // connectionDownOutcome is what a read as the bot of a connection that no platform runs comes to, with no call made: the verdict on
 // the channel or the groups cannot be had, which is Unknown and not False, since the Binding is not at fault and a restart is not
 // what mends it. The reason is ChatUnavailable, the closest the closed set has to a chat platform that cannot be read now, and the
-// message says why. It is the one place that tells a stopped connection's Bindings what became of the reads, so the outcomes a
+// message says so and points at the log, whose line for the transition carries err as the cause (it names the connection and holds no
+// token). It is the one place that tells a stopped connection's Bindings what became of the reads, so the outcomes a
 // connection can have for being down (stopped for a token the platform rejected, say) are told here, from the error that says why.
-func connectionDownOutcome(error) bindingcheck.Outcome {
+func connectionDownOutcome(err error) bindingcheck.Outcome {
 	return bindingcheck.Outcome{Status: bindingcheck.Unknown, Reason: bindingcheck.ReasonChatUnavailable,
-		Message: "the chat connection is not running (it has not started, or it stopped), so the bot was not asked: the operator's log has why"}
+		Message: "the chat connection is not running (it has not started, or it stopped), so the bot was not asked: the operator's log has why",
+		Cause:   telemetry.LogText(err)}
 }
 
 // connectionChannels is the bindingcheck.ChannelChecker of a running broker: it reads a channel as the bot of the connection of the

@@ -297,6 +297,11 @@ func TestABindingOfAConnectionThatIsNotRunningIsToldSoWithoutACall(t *testing.T)
 	if n := botB.callCount(); n != 0 {
 		t.Errorf("the bot of the connection that is not running was called %d times; want none", n)
 	}
+	// The operator's log has why: the INFO line of the transition carries the resolver's error, which names the connection.
+	// (The line is written by the Prober's hook, a moment after the condition is set.)
+	eventually(t, 10*time.Second, "no INFO line with the connection as the cause of sre/other-bot's ChannelJoined", func() bool {
+		return countOf(buf.String(), "level=INFO", "a condition is unknown", "binding=sre/other-bot", "condition=ChannelJoined", "cause=", connB) == 1
+	})
 	if strings.Contains(buf.String(), "level=WARN") {
 		t.Errorf("a connection that is not running logged a warning:\n%s", buf.String())
 	}

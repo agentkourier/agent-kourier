@@ -962,7 +962,7 @@ func TestTheBrokersProberProbesTheServedConnectionAndPrunesWhatAReloadRemoves(t 
 	}
 }
 
-// A reload that removes a Binding, or moves it to another ChatConnection than the one served, ends its verification, and its series go:
+// A reload that removes a Binding, or moves it to a ChatConnection the broker does not serve, ends its verification, and its series go:
 // an alert on them resolves without a word. Each such Binding gets one INFO line saying so, and a Binding still served gets none.
 func TestABindingTheReloadRemovedOrMovedAwayGetsALineWhenItsVerificationStops(t *testing.T) {
 	current := &snaps{}
