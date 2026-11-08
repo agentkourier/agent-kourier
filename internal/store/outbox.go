@@ -76,11 +76,6 @@ type Outbox interface {
 	// ErrNotFound if the row does not exist; ErrConflict if it already has a message ref;
 	// ErrInvalid if at is zero or not after the Unix epoch (a stored 0 means "not abandoned").
 	AbandonOutbox(ctx context.Context, id string, at time.Time) (abandoned bool, err error)
-	// AbandonOutboxBefore abandons, as of at, every row created before the cutoff that has a
-	// Payload and no message ref and is not abandoned, and returns their IDs: the retention
-	// limit on unposted text. A row with no Payload, a stream's, is left alone. ErrInvalid if
-	// either time is zero or not after the Unix epoch.
-	AbandonOutboxBefore(ctx context.Context, before, at time.Time) (ids []string, err error)
 	// ListUnposted returns rows with no message ref that are not abandoned, oldest first (rows made at
 	// the same time in any order), for recovery reconciliation.
 	ListUnposted(ctx context.Context) ([]OutboxEntry, error)

@@ -53,10 +53,6 @@ func (su suite) times(t *testing.T) {
 			_, err := s.PurgeTriggerThreads(t.Context(), at, time.Time{})
 			return err
 		}},
-		{"AbandonOutboxBefore", func(s store.Store, at time.Time) error {
-			_, err := s.AbandonOutboxBefore(t.Context(), at, t0)
-			return err
-		}},
 	}
 	for _, c := range calls {
 		su.run(t, c.name+" accepts a time after the epoch up to the latest SQLite holds, and refuses the rest", func(t *testing.T, s store.Store) {
