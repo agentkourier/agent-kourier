@@ -165,10 +165,10 @@ type AgentBackendSpec struct {
 	// +doc:default=Empty list
 	AllowedNamespaces []string `json:"allowedNamespaces,omitempty"`
 	// Agents limits the namespaces of the agents that a Binding of this backend may name in spec.agent.namespace. Omitted, a
-	// Binding may name an agent in any namespace, and the backend's own front door is the only check. Set, a Binding that
-	// names an agent in a namespace that sameNamespace and namespaces do not allow is not accepted and is not served.
-	// Only for dialect kagent-v1: on a2a the URL names the agent and spec.agent.namespace is never sent, so the field is
-	// refused there.
+	// Binding may name an agent in any namespace, and what the backend's own front door does is the only check. Set, a Binding
+	// that names any other namespace is rejected: with custom resources it is not served and its Accepted condition is False
+	// with the reason AgentNamespaceNotAllowed, and on the files route the config does not load. Only for dialect kagent-v1:
+	// on a2a the URL names the agent and spec.agent.namespace is never sent, so the field is refused there.
 	// +optional
 	Agents *AgentNamespaces `json:"agents,omitempty"`
 }
