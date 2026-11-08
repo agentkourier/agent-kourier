@@ -293,8 +293,8 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	go sup.run(supCtx, chosen.Team)
 	sd.add(stepIntake, func(c context.Context) { // the intakes stop before the interactions and the manager they feed
 		stopSup()
-		waitFor(c, sup.done) // no connection starts after this
-		host.haltAll(c)
+		waitFor(c, sup.done) // the supervisor's calls are bounded once stopSup has ended its context, so this returns at once or soon
+		host.haltAll(c)      // and a connection it adds after this, were the wait cut, is halted as it is added (runtimeTable.seal)
 	})
 	return chatDone, nil
 }

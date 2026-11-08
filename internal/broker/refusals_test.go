@@ -3,6 +3,7 @@ package broker
 import (
 	"strings"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -43,6 +44,31 @@ func TestTheBindingsOfARefusedConnectionAreToldItIsNotServed(t *testing.T) {
 	}
 	if own := c.stored(t, sreAlerts)["Accepted"]; own.Status != metav1.ConditionTrue {
 		t.Errorf("the served connection's Binding says Accepted %+v; want True", own)
+	}
+
+	// The Binding is not served here, so it has none of the probes of a served one, and what it says is written once: the broker that
+	// does serve the connection has the last word, and is not fought.
+	var told statusApply
+	for _, ap := range c.snapshotApplies() {
+		if ap.Name == "on-a" {
+			told = ap
+		}
+	}
+	for _, probed := range []string{"BackendReachable", "ChannelJoined"} {
+		if _, has := told.conds()[probed]; has {
+			t.Errorf("the status of a refused connection's Binding has %s, which only a served Binding has: %v", probed, told.conds())
+		}
+	}
+	writes := appliesTo(c, teamBind)
+	if err := c.update(storedBinding(teamBind, 1, servedStatus(1)...), "team-a"); err != nil { // another broker writes its own words
+		t.Fatal(err)
+	}
+	for range 5 {
+		sr.advance(time.Minute)
+		sr.reconcile()
+	}
+	if appliesTo(c, teamBind) != writes || c.stored(t, teamBind)["Ready"].Status != metav1.ConditionTrue {
+		t.Errorf("writes %d (was %d), Ready %+v; want the other broker's words left alone: once, and not put back", appliesTo(c, teamBind), writes, c.stored(t, teamBind)["Ready"])
 	}
 
 	refused.set(nil)

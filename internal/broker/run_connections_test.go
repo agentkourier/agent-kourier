@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -41,7 +42,22 @@ type connWorld struct {
 	events []string               // runs that ended, shutdown steps and transports that closed, in order
 	ids    map[string]appIdentity // by bot token; a token with none is its own app
 	ob     *outbox.Outbox
+	logs   syncBuffer
 }
+
+// syncBuffer is a buffer a logger writes to while a test reads it.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
 
 func newConnWorld(t *testing.T, edit func([]*unstructured.Unstructured)) *connWorld {
 	t.Helper()
@@ -53,8 +69,9 @@ func newConnWorld(t *testing.T, edit func([]*unstructured.Unstructured)) *connWo
 		}
 	})
 	w.dyn, w.kube = w.c.Dynamic.(*dynamicfake.FakeDynamicClient), w.c.Client.(*fake.Clientset)
-	w.ids[ownToken] = appIdentity{Team: "T1", User: "UOWN", Bot: "BOWN"}
+	w.ids[ownToken] = appIdentity{App: "AOWN", Team: "T1", User: "UOWN", Bot: "BOWN"}
 	w.c.ConnectionNamespaces = []string{"team-a", "team-b"}
+	w.c.Logger = slog.New(slog.NewTextHandler(&w.logs, nil))
 	w.c.superviseEvery, w.c.reloadPoll = 10*time.Millisecond, 20*time.Millisecond
 	w.c.newSlack = func(sc slack.Config) slackAPI { return &liveSlack{w: w, token: sc.BotToken.Reveal()} }
 	w.c.identify = func(_ context.Context, c Connection) (appIdentity, error) {
@@ -64,7 +81,7 @@ func newConnWorld(t *testing.T, edit func([]*unstructured.Unstructured)) *connWo
 		if id, ok := w.ids[tok]; ok {
 			return id, nil
 		}
-		return appIdentity{Team: "T1", User: "U" + tok, Bot: "B" + tok}, nil
+		return appIdentity{App: "A" + tok, Team: "T1", User: "U" + tok, Bot: "B" + tok}, nil
 	}
 	w.c.transportClosed = func(conn string) { w.event("closed:" + conn) }
 	w.c.shutdownTrace = func(step string) { w.event("step:" + step) }
@@ -168,7 +185,9 @@ func TestARunWhoseTeamSecretIsNotThereServesTheOwnConnectionAndStartsTheTeamOnce
 	r := start(t, w.c)
 	r.until("/readyz", http.StatusOK)
 	w.eventually("the own connection to run", func() bool { return w.up(ownToken) == 1 })
-	time.Sleep(100 * time.Millisecond)
+	w.eventually("the supervisor to have seen the connection whose Secret is missing", func() bool {
+		return strings.Contains(w.logs.String(), "is not started yet")
+	})
 	select {
 	case err := <-r.done:
 		t.Fatalf("Run returned %v with a team Secret missing; want it to lead", err)

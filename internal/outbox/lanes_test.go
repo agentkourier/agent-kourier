@@ -67,30 +67,52 @@ func TestForgetWaitsForADeliveryInFlight(t *testing.T) {
 	}
 }
 
-// TestAConnectionThatIsDownLeavesNoLane: the rows of a connection nothing runs wait for it, in the drain and in Send, and neither
-// keeps a lane for it: a removed connection's rows can wait up to the retention, and a lane for each would outlive them.
+// TestAConnectionThatIsDownLeavesNoLane: the rows of a connection nothing runs wait for it, and none of the ways to find that out keeps a
+// lane for it: a removed connection's rows can wait up to the retention, and a lane for each would outlive them. The drain (Reconcile), Run
+// and Send each see the connection down on their own, so each is looked at without the others.
 func TestAConnectionThatIsDownLeavesNoLane(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
-	res := &dynamic{m: map[string]outbox.Platform{connA: &poster{}}}
-	o := mustNew(t, outbox.Config{Store: st, Platforms: res, Now: func() time.Time { return t0 }, CallTimeout: time.Second, Logger: quiet()})
-	ctx := t.Context()
-	waiting := onConn(connB, "waiting-b")
-	waiting.Role = store.OutboxNotice
-	if _, err := o.Enqueue(ctx, waiting); err != nil {
-		t.Fatal(err)
+	newOutbox := func(t *testing.T) (*outbox.Outbox, store.Outbox) {
+		st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+		res := &dynamic{m: map[string]outbox.Platform{connA: &poster{}}}
+		return mustNew(t, outbox.Config{Store: st, Platforms: res, Now: func() time.Time { return t0 }, CallTimeout: time.Second, Interval: time.Hour, Logger: quiet()}), st
 	}
-	if _, err := o.Send(ctx, onConn(connA, "going-a")); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := o.Reconcile(ctx); err != nil {
-		t.Fatalf("Reconcile with b down: %v", err)
-	}
-	if _, err := o.Send(ctx, onConn(connB, "sent-b")); err == nil {
-		t.Fatal("Send on a connection that is down succeeded")
+	waiting := func(t *testing.T, o *outbox.Outbox, conn string) {
+		t.Helper()
+		p := onConn(conn, "waiting-"+conn)
+		p.Role = store.OutboxNotice
+		if _, err := o.Enqueue(t.Context(), p); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	if got := o.Lanes(); got != 1 {
-		t.Errorf("Lanes = %d with b down; want a's lane alone", got)
-	}
+	t.Run("the drain", func(t *testing.T) {
+		o, _ := newOutbox(t)
+		waiting(t, o, connB)
+		if err := o.Reconcile(t.Context()); err != nil {
+			t.Fatalf("Reconcile with b down: %v", err)
+		}
+		if got := o.Lanes(); got != 0 {
+			t.Errorf("Lanes = %d after the drain found b down; want none", got)
+		}
+	})
+	t.Run("Run", func(t *testing.T) {
+		o, st := newOutbox(t)
+		start(t, o)
+		waiting(t, o, connB)
+		waiting(t, o, connA) // a's row is posted, which shows the pass that saw b down has been made
+		eventually(t, "a's row to be posted", func() bool { return ref(st, outbox.ID("waiting-"+connA, store.OutboxNotice)) != "" })
+		eventually(t, "the pass to leave a's lane alone", func() bool { return o.Lanes() <= 1 })
+		if got := o.Lanes(); got > 1 {
+			t.Errorf("Lanes = %d after Run found b down; want a's alone", got)
+		}
+	})
+	t.Run("Send", func(t *testing.T) {
+		o, _ := newOutbox(t)
+		if _, err := o.Send(t.Context(), onConn(connB, "sent-b")); err == nil {
+			t.Fatal("Send on a connection that is down succeeded")
+		}
+		if got := o.Lanes(); got != 0 {
+			t.Errorf("Lanes = %d after Send found b down; want none", got)
+		}
+	})
 }

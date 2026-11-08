@@ -126,6 +126,7 @@ Every Slack call Agent Kourier makes, and the scope in the manifest that allows 
 | Call | Scope |
 |---|---|
 | `auth.test` | none |
+| `bots.info`, made by the leader once for each ChatConnection it serves, the broker's own included, but only when it serves a team ChatConnection, to tell which Slack app the bot belongs to | `users:read` (Slack's documentation for the method; not verified here) |
 | `users.info`, with the email for the audit log | `users:read`, `users:read.email` |
 | `chat.postMessage`, `chat.update`, `chat.postEphemeral` | `chat:write` |
 | `chat.startStream`, `chat.appendStream`, `chat.stopStream` | `chat:write` |

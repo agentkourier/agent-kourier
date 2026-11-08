@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -18,7 +19,8 @@ import (
 // half is shared by the connections and finds the platform here, by connection (runtimeTable).
 type connRuntime struct {
 	name string // "namespace/name"
-	ref  v1alpha1.ObjectRef
+	// conn is the connection as it was started: its credentials are the ones this runtime runs on.
+	conn Connection
 	// id is whose bot it is, guarded by the table's lock (runtimeTable.identify): the own connection's is learned after it runs.
 	id       appIdentity
 	platform builtPlatform
@@ -29,9 +31,10 @@ type connRuntime struct {
 	stop context.CancelFunc
 	// halted says the runtime is being stopped on purpose, by halt, so its end is no failure and its platform stays for the final drain.
 	halted atomic.Bool
-	// done is closed when RunPlatform has returned, and err is its result, set before. Both are set by run: a runtime that never ran has neither.
+	// done is closed when RunPlatform has returned. It is made by build, so that whoever halts the runtime sees it whenever it ran; ran says
+	// run was called, since a runtime that never ran has nothing to wait for.
 	done chan struct{}
-	err  error
+	ran  atomic.Bool
 	// closeOnce makes closing the transport once, whoever asks.
 	closeOnce sync.Once
 }
@@ -44,7 +47,7 @@ func (rt *connRuntime) halt() {
 
 // wait waits for RunPlatform to return, or for ctx. A runtime that never ran has nothing to wait for.
 func (rt *connRuntime) wait(ctx context.Context) {
-	if rt.done != nil {
+	if rt.ran.Load() {
 		waitFor(ctx, rt.done)
 	}
 }
@@ -55,6 +58,9 @@ func (rt *connRuntime) wait(ctx context.Context) {
 type runtimeTable struct {
 	mu  sync.RWMutex
 	rts map[string]*connRuntime
+	// sealed is set by the shutdown when it halts the runtimes: a runtime added after it is halted as it is added, so that none runs on
+	// beyond the step that stops them.
+	sealed bool
 }
 
 func newRuntimeTable() *runtimeTable { return &runtimeTable{rts: map[string]*connRuntime{}} }
@@ -93,11 +99,28 @@ func (o outboxPlatforms) Platform(conn string) (outbox.Platform, error) {
 // outbox is the table as the outbox's Resolver.
 func (t *runtimeTable) outbox() chat.Resolver[outbox.Platform] { return outboxPlatforms{t} }
 
-// add registers rt as the runtime of its connection.
-func (t *runtimeTable) add(rt *connRuntime) {
+// add registers rt as the runtime of its connection, and says whether it did: a sealed table (the broker is stopping) halts rt and refuses it.
+func (t *runtimeTable) add(rt *connRuntime) bool {
 	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.sealed {
+		rt.halt()
+		return false
+	}
 	t.rts[rt.name] = rt
-	t.mu.Unlock()
+	return true
+}
+
+// seal refuses every runtime from now on and returns those that are in the table.
+func (t *runtimeTable) seal() []*connRuntime {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.sealed = true
+	out := make([]*connRuntime, 0, len(t.rts))
+	for _, rt := range t.rts {
+		out = append(out, rt)
+	}
+	return out
 }
 
 // remove takes rt out of the table, if it is the connection's runtime still: a runtime that was replaced is not in it to take.
@@ -167,22 +190,24 @@ func (h *runtimeHost) build(conn Connection, id appIdentity) (*connRuntime, erro
 		return nil, err
 	}
 	ctx, report, stop := WithAuthFailure(h.parent)
-	rt := &connRuntime{name: name, ref: conn.Ref, id: id, platform: p, report: report, ctx: ctx, stop: stop}
-	h.table.add(rt)
+	rt := &connRuntime{name: name, conn: conn, id: id, platform: p, report: report, ctx: ctx, stop: stop, done: make(chan struct{})}
+	if !h.table.add(rt) {
+		h.closeTransport(rt)
+		return nil, errStopping
+	}
 	return rt, nil
 }
 
 // run starts the run of rt on sink, on a goroutine of its own. onEnd, if set, is called with what RunPlatform returned once it has. When the
 // runtime was not halted the run ended by itself, which for RunPlatform is a rejected credential: the runtime leaves the table then, so the
-// connection is down. A halted one stays until its owner takes it out, because the final drain of a shutdown still posts through it.
+// connection is down, and its transport closes. A halted one stays until its owner takes it out, because the final drain of a shutdown still posts through it.
 func (h *runtimeHost) run(rt *connRuntime, sink chat.Sink, onEnd func(rt *connRuntime, err error)) {
-	rt.done = make(chan struct{})
+	rt.ran.Store(true)
 	go func() {
 		err := RunPlatform(rt.ctx, rt.platform, sink, RunPolicy{Logger: h.log})
-		rt.err = err
 		if !rt.halted.Load() {
 			h.table.remove(rt)
-			h.metrics.ChatConnected(rt.name, false)
+			h.closeTransport(rt) // nothing posts through it from here: the connection is down
 		}
 		close(rt.done)
 		if onEnd != nil {
@@ -203,9 +228,10 @@ func (h *runtimeHost) closeTransport(rt *connRuntime) {
 	})
 }
 
-// haltAll ends the run of every runtime in the table and waits for them to return, or for ctx. The runtimes stay in the table.
+// haltAll ends the run of every runtime in the table and waits for them to return, or for ctx. The runtimes stay in the table, which takes no
+// more: one that is added after this is halted as it is.
 func (h *runtimeHost) haltAll(ctx context.Context) {
-	all := h.table.all()
+	all := h.table.seal()
 	for _, rt := range all {
 		rt.halt()
 	}
@@ -214,12 +240,15 @@ func (h *runtimeHost) haltAll(ctx context.Context) {
 	}
 }
 
-// closeAll closes the transport of every runtime in the table.
+// closeAll closes the transport of every runtime in the table (closeTransport is once for each; a run that ended by itself closed its own).
 func (h *runtimeHost) closeAll() {
 	for _, rt := range h.table.all() {
 		h.closeTransport(rt)
 	}
 }
+
+// errStopping is the error of building a runtime while the broker is stopping.
+var errStopping = errors.New("the broker is stopping")
 
 // runtimeStopTimeout bounds the wait for the run of a team connection that the supervisor takes away or restarts to return. Past it the run
 // is left to end on its own (it has been told to stop) and the supervisor goes on.
@@ -233,7 +262,7 @@ func (h *runtimeHost) stopRuntime(ctx context.Context, rt *connRuntime) {
 	wctx, cancel := context.WithTimeout(ctx, runtimeStopTimeout)
 	defer cancel()
 	rt.wait(wctx)
-	if rt.done != nil && wctx.Err() != nil && !isClosed(rt.done) {
+	if rt.ran.Load() && wctx.Err() != nil && !isClosed(rt.done) {
 		h.log.WarnContext(ctx, "chat connection: its run did not stop in time; it was told to stop and is left to end", "connection", rt.name, "waited", runtimeStopTimeout)
 	}
 	h.closeTransport(rt)

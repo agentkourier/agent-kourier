@@ -354,6 +354,11 @@ func (w *statusWriter) reconcile(ctx context.Context) {
 	for _, rb := range rep.Snapshot.Bindings() {
 		served[rb.Binding.Namespace+"/"+rb.Binding.Name] = rb.Binding
 	}
+	for key, rs := range rejections { // a Binding the broker holds and does not run (a second connection of a Slack app) is not served here
+		if slices.ContainsFunc(rs, func(r config.Rejection) bool { return r.Reason == config.ReasonConnectionNotServed }) {
+			delete(served, key)
+		}
+	}
 	unserved := w.unservedBindings(ctx, rep)
 	for key := range unserved {
 		if _, isServed := served[key]; isServed || len(rejections[key]) > 0 { // a Rejection of the Binding says more

@@ -2,7 +2,9 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
@@ -39,7 +41,9 @@ type supervisor struct {
 	// gone is told the connection of a runtime that was stopped, so that the parts that keep state for it let go (the outbox's lane).
 	gone func(conn string)
 
-	done     chan struct{}
+	done chan struct{}
+	// passes counts the passes made, for a test that waits for one to be sure the supervisor has looked.
+	passes   atomic.Int64
 	ownID    appIdentity
 	ownKnown bool
 	teams    map[string]*teamRuntime
@@ -57,12 +61,16 @@ type teamRuntime struct {
 	rt *connRuntime
 	// failed says starting it failed for fp, which is not tried again until fp changes.
 	failed bool
+	// rejected says Slack refused the credentials of fp when the identity was asked: it is not asked again until fp changes. MC-5 is where the
+	// connection's Bindings are told (ChatCredentialsRejected); here it is the place where it is first known.
+	rejected bool
 	// refused says it was found to be a second connection of a Slack app, and not run for it. It stays refused while its credentials cannot be read.
 	refused bool
 }
 
 // run supervises until ctx ends: it reconciles with initial, the team connections the takeover read, and then with what each tick finds. It
-// returns when ctx has ended; the runtimes are left running, for stopAll.
+// returns when ctx has ended; the runtimes are left running, for the shutdown's haltAll. Every call that can block in a pass is bounded by ctx or by a
+// timeout of its own, so once ctx has ended it returns within the longest of those.
 func (s *supervisor) run(ctx context.Context, initial []TeamConnection) {
 	defer close(s.done)
 	tick := time.NewTicker(s.every)
@@ -70,6 +78,7 @@ func (s *supervisor) run(ctx context.Context, initial []TeamConnection) {
 	desired := initial
 	for {
 		s.reconcile(ctx, desired)
+		s.passes.Add(1)
 		select {
 		case <-ctx.Done():
 			return
@@ -110,7 +119,7 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 	}
 	claimed := map[string]string{} // Slack app -> the connection that holds it
 	if s.ownID.known() {
-		claimed[s.ownID.app()] = s.own.Ref.Namespace + "/" + s.own.Ref.Name
+		claimed[s.ownID.App] = s.own.Ref.Namespace + "/" + s.own.Ref.Name
 	}
 	refused := map[string]string{}
 	var toStart []string
@@ -121,7 +130,7 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 			// Its Secret is not readable now, or its platform has no adapter. What runs keeps running on the tokens it was started with:
 			// a cache that is relisting is no reason to drop a connection. Otherwise it starts once it can.
 			if st != nil && st.rt != nil && st.id.known() {
-				claimed[st.id.app()] = name
+				claimed[st.id.App] = name
 			}
 			if st != nil && st.refused {
 				refused[name] = refusedMessage
@@ -139,23 +148,33 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 			s.teams[name] = st
 			delete(s.said, name)
 		}
+		if st.rejected {
+			continue
+		}
 		if !st.asked {
 			id, err := s.identify(ctx, t.Connection)
 			if err != nil {
+				if errors.Is(err, errCredentialsRejected) {
+					st.rejected = true
+					s.say(ctx, name, "the platform rejected the ChatConnection's credentials, so it is not started until its ChatConnection or its Secret changes", err)
+					continue
+				}
 				s.say(ctx, name, "the identity of the ChatConnection's bot is not known yet, so it is not started", err)
 				continue
 			}
 			st.id, st.asked = id, true
 		}
 		if st.id.known() {
-			if holder, taken := claimed[st.id.app()]; taken {
+			if holder, taken := claimed[st.id.App]; taken {
 				st.refused = true
 				refused[name] = refusedMessage
 				s.stop(ctx, name, st, "it is a second connection of the Slack app that "+holder+" uses")
 				s.say(ctx, name, "the ChatConnection is not served: it uses the same Slack app as the older ChatConnection "+holder+", and an app is served once", nil)
 				continue
 			}
-			claimed[st.id.app()] = name
+			if st.rt != nil || !st.failed { // a connection whose start failed holds no app: a younger one of it may be served
+				claimed[st.id.App] = name
+			}
 		}
 		st.refused = false
 		if st.rt == nil && !st.failed {
@@ -175,7 +194,13 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 // start builds and runs the runtime of t.
 func (s *supervisor) start(ctx context.Context, t TeamConnection, st *teamRuntime) {
 	name := t.Name()
+	if ctx.Err() != nil {
+		return
+	}
 	rt, err := s.host.build(t.Connection, st.id)
+	if errors.Is(err, errStopping) {
+		return
+	}
 	if err != nil {
 		st.failed = true
 		s.say(ctx, name, "the ChatConnection cannot be started", err)
