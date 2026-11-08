@@ -13,6 +13,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -569,5 +570,42 @@ func TestAFailedAuditOfAStoppedReportIsTriedAgain(t *testing.T) {
 	}
 	if told != 2 {
 		t.Errorf("told %d times; want 9.2, whose write failed, and 9.3, and not 9.4", told)
+	}
+}
+
+// The same, with the reload landing while the app_mention is handled, just after the Intake first reads the config: one event is
+// decided against one config, so it cannot both pass the dedup as a mention and be decided again as a report.
+func TestAReloadDuringTheAppMentionCannotStartTheLimitedReport(t *testing.T) {
+	oneAnHour := personTrigger(func(tr *v1alpha1.Trigger) {
+		tr.Limits.RateLimit = &v1alpha1.RateLimit{MaxRuns: 1, Per: metav1.Duration{Duration: time.Hour}, MaxConcurrent: 5}
+	})
+	h := newLimited(t, v1alpha1.Trigger{Type: v1alpha1.TriggerMention}, oneAnHour)
+	withoutMention := snapshotOf(t, []v1alpha1.Trigger{oneAnHour})
+	reloadOnRead := false
+	h.cfg.Snapshot = func() *config.Snapshot {
+		s := h.snap.Load()
+		if reloadOnRead {
+			reloadOnRead = false
+			h.snap.Store(withoutMention)
+		}
+		return s
+	}
+	h.in = chat.NewIntake(h.cfg)
+	if err := h.in.Message(h.ctx, personPost("C1", "8.8", "", "checkout is down")); err != nil {
+		t.Fatal(err)
+	}
+	message := personPost("C1", "9.9", "", "<@UAGENT> is checkout down?") // limited, and the adapter missed the mention
+	if err := h.in.Message(h.ctx, message); err != nil {
+		t.Fatal(err)
+	}
+	h.clk.advance(2 * time.Hour)
+	appMention := message
+	appMention.Mentioned = true
+	reloadOnRead = true
+	if err := h.in.Message(h.ctx, appMention); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.started(); !slices.Equal(got, []string{"8.8"}) {
+		t.Errorf("turns started for %v; want 8.8 alone, and no late start of 9.9", got)
 	}
 }
