@@ -89,7 +89,9 @@ func (c RunConfig) newPlatform(conn Connection, log *slog.Logger, onConnection f
 // and a test image sets it to reach the fake.
 func slackConfig(conn Connection, log *slog.Logger) slack.Config {
 	// AuthzTimeout is what a press is given for its membership checks, whose callers have no deadline.
-	cfg := slack.Config{BotToken: conn.Credentials["botToken"], AppToken: conn.Credentials["appToken"], Logger: log, AuthzTimeout: interact.PressAuthzTimeout}
+	cfg := slack.Config{BotToken: conn.Credentials["botToken"], AppToken: conn.Credentials["appToken"], Logger: log, AuthzTimeout: interact.PressAuthzTimeout,
+		// The connection label of the series the adapter records (see slack.Config.Connection).
+		Connection: v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)}
 	if url := testhooks.SlackAPIURL(); url != "" {
 		cfg.APIURL = url
 	}

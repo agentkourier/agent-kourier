@@ -223,6 +223,7 @@ func TestARunWhoseTeamSecretIsNotThereServesTheOwnConnectionAndStartsTheTeamOnce
 // has no run left, its outbox lane is gone, and the others are not touched.
 func TestARunAddsChangesAndRemovesATeamConnection(t *testing.T) {
 	w := newConnWorld(t, nil)
+	w.c.ConnectionNamespaces = append(w.c.ConnectionNamespaces, "team-c")
 	r := start(t, w.c)
 	r.until("/readyz", http.StatusOK)
 	w.eventually("the own connection to run", func() bool { return w.up(ownToken) == 1 && w.ob != nil })
@@ -230,7 +231,12 @@ func TestARunAddsChangesAndRemovesATeamConnection(t *testing.T) {
 
 	w.team("team-a", "tok-a1")
 	w.team("team-b", "tok-b")
-	w.eventually("both team connections to run", func() bool { return w.up("tok-a1") == 1 && w.up("tok-b") == 1 })
+	w.team("team-c", "tok-c")
+	w.eventually("the team connections to run", func() bool { return w.up("tok-a1") == 1 && w.up("tok-b") == 1 && w.up("tok-c") == 1 })
+	// The outbox gauges name each connection the broker serves, the ones the supervisor started included (they say 0 with nothing unposted).
+	for _, conn := range []string{"agent-kourier-system/slack-main", "team-b/slack", "team-c/slack"} {
+		r.waitMetric(`agentkourier_outbox_pending{connection="` + conn + `"} 0`)
+	}
 	// A post on the connection makes its lane; the double's Post fails, which leaves the row pending and the lane kept.
 	_, _ = w.ob.Send(t.Context(), outbox.Post{Source: "x", Role: store.OutboxReply, Connection: "team-a/slack", Channel: "C1", Thread: "1.1", Out: chat.Say(chat.Message{Fallback: "hi"})})
 	if got := w.lanes(); got != lanes+1 {
@@ -244,13 +250,22 @@ func TestARunAddsChangesAndRemovesATeamConnection(t *testing.T) {
 	}
 
 	// A deletion takes effect at the first read that settles it: some 10 to 20 seconds.
-	if err := w.dyn.Tracker().Delete(crConnections, "team-a", "slack"); err != nil {
-		t.Fatal(err)
+	for _, ns := range []string{"team-a", "team-c"} {
+		if err := w.dyn.Tracker().Delete(crConnections, ns, "slack"); err != nil {
+			t.Fatal(err)
+		}
 	}
-	w.eventually("team-a to stop and its lane to go", func() bool { return w.up("tok-a2") == 0 && w.lanes() == lanes })
+	w.eventually("team-a and team-c to stop and team-a's lane to go", func() bool { return w.up("tok-a2") == 0 && w.up("tok-c") == 0 && w.lanes() == lanes })
 	if w.up("tok-b") != 1 || w.up(ownToken) != 1 {
 		t.Errorf("up: team-b %d, own %d; want them running", w.up("tok-b"), w.up(ownToken))
 	}
+	// A connection that is no longer served has an outbox series only while a row of it is unposted: team-a's post is still pending, team-c has none.
+	r.waitMetric(`agentkourier_outbox_pending{connection="team-a/slack"} 1`)
+	w.eventually("team-c's outbox series to go with it", func() bool {
+		_, body := r.get("/metrics")
+		return !strings.Contains(body, `agentkourier_outbox_pending{connection="team-c/slack"}`)
+	})
+	r.waitMetric(`agentkourier_outbox_pending{connection="team-b/slack"} 0`)
 	r.cancel()
 	if err := r.wait(); err != nil {
 		t.Errorf("Run = %v after a signal; want nil", err)

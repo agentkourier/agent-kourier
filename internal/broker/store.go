@@ -85,7 +85,9 @@ type secretValues interface {
 // openedStore is what Run needs of a store beyond store.Store: both stores give it.
 type openedStore interface {
 	store.Store
-	RegisterMetrics(prometheus.Registerer) error
+	// RegisterMetrics exposes the store's gauges. connections lists the ChatConnections ("namespace/name") the broker serves, read at each scrape:
+	// the outbox gauges say 0 for each that has no unposted row.
+	RegisterMetrics(reg prometheus.Registerer, connections func() []string) error
 }
 
 // openStore opens the store that c chooses: the SQLite file at dbPath, or the Postgres database whose DSN is in the

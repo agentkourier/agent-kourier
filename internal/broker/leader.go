@@ -39,6 +39,8 @@ type leaderHalf struct {
 	// status is what the status writer writes with, set only with the crds config source: nil means the config comes from
 	// files, whose Bindings have no status, and the leader half makes no writer.
 	status *statusSink
+	// connsServed is the connections served, as the supervisor publishes them: Run made it, and its metrics read it (see Run).
+	connsServed *atomic.Pointer[[]Connection]
 }
 
 // openPlatform builds the chat platform of conn, and with an election fences it: every write to the chat that the leader half
@@ -228,7 +230,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	refused := &refusals{}
 	// The connections the verification probes the Bindings of: the supervisor publishes the list after each of its passes (supervisor.publish),
 	// and until the first the own connection's alone.
-	var connsServed atomic.Pointer[[]Connection]
+	connsServed := h.connsServed
 	connsServed.Store(&[]Connection{conn})
 	var connsChanged atomic.Uint64
 	if h.status != nil {
@@ -294,7 +296,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	// looks. A team connection that cannot start yet (its Secret has not synced) starts when it can, and none fails this start.
 	sup := &supervisor{
 		host: host, log: log, every: cmp.Or(cfg.superviseEvery, defaultSuperviseEvery), snapshot: boot.Reloader.Current, secrets: boot.Secrets,
-		own: conn, identify: cfg.identityOf, intake: newIntake, refusals: refused, conns: &connsServed, changes: &connsChanged, gone: ob.Forget,
+		own: conn, identify: cfg.identityOf, intake: newIntake, refusals: refused, conns: connsServed, changes: &connsChanged, gone: ob.Forget,
 		done: make(chan struct{}), teams: map[string]*teamRuntime{}, said: map[string]string{},
 	}
 	supCtx, stopSup := context.WithCancel(runCtx)

@@ -181,6 +181,10 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	}
 	connName := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
 	log.InfoContext(ctx, "serving a ChatConnection", "connection", connName)
+	// The connections served, which the leader half's supervisor keeps (supervisor.publish): the own connection until it does, so that a replica that
+	// does not lead names its own. The store's outbox gauges say 0 for each of them that has no unposted row.
+	var connsServed atomic.Pointer[[]Connection]
+	connsServed.Store(&[]Connection{conn})
 
 	// A write that finds another replica has led since ends the process (spec D37): the error alone would be handled
 	// by whichever part made the write, and the part could carry on. SQLite never calls it.
@@ -195,7 +199,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	}
 	auditEndpoint.Set(st)
 	log.InfoContext(ctx, "opened the store", "store", cfg.Store.kind()) // the kind only: a DSN is never logged
-	if err := st.RegisterMetrics(metrics.reg); err != nil {
+	if err := st.RegisterMetrics(metrics.reg, func() []string { return connectionNames(*connsServed.Load()) }); err != nil {
 		_ = st.Close()
 		return fmt.Errorf("store metrics: %w", err)
 	}
@@ -228,7 +232,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		lease = newLeaseClock(cfg.leaseNow)
 		guard = newLeaseFence(cfg.Election, lease, fail.now)
 	}
-	leader := &leaderHalf{cfg: cfg, log: log, sd: sd, metrics: metrics, boot: boot, st: st, leaseFence: guard, status: status}
+	leader := &leaderHalf{cfg: cfg, log: log, sd: sd, metrics: metrics, boot: boot, st: st, leaseFence: guard, status: status, connsServed: &connsServed}
 	leaderDone := make(chan error, 1)
 	runLeader := func() {
 		leave, ok := gate.enter()
