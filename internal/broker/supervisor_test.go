@@ -74,11 +74,11 @@ func (f *fakeConn) IsMember(context.Context, string, string) (bool, error) {
 }
 
 func (f *fakeConn) Run(ctx context.Context, _ chat.Sink) error {
-	f.live.Add(1)
-	defer f.live.Add(-1)
-	if f.onConn != nil {
+	if f.onConn != nil { // before the count, so that a test that waits for the count sees the connection up
 		f.onConn(true)
 	}
+	f.live.Add(1)
+	defer f.live.Add(-1)
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
