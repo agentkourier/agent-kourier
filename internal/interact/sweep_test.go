@@ -747,3 +747,38 @@ func TestSweepLeavesAnInteractionOfAConnectionThatIsDownUntilItRuns(t *testing.T
 		t.Errorf("updates %q; want the prompt replaced once", got)
 	}
 }
+
+// TestSweepSaysAgainWhenAConnectionStopsAfterRunning: the warning that a connection's due interactions wait is given once for an outage.
+// A sweep in which nothing due waits on the connection ends the outage for it, whether it ran again or the interactions were settled
+// meanwhile, so that the next outage is said too.
+func TestSweepSaysAgainWhenAConnectionStopsAfterRunning(t *testing.T) {
+	r := newSweepRig(t)
+	r.pending(t, "ix-1", "task-1", t0.Add(timeout))
+	running := chat.PlatformSet[interact.Updater]{}
+	sw := r.sweeper(t, func(c *interact.SweepConfig) { c.Updaters = running })
+	said := func() int {
+		return strings.Count(r.logs.String(), "level=WARN msg=\"interact: the chat connection of interactions that are due is not running")
+	}
+	sweep := func() {
+		t.Helper()
+		if err := sw.Sweep(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sweep()
+	sweep()
+	if said() != 1 {
+		t.Fatalf("%d warnings for one outage; want one", said())
+	}
+	// The interaction is settled while the connection is down (a press can be, a task that ended): nothing due waits on it next sweep.
+	if err := r.st.ResolveInteraction(t.Context(), "ix-1", store.InteractionCancelled, t0); err != nil {
+		t.Fatal(err)
+	}
+	sweep()
+	r.pending(t, "ix-2", "task-2", t0.Add(timeout)) // the connection is still down, or down again: a new outage
+	sweep()
+	if said() != 2 {
+		t.Errorf("%d warnings for two outages; want two", said())
+	}
+}

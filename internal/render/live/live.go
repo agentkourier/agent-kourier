@@ -910,7 +910,9 @@ func (u *Run) run(ctx context.Context) {
 				waiting := down
 				if down || verdict.Class == chat.FatalAuth {
 					// A rejected credential whose connection is down is the gap of a restart: the old runtime is out of the table
-					// and the new one is not in it yet, so the try is a wait for the connection, not an attempt.
+					// and the new one is not in it yet, so the try is a wait for the connection, not an attempt. Were the new one never
+					// to come up (its Secret cannot be used), each try is one real call with the revoked token, every Throttle: bounded by
+					// the final deadline and the turn's end, as any wait is.
 					if lookup := u.reresolve(ctx, &ref); verdict.Class == chat.FatalAuth && errors.Is(lookup, chat.ErrConnectionDown) {
 						waiting = true
 					}

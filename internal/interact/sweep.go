@@ -223,11 +223,14 @@ func (s *Sweeper) Sweep(ctx context.Context) error {
 		errs = append(errs, fmt.Errorf("interact: list the interactions that are due: %w", err))
 	}
 	done := 0
+	downNow := map[string]bool{} // the connections that do not run and have an interaction that is due, in this sweep
+	looked := true               // every due interaction was looked at
 	for _, row := range due {
 		if done == s.cfg.Batch {
+			looked = false
 			break
 		}
-		if s.down(ctx, row) {
+		if s.down(ctx, row, downNow) {
 			continue // not counted against the batch: it is not work
 		}
 		switch waiting, err := s.cfg.Presses.PendingPresses(ctx, row.ID, row.Deadline); { // if it cannot be known, wait
@@ -242,6 +245,13 @@ func (s *Sweeper) Sweep(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
+	if looked { // a connection that nothing due waits on, or that runs, is said again if it stops
+		for conn := range s.downSaid {
+			if !downNow[conn] {
+				delete(s.downSaid, conn)
+			}
+		}
+	}
 	// After the timeouts, so that a denial the session took and the agent did not, in this very sweep, is found timed out.
 	errs = append(errs, s.cancelUndelivered(ctx)...)
 	return errors.Join(errs...)
@@ -252,14 +262,14 @@ func (s *Sweeper) Sweep(ctx context.Context) error {
 // denied and the agent goes on, and its output is rendered into the connection's thread, which no platform can reach. The prompt's
 // edit and the notice are for that thread too. The interaction stays pending, and is timed out by the first sweep after the
 // connection runs (its deadline has passed already); the turn stays paused until then, as a connection's turns are not resumed until
-// it runs (session.Manager.Recover). It says so once for each connection, at WARN, until a due interaction of it finds it running.
+// it runs (session.Manager.Recover). It says so once for each connection, at WARN, and again after a sweep in which no due interaction waited on it (Sweep).
 // A platform that cannot be had for another reason is not waited for: the timeout goes on, and its
 // edit fails and is tried again as before.
-func (s *Sweeper) down(ctx context.Context, row store.Interaction) bool {
+func (s *Sweeper) down(ctx context.Context, row store.Interaction, downNow map[string]bool) bool {
 	if _, err := s.cfg.Updaters.Platform(row.Key.Connection); !errors.Is(err, chat.ErrConnectionDown) {
-		delete(s.downSaid, row.Key.Connection) // it runs: a later outage is said again
 		return false
 	}
+	downNow[row.Key.Connection] = true
 	if !s.downSaid[row.Key.Connection] {
 		s.downSaid[row.Key.Connection] = true
 		s.cfg.Logger.WarnContext(ctx, "interact: the chat connection of interactions that are due is not running; they are not timed out until it runs", "connection", row.Key.Connection, "interaction", row.ID)
