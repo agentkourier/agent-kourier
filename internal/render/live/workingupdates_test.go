@@ -417,7 +417,7 @@ func TestAProgressLineEndsACallWithNoID(t *testing.T) {
 // path does: at once, in place of the line of the call that returned.
 func TestAMovedTurnShowsTheProgressLineAtOnce(t *testing.T) {
 	e := setup(t)
-	e.cfg.Platform = spy{Platform: e.cfg.Platform, caps: e.cfg.Platform.Capabilities(), steps: new(atomic.Int32), streamFail: fmt.Errorf("start: %w", errRefused)}
+	e.use(spy{Platform: e.platform, caps: e.platform.Capabilities(), steps: new(atomic.Int32), streamFail: fmt.Errorf("start: %w", errRefused)})
 	e.live = newRenderer(t, e.cfg)
 	run := e.progressRun(t, sa, "U1")
 	run.Handle(call("c1", "search", nil))

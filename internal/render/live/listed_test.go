@@ -154,7 +154,7 @@ func TestAnAlertThreadReplyShowsTheLatestCardsAndCountsTheRest(t *testing.T) {
 func TestAnAlertThreadReplyWhoseCardsAreRefusedShowsTheLineAndItsAnswer(t *testing.T) {
 	e := setup(t)
 	refused := new(atomic.Int32)
-	e.cfg.Platform = refusesSteps{Platform: e.cfg.Platform, refused: refused}
+	e.use(refusesSteps{Platform: e.platform, refused: refused})
 	e.live = newRenderer(t, e.cfg)
 	run := e.alert(t, "", false)
 	run.Handle(call("c1", "search", nil))
@@ -321,7 +321,7 @@ func (updatesFail) Update(context.Context, chat.Ref, chat.Outgoing) error {
 // the alert on failed finals is not for cards.
 func TestAnAlertThreadReplyWhoseCardsCannotBeAddedAfterItsAnswerIsDelivered(t *testing.T) {
 	e := setup(t)
-	e.cfg.Platform = updatesFail{e.cfg.Platform}
+	e.use(updatesFail{e.platform})
 	reg := prometheus.NewRegistry()
 	obs, err := telemetry.New(reg, nil)
 	if err != nil {

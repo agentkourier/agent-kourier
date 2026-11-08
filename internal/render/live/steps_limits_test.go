@@ -151,7 +151,7 @@ func TestAStepThatIsRateLimitedWaitsAndIsNoStrikeAgainstTheSteps(t *testing.T) {
 // of its own, and nothing was started as a stream.
 func TestAPlatformThatRefusesTheStreamForGoodGetsThePostInstead(t *testing.T) {
 	e := setup(t)
-	e.cfg.Platform = spy{Platform: e.cfg.Platform, caps: e.cfg.Platform.Capabilities(), steps: new(atomic.Int32), streamFail: fmt.Errorf("start: %w", errRefused)}
+	e.use(spy{Platform: e.platform, caps: e.platform.Capabilities(), steps: new(atomic.Int32), streamFail: fmt.Errorf("start: %w", errRefused)})
 	e.live = newRenderer(t, e.cfg)
 	run, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1"})
 	run.Handle(text("a", "Hello"))
@@ -179,7 +179,7 @@ func TestAPlatformThatRefusesTheStreamForGoodGetsThePostInstead(t *testing.T) {
 func TestAReplyStillStreamsWhenSlackRefusesTheChunksMode(t *testing.T) {
 	e := setup(t)
 	adapterLog := &bytes.Buffer{}
-	e.cfg.Platform = slack.NewPlatform(e.client, "ns/conn").WithLogger(slog.New(slog.NewTextHandler(adapterLog, nil)))
+	e.use(slack.NewPlatform(e.client, "ns/conn").WithLogger(slog.New(slog.NewTextHandler(adapterLog, nil))))
 	e.live = newRenderer(t, e.cfg)
 	e.fake.RefuseChunkMode("invalid_chunks")
 	run := e.stream(t)
@@ -235,12 +235,12 @@ func TestAStepsRateLimitAtTheFinalDoesNotHoldBackTheStop(t *testing.T) {
 func TestATransientFailureOfTheStreamIsRetriedAndNeverPosted(t *testing.T) {
 	e := setup(t)
 	var starts atomic.Int32
-	e.cfg.Platform = spy{Platform: e.cfg.Platform, caps: e.cfg.Platform.Capabilities(), steps: new(atomic.Int32), streamFn: func() error {
+	e.use(spy{Platform: e.platform, caps: e.platform.Capabilities(), steps: new(atomic.Int32), streamFn: func() error {
 		if starts.Add(1) == 1 {
 			return errors.New("connection reset")
 		}
 		return nil
-	}}
+	}})
 	e.live = newRenderer(t, e.cfg)
 	run, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1"})
 	run.Handle(text("a", "Hello"))

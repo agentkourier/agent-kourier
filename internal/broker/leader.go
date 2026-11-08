@@ -76,6 +76,9 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 		return nil, err
 	}
 
+	// The parts that every connection shares look the platform up by the connection their row, turn or press names. The leader
+	// half runs one connection, so the one platform is the only entry.
+	platforms := chat.PlatformSet[chat.Platform]{connName: platform}
 	// The Bindings take the platform's own acknowledgment reaction, so the platform is built first.
 	bindings, err := NewBindings(boot.Reloader, boot.Secrets, auditor, Options{
 		OnRejected: metrics.CredentialRejected, AckReaction: platform.Capabilities().AckReaction, fence: h.leaseFence})
@@ -119,7 +122,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	// The renderer posts a turn's first message through the outbox and edits or streams it through the
 	// chat platform (the Slack adapter over the client); a notice is only queued on the outbox, off Slack's
 	// acknowledgement path.
-	renderer, err := live.New(live.Config{Sender: ob, Audit: auditor, Platform: platform, Store: st, Logger: log})
+	renderer, err := live.New(live.Config{Sender: ob, Audit: auditor, Platforms: platforms, Store: st, Logger: log})
 	if err != nil {
 		return nil, err
 	}
