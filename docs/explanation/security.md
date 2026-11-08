@@ -254,9 +254,10 @@ spec:
 - **Left out, there is no limit.** That is how every AgentBackend behaves until you set `agents`: a Binding may name an agent in any namespace, and only the backend's front door decides.
 - **Set, a Binding must match.** Its `agent.namespace` must be the Binding's own namespace, if `sameNamespace` is true, or one of `namespaces`. `sameNamespace` is the namespace of the Binding, not of the AgentBackend.
   What a Binding that names any other namespace costs depends on the route. **With custom resources** it is not served, and its `Accepted` condition is `False` with the reason `AgentNamespaceNotAllowed`;
-  the check runs each time the broker reads the config, so setting or narrowing `agents` drops the Bindings that no longer match at the next read, and the others keep running. A stream to the agent that is already open
-  keeps going until it ends. Every later step looks the Binding up and finds it gone: its next turn, one already queued included, is not sent, a pause for an
-  approval or a question is not posted, a button press is not decided, a cancel fails, and after a restart the broker does not follow the turn. **On the files route** the whole config
+  the check runs each time the broker reads the config, so setting or narrowing `agents` drops the Bindings that no longer match at the next read, and the others keep running. A task already sent to the agent is followed
+  until it ends, across reconnects, with the backend it started with, and the broker's own cancel of a stuck task uses that backend too. The steps that look the Binding
+  up find it gone: its next turn, one already queued included, is not sent; a pause for an approval or a question is not posted, and nothing ends that task on the agent,
+  which stays waiting, while the timeout cancel of a prompt posted earlier fails at every sweep; a button press is not decided; and after a restart the broker does not follow the turn. **On the files route** the whole config
   fails to resolve, so nothing is dropped: at start the broker exits with code 2 and serves nothing (the chart's `config.rollOnChange` restarts the pod when the ConfigMap changes, and with SQLite the old pod is already stopped), and on a reload the broker keeps serving
   every Binding under the last good config, which has the old limit or none, and sets `agentkourier_config_stale` to 1. The message names the AgentBackend and the agent namespace
   and nothing else of the backend's spec. When the AgentBackend's newest generation is invalid, or it was deleted and is held, it adds that the limit is that of the generation being served; the problems of an

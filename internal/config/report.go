@@ -82,8 +82,9 @@ func (i Invalid) rejectionFor(from, path string, rejected RejectionReason) (Reje
 	return rejected, path + ": " + i.describedTo(from)
 }
 
-// describedTo is describe as a Binding in namespace from is told it, whether a generation of the object is served or none
-// is: the owner's problems go only to a Binding in the object's own namespace.
+// describedTo is the sentence about i that a Binding in namespace from is given when i is another object that the Binding
+// names: describe with serving true, since the Binding's own serving is not in question, and the owner's problems only for a
+// Binding in i's own namespace.
 func (i Invalid) describedTo(from string) string { return i.describe(i.Namespace == from, true) }
 
 // Report is what a Reloader knows about the config it serves besides the Snapshot: the objects it refused and the
