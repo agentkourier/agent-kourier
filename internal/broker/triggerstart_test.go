@@ -340,7 +340,8 @@ func TestStartRefusesAMessageThatNamesNoConnection(t *testing.T) {
 	}
 }
 
-// Every trigger start reports botMessage as the source, in the view and in the session's origin.
+// A botMessage trigger's start reports botMessage as the source, in the view and in the session's origin (a personMessage
+// trigger's reports its own: TestOnStartOfAPersonsMessageIsTheirTurn).
 func TestOnStartSourceIsTheTriggerType(t *testing.T) {
 	s := newStarter(t)
 	m := firing(t)
@@ -653,6 +654,66 @@ func TestAMentionALimitStoppedIsAudited(t *testing.T) {
 	s.MentionLimited(s.tel.Ctx, mentioned(), store.LimitRate)
 	if len(s.aud.got) != 1 || s.aud.got[0].Ref != "botMention" || s.aud.got[0].Reason != "limit_rate" || s.aud.got[0].MessageID != mentioned().MessageID || s.aud.who[0].Binding != startBinding {
 		t.Errorf("audited %+v by %+v; want one refusal of the mention by the rate limit", s.aud.got, s.aud.who)
+	}
+}
+
+// reported is the match of a person's top-level message by a personMessage trigger: what the Intake hands the starter.
+func reported() chat.TriggerMatch {
+	return chat.TriggerMatch{
+		Binding: startBinding, Index: 1, Person: true, MessageID: "slack:" + startConn + ":C0123456789:3.3", Fields: map[string]string{},
+		PromptTemplate: "A person reported something in {{ .Channel }} ({{ .Source }}): {{ .Link }}.",
+		Received:       time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC),
+		Message: chat.Inbound{
+			At:   chat.Ref{Platform: "slack", Conn: startConn, Channel: "C0123456789", ID: "3.3"},
+			User: "U0REPORTER", Text: "checkout is down since the deploy",
+		},
+	}
+}
+
+// A person's message is that person's turn: the thread is the message's own, the turn names its author, so that the session
+// manager attributes it and audits the person, it carries no thread, and the session's origin says the source personMessage,
+// which feedback attributes to no alert. The prompt reports the source too, and holds what the person wrote in the untrusted
+// block only.
+func TestOnStartOfAPersonsMessageIsTheirTurn(t *testing.T) {
+	s := newStarter(t)
+	if err := s.OnStart(s.tel.Ctx, reported()); err != nil {
+		t.Fatalf("OnStart = %v", err)
+	}
+	if len(s.sub.got) != 1 {
+		t.Fatalf("%d turns submitted; want 1", len(s.sub.got))
+	}
+	in := s.sub.got[0]
+	if want := (session.Key{Connection: startConn, Channel: "C0123456789", Thread: "3.3"}); in.Key != want || in.MessageRef != "3.3" || in.MessageID != reported().MessageID || !in.Create || in.Binding != startBinding {
+		t.Errorf("submitted %+v; want a new session of thread %+v for the message 3.3 under %s", in, want, startBinding)
+	}
+	if in.UserID != "U0REPORTER" || in.WholeThread {
+		t.Errorf("UserID %q, WholeThread %v; want the person who wrote it, and no thread to carry", in.UserID, in.WholeThread)
+	}
+	if want := (store.Origin{Source: "personMessage"}); in.Origin != want {
+		t.Errorf("Origin = %+v; want %+v", in.Origin, want)
+	}
+	if got, want := instructionOf(t, in.Text), "A person reported something in C0123456789 (personMessage): https://example.slack.com/archives/C0123456789/p33."; got != want {
+		t.Errorf("instruction %q; want %q", got, want)
+	}
+	tag := untrustedTag(t, in.Text)
+	if before, inside, _ := strings.Cut(in.Text, "<"+tag+">"); strings.Contains(before, "checkout is down") || !strings.Contains(inside, "checkout is down since the deploy") {
+		t.Errorf("the person's text is not in the untrusted block alone:\n%s", in.Text)
+	}
+}
+
+// A prompt that is refused for a person's message is audited as that person's, as the turn would have been.
+func TestOnStartARefusedPersonsMessageIsAuditedWithThePerson(t *testing.T) {
+	s := newStarter(t)
+	m := reported()
+	m.PromptTemplate = "Report {{ .Nope }}"
+	if err := s.OnStart(s.tel.Ctx, m); !errors.Is(err, chat.ErrNotStarted) {
+		t.Fatalf("OnStart = %v; want ErrNotStarted", err)
+	}
+	if len(s.aud.who) != 1 || s.aud.who[0] != (audit.Actor{Binding: startBinding, User: "U0REPORTER"}) {
+		t.Errorf("audited by %+v; want the Binding and the person", s.aud.who)
+	}
+	if len(s.sub.got) != 0 {
+		t.Errorf("submitted %+v; want nothing", s.sub.got)
 	}
 }
 

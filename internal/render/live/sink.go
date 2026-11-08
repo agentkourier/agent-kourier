@@ -82,8 +82,9 @@ func (s *Sink) Turn(ctx context.Context, t session.TurnRef) agent.Handler {
 	return s.runs.Start(ctx, turn).Handle
 }
 
-// FollowUpHint is the line that ends the final message of a turn in a Binding whose chat.threadReplies is mention (D38): there, a
-// reply that does not mention Agent Kourier is ignored, and nothing else tells a person how to ask a follow-up. It is plain text, with no
+// FollowUpHint is the line that ends the final message of a turn in a thread that takes only mentioned replies: one of a Binding whose
+// chat.threadReplies is mention (D38), and one that a bot's mention (D49) or a person's message (D51) began, whatever the Binding
+// says. There a reply that does not mention Agent Kourier is ignored, and nothing else tells a person how to ask a follow-up. It is plain text, with no
 // mention syntax of any platform: the neutral model has no way to name Agent Kourier, and a line that said who to mention could not
 // be wrong about it.
 const FollowUpHint = "Mention me in this thread to ask a follow-up."

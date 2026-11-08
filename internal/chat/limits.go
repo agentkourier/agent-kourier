@@ -44,7 +44,7 @@ func (in *Intake) admit(ctx context.Context, m TriggerMatch) (store.TriggerAdmis
 		Binding: m.Binding, Trigger: m.Index, At: m.Received,
 		Key: store.ConversationKey{Connection: in.conn, Channel: m.Message.At.Channel, Thread: m.Message.At.ID},
 	}
-	if m.Mention {
+	if m.Mention || m.Person { // each holds its place for its own turn alone, not for the later turns of its thread
 		run.SessionThread = cmp.Or(m.Message.At.Thread, m.Message.At.ID)
 	}
 	adm, err := in.cfg.TriggerRuns.AdmitTriggerRun(ctx, run, limits)

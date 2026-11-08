@@ -835,11 +835,18 @@ func (t *tstate) outputTurn() store.TaskTurn {
 	if ackEmoji == "" {
 		ackID = ""
 	}
-	mention := t.began.Mention // an answer leaves it: the task is still the mention's, whoever's message the turn names now
-	if t.r.WholeThread {
-		mention = cmp.Or(mention, t.r.MessageRef)
-	}
+	mention := cmp.Or(t.began.Mention, t.startOf()) // an answer leaves it: the task is still the start's, whoever's message the turn names now
 	return store.TaskTurn{ID: cmp.Or(t.nid, t.began.ID, t.r.ID), User: cmp.Or(ack.UserID, t.r.UserID, t.began.User), MessageRef: cmp.Or(ack.MessageRef, t.r.MessageRef, t.began.MessageRef), Acknowledgment: ackEmoji, AcknowledgmentID: ackID, Mention: mention}
+}
+
+// startOf is the message of the trigger's start that the turn r is, for a start that holds its place in the trigger's limits for
+// its own turn alone (store.TaskTurn.Mention): a bot's mention, which carries the thread, or the person's message at the root
+// of a session that a personMessage trigger began. Any other turn, an alert's included, is none, and says "".
+func (t *tstate) startOf() string {
+	if t.r.WholeThread || (t.sess.Origin.Source == store.OriginPersonMessage && t.r.MessageRef == t.key.Thread) {
+		return t.r.MessageRef
+	}
+	return ""
 }
 
 // sinkRef is the TurnRef the sink is given for this attempt. An answer's output is a message of its own, named after the

@@ -18,9 +18,13 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
-// botMessageSource is the source every trigger start reports: the prompt view's Source and the session's origin
-// source.
-const botMessageSource = string(v1alpha1.TriggerBotMessage)
+// botMessageSource and personMessageSource are the sources a trigger start reports: the prompt view's Source and the
+// session's origin source. A start reports the type of the trigger that matched. Feedback attributes an alert by name to
+// botMessage alone, with an alertname.
+const (
+	botMessageSource    = string(v1alpha1.TriggerBotMessage)
+	personMessageSource = store.OriginPersonMessage
+)
 
 // botMentionSource is the source a bot's mention reports. It is no alert, so feedback attributes no alert to it.
 const botMentionSource = store.OriginBotMention
@@ -45,9 +49,9 @@ type triggerStarterConfig struct {
 	Log   *slog.Logger
 }
 
-// triggerStarter turns a botMessage trigger's decision to start into an investigation (spec 8.2): it renders the
-// first prompt from the trigger's template and the matched message, and gives it to the session manager's own
-// intake, the durable path a mention takes, anchored to the alert's thread. It is the Intake's IntakeConfig.OnStart.
+// triggerStarter turns a botMessage or personMessage trigger's decision to start into an investigation (spec 8.2): it
+// renders the first prompt from the trigger's template and the matched message, and gives it to the session manager's own
+// intake, the durable path a mention takes, anchored to the matched message's thread. It is the Intake's IntakeConfig.OnStart.
 //
 // It runs on the platform's acknowledgement path, which has seconds, so it does local work only: a render, a few local
 // writes, and a wake. It calls no agent and no Slack API; the permalink comes from what the platform cached when it
@@ -83,10 +87,13 @@ func newTriggerStarter(cfg triggerStarterConfig) (*triggerStarter, error) {
 // OnStart implements IntakeConfig.OnStart.
 //
 // The first turn's text is the rendered prompt (render.Prompt): the template's output, then the whole message in the
-// untrusted block. The turn names no user: nobody wrote it, so it is filed under the session manager's system
-// user (session.SystemUser), which sends no attribution and audits no person, rather than a person who did not write
-// it. A person's reply in the thread continues the session without a mention, as a reply in any thread Agent Kourier
-// owns does.
+// untrusted block. A bot's message and a bot's mention name no user: nobody wrote the turn, so it is filed under the
+// session manager's system user (session.SystemUser), which sends no attribution and audits no person, rather than a
+// person who did not write it. A person's message (m.Person) is that person's turn: it names its author, so the session
+// manager attributes it, audits the person and shows the answer to them as it does for any turn a person writes, and a
+// refusal is audited as theirs. A person's reply in an alert's thread continues the session without a mention, as a
+// reply in any thread Agent Kourier owns does; in the thread of a person's message, as in one a bot's mention began, only
+// a mentioned reply does (session.Manager, by the origin).
 //
 // The session keeps the trigger source and its bounded alertname subject, so that a vote on any message of the thread,
 // cast long after the start, can be attributed at the feedback boundary (spec 8.7).
@@ -108,8 +115,11 @@ func (s *triggerStarter) OnStart(ctx context.Context, m chat.TriggerMatch) error
 		return fmt.Errorf("bot message %s names no connection: %w", m.MessageID, chat.ErrNotStarted)
 	}
 	source := botMessageSource
-	if m.Mention {
+	switch {
+	case m.Mention:
 		source = botMentionSource
+	case m.Person:
+		source = personMessageSource
 	}
 	view := v1alpha1.PromptView{
 		Channel: at.Channel, State: m.Fields["state"], Key: m.Fields["key"], Source: source, Fields: m.Fields,
@@ -131,7 +141,7 @@ func (s *triggerStarter) OnStart(ctx context.Context, m chat.TriggerMatch) error
 	res, err := s.submit.Submit(ctx, session.Inbound{
 		Key:       s.keyOf(m),
 		Binding:   m.Binding,
-		MessageID: id, MessageRef: at.ID, Text: text, Create: true, WholeThread: m.Mention,
+		MessageID: id, MessageRef: at.ID, UserID: authorOf(m), Text: text, Create: true, WholeThread: m.Mention,
 		Origin: store.Origin{Source: source, Subject: feedback.AlertName(m.Fields["alertname"])},
 	})
 	switch {
@@ -144,6 +154,15 @@ func (s *triggerStarter) OnStart(ctx context.Context, m chat.TriggerMatch) error
 		return fmt.Errorf("start the investigation of %s: the session manager did not take it (%s)", id, res.Disposition)
 	}
 	return nil
+}
+
+// authorOf is who wrote the turn a match starts: the person of a person's message, and nobody for a bot's message or mention,
+// whatever user ID the sender's message carries.
+func authorOf(m chat.TriggerMatch) string {
+	if m.Person {
+		return m.Message.User
+	}
+	return ""
 }
 
 // permalink is the link to the message at, made by the platform of the message's connection.
@@ -195,7 +214,7 @@ func (s *triggerStarter) refuse(ctx context.Context, m chat.TriggerMatch, cause 
 	if err := s.notice(ctx, key, n); err != nil {
 		return fmt.Errorf("note the refused start of %s: %w", id, err)
 	}
-	if err := s.audit.TriggerRefused(ctx, audit.Actor{Binding: m.Binding}, audit.TriggerRefusal{MessageID: id, Trigger: m.Index, Ref: ref, Reason: reason, Len: length}); err != nil {
+	if err := s.audit.TriggerRefused(ctx, audit.Actor{Binding: m.Binding, User: authorOf(m)}, audit.TriggerRefusal{MessageID: id, Trigger: m.Index, Ref: ref, Reason: reason, Len: length}); err != nil {
 		s.log.WarnContext(ctx, "chat: the refusal of a trigger's start was not audited", "binding", m.Binding, "trigger", m.Index, "message", at.ID, "error", err)
 	}
 	telemetry.Count(ctx, "agentkourier_trigger_refused_total", m.Binding, strconv.Itoa(m.Index), ref, reason)

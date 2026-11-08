@@ -276,6 +276,67 @@ func TestDryRunShowsWhatAnExcludeTurnedAway(t *testing.T) {
 	}
 }
 
+// A personMessage trigger is replayed too: of people's top-level messages, a report is matched by it with the person as the
+// sender, one its exclude turns away is excluded with the reason, and a mention stays the mention trigger's, so it is person.
+// The alert beside them is still the botMessage trigger's.
+func TestDryRunReplaysAPersonMessageTrigger(t *testing.T) {
+	fake := fakeslack.New()
+	t.Cleanup(fake.Close)
+	connect(t, fake)
+	if _, err := fake.Webhook(webhook(webhookBot, kindFiring)); err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"checkout is down since the deploy", "thanks, it is back", "<@UFAKEBOT> is this real?"} {
+		say := fake.Say
+		if strings.HasPrefix(text, "<@") {
+			say = fake.Mention
+		}
+		if _, err := say(alertChannel, "U1", text); err != nil {
+			t.Fatal(err)
+		}
+	}
+	trial, err := os.ReadFile(dryRunConfig + "/trial.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const mention = "      - type: mention\n"
+	if !bytes.Contains(trial, []byte(mention)) {
+		t.Fatal("trial.yaml no longer has the mention trigger this test adds a personMessage trigger after")
+	}
+	person := mention + `      - type: personMessage
+        exclude: {text: '^(?i:thanks)\b'}
+        limits: {rateLimit: {maxRuns: 6, per: 30m, maxConcurrent: 2}, maxRunsPerDay: 50}
+        promptTemplate: 'A person reported something in {{ .Channel }}: {{ .Link }}.'
+`
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/binding.yaml", bytes.Replace(trial, []byte(mention), []byte(person), 1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, code := dry(t, fake, "--config", dir, "--binding", "agent-kourier/trial", "--json")
+	if code != exitOK {
+		t.Fatalf("exit code %d; stderr %q", code, stderr)
+	}
+	var r dryRunReport
+	if err := json.Unmarshal([]byte(stdout), &r); err != nil {
+		t.Fatal(err)
+	}
+	type row struct{ outcome, sender, why string }
+	var got []row
+	for _, m := range r.Messages {
+		got = append(got, row{m.Outcome, m.Sender.Kind, m.Why})
+	}
+	want := []row{{"matched", "bot", ""}, {"matched", "person", ""}, {"excluded", "person", "trigger 1: exclude text"}, {"person", "person", ""}}
+	if !slices.Equal(got, want) {
+		t.Errorf("messages = %+v; want %+v", got, want)
+	}
+	if m := r.Messages[1]; m.Trigger == nil || *m.Trigger != 1 || len(m.Fields) != 0 {
+		t.Errorf("the report = %+v; want it matched by trigger 1, with nothing extracted", m)
+	}
+	if r.Summary.Triggers["1"] != 1 || r.Summary.Triggers["2"] != 1 {
+		t.Errorf("triggers = %v; want one match of the personMessage trigger and one of the botMessage trigger", r.Summary.Triggers)
+	}
+}
+
 // The text report lists the messages oldest first, one line each, with the outcome, the trigger, what was extracted and the
 // title; and then the counts per outcome and trigger, the keys and the keys that flap.
 func TestDryRunTextReport(t *testing.T) {
