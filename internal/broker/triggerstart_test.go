@@ -652,7 +652,9 @@ func TestOnStartOfABotsMentionInAThreadThatCannotContinue(t *testing.T) {
 // no user.
 func TestAMentionALimitStoppedIsAudited(t *testing.T) {
 	s := newStarter(t)
-	s.Limited(s.tel.Ctx, mentioned(), store.LimitRate)
+	if err := s.Limited(s.tel.Ctx, mentioned(), store.LimitRate); err != nil {
+		t.Fatal(err)
+	}
 	if len(s.aud.got) != 1 || s.aud.got[0].Ref != "botMention" || s.aud.got[0].Reason != "limit_rate" || s.aud.got[0].MessageID != mentioned().MessageID || s.aud.who[0].Binding != startBinding || s.aud.who[0].User != "" {
 		t.Errorf("audited %+v by %+v; want one refusal of the mention by the rate limit, by no user", s.aud.got, s.aud.who)
 	}
@@ -663,9 +665,20 @@ func TestAnAlertALimitStoppedIsNotAudited(t *testing.T) {
 	s := newStarter(t)
 	m := reported()
 	m.Person = false
-	s.Limited(s.tel.Ctx, m, store.LimitRate)
+	if err := s.Limited(s.tel.Ctx, m, store.LimitRate); err != nil {
+		t.Fatal(err)
+	}
 	if len(s.aud.got) != 0 {
 		t.Errorf("audited %+v; want nothing for an alert", s.aud.got)
+	}
+}
+
+// An audit row that could not be written is an error of Limited, so that the Intake tells the person's next stopped start again.
+func TestAStoppedReportThatWasNotAuditedSaysSo(t *testing.T) {
+	s := newStarter(t)
+	s.aud.err = errors.New("the audit log is down")
+	if err := s.Limited(s.tel.Ctx, reported(), store.LimitRate); err == nil {
+		t.Error("Limited = nil; want the failed write's error")
 	}
 }
 
@@ -674,7 +687,9 @@ func TestAnAlertALimitStoppedIsNotAudited(t *testing.T) {
 func TestAPersonsReportALimitStoppedIsAuditedAsTheirs(t *testing.T) {
 	s := newStarter(t)
 	m := reported()
-	s.Limited(s.tel.Ctx, m, store.LimitDaily)
+	if err := s.Limited(s.tel.Ctx, m, store.LimitDaily); err != nil {
+		t.Fatal(err)
+	}
 	if len(s.aud.got) != 1 || s.aud.got[0].Ref != "personMessage" || s.aud.got[0].Reason != "limit_daily" || s.aud.got[0].MessageID != m.MessageID || s.aud.got[0].Trigger != m.Index {
 		t.Fatalf("audited %+v; want one refusal of the report by the daily cap", s.aud.got)
 	}

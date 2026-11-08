@@ -245,9 +245,7 @@ func (in *Intake) unthreaded(ctx context.Context, m TriggerMatch, closing bool) 
 	case adm.Limit != "":
 		if !adm.Again { // a redelivery that lost what remembers it was counted and told then
 			in.countLimited(ctx, m, adm.Limit)
-			if in.cfg.OnLimited != nil && in.tellsLimited(m) {
-				in.cfg.OnLimited(ctx, m, adm.Limit)
-			}
+			in.tellLimited(ctx, m, adm.Limit)
 		}
 		out.decision = DecisionLimited
 		return out, nil

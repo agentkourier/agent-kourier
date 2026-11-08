@@ -2,6 +2,7 @@ package chat_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -443,8 +444,9 @@ func TestAPersonsReportALimitStoppedIsTold(t *testing.T) {
 	}))
 	var told []chat.TriggerMatch
 	var limits []store.TriggerLimit
-	h.cfg.OnLimited = func(_ context.Context, m chat.TriggerMatch, l store.TriggerLimit) {
+	h.cfg.OnLimited = func(_ context.Context, m chat.TriggerMatch, l store.TriggerLimit) error {
 		told, limits = append(told, m), append(limits, l)
+		return nil
 	}
 	h.in = chat.NewIntake(h.cfg)
 	for _, id := range []string{"9.1", "9.2", "9.2"} {
@@ -486,8 +488,9 @@ func TestAPersonsStoppedReportsAreToldOnceAWindow(t *testing.T) {
 		tr.Limits.RateLimit = &v1alpha1.RateLimit{MaxRuns: 1, Per: metav1.Duration{Duration: 10 * time.Minute}, MaxConcurrent: 5}
 	}))
 	var told []string
-	h.cfg.OnLimited = func(_ context.Context, m chat.TriggerMatch, _ store.TriggerLimit) {
+	h.cfg.OnLimited = func(_ context.Context, m chat.TriggerMatch, _ store.TriggerLimit) error {
 		told = append(told, m.Message.User)
+		return nil
 	}
 	h.in = chat.NewIntake(h.cfg)
 	post := func(id, user string) {
@@ -515,5 +518,56 @@ func TestAPersonsStoppedReportsAreToldOnceAWindow(t *testing.T) {
 	post("10.2", "U1")
 	if !slices.Equal(told, []string{"U1", "U2", "U1"}) {
 		t.Errorf("told %v; want U1 again in a new window", told)
+	}
+}
+
+// A reload between a limited report and its app_mention can take the Binding's mention trigger away. Then the app_mention is the
+// report's duplicate, as on any Binding with no mention trigger: it is not decided again, so it cannot start the report late once
+// capacity is back.
+func TestAReloadThatDropsTheMentionTriggerLeavesTheLimitedReportADuplicate(t *testing.T) {
+	oneAnHour := personTrigger(func(tr *v1alpha1.Trigger) {
+		tr.Limits.RateLimit = &v1alpha1.RateLimit{MaxRuns: 1, Per: metav1.Duration{Duration: time.Hour}, MaxConcurrent: 5}
+	})
+	h := newLimited(t, v1alpha1.Trigger{Type: v1alpha1.TriggerMention}, oneAnHour)
+	if err := h.in.Message(h.ctx, personPost("C1", "8.8", "", "checkout is down")); err != nil {
+		t.Fatal(err)
+	}
+	message := personPost("C1", "9.9", "", "<@UAGENT> is checkout down?") // limited, and the adapter missed the mention
+	if err := h.in.Message(h.ctx, message); err != nil {
+		t.Fatal(err)
+	}
+	h.reload(t, oneAnHour)
+	h.clk.advance(2 * time.Hour)
+	appMention := message
+	appMention.Mentioned = true
+	if err := h.in.Message(h.ctx, appMention); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.started(); !slices.Equal(got, []string{"8.8"}) || len(h.sub.submitted()) != 0 {
+		t.Errorf("turns started for %v and %d submitted; want 8.8 alone, and nothing for 9.9", got, len(h.sub.submitted()))
+	}
+}
+
+// An audit row that could not be written opens no window: the person's next stopped report is told again.
+func TestAFailedAuditOfAStoppedReportIsTriedAgain(t *testing.T) {
+	h := newLimited(t, personTrigger(func(tr *v1alpha1.Trigger) {
+		tr.Limits.RateLimit = &v1alpha1.RateLimit{MaxRuns: 1, Per: metav1.Duration{Duration: time.Hour}, MaxConcurrent: 5}
+	}))
+	var told int
+	h.cfg.OnLimited = func(context.Context, chat.TriggerMatch, store.TriggerLimit) error {
+		told++
+		if told == 1 {
+			return errors.New("the audit log is down")
+		}
+		return nil
+	}
+	h.in = chat.NewIntake(h.cfg)
+	for _, id := range []string{"9.1", "9.2", "9.3", "9.4"} {
+		if err := h.in.Message(h.ctx, personPost("C1", id, "", "checkout is down")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if told != 2 {
+		t.Errorf("told %d times; want 9.2, whose write failed, and 9.3, and not 9.4", told)
 	}
 }

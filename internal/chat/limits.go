@@ -86,8 +86,8 @@ const maxToldLimited = 4096
 // toldLimited holds, for each person, Binding and trigger, when the window ends in which a stopped start of theirs was told to
 // IntakeConfig.OnLimited, so that a flood of one person's reports is audited once for each window of the trigger's rate limit
 // (rateLimit.per), not once for each message: the row names the person, and the metric and the digest count the messages. It is
-// held in memory, so a restart may audit one more for a window. Past maxToldLimited windows that have not ended it forgets them
-// all: the cost is more audit rows, never a person not audited.
+// held in memory, so a restart or a change of leader (a new Intake) may audit one more for a window. Past maxToldLimited windows that
+// have not ended it forgets them all: the cost is more audit rows, never fewer.
 type toldLimited struct {
 	mu    sync.Mutex
 	until map[string]time.Time
@@ -114,15 +114,30 @@ func (t *toldLimited) first(key string, now, until time.Time) bool {
 	return true
 }
 
-// tellsLimited says whether a start that a limit stopped is told to IntakeConfig.OnLimited: a bot's mention always, a person's
-// message once for each person and window of the trigger (toldLimited), and an alert's never, since it is only counted.
-func (in *Intake) tellsLimited(m TriggerMatch) bool {
+// forget closes the window of key, so that its next stopped start is the first again.
+func (t *toldLimited) forget(key string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.until, key)
+}
+
+// tellLimited tells IntakeConfig.OnLimited of a start that a limit stopped: a bot's mention always, a person's message once for each
+// person and window of the trigger (toldLimited), and an alert's never, since it is only counted. A person's window stays open only
+// if the record was written: after a failed write the next stopped start of theirs is told again.
+func (in *Intake) tellLimited(ctx context.Context, m TriggerMatch, limit store.TriggerLimit) {
+	if in.cfg.OnLimited == nil {
+		return
+	}
 	switch {
 	case m.Mention:
-		return true
+		_ = in.cfg.OnLimited(ctx, m, limit) // OnLimited logs its own failure, and a mention is told each time anyway
 	case m.Person:
 		key := fmt.Sprintf("%s#%d/%s", m.Binding, m.Index, m.Message.User)
-		return in.toldLimited.first(key, m.Received, m.Received.Add(m.Limits.DigestWindow()))
+		if !in.toldLimited.first(key, m.Received, m.Received.Add(m.Limits.DigestWindow())) {
+			return
+		}
+		if err := in.cfg.OnLimited(ctx, m, limit); err != nil {
+			in.toldLimited.forget(key)
+		}
 	}
-	return false
 }

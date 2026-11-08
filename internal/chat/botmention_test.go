@@ -86,7 +86,10 @@ func TestABotsMentionStartsOneTurnInItsThread(t *testing.T) {
 func TestAMentionWhoseSessionTakesNoTurnTouchesNoLimit(t *testing.T) {
 	h := newLimited(t)
 	var stopped []store.TriggerLimit
-	h.cfg.OnLimited = func(_ context.Context, _ chat.TriggerMatch, l store.TriggerLimit) { stopped = append(stopped, l) }
+	h.cfg.OnLimited = func(_ context.Context, _ chat.TriggerMatch, l store.TriggerLimit) error {
+		stopped = append(stopped, l)
+		return nil
+	}
 	var asked []string
 	h.cfg.TakesBotMention = func(_ context.Context, m chat.TriggerMatch) (bool, error) {
 		asked = append(asked, m.Message.At.Thread)
@@ -147,7 +150,10 @@ func TestTheIntakeAsksAgainWhetherItTakesTheMention(t *testing.T) {
 func TestARedeliveredStoppedMentionIsToldOnce(t *testing.T) {
 	h := newLimited(t)
 	var stopped []store.TriggerLimit
-	h.cfg.OnLimited = func(_ context.Context, _ chat.TriggerMatch, l store.TriggerLimit) { stopped = append(stopped, l) }
+	h.cfg.OnLimited = func(_ context.Context, _ chat.TriggerMatch, l store.TriggerLimit) error {
+		stopped = append(stopped, l)
+		return nil
+	}
 	h.in = chat.NewIntake(h.cfg)
 	for i := range 4 {
 		if err := h.in.Message(h.ctx, botMentionOf(fmt.Sprintf("5.%d", i+1), "4.4")); err != nil {
@@ -171,7 +177,10 @@ func TestARedeliveredStoppedMentionIsToldOnce(t *testing.T) {
 func TestABurstOfMentionsIsHeldToTheLimits(t *testing.T) {
 	h := newLimited(t)
 	var stopped []store.TriggerLimit
-	h.cfg.OnLimited = func(_ context.Context, _ chat.TriggerMatch, l store.TriggerLimit) { stopped = append(stopped, l) }
+	h.cfg.OnLimited = func(_ context.Context, _ chat.TriggerMatch, l store.TriggerLimit) error {
+		stopped = append(stopped, l)
+		return nil
+	}
 	h.in = chat.NewIntake(h.cfg)
 	for i := range 6 {
 		if err := h.in.Message(h.ctx, botMentionOf(fmt.Sprintf("5.%d", i+1), "4.4")); err != nil {

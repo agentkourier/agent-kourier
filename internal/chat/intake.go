@@ -71,8 +71,9 @@ type IntakeConfig struct {
 	// (TriggerMatch.Mention), or a person's message of a personMessage trigger (TriggerMatch.Person), whose author it names, so
 	// that a member who spends the limits for everyone can be found: once for each person, trigger and window of the trigger's
 	// rateLimit.per, while the metric counts every message. An alert's is only counted. It is told once for a message, not again
-	// for its redelivery. It is a record of something decided, so it returns nothing, and it does local writes only.
-	OnLimited func(ctx context.Context, m TriggerMatch, limit store.TriggerLimit)
+	// for its redelivery. It is a record of something decided: its error undoes nothing and only says that the record was not
+	// written, so that the person's next stopped start in the window is told again. It does local writes only.
+	OnLimited func(ctx context.Context, m TriggerMatch, limit store.TriggerLimit) error
 	// TakesBotMention, if set, says whether the session would take a bot's mention as a turn now, reading only. It is asked before
 	// the mention meets the limits: a mention that a session past its threadTTL, or whose Binding left the config, will not take
 	// posts nothing and queues nothing, so it is not_started, with no count against the limits and no report that they stopped
@@ -196,8 +197,6 @@ func (in *Intake) Message(ctx context.Context, m Inbound) (telemetryErr error) {
 		in.matched.add(seen)
 		if mentionMayTake {
 			in.awaitingMention.add(seen)
-		} else {
-			in.awaitingMention.remove(seen)
 		}
 		return nil
 	case d != "ignored":
@@ -476,9 +475,18 @@ func (r *recent) has(k [2]string) bool {
 
 // mentionOfLimited says whether m is a person's event that mentions Agent Kourier, of a message that a limit stopped a
 // personMessage trigger from starting on a Binding with a mention trigger: it is the mention trigger's, though the message is
-// remembered (Intake.awaitingMention).
+// remembered (Intake.awaitingMention). It asks the config of this moment too: after a reload that took the mention trigger away,
+// the event is the report's duplicate, and is not decided again, which could start the report late.
 func (in *Intake) mentionOfLimited(m Inbound, seen [2]string) bool {
-	return m.Mentioned && m.Bot == nil && in.awaitingMention.has(seen)
+	if !m.Mentioned || m.Bot != nil || !in.awaitingMention.has(seen) {
+		return false
+	}
+	snap := in.cfg.Snapshot()
+	if snap == nil {
+		return false
+	}
+	rb, ok := snap.BindingForChannel(in.cfg.Connection.Namespace, in.cfg.Connection.Name, m.At.Channel)
+	return ok && mentionTriggerIn(rb.Binding.Spec.Chat.Triggers)
 }
 
 // remove forgets k, in both generations.
