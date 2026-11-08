@@ -13,7 +13,7 @@ for a proof of concept.
 |---|---|---|
 | [Binding](binding.md) | An agent, its service identity, and the channel connected to it | Application team |
 | [AgentBackend](agentbackend.md) | The agent endpoint, its dialect, and the namespaces allowed to use it | Platform team |
-| [ChatConnection](chatconnection.md) | The chat platform connection and its Secret | Platform team |
+| [ChatConnection](chatconnection.md) | The chat platform connection and its Secret | Platform team, or a team that [runs its own chat app](../explanation/config-routes.md#a-teams-own-chat-app) |
 
 With custom resources a Binding also has a status, which [Binding status](binding-status.md) describes: its conditions, their reasons and what
 `observedGeneration` says.

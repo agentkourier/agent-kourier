@@ -42,7 +42,8 @@ Channel
 
 ChatConnection
 :   The resource that connects Agent Kourier to one chat platform workspace, with the Secret that holds its tokens.
-    Owned by the platform team.
+    One broker serves it. Owned by whoever owns the chat app and that broker: usually the platform team, or a team
+    that runs its own chat app.
 
 Config route
 :   Where the broker reads its resources from, chosen when it starts: `files` (usually a ConfigMap, all or nothing) or `crds`

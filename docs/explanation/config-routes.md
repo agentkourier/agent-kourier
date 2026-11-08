@@ -154,3 +154,26 @@ On files the directory holds exactly one `ChatConnection`: the broker refuses to
 resources a cluster can hold the connections of several brokers, so each broker is told which one it serves, as `namespace/name`, in `AGENTKOURIER_CHAT_CONNECTION`, which is
 required. It serves the Bindings whose `connectionRef` names that connection, and no others. That also lets two releases share a cluster. A Binding whose `connectionRef` names a connection that does not exist is
 reported by the leader of every broker that sees it, as `ConnectionNotFound`, since none owns it.
+
+### A team's own chat app
+
+A `ChatConnection` belongs to whoever owns the chat app and the broker that serves it. That is usually the platform team. A team that
+wants its own app, with its own bot and its own tokens, runs its own broker for it, on custom resources:
+
+1. The team puts its `ChatConnection`, and the Secret with the app's tokens, in its own namespace. Its Bindings there name the connection
+   without `allowedNamespaces`, which only a reference from another namespace needs.
+2. It installs another release of the chart with `crds.install: false` and `config.chatConnection` naming that connection. The CRDs, and
+   their upgrades, stay with the release that installed them ([chart README](https://github.com/agentkourier/agent-kourier/blob/main/charts/agent-kourier/README.md#custom-resources-instead-of-a-configmap)).
+3. Its Bindings may still name the platform team's `AgentBackend`, which must then list the team's namespace in its `allowedNamespaces`.
+
+Channels are held per connection, so the team's app and the platform's app can each have a Binding in the same channel.
+
+The team's broker is not confined to the team's namespace:
+
+- It lists and watches all three kinds in every namespace, so the chart gives each release (with `rbac.create`, the default) a ClusterRole for that and
+  for patching `bindings/status` in every namespace. A team's broker can read every other team's Bindings, AgentBackends and ChatConnections (not their Secrets, which
+  stay under Roles in their own namespaces). It writes the status of its own connection's Bindings, and of any Binding whose
+  `connectionRef` names a connection that does not exist.
+- `rbac.create: false` does not narrow this: the broker's list is cluster-wide, and a Role in one namespace does not authorize it.
+- The release creates that ClusterRole and its ClusterRoleBinding, which a namespace admin usually may not create, so someone with
+  cluster rights installs the release or creates them.

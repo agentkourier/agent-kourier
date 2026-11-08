@@ -6,7 +6,7 @@ The Default column shows what happens when a field is omitted. None means no def
 
 `apiVersion: agentkourier.dev/v1alpha1` · `kind: ChatConnection`
 
-ChatConnection is a workspace connection. Owned by the platform team.
+ChatConnection is a workspace connection, served by one broker. Owned by whoever owns the chat app and that broker: usually the platform team, or a team that runs its own chat app.
 
 ## ChatConnection
 
