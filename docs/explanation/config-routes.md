@@ -51,6 +51,7 @@ file and field. On a reload it keeps the last good config, logs `config reload f
 | An invalid new object | Does not serve it. A Binding has `Accepted=False`. |
 | An object is deleted | Removes it. |
 | A Binding names an AgentBackend or ChatConnection that does not exist, or that does not allow its namespace | Drops the Binding from routing, with a condition (`BackendNotFound`, `ConnectionNotFound`, `NamespaceNotAllowed`). |
+| A Binding names an agent namespace that its AgentBackend's `agents` field does not allow | Drops the Binding from routing, with `AgentNamespaceNotAllowed`. |
 | A Binding names an AgentBackend that is invalid | Serves the AgentBackend's last good generation, or drops the Binding if it has none, with `BackendRejected`. |
 | The broker's own ChatConnection is edited into something invalid | Keeps serving its last good generation, and each of its Bindings says `ConnectionRejected`. |
 | A Binding names a ChatConnection that exists and that no broker serves | Nothing reads the Binding and nothing writes its status: `READY` stays empty. Point `connectionRef` at a connection that a broker serves. |
@@ -112,7 +113,7 @@ count over a cap, and most of the rules between the fields of one object.
 **Left to the broker**, which reports them as `Accepted=False` after the object is stored: a regex in a trigger's `match`, `exclude` or `extract` that
 does not compile, or compiles to more than 2000 instructions, or takes the regexes of a Binding past 5000 instructions together; a trigger's `promptTemplate` that does not parse, names an extract the trigger lacks, or fails when it runs; a duplicate trigger; the
 parts of a URL that only Go's parser refuses (a bad percent escape, port or bracket); a `match` or `exclude` value of 512 characters or fewer that is
-over 512 bytes; and every rule that spans objects: that the AgentBackend and ChatConnection exist and allow the namespace, that the dialect has an adapter, that
+over 512 bytes; and every rule that spans objects: that the AgentBackend and ChatConnection exist and allow the namespace, that the AgentBackend's `agents` field allows the agent namespace, that the dialect has an adapter, that
 one Binding holds the channel, and that a Secret has its key.
 
 The caps (50 triggers in a Binding, 32 `extract` entries in a trigger, 32 headers and 256 bytes of a header's name in an AgentBackend) apply on

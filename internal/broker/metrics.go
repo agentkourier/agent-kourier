@@ -54,7 +54,7 @@ type Metrics struct {
 var (
 	configKinds      = []string{config.KindAgentBackend, config.KindChatConnection, config.KindBinding}
 	rejectionReasons = []config.RejectionReason{config.ReasonInvalidSpec, config.ReasonBackendNotFound, config.ReasonBackendRejected,
-		config.ReasonConnectionNotFound, config.ReasonConnectionRejected, config.ReasonNamespaceNotAllowed, config.ReasonChannelConflict}
+		config.ReasonConnectionNotFound, config.ReasonConnectionRejected, config.ReasonNamespaceNotAllowed, config.ReasonAgentNamespaceNotAllowed, config.ReasonChannelConflict}
 )
 
 // NewMetrics returns the metrics. stale is read at each scrape for agentkourier_config_stale, and
@@ -97,7 +97,7 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 		heldObjects: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_config_held_objects",
 			Help: "Objects of the custom resource config source that were deleted and that the broker holds at their last good generation, by kind, while its own ChatConnection is deleted and held: the connection, the Bindings of it that are gone, and the AgentBackends that they and the Bindings of it that are still there use and that are gone. A held Binding whose backend went first, or that lost its channel, is held and not served. 0 when nothing is held, and always while the config is read from files."}, []string{"kind"}),
 		bindingRej: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_config_binding_rejections",
-			Help: "Bindings of the custom resource config source that are not accepted as written, by the reason of their Accepted condition: InvalidSpec, BackendNotFound, BackendRejected, ConnectionNotFound, ConnectionRejected, NamespaceNotAllowed or ChannelConflict. A Binding that is served from an older generation counts too. 0 while the config is read from files."}, []string{"reason"}),
+			Help: "Bindings of the custom resource config source that are not accepted as written, by the reason of their Accepted condition: InvalidSpec, BackendNotFound, BackendRejected, ConnectionNotFound, ConnectionRejected, NamespaceNotAllowed, AgentNamespaceNotAllowed or ChannelConflict. A Binding that is served from an older generation counts too. 0 while the config is read from files."}, []string{"reason"}),
 		statusWrites: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_binding_status_writes_total",
 			Help: "Writes of a Binding's status by the leader, by result: written, put_back (written again to the words it already had, because the status had been changed: a person's edit, or another writer), or failed (the API server refused or could not be reached; it is tried again). The series exist only once the leader of a broker that reads the custom resources has tried a write."}, []string{"result"}),
 		crdSchema: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_crd_schema_state",

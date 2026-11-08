@@ -3,6 +3,18 @@
 What changed in each release, newest first, and what you must do about it. The steps for an upgrade are in
 [Upgrade](how-to/upgrade.md), which has a section for each change that needs one; this page says what changed and points to it.
 
+## Version 0.2.2 (unreleased)
+
+An AgentBackend on `dialect: kagent-v1` can now limit which agent namespaces its Bindings may name. Nothing changes for an AgentBackend that does not set the new field. Read
+[the upgrade section](how-to/upgrade.md#upgrade-to-the-release-that-limits-the-agents-a-binding-may-name) before you set it.
+
+- **New field `spec.agents` on AgentBackend.** `sameNamespace: true` lets a Binding name an agent in its own namespace, and `namespaces` lists others (at most 256). Left out, there is no limit, as before.
+  A value that allows nothing is invalid, and so is the field on an `a2a` AgentBackend. The AgentBackend CRD changes, so bring the CRDs and the image to the same release.
+- **New `Accepted` reason `AgentNamespaceNotAllowed`.** On custom resources a Binding that names an agent namespace its AgentBackend does not allow is not served, and says so in `Accepted`
+  ([Binding status](reference/binding-status.md)). On the files route the config does not resolve: the broker exits with code 2 at start, and keeps the last good config on a reload. The metric
+  `agentkourier_config_binding_rejections` gains the reason.
+- **An earlier broker ignores the field on custom resources,** and serves every Binding with no limit, so remove `agents` before a rollback.
+
 ## Version 0.2.1
 
 The chart now grants the served ChatConnection's Secret by itself, so the install on custom resources needs `config.chatConnection` and no `rbac.secretNames` entry for that Secret

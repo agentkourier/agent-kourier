@@ -25,6 +25,7 @@ AgentBackendSpec is the desired state of an AgentBackend.
 | `url` | string | Yes | None | URL is the http or https base URL for kagent-v1, or the exact JSON-RPC endpoint for a2a. The a2a card must be served at URL + "/.well-known/agent-card.json", as AX does. At most 2048 bytes, with no query and no fragment. At least 1 character. At most 2048 characters. |
 | `headers` | [][Header](#header) | No | Empty list | Headers are sent on every request. Omitted headers add no static headers. At most 32. |
 | `allowedNamespaces` | []string | No | Empty list | AllowedNamespaces lists the other namespaces whose Bindings may reference this backend. Each is a DNS-1123 label. An empty list permits references only from the backend's own namespace. At most 256. |
+| `agents` | [AgentNamespaces](#agentnamespaces) | No | None | Agents limits the namespaces of the agents that a Binding of this backend may name in spec.agent.namespace. Omitted, a Binding may name an agent in any namespace, and what the backend's own front door does is the only check. Set, a Binding that names any other namespace is rejected: with custom resources it is not served and its Accepted condition is False with the reason AgentNamespaceNotAllowed, and on the files route the config does not load. Only for dialect kagent-v1: on a2a the URL names the agent and spec.agent.namespace is never sent, so the field is refused there. |
 
 ## Header
 
@@ -44,6 +45,15 @@ SecretKeyRef names one value in a Secret in the referring object's namespace.
 |---|---|---|---|---|
 | `name` | string | Yes | None | Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a letter or digit. Pattern `^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`. At most 253 characters. |
 | `key` | string | No | `token` | Key selects the entry of the Secret. It defaults to "token". It consists of at most 253 alphanumeric characters, '-', '_' or '.', and is neither "." nor "..", nor does it start with "..". Pattern `^(\.?[-_a-zA-Z0-9][-._a-zA-Z0-9]*)?$`. At most 253 characters. |
+
+## AgentNamespaces
+
+AgentNamespaces lists the agent namespaces that the Bindings of an AgentBackend may name. A Binding's spec.agent.namespace must be its own namespace, if sameNamespace is true, or one of namespaces. A value that allows neither is refused, because it would reject every Binding.
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `sameNamespace` | boolean | No | false | SameNamespace allows a Binding to name an agent in the Binding's own namespace. Omitted or false, it does not. It compares the Binding's namespace, in the broker's cluster, with spec.agent.namespace, a namespace on the backend: it keeps a team to its own agents only where the two mean the same, as for a kagent in the broker's cluster. |
+| `namespaces` | []string | No | Empty list | Namespaces lists the namespaces whose agents any Binding that may use this backend may name. Each is a DNS-1123 label. At most 256. |
 
 ---
 

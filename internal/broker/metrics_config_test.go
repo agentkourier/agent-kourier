@@ -28,7 +28,7 @@ func TestConfigReportSetsTheRejectionGauges(t *testing.T) {
 	m.ConfigReport(config.Report{
 		Invalid: []config.Invalid{{Kind: config.KindAgentBackend}, {Kind: config.KindBinding}, {Kind: config.KindBinding}},
 		Rejections: []config.Rejection{
-			{Reason: config.ReasonBackendRejected}, {Reason: config.ReasonBackendRejected}, {Reason: config.ReasonChannelConflict}, {Reason: "Surprise"},
+			{Reason: config.ReasonBackendRejected}, {Reason: config.ReasonBackendRejected}, {Reason: config.ReasonChannelConflict}, {Reason: config.ReasonAgentNamespaceNotAllowed}, {Reason: "Surprise"},
 		},
 	})
 	wantInvalid := []string{"{kind=AgentBackend} 1", "{kind=Binding} 2", "{kind=ChatConnection} 0"}
@@ -36,7 +36,7 @@ func TestConfigReportSetsTheRejectionGauges(t *testing.T) {
 		t.Errorf("invalid objects = %v; want %v", got, wantInvalid)
 	}
 	got := gauges(t, m, "agentkourier_config_binding_rejections")
-	for _, want := range []string{"{reason=BackendRejected} 2", "{reason=ChannelConflict} 1", "{reason=InvalidSpec} 0", "{reason=other} 1", "{reason=NamespaceNotAllowed} 0"} {
+	for _, want := range []string{"{reason=BackendRejected} 2", "{reason=ChannelConflict} 1", "{reason=InvalidSpec} 0", "{reason=other} 1", "{reason=NamespaceNotAllowed} 0", "{reason=AgentNamespaceNotAllowed} 1"} {
 		if !slices.Contains(got, want) {
 			t.Errorf("binding rejections = %v; want %q among them", got, want)
 		}

@@ -226,21 +226,55 @@ Other things a writer of a Binding can do:
 goes through that door. What they share, and what they do not:
 
 - **Shared.** The `url`. With `dialect: kagent-v1` the agent is named in the request path (`<url>/agents/<namespace>/<name>`), and `agent.name` and `agent.namespace` of a Binding
-  are whatever its writer types, checked for their shape and never against a list of agents, so every agent that the backend serves is in reach. With `dialect: a2a` the URL is the
+  are whatever its writer types, checked for their shape and never against a list of agents; so every agent that the backend serves is in reach, unless the backend sets
+  `agents`, which limits the namespaces (below). With `dialect: a2a` the URL is the
   exact endpoint and the agent name is not sent, so the backend is that one agent. The dialect. And the static `headers`, whose Secret values are read in the AgentBackend's namespace
   and sent with every request of every Binding that names it, and with every probe. A Binding's writer cannot read those values, but each request they cause carries them.
 - **Not shared.** The identity. Each Binding presents its own: the token of its own `identity.tokenSecretRef`, read in its own namespace, or its own `userId`. The connection
   to the agent is kept per Binding and agent, and a session belongs to its Binding.
 - **So** a team that may write a Binding in a namespace that the AgentBackend allows can reach, with the Binding's identity and the shared headers, whatever the backend serves
-  at that `url`. Where the backend verifies that token and authorizes it for each agent, that check is the bound. Where it does not (a backend that takes `identity.userId`
+  at that `url`, in the agent namespaces its `agents` allows if it sets them. Where the backend verifies that token and authorizes it for each agent, that check is the bound. Where it does not (a backend that takes `identity.userId`
   as the caller, or one whose static headers hold an API key that is the only credential), the bound is the AgentBackend itself.
 - **A tenant can tell which agents exist, on `kagent-v1`, where the backend answers an unknown agent with a 404.** A Binding that names an agent makes the leader's probe ask the backend for
   its card, and a 404 is `AgentNotFound` in the Binding's status. A backend that authorizes first and answers 403 (`AgentForbidden`) reveals only the agents that the Binding's identity may use.
   This matters most when the tenant cannot read the token's Secret themselves.
 
-Use one AgentBackend per trust boundary: teams that must not reach each other's agents get separate AgentBackends, each with its own headers and Secrets, and each lists
-in `allowedNamespaces` only the namespaces of the teams that may use it. The list is empty by default, which allows the AgentBackend's own namespace and no other. Agent Kourier does
-not restrict which agents a Binding may name on a backend it is allowed to use.
+**Limit which agents a Binding may name.** On `dialect: kagent-v1`, an AgentBackend can list the agent namespaces its Bindings may name in `agent.namespace`:
+
+```yaml
+spec:
+  dialect: kagent-v1
+  url: http://kagent-frontdoor.kagent.svc.cluster.local:4180
+  allowedNamespaces: [payments, sre]
+  agents:
+    sameNamespace: true       # a Binding may name an agent in the Binding's own namespace
+    namespaces: [shared]      # and any Binding that may use this backend may name one in shared
+```
+
+- **Left out, there is no limit.** That is how every AgentBackend behaves until you set `agents`: a Binding may name an agent in any namespace, and only the backend's front door decides.
+- **Set, a Binding must match.** Its `agent.namespace` must be the Binding's own namespace, if `sameNamespace` is true, or one of `namespaces`. `sameNamespace` is the namespace of the Binding, not of the AgentBackend.
+  What a Binding that names any other namespace costs depends on the route. **With custom resources** it is not served, and its `Accepted` condition is `False` with the reason `AgentNamespaceNotAllowed`;
+  the check runs each time the broker reads the config, so setting or narrowing `agents` drops the Bindings that no longer match at the next read, and the others keep running. **On the files route** the whole config
+  fails to resolve, so nothing is dropped: at start the broker exits with code 2 and serves nothing (the chart's `config.rollOnChange` restarts the pod when the ConfigMap changes, and with SQLite the old pod is already stopped), and on a reload the broker keeps serving
+  every Binding under the last good config, which has the old limit or none, and sets `agentkourier_config_stale` to 1. The message names the AgentBackend and the agent namespace
+  and nothing else of the backend's spec. When the AgentBackend's newest generation is invalid, or it was deleted and is held, it adds that the limit is that of the generation being served; the problems of an
+  invalid generation go only to a Binding in the AgentBackend's own namespace. A Binding that the backend does not let in at all (`allowedNamespaces`) is told only `NamespaceNotAllowed`.
+- **Setting nothing is refused.** An `agents` value that allows no namespace (no `sameNamespace: true` and no `namespaces`) would reject every Binding, so the object is invalid. Leave `agents` out to impose no limit.
+  `namespaces` holds at most 256 entries ([Limits](../reference/limits.md)).
+- **An older broker ignores it.** On custom resources a broker from before the field does not know it and serves the Bindings with no limit ([a broker older than its CRDs](config-routes.md#unknown-fields)),
+  so keep the broker and the CRDs on the same release before you rely on it.
+- **Not on `a2a`.** There the `url` names the agent and `agent.namespace` is never sent, so `agents` would promise a control it does not give, and an `a2a` AgentBackend that sets it is invalid.
+- **What it does not bound.** It checks the namespace of the agent, not its name: a Binding may name any agent of an allowed namespace. It does not give the Bindings different credentials, since the
+  headers and the front door are still shared (above), and it does not replace a front door that authorizes the Binding's identity for each agent. It also bounds what a tenant can learn:
+  on custom resources a Binding that names an agent outside them is not served, so it is not probed, and its status cannot be used to ask the backend whether an agent in another namespace exists.
+  The limit itself is not secret from a team the backend lets in: by applying Bindings that name different namespaces and reading the reason, its author can learn which are allowed.
+  `sameNamespace` compares the Binding's namespace, in the broker's cluster, with `agent.namespace`, a namespace on the backend. It keeps a team to its own agents only where the two mean the
+  same, as for a kagent in the broker's cluster. Where kagent runs in another cluster whose namespaces belong to other teams, give each team its own AgentBackend, with only that team in `allowedNamespaces`
+  and only its agents' namespaces in `namespaces`.
+
+Where the teams must not share a door at all, use one AgentBackend per trust boundary: each has its own headers and Secrets, and lists in `allowedNamespaces` only the namespaces of the teams that may
+use it. The list is empty by default, which allows the AgentBackend's own namespace and no other. On `a2a` the backend is one agent, so one AgentBackend for each agent is how you keep two
+agents apart, and `allowedNamespaces` is the control over who may use it.
 
 What a status tells a tenant, and what it does not. A Binding's `status` is read by whoever can read the Binding, and it is written for them:
 

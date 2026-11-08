@@ -55,6 +55,47 @@ func TestSpecExamplesDecode(t *testing.T) {
 	}
 }
 
+func TestAgentNamespacesDecode(t *testing.T) {
+	var be AgentBackend
+	if err := yaml.UnmarshalStrict([]byte(`spec:
+  dialect: kagent-v1
+  agents:
+    sameNamespace: true
+    namespaces: [kagent, payments]
+`), &be); err != nil {
+		t.Fatal(err)
+	}
+	if be.Spec.Agents == nil || !be.Spec.Agents.SameNamespace || !slices.Equal(be.Spec.Agents.Namespaces, []string{"kagent", "payments"}) {
+		t.Errorf("agents = %+v; want sameNamespace and the two namespaces", be.Spec.Agents)
+	}
+}
+
+func TestAgentNamespacesAllows(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		agents         *AgentNamespaces
+		binding, agent string
+		want           bool
+	}{
+		{"unset allows any namespace", nil, "sre", "kagent", true},
+		{"unset allows the Binding's own", nil, "sre", "sre", true},
+		{"the own namespace, with sameNamespace", &AgentNamespaces{SameNamespace: true}, "sre", "sre", true},
+		{"the own namespace, without sameNamespace", &AgentNamespaces{Namespaces: []string{"kagent"}}, "sre", "sre", false},
+		{"the own namespace, listed", &AgentNamespaces{Namespaces: []string{"sre"}}, "sre", "sre", true},
+		{"a listed namespace", &AgentNamespaces{Namespaces: []string{"kagent", "payments"}}, "sre", "payments", true},
+		{"a listed namespace, with sameNamespace", &AgentNamespaces{SameNamespace: true, Namespaces: []string{"kagent"}}, "sre", "kagent", true},
+		{"a namespace not listed", &AgentNamespaces{SameNamespace: true, Namespaces: []string{"kagent"}}, "sre", "payments", false},
+		{"sameNamespace is the Binding's namespace, not the backend's", &AgentNamespaces{SameNamespace: true}, "sre", "agent-kourier-system", false},
+		{"a value that allows nothing", &AgentNamespaces{}, "sre", "sre", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.agents.Allows(tc.binding, tc.agent); got != tc.want {
+				t.Errorf("Allows(%q, %q) = %t, want %t", tc.binding, tc.agent, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestToolApprovalFieldsDecode(t *testing.T) {
 	var b Binding
 	if err := yaml.UnmarshalStrict([]byte(`spec:
