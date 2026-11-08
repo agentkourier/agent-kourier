@@ -287,8 +287,7 @@ What a team that can write these objects can do with the broker's access is in [
 ## Move back to the ConfigMap
 
 If the platform admits team namespaces (`config.connectionNamespaces`), take that list off the values in the same upgrade: the chart refuses a non-empty list with
-`config.source: files`, and the files route serves the one ChatConnection of its directory, so the team connections stop being served. Read the order for team connections in
-[Let a team bring its own Slack app](team-slack-app.md#take-it-back) first.
+`config.source: files`, and the files route serves the one ChatConnection of its directory, so the team connections stop being served. The files route writes no Binding status, so the team's Bindings keep the last status written, perhaps `Ready=True`.
 
 Where the chart rendered the resources from your `config.*` values, set `config.source: files` and upgrade. The ConfigMap is rendered from the same values:
 
