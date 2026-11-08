@@ -70,7 +70,7 @@ A probe is not retried. One failure holds `agentkourier_binding_ready` at 0 unti
 The reason for a result is not a label; it is in the log line of the change. [Troubleshoot an install](../how-to/troubleshoot.md#a-binding-is-not-ready) lists each reason and what to do about it.
 
 - a WARN `a condition is false` for a condition that went false;
-- a WARN `a condition is unknown` for `ChatCredentialsChanged` (the chat credentials Secret holds other tokens than the ones in use: restart Agent Kourier) and for `ChatCredentialsUnusable` (the Secret, or a key of it, is gone or empty, or the Secret is of a type that is never read: the connection keeps the tokens it read, and a restart fails until the Secret is mended);
+- a WARN `a condition is unknown` for `ChatCredentialsChanged` (the chat credentials Secret holds other tokens than the ones in use: restart Agent Kourier for the broker's own connection; a team connection restarts by itself) and for `ChatCredentialsUnusable` (the Secret, or a key of it, is gone or empty, or the Secret is of a type that is never read: the connection keeps the tokens it read, and for the own connection a restart fails until the Secret is mended);
 - an INFO `a condition is unknown` for any other result that is not yet known: for the agent, a 408, 425 or 429; for the chat platform, a rate limit, a deadline, or `the chat platform read failed`, with its cause in the line's `cause` attribute (for Slack, its code such as `no_permission` when it answered, or the transport's error such as `connection refused` when it did not);
 - an INFO `a condition is now true`, with the reason it had before in `was`, for a condition that was false, or unknown after a first result. A first result that is true has no line.
 

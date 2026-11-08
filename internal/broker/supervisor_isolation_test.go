@@ -128,7 +128,7 @@ func TestATeamConnectionThePlatformRejectsStopsThatConnectionOnly(t *testing.T) 
 			if got := w.tokens(); !slices.Equal(got, []string{"own-token", "tok-a", "tok-b"}) {
 				t.Errorf("platforms built = %v; want no restart of a rejected connection whose Secret is as it was", got)
 			}
-			w.stoppedBecause("team-a/slack") // and still says why
+			_ = w.stoppedBecause("team-a/slack") // and still says why
 
 			w.reconcile(team("team-a/slack", 1, "tok-a2", 1), b) // its Secret was replaced
 			w.eventually("team-a to run again", func() bool { return slices.Contains(w.running(), "team-a/slack") })

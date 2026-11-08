@@ -83,6 +83,8 @@ prober's own, and the same for all three. A probe that could not tell is `Unknow
 and a probe that ran past the prober's own 10 seconds (`ProbeTimeout`). A backend that does not answer is `False` with `Unreachable`. A card of more
 than 1 MiB is `False` with `InvalidAgentCard`, and the probe stops reading at that size.
 
+A Binding on a team ChatConnection (one that is not the broker's own) is read as that connection's bot, and when the connection does not run the read is not made. If Slack rejected the connection's token, `ChannelJoined` and `ApproversReadable` are `False` with `ChatCredentialsRejected`, and the connection starts again by itself when its credentials Secret or the ChatConnection changes. If its Secret is gone, empty or of a type that is never read, they are `Unknown` with `ChatCredentialsUnusable` until the Secret can be used. Otherwise a connection that is not running (it has not started yet, or stopped) is `Unknown` with `ChatUnavailable`. For `ChatCredentialsChanged`, the broker's own connection takes the new tokens at a restart of Agent Kourier, and a team connection restarts by itself, within about 5 seconds of Agent Kourier seeing the change. The reasons are listed in [A Binding is not ready](../how-to/troubleshoot.md#a-binding-is-not-ready).
+
 How a probe is made, and how often, is under [Binding verification](metrics.md#binding-verification): when the leader starts, when the config or a
 Secret the Binding refers to changes (at most once every 30 seconds), and every 5 minutes.
 

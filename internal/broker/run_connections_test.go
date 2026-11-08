@@ -83,7 +83,9 @@ func newConnWorld(t *testing.T, edit func([]*unstructured.Unstructured)) *connWo
 	w.c.ConnectionNamespaces = []string{"team-a", "team-b"}
 	w.c.Logger = slog.New(slog.NewTextHandler(&w.logs, nil))
 	w.c.superviseEvery, w.c.reloadPoll = 10*time.Millisecond, 20*time.Millisecond
-	w.c.newSlack = func(sc slack.Config) slackAPI { return &liveSlack{w: w, token: sc.BotToken.Reveal()} }
+	w.c.newSlack = func(sc slack.Config) slackAPI {
+		return &liveSlack{w: w, token: sc.BotToken.Reveal(), onConn: sc.OnConnection}
+	}
 	w.c.identify = func(ctx context.Context, c Connection) (appIdentity, error) {
 		tok := c.Credentials["botToken"].Reveal()
 		w.mu.Lock()
@@ -138,6 +140,8 @@ type liveSlack struct {
 	idleSlack
 	w     *connWorld
 	token string
+	// onConn is the adapter's OnConnection, which the client tells when its connection is up and when it is not.
+	onConn func(bool)
 }
 
 func (l *liveSlack) Run(ctx context.Context, sink slack.Sink) error {
@@ -146,6 +150,10 @@ func (l *liveSlack) Run(ctx context.Context, sink slack.Sink) error {
 	l.w.sinks[l.token] = sink
 	kill := l.w.killChan(l.token)
 	l.w.mu.Unlock()
+	if l.onConn != nil {
+		l.onConn(true)
+		defer l.onConn(false)
+	}
 	var err error
 	select {
 	case <-ctx.Done():
@@ -259,6 +267,7 @@ func TestARunAddsChangesAndRemovesATeamConnection(t *testing.T) {
 	w.team("team-a", "tok-a1")
 	w.team("team-b", "tok-b")
 	w.eventually("both team connections to run", func() bool { return w.up("tok-a1") == 1 && w.up("tok-b") == 1 })
+	r.waitMetric(`agentkourier_chat_connected{connection="team-a/slack"} 1`)
 	// A post on the connection makes its lane; the double's Post fails, which leaves the row pending and the lane kept.
 	_, _ = w.ob.Send(t.Context(), outbox.Post{Source: "x", Role: store.OutboxReply, Connection: "team-a/slack", Channel: "C1", Thread: "1.1", Out: chat.Say(chat.Message{Fallback: "hi"})})
 	if got := w.lanes(); got != lanes+1 {
@@ -276,6 +285,9 @@ func TestARunAddsChangesAndRemovesATeamConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	w.eventually("team-a to stop and its lane to go", func() bool { return w.up("tok-a2") == 0 && w.lanes() == lanes })
+	// The series of a connection that is away is deleted, not left at 0; the others' stay.
+	r.waitNoMetric(`agentkourier_chat_connected{connection="team-a/slack"}`)
+	r.waitMetric(`agentkourier_chat_connected{connection="team-b/slack"} 1`)
 	if w.up("tok-b") != 1 || w.up(ownToken) != 1 {
 		t.Errorf("up: team-b %d, own %d; want them running", w.up("tok-b"), w.up(ownToken))
 	}
