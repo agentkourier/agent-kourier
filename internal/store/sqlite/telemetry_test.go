@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/store/storetest"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
@@ -84,7 +85,7 @@ func TestBacklogsAndFirstInteractionResolution(t *testing.T) {
 	}
 	ctx := telemetry.WithObserver(t.Context(), obs)
 	s := openTemp(t)
-	if err := s.RegisterMetrics(reg); err != nil {
+	if err := s.RegisterMetrics(reg, nil); err != nil {
 		t.Fatal(err)
 	}
 	key := store.ConversationKey{Connection: "ns/conn", Channel: "C", Thread: "1"}
@@ -145,4 +146,9 @@ func TestBacklogsAndFirstInteractionResolution(t *testing.T) {
 	if !found {
 		t.Fatal("interaction wait missing")
 	}
+}
+
+// The outbox gauges are one series for each connection that has unposted rows (the conformance helper holds both stores to the same).
+func TestOutboxGaugesAreByConnection(t *testing.T) {
+	storetest.OutboxGaugesByConnection(t, openTemp(t))
 }

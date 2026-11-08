@@ -69,7 +69,7 @@ func (m StreamMode) text(markdown string) slackgo.MsgOption {
 // mode of its first append.
 func (c *Client) StartStream(ctx context.Context, channel, threadTS, recipientUser, markdown string, mode StreamMode) (telemetryResult0 string, telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.StartStream")
-	defer func() { finishChat(ctx, op, "StartStream", telemetryErr) }()
+	defer func() { c.finishChat(ctx, op, "StartStream", telemetryErr) }()
 	team, err := c.TeamID(ctx)
 	if err != nil {
 		return "", err
@@ -89,7 +89,7 @@ func (c *Client) StartStream(ctx context.Context, channel, threadTS, recipientUs
 // token.
 func (c *Client) AppendStream(ctx context.Context, channel, ts, markdown string, mode StreamMode) (telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.AppendStream")
-	defer func() { finishChat(ctx, op, "AppendStream", telemetryErr) }()
+	defer func() { c.finishChat(ctx, op, "AppendStream", telemetryErr) }()
 	if _, _, err := c.api.AppendStreamContext(ctx, channel, ts, append(inertOptions(), mode.text(markdown))...); err != nil {
 		return c.scrub("chat.appendStream", err)
 	}
@@ -114,7 +114,7 @@ type TaskUpdate struct {
 // sends u as it is, and the stream (Step) sends details and output once.
 func (c *Client) AppendStep(ctx context.Context, channel, ts string, u TaskUpdate) (telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.AppendStep")
-	defer func() { finishChat(ctx, op, "AppendStep", telemetryErr) }()
+	defer func() { c.finishChat(ctx, op, "AppendStep", telemetryErr) }()
 	chunk := slackgo.NewTaskUpdateChunk(u.ID, u.Title)
 	chunk.Status, chunk.Details, chunk.Output = slackgo.TaskCardStatus(u.Status), u.Details, u.Output
 	if _, _, err := c.api.AppendStreamContext(ctx, channel, ts, append(inertOptions(), slackgo.MsgOptionChunks(chunk))...); err != nil {
@@ -136,7 +136,7 @@ func (c *Client) AppendStep(ctx context.Context, channel, ts string, u TaskUpdat
 // and chat.appendStream do not.
 func (c *Client) StopStream(ctx context.Context, channel, ts, markdown string, blocks json.RawMessage, outboxID string, mode StreamMode) (telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.StopStream")
-	defer func() { finishChat(ctx, op, "StopStream", telemetryErr) }()
+	defer func() { c.finishChat(ctx, op, "StopStream", telemetryErr) }()
 	tag, err := outboxTag(outboxID)
 	if err != nil {
 		return fmt.Errorf("slack stop stream: %w", err)

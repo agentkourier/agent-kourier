@@ -27,7 +27,7 @@ const busyStatus = "is working…"
 // answered ok in one probe (2026-10-18), and whether it showed the status there is not known. Also the codes of refusesStatus.
 func (c *Client) SetThreadStatus(ctx context.Context, channel, threadTS, status string) (telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.SetThreadStatus")
-	defer func() { finishChat(ctx, op, "SetThreadStatus", telemetryErr) }()
+	defer func() { c.finishChat(ctx, op, "SetThreadStatus", telemetryErr) }()
 	if channel == "" || threadTS == "" {
 		return fmt.Errorf("slack set thread status: the channel and the thread are required: %w", store.ErrInvalid)
 	}

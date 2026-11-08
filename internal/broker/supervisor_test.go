@@ -19,6 +19,8 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/secret"
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
+	"github.com/agentkourier/agent-kourier/internal/telemetry/telemetrytest"
 )
 
 // newTestMetrics is the broker's metrics over a registry of its own.
@@ -545,5 +547,99 @@ func TestSupervisorCountsAChangeOfThePublishedConnections(t *testing.T) {
 		if changed := w.sup.changes.Load() != before; changed != st.counts {
 			t.Errorf("after %s: counted a change = %t; want %t", st.what, changed, st.counts)
 		}
+	}
+}
+
+// seriesWorld is a supWorld that records under an observer, for the tests of what the supervisor does to a connection's series.
+type seriesWorld struct {
+	*supWorld
+	h *telemetrytest.Harness
+}
+
+func newSeriesWorld(t *testing.T) *seriesWorld {
+	return &seriesWorld{supWorld: newSupWorld(t), h: telemetrytest.New(t)}
+}
+
+// record counts a chat call of each connection, as the adapter of the connection does.
+func (w *seriesWorld) record(conns ...string) {
+	for _, c := range conns {
+		telemetry.Count(w.h.Ctx, "agentkourier_chat_api_calls_total", "Post", "success", c)
+	}
+}
+
+// has says whether the connection has its series of chat calls.
+func (w *seriesWorld) has(conn string) bool {
+	return w.h.Counter(w.t, "agentkourier_chat_api_calls_total", map[string]string{"operation": "Post", "outcome": "success", "connection": conn}) > 0
+}
+
+func (w *seriesWorld) reconcile(desired ...TeamConnection) { w.sup.reconcile(w.h.Ctx, desired) }
+
+// The series of a connection (telemetry.ConnectionLabel) are deleted when the Snapshot no longer serves the connection, and are kept when the
+// connection only restarts, so that its counters go on. Those of the other connections stay.
+func TestSupervisorDeletesTheSeriesOfAConnectionThatLeavesTheSnapshot(t *testing.T) {
+	w := newSeriesWorld(t)
+	w.ids["tok-a"], w.ids["tok-a2"] = appIdentity{App: "AA", Team: "T1", User: "UA", Bot: "BA"}, appIdentity{App: "AA", Team: "T1", User: "UA", Bot: "BA"}
+	w.ids["tok-b"] = appIdentity{App: "AB", Team: "T1", User: "UB", Bot: "BB"}
+	a, b := team("team-a/slack", 1, "tok-a", 1), team("team-b/slack", 1, "tok-b", 2)
+
+	w.reconcile(a, b)
+	w.eventually("both connections to run", func() bool { return w.live.Load() == 3 })
+	w.record(ownName, "team-a/slack", "team-b/slack")
+
+	w.reconcile(team("team-a/slack", 2, "tok-a2", 1), b) // team-a restarts on a new generation and Secret
+	if !w.has("team-a/slack") || !w.has("team-b/slack") || !w.has(ownName) {
+		t.Fatal("a restart of team-a deleted a series; want every series kept")
+	}
+
+	w.reconcile(team("team-a/slack", 2, "tok-a2", 1)) // team-b left the Snapshot
+	if w.has("team-b/slack") {
+		t.Error("the series of team-b are still there after it left the Snapshot")
+	}
+	if !w.has("team-a/slack") || !w.has(ownName) {
+		t.Error("the series of team-a or of the own connection went with team-b's")
+	}
+}
+
+// A connection that is stopped because an older connection of its Slack app turned up is not served either, so its series go too.
+func TestSupervisorDeletesTheSeriesOfAConnectionItStopsForAnOlderOfItsApp(t *testing.T) {
+	w := newSeriesWorld(t)
+	app := appIdentity{App: "AAPP", Team: "T1", User: "UAPP", Bot: "BAPP"}
+	w.ids["tok-old"], w.ids["tok-young"] = app, app
+	old, young := team("team-a/slack", 1, "tok-old", 1), team("team-b/slack", 1, "tok-young", 2)
+
+	w.reconcile(young)
+	w.eventually("the younger connection to run", func() bool { return w.live.Load() == 2 })
+	w.record("team-b/slack")
+	w.reconcile(old, young) // the older connection of the app turns up: the younger is stopped and refused
+	if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack"}) {
+		t.Fatalf("running = %v; want the older connection served and the younger stopped", got)
+	}
+	if w.has("team-b/slack") {
+		t.Error("the series of team-b are still there after it was stopped for the older connection of its app")
+	}
+}
+
+// A connection that restarts into a refusal is not served either: its Secret was rotated to the tokens of the Slack app that an older connection
+// uses, so its new entry never ran, and the series of the run it replaced go.
+func TestSupervisorDeletesTheSeriesOfAConnectionThatRestartsIntoARefusal(t *testing.T) {
+	w := newSeriesWorld(t)
+	w.ids["tok-a"] = appIdentity{App: "AA", Team: "T1", User: "UA", Bot: "BA"}
+	w.ids["tok-b"] = appIdentity{App: "AB", Team: "T1", User: "UB", Bot: "BB"}
+	w.ids["tok-b2"] = appIdentity{App: "AA", Team: "T1", User: "UA", Bot: "BA"}
+	a, b := team("team-a/slack", 1, "tok-a", 1), team("team-b/slack", 1, "tok-b", 2)
+
+	w.reconcile(a, b)
+	w.eventually("both connections to run", func() bool { return w.live.Load() == 3 })
+	w.record(ownName, "team-a/slack", "team-b/slack")
+
+	w.reconcile(a, team("team-b/slack", 2, "tok-b2", 2)) // team-b's Secret now holds the tokens of team-a's app
+	if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack"}) {
+		t.Fatalf("running = %v; want team-b stopped as a second connection of team-a's app", got)
+	}
+	if w.has("team-b/slack") {
+		t.Error("the series of team-b are still there after it restarted into a refusal")
+	}
+	if !w.has("team-a/slack") || !w.has(ownName) {
+		t.Error("the series of team-a or of the own connection went with team-b's")
 	}
 }

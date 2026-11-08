@@ -248,3 +248,13 @@ func TestReadyzDoesNotWaitForTheChatConnection(t *testing.T) {
 
 	r.waitMetric(`agentkourier_chat_connected{connection="agent-kourier-system/slack-main"} 0`)
 }
+
+// The outbox gauges say 0 for the connection the broker serves while it has nothing unposted, so that it always has a series.
+func TestRunShowsTheOutboxGaugesOfTheServedConnection(t *testing.T) {
+	const name = "agent-kourier-system/slack-main"
+	r := start(t, startConfig(t))
+	r.until("/readyz", http.StatusOK)
+
+	r.waitMetric(`agentkourier_outbox_pending{connection="` + name + `"} 0`)
+	r.waitMetric(`agentkourier_outbox_oldest_age_seconds{connection="` + name + `"} 0`)
+}

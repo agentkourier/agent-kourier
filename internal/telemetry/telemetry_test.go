@@ -8,8 +8,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel/attribute"
@@ -50,7 +52,7 @@ func TestDurableContextAndIsolation(t *testing.T) {
 		t.Fatalf("span ancestry = %+v", spans)
 	}
 	_, other, otherReg := traced(t)
-	Count(ctx, "agentkourier_intake_total", "message", "accepted")
+	Count(ctx, "agentkourier_intake_total", "message", "accepted", "ns/conn")
 	if len(other.GetSpans()) != 0 {
 		t.Fatal("broker instances shared a provider")
 	}
@@ -208,5 +210,93 @@ func TestHTTPPropagationAndResponseLifecycle(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// connectionSeries are the series a ChatConnection owns, each with the labels its call sites give besides the connection's.
+var connectionSeries = []struct {
+	name   string
+	labels []string
+}{
+	{"agentkourier_intake_total", []string{"message", "accepted"}},
+	{"agentkourier_chat_api_calls_total", []string{"Post", "success"}},
+	{"agentkourier_slack_events_shed_total", []string{"channel_backlog"}},
+	{"agentkourier_slack_ack_duration_seconds", []string{"acked"}},
+}
+
+// seriesOf returns the values of the connection label of every series of the named family.
+func seriesOf(t *testing.T, reg *prometheus.Registry, name string) []string {
+	t.Helper()
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, f := range families {
+		if f.GetName() != name {
+			continue
+		}
+		for _, m := range f.Metric {
+			for _, l := range m.Label {
+				if l.GetName() == ConnectionLabel {
+					got = append(got, l.GetValue())
+				}
+			}
+		}
+	}
+	return got
+}
+
+// Every series that is a connection's carries the connection label, and ForgetConnection deletes one connection's series of all of
+// them and no other connection's.
+func TestForgetConnectionDeletesOnlyThatConnectionsSeries(t *testing.T) {
+	ctx, _, reg := traced(t)
+	const kept, gone = "ns/kept", "team-a/gone"
+	for _, conn := range []string{kept, gone} {
+		for _, s := range connectionSeries {
+			labels := append(slices.Clone(s.labels), conn)
+			if strings.HasSuffix(s.name, "_seconds") {
+				Observe(ctx, s.name, time.Second, labels...)
+			} else {
+				Count(ctx, s.name, labels...)
+			}
+		}
+	}
+	for _, s := range connectionSeries {
+		if got := seriesOf(t, reg, s.name); !slices.Equal(slices.Sorted(slices.Values(got)), []string{kept, gone}) {
+			t.Fatalf("%s has series for connections %v before the removal; want both", s.name, got)
+		}
+	}
+	ForgetConnection(ctx, gone)
+	for _, s := range connectionSeries {
+		if got := seriesOf(t, reg, s.name); !slices.Equal(got, []string{kept}) {
+			t.Errorf("%s has series for connections %v after the removal; want only %s", s.name, got, kept)
+		}
+	}
+	ForgetConnection(ctx, "never/seen")
+	ForgetConnection(t.Context(), gone) // a context without an Observer records nothing, and forgets nothing
+	for _, s := range connectionSeries {
+		if got := seriesOf(t, reg, s.name); !slices.Equal(got, []string{kept}) {
+			t.Errorf("%s has series for connections %v after forgetting two that have none; want only %s", s.name, got, kept)
+		}
+	}
+}
+
+// Series that no connection owns keep their labels, so that forgetting a connection never reaches them.
+func TestForgetConnectionLeavesOtherSeries(t *testing.T) {
+	ctx, _, reg := traced(t)
+	Count(ctx, "agentkourier_stream_reconnects_total", "ok")
+	Count(ctx, "agentkourier_trigger_matched_total", "ns/b")
+	ForgetConnection(ctx, "ns/b")
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]int{}
+	for _, f := range families {
+		seen[f.GetName()] = len(f.Metric)
+	}
+	if seen["agentkourier_stream_reconnects_total"] != 1 || seen["agentkourier_trigger_matched_total"] != 1 {
+		t.Fatalf("series after ForgetConnection = %v; want the reconnect and the trigger series kept", seen)
 	}
 }
