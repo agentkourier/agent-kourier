@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"net/http"
 	"os"
 	"regexp"
 	"slices"
@@ -15,6 +16,8 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/config"
@@ -218,9 +221,9 @@ func TestABindingOfATeamConnectionIsServedAndPutBack(t *testing.T) {
 	}
 }
 
-// A connection that leaves the set while the broker runs (its namespace's connection is deleted and made again, or a connection
-// older than it takes its place under the limit) tells its Bindings once: Accepted False with the reason ConnectionNotServed, and Ready
-// with it. The broker does not put it back: a broker that serves the connection has the last word, and the two would otherwise go on at
+// A connection that the Snapshot drops while the broker runs, and that still exists (the cases the source does not report itself: the
+// ones it does, the connections the limit leaves out, are in the over-cap test below), tells its Bindings once: Accepted False with the
+// reason ConnectionNotServed, and Ready with it. The broker does not put it back: a broker that serves the connection has the last word, and the two would otherwise go on at
 // each other. When the connection is served again the Binding is served, and its words are put back as any served Binding's.
 func TestABindingOfAConnectionTakenOutOfTheSetIsToldOnceAndNotPutBack(t *testing.T) {
 	c := newStatusCluster(t, storedBinding(sreAlerts, 1), storedBinding(teamBind, 1))
@@ -484,7 +487,7 @@ func TestABindingOfAnOverCapConnectionIsToldOnceAndNotPutBack(t *testing.T) {
 }
 
 // The record is the writer's to keep, and a store that fails it does not stop the writer writing the statuses of what is served. The
-// failure is said once; the record is tried again at the next full pass, and a set that was not recorded is compared with the record
+// failure is said once; the record is tried again at every pass that moves, and a set that was not recorded is compared with the record
 // that is there.
 func TestAFailingRecordDoesNotStopTheStatusesAndIsTriedAgain(t *testing.T) {
 	c := newStatusCluster(t, storedBinding(sreAlerts, 1))
@@ -573,6 +576,204 @@ func TestRetentionKeepsTheSessionsOfAnOverCapConnectionsBinding(t *testing.T) {
 	}).purgeSessions(t.Context())
 	for k, want := range map[store.ConversationKey]bool{overCap: true, deleted: false} {
 		_, err := st.GetSession(t.Context(), k, 100*365*day, sweepNow)
+		if present := err == nil; present != want {
+			t.Errorf("session %s present = %v (%v); want %v", k.Thread, present, err, want)
+		}
+	}
+}
+
+// A connection whose Bindings cannot be found yet is not forgotten, and nothing is told or deleted on a guess. The record keeps it
+// when it is written for another reason; the retention, which needs the Bindings to know whose sessions to keep, is told it knows
+// nothing, so it deletes no session; and when the lookup works the Bindings are known to both, and told.
+func TestAConnectionWhoseBindingsCannotBeFoundYetIsKeptAndNothingIsDeleted(t *testing.T) {
+	const otherBind = "team-b/on-b"
+	c := newStatusCluster(t, storedBinding(sreAlerts, 1), storedBinding(teamBind, 1, servedStatus(1)...), storedBinding(otherBind, 1))
+	record := &recordedServed{set: []string{ownConn, teamConn}}
+	failing := true
+	named := bothExist()
+	naming := func(ns, name string) (crsource.ConnectionBindings, error) {
+		if failing && ns+"/"+name == teamConn {
+			return crsource.ConnectionBindings{}, crsource.ErrNotSynced
+		}
+		return named.of(ns, name)
+	}
+	var rec *servedRecord
+	r := &servedRig{record: record, statusRig: newStatusRigWith(t, c, nil, func(cfg *statusConfig) {
+		rec = newServedRecord(record, naming, cfg.Now)
+		cfg.Served = rec
+	})}
+	// Another connection is served now, so the record is written while the lookup fails.
+	r.serving(t, map[string][]string{ownConn: {sreAlerts}, "team-b/slack": {otherBind}})
+	r.reconcile()
+	if want := []string{ownConn, teamConn, "team-b/slack"}; !slices.Equal(record.recorded(), want) {
+		t.Errorf("the record = %v after a write while the lookup failed; want %v: the connection is not forgotten", record.recorded(), want)
+	}
+	if appliesTo(c, teamBind) != 0 {
+		t.Errorf("a Binding was written %d times while its connection could not be looked up; want none", appliesTo(c, teamBind))
+	}
+
+	r.mu.Lock()
+	report := r.report
+	r.mu.Unlock()
+	reported := func() config.Report { return report }
+	known := rec.retentionKnows(t.Context(), reported, slog.New(slog.NewTextHandler(io.Discard, nil)), func() (map[string]time.Duration, []string, bool) {
+		return map[string]time.Duration{sreAlerts: time.Hour}, nil, true
+	})
+	if _, _, ok := known(); ok {
+		t.Error("the retention is told it knows the Bindings while a stopped connection cannot be looked up")
+	}
+
+	failing = false
+	ttls, unserved, ok := known()
+	if !ok || !slices.Equal(unserved, []string{teamBind}) || ttls[sreAlerts] != time.Hour {
+		t.Errorf("after the lookup works the retention is told %v, %v, %v; want the Binding of the stopped connection unserved", ttls, unserved, ok)
+	}
+	r.pass()
+	if a := c.stored(t, teamBind)["Accepted"]; a.Reason != "ConnectionNotServed" {
+		t.Errorf("Accepted = %+v after the lookup works; want ConnectionNotServed", a)
+	}
+}
+
+// The retention reads the report and the Bindings it keeps from one config. If a reload falls between its reads, it reads again once;
+// if the config moves again, it knows nothing this tick. A connection that is stopped in the config the Bindings were read from, and
+// served in the newer one, would otherwise leave its Bindings in neither list.
+func TestRetentionKnowsReadsOneSnapshot(t *testing.T) {
+	stopped, serving := servedSnapshot(t, ownServed()), servedSnapshot(t, bothServed())
+	record := func() *servedRecord {
+		return newServedRecord(&recordedServed{set: []string{ownConn, teamConn}}, bothExist().of, nil)
+	}
+	known := func(calls *int) func() (map[string]time.Duration, []string, bool) {
+		return func() (map[string]time.Duration, []string, bool) {
+			*calls++
+			return map[string]time.Duration{sreAlerts: time.Hour}, nil, true
+		}
+	}
+	sequence := func(snaps ...*config.Snapshot) func() config.Report {
+		i := 0
+		return func() config.Report { s := snaps[min(i, len(snaps)-1)]; i++; return config.Report{Snapshot: s} }
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	var reads int
+	if _, unserved, ok := record().retentionKnows(t.Context(), sequence(stopped), log, known(&reads))(); !ok || reads != 1 || !slices.Equal(unserved, []string{teamBind}) {
+		t.Errorf("a config that does not move: unserved %v, ok %v after %d reads; want the stopped Binding, ok, one read", unserved, ok, reads)
+	}
+
+	// The reload that serves the connection falls between the reads: the second attempt sees it served, and its Binding is no one's to keep.
+	reads = 0
+	if ttls, unserved, ok := record().retentionKnows(t.Context(), sequence(stopped, serving, serving, serving), log, known(&reads))(); !ok || reads != 2 || len(unserved) != 0 || ttls[sreAlerts] == 0 {
+		t.Errorf("a config that moved once: unserved %v, ok %v after %d reads; want none unserved, ok, two reads", unserved, ok, reads)
+	}
+
+	// A config that moves at every read is never read whole.
+	reads = 0
+	flip := 0
+	moving := func() config.Report {
+		flip++
+		if flip%2 == 0 {
+			return config.Report{Snapshot: stopped}
+		}
+		return config.Report{Snapshot: serving}
+	}
+	if _, _, ok := record().retentionKnows(t.Context(), moving, log, known(&reads))(); ok || reads != 2 {
+		t.Errorf("a config that moves at every read: ok %v after %d reads; want not ok after two", ok, reads)
+	}
+}
+
+// The names the source lists for a connection are those of Bindings that exist and name it; one of them may be served by now (the
+// cache lags a Binding that was moved from a served connection to a stopped one). A Binding the Snapshot serves is never told that
+// its connection is not served.
+func TestABindingTheSnapshotServesIsNotToldItsConnectionIsNotServed(t *testing.T) {
+	c := newStatusCluster(t, storedBinding(sreAlerts, 1), storedBinding(teamBind, 1, servedStatus(1)...))
+	record := &recordedServed{set: []string{ownConn, teamConn}}
+	named := namedBindings{ownConn: {sreAlerts}, teamConn: {teamBind, sreAlerts}}
+	r := newServedRig(t, c, ownServed(), record, named)
+	r.reconcile()
+	r.pass()
+	if a := c.stored(t, sreAlerts)["Accepted"]; a.Status != metav1.ConditionTrue {
+		t.Errorf("a Binding the Snapshot serves says Accepted %+v; want True", a)
+	}
+	if a := c.stored(t, teamBind)["Accepted"]; a.Reason != "ConnectionNotServed" {
+		t.Errorf("the other Binding says Accepted %+v; want ConnectionNotServed", a)
+	}
+}
+
+// The leader half is wired to the record: with the custom resources, the status writer tells the Bindings of a connection the store
+// records as served and that is not served now, and the retention keeps their sessions, as old as a deleted Binding's that it deletes.
+// Without Served in the writer's config, or the retention's wrapper, one of the two halves fails.
+func TestRunTellsAndKeepsTheBindingsOfAConnectionItStoppedServing(t *testing.T) {
+	c := crStartConfig(t, nil)
+	dyn := c.Dynamic.(*dynamicfake.FakeDynamicClient)
+	cluster := newStatusClusterOn(dyn)
+	c.StatusClient = cluster.dyn
+	conn := crObject(t, "chatconnection.yaml")
+	conn.SetNamespace("team-a")
+	conn.SetName("slack")
+	conn.SetUID("uid-team-a-slack")
+	bound := crObject(t, "binding-minimal.yaml")
+	bound.SetNamespace("team-a")
+	bound.SetName("on-a")
+	bound.SetUID("uid-team-a-on-a")
+	for field, value := range map[string]string{"namespace": "team-a", "name": "slack"} {
+		_ = unstructured.SetNestedField(bound.Object, value, "spec", "chat", "connectionRef", field)
+	}
+	_ = unstructured.SetNestedField(bound.Object, "C0TEAMA0001", "spec", "chat", "channel")
+	if err := dyn.Tracker().Create(crConnections, conn, "team-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := dyn.Tracker().Create(crBindings, bound, "team-a"); err != nil {
+		t.Fatal(err)
+	}
+
+	c.retentionEvery = 10 * time.Millisecond
+	seed, err := sqlite.Open(t.Context(), c.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	day := 24 * time.Hour
+	if err := seed.ReplaceServedConnections(t.Context(), []string{testConnection.Namespace + "/" + testConnection.Name, "team-a/slack"}, time.Now().Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	stopped := store.ConversationKey{Connection: "team-a/slack", Channel: "C1", Thread: "1.1"}
+	deleted := store.ConversationKey{Connection: "team-a/slack", Channel: "C1", Thread: "2.2"}
+	for k, binding := range map[store.ConversationKey]string{stopped: "team-a/on-a", deleted: "team-a/long-gone"} {
+		if err := seed.UpsertSession(t.Context(), store.Session{Key: k, Binding: binding, LastActivity: time.Now().Add(-400 * day)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	r := start(t, c)
+	r.until("/readyz", http.StatusOK)
+	timeout := time.After(30 * time.Second)
+	for cluster.stored(t, "team-a/on-a")["Accepted"].Reason != "ConnectionNotServed" {
+		select {
+		case <-cluster.applied:
+		case <-timeout:
+			t.Fatalf("the Binding of the stopped connection was not told: applies = %d", cluster.count())
+		}
+	}
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) { // the store's own metric says the sweep ran
+		if _, body := r.get("/metrics"); strings.Contains(body, `operation="agentkourier.store.PurgeExpiredSessions"`) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the session purge never ran")
+		}
+	}
+	r.cancel()
+	if err := r.wait(); err != nil {
+		t.Fatal(err)
+	}
+	st, err := sqlite.Open(t.Context(), c.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	for k, want := range map[store.ConversationKey]bool{stopped: true, deleted: false} {
+		_, err := st.GetSession(t.Context(), k, 100*365*day, time.Now())
 		if present := err == nil; present != want {
 			t.Errorf("session %s present = %v (%v); want %v", k.Thread, present, err, want)
 		}

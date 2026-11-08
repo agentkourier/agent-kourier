@@ -451,8 +451,8 @@ func (w *statusWriter) reconcile(ctx context.Context) {
 
 // unservedBindings returns, by "namespace/name", a ConnectionNotServed for each Binding that names a ChatConnection that exists and that
 // this broker does not serve: the connections that the report lists as left out, and the connections that the served set finds that the
-// broker served before and does not now. Its message names the connection and says why. A failure of the record is logged once, and tried again at the next full
-// pass; what the record could find stands. The caller leaves out the Bindings that the Snapshot serves and that a Rejection is about.
+// broker served before and does not now. Its message names the connection and says why. The record is read and written at every pass that moves (the Snapshot, a
+// Binding or the slow pass, which comes each Slow); a failure of it is logged once until it works, and what the record could find stands. The caller leaves out the Bindings that the Snapshot serves and that a Rejection is about.
 func (w *statusWriter) unservedBindings(ctx context.Context, rep config.Report) map[string]config.Rejection {
 	left := rep.UnservedConnections
 	if w.cfg.Served != nil {
@@ -461,7 +461,7 @@ func (w *statusWriter) unservedBindings(ctx context.Context, rep config.Report) 
 		case err != nil && !w.recordFailed:
 			w.recordFailed = true
 			w.cfg.Log.Warn("binding status: the served connections cannot be compared with the record in the store, or cannot be recorded; "+
-				"the statuses of the Bindings are written, and this is tried again at the next full pass and said once until it works", "error", telemetry.LogText(err))
+				"the statuses of the Bindings are written, and this is tried again at every pass that moves and said once until it works", "error", telemetry.LogText(err))
 		case err == nil:
 			w.recordFailed = false
 		}

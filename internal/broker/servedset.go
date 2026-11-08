@@ -14,6 +14,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/config/crsource"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
 // servedRecord knows which chat connections this broker serves, and which it served and does not now (spec D51). A broker that stops
@@ -137,27 +138,39 @@ func (r *servedRecord) stopped(ctx context.Context, rep config.Report) ([]config
 
 // retentionKnows adds the Bindings of the stopped connections to the Bindings that known says exist and are not served, so that the
 // retention gives their sessions the horizon of an unserved Binding and not that of a deleted one: their threadTTL is unknown, and may
-// exceed the longest that is served. The report is read apart from known's, which is safe: a Binding that is served by one is served
-// for the retention, which lets the served horizon win. If the stopped connections cannot be found, nothing is known, as before a config
-// has loaded, and the retention deletes no session this tick.
+// exceed the longest that is served. known and the stopped connections must come from one Snapshot, as the retention requires of known:
+// the report is read before and after known, and if its Snapshot moved between them the reads are made again, once; if it moved again,
+// nothing is known, as before a config has loaded. So it is when the stopped connections cannot be found: the retention deletes no
+// session this tick, and the failure is logged once until they can be found.
 func (r *servedRecord) retentionKnows(ctx context.Context, report func() config.Report, log *slog.Logger,
 	known func() (map[string]time.Duration, []string, bool)) func() (map[string]time.Duration, []string, bool) {
+	var failed bool // the retention's goroutine alone calls this
 	return func() (map[string]time.Duration, []string, bool) {
-		ttls, unserved, ok := known()
-		if !ok {
-			return nil, nil, false
-		}
-		stopped, err := r.stopped(ctx, report())
-		if err != nil {
-			if ctx.Err() == nil {
-				log.Warn("retention: the connections this broker served before and does not now cannot be found, so no session is deleted this time", "error", err)
+		for range 2 {
+			rep := report()
+			ttls, unserved, ok := known()
+			if !ok {
+				return nil, nil, false
 			}
-			return nil, nil, false
+			if report().Snapshot != rep.Snapshot {
+				continue // a reload fell between the reads: the Bindings of known are another config's
+			}
+			stopped, err := r.stopped(ctx, rep)
+			if err != nil {
+				if !failed && ctx.Err() == nil {
+					failed = true
+					log.Warn("retention: the connections this broker served before and does not now cannot be found, so no session is deleted until they can be",
+						"err", telemetry.LogText(err))
+				}
+				return nil, nil, false
+			}
+			failed = false
+			for _, u := range stopped {
+				unserved = append(unserved, u.Bindings...)
+			}
+			slices.Sort(unserved)
+			return ttls, slices.Compact(unserved), true
 		}
-		for _, u := range stopped {
-			unserved = append(unserved, u.Bindings...)
-		}
-		slices.Sort(unserved)
-		return ttls, slices.Compact(unserved), true
+		return nil, nil, false
 	}
 }

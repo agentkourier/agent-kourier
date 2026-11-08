@@ -10,9 +10,10 @@ ALTER TABLE interaction_presses ADD COLUMN connection TEXT NOT NULL DEFAULT '';
 -- connection) read by the connection first.
 DROP INDEX outbox_thread;
 CREATE INDEX outbox_thread ON outbox (connection, channel, thread_ts);
--- The chat connections this broker served, as of the last time it recorded them: a restarted broker compares them with the
--- ones it serves now, to tell which it stopped serving. Nothing reads or writes the table yet. served_since is when the
--- connection first entered the set.
+-- The chat connections this broker serves, and those it served before that still exist in the cluster, as of the last time it
+-- recorded them: a restarted broker compares them with the ones it serves now, to tell which it stopped serving. The leader reads
+-- the table when it starts and replaces its rows as a whole when the set changes. served_since is when the connection first
+-- entered the set, and a connection that stays in it keeps it.
 CREATE TABLE served_connections (
     connection   TEXT PRIMARY KEY,
     served_since INTEGER NOT NULL
