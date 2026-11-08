@@ -694,3 +694,49 @@ func TestAPressCheckThatFailsHoldsTheTimeout(t *testing.T) {
 		t.Fatalf("Sweep = %v, state %v, cancels %v; want an error, and nothing done", err, r.state(t, "ix-1"), r.sess.cancelled())
 	}
 }
+
+// TestSweepLeavesAnInteractionOfAConnectionThatIsDownUntilItRuns: ending a pause resumes the paused turn (a question's task is
+// cancelled, an approval's tools are denied), and the prompt and the notice are for the connection's thread, which nothing can reach
+// while no platform runs it. So the sweep leaves the interaction pending, ends nothing, and spends none of its batch on it: another
+// connection's interaction is timed out in the same sweep. Once the connection runs the interaction is timed out as any is.
+func TestSweepLeavesAnInteractionOfAConnectionThatIsDownUntilItRuns(t *testing.T) {
+	r := newSweepRig(t)
+	r.pending(t, "ix-down", "task-1", t0.Add(timeout)) // on key's connection, which nothing runs yet
+	if err := r.st.UpsertSession(t.Context(), store.Session{Key: keyB, ContextID: "ctx-2", TaskID: "task-2", Binding: "ns/b", LastActivity: t0}); err != nil {
+		t.Fatal(err)
+	}
+	req, _ := json.Marshal(dialect.Interaction{Kind: dialect.AskUser, TaskID: "task-2", RequestID: "req-up", Questions: []dialect.Question{{Text: "Which?", Choices: []string{"a", "b"}}}})
+	if _, err := r.st.CreateInteraction(t.Context(), store.Interaction{ID: "ix-up", Key: keyB, TaskID: "task-2", Kind: store.InteractionAskUser, Request: req, CreatedAt: t0, Deadline: t0.Add(timeout + time.Second)}); err != nil {
+		t.Fatal(err)
+	}
+	r.sess.current = "" // the cancel of either task is ErrNotPaused: only the calls are looked at
+	running := chat.PlatformSet[interact.Updater]{keyB.Connection: r.upd}
+	sw := r.sweeper(t, func(c *interact.SweepConfig) { c.Updaters, c.Batch = running, 1 })
+
+	if err := sw.Sweep(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if r.state(t, "ix-up") != store.InteractionTimedOut {
+		t.Error("the interaction of the connection that runs was not timed out: the one that waits took its place in the batch")
+	}
+	if got := r.state(t, "ix-down"); got != store.InteractionPending {
+		t.Errorf("the interaction of the connection that is down is %s; want it pending", got)
+	}
+	if got := r.sess.cancelled(); len(got) != 1 || got[0] != "task-2" {
+		t.Errorf("cancelled %v; want only task-2: the pause of the connection that is down is not ended", got)
+	}
+	if got := r.upd.list(); len(got) != 0 {
+		t.Errorf("updates %q; want none: ix-up was never posted, and ix-down waits", got)
+	}
+
+	running[key.Connection] = r.upd
+	if err := sw.Sweep(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.state(t, "ix-down"); got != store.InteractionTimedOut {
+		t.Errorf("the interaction is %s once its connection runs; want it timed out", got)
+	}
+	if got := r.upd.list(); len(got) != 1 || got[0] != "C1 100.001 timed_out" {
+		t.Errorf("updates %q; want the prompt replaced once", got)
+	}
+}

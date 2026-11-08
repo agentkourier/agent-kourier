@@ -193,7 +193,8 @@ func (s *Sweeper) Run(ctx context.Context) error {
 // Sweep times out up to Batch of the interactions that are past their deadline and grace, oldest
 // first, except those with a press waiting to be decided (see Presses). For each it ends the pause (below), replaces the
 // prompt, enqueues the notice, and records the timeout. A step that fails leaves the interaction pending for the next
-// sweep. It goes on past one it cannot finish, and returns every such error joined. For an enabled tool approval, the
+// sweep. It goes on past one it cannot finish, and returns every such error joined. An interaction whose chat connection is not
+// running is left pending, and not counted against Batch (down). For an enabled tool approval, the
 // timeout decision is audited before the denial reaches the session; the audit is skipped on retries in this process.
 //
 // Then it cancels the task of each denial the session took and the agent did not (cancelUndelivered), which is how a timeout
@@ -224,6 +225,9 @@ func (s *Sweeper) Sweep(ctx context.Context) error {
 		if done == s.cfg.Batch {
 			break
 		}
+		if s.down(ctx, row) {
+			continue // not counted against the batch: it is not work
+		}
 		switch waiting, err := s.cfg.Presses.PendingPresses(ctx, row.ID, row.Deadline); { // if it cannot be known, wait
 		case err != nil:
 			errs = append(errs, fmt.Errorf("interact: presses of %s: %w", row.ID, err))
@@ -239,6 +243,21 @@ func (s *Sweeper) Sweep(ctx context.Context) error {
 	// After the timeouts, so that a denial the session took and the agent did not, in this very sweep, is found timed out.
 	errs = append(errs, s.cancelUndelivered(ctx)...)
 	return errors.Join(errs...)
+}
+
+// down says whether the chat connection of the interaction's thread is not running (it has not started, stopped, or was removed), in
+// which case the timeout waits for it. Ending the pause resumes the paused turn: the task is cancelled, or the approval's tools are
+// denied and the agent goes on, and its output is rendered into the connection's thread, which no platform can reach. The prompt's
+// edit and the notice are for that thread too. The interaction stays pending, and is timed out by the first sweep after the
+// connection runs (its deadline has passed already); the turn stays paused until then, as a connection's turns are not resumed until
+// it runs (session.Manager.Recover). A platform that cannot be had for another reason is not waited for: the timeout goes on, and its
+// edit fails and is tried again as before.
+func (s *Sweeper) down(ctx context.Context, row store.Interaction) bool {
+	if _, err := s.cfg.Updaters.Platform(row.Key.Connection); !errors.Is(err, chat.ErrConnectionDown) {
+		return false
+	}
+	s.cfg.Logger.DebugContext(ctx, "interact: the connection of an interaction that is due is not running; its timeout waits for it", "interaction", row.ID, "connection", row.Key.Connection)
+	return true
 }
 
 // pauseEnd is how the pause of an interaction was ended, which says what its thread is told and whether it is counted as the

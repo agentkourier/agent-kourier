@@ -174,7 +174,7 @@ task is cancelled, and the refusal is audited. [The agent contract](agent-contra
 | The arguments of one tool in an approval prompt | `3000`<!--limit:approvalArgs--> UTF-16 units | Unusable, because the approver would not see what runs. | None |
 | All of an approval prompt's argument text | `3600`<!--limit:approvalTotal--> UTF-16 units | Unusable. | None |
 | The Block Kit JSON of an approval prompt | `16000`<!--limit:approvalBlocks--> UTF-16 units | Unusable. | None |
-| How long a pause waits for an answer | `30m`<!--limit:interactionTimeout--> by default | A question's task is cancelled and the thread told. An approval is denied for every tool, with the reason that no one decided in time, and the prompt shows a timed-out ending. | `interactions.timeout` of the Binding |
+| How long a pause waits for an answer | `30m`<!--limit:interactionTimeout--> by default | A question's task is cancelled and the thread told. An approval is denied for every tool, with the reason that no one decided in time, and the prompt shows a timed-out ending. While the Binding's chat connection is not running (it has not started, stopped, or was removed) none of this is done: the interaction stays pending, and the task stays paused, until the first sweep after the connection runs, which times it out. The sweep runs every 10 seconds. | `interactions.timeout` of the Binding |
 
 ## Start investigations: triggers, rates and probes
 
