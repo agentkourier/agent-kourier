@@ -116,7 +116,7 @@ func newSupWorld(t *testing.T) *supWorld {
 			w.idented = append(w.idented, tok)
 			return w.ids[tok], w.idErr[tok]
 		},
-		conns:  new(atomic.Pointer[[]Connection]),
+		conns: new(atomic.Pointer[[]Connection]), changes: new(atomic.Uint64),
 		intake: func(v1alpha1.ObjectRef) (chat.Sink, error) { return nil, nil },
 		gone:   func(conn string) { w.mu.Lock(); w.gone = append(w.gone, conn); w.mu.Unlock() },
 	}
@@ -519,5 +519,31 @@ func TestSupervisorPublishesTheConnectionsToVerify(t *testing.T) {
 	w.reconcile()
 	if got := published(); len(got) != 1 || got[ownName] != "own-token" {
 		t.Errorf("published = %v with no team connection; want the own alone", got)
+	}
+}
+
+// The published list counts a change and only a change: a pass that finds the connections and credentials as they were adds nothing, and a start, a
+// restart on a new token and a stop each add to it, which is what calls for a pass of the verification.
+func TestSupervisorCountsAChangeOfThePublishedConnections(t *testing.T) {
+	w := newSupWorld(t)
+	w.ids["tok-a"], w.ids["tok-a2"] = appIdentity{App: "AA", Team: "T1", User: "UA", Bot: "BA"}, appIdentity{App: "AA", Team: "T1", User: "UA", Bot: "BA"}
+	steps := []struct {
+		desired []TeamConnection
+		counts  bool
+		what    string
+	}{
+		{nil, false, "no team connection, the list the leader stored"},
+		{[]TeamConnection{team("team-a/slack", 1, "tok-a", 1)}, true, "a connection started"},
+		{[]TeamConnection{team("team-a/slack", 1, "tok-a", 1)}, false, "a pass that finds it as it was"},
+		{[]TeamConnection{team("team-a/slack", 2, "tok-a2", 1)}, true, "a restart on a new token"},
+		{nil, true, "a connection stopped"},
+	}
+	w.sup.conns.Store(&[]Connection{w.sup.own})
+	for _, st := range steps {
+		before := w.sup.changes.Load()
+		w.reconcile(st.desired...)
+		if changed := w.sup.changes.Load() != before; changed != st.counts {
+			t.Errorf("after %s: counted a change = %t; want %t", st.what, changed, st.counts)
+		}
 	}
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/identity"
+	"github.com/agentkourier/agent-kourier/internal/secret"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
@@ -40,6 +43,8 @@ type supervisor struct {
 	refusals *refusals
 	// conns is where the supervisor publishes the connections the verification probes the Bindings of (see publish).
 	conns *atomic.Pointer[[]Connection]
+	// changes counts the passes that changed what conns holds, which the verification adds to the config's revision (see publish).
+	changes *atomic.Uint64
 	// gone is told the connection of a runtime that was stopped, so that the parts that keep state for it let go (the outbox's lane).
 	gone func(conn string)
 
@@ -272,6 +277,11 @@ func (s *supervisor) say(ctx context.Context, name, msg string, err error) {
 // connection that is not running has no baseline to tell a changed Secret against). A refused connection is left out, so its Bindings are not
 // probed: they are told they are not served. The list is built whole and never changed after it is stored, because the probes read it from
 // several goroutines; nothing in them reads the supervisor's own state. It is called at the end of every pass, so it is as old as the last.
+//
+// A change of the list, which is a connection that started, restarted or stopped, counts in changes, and the verification adds the count to the
+// revision of the config it watches: a rotated Secret moves the config's revision, so a pass runs while the connection still runs on the old tokens and
+// tells its Bindings the credentials changed, and the restart that follows moves nothing the revision names, so without the count no pass
+// would run until the next interval to clear it.
 func (s *supervisor) publish(desired []TeamConnection) {
 	if s.conns == nil {
 		return
@@ -288,5 +298,17 @@ func (s *supervisor) publish(desired []TeamConnection) {
 		}
 		list = append(list, c)
 	}
-	s.conns.Store(&list)
+	if old := s.conns.Load(); old == nil || !sameConnections(*old, list) {
+		s.conns.Store(&list)
+		if s.changes != nil {
+			s.changes.Add(1)
+		}
+	}
+}
+
+// sameConnections says whether a and b list the same connections with the same credentials, in the same order.
+func sameConnections(a, b []Connection) bool {
+	return slices.EqualFunc(a, b, func(x, y Connection) bool {
+		return x.Ref == y.Ref && x.Platform == y.Platform && maps.EqualFunc(x.Credentials, y.Credentials, func(p, q secret.Value) bool { return p.Reveal() == q.Reveal() })
+	})
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync/atomic"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
@@ -229,6 +230,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	// and until the first the own connection's alone.
 	var connsServed atomic.Pointer[[]Connection]
 	connsServed.Store(&[]Connection{conn})
+	var connsChanged atomic.Uint64
 	if h.status != nil {
 		if boot.Source == nil {
 			return nil, errors.New("binding status: the config has no custom resource source to read the statuses from")
@@ -243,7 +245,9 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	}
 	prober = verification{
 		Bindings: bindings, Platforms: chat.Narrow[platformReader](platforms), Conns: func() []Connection { return *connsServed.Load() },
-		Snaps: boot.Reloader, Revision: boot.Reloader.Revision, Secrets: boot.Secrets, Metrics: metrics, Log: log, Interval: cfg.probeEvery, Tick: cfg.probeTick, MinRevisionGap: cfg.probeGap,
+		Snaps: boot.Reloader, Revision: func(ctx context.Context) string {
+			return boot.Reloader.Revision(ctx) + "/" + strconv.FormatUint(connsChanged.Load(), 10)
+		}, Secrets: boot.Secrets, Metrics: metrics, Log: log, Interval: cfg.probeEvery, Tick: cfg.probeTick, MinRevisionGap: cfg.probeGap,
 		Status: statusW,
 	}.newProber()
 	if statusW != nil {
@@ -290,7 +294,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	// looks. A team connection that cannot start yet (its Secret has not synced) starts when it can, and none fails this start.
 	sup := &supervisor{
 		host: host, log: log, every: cmp.Or(cfg.superviseEvery, defaultSuperviseEvery), snapshot: boot.Reloader.Current, secrets: boot.Secrets,
-		own: conn, identify: cfg.identityOf, intake: newIntake, refusals: refused, conns: &connsServed, gone: ob.Forget,
+		own: conn, identify: cfg.identityOf, intake: newIntake, refusals: refused, conns: &connsServed, changes: &connsChanged, gone: ob.Forget,
 		done: make(chan struct{}), teams: map[string]*teamRuntime{}, said: map[string]string{},
 	}
 	supCtx, stopSup := context.WithCancel(runCtx)

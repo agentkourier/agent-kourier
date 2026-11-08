@@ -388,3 +388,24 @@ func TestATeamBindingIsProbedWithItsOwnBot(t *testing.T) {
 		t.Errorf("the refused connection's Binding was probed (its bot: %v, the own bot: %v)", w.probedBy("tok-twin"), w.probedBy(ownToken))
 	}
 }
+
+// A rotated Secret of a team connection is told to its Bindings as changed while the connection runs on the old tokens, and the restart that follows
+// is verified: the pass after it clears what the first said, within a tick, and not at the next interval. The supervisor looks slowly here, so
+// the pass the rotation calls for comes first; the interval is an hour, so only the change of the published connections can call for another.
+func TestARotatedTeamSecretIsVerifiedAgainAfterTheRestart(t *testing.T) {
+	w := newConnWorld(t, nil)
+	w.c.probeEvery, w.c.probeTick, w.c.probeGap = time.Hour, 10*time.Millisecond, time.Millisecond
+	w.c.superviseEvery = 300 * time.Millisecond
+	w.team("team-a", "tok-a")
+	w.binding("team-a", "on-a", "C0TEAMA0001")
+	r := start(t, w.c)
+	r.until("/readyz", http.StatusOK)
+	w.eventually("team-a's channel to be read by its bot", func() bool { return slices.Contains(w.probedBy("tok-a"), "C0TEAMA0001") })
+
+	w.secret("team-a", "tok-a2")
+
+	w.eventually("team-a to restart on its new token", func() bool { return w.up("tok-a") == 0 && w.up("tok-a2") == 1 })
+	w.eventually("the Binding to be verified again as the bot of the restarted connection", func() bool {
+		return slices.Contains(w.probedBy("tok-a2"), "C0TEAMA0001")
+	})
+}

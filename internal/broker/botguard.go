@@ -53,8 +53,12 @@ func (g botGuard) otherUser(user string) bool {
 // everything else, a person's message and a bot's message that a trigger names. The adapter has asked AcceptsBotMention already; this is for an
 // adapter that does not, and for the identity of a bot that became known after it asked.
 func (g botGuard) Message(ctx context.Context, m chat.Inbound) error {
-	if (m.Bot != nil && m.Mentioned && g.other(m.Bot.ID)) || (m.Bot == nil && g.otherUser(m.User)) {
+	switch {
+	case m.Bot != nil && m.Mentioned && g.other(m.Bot.ID):
 		g.log.DebugContext(ctx, "chat: a mention by the bot of another connection of this broker was dropped", "connection", g.self, "channel", m.At.Channel, "message", m.At.ID)
+		return nil
+	case m.Bot == nil && g.otherUser(m.User):
+		g.log.DebugContext(ctx, "chat: a post by the user of another connection's bot, with no bot ID, was dropped, and not read as a person's", "connection", g.self, "channel", m.At.Channel, "message", m.At.ID)
 		return nil
 	}
 	return g.in.Message(ctx, m)
