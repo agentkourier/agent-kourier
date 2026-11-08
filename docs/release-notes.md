@@ -6,7 +6,7 @@ What changed in each release, newest first, and what you must do about it. The s
 ## Version 0.3.0 (unreleased)
 
 A team can now bring its own Slack app: the platform team lists the team's namespace, and the broker serves the ChatConnection the team
-makes there beside its own. Nothing changes for an install that does not set the new list. Read [Let a team bring its own Slack app](how-to/team-slack-app.md),
+makes there beside its own. The broker serves nothing new until that list admits a namespace; the migration and the metric labels below apply to every install. Read [Let a team bring its own Slack app](how-to/team-slack-app.md),
 and the warning on rolling back below, before you set it. An AgentBackend on `dialect: kagent-v1` can also limit which agent namespaces its Bindings may name; nothing changes for one that
 does not set the new field, and [the upgrade section](how-to/upgrade.md#upgrade-to-the-release-that-limits-the-agents-a-binding-may-name) says what to read before you set it.
 
@@ -33,7 +33,7 @@ does not set the new field, and [the upgrade section](how-to/upgrade.md#upgrade-
 - **A database migration (0029).** The outbox and the button presses record the connection they belong to, and the broker records the connections it serves. The migration only adds columns and a table. Rows written before it, or by an
   older release after a rollback, belong to the own connection: the leader gives them to it when it starts.
 - **Do not roll back past 0.3.0 while team connections are served.** The outbox of 0.2.1 posts every unposted row through its one chat platform, so a post waiting for a team's connection would go out through the platform's app.
-  First let the outbox of the team connections drain while they are still served (`agentkourier_outbox_pending` is 0 for each), then take `config.connectionNamespaces` off the values in the same change as the rollback: the chart of 0.2.1 refuses a `config` key it does not have.
+  First, while the team connections are still served, delete their Bindings and wait until their outbox is empty (`agentkourier_outbox_pending` is 0 for each) and none of their interactions is pending (a pause ends at its deadline, up to 7 days; 0.2.1's sweep would otherwise time one out through the platform's app), then take `config.connectionNamespaces` off the values in the same change as the rollback: the chart of 0.2.1 refuses a `config` key it does not have.
   The steps are in [Let a team bring its own Slack app](how-to/team-slack-app.md#take-it-back).
 
 ### Other changes

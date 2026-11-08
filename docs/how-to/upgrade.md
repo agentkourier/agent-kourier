@@ -794,7 +794,7 @@ spec:
 ## Upgrade to the release that serves team connections
 
 A team can bring its own Slack app: the platform team lists the team's namespace in the new value `config.connectionNamespaces`, and the broker serves the team's ChatConnection beside its own
-([Let a team bring its own Slack app](team-slack-app.md)). Nothing changes for an install until that list admits a namespace: the chart renders `AGENTKOURIER_CONNECTION_NAMESPACES` only for a
+([Let a team bring its own Slack app](team-slack-app.md)). The broker serves nothing new until that list admits a namespace (the migration and the metric labels below apply to every install): the chart renders `AGENTKOURIER_CONNECTION_NAMESPACES` only for a
 non-empty list, and a broker without it serves its own connection alone.
 
 - **A database migration, 0029, runs at the first start.** On SQLite and on Postgres it adds a `connection` column to `outbox` and to `interaction_presses`, `NOT NULL DEFAULT ''`, replaces the index on the outbox's

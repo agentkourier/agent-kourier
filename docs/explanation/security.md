@@ -88,9 +88,10 @@ already holds for every team. A reader of that pod's memory has them all, and a 
 the tokens of the team's app: see [Let a team bring its own Slack app](../how-to/team-slack-app.md).
 
 **The admission list is the consent.** Without it, any namespace where someone may create a ChatConnection would make the broker
-open a chat connection on tokens nobody at the platform reviewed. So the broker serves a ChatConnection only in its own
-namespace or in a namespace on the list. A ChatConnection anywhere else is not served, and the broker does not read the Secret it
-names. The list is read at start: taking a namespace off it is a restart, after which the connection is no longer served.
+open a chat connection on tokens nobody at the platform reviewed. So the broker serves its own ChatConnection (the one
+`config.chatConnection` names, in any namespace) and the ChatConnections of the namespaces on the list, and no other. Another
+ChatConnection of the release's namespace is not served unless that namespace is on the list. A ChatConnection that is not served is
+not run, and the broker does not read the Secret it names. The list is read at start: taking a namespace off it is a restart, after which the connection is no longer served.
 
 A second key stands beside it. The Secret of a team connection is in the team's namespace, and the broker's ServiceAccount can
 read it only if someone grants that: the team, with a Role that names the Secret, or the platform, with `rbac.secretNames` or
@@ -102,6 +103,10 @@ What a team that may write a ChatConnection in an admitted namespace can do, and
 - It can have the broker open Socket Mode on its app, and post as its app in the channels that app is in. A Binding posts only to the
   channel it names, as before, and a Binding uses a connection only from the connection's namespace or a namespace in its
   `allowedNamespaces`.
+- It can have the broker send its app's tokens to an agent, if the Secret is granted. The grant to the ServiceAccount is for the
+  Secret and not for the ChatConnection, so any Binding's `tokenSecretRef` or AgentBackend's `valueSecretRef` in that namespace can name it,
+  and the broker sends the value to that AgentBackend's `url`, as described below. Anyone who may write Bindings or AgentBackends in an admitted
+  namespace can then do this with the team's `botToken` and `appToken`. Grant the Secret only if they may hold the tokens.
 - It can fill the places. The broker serves at most 16 connections, its own first and the others oldest first, and no setting changes that.
   A team that creates many leaves a later team's connection out, and that connection's Bindings say `ConnectionNotServed`. Bound
   it with a `ResourceQuota` on `count/chatconnections.agentkourier.dev` in each admitted namespace, as the section below does for Bindings (Kubernetes's own object-count quota for a custom resource; not run here for this kind).

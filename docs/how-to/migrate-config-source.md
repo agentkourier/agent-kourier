@@ -286,6 +286,10 @@ What a team that can write these objects can do with the broker's access is in [
 
 ## Move back to the ConfigMap
 
+If the platform admits team namespaces (`config.connectionNamespaces`), take that list off the values in the same upgrade: the chart refuses a non-empty list with
+`config.source: files`, and the files route serves the one ChatConnection of its directory, so the team connections stop being served. Read the order for team connections in
+[Let a team bring its own Slack app](team-slack-app.md#take-it-back) first.
+
 Where the chart rendered the resources from your `config.*` values, set `config.source: files` and upgrade. The ConfigMap is rendered from the same values:
 
 ```sh
@@ -369,6 +373,7 @@ is held, a Binding that is deleted stays held, and leaves by itself once the con
 | What you see | Why, and what to do |
 |---|---|
 | `helm upgrade` fails with `config.existingConfigMap is for config.source files, and config.source is crds` | The values still name a ConfigMap and say nothing of the route, which defaults to custom resources. To stay on the ConfigMap, set `config.source: files`. To move, follow [Move a ConfigMap you manage yourself](#move-a-configmap-you-manage-yourself). Nothing changed. |
+| `helm upgrade` fails with `config.connectionNamespaces is for config.source crds, and config.source is files` | The values still list namespaces whose ChatConnections the broker serves, and the files route serves one ChatConnection. Set `config.connectionNamespaces: []`, or stay on `config.source: crds`. Nothing changed. |
 | `helm upgrade` fails with `config.source crds needs the CRDs` | Step 1 was skipped, or the CRDs were deleted. Install them first. Nothing changed. |
 | `helm upgrade` fails with `config.source crds needs Kubernetes 1.33 or later` | The API server is older. The ConfigMap route has no minimum: stay on it. With `helm template`, pass the cluster's version with `--kube-version`. |
 | The pod crash-loops and `kubectl logs` says `ChatConnection agent-kourier/slack was not found` (exit code 2) | The broker has its own ChatConnection, named by `AGENTKOURIER_CHAT_CONNECTION`, and does not start without it. Apply it, or name the one that exists in `config.chatConnection`. Once the resources exist the pod starts at its next restart, with nothing else to do. |

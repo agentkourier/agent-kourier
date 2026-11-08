@@ -70,8 +70,11 @@ kubectl auth can-i list secrets/team-a-slack -n team-a --as system:serviceaccoun
 ```
 
 The verbs are `list` and `watch`, not `get`. Give the Role a name the chart would not (`<fullname>-secrets` is the chart's own),
-so that the two never meet. The Role is a grant to the broker and not to one Binding: the broker may use that Secret for the
-ChatConnection that names it, and no other. [Let a team add its own Binding](migrate-config-source.md#let-a-team-add-its-own-binding)
+so that the two never meet. The Role is a grant to the broker, not to the ChatConnection: any Binding's `tokenSecretRef` or
+AgentBackend's `valueSecretRef` in `team-a` can name this Secret too, and the broker then reads it and sends its value to that
+AgentBackend's `url`. Anyone who may write Bindings or AgentBackends in the namespace can therefore have the broker send the app's
+tokens to an agent, so grant the Secret only if those writers may hold the tokens
+([Security model](../explanation/security.md#what-the-people-who-write-these-objects-can-do)). [Let a team add its own Binding](migrate-config-source.md#let-a-team-add-its-own-binding)
 has the same two objects as YAML.
 
 If the team cannot create a Role, the platform team grants the Secret in its values instead, in step 3.
@@ -93,8 +96,10 @@ only Bindings of `team-a` may use the connection, and they name it without a nam
 The [ChatConnection reference](../reference/chatconnection.md) has every field.
 
 The team then writes its Bindings and AgentBackend as in [Write a Binding](write-a-binding.md), and invites the bot of its app
-to the channels they name. The order of the steps does not matter. Until step 3 a Binding of the team has no status: the broker
-reads no Binding of a ChatConnection that it does not serve.
+to the channels they name. Create the ChatConnection before its Bindings. A Binding applied while its ChatConnection does not exist
+is owned by every broker, which writes `ConnectionNotFound` on it. Once the connection exists in a namespace that is not
+admitted, no broker serves it, and nothing rewrites that status until step 3. A Binding applied after its connection has no status
+at all until step 3, because the broker reads no Binding of a ChatConnection that it does not serve.
 
 ## 3. The platform team admits the namespace
 
@@ -129,8 +134,12 @@ Bindings, so use it only for a namespace that holds nothing but Agent Kourier's.
 in a namespace, and a Role of the same name that someone made by hand there makes the upgrade fail with `invalid ownership
 metadata`; this is why the team's Role above has another name.
 
-A connection whose Secret the broker cannot read yet is not an error. The broker looks at the connections it serves every 5
-seconds and starts the connection once the Secret can be read; it never stops the broker or another connection.
+A connection whose Secret the broker cannot read yet is not an error, and it never stops the broker or another connection. The
+broker looks at the connections it serves every 5 seconds and starts one once its Secret can be read. What the wait is depends on
+why it could not be read. A Secret that does not exist yet is picked up at the next look after it is created. A Secret that the API
+server denied (the team's Role is not there yet) is asked for again only at the broker's recheck of the config, which comes about
+once a minute and no sooner than a minute after the last try, so a Role applied late takes up to about 1 m 10 s, and then up to 5 s
+for the look, to be noticed. No setting changes it ([Limits](../reference/limits.md#run-the-broker)).
 
 ## 4. Check it
 
@@ -154,9 +163,10 @@ team meets, in the order of this page. [Binding status](../reference/binding-sta
 | What the team sees | What it means | What to do |
 |---|---|---|
 | No status, and empty `READY` and `REASON` columns | The namespace is not on the list, or the broker has not read the Binding yet (the first status comes within about 10 seconds). | Ask the platform team to admit the namespace. |
+| `Accepted` `False`, `ConnectionNotFound` | The Binding was applied before its ChatConnection existed, and the namespace is still not admitted, so nothing has rewritten the status. | Ask the platform team to admit the namespace. Apply the ChatConnection before its Bindings. |
 | `Accepted` `False`, `ConnectionNotServed` | The connection exists and the broker does not serve it: its namespace was taken off the list, it is past the 16, or it is a second connection of a Slack app that an older connection uses. `message` says which. It is written once and not put back. Only a Binding that the connection admits is told. | See below, and [the reason's row](../reference/binding-status.md#accepted). |
 | `Accepted` `False`, `ConnectionRejected` | The ChatConnection is invalid. If it had a good generation, that one runs. | Fix the ChatConnection; `kubectl apply --dry-run=server` finds what the schema checks. |
-| `ChannelJoined` `Unknown`, `ChatUnavailable` | The connection is not running: it has not started yet, it is waiting for the platform to say whose bot it is, or its Secret cannot be read now. The probe makes no call to Slack. | Wait a minute or two. If it stays, check the grant with `kubectl auth can-i` as in step 2, and ask the platform team to read the log. |
+| `ChannelJoined` `Unknown`, `ChatUnavailable` | The connection is not running: it has not started yet, it is waiting for the platform to say whose bot it is, or its Secret cannot be read now. The probe makes no call to Slack. | Wait about two minutes: a Role applied late is noticed up to about 1 m 15 s later. If it stays, check the grant with `kubectl auth can-i` as in step 2, and ask the platform team to read the log. |
 | `ChannelJoined` `Unknown`, `ChatCredentialsUnusable` | The Secret, or a key of it, is gone or empty, or the Secret is not of type `Opaque`. | Mend the Secret. The connection starts by itself. |
 | `ChannelJoined` `Unknown`, `ChatCredentialsChanged` | The Secret holds other tokens than the connection runs on: it is restarting. The reason clears at the next probe. | Nothing; see [Rotate the tokens](#rotate-the-tokens). |
 | `ChannelJoined` `False`, `ChatCredentialsRejected` | Slack rejected a token of the connection. Only this connection is stopped. | See [When Slack rejects a token](#when-slack-rejects-a-token). |
@@ -227,20 +237,32 @@ Mend it by writing valid tokens into the Secret.
 
 ## Take it back
 
-- **The team stops using its app.** It deletes the ChatConnection. The broker stops serving it at the read that settles the
-  deletion, about 10 to 20 seconds after the delete, and there is no hold, unlike the broker's own connection. The team's
-  Bindings then say `ConnectionNotFound`.
+- **The team stops using its app.** It deletes the ChatConnection. The config drops it at the read that settles the
+  deletion, about 10 to 20 seconds after the delete, with no hold, unlike the broker's own connection, and the connection stops at the supervisor's next look, up to 5
+  seconds later. The team's Bindings then say `ConnectionNotFound`.
 - **The platform stops serving the team.** It takes the namespace off `config.connectionNamespaces`. The broker reads the
   list at start, so the upgrade restarts it; it records the connections it serves in its store, and after the restart it
   writes `ConnectionNotServed` once on the Bindings that the connection admits. Their sessions are kept, and the
   posts waiting for the connection stay in the outbox.
-- **Rolling the release back.** Do not roll back to a release before 0.3.0 while team connections are served. The outbox and the
-  button presses of 0.3.0 record the connection they belong to. The outbox of 0.2.1 selects its unposted rows with no regard to a
-  connection and posts them through its one chat platform, so a post waiting for a team's connection would go out through the
-  platform's app. First let the team connections' outbox drain while they are still served: delete or pause their Bindings, wait until
-  `agentkourier_outbox_pending{connection="team-a/team-a-slack"}` is 0 on the leader, then take the list off the values in
-  the same change as the rollback: the chart of 0.2.1 refuses a `config` key it does not have, and this chart refuses a non-empty
-  list with `config.source: files`.
+- **Rolling the release back.** Do not roll back to a release before 0.3.0 while team connections are served. The outbox, the
+  interactions and the button presses of 0.3.0 record the connection they belong to, and 0.2.1 has one chat platform and does not
+  filter by connection in three places, read from the 0.2.1 code (not run):
+  - it selects its unposted outbox rows with no regard to a connection and posts them through its one platform, so a post waiting
+    for a team's connection would go out through the platform's app;
+  - its sweep lists every pending interaction that is past its deadline (`ListDueInteractions`) and, for one on a team's thread, ends
+    the pause, tries to edit the prompt and queues the timeout notice, which its one platform then posts in the team's thread;
+  - it replays every recorded button press (`ListPresses`) through its one platform.
+
+  A session whose Binding 0.2.1 does not have is skipped when it takes up its sessions, so that is safe. To leave nothing behind, while the team connections are still
+  served: delete the team's Bindings, so that no new thread starts; wait until
+  `agentkourier_outbox_pending{connection="team-a/team-a-slack"}` is 0 on the leader; and wait until no interaction of the
+  connection is pending and no press waits. A pending interaction ends at its deadline: 30 minutes by default, and a Binding may set up to 7 days
+  (`interactions.timeout`, [Limits](../reference/limits.md#write-a-binding-an-agentbackend-or-a-chatconnection)). `agentkourier_interactions_pending` has no `connection` label: if it is 0,
+  none is pending on any connection; if not, count the team's in the store (the table `interactions`, with `state = 'pending'` and
+  `connection = 'team-a/team-a-slack'`, and the table `interaction_presses` with the same `connection`). If you cannot wait, the remaining risk is plain: a
+  timeout notice, and an attempt to edit the prompt, for a team's thread from the platform's app. Then take the list off the values
+  in the same change as the rollback: the chart of 0.2.1 refuses a `config` key it does not have, and this chart refuses a
+  non-empty list with `config.source: files`.
 
 ## Related
 
