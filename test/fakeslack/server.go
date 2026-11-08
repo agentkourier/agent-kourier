@@ -173,6 +173,7 @@ type Server struct {
 	archived map[string]bool       // channels SetArchived marked archived, guarded by mu
 	dmOwner  map[string]string     // direct-message channel to the AppID it was opened with by DMApp, guarded by mu
 	revoked  map[string]bool       // AppIDs whose tokens SetRevoked revoked, guarded by mu
+	holds    map[string]*postHold  // AppIDs whose chat.postMessage calls HoldPosts holds, guarded by mu
 
 	noScope map[string]bool // methods SetMissingScope makes answer missing_scope, guarded by mu
 
@@ -282,6 +283,7 @@ func (s *Server) URL() string {
 // shuts down a Server started with New. Call it on a Server from NewHandler
 // too.
 func (s *Server) Close() {
+	s.releaseAllPosts()
 	s.sock.stop()
 	if s.srv != nil {
 		s.srv.Close()
@@ -300,6 +302,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case isControlPath(r.URL.Path):
 		s.control.ServeHTTP(w, r)
+		return
+	}
+	// A held post waits here, before it takes its turn, so that it holds up no other call.
+	if !s.waitPostHold(r) {
 		return
 	}
 	// Requests that queue events for the bot's own posts take turns, from
@@ -448,11 +454,14 @@ func (s *Server) authenticate(r *http.Request, prefix string) (App, string) {
 	case !strings.HasPrefix(token, prefix):
 		return App{}, "invalid_auth"
 	}
+	if s.isRetired(token) { // first: a token that was rotated away from is revoked, not unknown, whatever WithStrictTokens says of unowned ones
+		return App{}, "token_revoked"
+	}
 	app, ok := s.appForToken(token)
 	switch {
 	case !ok:
 		return App{}, "invalid_auth"
-	case s.isRevoked(app.AppID), s.isRetired(token):
+	case s.isRevoked(app.AppID):
 		return App{}, "token_revoked"
 	}
 	return app, ""

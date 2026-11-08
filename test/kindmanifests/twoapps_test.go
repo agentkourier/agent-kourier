@@ -131,6 +131,11 @@ func TestTheTwoAppsManifestsBindTheChannelsOfTheTests(t *testing.T) {
 	if ch, conn := chat("agent-kourier/mc-platform-final"); ch != e2e.ChannelMCPlatformFinal || conn != e2e.ConnPlatform {
 		t.Errorf("Binding agent-kourier/mc-platform-final is on channel %s and connection %s; want %s and %s", ch, conn, e2e.ChannelMCPlatformFinal, e2e.ConnPlatform)
 	}
+	for binding, conn := range map[string]string{"team-a/team-a-loop": e2e.ConnTeamA, "agent-kourier/mc-platform-loop": e2e.ConnPlatform} {
+		if ch, got := chat(binding); ch != e2e.ChannelMCLoop || got != conn {
+			t.Errorf("Binding %s is on channel %s and connection %s; want %s and %s: the two Bindings of the bot-loop case share a channel", binding, ch, got, e2e.ChannelMCLoop, conn)
+		}
+	}
 	for name, want := range map[string]string{"team-a/team-a": "live", "agent-kourier/mc-platform": "live", "team-a/team-a-final": "final", "agent-kourier/mc-platform-final": "final"} {
 		if got := bindings[name]["chat"].(map[string]any)["output"]; got != want {
 			t.Errorf("Binding %s has output %v; the tests expect %s", name, got, want)
@@ -151,6 +156,12 @@ func TestTheTwoAppsManifestsBindTheChannelsOfTheTests(t *testing.T) {
 	lib, err := os.ReadFile(twoAppsLib)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The bots are in the channels of the Bindings before the Bindings are made (seat_two_apps_bots), whose names are test/e2e's.
+	for _, ch := range []string{e2e.ChannelMCPlatform, e2e.ChannelMCPlatformFinal, e2e.ChannelMCLoop, e2e.ChannelMCTeamA, e2e.ChannelMCTeamAFinal} {
+		if !strings.Contains(string(lib), `\"channel\":\"`+ch+`\"`) {
+			t.Errorf("lib.sh's seat_two_apps_bots does not put a bot in the channel %s", ch)
+		}
 	}
 	for _, want := range []string{"create secret generic slack-team-a --from-literal=botToken=" + e2e.AppTeamA.BotToken, "--from-literal=appToken=" + e2e.AppTeamA.AppToken, "create secret generic team-a-agent-token"} {
 		if !strings.Contains(string(lib), want) {

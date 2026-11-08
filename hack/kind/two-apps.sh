@@ -62,7 +62,9 @@ RESULTS=()
 phase() {
   local name=$1
   echo "==> phase ${name}"
-  if E2E_PHASE=${name} E2E_RUN='TestMC_ATeamTakenOffTheAdmissionListIsNotServed' "${HERE}/e2e-run.sh" fast >"${OUT}/phase-${name}.log" 2>&1; then
+  # An E2E_RUN that matches no test (a renamed one) passes with no test run: the phase counts only when its log shows the test passed.
+  if E2E_PHASE=${name} E2E_RUN='TestMC_ATeamTakenOffTheAdmissionListIsNotServed' "${HERE}/e2e-run.sh" fast >"${OUT}/phase-${name}.log" 2>&1 &&
+    grep -q -- '^--- PASS: TestMC_ATeamTakenOffTheAdmissionListIsNotServed' "${OUT}/phase-${name}.log"; then
     RESULTS+=("PASS ${name}")
   else
     RESULTS+=("FAIL ${name}")

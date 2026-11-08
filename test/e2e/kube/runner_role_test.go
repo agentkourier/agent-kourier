@@ -162,7 +162,7 @@ func TestRunnerCRRoles(t *testing.T) {
 }
 
 // TestRunnerConnectionRoles pins what the scenarios of several Slack apps may do. In team-a, which the tier fills, the runner reads Bindings and
-// ChatConnections and patches the one Secret of the Slack tokens, by name: it can never read a Secret, there or anywhere. In team-b and team-c it plays a
+// patches the one Secret of the Slack tokens, by name: it can never read a Secret, there or anywhere. In team-b and team-c it plays a
 // team as it does in e2e-team, and may also make and delete ChatConnections, with the Secrets of a case (mc-slack and mc-token) the only ones it may list,
 // watch or delete.
 func TestRunnerConnectionRoles(t *testing.T) {
@@ -171,7 +171,7 @@ func TestRunnerConnectionRoles(t *testing.T) {
 	if !ok {
 		t.Fatalf("the manifest has no Role e2e-runner-team-a in %s", MultiTeamNamespace)
 	}
-	if got, want := grants([]rbacv1.Role{a}), map[string]bool{"bindings:get": true, "bindings:list": true, "chatconnections:get": true, "chatconnections:list": true, "secrets:patch": true}; len(got) != len(want) {
+	if got, want := grants([]rbacv1.Role{a}), map[string]bool{"bindings:get": true, "secrets:patch": true}; len(got) != len(want) {
 		t.Errorf("Role e2e-runner-team-a grants %v, want exactly %v", got, want)
 	} else {
 		for g := range want {
@@ -191,12 +191,12 @@ func TestRunnerConnectionRoles(t *testing.T) {
 			t.Fatalf("the manifest has no Role e2e-runner-%s in %s", ns, ns)
 		}
 		got := grants([]rbacv1.Role{r})
-		for _, want := range []string{"chatconnections:create", "chatconnections:delete", "chatconnections:get", "bindings:create", "bindings:delete", "bindings:get", "agentbackends:create", "agentbackends:delete", "secrets:create", "secrets:delete", "secrets:list", "secrets:watch", "roles:create", "rolebindings:create", "roles:delete", "rolebindings:delete"} {
+		for _, want := range []string{"chatconnections:create", "chatconnections:delete", "chatconnections:list", "bindings:list", "bindings:create", "bindings:delete", "bindings:get", "agentbackends:create", "agentbackends:delete", "secrets:create", "secrets:delete", "secrets:list", "secrets:watch", "roles:create", "rolebindings:create", "roles:delete", "rolebindings:delete"} {
 			if !got[want] {
 				t.Errorf("Role %s in %s lacks %s", r.Name, ns, want)
 			}
 		}
-		for _, never := range []string{"secrets:get", "secrets:update", "secrets:patch", "roles:get", "bindings:patch"} {
+		for _, never := range []string{"secrets:get", "secrets:update", "secrets:patch", "roles:get", "bindings:patch", "bindings:update", "chatconnections:update", "chatconnections:get"} {
 			if got[never] {
 				t.Errorf("Role %s in %s grants %s, which no scenario uses", r.Name, ns, never)
 			}

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/slack-go/slack"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -42,7 +43,14 @@ const (
 type mc struct {
 	*scenario
 	crs *kube.CRs
+	// within is how long a wait for a Binding's status goes on: statusWithin, which is for a status that a change of config calls for (a probe pass follows
+	// within 30 seconds), or mcProbeWithin for one that only the next pass brings.
+	within time.Duration
 }
+
+// mcProbeWithin is how long a Binding that was not ready when its bot was put in its channel may wait for its status: the probes of a Binding run every five
+// minutes, with some jitter, and a change of config is what brings a pass sooner.
+const mcProbeWithin = 7 * time.Minute
 
 // requireTwoApps skips unless the tier is the fast tier on custom resources and its broker admits team-a's namespace, and returns the environment.
 func requireTwoApps(t *testing.T) Env {
@@ -77,7 +85,7 @@ func newMCBare(t *testing.T) *mc {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &mc{scenario: newScenario(t), crs: crs}
+	return &mc{scenario: newScenario(t), crs: crs, within: statusWithin}
 }
 
 // newMCFailover is newMC on two replicas, with the signaler that kills the leader (it skips with S16's reason on one).
@@ -89,7 +97,7 @@ func newMCFailover(t *testing.T) (*mc, *failover) {
 		t.Fatal(err)
 	}
 	f := newFailover(t)
-	m := &mc{scenario: f.scenario, crs: crs}
+	m := &mc{scenario: f.scenario, crs: crs, within: statusWithin}
 	m.prepare()
 	return m, f
 }
@@ -229,7 +237,7 @@ func (m *mc) condition(ctx context.Context, namespace, name, typ string) (map[st
 func (m *mc) waitCondition(namespace, name, typ, status, reason string) map[string]any {
 	m.t.Helper()
 	var found map[string]any
-	err := Wait(m.ctx, statusWithin, fmt.Sprintf("the %s condition of Binding %s/%s to be %s %s", typ, namespace, name, status, reason), func(ctx context.Context) (bool, error) {
+	err := Wait(m.ctx, m.within, fmt.Sprintf("the %s condition of Binding %s/%s to be %s %s", typ, namespace, name, status, reason), func(ctx context.Context) (bool, error) {
 		cond, err := m.condition(ctx, namespace, name, typ)
 		if err != nil {
 			return false, err
@@ -249,7 +257,7 @@ func (m *mc) waitCondition(namespace, name, typ, status, reason string) map[stri
 // waitPlatformBindingReady waits until the leader says the platform's Binding is ready: agentkourier_binding_ready is 1 for it.
 func (m *mc) waitPlatformBindingReady() {
 	m.t.Helper()
-	err := Wait(m.ctx, statusWithin, "agentkourier_binding_ready{binding=agent-kourier/mc-platform} to be 1", func(ctx context.Context) (bool, error) {
+	err := Wait(m.ctx, m.within, "agentkourier_binding_ready{binding=agent-kourier/mc-platform} to be 1", func(ctx context.Context) (bool, error) {
 		v, err := m.leaderCounter(ctx, "agentkourier_binding_ready", map[string]string{"binding": "agent-kourier/mc-platform"})
 		if errors.Is(err, ErrNoSample) {
 			return false, nil
@@ -367,6 +375,7 @@ func (sc *scratch) binding(name, connection, channel string) {
 // platform's bot is not in it): the Binding verification goes through the Binding's own connection.
 func TestMC_BothBindingsAnswerThroughTheirOwnApp(t *testing.T) {
 	m := newMC(t)
+	m.within = mcProbeWithin // the tier puts the bots in their channels when it is brought up; a fake that was restarted since has forgotten, and the next pass finds out
 	for _, c := range []struct {
 		app     FakeApp
 		channel string
@@ -387,11 +396,17 @@ func TestMC_BothBindingsAnswerThroughTheirOwnApp(t *testing.T) {
 // platform's or team-a's. The other two keep answering. When the team removes its connection the app's client goes.
 func TestMC_AConnectionAddedWhileTheBrokerRunsIsServed(t *testing.T) {
 	m := newMC(t)
-	before := m.restarts()
-	if n, err := m.slack.AppConnections(m.ctx, AppTeamB.AppID); err != nil || n != 0 {
-		t.Fatalf("the app %s has %d clients (%v) before its team connects; want none", AppTeamB.AppID, n, err)
-	}
+	// newScratch removes what an earlier run left in the namespace, a connection of team-b's app included (a Job cut off by its timeout runs no cleanup);
+	// the broker stops that app's client then, and the case starts from none.
 	sc := m.newScratch(kube.ScratchNamespace, AppTeamB)
+	err := Wait(m.ctx, 2*time.Minute, "no client of the app "+AppTeamB.AppID+" before its team connects", func(ctx context.Context) (bool, error) {
+		n, err := m.slack.AppConnections(ctx, AppTeamB.AppID)
+		return n == 0, err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := m.restarts()
 	if err := m.slack.Join(m.ctx, ChannelMCTeamB, AppTeamB.AppID); err != nil {
 		t.Fatal(err)
 	}
@@ -419,7 +434,7 @@ func TestMC_AConnectionAddedWhileTheBrokerRunsIsServed(t *testing.T) {
 	if err := sc.crs.Delete(m.ctx, kube.ChatConnectionGVR, sc.ns, "team-b"); err != nil {
 		t.Fatal(err)
 	}
-	err := Wait(m.ctx, 2*time.Minute, "the client of the app "+AppTeamB.AppID+" to go with its connection", func(ctx context.Context) (bool, error) {
+	err = Wait(m.ctx, 2*time.Minute, "the client of the app "+AppTeamB.AppID+" to go with its connection", func(ctx context.Context) (bool, error) {
 		n, err := m.slack.AppConnections(ctx, AppTeamB.AppID)
 		return n == 0, err
 	})
@@ -533,9 +548,10 @@ func (m *mc) acknowledged(app FakeApp, channel, ts string) {
 }
 
 // TestMC_OutboxRowsPostThroughTheirOwnAppAfterAKill: a turn is held on a gate in each connection's channel, whose Binding has the output final, so that the
-// reply is one post through the outbox when the turn ends. The leader is killed with both turns running, and the replica that takes over finishes them once
-// the gates open: each thread has the one whole reply, posted through the connection of its Binding, by the bot of that app and no other. Each Binding's turn
-// is counted once in the new leader.
+// reply is one post through the outbox when the turn ends. The fake holds each app's chat.postMessage calls, and the gates open: each turn ends, and its
+// reply is a row whose post is certainly in flight, waiting at the fake, when the leader is killed (the case waits until the fake counts a held post of each
+// app before it kills). The held posts are abandoned with the dead process and nothing is stored. The replica that takes over finds the rows, and once the
+// fake lets the posts go each thread has the one whole reply, posted through the connection of its row, by the bot of that app and no other.
 //
 // The fast tier on Postgres with two replicas (see TestMC_FailoverServesBothConnections). A reply streamed live is the next case's.
 func TestMC_OutboxRowsPostThroughTheirOwnAppAfterAKill(t *testing.T) {
@@ -543,18 +559,28 @@ func TestMC_OutboxRowsPostThroughTheirOwnAppAfterAKill(t *testing.T) {
 	type turn struct {
 		app     FakeApp
 		channel string
-		binding string
 		gate    string
 		root    fakeslack.UserMessage
 	}
 	turns := []*turn{
-		{app: AppPlatform, channel: ChannelMCPlatformFinal, binding: "agent-kourier/mc-platform-final"},
-		{app: AppTeamA, channel: ChannelMCTeamAFinal, binding: "team-a/team-a-final"},
+		{app: AppPlatform, channel: ChannelMCPlatformFinal},
+		{app: AppTeamA, channel: ChannelMCTeamAFinal},
+	}
+	for _, tn := range turns {
+		app := tn.app
+		t.Cleanup(func() { // a hold left on would stop every later case that posts as the app
+			if err := m.slack.HoldPosts(context.WithoutCancel(m.ctx), app.AppID, false); err != nil {
+				t.Errorf("let %s's posts go at the end: %v", app.AppID, err)
+			}
+		})
 	}
 	old := f.leader()
 	before := f.restarts()
 	for i, tn := range turns {
 		tn.gate = f.gate(fmt.Sprintf("MC-%d", i))
+		if err := m.slack.HoldPosts(m.ctx, tn.app.AppID, true); err != nil {
+			t.Fatal(err)
+		}
 		um, err := m.say(tn.app, tn.channel, "UMCOUTBOX", "answer me gate:"+tn.gate)
 		if err != nil {
 			t.Fatal(err)
@@ -562,13 +588,31 @@ func TestMC_OutboxRowsPostThroughTheirOwnAppAfterAKill(t *testing.T) {
 		tn.root = um
 		m.acknowledged(tn.app, tn.channel, um.TS)
 	}
+	// The turns end, and the row of each is on its way to the fake, which holds it: nothing is stored until the posts are let go.
+	for _, tn := range turns {
+		if err := f.stub.Release(m.ctx, tn.gate); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tn := range turns {
+		err := Wait(m.ctx, stepTimeout, "a post of "+tn.app.AppID+" to wait on the fake's hold", func(ctx context.Context) (bool, error) {
+			n, err := m.slack.HeldPosts(ctx, tn.app.AppID)
+			return n >= 1, err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if th, err := m.slack.Thread(m.ctx, tn.channel, tn.root.TS); err != nil || len(BotMessages(th)) != 0 {
+			t.Fatalf("the thread of %s has bot messages (%v) before its post is let go: %s", tn.app.AppID, err, describe(th))
+		}
+	}
 
 	if err := f.sig.Kill(f.ctx, old.ContainerID); err != nil {
 		t.Fatal(err)
 	}
-	next := f.takeover(old)
+	f.takeover(old)
 	for _, tn := range turns {
-		if err := f.stub.Release(f.ctx, tn.gate); err != nil {
+		if err := m.slack.HoldPosts(m.ctx, tn.app.AppID, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -593,11 +637,107 @@ func TestMC_OutboxRowsPostThroughTheirOwnAppAfterAKill(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	for _, tn := range turns {
-		if got := f.completedTurns(next, tn.binding); got != 1 {
-			t.Errorf("the new leader counts %v completed turns for %s; want 1: the turn is finished once", got, tn.binding)
-		}
-	}
 	f.settle()
 	f.onlyEnded(before, old.Name)
+}
+
+// platformFakeBotToken is the bot token of the fake Slack's default app, the one the platform's Secret slack-fast holds: a token no registered app owns.
+const platformFakeBotToken = "xoxb-fake-test-token"
+
+// botClient is the Web API as the app's bot, to post as it does.
+func (m *mc) botClient(app FakeApp) *slack.Client {
+	token := app.BotToken
+	if token == "" {
+		token = platformFakeBotToken
+	}
+	return slack.New(token, slack.OptionAPIURL(m.env.SlackURL+"/"))
+}
+
+// botsInLoop are the two apps of ChannelMCLoop with their Bindings there, as the label of agentkourier_turn_outcomes_total names them.
+var botsInLoop = []struct {
+	app     FakeApp
+	binding string
+}{
+	{AppPlatform, "agent-kourier/mc-platform-loop"},
+	{AppTeamA, "team-a/team-a-loop"},
+}
+
+// TestMC_ABotsPostStartsNoTurnOfAnotherAppsBinding is the rule against a loop between two apps (D51): the bots of two apps are in one channel, each with a
+// Binding of its own connection there, and a message that one bot posts starts no turn of the other's Binding, whatever it says. For each bot as the poster, the
+// other bot's Binding has answered a person who mentioned it, and so owns a thread; the poster then posts, as its own bot, a message that mentions the other
+// at the top level of the channel and one in the thread the other owns. The other app is sent the events of both and acks them, which is its intake having
+// seen them, and for as long as the case watches its Binding starts no turn (agentkourier_turn_outcomes_total does not move) and says nothing in either
+// thread. The Binding still answers a person afterwards.
+func TestMC_ABotsPostStartsNoTurnOfAnotherAppsBinding(t *testing.T) {
+	m := newMC(t)
+	if err := m.slack.SetMembers(m.ctx, ChannelMCLoop, AppPlatform.BotUser, AppTeamA.BotUser); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range botsInLoop {
+		m.postedBy(m.answered(c.app, ChannelMCLoop, crServeTimeout), c.app)
+	}
+	completed := func(binding string) float64 {
+		return m.counter("agentkourier_turn_outcomes_total", map[string]string{"binding": binding, "outcome": "completed"})
+	}
+	botMessagesOf := func(channel, ts string, app FakeApp) int {
+		th, err := m.slack.Thread(m.ctx, channel, ts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for _, b := range BotMessages(th) {
+			if b.BotID == app.BotID {
+				n++
+			}
+		}
+		return n
+	}
+	for _, pair := range [][2]int{{0, 1}, {1, 0}} {
+		poster, other := botsInLoop[pair[0]], botsInLoop[pair[1]]
+		owned := m.answered(other.app, ChannelMCLoop, crServeTimeout) // a thread the other bot's Binding owns
+		thread := owned[0].TS
+		baseline, ownedBefore := completed(other.binding), botMessagesOf(ChannelMCLoop, thread, other.app)
+		if ownedBefore == 0 {
+			t.Fatalf("%s has no message in the thread it owns: %s", other.app.AppID, describe(owned))
+		}
+
+		bot := m.botClient(poster.app)
+		_, top, err := bot.PostMessageContext(m.ctx, ChannelMCLoop, slack.MsgOptionText(other.app.Mention()+"please investigate this", false))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, reply, err := bot.PostMessageContext(m.ctx, ChannelMCLoop, slack.MsgOptionText(other.app.Mention()+"and this", false), slack.MsgOptionTS(thread))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The other app took both events in: it was sent them, and acked them.
+		for _, ts := range []string{top, reply} {
+			ids, err := m.slack.EventEnvelopes(m.ctx, other.app.AppID, ChannelMCLoop, ts)
+			if err != nil || len(ids) == 0 {
+				t.Fatalf("%s was sent no event for the post %s of %s (%v); the case proves nothing without one", other.app.AppID, ts, poster.app.AppID, err)
+			}
+			for _, id := range ids {
+				if _, err := m.slack.AckWait(m.ctx, 15*time.Second, id); err != nil {
+					t.Fatalf("%s never acked the event %s: %v", other.app.AppID, id, err)
+				}
+			}
+		}
+		err = Consistently(m.ctx, 15*time.Second, "the Binding of "+other.app.AppID+" to start no turn for a post of "+poster.app.AppID, func(context.Context) (bool, error) {
+			if got := completed(other.binding); got != baseline {
+				return false, fmt.Errorf("%s completed %v turns, from %v: a bot's post started one", other.binding, got, baseline)
+			}
+			if n := botMessagesOf(ChannelMCLoop, top, other.app); n != 0 {
+				return false, fmt.Errorf("%s answered the top-level post of %s", other.app.AppID, poster.app.AppID)
+			}
+			if n := botMessagesOf(ChannelMCLoop, thread, other.app); n != ownedBefore {
+				return false, fmt.Errorf("%s has %d messages in its thread, from %d: it answered the post of %s", other.app.AppID, n, ownedBefore, poster.app.AppID)
+			}
+			return true, nil
+		})
+		if err != nil {
+			t.Error(err)
+		}
+		// Its Binding is not broken: a person is still answered.
+		m.postedBy(m.answered(other.app, ChannelMCLoop, crServeTimeout), other.app)
+	}
 }

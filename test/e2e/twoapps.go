@@ -31,9 +31,9 @@ const (
 	ConnTeamA = "team-a/team-a"
 )
 
-// The channels of the scenarios, one for each Binding, so that no two share a thread. The first four are bound in the tier (hack/kind/fast/two-apps) to the
-// stub's scenario-gated: mc-platform and mc-platform-final in agent-kourier, on the platform's connection, and team-a and team-a-final in team-a, on team-a's.
-// The others are for the Bindings a case makes while the broker runs.
+// The channels of the scenarios, one for each Binding but the loop channel, so that no two share a thread. The first five are bound in the tier
+// (hack/kind/fast/two-apps) to the stub's scenario-gated: mc-platform, mc-platform-final and mc-platform-loop in agent-kourier, on the platform's connection,
+// and team-a, team-a-final and team-a-loop in team-a, on team-a's. The others are for the Bindings a case makes while the broker runs.
 const (
 	// ChannelMCPlatform is the platform Binding's channel.
 	ChannelMCPlatform = "CMCPLATFORM"
@@ -43,6 +43,8 @@ const (
 	// the turn ends, in place of a live stream.
 	ChannelMCPlatformFinal = "CMCPLATFINAL"
 	ChannelMCTeamAFinal    = "CMCTEAMAFINAL"
+	// ChannelMCLoop is the channel with the bots of both apps in it and a Binding of each connection (mc-platform-loop, team-a-loop).
+	ChannelMCLoop = "CMCLOOP"
 	// ChannelMCTeamB is the channel of the Binding on the connection a case adds in team-b.
 	ChannelMCTeamB = "CMCTEAMB"
 	// ChannelMCDuplicate is the channel of the Binding on a second connection of team-a's app, in team-c.

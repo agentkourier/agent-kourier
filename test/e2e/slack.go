@@ -137,6 +137,31 @@ func (s *Slack) RotateTokens(ctx context.Context, appID, botToken, appToken stri
 	return s.c.do(ctx, http.MethodPost, "/_control/rotate", map[string]string{"app": appID, "bot_token": botToken, "app_token": appToken}, nil)
 }
 
+// HoldPosts holds the chat.postMessage calls of the app appID, or lets them go: while held each waits, with nothing stored, until released or until its client
+// goes away, when it is abandoned (fakeslack.Server.HoldPosts). It makes a post certainly in flight, for a case that kills Agent Kourier then.
+func (s *Slack) HoldPosts(ctx context.Context, appID string, hold bool) error {
+	return s.c.do(ctx, http.MethodPost, "/_control/hold-posts", map[string]any{"app": appID, "hold": hold}, nil)
+}
+
+// HeldPosts returns how many chat.postMessage calls of the app wait on its hold now.
+func (s *Slack) HeldPosts(ctx context.Context, appID string) (int, error) {
+	var out struct {
+		Held int `json:"held"`
+	}
+	err := s.c.do(ctx, http.MethodGet, "/_control/held-posts?"+url.Values{"app": {appID}}.Encode(), nil, &out)
+	return out.Held, err
+}
+
+// EventEnvelopes returns the envelope_id of each event the fake sent to the app appID for the bot message at ts of channel, whichever app posted it: the
+// other apps whose bots are in the channel get the post's event too. Pass them to AckWait to know the app has taken the event up. Empty when none was sent.
+func (s *Slack) EventEnvelopes(ctx context.Context, appID, channel, ts string) ([]string, error) {
+	var out struct {
+		Envelopes []string `json:"envelopes"`
+	}
+	err := s.c.do(ctx, http.MethodGet, "/_control/own-events?"+url.Values{"app": {appID}, "channel": {channel}, "ts": {ts}}.Encode(), nil, &out)
+	return out.Envelopes, err
+}
+
 // SetArchived marks channel archived, or not, for conversations.info. It does not register the channel: SetMembers does, and the
 // fake reports channel_not_found for a channel it was not given.
 func (s *Slack) SetArchived(ctx context.Context, channel string, archived bool) error {

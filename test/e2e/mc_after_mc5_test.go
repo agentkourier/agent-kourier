@@ -46,6 +46,9 @@ func (m *mc) fixTeamA(team *kube.CRs) error {
 // team-a's Secret, which restarts the connection once more.
 func (m *mc) restoreTeamA(team *kube.CRs) error {
 	ctx := context.WithoutCancel(m.ctx)
+	if err := m.slack.SetRevoked(ctx, AppTeamA.AppID, false); err != nil { // idempotent: a case that ended before the fix left the app revoked
+		return err
+	}
 	if err := m.slack.RotateTokens(ctx, AppTeamA.AppID, AppTeamA.BotToken, AppTeamA.AppToken); err != nil {
 		return err
 	}

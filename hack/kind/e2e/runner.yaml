@@ -96,7 +96,7 @@ subjects: [{kind: ServiceAccount, name: e2e-runner, namespace: e2e}]
 ---
 # The scenarios of a broker that serves several Slack apps (the MC_ tests; they skip unless the broker admits team-a's namespace, E2E_TWO_APPS=1 in
 # up-fast.sh), which e2e-run.sh makes the namespaces team-a, team-b and team-c empty for. team-a holds a ChatConnection, a Binding and two Secrets that
-# the tier makes (hack/kind/fast/two-apps): the runner reads the Binding's status and the connection, and changes one Secret, the Slack tokens, as a team
+# the tier makes (hack/kind/fast/two-apps): the runner reads the Binding's status, and changes one Secret, the Slack tokens, as a team
 # does that fixes a token. It never reads a Secret, and has no get on one at all.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -105,8 +105,8 @@ metadata:
   namespace: team-a
 rules:
   - apiGroups: [agentkourier.dev]
-    resources: [bindings, chatconnections]
-    verbs: [get, list]
+    resources: [bindings]
+    verbs: [get]
   - apiGroups: [""]
     resources: [secrets]
     resourceNames: [slack-team-a]
@@ -130,8 +130,11 @@ metadata:
   namespace: team-b
 rules:
   - apiGroups: [agentkourier.dev]
-    resources: [bindings, chatconnections]
-    verbs: [get, list, create, update, delete]
+    resources: [bindings]
+    verbs: [get, list, create, delete]
+  - apiGroups: [agentkourier.dev]
+    resources: [chatconnections]
+    verbs: [list, create, delete]
   - apiGroups: [agentkourier.dev]
     resources: [agentbackends]
     verbs: [list, create, delete]
@@ -161,8 +164,11 @@ metadata:
   namespace: team-c
 rules:
   - apiGroups: [agentkourier.dev]
-    resources: [bindings, chatconnections]
-    verbs: [get, list, create, update, delete]
+    resources: [bindings]
+    verbs: [get, list, create, delete]
+  - apiGroups: [agentkourier.dev]
+    resources: [chatconnections]
+    verbs: [list, create, delete]
   - apiGroups: [agentkourier.dev]
     resources: [agentbackends]
     verbs: [list, create, delete]

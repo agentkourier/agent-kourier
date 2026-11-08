@@ -406,13 +406,31 @@ fake_slack_app_connections() {
   jq -r --arg app "$1" '.[] | select(.app_id == $app) | .connections' <<<"${out}" 2>/dev/null || true
 }
 
+# seat_two_apps_bots: put the bots in the channels of the Bindings of hack/kind/fast/two-apps in the fake Slack, before the Bindings are made: the bot of the
+# default app (UFAKEBOT) in the platform's, team-a's (ATEAMA) in its own, and both in CMCLOOP. A Binding's first probe then finds its channel joined; one probed
+# before the bot is in it is probed again only at the next pass (every five minutes), which a case that waits for Ready would wait for. The fake keeps this in
+# memory, so a restarted fake has to be told again, which the MC_ tests do for their channels. test/e2e's twoapps.go names the channels. Needs K.
+seat_two_apps_bots() {
+  local pod=seat-bots-${RANDOM} fs=http://fakeslack.e2e.svc.cluster.local:8080/_control
+  # shellcheck disable=SC2016 # the script runs in the pod
+  "${K[@]}" -n e2e run "${pod}" --rm -i --quiet --restart=Never --image="${CURL_IMAGE}" --command -- sh -c '
+    set -e
+    fs=$1
+    post() { curl -sf -m 10 -X POST -H "Content-Type: application/json" -d "$2" "$fs/$1" >/dev/null; }
+    post members "{\"channel\":\"CMCPLATFORM\",\"users\":[\"UFAKEBOT\"]}"
+    post members "{\"channel\":\"CMCPLATFINAL\",\"users\":[\"UFAKEBOT\"]}"
+    post members "{\"channel\":\"CMCLOOP\",\"users\":[\"UFAKEBOT\",\"UTEAMA\"]}"
+    post join "{\"channel\":\"CMCTEAMA\",\"app\":\"ATEAMA\"}"
+    post join "{\"channel\":\"CMCTEAMAFINAL\",\"app\":\"ATEAMA\"}"' sh "${fs}" >/dev/null || die "could not put the bots of the two apps in their channels in the fake Slack"
+}
+
 # deploy_two_apps: the tier's second Slack app (E2E_TWO_APPS=1; custom resources only): the namespaces team-a, team-b and team-c, team-a's Secrets (the
 # Slack tokens of the app ATEAMA that the fake Slack hosts, and an agent token), and hack/kind/fast/two-apps/two-apps.yaml: team-a's Role,
 # ChatConnection, AgentBackend and Binding, and the platform's Binding mc-platform. It returns once the fake Slack has a Socket Mode client of team-a's app,
-# which is the broker serving the connection, and dies if none comes in three minutes. The Secrets are made with apply from a pipe, as deploy_agentkourier
+# which is the broker serving the connection, and dies if none comes in three minutes (each look is a pod, so the bound is the clock's). The Secrets are made with apply from a pipe, as deploy_agentkourier
 # makes the tier's. Needs HERE, K, jq, and the CRDs served (deploy_agentkourier with crds).
 deploy_two_apps() {
-  local ns tries connected=
+  local ns deadline connected=
   for ns in team-a team-b team-c; do
     "${K[@]}" create namespace "${ns}" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
   done
@@ -420,8 +438,10 @@ deploy_two_apps() {
     --from-literal=appToken=xapp-fake-team-a-token --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
   "${K[@]}" -n team-a create secret generic team-a-agent-token --from-literal=token="$(unsigned_jwt team-a@example.test)" \
     --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  seat_two_apps_bots
   "${K[@]}" apply -f "${HERE}/fast/two-apps/two-apps.yaml" >/dev/null
-  for ((tries = 0; tries < 90; tries++)); do
+  deadline=$((SECONDS + 180))
+  while [ "${SECONDS}" -lt "${deadline}" ]; do
     connected=$(fake_slack_app_connections ATEAMA)
     [ "${connected:-0}" -ge 1 ] 2>/dev/null && break
     sleep 2

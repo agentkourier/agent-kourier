@@ -99,7 +99,7 @@ func (s *scenario) connected() {
 		}
 	}
 	err := Wait(s.ctx, 2*time.Minute, "Agent Kourier to connect to the fake Slack", func(ctx context.Context) (bool, error) {
-		n, err := s.slack.Connections(ctx)
+		n, err := s.slack.AppConnections(ctx, AppPlatform.AppID)
 		return n >= 1, err
 	})
 	if err != nil {

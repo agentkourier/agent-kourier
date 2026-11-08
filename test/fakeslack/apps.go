@@ -119,7 +119,11 @@ func (s *Server) isRevoked(appID string) bool {
 // another app owns, or has rotated away from, is refused with ErrInvalid, as are a bot token without the prefix xoxb- and an app token without xapp-.
 // It fails with ErrNotFound for an app the Server does not host. Apps reports the tokens an app was registered with, not the ones rotated to.
 //
-// UNCONFIRMED(MC-11): that Slack refuses a replaced token with token_revoked and keeps the sockets that it opened.
+// UNCONFIRMED(MC-11): that Slack refuses a replaced token with token_revoked (also under WithStrictTokens, where a token no app owns is invalid_auth) and
+// keeps the sockets that it opened.
+//
+// DELIBERATE DEPARTURE from Slack: a token that was rotated away from may be given back, which brings it back. Slack does not revive a revoked token; the
+// fake does so that a case can put the pair the tier was brought up with back after it rotated to another.
 func (s *Server) RotateTokens(appID, botToken, appToken string) error {
 	if _, ok := s.appByID(appID); !ok {
 		return fmt.Errorf("fakeslack: no app %q: %w", appID, ErrNotFound)
@@ -222,11 +226,12 @@ func (s *Server) appOrDefault(id string) App {
 func (s *Server) appForToken(token string) (app App, ok bool) {
 	s.tokenMu.RLock()
 	id, owned := s.tokens[token]
+	anyToken := len(s.tokens) > 0
 	s.tokenMu.RUnlock()
 	if owned {
 		return s.appOrDefault(id), true
 	}
-	return s.defaultApp(), !s.strictTokens || len(s.tokens) == 0
+	return s.defaultApp(), !s.strictTokens || !anyToken
 }
 
 // Apps returns every app the Server hosts, the default app first. The tokens are included, so the result is for

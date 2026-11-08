@@ -261,6 +261,42 @@ func TestSlackDrivesSeveralApps(t *testing.T) {
 		t.Errorf("SetRevoked of an app the fake does not host = %v; want a 404", err)
 	}
 
+	if err := sl.HoldPosts(ctx, "ATEAMA", true); err != nil {
+		t.Fatal(err)
+	}
+	posted := make(chan error, 1)
+	go func() {
+		_, _, err := bot.PostMessageContext(ctx, "C1", slack.MsgOptionText("held", false))
+		posted <- err
+	}()
+	if err := Wait(ctx, 5*time.Second, "a post to wait on the hold", func(ctx context.Context) (bool, error) {
+		n, err := sl.HeldPosts(ctx, "ATEAMA")
+		return n == 1, err
+	}); err != nil {
+		t.Error(err)
+	}
+	if err := sl.HoldPosts(ctx, "ATEAMA", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-posted; err != nil {
+		t.Errorf("the held post after the release = %v", err)
+	}
+	if n, err := sl.HeldPosts(ctx, "ATEAMA"); err != nil || n != 0 {
+		t.Errorf("HeldPosts after the release = %d, %v; want 0", n, err)
+	}
+	if ids, err := sl.EventEnvelopes(ctx, "ATEAMA", "C1", "1.000001"); err != nil || len(ids) != 0 {
+		t.Errorf("EventEnvelopes of a message nobody posted = %v, %v; want none", ids, err)
+	}
+	if _, err := sl.EventEnvelopes(ctx, "ANOSUCHAPP", "C1", "1.000001"); !errors.As(err, &se) || se.Status != http.StatusNotFound {
+		t.Errorf("EventEnvelopes of an app the fake does not host = %v; want a 404", err)
+	}
+	if err := sl.HoldPosts(ctx, "ANOSUCHAPP", true); !errors.As(err, &se) || se.Status != http.StatusNotFound {
+		t.Errorf("HoldPosts of an app the fake does not host = %v; want a 404", err)
+	}
+	if _, err := sl.HeldPosts(ctx, "ANOSUCHAPP"); !errors.As(err, &se) || se.Status != http.StatusNotFound {
+		t.Errorf("HeldPosts of an app the fake does not host = %v; want a 404", err)
+	}
+
 	if err := sl.RotateTokens(ctx, "ATEAMA", "xoxb-fake-team-a-rotated", "xapp-fake-team-a-rotated"); err != nil {
 		t.Fatal(err)
 	}

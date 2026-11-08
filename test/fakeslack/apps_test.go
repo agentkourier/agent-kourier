@@ -962,3 +962,17 @@ func TestRotateTokensRefusesWhatNoAppCouldHold(t *testing.T) {
 		t.Errorf("RotateTokens to a token b rotated away from = %v, want ErrInvalid", err)
 	}
 }
+
+// Under WithStrictTokens a token no app owns is invalid_auth, but one that an app rotated away from is token_revoked: it was an app's.
+func TestARotatedAwayTokenIsRevokedEvenUnderStrictTokens(t *testing.T) {
+	fake := twoApps(t, fakeslack.WithStrictTokens())
+	if err := fake.RotateTokens("AAPPA", "xoxb-app-a-rotated", "xapp-app-a-rotated"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := webAs(fake, appA).AuthTest(); err == nil || err.Error() != "token_revoked" {
+		t.Errorf("auth.test with the token a rotated away from = %v, want token_revoked", err)
+	}
+	if _, err := slack.New("xoxb-nobody-token", slack.OptionAPIURL(fake.URL()+"/")).AuthTest(); err == nil || err.Error() != "invalid_auth" {
+		t.Errorf("auth.test with a token no app ever owned = %v, want invalid_auth", err)
+	}
+}

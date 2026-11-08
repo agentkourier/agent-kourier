@@ -105,3 +105,37 @@ spec:
     connectionRef: {namespace: agent-kourier, name: slack-fast}
     channel: CMCPLATFINAL
     output: final
+---
+# One channel, CMCLOOP, with the bots of both apps in it and a Binding of each connection on it: the case of two apps in one channel (the bot-loop scenario).
+# A message that one bot posts must start no turn of the other's Binding, whatever it says: the mention trigger is for people.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: team-a-loop, namespace: team-a}
+spec:
+  agent:
+    backendRef: {name: agents}
+    namespace: kagent
+    name: scenario-gated
+  identity:
+    userId: team-a
+    tokenSecretRef: {name: team-a-agent-token}
+  chat:
+    connectionRef: {name: team-a}
+    channel: CMCLOOP
+    output: live
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: mc-platform-loop, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {namespace: agent-kourier, name: agents}
+    namespace: kagent
+    name: scenario-gated
+  identity:
+    userId: agent-kourier-fast
+    tokenSecretRef: {name: agent-kourier-agent-token}
+  chat:
+    connectionRef: {namespace: agent-kourier, name: slack-fast}
+    channel: CMCLOOP
+    output: live
