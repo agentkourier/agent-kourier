@@ -248,6 +248,15 @@ func (m *Metrics) ChatConnected(connection string, up bool) {
 	m.chatUp.WithLabelValues(connection).Set(v)
 }
 
+// ConnectionRemoved is told that the ChatConnection named connection ("namespace/name") is no longer served by this broker: it was taken out of
+// the config, or out of the set the broker serves. It deletes the series the connection has: agentkourier_chat_connected, which would otherwise
+// say 0 for a connection that is not there. A connection that is stopped or restarting is not removed, and keeps its series. It is the one
+// place that lists the metric series that carry a connection, so a series that gains a connection label is deleted here too. A connection with
+// no series is no error.
+func (m *Metrics) ConnectionRemoved(connection string) {
+	m.chatUp.DeleteLabelValues(connection)
+}
+
 // Leader sets agentkourier_leader: 1 once this replica does Agent Kourier's work, 0 while it waits to.
 func (m *Metrics) Leader(leading bool) {
 	v := 0.0

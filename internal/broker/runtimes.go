@@ -15,7 +15,7 @@ import (
 )
 
 // connRuntime is what one served ChatConnection has of its own (spec D51): its chat platform, the run of its Socket Mode connection
-// (RunPlatform) with the intake it feeds, and the watch of its posts for a rejected credential (WatchAuth). Everything else of the leader
+// (RunPlatform) with the intake it feeds, and the watch of its calls for a rejected credential (WatchAuth). Everything else of the leader
 // half is shared by the connections and finds the platform here, by connection (runtimeTable).
 type connRuntime struct {
 	name string // "namespace/name"
@@ -24,8 +24,13 @@ type connRuntime struct {
 	// id is whose bot it is, guarded by the table's lock (runtimeTable.identify): the own connection's is learned after it runs.
 	id       appIdentity
 	platform builtPlatform
-	// report is WatchAuth's: a post, a lookup or a reaction that finds the tokens rejected ends ctx with ErrSlackAuth as the cause.
+	// watched is the platform as every shared part gets it (runtimeTable.Platform): watched for a rejected credential (WatchAuth), so that a
+	// call of any of them that finds the tokens rejected ends the run.
+	watched chat.Platform
+	// report is WatchAuth's: a call that finds the tokens rejected ends ctx with an authRejected, which is ErrSlackAuth, as the cause.
 	report func(code string)
+	// gauge is what agentkourier_chat_connected of the connection is set through.
+	gauge *connGauge
 	// ctx is RunPlatform's, and ends when halt is called or report is.
 	ctx  context.Context
 	stop context.CancelFunc
@@ -45,6 +50,42 @@ func (rt *connRuntime) halt() {
 	rt.stop()
 }
 
+// rejection says whether the platform rejected the credentials of the runtime, and the code it did so with: a call or the run saw it, and ended ctx
+// with it. A runtime that was halted on purpose has not been rejected.
+func (rt *connRuntime) rejection() (code string, rejected bool) {
+	var ar *authRejected
+	if errors.As(context.Cause(rt.ctx), &ar) {
+		return ar.code, true
+	}
+	return "", false
+}
+
+// connGauge sets agentkourier_chat_connected of one runtime, and stops doing so once the runtime is retired: a late report of the adapter's
+// connection (it calls back from its own goroutines) must not bring back the series of a connection that was stopped, replaced or removed.
+type connGauge struct {
+	mu      sync.Mutex
+	m       *Metrics
+	name    string
+	retired bool
+}
+
+// set is the adapter's OnConnection.
+func (g *connGauge) set(up bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.retired {
+		g.m.ChatConnected(g.name, up)
+	}
+}
+
+// retire says the connection is down for good, and ignores every report after it.
+func (g *connGauge) retire() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.retired = true
+	g.m.ChatConnected(g.name, false)
+}
+
 // wait waits for RunPlatform to return, or for ctx. A runtime that never ran has nothing to wait for.
 func (rt *connRuntime) wait(ctx context.Context) {
 	if rt.ran.Load() {
@@ -58,46 +99,104 @@ func (rt *connRuntime) wait(ctx context.Context) {
 type runtimeTable struct {
 	mu  sync.RWMutex
 	rts map[string]*connRuntime
+	// down says why a connection that is not in rts cannot run until something changes: the platform rejected its credentials, or its credentials
+	// Secret cannot be used. A connection with no entry is down without a reason this table knows (it has not started yet, or is not served).
+	down map[string]*connectionStopped
 	// sealed is set by the shutdown when it halts the runtimes: a runtime added after it is halted as it is added, so that none runs on
 	// beyond the step that stops them.
 	sealed bool
 }
 
-func newRuntimeTable() *runtimeTable { return &runtimeTable{rts: map[string]*connRuntime{}} }
+func newRuntimeTable() *runtimeTable {
+	return &runtimeTable{rts: map[string]*connRuntime{}, down: map[string]*connectionStopped{}}
+}
 
 var _ chat.Resolver[chat.Platform] = (*runtimeTable)(nil)
 
-// Platform implements chat.Resolver: the platform of the connection conn as the broker uses it (the fenced one, with an election).
+// Platform implements chat.Resolver: the platform of the connection conn as the broker uses it (the fenced one, with an election), watched for a
+// rejected credential (WatchAuth). A connection that does not run has none, and the error wraps chat.ErrConnectionDown; when the table knows why
+// (the platform rejected its credentials, or its Secret cannot be used) the error is a *connectionStopped that says so. A runtime whose credentials
+// were rejected is down from the call that found out, before its run has ended and left the table.
 func (t *runtimeTable) Platform(conn string) (chat.Platform, error) {
 	t.mu.RLock()
 	rt, ok := t.rts[conn]
+	why := t.down[conn]
 	t.mu.RUnlock()
-	if !ok {
+	switch {
+	case !ok && why != nil:
+		return nil, why
+	case !ok:
 		return nil, downError(conn)
 	}
-	return rt.platform.Platform, nil
+	if code, rejected := rt.rejection(); rejected {
+		return nil, &connectionStopped{conn: conn, rejected: true, code: code}
+	}
+	return rt.watched, nil
+}
+
+// runs says whether the connection conn runs: it is in the table, and its credentials have not been found rejected.
+func (t *runtimeTable) runs(conn string) bool {
+	_, err := t.Platform(conn)
+	return err == nil
 }
 
 // downError is the error of a connection that nothing runs.
 func downError(conn string) error { return fmt.Errorf("%w: %q", chat.ErrConnectionDown, conn) }
 
-// outboxPlatforms is the table as the outbox sees it: the platform of each connection with its posts watched for a rejected credential
-// (WatchAuth), so that a token revoked while the connection is up ends that connection's run.
-type outboxPlatforms struct{ t *runtimeTable }
-
-// Platform implements chat.Resolver.
-func (o outboxPlatforms) Platform(conn string) (outbox.Platform, error) {
-	o.t.mu.RLock()
-	rt, ok := o.t.rts[conn]
-	o.t.mu.RUnlock()
-	if !ok {
-		return nil, downError(conn)
-	}
-	return WatchAuth(rt.platform, rt.report), nil
+// outbox is the table as the outbox's Resolver. The platform it gives is the one every part gets: watched.
+func (t *runtimeTable) outbox() chat.Resolver[outbox.Platform] {
+	return chat.Narrow[outbox.Platform](t)
 }
 
-// outbox is the table as the outbox's Resolver.
-func (t *runtimeTable) outbox() chat.Resolver[outbox.Platform] { return outboxPlatforms{t} }
+// fail takes rt out of the table because its run ended by itself with err, and records why if err is a credential the platform rejected: the
+// connection is down from here, with that reason, until the supervisor clears it (clearDown) or a runtime of the connection is added. A runtime
+// that was replaced is not the connection's to take out.
+func (t *runtimeTable) fail(rt *connRuntime, err error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.rts[rt.name] != rt {
+		return
+	}
+	delete(t.rts, rt.name)
+	if code, ok := rejectionCode(err); ok {
+		t.down[rt.name] = &connectionStopped{conn: rt.name, rejected: true, code: code}
+	}
+}
+
+// setDown records why the connection conn does not run (see down).
+func (t *runtimeTable) setDown(conn string, why *connectionStopped) {
+	t.mu.Lock()
+	t.down[conn] = why
+	t.mu.Unlock()
+}
+
+// clearDown forgets why conn does not run.
+func (t *runtimeTable) clearDown(conn string) {
+	t.mu.Lock()
+	delete(t.down, conn)
+	t.mu.Unlock()
+}
+
+// clearUnusable forgets that the Secret of conn cannot be used, and leaves a rejection of its credentials, which only a change of them mends.
+func (t *runtimeTable) clearUnusable(conn string) {
+	t.mu.Lock()
+	if d := t.down[conn]; d != nil && !d.rejected {
+		delete(t.down, conn)
+	}
+	t.mu.Unlock()
+}
+
+// reasons says why each connection that does not run is down, as short words (the code of a rejection, or "unusable"), for a caller that wants to
+// know whether anything changed.
+func (t *runtimeTable) reasons() map[string]string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	out := make(map[string]string, len(t.down))
+	for conn, d := range t.down {
+		out[conn] = d.reason()
+	}
+	return out
+}
 
 // add registers rt as the runtime of its connection, and says whether it did: a sealed table (the broker is stopping) halts rt and refuses it.
 func (t *runtimeTable) add(rt *connRuntime) bool {
@@ -108,6 +207,7 @@ func (t *runtimeTable) add(rt *connRuntime) bool {
 		return false
 	}
 	t.rts[rt.name] = rt
+	delete(t.down, rt.name) // it runs: whatever kept the connection down is over
 	return true
 }
 
@@ -200,12 +300,13 @@ type runtimeHost struct {
 func (h *runtimeHost) build(conn Connection, id appIdentity) (*connRuntime, error) {
 	name := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
 	h.metrics.ChatConnected(name, false)
-	p, err := h.open(conn, func(up bool) { h.metrics.ChatConnected(name, up) })
+	gauge := &connGauge{m: h.metrics, name: name}
+	p, err := h.open(conn, gauge.set)
 	if err != nil {
 		return nil, err
 	}
 	ctx, report, stop := WithAuthFailure(h.parent)
-	rt := &connRuntime{name: name, conn: conn, id: id, platform: p, report: report, ctx: ctx, stop: stop, done: make(chan struct{})}
+	rt := &connRuntime{name: name, conn: conn, id: id, platform: p, watched: WatchAuth(p.Platform, report), report: report, gauge: gauge, ctx: ctx, stop: stop, done: make(chan struct{})}
 	if !h.table.add(rt) {
 		h.closeTransport(rt)
 		return nil, errStopping
@@ -214,14 +315,15 @@ func (h *runtimeHost) build(conn Connection, id appIdentity) (*connRuntime, erro
 }
 
 // run starts the run of rt on sink, on a goroutine of its own. onEnd, if set, is called with what RunPlatform returned once it has. When the
-// runtime was not halted the run ended by itself, which for RunPlatform is a rejected credential: the runtime leaves the table then, so the
-// connection is down, and its transport closes. A halted one stays until its owner takes it out, because the final drain of a shutdown still posts through it.
+// runtime was not halted the run ended by itself, which for RunPlatform is a rejected credential, whether the run or a call through the platform
+// found it out: the runtime leaves the table then, so the connection is down, with the rejection as the reason (runtimeTable.fail), and its
+// transport closes. A halted one stays until its owner takes it out, because the final drain of a shutdown still posts through it.
 func (h *runtimeHost) run(rt *connRuntime, sink chat.Sink, onEnd func(rt *connRuntime, err error)) {
 	rt.ran.Store(true)
 	go func() {
 		err := RunPlatform(rt.ctx, rt.platform, sink, RunPolicy{Logger: h.log})
 		if !rt.halted.Load() {
-			h.table.remove(rt)
+			h.table.fail(rt, err)
 			h.closeTransport(rt) // nothing posts through it from here: the connection is down
 		}
 		close(rt.done)
@@ -236,7 +338,7 @@ func (h *runtimeHost) run(rt *connRuntime, sink chat.Sink, onEnd func(rt *connRu
 func (h *runtimeHost) closeTransport(rt *connRuntime) {
 	rt.closeOnce.Do(func() {
 		rt.platform.closeIdle()
-		h.metrics.ChatConnected(rt.name, false)
+		rt.gauge.retire()
 		if h.cfg.transportClosed != nil {
 			h.cfg.transportClosed(rt.name)
 		}

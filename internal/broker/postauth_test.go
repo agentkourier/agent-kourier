@@ -14,20 +14,51 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 )
 
-// platform is an outbox.Platform whose Post, Find and React answer with the errors the test sets, and that says
-// what the Slack adapter says of them.
-type platform struct{ postErr, findErr, reactErr error }
+// platform is a chat.Platform whose calls that reach the chat answer with the error the test sets (err, for all of them; postErr
+// for the post alone, when it is set), and that says what the Slack adapter says of them.
+type platform struct {
+	chat.Platform
+	err, postErr error
+}
 
 func (p platform) Post(context.Context, chat.Target, chat.Outgoing, string) (chat.Ref, error) {
-	return chat.Ref{ID: "1.0"}, p.postErr
+	if p.postErr != nil {
+		return chat.Ref{ID: "1.0"}, p.postErr
+	}
+	return chat.Ref{ID: "1.0"}, p.err
 }
 
 func (p platform) Find(context.Context, chat.Target, string, time.Time) (chat.Ref, bool, error) {
-	return chat.Ref{ID: "2.0"}, true, p.findErr
+	return chat.Ref{ID: "2.0"}, true, p.err
 }
-
-func (p platform) React(context.Context, chat.Ref, string) error   { return p.reactErr }
-func (p platform) Unreact(context.Context, chat.Ref, string) error { return p.reactErr }
+func (p platform) Update(context.Context, chat.Ref, chat.Outgoing) error { return p.err }
+func (p platform) Stream(context.Context, chat.Target, string, string) (chat.Stream, error) {
+	return stream{err: p.err}, p.err
+}
+func (p platform) StreamAt(chat.Ref) chat.Stream { return stream{err: p.err} }
+func (p platform) Ephemeral(context.Context, chat.Target, string, chat.Message) error {
+	return p.err
+}
+func (p platform) React(context.Context, chat.Ref, string) error   { return p.err }
+func (p platform) Unreact(context.Context, chat.Ref, string) error { return p.err }
+func (p platform) IsMember(context.Context, string, string) (bool, error) {
+	return true, p.err
+}
+func (p platform) IsInAnyGroup(context.Context, []string, string) (bool, error) {
+	return true, p.err
+}
+func (p platform) GroupsReadable(context.Context, []string) error { return p.err }
+func (p platform) ChannelAccess(context.Context, string) (chat.Access, error) {
+	return chat.Access{Member: true}, p.err
+}
+func (p platform) IsBot(context.Context, string) (bool, error) { return false, p.err }
+func (p platform) ResolveUser(context.Context, string) (chat.User, error) {
+	return chat.User{ID: "U1"}, p.err
+}
+func (p platform) MarkBusy(context.Context, chat.Target, bool) error { return p.err }
+func (p platform) ThreadBetween(context.Context, chat.Target, string, string, int) ([]chat.HistoryMessage, int, error) {
+	return nil, 0, p.err
+}
 
 func (platform) RefAt(channel, thread, id string) chat.Ref {
 	return chat.Ref{Channel: channel, Thread: thread, ID: id}
@@ -39,12 +70,91 @@ func (platform) Classify(op chat.Op, err error) chat.Verdict {
 	return slack.NewPlatform(nil, "ns/conn").Classify(op, err)
 }
 
+// stream is a chat.Stream whose calls answer with err.
+type stream struct {
+	chat.Stream
+	err error
+}
+
+func (s stream) Ref() chat.Ref                                            { return chat.Ref{ID: "3.0"} }
+func (s stream) Append(context.Context, string) error                     { return s.err }
+func (s stream) Step(context.Context, chat.Step) error                    { return s.err }
+func (s stream) Stop(context.Context, string, chat.Message, string) error { return s.err }
+
 func slackErr(code string) error {
 	return fmt.Errorf("slack chat.postMessage: %w", slackgo.SlackErrorResponse{Err: code})
 }
 
-// WatchAuth reports a credential that the platform rejects, once per call that fails with it, for a post, a lookup and
-// a reaction alike; the answer passes through untouched, and nothing else is reported.
+// watchedCalls are the calls of a chat.Platform that reach the chat, and a stream's, each made on w, with the error it answered.
+var watchedCalls = map[string]func(t *testing.T, w chat.Platform) (id string, err error){
+	"Post": func(t *testing.T, w chat.Platform) (string, error) {
+		ref, err := w.Post(t.Context(), chat.Target{Channel: "C1"}, chat.Outgoing{}, "id")
+		return ref.ID, err
+	},
+	"Find": func(t *testing.T, w chat.Platform) (string, error) {
+		ref, _, err := w.Find(t.Context(), chat.Target{Channel: "C1"}, "id", time.Time{})
+		return ref.ID, err
+	},
+	"Update": func(t *testing.T, w chat.Platform) (string, error) {
+		return "", w.Update(t.Context(), chat.Ref{Channel: "C1", ID: "1.1"}, chat.Outgoing{})
+	},
+	"Stream": func(t *testing.T, w chat.Platform) (string, error) {
+		_, err := w.Stream(t.Context(), chat.Target{Channel: "C1"}, "U1", "hi")
+		return "", err
+	},
+	"stream Append": func(t *testing.T, w chat.Platform) (string, error) {
+		return "", w.StreamAt(chat.Ref{Channel: "C1", ID: "1.1"}).Append(t.Context(), "more")
+	},
+	"stream Step": func(t *testing.T, w chat.Platform) (string, error) {
+		return "", w.StreamAt(chat.Ref{Channel: "C1", ID: "1.1"}).Step(t.Context(), chat.Step{})
+	},
+	"stream Stop": func(t *testing.T, w chat.Platform) (string, error) {
+		return "", w.StreamAt(chat.Ref{Channel: "C1", ID: "1.1"}).Stop(t.Context(), "", chat.Message{}, "tag")
+	},
+	"Ephemeral": func(t *testing.T, w chat.Platform) (string, error) {
+		return "", w.Ephemeral(t.Context(), chat.Target{Channel: "C1"}, "U1", chat.Message{})
+	},
+	"React": func(t *testing.T, w chat.Platform) (string, error) {
+		return "", w.React(t.Context(), chat.Ref{Channel: "C1", ID: "1.1"}, "eyes")
+	},
+	"Unreact": func(t *testing.T, w chat.Platform) (string, error) {
+		return "", w.Unreact(t.Context(), chat.Ref{Channel: "C1", ID: "1.1"}, "eyes")
+	},
+	"IsMember": func(t *testing.T, w chat.Platform) (string, error) {
+		_, err := w.IsMember(t.Context(), "C1", "U1")
+		return "", err
+	},
+	"IsInAnyGroup": func(t *testing.T, w chat.Platform) (string, error) {
+		_, err := w.IsInAnyGroup(t.Context(), []string{"S1"}, "U1")
+		return "", err
+	},
+	"GroupsReadable": func(t *testing.T, w chat.Platform) (string, error) {
+		return "", w.GroupsReadable(t.Context(), []string{"S1"})
+	},
+	"ChannelAccess": func(t *testing.T, w chat.Platform) (string, error) {
+		_, err := w.ChannelAccess(t.Context(), "C1")
+		return "", err
+	},
+	"IsBot": func(t *testing.T, w chat.Platform) (string, error) {
+		_, err := w.IsBot(t.Context(), "U1")
+		return "", err
+	},
+	"ResolveUser": func(t *testing.T, w chat.Platform) (string, error) {
+		u, err := w.ResolveUser(t.Context(), "U1")
+		return u.ID, err
+	},
+	"MarkBusy": func(t *testing.T, w chat.Platform) (string, error) {
+		return "", w.MarkBusy(t.Context(), chat.Target{Channel: "C1", Thread: "1.1"}, true)
+	},
+	"ThreadBetween": func(t *testing.T, w chat.Platform) (string, error) {
+		_, _, err := w.ThreadBetween(t.Context(), chat.Target{Channel: "C1", Thread: "1.1"}, "", "", 10)
+		return "", err
+	},
+}
+
+// WatchAuth reports a credential that the platform rejects, once per call that fails with it, for every call that reaches the chat (a post, a
+// lookup, an edit, a stream and the calls on it, an ephemeral, a reaction, the reads of membership, groups, channels and users) alike; the
+// answer passes through untouched, and nothing else is reported.
 func TestWatchAuthReportsOnlyFatalAuthAndPassesEverythingThrough(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -61,25 +171,17 @@ func TestWatchAuthReportsOnlyFatalAuthAndPassesEverythingThrough(t *testing.T) {
 		{"a network error", errors.New("dial tcp: connection refused"), ""},
 		{"success", nil, ""},
 	} {
-		for _, call := range []string{"Post", "Find", "React", "Unreact"} {
+		for call, make := range watchedCalls {
 			var reported []string
-			w := WatchAuth(platform{postErr: tc.err, findErr: tc.err, reactErr: tc.err}, func(code string) { reported = append(reported, code) })
+			w := WatchAuth(platform{err: tc.err}, func(code string) { reported = append(reported, code) })
 
-			var ref chat.Ref
-			var err error
-			switch call {
-			case "Post":
-				ref, err = w.Post(t.Context(), chat.Target{Channel: "C1"}, chat.Outgoing{}, "id")
-			case "Find":
-				ref, _, err = w.Find(t.Context(), chat.Target{Channel: "C1"}, "id", time.Time{})
-			case "React":
-				err = w.React(t.Context(), chat.Ref{Channel: "C1", ID: "1.1"}, "eyes")
-			case "Unreact":
-				err = w.Unreact(t.Context(), chat.Ref{Channel: "C1", ID: "1.1"}, "eyes")
+			id, err := make(t, w)
+
+			if tc.err == nil && err != nil || tc.err != nil && !errors.Is(err, tc.err) {
+				t.Errorf("%s/%s: error %v; want the platform's own answer untouched", tc.name, call, err)
 			}
-
-			if wantID := map[string]string{"Post": "1.0", "Find": "2.0"}[call]; ref.ID != wantID || !errors.Is(err, tc.err) && tc.err != nil || tc.err == nil && err != nil {
-				t.Errorf("%s/%s: got %+v, %v; want the platform's own answer untouched", tc.name, call, ref, err)
+			if wantID := map[string]string{"Post": "1.0", "Find": "2.0", "ResolveUser": "U1"}[call]; id != wantID {
+				t.Errorf("%s/%s: result %q; want %q, the platform's own", tc.name, call, id, wantID)
 			}
 			if tc.want == "" && len(reported) != 0 || tc.want != "" && (len(reported) != 1 || reported[0] != tc.want) {
 				t.Errorf("%s/%s: reported %v, want %q", tc.name, call, reported, tc.want)

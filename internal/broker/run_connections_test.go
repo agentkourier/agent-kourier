@@ -44,6 +44,14 @@ type connWorld struct {
 	ids    map[string]appIdentity // by bot token; a token with none is its own app
 	ob     *outbox.Outbox
 	logs   syncBuffer
+
+	// kill is, by bot token, the channel a test sends to to make that token's Run return the error (a connection the platform drops for good).
+	kill map[string]chan error
+	// faults is the error each call of a token's client answers with, by token and call ("Post", "StartStream", "Update").
+	faults map[string]error
+	// idErr is the error asking whose bot a token is answers with, by token; idHold holds that call back until its channel is closed.
+	idErr  map[string]error
+	idHold map[string]chan struct{}
 }
 
 // syncBuffer is a buffer a logger writes to while a test reads it.
@@ -62,7 +70,8 @@ func (s *syncBuffer) String() string { s.mu.Lock(); defer s.mu.Unlock(); return 
 
 func newConnWorld(t *testing.T, edit func([]*unstructured.Unstructured)) *connWorld {
 	t.Helper()
-	w := &connWorld{t: t, live: map[string]int{}, probed: map[string][]string{}, sinks: map[string]slack.Sink{}, ids: map[string]appIdentity{}}
+	w := &connWorld{t: t, live: map[string]int{}, probed: map[string][]string{}, sinks: map[string]slack.Sink{}, ids: map[string]appIdentity{},
+		kill: map[string]chan error{}, faults: map[string]error{}, idErr: map[string]error{}, idHold: map[string]chan struct{}{}}
 	w.c = crStartConfig(t, func(objs []*unstructured.Unstructured) {
 		_ = unstructured.SetNestedStringSlice(objs[0].Object, []string{"sre", "payments", "team-a", "team-b"}, "spec", "allowedNamespaces")
 		if edit != nil {
@@ -75,10 +84,23 @@ func newConnWorld(t *testing.T, edit func([]*unstructured.Unstructured)) *connWo
 	w.c.Logger = slog.New(slog.NewTextHandler(&w.logs, nil))
 	w.c.superviseEvery, w.c.reloadPoll = 10*time.Millisecond, 20*time.Millisecond
 	w.c.newSlack = func(sc slack.Config) slackAPI { return &liveSlack{w: w, token: sc.BotToken.Reveal()} }
-	w.c.identify = func(_ context.Context, c Connection) (appIdentity, error) {
+	w.c.identify = func(ctx context.Context, c Connection) (appIdentity, error) {
 		tok := c.Credentials["botToken"].Reveal()
 		w.mu.Lock()
+		hold := w.idHold[tok]
+		w.mu.Unlock()
+		if hold != nil {
+			select {
+			case <-hold:
+			case <-ctx.Done():
+				return appIdentity{}, ctx.Err()
+			}
+		}
+		w.mu.Lock()
 		defer w.mu.Unlock()
+		if err := w.idErr[tok]; err != nil {
+			return appIdentity{}, err
+		}
 		if id, ok := w.ids[tok]; ok {
 			return id, nil
 		}
@@ -122,13 +144,19 @@ func (l *liveSlack) Run(ctx context.Context, sink slack.Sink) error {
 	l.w.mu.Lock()
 	l.w.live[l.token]++
 	l.w.sinks[l.token] = sink
+	kill := l.w.killChan(l.token)
 	l.w.mu.Unlock()
-	<-ctx.Done()
+	var err error
+	select {
+	case <-ctx.Done():
+		err = ctx.Err()
+	case err = <-kill:
+	}
 	l.w.mu.Lock()
 	l.w.live[l.token]--
 	l.w.events = append(l.w.events, "run-ended:"+l.token)
 	l.w.mu.Unlock()
-	return ctx.Err()
+	return err
 }
 
 // ChannelAccess records who was asked for which channel: the verification of a Binding reads its channel as the bot of its connection.

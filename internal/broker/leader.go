@@ -75,7 +75,8 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 		return nil, err
 	}
 	// The chat platform of the own connection, built for its ChatConnection.platform: it posts for the outbox, and a token revoked
-	// mid-run, which only a post sees, ends the run with ErrSlackAuth (WatchAuth, WithAuthFailure).
+	// mid-run, which a call through the platform sees, ends the run with ErrSlackAuth (WatchAuth, WithAuthFailure): the process exits for the own
+	// connection, and only that connection stops for a team's.
 	// agentkourier_chat_connected says 0 from here, and 1 while the connection is up. /readyz does not hold it: see NewHandler.
 	// The parts that every connection shares look the platform up by the connection their row, turn or press names, in the table of the
 	// connections that run, which the supervisor adds the team connections' to and takes them from.
@@ -158,7 +159,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	}
 	// A turn's acknowledgment removal is queued and its reply settled at once, so that retention does not queue it again.
 	unack := unacknowledge(sink.QueueNotice, st.SettleAcknowledgmentReplies)
-	mgr, err := session.New(session.Config{Context: runCtx, Store: st, Questions: st, Bindings: bindings, Users: users{platforms}, Sink: ix.tap, TextReply: ix.replies.Decide, Logger: log, Audit: auditor, OnTurnEnd: metrics.TurnOutcome, ThreadContext: threads.Section, AnswerWatcher: ix.reopened, Unacknowledge: unack})
+	mgr, err := session.New(session.Config{Context: runCtx, ConnectionRunning: table.runs, Store: st, Questions: st, Bindings: bindings, Users: users{platforms}, Sink: ix.tap, TextReply: ix.replies.Decide, Logger: log, Audit: auditor, OnTurnEnd: metrics.TurnOutcome, ThreadContext: threads.Section, AnswerWatcher: ix.reopened, Unacknowledge: unack})
 	if err != nil {
 		return nil, fmt.Errorf("session manager: %w", err)
 	}
@@ -244,7 +245,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 		}
 	}
 	prober = verification{
-		Bindings: bindings, Platforms: chat.Narrow[platformReader](platforms), Conns: func() []Connection { return *connsServed.Load() },
+		Own: conn.Ref, Bindings: bindings, Platforms: chat.Narrow[platformReader](platforms), Conns: func() []Connection { return *connsServed.Load() },
 		Snaps: boot.Reloader, Revision: func(ctx context.Context) string {
 			return boot.Reloader.Revision(ctx) + "/" + strconv.FormatUint(connsChanged.Load(), 10)
 		}, Secrets: boot.Secrets, Metrics: metrics, Log: log, Interval: cfg.probeEvery, Tick: cfg.probeTick, MinRevisionGap: cfg.probeGap,
@@ -295,6 +296,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	sup := &supervisor{
 		host: host, log: log, every: cmp.Or(cfg.superviseEvery, defaultSuperviseEvery), snapshot: boot.Reloader.Current, secrets: boot.Secrets,
 		own: conn, identify: cfg.identityOf, intake: newIntake, refusals: refused, conns: &connsServed, changes: &connsChanged, gone: ob.Forget,
+		removed: metrics.ConnectionRemoved, recover: mgr.RecoverConnection,
 		done: make(chan struct{}), teams: map[string]*teamRuntime{}, said: map[string]string{},
 	}
 	supCtx, stopSup := context.WithCancel(runCtx)
