@@ -69,6 +69,7 @@ Counts are of entries. A length in bytes is of bytes.
 | `chat.maxMentionsPerTurn` | From 1 to `10`<!--limit:mentionsPerTurnMax-->, default `2`<!--limit:mentionsPerTurnDefault--> | A value out of range, 0 included, is refused at load, and by the API server. The mentions past the cap in one turn are not mentioned. | The field itself |
 | `interactions.approverGroups` | `10`<!--limit:approverGroups--> groups | Refused at load, and by the API server. | None |
 | `allowedNamespaces` of an AgentBackend or a ChatConnection | `256`<!--limit:allowedNamespaces--> namespaces | Refused at load, and by the API server. | None |
+| `agents.namespaces` of an AgentBackend | `256`<!--limit:agentNamespaces--> namespaces | Refused at load, and by the API server. | None |
 | The `url` of an AgentBackend | `2048`<!--limit:backendURL--> bytes. A `?` or a `#` anywhere in it is refused, so a URL has no query and no fragment, even an empty one. | Refused at load, and by the API server. | None |
 | The `value` of a header | `4096`<!--limit:headerValue--> bytes | Refused at load, and by the API server. | None |
 | `chat.channel`, a trigger's `from.id`, and each entry of `interactions.approverGroups` | `32`<!--limit:chatID--> bytes each | Refused at load, and by the API server. | None |

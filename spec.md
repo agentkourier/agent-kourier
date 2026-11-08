@@ -422,6 +422,15 @@ namespaced. Cross-namespace references are denied unless the target resource lis
 referring namespace in `spec.allowedNamespaces`. These resources are loaded from YAML files,
 the default, or are to be served as CRDs generated from the same types (D30, D50), which the broker reads when `AGENTKOURIER_CONFIG_SOURCE` says `crds` (built, CK-8 and CK-10) (9).
 
+An AgentBackend can also limit the agents its Bindings may name. On `kagent-v1`, the optional `spec.agents` has
+`sameNamespace` (a Binding may name an agent in its own namespace) and `namespaces` (DNS-1123 labels, at most 256, that any
+Binding which may use the backend may name). Left out, a Binding may name an agent in any namespace, as before. Set, a Binding's
+`agent.namespace` must be its own namespace, with `sameNamespace`, or listed; any other Binding is rejected with the
+resolution reason `AgentNamespaceNotAllowed` at `spec.agent.namespace`, in the same way as `NamespaceNotAllowed` (CRs: not
+served and `Accepted=False`; files: the load fails). The message names the AgentBackend and the agent namespace and nothing
+else of the backend, and a Binding the backend's `allowedNamespaces` does not admit is told only `NamespaceNotAllowed`. A value that
+allows nothing is invalid, and so is the field on an `a2a` backend, where the URL names the agent and `agent.namespace` is never sent.
+
 Ownership split: the platform team owns `AgentBackend` and `ChatConnection`. Application
 teams own `Binding`.
 
@@ -440,6 +449,9 @@ spec:
   headers: []                        # static headers, values may come from Secrets;
                                      # identity headers are reserved; see section 7
   allowedNamespaces: ["sre", "payments"]
+  agents:                            # optional, kagent-v1 only: the agent namespaces a Binding may name
+    sameNamespace: true              # the Binding's own namespace
+    namespaces: ["kagent"]           # and these; omitted, any namespace. Must allow one; invalid on a2a
 ---
 apiVersion: agentkourier.dev/v1alpha1
 kind: ChatConnection
@@ -517,7 +529,7 @@ are refused as unknown fields by the strict decoder:
 | `Binding.spec.interactions.approverGroups` | Phase 5 | Names the Slack user groups whose members may approve a tool call; omitted or empty means any non-bot member of the Binding's channel (R1). It gates tool approvals only, not ask-user answers, and an approver must also be a channel member and not a bot. A Binding with `toolApprovals: true` and no group loads with a warning | A nonempty list requires `toolApprovals: true`; a configured list is checked at press time and a member outside every group receives `denied_not_approver` |
 | `ChatConnection.spec.directMessages.defaultBindingRef` | Phase 4 | Routes a DM to the named Binding, which may be in any namespace and must use the same connection, because the platform team owns connections; DM access is gated on membership in that Binding's channel (8.2, R8) | A DM is not routed: the Slack adapter drops it, and the intake finds a Binding by channel only |
 | `ChatConnection.spec.mode` (`socket` or `http`) and the Secret key `signingSecret` | Phase 4 | HTTP mode, with signing-secret verification (10) | Only Socket Mode is served, so `credentialsSecretRef` needs the keys `botToken` and `appToken` |
-| `Binding.status.conditions` (`Ready`, `BackendReachable`, `ChannelJoined`, `ApproversReadable`, `Accepted`) | Phase 4, with CR mode (D50) | In CR mode only, the elected leader writes each Binding's state: the probe results `BackendReachable`, `ChannelJoined` and, for a Binding that asks for tool approvals from `approverGroups` (and for no other), `ApproversReadable` (reasons `GroupNotFound`, `MissingScope`, `GroupsUnreadable`, and the chat reasons `ChatCredentialsRejected`, `ChatUnavailable`, `ChatCredentialsChanged` and `ChatCredentialsUnusable`), `Ready`, which is derived from the other conditions and not probed, and `Accepted` (reasons `InvalidSpec`, `BackendNotFound`, `BackendRejected`, `ConnectionNotFound`, `ConnectionRejected`, `NamespaceNotAllowed`, `ChannelConflict`), which says whether the broker took the object into routing. A Binding the broker rejects is `Accepted=False`, and its `Ready` is `False` with the reason `Accepted:<Reason>`. Each condition carries `observedGeneration`. A rejected Binding that is still served from its last good generation says which generation it serves. No time of the last probe is written, because a periodic write is watch traffic for every consumer. | With files nothing sets a status, and a problem with the config is a load error (below); with `crds` the leader writes it (built, CK-9). A file that sets `status:` is refused by a rule in the file loader (the type has the field), and stays refused |
+| `Binding.status.conditions` (`Ready`, `BackendReachable`, `ChannelJoined`, `ApproversReadable`, `Accepted`) | Phase 4, with CR mode (D50) | In CR mode only, the elected leader writes each Binding's state: the probe results `BackendReachable`, `ChannelJoined` and, for a Binding that asks for tool approvals from `approverGroups` (and for no other), `ApproversReadable` (reasons `GroupNotFound`, `MissingScope`, `GroupsUnreadable`, and the chat reasons `ChatCredentialsRejected`, `ChatUnavailable`, `ChatCredentialsChanged` and `ChatCredentialsUnusable`), `Ready`, which is derived from the other conditions and not probed, and `Accepted` (reasons `InvalidSpec`, `BackendNotFound`, `BackendRejected`, `ConnectionNotFound`, `ConnectionRejected`, `NamespaceNotAllowed`, `AgentNamespaceNotAllowed`, `ChannelConflict`), which says whether the broker took the object into routing. A Binding the broker rejects is `Accepted=False`, and its `Ready` is `False` with the reason `Accepted:<Reason>`. Each condition carries `observedGeneration`. A rejected Binding that is still served from its last good generation says which generation it serves. No time of the last probe is written, because a periodic write is watch traffic for every consumer. | With files nothing sets a status, and a problem with the config is a load error (below); with `crds` the leader writes it (built, CK-9). A file that sets `status:` is refused by a rule in the file loader (the type has the field), and stays refused |
 
 Alertmanager needs no route to Agent Kourier: its Slack receiver posts to the Binding's
 channel as it does for people today. The trigger above follows the documented example
