@@ -92,8 +92,8 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	}
 	chatCtx, report, stopChat := WithAuthFailure(runCtx)
 	ob, err := outbox.New(outbox.Config{
-		Store: st, Platform: WatchAuth(platform, report), Logger: log, OnAbandon: metrics.OutboxAbandoned,
-		// The producers do not name a connection yet: the rows they make are the own connection's.
+		Store: st, Platforms: chat.PlatformSet[outbox.Platform]{connName: WatchAuth(platform, report)}, Logger: log, OnAbandon: metrics.OutboxAbandoned,
+		// A row whose producer names no connection is the own connection's.
 		DefaultConnection: connName,
 	})
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -42,7 +43,7 @@ type noPlatform struct{ outbox.Platform }
 // platform is made through it, and one would panic.
 func EnqueueOnlyOutbox(t testing.TB, s store.Outbox, now func() time.Time) *outbox.Outbox {
 	t.Helper()
-	o, err := outbox.New(outbox.Config{Store: s, Platform: noPlatform{}, OnAbandon: outbox.NoAbandon, Now: now})
+	o, err := outbox.New(outbox.Config{Store: s, Platforms: chattest.Same[outbox.Platform](noPlatform{}), OnAbandon: outbox.NoAbandon, Now: now})
 	if err != nil {
 		t.Fatalf("outbox.New: %v", err)
 	}

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -24,7 +25,7 @@ func TestRowsCarryTheConnectionOfTheirPostOrTheDefault(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
-			o := mustNew(t, outbox.Config{Store: st, Platform: &poster{}, Now: func() time.Time { return t0 }, DefaultConnection: tc.def,
+			o := mustNew(t, outbox.Config{Store: st, Platforms: chattest.Same[outbox.Platform](&poster{}), Now: func() time.Time { return t0 }, DefaultConnection: tc.def,
 				Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 			ctx := t.Context()
 
@@ -56,7 +57,7 @@ func TestRowsCarryTheConnectionOfTheirPostOrTheDefault(t *testing.T) {
 // TestSendStoresTheConnectionOfThePost: Send writes the same row Enqueue does.
 func TestSendStoresTheConnectionOfThePost(t *testing.T) {
 	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
-	o := mustNew(t, outbox.Config{Store: st, Platform: &poster{}, Now: func() time.Time { return t0 }, DefaultConnection: "ns/own", CallTimeout: time.Second,
+	o := mustNew(t, outbox.Config{Store: st, Platforms: chattest.Same[outbox.Platform](&poster{}), Now: func() time.Time { return t0 }, DefaultConnection: "ns/own", CallTimeout: time.Second,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	if _, err := o.Send(t.Context(), reply("ev1")); err != nil {
 		t.Fatalf("Send: %v", err)
