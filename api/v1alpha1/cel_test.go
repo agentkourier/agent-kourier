@@ -262,6 +262,18 @@ func TestCELLiteralsEqualTheBrokersConstants(t *testing.T) {
 		}
 	})
 
+	t.Run("agents", func(t *testing.T) {
+		// The two rules of agents copy Validate's: the dialect the field is refused on, and a value that allows nothing.
+		if string(DialectA2A) != "a2a" {
+			t.Fatal("the dialect that the agents rule writes out as a literal has changed: update the rule")
+		}
+		rule := ruleWith(t, backends.at(t, "spec"), "has(self.agents)")
+		if !strings.Contains(rule, "self.dialect != 'a2a'") {
+			t.Errorf("the rule does not refuse agents on the a2a dialect: %s", rule)
+		}
+		ruleWith(t, backends.at(t, "spec.agents"), "self.sameNamespace", "size(self.namespaces) > 0")
+	})
+
 	t.Run("duration ranges", func(t *testing.T) {
 		thread := bindings.at(t, trigger+".thread")
 		for _, tc := range []struct {

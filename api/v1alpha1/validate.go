@@ -207,6 +207,19 @@ func (p *problems) namespaces(path string, ns []string) {
 	}
 }
 
+// agentNamespaces checks the agents of an AgentBackend of the given dialect. The a2a dialect is refused first, and is the one
+// problem when the value also allows nothing: its URL names the agent and agent.namespace is never sent, so a limit on the
+// namespace would promise a control that the dialect does not give.
+func (p *problems) agentNamespaces(d Dialect, a *AgentNamespaces) {
+	switch {
+	case d == DialectA2A:
+		p.add("spec.agents", "is not supported on the a2a dialect: the URL names the agent and agent.namespace is never sent")
+	case !a.SameNamespace && len(a.Namespaces) == 0:
+		p.add("spec.agents", "allows no agent namespace: set sameNamespace to true or list at least one namespace in namespaces")
+	}
+	p.namespaces("spec.agents.namespaces", a.Namespaces)
+}
+
 func (p *problems) meta(m metav1.ObjectMeta) {
 	p.name("metadata.name", m.Name)
 	p.namespace("metadata.namespace", m.Namespace)
@@ -287,6 +300,9 @@ func (a *AgentBackend) Validate() error {
 		p.secretRef(path+".valueSecretRef", h.ValueSecretRef)
 	}
 	p.namespaces("spec.allowedNamespaces", s.AllowedNamespaces)
+	if s.Agents != nil {
+		p.agentNamespaces(s.Dialect, s.Agents)
+	}
 	return errors.Join(p...)
 }
 

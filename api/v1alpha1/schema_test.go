@@ -203,6 +203,7 @@ func TestSchemaNamesMatchTheBrokersRules(t *testing.T) {
 		{"bindings", "spec.chat.connectionRef.name", isDNSSubdomain},
 		{"bindings", "spec.agent.namespace", isDNSLabel},
 		{"agentbackends", "spec.allowedNamespaces[]", isDNSLabel},
+		{"agentbackends", "spec.agents.namespaces[]", isDNSLabel},
 		{"chatconnections", "spec.allowedNamespaces[]", isDNSLabel},
 		// Optional values the broker accepts when they are empty.
 		{"bindings", "spec.agent.backendRef.namespace", func(v string) bool { return v == "" || isDNSLabel(v) }},
@@ -347,6 +348,7 @@ func TestSchemaCapsEqualTheBrokersCaps(t *testing.T) {
 		want int
 	}{
 		{"backend allowedNamespaces", backends.at(t, "spec.allowedNamespaces"), "maxItems", maxAllowedNamespaces},
+		{"backend agent namespaces", backends.at(t, "spec.agents.namespaces"), "maxItems", maxAllowedNamespaces},
 		{"connection allowedNamespaces", connections.at(t, "spec.allowedNamespaces"), "maxItems", maxAllowedNamespaces},
 		// The broker counts bytes and the schema characters, so the schema is never the stricter of the two.
 		{"backend url", backends.at(t, "spec.url"), "maxLength", maxURLLen},

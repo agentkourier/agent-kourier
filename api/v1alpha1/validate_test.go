@@ -176,6 +176,36 @@ func TestAgentBackendValidate(t *testing.T) {
 		{"too many allowed namespaces, none of them valid: one problem, not one for each", func(o *AgentBackend) {
 			o.Spec.AllowedNamespaces = slices.Repeat([]string{"Not_A_Namespace"}, maxAllowedNamespaces+1)
 		}, fmt.Sprintf("spec.allowedNamespaces: has %d items, maximum is %d", maxAllowedNamespaces+1, maxAllowedNamespaces)},
+		{"agents that allow the backend's own namespace ok", func(o *AgentBackend) { o.Spec.Agents = &AgentNamespaces{SameNamespace: true} }, ""},
+		{"agents that list namespaces ok", func(o *AgentBackend) { o.Spec.Agents = &AgentNamespaces{Namespaces: []string{"kagent", "payments"}} }, ""},
+		{"agents that allow both ok", func(o *AgentBackend) {
+			o.Spec.Agents = &AgentNamespaces{SameNamespace: true, Namespaces: []string{"kagent"}}
+		}, ""},
+		{"agents that allow nothing", func(o *AgentBackend) { o.Spec.Agents = &AgentNamespaces{} },
+			"spec.agents: allows no agent namespace: set sameNamespace to true or list at least one namespace in namespaces"},
+		{"agents with sameNamespace false and an empty list allow nothing", func(o *AgentBackend) { o.Spec.Agents = &AgentNamespaces{Namespaces: []string{}} },
+			"spec.agents: allows no agent namespace: set sameNamespace to true or list at least one namespace in namespaces"},
+		{"agents on the a2a dialect", func(o *AgentBackend) {
+			o.Spec.Dialect = DialectA2A
+			o.Spec.Agents = &AgentNamespaces{SameNamespace: true}
+		}, "spec.agents: is not supported on the a2a dialect: the URL names the agent and agent.namespace is never sent"},
+		{"agents that allow nothing on the a2a dialect: the dialect is the one problem", func(o *AgentBackend) {
+			o.Spec.Dialect = DialectA2A
+			o.Spec.Agents = &AgentNamespaces{}
+		}, "spec.agents: is not supported on the a2a dialect: the URL names the agent and agent.namespace is never sent"},
+		{"bad agent namespace", func(o *AgentBackend) {
+			o.Spec.Agents = &AgentNamespaces{Namespaces: []string{"kagent", "Not_A_Namespace"}}
+		},
+			badNamespace("spec.agents.namespaces[1]", "Not_A_Namespace")},
+		{"empty agent namespace", func(o *AgentBackend) { o.Spec.Agents = &AgentNamespaces{Namespaces: []string{""}} }, "spec.agents.namespaces[0]: required"},
+		{"the most agent namespaces ok", func(o *AgentBackend) { o.Spec.Agents = &AgentNamespaces{Namespaces: namespaces(maxAllowedNamespaces)} }, ""},
+		{"too many agent namespaces", func(o *AgentBackend) {
+			o.Spec.Agents = &AgentNamespaces{Namespaces: namespaces(maxAllowedNamespaces + 1)}
+		},
+			fmt.Sprintf("spec.agents.namespaces: has %d items, maximum is %d", maxAllowedNamespaces+1, maxAllowedNamespaces)},
+		{"too many agent namespaces, none of them valid: one problem, not one for each", func(o *AgentBackend) {
+			o.Spec.Agents = &AgentNamespaces{Namespaces: slices.Repeat([]string{"Not_A_Namespace"}, maxAllowedNamespaces+1)}
+		}, fmt.Sprintf("spec.agents.namespaces: has %d items, maximum is %d", maxAllowedNamespaces+1, maxAllowedNamespaces)},
 		{"the most headers ok", func(o *AgentBackend) { o.Spec.Headers = headers(maxHeaders) }, ""},
 		{"too many headers", func(o *AgentBackend) { o.Spec.Headers = headers(maxHeaders + 1) },
 			fmt.Sprintf("spec.headers: has %d items, maximum is %d", maxHeaders+1, maxHeaders)},
