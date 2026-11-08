@@ -3,9 +3,7 @@ package storetest
 import (
 	"fmt"
 	"maps"
-	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -300,10 +298,6 @@ func (su suite) outbox(t *testing.T) {
 		for _, bad := range []time.Time{{}, time.Unix(0, 0), time.Unix(-5, 0)} {
 			_, err := s.AbandonOutbox(ctx, "a", bad)
 			isErr(t, err, store.ErrInvalid, fmt.Sprintf("AbandonOutbox at %v", bad))
-			_, err = s.AbandonOutboxBefore(ctx, t0, bad)
-			isErr(t, err, store.ErrInvalid, fmt.Sprintf("AbandonOutboxBefore as of %v", bad))
-			_, err = s.AbandonOutboxBefore(ctx, bad, t0)
-			isErr(t, err, store.ErrInvalid, fmt.Sprintf("AbandonOutboxBefore before %v", bad))
 		}
 		if got := getOutbox(t, s, "a"); got.Payload == "" || !got.AbandonedAt.IsZero() {
 			t.Fatalf("row after the refusals = %+v; want it untouched", got)
@@ -318,66 +312,6 @@ func (su suite) outbox(t *testing.T) {
 		noErr(t, s.RecordMessageRef(t.Context(), "a", "5.5"), "RecordMessageRef on an abandoned row")
 		if got := getOutbox(t, s, "a"); got.MessageRef != "5.5" || got.AbandonedAt.IsZero() {
 			t.Fatalf("row = %+v; want the ref recorded and the abandon kept", got)
-		}
-	})
-
-	// The retention purge takes only a row that is old, unrecorded, not yet abandoned and has a payload.
-	su.run(t, "AbandonOutboxBefore takes only old, unposted rows that still hold a payload", func(t *testing.T, s store.Store) {
-		ctx := t.Context()
-		cut := t0.Add(-7 * 24 * time.Hour)
-		addOutbox(t, s, "old", cut.Add(-time.Second), `{"text":"hi"}`)
-		addOutbox(t, s, "boundary", cut, `{"text":"hi"}`)              // not older than the cut
-		addOutbox(t, s, "recent", t0.Add(-time.Hour), `{"text":"hi"}`) // young
-		addOutbox(t, s, "stream", cut.Add(-time.Hour), "")             // no payload to purge
-		addOutbox(t, s, "done", cut.Add(-time.Hour), `{"text":"hi"}`)  // recorded: its payload is gone
-		addOutbox(t, s, "gone", cut.Add(-time.Hour), `{"text":"hi"}`)  // abandoned before
-		noErr(t, s.RecordMessageRef(ctx, "done", "5.5"), "RecordMessageRef")
-		early := t0.Add(-time.Hour)
-		_, err := s.AbandonOutbox(ctx, "gone", early)
-		noErr(t, err, "AbandonOutbox")
-		ids, err := s.AbandonOutboxBefore(ctx, cut, t0)
-		if err != nil || !slices.Equal(ids, []string{"old"}) {
-			t.Fatalf("AbandonOutboxBefore = %v, %v; want only old", ids, err)
-		}
-		for id, want := range map[string]time.Time{"old": t0, "gone": early, "boundary": {}, "recent": {}, "stream": {}, "done": {}} {
-			if got := getOutbox(t, s, id); !got.AbandonedAt.Equal(want) {
-				t.Errorf("%s abandoned at %v; want %v", id, got.AbandonedAt, want)
-			}
-		}
-		if got := getOutbox(t, s, "old"); got.Payload != "" {
-			t.Errorf("the purged row kept its payload %q", got.Payload)
-		}
-		if ids, err := s.AbandonOutboxBefore(ctx, cut, t0); err != nil || len(ids) != 0 {
-			t.Fatalf("second purge = %v, %v; want nothing", ids, err)
-		}
-	})
-
-	su.run(t, "of concurrent retention purges each row is abandoned by one of them", func(t *testing.T, s store.Store) {
-		const rows, purgers = 40, 6
-		cut := t0.Add(time.Hour)
-		for i := range rows {
-			addOutbox(t, s, fmt.Sprintf("o%02d", i), t0, `{"text":"hi"}`)
-		}
-		var mu sync.Mutex
-		got := map[string]int{}
-		parallel(purgers, func(int) {
-			ids, err := s.AbandonOutboxBefore(t.Context(), cut, cut)
-			if err != nil {
-				t.Errorf("AbandonOutboxBefore: %v", err)
-			}
-			mu.Lock()
-			defer mu.Unlock()
-			for _, id := range ids {
-				got[id]++
-			}
-		})
-		if len(got) != rows {
-			t.Errorf("%d rows were abandoned; want %d", len(got), rows)
-		}
-		for id, n := range got {
-			if n != 1 {
-				t.Errorf("row %s was abandoned by %d purges; want 1", id, n)
-			}
 		}
 	})
 }

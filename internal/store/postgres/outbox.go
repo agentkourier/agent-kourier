@@ -142,22 +142,3 @@ func (s *adapter) AbandonOutbox(ctx context.Context, id string, at time.Time) (b
 	}
 	return abandoned, nil
 }
-
-// AbandonOutboxBefore implements store.Outbox. Of concurrent purges each row is taken by one: a purge
-// that meets a row another is changing waits for it, and then finds it no longer qualifies.
-func (s *adapter) AbandonOutboxBefore(ctx context.Context, before, at time.Time) ([]string, error) {
-	var ids []string
-	err := s.inTx(ctx, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `UPDATE outbox SET abandoned_at = $1, payload = ''
-			WHERE `+store.PendingOutbox("").Text(Dialect{})+` AND payload <> '' AND created_at < $2 RETURNING id`, at, before)
-		if err != nil {
-			return err
-		}
-		ids, err = pgx.CollectRows(rows, pgx.RowTo[string])
-		return err
-	})
-	if err != nil {
-		return nil, fmt.Errorf("abandon old outbox rows: %w", err)
-	}
-	return ids, nil
-}
