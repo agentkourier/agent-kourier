@@ -2,6 +2,7 @@ package broker
 
 import (
 	"cmp"
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -120,6 +121,15 @@ type RunConfig struct {
 	// startTrace is told as each step of the interactions' startup is done, so a test can see their order
 	// against the Slack intake opening.
 	startTrace func(step string)
+	// identify tells whose bot a connection's token is (appIdentity), in place of auth.test: a seam for this package's tests, which run
+	// connections on doubles. Nil asks Slack, except where newSlack replaces the client, and then asks nothing (identityOf).
+	identify func(ctx context.Context, conn Connection) (appIdentity, error)
+	// superviseEvery is how often the supervisor looks at the team connections (5 seconds if zero): a seam for this package's tests,
+	// which cannot wait for it.
+	superviseEvery time.Duration
+	// transportClosed is told the connection as the idle connections of its Slack transport are closed, so a test can see that every
+	// connection's is, and after the final drain.
+	transportClosed func(conn string)
 	// leaderLaunched is called once Run has launched the leader half (or its candidacy), before it waits for the
 	// signal, so a test can hold Run there and send the signal while the leader half is up.
 	leaderLaunched func()
