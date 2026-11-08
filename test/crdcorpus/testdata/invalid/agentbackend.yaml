@@ -849,7 +849,7 @@ spec:
     namespaces: []
 ---
 # rule: agentbackend/spec.agents: on the a2a dialect
-# want: spec.agents: is not supported on the a2a dialect
+# want: spec.agents: is supported only on the kagent-v1 dialect
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: AgentBackend
@@ -863,7 +863,7 @@ spec:
     sameNamespace: true
 ---
 # rule: agentbackend/spec.agents: on the a2a dialect, with a list
-# want: spec.agents: is not supported on the a2a dialect
+# want: spec.agents: is supported only on the kagent-v1 dialect
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: AgentBackend

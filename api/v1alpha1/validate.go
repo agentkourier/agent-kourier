@@ -207,14 +207,15 @@ func (p *problems) namespaces(path string, ns []string) {
 	}
 }
 
-// agentNamespaces checks the agents of an AgentBackend of the given dialect. The a2a dialect is refused first, and the check for a value
-// that allows nothing is then skipped, so the field has one problem of its own: the URL of a2a names the agent and agent.namespace is
-// never sent, so a limit on the namespace would promise a control that the dialect does not give. The entries of namespaces are checked either way.
+// agentNamespaces checks the agents of an AgentBackend of the given dialect. Only kagent-v1 sends agent.namespace, in the request
+// path: on any other dialect a limit on the namespace would promise a control that the dialect does not give, so the field is
+// refused there. A value that allows nothing is refused on every dialect, and the entries of namespaces are checked either way,
+// so the problems are those of the CRD's two rules, one on the spec and one on the field.
 func (p *problems) agentNamespaces(d Dialect, a *AgentNamespaces) {
-	switch {
-	case d == DialectA2A:
-		p.add("spec.agents", "is not supported on the a2a dialect: the URL names the agent and agent.namespace is never sent")
-	case !a.SameNamespace && len(a.Namespaces) == 0:
+	if d != DialectKagentV1 {
+		p.add("spec.agents", "is supported only on the kagent-v1 dialect, the only one that sends agent.namespace")
+	}
+	if !a.SameNamespace && len(a.Namespaces) == 0 {
 		p.add("spec.agents", "allows no agent namespace: set sameNamespace to true or list at least one namespace in namespaces")
 	}
 	p.namespaces("spec.agents.namespaces", a.Namespaces)

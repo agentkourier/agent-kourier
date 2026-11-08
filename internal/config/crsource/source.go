@@ -703,7 +703,8 @@ func (s *Source) clock() time.Time {
 }
 
 // holdStarted says, once, that a hold has begun: how many Bindings and AgentBackends it holds, and how many of the held
-// Bindings name a backend that is gone and was not held, which are not served.
+// Bindings name a backend that is not in the set (gone and not held, or refused with no last good generation), which are
+// not served.
 func (s *Source) holdStarted(bindings, backends, withoutBackend int) {
 	if s.holding {
 		return
