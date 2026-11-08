@@ -479,3 +479,35 @@ func TestARefusedConnectionsChatConnectedSeriesIsDeleted(t *testing.T) {
 		t.Errorf("samples = %v; want the series of the connection that restarted into a refusal deleted", samples(t, w2.host.metrics))
 	}
 }
+
+// A connection that is removed and served again is a new span: what was held from before the removal stays down, and the platform of the runtime
+// that serves it again works.
+func TestAConnectionServedAgainAfterARemovalIsNotRetired(t *testing.T) {
+	w := newSupWorld(t)
+	w.apps("tok-a", "tok-a2")
+	update := func(p chat.Platform) error {
+		return p.Update(t.Context(), chat.Ref{Channel: "C1", ID: "1.1"}, chat.Outgoing{})
+	}
+	w.reconcile(team("team-a/slack", 1, "tok-a", 1))
+	w.eventually("two runs", func() bool { return w.live.Load() == 2 })
+	held, err := w.table.Platform("team-a/slack")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w.reconcile() // removed
+	w.eventually("team-a to stop", func() bool { return !slices.Contains(w.running(), "team-a/slack") })
+	w.reconcile(team("team-a/slack", 1, "tok-a2", 1)) // added back
+	w.eventually("team-a to run again", func() bool { return slices.Contains(w.running(), "team-a/slack") })
+
+	if err := update(held); !errors.Is(err, chat.ErrConnectionDown) {
+		t.Errorf("a call on the platform held from before the removal = %v; want it down", err)
+	}
+	fresh, err := w.table.Platform("team-a/slack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := update(fresh); err != nil {
+		t.Errorf("a call on the platform of the runtime that serves the connection again = %v; want it to reach the platform", err)
+	}
+}

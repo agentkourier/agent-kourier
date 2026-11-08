@@ -20,7 +20,7 @@ How many values of `connection` each family can have:
   one for each connection the broker serves, so at most 16 (a call that is still in flight when a connection is removed can bring one of its series back, stale). A connection that was never served has none.
 - `agentkourier_chat_connected`: at most one for each connection the broker serves, so at most 16. It says 0 for a connection that is not connected: one that stopped
   because the platform rejected its credentials, one whose Secret cannot be read or whose credentials the platform rejected when it was asked whose bot it is, so that it never
-  started, and one that is starting. A connection that is waiting for the platform to say whose bot it is has no series yet.
+  started, and one that is starting. A connection that is waiting for the platform to say whose bot it is has no series yet, unless its Secret could not be read before it waited, which set the 0.
 - `agentkourier_outbox_pending` and `agentkourier_outbox_oldest_age_seconds`: each connection served, which says 0 while it has no unposted row; the
   empty value, for rows written before the broker recorded connections; and each connection that is no longer served but still has an unposted row, until
   retention abandons the row.
