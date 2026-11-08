@@ -17,7 +17,7 @@ carry `binding`, and the rest are the broker's as a whole.
 How many values of `connection` each family can have:
 
 - `agentkourier_intake_total`, `agentkourier_chat_api_calls_total`, `agentkourier_slack_events_shed_total` and `agentkourier_slack_ack_duration_seconds`:
-  one for each connection the broker serves, so at most 16. A connection that was never served has none.
+  one for each connection the broker serves, so at most 16 (a call that is still in flight when a connection is removed can bring one of its series back, stale). A connection that was never served has none.
 - `agentkourier_chat_connected`: one for each connection that has been built since the broker started. The broker does not delete the series of a connection
   that it stops serving: it keeps saying 0.
 - `agentkourier_outbox_pending` and `agentkourier_outbox_oldest_age_seconds`: each connection served, which says 0 while it has no unposted row; the

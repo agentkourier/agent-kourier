@@ -19,7 +19,7 @@ An AgentBackend on `dialect: kagent-v1` can now limit which agent namespaces its
   `agentkourier_outbox_pending` and `agentkourier_outbox_oldest_age_seconds`. A query that sums over the series, or selects by the labels it names, gives what it did.
   An expression that matches one of these series one to one with a metric that has no `connection` label, such as `agentkourier_outbox_pending + agentkourier_reply_queue_depth`,
   stops matching at once and returns nothing: add `ignoring(connection)` or aggregate first. An `on(...)` list needs `connection` once the broker serves two connections.
-  A served connection always has its two outbox gauges (0 with nothing unposted), and a connection that is no longer served has them only while it has an unposted row.
+  A served connection always has its two outbox gauges on the leader (0 with nothing unposted), and a connection that is no longer served has them only while it has an unposted row.
   A connection the broker stops serving has its counter and histogram series deleted. [Metrics](reference/metrics.md#series-by-connection) has the rest.
 
 ## Version 0.2.1
