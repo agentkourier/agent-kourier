@@ -177,6 +177,9 @@ Checks that no values file can get past. Included by the Deployment, which every
 {{- if and .Values.config.existingConfigMap (or .Values.config.agentBackends .Values.config.chatConnections .Values.config.bindings) -}}
 {{- fail "config.existingConfigMap and config.agentBackends/chatConnections/bindings are two ways to supply the same files: set one" -}}
 {{- end -}}
+{{- if and .Values.config.connectionNamespaces (not (include "agentkourier.crMode" .)) -}}
+{{- fail "config.connectionNamespaces is for config.source crds, and config.source is files (or unset, which reads as files): with config.source: files the broker serves the one ChatConnection of its directory, refuses AGENTKOURIER_CONNECTION_NAMESPACES and would not start. To serve the ChatConnections of those namespaces, set config.source: crds; otherwise remove config.connectionNamespaces" -}}
+{{- end -}}
 {{- if include "agentkourier.crMode" . -}}
 {{- if .Values.config.existingConfigMap -}}
 {{- fail "config.existingConfigMap is for config.source files, and config.source is crds (the chart's default unless your values set it): Agent Kourier would read custom resources, mount no ConfigMap and ignore it. To keep reading your ConfigMap, set config.source: files. To move to custom resources instead, remove config.existingConfigMap and follow https://agentkourier.dev/how-to/migrate-config-source/#move-a-configmap-you-manage-yourself" -}}
