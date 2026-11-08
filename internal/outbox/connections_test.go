@@ -290,15 +290,19 @@ func TestARowOfAConnectionThatIsDownWaits(t *testing.T) {
 	}
 }
 
-// TestAPurgeDoesNotWaitForAHungDelivery: the retention purge keeps off rows whose post is in flight, and does not wait for the
-// post to finish: with one connection's platform hung, the passes that another connection's rows need still run.
-func TestAPurgeDoesNotWaitForAHungDelivery(t *testing.T) {
+// TestRetentionIsKeptWhileAnotherConnectionHangs: the posts of a connection that hangs are in flight all the while, and the rows
+// of another connection that are past Retention are abandoned all the same: one whose platform answers, and one that no
+// platform runs. The abandoning is each connection's own, so no connection's hang puts it off.
+func TestRetentionIsKeptWhileAnotherConnectionHangs(t *testing.T) {
 	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
 	release := make(chan struct{})
 	a, b := hangs(release), &poster{}
 	var clock atomic.Int64
+	var mu sync.Mutex
+	var abandoned []string
 	o := mustNew(t, outbox.Config{Store: st, Platforms: chat.PlatformSet[outbox.Platform]{connA: a, connB: b},
-		Now: func() time.Time { return t0.Add(time.Duration(clock.Load())) }, CallTimeout: time.Minute, Interval: time.Hour, PurgeInterval: time.Minute, Logger: quiet()})
+		Now: func() time.Time { return t0.Add(time.Duration(clock.Load())) }, CallTimeout: time.Minute, Interval: time.Hour, Retention: time.Hour, Logger: quiet(),
+		OnAbandon: func(id, reason string) { mu.Lock(); abandoned = append(abandoned, id+" "+reason); mu.Unlock() }})
 	start(t, o)
 	ctx := t.Context()
 
@@ -306,10 +310,95 @@ func TestAPurgeDoesNotWaitForAHungDelivery(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "a's post to be in flight", func() bool { posts, _ := a.counts(); return posts == 1 })
-	clock.Add(int64(time.Hour)) // the next pass is due to purge
+
+	clock.Add(int64(2 * time.Hour)) // the rows made at t0 are past Retention, and the stuck one made just now is not
+	for _, p := range []outbox.Post{onConn(connB, "old-b"), onConn("ns/down", "old-down")} {
+		p.Role = store.OutboxNotice
+		if _, err := st.CreateOutbox(ctx, store.OutboxEntry{ID: outbox.ID(p.Source, p.Role), EventID: p.Source, Role: p.Role, Connection: p.Connection, Channel: "C1", CreatedAt: t0, Payload: neutral(p.Source)}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if _, err := o.Enqueue(ctx, onConn(connB, "later")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "b's post to go out in a pass that is due to purge, while a hangs", func() bool { return ref(st, outbox.ID("later", store.OutboxReply)) != "" })
+	eventually(t, "the old rows to be abandoned while a hangs", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Contains(abandoned, "old-down/notice "+outbox.AbandonExpired) && slices.Contains(abandoned, "old-b/notice "+outbox.AbandonExpired)
+	})
+	for _, id := range []string{"old-b/notice", "old-down/notice"} {
+		if row, err := st.GetOutbox(ctx, id); err != nil || row.AbandonedAt.IsZero() || row.Payload != "" {
+			t.Errorf("row %s = %+v, %v; want it abandoned with its text dropped", id, row, err)
+		}
+	}
+	if posts, _ := b.counts(); posts != 1 {
+		t.Errorf("b posted %d times; want only the row that is not past Retention", posts)
+	}
 	close(release)
+}
+
+// TestARowOfAConnectionThatStaysDownIsAbandonedAfterRetention: nothing posts it, and its text goes at the retention all the same.
+func TestARowOfAConnectionThatStaysDownIsAbandonedAfterRetention(t *testing.T) {
+	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	var clock atomic.Int64
+	var abandoned []string
+	o := mustNew(t, outbox.Config{Store: st, Platforms: chat.PlatformSet[outbox.Platform]{connA: &poster{}},
+		Now: func() time.Time { return t0.Add(time.Duration(clock.Load())) }, CallTimeout: time.Second, Logger: quiet(),
+		OnAbandon: func(id, reason string) { abandoned = append(abandoned, id+" "+reason) }})
+	ctx := t.Context()
+	post := onConn(connB, "waiting")
+	post.Role = store.OutboxNotice
+	id, err := o.Enqueue(ctx, post)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	clock.Store(int64(7*24*time.Hour - time.Second)) // inside the default 7 days
+	if err := o.Reconcile(ctx); err != nil {
+		t.Fatalf("Reconcile = %v", err)
+	}
+	if row, _ := st.GetOutbox(ctx, id); !row.AbandonedAt.IsZero() || row.Payload == "" || len(abandoned) != 0 {
+		t.Fatalf("row = %+v, abandoned %v; want it waiting inside the retention", row, abandoned)
+	}
+	clock.Store(int64(7*24*time.Hour + time.Second))
+	for range 2 { // the second pass finds it gone and reports nothing more
+		if err := o.Reconcile(ctx); err != nil {
+			t.Fatalf("Reconcile = %v", err)
+		}
+	}
+	if row, _ := st.GetOutbox(ctx, id); row.AbandonedAt.IsZero() || row.Payload != "" {
+		t.Errorf("row = %+v; want it abandoned, with its text dropped, though b never ran", row)
+	}
+	if want := id + " " + outbox.AbandonExpired; len(abandoned) != 1 || abandoned[0] != want {
+		t.Errorf("abandoned = %v; want %q once", abandoned, want)
+	}
+}
+
+// TestARowWithNoConnectionIsTheDefaultConnectionsUntilItIsAttributed: a row stored before connections were recorded has none, and
+// is the own connection's: it is delivered through that connection's platform, in its lane, and not left for a connection ""
+// that nothing runs.
+func TestARowWithNoConnectionIsTheDefaultConnectionsUntilItIsAttributed(t *testing.T) {
+	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	own, other := &poster{}, &poster{}
+	o := mustNew(t, outbox.Config{Store: st, Platforms: chat.PlatformSet[outbox.Platform]{connA: own, connB: other}, DefaultConnection: connA,
+		Now: func() time.Time { return t0 }, CallTimeout: time.Second, Logger: quiet()})
+	ctx := t.Context()
+	if _, err := st.CreateOutbox(ctx, store.OutboxEntry{ID: "old/reply", EventID: "old", Role: store.OutboxReply, Channel: "C1", Thread: "1.1", CreatedAt: t0, Payload: neutral("old")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.Reconcile(ctx); err != nil {
+		t.Fatalf("Reconcile = %v", err)
+	}
+	if ref(st, "old/reply") == "" {
+		t.Fatal("the row with no connection was not posted")
+	}
+	if posts, _ := own.counts(); posts != 1 {
+		t.Errorf("the own connection posted %d times; want 1", posts)
+	}
+	if got := own.targets; len(got) != 1 || got[0].Conn != connA {
+		t.Errorf("targets = %+v; want the own connection in the Target", got)
+	}
+	if posts, _ := other.counts(); posts != 0 {
+		t.Errorf("the other connection posted %d times; want none", posts)
+	}
 }

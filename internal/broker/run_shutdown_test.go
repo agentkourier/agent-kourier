@@ -320,7 +320,7 @@ func TestRunPostsWhatIsPendingInAFinalDrain(t *testing.T) {
 			return
 		}
 		defer func() { _ = st.Close() }()
-		post := outbox.Post{Source: "late", Role: store.OutboxNotice, Connection: "agent-kourier-system/slack-main", Channel: "C0123456789", Out: chat.Say(chat.Message{Fallback: "last words"})}
+		post := outbox.Post{Source: "late", Role: store.OutboxNotice, Channel: "C0123456789", Out: chat.Say(chat.Message{Fallback: "last words"})}
 		if _, err := enqueuer(t, st).Enqueue(context.Background(), post); err != nil {
 			t.Error(err)
 		}

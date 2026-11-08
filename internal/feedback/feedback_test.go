@@ -146,7 +146,7 @@ func newRig(t *testing.T) *rig {
 func (r *rig) message(t *testing.T, k store.ConversationKey, turn, ref string) {
 	t.Helper()
 	id := outbox.ID(turn, store.OutboxReply)
-	if _, err := r.st.CreateOutbox(t.Context(), store.OutboxEntry{ID: id, EventID: turn, Role: store.OutboxReply, Channel: k.Channel, Thread: k.Thread, CreatedAt: t0}); err != nil {
+	if _, err := r.st.CreateOutbox(t.Context(), store.OutboxEntry{ID: id, EventID: turn, Role: store.OutboxReply, Connection: k.Connection, Channel: k.Channel, Thread: k.Thread, CreatedAt: t0}); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.st.RecordMessageRef(t.Context(), id, ref); err != nil {
@@ -680,7 +680,7 @@ func TestAPressBeforeTheMessageIsRecordedIsKeptUntilItIs(t *testing.T) {
 	setup := func(t *testing.T) (*rig, chat.Interaction, string) {
 		r := newRig(t)
 		id := outbox.ID(unposted, store.OutboxReply)
-		if _, err := r.st.CreateOutbox(t.Context(), store.OutboxEntry{ID: id, EventID: unposted, Role: store.OutboxReply, Channel: key.Channel, Thread: key.Thread, CreatedAt: t0}); err != nil {
+		if _, err := r.st.CreateOutbox(t.Context(), store.OutboxEntry{ID: id, EventID: unposted, Role: store.OutboxReply, Connection: key.Connection, Channel: key.Channel, Thread: key.Thread, CreatedAt: t0}); err != nil {
 			t.Fatal(err)
 		}
 		i := press("UALICE1", store.FeedbackInvestigation, store.VerdictUseful)

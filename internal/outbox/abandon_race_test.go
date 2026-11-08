@@ -10,10 +10,10 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 )
 
-// TestThePurgeWaitsForAnInFlightDelivery: a row that is old by the time a drain starts, while its
-// post is still in flight, is not purged under it. The drain waits, and the row ends posted, not
+// TestRetentionWaitsForAnInFlightDelivery: a row that is old by the time a drain starts, while its
+// post is still in flight, is not abandoned under it. The drain waits for the connection's lock, and the row ends posted, not
 // abandoned, with no report.
-func TestThePurgeWaitsForAnInFlightDelivery(t *testing.T) {
+func TestRetentionWaitsForAnInFlightDelivery(t *testing.T) {
 	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
 	var clock atomic.Int64
 	inPost, release := make(chan struct{}), make(chan struct{})

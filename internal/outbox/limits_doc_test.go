@@ -20,4 +20,5 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Duration(t, "outboxRetryBase", o.cfg.RetryBase)
 	limitsdoc.Duration(t, "outboxRetryMax", o.cfg.RetryMax)
 	limitsdoc.Duration(t, "outboxCall", o.cfg.CallTimeout)
+	limitsdoc.Duration(t, "outboxInterval", o.cfg.Interval)
 }

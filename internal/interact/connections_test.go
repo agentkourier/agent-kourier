@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strconv"
 	"testing"
 	"time"
+
+	slackgo "github.com/slack-go/slack"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
@@ -269,5 +272,36 @@ func TestSweepEditsAndNotifiesThroughTheConnectionOfTheInteraction(t *testing.T)
 	rows := r.notices(t)
 	if len(rows) != 1 || rows[0].Connection != keyB.Connection {
 		t.Errorf("notices = %+v; want one, for connection %s", rows, keyB.Connection)
+	}
+}
+
+// TestARateLimitPausesTheEditsOfItsOwnConnectionOnly: the limit is the app's own, so the Retry-After of one connection holds
+// back that connection's prompts and the others go on, in the pass that met it and in the ones after.
+func TestARateLimitPausesTheEditsOfItsOwnConnectionOnly(t *testing.T) {
+	a := &edits{err: fmt.Errorf("slack chat.update: %w", &slackgo.RateLimitedError{RetryAfter: 30 * time.Second})}
+	b := &edits{}
+	r := newRepairRig(t, func(c *interact.ReplacerConfig) {
+		c.Updaters = chat.PlatformSet[interact.Editor]{key.Connection: a, keyB.Connection: b}
+	})
+	r.decidedOn(t, key.Connection, "a-1")
+	r.decidedOn(t, key.Connection, "a-2")
+	r.decidedOn(t, keyB.Connection, "b-1")
+	r.decidedOn(t, keyB.Connection, "b-2")
+
+	if err := r.r.Repair(t.Context()); err != nil {
+		t.Fatalf("Repair = %v; want none: a rate limit is waited out, not an error", err)
+	}
+	if len(a.got) != 1 || len(b.got) != 2 {
+		t.Fatalf("a made %d edits and b %d; want one that was refused, and both of b's: a's limit does not hold b back", len(a.got), len(b.got))
+	}
+	r.advance(10 * time.Second)
+	_ = r.r.Repair(t.Context())
+	if len(a.got) != 1 {
+		t.Errorf("a made %d edits after 10 seconds of its 30; want it left alone", len(a.got))
+	}
+	r.advance(21 * time.Second)
+	_ = r.r.Repair(t.Context())
+	if len(a.got) != 2 {
+		t.Errorf("a made %d edits once its wait was over; want it asked again", len(a.got))
 	}
 }

@@ -345,7 +345,8 @@ const (
 )
 
 // onMessage says whether the message that press was made on is the output of v's turn in v's thread, in the channel of the press:
-// the outbox row of the turn's reply, or of its reply posted again (outbox.RepostedSource), holds that message and place. A row
+// the outbox row of the turn's reply, or of its reply posted again (outbox.RepostedSource), holds that message and place, on the
+// press's connection. A row
 // of that place that holds no message yet is not a no: the platform shows a message before its row is written. An error is a
 // read that failed, and says nothing of the press.
 func (h *Handler) onMessage(ctx context.Context, press store.Press, v Value) (messageFound, error) {
@@ -357,8 +358,8 @@ func (h *Handler) onMessage(ctx context.Context, press store.Press, v Value) (me
 		} else if err != nil {
 			return messageOther, err
 		}
-		if row.Channel != press.Channel || row.Thread != v.Thread {
-			continue
+		if row.Channel != press.Channel || row.Thread != v.Thread || row.Connection != press.Connection {
+			continue // the place, on the connection the press came in on: another app's message of the same IDs is not the turn's
 		}
 		switch row.MessageRef {
 		case "":

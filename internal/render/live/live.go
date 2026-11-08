@@ -230,7 +230,7 @@ type Run struct {
 	cfg Config
 	// platform is the platform of the turn's connection, resolved when the run started, and caps what it can do and how much
 	// it shows, asked then.
-	platform chat.Platform
+	platform runPlatform
 	caps     chat.Caps
 	turn     Turn
 	wake     chan struct{} // a slot: the state changed
@@ -354,12 +354,15 @@ const (
 // finished, so that the two never write the message at once and the earlier, which knows less, never writes over the
 // later. The session does this when it follows a task again under the turn whose send has not yet returned.
 func (r *Renderer) Start(ctx context.Context, t Turn) *Run {
-	platform, err := r.cfg.Platforms.Platform(t.Connection)
-	if err != nil {
+	var platform runPlatform
+	var caps chat.Caps
+	if p, err := r.cfg.Platforms.Platform(t.Connection); err != nil {
 		r.cfg.Logger.WarnContext(ctx, "live: the turn's connection is not running; its writes fail until it is, and its reply waits in the outbox", "connection", t.Connection, "channel", t.Channel, "err", err)
-		platform = down{err: err}
+		d := down{conn: t.Connection, err: err}
+		platform, caps = d, d.Capabilities()
+	} else {
+		platform, caps = p, p.Capabilities()
 	}
-	caps := platform.Capabilities()
 	streaming := t.Mode == v1alpha1.OutputLive && t.Recipient != "" && caps.Streams
 	u := &Run{cfg: r.cfg, platform: platform, caps: caps, owner: r, turn: t, streaming: streaming, wake: make(chan struct{}, 1), done: make(chan struct{}), texts: map[a2a.ArtifactID]string{}, progress: v1alpha1.ProgressSteps}
 	if t.Mode == v1alpha1.OutputLive && (t.Progress == v1alpha1.ProgressStepsAndActivity || t.Progress == v1alpha1.ProgressActivity) {

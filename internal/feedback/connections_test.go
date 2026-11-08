@@ -61,3 +61,28 @@ func TestAVoteIsCheckedAndAnsweredOnTheConnectionItCameIn(t *testing.T) {
 		t.Errorf("b told %+v and a told %+v; want the thanks from b's app alone", got, r.eph.list())
 	}
 }
+
+// TestAVoteOnAnotherConnectionsMessageIsIgnored: the message a press names is the turn's only on the connection of the turn's row.
+// A press that came in on another app, whose session has the same channel and thread, names a message that is not the turn's,
+// whatever its ID: it is dropped without a word, and no vote is stored.
+func TestAVoteOnAnotherConnectionsMessageIsIgnored(t *testing.T) {
+	r := newRig(t)
+	keyB := store.ConversationKey{Connection: "agent-kourier/team", Channel: key.Channel, Thread: key.Thread}
+	if err := r.st.UpsertSession(t.Context(), store.Session{Key: keyB, Binding: bindingID, Agent: agentID, LastActivity: t0}); err != nil {
+		t.Fatal(err)
+	}
+	r.members("UCAROL")
+	in := chat.Interaction{
+		User: "UCAROL", At: chat.Ref{Platform: "slack", Conn: keyB.Connection, Channel: key.Channel, Thread: key.Thread, ID: "100.9"}, // the turn's message ID, on a's app
+		PromptID: feedback.Value{Kind: store.FeedbackInvestigation, Verdict: store.VerdictUseful, Thread: key.Thread, Turn: turn}.String(), // the turn of a
+	}
+	if res, err := r.vote(t, in); res != interact.Done || err != nil {
+		t.Fatalf("vote = %v, %v; want it finished", res, err)
+	}
+	if votes, err := r.st.ListVotes(t.Context(), keyB); err != nil || len(votes) != 0 {
+		t.Errorf("votes on b = %v, %v; want none", votes, err)
+	}
+	if got := r.eph.list(); len(got) != 0 {
+		t.Errorf("told %v; want nobody told", got)
+	}
+}
