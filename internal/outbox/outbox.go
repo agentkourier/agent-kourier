@@ -176,8 +176,14 @@ type Outbox struct {
 	wake   chan struct{} // Enqueue's signal to Run; one slot, since a drain takes every row
 }
 
-// lane is the delivery of one connection's rows.
+// lane is the delivery of one connection's rows. Its refs, and drop, are guarded by Outbox.lanesMu.
 type lane struct {
+	// refs counts the holders of the lane (lane and release), so that the lane is not dropped from under a delivery, and drop
+	// says it is to go from the map when the last holder lets go: its connection is not running (retire), or was taken away
+	// (Forget). A holder that takes the lane again keeps it (drop is cleared).
+	refs int
+	drop bool
+
 	// mu allows one delivery at a time on the connection. A post's outcome is unknown until its ref is recorded, so
 	// two deliveries of one row could post it twice. It is the connection's alone: the rows of another connection are other
 	// rows, so a delivery that is slow, throttled or hung holds up this connection and no other.
@@ -213,7 +219,7 @@ func (l *lane) end() (again bool) {
 	return again
 }
 
-// lane returns the lane of conn.
+// lane returns the lane of conn, made if there is none, and holds it for the caller, who gives it back with release.
 func (o *Outbox) lane(conn string) *lane {
 	o.lanesMu.Lock()
 	defer o.lanesMu.Unlock()
@@ -222,7 +228,52 @@ func (o *Outbox) lane(conn string) *lane {
 		l = &lane{}
 		o.lanes[conn] = l
 	}
+	l.refs++
+	l.drop = false
 	return l
+}
+
+// release gives back a lane that lane returned. The last holder of a lane marked to drop removes it from the map.
+func (o *Outbox) release(conn string, l *lane) {
+	o.lanesMu.Lock()
+	defer o.lanesMu.Unlock()
+	l.refs--
+	if l.refs == 0 && l.drop && o.lanes[conn] == l {
+		delete(o.lanes, conn)
+	}
+}
+
+// retire marks the lane of conn to go when its holders let it, because nothing runs the connection: its lane holds no
+// state worth keeping (the time its platform last worked is of a platform that is gone), and a lane kept for every connection that
+// ever had a row would grow with them. The caller holds the lane.
+func (o *Outbox) retire(l *lane) {
+	o.lanesMu.Lock()
+	l.drop = true
+	o.lanesMu.Unlock()
+}
+
+// Forget drops the delivery state of the connection conn, for a connection the broker no longer runs: the lane of its rows, which
+// is otherwise kept for as long as the Outbox lives. A lane that is delivering, or that a Send holds, goes when the last of them
+// is done with it. It is no loss: a row of conn that is posted later makes the lane again, and a row that is pending stays so.
+func (o *Outbox) Forget(conn string) {
+	o.lanesMu.Lock()
+	defer o.lanesMu.Unlock()
+	l, ok := o.lanes[conn]
+	switch {
+	case !ok:
+	case l.refs == 0:
+		delete(o.lanes, conn)
+	default:
+		l.drop = true
+	}
+}
+
+// Lanes is the number of connections whose delivery state the Outbox holds: the connections that run and those with a delivery
+// in flight. It is for a test or a diagnostic to see that Forget and a connection that is down leave no lane behind.
+func (o *Outbox) Lanes() int {
+	o.lanesMu.Lock()
+	defer o.lanesMu.Unlock()
+	return len(o.lanes)
 }
 
 // retryState is how often a row's delivery has failed in a row, and when it may be tried again.
@@ -282,6 +333,7 @@ func (o *Outbox) Send(ctx context.Context, p Post) (chat.Ref, error) {
 		return chat.Ref{}, err
 	}
 	ln := o.lane(row.Connection)
+	defer o.release(row.Connection, ln)
 	ln.mu.Lock()
 	defer ln.mu.Unlock()
 	created, err := o.cfg.Store.CreateOutbox(ctx, row)
@@ -291,6 +343,9 @@ func (o *Outbox) Send(ctx context.Context, p Post) (chat.Ref, error) {
 	ref, err := o.deliver(ctx, ln, row.ID, !created)
 	if err == nil {
 		o.settle(row.ID, nil) // a row Run was backing off is delivered; forget it
+	}
+	if errors.Is(err, chat.ErrConnectionDown) {
+		o.retire(ln)
 	}
 	return ref, err
 }
@@ -462,11 +517,13 @@ func (o *Outbox) dispatch(ctx context.Context, drains *sync.WaitGroup) {
 	for conn, rows := range byConn {
 		ln := o.lane(conn)
 		if !ln.begin() {
+			o.release(conn, ln)
 			continue
 		}
 		drains.Add(1)
 		go func() {
 			defer drains.Done()
+			defer o.release(conn, ln)
 			err := o.drainLane(ctx, conn, rows)
 			if ln.end() {
 				o.signal()
@@ -576,6 +633,7 @@ func (o *Outbox) unposted(ctx context.Context) (map[string][]store.OutboxEntry, 
 // them is past Retention if it is not.
 func (o *Outbox) drainLane(ctx context.Context, conn string, rows []store.OutboxEntry) error {
 	ln := o.lane(conn)
+	defer o.release(conn, ln)
 	var errs []error
 	for _, r := range rows {
 		ln.mu.Lock()
@@ -594,6 +652,7 @@ func (o *Outbox) drainLane(ctx context.Context, conn string, rows []store.Outbox
 		}
 		ln.mu.Unlock()
 		if down {
+			o.retire(ln)
 			o.cfg.Logger.DebugContext(ctx, "outbox: the connection of some posts is not running; they wait for it", "connection", conn)
 			break
 		}

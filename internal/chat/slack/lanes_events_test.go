@@ -31,7 +31,7 @@ func TestTheShedEventsNotYetLoggedAreLoggedWhenRunEnds(t *testing.T) {
 	for i := 0; i < extra; i++ {
 		send(t, fake, onChannel("C1", fmt.Sprintf("%d.2", 1000+i), "private-text"))
 	}
-	for deadline := time.Now().Add(5 * time.Second); h.Counter(t, "agentkourier_slack_events_shed_total", map[string]string{"reason": "channel_backlog"}) < extra; time.Sleep(time.Millisecond) {
+	for deadline := time.Now().Add(5 * time.Second); h.Counter(t, "agentkourier_slack_events_shed_total", map[string]string{"reason": "channel_backlog", "connection": intakeConn}) < extra; time.Sleep(time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatalf("the shed events were not counted: %s", h.Exported(t))
 		}

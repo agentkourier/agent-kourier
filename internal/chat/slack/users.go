@@ -28,7 +28,7 @@ type cachedUser struct {
 // token. The broker's adapter over the platform makes it a session.Users, which names the connection.
 func (c *Client) ResolveUser(ctx context.Context, id string) (telemetryResult0 dialect.User, telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.ResolveUser")
-	defer func() { finishChat(ctx, op, "ResolveUser", telemetryErr) }()
+	defer func() { c.finishChat(ctx, op, "ResolveUser", telemetryErr) }()
 	now := c.now()
 	c.mu.Lock()
 	e, ok := c.users[id]

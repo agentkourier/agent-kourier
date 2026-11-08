@@ -41,7 +41,7 @@ func outboxTag(outboxID string) (slackgo.MsgOption, error) {
 // event_payload, and that chat.postMessage returns the ts of a message that carries metadata.
 func (c *Client) Post(ctx context.Context, channel, threadTS string, content Content, outboxID string) (telemetryResult0 string, telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.Post")
-	defer func() { finishChat(ctx, op, "Post", telemetryErr) }()
+	defer func() { c.finishChat(ctx, op, "Post", telemetryErr) }()
 	tag, err := outboxTag(outboxID)
 	if err != nil {
 		return "", fmt.Errorf("slack post: %w", err)
