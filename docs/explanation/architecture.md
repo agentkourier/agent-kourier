@@ -120,6 +120,86 @@ manifests, operator, or deployment tooling handle that lifecycle.
 
 ## One conversation
 
+A turn crosses two protocols. Slack delivers events to Agent Kourier over a Socket Mode connection, and Agent Kourier
+writes to Slack through its Web API. Agent Kourier calls the agent over A2A and reads the reply as a stream. The first
+diagram follows one message in a chat thread; the second shows what happens when the agent pauses for an answer.
+
+```mermaid
+sequenceDiagram
+    box Slack
+        participant S as Slack
+    end
+    box Agent Kourier
+        participant A as Slack adapter and chat intake
+        participant M as Session manager
+        participant R as Renderer and outbox
+    end
+    box A2A backend
+        participant G as Agent
+    end
+    S->>A: Socket Mode event (message or app_mention)
+    A->>M: Submit the turn to the Binding's session
+    M->>M: write the session and queue the turn, keyed by message ID
+    M->>R: acknowledgment notice, unless the Binding turns it off
+    M-->>A: queued, and the session's runner woken
+    Note over S,M: Submit does not wait for the agent. If it returns an error, the event is left<br/>unacknowledged for Slack to send again. A message it rejects as invalid is dropped.
+    par
+        A->>S: acknowledge the event
+    and
+        R-)S: reactions.add (hourglass_flowing_sand by default), from the outbox, if on
+    and
+        M->>G: SendStreamingMessage as the Binding's identity,<br/>with the session's contextId (none on a first turn)
+    end
+    loop while the task runs
+        G-->>M: task, status and artifact updates
+        M->>R: output so far
+        R->>S: chat.startStream, then chat.appendStream as output arrives
+        opt the stream drops or stays silent too long
+            M->>G: GetTask
+            M->>G: SubscribeToTask, if the task has not ended, and read on from there
+        end
+    end
+    G-->>M: final status, such as completed, failed or input-required
+    R->>S: chat.stopStream
+    R-)S: reactions.remove, if on
+```
+
+A turn that no person wrote, such as the one an alert starts, has no one to show a stream to, so its reply is a
+`chat.postMessage` through the outbox, followed by `chat.update` calls as output arrives. A person's reply in that
+thread streams as above. With `output: final`, the reply is posted once, when the turn ends.
+
+```mermaid
+sequenceDiagram
+    participant S as Slack
+    participant A as Slack adapter and chat intake
+    participant I as Interactions
+    participant M as Session manager
+    participant G as Agent
+    G-->>M: input-required (a question or a tool approval)
+    M->>I: record the pause
+    I->>S: post the question through the outbox
+    S->>A: Socket Mode interactive event (a button press)
+    A->>I: record the press
+    A->>S: acknowledge the event
+    I->>I: check that the question is still open, channel membership and that the presser<br/>is not a bot. For an approval, check that the Binding still allows approvals<br/>and, if it names approver groups, that the presser is in one
+    I->>I: decide, if the press came before the deadline
+    I->>M: the answer
+    par
+        I->>S: take the controls off the question
+    and
+        M->>G: GetTask on the paused task, then SendStreamingMessage with its ID
+    end
+    G-->>M: the task streams again
+```
+
+If the agent rejects the answer with a JSON-RPC internal error (`-32603`), Agent Kourier cancels the paused task and
+posts a notice in the thread.
+
+A question that takes a typed answer is answered by a reply in the thread instead of a button. The reply comes in as
+a Socket Mode message event and Submit queues it. A session waiting on the question reads the paused task and passes
+the reply to interactions, which check it as they check a press. A reply that is not taken as the answer stays queued
+as an ordinary turn, unless intake already tied it to the question.
+
 1. The messaging adapter feeds an inbound message to chat intake, which selects
    the binding and applies the channel and thread rules.
 2. The session manager persists the reply and runs turns in order. The agent
