@@ -11,6 +11,7 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/agentkourier/agent-kourier/internal/audit"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/generic"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
@@ -45,7 +46,7 @@ func textQuestionWithPrompt(t *testing.T, r *pressRig, posted bool) (a2a.Task, s
 		}
 	}
 	r.task(t, "task-1")
-	r.pl, err = interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{interact.Binding{Dialect: d, AskUser: true, Timeout: time.Minute}}, Authorizer: r.az, Ephemerals: r.eph, Decider: r.d, Auditor: r.aud, Now: func() time.Time { return r.now }}))
+	r.pl, err = interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{interact.Binding{Dialect: d, AskUser: true, Timeout: time.Minute}}, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Decider: r.d, Auditor: r.aud, Now: func() time.Time { return r.now }}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,7 +331,7 @@ func TestTextReplyToAStructuredFreeTextQuestionOnA2AStaysQueued(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.task(t, "task-1")
-	r.pl, err = interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{interact.Binding{Dialect: d, AskUser: true, Timeout: time.Minute}}, Authorizer: r.az, Ephemerals: r.eph, Decider: r.d, Auditor: r.aud, Now: func() time.Time { return r.now }}))
+	r.pl, err = interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{interact.Binding{Dialect: d, AskUser: true, Timeout: time.Minute}}, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Decider: r.d, Auditor: r.aud, Now: func() time.Time { return r.now }}))
 	if err != nil {
 		t.Fatal(err)
 	}

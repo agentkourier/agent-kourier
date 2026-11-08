@@ -16,6 +16,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -100,7 +101,7 @@ func newPressRigFor(t *testing.T, b interact.Binding) *pressRig {
 		t.Fatal(err)
 	}
 	var err error
-	r.pl, err = interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{b}, Authorizer: r.az, Ephemerals: r.eph, Decider: r.d, Auditor: r.aud,
+	r.pl, err = interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{b}, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Decider: r.d, Auditor: r.aud,
 		Limits: store.PressLimits{Total: 10, PerUser: 2}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Now: func() time.Time { return r.now }, Notify: func(p store.Press) { r.got = append(r.got, p) }}))
 	if err != nil {
@@ -336,9 +337,9 @@ func TestWhatAPersonIsToldIsToldInTheThreadOfThePrompt(t *testing.T) {
 	if _, err := r.process(t, gone); err != nil {
 		t.Fatal(err)
 	}
-	want := []chat.Target{{Conn: key.Connection, Channel: key.Channel, Thread: key.Thread}, {Channel: key.Channel}}
+	want := []chat.Target{{Conn: key.Connection, Channel: key.Channel, Thread: key.Thread}, {Conn: key.Connection, Channel: key.Channel}}
 	if got := r.eph.targets(); !slices.Equal(got, want) {
-		t.Errorf("told in %+v; want the prompt's thread, and for the gone interaction the press's channel alone", got)
+		t.Errorf("told in %+v; want the prompt's thread, and for the gone interaction the press's channel alone, on the connection the press came in on", got)
 	}
 }
 
@@ -347,7 +348,7 @@ func (r *pressRig) loggedPipeline(t *testing.T) (*interact.Pipeline, *logBuf) {
 	t.Helper()
 	logs := &logBuf{}
 	b := interact.Binding{Dialect: kagentv1.New(time.Second), AskUser: true, Timeout: time.Minute, Identity: "secret:ns/tok"}
-	pl, err := interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{b}, Authorizer: r.az, Ephemerals: r.eph, Decider: r.d, Auditor: r.aud,
+	pl, err := interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{b}, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Decider: r.d, Auditor: r.aud,
 		Logger: slog.New(slog.NewTextHandler(logs, nil)), Now: func() time.Time { return r.now }}))
 	if err != nil {
 		t.Fatal(err)
@@ -364,11 +365,11 @@ func TestAPressRecordedByAnOlderVersionIsToldAndLoggedAsSuchNotAsCorruption(t *t
 	r.open(t)
 	pl, logs := r.loggedPipeline(t)
 	old := []byte(`{"q0":{"a0":{"Type":"plain_text_input","Values":["x"]}}}`)
-	seq, err := r.st.RecordPress(t.Context(), store.Press{InteractionID: "ix-1", User: "UALICE1", Channel: key.Channel, MessageRef: "100.1", Inputs: old, PressedAt: r.now}, store.PressLimits{Total: 10, PerUser: 2})
+	seq, err := r.st.RecordPress(t.Context(), store.Press{InteractionID: "ix-1", User: "UALICE1", Connection: key.Connection, Channel: key.Channel, MessageRef: "100.1", Inputs: old, PressedAt: r.now}, store.PressLimits{Total: 10, PerUser: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := pl.Process(t.Context(), store.Press{Seq: seq, InteractionID: "ix-1", User: "UALICE1", Channel: key.Channel, MessageRef: "100.1", Inputs: old, PressedAt: r.now})
+	res, err := pl.Process(t.Context(), store.Press{Seq: seq, InteractionID: "ix-1", User: "UALICE1", Connection: key.Connection, Channel: key.Channel, MessageRef: "100.1", Inputs: old, PressedAt: r.now})
 	if err != nil || res != interact.Done || strings.Join(r.eph.list(), "|") != "UALICE1: This question is no longer available." || r.waiting(t) != 0 {
 		t.Fatalf("Process = %v, %v, told %q, %d waiting; want it done and the person told the question is gone", res, err, r.eph.list(), r.waiting(t))
 	}
@@ -387,7 +388,7 @@ func TestARequestThatCannotBeReadIsAnError(t *testing.T) {
 		t.Fatal(err)
 	}
 	pl, logs := r.loggedPipeline(t)
-	if res, err := pl.Process(t.Context(), store.Press{InteractionID: "ix-bad", User: "UALICE1", Channel: key.Channel, MessageRef: "100.1", Inputs: []byte("null"), PressedAt: r.now}); err != nil || res != interact.Done {
+	if res, err := pl.Process(t.Context(), store.Press{InteractionID: "ix-bad", User: "UALICE1", Connection: key.Connection, Channel: key.Channel, MessageRef: "100.1", Inputs: []byte("null"), PressedAt: r.now}); err != nil || res != interact.Done {
 		t.Fatalf("Process = %v, %v; want it done", res, err)
 	}
 	if out := logs.String(); !strings.Contains(out, "level=ERROR") || !strings.Contains(out, "ix-bad") {
@@ -512,7 +513,7 @@ func TestARefusalIsAuditedBeforeThePersonIsToldAndNotWithoutIt(t *testing.T) {
 // TestThePressLimitsDefaultToAThousandInAllAndTenForOnePerson.
 func TestThePressLimitsDefaultToAThousandInAllAndTenForOnePerson(t *testing.T) {
 	r := newPressRig(t)
-	pl, err := interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{}, Authorizer: r.az, Ephemerals: r.eph, Decider: r.d, Auditor: r.aud}))
+	pl, err := interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{}, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Decider: r.d, Auditor: r.aud}))
 	if err != nil {
 		t.Fatal(err)
 	}

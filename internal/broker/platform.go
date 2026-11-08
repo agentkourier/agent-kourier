@@ -96,11 +96,16 @@ func slackConfig(conn Connection, log *slog.Logger) slack.Config {
 	return cfg
 }
 
-// users is the session manager's Users over a platform: the platform's user, as the dialects name one.
-type users struct{ p chat.Platform }
+// users is the session manager's Users over the platforms of the connections: the platform's user, as the dialects name one,
+// asked of the platform of the connection the user's turn is in.
+type users struct{ platforms chat.Resolver[chat.Platform] }
 
-func (u users) ResolveUser(ctx context.Context, id string) (dialect.User, error) {
-	user, err := u.p.ResolveUser(ctx, id)
+func (u users) ResolveUser(ctx context.Context, conn, id string) (dialect.User, error) {
+	p, err := u.platforms.Platform(conn)
+	if err != nil {
+		return dialect.User{}, err
+	}
+	user, err := p.ResolveUser(ctx, id)
 	if err != nil {
 		return dialect.User{}, err
 	}

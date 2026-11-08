@@ -370,7 +370,7 @@ func (p ownStopFails) Stream(ctx context.Context, at chat.Target, recipient, mar
 // stop is tried once, its refusal is no failure, and nothing replaces the message.
 func TestACutTurnWhoseStreamEndedAlreadyLeavesIt(t *testing.T) {
 	e := setup(t)
-	e.cfg.Platform = ownStopFails{Platform: e.cfg.Platform, err: fmt.Errorf("%w: message_not_in_streaming_state", chat.ErrNotStreaming)}
+	e.use(ownStopFails{Platform: e.platform, err: fmt.Errorf("%w: message_not_in_streaming_state", chat.ErrNotStreaming)})
 	e.live = newRenderer(t, e.cfg)
 	run, cancel := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Progress: sa, Recipient: "U1"})
 	run.Handle(text("a", "Checking."))
@@ -395,7 +395,7 @@ func TestACutTurnIsCountedByHowItsClosingWriteWent(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			e := setup(t)
 			if tc.err != nil {
-				e.cfg.Platform = ownStopFails{Platform: e.cfg.Platform, err: tc.err}
+				e.use(ownStopFails{Platform: e.platform, err: tc.err})
 			}
 			reg := prometheus.NewRegistry()
 			obs, err := telemetry.New(reg, nil)

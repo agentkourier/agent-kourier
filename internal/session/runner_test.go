@@ -184,11 +184,31 @@ func (s *fakeSink) Turn(ctx context.Context, ref TurnRef) agent.Handler {
 
 type fakeUsers map[string]dialect.User
 
-func (u fakeUsers) ResolveUser(_ context.Context, id string) (dialect.User, error) {
+func (u fakeUsers) ResolveUser(_ context.Context, _, id string) (dialect.User, error) {
 	if user, ok := u[id]; ok {
 		return user, nil
 	}
 	return dialect.User{}, errors.New("no such user")
+}
+
+// connectionNoted is a Users that notes the connection it was asked on.
+type connectionNoted struct {
+	Users
+	mu    sync.Mutex
+	conns []string
+}
+
+func (c *connectionNoted) ResolveUser(ctx context.Context, conn, id string) (dialect.User, error) {
+	c.mu.Lock()
+	c.conns = append(c.conns, conn)
+	c.mu.Unlock()
+	return c.Users.ResolveUser(ctx, conn, id)
+}
+
+func (c *connectionNoted) seen() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.conns)
 }
 
 // live starts real runners on Submit, with a sink, and returns the sink.
@@ -248,7 +268,8 @@ func TestTurnAttribution(t *testing.T) {
 	f.attr, f.platform = (&kagentv1.Dialect{}).Attribute, dialect.Platform{ID: "slack", Name: "Slack"}
 	var logs bytes.Buffer // written by the runner, read once it has retired
 	f.m.cfg.Logger = slog.New(slog.NewTextHandler(&logs, nil))
-	f.m.cfg.Users = fakeUsers{"U1": {ID: "U1", Name: "Ada", Email: "ada@example.com"}, "U3": {Name: "Eve"}}
+	users := &connectionNoted{Users: fakeUsers{"U1": {ID: "U1", Name: "Ada", Email: "ada@example.com"}, "U3": {Name: "Eve"}}}
+	f.m.cfg.Users = users
 	for i, tc := range []struct{ user, want string }{
 		{"U1", "[Slack: Ada (U1) <ada@example.com>]\nhello"},
 		{"U2", "[Slack: U2]\nhello"},       // the platform cannot resolve U2
@@ -274,6 +295,10 @@ func TestTurnAttribution(t *testing.T) {
 		}
 	}
 	f.retired(t) // the runner logs the end of a turn after its final event
+	// Whose user a user is depends on the app, so the manager asks the platform of the connection the turn is in.
+	if got, want := users.seen(), []string{key.Connection, key.Connection, key.Connection}; key.Connection == "" || !slices.Equal(got, want) {
+		t.Errorf("users were resolved on the connections %q; want the turn's, %q, three times", got, key.Connection)
+	}
 	if got := logs.String(); !strings.Contains(got, "U2") || !strings.Contains(got, "no such user") {
 		t.Errorf("log = %q; want the failed resolution of U2 and its cause", got)
 	}

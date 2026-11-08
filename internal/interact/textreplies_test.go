@@ -8,6 +8,7 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/agentkourier/agent-kourier/internal/audit"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/dialect/generic"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
@@ -84,10 +85,10 @@ func TestTextRepliesPostMissingPromptThenDecideOnce(t *testing.T) {
 	r := newPressRig(t)
 	task, reply, id := textQuestionWithPrompt(t, r, false)
 	platform := &poster{posted: map[string]string{}}
-	ob := newOutbox(t, outbox.Config{Store: r.st, Platform: platform, Now: func() time.Time { return r.now }})
+	ob := newOutbox(t, outbox.Config{Store: r.st, Platforms: chattest.Same[outbox.Platform](platform), Now: func() time.Time { return r.now }})
 	pauses, err := interact.New(intakeCfg(interact.Config{
 		Store: r.st, AuditReader: r.st, Lookup: lookup{interact.Binding{Dialect: generic.New(time.Second), AskUser: true, Timeout: 10 * time.Minute}},
-		Platform: platform, Outbox: ob, Session: r.sess, Audit: newWriter(t, r.st, audit.Options{}), Now: func() time.Time { return r.now },
+		Platforms: chattest.Same[interact.Fitter](platform), Outbox: ob, Session: r.sess, Audit: newWriter(t, r.st, audit.Options{}), Now: func() time.Time { return r.now },
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -123,11 +124,11 @@ func TestTextRepliesRefuseUnusablePauseBeforeLeavingTheReplyQueued(t *testing.T)
 	task, reply, _ := textQuestion(t, r)
 	task.Status.Message = nil
 	platform := &poster{posted: map[string]string{}}
-	ob := newOutbox(t, outbox.Config{Store: r.st, Platform: platform, Now: func() time.Time { return r.now }})
+	ob := newOutbox(t, outbox.Config{Store: r.st, Platforms: chattest.Same[outbox.Platform](platform), Now: func() time.Time { return r.now }})
 	cancelled := &sess{}
 	pauses, err := interact.New(intakeCfg(interact.Config{
 		Store: r.st, AuditReader: r.st, Lookup: lookup{interact.Binding{Dialect: generic.New(time.Second), AskUser: true, Timeout: 10 * time.Minute}},
-		Platform: platform, Outbox: ob, Session: cancelled, Audit: newWriter(t, r.st, audit.Options{}), Now: func() time.Time { return r.now },
+		Platforms: chattest.Same[interact.Fitter](platform), Outbox: ob, Session: cancelled, Audit: newWriter(t, r.st, audit.Options{}), Now: func() time.Time { return r.now },
 	}))
 	if err != nil {
 		t.Fatal(err)

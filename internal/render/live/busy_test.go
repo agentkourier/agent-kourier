@@ -58,8 +58,8 @@ func setupBusy(t *testing.T, prepare ...func(*chattest.FakePlatform)) *busyEnv {
 		f(fake)
 	}
 	by := &busyFake{FakePlatform: fake}
-	e.cfg.Platform = by
-	e.cfg.Sender = newOutbox(t, outbox.Config{Store: e.store, Platform: by, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	e.use(by)
+	e.cfg.Sender = newOutbox(t, outbox.Config{Store: e.store, Platforms: chattest.Same[outbox.Platform](by), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	e.live = newRenderer(t, e.cfg)
 	return &busyEnv{env: e, fake: fake, by: by, at: chat.Target{Channel: "C1", Thread: e.root}}
 }

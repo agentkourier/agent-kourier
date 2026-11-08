@@ -195,7 +195,7 @@ func TestAnUpdateWithTextThatIsRefusedIsAFailedWrite(t *testing.T) {
 	e := setup(t)
 	e.leftOpen(t, "partial")
 	refused := new(atomic.Int32)
-	e.cfg.Platform = refusesAll{Platform: e.cfg.Platform, refused: refused}
+	e.use(refusesAll{Platform: e.platform, refused: refused})
 	e.live = newRenderer(t, e.cfg)
 	again, _, outcome := e.observed(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1", Recovered: true})
 	again.Handle(text("a", "the whole answer"))
@@ -358,7 +358,7 @@ func TestTheRefusalIsHandledThroughTheNeutralSeamOfAnyPlatform(t *testing.T) {
 	e := setup(t)
 	fake := chattest.NewFake()
 	p := &refusesTextless{Platform: fake}
-	e.cfg.Platform = p
+	e.use(p)
 	e.live = newRenderer(t, e.cfg)
 	e.leftOpen(t, "partial")
 	again, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1", Recovered: true})

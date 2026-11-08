@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
@@ -63,7 +64,7 @@ func TestWhatLeftTheHorizonIsForgotten(t *testing.T) {
 	add("recent-done", "2.2", base.Add(20*time.Hour))
 	add("recent-failed", "bad", base.Add(20*time.Hour))
 	now := base.Add(21 * time.Hour)
-	r, err := NewReplacer(ReplacerConfig{Store: st, Updater: failsOn{"bad": true}, Now: func() time.Time { return now },
+	r, err := NewReplacer(ReplacerConfig{Store: st, Updaters: chattest.Same[Editor](failsOn{"bad": true}), Now: func() time.Time { return now },
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +85,7 @@ func TestWhatLeftTheHorizonIsForgotten(t *testing.T) {
 
 // TestAnEditHasHalfAMinuteByDefault: an edit is bounded without being configured.
 func TestAnEditHasHalfAMinuteByDefault(t *testing.T) {
-	r, err := NewReplacer(ReplacerConfig{Store: struct{ store.Interactions }{}, Updater: failsOn{}})
+	r, err := NewReplacer(ReplacerConfig{Store: struct{ store.Interactions }{}, Updaters: chattest.Same[Editor](failsOn{})})
 	if err != nil {
 		t.Fatal(err)
 	}

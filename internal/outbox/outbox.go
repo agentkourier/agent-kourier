@@ -18,6 +18,12 @@
 // enqueued first: a removal cancels a reaction that is not yet made, and a reaction enqueued after its removal is
 // not made. Without that, a reaction that failed and waits for a retry would be made after the removal, and stay.
 //
+// Every row names the ChatConnection whose app posts it (store.OutboxEntry.Connection), and the outbox looks the platform of
+// that connection up (Config.Platforms) when it delivers the row. Each connection is delivered on its own: its rows go one at
+// a time, in the order they were made, and another connection's rows go meanwhile, so an app that is slow, throttled or hung
+// holds up its own rows and no other's. A row whose connection no platform runs (chat.ErrConnectionDown) stays pending, is
+// not a failure of any platform, and is delivered once the connection runs; Config.Retention still abandons it.
+//
 // A post that can never succeed is abandoned, not retried for ever: what the platform says is permanent (Classify:
 // a channel that is gone, text too long, content it refuses), a message that is not valid or a stored payload that
 // is not one of this version (a legacy Slack payload, which is not migrated), and a lookup that has timed out five
@@ -66,7 +72,7 @@ const storeWriteTimeout = 10 * time.Second
 // abandoned.
 const lookupTimeouts = 5
 
-// Platform is what the outbox asks of the chat platform: chat.Platform, or a wrapper of it.
+// Platform is what the outbox asks of the chat platform of one connection: chat.Platform, or a wrapper of it.
 type Platform interface {
 	// Post posts o tagged with tag and returns where it landed. Its error does not say whether the message
 	// was posted.
@@ -85,13 +91,15 @@ type Platform interface {
 	Classify(op chat.Op, err error) chat.Verdict
 }
 
-// Config configures an Outbox. Store, Platform and OnAbandon are required: New refuses a Config without them, and says which.
+// Config configures an Outbox. Store, Platforms and OnAbandon are required: New refuses a Config without them, and says which.
 type Config struct {
-	Store    store.Outbox
-	Platform Platform
-	Now      func() time.Time // time.Now if nil
-	Logger   *slog.Logger     // slog.Default() if nil
-	// CallTimeout bounds each Post, Find and React (default 30 seconds), because the delivery lock is
+	Store store.Outbox
+	// Platforms gives the platform of the connection a row names, at each delivery. A connection it has none for is down: its
+	// rows wait (chat.ErrConnectionDown).
+	Platforms chat.Resolver[Platform]
+	Now       func() time.Time // time.Now if nil
+	Logger    *slog.Logger     // slog.Default() if nil
+	// CallTimeout bounds each Post, Find and React (default 30 seconds), because the connection's delivery lock is
 	// held across them and an unbounded call would hold it for good.
 	CallTimeout time.Duration
 	// Interval is how often Run drains with no signal (default 30 seconds).
@@ -100,22 +108,23 @@ type Config struct {
 	// It doubles with each failure up to RetryMax (default 5 minutes).
 	RetryBase, RetryMax time.Duration
 	// Retention is how long a post may stay unposted before its text is dropped and it is
-	// abandoned (default 7 days).
+	// abandoned (default 7 days). A connection's delivery abandons its own rows that are past it, at each pass, before it
+	// looks at them for anything else: a row whose connection nothing runs is abandoned too.
 	Retention time.Duration
 	// LookupTimeoutFloor is how long the lookups of a row must have been timing out, from the first
 	// of five in a row, before it is abandoned for them (default 1 hour). The rule is for a lookup
 	// that can never finish, not for an outage that hangs every request: so it also needs some
 	// other platform call to have worked since the first timeout.
 	LookupTimeoutFloor time.Duration
-	// PurgeInterval is how often Reconcile drops the text of expired rows (default 5 minutes).
-	PurgeInterval time.Duration
-	// DefaultConnection is the connection ("namespace/name") of a Post or a Reaction that names none: the broker's own, until
-	// every producer names its own. Empty stores such a row with no connection, as rows written before connections were
-	// recorded are.
+	// DefaultConnection is the connection ("namespace/name") of a Post or a Reaction that names none: the broker's own. Every
+	// producer of the broker names its connection, so this is the answer for one that does not. Empty stores such a row with
+	// no connection, as rows written before connections were recorded are.
 	DefaultConnection string
 	// OnAbandon is called once for each row that is abandoned, with its ID and the reason:
 	// a neutral reason (chat.Reason) or AbandonInvalid, AbandonLookupTimeout or AbandonExpired. It is for a
-	// metric, and runs under the delivery lock, so it must not block. Required: NoAbandon counts nothing.
+	// metric, and runs under the delivery lock of the row's connection, so it must not block. Deliveries of different
+	// connections run at the same time, so it may be called from several goroutines at once. Required: NoAbandon counts
+	// nothing.
 	OnAbandon func(id, reason string)
 }
 
@@ -153,19 +162,67 @@ func ID(source string, role store.OutboxRole) string { return source + "/" + str
 // Outbox delivers posts. It is safe for concurrent use.
 type Outbox struct {
 	cfg Config
-	// mu allows one delivery at a time. A post's outcome is unknown until its ref is recorded, so
-	// two deliveries of one row could post it twice.
-	mu    sync.Mutex
-	retry map[string]retryState // rows whose delivery failed; guarded by mu
+	// lanesMu guards lanes, the delivery state of each connection, by its name. It is held only to find or make a lane.
+	lanesMu sync.Mutex
+	lanes   map[string]*lane
+	// retryMu guards retry, the rows whose delivery failed. It is held only across the map, never a call.
+	retryMu sync.Mutex
+	retry   map[string]retryState
 	// pairMu makes the rows of a reaction and of its removal come in one order whichever is enqueued first:
 	// EnqueueReaction looks for the removal and writes its own row under it, as EnqueueUnreaction writes the
 	// removal's, so that no reaction is written after its removal was delivered. It is held only across local
-	// writes, never a platform call, and never with mu held, so Enqueue never waits for a delivery.
+	// writes, never a platform call, and never with a lane's lock held, so Enqueue never waits for a delivery.
 	pairMu sync.Mutex
-	// platformOK is when a call to the platform last worked, and lastPurge when the retention purge last ran.
-	// Both are guarded by mu.
-	platformOK, lastPurge time.Time
-	wake                  chan struct{} // Enqueue's signal to Run; one slot, since a drain takes every row
+	wake   chan struct{} // Enqueue's signal to Run; one slot, since a drain takes every row
+}
+
+// lane is the delivery of one connection's rows.
+type lane struct {
+	// mu allows one delivery at a time on the connection. A post's outcome is unknown until its ref is recorded, so
+	// two deliveries of one row could post it twice. It is the connection's alone: the rows of another connection are other
+	// rows, so a delivery that is slow, throttled or hung holds up this connection and no other.
+	mu sync.Mutex
+	// platformOK is when a call to this connection's platform last worked, which the abandoning of a lookup that keeps
+	// timing out needs: another connection's platform working says nothing of this one. Guarded by mu.
+	platformOK time.Time
+
+	// stateMu guards draining, that Run has a goroutine delivering this connection's rows, and missed, that a pass found it so
+	// and left rows for it, so that the goroutine asks for another pass when it ends.
+	stateMu          sync.Mutex
+	draining, missed bool
+}
+
+// begin says whether the caller may start Run's goroutine for the lane, and if one is running already, notes that rows
+// were left for it.
+func (l *lane) begin() bool {
+	l.stateMu.Lock()
+	defer l.stateMu.Unlock()
+	if l.draining {
+		l.missed = true
+		return false
+	}
+	l.draining = true
+	return true
+}
+
+// end ends the lane's goroutine, and says whether a pass left rows for it meanwhile.
+func (l *lane) end() (again bool) {
+	l.stateMu.Lock()
+	defer l.stateMu.Unlock()
+	l.draining, again, l.missed = false, l.missed, false
+	return again
+}
+
+// lane returns the lane of conn.
+func (o *Outbox) lane(conn string) *lane {
+	o.lanesMu.Lock()
+	defer o.lanesMu.Unlock()
+	l, ok := o.lanes[conn]
+	if !ok {
+		l = &lane{}
+		o.lanes[conn] = l
+	}
+	return l
 }
 
 // retryState is how often a row's delivery has failed in a row, and when it may be tried again.
@@ -177,14 +234,14 @@ type retryState struct {
 	next         time.Time
 }
 
-// New returns an Outbox over cfg. It refuses a Config without its Store, Platform or OnAbandon, naming the field, so that a
+// New returns an Outbox over cfg. It refuses a Config without its Store, Platforms or OnAbandon, naming the field, so that a
 // wiring that leaves one out fails at start-up.
 func New(cfg Config) (*Outbox, error) {
 	switch {
 	case cfg.Store == nil:
 		return nil, errors.New("outbox: Config.Store is required")
-	case cfg.Platform == nil:
-		return nil, errors.New("outbox: Config.Platform is required")
+	case cfg.Platforms == nil:
+		return nil, errors.New("outbox: Config.Platforms is required")
 	case cfg.OnAbandon == nil:
 		return nil, errors.New("outbox: Config.OnAbandon is required (NoAbandon counts nothing)")
 	}
@@ -209,13 +266,10 @@ func New(cfg Config) (*Outbox, error) {
 	if cfg.LookupTimeoutFloor <= 0 {
 		cfg.LookupTimeoutFloor = time.Hour
 	}
-	if cfg.PurgeInterval <= 0 {
-		cfg.PurgeInterval = 5 * time.Minute
-	}
 	if cfg.Retention <= 0 {
 		cfg.Retention = 7 * 24 * time.Hour
 	}
-	return &Outbox{cfg: cfg, wake: make(chan struct{}, 1), retry: map[string]retryState{}}, nil
+	return &Outbox{cfg: cfg, wake: make(chan struct{}, 1), lanes: map[string]*lane{}, retry: map[string]retryState{}}, nil
 }
 
 // Send writes the row, posts the message and records its ID, and returns where it is. A message that
@@ -227,13 +281,14 @@ func (o *Outbox) Send(ctx context.Context, p Post) (chat.Ref, error) {
 	if err != nil {
 		return chat.Ref{}, err
 	}
-	o.mu.Lock()
-	defer o.mu.Unlock()
+	ln := o.lane(row.Connection)
+	ln.mu.Lock()
+	defer ln.mu.Unlock()
 	created, err := o.cfg.Store.CreateOutbox(ctx, row)
 	if err != nil {
 		return chat.Ref{}, err
 	}
-	ref, err := o.deliver(ctx, row.ID, !created)
+	ref, err := o.deliver(ctx, ln, row.ID, !created)
 	if err == nil {
 		o.settle(row.ID, nil) // a row Run was backing off is delivered; forget it
 	}
@@ -251,7 +306,11 @@ func (o *Outbox) row(p Post) (store.OutboxEntry, error) {
 		return store.OutboxEntry{}, fmt.Errorf("outbox post %s: %w: %w", row.ID, store.ErrInvalid, err)
 	}
 	if p.Out.Prompt != nil {
-		if err := o.cfg.Platform.Fits(*p.Out.Prompt); err != nil {
+		pl, err := o.cfg.Platforms.Platform(row.Connection)
+		if err != nil { // the connection is not running: the prompt cannot be checked, which is no fault of the prompt
+			return store.OutboxEntry{}, fmt.Errorf("outbox post %s: %w", row.ID, err)
+		}
+		if err := pl.Fits(*p.Out.Prompt); err != nil {
 			return store.OutboxEntry{}, fmt.Errorf("outbox post %s: %w: %w", row.ID, store.ErrInvalid, err)
 		}
 	}
@@ -368,16 +427,18 @@ func (o *Outbox) connection(c string) string {
 }
 
 // Run drains the outbox until ctx ends, and returns its error. It drains at once, which recovers
-// what a crash left, then on each Enqueue and every Interval. A row that fails is tried again after
+// what a crash left, then on each Enqueue and every Interval. Each connection with rows to deliver is drained by a
+// goroutine of its own, so a connection whose platform is slow or hung holds up its own rows and no other connection's;
+// Run returns once those goroutines have, which ctx ends. A row that fails is tried again after
 // a delay that doubles from RetryBase up to RetryMax, so one that always fails does not spin. Call
 // it once.
 func (o *Outbox) Run(ctx context.Context) error {
 	tick := time.NewTicker(o.cfg.Interval)
 	defer tick.Stop()
+	var drains sync.WaitGroup
+	defer drains.Wait()
 	for {
-		if err := o.Reconcile(ctx); err != nil && ctx.Err() == nil {
-			o.cfg.Logger.WarnContext(ctx, "outbox: some posts were not delivered; they will be tried again", "err", err)
-		}
+		o.dispatch(ctx, &drains)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -387,13 +448,53 @@ func (o *Outbox) Run(ctx context.Context) error {
 	}
 }
 
-// settle records the outcome of delivering a row: a failure sets the delay before its next try, a
-// success forgets the row. The caller holds o.mu.
-func (o *Outbox) settle(id string, err error) {
-	if err == nil || errors.Is(err, ErrAbandoned) {
-		delete(o.retry, id)
+// dispatch is a pass of Run: it lists what is unposted, and starts a goroutine for each connection that has rows and
+// has none running. A connection whose goroutine is still running is left its rows, and the goroutine asks for another pass
+// when it ends.
+func (o *Outbox) dispatch(ctx context.Context, drains *sync.WaitGroup) {
+	byConn, err := o.unposted(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			o.cfg.Logger.WarnContext(ctx, "outbox: some posts were not delivered; they will be tried again", "err", err)
+		}
 		return
 	}
+	for conn, rows := range byConn {
+		ln := o.lane(conn)
+		if !ln.begin() {
+			continue
+		}
+		drains.Add(1)
+		go func() {
+			defer drains.Done()
+			err := o.drainLane(ctx, conn, rows)
+			if ln.end() {
+				o.signal()
+			}
+			if err != nil && ctx.Err() == nil {
+				o.cfg.Logger.WarnContext(ctx, "outbox: some posts were not delivered; they will be tried again", "err", err)
+			}
+		}()
+	}
+}
+
+// signal wakes Run, unless a wake is waiting already.
+func (o *Outbox) signal() {
+	select {
+	case o.wake <- struct{}{}:
+	default: // a signal is already waiting, and the drain it starts will take every row
+	}
+}
+
+// settle records the outcome of delivering a row: a failure sets the delay before its next try, a
+// success forgets the row.
+func (o *Outbox) settle(id string, err error) {
+	if err == nil || errors.Is(err, ErrAbandoned) {
+		o.dropRetry(id)
+		return
+	}
+	o.retryMu.Lock()
+	defer o.retryMu.Unlock()
 	r := o.retry[id]
 	r.fails++
 	delay := o.cfg.RetryBase
@@ -404,47 +505,98 @@ func (o *Outbox) settle(id string, err error) {
 	o.retry[id] = r
 }
 
+// dropRetry forgets what is known of the failed deliveries of the row id.
+func (o *Outbox) dropRetry(id string) {
+	o.retryMu.Lock()
+	delete(o.retry, id)
+	o.retryMu.Unlock()
+}
+
+// backingOff says whether the row id failed its last delivery and is not to be tried again yet.
+func (o *Outbox) backingOff(id string) bool {
+	o.retryMu.Lock()
+	defer o.retryMu.Unlock()
+	next, ok := o.retry[id]
+	return ok && o.cfg.Now().Before(next.next)
+}
+
 // Reconcile delivers every row that has a payload and no ref, oldest first, looking each up
 // before it posts: it is for startup, after a crash may have left posts unrecorded, and is one
-// pass of Run. A row with no payload is not one of Send's or Enqueue's (they refuse an invalid
+// pass of Run, made in the caller's goroutine and returning when every connection has been drained. A connection's rows go
+// one at a time and the connections go at once, so one whose platform hangs holds up the return and no other connection's
+// rows. A row with no payload is not one of Send's or Enqueue's (they refuse an invalid
 // message): it is a stream's, whose renderer records the ref itself, and is left alone, as is a
-// row still waiting out its retry delay. The retention purge runs in it at most every
-// PurgeInterval. It goes on past a row it cannot reconcile, and returns every such error joined.
+// row still waiting out its retry delay, and a row whose connection no platform runs (chat.ErrConnectionDown), which waits
+// for the connection. A row past Retention is abandoned, as every pass does it, before anything else is tried with it. It
+// goes on past a row it cannot reconcile, and returns every such error joined.
 func (o *Outbox) Reconcile(ctx context.Context) error {
-	var errs []error
-	now := o.cfg.Now()
-	// The purge comes before any lookup of the rows it takes, and under the lock, so that no row is
-	// purged while its post is in flight.
-	o.mu.Lock()
-	if o.lastPurge.IsZero() || now.Sub(o.lastPurge) >= o.cfg.PurgeInterval { // a write, so not on every pass
-		expired, err := o.cfg.Store.AbandonOutboxBefore(ctx, now.Add(-o.cfg.Retention), now)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("drop expired outbox text: %w", err))
-		} else {
-			o.lastPurge = now
-		}
-		for _, id := range expired {
-			delete(o.retry, id)
-			o.reportAbandon(ctx, id, AbandonExpired, "", nil)
-		}
+	byConn, err := o.unposted(ctx)
+	if err != nil {
+		return err
 	}
-	o.mu.Unlock()
+	var (
+		errs []error
+		wg   sync.WaitGroup
+		mu   sync.Mutex
+	)
+	for conn, rows := range byConn {
+		wg.Go(func() {
+			if err := o.drainLane(ctx, conn, rows); err != nil {
+				mu.Lock()
+				errs = append(errs, err)
+				mu.Unlock()
+			}
+		})
+	}
+	wg.Wait()
+	return errors.Join(errs...)
+}
+
+// unposted lists the rows to deliver, with a payload and no ref, by connection, each connection's oldest first.
+func (o *Outbox) unposted(ctx context.Context) (map[string][]store.OutboxEntry, error) {
 	rows, err := o.cfg.Store.ListUnposted(ctx)
 	if err != nil {
-		return errors.Join(append(errs, fmt.Errorf("reconcile outbox: %w", err))...)
+		return nil, fmt.Errorf("reconcile outbox: %w", err)
 	}
+	byConn := map[string][]store.OutboxEntry{}
 	for _, r := range rows {
-		if r.Payload == "" {
+		if r.Payload != "" {
+			conn := o.connection(r.Connection)
+			byConn[conn] = append(byConn[conn], r)
+		}
+	}
+	return byConn, nil
+}
+
+// drainLane delivers rows, which are the unposted rows of conn, oldest first, one at a time under the connection's lock, and
+// returns the errors of those that failed, joined. A row past Retention is abandoned first, under the lock, which keeps it from
+// a post in flight; so is one whose connection is down, which is how its text goes after the retention though nothing posts it.
+// It goes on past a row it cannot deliver, and stops at the first that finds the connection down: no row of it can be delivered
+// before the connection runs, and nothing is counted against any platform for that. The rows after it are younger, so none of
+// them is past Retention if it is not.
+func (o *Outbox) drainLane(ctx context.Context, conn string, rows []store.OutboxEntry) error {
+	ln := o.lane(conn)
+	var errs []error
+	for _, r := range rows {
+		ln.mu.Lock()
+		gone, err := o.expire(ctx, r)
+		if err != nil {
+			errs = append(errs, err)
+		}
+		if gone || o.backingOff(r.ID) {
+			ln.mu.Unlock()
 			continue
 		}
-		o.mu.Lock()
-		if next, ok := o.retry[r.ID]; ok && o.cfg.Now().Before(next.next) {
-			o.mu.Unlock()
-			continue
+		_, err = o.deliver(ctx, ln, r.ID, true)
+		down := errors.Is(err, chat.ErrConnectionDown)
+		if !down {
+			o.settle(r.ID, err)
 		}
-		_, err := o.deliver(ctx, r.ID, true)
-		o.settle(r.ID, err)
-		o.mu.Unlock()
+		ln.mu.Unlock()
+		if down {
+			o.cfg.Logger.DebugContext(ctx, "outbox: the connection of some posts is not running; they wait for it", "connection", conn)
+			break
+		}
 		if !errors.Is(err, ErrAbandoned) { // an abandon is reported where it happens
 			errs = append(errs, err)
 		}
@@ -452,15 +604,37 @@ func (o *Outbox) Reconcile(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// expire abandons the row r, as listed, if it is past Retention, and says whether it is no longer to be delivered: it was
+// abandoned, or it has been posted or abandoned since it was listed. The caller holds the lock of the row's connection, so no
+// delivery of it is in flight. A row that cannot be abandoned is delivered as any other, and the error is returned.
+func (o *Outbox) expire(ctx context.Context, r store.OutboxEntry) (gone bool, err error) {
+	now := o.cfg.Now()
+	if !r.CreatedAt.Before(now.Add(-o.cfg.Retention)) {
+		return false, nil
+	}
+	newly, err := o.cfg.Store.AbandonOutbox(ctx, r.ID, now)
+	switch {
+	case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrNotFound): // posted, or gone, since it was listed
+		return true, nil
+	case err != nil:
+		return false, fmt.Errorf("drop expired outbox text of %s: %w", r.ID, err)
+	}
+	o.dropRetry(r.ID)
+	if newly {
+		o.reportAbandon(ctx, r.ID, AbandonExpired, "", nil)
+	}
+	return true, nil
+}
+
 // target is where a row's message goes.
-func target(row store.OutboxEntry) chat.Target {
-	return chat.Target{Channel: row.Channel, Thread: row.Thread}
+func (o *Outbox) target(row store.OutboxEntry) chat.Target {
+	return chat.Target{Conn: o.connection(row.Connection), Channel: row.Channel, Thread: row.Thread}
 }
 
 // permanent says whether err, of a call of the kind op, is one that no retry mends, and if so why: the neutral
 // reason and the platform's own code.
-func (o *Outbox) permanent(op chat.Op, err error) (reason, code string, ok bool) {
-	v := o.cfg.Platform.Classify(op, err)
+func permanent(pl Platform, op chat.Op, err error) (reason, code string, ok bool) {
+	v := pl.Classify(op, err)
 	if v.Class != chat.Permanent {
 		return "", "", false
 	}
@@ -492,15 +666,21 @@ func decode(payload string) (chat.Outgoing, error) {
 }
 
 // deliver posts the row id unless it already has a ref, which it returns. With lookup it first
-// asks the platform for the message, and adopts it if it is there. The caller holds o.mu. The row is read
-// again here, so a delivery that finished while the caller waited for the lock is seen.
-func (o *Outbox) deliver(ctx context.Context, id string, lookup bool) (telemetryRef chat.Ref, telemetryErr error) {
+// asks the platform for the message, and adopts it if it is there. The platform is the one of the row's connection; with none
+// running the error wraps chat.ErrConnectionDown, and nothing was tried. The caller holds ln.mu, the lane of the row's
+// connection. The row is read again here, so a delivery that finished while the caller waited for the
+// lock is seen.
+func (o *Outbox) deliver(ctx context.Context, ln *lane, id string, lookup bool) (telemetryRef chat.Ref, telemetryErr error) {
 	row, err := o.cfg.Store.GetOutbox(ctx, id)
 	if err != nil {
 		return chat.Ref{}, err
 	}
+	pl, err := o.cfg.Platforms.Platform(o.connection(row.Connection)) // a row nobody has attributed yet is the own connection's
+	if err != nil {
+		return chat.Ref{}, fmt.Errorf("deliver %s: %w", id, err)
+	}
 	if row.MessageRef != "" {
-		return o.cfg.Platform.RefAt(row.Channel, row.Thread, row.MessageRef), nil
+		return pl.RefAt(row.Channel, row.Thread, row.MessageRef), nil
 	}
 	ctx = telemetry.Restore(ctx, row.TraceParent, row.TraceState)
 	ctx, op := telemetry.Start(ctx, "agentkourier.outbox.deliver", attribute.String("agentkourier.outbox.id", id), attribute.String("agentkourier.outbox.role", string(row.Role)))
@@ -516,7 +696,7 @@ func (o *Outbox) deliver(ctx context.Context, id string, lookup bool) (telemetry
 		return chat.Ref{}, fmt.Errorf("deliver %s: %w", id, ErrAbandoned)
 	}
 	if row.Role == store.OutboxReaction {
-		return o.react(ctx, row)
+		return o.react(ctx, ln, pl, row)
 	}
 	if row.Payload == "" {
 		return chat.Ref{}, fmt.Errorf("deliver %s: the row has no payload: %w", id, store.ErrInvalid)
@@ -526,14 +706,14 @@ func (o *Outbox) deliver(ctx context.Context, id string, lookup bool) (telemetry
 		return chat.Ref{}, o.abandon(ctx, row, AbandonInvalid, "", fmt.Errorf("deliver %s: payload: %w", id, err))
 	}
 	if lookup {
-		ref, found, err := o.find(ctx, row)
+		ref, found, err := o.find(ctx, pl, row)
 		if err == nil {
-			o.platformOK = o.cfg.Now()
-		} else if reason, code, ok := o.permanent(chat.OpPost, err); ok { // as for a post: it will not pass
+			ln.platformOK = o.cfg.Now()
+		} else if reason, code, ok := permanent(pl, chat.OpPost, err); ok { // as for a post: it will not pass
 			return chat.Ref{}, o.abandon(ctx, row, reason, code, fmt.Errorf("deliver %s: looking for the message: %w", id, err))
 		}
 		timedOut := err != nil && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded)
-		if o.lookupGivesUp(id, timedOut) {
+		if o.lookupGivesUp(ln, id, timedOut) {
 			return chat.Ref{}, o.abandon(ctx, row, AbandonLookupTimeout, "", fmt.Errorf("deliver %s: looking for the message: %w", id, err))
 		}
 		if err != nil {
@@ -548,10 +728,10 @@ func (o *Outbox) deliver(ctx context.Context, id string, lookup bool) (telemetry
 	}
 	callCtx, cancel := context.WithTimeout(ctx, o.cfg.CallTimeout)
 	defer cancel()
-	ref, err := o.cfg.Platform.Post(callCtx, target(row), out, id)
+	ref, err := pl.Post(callCtx, o.target(row), out, id)
 	if err != nil {
 		err = fmt.Errorf("deliver %s: post: %w", id, err)
-		if reason, code, ok := o.permanent(chat.OpPost, err); ok {
+		if reason, code, ok := permanent(pl, chat.OpPost, err); ok {
 			return chat.Ref{}, o.abandon(ctx, row, reason, code, err)
 		}
 		if errors.Is(err, store.ErrInvalid) || errors.Is(err, chat.ErrInvalid) {
@@ -559,23 +739,23 @@ func (o *Outbox) deliver(ctx context.Context, id string, lookup bool) (telemetry
 		}
 		return chat.Ref{}, err
 	}
-	o.platformOK = o.cfg.Now()
+	ln.platformOK = o.cfg.Now()
 	testhooks.AfterPost() // a no-op unless this is a test image, where it can crash the process here
 	return o.record(ctx, id, ref)
 }
 
 // react makes the reaction of row, or takes it off when the row is a removal, and records the ID of its
 // message as the ref. There is no lookup: a reaction made twice is made once, one taken off twice is taken
-// off once, and one made before a crash is simply found there. The caller holds o.mu.
-func (o *Outbox) react(ctx context.Context, row store.OutboxEntry) (chat.Ref, error) {
+// off once, and one made before a crash is simply found there. The caller holds ln.mu, as deliver's does.
+func (o *Outbox) react(ctx context.Context, ln *lane, pl Platform, row store.OutboxEntry) (chat.Ref, error) {
 	var p reactionPayload
 	if err := json.Unmarshal([]byte(row.Payload), &p); err != nil || p.TS == "" || p.Name == "" {
 		return chat.Ref{}, o.abandon(ctx, row, AbandonInvalid, "", fmt.Errorf("deliver %s: the reaction's payload is not usable: %w", row.ID, store.ErrInvalid))
 	}
-	ref := o.cfg.Platform.RefAt(row.Channel, "", p.TS)
-	call, verb := o.cfg.Platform.React, "react"
+	ref := pl.RefAt(row.Channel, "", p.TS)
+	call, verb := pl.React, "react"
 	if p.Remove {
-		call, verb = o.cfg.Platform.Unreact, "unreact"
+		call, verb = pl.Unreact, "unreact"
 		needed, err := o.unreact(ctx, row)
 		if err != nil {
 			return chat.Ref{}, err
@@ -588,7 +768,7 @@ func (o *Outbox) react(ctx context.Context, row store.OutboxEntry) (chat.Ref, er
 	defer cancel()
 	if err := call(callCtx, ref, p.Name); err != nil {
 		err = fmt.Errorf("deliver %s: %s: %w", row.ID, verb, err)
-		if reason, code, ok := o.permanent(chat.OpReact, err); ok {
+		if reason, code, ok := permanent(pl, chat.OpReact, err); ok {
 			return chat.Ref{}, o.abandon(ctx, row, reason, code, err)
 		}
 		if errors.Is(err, store.ErrInvalid) || errors.Is(err, chat.ErrInvalid) {
@@ -596,7 +776,7 @@ func (o *Outbox) react(ctx context.Context, row store.OutboxEntry) (chat.Ref, er
 		}
 		return chat.Ref{}, err
 	}
-	o.platformOK = o.cfg.Now()
+	ln.platformOK = o.cfg.Now()
 	return o.record(ctx, row.ID, ref)
 }
 
@@ -611,7 +791,7 @@ func (o *Outbox) react(ctx context.Context, row store.OutboxEntry) (chat.Ref, er
 //   - If it is still unposted it is also cancelled, so that it is never made after the removal, which would
 //     leave it for good.
 //
-// The caller holds o.mu, so no delivery of the reaction is in flight.
+// The caller holds the connection's lock, so no delivery of the reaction is in flight.
 func (o *Outbox) unreact(ctx context.Context, row store.OutboxEntry) (needed bool, err error) {
 	addID := ID(row.EventID, store.OutboxReaction)
 	add, err := o.cfg.Store.GetOutbox(ctx, addID)
@@ -628,7 +808,7 @@ func (o *Outbox) unreact(ctx context.Context, row store.OutboxEntry) (needed boo
 	if _, err := o.cfg.Store.AbandonOutbox(wctx, addID, o.cfg.Now()); err != nil {
 		return false, fmt.Errorf("deliver %s: cancel the reaction it takes off: %w", row.ID, err)
 	}
-	delete(o.retry, addID)
+	o.dropRetry(addID)
 	return true, nil
 }
 
@@ -636,8 +816,10 @@ func (o *Outbox) unreact(ctx context.Context, row store.OutboxEntry) (needed boo
 // for its lookups: a timeout adds one to the count in a row, and any other end starts it again.
 // It needs five, spread over LookupTimeoutFloor from the first, and some other platform call that has
 // worked since that first one; otherwise it is the platform that is down, not this lookup that cannot
-// finish. The caller holds o.mu.
-func (o *Outbox) lookupGivesUp(id string, timedOut bool) bool {
+// finish. The platform is the row's connection's: the calls of another connection's say nothing of it. The caller holds ln.mu.
+func (o *Outbox) lookupGivesUp(ln *lane, id string, timedOut bool) bool {
+	o.retryMu.Lock()
+	defer o.retryMu.Unlock()
 	r, ok := o.retry[id]
 	if !timedOut {
 		if ok {
@@ -652,12 +834,12 @@ func (o *Outbox) lookupGivesUp(id string, timedOut bool) bool {
 	}
 	r.timeouts++
 	o.retry[id] = r
-	return r.timeouts >= lookupTimeouts && now.Sub(r.firstTimeout) >= o.cfg.LookupTimeoutFloor && o.platformOK.After(r.firstTimeout)
+	return r.timeouts >= lookupTimeouts && now.Sub(r.firstTimeout) >= o.cfg.LookupTimeoutFloor && ln.platformOK.After(r.firstTimeout)
 }
 
 // abandon gives up on the row, which will never post, and returns an error that wraps ErrAbandoned
 // and cause. If the store cannot record it, the row is still work and that error is returned alone.
-// code is the platform's own code for a permanent error, for the log and nothing else. The caller holds o.mu.
+// code is the platform's own code for a permanent error, for the log and nothing else. The caller holds the connection's lock.
 func (o *Outbox) abandon(ctx context.Context, row store.OutboxEntry, reason, code string, cause error) error {
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), storeWriteTimeout)
 	defer cancel()
@@ -665,7 +847,7 @@ func (o *Outbox) abandon(ctx context.Context, row store.OutboxEntry, reason, cod
 	if err != nil {
 		return fmt.Errorf("abandon %s (%s): %w", row.ID, reason, err)
 	}
-	delete(o.retry, row.ID)
+	o.dropRetry(row.ID)
 	if newly {
 		o.reportAbandon(ctx, row.ID, reason, code, cause)
 	}
@@ -687,10 +869,10 @@ func (o *Outbox) reportAbandon(ctx context.Context, id, reason, code string, cau
 }
 
 // find looks for the row's message, within the call timeout.
-func (o *Outbox) find(ctx context.Context, row store.OutboxEntry) (chat.Ref, bool, error) {
+func (o *Outbox) find(ctx context.Context, pl Platform, row store.OutboxEntry) (chat.Ref, bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, o.cfg.CallTimeout)
 	defer cancel()
-	return o.cfg.Platform.Find(ctx, target(row), row.ID, row.CreatedAt)
+	return pl.Find(ctx, o.target(row), row.ID, row.CreatedAt)
 }
 
 // record stores the message's ID on the row and returns its Ref. The message is already on the platform, so it

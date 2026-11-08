@@ -11,6 +11,7 @@ import (
 	slackgo "github.com/slack-go/slack"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
@@ -113,7 +114,7 @@ func TestTheIntakeAsksTheRealPlatformWhetherAPromptFits(t *testing.T) {
 	r := newRig(t, nil)
 	platform := slack.NewPlatform(nil, "ns/main") // Fits is pure: no client is needed
 	intake, err := interact.New(intakeCfg(interact.Config{Store: r.st, AuditReader: r.st, Lookup: lookup{interact.Binding{Dialect: kagentv1.New(30 * time.Second), AskUser: true, Timeout: timeout}},
-		Platform: platform, Outbox: r.outbox, Session: r.sess, Audit: r.audit, Now: func() time.Time { return t0 }}))
+		Platforms: chattest.Same[interact.Fitter](platform), Outbox: r.outbox, Session: r.sess, Audit: r.audit, Now: func() time.Time { return t0 }}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +153,7 @@ func TestTheLoserOfARaceIsToldWhoWonAsAMention(t *testing.T) {
 	} {
 		fake, platform, root := slackPlatform(t)
 		r := newDecideRig(t)
-		d, err := interact.NewDecider(decideCfg(interact.DecideConfig{Store: r.st, Auditor: r.aud, Ephemerals: platform, Session: r.sess, Sessions: r.st, Replacer: r.rep, Outbox: r.out}))
+		d, err := interact.NewDecider(decideCfg(interact.DecideConfig{Store: r.st, Auditor: r.aud, Ephemerals: chattest.Same[interact.Ephemeral](platform), Session: r.sess, Sessions: r.st, Replacer: r.rep, Outbox: r.out}))
 		if err != nil {
 			t.Fatal(err)
 		}

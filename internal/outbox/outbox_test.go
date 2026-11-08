@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/secret"
@@ -50,6 +51,7 @@ type poster struct {
 	sent           []chat.Outgoing
 	tags           []string
 	targets        []chat.Target
+	findTargets    []chat.Target
 }
 
 func (p *poster) Post(ctx context.Context, t chat.Target, o chat.Outgoing, tag string) (chat.Ref, error) {
@@ -69,6 +71,7 @@ func (p *poster) Post(ctx context.Context, t chat.Target, o chat.Outgoing, tag s
 func (p *poster) Find(ctx context.Context, t chat.Target, id string, since time.Time) (chat.Ref, bool, error) {
 	p.mu.Lock()
 	p.finds++
+	p.findTargets = append(p.findTargets, t)
 	p.lastSince = since
 	fn, ts := p.onFind, p.found[id]
 	p.mu.Unlock()
@@ -144,19 +147,19 @@ func mustNew(t *testing.T, cfg outbox.Config) *outbox.Outbox {
 	return o
 }
 
-// New refuses a Config without its Store, Platform or OnAbandon, and the error names the field: a wiring that drops one
+// New refuses a Config without its Store, Platforms or OnAbandon, and the error names the field: a wiring that drops one
 // fails at start-up instead of posting nothing, or counting nothing.
 func TestNewNamesTheFieldThatIsMissing(t *testing.T) {
 	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
-	full := outbox.Config{Store: st, Platform: &poster{}, OnAbandon: outbox.NoAbandon}
-	for _, tc := range []struct{ field string }{{"Store"}, {"Platform"}, {"OnAbandon"}} {
+	full := outbox.Config{Store: st, Platforms: chattest.Same[outbox.Platform](&poster{}), OnAbandon: outbox.NoAbandon}
+	for _, tc := range []struct{ field string }{{"Store"}, {"Platforms"}, {"OnAbandon"}} {
 		t.Run(tc.field, func(t *testing.T) {
 			cfg := full
 			switch tc.field {
 			case "Store":
 				cfg.Store = nil
-			case "Platform":
-				cfg.Platform = nil
+			case "Platforms":
+				cfg.Platforms = nil
 			case "OnAbandon":
 				cfg.OnAbandon = nil
 			}
@@ -173,7 +176,7 @@ func TestNewNamesTheFieldThatIsMissing(t *testing.T) {
 
 func newOutbox(t *testing.T, st store.Outbox, p outbox.Platform) *outbox.Outbox {
 	t.Helper()
-	return mustNew(t, outbox.Config{Store: st, Platform: p, Now: func() time.Time { return t0 },
+	return mustNew(t, outbox.Config{Store: st, Platforms: chattest.Same[outbox.Platform](p), Now: func() time.Time { return t0 },
 		CallTimeout: time.Second, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 }
 
@@ -353,7 +356,7 @@ func TestSlackCallsAreBounded(t *testing.T) {
 	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
 	hang := func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }
 	p := &poster{onPost: hang}
-	ob := mustNew(t, outbox.Config{Store: st, Platform: p, Now: func() time.Time { return t0 }, CallTimeout: 20 * time.Millisecond})
+	ob := mustNew(t, outbox.Config{Store: st, Platforms: chattest.Same[outbox.Platform](p), Now: func() time.Time { return t0 }, CallTimeout: 20 * time.Millisecond})
 	done := make(chan error, 1)
 	go func() {
 		_, err := ob.Send(t.Context(), reply("ev1")) // hangs in Post
@@ -449,7 +452,7 @@ func TestLookupStartsWhereTheRowWasMade(t *testing.T) {
 	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
 	var clock atomic.Int64
 	p := &poster{onPost: func(context.Context) error { return errors.New("connection reset") }}
-	ob := mustNew(t, outbox.Config{Store: st, Platform: p, Now: func() time.Time { return t0.Add(time.Duration(clock.Load())) }, CallTimeout: time.Second})
+	ob := mustNew(t, outbox.Config{Store: st, Platforms: chattest.Same[outbox.Platform](p), Now: func() time.Time { return t0.Add(time.Duration(clock.Load())) }, CallTimeout: time.Second})
 	if _, err := ob.Send(t.Context(), reply("ev1")); err == nil {
 		t.Fatal("Send with a failing post succeeded")
 	}

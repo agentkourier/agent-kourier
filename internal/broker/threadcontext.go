@@ -42,12 +42,12 @@ const (
 	threadUnsupported = "unsupported" // the platform cannot read a thread: the turn went with the mentioned message alone
 )
 
-// threadContextConfig configures a threadContext. Platform and Replies are required: newThreadContext refuses a config
+// threadContextConfig configures a threadContext. Platforms and Replies are required: newThreadContext refuses a config
 // without them, naming the field. Logger and After are tunables with defaults.
 type threadContextConfig struct {
-	// Platform is the built chat platform, as the broker uses it (the fenced one, with an election). A platform that cannot
-	// read a thread says chat.ErrNoThreadReads.
-	Platform chat.Platform
+	// Platforms gives the built chat platform of a turn's connection, as the broker uses it (the fenced one, with an election).
+	// A platform that cannot read a thread says chat.ErrNoThreadReads.
+	Platforms chat.Resolver[chat.Platform]
 	// Replies is the reply queue, which session.WereAdmitted reads to tell a reply that was a turn or an answer.
 	Replies session.ReplyRecord
 	Logger  *slog.Logger
@@ -57,10 +57,10 @@ type threadContextConfig struct {
 
 // threadContext implements session.Config.ThreadContext.
 type threadContext struct {
-	platform chat.Platform
-	replies  session.ReplyRecord
-	log      *slog.Logger
-	after    func(time.Duration) <-chan time.Time
+	platforms chat.Resolver[chat.Platform]
+	replies   session.ReplyRecord
+	log       *slog.Logger
+	after     func(time.Duration) <-chan time.Time
 
 	mu    sync.Mutex
 	noted map[string]bool // the Bindings that were told of an unsupported platform in the log
@@ -69,12 +69,12 @@ type threadContext struct {
 // newThreadContext returns a threadContext over cfg.
 func newThreadContext(cfg threadContextConfig) (*threadContext, error) {
 	switch {
-	case cfg.Platform == nil:
-		return nil, errors.New("broker: a Platform is required for the thread context")
+	case cfg.Platforms == nil:
+		return nil, errors.New("broker: Platforms is required for the thread context")
 	case cfg.Replies == nil:
 		return nil, errors.New("broker: Replies is required for the thread context: it asks whether a message was a turn")
 	}
-	t := &threadContext{platform: cfg.Platform, replies: cfg.Replies, log: cfg.Logger, after: cfg.After, noted: map[string]bool{}}
+	t := &threadContext{platforms: cfg.Platforms, replies: cfg.Replies, log: cfg.Logger, after: cfg.After, noted: map[string]bool{}}
 	if t.log == nil {
 		t.log = slog.Default()
 	}
@@ -98,8 +98,12 @@ func (t *threadContext) build(ctx context.Context, key session.Key, binding, aft
 		return "", threadEmpty
 	}
 	target := chat.Target{Conn: key.Connection, Channel: key.Channel, Thread: key.Thread}
+	pl, err := t.platforms.Platform(key.Connection)
+	if err != nil { // the connection is not running: the turn goes with the line that says the replies could not be read
+		return t.failed(ctx, binding, "find the platform of the connection", err)
+	}
 	fromStart := whole && after == "" // no turn has carried the thread: what opened it is no reply, and may be what it is all about
-	msgs, dropped, err := t.read(ctx, target, after, before, fromStart)
+	msgs, dropped, err := t.read(ctx, pl, target, after, before, fromStart)
 	tooLong := errors.Is(err, chat.ErrThreadTooLong) && fromStart && len(msgs) > 0 // what opened it came back with the error
 	switch {
 	case errors.Is(err, chat.ErrNoThreadReads):
@@ -120,9 +124,9 @@ func (t *threadContext) build(ctx context.Context, key session.Key, binding, aft
 	}
 	var leftOut int
 	if whole {
-		section, leftOut = render.ThreadMessagesCounted(t.named(ctx, people), pinned, dropped)
+		section, leftOut = render.ThreadMessagesCounted(t.named(ctx, pl, people), pinned, dropped)
 	} else {
-		section, leftOut = render.ThreadRepliesCounted(t.named(ctx, people), dropped)
+		section, leftOut = render.ThreadRepliesCounted(t.named(ctx, pl, people), dropped)
 	}
 	if tooLong { // the line says the rest is missing
 		line, failed := t.failed(ctx, binding, "read the thread", err)
@@ -140,18 +144,18 @@ func (t *threadContext) build(ctx context.Context, key session.Key, binding, aft
 // read reads the window, from the thread's start if fromStart says so, and once more if the platform said to wait a few seconds: a
 // rate limit that asks for up to threadRateWaitMax is waited out once; any other error, a longer wait, or a second refusal is the
 // caller's to do without.
-func (t *threadContext) read(ctx context.Context, target chat.Target, after, before string, fromStart bool) ([]chat.HistoryMessage, int, error) {
+func (t *threadContext) read(ctx context.Context, pl chat.Platform, target chat.Target, after, before string, fromStart bool) ([]chat.HistoryMessage, int, error) {
 	once := func() ([]chat.HistoryMessage, int, error) {
 		if fromStart {
-			return t.platform.ThreadFromStart(ctx, target, before, threadFetchLimit)
+			return pl.ThreadFromStart(ctx, target, before, threadFetchLimit)
 		}
-		return t.platform.ThreadBetween(ctx, target, after, before, threadFetchLimit)
+		return pl.ThreadBetween(ctx, target, after, before, threadFetchLimit)
 	}
 	msgs, dropped, err := once()
 	if err == nil || errors.Is(err, chat.ErrNoThreadReads) || errors.Is(err, chat.ErrThreadTooLong) {
 		return msgs, dropped, err
 	}
-	wait := t.platform.Classify(chat.OpOther, err).RetryAfter
+	wait := pl.Classify(chat.OpOther, err).RetryAfter
 	if wait <= 0 || wait > threadRateWaitMax {
 		return msgs, dropped, err
 	}
@@ -216,7 +220,7 @@ func threadText(m chat.Inbound) string {
 
 // named returns msgs as the replies the render shows, with the names the platform gives their authors (its user cache
 // answers a person who wrote more than once). A name that cannot be had is left out: the reply shows the ID alone.
-func (t *threadContext) named(ctx context.Context, msgs []chat.HistoryMessage) []render.ThreadReply {
+func (t *threadContext) named(ctx context.Context, pl chat.Platform, msgs []chat.HistoryMessage) []render.ThreadReply {
 	names := map[string]string{}
 	out := make([]render.ThreadReply, len(msgs))
 	for i, m := range msgs {
@@ -227,7 +231,7 @@ func (t *threadContext) named(ctx context.Context, msgs []chat.HistoryMessage) [
 		}
 		name, ok := names[id]
 		if !ok {
-			if u, err := t.platform.ResolveUser(ctx, id); err == nil {
+			if u, err := pl.ResolveUser(ctx, id); err == nil {
 				name = u.Name
 			}
 			names[id] = name

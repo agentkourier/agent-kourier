@@ -128,7 +128,7 @@ func (b *Backstop) check(ctx context.Context, row store.Interaction, now time.Ti
 	case err != nil && !errors.Is(err, store.ErrNotFound):
 		return fmt.Errorf("interact: read the session of %s: %w", row.ID, err)
 	}
-	if _, err := b.cfg.Outbox.Enqueue(ctx, outbox.Post{Source: row.ID + "/answer", Role: store.OutboxNotice, Channel: row.Key.Channel,
+	if _, err := b.cfg.Outbox.Enqueue(ctx, outbox.Post{Source: row.ID + "/answer", Role: store.OutboxNotice, Connection: row.Key.Connection, Channel: row.Key.Channel,
 		Thread: row.Key.Thread, Out: chat.Say(render.Notice(textClosedBefore, ""))}); err != nil {
 		return fmt.Errorf("interact: tell the thread that the answer to %s never arrived: %w", row.ID, err)
 	}
