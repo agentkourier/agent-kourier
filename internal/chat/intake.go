@@ -69,8 +69,9 @@ type IntakeConfig struct {
 	OnStart func(ctx context.Context, m TriggerMatch) error
 	// OnLimited, if set, is told of a start that a limit stopped and that someone asked for, for the audit log: a bot's mention
 	// (TriggerMatch.Mention), or a person's message of a personMessage trigger (TriggerMatch.Person), whose author it names, so
-	// that a member who spends the limits for everyone can be found. An alert's is only counted. It is told once for a message,
-	// not again for its redelivery. It is a record of something decided, so it returns nothing, and it does local writes only.
+	// that a member who spends the limits for everyone can be found: once for each person, trigger and window of the trigger's
+	// rateLimit.per, while the metric counts every message. An alert's is only counted. It is told once for a message, not again
+	// for its redelivery. It is a record of something decided, so it returns nothing, and it does local writes only.
 	OnLimited func(ctx context.Context, m TriggerMatch, limit store.TriggerLimit)
 	// TakesBotMention, if set, says whether the session would take a bot's mention as a turn now, reading only. It is asked before
 	// the mention meets the limits: a mention that a session past its threadTTL, or whose Binding left the config, will not take
@@ -108,6 +109,8 @@ type Intake struct {
 	// mention trigger: they are remembered, but an event of one that says it mentions Agent Kourier is still the mention
 	// trigger's, since the adapter may miss a mention that Slack registers and sends as an app_mention.
 	awaitingMention recent
+	// toldLimited holds the windows in which each person's stopped start was told to OnLimited.
+	toldLimited toldLimited
 	// mentionless holds the Bindings that were said to have no mention trigger, so that it is said once.
 	mentionless sync.Map
 	// emptyKeyWarned are the triggers (namespace/name#index) that were warned of for an empty key.

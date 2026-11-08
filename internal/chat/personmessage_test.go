@@ -2,6 +2,7 @@ package chat_test
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -474,5 +475,45 @@ func TestAReportThatStartedNothingIsRememberedWhereNoMentionTriggerCouldTakeIt(t
 	}
 	if d := h.decisions(t); d["not_started"] != 1 {
 		t.Errorf("decisions = %v; want one not_started", d)
+	}
+}
+
+// A flood of one person's reports past the limits is told to OnLimited once for each window of the trigger's rate limit, so the
+// audit log names the person without a row for every message; the metric still counts each. Another person is told on their own,
+// and the person is told again once the window has passed.
+func TestAPersonsStoppedReportsAreToldOnceAWindow(t *testing.T) {
+	h := newLimited(t, personTrigger(func(tr *v1alpha1.Trigger) {
+		tr.Limits.RateLimit = &v1alpha1.RateLimit{MaxRuns: 1, Per: metav1.Duration{Duration: 10 * time.Minute}, MaxConcurrent: 5}
+	}))
+	var told []string
+	h.cfg.OnLimited = func(_ context.Context, m chat.TriggerMatch, _ store.TriggerLimit) {
+		told = append(told, m.Message.User)
+	}
+	h.in = chat.NewIntake(h.cfg)
+	post := func(id, user string) {
+		t.Helper()
+		m := personPost("C1", id, "", "checkout is down")
+		m.User = user
+		if err := h.in.Message(h.ctx, m); err != nil {
+			t.Fatal(err)
+		}
+		h.clk.advance(time.Second)
+	}
+	post("9.1", "U1") // started
+	for i := range 5 {
+		post(fmt.Sprintf("9.%d", i+2), "U1")
+	}
+	post("9.9", "U2")
+	if !slices.Equal(told, []string{"U1", "U2"}) {
+		t.Fatalf("told %v; want U1 once for five stopped reports, then U2", told)
+	}
+	if got := h.limitedCount(t, "0"); got["rate"] != 6 {
+		t.Errorf("limited = %v; want all six stopped reports counted", got)
+	}
+	h.clk.advance(10 * time.Minute)
+	post("10.1", "U3") // the window passed: this one starts
+	post("10.2", "U1")
+	if !slices.Equal(told, []string{"U1", "U2", "U1"}) {
+		t.Errorf("told %v; want U1 again in a new window", told)
 	}
 }

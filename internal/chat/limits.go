@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -76,4 +78,51 @@ func (in *Intake) stopThread(ctx context.Context, m TriggerMatch, hash string, o
 func (in *Intake) countLimited(ctx context.Context, m TriggerMatch, limit store.TriggerLimit) {
 	telemetry.Count(ctx, "agentkourier_trigger_limited_total", m.Binding, strconv.Itoa(m.Index), string(limit))
 	in.log.InfoContext(ctx, "chat: a trigger's start was not made; a limit is reached", "binding", m.Binding, "trigger", m.Index, "limit", limit, "channel", m.Message.At.Channel, "message", m.Message.At.ID)
+}
+
+// maxToldLimited bounds how many people's windows toldLimited holds at once.
+const maxToldLimited = 4096
+
+// toldLimited holds, for each person, Binding and trigger, when the window ends in which a stopped start of theirs was told to
+// IntakeConfig.OnLimited, so that a flood of one person's reports is audited once for each window of the trigger's rate limit
+// (rateLimit.per), not once for each message: the row names the person, and the metric and the digest count the messages. It is
+// held in memory, so a restart may audit one more for a window. Past maxToldLimited windows that have not ended it forgets them
+// all: the cost is more audit rows, never a person not audited.
+type toldLimited struct {
+	mu    sync.Mutex
+	until map[string]time.Time
+}
+
+// first says whether the stopped start of key at now is the first of its window, and if so opens a window that ends at until.
+func (t *toldLimited) first(key string, now, until time.Time) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if end, ok := t.until[key]; ok && now.Before(end) {
+		return false
+	}
+	if t.until == nil || len(t.until) >= maxToldLimited {
+		for k, end := range t.until {
+			if !now.Before(end) {
+				delete(t.until, k)
+			}
+		}
+		if t.until == nil || len(t.until) >= maxToldLimited {
+			t.until = map[string]time.Time{}
+		}
+	}
+	t.until[key] = until
+	return true
+}
+
+// tellsLimited says whether a start that a limit stopped is told to IntakeConfig.OnLimited: a bot's mention always, a person's
+// message once for each person and window of the trigger (toldLimited), and an alert's never, since it is only counted.
+func (in *Intake) tellsLimited(m TriggerMatch) bool {
+	switch {
+	case m.Mention:
+		return true
+	case m.Person:
+		key := fmt.Sprintf("%s#%d/%s", m.Binding, m.Index, m.Message.User)
+		return in.toldLimited.first(key, m.Received, m.Received.Add(m.Limits.DigestWindow()))
+	}
+	return false
 }
