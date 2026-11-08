@@ -1,15 +1,19 @@
 package broker
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"sync/atomic"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/bindingcheck"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/internal/session"
@@ -51,13 +55,16 @@ func (h *leaderHalf) openPlatform(conn Connection, onConnection func(connected b
 	return p, nil
 }
 
-// start starts the leader half on conn, the ChatConnection and credentials as they are now (a standby that leads hours
-// after it started must not use the tokens it saw at start: a takeover is a restart to the new leader). Its parts run on
-// runCtx (the broker's own, which only the shutdown ends; ctx is Run's, the signal, which it only logs with). It returns the channel that says how the chat connection's run ended. An error
+// start starts the leader half on the connections as they are now (a standby that leads hours after it started must not use
+// the tokens it saw at start: a takeover is a restart to the new leader): the own connection's runtime, and a supervisor that starts
+// the team connections' (supervisor), the first of them from the ones read with the own. Its parts run on
+// runCtx (the broker's own, which only the shutdown ends; ctx is Run's, the signal, which it only logs with). It returns the channel that says how the own
+// connection's run ended: a team connection's run ends nothing but itself. An error
 // from a step is returned as it is; whatever started before it has registered its stop. It must not be called twice, or
 // once a shutdown has begun (Run's startGate sees to both).
-func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan error, error) {
+func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-chan error, error) {
 	cfg, log, sd, metrics, boot, st := h.cfg, h.log, h.sd, h.metrics, h.boot, h.st
+	conn := chosen.Own
 	connName := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
 	var auditLog store.Audit = st
 	if cfg.auditStore != nil {
@@ -67,30 +74,42 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	if err != nil {
 		return nil, err
 	}
-	// The chat platform, built for the connection's ChatConnection.platform: it posts for the outbox, and a token revoked
+	// The chat platform of the own connection, built for its ChatConnection.platform: it posts for the outbox, and a token revoked
 	// mid-run, which only a post sees, ends the run with ErrSlackAuth (WatchAuth, WithAuthFailure).
 	// agentkourier_chat_connected says 0 from here, and 1 while the connection is up. /readyz does not hold it: see NewHandler.
-	metrics.ChatConnected(connName, false)
-	platform, err := h.openPlatform(conn, func(up bool) { metrics.ChatConnected(connName, up) })
+	// The parts that every connection shares look the platform up by the connection their row, turn or press names, in the table of the
+	// connections that run, which the supervisor adds the team connections' to and takes them from.
+	table := newRuntimeTable()
+	host := &runtimeHost{cfg: cfg, log: log, metrics: metrics, table: table, open: h.openPlatform, parent: runCtx}
+	ownRT, err := host.build(conn, appIdentity{})
 	if err != nil {
 		return nil, err
 	}
-
-	// The Bindings take the platform's own acknowledgment reaction, so the platform is built first.
+	var platforms chat.Resolver[chat.Platform] = table
+	// The Bindings take the acknowledgment reaction of the platform of their own connection, so the platform is built first.
 	bindings, err := NewBindings(boot.Reloader, boot.Secrets, auditor, Options{
-		OnRejected: metrics.CredentialRejected, AckReaction: platform.Capabilities().AckReaction, fence: h.leaseFence})
+		OnRejected: metrics.CredentialRejected, Platforms: chat.Narrow[platformCaps](platforms), fence: h.leaseFence})
 	if err != nil {
-		platform.closeIdle()
+		host.closeAll()
 		return nil, err
 	}
 	sd.add(stepPool, func(context.Context) { bindings.Close() })
 
-	chatCtx, report, stopChat := WithAuthFailure(runCtx)
+	// The rows that were written before connections were recorded are this connection's, and are named so before the outbox
+	// reconciles or a session recovers: nothing reads a row that belongs to nobody.
+	if err := attributeStoredRows(runCtx, st, log, connName); err != nil {
+		return nil, err
+	}
 	ob, err := outbox.New(outbox.Config{
-		Store: st, Platform: WatchAuth(platform, report), Logger: log, OnAbandon: metrics.OutboxAbandoned,
+		Store: st, Platforms: table.outbox(), Logger: log, OnAbandon: metrics.OutboxAbandoned,
+		// A row whose producer names no connection is the own connection's.
+		DefaultConnection: connName,
 	})
 	if err != nil {
 		return nil, err
+	}
+	if cfg.outboxBuilt != nil {
+		cfg.outboxBuilt(ob)
 	}
 	if err := ob.Reconcile(runCtx); err != nil { // Slack may be down: Run below tries again, so this only says so
 		log.WarnContext(ctx, "outbox: the first reconcile did not finish; it will be tried again", "error", err)
@@ -105,14 +124,14 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 			log.Warn("outbox: the final drain did not finish", "error", err)
 		}
 		// Slack's connections close only now: the drain posts through them, and a connection that its
-		// calls opened after an earlier close would be one that nothing closes.
-		platform.closeIdle()
+		// calls opened after an earlier close would be one that nothing closes. Every connection that still runs has its own.
+		host.closeAll()
 	})
 
 	// The renderer posts a turn's first message through the outbox and edits or streams it through the
 	// chat platform (the Slack adapter over the client); a notice is only queued on the outbox, off Slack's
 	// acknowledgement path.
-	renderer, err := live.New(live.Config{Sender: ob, Audit: auditor, Platform: platform, Store: st, Logger: log})
+	renderer, err := live.New(live.Config{Sender: ob, Audit: auditor, Platforms: platforms, Store: st, Logger: log})
 	if err != nil {
 		return nil, err
 	}
@@ -126,20 +145,20 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	// them, and the manager, which they feed.
 	stops := stopList{trace: cfg.stopTrace}
 	sd.add(stepInteractions, stops.run)
-	parts := interactionDeps{st: st, ob: ob, platform: platform, auditor: auditor, bindings: bindings, metrics: metrics, log: log, trace: cfg.startTrace}
+	parts := interactionDeps{st: st, ob: ob, platforms: platforms, auditor: auditor, bindings: bindings, metrics: metrics, log: log, trace: cfg.startTrace}
 	ix, err := parts.build(sink)
 	if err != nil {
 		return nil, err
 	}
 	// A mentioned turn of a mention-only Binding carries the replies since the previous turn, which are read through the
 	// platform as it is built here (fenced with an election: the read is not a write, so the fence passes it).
-	threads, err := newThreadContext(threadContextConfig{Platform: platform, Replies: st, Logger: log})
+	threads, err := newThreadContext(threadContextConfig{Platforms: platforms, Replies: st, Logger: log})
 	if err != nil {
 		return nil, err
 	}
 	// A turn's acknowledgment removal is queued and its reply settled at once, so that retention does not queue it again.
 	unack := unacknowledge(sink.QueueNotice, st.SettleAcknowledgmentReplies)
-	mgr, err := session.New(session.Config{Context: runCtx, Store: st, Questions: st, Bindings: bindings, Users: users{platform}, Sink: ix.tap, TextReply: ix.replies.Decide, Logger: log, Audit: auditor, OnTurnEnd: metrics.TurnOutcome, ThreadContext: threads.Section, AnswerWatcher: ix.reopened, Unacknowledge: unack})
+	mgr, err := session.New(session.Config{Context: runCtx, Store: st, Questions: st, Bindings: bindings, Users: users{platforms}, Sink: ix.tap, TextReply: ix.replies.Decide, Logger: log, Audit: auditor, OnTurnEnd: metrics.TurnOutcome, ThreadContext: threads.Section, AnswerWatcher: ix.reopened, Unacknowledge: unack})
 	if err != nil {
 		return nil, fmt.Errorf("session manager: %w", err)
 	}
@@ -175,7 +194,15 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	// left on sessions that have been expired for good, those sessions with what belongs to them, and audit entries past
 	// the operator's retention, if one is set. It writes to the store and the audit, and asks an agent to cancel a stale
 	// task, a call that is bounded and that its context ends, so it stops with the other loops.
-	retain, err := newRetention(retentionConfig{Store: st, Interval: cfg.retentionEvery, AuditRetention: cfg.AuditRetention, ThreadTTLsAndUnserved: bindings.ThreadTTLsAndUnserved,
+	// With the custom resources the record of the connections served (the status writer's, below) also tells the retention which Bindings
+	// belong to a connection this broker served before and does not now: their sessions are kept like those of any unserved Binding.
+	var served *servedRecord
+	retentionKnows := bindings.ThreadTTLsAndUnserved
+	if h.status != nil && boot.Source != nil {
+		served = newServedRecord(st, boot.Source.ConnectionBindings, nil)
+		retentionKnows = served.retentionKnows(runCtx, boot.Reloader.Report, log, retentionKnows)
+	}
+	retain, err := newRetention(retentionConfig{Store: st, Interval: cfg.retentionEvery, AuditRetention: cfg.AuditRetention, ThreadTTLsAndUnserved: retentionKnows,
 		Canceller: bindings, Audit: auditor, Holds: mgr.HoldsTask, OnRemoved: metrics.RetentionRemoved, Logger: log,
 		EnsureAcknowledgment: func(ctx context.Context, r store.Reply) error {
 			return sink.QueueNotice(ctx, r.Key, session.Notice{ID: session.AcknowledgmentID(r.ID), Kind: session.NoticeAcknowledged, MessageRef: r.MessageRef, Reaction: r.Acknowledgment})
@@ -196,23 +223,36 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	// reads its State, and is stopped after it, since it reads that State to the end.
 	var prober *bindingcheck.Prober
 	var statusW *statusWriter
+	// The connections the supervisor does not run because they are a second connection of one Slack app are in the Snapshot, and so are
+	// their Bindings: the report that the writer reads says those Bindings are not served (refusals.overlay).
+	refused := &refusals{}
+	// The connections the verification probes the Bindings of: the supervisor publishes the list after each of its passes (supervisor.publish),
+	// and until the first the own connection's alone.
+	var connsServed atomic.Pointer[[]Connection]
+	connsServed.Store(&[]Connection{conn})
+	var connsChanged atomic.Uint64
 	if h.status != nil {
 		if boot.Source == nil {
 			return nil, errors.New("binding status: the config has no custom resource source to read the statuses from")
 		}
 		statusW, err = newStatusWriter(statusConfig{
-			Client: h.status.client, Report: boot.Reloader.Report, Conditions: func() map[string][]bindingcheck.Condition { return prober.State().Snapshot() },
-			Observed: boot.Source.BindingStatus, Version: boot.Source.BindingEvents, Timeout: statusCallTimeout(h.cfg.Election, h.leaseFence != nil), Fence: h.leaseFence, Warnings: h.status.warnings, Log: log, OnWrite: metrics.StatusWrite,
+			Client: h.status.client, Report: func() config.Report { return refused.overlay(boot.Reloader.Report()) }, Conditions: func() map[string][]bindingcheck.Condition { return prober.State().Snapshot() },
+			Observed: boot.Source.BindingStatus, Version: boot.Source.BindingEvents, Served: served, Timeout: statusCallTimeout(h.cfg.Election, h.leaseFence != nil), Fence: h.leaseFence, Warnings: h.status.warnings, Log: log, OnWrite: metrics.StatusWrite,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("binding status: %w", err)
 		}
 	}
 	prober = verification{
-		Bindings: bindings, Platform: platform, Snaps: boot.Reloader, Revision: boot.Reloader.Revision, Conn: conn,
-		Secrets: boot.Secrets, Metrics: metrics, Log: log, Interval: cfg.probeEvery, Tick: cfg.probeTick, MinRevisionGap: cfg.probeGap,
+		Bindings: bindings, Platforms: chat.Narrow[platformReader](platforms), Conns: func() []Connection { return *connsServed.Load() },
+		Snaps: boot.Reloader, Revision: func(ctx context.Context) string {
+			return boot.Reloader.Revision(ctx) + "/" + strconv.FormatUint(connsChanged.Load(), 10)
+		}, Secrets: boot.Secrets, Metrics: metrics, Log: log, Interval: cfg.probeEvery, Tick: cfg.probeTick, MinRevisionGap: cfg.probeGap,
 		Status: statusW,
 	}.newProber()
+	if statusW != nil {
+		refused.changed = statusW.notify
+	}
 	if statusW != nil {
 		stops.add("binding-status", startLoop(runCtx, func(c context.Context) error { statusW.Run(c); return nil }))
 	}
@@ -226,28 +266,43 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	// mention takes. The threads of the keys are in the store; the permalink comes from what the platform learned when it
 	// connected, since the start runs on the acknowledgement path and may call neither Slack nor the agent.
 	starter, err := newTriggerStarter(triggerStarterConfig{
-		Conn: connName, Submit: mgr, Takes: mgr.Takes, Notice: sink.QueueNotice, Audit: auditor, Link: platform.Permalink, Log: log,
+		Submit: mgr, Takes: mgr.Takes, Notice: sink.QueueNotice, Audit: auditor, Links: chat.Narrow[chat.Permalinker](platforms), Log: log,
 	})
 	if err != nil {
 		return nil, err
 	}
-	intakeCfg, err := newIntakeConfig(intakeParts{
-		conn: conn.Ref, snapshot: boot.Reloader.Current, submitter: mgr, interactions: interactions, log: log,
-		notice: sink.QueueNotice, starter: starter, threads: st, runs: st, replies: st,
-	})
+	// Each connection has an intake of its own (its table of triggers, the messages it has seen) over the parts that every connection
+	// shares, behind a guard that drops a mention by the bot of another connection this broker runs (botGuard).
+	newIntake := func(ref v1alpha1.ObjectRef) (chat.Sink, error) {
+		intakeCfg, err := newIntakeConfig(intakeParts{
+			conn: ref, snapshot: boot.Reloader.Current, submitter: mgr, interactions: interactions, log: log,
+			notice: sink.QueueNotice, starter: starter, threads: st, runs: st, replies: st,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return botGuard{in: chat.NewIntake(intakeCfg), self: v1alpha1.NamespacedName(ref.Namespace, ref.Name), bots: table, log: log}, nil
+	}
+	ownSink, err := newIntake(conn.Ref)
 	if err != nil {
 		return nil, err
 	}
-	intake := chat.NewIntake(intakeCfg)
-	chatDone, chatStopped := make(chan error, 1), make(chan struct{})
+	chatDone := make(chan error, 1)
 	parts.traced("open-intake")
-	go func() {
-		chatDone <- RunPlatform(chatCtx, platform, intake, RunPolicy{Logger: log})
-		close(chatStopped)
-	}()
-	sd.add(stepIntake, func(c context.Context) { // the intake stops before the interactions and the manager it feeds
-		stopChat()
-		waitFor(c, chatStopped)
+	host.run(ownRT, ownSink, func(_ *connRuntime, err error) { chatDone <- err })
+	// The team connections: started by the supervisor, from the ones read with the own connection and then from the snapshot at each of its
+	// looks. A team connection that cannot start yet (its Secret has not synced) starts when it can, and none fails this start.
+	sup := &supervisor{
+		host: host, log: log, every: cmp.Or(cfg.superviseEvery, defaultSuperviseEvery), snapshot: boot.Reloader.Current, secrets: boot.Secrets,
+		own: conn, identify: cfg.identityOf, intake: newIntake, refusals: refused, conns: &connsServed, changes: &connsChanged, gone: ob.Forget,
+		done: make(chan struct{}), teams: map[string]*teamRuntime{}, said: map[string]string{},
+	}
+	supCtx, stopSup := context.WithCancel(runCtx)
+	go sup.run(supCtx, chosen.Team)
+	sd.add(stepIntake, func(c context.Context) { // the intakes stop before the interactions and the manager they feed
+		stopSup()
+		waitFor(c, sup.done) // the supervisor's calls are bounded once stopSup has ended its context, so this returns at once or soon
+		host.haltAll(c)      // and a connection it adds after this, were the wait cut, is halted as it is added (runtimeTable.seal)
 	})
 	return chatDone, nil
 }

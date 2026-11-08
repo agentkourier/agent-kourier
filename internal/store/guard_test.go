@@ -128,13 +128,6 @@ func abandonOutbox(at time.Time) call {
 	return func(ctx context.Context, s store.Store) error { _, err := s.AbandonOutbox(ctx, "o1", at); return err }
 }
 
-func abandonOutboxBefore(before, at time.Time) call {
-	return func(ctx context.Context, s store.Store) error {
-		_, err := s.AbandonOutboxBefore(ctx, before, at)
-		return err
-	}
-}
-
 func upsertSession(f func(*store.Session)) call {
 	return func(ctx context.Context, s store.Store) error { return s.UpsertSession(ctx, mut(okSession, f)) }
 }
@@ -232,6 +225,19 @@ func clearSettledInteractions(now time.Time, grace, undelivered time.Duration) c
 func recordPress(f func(*store.Press), limits store.PressLimits) call {
 	return func(ctx context.Context, s store.Store) error {
 		_, err := s.RecordPress(ctx, mut(okPress, f), limits)
+		return err
+	}
+}
+
+func replaceServedConnections(now time.Time, connections ...string) call {
+	return func(ctx context.Context, s store.Store) error {
+		return s.ReplaceServedConnections(ctx, connections, now)
+	}
+}
+
+func attributeConnection(connection string) call {
+	return func(ctx context.Context, s store.Store) error {
+		_, err := s.AttributeConnection(ctx, connection)
 		return err
 	}
 }
@@ -452,12 +458,6 @@ func specs() []spec {
 			"epoch":        abandonOutbox(epoc),
 			"before epoch": abandonOutbox(epoc.Add(-time.Hour)),
 		}},
-		{"AbandonOutboxBefore", abandonOutboxBefore(t0, t0), map[string]call{
-			"before is zero":  abandonOutboxBefore(time.Time{}, t0),
-			"before is epoch": abandonOutboxBefore(epoc, t0),
-			"at is zero":      abandonOutboxBefore(t0, time.Time{}),
-			"at is epoch":     abandonOutboxBefore(t0, epoc),
-		}},
 		{"ListUnposted", func(ctx context.Context, s store.Store) error { _, err := s.ListUnposted(ctx); return err }, nil},
 
 		{"UpsertSession", upsertSession(nil), with(
@@ -556,6 +556,13 @@ func specs() []spec {
 			"PerUser limit 0":  recordPress(nil, store.PressLimits{Total: 10, PerUser: 0}),
 		}},
 		{"ListPresses", func(ctx context.Context, s store.Store) error { _, err := s.ListPresses(ctx); return err }, nil},
+		{"ServedConnections", func(ctx context.Context, s store.Store) error { _, err := s.ServedConnections(ctx); return err }, nil},
+		{"ReplaceServedConnections", replaceServedConnections(t0, "ns/a", "ns/b"), map[string]call{
+			"an empty connection": replaceServedConnections(t0, "ns/a", ""),
+			"zero time":           replaceServedConnections(time.Time{}, "ns/a"),
+			"epoch":               replaceServedConnections(epoc, "ns/a"),
+		}},
+		{"AttributeConnection", attributeConnection("slack"), map[string]call{"no connection": attributeConnection("")}},
 		{"PendingPresses", pendingPresses("i1", t0), map[string]call{
 			"no ID":     pendingPresses("", t0),
 			"no before": pendingPresses("i1", time.Time{}),
@@ -707,7 +714,6 @@ func specs() []spec {
 // timeCalls are the calls that check a time with validTime, each with the time put in the argument that is checked.
 var timeCalls = map[string]func(time.Time) call{
 	"AbandonOutbox":       abandonOutbox,
-	"AbandonOutboxBefore": func(at time.Time) call { return abandonOutboxBefore(at, t0) },
 	"AdmitTriggerRun":     func(at time.Time) call { return admitTriggerRun(func(r *store.TriggerRun) { r.At = at }, okRunLimits) },
 	"ListTriggerDigests":  listTriggerDigests,
 	"MarkTriggerDigested": func(at time.Time) call { return markTriggerDigested("ns/b", 0, at) },
@@ -933,5 +939,21 @@ func TestHasRepliesAcceptsNoIDsAndUpToTheBound(t *testing.T) {
 		if !c.ok && (!errors.Is(err, store.ErrInvalid) || len(a.calls) != 0) {
 			t.Errorf("%s: HasReplies = %v, adapter calls %v; want ErrInvalid and no call", name, err, a.calls)
 		}
+	}
+}
+
+// TestReplaceServedConnectionsGivesTheAdapterTheSetSortedWithNoRepeats: a connection listed twice is one, and the adapter does not
+// depend on the order the caller used.
+func TestReplaceServedConnectionsGivesTheAdapterTheSetSortedWithNoRepeats(t *testing.T) {
+	in := []string{"ns/b", "ns/a", "ns/b"}
+	a := &fakeAdapter{}
+	if err := store.Guard(a).ReplaceServedConnections(t.Context(), in, t0); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.row.([]string); !slices.Equal(got, []string{"ns/a", "ns/b"}) {
+		t.Errorf("the adapter was given %v; want [ns/a ns/b]", got)
+	}
+	if !slices.Equal(in, []string{"ns/b", "ns/a", "ns/b"}) {
+		t.Errorf("the caller's slice is now %v; want it untouched", in)
 	}
 }

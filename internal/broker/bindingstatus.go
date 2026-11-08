@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"maps"
 	"regexp"
@@ -86,10 +87,13 @@ var probedTypes = []bindingcheck.ConditionType{bindingcheck.BackendReachable, bi
 // acceptedReasonOrder is the order in which the reasons of the Rejections of one Binding give way to one: the first of them that
 // the Binding has is its Accepted reason, and the messages of all follow in the same order. It is the order of the spec's row for
 // the condition, and puts what is wrong with the object itself before what is wrong with the objects it names, and the
-// channel, which a Binding can lose only if it resolved, last.
+// channel, which a Binding can lose only if it resolved, last. ConnectionNotServed is the writer's own (it comes from the connections
+// that the report lists as left out, not from a Rejection), and no Binding has it with another reason, since a Rejection of the
+// Binding says more.
 var acceptedReasonOrder = []config.RejectionReason{
 	config.ReasonInvalidSpec, config.ReasonBackendNotFound, config.ReasonBackendRejected, config.ReasonConnectionNotFound,
-	config.ReasonConnectionRejected, config.ReasonNamespaceNotAllowed, config.ReasonAgentNamespaceNotAllowed, config.ReasonChannelConflict,
+	config.ReasonConnectionRejected, config.ReasonConnectionNotServed, config.ReasonNamespaceNotAllowed, config.ReasonAgentNamespaceNotAllowed,
+	config.ReasonChannelConflict,
 }
 
 // boundBy finds the Binding that holds a channel in the message of a ChannelConflict, which names it as "already bound by
@@ -166,6 +170,10 @@ type statusConfig struct {
 	// OnWrite is told the result of each write, "written", "put_back" (the status was written again to the words it already had)
 	// or "failed", for a metric. Nil means none.
 	OnWrite func(result string)
+	// Served, when set, is the leader's record of the chat connections it serves (servedRecord), which the writer updates at each pass and
+	// from which it tells the Bindings of the connections the broker served before and does not now. Without it the writer tells only
+	// the Bindings of the connections that the report lists as left out.
+	Served *servedRecord
 	// Gap, Tick, Slow and Timeout default to statusGap, statusTick, statusSlow and statusTimeout; a test passes less. Now is
 	// time.Now if nil.
 	Gap, Tick, Slow, Timeout time.Duration
@@ -226,12 +234,13 @@ type statusWriter struct {
 	dirty atomic.Bool
 
 	// What follows belongs to the goroutine that runs reconcile.
-	keys        map[string]*statusKey
-	unsynced    bool             // the cache's not being synced has been logged
-	lastSnap    *config.Snapshot // the Snapshot of the last pass
-	lastVersion uint64           // the informer's event count at the last pass
-	nextFull    time.Time        // a whole pass is due at this time
-	retryAt     time.Time        // a write that was held back is due at this time, if it is not zero
+	keys         map[string]*statusKey
+	recordFailed bool             // the failure to read or write the record has been logged
+	unsynced     bool             // the cache's not being synced has been logged
+	lastSnap     *config.Snapshot // the Snapshot of the last pass
+	lastVersion  uint64           // the informer's event count at the last pass
+	nextFull     time.Time        // a whole pass is due at this time
+	retryAt      time.Time        // a write that was held back is due at this time, if it is not zero
 }
 
 // statusKey is what the writer keeps for one Binding.
@@ -345,11 +354,25 @@ func (w *statusWriter) reconcile(ctx context.Context) {
 	for _, rb := range rep.Snapshot.Bindings() {
 		served[rb.Binding.Namespace+"/"+rb.Binding.Name] = rb.Binding
 	}
+	for key, rs := range rejections { // a Binding the broker holds and does not run (a second connection of a Slack app) is not served here
+		if slices.ContainsFunc(rs, func(r config.Rejection) bool { return r.Reason == config.ReasonConnectionNotServed }) {
+			delete(served, key)
+		}
+	}
+	unserved := w.unservedBindings(ctx, rep)
+	for key := range unserved {
+		if _, isServed := served[key]; isServed || len(rejections[key]) > 0 { // a Rejection of the Binding says more
+			delete(unserved, key)
+		}
+	}
 	keys := map[string]bool{}
 	for key := range rejections {
 		keys[key] = true
 	}
 	for key := range served {
+		keys[key] = true
+	}
+	for key := range unserved {
 		keys[key] = true
 	}
 
@@ -369,6 +392,10 @@ func (w *statusWriter) reconcile(ctx context.Context) {
 		have[key], found[key] = cur, ok
 	}
 	w.unsynced = false
+	for key, rej := range unserved { // the report names a Binding and no more: the generation is the cached object's
+		rej.Generation = have[key].Generation
+		rejections[key] = []config.Rejection{rej}
+	}
 
 	wants := w.desire(keys, rejections, served, have, w.cfg.Conditions(), now)
 	for _, key := range slices.Sorted(maps.Keys(wants)) {
@@ -425,6 +452,35 @@ func (w *statusWriter) reconcile(ctx context.Context) {
 			delete(w.keys, key)
 		}
 	}
+}
+
+// unservedBindings returns, by "namespace/name", a ConnectionNotServed for each Binding that names a ChatConnection that exists and that
+// this broker does not serve: the connections that the report lists as left out, and the connections that the served set finds that the
+// broker served before and does not now. Its message names the connection and says why. The record is read and written at every pass that moves (the Snapshot, a
+// Binding or the slow pass, which comes each Slow); a failure of it is logged once until it works, and what the record could find stands. The caller leaves out the Bindings that the Snapshot serves and that a Rejection is about.
+func (w *statusWriter) unservedBindings(ctx context.Context, rep config.Report) map[string]config.Rejection {
+	left := rep.UnservedConnections
+	if w.cfg.Served != nil {
+		stopped, err := w.cfg.Served.update(ctx, rep)
+		switch {
+		case err != nil && !w.recordFailed:
+			w.recordFailed = true
+			w.cfg.Log.Warn("binding status: the served connections cannot be compared with the record in the store, or cannot be recorded; "+
+				"the statuses of the Bindings are written, and this is tried again at every pass that moves and said once until it works", "error", telemetry.LogText(err))
+		case err == nil:
+			w.recordFailed = false
+		}
+		left = append(slices.Clone(left), stopped...)
+	}
+	out := map[string]config.Rejection{}
+	for _, u := range left {
+		message := fmt.Sprintf("spec.chat.connectionRef: ChatConnection %s/%s is not served by this broker: %s", u.Namespace, u.Name, u.Message)
+		for _, key := range u.Admitted { // a Binding that the connection does not admit is told nothing of it
+			namespace, name, _ := strings.Cut(key, "/")
+			out[key] = config.Rejection{Namespace: namespace, Name: name, Reason: config.ReasonConnectionNotServed, Message: message}
+		}
+	}
+	return out
 }
 
 // write applies want as the status of the Binding key and records what came of it. The call is cut at the timeout, so that one
@@ -739,11 +795,12 @@ func byType(conds []metav1.Condition) map[string]metav1.Condition {
 
 // othersToo reports whether the rejections of a Binding are ones that another broker can make of it too: its spec is refused
 // (a refused edit is owned by the connection it names and by the one the last good generation names), or it names a ChatConnection
-// that does not exist (every broker owns a Binding of that). Any other reason is of a Binding that names a connection that exists,
-// which only that connection's broker owns.
+// that does not exist (every broker owns a Binding of that), or it names a connection that exists and that this broker does not serve
+// (ConnectionNotServed: a broker that does serve it has the last word). Any other reason is of a Binding that names a connection that
+// exists, which only that connection's broker owns.
 func othersToo(rejections []config.Rejection) bool {
 	return slices.ContainsFunc(rejections, func(r config.Rejection) bool {
-		return r.Reason == config.ReasonInvalidSpec || r.Reason == config.ReasonConnectionNotFound
+		return r.Reason == config.ReasonInvalidSpec || r.Reason == config.ReasonConnectionNotFound || r.Reason == config.ReasonConnectionNotServed
 	})
 }
 

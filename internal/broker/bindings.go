@@ -15,6 +15,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/generic"
@@ -43,13 +44,20 @@ type Options struct {
 	// Binding's namespace/name. Turns run concurrently, so it may be called from several
 	// goroutines at once and must be safe for that. Required.
 	OnRejected func(binding string)
-	// AckReaction is the chat platform's own acknowledgment reaction (chat.Caps.AckReaction), which a Binding that names none
-	// gets. Empty means the platform has none.
-	AckReaction string
+	// Platforms gives the platform that runs a connection, by "namespace/name", for its own acknowledgment reaction
+	// (chat.Caps.AckReaction), which a Binding that names none gets: the reaction of the platform that runs the Binding's own
+	// connection. A connection no platform runs (an error from Platforms, such as one wrapping chat.ErrConnectionDown) has no
+	// reaction to give, as a platform with none, and nil Platforms gives none at all.
+	Platforms chat.Resolver[platformCaps]
 	// fence, when set, refuses the calls that change what the agent holds (a send, an answer, a cancel) of a leader whose
 	// lease is past its renew deadline (fenceAgent). Nil with SQLite, which has no lease. Set only by the leader half, which is
 	// where the Bindings of a running broker are built.
 	fence *leaseFence
+}
+
+// platformCaps is what Bindings asks of a chat platform: what it can do, for the acknowledgment reaction it has of its own.
+type platformCaps interface {
+	Capabilities() chat.Caps
 }
 
 // kit is what one dialect needs: the dialect itself, the pool that connects through it, its
@@ -144,7 +152,7 @@ func (b *Bindings) Backend(name string) (session.Backend, error) {
 	if err != nil {
 		return session.Backend{}, fmt.Errorf("broker: Binding %s: %w", name, err)
 	}
-	ackEnabled, ackEmoji := acknowledgment(rb.Binding.Spec.Chat.Acknowledgment, b.opts.AckReaction)
+	ackEnabled, ackEmoji := acknowledgment(rb.Binding.Spec.Chat.Acknowledgment, b.ackReaction(rb.Connection))
 	var ag session.AgentAPI = k.pool.Agent(src.Target())
 	if b.opts.fence != nil {
 		ag = fenceAgent(ag, b.opts.fence)
@@ -190,6 +198,19 @@ func (b *Bindings) CheckAgent(ctx context.Context, name string) error {
 		return fmt.Errorf("broker: Binding %s: %w", name, err)
 	}
 	return k.pool.Check(ctx, src.Target())
+}
+
+// ackReaction is the acknowledgment reaction of the platform that runs conn, the ChatConnection of a Binding, and empty when none runs
+// it or Bindings was given no platforms.
+func (b *Bindings) ackReaction(conn *v1alpha1.ChatConnection) string {
+	if b.opts.Platforms == nil {
+		return ""
+	}
+	p, err := b.opts.Platforms.Platform(v1alpha1.NamespacedName(conn.Namespace, conn.Name))
+	if err != nil {
+		return ""
+	}
+	return p.Capabilities().AckReaction
 }
 
 // acknowledgment is whether a Binding reacts to an accepted message, and with which reaction: the one the Binding names, else

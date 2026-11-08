@@ -17,18 +17,19 @@ Agent text that streams to a thread is never stored. Spans, metric labels and th
 | `interactions.request` | The agent's pause: its hint, the questions and choices, a tool's name and arguments, as JSON. Secrets are taken out before it is stored (below). | Until the interaction is settled and the grace has passed; then emptied. |
 | `interactions.answer` | The person's answer, free text included. | The same. |
 | `interactions` (the rest of the row) | IDs, kind, state, times, the decider's platform ID, the prompt's message ref. | No content. The row goes with its session (below). |
-| `reply_queue.text` | A thread reply, or an alert prompt, waiting for its turn. | Cleared when the turn is delivered. A reply that was never delivered is dropped, with its text, after 30 days (below). |
+| `reply_queue.text` | A thread reply, an alert prompt, or the prompt of a person's message that a `personMessage` trigger took, which holds what the person wrote, waiting for its turn. | Cleared when the turn is delivered. A reply that was never delivered is dropped, with its text, after 30 days (below). |
 | `interaction_presses.inputs` | What a person typed into a prompt. | Until the press is processed, or the worker gives up (an hour); purged an hour after the interaction's deadline at the latest. |
 | `outbox.payload` | The message to post. | Cleared once posted or abandoned. A row still unposted after 7 days is abandoned (reason `expired`) and its payload emptied; the row stays until its session is deleted. |
 | `sessions`, `reply_queue` (delivered), `interactions`, `interaction_presses`, `outbox` | IDs, keys, refs and times of a thread: no message text is left in them. The ID of an `outbox` row for a mention holds the platform user ID of the person mentioned, and logs and traces show that ID too, as `outbox_id` and `agentkourier.outbox.id`. | Until the session has been expired for 90 days, then all deleted together (below). `AGENTKOURIER_AUDIT_RETENTION` does not shorten this. |
 | `feedback` | A person's verdict on a message of an investigation or an answer: the session and turn, the voter's platform ID, the Binding, the agent, the alert name and the verdict, and when. No free text. | For good: kept so that a review of the votes can read them. No retention loop deletes a row, and the deletion of a session 90 days after it expired (below) leaves its feedback rows. |
 | `sessions.origin_source`, `sessions.origin_subject`, `sessions.agent_name` | The bounded source and subject that caused the thread, each in the name shape (ASCII letters, digits and `_.-:`, at most 128 bytes), and the agent of the Binding when the session was made. Both origin values are empty for an ordinary conversation; a source may have no subject. Follow-up turns keep the origin and agent captured when the session was created. | As long as the session row, which is deleted with its thread (below). |
 | `audit` | IDs, codes, outcomes and lengths, never message text; the platform user ID of a voter or presser, and of a person a reply mentioned with the name the Binding declares for them; an `email` column that nothing writes today; and, for an unusable pause, one redacted reason of at most 120 bytes. For oversized or abandoned prompts with a stored interaction, the refusal reason is audited before the interaction closes; recovery records a cancellation only when its result is known, so `ErrNotPaused` and a crash after cancellation before the audit do not produce an invented success row. An answered tool approval also stores approved and denied counts and up to 20 cleaned tool names in request order, when they fit within the audit row limit; it stores no arguments or rejection reasons. | For ever, unless `AGENTKOURIER_AUDIT_RETENTION` is set (below). |
+| `served_connections` | The `namespace/name` of each chat connection the leader serves now, and of each it served before and that still exists in the cluster, with when it was first served. No content. The leader compares it with the connections it serves when it starts, to find those it stopped serving. | A connection stays until it is served again (it then stays as served) or its ChatConnection is deleted. |
 | `events.payload` | Nothing writes it. | n/a |
 
 ### Feedback
 
-The useful and not-useful buttons store one row for each person and message, in table `feedback` of both stores. The feedback adapter maps the origins `botMessage` (what every trigger start records) and `legacy` (migrated from the older session schema), with validated `alertname` subjects, to alert-name attribution. It also maps `alertmanager`, which Agent Kourier no longer writes: only sessions created before that origin was retired keep it, and their votes still count under their alert's name:
+The useful and not-useful buttons store one row for each person and message, in table `feedback` of both stores. The feedback adapter maps the origins `botMessage` (what a `botMessage` trigger's start records) and `legacy` (migrated from the older session schema), with validated `alertname` subjects, to alert-name attribution; a `personMessage` trigger's start records `personMessage`, which names no alert. It also maps `alertmanager`, which Agent Kourier no longer writes: only sessions created before that origin was retired keep it, and their votes still count under their alert's name:
 
 | Column | Holds |
 |---|---|
@@ -36,7 +37,7 @@ The useful and not-useful buttons store one row for each person and message, in 
 | `turn_id` | The turn whose output is the rated message. A thread's several answers are rated apart. |
 | `user_id` | The platform's ID of who voted (a pseudonym, not a name or an email). |
 | `binding`, `agent`, `alert_name` | The Binding, its agent (`namespace/name` on the backend) and the alert name of the thread, as they were at the person's first vote. |
-| `kind` | `investigation` (the final message of a thread that a trigger or an alert started) or `answer` (an answer to a person, on a Binding with `feedback.enabled`). |
+| `kind` | `investigation` (the final message of a thread that a `botMessage` trigger or an alert started) or `answer` (an answer to a person, a person's message that a `personMessage` trigger took or a bot's mention, on a Binding with `feedback.enabled`). |
 | `verdict` | `useful` or `not_useful`. A later press of the other button replaces it. |
 | `first_at`, `voted_at` | The first vote, and the latest. |
 
@@ -240,6 +241,11 @@ reaches the agent, and so its model provider, once a bot mentions Agent Kourier 
 `chat.botMentions: none` to stop that. Those messages are cleaned, redacted, cut and not stored, as above; `reply_queue.text` holds the fixed prompt
 and the bot's post.
 
+A `personMessage` trigger sends what people post at the top level of the channel to the agent, and so to its model provider, without anyone
+mentioning Agent Kourier: each message it takes is in `reply_queue.text`, after the template's output, until the turn is delivered. Its thread takes
+only mentioned replies, whatever `chat.threadReplies` says, so a reply there reaches the agent only when someone later mentions Agent Kourier in the
+thread, and then as above.
+
 ### Sessions and what belongs to them
 
 Clearing content leaves the rows, and a thread that nobody answers again would keep its rows for ever. A session is kept after
@@ -324,6 +330,12 @@ leader's epoch first, and a session that a writer holds locked is left for the n
 `agentkourier_retention_removed_total`: `expired_sessions`, and the rows that went with them as `session_replies`,
 `session_interactions`, `session_presses` and `session_outbox` (and, for a stale task, as above). Migration 0022 adds the indexes the sweep reads by (a session's
 last activity; a thread's replies, interactions and outbox rows; an outbox row's source, in the C collation with Postgres).
+
+**Connection of an outbox row and a press.** Migration 0029 adds a `connection` column to `outbox` and `interaction_presses` and keys
+the outbox's thread index by it, because a channel ID names a channel only within one chat app. The sweep deletes the outbox rows of a
+session's thread for the session's connection only, and a pending outbox row holds back only the sessions of its own connection. A row
+written before the migration, or by an older version after a rollback, has an empty connection: when the broker starts leading it gives
+every such row its own connection, 1000 rows of a table to a transaction, and logs at INFO how many it changed in all (nothing, when none).
 
 Not deleted here: `feedback` rows, which are kept so that a review of the votes can read them.
 

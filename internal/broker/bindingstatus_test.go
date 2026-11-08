@@ -347,17 +347,27 @@ var statusT0 = time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
 // newStatusRig builds a writer over cluster. serving gives the generation of each Binding the source serves.
 func newStatusRig(t *testing.T, cluster *statusCluster, serving map[string]int64) *statusRig {
 	t.Helper()
+	return newStatusRigWith(t, cluster, serving, nil)
+}
+
+// newStatusRigWith is newStatusRig for a writer whose config the test changes (mutate may be nil) before it is built.
+func newStatusRigWith(t *testing.T, cluster *statusCluster, serving map[string]int64, mutate func(*statusConfig)) *statusRig {
+	t.Helper()
 	r := &statusRig{t: t, cluster: cluster, logs: &bytes.Buffer{}, now: statusT0, probed: map[string][]bindingcheck.Condition{}}
 	r.report = config.Report{Snapshot: snapshotOf(t, serving)}
 	cluster.warn = &warningCounter{}
-	w, err := newStatusWriter(statusConfig{
+	cfg := statusConfig{
 		Client: cluster.dyn, Report: func() config.Report { r.mu.Lock(); defer r.mu.Unlock(); return r.report },
 		Conditions: func() map[string][]bindingcheck.Condition { r.mu.Lock(); defer r.mu.Unlock(); return r.probed },
 		Observed:   cluster.observed, Warnings: cluster.warn, Log: slog.New(slog.NewTextHandler(r.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		OnWrite: func(result string) { r.writes = append(r.writes, result) },
 		Gap:     10 * time.Second, Tick: time.Second,
 		Now: func() time.Time { r.mu.Lock(); defer r.mu.Unlock(); return r.now },
-	})
+	}
+	if mutate != nil {
+		mutate(&cfg)
+	}
+	w, err := newStatusWriter(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1156,7 +1166,11 @@ func TestSeveralRejectionsGiveOneAcceptedReasonInAFixedOrder(t *testing.T) {
 
 // The reasons that Accepted orders are the reasons the config package gives and the metric counts, no more and no fewer.
 func TestAcceptedReasonOrderListsEveryReasonOfTheConfig(t *testing.T) {
-	if !slices.Equal(slices.Sorted(slices.Values(acceptedReasonOrder)), slices.Sorted(slices.Values(rejectionReasons))) {
+	// ConnectionNotServed is the writer's own, from the connections that the report lists as left out, and no Rejection of a source: the metric counts
+	// the Rejections, so it has no series there.
+	ordered := slices.DeleteFunc(slices.Clone(acceptedReasonOrder), func(r config.RejectionReason) bool { return r == config.ReasonConnectionNotServed })
+	if !slices.Contains(acceptedReasonOrder, config.ReasonConnectionNotServed) ||
+		!slices.Equal(slices.Sorted(slices.Values(ordered)), slices.Sorted(slices.Values(rejectionReasons))) {
 		t.Errorf("acceptedReasonOrder = %v, the metric counts %v: a reason with no place in the order would be reported as Rejected", acceptedReasonOrder, rejectionReasons)
 	}
 }
@@ -1445,9 +1459,9 @@ func TestTheBrokersProberTellsTheStatusWriterAtTheEndOfEachPass(t *testing.T) {
 	var calls atomic.Int64
 	r := newStatusRig(t, newStatusCluster(t), nil)
 	p := verification{
-		Bindings: probeFunc(func(context.Context, string) error { calls.Add(1); return nil }), Platform: &accessFake{access: chat.Access{Member: true}},
+		Bindings: probeFunc(func(context.Context, string) error { calls.Add(1); return nil }), Platforms: soleBot(refA, &accessFake{access: chat.Access{Member: true}}),
 		Snaps: current, Revision: func(context.Context) string { return "r" }, Status: r.w,
-		Conn:    Connection{Ref: v1alpha1.ObjectRef{Namespace: "platform", Name: "slack-a"}},
+		Conns:   soleConn(refA),
 		Metrics: mustMetrics(t, nil), Log: slog.New(slog.DiscardHandler), Interval: 20 * time.Millisecond, Tick: 2 * time.Millisecond,
 	}.newProber()
 	runProber(t, p)
@@ -1462,8 +1476,8 @@ func TestTheBrokersProberTellsTheStatusWriterAtTheEndOfEachPass(t *testing.T) {
 
 // The Prober is given each Binding's generation, so that what it stamps is the generation the Binding had when the pass began.
 func TestBindingTargetsCarryTheGeneration(t *testing.T) {
-	got := bindingTargets(snapshotWithUIDs(t, map[string]int64{sreAlerts: 7}, map[string]string{sreAlerts: "uid-7"}), v1alpha1.ObjectRef{Namespace: "sre", Name: "slack"})
-	if want := []bindingcheck.Target{{Binding: sreAlerts, Channel: "C-alerts", Generation: 7, UID: "uid-7"}}; !reflect.DeepEqual(got, want) {
+	got := bindingTargets(snapshotWithUIDs(t, map[string]int64{sreAlerts: 7}, map[string]string{sreAlerts: "uid-7"}), []v1alpha1.ObjectRef{sreSlack})
+	if want := []bindingcheck.Target{{Binding: sreAlerts, Connection: "sre/slack", Channel: "C-alerts", Generation: 7, UID: "uid-7"}}; !reflect.DeepEqual(got, want) {
 		t.Errorf("targets = %v, want %v", got, want)
 	}
 }

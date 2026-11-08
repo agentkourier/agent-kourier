@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -27,7 +28,9 @@ type house struct {
 // built is what one house holds, which is what deleting it should count.
 var built = store.PurgedSessions{Sessions: 1, Replies: 2, Interactions: 1, Presses: 1, Outbox: 4}
 
-func (h house) id(what string) string { return h.key.Thread + "-" + what }
+// id is the ID of the row what of the house. It names the connection too: two houses that differ only in their connection
+// share a channel and a thread, and their rows must not share an ID.
+func (h house) id(what string) string { return h.key.Connection + "-" + h.key.Thread + "-" + what }
 
 // queued is the source of the queued reaction of the reply what: what the session manager names the notice.
 func (h house) queued(what string) string { return h.id(what) + "/queued" }
@@ -40,7 +43,7 @@ type noPlatform struct{ outbox.Platform }
 // platform is made through it, and one would panic.
 func EnqueueOnlyOutbox(t testing.TB, s store.Outbox, now func() time.Time) *outbox.Outbox {
 	t.Helper()
-	o, err := outbox.New(outbox.Config{Store: s, Platform: noPlatform{}, OnAbandon: outbox.NoAbandon, Now: now})
+	o, err := outbox.New(outbox.Config{Store: s, Platforms: chattest.Same[outbox.Platform](noPlatform{}), OnAbandon: outbox.NoAbandon, Now: now})
 	if err != nil {
 		t.Fatalf("outbox.New: %v", err)
 	}
@@ -51,7 +54,7 @@ func EnqueueOnlyOutbox(t testing.TB, s store.Outbox, now func() time.Time) *outb
 func (h house) reaction(t *testing.T, s store.Store, what string) string {
 	t.Helper()
 	id, err := EnqueueOnlyOutbox(t, s, func() time.Time { return h.last }).
-		EnqueueReaction(t.Context(), outbox.Reaction{Source: h.queued(what), Channel: h.key.Channel, TS: "7." + h.key.Thread, Name: "hourglass_flowing_sand"})
+		EnqueueReaction(t.Context(), outbox.Reaction{Source: h.queued(what), Connection: h.key.Connection, Channel: h.key.Channel, TS: "7." + h.key.Thread, Name: "hourglass_flowing_sand"})
 	noErr(t, err, "reaction of "+what)
 	return id
 }
@@ -76,8 +79,8 @@ func (h house) build(t *testing.T, s store.Store) {
 	_, err = s.RecordPress(ctx, press(i.ID, "U1", t0), roomy)
 	noErr(t, err, "press on "+i.ID)
 	for _, o := range []store.OutboxEntry{
-		{ID: h.id("post"), EventID: h.id("r1"), Role: store.OutboxReply, Channel: h.key.Channel, Thread: h.key.Thread},
-		{ID: h.id("note"), EventID: "mention-" + h.key.Thread, Role: store.OutboxNotice, Channel: h.key.Channel, Thread: h.key.Thread},
+		{ID: h.id("post"), EventID: h.id("r1"), Role: store.OutboxReply, Connection: h.key.Connection, Channel: h.key.Channel, Thread: h.key.Thread},
+		{ID: h.id("note"), EventID: "mention-" + h.key.Thread, Role: store.OutboxNotice, Connection: h.key.Connection, Channel: h.key.Channel, Thread: h.key.Thread},
 	} {
 		o.CreatedAt, o.Payload = h.last, `{"text":"hi"}`
 		_, err := s.CreateOutbox(ctx, o)
@@ -88,7 +91,7 @@ func (h house) build(t *testing.T, s store.Store) {
 	react := h.reaction(t, s, "r1")
 	noErr(t, s.RecordMessageRef(ctx, react, "7."+h.key.Thread), "react")
 	unreact, err := EnqueueOnlyOutbox(t, s, func() time.Time { return h.last }).
-		EnqueueUnreaction(ctx, outbox.Reaction{Source: h.queued("r1"), Channel: h.key.Channel, TS: "7." + h.key.Thread, Name: "hourglass_flowing_sand"})
+		EnqueueUnreaction(ctx, outbox.Reaction{Source: h.queued("r1"), Connection: h.key.Connection, Channel: h.key.Channel, TS: "7." + h.key.Thread, Name: "hourglass_flowing_sand"})
 	noErr(t, err, "unreaction")
 	noErr(t, s.RecordMessageRef(ctx, unreact, "7."+h.key.Thread), "unreact")
 	_, err = s.AbandonOutbox(ctx, h.id("note"), h.last.Add(time.Minute))
@@ -246,6 +249,35 @@ func (su suite) sessionRetention(t *testing.T) {
 		}
 	})
 
+	// Two apps in one workspace share channel IDs, so the thread (channel, ts) of one connection's session is the thread of the
+	// other's. What the purge deletes of one is not the other's.
+	su.run(t, "PurgeExpiredSessions leaves the rows of another connection's thread in the same channel and thread", func(t *testing.T, s store.Store) {
+		a := house{store.ConversationKey{Connection: "ns/a", Channel: "C1", Thread: "1.1"}, "ns/b", t0}
+		b := house{store.ConversationKey{Connection: "ns/b", Channel: "C1", Thread: "1.1"}, "ns/b", t0}
+		a.build(t, s)
+		b.build(t, s)
+		// Only the sessions of A are past the horizon: B's, with the same channel and thread, is inside it.
+		noErr(t, s.TouchSession(t.Context(), b.key, cutoff.Add(time.Hour)), "TouchSession")
+		if got := purge(t, s, horizons("ns/b"), 10); got != built {
+			t.Fatalf("purged %+v; want the one house of A: %+v", got, built)
+		}
+		a.whole(t, s, false)
+		b.whole(t, s, true)
+	})
+
+	su.run(t, "PurgeExpiredSessions is not held back by an outbox row of another connection's thread", func(t *testing.T, s store.Store) {
+		a := house{store.ConversationKey{Connection: "ns/a", Channel: "C1", Thread: "1.1"}, "ns/b", t0}
+		a.build(t, s)
+		_, err := s.CreateOutbox(t.Context(), store.OutboxEntry{ID: "b-unposted", EventID: "e", Role: store.OutboxReply, Connection: "ns/b", Channel: "C1", Thread: "1.1", CreatedAt: t0, Payload: "{}"})
+		noErr(t, err, "unposted row of B")
+		if got := purge(t, s, horizons("ns/b"), 10); got != built {
+			t.Fatalf("purged %+v; want the house of A, which B's pending row in the same channel and thread does not hold: %+v", got, built)
+		}
+		if _, err := s.GetOutbox(t.Context(), "b-unposted"); err != nil {
+			t.Errorf("B's unposted row after = %v; want it kept", err)
+		}
+	})
+
 	su.run(t, "PurgeExpiredSessions never deletes a session with an active task, a pending interaction, a reply not delivered or an outbox row not posted", func(t *testing.T, s store.Store) {
 		ctx := t.Context()
 		old := t0.Add(-10 * ttl) // far older than the horizon, which is t0
@@ -277,7 +309,7 @@ func (su suite) sessionRetention(t *testing.T) {
 				func(h house) { noErr(t, s.MarkReplyDelivered(ctx, h.id("queued"), t0), "deliver") }},
 			{"an outbox row for the thread, not posted",
 				func(h house) {
-					_, err := s.CreateOutbox(ctx, store.OutboxEntry{ID: h.id("unposted"), EventID: "e", Role: store.OutboxReply, Channel: h.key.Channel, Thread: h.key.Thread, CreatedAt: old, Payload: "{}"})
+					_, err := s.CreateOutbox(ctx, store.OutboxEntry{ID: h.id("unposted"), EventID: "e", Role: store.OutboxReply, Connection: h.key.Connection, Channel: h.key.Channel, Thread: h.key.Thread, CreatedAt: old, Payload: "{}"})
 					noErr(t, err, "unposted")
 				},
 				func(h house) {

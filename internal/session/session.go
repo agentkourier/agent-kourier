@@ -111,9 +111,10 @@ type Bindings interface {
 	Backend(name string) (Backend, error)
 }
 
-// Users resolves a chat user for attribution (the chat platform's ResolveUser).
+// Users resolves a chat user for attribution (the chat platform's ResolveUser), on the platform of the ChatConnection conn,
+// "namespace/name": a user's ID means something on one connection's app only.
 type Users interface {
-	ResolveUser(ctx context.Context, id string) (dialect.User, error)
+	ResolveUser(ctx context.Context, conn, id string) (dialect.User, error)
 }
 
 // TurnRef names the turn a Sink is asked to render.
@@ -146,8 +147,10 @@ type TurnRef struct {
 	// zero value, those of an investigation for an alert's first prompt (nobody wrote it: its user is SystemUser),
 	// and those of an answer for a person's turn or a bot's mention on a Binding with feedback.enabled.
 	Feedback store.FeedbackKind
-	// ThreadReplies is the Binding's chat.threadReplies. In mention the final message of the output tells the thread to mention
-	// Agent Kourier to ask a follow-up (D38); anything else, the empty value too, adds nothing.
+	// ThreadReplies is what the session takes of replies: the Binding's chat.threadReplies, but mention for a session that a bot's
+	// mention (D49) or a person's message (D51) began, whatever the Binding says (takesOnlyMentions). In mention the final message
+	// of the output tells the thread to mention Agent Kourier to ask a follow-up (D38); anything else, the empty value too, adds
+	// nothing.
 	ThreadReplies v1alpha1.ThreadReplies
 	// Mentions are the people the Binding declares, and MaxMentions the most a turn notifies (Backend.Mentions).
 	Mentions    []v1alpha1.ChatMention

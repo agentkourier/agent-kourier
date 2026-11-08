@@ -14,13 +14,14 @@ import (
 
 	"go.uber.org/goleak"
 
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
 // drainConfig is a Config for Run: a ticker too slow to matter unless a test sets it.
 func drainConfig(st store.Outbox, p *poster) outbox.Config {
-	return outbox.Config{Store: st, Platform: p, Now: func() time.Time { return t0 }, CallTimeout: time.Second, Interval: time.Hour}
+	return outbox.Config{Store: st, Platforms: chattest.Same[outbox.Platform](p), Now: func() time.Time { return t0 }, CallTimeout: time.Second, Interval: time.Hour}
 }
 
 // start runs o.Run until the end of the test, which checks that Run returned the context's error.

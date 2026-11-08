@@ -527,12 +527,14 @@ func (p *problems) triggers(path string, ts []Trigger) {
 }
 
 func (p *problems) trigger(path string, t *Trigger, b *regexBudget) {
-	p.oneOf(path+".type", string(t.Type), string(TriggerMention), string(TriggerBotMessage))
+	p.oneOf(path+".type", string(t.Type), string(TriggerMention), string(TriggerBotMessage), string(TriggerPersonMessage))
 	switch t.Type {
 	case TriggerMention:
 		p.mentionTrigger(path, t)
 	case TriggerBotMessage:
 		p.botMessageTrigger(path, t, b)
+	case TriggerPersonMessage:
+		p.personMessageTrigger(path, t, b)
 	}
 }
 
@@ -545,7 +547,7 @@ func (p *problems) mentionTrigger(path string, t *Trigger) {
 	}{
 		{"from", t.From != nil}, {"match", len(t.Match) > 0},
 		{"exclude", len(t.Exclude) > 0}, {"extract", len(t.Extract) > 0},
-		{"thread", t.Thread.By != "" || t.Thread.Cooldown.Duration != 0 || t.Thread.MaxIdle.Duration != 0 || len(t.Thread.CloseWhen) > 0},
+		{"thread", t.Thread.isSet()},
 		{"promptTemplate", t.PromptTemplate != ""},
 		{"limits", !t.Limits.IsZero()},
 	} {
@@ -553,6 +555,33 @@ func (p *problems) mentionTrigger(path string, t *Trigger) {
 			p.add(path+"."+f.name, "not allowed with type: mention")
 		}
 	}
+}
+
+// personMessageTrigger checks a trigger on a person's top-level message. A person's message has no sender to name, no
+// structured part to read a field from and no key to thread by, so the sender, extract and thread fields are refused, and match
+// and exclude read only text. It is bounded like a botMessage trigger: limits and a prompt template are required.
+func (p *problems) personMessageTrigger(path string, t *Trigger, b *regexBudget) {
+	for _, f := range []struct {
+		name string
+		set  bool
+	}{{"from", t.From != nil}, {"extract", len(t.Extract) > 0}, {"thread", t.Thread.isSet()}} {
+		if f.set {
+			p.add(path+"."+f.name, "not allowed with type: personMessage")
+		}
+	}
+	for _, m := range []struct {
+		name    string
+		entries map[MessageField]string
+	}{{"match", t.Match}, {"exclude", t.Exclude}} {
+		p.fieldRegexes(path+"."+m.name, m.entries, b)
+		for _, f := range slices.Sorted(maps.Keys(m.entries)) {
+			if f != FieldText && slices.Contains(messageFields(), f) {
+				p.add(path+"."+m.name+"."+string(f), "a person's message has only the field %s", FieldText)
+			}
+		}
+	}
+	p.limits(path+".limits", t.Limits, personLimitsHint)
+	p.promptTemplate(path+".promptTemplate", t.PromptTemplate, nil)
 }
 
 func (p *problems) botMessageTrigger(path string, t *Trigger, b *regexBudget) {
@@ -583,13 +612,18 @@ func (p *problems) botMessageTrigger(path string, t *Trigger, b *regexBudget) {
 		p.extract(path+".extract."+name, name, t.Extract[name], b)
 	}
 	p.thread(path+".thread", &t.Thread, t.Extract)
-	p.limits(path+".limits", t.Limits)
-	if t.PromptTemplate == "" {
-		p.add(path+".promptTemplate", "required")
-	} else if len(t.PromptTemplate) > maxPromptTemplateLen {
-		p.maxBytes(path+".promptTemplate", t.PromptTemplate, maxPromptTemplateLen) // refused unparsed
-	} else if err := checkPromptTemplate("promptTemplate", t.PromptTemplate, t.Extract); err != nil {
-		p.add(path+".promptTemplate", "invalid template: %v", err)
+	p.limits(path+".limits", t.Limits, limitsHint)
+	p.promptTemplate(path+".promptTemplate", t.PromptTemplate, t.Extract)
+}
+
+// promptTemplate checks the required prompt template of a trigger against the values it extracts.
+func (p *problems) promptTemplate(path, text string, extract map[string]Extract) {
+	if text == "" {
+		p.add(path, "required")
+	} else if len(text) > maxPromptTemplateLen {
+		p.maxBytes(path, text, maxPromptTemplateLen) // refused unparsed
+	} else if err := checkPromptTemplate("promptTemplate", text, extract); err != nil {
+		p.add(path, "invalid template: %v", err)
 	}
 }
 
@@ -618,18 +652,23 @@ func (p *problems) extract(path, name string, e Extract, b *regexBudget) {
 	}
 }
 
-// limitsHint points a botMessage trigger that lacks limits at the documented example, which sets both.
-const limitsHint = "see the example in how-to/investigate-alertmanager-alerts (https://agentkourier.dev/how-to/investigate-alertmanager-alerts/)"
+// limitsHint points a botMessage trigger that lacks limits at the documented example, which sets both, and personLimitsHint a
+// personMessage trigger at its own.
+const (
+	limitsHint       = "see the example in how-to/investigate-alertmanager-alerts (https://agentkourier.dev/how-to/investigate-alertmanager-alerts/)"
+	personLimitsHint = "see the example in reference/chat-triggers (https://agentkourier.dev/reference/chat-triggers/#a-persons-message)"
+)
 
-// limits checks the limits of a botMessage trigger: it must set a rate limit and a daily cap, and a rate limit
+// limits checks the limits of a botMessage or personMessage trigger: it must set a rate limit and a daily cap, and a rate limit
 // set in part fails on each field it lacks. The window is bounded on both sides: see MinRateWindow and
-// MaxLimitWindow. A cap of 0 means none, and it must be written: leaving the cap out is refused.
-func (p *problems) limits(path string, l TriggerLimits) {
+// MaxLimitWindow. A cap of 0 means none, and it must be written: leaving the cap out is refused. hint says where an example
+// that sets both is.
+func (p *problems) limits(path string, l TriggerLimits, hint string) {
 	if l.RateLimit == nil {
-		p.add(path+".rateLimit", "required: set maxRuns, per and maxConcurrent; %s", limitsHint)
+		p.add(path+".rateLimit", "required: set maxRuns, per and maxConcurrent; %s", hint)
 	}
 	if l.MaxRunsPerDay == nil {
-		p.add(path+".maxRunsPerDay", "required: set the cap for a day, or 0 for no cap; %s", limitsHint)
+		p.add(path+".maxRunsPerDay", "required: set the cap for a day, or 0 for no cap; %s", hint)
 	}
 	if r := l.RateLimit; r != nil {
 		p.positive(path+".rateLimit.maxRuns", int64(r.MaxRuns))

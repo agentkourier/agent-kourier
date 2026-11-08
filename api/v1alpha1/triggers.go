@@ -31,8 +31,9 @@ type (
 
 // Values of the trigger enumerations.
 const (
-	TriggerMention    TriggerType = "mention"
-	TriggerBotMessage TriggerType = "botMessage"
+	TriggerMention       TriggerType = "mention"
+	TriggerBotMessage    TriggerType = "botMessage"
+	TriggerPersonMessage TriggerType = "personMessage"
 
 	FieldText     MessageField = "text"
 	FieldTitle    MessageField = "title"
@@ -61,8 +62,8 @@ func messageFields() []MessageField {
 }
 
 // The CEL rules on a trigger copy rules of Validate and refuse nothing that Validate accepts. A rule that forbids a field
-// is gated on the type mention, and one that requires a field on the type botMessage; the thread rules (by key, closeWhen
-// keys, the ranges) hold for either type, since Validate refuses those fields on a mention trigger anyway. A value that
+// is gated on the type mention or personMessage, and one that requires a field on the type botMessage or personMessage; the thread rules (by key, closeWhen
+// keys, the ranges) hold for every type, since Validate refuses those fields on a mention trigger anyway. A value that
 // Validate reads as unset counts as unset here: a missing field, an empty list or map, a zero duration (CEL's duration()
 // parses as time.ParseDuration does: spec D50). A field absent from the object is read with has(), since the apiserver
 // checks the object as it was written, before Default. (Not in the doc comment below, which the reference pages print,
@@ -82,45 +83,57 @@ func messageFields() []MessageField {
 // +kubebuilder:validation:XValidation:rule=`self.type != 'botMessage' || (has(self.promptTemplate) && self.promptTemplate != "")`,message="required with type: botMessage",fieldPath=".promptTemplate"
 // +kubebuilder:validation:XValidation:rule="self.type != 'botMessage' || (has(self.limits) && has(self.limits.rateLimit))",message="required with type: botMessage: set maxRuns, per and maxConcurrent",fieldPath=".limits.rateLimit"
 // +kubebuilder:validation:XValidation:rule="self.type != 'botMessage' || (has(self.limits) && has(self.limits.maxRunsPerDay))",message="required with type: botMessage: set the cap for a day, or 0 for no cap",fieldPath=".limits.maxRunsPerDay"
+// +kubebuilder:validation:XValidation:rule="self.type != 'personMessage' || !has(self.from)",message="not allowed with type: personMessage",fieldPath=".from"
+// +kubebuilder:validation:XValidation:rule="self.type != 'personMessage' || !has(self.match) || self.match.all(k, k == 'text')",message="a person's message has only the field text",fieldPath=".match"
+// +kubebuilder:validation:XValidation:rule="self.type != 'personMessage' || !has(self.exclude) || self.exclude.all(k, k == 'text')",message="a person's message has only the field text",fieldPath=".exclude"
+// +kubebuilder:validation:XValidation:rule="self.type != 'personMessage' || !has(self.extract) || size(self.extract) == 0",message="not allowed with type: personMessage",fieldPath=".extract"
+// +kubebuilder:validation:XValidation:rule=`self.type != 'personMessage' || !has(self.thread) || !((has(self.thread.by) && self.thread.by != "") || (has(self.thread.cooldown) && duration(self.thread.cooldown) != duration('0s')) || (has(self.thread.maxIdle) && duration(self.thread.maxIdle) != duration('0s')) || (has(self.thread.closeWhen) && size(self.thread.closeWhen) > 0))`,message="not allowed with type: personMessage",fieldPath=".thread"
+// +kubebuilder:validation:XValidation:rule=`self.type != 'personMessage' || (has(self.promptTemplate) && self.promptTemplate != "")`,message="required with type: personMessage",fieldPath=".promptTemplate"
+// +kubebuilder:validation:XValidation:rule="self.type != 'personMessage' || (has(self.limits) && has(self.limits.rateLimit))",message="required with type: personMessage: set maxRuns, per and maxConcurrent",fieldPath=".limits.rateLimit"
+// +kubebuilder:validation:XValidation:rule="self.type != 'personMessage' || (has(self.limits) && has(self.limits.maxRunsPerDay))",message="required with type: personMessage: set the cap for a day, or 0 for no cap",fieldPath=".limits.maxRunsPerDay"
 // +kubebuilder:validation:XValidation:rule="!(has(self.thread) && has(self.thread.by) && self.thread.by == 'key') || (has(self.extract) && 'key' in self.extract)",message=`thread.by: key requires an extract named "key"`,fieldPath=".thread.by"
 // +kubebuilder:validation:XValidation:rule="!has(self.thread) || !has(self.thread.closeWhen) || self.thread.closeWhen.all(k, has(self.extract) && k in self.extract)",message="every key must be the name of an entry of extract",fieldPath=".thread.closeWhen"
 type Trigger struct {
-	// Type is mention, a person @mentioning Agent Kourier, or botMessage, a message a bot posts.
-	// A mention trigger takes no other field. The key is type, not on: YAML 1.1 reads a bare
+	// Type is mention, a person @mentioning Agent Kourier, botMessage, a message a bot posts, or personMessage, a
+	// top-level message a person posts. A mention trigger takes no other field. The key is type, not on: YAML 1.1 reads a bare
 	// on as the boolean true, and the loader's decoder follows it.
-	// +kubebuilder:validation:Enum=mention;botMessage
+	// +kubebuilder:validation:Enum=mention;botMessage;personMessage
 	Type TriggerType `json:"type"`
 	// From names the sender a botMessage trigger accepts. Required for botMessage.
 	From *BotSource `json:"from,omitempty"`
-	// Match maps a message field to a regex it must match. Every entry must match.
+	// Match maps a message field to a regex it must match. Every entry must match. A personMessage trigger has the
+	// field text alone.
 	// +kubebuilder:validation:MaxProperties=6
 	// +kubebuilder:validation:XValidation:rule="self.all(k, k in ['text', 'title', 'link', 'fallback', 'footer', 'body'])",message="unsupported message field, must be one of text, title, link, fallback, footer, body"
 	// +kubebuilder:validation:XValidation:rule="self.all(k, size(self[k]) > 0)",message="a regular expression is required"
 	// +kubebuilder:validation:XValidation:rule="self.all(k, size(self[k]) <= 512)",message="a regular expression is longer than the 512 byte limit"
 	Match map[MessageField]string `json:"match,omitempty"`
-	// Exclude maps a message field to a regex; a message matching any entry is ignored.
+	// Exclude maps a message field to a regex; a message matching any entry is ignored. A personMessage trigger has
+	// the field text alone.
 	// +kubebuilder:validation:MaxProperties=6
 	// +kubebuilder:validation:XValidation:rule="self.all(k, k in ['text', 'title', 'link', 'fallback', 'footer', 'body'])",message="unsupported message field, must be one of text, title, link, fallback, footer, body"
 	// +kubebuilder:validation:XValidation:rule="self.all(k, size(self[k]) > 0)",message="a regular expression is required"
 	// +kubebuilder:validation:XValidation:rule="self.all(k, size(self[k]) <= 512)",message="a regular expression is longer than the 512 byte limit"
 	Exclude map[MessageField]string `json:"exclude,omitempty"`
 	// Extract names the values to pull out of a message. A message in which one of these
-	// regexes does not match does not match the trigger. At most 32, each named in at most 63 bytes.
+	// regexes does not match does not match the trigger. At most 32, each named in at most 63 bytes. A
+	// personMessage trigger takes none.
 	// +kubebuilder:validation:MaxProperties=32
 	// +kubebuilder:validation:XValidation:rule="self.all(k, size(k) <= 63)",message="an extract name is longer than the 63 byte limit"
 	// +kubebuilder:validation:XValidation:rule="self.all(k, k.matches('^[a-z][A-Za-z0-9_]*$'))",message="invalid extract name: it must start with a lower-case letter and use only letters, digits and '_', so a template can read .Fields.<name>"
 	// +kubebuilder:validation:XValidation:rule="self.all(k, self[k].regex.contains('(?P<' + k + '>') || self[k].regex.contains('(?<' + k + '>'))",message="every regex must have a named group (?P<name>...) that is the entry's name, and supplies the value"
 	Extract map[string]Extract `json:"extract,omitempty"`
-	// Thread ties messages that share an extracted key to one thread.
+	// Thread ties messages that share an extracted key to one thread. A personMessage trigger takes none: each
+	// message it matches is a thread of its own.
 	// +optional
 	Thread TriggerThread `json:"thread,omitzero"`
 	// PromptTemplate is a Go template over the trigger's view of the message (.Channel,
-	// .State, .Key, .Fields, .Link, .Source). Required for botMessage. At most 8192 bytes; it has no loops,
+	// .State, .Key, .Fields, .Link, .Source). Required for botMessage and personMessage. At most 8192 bytes; it has no loops,
 	// variables or defined templates, and calls only and, eq, ge, gt, index, le, len, lt, ne, not, or and slice.
 	// +kubebuilder:validation:MaxLength=8192
 	PromptTemplate string `json:"promptTemplate,omitempty"`
 	// Limits bounds how many investigations the trigger starts (rate, concurrency and a daily cap). Required
-	// for botMessage: both rateLimit and maxRunsPerDay.
+	// for botMessage and personMessage: both rateLimit and maxRunsPerDay.
 	// +optional
 	Limits TriggerLimits `json:"limits,omitzero"`
 }
@@ -204,6 +217,11 @@ type TriggerThread struct {
 	CloseWhen map[string]string `json:"closeWhen,omitempty"`
 }
 
+// isSet says whether any thread rule is set.
+func (t TriggerThread) isSet() bool {
+	return t.By != "" || t.Cooldown.Duration != 0 || t.MaxIdle.Duration != 0 || len(t.CloseWhen) > 0
+}
+
 // MaxThreadMaxIdle is the most idle time a trigger can mean (720h): the ceiling validation holds a set
 // thread.maxIdle to, above the default of the longest cooldown. A sweep of the rows of idle threads must cut off
 // no later than now minus this, or it would delete a thread that a trigger with a long maxIdle still counts live.
@@ -268,7 +286,7 @@ type PromptView struct {
 	// Link is the platform's permalink of the triggering message, built by Agent Kourier from the channel
 	// and the message's ID. It is not taken from the message: never the message's own link field.
 	Link string
-	// Source names what sent the message: "botMessage" for a trigger of that type.
+	// Source names what sent the message: "botMessage" or "personMessage", the type of the trigger.
 	Source string
 	// Fields holds one value per extract entry, by the entry's name.
 	Fields map[string]string

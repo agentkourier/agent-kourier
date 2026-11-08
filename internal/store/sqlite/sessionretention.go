@@ -111,7 +111,7 @@ func deleteSession(ctx context.Context, tx *sql.Tx, k store.ConversationKey, out
 		{"presses", `DELETE FROM interaction_presses WHERE interaction_id IN
 			(SELECT id FROM interactions WHERE connection = ? AND channel = ? AND thread_ts = ? AND ` + decided + `)`, &out.Presses, where},
 		{"interactions", `DELETE FROM interactions WHERE connection = ? AND channel = ? AND thread_ts = ? AND ` + decided, &out.Interactions, where},
-		{"outbox rows of the thread", `DELETE FROM outbox WHERE channel = ? AND thread_ts = ? AND ` + settled, &out.Outbox, []any{k.Channel, k.Thread}},
+		{"outbox rows of the thread", `DELETE FROM outbox WHERE connection = ? AND channel = ? AND thread_ts = ? AND ` + settled, &out.Outbox, where},
 	}
 	for _, id := range replies {
 		b := store.NewBinder(d)

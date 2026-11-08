@@ -16,6 +16,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/feedback"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
@@ -131,7 +132,7 @@ func newRig(t *testing.T) *rig {
 	}
 	r.message(t, key, turn, "100.9")
 	r.h, err = feedback.New(feedback.Config{
-		Store: st, Sessions: st, Authorizer: r.az, Ephemerals: r.eph, Auditor: r.aud,
+		Store: st, Sessions: st, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Auditor: r.aud,
 		Limits: store.PressLimits{Total: 10, PerUser: 3}, Logger: slog.New(slog.NewTextHandler(&r.logs, nil)),
 		Now: func() time.Time { return r.now }, Notify: func(p store.Press) { r.seen = append(r.seen, p) },
 	})
@@ -145,7 +146,7 @@ func newRig(t *testing.T) *rig {
 func (r *rig) message(t *testing.T, k store.ConversationKey, turn, ref string) {
 	t.Helper()
 	id := outbox.ID(turn, store.OutboxReply)
-	if _, err := r.st.CreateOutbox(t.Context(), store.OutboxEntry{ID: id, EventID: turn, Role: store.OutboxReply, Channel: k.Channel, Thread: k.Thread, CreatedAt: t0}); err != nil {
+	if _, err := r.st.CreateOutbox(t.Context(), store.OutboxEntry{ID: id, EventID: turn, Role: store.OutboxReply, Connection: k.Connection, Channel: k.Channel, Thread: k.Thread, CreatedAt: t0}); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.st.RecordMessageRef(t.Context(), id, ref); err != nil {
@@ -309,6 +310,9 @@ func TestPressRecordsAtAgentKouriersTimeAndDoesNoneOfTheWork(t *testing.T) {
 	presses, _ := r.st.ListPresses(t.Context())
 	if len(presses) != 1 || !presses[0].PressedAt.Equal(t0) || len(r.seen) != 1 || r.seen[0].Seq != presses[0].Seq {
 		t.Fatalf("presses %+v, announced %+v; want one, at Agent Kourier's own time, announced to the worker", presses, r.seen)
+	}
+	if key.Connection == "" || presses[0].Connection != key.Connection {
+		t.Errorf("the press has connection %q; want the one it came in on, %q", presses[0].Connection, key.Connection)
 	}
 	if r.az.asked != 0 || len(r.eph.list()) != 0 || len(r.votes(t)) != 0 {
 		t.Error("recording the press did the work of processing it")
@@ -676,7 +680,7 @@ func TestAPressBeforeTheMessageIsRecordedIsKeptUntilItIs(t *testing.T) {
 	setup := func(t *testing.T) (*rig, chat.Interaction, string) {
 		r := newRig(t)
 		id := outbox.ID(unposted, store.OutboxReply)
-		if _, err := r.st.CreateOutbox(t.Context(), store.OutboxEntry{ID: id, EventID: unposted, Role: store.OutboxReply, Channel: key.Channel, Thread: key.Thread, CreatedAt: t0}); err != nil {
+		if _, err := r.st.CreateOutbox(t.Context(), store.OutboxEntry{ID: id, EventID: unposted, Role: store.OutboxReply, Connection: key.Connection, Channel: key.Channel, Thread: key.Thread, CreatedAt: t0}); err != nil {
 			t.Fatal(err)
 		}
 		i := press("UALICE1", store.FeedbackInvestigation, store.VerdictUseful)
@@ -750,7 +754,7 @@ func TestAPressRecordedBeforeARestartIsProcessedAfterIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A new Handler over the same store, as a restart makes, finds the press in the store and processes it.
-	h, err := feedback.New(notifying(feedback.Config{Store: r.st, Sessions: r.st, Authorizer: r.az, Ephemerals: r.eph, Auditor: r.aud, Now: func() time.Time { return t0.Add(time.Hour) }}))
+	h, err := feedback.New(notifying(feedback.Config{Store: r.st, Sessions: r.st, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Auditor: r.aud, Now: func() time.Time { return t0.Add(time.Hour) }}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -870,7 +874,7 @@ func notifying(cfg feedback.Config) feedback.Config {
 // New refuses a Config without Notify, and the error names it: the worker would never hear of a press.
 func TestNewRefusesAnUnwiredNotify(t *testing.T) {
 	r := newRig(t)
-	_, err := feedback.New(feedback.Config{Store: r.st, Sessions: r.st, Authorizer: r.az, Ephemerals: r.eph, Auditor: r.aud})
+	_, err := feedback.New(feedback.Config{Store: r.st, Sessions: r.st, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Auditor: r.aud})
 	if err == nil || !strings.Contains(err.Error(), "Notify") {
 		t.Fatalf("New = %v; want an error that names Notify", err)
 	}

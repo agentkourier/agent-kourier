@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/limitsdoc"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -20,7 +21,7 @@ func (noEphemeral) Ephemeral(context.Context, chat.Target, string, chat.Message)
 func TestLimitsPage(t *testing.T) {
 	p, err := NewPipeline(PressConfig{
 		Store: struct{ PressStore }{}, Sessions: struct{ SessionReader }{}, Lookup: struct{ Lookup }{},
-		Authorizer: struct{ Authorizer }{}, Ephemerals: noEphemeral{}, Decider: struct{ PressDecider }{},
+		Authorizers: chattest.Same[Authorizer](struct{ Authorizer }{}), Ephemerals: chattest.Same[Ephemeral](noEphemeral{}), Decider: struct{ PressDecider }{},
 		Auditor: struct{ Auditor }{}, Notify: func(store.Press) {},
 	})
 	if err != nil {

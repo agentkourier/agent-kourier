@@ -36,11 +36,15 @@ type OutboxEntry struct {
 	ID string
 	// EventID is the source ID: the event ID, or for a digest (D26) the
 	// deterministic ID of its window.
-	EventID   string
-	Role      OutboxRole
-	Channel   string
-	Thread    string // empty for a root post
-	CreatedAt time.Time
+	EventID string
+	Role    OutboxRole
+	// Connection is the ChatConnection ("namespace/name") whose app posts the row: channel IDs are not unique across
+	// apps, so the channel and thread name a conversation only with it. Empty is a row written before the broker
+	// recorded connections, which belongs to the broker's own connection until AttributeConnection says so.
+	Connection string
+	Channel    string
+	Thread     string // empty for a root post
+	CreatedAt  time.Time
 	// MessageRef identifies the posted message; empty until recorded.
 	MessageRef string
 	// Payload is the message to post, as JSON the store never interprets. It is cleared when
@@ -72,11 +76,6 @@ type Outbox interface {
 	// ErrNotFound if the row does not exist; ErrConflict if it already has a message ref;
 	// ErrInvalid if at is zero or not after the Unix epoch (a stored 0 means "not abandoned").
 	AbandonOutbox(ctx context.Context, id string, at time.Time) (abandoned bool, err error)
-	// AbandonOutboxBefore abandons, as of at, every row created before the cutoff that has a
-	// Payload and no message ref and is not abandoned, and returns their IDs: the retention
-	// limit on unposted text. A row with no Payload, a stream's, is left alone. ErrInvalid if
-	// either time is zero or not after the Unix epoch.
-	AbandonOutboxBefore(ctx context.Context, before, at time.Time) (ids []string, err error)
 	// ListUnposted returns rows with no message ref that are not abandoned, oldest first (rows made at
 	// the same time in any order), for recovery reconciliation.
 	ListUnposted(ctx context.Context) ([]OutboxEntry, error)

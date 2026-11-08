@@ -9,7 +9,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
-// RecordPress implements store.Presses. The counts and the insert are one transaction on the
+// RecordPress implements store.Presses. The counts, of the presses of p's connection, and the insert are one transaction on the
 // single write connection, so the limits hold under concurrent presses.
 func (s *adapter) RecordPress(ctx context.Context, p store.Press, limits store.PressLimits) (int64, error) {
 	if p.Inputs == nil {
@@ -18,14 +18,14 @@ func (s *adapter) RecordPress(ctx context.Context, p store.Press, limits store.P
 	var seq int64
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		var total, user int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(user_id = ?), 0) FROM interaction_presses`, p.User).Scan(&total, &user); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(user_id = ?), 0) FROM interaction_presses WHERE connection = ?`, p.User, p.Connection).Scan(&total, &user); err != nil {
 			return fmt.Errorf("count presses: %w", err)
 		}
 		if total >= limits.Total || user >= limits.PerUser {
 			return fmt.Errorf("%d presses wait, %d from %s: %w", total, user, p.User, store.ErrLimit)
 		}
-		res, err := tx.ExecContext(ctx, `INSERT INTO interaction_presses (interaction_id, user_id, channel, message_ts, inputs, pressed_at, trace_parent, trace_state)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, p.InteractionID, p.User, p.Channel, p.MessageRef, p.Inputs, ts(p.PressedAt), p.TraceParent, p.TraceState)
+		res, err := tx.ExecContext(ctx, `INSERT INTO interaction_presses (interaction_id, user_id, connection, channel, message_ts, inputs, pressed_at, trace_parent, trace_state)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, p.InteractionID, p.User, p.Connection, p.Channel, p.MessageRef, p.Inputs, ts(p.PressedAt), p.TraceParent, p.TraceState)
 		if err != nil {
 			return err
 		}
@@ -40,7 +40,7 @@ func (s *adapter) RecordPress(ctx context.Context, p store.Press, limits store.P
 
 // ListPresses implements store.Presses.
 func (s *adapter) ListPresses(ctx context.Context) ([]store.Press, error) {
-	rows, err := s.read.QueryContext(ctx, `SELECT seq, interaction_id, user_id, channel, message_ts, inputs, pressed_at, trace_parent, trace_state
+	rows, err := s.read.QueryContext(ctx, `SELECT seq, interaction_id, user_id, connection, channel, message_ts, inputs, pressed_at, trace_parent, trace_state
 		FROM interaction_presses ORDER BY seq`)
 	if err != nil {
 		return nil, fmt.Errorf("list presses: %w", err)
@@ -50,7 +50,7 @@ func (s *adapter) ListPresses(ctx context.Context) ([]store.Press, error) {
 	for rows.Next() {
 		var p store.Press
 		var at int64
-		if err := rows.Scan(&p.Seq, &p.InteractionID, &p.User, &p.Channel, &p.MessageRef, &p.Inputs, &at, &p.TraceParent, &p.TraceState); err != nil {
+		if err := rows.Scan(&p.Seq, &p.InteractionID, &p.User, &p.Connection, &p.Channel, &p.MessageRef, &p.Inputs, &at, &p.TraceParent, &p.TraceState); err != nil {
 			return nil, fmt.Errorf("list presses: %w", err)
 		}
 		p.PressedAt = fromTS(at)

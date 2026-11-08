@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    agentkourier.dev/schema-sha256: 9708cc81a96bf49b96e86c08f8aba41b770874c71ef9bf618e6a68098741428b
+    agentkourier.dev/schema-sha256: 474c6b70686538358e9ba7449a7a47ea40d1120faf15e540fff0b0ec904d5e99
     controller-gen.kubebuilder.io/version: v0.23.0
   name: bindings.agentkourier.dev
 spec:
@@ -260,8 +260,9 @@ spec:
                         exclude:
                           additionalProperties:
                             type: string
-                          description: Exclude maps a message field to a regex; a
-                            message matching any entry is ignored.
+                          description: |-
+                            Exclude maps a message field to a regex; a message matching any entry is ignored. A personMessage trigger has
+                            the field text alone.
                           maxProperties: 6
                           type: object
                           x-kubernetes-validations:
@@ -307,7 +308,8 @@ spec:
                             type: object
                           description: |-
                             Extract names the values to pull out of a message. A message in which one of these
-                            regexes does not match does not match the trigger. At most 32, each named in at most 63 bytes.
+                            regexes does not match does not match the trigger. At most 32, each named in at most 63 bytes. A
+                            personMessage trigger takes none.
                           maxProperties: 32
                           type: object
                           x-kubernetes-validations:
@@ -348,11 +350,11 @@ spec:
                         limits:
                           description: |-
                             Limits bounds how many investigations the trigger starts (rate, concurrency and a daily cap). Required
-                            for botMessage: both rateLimit and maxRunsPerDay.
+                            for botMessage and personMessage: both rateLimit and maxRunsPerDay.
                           properties:
                             maxRunsPerDay:
                               description: |-
-                                MaxRunsPerDay caps starts in any 24 hours. Required for a botMessage trigger: an explicit 0 means
+                                MaxRunsPerDay caps starts in any 24 hours. Required for a botMessage or personMessage trigger: an explicit 0 means
                                 no cap.
                               format: int32
                               minimum: 0
@@ -360,7 +362,7 @@ spec:
                             rateLimit:
                               description: |-
                                 RateLimit allows MaxRuns starts in any window of Per, and MaxConcurrent investigations running at once.
-                                Required for a botMessage trigger, with all three fields set.
+                                Required for a botMessage or personMessage trigger, with all three fields set.
                               properties:
                                 maxConcurrent:
                                   format: int32
@@ -389,8 +391,9 @@ spec:
                         match:
                           additionalProperties:
                             type: string
-                          description: Match maps a message field to a regex it must
-                            match. Every entry must match.
+                          description: |-
+                            Match maps a message field to a regex it must match. Every entry must match. A personMessage trigger has the
+                            field text alone.
                           maxProperties: 6
                           type: object
                           x-kubernetes-validations:
@@ -406,13 +409,14 @@ spec:
                         promptTemplate:
                           description: |-
                             PromptTemplate is a Go template over the trigger's view of the message (.Channel,
-                            .State, .Key, .Fields, .Link, .Source). Required for botMessage. At most 8192 bytes; it has no loops,
+                            .State, .Key, .Fields, .Link, .Source). Required for botMessage and personMessage. At most 8192 bytes; it has no loops,
                             variables or defined templates, and calls only and, eq, ge, gt, index, le, len, lt, ne, not, or and slice.
                           maxLength: 8192
                           type: string
                         thread:
-                          description: Thread ties messages that share an extracted
-                            key to one thread.
+                          description: |-
+                            Thread ties messages that share an extracted key to one thread. A personMessage trigger takes none: each
+                            message it matches is a thread of its own.
                           properties:
                             by:
                               description: 'By is key: messages with the same extracted
@@ -488,12 +492,13 @@ spec:
                               : duration(''0s'')) && duration(self.maxIdle) <= duration(''720h''))'
                         type:
                           description: |-
-                            Type is mention, a person @mentioning Agent Kourier, or botMessage, a message a bot posts.
-                            A mention trigger takes no other field. The key is type, not on: YAML 1.1 reads a bare
+                            Type is mention, a person @mentioning Agent Kourier, botMessage, a message a bot posts, or personMessage, a
+                            top-level message a person posts. A mention trigger takes no other field. The key is type, not on: YAML 1.1 reads a bare
                             on as the boolean true, and the loader's decoder follows it.
                           enum:
                           - mention
                           - botMessage
+                          - personMessage
                           type: string
                       required:
                       - type
@@ -544,6 +549,43 @@ spec:
                         message: 'required with type: botMessage: set the cap for
                           a day, or 0 for no cap'
                         rule: self.type != 'botMessage' || (has(self.limits) && has(self.limits.maxRunsPerDay))
+                      - fieldPath: .from
+                        message: 'not allowed with type: personMessage'
+                        rule: self.type != 'personMessage' || !has(self.from)
+                      - fieldPath: .match
+                        message: a person's message has only the field text
+                        rule: self.type != 'personMessage' || !has(self.match) ||
+                          self.match.all(k, k == 'text')
+                      - fieldPath: .exclude
+                        message: a person's message has only the field text
+                        rule: self.type != 'personMessage' || !has(self.exclude) ||
+                          self.exclude.all(k, k == 'text')
+                      - fieldPath: .extract
+                        message: 'not allowed with type: personMessage'
+                        rule: self.type != 'personMessage' || !has(self.extract) ||
+                          size(self.extract) == 0
+                      - fieldPath: .thread
+                        message: 'not allowed with type: personMessage'
+                        rule: self.type != 'personMessage' || !has(self.thread) ||
+                          !((has(self.thread.by) && self.thread.by != "") || (has(self.thread.cooldown)
+                          && duration(self.thread.cooldown) != duration('0s')) ||
+                          (has(self.thread.maxIdle) && duration(self.thread.maxIdle)
+                          != duration('0s')) || (has(self.thread.closeWhen) && size(self.thread.closeWhen)
+                          > 0))
+                      - fieldPath: .promptTemplate
+                        message: 'required with type: personMessage'
+                        rule: self.type != 'personMessage' || (has(self.promptTemplate)
+                          && self.promptTemplate != "")
+                      - fieldPath: .limits.rateLimit
+                        message: 'required with type: personMessage: set maxRuns,
+                          per and maxConcurrent'
+                        rule: self.type != 'personMessage' || (has(self.limits) &&
+                          has(self.limits.rateLimit))
+                      - fieldPath: .limits.maxRunsPerDay
+                        message: 'required with type: personMessage: set the cap for
+                          a day, or 0 for no cap'
+                        rule: self.type != 'personMessage' || (has(self.limits) &&
+                          has(self.limits.maxRunsPerDay))
                       - fieldPath: .thread.by
                         message: 'thread.by: key requires an extract named "key"'
                         rule: '!(has(self.thread) && has(self.thread.by) && self.thread.by

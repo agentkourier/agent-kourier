@@ -346,7 +346,7 @@ func TestTriggersValidate(t *testing.T) {
 		{"the fixture is valid", func(*Binding) {}, ""},
 		{"no triggers at all", func(o *Binding) { o.Spec.Chat.Triggers = nil }, ""},
 		{"unknown kind", func(o *Binding) { bot(o).Type = "message" },
-			at + `.type: unsupported value "message", must be one of mention, botMessage`},
+			at + `.type: unsupported value "message", must be one of mention, botMessage, personMessage`},
 		{"mention with a source", func(o *Binding) { o.Spec.Chat.Triggers[0].From = &BotSource{ID: "B0123456789"} },
 			"spec.chat.triggers[0].from: not allowed with type: mention"},
 		{"mention with a prompt", func(o *Binding) { o.Spec.Chat.Triggers[0].PromptTemplate = "x" },
@@ -572,6 +572,80 @@ func TestTriggersValidate(t *testing.T) {
 		{"another bot with the same match is not a duplicate", func(o *Binding) {
 			other := *bot(o)
 			other.From = &BotSource{ID: "B0000000001", Kind: SenderKindBot}
+			o.Spec.Chat.Triggers = append(o.Spec.Chat.Triggers, other)
+		}, ""},
+	})
+}
+
+// person appends a valid personMessage trigger to o's triggers, and returns it: [2].
+func person(o *Binding) *Trigger {
+	perDay := int32(50)
+	o.Spec.Chat.Triggers = append(o.Spec.Chat.Triggers, Trigger{
+		Type:           TriggerPersonMessage,
+		Exclude:        map[MessageField]string{FieldText: `^(?:thanks|ok)\b`},
+		PromptTemplate: "A person reported something in {{ .Channel }}: {{ .Link }}.",
+		Limits: TriggerLimits{
+			RateLimit:     &RateLimit{MaxRuns: 6, Per: metav1.Duration{Duration: 30 * time.Minute}, MaxConcurrent: 2},
+			MaxRunsPerDay: &perDay,
+		},
+	})
+	return &o.Spec.Chat.Triggers[2]
+}
+
+// A personMessage trigger is bounded like a botMessage trigger: it needs limits and a prompt template. A person's message has
+// no sender to name, no structured part to read and no key to thread by, so it takes no from, extract or thread, and match and
+// exclude read only text. A trigger that lacks its limits is pointed at the personMessage example, not the Alertmanager one.
+func TestPersonMessageTriggerValidate(t *testing.T) {
+	const (
+		at         = "spec.chat.triggers[2]"
+		personHint = "see the example in reference/chat-triggers (https://agentkourier.dev/reference/chat-triggers/#a-persons-message)"
+	)
+	runMutations[Binding](t, "binding.yaml", []mutation[Binding]{
+		{"a personMessage trigger ok", func(o *Binding) { person(o) }, ""},
+		{"with a match on text ok", func(o *Binding) { person(o).Match = map[MessageField]string{FieldText: "(?i)down"} }, ""},
+		{"beside a mention trigger and a botMessage trigger ok", func(o *Binding) { person(o) }, ""},
+		{"without a mention trigger ok", func(o *Binding) { person(o); o.Spec.Chat.Triggers = o.Spec.Chat.Triggers[1:] }, ""},
+		{"with a daily cap of 0 ok", func(o *Binding) { person(o).Limits.MaxRunsPerDay = new(int32(0)) }, ""},
+		{"with a source", func(o *Binding) { person(o).From = &BotSource{ID: "B0123456789", Kind: SenderKindBot} },
+			at + ".from: not allowed with type: personMessage"},
+		{"with an extract", func(o *Binding) {
+			person(o).Extract = map[string]Extract{"key": {Field: FieldText, Regex: "(?P<key>.+)"}}
+		}, at + ".extract: not allowed with type: personMessage"},
+		{"with a thread rule", func(o *Binding) { person(o).Thread.By = ThreadByKey },
+			at + ".thread: not allowed with type: personMessage"},
+		{"with a cooldown", func(o *Binding) { person(o).Thread.Cooldown = metav1.Duration{Duration: time.Hour} },
+			at + ".thread: not allowed with type: personMessage"},
+		{"with a match on a field a person's message lacks", func(o *Binding) { person(o).Match = map[MessageField]string{FieldTitle: "x"} },
+			at + ".match.title: a person's message has only the field text"},
+		{"with an exclude on a field a person's message lacks", func(o *Binding) { person(o).Exclude = map[MessageField]string{FieldBody: "x"} },
+			at + ".exclude.body: a person's message has only the field text"},
+		{"with a match on an unknown field", func(o *Binding) { person(o).Match = map[MessageField]string{"subject": "x"} },
+			at + `.match.subject: unsupported message field "subject", must be one of text, title, link, fallback, footer, body`},
+		{"with a match regex that does not compile", func(o *Binding) { person(o).Match = map[MessageField]string{FieldText: "("} },
+			at + ".match.text: invalid regular expression: error parsing regexp: missing closing ): `(`"},
+		{"with an exclude regex over the length cap", func(o *Binding) { person(o).Exclude = map[MessageField]string{FieldText: strings.Repeat("a", 513)} },
+			at + ".exclude.text: regular expression is 513 bytes, longer than the 512 byte limit"},
+		{"without a rate limit", func(o *Binding) { person(o).Limits.RateLimit = nil },
+			at + ".limits.rateLimit: required: set maxRuns, per and maxConcurrent; " + personHint},
+		{"without a daily cap", func(o *Binding) { person(o).Limits.MaxRunsPerDay = nil },
+			at + ".limits.maxRunsPerDay: required: set the cap for a day, or 0 for no cap; " + personHint},
+		{"with a rate window over a day", func(o *Binding) { person(o).Limits.RateLimit.Per = metav1.Duration{Duration: 25 * time.Hour} },
+			at + ".limits.rateLimit.per: 25h0m0s is out of range, must be between 10s and 24h0m0s"},
+		{"without a prompt template", func(o *Binding) { person(o).PromptTemplate = "" }, at + ".promptTemplate: required"},
+		{"with a template that reads an extract it has not", func(o *Binding) { person(o).PromptTemplate = "{{ .Fields.alertname }}" },
+			at + ".promptTemplate: invalid template: promptTemplate:1:10: .Fields.alertname is not an extract of this trigger (extract has none)"},
+		{"with a template that loops", func(o *Binding) { person(o).PromptTemplate = `{{ range 3 }}x{{ end }}` },
+			at + `.promptTemplate: invalid template: promptTemplate:1:9: range is not allowed: a prompt template has no loops`},
+		{"with a template over the length cap", func(o *Binding) { person(o).PromptTemplate = strings.Repeat("x", maxPromptTemplateLen+1) },
+			fmt.Sprintf("%s.promptTemplate: is %d bytes, longer than the %d byte limit", at, maxPromptTemplateLen+1, maxPromptTemplateLen)},
+		{"twice with the same match and exclude", func(o *Binding) {
+			dup := *person(o)
+			dup.PromptTemplate = "another prompt"
+			o.Spec.Chat.Triggers = append(o.Spec.Chat.Triggers, dup)
+		}, "spec.chat.triggers[3]: duplicate of spec.chat.triggers[2]"},
+		{"twice with another match is not a duplicate", func(o *Binding) {
+			other := *person(o)
+			other.Match = map[MessageField]string{FieldText: "database"}
 			o.Spec.Chat.Triggers = append(o.Spec.Chat.Triggers, other)
 		}, ""},
 	})

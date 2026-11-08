@@ -126,6 +126,7 @@ Every Slack call Agent Kourier makes, and the scope in the manifest that allows 
 | Call | Scope |
 |---|---|
 | `auth.test` | none |
+| `bots.info`, made by the leader once for each ChatConnection it serves, the broker's own included, but only when it serves a team ChatConnection, to tell which Slack app the bot belongs to | `users:read` (Slack's documentation for the method; not verified here) |
 | `users.info`, with the email for the audit log | `users:read`, `users:read.email` |
 | `chat.postMessage`, `chat.update`, `chat.postEphemeral` | `chat:write` |
 | `chat.startStream`, `chat.appendStream`, `chat.stopStream` | `chat:write` |
@@ -138,6 +139,9 @@ Every Slack call Agent Kourier makes, and the scope in the manifest that allows 
 | `usergroups.users.list`, made when someone presses a tool approval on a Binding that sets `interactions.approverGroups`, and by the leader to [verify each such Binding](troubleshoot.md#a-binding-is-not-ready) | `usergroups:read` when a Binding sets `interactions.approverGroups` |
 | Events `app_mention`, `message.channels`, `message.groups` | `app_mentions:read`, `channels:history`, `groups:history` |
 | Socket Mode | the app-level token, `connections:write` |
+
+The `message.channels` and `message.groups` events carry a person's replies in a thread Agent Kourier owns and, for a Binding with a
+[`personMessage` trigger](../reference/chat-triggers.md#a-persons-message), each message a person posts outside a thread; no other scope or event is needed for it.
 
 The leader calls `conversations.info` once for each Binding's channel on each pass of [Binding verification](../reference/metrics.md#binding-verification), and `usergroups.users.list` up to once for each approver group that the Bindings setting `interactions.approverGroups` name, a group that several Bindings name once unless a read is cut short at its Binding's 8 second bound, when the next Binding that needs the group reads it again (a Binding's read stops at the first group that fails, and none is made while the chat credentials Secret differs from the tokens in use or is unusable: gone, empty, missing a key, or of a type that is never read). An app without the scope reads `False/MissingScope` on `ChannelJoined`, or on `ApproversReadable` for the groups; the calls only report, and turns still run.
 

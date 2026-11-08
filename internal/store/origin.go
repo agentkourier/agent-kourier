@@ -10,6 +10,10 @@ const MaxOriginPart = 128
 // OriginBotMention is the source of a session that a bot's mention made. It is no alert, so feedback attributes no alert to it.
 const OriginBotMention = "botMention"
 
+// OriginPersonMessage is the source of a session that a personMessage trigger made, from a person's top-level message. It is no
+// alert, so feedback attributes no alert to it.
+const OriginPersonMessage = "personMessage"
+
 // Origin identifies the bounded external source and subject that caused a
 // session. The zero value is an ordinary conversation. Source may be present
 // without Subject when a source has no subject to retain.

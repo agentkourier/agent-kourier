@@ -198,6 +198,12 @@ An alert thread is a session like any other, started by a trigger instead of a p
 to the thread as notes, its resolve closes it with a note, and people continue the investigation by replying. The
 first turn names no person; it is filed under the system user. See [Chat triggers](../reference/chat-triggers.md).
 
+## A person's report
+
+A `personMessage` trigger starts a session on a message a person posts at the top level of the channel, in that message's thread. Unlike an
+alert's, the first turn is the person's: it names them, as a mention does. The session takes a reply only if it mentions Agent Kourier, whatever
+`chat.threadReplies` says, because people discuss a report under it. See [A person's message](../reference/chat-triggers.md#a-persons-message).
+
 ## Another agent's mention
 
 Another bot's mention is a turn of the thread it is in, filed under the system user too. It can start a session in a thread Agent Kourier does not

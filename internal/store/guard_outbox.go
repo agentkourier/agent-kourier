@@ -62,16 +62,3 @@ func (g *Guarded) AbandonOutbox(ctx context.Context, id string, at time.Time) (a
 	})
 	return abandoned, err
 }
-
-// AbandonOutboxBefore implements Outbox.
-func (g *Guarded) AbandonOutboxBefore(ctx context.Context, before, at time.Time) (ids []string, err error) {
-	err = g.run(ctx, "agentkourier.store.AbandonOutboxBefore", func(ctx context.Context) error {
-		if !validTime(before) || !validTime(at) {
-			return fmt.Errorf("abandon old outbox rows (before %v, at %v): both times must be after the Unix epoch: %w", before, at, ErrInvalid)
-		}
-		var err error
-		ids, err = g.a.AbandonOutboxBefore(ctx, before, at)
-		return err
-	})
-	return ids, err
-}

@@ -147,6 +147,80 @@ func TestReplayAgreesWithTheIntake(t *testing.T) {
 	}
 }
 
+// A personMessage trigger is replayed as the intake runs it: a person's top-level message that it takes is matched, one its
+// exclude turns away is excluded and says where, and one its match misses is unmatched. A person's reply in a thread, and a
+// mention where the Binding has a mention trigger, are no input of it and stay person; a bot's message is still a botMessage
+// trigger's alone.
+func TestReplayRunsAPersonMessageTrigger(t *testing.T) {
+	mention := v1alpha1.Trigger{Type: v1alpha1.TriggerMention}
+	reports := personTrigger(func(tr *v1alpha1.Trigger) {
+		tr.Match = map[v1alpha1.MessageField]string{v1alpha1.FieldText: `(?i)down|slow`}
+		tr.Exclude = map[v1alpha1.MessageField]string{v1alpha1.FieldText: `^(?i:thanks)\b`}
+	})
+	said := func(id, thread, text string, mentioned bool) chat.HistoryMessage {
+		m := personPost("C1", id, thread, text)
+		m.Mentioned = mentioned
+		return chat.HistoryMessage{Message: m}
+	}
+	for _, tc := range []struct {
+		name     string
+		triggers []v1alpha1.Trigger
+		msg      chat.HistoryMessage
+		want     chat.ReplayVerdict
+	}{
+		{"a report", []v1alpha1.Trigger{mention, reports}, said("1.1", "", "checkout is down", false), chat.ReplayVerdict{Outcome: chat.ReplayMatched, Trigger: 1, Fields: map[string]string{}}},
+		{"thanks", []v1alpha1.Trigger{mention, reports}, said("1.2", "", "thanks, checkout is down no more", false), chat.ReplayVerdict{Outcome: chat.ReplayExcluded, Why: "trigger 1: exclude text"}},
+		{"chatter", []v1alpha1.Trigger{mention, reports}, said("1.3", "", "lunch?", false), chat.ReplayVerdict{Outcome: chat.ReplayUnmatched, Why: "trigger 1: match text"}},
+		{"a reply in a thread", []v1alpha1.Trigger{mention, reports}, said("1.5", "1.1", "it is slow too", false), chat.ReplayVerdict{Outcome: chat.ReplayPerson}},
+		{"a mention, with a mention trigger", []v1alpha1.Trigger{reports, mention}, said("1.6", "", "<@UFAKEBOT> is it down?", true), chat.ReplayVerdict{Outcome: chat.ReplayPerson}},
+		{"a mention, without one", []v1alpha1.Trigger{reports}, said("1.7", "", "<@UFAKEBOT> is it down?", true), chat.ReplayVerdict{Outcome: chat.ReplayMatched, Trigger: 0, Fields: map[string]string{}}},
+		{"a person, with no personMessage trigger", []v1alpha1.Trigger{mention, trialTrigger()}, said("1.8", "", "checkout is down", false), chat.ReplayVerdict{Outcome: chat.ReplayPerson}},
+		{"a bot, beside a personMessage trigger", []v1alpha1.Trigger{reports, trialTrigger()}, history("1.9", &kindFiring), chat.ReplayVerdict{Outcome: chat.ReplayMatched, Trigger: 1,
+			Fields: map[string]string{"state": "FIRING", "alertname": "KubePodCrashLooping", "key": "KubePodCrashLooping shop"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := replayOf(t, newTriggered(t, tc.triggers...)).Classify(tc.msg)
+			if got.Outcome != tc.want.Outcome || got.Trigger != tc.want.Trigger || got.Why != tc.want.Why || !maps.Equal(got.Fields, tc.want.Fields) {
+				t.Fatalf("Classify = %+v; want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// What the dry run says of a person's message is what the intake does with it: matched where the intake starts a turn from a
+// personMessage trigger, unmatched or excluded where it counts it unmatched, and person where it does neither.
+func TestReplayOfAPersonAgreesWithTheIntake(t *testing.T) {
+	const binding = "sre/sre-alerts"
+	reports := personTrigger(func(tr *v1alpha1.Trigger) {
+		tr.Match = map[v1alpha1.MessageField]string{v1alpha1.FieldText: `(?i)down`}
+		tr.Exclude = map[v1alpha1.MessageField]string{v1alpha1.FieldText: `^(?i:thanks)\b`}
+	})
+	h := newTriggered(t, v1alpha1.Trigger{Type: v1alpha1.TriggerMention}, reports)
+	r := replayOf(t, h)
+	for i, tc := range []struct {
+		text, thread string
+		mentioned    bool
+	}{
+		{"checkout is down", "", false}, {"thanks, it is down no more", "", false}, {"lunch?", "", false},
+		{"<@UFAKEBOT> is it down?", "", true}, {"still down", "1.0", false},
+	} {
+		id := strconv.Itoa(i+1) + ".1"
+		m := personPost("C1", id, tc.thread, tc.text)
+		m.Mentioned = tc.mentioned
+		started, unmatched := len(h.got()), h.counter(t, "agentkourier_trigger_unmatched_total", binding)
+		if err := h.in.Message(h.ctx, m); err != nil {
+			t.Fatal(err)
+		}
+		intakeStarted := len(h.got())-started == 1
+		intakeUnmatched := h.counter(t, "agentkourier_trigger_unmatched_total", binding)-unmatched == 1
+		got := r.Classify(chat.HistoryMessage{Message: m})
+		replayUnmatched := got.Outcome == chat.ReplayUnmatched || got.Outcome == chat.ReplayExcluded
+		if (got.Outcome == chat.ReplayMatched) != intakeStarted || replayUnmatched != intakeUnmatched || (got.Outcome == chat.ReplayPerson) != (!intakeStarted && !intakeUnmatched) {
+			t.Errorf("%q: replay says %q; the intake started %t and counted it unmatched %t", tc.text, got.Outcome, intakeStarted, intakeUnmatched)
+		}
+	}
+}
+
 // A Binding whose trigger does not compile cannot be replayed, and says which; load rejects such a trigger, so this is
 // a Binding that did not come through the loader.
 func TestNewReplayRefusesATriggerThatDoesNotCompile(t *testing.T) {

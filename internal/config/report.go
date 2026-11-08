@@ -94,6 +94,16 @@ type UnservedReason string
 // and this one is not among the oldest.
 const UnservedCap UnservedReason = "cap"
 
+// UnservedStopped is the reason of a connection that the broker served before and does not now, though it still exists: the
+// namespace was taken off the admission list, or the broker's own connection was changed. A source does not give it, since it cannot
+// know what the broker served before; the broker adds it from the record in its store (the status writer's served set).
+const UnservedStopped UnservedReason = "stopped"
+
+// ReasonConnectionNotServed is the reason of an Accepted condition of a Binding whose ChatConnection exists and is not served by this
+// broker, because of an UnservedConnection. It is no Rejection of a source: the Bindings of such a connection are in no Rejection, the
+// status writer composes it, and it has no place among the reasons that the metric counts.
+const ReasonConnectionNotServed RejectionReason = "ConnectionNotServed"
+
 // UnservedConnection says that a ChatConnection of a namespace the broker reads is not served, and why. It is not an Invalid: the
 // object may be valid, and nothing in it is wrong. The Bindings that name it are not this broker's to serve or to report.
 type UnservedConnection struct {
@@ -106,6 +116,9 @@ type UnservedConnection struct {
 	// Bindings is the "namespace/name" of each Binding that exists and names this connection, sorted. None is in the Snapshot: they are
 	// what the status of the connection's Bindings and the retention of their sessions need.
 	Bindings []string
+	// Admitted is the part of Bindings whose namespace the connection allows (its own namespace, or one in its allowedNamespaces). The
+	// status may name the connection to these and no others; the retention of sessions needs all of Bindings.
+	Admitted []string
 }
 
 // Report is what a Reloader knows about the config it serves besides the Snapshot: the objects it refused and the
@@ -126,14 +139,18 @@ type Report struct {
 	UnservedConnections []UnservedConnection
 }
 
-// Unserved returns the "namespace/name" of each Binding that exists and is not in the Snapshot, sorted. Its sessions
-// belong to a Binding that is in the cluster and left out of routing, not to one that was deleted.
+// Unserved returns the "namespace/name" of each Binding that exists and is not in the Snapshot, sorted: those a Rejection leaves
+// out, and those that name a ChatConnection in UnservedConnections. Its sessions belong to a Binding that is in the cluster and left
+// out of routing, not to one that was deleted.
 func (r Report) Unserved() []string {
 	var out []string
 	for _, rej := range r.Rejections {
 		if rej.Served == 0 {
 			out = append(out, rej.Namespace+"/"+rej.Name)
 		}
+	}
+	for _, u := range r.UnservedConnections {
+		out = append(out, u.Bindings...)
 	}
 	slices.Sort(out)
 	return slices.Compact(out)

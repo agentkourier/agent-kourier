@@ -218,7 +218,7 @@ func (i *Intake) cancel(ctx context.Context, p Pause, reason, notice, id string)
 }
 
 func (i *Intake) enqueueNotice(ctx context.Context, p Pause, notice, id string) error {
-	post := outbox.Post{Source: id, Role: store.OutboxNotice, Channel: p.Key.Channel, Thread: p.Key.Thread, Out: chat.Say(render.Notice(notice, ""))}
+	post := outbox.Post{Source: id, Role: store.OutboxNotice, Connection: p.Key.Connection, Channel: p.Key.Channel, Thread: p.Key.Thread, Out: chat.Say(render.Notice(notice, ""))}
 	if _, err := i.cfg.Outbox.Enqueue(ctx, post); err != nil {
 		return fmt.Errorf("enqueue the notice: %w", err)
 	}
@@ -299,7 +299,7 @@ func (i *Intake) autoDeny(ctx context.Context, p Pause, b Binding, in dialect.In
 	default:
 		return nil
 	}
-	post := outbox.Post{Source: row.ID, Role: store.OutboxNotice, Channel: p.Key.Channel, Thread: p.Key.Thread, Out: chat.Say(render.Notice(noticeDenied, ""))}
+	post := outbox.Post{Source: row.ID, Role: store.OutboxNotice, Connection: p.Key.Connection, Channel: p.Key.Channel, Thread: p.Key.Thread, Out: chat.Say(render.Notice(noticeDenied, ""))}
 	if _, err := i.cfg.Outbox.Enqueue(ctx, post); err != nil {
 		return fmt.Errorf("interact: enqueue the notice of %s: %w", row.ID, err)
 	}
