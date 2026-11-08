@@ -25,7 +25,7 @@
 //     only, where Slack spreads them over up to 10; and unacked envelopes
 //     never being redelivered, where Slack retries.
 //   - Several apps (apps.go, WithApp): a registered app's events being the channels whose members
-//     include its bot, and the default app's being every channel's; the ticket parameter that
+//     include its bot, and the default app's being every channel's; the app parameter that
 //     tells a websocket whose connection it is; another app's posts reaching an app as message
 //     events of the same shape as its own, updates included (ownevents.go); cant_update_message
 //     for a message another app posted, message_not_in_streaming_state for another app's stream;

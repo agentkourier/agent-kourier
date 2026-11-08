@@ -64,11 +64,13 @@ func (c *sockConn) send(v any) error {
 // connectionsOpen implements apps.connections.open
 // (https://docs.slack.dev/reference/methods/apps.connections.open/): it points
 // the client at this server's websocket, on whatever host the request used. A
-// registered app's URL carries its app ID in a ticket parameter, which is how
+// registered app's URL carries its app ID in an app parameter, which is how
 // the websocket knows whose connection it is; the default app's URL has none.
+// The parameter is not called ticket, because a gate in front of the fake may
+// add a ticket of its own, which the fake ignores (internal/chat/slack's tests do).
 //
-// UNCONFIRMED(MC-10): the ticket parameter. Slack's URL carries an opaque
-// ticket of its own, and nothing depends on this one's form.
+// UNCONFIRMED(MC-10): the app parameter. Slack's URL carries an opaque
+// ticket and no app, and nothing depends on this one's form.
 func (s *Server) connectionsOpen(r *http.Request, app App) (response, string) {
 	scheme := "ws"
 	if r.TLS != nil {
@@ -76,7 +78,7 @@ func (s *Server) connectionsOpen(r *http.Request, app App) (response, string) {
 	}
 	u := scheme + "://" + r.Host + socketPath
 	if app.AppID != s.defaultApp().AppID {
-		u += "?" + url.Values{"ticket": {app.AppID}}.Encode()
+		u += "?" + url.Values{"app": {app.AppID}}.Encode()
 	}
 	return response{"url": u}, ""
 }
@@ -86,12 +88,12 @@ func (s *Server) connectionsOpen(r *http.Request, app App) (response, string) {
 //
 // UNCONFIRMED(WP-04): the shape of hello (Slack's debug_info is filler here),
 // and that the connection needs no ticket. The connection belongs to the app
-// named by the ticket parameter of the URL, which apps.connections.open hands
-// out, and to the default app without one; a ticket no app owns is refused.
+// named by the app parameter of the URL, which apps.connections.open hands
+// out, and to the default app without one; an app no Server hosts is refused.
 func (s *Server) serveSocket(w http.ResponseWriter, r *http.Request) {
-	app, err := s.appNamed(r.URL.Query().Get("ticket"))
+	app, err := s.appNamed(r.URL.Query().Get("app"))
 	if err != nil {
-		http.Error(w, "fakeslack: unknown ticket", http.StatusBadRequest)
+		http.Error(w, "fakeslack: unknown app", http.StatusBadRequest)
 		return
 	}
 	sk := &s.sock

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/socketmode"
 
@@ -132,6 +133,37 @@ func TestAppsAuthenticateByTheirOwnTokens(t *testing.T) {
 	if _, _, err := slack.New(appA.BotToken, slack.OptionAPIURL(fake.URL()+"/"), slack.OptionAppLevelToken(appA.BotToken)).
 		StartSocketModeContext(t.Context()); err == nil || err.Error() != "invalid_auth" {
 		t.Errorf("apps.connections.open with a bot token = %v, want invalid_auth", err)
+	}
+}
+
+func TestSocketURLsNameTheAppAndIgnoreATicket(t *testing.T) {
+	fake := twoApps(t)
+	urlOf := func(a fakeslack.App) string {
+		t.Helper()
+		_, u, err := webAs(fake, a).StartSocketModeContext(t.Context())
+		if err != nil {
+			t.Fatalf("apps.connections.open: %v", err)
+		}
+		return u
+	}
+	if u := urlOf(appA); !strings.HasSuffix(u, "/link?app=AAPPA") {
+		t.Errorf("a's URL = %q, want /link?app=AAPPA", u)
+	}
+	if u := urlOf(fakeslack.App{AppToken: "xapp-nobody-token"}); !strings.HasSuffix(u, "/link") {
+		t.Errorf("default app's URL = %q, want /link with no query", u)
+	}
+	// A ticket, which a gate in front of the fake may add, is not the fake's to read; an app it does not host is refused.
+	for query, want := range map[string]int{"?ticket=T-1": 101, "?app=ANOBODY": 400} {
+		ws, resp, err := websocket.DefaultDialer.DialContext(t.Context(), "ws"+strings.TrimPrefix(fake.URL(), "http")+"/link"+query, nil)
+		if ws != nil {
+			_ = ws.Close()
+		}
+		if resp == nil || resp.StatusCode != want {
+			t.Errorf("dial /link%s = %v, %v; want status %d", query, resp, err, want)
+		}
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
 	}
 }
 
