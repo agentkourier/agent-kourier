@@ -829,3 +829,46 @@ func TestAnAppMentionForADisconnectedAppDoesNotHoldBackTheMessage(t *testing.T) 
 		t.Errorf("Mention with no app connected = %v, %d stored; want ErrNoConnection and none", err, len(other.Messages("C1")))
 	}
 }
+
+// bots.info tells which app a bot belongs to: the app ID of the App whose bot the ID names, with the bot's user. It is held to the rules of
+// every method: a token no app owns is refused under strict tokens, a revoked app's token answers token_revoked, a bot nobody has is
+// bot_not_found, no bot is invalid_arguments, and SetMissingScope makes it answer missing_scope.
+func TestBotsInfoAnswersTheAppOfTheBot(t *testing.T) {
+	fake := twoApps(t, fakeslack.WithStrictTokens())
+	botOf := func(c *slack.Client, id string) (*slack.Bot, error) {
+		return c.GetBotInfoContext(t.Context(), slack.GetBotInfoParameters{Bot: id})
+	}
+
+	got, err := botOf(webAs(fake, appA), "BBOTA")
+	if err != nil || got.AppID != "AAPPA" || got.UserID != "UBOTA" || got.ID != "BBOTA" {
+		t.Errorf("bots.info of a's bot = %+v, %v; want app AAPPA and user UBOTA", got, err)
+	}
+	if got, err := botOf(webAs(fake, appA), "BBOTB"); err != nil || got.AppID != "AAPPB" {
+		t.Errorf("bots.info of b's bot, asked as a = %+v, %v; want b's app", got, err)
+	}
+	if _, err := botOf(webAs(fake, appA), "BNOBODY"); err == nil || err.Error() != "bot_not_found" {
+		t.Errorf("bots.info of a bot nobody has = %v; want bot_not_found", err)
+	}
+	if _, err := botOf(webAs(fake, appA), ""); err == nil || err.Error() != "invalid_arguments" {
+		t.Errorf("bots.info with no bot = %v; want invalid_arguments", err)
+	}
+	if _, err := botOf(slack.New("xoxb-nobody-token", slack.OptionAPIURL(fake.URL()+"/")), "BBOTA"); err == nil || err.Error() != "invalid_auth" {
+		t.Errorf("bots.info with a token no app owns = %v; want invalid_auth under strict tokens", err)
+	}
+
+	fake.SetMissingScope("bots.info", true)
+	if _, err := botOf(webAs(fake, appA), "BBOTA"); err == nil || err.Error() != "missing_scope" {
+		t.Errorf("bots.info without the scope = %v; want missing_scope", err)
+	}
+	fake.SetMissingScope("bots.info", false)
+
+	if err := fake.SetRevoked("AAPPA", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := botOf(webAs(fake, appA), "BBOTA"); err == nil || err.Error() != "token_revoked" {
+		t.Errorf("bots.info as a revoked app = %v; want token_revoked", err)
+	}
+	if got, err := botOf(webAs(fake, appB), "BBOTA"); err != nil || got.AppID != "AAPPA" {
+		t.Errorf("bots.info as b about a's revoked bot = %+v, %v; want the bot still known to b", got, err)
+	}
+}

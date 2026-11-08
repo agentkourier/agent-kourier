@@ -247,7 +247,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		}
 		// The connection and its Secrets as they are now: the startup read above only checks that the config can be served.
 		// Everything else the leader half uses (the Bindings, the config snapshot, the Secrets) it reads live.
-		current, err := ChooseConnection(runCtx, boot.Reloader.Current(), cfg.ChatConnection, boot.Secrets)
+		current, err := ChooseConnections(runCtx, boot.Reloader.Current(), cfg.ChatConnection, boot.Secrets)
 		if err != nil {
 			leave()
 			leaderDone <- err
