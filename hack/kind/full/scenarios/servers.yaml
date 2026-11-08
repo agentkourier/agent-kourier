@@ -11,7 +11,7 @@ spec:
     spec:
       containers:
         - name: scenariollm
-          image: python:3.15-alpine@sha256:20a82dbc2783112ddb91d1534603f802d222a3e63e593cd002eb2ac534e70211
+          image: python:3.15-alpine@sha256:a0f2e268f2ce8f3709611a90054ec6a8ae31f6251f5896b8648b9bb99835e30a
           command: ["python", "/app/scenariollm.py", "8080"]
           ports: [{containerPort: 8080}]
           volumeMounts: [{name: app, mountPath: /app}]
@@ -32,7 +32,7 @@ spec:
     spec:
       containers:
         - name: scenariomcp
-          image: python:3.15-alpine@sha256:20a82dbc2783112ddb91d1534603f802d222a3e63e593cd002eb2ac534e70211
+          image: python:3.15-alpine@sha256:a0f2e268f2ce8f3709611a90054ec6a8ae31f6251f5896b8648b9bb99835e30a
           command: ["python", "/app/scenariomcp.py", "8082"]
           ports: [{containerPort: 8082}]
           volumeMounts: [{name: app, mountPath: /app}]

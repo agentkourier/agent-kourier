@@ -26,11 +26,7 @@ func startObservedRun(t *testing.T, sk slack.Sink) (fake *fakeslack.Server, h *t
 	logs = &syncBuffer{}
 	cfg := slack.Config{BotToken: secret.New(botToken), AppToken: secret.New(appToken), APIURL: fake.URL() + "/",
 		Logger: slog.New(slog.NewTextHandler(logs, nil))}
-	ctx, cancel := context.WithCancel(h.Ctx)
-	done := make(chan error, 1)
-	go func() { done <- slack.New(cfg).Run(ctx, sk) }()
-	wait = sync.OnceValue(func() error { return <-done })
-	t.Cleanup(func() { cancel(); _ = wait() })
+	cancel, wait = runIn(h.Ctx, t, slack.New(cfg), sk)
 	waitConnected(t, fake)
 	return fake, h, logs, cancel, wait
 }
