@@ -310,6 +310,9 @@ func TestPressRecordsAtAgentKouriersTimeAndDoesNoneOfTheWork(t *testing.T) {
 	if len(presses) != 1 || !presses[0].PressedAt.Equal(t0) || len(r.seen) != 1 || r.seen[0].Seq != presses[0].Seq {
 		t.Fatalf("presses %+v, announced %+v; want one, at Agent Kourier's own time, announced to the worker", presses, r.seen)
 	}
+	if key.Connection == "" || presses[0].Connection != key.Connection {
+		t.Errorf("the press has connection %q; want the one it came in on, %q", presses[0].Connection, key.Connection)
+	}
 	if r.az.asked != 0 || len(r.eph.list()) != 0 || len(r.votes(t)) != 0 {
 		t.Error("recording the press did the work of processing it")
 	}

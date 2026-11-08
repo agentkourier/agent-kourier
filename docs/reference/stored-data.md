@@ -325,6 +325,12 @@ leader's epoch first, and a session that a writer holds locked is left for the n
 `session_interactions`, `session_presses` and `session_outbox` (and, for a stale task, as above). Migration 0022 adds the indexes the sweep reads by (a session's
 last activity; a thread's replies, interactions and outbox rows; an outbox row's source, in the C collation with Postgres).
 
+**Connection of an outbox row and a press.** Migration 0029 adds a `connection` column to `outbox` and `interaction_presses` and keys
+the outbox's thread index by it, because a channel ID names a channel only within one chat app. The sweep deletes the outbox rows of a
+session's thread for the session's connection only, and a pending outbox row holds back only the sessions of its own connection. A row
+written before the migration, or by an older version after a rollback, has an empty connection: when the broker starts leading it gives
+every such row its own connection, and logs at INFO how many it changed (nothing, when none).
+
 Not deleted here: `feedback` rows, which are kept so that a review of the votes can read them.
 
 ### Audit

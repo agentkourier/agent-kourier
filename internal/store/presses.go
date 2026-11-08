@@ -17,6 +17,10 @@ type Press struct {
 	InteractionID string
 	// User is who pressed, as Slack says.
 	User string
+	// Connection is the ChatConnection ("namespace/name") the press came in on: the press cap is counted per connection,
+	// and a channel ID names a channel only within one app. Empty is a press recorded before the broker recorded
+	// connections, which belongs to the broker's own connection until AttributeConnection says so.
+	Connection string
 	// Channel and MessageRef locate the message the button is on.
 	Channel, MessageRef string
 	// Inputs is the press's input state as the caller encoded it; the store does not read it. It
@@ -26,7 +30,8 @@ type Press struct {
 }
 
 // PressLimits bounds the presses waiting to be processed, so that one person or a flood cannot fill
-// the store.
+// the store. Both bounds are counted per connection (Press.Connection), so a flood on one app cannot refuse
+// the presses of another; the bound for the whole process is the limit times the connections it serves.
 type PressLimits struct {
 	Total, PerUser int
 }
@@ -36,7 +41,7 @@ type PressLimits struct {
 type Presses interface {
 	// RecordPress stores p and returns its Seq. InteractionID, User, Channel, MessageRef and
 	// PressedAt are required (ErrInvalid), and both limits are positive. It returns ErrLimit if
-	// the store already holds limits.Total presses, or limits.PerUser for p.User.
+	// the store already holds limits.Total presses of p.Connection, or limits.PerUser for p.User on it.
 	RecordPress(ctx context.Context, p Press, limits PressLimits) (int64, error)
 	// ListPresses returns the presses waiting, oldest Seq first.
 	ListPresses(ctx context.Context) ([]Press, error)

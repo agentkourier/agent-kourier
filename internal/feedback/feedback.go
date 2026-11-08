@@ -197,8 +197,8 @@ func New(cfg Config) (*Handler, error) {
 	return &Handler{cfg: cfg, labels: map[string]map[string]struct{}{}}, nil
 }
 
-// pressInputs is what a press records beside the person and the message: the connection it came in on, which a press row has
-// no column for, and the button's value, whose verdict the lane leaves out.
+// pressInputs is what a press records beside the person and the message: the connection it came in on (the press row has the
+// column too, now; the inputs of a press recorded before it have only this), and the button's value, whose verdict the lane leaves out.
 type pressInputs struct {
 	Conn  string `json:"conn"`
 	Value string `json:"value"`
@@ -224,7 +224,7 @@ func (h *Handler) Press(ctx context.Context, i chat.Interaction) error {
 	if err != nil {
 		return fmt.Errorf("feedback: encode a press: %w", err)
 	}
-	press := store.Press{InteractionID: laneOf(v.Turn), User: i.User, Channel: i.At.Channel, MessageRef: i.At.ID, Inputs: inputs, PressedAt: h.cfg.Now()}
+	press := store.Press{InteractionID: laneOf(v.Turn), User: i.User, Connection: i.At.Conn, Channel: i.At.Channel, MessageRef: i.At.ID, Inputs: inputs, PressedAt: h.cfg.Now()}
 	if press.Seq, err = h.cfg.Store.RecordPress(ctx, press, h.cfg.Limits); err != nil {
 		return fmt.Errorf("feedback: record a press on %s: %w", v.Turn, err)
 	}

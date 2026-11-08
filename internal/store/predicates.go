@@ -120,8 +120,7 @@ func NothingHoldsBack(s Ref) Fixed {
 			s.col("task_id") + " = ''",
 			"NOT EXISTS (SELECT 1 FROM interactions i WHERE " + thread("i") + " AND " + PendingInteractions("i").Text(d) + ")",
 			"NOT EXISTS (SELECT 1 FROM reply_queue r WHERE " + thread("r") + " AND " + UndeliveredReplies("r").Text(d) + ")",
-			"NOT EXISTS (SELECT 1 FROM outbox o WHERE o.channel = " + s.col("channel") + " AND o.thread_ts = " + s.col("thread_ts") +
-				" AND " + PendingOutbox("o").Text(d) + ")",
+			"NOT EXISTS (SELECT 1 FROM outbox o WHERE " + thread("o") + " AND " + PendingOutbox("o").Text(d) + ")",
 			"NOT EXISTS (SELECT 1 FROM reply_queue r JOIN outbox o ON " + OutboxDerivedFromReplyRow("o", "r").Text(d) +
 				" WHERE " + thread("r") + " AND " + PendingOutbox("o").Text(d) + ")",
 		}, " AND ")

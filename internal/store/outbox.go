@@ -36,11 +36,15 @@ type OutboxEntry struct {
 	ID string
 	// EventID is the source ID: the event ID, or for a digest (D26) the
 	// deterministic ID of its window.
-	EventID   string
-	Role      OutboxRole
-	Channel   string
-	Thread    string // empty for a root post
-	CreatedAt time.Time
+	EventID string
+	Role    OutboxRole
+	// Connection is the ChatConnection ("namespace/name") whose app posts the row: channel IDs are not unique across
+	// apps, so the channel and thread name a conversation only with it. Empty is a row written before the broker
+	// recorded connections, which belongs to the broker's own connection until AttributeConnection says so.
+	Connection string
+	Channel    string
+	Thread     string // empty for a root post
+	CreatedAt  time.Time
 	// MessageRef identifies the posted message; empty until recorded.
 	MessageRef string
 	// Payload is the message to post, as JSON the store never interprets. It is cleared when
