@@ -68,6 +68,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	var apps appFlags
 	fs.Var(&apps, "app", "another Slack app to host: app_id=..,bot_user=..,bot_id=..[,team_id=..,team_name=..,bot_token=xoxb-..,app_token=xapp-..]; repeatable")
 	strict := fs.Bool("strict-membership", false, "deliver the default app's events only for channels whose members include its bot")
+	strictTokens := fs.Bool("strict-tokens", false, "answer invalid_auth to a token no -app owns, once an -app has a token")
 	spread := fs.Bool("socket-spread", false, "send each event to one of an app's connections in turn, not to its newest")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("flags: %w", err)
@@ -82,6 +83,9 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	}
 	if *strict {
 		opts = append(opts, fakeslack.WithStrictMembership())
+	}
+	if *strictTokens {
+		opts = append(opts, fakeslack.WithStrictTokens())
 	}
 	if *spread {
 		opts = append(opts, fakeslack.WithSocketSpread())

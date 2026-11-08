@@ -52,14 +52,16 @@ func (a App) Validate() error {
 
 // WithApp registers another Slack app. A registered app's bot token reaches the Web API as that app, its app
 // token opens Socket Mode connections for that app alone, and it receives the events of the channels whose
-// members (SetMembers, Join) include its bot, and of no other. An App that fails Validate is ignored, since an Option cannot return an error; check it
-// first where that would hide a mistake. An App with the AppID of one already registered, the default app
-// included, replaces it. If two apps share a token, the first registered owns it. Set at construction, read-only
-// after.
+// members (SetMembers, Join) include its bot, and of no other. An App with the AppID of one already registered,
+// the default app included, replaces it. If two apps share a token, the first registered owns it.
+//
+// An App that fails Validate makes WithApp panic when the Server is built, so that a mistake in a test's setup
+// is not hidden; the message names the fields, never a token. Check Validate first to avoid that. Set at
+// construction, read-only after.
 func WithApp(a App) Option {
 	return func(s *Server) {
-		if a.Validate() != nil {
-			return
+		if err := a.Validate(); err != nil {
+			panic(err)
 		}
 		if i := slices.IndexFunc(s.apps, func(x App) bool { return x.AppID == a.AppID }); i >= 0 {
 			s.apps[i] = a
@@ -67,6 +69,46 @@ func WithApp(a App) Option {
 		}
 		s.apps = append(s.apps, a)
 	}
+}
+
+// WithStrictTokens makes the fake refuse a well-formed token that no registered app owns with invalid_auth, where
+// it otherwise belongs to the default app. It applies once any app has a token (WithApp), so a Server with none
+// behaves as it always did. The default app has no tokens, so with this option it is reachable by none.
+//
+// UNCONFIRMED(MC-10): the code, which is invalid_auth as for any other token the fake does not accept.
+func WithStrictTokens() Option { return func(s *Server) { s.strictTokens = true } }
+
+// SetRevoked revokes the tokens of the app appID, or restores them. While an app is revoked its bot token's Web
+// API calls answer token_revoked, apps.connections.open with its app token answers the same, and a websocket for
+// it is refused. Revoking it also ends its open Socket Mode connections, each sent a disconnect envelope and then
+// closed. Clearing the flag lets the app connect again; nothing reopens a connection for it. The default app's
+// ID revokes every token the default app owns, which are all the tokens no registered app owns. It fails with
+// ErrNotFound for an app the Server does not host.
+//
+// UNCONFIRMED(MC-10): the code token_revoked, where Slack may say invalid_auth or account_inactive for a token
+// that was revoked or whose app was uninstalled, and the disconnect envelope's reason (link_disabled).
+func (s *Server) SetRevoked(appID string, revoked bool) error {
+	if _, ok := s.appByID(appID); !ok {
+		return fmt.Errorf("fakeslack: no app %q: %w", appID, ErrNotFound)
+	}
+	s.mu.Lock()
+	if revoked {
+		s.revoked[appID] = true
+	} else {
+		delete(s.revoked, appID)
+	}
+	s.mu.Unlock()
+	if revoked {
+		s.sock.disconnect(appID)
+	}
+	return nil
+}
+
+// isRevoked says whether SetRevoked revoked the app's tokens.
+func (s *Server) isRevoked(appID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.revoked[appID]
 }
 
 // WithSocketSpread makes the fake send each event to exactly one of an app's Socket Mode connections, taking
@@ -86,8 +128,13 @@ func WithStrictMembership() Option { return func(s *Server) { s.strict = true } 
 // finishApps fills in what the options left empty and indexes the apps' tokens. It runs once, after the options.
 func (s *Server) finishApps() {
 	s.tokens = map[string]string{}
+	seen := map[string]bool{}
 	for i := range s.apps {
 		a := &s.apps[i]
+		if seen[a.AppID] {
+			panic(fmt.Sprintf("fakeslack: two apps have the app ID %q (WithBot after WithApp?)", a.AppID))
+		}
+		seen[a.AppID] = true
 		if a.TeamID == "" {
 			a.TeamID, a.TeamName = s.apps[0].TeamID, s.apps[0].TeamName
 		}
@@ -120,12 +167,13 @@ func (s *Server) appOrDefault(id string) App {
 	return s.defaultApp()
 }
 
-// appForToken returns the app that owns token, or the default app for a token no app owns.
-func (s *Server) appForToken(token string) App {
-	if id, ok := s.tokens[token]; ok {
-		return s.appOrDefault(id)
+// appForToken returns the app that owns token, or the default app for a token no app owns. With
+// WithStrictTokens, and an app that has a token, ok is false for a token no app owns.
+func (s *Server) appForToken(token string) (app App, ok bool) {
+	if id, owned := s.tokens[token]; owned {
+		return s.appOrDefault(id), true
 	}
-	return s.defaultApp()
+	return s.defaultApp(), !s.strictTokens || len(s.tokens) == 0
 }
 
 // Apps returns every app the Server hosts, the default app first. The tokens are included, so the result is for

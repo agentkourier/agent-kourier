@@ -82,7 +82,7 @@ func TestRunHostsTheAppsItIsGiven(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- run(ctx, []string{
-			"-addr", "127.0.0.1:0", "-strict-membership", "-socket-spread",
+			"-addr", "127.0.0.1:0", "-strict-membership", "-strict-tokens", "-socket-spread",
 			"-app", "app_id=ATEAM,bot_user=UTEAM,bot_id=BTEAM,team_id=TTEAM,team_name=team,bot_token=xoxb-team-token,app_token=xapp-team-token",
 		}, out)
 	}()
@@ -91,11 +91,13 @@ func TestRunHostsTheAppsItIsGiven(t *testing.T) {
 		t.Fatal("run did not announce its address")
 	}
 
-	for token, want := range map[string]string{"xoxb-team-token": "UTEAM", "xoxb-someone-else": "UFAKEBOT"} {
-		auth := call(t, http.MethodPost, "http://"+addr+"/auth.test", nil, http.Header{"Authorization": {"Bearer " + token}})
-		if auth["ok"] != true || auth["user_id"] != want {
-			t.Errorf("auth.test with %s = %v, want user_id %s", token, auth, want)
-		}
+	auth := call(t, http.MethodPost, "http://"+addr+"/auth.test", nil, http.Header{"Authorization": {"Bearer xoxb-team-token"}})
+	if auth["ok"] != true || auth["user_id"] != "UTEAM" {
+		t.Errorf("auth.test with the app's token = %v, want user_id UTEAM", auth)
+	}
+	auth = call(t, http.MethodPost, "http://"+addr+"/auth.test", nil, http.Header{"Authorization": {"Bearer xoxb-someone-else"}})
+	if auth["ok"] != false || auth["error"] != "invalid_auth" {
+		t.Errorf("auth.test with another token under -strict-tokens = %v, want invalid_auth", auth)
 	}
 	apps := func() []any {
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+addr+"/_control/apps", nil)

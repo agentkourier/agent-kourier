@@ -94,7 +94,7 @@ func (s *Server) queueOwnLocked(channel string, prev, cur *Message) {
 // streaming, a message event at chat.startStream, no event at chat.appendStream
 // and a message_changed at chat.stopStream; and that a reply gives no
 // message_changed for its thread parent, where Slack sends one, since the
-// parent's reply_count changes. UNCONFIRMED(MC-10): that an app in the channel gets
+// parent's reply_count changes. UNCONFIRMED(MC-S): that an app in the channel gets
 // another app's posts, and their updates, as events of this shape (a message with
 // the poster's user, bot_id and app_id, and a message_changed), where Slack may
 // leave out the updates or send a bot_message subtype; a live probe settles it.

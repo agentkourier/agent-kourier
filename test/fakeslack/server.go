@@ -30,7 +30,8 @@
 //     events of the same shape as its own, updates included (ownevents.go); cant_update_message
 //     for a message another app posted, message_not_in_streaming_state for another app's stream;
 //     and, with WithSocketSpread, each of an app's events going to one of its connections in
-//     turn.
+//     turn; and, for a revoked app (SetRevoked), the code token_revoked and the reason of the
+//     disconnect envelope sent to its sockets.
 //   - User actions (control.go): the order of the app_mention and message
 //     events for a mention, in a thread too, and both being sent; the fields
 //     of each event, which are the ones Agent Kourier needs; a mention in a direct
@@ -126,6 +127,10 @@
 //     recipient; 12000 characters of markdown_text per call (msg_too_long);
 //     and blocks chunks going through the block rules. Q2 (rate limits) is
 //     out of a fake's reach.
+//
+// Not faked: not_in_channel. chat.postMessage and the other methods accept a post to any channel for
+// any app, whether or not its bot is among the channel's members; an app's membership shows only in
+// conversations.info and conversations.members and in which events it receives.
 package fakeslack
 
 import (
@@ -143,14 +148,15 @@ type Server struct {
 	srv *httptest.Server // nil when used only as a handler
 	now func() time.Time
 
-	pingEvery   time.Duration
-	apps        []App             // the default app first; set by options, read-only after construction (apps.go)
-	tokens      map[string]string // token to the AppID that owns it, built after the options
-	spread      bool              // set by WithSocketSpread, read-only after construction
-	strict      bool              // set by WithStrictMembership, read-only after construction
-	noOwnEvents bool              // set by WithoutOwnPostEvents, read-only after construction
-	sock        sockets
-	control     http.Handler // the /_control/ routes
+	pingEvery    time.Duration
+	apps         []App             // the default app first; set by options, read-only after construction (apps.go)
+	tokens       map[string]string // token to the AppID that owns it, built after the options
+	spread       bool              // set by WithSocketSpread, read-only after construction
+	strict       bool              // set by WithStrictMembership, read-only after construction
+	strictTokens bool              // set by WithStrictTokens, read-only after construction
+	noOwnEvents  bool              // set by WithoutOwnPostEvents, read-only after construction
+	sock         sockets
+	control      http.Handler // the /_control/ routes
 
 	mu       sync.Mutex
 	last     int64                 // microseconds of the last ts issued, guarded by mu
@@ -160,6 +166,7 @@ type Server struct {
 	members  map[string][]string   // guarded by mu
 	archived map[string]bool       // channels SetArchived marked archived, guarded by mu
 	dmOwner  map[string]string     // direct-message channel to the AppID it was opened with by DMApp, guarded by mu
+	revoked  map[string]bool       // AppIDs whose tokens SetRevoked revoked, guarded by mu
 
 	noScope map[string]bool // methods SetMissingScope makes answer missing_scope, guarded by mu
 
@@ -229,6 +236,7 @@ func NewHandler(opts ...Option) *Server {
 		members:  map[string][]string{},
 		archived: map[string]bool{},
 		dmOwner:  map[string]string{},
+		revoked:  map[string]bool{},
 		noScope:  map[string]bool{},
 
 		usergroups: map[string][]string{},
@@ -407,5 +415,12 @@ func (s *Server) authenticate(r *http.Request, prefix string) (App, string) {
 	case !strings.HasPrefix(token, prefix):
 		return App{}, "invalid_auth"
 	}
-	return s.appForToken(token), ""
+	app, ok := s.appForToken(token)
+	switch {
+	case !ok:
+		return App{}, "invalid_auth"
+	case s.isRevoked(app.AppID):
+		return App{}, "token_revoked"
+	}
+	return app, ""
 }

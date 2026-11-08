@@ -70,6 +70,11 @@ type (
 		// App is the AppID of the app whose bot joins; empty is the default app.
 		App string `json:"app"`
 	}
+	revokedReq struct {
+		// App is the AppID of the app; empty is the default app.
+		App     string `json:"app"`
+		Revoked bool   `json:"revoked"`
+	}
 	archivedReq struct {
 		Channel  string `json:"channel"`
 		Archived bool   `json:"archived"`
@@ -157,6 +162,9 @@ func (s *Server) newControlRoutes() controlRoutes {
 			return nil, invalid("fakeslack: a bot joins a channel, so it needs a channel")
 		}
 		return struct{}{}, s.Join(q.Channel, s.appID(q.App))
+	}))
+	mux.HandleFunc("POST /_control/revoked", post(func(q revokedReq) (any, error) {
+		return struct{}{}, s.SetRevoked(s.appID(q.App), q.Revoked)
 	}))
 	mux.HandleFunc("POST /_control/usergroups", post(func(q usergroupReq) (any, error) {
 		if q.Usergroup == "" {

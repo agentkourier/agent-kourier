@@ -167,7 +167,7 @@ func TestSocketURLsNameTheAppAndIgnoreATicket(t *testing.T) {
 	}
 }
 
-func TestWithAppIgnoresAnAppThatFailsValidation(t *testing.T) {
+func TestWithAppPanicsForAnAppThatFailsValidation(t *testing.T) {
 	bad := []fakeslack.App{
 		{BotUser: "U1", BotID: "B1", BotToken: "xoxb-x"},
 		{AppID: "A1", BotID: "B1", BotToken: "xoxb-x"},
@@ -179,12 +179,25 @@ func TestWithAppIgnoresAnAppThatFailsValidation(t *testing.T) {
 		if a.Validate() == nil {
 			t.Errorf("case %d: Validate() = nil, want an error", i)
 		}
-		fake := fakeslack.NewHandler(fakeslack.WithApp(a))
-		if n := len(fake.Apps()); n != 1 {
-			t.Errorf("case %d: %d apps hosted, want only the default app", i, n)
-		}
-		fake.Close()
+		func() {
+			defer func() {
+				err, _ := recover().(error)
+				if err == nil || strings.Contains(err.Error(), "xoxb-x") {
+					t.Errorf("case %d: WithApp panicked with %v, want an error that names no token", i, err)
+				}
+			}()
+			fakeslack.NewHandler(fakeslack.WithApp(a)).Close()
+		}()
 	}
+	// Two apps with one app ID: WithBot after WithApp makes the default app's the same as a registered app's.
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("WithBot after WithApp with the same app ID did not panic")
+			}
+		}()
+		fakeslack.NewHandler(fakeslack.WithApp(appA), fakeslack.WithBot("UX", "BX", "AAPPA")).Close()
+	}()
 	if err := appA.Validate(); err != nil {
 		t.Errorf("Validate on a good app = %v", err)
 	}
@@ -657,4 +670,156 @@ func TestControlSurfaceNamesTheApp(t *testing.T) {
 func toString(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+func TestARevokedAppIsRefusedAndItsSocketsClosed(t *testing.T) {
+	fake := twoApps(t)
+	smcB := socketAs(t, fake, appB)
+	// a connects by hand, so the test sees the disconnect envelope that slack-go's client keeps to itself.
+	connect := func() *websocket.Conn {
+		t.Helper()
+		_, u, err := webAs(fake, appA).StartSocketModeContext(t.Context())
+		if err != nil {
+			t.Fatalf("apps.connections.open: %v", err)
+		}
+		ws, resp, err := websocket.DefaultDialer.DialContext(t.Context(), u, nil)
+		if err != nil {
+			t.Fatalf("dial %s: %v", u, err)
+		}
+		_ = resp.Body.Close()
+		t.Cleanup(func() { _ = ws.Close() })
+		if _, msg, err := ws.ReadMessage(); err != nil || !strings.Contains(string(msg), `"hello"`) {
+			t.Fatalf("first message = %s, %v; want hello", msg, err)
+		}
+		return ws
+	}
+	ws := connect()
+	eventually(t, "a to be connected", func() bool { return fake.AppConnections("AAPPA") == 1 })
+
+	if err := fake.SetRevoked("AAPPA", true); err != nil {
+		t.Fatalf("SetRevoked: %v", err)
+	}
+
+	// a's open socket is sent a disconnect and then closed, and b's is not.
+	_, msg, err := ws.ReadMessage()
+	if err != nil || !strings.Contains(string(msg), `"type":"disconnect"`) {
+		t.Fatalf("message after revoking = %s, %v; want a disconnect envelope", msg, err)
+	}
+	if _, _, err := ws.ReadMessage(); err == nil {
+		t.Error("a's socket is still open after the disconnect")
+	}
+	eventually(t, "a's connection to be dropped", func() bool { return fake.AppConnections("AAPPA") == 0 })
+	if n := fake.AppConnections("AAPPB"); n != 1 {
+		t.Errorf("b has %d connections, want 1", n)
+	}
+	quiet(t, "b", smcB)
+
+	// a's calls fail, with the code and not with a token in the message; b carries on.
+	_, authErr := webAs(fake, appA).AuthTest()
+	_, _, openErr := webAs(fake, appA).StartSocketModeContext(t.Context())
+	for name, err := range map[string]error{"auth.test": authErr, "apps.connections.open": openErr} {
+		if err == nil || err.Error() != "token_revoked" {
+			t.Errorf("%s as the revoked app = %v, want token_revoked", name, err)
+		}
+	}
+	if got, err := webAs(fake, appB).AuthTest(); err != nil || got.UserID != "UBOTB" {
+		t.Errorf("auth.test as b = %+v, %v; want b working", got, err)
+	}
+	ws2, resp, err := websocket.DefaultDialer.DialContext(t.Context(), "ws"+strings.TrimPrefix(fake.URL(), "http")+"/link?app=AAPPA", nil)
+	if ws2 != nil {
+		_ = ws2.Close()
+	}
+	if resp == nil || resp.StatusCode != 401 {
+		t.Errorf("dial a's link = %v, %v; want status 401", resp, err)
+	}
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+
+	// Clearing the flag lets a connect again.
+	if err := fake.SetRevoked("AAPPA", false); err != nil {
+		t.Fatalf("SetRevoked: %v", err)
+	}
+	connect()
+	eventually(t, "a to reconnect", func() bool { return fake.AppConnections("AAPPA") == 1 })
+	if err := fake.SetRevoked("ANOBODY", true); !errors.Is(err, fakeslack.ErrNotFound) {
+		t.Errorf("SetRevoked of an unknown app = %v, want ErrNotFound", err)
+	}
+}
+
+func TestControlSurfaceRevokesAnApp(t *testing.T) {
+	fake := twoApps(t)
+	var body map[string]any
+	if s := control(t, fake, "POST", "/_control/revoked", map[string]any{"app": "AAPPA", "revoked": true}, &body); s != 200 || len(body) != 0 {
+		t.Fatalf("revoke = %d, %v; want 200 and an empty body", s, body)
+	}
+	if _, err := webAs(fake, appA).AuthTest(); err == nil || err.Error() != "token_revoked" {
+		t.Errorf("auth.test after the control call = %v, want token_revoked", err)
+	}
+	if s := control(t, fake, "POST", "/_control/revoked", map[string]any{"app": "AAPPA", "revoked": false}, nil); s != 200 {
+		t.Fatalf("restore = %d", s)
+	}
+	if _, err := webAs(fake, appA).AuthTest(); err != nil {
+		t.Errorf("auth.test after restoring: %v", err)
+	}
+	// An unknown app is a 404 whose body says nothing of tokens.
+	var e map[string]string
+	if s := control(t, fake, "POST", "/_control/revoked", map[string]any{"app": "ANOBODY", "revoked": true}, &e); s != 404 ||
+		strings.Contains(toString(e), "xoxb-") || strings.Contains(toString(e), "xapp-") {
+		t.Errorf("revoke of an unknown app = %d, %v; want 404 with no token", s, e)
+	}
+	// The empty app is the default app, whose tokens are the ones no app owns.
+	if s := control(t, fake, "POST", "/_control/revoked", map[string]any{"revoked": true}, nil); s != 200 {
+		t.Fatalf("revoke default = %d", s)
+	}
+	if _, err := slack.New("xoxb-nobody-token", slack.OptionAPIURL(fake.URL()+"/")).AuthTest(); err == nil || err.Error() != "token_revoked" {
+		t.Errorf("auth.test as the default app = %v, want token_revoked", err)
+	}
+	if _, err := webAs(fake, appB).AuthTest(); err != nil {
+		t.Errorf("b after the default app was revoked: %v", err)
+	}
+}
+
+func TestStrictTokensRefuseATokenNoAppOwns(t *testing.T) {
+	fake := twoApps(t, fakeslack.WithStrictTokens())
+	if _, err := slack.New("xoxb-nobody-token", slack.OptionAPIURL(fake.URL()+"/")).AuthTest(); err == nil || err.Error() != "invalid_auth" {
+		t.Errorf("auth.test with an unowned token = %v, want invalid_auth", err)
+	}
+	if _, _, err := slack.New("xoxb-x", slack.OptionAPIURL(fake.URL()+"/"), slack.OptionAppLevelToken("xapp-nobody-token")).
+		StartSocketModeContext(t.Context()); err == nil || err.Error() != "invalid_auth" {
+		t.Errorf("apps.connections.open with an unowned token = %v, want invalid_auth", err)
+	}
+	if _, err := webAs(fake, appA).AuthTest(); err != nil {
+		t.Errorf("auth.test with a's own token: %v", err)
+	}
+
+	// With no app that has a token, the option changes nothing.
+	plain := fakeslack.New(fakeslack.WithStrictTokens())
+	t.Cleanup(plain.Close)
+	if _, err := slack.New("xoxb-nobody-token", slack.OptionAPIURL(plain.URL()+"/")).AuthTest(); err != nil {
+		t.Errorf("auth.test on a Server with no app tokens = %v, want the default app", err)
+	}
+}
+
+func TestAnAppMentionForADisconnectedAppDoesNotHoldBackTheMessage(t *testing.T) {
+	fake := twoApps(t, fakeslack.WithoutOwnPostEvents())
+	smcB := socketAs(t, fake, appB) // a is not connected
+	fake.SetMembers("C1", "U1", "UBOTA", "UBOTB")
+
+	got, err := fake.Mention("C1", "U1", "<@UBOTA> are you there?")
+	if err != nil {
+		t.Fatalf("Mention = %v, want no error: b got the message", err)
+	}
+	if len(got.Envelopes) != 1 || len(got.AppEnvelopes["AAPPB"]) != 1 {
+		t.Fatalf("envelopes = %v, by app %v; want the one message event, for b", got.Envelopes, got.AppEnvelopes)
+	}
+	if _, p := nextPayload(t, smcB); p.Event.Type != "message" {
+		t.Errorf("b got %+v, want the message", p.Event)
+	}
+	// With nobody left to get either event, it is still ErrNoConnection, and nothing is stored.
+	other := twoApps(t, fakeslack.WithoutOwnPostEvents())
+	other.SetMembers("C1", "U1", "UBOTA")
+	if _, err := other.Mention("C1", "U1", "<@UBOTA> hi"); !errors.Is(err, fakeslack.ErrNoConnection) || len(other.Messages("C1")) != 0 {
+		t.Errorf("Mention with no app connected = %v, %d stored; want ErrNoConnection and none", err, len(other.Messages("C1")))
+	}
 }

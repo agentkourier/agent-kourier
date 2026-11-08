@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -94,6 +95,10 @@ func (s *Server) serveSocket(w http.ResponseWriter, r *http.Request) {
 	app, err := s.appNamed(r.URL.Query().Get("app"))
 	if err != nil {
 		http.Error(w, "fakeslack: unknown app", http.StatusBadRequest)
+		return
+	}
+	if s.isRevoked(app.AppID) {
+		http.Error(w, "fakeslack: token_revoked", http.StatusUnauthorized)
 		return
 	}
 	sk := &s.sock
@@ -192,6 +197,18 @@ func (sk *sockets) remove(c *sockConn) {
 		}
 	}
 	_ = c.ws.Close()
+}
+
+// disconnect tells each connection of the app to go, with a disconnect envelope, and closes it. The handler of each
+// removes it from the list as its read fails.
+func (sk *sockets) disconnect(appID string) {
+	sk.mu.Lock()
+	conns := slices.DeleteFunc(slices.Clone(sk.conns), func(c *sockConn) bool { return c.app != appID })
+	sk.mu.Unlock()
+	for _, c := range conns {
+		_ = c.write(map[string]any{"type": "disconnect", "reason": "link_disabled"})
+		_ = c.ws.Close()
+	}
 }
 
 // stop stops accepting clients, drops the connected ones, and waits for their

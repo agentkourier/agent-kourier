@@ -147,7 +147,8 @@ func (s *Server) channelType(channel string) string {
 // Nothing happens if no app that would get the events has a client connected.
 // If the clients leave after that check, the message stays stored and the error
 // is ErrNoConnection: the event is lost, as it would be in Slack. An event that
-// reaches some apps and not others is lost for the others without an error.
+// reaches some apps and not others is lost for the others without an error, and
+// the error is returned only if no envelope went out at all.
 func (s *Server) userMessage(channel, threadTS, user, text string) (UserMessage, error) {
 	if channel == "" || user == "" || text == "" {
 		return UserMessage{}, invalid("fakeslack: a user message needs a channel, a user and text")
@@ -175,6 +176,7 @@ func (s *Server) userMessage(channel, threadTS, user, text string) (UserMessage,
 	if chType != "im" && len(mentioned) > 0 {
 		eventTypes = []string{"app_mention", "message"}
 	}
+	var failed error
 	for _, typ := range eventTypes {
 		ev := map[string]any{"type": typ, "user": user, "text": text, "ts": m.TS, "channel": channel, "event_ts": m.TS}
 		if typ == "message" {
@@ -189,9 +191,14 @@ func (s *Server) userMessage(channel, threadTS, user, text string) (UserMessage,
 		}
 		ids, err := s.deliver(targets, ev)
 		out.addEnvelopes(s, ids)
-		if err != nil {
-			return out, err
+		if err != nil && failed == nil {
+			failed = err
 		}
+	}
+	// Each event goes out whatever became of the one before: an app_mention for an app that has left must not hold
+	// back the message event the others are waiting for. Only an event nobody got is an error.
+	if len(out.Envelopes) == 0 {
+		return out, failed
 	}
 	return out, nil
 }
