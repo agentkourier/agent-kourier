@@ -69,6 +69,22 @@ func TestCounterFindsASampleByNameAndLabels(t *testing.T) {
 	}
 }
 
+func TestSumAddsTheSamplesThatMatch(t *testing.T) {
+	c := metricsServer(t, exposition)
+	if got, err := c.Sum(t.Context(), "agentkourier_approval_outcomes_total", nil); err != nil || got != 4 {
+		t.Errorf("Sum of the approval outcomes = %v, %v; want 4, the two samples together", got, err)
+	}
+	if got, err := c.Sum(t.Context(), "agentkourier_outbox_abandoned_total", map[string]string{"channel": "C1"}); err != nil || got != 7 {
+		t.Errorf("Sum of the abandoned posts in C1 = %v, %v; want 7", got, err)
+	}
+	if got, err := c.Sum(t.Context(), "agentkourier_approval_outcomes_total", map[string]string{"outcome": "denied"}); err != nil || got != 3 {
+		t.Errorf("Sum of one outcome = %v, %v; want 3", got, err)
+	}
+	if _, err := c.Sum(t.Context(), "agentkourier_missing_total", nil); !errors.Is(err, ErrNoSample) {
+		t.Errorf("Sum of a counter with no sample = %v, want ErrNoSample", err)
+	}
+}
+
 func TestCounterSaysWhyThereIsNoSingleSample(t *testing.T) {
 	c := metricsServer(t, exposition)
 	for _, tc := range []struct {

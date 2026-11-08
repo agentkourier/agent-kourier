@@ -32,6 +32,13 @@
 # upgraded to read them (lib.sh's deploy_agentkourier, with hack/kind/crds-values.yaml): the move the chart README gives. The E2E suite is the same on
 # either, and the scenarios that are about the custom resources (the CR_ tests) skip on the ConfigMap route. Re-running with the other value moves
 # the tier over in place, and back: the custom resources stay in the cluster, unread, when the tier goes back to files.
+#
+# E2E_TWO_APPS=1 (with E2E_CONFIG_SOURCE=crds) runs a broker that serves two Slack apps (spec D51; the MC_ tests of test/e2e, which make e2e-two-apps runs, and make e2e-fast does not): the platform's
+# ChatConnection (slack-fast, the fake Slack's default app) and a team's, team-a, which brings its own Slack app and its own Secret, granted by a Role of
+# its own. The platform admits the namespaces team-a, team-b and team-c (hack/kind/two-apps-values.yaml), and each connection has a Binding
+# (hack/kind/fast/two-apps). The fake Slack hosts the second app and a third (team-b's) in every tier (fast/doubles.yaml). On E2E_STORE=postgres with
+# E2E_REPLICAS=2 the failover scenarios of that suite run too. Bringing the tier up again without it takes the admission list away, and the team's
+# objects stay in the cluster, not served. hack/kind/two-apps.sh (make e2e-two-apps) runs the scenarios that change the admission list with Helm.
 set -eEuo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -53,6 +60,12 @@ case "${E2E_REPLICAS}" in
 esac
 E2E_CONFIG_SOURCE=${E2E_CONFIG_SOURCE:-files}
 require_config_source
+E2E_TWO_APPS=${E2E_TWO_APPS:-0}
+case "${E2E_TWO_APPS}" in
+  0) ;;
+  1) [ "${E2E_CONFIG_SOURCE}" = crds ] || die "E2E_TWO_APPS=1 needs E2E_CONFIG_SOURCE=crds: a team's ChatConnection is a custom resource" ;;
+  *) die "E2E_TWO_APPS must be 0 or 1" ;;
+esac
 CTX=kind-${CLUSTER}
 K=(kubectl --context "${CTX}")
 H=(helm --kube-context "${CTX}")
@@ -69,7 +82,7 @@ trap 'on_error $LINENO' ERR
 BUILD=
 trap '[ -z "${BUILD}" ] || rm -rf "${BUILD}"' EXIT
 
-for tool in docker kind kubectl helm go; do
+for tool in docker kind kubectl helm go jq; do
   command -v "${tool}" >/dev/null || die "${tool} is required"
 done
 docker info >/dev/null 2>&1 || die "the Docker daemon is not reachable"
@@ -116,6 +129,11 @@ if [ "${E2E_REPLICAS}" = 2 ]; then
   AGENTKOURIER_HELM_ARGS=(-f "${ROOT}/charts/agent-kourier/ci/fast-postgres-ha-values.yaml")
 fi
 
+AGENTKOURIER_CRDS_ARGS=()
+if [ "${E2E_TWO_APPS}" = 1 ]; then
+  AGENTKOURIER_CRDS_ARGS=(-f "${HERE}/two-apps-values.yaml")
+fi
+
 step "agent-kourier: namespace, config, Secrets, chart"
 # Created and updated with apply, so a re-run changes what changed. The Secrets are fake constants made
 # here and never committed: the Slack tokens carry the prefixes the fake Slack checks, and the agent token
@@ -128,6 +146,11 @@ b64url() { printf %s "$1" | base64 | tr -d '=\n' | tr '/+' '_-'; }
 # waits for the rollout and shows Agent Kourier's log if it does not become ready.
 deploy_agentkourier "${FAST}/agent-kourier/config/agentbackend.yaml" "${FAST}/agent-kourier/a2a" "${FAST}/agent-kourier/verify"
 
+if [ "${E2E_TWO_APPS}" = 1 ]; then
+  step "team-a: a second Slack app, its Secrets, ChatConnection and Binding, and the platform's Binding"
+  deploy_two_apps
+fi
+
 step "verify"
 "${FAST}/verify.sh"
-echo "fast tier up in ${SECONDS}s (context ${CTX}, store ${E2E_STORE}, ${E2E_REPLICAS} Agent Kourier replica(s), config source ${E2E_CONFIG_SOURCE})"
+echo "fast tier up in ${SECONDS}s (context ${CTX}, store ${E2E_STORE}, ${E2E_REPLICAS} Agent Kourier replica(s), config source ${E2E_CONFIG_SOURCE}, two apps ${E2E_TWO_APPS})"

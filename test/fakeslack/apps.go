@@ -112,6 +112,59 @@ func (s *Server) isRevoked(appID string) bool {
 	return s.revoked[appID]
 }
 
+// RotateTokens gives the app appID a new pair of tokens, as an operator does that replaces the tokens of a Slack app: the pair it had until now is
+// refused from here with token_revoked (for good, whether or not the app is revoked: SetRevoked does not bring it back), and the new pair is the app's.
+// Connections the app has stay open, as Slack leaves a socket that was opened with a token that is replaced; nothing opens one for it. A pair the app
+// had before and rotated away from may be given again, which brings it back; the pair it holds now may be given again, and nothing changes. A token that
+// another app owns, or has rotated away from, is refused with ErrInvalid, as are a bot token without the prefix xoxb- and an app token without xapp-.
+// It fails with ErrNotFound for an app the Server does not host. Apps reports the tokens an app was registered with, not the ones rotated to.
+//
+// UNCONFIRMED(MC-11): that Slack refuses a replaced token with token_revoked (also under WithStrictTokens, where a token no app owns is invalid_auth) and
+// keeps the sockets that it opened.
+//
+// DELIBERATE DEPARTURE from Slack: a token that was rotated away from may be given back, which brings it back. Slack does not revive a revoked token; the
+// fake does so that a case can put the pair the tier was brought up with back after it rotated to another.
+func (s *Server) RotateTokens(appID, botToken, appToken string) error {
+	if _, ok := s.appByID(appID); !ok {
+		return fmt.Errorf("fakeslack: no app %q: %w", appID, ErrNotFound)
+	}
+	if !strings.HasPrefix(botToken, "xoxb-") || !strings.HasPrefix(appToken, "xapp-") {
+		return invalid("fakeslack: a rotated bot token starts with xoxb- and an app token with xapp-")
+	}
+	s.tokenMu.Lock()
+	defer s.tokenMu.Unlock()
+	for _, tok := range []string{botToken, appToken} {
+		if owner, owned := s.tokens[tok]; owned && owner != appID {
+			return invalid("fakeslack: a token is owned by another app")
+		}
+		if owner, gone := s.retired[tok]; gone && owner != appID {
+			return invalid("fakeslack: a token was rotated away from by another app")
+		}
+	}
+	if s.retired == nil {
+		s.retired = map[string]string{}
+	}
+	for tok, owner := range s.tokens {
+		if owner == appID && tok != botToken && tok != appToken {
+			delete(s.tokens, tok)
+			s.retired[tok] = appID
+		}
+	}
+	for _, tok := range []string{botToken, appToken} {
+		delete(s.retired, tok)
+		s.tokens[tok] = appID
+	}
+	return nil
+}
+
+// isRetired says whether the token was rotated away from.
+func (s *Server) isRetired(token string) bool {
+	s.tokenMu.RLock()
+	defer s.tokenMu.RUnlock()
+	_, gone := s.retired[token]
+	return gone
+}
+
 // WithSocketSpread makes the fake send each event to exactly one of an app's Socket Mode connections, taking
 // them in turn, where it otherwise sends every event to the app's newest connection. It is for tests of what a
 // client that holds a second connection of the same app misses.
@@ -171,10 +224,14 @@ func (s *Server) appOrDefault(id string) App {
 // appForToken returns the app that owns token, or the default app for a token no app owns. With
 // WithStrictTokens, and an app that has a token, ok is false for a token no app owns.
 func (s *Server) appForToken(token string) (app App, ok bool) {
-	if id, owned := s.tokens[token]; owned {
+	s.tokenMu.RLock()
+	id, owned := s.tokens[token]
+	anyToken := len(s.tokens) > 0
+	s.tokenMu.RUnlock()
+	if owned {
 		return s.appOrDefault(id), true
 	}
-	return s.defaultApp(), !s.strictTokens || len(s.tokens) == 0
+	return s.defaultApp(), !s.strictTokens || !anyToken
 }
 
 // Apps returns every app the Server hosts, the default app first. The tokens are included, so the result is for

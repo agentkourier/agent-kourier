@@ -48,9 +48,24 @@ func (c *AgentKourier) WaitReady(ctx context.Context, timeout time.Duration) err
 // error that says so: which of them is meant is not guessed. Any sample is read, a gauge too, though
 // the helper is for counters. A body it cannot parse is an error, not a missing sample.
 func (c *AgentKourier) Counter(ctx context.Context, name string, labels map[string]string) (float64, error) {
-	body, err := c.c.getText(ctx, "/metrics", maxMetrics)
+	found, err := c.samples(ctx, name, labels)
 	if err != nil {
 		return 0, err
+	}
+	switch len(found) {
+	case 0:
+		return 0, fmt.Errorf("%w: %s%v", ErrNoSample, name, labels)
+	case 1:
+		return found[0], nil
+	}
+	return 0, fmt.Errorf("e2e: %d samples of %s match %v; add labels to say which", len(found), name, labels)
+}
+
+// samples scrapes /metrics and returns the value of every sample named name whose labels include every one in labels.
+func (c *AgentKourier) samples(ctx context.Context, name string, labels map[string]string) ([]float64, error) {
+	body, err := c.c.getText(ctx, "/metrics", maxMetrics)
+	if err != nil {
+		return nil, err
 	}
 	var found []float64
 	for n, line := range strings.Split(body, "\n") {
@@ -60,19 +75,30 @@ func (c *AgentKourier) Counter(ctx context.Context, name string, labels map[stri
 		}
 		got, have, value, err := parseSample(line)
 		if err != nil {
-			return 0, fmt.Errorf("e2e: /metrics line %d: %w", n+1, err)
+			return nil, fmt.Errorf("e2e: /metrics line %d: %w", n+1, err)
 		}
 		if got == name && includes(have, labels) {
 			found = append(found, value)
 		}
 	}
-	switch len(found) {
-	case 0:
-		return 0, fmt.Errorf("%w: %s%v", ErrNoSample, name, labels)
-	case 1:
-		return found[0], nil
+	return found, nil
+}
+
+// Sum scrapes /metrics and returns the total of the samples named name whose labels include every one in labels, for a counter that has a sample for each
+// of several outcomes or decisions and is to be held constant as a whole. No such sample is ErrNoSample. A body it cannot parse is an error.
+func (c *AgentKourier) Sum(ctx context.Context, name string, labels map[string]string) (float64, error) {
+	found, err := c.samples(ctx, name, labels)
+	if err != nil {
+		return 0, err
 	}
-	return 0, fmt.Errorf("e2e: %d samples of %s match %v; add labels to say which", len(found), name, labels)
+	if len(found) == 0 {
+		return 0, fmt.Errorf("%w: %s%v", ErrNoSample, name, labels)
+	}
+	var total float64
+	for _, v := range found {
+		total += v
+	}
+	return total, nil
 }
 
 // AuditEntries reads the persisted audit rows exposed by the testhooks image.

@@ -872,3 +872,194 @@ func TestBotsInfoAnswersTheAppOfTheBot(t *testing.T) {
 		t.Errorf("bots.info as b about a's revoked bot = %+v, %v; want the bot still known to b", got, err)
 	}
 }
+
+func TestRotatedTokensReplaceTheAppsPairAndTheOldPairIsRefused(t *testing.T) {
+	fake := twoApps(t)
+	smc := socketAs(t, fake, appA)
+	_ = smc
+	eventually(t, "a to be connected", func() bool { return fake.AppConnections("AAPPA") == 1 })
+	rotated := fakeslack.App{BotToken: "xoxb-app-a-rotated", AppToken: "xapp-app-a-rotated"}
+
+	if err := fake.RotateTokens("AAPPA", rotated.BotToken, rotated.AppToken); err != nil {
+		t.Fatalf("RotateTokens: %v", err)
+	}
+	// The new pair is the app's: its identity, its Web API and apps.connections.open. A socket opened with the old one stays open.
+	if got, err := webAs(fake, rotated).AuthTest(); err != nil || got.UserID != "UBOTA" {
+		t.Errorf("auth.test with the new bot token = %+v, %v; want a's bot", got, err)
+	}
+	if _, _, err := webAs(fake, rotated).StartSocketModeContext(t.Context()); err != nil {
+		t.Errorf("apps.connections.open with the new app token = %v", err)
+	}
+	if n := fake.AppConnections("AAPPA"); n != 1 {
+		t.Errorf("a has %d connections after the rotation, want the 1 it had", n)
+	}
+	// The old pair is refused, with the code and not with a token in the message, though the app is not revoked, and is not the default app's.
+	_, authErr := webAs(fake, appA).AuthTest()
+	_, _, openErr := webAs(fake, appA).StartSocketModeContext(t.Context())
+	for name, err := range map[string]error{"auth.test": authErr, "apps.connections.open": openErr} {
+		if err == nil || err.Error() != "token_revoked" {
+			t.Errorf("%s with the old token = %v, want token_revoked", name, err)
+		}
+	}
+	// Revoking the app and restoring it leaves the pair as it was: the old one stays refused and the new one works.
+	if err := fake.SetRevoked("AAPPA", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := webAs(fake, rotated).AuthTest(); err == nil || err.Error() != "token_revoked" {
+		t.Errorf("auth.test with the new token while the app is revoked = %v, want token_revoked", err)
+	}
+	if err := fake.SetRevoked("AAPPA", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := webAs(fake, rotated).AuthTest(); err != nil {
+		t.Errorf("auth.test with the new token after the app is restored = %v", err)
+	}
+	if _, err := webAs(fake, appA).AuthTest(); err == nil || err.Error() != "token_revoked" {
+		t.Errorf("auth.test with the old token after the app is restored = %v, want token_revoked", err)
+	}
+	// The pair it had before may be given again, and then the new pair is the one refused. Giving the pair it holds changes nothing.
+	if err := fake.RotateTokens("AAPPA", rotated.BotToken, rotated.AppToken); err != nil {
+		t.Errorf("RotateTokens to the pair it holds = %v", err)
+	}
+	if err := fake.RotateTokens("AAPPA", appA.BotToken, appA.AppToken); err != nil {
+		t.Fatalf("RotateTokens back: %v", err)
+	}
+	if _, err := webAs(fake, appA).AuthTest(); err != nil {
+		t.Errorf("auth.test with the first pair, given again = %v", err)
+	}
+	if _, err := webAs(fake, rotated).AuthTest(); err == nil || err.Error() != "token_revoked" {
+		t.Errorf("auth.test with the rotated pair after it was replaced = %v, want token_revoked", err)
+	}
+	// Another app is untouched.
+	if got, err := webAs(fake, appB).AuthTest(); err != nil || got.UserID != "UBOTB" {
+		t.Errorf("auth.test as b = %+v, %v; want b working", got, err)
+	}
+}
+
+func TestRotateTokensRefusesWhatNoAppCouldHold(t *testing.T) {
+	fake := twoApps(t)
+	for name, tc := range map[string]struct {
+		app, bot, app2 string
+		want           error
+	}{
+		"a bot token without its prefix":  {"AAPPA", "xapp-wrong", "xapp-app-a-rotated", fakeslack.ErrInvalid},
+		"an app token without its prefix": {"AAPPA", "xoxb-app-a-rotated", "xoxb-wrong", fakeslack.ErrInvalid},
+		"another app's token":             {"AAPPA", appB.BotToken, "xapp-app-a-rotated", fakeslack.ErrInvalid},
+		"an app the fake does not host":   {"ANOBODY", "xoxb-new", "xapp-new", fakeslack.ErrNotFound},
+	} {
+		if err := fake.RotateTokens(tc.app, tc.bot, tc.app2); !errors.Is(err, tc.want) {
+			t.Errorf("%s: RotateTokens = %v, want %v", name, err, tc.want)
+		}
+	}
+	if _, err := webAs(fake, appA).AuthTest(); err != nil {
+		t.Errorf("a's own pair stopped working after refused rotations: %v", err)
+	}
+	// A pair another app rotated away from is not a pair to take.
+	if err := fake.RotateTokens("AAPPB", "xoxb-app-b-rotated", "xapp-app-b-rotated"); err != nil {
+		t.Fatal(err)
+	}
+	if err := fake.RotateTokens("AAPPA", appB.BotToken, "xapp-app-a-rotated"); !errors.Is(err, fakeslack.ErrInvalid) {
+		t.Errorf("RotateTokens to a token b rotated away from = %v, want ErrInvalid", err)
+	}
+}
+
+// Under WithStrictTokens a token no app owns is invalid_auth, but one that an app rotated away from is token_revoked: it was an app's.
+func TestARotatedAwayTokenIsRevokedEvenUnderStrictTokens(t *testing.T) {
+	fake := twoApps(t, fakeslack.WithStrictTokens())
+	if err := fake.RotateTokens("AAPPA", "xoxb-app-a-rotated", "xapp-app-a-rotated"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := webAs(fake, appA).AuthTest(); err == nil || err.Error() != "token_revoked" {
+		t.Errorf("auth.test with the token a rotated away from = %v, want token_revoked", err)
+	}
+	if _, err := slack.New("xoxb-nobody-token", slack.OptionAPIURL(fake.URL()+"/")).AuthTest(); err == nil || err.Error() != "invalid_auth" {
+		t.Errorf("auth.test with a token no app ever owned = %v, want invalid_auth", err)
+	}
+}
+
+// mdBlock is a markdown block as Slack has it, whose text is a plain string and not a text object; slack-go has no type for it.
+type mdBlock struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+func (mdBlock) BlockType() slack.MessageBlockType { return slack.MBTMarkdown }
+func (mdBlock) ID() string                        { return "" }
+
+// A bot's post that mentions another app's bot gets that app an app_mention, as a person's post does, by the rule that docs/spikes/slack-mention-probe.md
+// ("What a second app receives") measured, and then the message event; an app the post does not mention gets the message event alone, and the poster neither
+// hears itself mentioned. The rows are the probe's.
+func TestABotPostThatMentionsAnotherAppsBotIsAnAppMentionForIt(t *testing.T) {
+	fake := twoApps(t)
+	smcA, smcB := socketAs(t, fake, appA), socketAs(t, fake, appB)
+	fake.SetMembers("C1", "UBOTA", "UBOTB")
+	mrkdwn := func(s string) *slack.TextBlockObject { return slack.NewTextBlockObject("mrkdwn", s, false, false) }
+	richUser := slack.NewRichTextBlock("rt", &slack.RichTextSection{Type: slack.RTESection, Elements: []slack.RichTextSectionElement{slack.NewRichTextSectionUserElement("UBOTB", nil)}})
+	both, onlyMessage := []string{"app_mention", "message"}, []string{"message"}
+
+	for name, msg := range map[string]struct {
+		opts     []slack.MsgOption
+		wantType []string // what b is sent, in order
+	}{
+		"B: a token in the text":                                                  {[]slack.MsgOption{text("<@UBOTB> look at this")}, both},
+		"B: a labelled token in the text":                                         {[]slack.MsgOption{text("<@UBOTB|botb> look at this")}, both},
+		"J: no mention":                                                           {[]slack.MsgOption{text("nothing to see")}, onlyMessage},
+		"a mention of itself":                                                     {[]slack.MsgOption{text("<@UBOTA> me")}, onlyMessage},
+		"A: a context block's mrkdwn token, none in text":                         {[]slack.MsgOption{text("fallback words"), slack.MsgOptionBlocks(slack.NewContextBlock("c", mrkdwn("<@UBOTB> and words")))}, both},
+		"F: a section block's mrkdwn token, none in text":                         {[]slack.MsgOption{text("fallback words"), slack.MsgOptionBlocks(slack.NewSectionBlock(mrkdwn("<@UBOTB>"), nil, nil))}, both},
+		"C: a token in the text and in a context block":                           {[]slack.MsgOption{text("<@UBOTB> here"), slack.MsgOptionBlocks(slack.NewContextBlock("c", mrkdwn("<@UBOTB>")))}, both},
+		"H: a context block with another user's token":                            {[]slack.MsgOption{text("fallback words"), slack.MsgOptionBlocks(slack.NewContextBlock("c", mrkdwn("<@UOTHER>")))}, onlyMessage},
+		"G: a rich_text user element, none in text":                               {[]slack.MsgOption{text("see below"), slack.MsgOptionBlocks(richUser)}, onlyMessage},
+		"N1: a markdown block, then a context block with the token, none in text": {[]slack.MsgOption{text("fallback words"), slack.MsgOptionBlocks(mdBlock{Type: "markdown", Text: "a body"}, slack.NewContextBlock("c", mrkdwn("<@UBOTB>")))}, onlyMessage},
+		"D: a markdown block with no token, the token in text":                    {[]slack.MsgOption{text("<@UBOTB> here"), slack.MsgOptionBlocks(mdBlock{Type: "markdown", Text: "a body"})}, both},
+		"E: a markdown block with the token, none in text":                        {[]slack.MsgOption{text("fallback words"), slack.MsgOptionBlocks(mdBlock{Type: "markdown", Text: "<@UBOTB>"})}, onlyMessage},
+		"E1: a section's plain_text with the token, and the token in text":        {[]slack.MsgOption{text("<@UBOTB> here"), slack.MsgOptionBlocks(slack.NewSectionBlock(slack.NewTextBlockObject("plain_text", "<@UBOTB>", false, false), nil, nil))}, onlyMessage},
+		"a section's mrkdwn token beside a rich_text block, none in text":         {[]slack.MsgOption{text("see below"), slack.MsgOptionBlocks(slack.NewSectionBlock(mrkdwn("<@UBOTB>"), nil, nil), richUser)}, onlyMessage},
+	} {
+		_, ts, err := webAs(fake, appA).PostMessage("C1", msg.opts...)
+		if err != nil {
+			t.Fatalf("%s: a posts: %v", name, err)
+		}
+		_, ownMessage := nextPayload(t, smcA)
+		if ownMessage.Event.Type != "message" {
+			t.Errorf("%s: the poster was sent %q first, want its own message event", name, ownMessage.Event.Type)
+		}
+		for i, want := range msg.wantType {
+			_, p := nextPayload(t, smcB)
+			if p.Event.Type != want {
+				t.Fatalf("%s: b's event %d is a %q, want %q", name, i, p.Event.Type, want)
+			}
+			if p.Event.User != "UBOTA" || p.Event.BotID != "BBOTA" || p.Event.AppID != "AAPPA" || p.Event.Channel != "C1" || p.APIAppID != "AAPPB" {
+				t.Errorf("%s: b's %s is %+v for app %s; want a's bot (user, bot_id, app_id) in b's envelope", name, want, p.Event, p.APIAppID)
+			}
+		}
+		if got := len(fake.EventEnvelopes("AAPPB", "C1", ts)); got != len(msg.wantType) {
+			t.Errorf("%s: the fake recorded %d envelopes for b, want %d", name, got, len(msg.wantType))
+		}
+		quiet(t, "a", smcA)
+		quiet(t, "b", smcB)
+	}
+}
+
+func TestAppConnectionsOpenedCountsEveryClientThatConnected(t *testing.T) {
+	fake := twoApps(t)
+	if n := fake.AppConnectionsOpened("AAPPA"); n != 0 {
+		t.Fatalf("opened before any client = %d, want 0", n)
+	}
+	socketAs(t, fake, appA)
+	socketAs(t, fake, appA)
+	socketAs(t, fake, appB)
+	if got := fake.AppConnectionsOpened("AAPPA"); got != 2 {
+		t.Errorf("a has opened %d clients, want 2", got)
+	}
+	// Revoking ends a's clients, while the revocation lasts they cannot come back, and the count of those opened does not drop with them.
+	if err := fake.SetRevoked("AAPPA", true); err != nil {
+		t.Fatal(err)
+	}
+	if got, now := fake.AppConnectionsOpened("AAPPA"), fake.AppConnections("AAPPA"); got < 2 || now != 0 {
+		t.Errorf("a has opened %d clients and %d are connected after the revocation, want at least 2 opened and none connected", got, now)
+	}
+	if got := fake.AppConnectionsOpened("AAPPB"); got != 1 {
+		t.Errorf("b has opened %d clients, want 1", got)
+	}
+}

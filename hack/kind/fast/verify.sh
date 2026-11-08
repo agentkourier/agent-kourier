@@ -11,7 +11,8 @@
 #     /healthz and /readyz on each, through its proxy), exactly one of them the leader (agentkourier_leader, which a lone replica says too), and,
 #     on the Postgres store (E2E_STORE=postgres), a Postgres that is published nowhere, and with two replicas a container signaler that
 #     is published nowhere either;
-#  3. one probe pod in the cluster: fake Slack auth.test and /_control/connections, which shows Agent Kourier
+#  3. one probe pod in the cluster: fake Slack auth.test and /_control/connections of the default app (AFAKEAPP: with a team's app in the tier, a
+#     socket of that app must not stand for the platform's own), which shows Agent Kourier
 #     connected over Socket Mode (at least one connection, waited for); the stub
 #     agent's card with an unsigned JWT (200) and without one (401) and its release endpoint
 #     (204, with no token, as the fake Slack's); Alertmanager's API; the
@@ -106,11 +107,11 @@ code() { curl -s -m 10 -o /dev/null -w '%{http_code}' "$@"; } # CURL ARG...
 assert "fake Slack auth.test" has "$(curl -s -m 10 -X POST -H 'Authorization: Bearer xoxb-fake-test-token' "$FS/auth.test")" '"ok":true'
 conns=0
 for _ in $(seq 30); do
-  conns=$(curl -s -m 10 "$FS/_control/connections" | sed -n 's/.*"connections":\([0-9]*\).*/\1/p')
+  conns=$(curl -s -m 10 "$FS/_control/connections?app=AFAKEAPP" | sed -n 's/.*"connections":\([0-9]*\).*/\1/p')
   [ "${conns:-0}" -ge 1 ] && break
   sleep 1
 done
-assert "Agent Kourier is connected to the fake Slack over Socket Mode (connections: ${conns:-none})" test "${conns:-0}" -ge 1
+assert "Agent Kourier is connected to the fake Slack over Socket Mode, as the default app that its own ChatConnection is (connections: ${conns:-none})" test "${conns:-0}" -ge 1
 
 jwt="$(b64 '{"alg":"none"}').$(b64 '{"email":"verify@example.test"}')."
 card=$(curl -s -m 10 -H "Authorization: Bearer $jwt" "$AGENT/.well-known/agent-card.json")

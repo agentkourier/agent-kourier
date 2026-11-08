@@ -66,6 +66,17 @@ func (r *Replicas) Counter(ctx context.Context, rep kube.Replica, name string, l
 	return NewAgentKourier(base).Counter(ctx, name, labels)
 }
 
+// Sum is AgentKourier.Sum on the replica's own /metrics.
+func (r *Replicas) Sum(ctx context.Context, rep kube.Replica, name string, labels map[string]string) (float64, error) {
+	base := r.base(rep)
+	if base == "" {
+		return 0, fmt.Errorf("e2e: no address for replica %s", rep.ID())
+	}
+	ctx, cancel := context.WithTimeout(ctx, r.ask)
+	defer cancel()
+	return NewAgentKourier(base).Sum(ctx, name, labels)
+}
+
 // AuditEntries reads the persisted audit rows of one replica.
 func (r *Replicas) AuditEntries(ctx context.Context, rep kube.Replica) ([]store.AuditEntry, error) {
 	base := r.base(rep)
@@ -95,7 +106,8 @@ func (r *Replicas) Leaders(ctx context.Context) ([]kube.Replica, error) {
 }
 
 // WaitLeader waits up to timeout until exactly one replica leads, its chat connection is up (agentkourier_chat_connected
-// is 1: the connection to Slack is what takes events in) and it is none of the processes named in not (by ID: the
+// is 1 for the platform's own connection, ConnPlatform: the connection to Slack is what takes events in. A broker that serves
+// team connections has more series, one for each, and a scenario that wants one of those up waits for it itself) and it is none of the processes named in not (by ID: the
 // replicas that were leaders before an event, whose end or takeover is what a scenario waits for). It returns that
 // replica. A restart in the same pod is another process, so the pod that was the leader may be the answer after a
 // crash, once it has come back as a new process and won the Lease.
@@ -110,7 +122,7 @@ func (r *Replicas) WaitLeader(ctx context.Context, timeout time.Duration, not ..
 		if err != nil || len(leaders) != 1 || slices.Contains(not, leaders[0].ID()) {
 			return false, err
 		}
-		up, err := r.Counter(ctx, leaders[0], "agentkourier_chat_connected", nil)
+		up, err := r.Counter(ctx, leaders[0], "agentkourier_chat_connected", map[string]string{"connection": ConnPlatform})
 		if err != nil || up != 1 {
 			return false, err
 		}

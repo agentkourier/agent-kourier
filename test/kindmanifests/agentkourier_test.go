@@ -329,6 +329,14 @@ func TestTheRunnerJobRunsEveryE2ETest(t *testing.T) {
 			if m[1] == "TestMain" {
 				continue
 			}
+			// The MC_ tests (a broker with two Slack apps) are make e2e-two-apps's, in a Job of its own: the main Job leaves them out, so that its run stays well
+			// inside the Job's time limit (TestTheTwoAppsScriptRunsEveryMCTest).
+			if strings.HasPrefix(m[1], "TestMC_") {
+				if re.MatchString(m[1]) {
+					t.Errorf("the Job's pattern %q selects %s (%s): the MC_ tests are run by make e2e-two-apps, not by the main Job", pattern, m[1], filepath.Base(f))
+				}
+				continue
+			}
 			seen++
 			if !re.MatchString(m[1]) {
 				t.Errorf("the Job's pattern %q does not select %s (%s), so the Job would never run it", pattern, m[1], filepath.Base(f))
