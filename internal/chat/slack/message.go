@@ -119,8 +119,8 @@ const (
 // decode returns the Message that inner carries, and what to do with it (spec 8.2, D36).
 //   - A person's message is forwarded if it is plain, a thread_broadcast or a file_share, with a user, a
 //     channel, a ts and text. It is Mentioned if its text holds Agent Kourier's user token (mentionedIn), or its blocks
-//     mention Agent Kourier where Slack registers a mention (mentionedInBlocks). Slackbot's posts are no person's, and are
-//     dropped (slackbotUser).
+//     mention Agent Kourier where Slack registers a mention (mentionedInBlocks). A Slackbot post with no bot ID is no person's,
+//     and is dropped (slackbotUser).
 //   - A bot's message (a message event with a bot_id and no subtype or bot_message) is forwarded with its
 //     content, for Run to ask the Sink whether a trigger names the bot. A message of Agent Kourier's own, by user ID
 //     or by bot ID, is never forwarded (ownPost): two bots would answer each other without end. A bot's message
@@ -192,8 +192,10 @@ func (me self) mentionedIn(text string) bool {
 	return false
 }
 
-// slackbotUser is the user ID Slack gives Slackbot in every workspace. Slackbot posts reminders and its own responses as a user,
-// with no bot ID, so without this its posts would be a person's. It is no person and no app a trigger can name.
+// slackbotUser is the user ID Slack gives Slackbot in every workspace. A Slackbot post that comes with no bot ID would otherwise be
+// a person's, and Slackbot is no person. Its reminders do carry a bot ID (B01), so decode takes them, and a reminder's app_mention,
+// as a bot's before it asks this (docs/spikes/slack-user-token-and-slackbot-probe.md). So does a post an app makes with a person's
+// user token: Slack sends it with the app's bot ID.
 const slackbotUser = "USLACKBOT"
 
 // person says whether a post with no bot ID under user is a person's: it has a user, and the user is neither Agent Kourier nor

@@ -17,7 +17,7 @@ These are the defaults, which a Binding with no `chat.triggers` gets.
 | Any message Agent Kourier posted, including the edit events of its own posts | Ignored, always. |
 | A message from any other bot or app | Ignored, unless a `botMessage` trigger names its bot ID. |
 | A person's message that is not in a thread and does not mention Agent Kourier | Ignored, unless a `personMessage` trigger takes it. See [A person's message](#a-persons-message). |
-| A message Slackbot posts, such as a reminder | Ignored: Slackbot is no person, and no trigger can name it. |
+| A reminder Slackbot posts in the channel | Slack sends it as a bot's message, under Slackbot's bot ID (`B01` in the one workspace where this was measured): ignored, unless a `botMessage` trigger names that ID. A reminder that mentions Agent Kourier is [a bot's mention](#a-bots-mention). A Slackbot post that comes with no bot ID is ignored. |
 | A mention of Agent Kourier by any other bot or app | A turn in the thread that holds it, within fixed limits, unless the Binding says otherwise. See [A bot's mention](#a-bots-mention). |
 | An edit or deletion of any message, or another non-message subtype | Ignored. Plain messages, `thread_broadcast` and `file_share` (its text only) count as messages. |
 | A direct message | Not served yet. |
@@ -37,6 +37,8 @@ These are the defaults, which a Binding with no `chat.triggers` gets.
 Any bot or incoming webhook that can post in a bound channel can start a turn by mentioning Agent Kourier, because Slack cannot tell an
 agent from any other bot. This is on by default for a Binding with a `mention` trigger, including one with no `chat.triggers`.
 Set `chat.botMentions: none` to turn it off. A Binding whose list leaves out the `mention` trigger takes no bot's mention either.
+Slack sends a Slackbot reminder that mentions Agent Kourier, and a post that an app makes with a person's user token, as a bot's
+mention, under Slackbot's bot ID (`B01` where this was measured) or the app's own.
 
 | | |
 |---|---|
@@ -96,7 +98,7 @@ spec:
 | Limits | The trigger's own. A start holds its place in `maxConcurrent` while its own turn is queued or running, including while it waits for a person's answer; a later turn in its thread does not hold it. |
 | A limit is reached | No turn and nothing in the thread. Counted, and in the digest line of its window. |
 | The prompt | The template's output, then the whole message in the untrusted block, as for a `botMessage` trigger. The template has no extract to read, so `.Fields` is empty and `.State` and `.Key` are empty; `.Source` is `personMessage`. |
-| Who can start it | Anyone who can post in the channel, held to the trigger's limits. A message from a person of another workspace in a channel shared with it counts like any other, as a mention from that person does. A message that an app posts with a person's token is that person's when Slack sends it with no bot ID. |
+| Who can start it | Anyone who can post in the channel, held to the trigger's limits. A message from a person of another workspace in a channel shared with it counts like any other, as a mention from that person does. A message that an app posts with a person's user token is not that person's: Slack sends it with the app's bot ID, so it is a bot's message, which this trigger never takes. |
 | Slack | The app needs the `channels:history` scope, and `groups:history` for a private channel, and the events `message.channels` and `message.groups`. The [app manifest](../how-to/configure-slack.md) has them already, because replies in a thread need them too. |
 
 `agent-kourier dry-run` replays a `personMessage` trigger as the intake runs it: a top-level message it takes is `matched`, one it
