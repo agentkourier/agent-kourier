@@ -101,16 +101,16 @@ func TestResolvePerObject(t *testing.T) {
 					Message: "spec.agent.backendRef: " + backend + " generation 5 is invalid, serving generation 4"},
 			},
 			[]string{"sre/chat-only", "sre/sre-alerts"}},
-		{"a backend whose last good generation limits the agent namespaces leaves a Binding out for it, as for any other resolution rule",
+		{"a backend whose last good generation limits the agent namespaces leaves a Binding out for it and says that the limit is the served generation's",
 			func(s *Set) {
 				s.AgentBackends[0].Spec.Agents = &v1alpha1.AgentNamespaces{Namespaces: []string{"payments"}}
 				s.Invalid = []Invalid{{Kind: KindAgentBackend, Namespace: "agent-kourier-system", Name: "kagent-pilot", Generation: 5, Served: 4, Message: "spec.url: required"}}
 			},
 			[]Rejection{
 				{Namespace: "sre", Name: "chat-only", Reason: ReasonAgentNamespaceNotAllowed, Generation: 2,
-					Message: "spec.agent.namespace: " + backend + " does not allow agents in namespace kagent"},
+					Message: "spec.agent.namespace: " + backend + " does not allow agents in namespace kagent (the limit is that of the generation being served: " + backend + " generation 5 is invalid, serving generation 4)"},
 				{Namespace: "sre", Name: "sre-alerts", Reason: ReasonAgentNamespaceNotAllowed, Generation: 2,
-					Message: "spec.agent.namespace: " + backend + " does not allow agents in namespace kagent"},
+					Message: "spec.agent.namespace: " + backend + " does not allow agents in namespace kagent (the limit is that of the generation being served: " + backend + " generation 5 is invalid, serving generation 4)"},
 			},
 			nil},
 		{"a connection that is invalid, has no good generation and allows the Binding is ConnectionRejected",

@@ -207,9 +207,9 @@ func (p *problems) namespaces(path string, ns []string) {
 	}
 }
 
-// agentNamespaces checks the agents of an AgentBackend of the given dialect. The a2a dialect is refused first, and is the one
-// problem when the value also allows nothing: its URL names the agent and agent.namespace is never sent, so a limit on the
-// namespace would promise a control that the dialect does not give.
+// agentNamespaces checks the agents of an AgentBackend of the given dialect. The a2a dialect is refused first, and the check for a value
+// that allows nothing is then skipped, so the field has one problem of its own: the URL of a2a names the agent and agent.namespace is
+// never sent, so a limit on the namespace would promise a control that the dialect does not give. The entries of namespaces are checked either way.
 func (p *problems) agentNamespaces(d Dialect, a *AgentNamespaces) {
 	switch {
 	case d == DialectA2A:

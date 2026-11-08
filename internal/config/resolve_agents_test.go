@@ -1,6 +1,7 @@
 package config
 
 import (
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -58,7 +59,7 @@ func TestAgentNamespaces(t *testing.T) {
 				tc.mutate(set)
 				snap, got := ResolvePartial(set)
 				var want []Rejection
-				for _, name := range slices.Sorted(mapKeys(tc.rejected)) {
+				for _, name := range slices.Sorted(maps.Keys(tc.rejected)) {
 					want = append(want, rejected(name, ReasonAgentNamespaceNotAllowed, tc.rejected[name]))
 				}
 				if !slices.Equal(got, want) {
@@ -96,16 +97,6 @@ func TestAgentNamespaces(t *testing.T) {
 				wantProblems(t, set, specSecrets(), want...)
 			})
 		})
-	}
-}
-
-func mapKeys(m map[string]string) func(yield func(string) bool) {
-	return func(yield func(string) bool) {
-		for k := range m {
-			if !yield(k) {
-				return
-			}
-		}
 	}
 }
 

@@ -176,7 +176,7 @@ func TestAgentBackendValidate(t *testing.T) {
 		{"too many allowed namespaces, none of them valid: one problem, not one for each", func(o *AgentBackend) {
 			o.Spec.AllowedNamespaces = slices.Repeat([]string{"Not_A_Namespace"}, maxAllowedNamespaces+1)
 		}, fmt.Sprintf("spec.allowedNamespaces: has %d items, maximum is %d", maxAllowedNamespaces+1, maxAllowedNamespaces)},
-		{"agents that allow the backend's own namespace ok", func(o *AgentBackend) { o.Spec.Agents = &AgentNamespaces{SameNamespace: true} }, ""},
+		{"agents that allow the Binding's own namespace ok", func(o *AgentBackend) { o.Spec.Agents = &AgentNamespaces{SameNamespace: true} }, ""},
 		{"agents that list namespaces ok", func(o *AgentBackend) { o.Spec.Agents = &AgentNamespaces{Namespaces: []string{"kagent", "payments"}} }, ""},
 		{"agents that allow both ok", func(o *AgentBackend) {
 			o.Spec.Agents = &AgentNamespaces{SameNamespace: true, Namespaces: []string{"kagent"}}
@@ -189,7 +189,7 @@ func TestAgentBackendValidate(t *testing.T) {
 			o.Spec.Dialect = DialectA2A
 			o.Spec.Agents = &AgentNamespaces{SameNamespace: true}
 		}, "spec.agents: is not supported on the a2a dialect: the URL names the agent and agent.namespace is never sent"},
-		{"agents that allow nothing on the a2a dialect: the dialect is the one problem", func(o *AgentBackend) {
+		{"agents that allow nothing on the a2a dialect: one problem for the field", func(o *AgentBackend) {
 			o.Spec.Dialect = DialectA2A
 			o.Spec.Agents = &AgentNamespaces{}
 		}, "spec.agents: is not supported on the a2a dialect: the URL names the agent and agent.namespace is never sent"},

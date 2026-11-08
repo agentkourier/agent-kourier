@@ -128,7 +128,8 @@ func CapMessage(s string) string {
 // naming the reason: its own spec (InvalidSpec), its backend (BackendRejected) or its connection (ConnectionRejected). A
 // Binding that is left out for a reference that is not found, where the target exists but is refused, has the Rejection
 // with that reason instead of NotFound. A Binding that is refused and has no last good generation is left out, and is
-// rejected as InvalidSpec.
+// rejected as InvalidSpec. A Binding left out by the agents limit of a backend whose newer generation is refused says that the
+// limit is the served generation's.
 func resolvePerObject(set *Set) (*Snapshot, []Rejection) {
 	invalid := make(map[identity]Invalid, len(set.Invalid))
 	for _, inv := range set.Invalid {
@@ -175,6 +176,13 @@ func resolvePerObject(set *Set) (*Snapshot, []Rejection) {
 		case ReasonBackendNotFound:
 			if inv, ok := invalid[refs.backend]; ok {
 				rej.Reason, rej.Message = inv.rejectionFor(rej.Namespace, "spec.agent.backendRef", ReasonBackendRejected)
+			}
+		case ReasonAgentNamespaceNotAllowed:
+			// The limit is that of the backend's generation in the Set, which is the last good one when a newer one is refused, so
+			// the owner who reads the newer one is told which is in force. The sentence follows the rule of rejectionFor: the
+			// owner's problems only in the backend's own namespace.
+			if inv, ok := invalid[refs.backend]; ok {
+				rej.Message += " (the limit is that of the generation being served: " + inv.describe(inv.Namespace == rej.Namespace, true) + ")"
 			}
 		case ReasonConnectionNotFound:
 			if inv, ok := invalid[refs.conn]; ok {
