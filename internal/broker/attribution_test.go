@@ -5,8 +5,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -82,8 +82,21 @@ func TestRunAttributesTheRowsWrittenBeforeConnectionsToTheOwnConnection(t *testi
 		t.Fatal(err)
 	}
 
+	// /readyz answers 200 before the leader half starts, so the test waits for the sessions' recovery instead: the rows are
+	// attributed before it, and it is the first step of the leader's start that the trace is told of.
+	recovered := make(chan struct{})
+	var once sync.Once
+	c.startTrace = func(step string) {
+		if step == "recover-sessions" {
+			once.Do(func() { close(recovered) })
+		}
+	}
 	r := start(t, c)
-	r.until("/readyz", http.StatusOK)
+	select {
+	case <-recovered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the leader half never recovered its sessions")
+	}
 	r.cancel()
 	if err := r.wait(); err != nil {
 		t.Fatal(err)
