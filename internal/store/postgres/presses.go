@@ -10,9 +10,9 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
-// RecordPress implements store.Presses. The counts and the insert are one transaction under an advisory
-// lock that every RecordPress takes, so the limits, counted over the presses of p's connection, hold under concurrent presses: READ COMMITTED would
-// let two callers count the same free place. The lock also makes the order of Seq the order of commits.
+// RecordPress implements store.Presses. The counts, over the presses of p's connection, and the insert are one transaction
+// under an advisory lock that every RecordPress takes, so the limits hold under concurrent presses: READ COMMITTED would let
+// two callers count the same free place. The lock also makes the order of Seq the order of commits.
 func (s *adapter) RecordPress(ctx context.Context, p store.Press, limits store.PressLimits) (int64, error) {
 	var seq int64
 	if p.Inputs == nil {

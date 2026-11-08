@@ -35,7 +35,7 @@ func (s *adapter) ServedConnections(ctx context.Context) ([]string, error) {
 }
 
 // ReplaceServedConnections implements store.ConnectionServing. connections is sorted and has no repeats (the guard sees to it).
-func (s *adapter) ReplaceServedConnections(ctx context.Context, connections []string) error {
+func (s *adapter) ReplaceServedConnections(ctx context.Context, connections []string, now time.Time) error {
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		have, err := recordedServed(ctx, tx)
 		if err != nil {
@@ -48,7 +48,7 @@ func (s *adapter) ReplaceServedConnections(ctx context.Context, connections []st
 				}
 			}
 		}
-		since := ts(time.Now())
+		since := ts(now)
 		for _, c := range connections {
 			if _, err := tx.ExecContext(ctx, `INSERT INTO served_connections (connection, served_since) VALUES (?, ?) ON CONFLICT (connection) DO NOTHING`, c, since); err != nil {
 				return err

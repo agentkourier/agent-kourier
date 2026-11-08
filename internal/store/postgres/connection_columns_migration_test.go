@@ -129,20 +129,20 @@ func TestServedSinceIsKeptForAConnectionThatStaysAndSetForANewOne(t *testing.T) 
 		}
 		return out
 	}
-	if err := s.ReplaceServedConnections(ctx, []string{"ns/stays", "ns/goes"}); err != nil {
+	at := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	if err := s.ReplaceServedConnections(ctx, []string{"ns/stays", "ns/goes"}, at); err != nil {
 		t.Fatal(err)
 	}
 	first := since()
-	if first["ns/stays"].IsZero() {
-		t.Fatalf("served_since = %v; want a time for each connection", first)
+	if !first["ns/stays"].Equal(at) || !first["ns/goes"].Equal(at) {
+		t.Fatalf("served_since = %v; want the time of the call for each connection, %v", first, at)
 	}
-	time.Sleep(5 * time.Millisecond)
-	if err := s.ReplaceServedConnections(ctx, []string{"ns/stays", "ns/new"}); err != nil {
+	if err := s.ReplaceServedConnections(ctx, []string{"ns/stays", "ns/new"}, at.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	second := since()
-	if len(second) != 2 || !second["ns/stays"].Equal(first["ns/stays"]) || !second["ns/new"].After(first["ns/stays"]) {
-		t.Errorf("served_since was %v, is now %v; want ns/stays unchanged, ns/goes gone, and ns/new later than ns/stays", first, second)
+	if len(second) != 2 || !second["ns/stays"].Equal(at) || !second["ns/new"].Equal(at.Add(time.Hour)) {
+		t.Errorf("served_since was %v, is now %v; want ns/stays to keep %v, ns/goes gone, and ns/new served from %v", first, second, at, at.Add(time.Hour))
 	}
 }
 
@@ -150,10 +150,46 @@ func TestServedSinceIsKeptForAConnectionThatStaysAndSetForANewOne(t *testing.T) 
 func TestReplaceServedConnectionsIsFenced(t *testing.T) {
 	dsn, _, _ := freshSchema(t)
 	standby := openStandbyAt(t, dsn)
-	if err := standby.ReplaceServedConnections(t.Context(), []string{"ns/a"}); !errors.Is(err, store.ErrDeposed) {
+	if err := standby.ReplaceServedConnections(t.Context(), []string{"ns/a"}, time.Now()); !errors.Is(err, store.ErrDeposed) {
 		t.Fatalf("ReplaceServedConnections of a standby = %v; want store.ErrDeposed", err)
 	}
 	if got, err := standby.ServedConnections(t.Context()); err != nil || len(got) != 0 {
 		t.Errorf("ServedConnections = %v, %v; want none: the standby's write changed nothing", got, err)
+	}
+}
+
+// TestAttributeConnectionAttributesTablesLargerThanOneBatch: rows without a connection in more than one batch (the outbox, and
+// the presses) are all attributed, the count is of all of them, and rows that have a connection are left alone.
+func TestAttributeConnectionAttributesTablesLargerThanOneBatch(t *testing.T) {
+	dsn, _, _ := freshSchema(t)
+	s := openAt(t, dsn)
+	ctx := t.Context()
+	n := 2*store.AttributeBatch + 1
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	for _, q := range []string{
+		`INSERT INTO outbox (id, event_id, role, channel, thread_ts, created_at) SELECT 'o' || i, 'e' || i, 'reply', 'C1', '1.1', $2 FROM generate_series(1, $1::int) i`,
+		`INSERT INTO interaction_presses (interaction_id, user_id, channel, message_ts, inputs, pressed_at) SELECT 'ix', 'U' || i, 'C1', '1.2', '\x7b7d', $2 FROM generate_series(1, $1::int) i`,
+	} {
+		if _, err := s.a.pool.Exec(ctx, q, n, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.a.pool.Exec(ctx, `UPDATE outbox SET connection = 'ns/other' WHERE id = 'o1'`); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.AttributeConnection(ctx, "ns/own")
+	if want := (store.AttributedRows{Outbox: n - 1, Presses: n}); err != nil || got != want {
+		t.Fatalf("AttributeConnection = %+v, %v; want %+v", got, err, want)
+	}
+	var empty, own, other int
+	if err := s.a.pool.QueryRow(ctx, `SELECT
+		(SELECT COUNT(*) FROM outbox WHERE connection = '') + (SELECT COUNT(*) FROM interaction_presses WHERE connection = ''),
+		(SELECT COUNT(*) FROM outbox WHERE connection = 'ns/own') + (SELECT COUNT(*) FROM interaction_presses WHERE connection = 'ns/own'),
+		(SELECT COUNT(*) FROM outbox WHERE connection = 'ns/other')`).Scan(&empty, &own, &other); err != nil {
+		t.Fatal(err)
+	}
+	if empty != 0 || own != 2*n-1 || other != 1 {
+		t.Errorf("rows with no connection %d, the own connection's %d, another's %d; want 0, %d and 1", empty, own, other, 2*n-1)
 	}
 }

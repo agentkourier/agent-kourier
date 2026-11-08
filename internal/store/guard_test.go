@@ -236,8 +236,10 @@ func recordPress(f func(*store.Press), limits store.PressLimits) call {
 	}
 }
 
-func replaceServedConnections(connections ...string) call {
-	return func(ctx context.Context, s store.Store) error { return s.ReplaceServedConnections(ctx, connections) }
+func replaceServedConnections(now time.Time, connections ...string) call {
+	return func(ctx context.Context, s store.Store) error {
+		return s.ReplaceServedConnections(ctx, connections, now)
+	}
 }
 
 func attributeConnection(connection string) call {
@@ -568,7 +570,11 @@ func specs() []spec {
 		}},
 		{"ListPresses", func(ctx context.Context, s store.Store) error { _, err := s.ListPresses(ctx); return err }, nil},
 		{"ServedConnections", func(ctx context.Context, s store.Store) error { _, err := s.ServedConnections(ctx); return err }, nil},
-		{"ReplaceServedConnections", replaceServedConnections("ns/a", "ns/b"), map[string]call{"an empty connection": replaceServedConnections("ns/a", "")}},
+		{"ReplaceServedConnections", replaceServedConnections(t0, "ns/a", "ns/b"), map[string]call{
+			"an empty connection": replaceServedConnections(t0, "ns/a", ""),
+			"zero time":           replaceServedConnections(time.Time{}, "ns/a"),
+			"epoch":               replaceServedConnections(epoc, "ns/a"),
+		}},
 		{"AttributeConnection", attributeConnection("slack"), map[string]call{"no connection": attributeConnection("")}},
 		{"PendingPresses", pendingPresses("i1", t0), map[string]call{
 			"no ID":     pendingPresses("", t0),
@@ -955,7 +961,7 @@ func TestHasRepliesAcceptsNoIDsAndUpToTheBound(t *testing.T) {
 func TestReplaceServedConnectionsGivesTheAdapterTheSetSortedWithNoRepeats(t *testing.T) {
 	in := []string{"ns/b", "ns/a", "ns/b"}
 	a := &fakeAdapter{}
-	if err := store.Guard(a).ReplaceServedConnections(t.Context(), in); err != nil {
+	if err := store.Guard(a).ReplaceServedConnections(t.Context(), in, t0); err != nil {
 		t.Fatal(err)
 	}
 	if got := a.row.([]string); !slices.Equal(got, []string{"ns/a", "ns/b"}) {

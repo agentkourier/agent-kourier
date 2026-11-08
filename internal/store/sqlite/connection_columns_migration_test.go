@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -140,19 +141,56 @@ func TestServedSinceIsKeptForAConnectionThatStaysAndSetForANewOne(t *testing.T) 
 		}
 		return out
 	}
-	if err := s.ReplaceServedConnections(ctx, []string{"ns/stays", "ns/goes"}); err != nil {
+	at := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	if err := s.ReplaceServedConnections(ctx, []string{"ns/stays", "ns/goes"}, at); err != nil {
 		t.Fatal(err)
 	}
 	first := since()
-	if first["ns/stays"] <= 0 {
-		t.Fatalf("served_since = %v; want a time for each connection", first)
+	if first["ns/stays"] != ts(at) || first["ns/goes"] != ts(at) {
+		t.Fatalf("served_since = %v; want the time of the call for each connection, %d", first, ts(at))
 	}
-	time.Sleep(5 * time.Millisecond)
-	if err := s.ReplaceServedConnections(ctx, []string{"ns/stays", "ns/new"}); err != nil {
+	if err := s.ReplaceServedConnections(ctx, []string{"ns/stays", "ns/new"}, at.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	second := since()
-	if len(second) != 2 || second["ns/stays"] != first["ns/stays"] || second["ns/new"] <= first["ns/stays"] {
-		t.Errorf("served_since was %v, is now %v; want ns/stays unchanged, ns/goes gone, and ns/new later than ns/stays", first, second)
+	if want := (map[string]int64{"ns/stays": ts(at), "ns/new": ts(at.Add(time.Hour))}); !maps.Equal(second, want) {
+		t.Errorf("served_since was %v, is now %v; want %v: ns/stays keeps its time, ns/goes is gone, and ns/new is served from the second call", first, second, want)
+	}
+}
+
+// TestAttributeConnectionAttributesTablesLargerThanOneBatch: rows without a connection in more than one batch (the outbox, and
+// the presses) are all attributed, the count is of all of them, and rows that have a connection are left alone.
+func TestAttributeConnectionAttributesTablesLargerThanOneBatch(t *testing.T) {
+	s := openAt(t, filepath.Join(t.TempDir(), "agent-kourier.db"))
+	ctx := t.Context()
+	n := 2*store.AttributeBatch + 1
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC).UnixNano()
+	fill := func(q string) {
+		t.Helper()
+		if _, err := s.a.write.ExecContext(ctx, q, n, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fill(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+		INSERT INTO outbox (id, event_id, role, channel, thread_ts, created_at) SELECT 'o' || i, 'e' || i, 'reply', 'C1', '1.1', ? FROM n`)
+	fill(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+		INSERT INTO interaction_presses (interaction_id, user_id, channel, message_ts, inputs, pressed_at) SELECT 'ix', 'U' || i, 'C1', '1.2', x'7b7d', ? FROM n`)
+	if _, err := s.a.write.ExecContext(ctx, `UPDATE outbox SET connection = 'ns/other' WHERE id = 'o1'`); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.AttributeConnection(ctx, "ns/own")
+	if want := (store.AttributedRows{Outbox: n - 1, Presses: n}); err != nil || got != want {
+		t.Fatalf("AttributeConnection = %+v, %v; want %+v", got, err, want)
+	}
+	var empty, own, other int
+	if err := s.a.read.QueryRowContext(ctx, `SELECT
+		(SELECT COUNT(*) FROM outbox WHERE connection = '') + (SELECT COUNT(*) FROM interaction_presses WHERE connection = ''),
+		(SELECT COUNT(*) FROM outbox WHERE connection = 'ns/own') + (SELECT COUNT(*) FROM interaction_presses WHERE connection = 'ns/own'),
+		(SELECT COUNT(*) FROM outbox WHERE connection = 'ns/other')`).Scan(&empty, &own, &other); err != nil {
+		t.Fatal(err)
+	}
+	if empty != 0 || own != 2*n-1 || other != 1 {
+		t.Errorf("rows with no connection %d, the own connection's %d, another's %d; want 0, %d and 1", empty, own, other, 2*n-1)
 	}
 }

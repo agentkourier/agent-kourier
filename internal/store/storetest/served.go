@@ -16,7 +16,7 @@ func (su suite) servedConnections(t *testing.T) {
 	}
 	replace := func(t *testing.T, s store.Store, connections ...string) {
 		t.Helper()
-		noErr(t, s.ReplaceServedConnections(t.Context(), connections), "ReplaceServedConnections")
+		noErr(t, s.ReplaceServedConnections(t.Context(), connections, t0), "ReplaceServedConnections")
 	}
 
 	su.runReopen(t, "no connection is recorded until a set is, and a set survives a restart, listed sorted", func(t *testing.T, s store.Store, reopen func() store.Store) {
@@ -56,7 +56,7 @@ func (su suite) servedConnections(t *testing.T) {
 			t.Fatalf("ServedConnections after an empty set = %v; want none", got)
 		}
 		replace(t, s, "ns/a")
-		noErr(t, s.ReplaceServedConnections(t.Context(), nil), "ReplaceServedConnections(nil)")
+		noErr(t, s.ReplaceServedConnections(t.Context(), nil, t0), "ReplaceServedConnections(nil)")
 		if got := served(t, s); len(got) != 0 {
 			t.Errorf("ServedConnections after a nil set = %v; want none", got)
 		}
@@ -65,9 +65,25 @@ func (su suite) servedConnections(t *testing.T) {
 
 	su.run(t, "ReplaceServedConnections with an empty connection is refused and changes nothing", func(t *testing.T, s store.Store) {
 		replace(t, s, "ns/a")
-		isErr(t, s.ReplaceServedConnections(t.Context(), []string{"ns/b", ""}), store.ErrInvalid, "an empty connection")
+		isErr(t, s.ReplaceServedConnections(t.Context(), []string{"ns/b", ""}, t0), store.ErrInvalid, "an empty connection")
 		if got := served(t, s); !slices.Equal(got, []string{"ns/a"}) {
 			t.Errorf("ServedConnections = %v; want the set as it was", got)
+		}
+	})
+
+	// Replaces that run together are applied one after the other: the record is the set of one of them, never a mix. A store that
+	// let each delete against the set as it was, and then insert, would commit the union.
+	su.run(t, "ReplaceServedConnections calls that run together leave the set of one of them", func(t *testing.T, s store.Store) {
+		sets := [][]string{{"ns/a", "ns/b"}, {"ns/c", "ns/d"}}
+		for round := range 30 {
+			parallel(2, func(i int) {
+				if err := s.ReplaceServedConnections(t.Context(), sets[i], t0); err != nil {
+					t.Errorf("ReplaceServedConnections: %v", err)
+				}
+			})
+			if got := served(t, s); !slices.Equal(got, sets[0]) && !slices.Equal(got, sets[1]) {
+				t.Fatalf("round %d: ServedConnections = %v; want one of %v", round, got, sets)
+			}
 		}
 	})
 }

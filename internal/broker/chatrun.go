@@ -88,8 +88,8 @@ func RunPlatform(ctx context.Context, runner PlatformRunner, sink chat.Sink, p R
 }
 
 // ChooseConnection returns the only ChatConnection of snap, with the keys of its credentials Secret that its
-// platform needs (platformKeys) read through secrets. v1 serves exactly one, and only a platform that has an adapter (Slack, in Socket Mode). Anything else is an
-// error wrapping ErrWiring. The tokens are those of the snapshot at the call: Run reads them at start, and again when the
+// platform needs (platformKeys) read through secrets. v1 serves exactly one, and only a platform that has an adapter
+// (Slack, in Socket Mode). Anything else is an error wrapping ErrWiring. The tokens are those of the snapshot at the call: Run reads them at start, and again when the
 // leader half starts, since a standby may lead long after it started. A change of the connection or of its Secret applies
 // to a running leader on restart, and nothing flags it as a failed reload (the stale flag is for reloads that failed): the
 // verification of the Bindings tells of tokens that differ from these (ChatCredentialsChanged), and logs a Binding that a reload moved

@@ -47,7 +47,7 @@ func (f *fakeAdapter) ServedConnections(_ context.Context) ([]string, error) {
 	return zero[[]string](), f.err
 }
 
-func (f *fakeAdapter) ReplaceServedConnections(_ context.Context, a1 []string) error {
+func (f *fakeAdapter) ReplaceServedConnections(_ context.Context, a1 []string, _ time.Time) error {
 	f.record("ReplaceServedConnections")
 	f.row = a1
 	return f.err
