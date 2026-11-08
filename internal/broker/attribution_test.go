@@ -83,18 +83,24 @@ func TestRunAttributesTheRowsWrittenBeforeConnectionsToTheOwnConnection(t *testi
 	}
 
 	r := start(t, c)
-	r.until("/readyz", http.StatusOK)
-	r.cancel()
-	if err := r.wait(); err != nil {
-		t.Fatal(err)
-	}
+	r.until("/readyz", http.StatusOK) // ready does not mean leading: the attribution runs when the leader starts
 
 	st, err := sqlite.Open(t.Context(), c.DBPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = st.Close() }()
-	if row, err := st.GetOutbox(t.Context(), "old/reply"); err != nil || row.Connection != own {
-		t.Errorf("the outbox row = %+v, %v; want connection %q", row, err, own)
+	var row store.OutboxEntry
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if row, err = st.GetOutbox(t.Context(), "old/reply"); err == nil && row.Connection == own {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the outbox row = %+v, %v; want connection %q", row, err, own)
+		}
+	}
+	r.cancel()
+	if err := r.wait(); err != nil {
+		t.Fatal(err)
 	}
 }
