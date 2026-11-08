@@ -164,7 +164,10 @@ func (in *Intake) Message(ctx context.Context, m Inbound) (telemetryErr error) {
 		op.Finish(telemetryErr)
 	}()
 	seen := [2]string{m.At.Channel, m.At.ID}
-	if in.seen.has(seen) && !in.mentionOfLimited(m, seen) {
+	// One config decides whether a person's event passes the dedup and how it is tried as a report: a reload between two reads could
+	// let a limited report's app_mention pass as a mention and then be decided again as the report, and start it late.
+	snap := in.cfg.Snapshot()
+	if in.seen.has(seen) && !in.mentionOfLimited(snap, m, seen) {
 		disposition = "duplicate"
 		if in.matched.has(seen) {
 			in.countDecision(ctx, m.At.Channel, DecisionDedup)
@@ -188,7 +191,7 @@ func (in *Intake) Message(ctx context.Context, m Inbound) (telemetryErr error) {
 		}
 		return nil
 	}
-	switch d, mentionMayTake, err := in.personMessage(ctx, m); {
+	switch d, mentionMayTake, err := in.personMessage(ctx, snap, m); {
 	case err != nil:
 		return err
 	case d == "trigger_matched":
@@ -303,8 +306,7 @@ func (in *Intake) botMessage(ctx context.Context, m Inbound) (disposition string
 // That event must not be taken for a duplicate, or the person's mention is lost in silence (Intake.awaitingMention). A start
 // that was not made posted its note in the thread, so its app_mention is a duplicate, and no answer follows the note. Where the
 // Binding has no mention trigger, the app_mention is the same report, decided the same way.
-func (in *Intake) personMessage(ctx context.Context, m Inbound) (disposition string, mentionMayTake bool, err error) {
-	snap := in.cfg.Snapshot()
+func (in *Intake) personMessage(ctx context.Context, snap *config.Snapshot, m Inbound) (disposition string, mentionMayTake bool, err error) {
 	if snap == nil {
 		return "ignored", false, nil
 	}
@@ -475,13 +477,12 @@ func (r *recent) has(k [2]string) bool {
 
 // mentionOfLimited says whether m is a person's event that mentions Agent Kourier, of a message that a limit stopped a
 // personMessage trigger from starting on a Binding with a mention trigger: it is the mention trigger's, though the message is
-// remembered (Intake.awaitingMention). It asks the config of this moment too: after a reload that took the mention trigger away,
-// the event is the report's duplicate, and is not decided again, which could start the report late.
-func (in *Intake) mentionOfLimited(m Inbound, seen [2]string) bool {
+// remembered (Intake.awaitingMention). It asks snap, the config the event is handled under, too: after a reload that took the
+// mention trigger away, the event is the report's duplicate, and is not decided again, which could start the report late.
+func (in *Intake) mentionOfLimited(snap *config.Snapshot, m Inbound, seen [2]string) bool {
 	if !m.Mentioned || m.Bot != nil || !in.awaitingMention.has(seen) {
 		return false
 	}
-	snap := in.cfg.Snapshot()
 	if snap == nil {
 		return false
 	}
