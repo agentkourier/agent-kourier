@@ -26,6 +26,13 @@ type busyMark struct {
 	done   bool // this turn marks no more
 }
 
+// follow makes m the platform that marks and clears the thread, after the run looked its connection's platform up again.
+func (b *busyMark) follow(m chat.BusyMarker) {
+	if b != nil {
+		b.m = m
+	}
+}
+
 // set marks the thread, unless the turn marks no more, the platform has said it cannot, or the turn's context has ended
 // (a turn that never ended owes nothing). A platform that says ErrNoBusy has reported why itself, so that is not logged; any
 // other error is, once, and this turn stops marking, though it still clears what the failed call may have set.

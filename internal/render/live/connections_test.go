@@ -133,8 +133,8 @@ func TestEachTurnIsRenderedByTheAppOfItsConnection(t *testing.T) {
 	}
 }
 
-// TestATurnOfAConnectionThatIsDownIsWrittenWhenItRuns: with no platform running the turn's connection, the run fails its writes
-// as a platform that does not answer, and goes on until its final deadline; its reply is in the outbox, waiting, and goes out
+// TestATurnOfAConnectionThatIsDownIsWrittenWhenItRuns: with no platform running the turn's connection, the run's writes fail, are not
+// counted as attempts (Attempts is 2), and are tried again until its final deadline; its reply is in the outbox, waiting, and goes out
 // through the connection's platform once it runs.
 func TestATurnOfAConnectionThatIsDownIsWrittenWhenItRuns(t *testing.T) {
 	w := newTwoConnections(t, live.Config{FinalDeadline: 300 * time.Millisecond, Attempts: 2})
