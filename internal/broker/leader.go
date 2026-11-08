@@ -227,8 +227,8 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 		}
 	}
 	prober = verification{
-		Bindings: bindings, Platform: platform, Snaps: boot.Reloader, Revision: boot.Reloader.Revision, Conn: conn,
-		Secrets: boot.Secrets, Metrics: metrics, Log: log, Interval: cfg.probeEvery, Tick: cfg.probeTick, MinRevisionGap: cfg.probeGap,
+		Bindings: bindings, Platforms: chat.Narrow[platformReader](platforms), Conns: func() []Connection { return []Connection{conn} },
+		Snaps: boot.Reloader, Revision: boot.Reloader.Revision, Secrets: boot.Secrets, Metrics: metrics, Log: log, Interval: cfg.probeEvery, Tick: cfg.probeTick, MinRevisionGap: cfg.probeGap,
 		Status: statusW,
 	}.newProber()
 	if statusW != nil {
