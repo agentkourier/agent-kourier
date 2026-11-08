@@ -188,11 +188,16 @@ func (s *triggerStarter) keyOf(m chat.TriggerMatch) session.Key {
 	return session.Key{Connection: m.Message.At.Conn, Channel: m.Message.At.Channel, Thread: thread}
 }
 
-// MentionLimited records that a limit stopped a bot's mention (chat.IntakeConfig.OnMentionLimited). Its failure is logged and
-// counted by the Writer, and undoes nothing.
-func (s *triggerStarter) MentionLimited(ctx context.Context, m chat.TriggerMatch, limit store.TriggerLimit) {
-	if err := s.audit.TriggerRefused(ctx, audit.Actor{Binding: m.Binding}, audit.TriggerRefusal{MessageID: m.MessageID, Trigger: m.Index, Ref: botMentionSource, Reason: "limit_" + string(limit)}); err != nil {
-		s.log.WarnContext(ctx, "chat: a bot's mention that a limit stopped was not audited", "binding", m.Binding, "channel", m.Message.At.Channel, "message", m.Message.At.ID, "error", err)
+// Limited records that a limit stopped a bot's mention or a person's message (chat.IntakeConfig.OnLimited): a person's under that
+// person's user ID, so that a member who spends a trigger's limits for everyone can be found, and a bot's under nobody. It names the
+// message by ID and never by what it said. Its failure is logged and counted by the Writer, and undoes nothing.
+func (s *triggerStarter) Limited(ctx context.Context, m chat.TriggerMatch, limit store.TriggerLimit) {
+	ref := botMentionSource
+	if m.Person {
+		ref = personMessageSource
+	}
+	if err := s.audit.TriggerRefused(ctx, audit.Actor{Binding: m.Binding, User: authorOf(m)}, audit.TriggerRefusal{MessageID: m.MessageID, Trigger: m.Index, Ref: ref, Reason: "limit_" + string(limit)}); err != nil {
+		s.log.WarnContext(ctx, "chat: a start that a limit stopped was not audited", "binding", m.Binding, "source", ref, "channel", m.Message.At.Channel, "message", m.Message.At.ID, "error", err)
 	}
 }
 

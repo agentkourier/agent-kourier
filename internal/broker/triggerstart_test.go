@@ -648,12 +648,30 @@ func TestOnStartOfABotsMentionInAThreadThatCannotContinue(t *testing.T) {
 	}
 }
 
-// A mention that a limit stopped is audited, by message and limit and with nothing the post said.
+// A mention that a limit stopped is audited, by message and limit and with nothing the post said. Nobody wrote it, so it names
+// no user.
 func TestAMentionALimitStoppedIsAudited(t *testing.T) {
 	s := newStarter(t)
-	s.MentionLimited(s.tel.Ctx, mentioned(), store.LimitRate)
-	if len(s.aud.got) != 1 || s.aud.got[0].Ref != "botMention" || s.aud.got[0].Reason != "limit_rate" || s.aud.got[0].MessageID != mentioned().MessageID || s.aud.who[0].Binding != startBinding {
-		t.Errorf("audited %+v by %+v; want one refusal of the mention by the rate limit", s.aud.got, s.aud.who)
+	s.Limited(s.tel.Ctx, mentioned(), store.LimitRate)
+	if len(s.aud.got) != 1 || s.aud.got[0].Ref != "botMention" || s.aud.got[0].Reason != "limit_rate" || s.aud.got[0].MessageID != mentioned().MessageID || s.aud.who[0].Binding != startBinding || s.aud.who[0].User != "" {
+		t.Errorf("audited %+v by %+v; want one refusal of the mention by the rate limit, by no user", s.aud.got, s.aud.who)
+	}
+}
+
+// A person's report that a limit stopped is audited under that person, by message, trigger and limit, so that a member who
+// spends the limits for everyone can be found; nothing they wrote is in it.
+func TestAPersonsReportALimitStoppedIsAuditedAsTheirs(t *testing.T) {
+	s := newStarter(t)
+	m := reported()
+	s.Limited(s.tel.Ctx, m, store.LimitDaily)
+	if len(s.aud.got) != 1 || s.aud.got[0].Ref != "personMessage" || s.aud.got[0].Reason != "limit_daily" || s.aud.got[0].MessageID != m.MessageID || s.aud.got[0].Trigger != m.Index {
+		t.Fatalf("audited %+v; want one refusal of the report by the daily cap", s.aud.got)
+	}
+	if who := s.aud.who[0]; who.Binding != startBinding || who.User != m.Message.User {
+		t.Errorf("audited by %+v; want the Binding and the person %s", who, m.Message.User)
+	}
+	if strings.Contains(fmt.Sprintf("%+v", s.aud.got[0]), "checkout") {
+		t.Errorf("audited %+v; want nothing the person wrote", s.aud.got[0])
 	}
 }
 

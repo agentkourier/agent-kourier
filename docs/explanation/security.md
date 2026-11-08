@@ -36,6 +36,13 @@ its questions; a button press or typed answer counts only from a channel member 
 per-user or group permissions in v1, with one exception: a Binding with tool approvals can set
 `interactions.approverGroups`, and then only members of those user groups may decide an approval.
 
+A trigger's limits bound how many turns it starts, not how many turns people take after. A `personMessage` trigger lets
+anyone in the channel start one with a top-level message, held to the trigger's limits; a mentioned reply in that message's
+thread is then a turn that no limit counts, as a reply in any thread Agent Kourier owns is, and as a person's mention is.
+Turns in one thread run one at a time. A start that a limit stops is audited under the person who posted the message, so a
+member who spends the limits for everyone can be found. A trigger's `match` and `exclude` read the raw text of a message:
+they filter noise and control no access, and a zero-width character inside a word gets past an `exclude`.
+
 Bindings are namespaced, and shared resources list the namespaces allowed to refer to them in `allowedNamespaces`. A
 team's identity token Secret lives in its own namespace.
 

@@ -1,6 +1,7 @@
 package chat_test
 
 import (
+	"context"
 	"slices"
 	"strings"
 	"testing"
@@ -62,6 +63,8 @@ func TestAPersonsTopLevelMessageMatchesAPersonMessageTrigger(t *testing.T) {
 		{"a match that fails is no match", onlyText(`(?i)down`, ""), personPost("C1", "9.9", "", "all quiet"), false},
 		{"an exclude turns a message away that match accepts", onlyText(`checkout`, `^(thanks|ok)\b`), personPost("C1", "9.9", "", "thanks, checkout is back"), false},
 		{"a message no exclude entry matches is kept", onlyText(`checkout`, `^(thanks|ok)\b`), personPost("C1", "9.9", "", "checkout is down"), true},
+		// match and exclude read the raw text: they filter noise and control no access.
+		{"a zero-width character inside a word gets past an exclude", onlyText(`checkout`, `^(thanks|ok)\b`), personPost("C1", "9.9", "", "tha\u200bnks, checkout is back"), true},
 		{"a message with no user is nobody's", personTrigger(nil), chat.Inbound{At: chat.Ref{Platform: "slack", Conn: conn, Channel: "C1", ID: "9.9"}, Text: "checkout is down"}, false},
 		{"a direct message is not served", personTrigger(nil), func() chat.Inbound {
 			m := personPost("C1", "9.9", "", "checkout is down")
@@ -329,5 +332,109 @@ func TestWhatAPersonWroteReachesNoLogOrMetric(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// A person's mention arrives twice, as the message and as Slack's app_mention, and the adapter may not see in the message
+// event a mention that Slack registers. Then the message event is a report: where a limit stops it, or its start is not made,
+// it started nothing, so it is not remembered, and the app_mention that follows is still the mention trigger's. In the other
+// order the app_mention takes the message, and the message event that follows is its duplicate. Either way the person's
+// mention is one new session, and no trigger start.
+func TestAPersonsMentionIsNotLostToAReportThatStartedNothing(t *testing.T) {
+	mention := v1alpha1.Trigger{Type: v1alpha1.TriggerMention}
+	oneAnHour := func(tr *v1alpha1.Trigger) {
+		tr.Limits.RateLimit = &v1alpha1.RateLimit{MaxRuns: 1, Per: metav1.Duration{Duration: time.Hour}, MaxConcurrent: 5}
+	}
+	// limited spends the trigger's one start of the hour on another report, so that the next one is limited.
+	limited := func(t *testing.T, h *triggered) {
+		t.Helper()
+		if err := h.in.Message(h.ctx, personPost("C1", "8.8", "", "checkout is down")); err != nil {
+			t.Fatal(err)
+		}
+		h.mu.Lock()
+		h.matches = nil
+		h.mu.Unlock()
+	}
+	refused := func(_ *testing.T, h *triggered) { h.hookErr = chat.ErrNotStarted }
+	for _, tt := range []struct {
+		name        string
+		setup       func(*testing.T, *triggered)
+		mentionLast bool
+		decision    string
+		asked       int // the times OnStart was asked: a start that is not made was asked once
+	}{
+		{"limited, message first", limited, true, "limited", 0},
+		{"not started, message first", refused, true, "not_started", 1},
+		{"limited, app_mention first", limited, false, "", 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newLimited(t, mention, personTrigger(oneAnHour))
+			tt.setup(t, h)
+			message := personPost("C1", "9.9", "", "<@UAGENT> is checkout down?") // the adapter missed the mention
+			appMention := message
+			appMention.Mentioned = true
+			events := []chat.Inbound{message, appMention, message} // the last a redelivery, which is the mention's duplicate
+			if !tt.mentionLast {
+				events = []chat.Inbound{appMention, message}
+			}
+			for _, ev := range events {
+				if err := h.in.Message(h.ctx, ev); err != nil {
+					t.Fatal(err)
+				}
+			}
+			subs := h.sub.submitted()
+			if len(subs) != 1 || !subs[0].Create || subs[0].Key.Thread != "9.9" || subs[0].Binding != bindingName || subs[0].UserID != message.User {
+				t.Errorf("submitted = %+v; want the person's mention, once, as a new session of 9.9", subs)
+			}
+			if got := h.got(); len(got) != tt.asked {
+				t.Errorf("OnStart was asked %d times; want %d", len(got), tt.asked)
+			}
+			if d := h.decisions(t); tt.decision != "" && d[tt.decision] != 1 {
+				t.Errorf("decisions = %v; want the report %s once", d, tt.decision)
+			}
+		})
+	}
+}
+
+// A report that a limit stopped is told to OnLimited, as a bot's mention is, with the person who wrote it, so that the audit log
+// can name a member who spends the limits for everyone. A redelivery of it is told once.
+func TestAPersonsReportALimitStoppedIsTold(t *testing.T) {
+	h := newLimited(t, personTrigger(func(tr *v1alpha1.Trigger) {
+		tr.Limits.RateLimit = &v1alpha1.RateLimit{MaxRuns: 1, Per: metav1.Duration{Duration: time.Hour}, MaxConcurrent: 5}
+	}))
+	var told []chat.TriggerMatch
+	var limits []store.TriggerLimit
+	h.cfg.OnLimited = func(_ context.Context, m chat.TriggerMatch, l store.TriggerLimit) {
+		told, limits = append(told, m), append(limits, l)
+	}
+	h.in = chat.NewIntake(h.cfg)
+	for _, id := range []string{"9.1", "9.2", "9.2"} {
+		if err := h.in.Message(h.ctx, personPost("C1", id, "", "checkout is down")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(told) != 1 || !told[0].Person || told[0].Message.At.ID != "9.2" || told[0].Message.User == "" || limits[0] != store.LimitRate {
+		t.Fatalf("told %+v of %v; want 9.2 once, a person's, stopped by the rate limit", told, limits)
+	}
+}
+
+// Where the Binding has no mention trigger, a person's mention is a report like any other, so its app_mention is the same report
+// and is remembered as one: a start that was not made is asked for once, not refused, audited and counted again.
+func TestAReportThatStartedNothingIsRememberedWhereNoMentionTriggerCouldTakeIt(t *testing.T) {
+	h := newLimited(t, personTrigger(nil))
+	h.hookErr = chat.ErrNotStarted
+	message := personPost("C1", "9.9", "", "<@UAGENT> is checkout down?")
+	appMention := message
+	appMention.Mentioned = true
+	for _, ev := range []chat.Inbound{message, appMention} {
+		if err := h.in.Message(h.ctx, ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := h.got(); len(got) != 1 || len(h.sub.submitted()) != 0 {
+		t.Errorf("OnStart was asked %d times and %d submitted; want once, and none", len(got), len(h.sub.submitted()))
+	}
+	if d := h.decisions(t); d["not_started"] != 1 {
+		t.Errorf("decisions = %v; want one not_started", d)
 	}
 }
