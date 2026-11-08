@@ -14,8 +14,9 @@ import (
 // A broker serves what it can instead: Served is the generation of the same object that the Set holds in its place, the
 // last good one, or zero when there is none and the object is left out. A deleted object that is held on purpose has Deleted
 // set and no Generation: the broker's own ChatConnection, which a running broker keeps, and, while that is held, the Bindings
-// of it and the AgentBackends they use that went with it. A held Binding that cannot be served (it lost its channel, or its
-// backend is gone) is counted here and not served.
+// of it and the AgentBackends they use that went with it. A held Binding that resolution leaves out, for any reason (it lost
+// its channel, its backend is gone, or its backend no longer allows it), is counted here and not served, with no Rejection:
+// it has no object to put one on.
 type Invalid struct {
 	// Kind is KindAgentBackend, KindChatConnection or KindBinding.
 	Kind string
@@ -78,8 +79,13 @@ func (i Invalid) rejectionFor(from, path string, rejected RejectionReason) (Reje
 	if i.Namespace != from && !slices.Contains(i.AllowedNamespaces, from) {
 		return ReasonNamespaceNotAllowed, fmt.Sprintf("%s: %s does not allow namespace %s", path, i.ID(), from)
 	}
-	return rejected, path + ": " + i.describe(i.Namespace == from, true)
+	return rejected, path + ": " + i.describedTo(from)
 }
+
+// describedTo is the sentence about i that a Binding in namespace from is given when i is another object that the Binding
+// names: describe with serving true, since the Binding's own serving is not in question, and the owner's problems only for a
+// Binding in i's own namespace.
+func (i Invalid) describedTo(from string) string { return i.describe(i.Namespace == from, true) }
 
 // UnservedReason says why a ChatConnection that exists is not served.
 type UnservedReason string
@@ -179,7 +185,7 @@ func resolvePerObject(set *Set) (*Snapshot, []Rejection) {
 	for _, rej := range partial {
 		id := identity{KindBinding, rej.Namespace, rej.Name}
 		if inv, held := invalid[id]; held && inv.Deleted {
-			continue // held after its deletion and not served: it has no object to say anything of, and no generation to count
+			continue // held after its deletion and not served: it has no object to say anything of, and no generation to count (see Invalid)
 		}
 		refs := bindings[id]
 		rej.Generation = refs.generation
@@ -210,7 +216,7 @@ func resolvePerObject(set *Set) (*Snapshot, []Rejection) {
 			// sentence tells it what flag, below, tells a served Binding of the same backend: the two generations, and the
 			// owner's problems only in the backend's own namespace. (rejectionFor is for a backend with no generation in force.)
 			if inv, ok := invalid[refs.backend]; ok {
-				rej.Message += " (the limit is that of the generation being served: " + inv.describe(inv.Namespace == rej.Namespace, true) + ")"
+				rej.Message += " (the limit is that of the generation being served: " + inv.describedTo(rej.Namespace) + ")"
 			}
 		case ReasonConnectionNotFound:
 			if inv, ok := invalid[refs.conn]; ok {
@@ -226,7 +232,7 @@ func resolvePerObject(set *Set) (*Snapshot, []Rejection) {
 			continue // held after its deletion: there is no object to say anything of, and it is served as it was
 		}
 		flag := func(reason RejectionReason, path string, inv Invalid) {
-			out = append(out, Rejection{Namespace: id.namespace, Name: id.name, Reason: reason, Message: path + ": " + inv.describe(inv.Namespace == id.namespace, true),
+			out = append(out, Rejection{Namespace: id.namespace, Name: id.name, Reason: reason, Message: path + ": " + inv.describedTo(id.namespace),
 				Generation: rb.Binding.Generation, Served: rb.Binding.Generation})
 		}
 		refs := bindings[id]
