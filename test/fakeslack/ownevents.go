@@ -141,11 +141,11 @@ func (s *Server) flushOwn() {
 	}
 }
 
-// blockOf is the part of a Block Kit block that a mention can be in: the mrkdwn text of a section or the mrkdwn elements of a context block, which is how
-// render.MentionMessage mentions a bot.
+// blockOf is the part of a Block Kit block that a mention can be in. Its text is kept raw: a section's is an object (type and text), a markdown block's is a
+// plain string, and one decoding for both would fail for a message with a markdown block, which the broker's own replies are.
 type blockOf struct {
 	Type     string            `json:"type"`
-	Text     *blockText        `json:"text"`
+	Text     json.RawMessage   `json:"text"`
 	Fields   []blockText       `json:"fields"`
 	Elements []json.RawMessage `json:"elements"`
 }
@@ -160,38 +160,44 @@ func tokenFor(text, bot string) bool {
 	return strings.Contains(text, "<@"+bot+">") || strings.Contains(text, "<@"+bot+"|")
 }
 
-// mentionsBot says whether Slack sends the app an app_mention for the bot post e, by the rule that docs/spikes/slack-mention-probe.md ("What a second app
-// receives", 2026-11-03) measured:
-//   - a token in the top-level text gives one (rows B, C, D), whatever the blocks;
-//   - a token in the mrkdwn text of a section or context block gives one (rows A, F), but only when the post has no rich_text and no markdown block: with one
-//     the token in a block gives none (row E, a markdown block);
-//   - a rich_text user element gives none (row G), and a token of another user none (row H).
+// mentionsBot says whether Slack sends the app an app_mention for the bot post e, by the reading that fits docs/spikes/slack-mention-probe.md: an app_mention
+// fires exactly where a mention registers for a person (the second table), and a mention registers
+//   - from the top-level text when the post has no block, or a rich_text or markdown block (the first table's T1, C3, D2, D3; the second's B, D), or any
+//     block but section and context;
+//   - from the mrkdwn text of the blocks, and not from the text, when the post has only section and context blocks (the first table's A, B, E; the second's
+//     A, C, F): a section whose plain_text holds the token registers nothing (E);
+//   - never from a rich_text user element (G) or from a token of a markdown block beside no token in the text (E).
 //
 // A direct message gets no app_mention, as a person's does not (Mention). An edit gets none here: Slack sends an app_mention with edited set for a bot's edit
 // that adds a mention (row I), and the fake does not, a known departure; the adapter drops an edited mention.
 //
-// UNCONFIRMED(MC-S): the cases the probe did not cover: a Slack Connect channel, Enterprise Grid, an app that mentions itself, a token in the fields of a
-// section block (read like its text), and any block type but section, context, rich_text and markdown.
+// UNCONFIRMED(MC-S): the reading for "only section and context blocks" is one row's (the first table's E: a section's plain_text with the token in text did not
+// register), and Slack may still give an app_mention for the text there; the cases the probe did not cover: a Slack Connect channel, Enterprise Grid, an app
+// that mentions itself, a token in the fields of a section block (read like its text), a post with a block of another type beside section and context (read
+// as the text), and a stream, where the fake sends an app_mention only at chat.startStream and for a token in its initial text, and the probe shows a token
+// in a stream chunk (the first table's I) or at its stop (J) registers.
 func mentionsBot(e ownEvent, a App) bool {
 	if e.prev != nil || strings.HasPrefix(e.channel, "D") {
 		return false
 	}
-	if tokenFor(e.cur.Text, a.BotUser) {
-		return true
-	}
 	var blocks []blockOf
-	if len(e.cur.Blocks) == 0 || json.Unmarshal(e.cur.Blocks, &blocks) != nil {
-		return false
+	if len(e.cur.Blocks) > 0 && json.Unmarshal(e.cur.Blocks, &blocks) != nil {
+		blocks = nil
 	}
+	onlySectionAndContext := len(blocks) > 0
 	for _, b := range blocks {
-		if b.Type == "rich_text" || b.Type == "markdown" {
-			return false
+		if b.Type != "section" && b.Type != "context" {
+			onlySectionAndContext = false
 		}
+	}
+	if !onlySectionAndContext {
+		return tokenFor(e.cur.Text, a.BotUser)
 	}
 	for _, b := range blocks {
 		switch b.Type {
 		case "section":
-			if b.Text != nil && b.Text.Type == "mrkdwn" && tokenFor(b.Text.Text, a.BotUser) {
+			var text blockText
+			if json.Unmarshal(b.Text, &text) == nil && text.Type == "mrkdwn" && tokenFor(text.Text, a.BotUser) {
 				return true
 			}
 			for _, f := range b.Fields {
