@@ -5,8 +5,9 @@ import "slices"
 // WithoutOwnPostEvents stops the fake sending Socket Mode events for the bot's
 // own posts and updates. By default every bot post is delivered as a message
 // event, and every update as a message_changed event, to a connected client, as
-// Slack does; Agent Kourier has to recognise and ignore them. Set at construction,
-// read-only after.
+// Slack does; Agent Kourier has to recognise and ignore them. With several apps
+// (WithApp) it also stops the events other apps in the channel get for the post.
+// Set at construction, read-only after.
 func WithoutOwnPostEvents() Option { return func(s *Server) { s.noOwnEvents = true } }
 
 // ownEventMethods are the Web API methods that queue events for the bot's own
@@ -18,16 +19,38 @@ var ownEventMethods = map[string]bool{
 // ownKey names a bot message, for the envelopes of its events.
 type ownKey struct{ channel, ts string }
 
-// OwnEventEnvelopes returns the envelope_id of each event the fake sent for the
-// bot's message ts in channel, in order: its message event, then one
-// message_changed for each update (or the stop of a stream). A test that wants
-// to know Agent Kourier has seen its own post's event passes them to WaitAck. They
-// are recorded before the call that caused them returns. The list is empty when
-// events are off or no client was connected.
+// ownRecord is the envelopes sent for one bot message: the AppID that posted it, and the envelope_id of each event
+// by the AppID of the app it went to.
+type ownRecord struct {
+	poster string
+	sent   map[string][]string
+}
+
+// OwnEventEnvelopes returns the envelope_id of each event the fake sent to the app that posted the bot message
+// ts in channel, in order: its message event, then one message_changed for each update (or the stop of a
+// stream). A test that wants to know Agent Kourier has seen its own post's event passes them to WaitAck. They
+// are recorded before the call that caused them returns. The list is empty when events are off or no client was
+// connected. EventEnvelopes names the app.
 func (s *Server) OwnEventEnvelopes(channel, ts string) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return slices.Clone(s.ownSent[ownKey{channel, ts}])
+	rec := s.ownSent[ownKey{channel, ts}]
+	if rec == nil {
+		return nil
+	}
+	return slices.Clone(rec.sent[rec.poster])
+}
+
+// EventEnvelopes is OwnEventEnvelopes for the events that went to the app appID, which may be another app than
+// the one that posted the message: the other apps whose bots are in the channel get the same events.
+func (s *Server) EventEnvelopes(appID, channel, ts string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec := s.ownSent[ownKey{channel, ts}]
+	if rec == nil {
+		return nil
+	}
+	return slices.Clone(rec.sent[appID])
 }
 
 // ownEvent is a bot post (prev nil) or change to one, waiting to be sent.
@@ -60,27 +83,48 @@ func (s *Server) queueOwnLocked(channel string, prev, cur *Message) {
 // holds only its events. With no client connected they are dropped, as Slack
 // drops events for an app that is not listening.
 //
+// Each event goes to the app that posted, first, and then to every other app
+// that is in the channel (recipients), each over its own connection and in an
+// envelope made for it. The others see the post as a bot message: a message
+// event with the poster's user, bot_id and app_id.
+//
 // UNCONFIRMED(WP-04): a message event for each bot post with no subtype, and
 // with bot_id and app_id; that blocks are included and metadata is not; a
 // message_changed event, hidden, with its own ts, for each chat.update; for
 // streaming, a message event at chat.startStream, no event at chat.appendStream
 // and a message_changed at chat.stopStream; and that a reply gives no
 // message_changed for its thread parent, where Slack sends one, since the
-// parent's reply_count changes.
+// parent's reply_count changes. UNCONFIRMED(MC-S): that an app in the channel gets
+// another app's posts, and their updates, as events of this shape (a message with
+// the poster's user, bot_id and app_id, and a message_changed), where Slack may
+// leave out the updates or send a bot_message subtype; a live probe settles it.
 func (s *Server) flushOwn() {
 	s.mu.Lock()
 	events := s.ownPending
 	s.ownPending = nil
 	s.mu.Unlock()
 	for _, e := range events {
-		id, err := s.eventCallback(s.ownEventBody(e))
-		if err != nil {
-			continue // ErrNoConnection is the dropped case
+		poster := s.appOrDefault(e.cur.AppID)
+		targets := []App{poster}
+		for _, a := range s.recipients(e.channel) {
+			if a.AppID != poster.AppID {
+				targets = append(targets, a)
+			}
 		}
-		s.mu.Lock()
-		k := ownKey{e.channel, e.cur.TS}
-		s.ownSent[k] = append(s.ownSent[k], id)
-		s.mu.Unlock()
+		body := s.ownEventBody(e)
+		for _, a := range targets {
+			id, err := s.eventCallbackTo(a, body)
+			if err != nil {
+				continue // ErrNoConnection is the dropped case
+			}
+			s.mu.Lock()
+			k := ownKey{e.channel, e.cur.TS}
+			if s.ownSent[k] == nil {
+				s.ownSent[k] = &ownRecord{poster: poster.AppID, sent: map[string][]string{}}
+			}
+			s.ownSent[k].sent[a.AppID] = append(s.ownSent[k].sent[a.AppID], id)
+			s.mu.Unlock()
+		}
 	}
 }
 

@@ -84,7 +84,8 @@ func (s *Server) Submit(user, messageTS, submitActionID string, values StateValu
 	return s.blockActions(user, channel, m, btn, blocks, values)
 }
 
-// blockActions delivers the block_actions payload for a press of btn.
+// blockActions delivers the block_actions payload for a press of btn, to the app that posted the message m (the
+// default app for a message no app posted), over that app's connection alone.
 //
 // UNCONFIRMED(WP-04): the payload's fields, which are the ones Agent Kourier needs
 // and slack-go parses (no response_url, trigger_id, token or team domain); the
@@ -103,6 +104,7 @@ func (s *Server) blockActions(user, channel string, m Message, btn element, bloc
 	if name == "" {
 		name = user
 	}
+	app := s.appOrDefault(m.AppID)
 	container := map[string]any{"type": "message", "message_ts": m.TS, "channel_id": channel, "is_ephemeral": false}
 	if m.ThreadTS != "" {
 		container["thread_ts"] = m.ThreadTS
@@ -112,9 +114,9 @@ func (s *Server) blockActions(user, channel string, m Message, btn element, bloc
 		"text": btn.element["text"], "value": btn.element["value"],
 		"action_ts": fmt.Sprintf("%d.%06d", now.Unix(), now.Nanosecond()/1000),
 	}
-	return s.SendEnvelope("interactive", map[string]any{
-		"type": "block_actions", "api_app_id": s.bot.app, "team": map[string]any{"id": s.team.id},
-		"user":    map[string]any{"id": user, "name": name, "team_id": s.team.id},
+	return s.sendEnvelope(app.AppID, "interactive", map[string]any{
+		"type": "block_actions", "api_app_id": app.AppID, "team": map[string]any{"id": app.TeamID},
+		"user":    map[string]any{"id": user, "name": name, "team_id": app.TeamID},
 		"channel": map[string]any{"id": channel}, "container": container, "message": m,
 		"state": map[string]any{"values": state}, "actions": []any{action},
 	})

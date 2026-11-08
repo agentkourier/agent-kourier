@@ -41,6 +41,7 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Count(t, "mentionsPerTurnDefault", DefaultMaxMentionsPerTurn)
 	limitsdoc.Count(t, "approverGroups", maxApproverGroups)
 	limitsdoc.Count(t, "allowedNamespaces", maxAllowedNamespaces)
+	limitsdoc.Count(t, "agentNamespaces", maxAllowedNamespaces)
 	limitsdoc.Count(t, "chatID", maxChatIDLen)
 	limitsdoc.Count(t, "mentionUserLen", maxMentionUserLen)
 	limitsdoc.Count(t, "emoji", maxEmojiLen)

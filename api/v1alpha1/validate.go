@@ -207,6 +207,20 @@ func (p *problems) namespaces(path string, ns []string) {
 	}
 }
 
+// agentNamespaces checks the agents of an AgentBackend of the given dialect. Only kagent-v1 sends agent.namespace, in the request
+// path: on any other dialect a limit on the namespace would promise a control that the dialect does not give, so the field is
+// refused there. A value that allows nothing is refused on every dialect, and the entries of namespaces are checked either way,
+// so the problems are those of the CRD's two rules, one on the spec and one on the field.
+func (p *problems) agentNamespaces(d Dialect, a *AgentNamespaces) {
+	if d != DialectKagentV1 {
+		p.add("spec.agents", "is supported only on the kagent-v1 dialect, the only one that sends agent.namespace")
+	}
+	if !a.SameNamespace && len(a.Namespaces) == 0 {
+		p.add("spec.agents", "allows no agent namespace: set sameNamespace to true or list at least one namespace in namespaces")
+	}
+	p.namespaces("spec.agents.namespaces", a.Namespaces)
+}
+
 func (p *problems) meta(m metav1.ObjectMeta) {
 	p.name("metadata.name", m.Name)
 	p.namespace("metadata.namespace", m.Namespace)
@@ -287,6 +301,9 @@ func (a *AgentBackend) Validate() error {
 		p.secretRef(path+".valueSecretRef", h.ValueSecretRef)
 	}
 	p.namespaces("spec.allowedNamespaces", s.AllowedNamespaces)
+	if s.Agents != nil {
+		p.agentNamespaces(s.Dialect, s.Agents)
+	}
 	return errors.Join(p...)
 }
 

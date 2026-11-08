@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    agentkourier.dev/schema-sha256: 2efcd886055f356a454eb1649f2f099a724ef03f36e957b061363ad09c49b248
+    agentkourier.dev/schema-sha256: 956beb225f5b5ef6e2be342408aaf922d2990d7446889afeb2b3527eb30f679a
     controller-gen.kubebuilder.io/version: v0.23.0
   name: agentbackends.agentkourier.dev
 spec:
@@ -45,6 +45,37 @@ spec:
           spec:
             description: AgentBackendSpec is the desired state of an AgentBackend.
             properties:
+              agents:
+                description: |-
+                  Agents limits the namespaces of the agents that a Binding of this backend may name in spec.agent.namespace. Omitted, a
+                  Binding may name an agent in any namespace, and what the backend's own front door does is the only check. Set, a Binding
+                  that names any other namespace is rejected: with custom resources it is not served and its Accepted condition is False
+                  with the reason AgentNamespaceNotAllowed, and on the files route the whole config fails when the broker resolves it, at
+                  start or on a reload (agent-kourier dry-run does not resolve it). Only for dialect kagent-v1: on a2a the URL names the
+                  agent and spec.agent.namespace is never sent, so the field is refused there.
+                properties:
+                  namespaces:
+                    description: |-
+                      Namespaces lists the namespaces whose agents any Binding that may use this backend may name. Each is a DNS-1123 label.
+                      At most 256.
+                    items:
+                      maxLength: 63
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                    maxItems: 256
+                    type: array
+                  sameNamespace:
+                    description: |-
+                      SameNamespace allows a Binding to name an agent in the Binding's own namespace. Omitted or false, it does not. It
+                      compares the Binding's namespace, in the broker's cluster, with spec.agent.namespace, a namespace on the backend: it
+                      keeps a team to its own agents only where the two mean the same, as for a kagent in the broker's cluster.
+                    type: boolean
+                type: object
+                x-kubernetes-validations:
+                - message: 'allows no agent namespace: set sameNamespace to true or
+                    list at least one namespace in namespaces'
+                  rule: (has(self.sameNamespace) && self.sameNamespace) || (has(self.namespaces)
+                    && size(self.namespaces) > 0)
               allowedNamespaces:
                 description: |-
                   AllowedNamespaces lists the other namespaces whose Bindings may reference this backend. Each is a DNS-1123 label.
@@ -143,6 +174,11 @@ spec:
             - dialect
             - url
             type: object
+            x-kubernetes-validations:
+            - fieldPath: .agents
+              message: agents is supported only on the kagent-v1 dialect, the only
+                one that sends agent.namespace
+              rule: '!has(self.agents) || self.dialect == ''kagent-v1'''
         required:
         - spec
         type: object

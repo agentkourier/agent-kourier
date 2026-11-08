@@ -40,7 +40,8 @@ type WebhookPost struct {
 const defaultWebhookName = "incoming-webhook"
 
 // Webhook stores a post through an incoming webhook in its channel and delivers the message event for it,
-// as Slack does for an app subscribed to message.channels that is in the channel. Like a user's message it
+// as Slack does for an app subscribed to message.channels that is in the channel. With several apps, every
+// app in the channel gets it (see recipients). Like a user's message it
 // needs a client connected to receive the event: with none, nothing is stored and the error is
 // ErrNoConnection. The post must have a channel and a bot ID, and some content: text, or an attachment with
 // a field set.
@@ -59,7 +60,8 @@ func (s *Server) Webhook(p WebhookPost) (UserMessage, error) {
 	if slices.ContainsFunc(p.Attachments, func(a Attachment) bool { return !hasContent(a) }) {
 		return UserMessage{}, invalid("fakeslack: a webhook post's attachment has no content")
 	}
-	if s.Connections() == 0 {
+	recipients := s.recipients(p.Channel)
+	if !s.anyConnected(recipients) {
 		return UserMessage{}, ErrNoConnection
 	}
 	attachments := cloneAttachments(p.Attachments)
@@ -81,12 +83,9 @@ func (s *Server) Webhook(p WebhookPost) (UserMessage, error) {
 	if len(attachments) > 0 {
 		ev["attachments"] = attachments
 	}
-	id, err := s.eventCallback(ev)
-	if err != nil {
-		return out, err
-	}
-	out.Envelopes = append(out.Envelopes, id)
-	return out, nil
+	ids, err := s.deliver(recipients, ev)
+	out.addEnvelopes(s, ids)
+	return out, err
 }
 
 // hasContent says whether an attachment carries anything a reader would see.

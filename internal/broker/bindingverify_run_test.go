@@ -175,7 +175,13 @@ func TestRunProbesTheApproverGroupsOfABindingThatNamesThem(t *testing.T) {
 		t.Error("no probe of ApproversReadable was timed")
 	}
 
-	if err := os.WriteFile(file, raw, 0o600); err != nil { // the edit that takes the group away
+	// The edit that takes the group away. It is staged and renamed into place: the broker reads the directory every 10ms, and a write in
+	// place can be read half done, which removes the Binding (a prune) where the test wants only its groups gone (a drop).
+	staging := filepath.Join(c.ConfigDir, ".binding.yaml.tmp") // a dot name is not a config file
+	if err := os.WriteFile(staging, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(staging, file); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, 10*time.Second, "the ApproversReadable series was not deleted after the groups were taken away", func() bool {

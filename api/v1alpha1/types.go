@@ -1,6 +1,7 @@
 package v1alpha1
 
 import (
+	"slices"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -127,6 +128,8 @@ type AgentBackendList struct {
 }
 
 // AgentBackendSpec is the desired state of an AgentBackend.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.agents) || self.dialect == 'kagent-v1'",message="agents is supported only on the kagent-v1 dialect, the only one that sends agent.namespace",fieldPath=".agents"
 type AgentBackendSpec struct {
 	// +kubebuilder:validation:Enum=a2a;kagent-v1
 	Dialect Dialect `json:"dialect"`
@@ -161,6 +164,43 @@ type AgentBackendSpec struct {
 	// +kubebuilder:validation:items:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	// +doc:default=Empty list
 	AllowedNamespaces []string `json:"allowedNamespaces,omitempty"`
+	// Agents limits the namespaces of the agents that a Binding of this backend may name in spec.agent.namespace. Omitted, a
+	// Binding may name an agent in any namespace, and what the backend's own front door does is the only check. Set, a Binding
+	// that names any other namespace is rejected: with custom resources it is not served and its Accepted condition is False
+	// with the reason AgentNamespaceNotAllowed, and on the files route the whole config fails when the broker resolves it, at
+	// start or on a reload (agent-kourier dry-run does not resolve it). Only for dialect kagent-v1: on a2a the URL names the
+	// agent and spec.agent.namespace is never sent, so the field is refused there.
+	// +optional
+	Agents *AgentNamespaces `json:"agents,omitempty"`
+}
+
+// AgentNamespaces lists the agent namespaces that the Bindings of an AgentBackend may name. A Binding's spec.agent.namespace
+// must be its own namespace, if sameNamespace is true, or one of namespaces. A value that allows neither is refused, because
+// it would reject every Binding.
+//
+// +kubebuilder:validation:XValidation:rule="(has(self.sameNamespace) && self.sameNamespace) || (has(self.namespaces) && size(self.namespaces) > 0)",message="allows no agent namespace: set sameNamespace to true or list at least one namespace in namespaces"
+type AgentNamespaces struct {
+	// SameNamespace allows a Binding to name an agent in the Binding's own namespace. Omitted or false, it does not. It
+	// compares the Binding's namespace, in the broker's cluster, with spec.agent.namespace, a namespace on the backend: it
+	// keeps a team to its own agents only where the two mean the same, as for a kagent in the broker's cluster.
+	// +doc:default=false
+	SameNamespace bool `json:"sameNamespace,omitempty"`
+	// Namespaces lists the namespaces whose agents any Binding that may use this backend may name. Each is a DNS-1123 label.
+	// At most 256.
+	// +kubebuilder:validation:MaxItems=256
+	// +kubebuilder:validation:items:MaxLength=63
+	// +kubebuilder:validation:items:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +doc:default=Empty list
+	Namespaces []string `json:"namespaces,omitempty"`
+}
+
+// Allows reports whether a Binding in bindingNamespace may name an agent in agentNamespace on the backend that holds a. A nil
+// a, the field left out, allows every namespace. It looks at no other object and does not check that either name is valid.
+func (a *AgentNamespaces) Allows(bindingNamespace, agentNamespace string) bool {
+	if a == nil {
+		return true
+	}
+	return (a.SameNamespace && agentNamespace == bindingNamespace) || slices.Contains(a.Namespaces, agentNamespace)
 }
 
 // Header is a static HTTP header. Set exactly one of value and valueSecretRef; valueSecretRef's key

@@ -181,7 +181,7 @@ func slackConnections(t *testing.T, names ...string) *config.Snapshot {
 func TestChooseConnectionReadsTheTokensOfTheOneConnection(t *testing.T) {
 	r := &reader{vals: map[string]string{"platform/creds-slack/botToken": "xoxb-fake-bot", "platform/creds-slack/appToken": "xapp-fake-app"}}
 
-	got, err := ChooseConnection(t.Context(), slackConnections(t, "platform/slack"), r)
+	got, err := ChooseConnection(t.Context(), slackConnections(t, "platform/slack"), v1alpha1.ObjectRef{}, r)
 
 	if err != nil {
 		t.Fatal(err)
@@ -199,13 +199,59 @@ func TestChooseConnectionNeedsExactlyOne(t *testing.T) {
 	for name, snap := range map[string]*config.Snapshot{
 		"none": slackConnections(t), "two": slackConnections(t, "platform/a", "platform/b"),
 	} {
-		_, err := ChooseConnection(t.Context(), snap, r)
+		_, err := ChooseConnection(t.Context(), snap, v1alpha1.ObjectRef{}, r)
 		if !errors.Is(err, ErrWiring) {
 			t.Errorf("%s: ChooseConnection = %v, want ErrWiring", name, err)
 		}
 	}
-	if _, err := ChooseConnection(t.Context(), slackConnections(t, "platform/a", "platform/b"), r); !strings.Contains(err.Error(), "platform/a") || !strings.Contains(err.Error(), "platform/b") {
+	if _, err := ChooseConnection(t.Context(), slackConnections(t, "platform/a", "platform/b"), v1alpha1.ObjectRef{}, r); !strings.Contains(err.Error(), "platform/a") || !strings.Contains(err.Error(), "platform/b") {
 		t.Errorf("the error for two connections should name both: %v", err)
+	}
+}
+
+// With the custom resources the snapshot may hold the ChatConnections of the admitted namespaces besides the broker's own: the
+// broker's own is the one it runs (the others are not run yet), found by its reference and not by being the only one. The files
+// route has no reference and keeps exactly one.
+func TestChooseConnectionPicksTheOwnConnectionAmongSeveral(t *testing.T) {
+	r := &reader{vals: map[string]string{
+		"platform/creds-slack/botToken": "xoxb-fake-own", "platform/creds-slack/appToken": "xapp-fake-own",
+		"team-a/creds-slack/botToken": "xoxb-fake-a", "team-a/creds-slack/appToken": "xapp-fake-a",
+	}}
+	own := v1alpha1.ObjectRef{Namespace: "platform", Name: "slack"}
+	// The own connection is neither the first nor the last of the snapshot, which is sorted by namespace and name.
+	snap := slackConnections(t, "team-a/slack", "platform/slack", "zeta/slack")
+
+	got, err := ChooseConnection(t.Context(), snap, own, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Ref != own || got.Credentials["botToken"].Reveal() != "xoxb-fake-own" || got.Credentials["appToken"].Reveal() != "xapp-fake-own" {
+		t.Errorf("ChooseConnection = %+v, want platform/slack with its own tokens, not another connection's", got.Ref)
+	}
+	// One connection that is the own is chosen as before.
+	if got, err := ChooseConnection(t.Context(), slackConnections(t, "platform/slack"), own, r); err != nil || got.Ref != own {
+		t.Errorf("ChooseConnection over the own alone = %+v, %v; want it", got.Ref, err)
+	}
+	// The files route, which names none, still refuses several.
+	if _, err := ChooseConnection(t.Context(), snap, v1alpha1.ObjectRef{}, r); !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), "exactly one") {
+		t.Errorf("several connections and no own: ChooseConnection = %v; want ErrWiring saying exactly one", err)
+	}
+}
+
+// An own connection that the snapshot lacks is the operator's, whatever else the snapshot holds. And a team connection never
+// decides the outcome: its Secret is not read here, so one that is missing or unsynced cannot fail a takeover.
+func TestChooseConnectionNeedsTheOwnConnectionToBeThere(t *testing.T) {
+	r := &reader{vals: map[string]string{"team-a/creds-slack/botToken": "xoxb-fake-a", "team-a/creds-slack/appToken": "xapp-fake-a"}}
+	own := v1alpha1.ObjectRef{Namespace: "platform", Name: "slack"}
+	_, err := ChooseConnection(t.Context(), slackConnections(t, "team-a/slack"), own, r)
+	if !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), "platform/slack") {
+		t.Errorf("ChooseConnection = %v; want an ErrWiring naming platform/slack", err)
+	}
+
+	own = v1alpha1.ObjectRef{Namespace: "platform", Name: "slack"}
+	r = &reader{vals: map[string]string{"platform/creds-slack/botToken": "xoxb-fake-own", "platform/creds-slack/appToken": "xapp-fake-own"}} // team-a's Secret is not there
+	if got, err := ChooseConnection(t.Context(), slackConnections(t, "platform/slack", "team-a/slack"), own, r); err != nil || got.Ref != own {
+		t.Errorf("ChooseConnection with a team Secret missing = %+v, %v; want the own connection", got.Ref, err)
 	}
 }
 
@@ -214,17 +260,17 @@ func TestChooseConnectionRefusesWhatV1CannotRun(t *testing.T) {
 	snap := slackConnections(t, "platform/a")
 	conn := snap.ChatConnections()[0]
 	conn.Spec.Platform = "teams"
-	if _, err := ChooseConnection(t.Context(), snap, r); !errors.Is(err, ErrWiring) {
+	if _, err := ChooseConnection(t.Context(), snap, v1alpha1.ObjectRef{}, r); !errors.Is(err, ErrWiring) {
 		t.Errorf("a connection that is not Slack's: %v, want ErrWiring", err)
 	}
-	if _, err := ChooseConnection(t.Context(), nil, r); err == nil || errors.Is(err, ErrWiring) {
+	if _, err := ChooseConnection(t.Context(), nil, v1alpha1.ObjectRef{}, r); err == nil || errors.Is(err, ErrWiring) {
 		t.Errorf("before any config: %v, want an error that is not a wiring error", err)
 	}
 }
 
 func TestChooseConnectionNamesAMissingKeyNotItsValue(t *testing.T) {
 	r := &reader{vals: map[string]string{"platform/creds-slack/botToken": "xoxb-fake-bot"}} // no appToken: the fake reads it as empty
-	_, err := ChooseConnection(t.Context(), slackConnections(t, "platform/slack"), r)
+	_, err := ChooseConnection(t.Context(), slackConnections(t, "platform/slack"), v1alpha1.ObjectRef{}, r)
 	if err == nil || !strings.Contains(err.Error(), "appToken") || strings.Contains(err.Error(), "xoxb-fake-bot") {
 		t.Errorf("ChooseConnection = %v, want an error naming appToken and holding no token", err)
 	}
@@ -252,7 +298,7 @@ func TestChooseConnectionWiringErrorsAreOnlyTheOperators(t *testing.T) {
 		"value empty":     {fmt.Errorf("read: %w", secret.ErrEmptyValue), true},
 		"cache not ready": {errors.New("secret cache not synced"), false},
 	} {
-		_, err := ChooseConnection(t.Context(), snap, failing{tc.err})
+		_, err := ChooseConnection(t.Context(), snap, v1alpha1.ObjectRef{}, failing{tc.err})
 		if err == nil || errors.Is(err, ErrWiring) != tc.wiring || !errors.Is(err, tc.err) {
 			t.Errorf("%s: ChooseConnection = %v, want wiring=%t and the cause kept", name, err, tc.wiring)
 		}

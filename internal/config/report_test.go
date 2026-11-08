@@ -101,6 +101,18 @@ func TestResolvePerObject(t *testing.T) {
 					Message: "spec.agent.backendRef: " + backend + " generation 5 is invalid, serving generation 4"},
 			},
 			[]string{"sre/chat-only", "sre/sre-alerts"}},
+		{"a backend whose last good generation limits the agent namespaces leaves a Binding out for it and says that the limit is the served generation's",
+			func(s *Set) {
+				s.AgentBackends[0].Spec.Agents = &v1alpha1.AgentNamespaces{Namespaces: []string{"payments"}}
+				s.Invalid = []Invalid{{Kind: KindAgentBackend, Namespace: "agent-kourier-system", Name: "kagent-pilot", Generation: 5, Served: 4, Message: "spec.url: required"}}
+			},
+			[]Rejection{
+				{Namespace: "sre", Name: "chat-only", Reason: ReasonAgentNamespaceNotAllowed, Generation: 2,
+					Message: "spec.agent.namespace: " + backend + " does not allow agents in namespace kagent (the limit is that of the generation being served: " + backend + " generation 5 is invalid, serving generation 4)"},
+				{Namespace: "sre", Name: "sre-alerts", Reason: ReasonAgentNamespaceNotAllowed, Generation: 2,
+					Message: "spec.agent.namespace: " + backend + " does not allow agents in namespace kagent (the limit is that of the generation being served: " + backend + " generation 5 is invalid, serving generation 4)"},
+			},
+			nil},
 		{"a connection that is invalid, has no good generation and allows the Binding is ConnectionRejected",
 			func(s *Set) {
 				s.ChatConnections = nil
@@ -111,6 +123,35 @@ func TestResolvePerObject(t *testing.T) {
 					Message: "spec.chat.connectionRef: " + conn + " generation 7 is invalid, with no earlier generation to serve"},
 				{Namespace: "sre", Name: "sre-alerts", Reason: ReasonConnectionRejected, Generation: 2,
 					Message: "spec.chat.connectionRef: " + conn + " generation 7 is invalid, with no earlier generation to serve"},
+			},
+			nil},
+		{"a backend in the Binding's own namespace, whose newest generation is invalid, tells its owner the problems and which limit is in force",
+			func(s *Set) {
+				s.AgentBackends[0].Namespace = "sre"
+				s.AgentBackends[0].Spec.AllowedNamespaces = nil
+				s.AgentBackends[0].Spec.Agents = &v1alpha1.AgentNamespaces{Namespaces: []string{"payments"}}
+				for i := range s.Bindings {
+					s.Bindings[i].Spec.Agent.BackendRef.Namespace = ""
+				}
+				s.Invalid = []Invalid{{Kind: KindAgentBackend, Namespace: "sre", Name: "kagent-pilot", Generation: 5, Served: 4, Message: "spec.url: required"}}
+			},
+			[]Rejection{
+				{Namespace: "sre", Name: "chat-only", Reason: ReasonAgentNamespaceNotAllowed, Generation: 2,
+					Message: "spec.agent.namespace: AgentBackend sre/kagent-pilot does not allow agents in namespace kagent (the limit is that of the generation being served: AgentBackend sre/kagent-pilot generation 5 is invalid, serving generation 4: spec.url: required)"},
+				{Namespace: "sre", Name: "sre-alerts", Reason: ReasonAgentNamespaceNotAllowed, Generation: 2,
+					Message: "spec.agent.namespace: AgentBackend sre/kagent-pilot does not allow agents in namespace kagent (the limit is that of the generation being served: AgentBackend sre/kagent-pilot generation 5 is invalid, serving generation 4: spec.url: required)"},
+			},
+			nil},
+		{"a backend that was deleted and is held leaves a Binding out for its limit and says so",
+			func(s *Set) {
+				s.AgentBackends[0].Spec.Agents = &v1alpha1.AgentNamespaces{Namespaces: []string{"payments"}}
+				s.Invalid = []Invalid{{Kind: KindAgentBackend, Namespace: "agent-kourier-system", Name: "kagent-pilot", Served: 4, Deleted: true}}
+			},
+			[]Rejection{
+				{Namespace: "sre", Name: "chat-only", Reason: ReasonAgentNamespaceNotAllowed, Generation: 2,
+					Message: "spec.agent.namespace: " + backend + " does not allow agents in namespace kagent (the limit is that of the generation being served: " + backend + " was deleted, serving generation 4)"},
+				{Namespace: "sre", Name: "sre-alerts", Reason: ReasonAgentNamespaceNotAllowed, Generation: 2,
+					Message: "spec.agent.namespace: " + backend + " does not allow agents in namespace kagent (the limit is that of the generation being served: " + backend + " was deleted, serving generation 4)"},
 			},
 			nil},
 		{"a connection that was deleted and is held says so",
@@ -152,6 +193,20 @@ func TestResolvePerObject(t *testing.T) {
 					Message: "spec.agent.backendRef: AgentBackend agent-kourier-system/nope not found"},
 			},
 			[]string{"sre/chat-only"}},
+		{"a Binding at its last good generation that the agents limit then drops still has its refused spec first, at the new generation",
+			func(s *Set) {
+				s.AgentBackends[0].Spec.Agents = &v1alpha1.AgentNamespaces{Namespaces: []string{"payments"}}
+				s.Invalid = []Invalid{{Kind: KindBinding, Namespace: "sre", Name: "sre-alerts", Generation: 5, Served: 2, Message: "x"}}
+			},
+			[]Rejection{
+				{Namespace: "sre", Name: "chat-only", Reason: ReasonAgentNamespaceNotAllowed, Generation: 2,
+					Message: "spec.agent.namespace: " + backend + " does not allow agents in namespace kagent"},
+				{Namespace: "sre", Name: "sre-alerts", Reason: ReasonInvalidSpec, Generation: 5,
+					Message: "spec: Binding sre/sre-alerts generation 5 is invalid, and its last good generation 2 is not served either: x"},
+				{Namespace: "sre", Name: "sre-alerts", Reason: ReasonAgentNamespaceNotAllowed, Generation: 5,
+					Message: "spec.agent.namespace: " + backend + " does not allow agents in namespace kagent"},
+			},
+			nil},
 		{"a channel conflict is a rejection that is not served",
 			func(s *Set) {
 				sreAlerts(s).CreationTimestamp = at(2)
@@ -476,6 +531,29 @@ func TestAHeldBindingThatCannotBeServedIsNotCountedAsRejected(t *testing.T) {
 	}
 	if un := (Report{Rejections: got}).Unserved(); slices.Contains(un, "sre/sre-alerts") {
 		t.Errorf("Unserved = %v; a held Binding is no Binding that exists", un)
+	}
+}
+
+// A held Binding that its backend's agents no longer allows is not served and has no rejection either, as one that lost its
+// channel: the backend is still there and was narrowed while the connection is held, and the held Binding has no status.
+func TestAHeldBindingThatTheAgentsLimitRefusesIsNotServedNorRejected(t *testing.T) {
+	set := generations(t)
+	set.AgentBackends[0].Spec.Agents = &v1alpha1.AgentNamespaces{Namespaces: []string{"payments"}}
+	set.Invalid = []Invalid{
+		{Kind: KindBinding, Namespace: "sre", Name: "sre-alerts", Served: 2, Deleted: true},
+		{Kind: KindChatConnection, Namespace: "agent-kourier-system", Name: "slack-main", Served: 6, Deleted: true},
+	}
+	snap, got := resolvePerObject(set)
+	if _, ok := snap.Binding("sre", "sre-alerts"); ok {
+		t.Error("the held Binding that the agents limit refuses is served")
+	}
+	for _, r := range got {
+		if r.Name == "sre-alerts" {
+			t.Errorf("the held Binding that the agents limit refuses has a rejection: %+v", r)
+		}
+	}
+	if !slices.ContainsFunc(got, func(r Rejection) bool { return r.Name == "chat-only" && r.Reason == ReasonAgentNamespaceNotAllowed }) {
+		t.Errorf("rejections = %+v; want the live Binding chat-only rejected for the limit", got)
 	}
 }
 

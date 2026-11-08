@@ -58,6 +58,8 @@ func Run(t *testing.T, open func(t *testing.T) Instance) {
 		{"Outbox", su.outbox},
 		{"Interactions", su.interactions},
 		{"Presses", su.presses},
+		{"Attribution", su.attribution},
+		{"ServedConnections", su.servedConnections},
 		{"Audit", su.audit},
 		{"Retention", su.retention},
 		{"StaleTasks", su.staleTasks},

@@ -14,7 +14,7 @@ import (
 // UNCONFIRMED(WP-04): a reply must target a top-level message; the response
 // echoes the message without its metadata, so Agent Kourier must not depend on it
 // there; blocks=[] with text stores no blocks.
-func (s *Server) postMessage(form url.Values) (response, string) {
+func (s *Server) postMessage(app App, form url.Values) (response, string) {
 	channel := form.Get("channel")
 	if channel == "" {
 		return nil, "channel_not_found"
@@ -22,7 +22,7 @@ func (s *Server) postMessage(form url.Values) (response, string) {
 	if code := validateContent(form.Get("text"), form.Get("blocks"), true); code != "" {
 		return nil, code
 	}
-	m := s.botMessage(form.Get("text"), form.Get("thread_ts"))
+	m := botMessage(app, form.Get("text"), form.Get("thread_ts"))
 	m.Blocks = blocksOrNil(form.Get("blocks"))
 	if raw := form.Get("metadata"); raw != "" {
 		var ok bool

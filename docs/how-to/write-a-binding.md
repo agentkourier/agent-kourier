@@ -45,7 +45,8 @@ spec:
 
 1. The platform team's AgentBackend. A reference to another namespace works only if that resource lists your
    namespace in `allowedNamespaces`.
-2. The agent's namespace and name on the backend, not in your cluster.
+2. The agent's namespace and name on the backend, not in your cluster. If the AgentBackend sets `agents`, the namespace must be one it allows (yours, if it sets `sameNamespace: true`), or the
+   Binding says `AgentNamespaceNotAllowed` and is not served.
 3. The token every turn of this Binding is sent with. Without a front door that verifies it, use `userId` instead,
    which is sent as `X-User-Id`.
 4. `live` streams the answer as the agent writes it; `final` posts it once, when the turn ends.
