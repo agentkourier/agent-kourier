@@ -28,7 +28,7 @@ func (e *env) leftOpen(t *testing.T, text string, steps ...chat.Step) {
 	if _, err := e.store.CreateOutbox(ctx, store.OutboxEntry{ID: id, EventID: "turn-1", Role: store.OutboxReply, Channel: "C1", Thread: e.root, CreatedAt: e.clk.Now()}); err != nil {
 		t.Fatal(err)
 	}
-	s, err := e.cfg.Platform.Stream(ctx, chat.Target{Channel: "C1", Thread: e.root}, "U1", text)
+	s, err := e.platform.Stream(ctx, chat.Target{Channel: "C1", Thread: e.root}, "U1", text)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +388,7 @@ func TestNotStreamingIsMatchedByTypeNotByText(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			e := setup(t)
 			e.postedByUpdate(t)
-			e.cfg.Platform = stopFails{Platform: e.cfg.Platform, err: tc.err}
+			e.use(stopFails{Platform: e.platform, err: tc.err})
 			e.live = newRenderer(t, e.cfg)
 			again, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1", Recovered: true})
 			again.Handle(text("a", "the whole answer"))

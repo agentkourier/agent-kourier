@@ -121,7 +121,7 @@ func (d *triggerDigest) pass(ctx context.Context) {
 func (d *triggerDigest) post(ctx context.Context, dg store.TriggerDigest) {
 	source := strings.Join([]string{"trigger-digest", dg.Connection, dg.Binding, strconv.Itoa(dg.Trigger), strconv.FormatInt(dg.Start.UnixNano(), 10)}, "/")
 	_, err := d.cfg.Queue.Enqueue(ctx, outbox.Post{
-		Source: source, Role: store.OutboxDigest, Channel: dg.Channel,
+		Source: source, Role: store.OutboxDigest, Connection: dg.Connection, Channel: dg.Channel,
 		Out: chat.Say(chat.Message{Fallback: digestText(dg)}),
 	})
 	if err != nil {

@@ -12,6 +12,7 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -61,7 +62,7 @@ func newBackstopRig(t *testing.T) *backstopRig {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	r := &backstopRig{st: st, sess: &flakySessions{SessionReader: st}, now: d0.Add(time.Hour)}
-	r.ob = &countedOutbox{Outbox: newOutbox(t, outbox.Config{Store: st, Platform: &poster{posted: map[string]string{}}, Now: func() time.Time { return r.now }, CallTimeout: time.Second,
+	r.ob = &countedOutbox{Outbox: newOutbox(t, outbox.Config{Store: st, Platforms: chattest.Same[outbox.Platform](&poster{posted: map[string]string{}}), Now: func() time.Time { return r.now }, CallTimeout: time.Second,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})}
 	return r
 }

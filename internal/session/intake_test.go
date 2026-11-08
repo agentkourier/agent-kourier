@@ -264,7 +264,7 @@ func (quietSink) Notice(context.Context, Key, Notice)         {}
 // idOnly resolves every user to their ID alone, which is what a turn is attributed by when the platform knows no one.
 type idOnly struct{}
 
-func (idOnly) ResolveUser(_ context.Context, id string) (dialect.User, error) {
+func (idOnly) ResolveUser(_ context.Context, _, id string) (dialect.User, error) {
 	return dialect.User{ID: id}, nil
 }
 

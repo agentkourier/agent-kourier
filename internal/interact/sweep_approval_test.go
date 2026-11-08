@@ -12,6 +12,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/interact"
@@ -617,7 +618,7 @@ func TestARecoveredTimeoutDenialUsesAnExplicitAuditReader(t *testing.T) {
 	}
 	b := interact.Binding{Dialect: kagentv1.New(30 * time.Second), ToolApprovals: true, Timeout: timeout}
 	in, err := interact.New(intakeCfg(interact.Config{
-		Store: interactionsOnlyStore{Interactions: r.st}, AuditReader: r.st, Lookup: lookup{b}, Platform: fitter{r}, Outbox: r.outbox,
+		Store: interactionsOnlyStore{Interactions: r.st}, AuditReader: r.st, Lookup: lookup{b}, Platforms: chattest.Same[interact.Fitter](fitter{r}), Outbox: r.outbox,
 		Session: r.sess, Audit: r.audit, Now: func() time.Time { return t0.Add(time.Hour) },
 	}))
 	if err != nil {

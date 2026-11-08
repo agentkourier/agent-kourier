@@ -19,12 +19,8 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/secret"
-	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
-
-// Client resolves users for the session manager.
-var _ session.Users = (*slack.Client)(nil)
 
 // counter is an http.RoundTripper that counts requests by path. It answers each one with err,
 // if set, else with the status, if set (with statusText, or the usual, the body and a

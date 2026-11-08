@@ -88,10 +88,10 @@ func newStarter(t *testing.T) *starter {
 	s := &starter{sub: &startSubmitter{}, notes: &startNotes{}, aud: &startAudit{}, logs: &bytes.Buffer{}, tel: telemetrytest.New(t)}
 	var err error
 	s.triggerStarter, err = newTriggerStarter(triggerStarterConfig{
-		Conn: startConn, Submit: s.sub, Takes: alwaysTakes, Notice: s.notes.take, Audit: s.aud,
-		Link: func(r chat.Ref) (string, bool) {
+		Submit: s.sub, Takes: alwaysTakes, Notice: s.notes.take, Audit: s.aud,
+		Links: chattest.Same[chat.Permalinker](linkFunc(func(r chat.Ref) (string, bool) {
 			return "https://example.slack.com/archives/" + r.Channel + "/p" + strings.Replace(r.ID, ".", "", 1), true
-		},
+		})),
 		Log: slog.New(slog.NewTextHandler(s.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	})
 	if err != nil {
@@ -234,7 +234,7 @@ func TestOnStartLinkIsTheAgentKourierBuiltPermalinkNotTheMessagesOwnLink(t *test
 // than a guess, and the turn still starts.
 func TestOnStartWithoutAPermalinkHasAnEmptyLink(t *testing.T) {
 	s := newStarter(t)
-	s.link = noPermalink
+	s.links = noPermalink()
 	m := firing(t)
 	m.PromptTemplate = "Alert [{{ .Link }}]"
 	if err := s.OnStart(s.tel.Ctx, m); err != nil {
@@ -243,7 +243,7 @@ func TestOnStartWithoutAPermalinkHasAnEmptyLink(t *testing.T) {
 	if got := instructionOf(t, s.sub.got[0].Text); got != "Alert []" {
 		t.Errorf("instruction = %q; want an empty link", got)
 	}
-	s.link = func(chat.Ref) (string, bool) { return "", false }
+	s.links = noPermalink()
 	if err := s.OnStart(s.tel.Ctx, m); err != nil {
 		t.Fatalf("OnStart = %v", err)
 	}
@@ -256,18 +256,17 @@ func TestOnStartWithoutAPermalinkHasAnEmptyLink(t *testing.T) {
 // render nothing, queue nothing, tell no thread or audit no refusal.
 func TestNewTriggerStarterNamesTheFieldThatIsMissing(t *testing.T) {
 	full := triggerStarterConfig{
-		Conn: startConn, Submit: &startSubmitter{}, Takes: alwaysTakes, Notice: (&startNotes{}).take, Audit: &startAudit{}, Link: noPermalink, Log: slog.Default(),
+		Submit: &startSubmitter{}, Takes: alwaysTakes, Notice: (&startNotes{}).take, Audit: &startAudit{}, Links: noPermalink(), Log: slog.Default(),
 	}
 	for _, tc := range []struct {
 		field string
 		clear func(*triggerStarterConfig)
 	}{
-		{"Conn", func(c *triggerStarterConfig) { c.Conn = "" }},
 		{"Submit", func(c *triggerStarterConfig) { c.Submit = nil }},
 		{"Takes", func(c *triggerStarterConfig) { c.Takes = nil }},
 		{"Notice", func(c *triggerStarterConfig) { c.Notice = nil }},
 		{"Audit", func(c *triggerStarterConfig) { c.Audit = nil }},
-		{"Link", func(c *triggerStarterConfig) { c.Link = nil }},
+		{"Links", func(c *triggerStarterConfig) { c.Links = nil }},
 		{"Log", func(c *triggerStarterConfig) { c.Log = nil }},
 	} {
 		t.Run(tc.field, func(t *testing.T) {
@@ -283,8 +282,63 @@ func TestNewTriggerStarterNamesTheFieldThatIsMissing(t *testing.T) {
 	}
 }
 
-// noPermalink is the Link of a platform that makes none: the prompt's link is empty.
-func noPermalink(chat.Ref) (string, bool) { return "", false }
+// linkFunc is a Permalinker made of a function.
+type linkFunc func(chat.Ref) (string, bool)
+
+func (f linkFunc) Permalink(r chat.Ref) (string, bool) { return f(r) }
+
+// noPermalink is the Links of a platform that makes none: the prompt's link is empty.
+func noPermalink() chat.Resolver[chat.Permalinker] {
+	return chattest.Same[chat.Permalinker](linkFunc(func(chat.Ref) (string, bool) { return "", false }))
+}
+
+// The session of a start is the connection of the message, and its link is made by the platform of that connection: two
+// connections' alerts in one channel ID are two sessions, each linked by its own app.
+func TestStartIsOfTheConnectionOfTheMessage(t *testing.T) {
+	s := newStarter(t)
+	s.links = chat.PlatformSet[chat.Permalinker]{
+		"ns/a": linkFunc(func(r chat.Ref) (string, bool) { return "https://a.example/" + r.ID, true }),
+		"ns/b": linkFunc(func(r chat.Ref) (string, bool) { return "https://b.example/" + r.ID, true }),
+	}
+	for _, conn := range []string{"ns/a", "ns/b"} {
+		m := firing(t)
+		m.Message.At.Conn = conn
+		m.PromptTemplate = "{{ .Link }}"
+		if err := s.OnStart(s.tel.Ctx, m); err != nil {
+			t.Fatalf("OnStart on %s: %v", conn, err)
+		}
+	}
+	for i, conn := range []string{"ns/a", "ns/b"} {
+		got := s.sub.got[i]
+		if got.Key.Connection != conn || instructionOf(t, got.Text) != "https://"+conn[len("ns/"):]+".example/"+alertTS {
+			t.Errorf("start %d = key %+v, text %q; want the session of %s and the link its own platform made", i, got.Key, got.Text, conn)
+		}
+	}
+	// A connection no platform runs makes no link, as a platform that makes none; the start goes on.
+	m := firing(t)
+	m.Message.At.Conn = "ns/gone"
+	m.PromptTemplate = "Alert [{{ .Link }}]"
+	if err := s.OnStart(s.tel.Ctx, m); err != nil {
+		t.Fatalf("OnStart on a connection that is down: %v", err)
+	}
+	if got := instructionOf(t, s.sub.got[2].Text); got != "Alert []" || s.sub.got[2].Key.Connection != "ns/gone" {
+		t.Errorf("start on a connection that is down = %q on %+v; want an empty link", got, s.sub.got[2].Key)
+	}
+}
+
+// A message that names no connection could file a session under none, so it starts nothing: the Intake treats the start as
+// handled, and nothing is submitted.
+func TestStartRefusesAMessageThatNamesNoConnection(t *testing.T) {
+	s := newStarter(t)
+	m := firing(t)
+	m.Message.At.Conn = ""
+	if err := s.OnStart(s.tel.Ctx, m); !errors.Is(err, chat.ErrNotStarted) {
+		t.Errorf("OnStart = %v; want ErrNotStarted", err)
+	}
+	if len(s.sub.got) != 0 {
+		t.Errorf("submitted %+v; want nothing", s.sub.got)
+	}
+}
 
 // A botMessage trigger's start reports botMessage as the source, in the view and in the session's origin (a personMessage
 // trigger's reports its own: TestOnStartOfAPersonsMessageIsTheirTurn).
@@ -667,7 +721,7 @@ func TestOnStartARefusedPersonsMessageIsAuditedWithThePerson(t *testing.T) {
 func TestTakesBotMentionAsksAboutTheThreadOfTheMention(t *testing.T) {
 	var asked session.Inbound
 	s, err := newTriggerStarter(triggerStarterConfig{
-		Conn: startConn, Submit: &startSubmitter{}, Notice: (&startNotes{}).take, Audit: &startAudit{}, Link: noPermalink, Log: slog.Default(),
+		Submit: &startSubmitter{}, Notice: (&startNotes{}).take, Audit: &startAudit{}, Links: noPermalink(), Log: slog.Default(),
 		Takes: func(_ context.Context, in session.Inbound) (bool, error) { asked = in; return false, nil },
 	})
 	if err != nil {

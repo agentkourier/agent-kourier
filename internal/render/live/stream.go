@@ -47,7 +47,7 @@ import (
 func (u *Run) writeStream(ctx context.Context, ref *chat.Ref, v view) error {
 	id := outbox.ID(u.turn.Source, store.OutboxReply)
 	if !u.rowMade {
-		created, err := u.cfg.Store.CreateOutbox(ctx, store.OutboxEntry{ID: id, EventID: u.turn.Source, Role: store.OutboxReply, Channel: u.turn.Channel, Thread: u.turn.Thread, CreatedAt: u.cfg.Now()})
+		created, err := u.cfg.Store.CreateOutbox(ctx, store.OutboxEntry{ID: id, EventID: u.turn.Source, Role: store.OutboxReply, Connection: u.turn.Connection, Channel: u.turn.Channel, Thread: u.turn.Thread, CreatedAt: u.cfg.Now()})
 		if err != nil {
 			return err
 		}
@@ -61,9 +61,9 @@ func (u *Run) writeStream(ctx context.Context, ref *chat.Ref, v view) error {
 		if len(v.steps) > 0 { // the text before the first step: the step comes where its call was made
 			first = v.body[:v.pos[0]]
 		}
-		s, err := u.cfg.Platform.Stream(ctx, chat.Target{Channel: u.turn.Channel, Thread: u.turn.Thread}, u.turn.Recipient, first)
+		s, err := u.platform.Stream(ctx, chat.Target{Conn: u.turn.Connection, Channel: u.turn.Channel, Thread: u.turn.Thread}, u.turn.Recipient, first)
 		if err != nil {
-			if u.cfg.Platform.Classify(chat.OpPost, err).Class == chat.Permanent {
+			if u.platform.Classify(chat.OpPost, err).Class == chat.Permanent {
 				u.cfg.Logger.WarnContext(ctx, "live: the platform refused the stream for good; the reply is posted instead", "channel", u.turn.Channel, "err", err)
 				return u.postInstead(ctx, ref)
 			}
@@ -215,7 +215,7 @@ func (u *Run) sendStep(ctx context.Context, st chat.Step, final bool) (bool, err
 		u.stepFails = 0
 		return true, nil
 	}
-	verdict := u.cfg.Platform.Classify(chat.OpPost, err)
+	verdict := u.platform.Classify(chat.OpPost, err)
 	switch {
 	case errors.Is(err, chat.ErrNotStreaming):
 		return false, nil
@@ -259,7 +259,7 @@ func (u *Run) takeOver(ctx context.Context, ref *chat.Ref, id string) error {
 	}
 	if row.MessageRef != "" {
 		u.streaming, u.adopted = false, true
-		*ref, u.adoptStop = u.cfg.Platform.RefAt(u.turn.Channel, u.turn.Thread, row.MessageRef), true
+		*ref, u.adoptStop = u.platform.RefAt(u.turn.Channel, u.turn.Thread, row.MessageRef), true
 		return u.writeMoved(ctx, ref)
 	}
 	return u.postInstead(ctx, ref)

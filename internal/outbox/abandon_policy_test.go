@@ -119,26 +119,23 @@ func TestAShutdownMidAbandonStillRecordsIt(t *testing.T) {
 	}
 }
 
-// TestThePurgeRunsAtMostEveryFiveMinutes: Reconcile runs on every signal and tick, and the purge is
-// a write; a row that has just come due waits for the next one.
-func TestThePurgeRunsAtMostEveryFiveMinutes(t *testing.T) {
+// TestARowPastRetentionIsAbandonedAtTheNextPass: every pass looks at the age of the rows it drains, so a row that has just come due
+// goes at the next one, and is reported once.
+func TestARowPastRetentionIsAbandonedAtTheNextPass(t *testing.T) {
 	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
 	var clock atomic.Int64
 	p := &poster{onPost: func(context.Context) error { return errors.New("connection reset") }}
 	ob, hooks, _ := abandoning(t, st, p, func(c *outbox.Config) {
 		c.Now = func() time.Time { return t0.Add(time.Duration(clock.Load())) }
 	})
-	if err := ob.Reconcile(t.Context()); err != nil { // the first one purges
-		t.Fatal(err)
-	}
-	old := store.OutboxEntry{ID: "old/reply", EventID: "old", Role: store.OutboxReply, Channel: "C1", CreatedAt: t0.Add(-8 * 24 * time.Hour), Payload: neutral("hi")}
+	old := store.OutboxEntry{ID: "old/reply", EventID: "old", Role: store.OutboxReply, Channel: "C1", CreatedAt: t0.Add(-7*24*time.Hour + time.Minute), Payload: neutral("hi")}
 	if _, err := st.CreateOutbox(t.Context(), old); err != nil {
 		t.Fatal(err)
 	}
 	for _, step := range []struct {
 		at   time.Duration
 		gone bool
-	}{{time.Minute, false}, {4 * time.Minute, false}, {5 * time.Minute, true}} {
+	}{{0, false}, {59 * time.Second, false}, {time.Minute + time.Nanosecond, true}, {time.Hour, true}} {
 		clock.Store(int64(step.at))
 		_ = ob.Reconcile(t.Context())
 		if got := abandoned(t, st, "old/reply"); got != step.gone {

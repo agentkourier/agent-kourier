@@ -281,7 +281,7 @@ func TestInteractionDepsNameThePartThatIsMissing(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	full := interactionDeps{
-		st: st, ob: &outbox.Outbox{}, platform: builtPlatform{Platform: chattest.NewFake()}, auditor: &audit.Writer{},
+		st: st, ob: &outbox.Outbox{}, platforms: chattest.Same[chat.Platform](chattest.NewFake()), auditor: &audit.Writer{},
 		bindings: &Bindings{}, metrics: &Metrics{}, log: slog.Default(),
 	}
 	for _, tc := range []struct {
@@ -290,7 +290,7 @@ func TestInteractionDepsNameThePartThatIsMissing(t *testing.T) {
 	}{
 		{"st", func(d *interactionDeps) { d.st = nil }},
 		{"ob", func(d *interactionDeps) { d.ob = nil }},
-		{"platform", func(d *interactionDeps) { d.platform = builtPlatform{} }},
+		{"platforms", func(d *interactionDeps) { d.platforms = nil }},
 		{"auditor", func(d *interactionDeps) { d.auditor = nil }},
 		{"bindings", func(d *interactionDeps) { d.bindings = nil }},
 		{"metrics", func(d *interactionDeps) { d.metrics = nil }},

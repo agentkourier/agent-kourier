@@ -86,7 +86,7 @@ func (noAudit) AgentCall(context.Context, audit.Actor, audit.Call) error { retur
 // idOnly resolves every user to their ID alone.
 type idOnly struct{}
 
-func (idOnly) ResolveUser(_ context.Context, id string) (dialect.User, error) {
+func (idOnly) ResolveUser(_ context.Context, _, id string) (dialect.User, error) {
 	return dialect.User{ID: id}, nil
 }
 

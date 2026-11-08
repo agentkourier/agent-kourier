@@ -37,18 +37,16 @@ type triggerAuditor interface {
 // triggerStarterConfig is what a triggerStarter is made from. Every field is required: newTriggerStarter refuses a config
 // without one and names it. Link is the one that may legitimately do nothing: a platform that makes no links says false.
 type triggerStarterConfig struct {
-	// Conn is the ChatConnection as it appears in keys and message IDs: namespace/name.
-	Conn   string
 	Submit chat.Submitter
 	// Takes says whether a turn would be queued, writing nothing (session.Manager.Takes).
 	Takes func(ctx context.Context, in session.Inbound) (bool, error)
 	// Notice queues a note in a thread (live.Sink.QueueNotice); its error means the note was not written.
 	Notice func(ctx context.Context, key session.Key, n session.Notice) error
 	Audit  triggerAuditor
-	// Link builds the permalink of a message (chat.Permalinker), and says false if the platform cannot: the view's Link is
-	// then empty.
-	Link func(chat.Ref) (string, bool)
-	Log  *slog.Logger
+	// Links gives the platform of a message's connection, which builds the permalink of a message (chat.Permalinker), and says
+	// false if the platform cannot: the view's Link is then empty, as it is for a connection that is not running.
+	Links chat.Resolver[chat.Permalinker]
+	Log   *slog.Logger
 }
 
 // triggerStarter turns a botMessage or personMessage trigger's decision to start into an investigation (spec 8.2): it
@@ -59,20 +57,17 @@ type triggerStarterConfig struct {
 // writes, and a wake. It calls no agent and no Slack API; the permalink comes from what the platform cached when it
 // connected.
 type triggerStarter struct {
-	conn   string
 	submit chat.Submitter
 	takes  func(ctx context.Context, in session.Inbound) (bool, error)
 	notice func(ctx context.Context, key session.Key, n session.Notice) error
 	audit  triggerAuditor
-	link   func(chat.Ref) (string, bool)
+	links  chat.Resolver[chat.Permalinker]
 	log    *slog.Logger
 }
 
 // newTriggerStarter returns a triggerStarter over cfg, or an error that names the field that cfg leaves out.
 func newTriggerStarter(cfg triggerStarterConfig) (*triggerStarter, error) {
 	switch {
-	case cfg.Conn == "":
-		return nil, errors.New("broker: Conn is required for the trigger start")
 	case cfg.Submit == nil:
 		return nil, errors.New("broker: Submit is required for the trigger start: it is how a turn is queued")
 	case cfg.Takes == nil:
@@ -81,12 +76,12 @@ func newTriggerStarter(cfg triggerStarterConfig) (*triggerStarter, error) {
 		return nil, errors.New("broker: Notice is required for the trigger start: it is how a refused start is told to the thread")
 	case cfg.Audit == nil:
 		return nil, errors.New("broker: Audit is required for the trigger start: a refused start is recorded")
-	case cfg.Link == nil:
-		return nil, errors.New("broker: Link is required for the trigger start (the platform's Permalink)")
+	case cfg.Links == nil:
+		return nil, errors.New("broker: Links is required for the trigger start (the platforms' Permalink)")
 	case cfg.Log == nil:
 		return nil, errors.New("broker: Log is required for the trigger start")
 	}
-	return &triggerStarter{conn: cfg.Conn, submit: cfg.Submit, takes: cfg.Takes, notice: cfg.Notice, audit: cfg.Audit, link: cfg.Link, log: cfg.Log}, nil
+	return &triggerStarter{submit: cfg.Submit, takes: cfg.Takes, notice: cfg.Notice, audit: cfg.Audit, links: cfg.Links, log: cfg.Log}, nil
 }
 
 // OnStart implements IntakeConfig.OnStart.
@@ -115,6 +110,10 @@ func newTriggerStarter(cfg triggerStarterConfig) (*triggerStarter, error) {
 // is ErrNotStarted with no note: the bot asked, and a note answers no one.
 func (s *triggerStarter) OnStart(ctx context.Context, m chat.TriggerMatch) error {
 	at := m.Message.At
+	if at.Conn == "" { // an adapter names the connection of every message it forwards; one that does not could file the session under none
+		s.log.ErrorContext(ctx, "chat: a bot message names no connection, so it started nothing", "binding", m.Binding, "channel", at.Channel, "message", at.ID)
+		return fmt.Errorf("bot message %s names no connection: %w", m.MessageID, chat.ErrNotStarted)
+	}
 	source := botMessageSource
 	switch {
 	case m.Mention:
@@ -125,7 +124,7 @@ func (s *triggerStarter) OnStart(ctx context.Context, m chat.TriggerMatch) error
 	view := v1alpha1.PromptView{
 		Channel: at.Channel, State: m.Fields["state"], Key: m.Fields["key"], Source: source, Fields: m.Fields,
 	}
-	if link, ok := s.link(at); ok {
+	if link, ok := s.permalink(at); ok {
 		view.Link = link
 	} else {
 		s.log.DebugContext(ctx, "chat: the platform made no permalink for an alert; the prompt's link is empty", "channel", at.Channel, "message", at.ID)
@@ -166,6 +165,15 @@ func authorOf(m chat.TriggerMatch) string {
 	return ""
 }
 
+// permalink is the link to the message at, made by the platform of the message's connection.
+func (s *triggerStarter) permalink(at chat.Ref) (string, bool) {
+	p, err := s.links.Platform(at.Conn)
+	if err != nil {
+		return "", false
+	}
+	return p.Permalink(at)
+}
+
 // TakesBotMention says whether the session of a bot's mention would take it as a turn (chat.IntakeConfig.TakesBotMention).
 func (s *triggerStarter) TakesBotMention(ctx context.Context, m chat.TriggerMatch) (bool, error) {
 	return s.takes(ctx, session.Inbound{Key: s.keyOf(m), Binding: m.Binding, Create: true, WholeThread: true})
@@ -177,7 +185,7 @@ func (s *triggerStarter) keyOf(m chat.TriggerMatch) session.Key {
 	if m.Mention {
 		thread = cmp.Or(m.Message.At.Thread, thread)
 	}
-	return session.Key{Connection: s.conn, Channel: m.Message.At.Channel, Thread: thread}
+	return session.Key{Connection: m.Message.At.Conn, Channel: m.Message.At.Channel, Thread: thread}
 }
 
 // MentionLimited records that a limit stopped a bot's mention (chat.IntakeConfig.OnMentionLimited). Its failure is logged and

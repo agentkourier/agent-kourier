@@ -1010,7 +1010,7 @@ func TestAMovedTurnThatEndsWithNothingToShowDoesNotWriteAnEmptyMessage(t *testin
 	}
 	t.Run("the stream is refused: no message stands, and none is posted", func(t *testing.T) {
 		e := setup(t)
-		e.cfg.Platform = spy{Platform: e.cfg.Platform, caps: e.cfg.Platform.Capabilities(), steps: new(atomic.Int32), streamFail: fmt.Errorf("start: %w", errRefused)}
+		e.use(spy{Platform: e.platform, caps: e.platform.Capabilities(), steps: new(atomic.Int32), streamFail: fmt.Errorf("start: %w", errRefused)})
 		e.live = newRenderer(t, e.cfg)
 		release := e.hold()
 		t.Cleanup(release)

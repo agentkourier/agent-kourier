@@ -76,7 +76,7 @@ func (s *Sink) Turn(ctx context.Context, t session.TurnRef) agent.Handler {
 	if mode == "" {
 		mode = v1alpha1.OutputLive
 	}
-	turn := Turn{Source: t.MessageID, Channel: t.Key.Channel, Thread: t.Key.Thread, Mode: mode, Progress: t.Progress, Recipient: recipient, Recovered: t.Recovered}
+	turn := Turn{Source: t.MessageID, Connection: t.Key.Connection, Channel: t.Key.Channel, Thread: t.Key.Thread, Mode: mode, Progress: t.Progress, Recipient: recipient, Recovered: t.Recovered}
 	turn.Footer = footerOf(t)
 	turn.Binding, turn.Mentions, turn.MaxMentions = t.Binding, t.Mentions, t.MaxMentions
 	return s.runs.Start(ctx, turn).Handle
@@ -128,7 +128,7 @@ func (s *Sink) QueueNotice(ctx context.Context, key session.Key, n session.Notic
 		name, remove, ok = n.Reaction, n.Kind == session.NoticeUnacknowledged, true
 	}
 	if ok {
-		r := outbox.Reaction{Source: n.ID, Channel: key.Channel, TS: n.MessageRef, Name: name}
+		r := outbox.Reaction{Source: n.ID, Connection: key.Connection, Channel: key.Channel, TS: n.MessageRef, Name: name}
 		if remove {
 			_, err = s.queue.EnqueueUnreaction(ctx, r)
 		} else {
@@ -140,7 +140,7 @@ func (s *Sink) QueueNotice(ctx context.Context, key session.Key, n session.Notic
 			s.log.WarnContext(ctx, "live: a notice of a kind with no wording was dropped", "kind", n.Kind, "channel", key.Channel)
 			return nil
 		}
-		post := outbox.Post{Source: n.ID, Role: store.OutboxNotice, Channel: key.Channel, Thread: key.Thread, Out: chat.Say(render.Notice(text, n.Detail))}
+		post := outbox.Post{Source: n.ID, Role: store.OutboxNotice, Connection: key.Connection, Channel: key.Channel, Thread: key.Thread, Out: chat.Say(render.Notice(text, n.Detail))}
 		_, err = s.queue.Enqueue(ctx, post)
 	}
 	if errors.Is(err, store.ErrInvalid) {

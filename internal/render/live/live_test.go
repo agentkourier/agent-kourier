@@ -23,6 +23,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
@@ -363,6 +364,13 @@ type env struct {
 	live   *live.Renderer
 	root   string
 	logs   *bytes.Buffer
+	// platform is the platform the Renderer is configured with (cfg.Platforms answers every connection with it); use replaces it.
+	platform chat.Platform
+}
+
+// use makes p the platform of every connection of e.cfg, for the Renderer that a test makes from it next.
+func (e *env) use(p chat.Platform) {
+	e.platform, e.cfg.Platforms = p, chattest.Same[chat.Platform](p)
 }
 
 func setup(t *testing.T) *env {
@@ -387,9 +395,10 @@ func setup(t *testing.T) *env {
 	t.Cleanup(func() { _ = e.store.Close() })
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
 	platform := slack.NewPlatform(client, "ns/conn")
-	e.ob = newOutbox(t, outbox.Config{Store: e.store, Platform: platform, Logger: quiet})
+	e.ob = newOutbox(t, outbox.Config{Store: e.store, Platforms: chattest.Same[outbox.Platform](platform), Logger: quiet})
 	e.rf = &recordFail{Outbox: e.store}
-	e.cfg = live.Config{Sender: e.ob, Platform: platform, Store: e.rf, Throttle: throttle, FinalDeadline: 10 * time.Minute, Now: e.clk.Now, After: e.clk.After, Logger: slog.New(slog.NewTextHandler(e.logs, nil))}
+	e.platform = platform
+	e.cfg = live.Config{Sender: e.ob, Platforms: chattest.Same[chat.Platform](platform), Store: e.rf, Throttle: throttle, FinalDeadline: 10 * time.Minute, Now: e.clk.Now, After: e.clk.After, Logger: slog.New(slog.NewTextHandler(e.logs, nil))}
 	e.live = newRenderer(t, e.cfg)
 	t.Cleanup(func() { // a run that saw its final goes on without its context: turn the clock for it
 		for deadline := time.Now().Add(3 * time.Second); runsAlive() && time.Now().Before(deadline); time.Sleep(time.Millisecond) {
@@ -422,17 +431,17 @@ func newRenderer(t *testing.T, cfg live.Config) *live.Renderer {
 	return r
 }
 
-// New refuses a Config without its Sender, Platform or Store, and the error names the field.
+// New refuses a Config without its Sender, Platforms or Store, and the error names the field.
 func TestNewNamesTheFieldThatIsMissing(t *testing.T) {
 	e := setup(t)
-	for _, field := range []string{"Sender", "Platform", "Store"} {
+	for _, field := range []string{"Sender", "Platforms", "Store"} {
 		t.Run(field, func(t *testing.T) {
 			cfg := e.cfg
 			switch field {
 			case "Sender":
 				cfg.Sender = nil
-			case "Platform":
-				cfg.Platform = nil
+			case "Platforms":
+				cfg.Platforms = nil
 			case "Store":
 				cfg.Store = nil
 			}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/interact"
@@ -107,7 +108,7 @@ func TestADenialReachesTheAgent(t *testing.T) {
 		t.Fatalf("the stub did not pause: %v, %v", paused, err)
 	}
 	r, got := newRig(t, nil), &answerer{ag: ag}
-	in, err := interact.New(intakeCfg(interact.Config{Store: r.st, AuditReader: r.st, Lookup: lookup{interact.Binding{Dialect: kagentv1.New(0), Timeout: time.Minute}}, Platform: fitter{r},
+	in, err := interact.New(intakeCfg(interact.Config{Store: r.st, AuditReader: r.st, Lookup: lookup{interact.Binding{Dialect: kagentv1.New(0), Timeout: time.Minute}}, Platforms: chattest.Same[interact.Fitter](fitter{r}),
 		Outbox: r.outbox, Session: got, Audit: r.audit}))
 	if err != nil {
 		t.Fatal(err)

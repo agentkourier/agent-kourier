@@ -14,6 +14,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -66,7 +67,7 @@ func unrecordableRig(t *testing.T, ask bool, notify func(store.Press), errs ...e
 	if ask {
 		b = interact.Binding{Dialect: b.Dialect, AskUser: true, Timeout: time.Minute, Identity: "secret:ns/tok"}
 	}
-	d, err := interact.NewDecider(decideCfg(interact.DecideConfig{Store: r.st, Auditor: aud, Ephemerals: r.eph, Session: r.sess, Sessions: r.st, Replacer: r.rep, Outbox: r.out,
+	d, err := interact.NewDecider(decideCfg(interact.DecideConfig{Store: r.st, Auditor: aud, Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Session: r.sess, Sessions: r.st, Replacer: r.rep, Outbox: r.out,
 		Logger:     slog.New(slog.NewJSONHandler(out, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		OnDecision: func(res string) { r.mu.Lock(); r.hooks = append(r.hooks, res); r.mu.Unlock() },
 		OnApprovalOutcome: func(binding string, o interact.Outcome) {
@@ -80,7 +81,7 @@ func unrecordableRig(t *testing.T, ask bool, notify func(store.Press), errs ...e
 	if notify == nil {
 		notify = func(store.Press) {}
 	}
-	r.pl, err = interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{b}, Authorizer: r.az, Ephemerals: r.eph, Decider: d, Auditor: aud,
+	r.pl, err = interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{b}, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Decider: d, Auditor: aud,
 		Logger: quietLogger(), Now: func() time.Time { return r.now }, Notify: notify}))
 	if err != nil {
 		t.Fatal(err)

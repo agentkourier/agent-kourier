@@ -76,6 +76,9 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 		return nil, err
 	}
 
+	// The parts that every connection shares look the platform up by the connection their row, turn or press names. The leader
+	// half runs one connection, so the one platform is the only entry.
+	platforms := chat.PlatformSet[chat.Platform]{connName: platform}
 	// The Bindings take the platform's own acknowledgment reaction, so the platform is built first.
 	bindings, err := NewBindings(boot.Reloader, boot.Secrets, auditor, Options{
 		OnRejected: metrics.CredentialRejected, AckReaction: platform.Capabilities().AckReaction, fence: h.leaseFence})
@@ -92,8 +95,8 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	}
 	chatCtx, report, stopChat := WithAuthFailure(runCtx)
 	ob, err := outbox.New(outbox.Config{
-		Store: st, Platform: WatchAuth(platform, report), Logger: log, OnAbandon: metrics.OutboxAbandoned,
-		// The producers do not name a connection yet: the rows they make are the own connection's.
+		Store: st, Platforms: chat.PlatformSet[outbox.Platform]{connName: WatchAuth(platform, report)}, Logger: log, OnAbandon: metrics.OutboxAbandoned,
+		// A row whose producer names no connection is the own connection's.
 		DefaultConnection: connName,
 	})
 	if err != nil {
@@ -119,7 +122,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	// The renderer posts a turn's first message through the outbox and edits or streams it through the
 	// chat platform (the Slack adapter over the client); a notice is only queued on the outbox, off Slack's
 	// acknowledgement path.
-	renderer, err := live.New(live.Config{Sender: ob, Audit: auditor, Platform: platform, Store: st, Logger: log})
+	renderer, err := live.New(live.Config{Sender: ob, Audit: auditor, Platforms: platforms, Store: st, Logger: log})
 	if err != nil {
 		return nil, err
 	}
@@ -133,20 +136,20 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	// them, and the manager, which they feed.
 	stops := stopList{trace: cfg.stopTrace}
 	sd.add(stepInteractions, stops.run)
-	parts := interactionDeps{st: st, ob: ob, platform: platform, auditor: auditor, bindings: bindings, metrics: metrics, log: log, trace: cfg.startTrace}
+	parts := interactionDeps{st: st, ob: ob, platforms: platforms, auditor: auditor, bindings: bindings, metrics: metrics, log: log, trace: cfg.startTrace}
 	ix, err := parts.build(sink)
 	if err != nil {
 		return nil, err
 	}
 	// A mentioned turn of a mention-only Binding carries the replies since the previous turn, which are read through the
 	// platform as it is built here (fenced with an election: the read is not a write, so the fence passes it).
-	threads, err := newThreadContext(threadContextConfig{Platform: platform, Replies: st, Logger: log})
+	threads, err := newThreadContext(threadContextConfig{Platforms: platforms, Replies: st, Logger: log})
 	if err != nil {
 		return nil, err
 	}
 	// A turn's acknowledgment removal is queued and its reply settled at once, so that retention does not queue it again.
 	unack := unacknowledge(sink.QueueNotice, st.SettleAcknowledgmentReplies)
-	mgr, err := session.New(session.Config{Context: runCtx, Store: st, Questions: st, Bindings: bindings, Users: users{platform}, Sink: ix.tap, TextReply: ix.replies.Decide, Logger: log, Audit: auditor, OnTurnEnd: metrics.TurnOutcome, ThreadContext: threads.Section, AnswerWatcher: ix.reopened, Unacknowledge: unack})
+	mgr, err := session.New(session.Config{Context: runCtx, Store: st, Questions: st, Bindings: bindings, Users: users{platforms}, Sink: ix.tap, TextReply: ix.replies.Decide, Logger: log, Audit: auditor, OnTurnEnd: metrics.TurnOutcome, ThreadContext: threads.Section, AnswerWatcher: ix.reopened, Unacknowledge: unack})
 	if err != nil {
 		return nil, fmt.Errorf("session manager: %w", err)
 	}
@@ -241,7 +244,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	// mention takes. The threads of the keys are in the store; the permalink comes from what the platform learned when it
 	// connected, since the start runs on the acknowledgement path and may call neither Slack nor the agent.
 	starter, err := newTriggerStarter(triggerStarterConfig{
-		Conn: connName, Submit: mgr, Takes: mgr.Takes, Notice: sink.QueueNotice, Audit: auditor, Link: platform.Permalink, Log: log,
+		Submit: mgr, Takes: mgr.Takes, Notice: sink.QueueNotice, Audit: auditor, Links: chat.Narrow[chat.Permalinker](platforms), Log: log,
 	})
 	if err != nil {
 		return nil, err
