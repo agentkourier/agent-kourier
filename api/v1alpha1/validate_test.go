@@ -111,6 +111,31 @@ func namespaces(n int) []string {
 	return out
 }
 
+// TestAgentBackendAgentsProblems holds Validate to what the CRD's two rules of agents give for one object: a value that allows
+// nothing on a dialect other than kagent-v1 breaks both, and a dialect that is not known is not one that sends agent.namespace.
+func TestAgentBackendAgentsProblems(t *testing.T) {
+	const notSupported = "spec.agents: is supported only on the kagent-v1 dialect: on a2a the URL names the agent and agent.namespace is never sent"
+	const allowsNothing = "spec.agents: allows no agent namespace: set sameNamespace to true or list at least one namespace in namespaces"
+	for _, tc := range []struct {
+		name    string
+		dialect Dialect
+		agents  AgentNamespaces
+		want    []string
+	}{
+		{"nothing allowed on a2a", DialectA2A, AgentNamespaces{}, []string{notSupported, allowsNothing}},
+		{"an unknown dialect", "foo", AgentNamespaces{SameNamespace: true},
+			[]string{`spec.dialect: unsupported value "foo", must be one of a2a, kagent-v1`, notSupported}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := load[AgentBackend](t, "agentbackend.yaml")
+			o.Spec.Dialect, o.Spec.Agents = tc.dialect, &tc.agents
+			if got := problemsOf(o.Validate()); !slices.Equal(got, tc.want) {
+				t.Fatalf("Validate() problems = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestAgentBackendValidate(t *testing.T) {
 	hdr := func(o *AgentBackend, h Header) { o.Spec.Headers = []Header{h} }
 	runMutations[AgentBackend](t, "agentbackend.yaml", []mutation[AgentBackend]{
@@ -188,11 +213,7 @@ func TestAgentBackendValidate(t *testing.T) {
 		{"agents on the a2a dialect", func(o *AgentBackend) {
 			o.Spec.Dialect = DialectA2A
 			o.Spec.Agents = &AgentNamespaces{SameNamespace: true}
-		}, "spec.agents: is not supported on the a2a dialect: the URL names the agent and agent.namespace is never sent"},
-		{"agents that allow nothing on the a2a dialect: one problem for the field", func(o *AgentBackend) {
-			o.Spec.Dialect = DialectA2A
-			o.Spec.Agents = &AgentNamespaces{}
-		}, "spec.agents: is not supported on the a2a dialect: the URL names the agent and agent.namespace is never sent"},
+		}, "spec.agents: is supported only on the kagent-v1 dialect: on a2a the URL names the agent and agent.namespace is never sent"},
 		{"bad agent namespace", func(o *AgentBackend) {
 			o.Spec.Agents = &AgentNamespaces{Namespaces: []string{"kagent", "Not_A_Namespace"}}
 		},
