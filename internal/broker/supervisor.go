@@ -197,6 +197,9 @@ func (s *supervisor) start(ctx context.Context, t TeamConnection, st *teamRuntim
 // ended is told that the run of a team connection returned by itself: the platform rejected its credentials. The connection is down, and nothing else
 // is touched; it runs again when its ChatConnection or its Secret changes.
 func (s *supervisor) ended(rt *connRuntime, err error) {
+	if rt.halted.Load() {
+		return
+	}
 	s.log.Warn("chat connection: its run ended and it is not served until its ChatConnection or its Secret changes", "connection", rt.name, "error", telemetry.LogText(err))
 }
 
@@ -230,19 +233,4 @@ func (s *supervisor) say(ctx context.Context, name, msg string, err error) {
 		return
 	}
 	s.log.WarnContext(ctx, msg, "connection", name)
-}
-
-// stopAll halts the runtimes and waits for them, for ctx at the most. It is for the shutdown, after run returned, and leaves the runtimes in the
-// table, because the final drain still posts through them (the host closes their transports after it).
-func (s *supervisor) stopAll(ctx context.Context) {
-	for _, st := range s.teams {
-		if st.rt != nil {
-			st.rt.halt()
-		}
-	}
-	for _, st := range s.teams {
-		if st.rt != nil {
-			st.rt.wait(ctx)
-		}
-	}
 }

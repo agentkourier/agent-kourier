@@ -107,6 +107,9 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	if err != nil {
 		return nil, err
 	}
+	if cfg.outboxBuilt != nil {
+		cfg.outboxBuilt(ob)
+	}
 	if err := ob.Reconcile(runCtx); err != nil { // Slack may be down: Run below tries again, so this only says so
 		log.WarnContext(ctx, "outbox: the first reconcile did not finish; it will be tried again", "error", err)
 	}

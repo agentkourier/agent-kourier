@@ -189,11 +189,10 @@ func (t TeamConnection) Name() string { return v1alpha1.NamespacedName(t.Ref.Nam
 // kept in memory and compared, never logged or stored.
 func (t TeamConnection) fingerprint() string {
 	h := sha256.New()
-	fmt.Fprintf(h, "%q %d %q %q\n", t.UID, t.Generation, t.Platform, t.Name())
+	_, _ = fmt.Fprintf(h, "%q %d %q %q\n", t.UID, t.Generation, t.Platform, t.Name()) // a hash.Hash never fails to write
 	for _, key := range slices.Sorted(maps.Keys(t.Credentials)) {
 		v := t.Credentials[key].Reveal()
-		fmt.Fprintf(h, "%q %d:", key, len(v))
-		h.Write([]byte(v))
+		_, _ = fmt.Fprintf(h, "%q %d:%s", key, len(v), v)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

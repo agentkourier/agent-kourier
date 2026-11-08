@@ -21,6 +21,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -130,6 +131,8 @@ type RunConfig struct {
 	// transportClosed is told the connection as the idle connections of its Slack transport are closed, so a test can see that every
 	// connection's is, and after the final drain.
 	transportClosed func(conn string)
+	// outboxBuilt is given the outbox as the leader half builds it, so a test can post through it and look at its lanes.
+	outboxBuilt func(*outbox.Outbox)
 	// leaderLaunched is called once Run has launched the leader half (or its candidacy), before it waits for the
 	// signal, so a test can hold Run there and send the signal while the leader half is up.
 	leaderLaunched func()

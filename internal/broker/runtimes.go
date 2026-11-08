@@ -172,9 +172,9 @@ func (h *runtimeHost) build(conn Connection, id appIdentity) (*connRuntime, erro
 	return rt, nil
 }
 
-// run starts the run of rt on sink, on a goroutine of its own. onEnd, if set, is called with what RunPlatform returned once it has, unless
-// the runtime was halted: the run ended by itself, which for RunPlatform is a rejected credential. The runtime leaves the table then, so
-// the connection is down; a halted one stays until its owner takes it out, because the final drain of a shutdown still posts through it.
+// run starts the run of rt on sink, on a goroutine of its own. onEnd, if set, is called with what RunPlatform returned once it has. When the
+// runtime was not halted the run ended by itself, which for RunPlatform is a rejected credential: the runtime leaves the table then, so the
+// connection is down. A halted one stays until its owner takes it out, because the final drain of a shutdown still posts through it.
 func (h *runtimeHost) run(rt *connRuntime, sink chat.Sink, onEnd func(rt *connRuntime, err error)) {
 	rt.done = make(chan struct{})
 	go func() {
@@ -185,7 +185,7 @@ func (h *runtimeHost) run(rt *connRuntime, sink chat.Sink, onEnd func(rt *connRu
 			h.metrics.ChatConnected(rt.name, false)
 		}
 		close(rt.done)
-		if onEnd != nil && !rt.halted.Load() {
+		if onEnd != nil {
 			onEnd(rt, err)
 		}
 	}()
