@@ -154,6 +154,9 @@ func TestTheDigestIsOneLineInTheChannelWhenTheWindowEnds(t *testing.T) {
 	if p.Role != store.OutboxDigest || p.Channel != digestChannel || p.Thread != "" {
 		t.Errorf("post = %+v; want a digest at the top level of %s", p, digestChannel)
 	}
+	if p.Connection != digestConn {
+		t.Errorf("post connection = %q; want %q, the connection of the starts the limits stopped: its app posts the line", p.Connection, digestConn)
+	}
 	if want := "7 bot messages not investigated in the last 10m (rate limit)."; p.Out.Message == nil || p.Out.Message.Fallback != want {
 		t.Errorf("the line = %+v; want %q", p.Out.Message, want)
 	}

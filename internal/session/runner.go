@@ -1776,7 +1776,7 @@ func (m *Manager) message(r store.Reply, sess store.Session, b Backend) *a2a.Mes
 		return msg
 	}
 	user := dialect.User{ID: r.UserID}
-	switch u, err := m.cfg.Users.ResolveUser(m.ctx, r.UserID); {
+	switch u, err := m.cfg.Users.ResolveUser(m.ctx, r.Key.Connection, r.UserID); {
 	case err != nil:
 		m.cfg.Logger.Warn("resolve user for attribution, using the ID alone", "user", r.UserID, "error", err)
 	default:

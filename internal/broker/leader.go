@@ -143,13 +143,13 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	}
 	// A mentioned turn of a mention-only Binding carries the replies since the previous turn, which are read through the
 	// platform as it is built here (fenced with an election: the read is not a write, so the fence passes it).
-	threads, err := newThreadContext(threadContextConfig{Platform: platform, Replies: st, Logger: log})
+	threads, err := newThreadContext(threadContextConfig{Platforms: platforms, Replies: st, Logger: log})
 	if err != nil {
 		return nil, err
 	}
 	// A turn's acknowledgment removal is queued and its reply settled at once, so that retention does not queue it again.
 	unack := unacknowledge(sink.QueueNotice, st.SettleAcknowledgmentReplies)
-	mgr, err := session.New(session.Config{Context: runCtx, Store: st, Questions: st, Bindings: bindings, Users: users{platform}, Sink: ix.tap, TextReply: ix.replies.Decide, Logger: log, Audit: auditor, OnTurnEnd: metrics.TurnOutcome, ThreadContext: threads.Section, AnswerWatcher: ix.reopened, Unacknowledge: unack})
+	mgr, err := session.New(session.Config{Context: runCtx, Store: st, Questions: st, Bindings: bindings, Users: users{platforms}, Sink: ix.tap, TextReply: ix.replies.Decide, Logger: log, Audit: auditor, OnTurnEnd: metrics.TurnOutcome, ThreadContext: threads.Section, AnswerWatcher: ix.reopened, Unacknowledge: unack})
 	if err != nil {
 		return nil, fmt.Errorf("session manager: %w", err)
 	}
@@ -236,7 +236,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	// mention takes. The threads of the keys are in the store; the permalink comes from what the platform learned when it
 	// connected, since the start runs on the acknowledgement path and may call neither Slack nor the agent.
 	starter, err := newTriggerStarter(triggerStarterConfig{
-		Conn: connName, Submit: mgr, Takes: mgr.Takes, Notice: sink.QueueNotice, Audit: auditor, Link: platform.Permalink, Log: log,
+		Submit: mgr, Takes: mgr.Takes, Notice: sink.QueueNotice, Audit: auditor, Links: chat.Narrow[chat.Permalinker](platforms), Log: log,
 	})
 	if err != nil {
 		return nil, err
