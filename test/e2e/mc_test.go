@@ -63,7 +63,7 @@ func requireTwoApps(t *testing.T) Env {
 		t.Skipf("the scenarios of several Slack apps reach the stub agent and the fake Slack's apps, which the %s tier does not run", env.Tier)
 	}
 	if env.ConfigSource != "crds" || !env.Admits(kube.MultiTeamNamespace) {
-		t.Skipf("the broker does not admit the ChatConnections of %s here (config source %s, admitted namespaces %q); bring the tier up with: E2E_TWO_APPS=1 E2E_CONFIG_SOURCE=crds make e2e-fast-up (add E2E_STORE=postgres E2E_REPLICAS=2 for the failover cases)",
+		t.Skipf("the broker does not admit the ChatConnections of %s here (config source %s, admitted namespaces %q); bring the tier up with: E2E_TWO_APPS=1 E2E_CONFIG_SOURCE=crds make e2e-fast-up (add E2E_STORE=postgres E2E_REPLICAS=2 for the failover cases), and run them with: make e2e-two-apps (the Job of make e2e-fast leaves them out)",
 			kube.MultiTeamNamespace, env.ConfigSource, env.ConnectionNamespaces)
 	}
 	return env
@@ -641,6 +641,55 @@ func TestMC_OutboxRowsPostThroughTheirOwnAppAfterAKill(t *testing.T) {
 	f.onlyEnded(before, old.Name)
 }
 
+// bindingSignals are the leader's counters that a message moves when a Binding takes it in: a trigger matched, what was decided about it (started, queued,
+// limited and so on), and a turn that ended. A match that is limited or fails moves no turn outcome, so the first two are held as well as the third.
+type bindingSignals struct{ matched, decisions, outcomes float64 }
+
+// signals reads the counters of the Binding from the leader, 0 for a series that is not there yet.
+func (m *mc) signals(binding string) bindingSignals {
+	m.t.Helper()
+	sum := func(name string) float64 {
+		labels := map[string]string{"binding": binding}
+		many, err := m.replicated(m.ctx)
+		var v float64
+		if err == nil && many {
+			var leader kube.Replica
+			if leader, err = m.reps.WaitLeader(m.ctx, 2*time.Minute); err == nil {
+				v, err = m.reps.Sum(m.ctx, leader, name, labels)
+			}
+		} else if err == nil {
+			v, err = m.agentKourier.Sum(m.ctx, name, labels)
+		}
+		if errors.Is(err, ErrNoSample) {
+			return 0
+		}
+		if err != nil {
+			m.t.Fatal(err)
+		}
+		return v
+	}
+	return bindingSignals{sum("agentkourier_trigger_matched_total"), sum("agentkourier_trigger_decisions_total"), sum("agentkourier_turn_outcomes_total")}
+}
+
+// settledSignals is signals once they have stopped moving: the turn that answered a person a moment ago counts its outcome after its reply is posted, and
+// that increment must not land inside a window that watches for another.
+func (m *mc) settledSignals(binding string) bindingSignals {
+	m.t.Helper()
+	last, stable := m.signals(binding), 0
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
+		time.Sleep(time.Second)
+		if now := m.signals(binding); now == last {
+			if stable++; stable >= 4 {
+				return now
+			}
+		} else {
+			last, stable = now, 0
+		}
+	}
+	m.t.Fatalf("the counters of %s are still moving after 30 seconds: %+v", binding, last)
+	return last
+}
+
 // platformFakeBotToken is the bot token of the fake Slack's default app, the one the platform's Secret slack-fast holds: a token no registered app owns.
 const platformFakeBotToken = "xoxb-fake-test-token"
 
@@ -666,7 +715,7 @@ var botsInLoop = []struct {
 // Binding of its own connection there, and a message that one bot posts starts no turn of the other's Binding, whatever it says. For each bot as the poster, the
 // other bot's Binding has answered a person who mentioned it, and so owns a thread; the poster then posts, as its own bot, a message that mentions the other
 // at the top level of the channel and one in the thread the other owns. The other app is sent the events of both and acks them, which is its intake having
-// seen them, and for as long as the case watches its Binding starts no turn (agentkourier_turn_outcomes_total does not move) and says nothing in either
+// seen them, and for as long as the case watches its Binding starts no turn (none of the Binding's trigger and turn counters moves) and says nothing in either
 // thread. The Binding still answers a person afterwards.
 func TestMC_ABotsPostStartsNoTurnOfAnotherAppsBinding(t *testing.T) {
 	m := newMC(t)
@@ -675,9 +724,6 @@ func TestMC_ABotsPostStartsNoTurnOfAnotherAppsBinding(t *testing.T) {
 	}
 	for _, c := range botsInLoop {
 		m.postedBy(m.answered(c.app, ChannelMCLoop, crServeTimeout), c.app)
-	}
-	completed := func(binding string) float64 {
-		return m.counter("agentkourier_turn_outcomes_total", map[string]string{"binding": binding, "outcome": "completed"})
 	}
 	botMessagesOf := func(channel, ts string, app FakeApp) int {
 		th, err := m.slack.Thread(m.ctx, channel, ts)
@@ -696,7 +742,7 @@ func TestMC_ABotsPostStartsNoTurnOfAnotherAppsBinding(t *testing.T) {
 		poster, other := botsInLoop[pair[0]], botsInLoop[pair[1]]
 		owned := m.answered(other.app, ChannelMCLoop, crServeTimeout) // a thread the other bot's Binding owns
 		thread := owned[0].TS
-		baseline, ownedBefore := completed(other.binding), botMessagesOf(ChannelMCLoop, thread, other.app)
+		baseline, ownedBefore := m.settledSignals(other.binding), botMessagesOf(ChannelMCLoop, thread, other.app)
 		if ownedBefore == 0 {
 			t.Fatalf("%s has no message in the thread it owns: %s", other.app.AppID, describe(owned))
 		}
@@ -723,8 +769,8 @@ func TestMC_ABotsPostStartsNoTurnOfAnotherAppsBinding(t *testing.T) {
 			}
 		}
 		err = Consistently(m.ctx, 15*time.Second, "the Binding of "+other.app.AppID+" to start no turn for a post of "+poster.app.AppID, func(context.Context) (bool, error) {
-			if got := completed(other.binding); got != baseline {
-				return false, fmt.Errorf("%s completed %v turns, from %v: a bot's post started one", other.binding, got, baseline)
+			if got := m.signals(other.binding); got != baseline {
+				return false, fmt.Errorf("the counters of %s are %+v, from %+v: a bot's post moved them", other.binding, got, baseline)
 			}
 			if n := botMessagesOf(ChannelMCLoop, top, other.app); n != 0 {
 				return false, fmt.Errorf("%s answered the top-level post of %s", other.app.AppID, poster.app.AppID)

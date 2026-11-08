@@ -976,3 +976,47 @@ func TestARotatedAwayTokenIsRevokedEvenUnderStrictTokens(t *testing.T) {
 		t.Errorf("auth.test with a token no app ever owned = %v, want invalid_auth", err)
 	}
 }
+
+// A bot's post that mentions another app's bot gets that app an app_mention, as a person's post does, and then the message event; an app the post does not
+// mention gets the message event alone, and the poster neither hears itself mentioned.
+func TestABotPostThatMentionsAnotherAppsBotIsAnAppMentionForIt(t *testing.T) {
+	fake := twoApps(t)
+	smcA, smcB := socketAs(t, fake, appA), socketAs(t, fake, appB)
+	fake.SetMembers("C1", "UBOTA", "UBOTB")
+
+	for name, msg := range map[string]struct {
+		opts     []slack.MsgOption
+		wantType []string // what b is sent, in order
+	}{
+		"a text mention":      {[]slack.MsgOption{text("<@UBOTB> look at this")}, []string{"app_mention", "message"}},
+		"a labelled mention":  {[]slack.MsgOption{text("<@UBOTB|botb> look at this")}, []string{"app_mention", "message"}},
+		"no mention":          {[]slack.MsgOption{text("nothing to see")}, []string{"message"}},
+		"a mention of itself": {[]slack.MsgOption{text("<@UBOTA> me")}, []string{"message"}},
+		"a blocks-only mention": {[]slack.MsgOption{text("see below"), slack.MsgOptionBlocks(slack.NewRichTextBlock("rt",
+			&slack.RichTextSection{Type: slack.RTESection, Elements: []slack.RichTextSectionElement{slack.NewRichTextSectionUserElement("UBOTB", nil)}}))},
+			[]string{"app_mention", "message"}},
+	} {
+		_, ts, err := webAs(fake, appA).PostMessage("C1", msg.opts...)
+		if err != nil {
+			t.Fatalf("%s: a posts: %v", name, err)
+		}
+		_, ownMessage := nextPayload(t, smcA)
+		if ownMessage.Event.Type != "message" {
+			t.Errorf("%s: the poster was sent %q first, want its own message event", name, ownMessage.Event.Type)
+		}
+		for i, want := range msg.wantType {
+			_, p := nextPayload(t, smcB)
+			if p.Event.Type != want {
+				t.Fatalf("%s: b's event %d is a %q, want %q", name, i, p.Event.Type, want)
+			}
+			if p.Event.User != "UBOTA" || p.Event.BotID != "BBOTA" || p.Event.AppID != "AAPPA" || p.Event.Channel != "C1" || p.APIAppID != "AAPPB" {
+				t.Errorf("%s: b's %s is %+v for app %s; want a's bot (user, bot_id, app_id) in b's envelope", name, want, p.Event, p.APIAppID)
+			}
+		}
+		if got := len(fake.EventEnvelopes("AAPPB", "C1", ts)); got != len(msg.wantType) {
+			t.Errorf("%s: the fake recorded %d envelopes for b, want %d", name, got, len(msg.wantType))
+		}
+		quiet(t, "a", smcA)
+		quiet(t, "b", smcB)
+	}
+}

@@ -33,7 +33,7 @@
 # either, and the scenarios that are about the custom resources (the CR_ tests) skip on the ConfigMap route. Re-running with the other value moves
 # the tier over in place, and back: the custom resources stay in the cluster, unread, when the tier goes back to files.
 #
-# E2E_TWO_APPS=1 (with E2E_CONFIG_SOURCE=crds) runs a broker that serves two Slack apps (spec D51; the MC_ tests of test/e2e): the platform's
+# E2E_TWO_APPS=1 (with E2E_CONFIG_SOURCE=crds) runs a broker that serves two Slack apps (spec D51; the MC_ tests of test/e2e, which make e2e-two-apps runs, and make e2e-fast does not): the platform's
 # ChatConnection (slack-fast, the fake Slack's default app) and a team's, team-a, which brings its own Slack app and its own Secret, granted by a Role of
 # its own. The platform admits the namespaces team-a, team-b and team-c (hack/kind/two-apps-values.yaml), and each connection has a Binding
 # (hack/kind/fast/two-apps). The fake Slack hosts the second app and a third (team-b's) in every tier (fast/doubles.yaml). On E2E_STORE=postgres with

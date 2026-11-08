@@ -79,7 +79,7 @@ image-check: image image-testhooks ## Prove the production image's binary lacks 
 release-image: ## Build the multi-arch release image to bin/release (VERSION=vX.Y.Z); PUSH=1 REGISTRY=<repo> CHART_REGISTRY=oci://<repo> also pushes; see RELEASING.md
 	VERSION="$(VERSION)" REGISTRY="$(REGISTRY)" CHART_REGISTRY="$(CHART_REGISTRY)" PUSH="$(PUSH)" hack/release/release.sh
 
-e2e-fast-up: ## Bring up the fast E2E tier (kind, Alertmanager, fake Slack, stub agent, sink); E2E_STORE=postgres runs Agent Kourier on Postgres, with E2E_REPLICAS=2 on two replicas (S16, failover); E2E_CONFIG_SOURCE=crds reads the config from custom resources, not the ConfigMap, and with E2E_TWO_APPS=1 serves a team's Slack app beside the platform's (the MC_ tests)
+e2e-fast-up: ## Bring up the fast E2E tier (kind, Alertmanager, fake Slack, stub agent, sink); E2E_STORE=postgres runs Agent Kourier on Postgres, with E2E_REPLICAS=2 on two replicas (S16, failover); E2E_CONFIG_SOURCE=crds reads the config from custom resources, not the ConfigMap, and with E2E_TWO_APPS=1 serves a team's Slack app beside the platform's (make e2e-two-apps runs the MC_ tests)
 	hack/kind/up-fast.sh
 
 e2e-fast: ## Run the E2E tests in the fast tier, as a Job (the tier must be up)
@@ -106,7 +106,7 @@ e2e-crs-scenarios: ## The custom resource scenarios that need kubectl or Helm: u
 e2e-crs-migration: ## Move the fast tier between the ConfigMap and the custom resources with Helm, and back, with a session in flight (the tier up on Postgres, two replicas, files)
 	hack/kind/crs-migration.sh
 
-e2e-two-apps: ## Take a team off the platform's admission list with Helm, and put it back (the MC_ phases the Job cannot run): the fast tier up on E2E_TWO_APPS=1 E2E_CONFIG_SOURCE=crds
+e2e-two-apps: ## Run the MC_ tests (a broker with two Slack apps) as a Job of their own, then take a team off the platform's admission list with Helm and put it back: the fast tier up on E2E_TWO_APPS=1 E2E_CONFIG_SOURCE=crds
 	hack/kind/two-apps.sh
 
 sandbox-up: ## Dogfood tier on the full tier: Agent Kourier on a real Slack, a read-only SRE agent on a real model, seeded faults (secrets file: SANDBOX_ENV)

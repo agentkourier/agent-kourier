@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -277,5 +278,49 @@ func TestTheAdmissionListGoesInTheRouteUpgradeOnly(t *testing.T) {
 	}
 	if !strings.Contains(upgrades[1], "/hack/kind/crds-values.yaml -f /v/two-apps.yaml") {
 		t.Errorf("the route upgrade %q does not take the admission list after the overlay", upgrades[1])
+	}
+}
+
+// TestTheTwoAppsScriptRunsEveryMCTest: the main Job's pattern leaves the MC_ tests out (TestTheRunnerJobRunsEveryE2ETest), so make e2e-two-apps is what runs them,
+// all of them in one Job pass, and then the admission test in its two phases. A test of that family that the script's pattern did not select would run nowhere.
+func TestTheTwoAppsScriptRunsEveryMCTest(t *testing.T) {
+	script, err := os.ReadFile("../../hack/kind/two-apps.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk, err := os.ReadFile("../../Makefile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(script), "run all-mc '^TestMC_' ''") {
+		t.Error("two-apps.sh does not run every test named TestMC_ in a Job pass of its own, with no phase")
+	}
+	for _, phase := range []string{"phase removed", "phase restored"} {
+		if !strings.Contains(string(script), phase) {
+			t.Errorf("two-apps.sh does not run the %q of the admission test", phase)
+		}
+	}
+	if !strings.Contains(string(mk), "e2e-two-apps:") || !strings.Contains(string(mk), "hack/kind/two-apps.sh") {
+		t.Error("the Makefile has no target e2e-two-apps that runs hack/kind/two-apps.sh")
+	}
+	files, err := filepath.Glob("../e2e/mc*_test.go")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no MC_ test files: %v", err)
+	}
+	n := 0
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range regexp.MustCompile(`(?m)^func (Test\w+)\(`).FindAllStringSubmatch(string(raw), -1) {
+			n++
+			if !strings.HasPrefix(m[1], "TestMC_") {
+				t.Errorf("%s in %s is a test of the MC_ files that is not named TestMC_..., so no pattern selects it", m[1], filepath.Base(f))
+			}
+		}
+	}
+	if n < 6 {
+		t.Errorf("found %d MC_ tests; the scan is not looking at them", n)
 	}
 }

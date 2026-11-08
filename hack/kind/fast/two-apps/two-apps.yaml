@@ -107,7 +107,8 @@ spec:
     output: final
 ---
 # One channel, CMCLOOP, with the bots of both apps in it and a Binding of each connection on it: the case of two apps in one channel (the bot-loop scenario).
-# A message that one bot posts must start no turn of the other's Binding, whatever it says: the mention trigger is for people.
+# A message that one bot posts, mentioning the other, must start no turn of the other's Binding: a bot's mention starts a turn by default (the app_mention
+# event of Slack carries it), and what stops the loop is the broker's guard against the bot of another connection it serves, not the trigger.
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata: {name: team-a-loop, namespace: team-a}

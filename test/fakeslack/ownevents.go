@@ -1,6 +1,10 @@
 package fakeslack
 
-import "slices"
+import (
+	"regexp"
+	"slices"
+	"strings"
+)
 
 // WithoutOwnPostEvents stops the fake sending Socket Mode events for the bot's
 // own posts and updates. By default every bot post is delivered as a message
@@ -86,7 +90,8 @@ func (s *Server) queueOwnLocked(channel string, prev, cur *Message) {
 // Each event goes to the app that posted, first, and then to every other app
 // that is in the channel (recipients), each over its own connection and in an
 // envelope made for it. The others see the post as a bot message: a message
-// event with the poster's user, bot_id and app_id.
+// event with the poster's user, bot_id and app_id, and one whose bot the post
+// mentions is sent an app_mention with the same fields before it.
 //
 // UNCONFIRMED(WP-04): a message event for each bot post with no subtype, and
 // with bot_id and app_id; that blocks are included and metadata is not; a
@@ -113,19 +118,66 @@ func (s *Server) flushOwn() {
 		}
 		body := s.ownEventBody(e)
 		for _, a := range targets {
-			id, err := s.eventCallbackTo(a, body)
-			if err != nil {
-				continue // ErrNoConnection is the dropped case
+			// An app whose bot the post mentions is sent an app_mention first, as a person's post is (userMessage), with the poster's bot_id.
+			bodies := []map[string]any{body}
+			if a.AppID != poster.AppID && mentionsBot(e, a) {
+				bodies = []map[string]any{s.appMentionBody(e), body}
 			}
-			s.mu.Lock()
-			k := ownKey{e.channel, e.cur.TS}
-			if s.ownSent[k] == nil {
-				s.ownSent[k] = &ownRecord{poster: poster.AppID, sent: map[string][]string{}}
+			for _, b := range bodies {
+				id, err := s.eventCallbackTo(a, b)
+				if err != nil {
+					continue // ErrNoConnection is the dropped case
+				}
+				s.mu.Lock()
+				k := ownKey{e.channel, e.cur.TS}
+				if s.ownSent[k] == nil {
+					s.ownSent[k] = &ownRecord{poster: poster.AppID, sent: map[string][]string{}}
+				}
+				s.ownSent[k].sent[a.AppID] = append(s.ownSent[k].sent[a.AppID], id)
+				s.mu.Unlock()
 			}
-			s.ownSent[k].sent[a.AppID] = append(s.ownSent[k].sent[a.AppID], id)
-			s.mu.Unlock()
 		}
 	}
+}
+
+// userInBlocks finds a user element of blocks, which a mention in rich text is: "user_id":"U...".
+var userInBlocks = regexp.MustCompile(`"user_id"\s*:\s*"([A-Z0-9]+)"`)
+
+// mentionsBot says whether the bot post e mentions the bot of app a: <@U...> in its text, or a user element naming it in its blocks. A direct message
+// gets no app_mention, as a person's does not (Mention).
+//
+// UNCONFIRMED(MC-S): that Slack sends an app_mention for a bot's post that mentions the app (docs/spikes/slack-mention-probe.md says it does for a text
+// mention), and, for a post whose blocks mention the app and whose text does not, that it does so for the user element of a rich_text block; the fake does.
+func mentionsBot(e ownEvent, a App) bool {
+	if e.prev != nil || strings.HasPrefix(e.channel, "D") {
+		return false
+	}
+	if strings.Contains(e.cur.Text, "<@"+a.BotUser+">") || strings.Contains(e.cur.Text, "<@"+a.BotUser+"|") {
+		return true
+	}
+	for _, m := range userInBlocks.FindAllSubmatch(e.cur.Blocks, -1) {
+		if string(m[1]) == a.BotUser {
+			return true
+		}
+	}
+	return false
+}
+
+// appMentionBody builds the app_mention event for the bot post e: the message's own fields, with the poster's user, bot_id and app_id.
+//
+// UNCONFIRMED(MC-S): the fields of an app_mention for a bot's post beyond the message's own (user, bot_id, app_id, text, ts, channel).
+func (s *Server) appMentionBody(e ownEvent) map[string]any {
+	ev := map[string]any{
+		"type": "app_mention", "user": e.cur.User, "bot_id": e.cur.BotID, "app_id": e.cur.AppID, "text": e.cur.Text,
+		"ts": e.cur.TS, "event_ts": e.cur.TS, "channel": e.channel,
+	}
+	if e.cur.ThreadTS != "" {
+		ev["thread_ts"] = e.cur.ThreadTS
+	}
+	if e.cur.Blocks != nil {
+		ev["blocks"] = e.cur.Blocks
+	}
+	return ev
 }
 
 // ownEventBody builds the Events API event for e.

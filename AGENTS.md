@@ -75,7 +75,7 @@ golangci-lint runs as `go tool golangci-lint`, never a global install.
   release upgraded with `hack/kind/crds-values.yaml`, as the chart README says to move. The default, `files`, is the ConfigMap route, which each tier's values name (`config.source: files`) because the chart's own default is `crds`. The bring-up moves a tier
   between the two in place; `e2e-run.sh` reads the source from the Deployment, and the `CR_` tests skip on files. Run `make e2e-fast` on each source before
   a change to `internal/config`, the chart or `hack/kind`.
-- `E2E_TWO_APPS=1` (with `E2E_CONFIG_SOURCE=crds`) adds a team's Slack app to the fast tier, which the `MC_` tests drive; `make e2e-two-apps` (`hack/kind/two-apps.sh`) runs the one that changes the admission list with Helm.
+- `E2E_TWO_APPS=1` (with `E2E_CONFIG_SOURCE=crds`) adds a team's Slack app to the fast tier, which the `MC_` tests drive. `make e2e-fast` does not run them (their failover cases would take its Job near its time limit); `make e2e-two-apps` (`hack/kind/two-apps.sh`) runs them as a Job of their own (`E2E_RUN=^TestMC_`), then the one that changes the admission list with Helm.
 - `make e2e-crs-scenarios` runs what the Job cannot, because its image has no kubectl or Helm (`hack/kind/crs-scenarios.sh`; the fast tier up on
   `E2E_CONFIG_SOURCE=crds`): what each client does with an unknown field, what `kubectl get` shows, a
   Binding stored before a tightening of the schema, and `kubectl wait`. `make e2e-crs-migration` (`hack/kind/crs-migration.sh`) moves a release between the ConfigMap

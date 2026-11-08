@@ -17,6 +17,9 @@ type postHold struct {
 // app's other methods, and every other app, are not held. Holding an app that is held already changes nothing. It is for a test that needs a post to be
 // certainly in flight: a leader killed while its post waits here leaves the row pending. It fails with ErrNotFound for an app the Server does not host.
 //
+// The holds are safe only because the e2e tests run one after another (none calls t.Parallel): a hold is the fake's, not a test's, so two tests that held the
+// same app at once would release each other's.
+//
 // UNCONFIRMED(MC-11): that a call whose client has gone is never applied; Slack may apply a request that reached it.
 func (s *Server) HoldPosts(appID string) error {
 	if _, ok := s.appByID(appID); !ok {

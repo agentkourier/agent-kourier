@@ -329,6 +329,14 @@ func TestTheRunnerJobRunsEveryE2ETest(t *testing.T) {
 			if m[1] == "TestMain" {
 				continue
 			}
+			// The MC_ tests (a broker with two Slack apps) are make e2e-two-apps's, in a Job of its own: the main Job leaves them out, so that its run stays well
+			// inside the Job's time limit (TestTheTwoAppsScriptRunsEveryMCTest).
+			if strings.HasPrefix(m[1], "TestMC_") {
+				if re.MatchString(m[1]) {
+					t.Errorf("the Job's pattern %q selects %s (%s): the MC_ tests are run by make e2e-two-apps, not by the main Job", pattern, m[1], filepath.Base(f))
+				}
+				continue
+			}
 			seen++
 			if !re.MatchString(m[1]) {
 				t.Errorf("the Job's pattern %q does not select %s (%s), so the Job would never run it", pattern, m[1], filepath.Base(f))
@@ -339,7 +347,7 @@ func TestTheRunnerJobRunsEveryE2ETest(t *testing.T) {
 		t.Errorf("found %d e2e tests; the scan is not looking at them", seen)
 	}
 	// Each family the files hold has a test the pattern selects, named here: a family that is dropped from the pattern fails even if the scan misses it.
-	for _, name := range []string{"TestSmoke", "TestFault_X", "TestS1_X", "TestAX_X", "TestA2A_APlainPodThatRestartedAnswersAThreadFromAFreshContext", "TestVerify_BindingsThatCannotBeServedAreNotReadyAndTheLeaderSaysWhy", "TestCR_X", "TestMC_X"} {
+	for _, name := range []string{"TestSmoke", "TestFault_X", "TestS1_X", "TestAX_X", "TestA2A_APlainPodThatRestartedAnswersAThreadFromAFreshContext", "TestVerify_BindingsThatCannotBeServedAreNotReadyAndTheLeaderSaysWhy", "TestCR_X"} {
 		if !re.MatchString(name) {
 			t.Errorf("the Job's pattern %q does not select %s, so it would never run", pattern, name)
 		}

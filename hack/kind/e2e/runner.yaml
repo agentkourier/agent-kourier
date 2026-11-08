@@ -94,7 +94,8 @@ metadata:
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: e2e-runner-team}
 subjects: [{kind: ServiceAccount, name: e2e-runner, namespace: e2e}]
 ---
-# The scenarios of a broker that serves several Slack apps (the MC_ tests; they skip unless the broker admits team-a's namespace, E2E_TWO_APPS=1 in
+# The scenarios of a broker that serves several Slack apps (the MC_ tests, which this Job's pattern leaves out: make e2e-two-apps runs them in a Job of its own,
+# with E2E_RUN=^TestMC_; they skip unless the broker admits team-a's namespace, E2E_TWO_APPS=1 in
 # up-fast.sh), which e2e-run.sh makes the namespaces team-a, team-b and team-c empty for. team-a holds a ChatConnection, a Binding and two Secrets that
 # the tier makes (hack/kind/fast/two-apps): the runner reads the Binding's status, and changes one Secret, the Slack tokens, as a team
 # does that fixes a token. It never reads a Secret, and has no get on one at all.
@@ -210,12 +211,12 @@ spec:
         - name: e2e
           image: agent-kourier-e2e/runner:dev
           imagePullPolicy: Never
-          args: ["-test.v", "-test.run=^Test(Smoke|Fault.*|S[0-9]+_.*|AX_.*|A2A_.*|Verify_.*|CR_.*|MC_.*)$", "-test.timeout=20m"]
+          args: ["-test.v", "-test.run=^Test(Smoke|Fault.*|S[0-9]+_.*|AX_.*|A2A_.*|Verify_.*|CR_.*)$", "-test.timeout=20m"]
           # The tier the Job runs in: e2e-run.sh puts fast or full here, so that a test can tell a tier
           # that has Agent Kourier from one that does not yet.
           # E2E_CONFIG_SOURCE is where the tier's Agent Kourier reads its config from, files (the ConfigMap) or crds (custom resources): e2e-run.sh
           # reads it from the Deployment as it is now, so that a tier moved between the two in place is run as it is, and the CR_ tests skip on files.
           # E2E_PHASE is the part of a scenario that a script runs between its own steps (hack/kind/crs-migration.sh, hack/kind/two-apps.sh); empty in an ordinary run.
-          # E2E_CONNECTION_NAMESPACES is the broker's admission list, as its Deployment has it (e2e-run.sh reads it): the MC_ tests skip unless it holds team-a.
+          # E2E_CONNECTION_NAMESPACES is the broker's admission list, as its Deployment has it (e2e-run.sh reads it): the MC_ tests (not in this pattern; E2E_RUN=^TestMC_ or make e2e-two-apps) skip unless it holds team-a.
           env: [{name: E2E_TIER, value: "@TIER@"}, {name: E2E_STUB_URL, value: "@STUB_URL@"}, {name: E2E_CONFIG_SOURCE, value: "@CONFIG_SOURCE@"}, {name: E2E_PHASE, value: "@PHASE@"}, {name: E2E_CONNECTION_NAMESPACES, value: "@CONNECTION_NAMESPACES@"}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}

@@ -66,6 +66,17 @@ func (r *Replicas) Counter(ctx context.Context, rep kube.Replica, name string, l
 	return NewAgentKourier(base).Counter(ctx, name, labels)
 }
 
+// Sum is AgentKourier.Sum on the replica's own /metrics.
+func (r *Replicas) Sum(ctx context.Context, rep kube.Replica, name string, labels map[string]string) (float64, error) {
+	base := r.base(rep)
+	if base == "" {
+		return 0, fmt.Errorf("e2e: no address for replica %s", rep.ID())
+	}
+	ctx, cancel := context.WithTimeout(ctx, r.ask)
+	defer cancel()
+	return NewAgentKourier(base).Sum(ctx, name, labels)
+}
+
 // AuditEntries reads the persisted audit rows of one replica.
 func (r *Replicas) AuditEntries(ctx context.Context, rep kube.Replica) ([]store.AuditEntry, error) {
 	base := r.base(rep)
