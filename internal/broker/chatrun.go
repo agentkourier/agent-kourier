@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -87,18 +88,28 @@ func RunPlatform(ctx context.Context, runner PlatformRunner, sink chat.Sink, p R
 	}
 }
 
-// ChooseConnection returns the only ChatConnection of snap, with the keys of its credentials Secret that its
-// platform needs (platformKeys) read through secrets. v1 serves exactly one, and only a platform that has an adapter
-// (Slack, in Socket Mode). Anything else is an error wrapping ErrWiring. The tokens are those of the snapshot at the call: Run reads them at start, and again when the
+// ChooseConnection returns the ChatConnection this broker runs, with the keys of its credentials Secret that its
+// platform needs (platformKeys) read through secrets. With the custom resources own is the broker's own connection
+// (RunConfig.ChatConnection), found by its reference: the snapshot may hold the ChatConnections of the admitted namespaces
+// besides it, and those are not run yet, so their Secrets are not read here and none of them can fail this. With the files
+// own is the zero value, and the directory must hold exactly one ChatConnection, as the broker serves one. The connection must be on a platform that has an adapter (Slack, in Socket Mode). Anything else is an
+// error wrapping ErrWiring. The tokens are those of the snapshot at the call: Run reads them at start, and again when the
 // leader half starts, since a standby may lead long after it started. A change of the connection or of its Secret applies
 // to a running leader on restart, and nothing flags it as a failed reload (the stale flag is for reloads that failed): the
 // verification of the Bindings tells of tokens that differ from these (ChatCredentialsChanged), and logs a Binding that a reload moved
 // to another connection when it stops verifying it.
-func ChooseConnection(ctx context.Context, snap *config.Snapshot, secrets identity.SecretReader) (Connection, error) {
+func ChooseConnection(ctx context.Context, snap *config.Snapshot, own v1alpha1.ObjectRef, secrets identity.SecretReader) (Connection, error) {
 	if snap == nil {
 		return Connection{}, errors.New("broker: the config has not loaded yet")
 	}
 	conns := snap.ChatConnections()
+	if own != (v1alpha1.ObjectRef{}) {
+		i := slices.IndexFunc(conns, func(c *v1alpha1.ChatConnection) bool { return c.Namespace == own.Namespace && c.Name == own.Name })
+		if i < 0 {
+			return Connection{}, fmt.Errorf("%w: ChatConnection %s is not in the config: AGENTKOURIER_CHAT_CONNECTION names the connection this broker runs", ErrWiring, v1alpha1.NamespacedName(own.Namespace, own.Name))
+		}
+		conns = conns[i : i+1]
+	}
 	if len(conns) != 1 {
 		names := make([]string, len(conns))
 		for i, c := range conns {

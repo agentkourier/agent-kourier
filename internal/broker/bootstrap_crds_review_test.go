@@ -53,7 +53,7 @@ func TestBootstrapCRDsKeepsTheOwnConnectionWhenItIsMadeAgainInvalid(t *testing.T
 	if n := len(c.Reloader.Current().Bindings()); n != 2 {
 		t.Errorf("%d Bindings served; want both, on the connection that was kept", n)
 	}
-	conn, err := ChooseConnection(t.Context(), c.Reloader.Current(), c.Secrets)
+	conn, err := ChooseConnection(t.Context(), c.Reloader.Current(), testConnection, c.Secrets)
 	if err != nil {
 		t.Fatalf("ChooseConnection = %v; a takeover would exit with it", err)
 	}
@@ -120,7 +120,7 @@ func TestBootstrapCRDsKeepsRoutingWhenEverythingIsDeletedTogether(t *testing.T) 
 	if n := len(rep.Snapshot.Bindings()); n != 2 || len(rep.Rejections) != 0 {
 		t.Errorf("%d Bindings served, rejections %+v; want both served from the hold and nothing rejected", n, rep.Rejections)
 	}
-	if _, err := ChooseConnection(t.Context(), rep.Snapshot, c.Secrets); err != nil {
+	if _, err := ChooseConnection(t.Context(), rep.Snapshot, testConnection, c.Secrets); err != nil {
 		t.Errorf("ChooseConnection = %v; a takeover during the hold would exit with it", err)
 	}
 	if _, ok := rep.Snapshot.Binding("sre", "sre-alerts"); !ok {
