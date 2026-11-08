@@ -530,6 +530,25 @@ func (s *Source) BindingStatus(namespace, name string) (BindingStatus, bool, err
 	return BindingStatus{UID: u.GetUID(), Generation: u.GetGeneration(), ResourceVersion: u.GetResourceVersion(), Conditions: ConditionsOf(u)}, true, nil
 }
 
+// ConnectionBindings returns the "namespace/name" of each Binding that names the ChatConnection namespace/name, sorted, and whether
+// that ChatConnection exists, whether or not the broker serves it. It reads the caches and nothing else, so the connection need not
+// be one the Set lists: it is how the broker finds the Bindings of a connection it served before and does not now (a namespace taken
+// off the admission list), which no read of the Set names. A Binding that is invalid still says which connection it means, as for
+// UnservedConnection.Bindings. It fails with ErrNotSynced until the caches have synced, and with ErrStopped after Stop.
+func (s *Source) ConnectionBindings(namespace, name string) (bindings []string, exists bool, err error) {
+	l, err := s.list()
+	if err != nil {
+		return nil, false, err
+	}
+	want := key{config.KindChatConnection, namespace, name}
+	for _, u := range l.bindings {
+		if refOf(config.KindChatConnection, u, "spec", "chat", "connectionRef") == want {
+			bindings = append(bindings, u.GetNamespace()+"/"+u.GetName())
+		}
+	}
+	return bindings, l.hasConnection[want], nil
+}
+
 // BindingEvents counts the events (an object added, changed or deleted) that the Binding informer has delivered, and only grows.
 // A reader of the statuses that sees it unchanged since it last looked knows that no Binding has changed since: the cache is
 // updated before the event is counted, so a change that the count has not caught up with yet is seen at the next look. It reads

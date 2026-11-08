@@ -488,3 +488,40 @@ func TestAPlaceThatADeletionFreesIsTakenAtTheNextPoll(t *testing.T) {
 		t.Errorf("c01 served: %v, unserved %+v; want c01 gone and nothing left out", serves("c01"), r.Report().UnservedConnections)
 	}
 }
+
+// ConnectionBindings answers for any ChatConnection of the cluster, served or not: whether it exists, and the Bindings that name it,
+// sorted, the unreadable one too. The broker asks it of a connection it served before and does not now, which no read of the Set lists.
+func TestConnectionBindingsNamesTheBindingsOfAnyConnection(t *testing.T) {
+	leakCheck(t)
+	objs := corpus(t)
+	broken := bindingOn(objs, "payments", "broken-on-c", "team-c", "slack")
+	_ = unstructured.SetNestedField(broken.Object, "#general", "spec", "chat", "channel")
+	extra := []*unstructured.Unstructured{
+		teamConnection(objs, "team-a", "slack", created),
+		teamConnection(objs, "team-c", "slack", created), // not admitted
+		bindingOn(objs, "team-c", "on-c", "team-c", "slack"),
+		bindingOn(objs, "sre", "also-on-c", "team-c", "slack"),
+		broken,
+		bindingOn(objs, "team-a", "on-a", "team-a", "slack"),
+		bindingOn(objs, "sre", "dangling", "team-z", "gone"), // names no connection that exists
+	}
+	src, _ := newCluster(t, append(objs, extra...)...).startAdmitted(t, nil, "team-a")
+
+	for name, tc := range map[string]struct {
+		namespace, name string
+		want            []string
+		exists          bool
+	}{
+		"a connection that is not admitted": {"team-c", "slack", []string{"payments/broken-on-c", "sre/also-on-c", "team-c/on-c"}, true},
+		"a connection that is served":       {"team-a", "slack", []string{"team-a/on-a"}, true},
+		"the own connection":                {"agent-kourier-system", "slack-main", []string{"sre/chat-only", "sre/sre-alerts"}, true},
+		"one that does not exist":           {"team-z", "gone", []string{"sre/dangling"}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, exists, err := src.ConnectionBindings(tc.namespace, tc.name)
+			if err != nil || exists != tc.exists || !slices.Equal(got, tc.want) {
+				t.Errorf("ConnectionBindings(%s/%s) = %v, %v, %v; want %v, %v", tc.namespace, tc.name, got, exists, err, tc.want, tc.exists)
+			}
+		})
+	}
+}
