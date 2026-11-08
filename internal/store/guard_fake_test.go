@@ -58,11 +58,6 @@ func (f *fakeAdapter) AttributeConnection(_ context.Context, _ string) (store.At
 	return zero[store.AttributedRows](), f.err
 }
 
-func (f *fakeAdapter) AbandonOutboxBefore(_ context.Context, _ time.Time, _ time.Time) ([]string, error) {
-	f.record("AbandonOutboxBefore")
-	return zero[[]string](), f.err
-}
-
 func (f *fakeAdapter) AbandonStrandedReplies(_ context.Context, _ time.Time, _ time.Duration) (int, error) {
 	f.record("AbandonStrandedReplies")
 	return zero[int](), f.err
