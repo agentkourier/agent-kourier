@@ -63,7 +63,7 @@ Counts are of entries. A length in bytes is of bytes.
 | A regular expression of `match`, `exclude` or `extract` | `512`<!--limit:regex--> bytes | Refused at load, and by the API server. | None |
 | The program of one regular expression of `match`, `exclude` or `extract` | `2000`<!--limit:regexInstructions--> instructions: the length of the program Go compiles the expression to (`regexp/syntax`, after `Simplify`, counting the failure and match instructions). Measured with Go 1.27: the regular expressions of this repository's example Bindings are 10 to 98, `.{0,900}` is 1802 and `.{0,1000}` is 2002. | Refused at load, with the field, the count and the limit. The API server cannot count instructions, so on the custom resource route it creates the object and the Binding shows `Accepted` as `False` with the reason `InvalidSpec`. The check ends at the first regular expression it refuses, so the message names one. [The upgrade page](../how-to/upgrade.md#upgrade-to-the-release-that-bounds-what-a-triggers-regular-expressions-cost) has the errors. | None |
 | The programs of all the regular expressions of a Binding, over all its triggers | `5000`<!--limit:bindingRegexInstructions--> instructions | Refused at load, as the row above says, at the regular expression that takes the sum past it. The trigger cap is 50, but the budget is what a Binding with many triggers meets first: the trigger of [Investigate Alertmanager alerts](../how-to/investigate-alertmanager-alerts.md) compiles to 346 instructions (370 with the `exclude` of the heartbeat, as in the chart's CI values and the test fixture), so 14 of it fit and the 15th is refused (13 and 14 with the exclude). About half of that is the bounded repeat `{1,32}` of the optional bracket tag, 67 instructions each of the three times it appears, where `[^\]]*` is 6. | None |
-| `promptTemplate` of a `botMessage` trigger | `8192`<!--limit:promptTemplate--> bytes | Refused at load without being parsed, and by the API server. | None |
+| `promptTemplate` of a `botMessage` or `personMessage` trigger | `8192`<!--limit:promptTemplate--> bytes | Refused at load without being parsed, and by the API server. | None |
 | `spec.agent.name` of a Binding | `253`<!--limit:agentName--> bytes | Refused at load, and by the API server. | None |
 | `spec.identity.userId` of a Binding | `256`<!--limit:userId--> bytes | Refused at load, and by the API server. | None |
 | Headers of an AgentBackend (`spec.headers`) | `32`<!--limit:headers--> | Refused at load, and by the API server. | None |
@@ -97,7 +97,7 @@ what is refused at load before you apply a config.
 
 ## Write a prompt template
 
-A `botMessage` trigger's `promptTemplate` is text that runs over values taken out of a message. These limits keep what it can do small.
+A `botMessage` or `personMessage` trigger's `promptTemplate` is text that runs over values taken out of a message. These limits keep what it can do small.
 [The release that limits prompt templates](../how-to/upgrade.md#upgrade-to-the-release-that-limits-prompt-templates) has the errors.
 
 | Limit | Value | Past it | Setting |
@@ -180,7 +180,7 @@ task is cancelled, and the refusal is audited. [The agent contract](agent-contra
 
 | Limit | Value | Past it | Setting |
 |---|---|---|---|
-| Starts of a `botMessage` trigger | The `rateLimit` (`maxRuns` in any `per`, and `maxConcurrent` at once) and `maxRunsPerDay`, all required | The start is not made: no turn, nothing in the alert's thread. It is counted in `agentkourier_trigger_limited_total` and in one digest line for the window. Only a start is limited: a repeat, a close and a note never are. See [Limits and the digest line](chat-triggers.md#limits-and-the-digest-line). | `limits` of the trigger |
+| Starts of a `botMessage` or `personMessage` trigger | The `rateLimit` (`maxRuns` in any `per`, and `maxConcurrent` at once) and `maxRunsPerDay`, all required | The start is not made: no turn, nothing in the alert's thread. It is counted in `agentkourier_trigger_limited_total` and in one digest line for the window. Only a start is limited: a repeat, a close and a note never are. See [Limits and the digest line](chat-triggers.md#limits-and-the-digest-line). | `limits` of the trigger |
 | Starts of a `mention` trigger (a person's mention) | No limit | Nothing stops a person's mention from starting a turn. | None: a `mention` trigger takes no `limits` field |
 | A bot's mention of Agent Kourier, across every bot on a Binding | `3`<!--limit:botRuns--> in any `30m`<!--limit:botPer-->, `1`<!--limit:botConcurrent--> at a time, and `20`<!--limit:botPerDay--> in any `24h`<!--limit:botDay--> | The start is not made: no turn and nothing in the thread. It is counted, audited and in the window's digest line. | `chat.botMentions: none` turns bot mentions off. The numbers have no setting. |
 | How much of a message field a trigger's regular expressions read | The first `16 KiB`<!--limit:matchedField--> of each of the fields `text`, `title`, `link`, `fallback`, `footer` and `body`, cut at a character boundary (a character that the cut would split is left out whole). `match`, `exclude` and `extract` all read the same head. | The rest of the field is not read: a regular expression finds nothing that is past it, and one that ends in `$` ends at the end of the head. The message is otherwise unchanged. | None |

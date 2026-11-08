@@ -37,9 +37,10 @@ type TriggerRun struct {
 	Trigger int
 	// Key is the alert's message: its connection, channel and ts as the thread.
 	Key ConversationKey
-	// SessionThread is the thread of the session that a bot's mention is a turn of, whether or not the mention opened it. Empty
-	// means Key.Thread and a start that owns its session. Rate and daily count messages by Key; concurrency finds the session by
-	// this, and counts a mention only while its own turn is queued or began the session's task (TaskTurn.Mention).
+	// SessionThread is the thread of the session that a bot's mention, or a person's message of a personMessage trigger, is a turn
+	// of, whether or not it opened it (a person's message always does). Empty means Key.Thread and a start that owns its session,
+	// as an alert's does. Rate and daily count messages by Key; concurrency finds the session by this, and counts such a start only
+	// while its own turn is queued or began the session's task (TaskTurn.Mention).
 	SessionThread string
 	// At is when the start was decided. The windows of the limits end here.
 	At time.Time

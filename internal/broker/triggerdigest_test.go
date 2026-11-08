@@ -157,7 +157,7 @@ func TestTheDigestIsOneLineInTheChannelWhenTheWindowEnds(t *testing.T) {
 	if p.Connection != digestConn {
 		t.Errorf("post connection = %q; want %q, the connection of the starts the limits stopped: its app posts the line", p.Connection, digestConn)
 	}
-	if want := "7 bot messages not investigated in the last 10m (rate limit)."; p.Out.Message == nil || p.Out.Message.Fallback != want {
+	if want := "7 messages not investigated in the last 10m (rate limit)."; p.Out.Message == nil || p.Out.Message.Fallback != want {
 		t.Errorf("the line = %+v; want %q", p.Out.Message, want)
 	}
 	if err := p.Out.Validate(); err != nil {
@@ -215,31 +215,33 @@ func TestEachWindowAndTriggerHasItsOwnDigest(t *testing.T) {
 	}
 	slices.Sort(lines)
 	want := []string{
-		"1 bot message not investigated in the last 10m (rate limit).",
-		"1 bot message not investigated in the last 10m (rate limit).",
-		"2 bot messages not investigated in the last 10m (rate limit).",
+		"1 message not investigated in the last 10m (rate limit).",
+		"1 message not investigated in the last 10m (rate limit).",
+		"2 messages not investigated in the last 10m (rate limit).",
 	}
 	if !slices.Equal(lines, want) || len(ids) != 3 {
 		t.Errorf("lines %q with IDs %v; want three digests with three IDs", lines, ids)
 	}
 }
 
+// The line counts messages, whichever trigger took them, a bot's or a person's: the window is a trigger's place in the list,
+// which a reload can give another type, so the line says nothing that only one type's messages are.
 func TestTheDigestSaysWhyAndHowLong(t *testing.T) {
 	for _, tt := range []struct {
 		name string
 		d    store.TriggerDigest
 		want string
 	}{
-		{"one alert", digestOf(10*time.Minute, store.LimitRate, 1), "1 bot message not investigated in the last 10m (rate limit)."},
-		{"several", digestOf(10*time.Minute, store.LimitRate, 7), "7 bot messages not investigated in the last 10m (rate limit)."},
-		{"concurrency", digestOf(10*time.Minute, store.LimitConcurrent, 2), "2 bot messages not investigated in the last 10m (concurrency limit)."},
-		{"daily", digestOf(time.Hour, store.LimitDaily, 4), "4 bot messages not investigated in the last 1h (daily cap)."},
-		{"hours and minutes", digestOf(90*time.Minute, store.LimitRate, 2), "2 bot messages not investigated in the last 1h30m (rate limit)."},
-		{"seconds", digestOf(30*time.Second, store.LimitRate, 2), "2 bot messages not investigated in the last 30s (rate limit)."},
-		{"a day", digestOf(24*time.Hour, store.LimitDaily, 2), "2 bot messages not investigated in the last 24h (daily cap)."},
+		{"one alert", digestOf(10*time.Minute, store.LimitRate, 1), "1 message not investigated in the last 10m (rate limit)."},
+		{"several", digestOf(10*time.Minute, store.LimitRate, 7), "7 messages not investigated in the last 10m (rate limit)."},
+		{"concurrency", digestOf(10*time.Minute, store.LimitConcurrent, 2), "2 messages not investigated in the last 10m (concurrency limit)."},
+		{"daily", digestOf(time.Hour, store.LimitDaily, 4), "4 messages not investigated in the last 1h (daily cap)."},
+		{"hours and minutes", digestOf(90*time.Minute, store.LimitRate, 2), "2 messages not investigated in the last 1h30m (rate limit)."},
+		{"seconds", digestOf(30*time.Second, store.LimitRate, 2), "2 messages not investigated in the last 30s (rate limit)."},
+		{"a day", digestOf(24*time.Hour, store.LimitDaily, 2), "2 messages not investigated in the last 24h (daily cap)."},
 		{"two reasons, in a fixed order", store.TriggerDigest{Start: digestNow, End: digestNow.Add(10 * time.Minute),
 			Counts: map[store.TriggerLimit]int{store.LimitDaily: 1, store.LimitConcurrent: 2, store.LimitRate: 3}},
-			"6 bot messages not investigated in the last 10m (rate limit: 3, concurrency limit: 2, daily cap: 1)."},
+			"6 messages not investigated in the last 10m (rate limit: 3, concurrency limit: 2, daily cap: 1)."},
 	} {
 		if got := digestText(tt.d); got != tt.want {
 			t.Errorf("%s: %q; want %q", tt.name, got, tt.want)

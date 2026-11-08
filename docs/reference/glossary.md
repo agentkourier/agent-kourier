@@ -130,8 +130,8 @@ Thread
 :   A message and its replies. Agent Kourier owns a thread it started, or one it was mentioned in.
 
 Trigger
-:   A rule in a Binding's `chat.triggers` that decides what starts a turn: `mention`, or `botMessage` for another bot's
-    posts.
+:   A rule in a Binding's `chat.triggers` that decides what starts a turn: `mention`, `botMessage` for another bot's
+    posts, or `personMessage` for the messages people post at the top level of the channel.
 
 Turn
 :   One message to the agent and the task that answers it. A session's turns run one at a time, in order.
