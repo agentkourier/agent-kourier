@@ -213,7 +213,7 @@ func (p *problems) namespaces(path string, ns []string) {
 // so the problems are those of the CRD's two rules, one on the spec and one on the field.
 func (p *problems) agentNamespaces(d Dialect, a *AgentNamespaces) {
 	if d != DialectKagentV1 {
-		p.add("spec.agents", "is supported only on the kagent-v1 dialect: on a2a the URL names the agent and agent.namespace is never sent")
+		p.add("spec.agents", "is supported only on the kagent-v1 dialect, the only one that sends agent.namespace")
 	}
 	if !a.SameNamespace && len(a.Namespaces) == 0 {
 		p.add("spec.agents", "allows no agent namespace: set sameNamespace to true or list at least one namespace in namespaces")

@@ -263,7 +263,7 @@ func TestCELLiteralsEqualTheBrokersConstants(t *testing.T) {
 	})
 
 	t.Run("agents", func(t *testing.T) {
-		// The two rules of agents copy Validate's: the dialect the field is refused on, and a value that allows nothing.
+		// The two rules of agents copy Validate's: the one dialect the field is allowed on, and a value that allows nothing.
 		// The dialect rule allows the field on kagent-v1 only, so a dialect added later is refused until it says otherwise.
 		if string(DialectKagentV1) != "kagent-v1" {
 			t.Fatal("the dialect that the agents rule writes out as a literal has changed: update the rule")

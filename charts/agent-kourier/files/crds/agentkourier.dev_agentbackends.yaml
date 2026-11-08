@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    agentkourier.dev/schema-sha256: 1be989f3181e501cc9802b29bba239ff010aab3e1e691e5bcd6a18177e780ffa
+    agentkourier.dev/schema-sha256: 956beb225f5b5ef6e2be342408aaf922d2990d7446889afeb2b3527eb30f679a
     controller-gen.kubebuilder.io/version: v0.23.0
   name: agentbackends.agentkourier.dev
 spec:
@@ -176,8 +176,8 @@ spec:
             type: object
             x-kubernetes-validations:
             - fieldPath: .agents
-              message: 'agents is supported only on the kagent-v1 dialect: on a2a
-                the URL names the agent and agent.namespace is never sent'
+              message: agents is supported only on the kagent-v1 dialect, the only
+                one that sends agent.namespace
               rule: '!has(self.agents) || self.dialect == ''kagent-v1'''
         required:
         - spec

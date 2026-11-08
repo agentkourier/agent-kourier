@@ -129,7 +129,7 @@ type AgentBackendList struct {
 
 // AgentBackendSpec is the desired state of an AgentBackend.
 //
-// +kubebuilder:validation:XValidation:rule="!has(self.agents) || self.dialect == 'kagent-v1'",message="agents is supported only on the kagent-v1 dialect: on a2a the URL names the agent and agent.namespace is never sent",fieldPath=".agents"
+// +kubebuilder:validation:XValidation:rule="!has(self.agents) || self.dialect == 'kagent-v1'",message="agents is supported only on the kagent-v1 dialect, the only one that sends agent.namespace",fieldPath=".agents"
 type AgentBackendSpec struct {
 	// +kubebuilder:validation:Enum=a2a;kagent-v1
 	Dialect Dialect `json:"dialect"`

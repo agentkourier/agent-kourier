@@ -226,8 +226,8 @@ Other things a writer of a Binding can do:
 goes through that door. What they share, and what they do not:
 
 - **Shared.** The `url`. With `dialect: kagent-v1` the agent is named in the request path (`<url>/agents/<namespace>/<name>`), and `agent.name` and `agent.namespace` of a Binding
-  are whatever its writer types, checked for their shape; `agent.name` is never checked against a list of agents, and `agent.namespace` is only when the backend sets
-  `agents` (below). So without `agents` every agent that the backend serves is in reach, and with it every agent in the namespaces it allows. With `dialect: a2a` the URL is the
+  are whatever its writer types, checked for their shape; `agent.name` is never checked against a list of agents, and `agent.namespace` is checked only when the backend
+  sets `agents`, against the namespaces that it allows (below). So without `agents` every agent that the backend serves is in reach, and with it every agent in the namespaces it allows. With `dialect: a2a` the URL is the
   exact endpoint and the agent name is not sent, so the backend is that one agent. The dialect. And the static `headers`, whose Secret values are read in the AgentBackend's namespace
   and sent with every request of every Binding that names it, and with every probe. A Binding's writer cannot read those values, but each request they cause carries them.
 - **Not shared.** The identity. Each Binding presents its own: the token of its own `identity.tokenSecretRef`, read in its own namespace, or its own `userId`. The connection
@@ -254,8 +254,9 @@ spec:
 - **Left out, there is no limit.** That is how every AgentBackend behaves until you set `agents`: a Binding may name an agent in any namespace, and only the backend's front door decides.
 - **Set, a Binding must match.** Its `agent.namespace` must be the Binding's own namespace, if `sameNamespace` is true, or one of `namespaces`. `sameNamespace` is the namespace of the Binding, not of the AgentBackend.
   What a Binding that names any other namespace costs depends on the route. **With custom resources** it is not served, and its `Accepted` condition is `False` with the reason `AgentNamespaceNotAllowed`;
-  the check runs each time the broker reads the config, so setting or narrowing `agents` drops the Bindings that no longer match at the next read, and the others keep running. A turn that was already sent runs to its end
-  under the config it started with; the dropped Binding's next turn, one already queued included, is not sent. **On the files route** the whole config
+  the check runs each time the broker reads the config, so setting or narrowing `agents` drops the Bindings that no longer match at the next read, and the others keep running. A stream to the agent that is already open
+  keeps going until it ends. Every later step looks the Binding up and finds it gone: its next turn, one already queued included, is not sent, a pause for an
+  approval or a question is not posted, a button press is not decided, a cancel fails, and after a restart the broker does not follow the turn. **On the files route** the whole config
   fails to resolve, so nothing is dropped: at start the broker exits with code 2 and serves nothing (the chart's `config.rollOnChange` restarts the pod when the ConfigMap changes, and with SQLite the old pod is already stopped), and on a reload the broker keeps serving
   every Binding under the last good config, which has the old limit or none, and sets `agentkourier_config_stale` to 1. The message names the AgentBackend and the agent namespace
   and nothing else of the backend's spec. When the AgentBackend's newest generation is invalid, or it was deleted and is held, it adds that the limit is that of the generation being served; the problems of an

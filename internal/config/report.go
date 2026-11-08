@@ -14,9 +14,9 @@ import (
 // A broker serves what it can instead: Served is the generation of the same object that the Set holds in its place, the
 // last good one, or zero when there is none and the object is left out. A deleted object that is held on purpose has Deleted
 // set and no Generation: the broker's own ChatConnection, which a running broker keeps, and, while that is held, the Bindings
-// of it and the AgentBackends they use that went with it. A held Binding that cannot be served (it lost its channel, its
-// backend is gone, or its backend's agents does not allow its agent namespace) is counted here and not served, with no
-// Rejection: it has no object to put one on.
+// of it and the AgentBackends they use that went with it. A held Binding that resolution leaves out, for any reason (it lost
+// its channel, its backend is gone, or its backend no longer allows it), is counted here and not served, with no Rejection:
+// it has no object to put one on.
 type Invalid struct {
 	// Kind is KindAgentBackend, KindChatConnection or KindBinding.
 	Kind string
@@ -82,8 +82,8 @@ func (i Invalid) rejectionFor(from, path string, rejected RejectionReason) (Reje
 	return rejected, path + ": " + i.describedTo(from)
 }
 
-// describedTo is describe for a Binding in namespace from that runs with the object's generation in force: the owner's
-// problems go only to a Binding in the object's own namespace.
+// describedTo is describe as a Binding in namespace from is told it, whether a generation of the object is served or none
+// is: the owner's problems go only to a Binding in the object's own namespace.
 func (i Invalid) describedTo(from string) string { return i.describe(i.Namespace == from, true) }
 
 // Report is what a Reloader knows about the config it serves besides the Snapshot: the objects it refused and the
