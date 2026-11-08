@@ -128,13 +128,6 @@ func abandonOutbox(at time.Time) call {
 	return func(ctx context.Context, s store.Store) error { _, err := s.AbandonOutbox(ctx, "o1", at); return err }
 }
 
-func abandonOutboxBefore(before, at time.Time) call {
-	return func(ctx context.Context, s store.Store) error {
-		_, err := s.AbandonOutboxBefore(ctx, before, at)
-		return err
-	}
-}
-
 func upsertSession(f func(*store.Session)) call {
 	return func(ctx context.Context, s store.Store) error { return s.UpsertSession(ctx, mut(okSession, f)) }
 }
@@ -465,12 +458,6 @@ func specs() []spec {
 			"epoch":        abandonOutbox(epoc),
 			"before epoch": abandonOutbox(epoc.Add(-time.Hour)),
 		}},
-		{"AbandonOutboxBefore", abandonOutboxBefore(t0, t0), map[string]call{
-			"before is zero":  abandonOutboxBefore(time.Time{}, t0),
-			"before is epoch": abandonOutboxBefore(epoc, t0),
-			"at is zero":      abandonOutboxBefore(t0, time.Time{}),
-			"at is epoch":     abandonOutboxBefore(t0, epoc),
-		}},
 		{"ListUnposted", func(ctx context.Context, s store.Store) error { _, err := s.ListUnposted(ctx); return err }, nil},
 
 		{"UpsertSession", upsertSession(nil), with(
@@ -727,7 +714,6 @@ func specs() []spec {
 // timeCalls are the calls that check a time with validTime, each with the time put in the argument that is checked.
 var timeCalls = map[string]func(time.Time) call{
 	"AbandonOutbox":       abandonOutbox,
-	"AbandonOutboxBefore": func(at time.Time) call { return abandonOutboxBefore(at, t0) },
 	"AdmitTriggerRun":     func(at time.Time) call { return admitTriggerRun(func(r *store.TriggerRun) { r.At = at }, okRunLimits) },
 	"ListTriggerDigests":  listTriggerDigests,
 	"MarkTriggerDigested": func(at time.Time) call { return markTriggerDigested("ns/b", 0, at) },

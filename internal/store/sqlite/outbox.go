@@ -105,29 +105,3 @@ func (s *adapter) AbandonOutbox(ctx context.Context, id string, at time.Time) (b
 	}
 	return abandoned, nil
 }
-
-// AbandonOutboxBefore implements store.Outbox.
-func (s *adapter) AbandonOutboxBefore(ctx context.Context, before, at time.Time) ([]string, error) {
-	var ids []string
-	err := s.inTx(ctx, func(tx *sql.Tx) error {
-		//nolint:gosec // G202: the predicate is column names and literals (store.PendingOutbox); every value is an argument
-		rows, err := tx.QueryContext(ctx, `UPDATE outbox SET abandoned_at = ?, payload = ''
-			WHERE `+store.PendingOutbox("").Text(Dialect{})+` AND payload <> '' AND created_at < ? RETURNING id`, ts(at), ts(before))
-		if err != nil {
-			return err
-		}
-		defer func() { _ = rows.Close() }() // rows.Err below reports read failures
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				return err
-			}
-			ids = append(ids, id)
-		}
-		return rows.Err()
-	})
-	if err != nil {
-		return nil, fmt.Errorf("abandon old outbox rows: %w", err)
-	}
-	return ids, nil
-}
