@@ -34,7 +34,7 @@ does not set the new field, and [the upgrade section](how-to/upgrade.md#upgrade-
   older release after a rollback, belong to the own connection: the leader gives them to it when it starts.
 - **Do not roll back past 0.3.0 while team connections are served.** The outbox of 0.2.1 posts every unposted row through its one chat platform, so a post waiting for a team's connection would go out through the platform's app,
   and its sweep can edit a team's prompt and post a timeout notice from the platform's app for an interaction whose session no longer records the task. While the connections are still served: let the team's pending interactions end
-  (a pause ends at its deadline, up to 7 days), delete their Bindings, check again that none is pending (one left after the delete stays pending), wait until `agentkourier_outbox_pending` is 0 for each, then take
+  (a pause ends at its deadline, up to 7 days), delete their Bindings, check again that none is pending (one left after the delete usually stays pending), wait until `agentkourier_outbox_pending` is 0 for each, then take
   `config.connectionNamespaces` off the values in the same change as the rollback: the chart of 0.2.1 refuses a `config` key it does not have.
   The steps are in [Let a team bring its own Slack app](how-to/team-slack-app.md#take-it-back).
 
