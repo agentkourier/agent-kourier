@@ -327,7 +327,8 @@ func TestAConnectionWhoseSecretWasNeverThereLeavesNoSeriesOrReasonWhenRemoved(t 
 }
 
 // A platform resolved before the connection was rejected, which a turn holds for its length, fails fast after it: the error is the typed one, and
-// the call is not made on the platform. So does one resolved before the connection restarted, whose transport was closed.
+// the call is not made on the platform. One resolved before a restart goes on with its own platform; one resolved before the connection was
+// removed fails fast.
 func TestAPlatformResolvedBeforeTheConnectionStoppedFailsFastAfter(t *testing.T) {
 	w := newSupWorld(t)
 	w.apps("tok-a", "tok-a2")
@@ -364,21 +365,66 @@ func TestAPlatformResolvedBeforeTheConnectionStoppedFailsFastAfter(t *testing.T)
 		t.Errorf("the platform saw %d more calls after the rejection; want none", n)
 	}
 
-	// A restart: the platform held from before it fails fast, and the new one works.
-	w.reconcile(team("team-a/slack", 1, "tok-a2", 1))
+	// A restart (a new Secret, or any edit of the spec) does not cut off the turns in flight: the platform they hold is the old runtime's, whose
+	// token is usually still good, and it goes on with its own platform to the end of the turn. A new call resolves the new runtime's.
+	w.reconcile(team("team-a/slack", 1, "tok-a2", 1)) // the rejected connection starts again on a new token
 	w.eventually("team-a to run again", func() bool { return w.live.Load() == 2 && slices.Contains(w.running(), "team-a/slack") })
 	held2, err := w.table.Platform("team-a/slack")
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.reconcile(team("team-a/slack", 2, "tok-a2", 1)) // restarted again
+	w.reconcile(team("team-a/slack", 2, "tok-a2", 1)) // restarted again, on a new generation
 	w.eventually("the restart", func() bool { return len(w.tokens()) == 4 })
 	prev := w.openedFor("tok-a2")
-	if err := held2.Update(t.Context(), chat.Ref{Channel: "C1", ID: "1.1"}, chat.Outgoing{}); !errors.Is(err, chat.ErrConnectionDown) {
-		t.Errorf("a call on the platform of the replaced runtime = %v; want it down", err)
+	if err := held2.Update(t.Context(), chat.Ref{Channel: "C1", ID: "1.1"}, chat.Outgoing{}); err != nil {
+		t.Errorf("a call on the platform held across a restart = %v; want it to reach the platform it holds", err)
 	}
-	if n := prev.called("Update"); n != 0 {
-		t.Errorf("the replaced runtime's platform saw %d calls after it was closed; want none", n)
+	if n := prev.called("Update"); n != 1 {
+		t.Errorf("the replaced runtime's platform saw %d calls; want the held call", n)
+	}
+
+	// A removal retires the connection: what is held, from before the restart as well as from the last run, fails fast.
+	heldBefore := held2
+	heldNow, err := w.table.Platform("team-a/slack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.reconcile()
+	for name, p := range map[string]chat.Platform{"the run that was replaced": heldBefore, "the run that was removed": heldNow} {
+		if err := p.Update(t.Context(), chat.Ref{Channel: "C1", ID: "1.1"}, chat.Outgoing{}); !errors.Is(err, chat.ErrConnectionDown) {
+			t.Errorf("a call on the platform of %s after the connection was removed = %v; want it down", name, err)
+		}
+	}
+	if n := prev.called("Update"); n != 1 {
+		t.Errorf("the platform saw %d calls; want none after the removal", n)
+	}
+}
+
+// A connection refused as a second connection of a Slack app is not served: what holds its platform fails fast, and so does what held the platform
+// of the run a restart into the refusal replaced. The shutdown retires nothing: the final drain posts through the halted runtimes.
+func TestAPlatformHeldWhenTheConnectionIsRefusedFailsFast(t *testing.T) {
+	w := newSupWorld(t)
+	app := appIdentity{App: "AA", Team: "T1", User: "UA", Bot: "BA"}
+	w.ids["tok-a"], w.ids["tok-b"], w.ids["tok-b2"] = app, appIdentity{App: "AB", Team: "T1", User: "UB", Bot: "BB"}, app
+	a, b := team("team-a/slack", 1, "tok-a", 1), team("team-b/slack", 1, "tok-b", 2)
+	w.reconcile(a, b)
+	w.eventually("three runs", func() bool { return w.live.Load() == 3 })
+	held, err := w.table.Platform("team-b/slack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.reconcile(a, team("team-b/slack", 2, "tok-b2", 2)) // team-b restarts into a refusal: its Secret holds team-a's app
+	if err := held.Update(t.Context(), chat.Ref{Channel: "C1", ID: "1.1"}, chat.Outgoing{}); !errors.Is(err, chat.ErrConnectionDown) {
+		t.Errorf("a call on the platform held across a restart into a refusal = %v; want it down", err)
+	}
+
+	heldA, err := w.table.Platform("team-a/slack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.host.haltAll(t.Context()) // the shutdown
+	if err := heldA.Update(t.Context(), chat.Ref{Channel: "C1", ID: "1.1"}, chat.Outgoing{}); err != nil {
+		t.Errorf("a call on a halted runtime's platform = %v; want it to post: the final drain needs it", err)
 	}
 }
 
@@ -408,6 +454,9 @@ func TestARefusedConnectionsChatConnectedSeriesIsDeleted(t *testing.T) {
 	}
 	unreadable := unready("team-b/slack", 1, 2)
 	w.reconcile(old, unreadable) // refused, and its Secret cannot be read just now
+	if has("team-b/slack") {
+		t.Errorf("samples = %v; a refused connection whose Secret cannot be read has its series brought back", samples(t, w.host.metrics))
+	}
 	w.reconcile(old, young)
 	if has("team-b/slack") {
 		t.Errorf("samples = %v; a pass that found the refused connection again brought its series back", samples(t, w.host.metrics))

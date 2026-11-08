@@ -70,7 +70,9 @@ type supervisor struct {
 	// seen is every connection a pass has found in desired and that has not left since, whether or not it has an entry in teams (a connection
 	// whose Secret cannot be read has none), so that a connection that leaves is removed (removed, clearDown).
 	seen map[string]bool
-	said map[string]string // the last line said of each connection, so that a state is said once
+	// lives is the span each connection that is served has been served in (connLife), so that retiring it reaches every runtime it has had.
+	lives map[string]*connLife
+	said  map[string]string // the last line said of each connection, so that a state is said once
 }
 
 // teamRuntime is what the supervisor knows of one team connection.
@@ -131,6 +133,7 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 			continue
 		}
 		if st := s.teams[name]; st != nil {
+			s.retire(name)
 			s.stop(ctx, name, st, "it is no longer served")
 		}
 		s.host.table.clearDown(name)
@@ -225,6 +228,7 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 				newly := !st.refused
 				st.refused = true
 				refused[name] = refusedMessage
+				s.retire(name)
 				s.stop(ctx, name, st, "it is a second connection of the Slack app that "+holder+" uses")
 				// Not served from here, so the series of its earlier run would only go stale. Not only when this entry ran: a restart that
 				// ends in a refusal (its Secret now holds another app's tokens) made this entry fresh, and the run it replaced left series.
@@ -300,6 +304,7 @@ func (s *supervisor) start(ctx context.Context, t TeamConnection, st *teamRuntim
 		return
 	}
 	st.rt = rt
+	rt.life.Store(s.lifeOf(name))
 	st.recovering = true
 	s.host.run(rt, sink, s.ended)
 	delete(s.said, name)
@@ -318,6 +323,24 @@ func (s *supervisor) ended(rt *connRuntime, err error) {
 		return
 	}
 	s.log.Warn("chat connection: the platform rejected its credentials, so its run ended and it is not served until its ChatConnection or its Secret changes", "connection", rt.name, "code", code, "error", telemetry.LogText(err))
+}
+
+// lifeOf is the span of the connection name being served that a runtime started now belongs to: every runtime of the connection, those that a
+// restart replaced included, until it stops being served.
+func (s *supervisor) lifeOf(name string) *connLife {
+	if s.lives[name] == nil {
+		s.lives[name] = &connLife{}
+	}
+	return s.lives[name]
+}
+
+// retire says the connection is not served any more (it was removed, or refused as a second connection of a Slack app): what holds the platform of any
+// of its runtimes fails fast from here. A restart does not retire. If the connection is served again it has a new span.
+func (s *supervisor) retire(name string) {
+	if l := s.lives[name]; l != nil {
+		l.retired.Store(true)
+		delete(s.lives, name)
+	}
 }
 
 // stop stops the runtime of st, if it has one, and says why. The connection is down from here.

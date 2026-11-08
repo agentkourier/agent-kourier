@@ -40,9 +40,12 @@ type connRuntime struct {
 	// run was called, since a runtime that never ran has nothing to wait for.
 	done chan struct{}
 	ran  atomic.Bool
-	// closeOnce makes closing the transport once, whoever asks. closed says it was done.
+	// closeOnce makes closing the transport once, whoever asks.
 	closeOnce sync.Once
-	closed    atomic.Bool
+	// life is the span of the connection being served that the runtime belongs to, set by the supervisor for a team connection. Once the span is
+	// retired the platform of the runtime fails fast (stopped). A runtime that is replaced by a restart is in the same span: its turns go on with
+	// the platform they hold, which is the connection's still. Nil for the own connection, which is always served.
+	life atomic.Pointer[connLife]
 }
 
 // halt ends the run of the runtime on purpose and does not wait for it (wait does).
@@ -61,14 +64,18 @@ func (rt *connRuntime) rejection() (code string, rejected bool) {
 	return "", false
 }
 
+// connLife is a span of a connection being served, shared by the runtimes it has in it. It is retired when the connection stops being served.
+type connLife struct{ retired atomic.Bool }
+
 // stopped is the error a call through the runtime's platform fails with once it can no longer be used, and nil while it can: the platform
-// rejected the credentials (a *connectionStopped, from the call that found out), or the transport was closed because the runtime was stopped or
-// replaced (down). The shutdown's final drain posts through a halted runtime, which is closed only after it.
+// rejected the credentials (a *connectionStopped, from the call that found out), or the connection is not served any more (retired: down). A
+// runtime that was only replaced by a restart, or halted by the shutdown, is neither: the turns that hold its platform finish with it, and the
+// final drain posts through it.
 func (rt *connRuntime) stopped() error {
 	if code, rejected := rt.rejection(); rejected {
 		return &connectionStopped{conn: rt.name, rejected: true, code: code}
 	}
-	if rt.closed.Load() {
+	if l := rt.life.Load(); l != nil && l.retired.Load() {
 		return downError(rt.name)
 	}
 	return nil
@@ -352,7 +359,6 @@ func (h *runtimeHost) run(rt *connRuntime, sink chat.Sink, onEnd func(rt *connRu
 // platform: one that a later call opens closes when idle (the transport's own timeout), and nothing closes it sooner.
 func (h *runtimeHost) closeTransport(rt *connRuntime) {
 	rt.closeOnce.Do(func() {
-		rt.closed.Store(true)
 		rt.platform.closeIdle()
 		rt.gauge.retire()
 		if h.cfg.transportClosed != nil {

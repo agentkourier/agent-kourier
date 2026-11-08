@@ -158,7 +158,7 @@ func newSupWorld(t *testing.T) *supWorld {
 	w.host.run(ownRT, nil, nil)
 	w.sup = &supervisor{
 		host: w.host, log: log, every: time.Hour, own: own, refusals: &refusals{}, done: make(chan struct{}),
-		teams: map[string]*teamRuntime{}, seen: map[string]bool{}, said: map[string]string{},
+		teams: map[string]*teamRuntime{}, seen: map[string]bool{}, lives: map[string]*connLife{}, said: map[string]string{},
 		identify: func(_ context.Context, c Connection) (appIdentity, error) {
 			tok := c.Credentials["botToken"].Reveal()
 			w.mu.Lock()
