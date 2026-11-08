@@ -116,7 +116,7 @@ NetworkPolicy in another namespace for instance, needs the real name, or you set
   resource's spec exactly as the [resource reference](../../docs/reference/binding.md) describes it (the chart does not interpret it; Agent Kourier's loader validates it at start).
   `namespace` defaults to the release's. Or `config.existingConfigMap`, a ConfigMap you manage, with `rbac.secretNamespaces` to say where
   its Secrets are. Not both.
-- `config.source` (`crds`, the default, or `files`), `config.chatConnection`, `config.chatConnectionSecret` and `crds.install` (unset: true with `crds`, false with `files`): where Agent Kourier reads those resources from
+- `config.source` (`crds`, the default, or `files`), `config.chatConnection`, `config.chatConnectionSecret`, `config.connectionNamespaces` and `crds.install` (unset: true with `crds`, false with `files`): where Agent Kourier reads those resources from
   (see Custom resources instead of a ConfigMap). An install of the ConfigMap route that upgrades with the values it had gets the default: set `config.source: files` to keep it.
 - `store.type` (`sqlite`, the default, or `postgres`) and, with Postgres, `store.postgres.dsnSecret` and `store.postgres.timeouts` (see Store).
 - `replicaCount` (2 with Postgres for a standby) and `leaderElection.*`, the Lease's timings (see High availability).
@@ -161,6 +161,13 @@ What the route needs:
   (empty, the default, is the connection's own name). With `config.source: crds` and `config.chatConnection` set, the chart grants `list` and `watch` on that
   one Secret by name, since it cannot read the ChatConnection you apply. It is skipped when `config.chatConnections` renders that connection (its
   `credentialsSecretRef` is granted instead), and ignored with `files` or an empty `config.chatConnection`.
+- **`config.connectionNamespaces`**: the admission list, a list of namespace names (empty, the default). The broker serves the `ChatConnection`s of these namespaces
+  beside its own, at most 16 connections in all with its own counted first and the others oldest first; no setting changes the 16. Two
+  `ChatConnection`s of one Slack app (one app ID, even in two workspaces) are not both served: the older is. The chart renders the list as
+  `AGENTKOURIER_CONNECTION_NAMESPACES` (comma-joined) and renders nothing when it is empty, and it refuses a non-empty list with `config.source: files`. The ClusterRole
+  above already reads the three kinds in every namespace, so the list adds no rule, and the chart grants no Secret of a listed namespace: each team grants the credentials
+  Secret of its connection to the ServiceAccount with a Role of its own that names it (`resourceNames`, as for a Binding's token below), or you name it in `rbac.secretNames`
+  or its namespace in `rbac.secretNamespaces`. A team connection whose Secret the broker cannot read yet is started once it can, and never stops the broker.
 - **Namespaces that exist.** A file can name a namespace that does not exist; a custom resource cannot.
 
 Move a running install of the ConfigMap route to it in two upgrades, each a working install, and back by the same values (keep `crds: {install: true}` in the values
@@ -183,7 +190,7 @@ kubectl get akbinding,akbackend,akconnection -A
 three) list them. **Never `kubectl get bindings`**: that is the core `bindings` resource, which is something else and fails. Going back, with
 `config.source=files`: the ConfigMap returns from the same values, and Helm deletes the custom resources the chart rendered (it stops rendering
 them), while the ones made by hand stay in the cluster, unread, as do the CRDs. The values of the route (`config.chatConnection`, `config.chatConnectionSecret`, `rbac.secretNames`)
-may stay set: with `files` they are ignored, so going back is the same values with `config.source: files`. `helm uninstall` likewise deletes the
+may stay set: with `files` they are ignored, so going back is the same values with `config.source: files`, except `config.connectionNamespaces`, which the chart refuses with `files`: set it to `[]` in the same upgrade. `helm uninstall` likewise deletes the
 rendered resources and keeps the CRDs, and with them every custom resource of the cluster: **never delete a CRD to get out of a refusal**, since
 that deletes every team's resources. A reinstall under another release name (or in another namespace) with `crds.install: true`, which is what an unset value is on the default route, is refused by
 Helm (`invalid ownership metadata`), because the kept CRDs name the release that made them. The same holds for a second broker in the same cluster, which sets `crds.install: false`. There are two ways on, neither of which deletes

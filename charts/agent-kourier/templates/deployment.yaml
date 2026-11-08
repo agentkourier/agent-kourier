@@ -59,6 +59,9 @@ spec:
             {{- /* Only for crds: the default's template carries no variable of this route. With crds there is no directory to read. */}}
             - {name: AGENTKOURIER_CONFIG_SOURCE, value: crds}
             - {name: AGENTKOURIER_CHAT_CONNECTION, value: {{ include "agentkourier.chatConnection" . | quote }}}
+            {{- with .Values.config.connectionNamespaces }}
+            - {name: AGENTKOURIER_CONNECTION_NAMESPACES, value: {{ join "," . | quote }}}
+            {{- end }}
             {{- else }}
             - {name: AGENTKOURIER_CONFIG_DIR, value: /etc/agent-kourier}
             {{- end }}
