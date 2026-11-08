@@ -278,7 +278,8 @@ func (r *resolver) binding(b *v1alpha1.Binding) {
 		backend = nil
 	}
 	// The backend is looked at only once the Binding may use it, so that a Binding it does not allow learns nothing of its
-	// agents field, and the message names the backend and the namespace and nothing else of the backend's spec.
+	// agents field, and the message names the backend and the namespace and nothing else of the backend's spec. The field is
+	// not secret from a Binding that the backend does let in: its author can try namespaces one at a time and read the reason.
 	if backend != nil && !backend.Spec.Agents.Allows(b.Namespace, b.Spec.Agent.Namespace) {
 		r.reject(from, ReasonAgentNamespaceNotAllowed, "spec.agent.namespace", fmt.Errorf("%s does not allow agents in namespace %s",
 			identity{"AgentBackend", backend.Namespace, backend.Name}, b.Spec.Agent.Namespace))

@@ -179,7 +179,9 @@ type AgentBackendSpec struct {
 //
 // +kubebuilder:validation:XValidation:rule="(has(self.sameNamespace) && self.sameNamespace) || (has(self.namespaces) && size(self.namespaces) > 0)",message="allows no agent namespace: set sameNamespace to true or list at least one namespace in namespaces"
 type AgentNamespaces struct {
-	// SameNamespace allows a Binding to name an agent in the Binding's own namespace. Omitted or false, it does not.
+	// SameNamespace allows a Binding to name an agent in the Binding's own namespace. Omitted or false, it does not. It
+	// compares the Binding's namespace, in the broker's cluster, with spec.agent.namespace, a namespace on the backend: it
+	// keeps a team to its own agents only where the two mean the same, as for a kagent in the broker's cluster.
 	// +doc:default=false
 	SameNamespace bool `json:"sameNamespace,omitempty"`
 	// Namespaces lists the namespaces whose agents any Binding that may use this backend may name. Each is a DNS-1123 label.

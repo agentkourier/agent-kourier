@@ -267,6 +267,10 @@ spec:
 - **What it does not bound.** It checks the namespace of the agent, not its name: a Binding may name any agent of an allowed namespace. It does not give the Bindings different credentials, since the
   headers and the front door are still shared (above), and it does not replace a front door that authorizes the Binding's identity for each agent. It also bounds what a tenant can learn:
   on custom resources a Binding that names an agent outside them is not served, so it is not probed, and its status cannot be used to ask the backend whether an agent in another namespace exists.
+  The limit itself is not secret from a team the backend lets in: by applying Bindings that name different namespaces and reading the reason, its author can learn which are allowed.
+  `sameNamespace` compares the Binding's namespace, in the broker's cluster, with `agent.namespace`, a namespace on the backend. It keeps a team to its own agents only where the two mean the
+  same, as for a kagent in the broker's cluster. Where kagent runs in another cluster whose namespaces belong to other teams, give each team its own AgentBackend, with only that team in `allowedNamespaces`
+  and only its agents' namespaces in `namespaces`.
 
 Where the teams must not share a door at all, use one AgentBackend per trust boundary: each has its own headers and Secrets, and lists in `allowedNamespaces` only the namespaces of the teams that may
 use it. The list is empty by default, which allows the AgentBackend's own namespace and no other. On `a2a` the backend is one agent, so one AgentBackend for each agent is how you keep two

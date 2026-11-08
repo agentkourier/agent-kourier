@@ -52,7 +52,7 @@ AgentNamespaces lists the agent namespaces that the Bindings of an AgentBackend 
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `sameNamespace` | boolean | No | false | SameNamespace allows a Binding to name an agent in the Binding's own namespace. Omitted or false, it does not. |
+| `sameNamespace` | boolean | No | false | SameNamespace allows a Binding to name an agent in the Binding's own namespace. Omitted or false, it does not. It compares the Binding's namespace, in the broker's cluster, with spec.agent.namespace, a namespace on the backend: it keeps a team to its own agents only where the two mean the same, as for a kagent in the broker's cluster. |
 | `namespaces` | []string | No | Empty list | Namespaces lists the namespaces whose agents any Binding that may use this backend may name. Each is a DNS-1123 label. At most 256. |
 
 ---

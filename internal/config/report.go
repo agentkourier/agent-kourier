@@ -181,8 +181,9 @@ func resolvePerObject(set *Set) (*Snapshot, []Rejection) {
 			}
 		case ReasonAgentNamespaceNotAllowed:
 			// The limit is that of the backend's generation in the Set, which is the last good one when a newer one is refused, so
-			// the owner who reads the newer one is told which is in force. The sentence follows the rule of rejectionFor: the
-			// owner's problems only in the backend's own namespace.
+			// the owner who reads the newer one is told which is in force. The generation in force lets the Binding in, so the
+			// sentence tells it what flag, below, tells a served Binding of the same backend: the two generations, and the
+			// owner's problems only in the backend's own namespace. (rejectionFor is for a backend with no generation in force.)
 			if inv, ok := invalid[refs.backend]; ok {
 				rej.Message += " (the limit is that of the generation being served: " + inv.describe(inv.Namespace == rej.Namespace, true) + ")"
 			}
