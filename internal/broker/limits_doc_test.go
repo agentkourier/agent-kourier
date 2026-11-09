@@ -44,6 +44,9 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Duration(t, "superviseEvery", defaultSuperviseEvery)
 	limitsdoc.Duration(t, "identifyTimeout", identifyTimeout)
 	limitsdoc.Duration(t, "runtimeStopTimeout", runtimeStopTimeout)
+	limitsdoc.Duration(t, "reconnectBase", defaultRunBase)
+	limitsdoc.Duration(t, "reconnectMax", defaultRunMax)
+	limitsdoc.Duration(t, "reconnectReset", defaultRunResetAfter)
 
 	// The leader builds the retention loop without a reply age or a session grace, so the loop's defaults are the values.
 	r, err := newRetention(retentionConfig{
