@@ -60,19 +60,23 @@ func TestConstructorsRefuseAnUnwiredHookAndNameIt(t *testing.T) {
 			return err
 		}},
 		{"the sweeper", "OnTimeout", func() error {
-			_, err := interact.NewSweeper(interact.SweepConfig{Store: inertStore{}, Sessions: inertReader{}, Lookup: inertLookup{}, Session: inertSession{}, Updaters: chattest.Same[interact.Updater](inertUpdater{}), Outbox: inertEnqueuer{}, Auditor: inertAuditor{}, Presses: inertPresses{}, OnApprovalOutcome: func(string, interact.Outcome) {}})
+			_, err := interact.NewSweeper(interact.SweepConfig{Store: inertStore{}, Sessions: inertReader{}, Lookup: inertLookup{}, Session: inertSession{}, Abandoner: inertAbandoner{}, Updaters: chattest.Same[interact.Updater](inertUpdater{}), Outbox: inertEnqueuer{}, Auditor: inertAuditor{}, Presses: inertPresses{}, OnApprovalOutcome: func(string, interact.Outcome) {}})
 			return err
 		}},
 		{"the sweeper's OnApprovalOutcome", "OnApprovalOutcome", func() error {
-			_, err := interact.NewSweeper(interact.SweepConfig{Store: inertStore{}, Sessions: inertReader{}, Lookup: inertLookup{}, Session: inertSession{}, Updaters: chattest.Same[interact.Updater](inertUpdater{}), Outbox: inertEnqueuer{}, Auditor: inertAuditor{}, Presses: inertPresses{}, OnTimeout: func(string) {}})
+			_, err := interact.NewSweeper(interact.SweepConfig{Store: inertStore{}, Sessions: inertReader{}, Lookup: inertLookup{}, Session: inertSession{}, Abandoner: inertAbandoner{}, Updaters: chattest.Same[interact.Updater](inertUpdater{}), Outbox: inertEnqueuer{}, Auditor: inertAuditor{}, Presses: inertPresses{}, OnTimeout: func(string) {}})
 			return err
 		}},
 		{"the sweeper's Reopened", "Reopened", func() error {
-			_, err := interact.NewSweeper(interact.SweepConfig{Store: inertStore{}, Sessions: inertReader{}, Lookup: inertLookup{}, Session: inertSession{}, Updaters: chattest.Same[interact.Updater](inertUpdater{}), Outbox: inertEnqueuer{}, Auditor: inertAuditor{}, Presses: inertPresses{}, OnTimeout: func(string) {}, OnApprovalOutcome: func(string, interact.Outcome) {}})
+			_, err := interact.NewSweeper(interact.SweepConfig{Store: inertStore{}, Sessions: inertReader{}, Lookup: inertLookup{}, Session: inertSession{}, Abandoner: inertAbandoner{}, Updaters: chattest.Same[interact.Updater](inertUpdater{}), Outbox: inertEnqueuer{}, Auditor: inertAuditor{}, Presses: inertPresses{}, OnTimeout: func(string) {}, OnApprovalOutcome: func(string, interact.Outcome) {}})
+			return err
+		}},
+		{"the sweeper's Abandoner", "Abandoner", func() error {
+			_, err := interact.NewSweeper(interact.SweepConfig{Store: inertStore{}, Sessions: inertReader{}, Lookup: inertLookup{}, Session: inertSession{}, Updaters: chattest.Same[interact.Updater](inertUpdater{}), Outbox: inertEnqueuer{}, Auditor: inertAuditor{}, Presses: inertPresses{}, OnTimeout: func(string) {}, OnApprovalOutcome: func(string, interact.Outcome) {}, Reopened: interact.NewReopened(nil)})
 			return err
 		}},
 		{"the sweeper's Lookup", "Lookup", func() error {
-			_, err := interact.NewSweeper(interact.SweepConfig{Store: inertStore{}, Sessions: inertReader{}, Session: inertSession{}, Updaters: chattest.Same[interact.Updater](inertUpdater{}), Outbox: inertEnqueuer{}, Auditor: inertAuditor{}, Presses: inertPresses{}, OnTimeout: func(string) {}, OnApprovalOutcome: func(string, interact.Outcome) {}})
+			_, err := interact.NewSweeper(interact.SweepConfig{Store: inertStore{}, Sessions: inertReader{}, Session: inertSession{}, Abandoner: inertAbandoner{}, Updaters: chattest.Same[interact.Updater](inertUpdater{}), Outbox: inertEnqueuer{}, Auditor: inertAuditor{}, Presses: inertPresses{}, OnTimeout: func(string) {}, OnApprovalOutcome: func(string, interact.Outcome) {}})
 			return err
 		}},
 		{"the retention loop", "OnCleared", func() error {
@@ -94,6 +98,7 @@ type inertShow struct{}
 func (inertShow) Ephemeral(context.Context, chat.Target, string, chat.Message) error { return nil }
 
 type (
+	inertAbandoner struct{ interact.Abandoner }
 	inertUpdater   struct{ interact.Updater }
 	inertPresses   struct{ interact.PressQueue }
 	inertRetention struct{ interact.RetentionStore }

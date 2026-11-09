@@ -427,6 +427,7 @@ func TestDecision(t *testing.T) {
 		{"not an approver", Decision{InteractionID: "i1", TaskID: "t1", Result: DecisionNotApprover}, t0, "denied_not_approver"},
 		{"timed out", Decision{InteractionID: "i1", TaskID: "t1", Result: DecisionTimedOut, At: decided}, decided, "timed_out"},
 		{"answer cleared", Decision{InteractionID: "i1", TaskID: "t1", Result: DecisionAnswerCleared, At: decided}, decided, "answer_cleared"},
+		{"orphaned", Decision{InteractionID: "i1", TaskID: "t1", Result: DecisionOrphaned, At: decided}, decided, "orphaned"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w, s := newWriter(t)
