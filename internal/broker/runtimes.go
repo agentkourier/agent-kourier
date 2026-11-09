@@ -128,7 +128,8 @@ type runtimeTable struct {
 	//
 	// The invariant, after every look of the supervisor: a team connection has its bot here while it is served with an identity that is known
 	// (the entry's id), whether or not it runs; the own connection has its own once that identity is known (a look returns before then).
-	// A connection that is refused, or that is not in the config, has none. One whose new tokens fail the lookup keeps the bot of its last
+	// A connection that is refused (also one that held its app and whose Secret cannot be read, when an older connection claims the app), or that
+	// is not in the config, has none. One whose new tokens fail the lookup keeps the bot of its last
 	// known identity, whether Slack rejected them, did not answer, or answered for good (a missing scope, a token that belongs to no bot): the
 	// old runtime and the turns that hold its platform may still post as that bot, and a post of the broker's own bot that the guard did not
 	// know would be the loop it exists to stop. A refusal that lifts writes the bot back, since the lookup that learned it is not asked again;
