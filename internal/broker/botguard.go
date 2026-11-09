@@ -17,7 +17,7 @@ type botOwners interface {
 }
 
 // botGuard is the Sink of a connection's platform: the Intake, except that a bot's mention by the bot of another connection that
-// the broker serves starts nothing (spec D51). Two of the broker's apps in one channel would otherwise answer each other without end:
+// the broker serves starts nothing (spec D52). Two of the broker's apps in one channel would otherwise answer each other without end:
 // a bot's mention starts a turn on any Binding that takes them (chat.botMentions), and each app's reply can mention the other. A
 // Binding's trigger that names the other app's bot (a botMessage trigger with from.id) still reads its posts, because that is a
 // message the Intake takes by the trigger and not as a mention (AcceptsBot, and AcceptsBotMention already says no for a bot a

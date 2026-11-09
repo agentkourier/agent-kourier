@@ -298,4 +298,4 @@ Mend it by writing valid tokens into the Secret.
 - [Security model](../explanation/security.md#a-team-brings-its-own-chat-app): what the broker holds, and what the admission list means.
 - [Limits](../reference/limits.md#run-the-broker): the 16, and how soon a change is followed.
 - [ChatConnection reference](../reference/chatconnection.md)
-- [Choose a config route](../explanation/config-routes.md#one-chatconnection)
+- [Choose a config route](../explanation/config-routes.md#which-chatconnections-a-broker-serves)

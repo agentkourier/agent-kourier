@@ -14,7 +14,7 @@
 // # What it reads
 //
 // The broker has an own ChatConnection, named in Options, and may be admitted to the namespaces of Options.ConnectionNamespaces
-// (spec D51). The connections it serves are the own and every ChatConnection of an admitted namespace, up to maxServedConnections
+// (spec D52). The connections it serves are the own and every ChatConnection of an admitted namespace, up to maxServedConnections
 // (see there for the rule); the Set holds those and no others. It also holds the Bindings whose connectionRef names a served
 // connection, or names no connection that exists (so that some broker reports it). A Binding that names another existing
 // connection, one of a namespace that is not admitted among them, belongs to the broker that serves that one, and is not in the

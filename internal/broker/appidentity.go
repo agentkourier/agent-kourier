@@ -19,7 +19,7 @@ const identifyTimeout = 10 * time.Second
 // appIdentity is who a ChatConnection's bot is on its platform: the app the bot belongs to, as bots.info gives it for the bot that auth.test
 // names, and the workspace, the bot's user and its bot ID. Two connections with the same App are one Slack app, whether in one workspace or in
 // two (an app installed in two workspaces has one app-level token's sockets and one stream of events), and the broker serves the older of them
-// (spec D51), because Slack hands each event of an app to one of the app's Socket Mode connections (docs/spikes/slack-mention-probe.md). The bot
+// (spec D52), because Slack hands each event of an app to one of the app's Socket Mode connections (docs/spikes/slack-mention-probe.md). The bot
 // ID is what the posts of the bot carry (bot_id), which is how another connection's bot is told from a person.
 type appIdentity struct{ App, Team, User, Bot string }
 

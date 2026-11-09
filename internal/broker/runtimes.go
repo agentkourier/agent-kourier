@@ -14,7 +14,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 )
 
-// connRuntime is what one served ChatConnection has of its own (spec D51): its chat platform, the run of its Socket Mode connection
+// connRuntime is what one served ChatConnection has of its own (spec D52): its chat platform, the run of its Socket Mode connection
 // (RunPlatform) with the intake it feeds, and the watch of its calls for a rejected credential (WatchAuth). Everything else of the leader
 // half is shared by the connections and finds the platform here, by connection (runtimeTable).
 type connRuntime struct {

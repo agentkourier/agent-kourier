@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -421,6 +422,35 @@ func TestARunServesTheOlderOfTwoConnectionsOfOneSlackAppAndTellsTheOthersBinding
 	}
 }
 
+// dueQuestion is a question that waits on a thread, past its deadline, with a task that its session records.
+type dueQuestion struct{ id, conn, channel, binding string }
+
+// seedDueQuestions puts the questions in the store at path before the broker starts.
+func seedDueQuestions(t *testing.T, path string, qs ...dueQuestion) {
+	t.Helper()
+	seed, err := sqlite.Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range qs {
+		k := store.ConversationKey{Connection: q.conn, Channel: q.channel, Thread: "1.1"}
+		if err := seed.UpsertSession(t.Context(), store.Session{Key: k, Binding: q.binding, ContextID: "ctx", LastActivity: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+		if err := seed.SetSessionTask(t.Context(), k, "", "task-"+q.id, store.TaskTurn{ID: "turn"}); err != nil {
+			t.Fatal(err)
+		}
+		req, _ := json.Marshal(dialect.Interaction{Kind: dialect.AskUser, TaskID: a2a.TaskID("task-" + q.id), RequestID: "req-" + q.id, Questions: []dialect.Question{{Text: "Which?", Choices: []string{"a", "b"}}}})
+		due := store.Interaction{ID: q.id, Key: k, TaskID: "task-" + q.id, Kind: store.InteractionAskUser, Request: req, CreatedAt: time.Now().Add(-2 * time.Hour), Deadline: time.Now().Add(-time.Hour)}
+		if _, err := seed.CreateInteraction(t.Context(), due); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A question that waits on the thread of a refused connection (a second connection of the own connection's Slack app) is ended by the leader's
 // sweep as an orphan's, though the connection's Binding is in the config: nothing runs the connection, and unlike a connection that is down for now it
 // never will. This holds the leader's wiring of the sweep to the supervisor's refusals (Served).
@@ -430,25 +460,7 @@ func TestARunEndsTheDueQuestionOfARefusedConnectionAsAnOrphans(t *testing.T) {
 	w.ids["tok-twin"] = w.ids[ownToken]
 	w.team("team-b", "tok-twin")
 	w.binding("team-b", "on-b", "C0TEAMB0001")
-	seed, err := sqlite.Open(t.Context(), w.c.DBPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	k := store.ConversationKey{Connection: "team-b/slack", Channel: "C0TEAMB0001", Thread: "1.1"}
-	if err := seed.UpsertSession(t.Context(), store.Session{Key: k, Binding: "team-b/on-b", ContextID: "ctx", LastActivity: time.Now()}); err != nil {
-		t.Fatal(err)
-	}
-	if err := seed.SetSessionTask(t.Context(), k, "", "task-1", store.TaskTurn{ID: "turn"}); err != nil {
-		t.Fatal(err)
-	}
-	req, _ := json.Marshal(dialect.Interaction{Kind: dialect.AskUser, TaskID: "task-1", RequestID: "req-1", Questions: []dialect.Question{{Text: "Which?", Choices: []string{"a", "b"}}}})
-	due := store.Interaction{ID: "ix-twin", Key: k, TaskID: "task-1", Kind: store.InteractionAskUser, Request: req, CreatedAt: time.Now().Add(-2 * time.Hour), Deadline: time.Now().Add(-time.Hour)}
-	if _, err := seed.CreateInteraction(t.Context(), due); err != nil {
-		t.Fatal(err)
-	}
-	if err := seed.Close(); err != nil {
-		t.Fatal(err)
-	}
+	seedDueQuestions(t, w.c.DBPath, dueQuestion{id: "ix-twin", conn: "team-b/slack", channel: "C0TEAMB0001", binding: "team-b/on-b"})
 	r := start(t, w.c)
 	r.until("/readyz", http.StatusOK)
 
@@ -503,4 +515,52 @@ func TestARotatedTeamSecretIsVerifiedAgainAfterTheRestart(t *testing.T) {
 	w.eventually("the Binding to be verified again as the bot of the restarted connection", func() bool {
 		return slices.Contains(w.probedBy("tok-a2"), "C0TEAMA0001")
 	})
+}
+
+// A question that waits on a thread of a ChatConnection that is not in the config is ended by the leader's sweep as an orphan's, though the
+// Binding of its session is in the config (team-b/on-b, which was pointed at team-b's connection after the question was asked on the connection
+// team-z, and team-z's ChatConnection was deleted): nothing will run team-z again. A question on a connection that is in the config and down for
+// rejected credentials (team-b's) is served and waits for it, not ended. This holds the leader's Served to the config's connections.
+func TestARunEndsTheDueQuestionOfAConnectionThatIsGoneAndKeepsOneThatIsDown(t *testing.T) {
+	w := newConnWorld(t, nil)
+	w.c.sweepEvery, w.c.orphanGrace = 10*time.Millisecond, 50*time.Millisecond
+	w.idErr["tok-b"] = &credentialsRejectedError{method: "auth.test", code: "invalid_auth"}
+	w.team("team-b", "tok-b")
+	w.binding("team-b", "on-b", "C0TEAMB0001")
+	seedDueQuestions(t, w.c.DBPath,
+		dueQuestion{id: "ix-gone", conn: "team-z/slack", channel: "C0TEAMZ0001", binding: "team-b/on-b"},
+		dueQuestion{id: "ix-down", conn: "team-b/slack", channel: "C0TEAMB0001", binding: "team-b/on-b"})
+	r := start(t, w.c)
+	r.until("/readyz", http.StatusOK)
+
+	r.waitMetric(`agentkourier_approval_outcomes_total{binding="team-b/on-b",outcome="orphaned"} 1`)
+	// The sweep that looks at ix-down says it waits for its connection, and a sweep that did not serve it would start its orphan grace instead.
+	logged := func(msg string) bool { // a line that has msg and is about ix-down
+		for _, l := range strings.Split(w.logs.String(), "\n") {
+			if strings.Contains(l, msg) && strings.Contains(l, "interaction=ix-down") {
+				return true
+			}
+		}
+		return false
+	}
+	w.eventually("the sweep to say that it waits for team-b's connection", func() bool {
+		return logged("interact: the chat connection of interactions that are due is not running")
+	})
+	if logged("cannot be ended through its Binding") {
+		t.Errorf("the sweep counted the grace for ix-down, whose connection is in the config:\n%s", grep(w.logs.String(), "cannot be ended through its Binding"))
+	}
+	st, err := sqlite.Open(t.Context(), w.c.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	for id, want := range map[string]store.InteractionState{"ix-gone": store.InteractionTimedOut, "ix-down": store.InteractionPending} {
+		if row, err := st.GetInteraction(t.Context(), id); err != nil || row.State != want {
+			t.Errorf("%s = %+v, %v; want %s: the connection that is gone ends its question and the one that is down keeps it", id, row.State, err, want)
+		}
+	}
+	_, body := r.get("/metrics")
+	if strings.Contains(body, "agentkourier_interaction_timeouts_total{} 1") {
+		t.Errorf("/metrics:\n%s\nwant no timeout", grep(body, "agentkourier_interaction_timeouts_total"))
+	}
 }

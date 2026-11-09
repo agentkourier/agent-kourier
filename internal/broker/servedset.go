@@ -17,7 +17,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
-// servedRecord knows which chat connections this broker serves, and which it served and does not now (spec D51). A broker that stops
+// servedRecord knows which chat connections this broker serves, and which it served and does not now (spec D52). A broker that stops
 // serving a connection that still exists must tell the connection's Bindings so, once, because the last status a broker wrote
 // (Ready=True, perhaps) would otherwise stay over a Binding that nobody serves, and must keep their sessions, whose threadTTL it does not
 // know. While it runs it sees the connection leave the Snapshot; but the admission list is read at start, so a namespace taken off it is a

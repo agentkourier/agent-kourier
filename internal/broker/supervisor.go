@@ -21,7 +21,7 @@ import (
 // (a ChatConnection added, edited or taken away, or its Secret changed) and the runtime that follows it.
 const defaultSuperviseEvery = 5 * time.Second
 
-// supervisor keeps one runtime for each team ChatConnection the Snapshot serves (spec D51): it starts the ones that have none, restarts one whose
+// supervisor keeps one runtime for each team ChatConnection the Snapshot serves (spec D52): it starts the ones that have none, restarts one whose
 // ChatConnection or credentials changed (the fingerprint of TeamConnection), and stops the ones the Snapshot no longer serves. A connection whose
 // Secret cannot be read yet is started once it can, and never fails the broker. The own connection is not its to start or stop: its tokens apply at a
 // restart (spec D50 (6)), and it is only counted first when two connections are of one Slack app.

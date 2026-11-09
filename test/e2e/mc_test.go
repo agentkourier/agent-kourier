@@ -21,7 +21,7 @@ import (
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
-// The scenarios of a broker that serves several ChatConnections, each with a Slack app of its own (spec D51): the platform's connection (slack-fast, the
+// The scenarios of a broker that serves several ChatConnections, each with a Slack app of its own (spec D52): the platform's connection (slack-fast, the
 // fake Slack's default app) and team-a's, which brings its own app, its own Secret and the Role that grants it (hack/kind/fast/two-apps), with a Binding on
 // each. The fast tier on custom resources, brought up with E2E_TWO_APPS=1 (hack/kind/up-fast.sh), on Postgres with two replicas for the failover cases
 // (E2E_STORE=postgres E2E_REPLICAS=2); anywhere else they skip and say why. Which app answered is read from the fake Slack, as the bot and app IDs of the
@@ -711,7 +711,7 @@ var botsInLoop = []struct {
 	{AppTeamA, "team-a/team-a-loop"},
 }
 
-// TestMC_ABotsPostStartsNoTurnOfAnotherAppsBinding is the rule against a loop between two apps (D51): the bots of two apps are in one channel, each with a
+// TestMC_ABotsPostStartsNoTurnOfAnotherAppsBinding is the rule against a loop between two apps (D52): the bots of two apps are in one channel, each with a
 // Binding of its own connection there, and a message that one bot posts starts no turn of the other's Binding, whatever it says. For each bot as the poster, the
 // other bot's Binding has answered a person who mentioned it, and so owns a thread; the poster then posts, as its own bot, a message that mentions the other
 // at the top level of the channel and one in the thread the other owns. The other app is sent the events of both and acks them, which is its intake having
