@@ -63,6 +63,32 @@ func (m *Manager) Cancel(ctx context.Context, key Key, taskID a2a.TaskID, reason
 	return nil
 }
 
+// Abandon ends the pause on the task taskID without calling the agent, for the interaction timeout of a pause whose Binding is not in the
+// config or whose chat connection this broker does not serve: Cancel needs the Binding's backend, so for such a pause it fails for as
+// long as the Binding is missing, and nothing else would end the pause, its runner, or the session that holds the task. It does what Cancel
+// does once the agent has been asked, and no more. The runner parked on the task is released and clears the task from the session, so
+// that the turns held behind the pause go on (a Binding that is gone drops them with its notice) and HoldsTask is false; with no runner
+// (after a restart) the record is cleared and the queue started. The task is left at the agent: it stays input-required until the agent
+// expires it. Nothing is audited, as no call was made, and the thread is told nothing, which the caller does. ErrNotPaused means the
+// recorded task is not taskID, or it is not paused, as for Cancel. reason is for the log.
+func (m *Manager) Abandon(ctx context.Context, key Key, taskID a2a.TaskID, reason string) error {
+	switch _, paused, err := m.pausedOn(ctx, key, taskID); {
+	case err != nil:
+		return err
+	case !paused:
+		return ErrNotPaused
+	}
+	switch err := m.endPause(ctx, key, taskID); {
+	case err == nil:
+	case errors.Is(err, ErrNotParked): // the runner streams it, or another control ended the pause since the look
+		return ErrNotPaused
+	default:
+		return err
+	}
+	m.cfg.Logger.Info("ended a paused task without calling the agent", "key", key, "task", taskID, "reason", reason)
+	return nil
+}
+
 // HoldsTask reports whether this manager's runner for the conversation still works on the task: it waits for input on it, or
 // streams or follows it. The retention of a task that a crash left on a long-expired session asks, so as not to clear a task
 // from under a runner that has it.
@@ -123,6 +149,49 @@ func classifyCancel(err error) cancelKind {
 	return cancelTransient
 }
 
+// recordedTask reads the session of key, and says whether it records the task id.
+func (m *Manager) recordedTask(ctx context.Context, key Key, id a2a.TaskID) (sess store.Session, isTask bool, err error) {
+	sess, err = m.cfg.Store.GetSession(ctx, key, readAll, m.cfg.Now())
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return sess, false, nil
+	case err != nil:
+		return sess, false, fmt.Errorf("read session: %w", err)
+	}
+	return sess, id != "" && sess.TaskID == string(id), nil
+}
+
+// pausedOn reads the session of key, and says whether the conversation is paused on the task id: the session records it, and the runner is
+// parked on it and has not been released, or there is no runner (after a restart).
+func (m *Manager) pausedOn(ctx context.Context, key Key, id a2a.TaskID) (sess store.Session, paused bool, err error) {
+	sess, isTask, err := m.recordedTask(ctx, key, id)
+	if err != nil || !isTask {
+		return sess, false, err
+	}
+	if m.afterSessionRead != nil {
+		m.afterSessionRead()
+	}
+	m.mu.Lock()
+	c := m.convos[key]
+	notPaused := c != nil && (c.parked != id || c.released)
+	m.mu.Unlock()
+	if notPaused { // the runner streams it, or waits on something else
+		return sess, false, nil
+	}
+	// A look that finds no runner does not say the pause is open: it is also what a pause leaves that another control ended since the
+	// read above, once its runner has cleared the record and retired (releasePause clears the record before it resets the runner,
+	// and retire comes after). So when no runner is seen, the record is read again after the look. A record that is still the
+	// task's, read after no runner was seen, was not cleared before the runner went, so the pause was open at the look; after a
+	// restart the record is there, and the cancel goes on. A runner seen parked on the task and not released needs no second read:
+	// the pause was open at the look.
+	if c == nil {
+		if sess, isTask, err = m.recordedTask(ctx, key, id); err != nil || !isTask {
+			return sess, false, err
+		}
+	}
+	return sess, true, nil
+}
+
 // cancelActive cancels the session's recorded task, which must be id, and audits the decision
 // once. A cancel that failed is classified: a task that ended meanwhile counts as cancelled once
 // GetTask says so; a task the agent no longer knows resets the session; a refused credential
@@ -134,42 +203,15 @@ func classifyCancel(err error) cancelKind {
 // unverified, if it is not nil, is set when the task is counted as over without Agent Kourier having read it: the answer to the cancel was too large, or
 // the agent said the task cannot be cancelled and the task is too large to read, so that what became of it is not known.
 func (m *Manager) cancelActive(ctx context.Context, key Key, id a2a.TaskID, by string, needPause bool, unverified *bool) (done, paused bool, err error) {
-	recorded := func() (sess store.Session, isTask bool, err error) {
-		sess, err = m.cfg.Store.GetSession(ctx, key, readAll, m.cfg.Now())
-		switch {
-		case errors.Is(err, store.ErrNotFound):
-			return sess, false, nil
-		case err != nil:
-			return sess, false, fmt.Errorf("read session: %w", err)
-		}
-		return sess, id != "" && sess.TaskID == string(id), nil
+	var sess store.Session
+	var isTask bool
+	if needPause {
+		sess, isTask, err = m.pausedOn(ctx, key, id)
+	} else {
+		sess, isTask, err = m.recordedTask(ctx, key, id)
 	}
-	sess, isTask, err := recorded()
 	if err != nil || !isTask {
 		return false, false, err
-	}
-	if needPause {
-		if m.afterSessionRead != nil {
-			m.afterSessionRead()
-		}
-		m.mu.Lock()
-		c := m.convos[key]
-		notPaused := c != nil && (c.parked != id || c.released)
-		m.mu.Unlock()
-		if notPaused { // the runner streams it, or waits on something else
-			return false, false, nil
-		}
-		// A look that finds no runner does not say the pause is open: it is also what a pause leaves that another control ended since the
-		// read above, once its runner has cleared the record and retired (releasePause clears the record before it resets the runner,
-		// and retire comes after). So when no runner is seen, the record is read again after the look. A record that is still the
-		// task's, read after no runner was seen, was not cleared before the runner went, so the pause was open at the look; after a
-		// restart the record is there, and the cancel goes on. A runner seen parked on the task and not released needs no second read:
-		// the pause was open at the look.
-		if c == nil {
-			if sess, isTask, err = recorded(); err != nil || !isTask {
-				return false, false, err
-			}
-		}
 	}
 	backend, err := m.cfg.Bindings.Backend(sess.Binding)
 	if err != nil {
