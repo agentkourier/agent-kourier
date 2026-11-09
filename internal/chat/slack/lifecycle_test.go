@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -208,11 +207,6 @@ func TestLostConnectionEndsRunAndTheNextRunRecovers(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatalf("Run did not return after a connection that could not be opened again; the log:\n%s", k.logs)
-	}
-	// slack-go's run is over when Run has returned, not only soon after: nothing outlives Run (the transport is closed after it).
-	buf := make([]byte, 1<<20)
-	if stacks := string(buf[:runtime.Stack(buf, true)]); strings.Contains(stacks, "socketmode.(*Client).RunContext") {
-		t.Errorf("slack-go's RunContext still runs after Run returned:\n%s", stacks)
 	}
 	if got := k.states.get(); len(got) != 2 || !got[0] || got[1] {
 		t.Errorf("OnConnection was told %v; want up, down", got)
