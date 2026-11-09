@@ -7,16 +7,17 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 )
 
-// botOwners tells whose bot a bot ID is among the connections the broker runs.
+// botOwners tells whose bot a bot ID is among the connections the broker serves: a connection that is served and restarting keeps its bot, since
+// the turns that hold its old platform still post as it.
 type botOwners interface {
-	// botOwner returns the connection ("namespace/name") whose bot has the ID botID, if one of the connections that run does.
+	// botOwner returns the connection ("namespace/name") whose bot has the ID botID, if one of the served connections does.
 	botOwner(botID string) (conn string, ok bool)
 	// botUserOwner is botOwner for the user a bot posts as (appIdentity.User).
 	botUserOwner(user string) (conn string, ok bool)
 }
 
 // botGuard is the Sink of a connection's platform: the Intake, except that a bot's mention by the bot of another connection that
-// the broker runs starts nothing (spec D52). Two of the broker's apps in one channel would otherwise answer each other without end:
+// the broker serves starts nothing (spec D52). Two of the broker's apps in one channel would otherwise answer each other without end:
 // a bot's mention starts a turn on any Binding that takes them (chat.botMentions), and each app's reply can mention the other. A
 // Binding's trigger that names the other app's bot (a botMessage trigger with from.id) still reads its posts, because that is a
 // message the Intake takes by the trigger and not as a mention (AcceptsBot, and AcceptsBotMention already says no for a bot a
@@ -37,7 +38,7 @@ var (
 	_ chat.BotMentionFilter = botGuard{}
 )
 
-// other says whether botID is the bot of a connection that runs and that is not self.
+// other says whether botID is the bot of a served connection that is not self.
 func (g botGuard) other(botID string) bool {
 	conn, ok := g.bots.botOwner(botID)
 	return ok && conn != g.self
@@ -72,7 +73,7 @@ func (g botGuard) Interaction(ctx context.Context, i chat.Interaction) error {
 // AcceptsBot is the Intake's: a botMessage trigger that names the bot is the only way a bot's message is taken, another connection's included.
 func (g botGuard) AcceptsBot(channel, botID string) bool { return g.in.AcceptsBot(channel, botID) }
 
-// AcceptsBotMention is the Intake's, and no for the bot of another connection that runs.
+// AcceptsBotMention is the Intake's, and no for the bot of another served connection.
 func (g botGuard) AcceptsBotMention(channel, botID string) bool {
 	return !g.other(botID) && g.in.AcceptsBotMention(channel, botID)
 }

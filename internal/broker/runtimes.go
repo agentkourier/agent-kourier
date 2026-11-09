@@ -20,9 +20,7 @@ import (
 type connRuntime struct {
 	name string // "namespace/name"
 	// conn is the connection as it was started: its credentials are the ones this runtime runs on.
-	conn Connection
-	// id is whose bot it is, guarded by the table's lock (runtimeTable.identify): the own connection's is learned after it runs.
-	id       appIdentity
+	conn     Connection
 	platform builtPlatform
 	// watched is the platform as every shared part gets it (runtimeTable.Platform): watched for a rejected credential (WatchAuth), so that a
 	// call of any of them that finds the tokens rejected ends the run.
@@ -123,13 +121,18 @@ type runtimeTable struct {
 	// down says why a connection that is not in rts cannot run until something changes: the platform rejected its credentials, or its credentials
 	// Secret cannot be used. A connection with no entry is down without a reason this table knows (it has not started yet, or is not served).
 	down map[string]*connectionStopped
+	// bots is whose bot each served connection has (appIdentity), apart from rts: a connection that restarts has no runtime while its new tokens
+	// are being asked about, and the turns that hold its old platform still post as its old bot (until they finish, even if the new tokens turn
+	// out to be another app's, whose bot then replaces the old). The supervisor writes it (identify, forgetBot); the bot guard of every
+	// connection reads it (botOwner, botUserOwner).
+	bots map[string]appIdentity
 	// sealed is set by the shutdown when it halts the runtimes: a runtime added after it is halted as it is added, so that none runs on
 	// beyond the step that stops them.
 	sealed bool
 }
 
 func newRuntimeTable() *runtimeTable {
-	return &runtimeTable{rts: map[string]*connRuntime{}, down: map[string]*connectionStopped{}}
+	return &runtimeTable{rts: map[string]*connRuntime{}, down: map[string]*connectionStopped{}, bots: map[string]appIdentity{}}
 }
 
 var _ chat.Resolver[chat.Platform] = (*runtimeTable)(nil)
@@ -253,24 +256,30 @@ func (t *runtimeTable) remove(rt *connRuntime) {
 	t.mu.Unlock()
 }
 
-// identify records whose bot the runtime of conn is, which is learned after it was built for the own connection.
+// identify records whose bot the connection conn has, in place of the one it had: a connection that is served keeps its bot until a new one is
+// learned (a restart on other tokens) or forgetBot is called, whether or not it runs now.
 func (t *runtimeTable) identify(conn string, id appIdentity) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if rt, ok := t.rts[conn]; ok {
-		rt.id = id
-	}
+	t.bots[conn] = id
 }
 
-// botOwner implements botOwners over the connections that run.
+// forgetBot forgets the bot of conn: it is not served any more (it left the Snapshot, or is refused as a second connection of a Slack app).
+func (t *runtimeTable) forgetBot(conn string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.bots, conn)
+}
+
+// botOwner implements botOwners over the connections that are served.
 func (t *runtimeTable) botOwner(botID string) (string, bool) {
 	if botID == "" {
 		return "", false
 	}
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	for name, rt := range t.rts {
-		if rt.id.Bot == botID {
+	for name, id := range t.bots {
+		if id.Bot == botID {
 			return name, true
 		}
 	}
@@ -284,8 +293,8 @@ func (t *runtimeTable) botUserOwner(user string) (string, bool) {
 	}
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	for name, rt := range t.rts {
-		if rt.id.User == user {
+	for name, id := range t.bots {
+		if id.User == user {
 			return name, true
 		}
 	}
@@ -315,10 +324,9 @@ type runtimeHost struct {
 	parent context.Context
 }
 
-// build makes the runtime of conn, whose bot is id, and puts it in the table: from here the shared parts reach its platform, and the other
-// connections tell its bot. agentkourier_chat_connected says 0 for it from here, and 1 while its connection is up. It runs nothing (run does),
-// so that the own connection's platform exists before the parts it feeds are built.
-func (h *runtimeHost) build(conn Connection, id appIdentity) (*connRuntime, error) {
+// build makes the runtime of conn and puts it in the table: from here the shared parts reach its platform. agentkourier_chat_connected says 0 for
+// it from here, and 1 while its connection is up. It runs nothing (run does), so that the own connection's platform exists before the parts it feeds are built.
+func (h *runtimeHost) build(conn Connection) (*connRuntime, error) {
 	name := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
 	h.metrics.ChatConnected(name, false)
 	gauge := &connGauge{m: h.metrics, name: name}
@@ -327,7 +335,7 @@ func (h *runtimeHost) build(conn Connection, id appIdentity) (*connRuntime, erro
 		return nil, err
 	}
 	ctx, report, stop := WithAuthFailure(h.parent)
-	rt := &connRuntime{name: name, conn: conn, id: id, platform: p, report: report, gauge: gauge, ctx: ctx, stop: stop, done: make(chan struct{})}
+	rt := &connRuntime{name: name, conn: conn, platform: p, report: report, gauge: gauge, ctx: ctx, stop: stop, done: make(chan struct{})}
 	rt.watched = watchRuntime(p.Platform, report, rt.stopped)
 	if !h.table.add(rt) {
 		h.closeTransport(rt)

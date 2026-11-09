@@ -31,8 +31,26 @@ func (a appIdentity) known() bool { return a.App != "" }
 // credentials. It is the place where a rejected team connection is first seen.
 var errCredentialsRejected = errors.New("the platform rejected the credentials")
 
+// errIdentityMayPass is wrapped by the error of an identity call that failed in a way that may pass when it is asked again: it timed out, the
+// request failed, Slack answered with a status other than 200 (a 5xx, or a 429), or with one of transientCodes. Any other failure (a scope the
+// app lacks, a token that is no bot's, an answer with no app) is given again for the same token, so the supervisor does not wait on it.
+var errIdentityMayPass = errors.New("the identity call may succeed when it is asked again")
+
+// mayPassError marks err as one that errors.Is errIdentityMayPass, and says what err says.
+type mayPassError struct{ error }
+
+// Is makes the error errIdentityMayPass.
+func (e mayPassError) Is(target error) bool { return target == errIdentityMayPass }
+
+// Unwrap returns the error that is marked.
+func (e mayPassError) Unwrap() error { return e.error }
+
 // rejectedCodes are the codes of Slack's that mean the token is no good, as opposed to a call that failed for a reason that may pass.
 var rejectedCodes = []string{"invalid_auth", "token_revoked", "token_expired", "account_inactive", "not_authed"}
+
+// transientCodes are the codes of Slack's that say the service could not answer now, whatever the token: the call may succeed when it is asked
+// again (errIdentityMayPass). Their meanings are taken from Slack's API documentation and were not checked against Slack here.
+var transientCodes = []string{"ratelimited", "internal_error", "service_unavailable", "request_timeout", "fatal_error"}
 
 // identityOf asks the platform whose bot conn's token is, each call within identifyTimeout. RunConfig.identify replaces the call (a seam for this
 // package's tests); when a test has replaced the Slack client (newSlack) and gives no identify, the identity is not asked, since the
@@ -82,19 +100,30 @@ func slackIdentity(ctx context.Context, conn Connection, apiURL string) (appIden
 	return appIdentity{App: bot.AppID, Team: auth.TeamID, User: auth.UserID, Bot: auth.BotID}, nil
 }
 
-// identifyError describes a failed call of the method for the log without the transport's own words, which could carry more than a code.
+// identifyError describes a failed call of the method for the log without the transport's own words, which could carry more than a code. A failure
+// that may pass when the call is asked again wraps errIdentityMayPass (see there).
 func identifyError(method string, err error) error {
 	var resp slackgo.SlackErrorResponse
+	var status slackgo.StatusCodeError
+	var limited *slackgo.RateLimitedError
 	switch {
 	case errors.As(err, &resp):
 		if slices.Contains(rejectedCodes, resp.Err) {
 			return &credentialsRejectedError{method: method, code: resp.Err}
 		}
-		return fmt.Errorf("%s: Slack answered %q", method, resp.Err)
+		e := fmt.Errorf("%s: Slack answered %q", method, resp.Err)
+		if slices.Contains(transientCodes, resp.Err) {
+			return mayPassError{e}
+		}
+		return e
 	case errors.Is(err, context.DeadlineExceeded):
-		return fmt.Errorf("%s: timed out", method)
+		return mayPassError{fmt.Errorf("%s: timed out", method)}
 	case errors.Is(err, context.Canceled):
 		return fmt.Errorf("%s: %w", method, context.Canceled)
+	case errors.As(err, &status):
+		return mayPassError{fmt.Errorf("%s: Slack answered with the status %d", method, status.Code)}
+	case errors.As(err, &limited):
+		return mayPassError{fmt.Errorf("%s: Slack rate-limited the call", method)}
 	}
-	return fmt.Errorf("%s: the request failed", method)
+	return mayPassError{fmt.Errorf("%s: the request failed", method)}
 }
