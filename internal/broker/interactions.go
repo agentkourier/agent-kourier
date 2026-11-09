@@ -80,6 +80,9 @@ type interactionDeps struct {
 	served func(conn string) bool
 	// now is the sweeper's clock; time.Now if nil. A test's.
 	now func() time.Time
+	// sweepEvery and orphanGrace are how often the timeout sweep runs (10 seconds if zero) and how long it waits to end an orphan (5 minutes if
+	// zero): seams for this package's tests, which cannot wait for them.
+	sweepEvery, orphanGrace time.Duration
 }
 
 // check refuses a deps with a part left out, and names it: the interactions are built from these in two steps (build,
@@ -195,7 +198,7 @@ func (d interactionDeps) build(inner session.Sink) (*interactionRuntime, error) 
 func (d interactionDeps) newSweeper(mgr *session.Manager, r *interactionRuntime) (*interact.Sweeper, error) {
 	sweeper, err := interact.NewSweeper(interact.SweepConfig{
 		Store: d.st, Sessions: d.st, Lookup: d.bindings, Session: mgr, Abandoner: mgr, Served: d.served, Updaters: chat.Narrow[interact.Updater](d.platforms), Outbox: d.ob, Auditor: d.auditor,
-		Presses: d.st, Reopened: r.reopened, Now: d.now, OnTimeout: d.metrics.InteractionTimeout, OnApprovalOutcome: d.metrics.ApprovalOutcome, Logger: d.log,
+		Presses: d.st, Reopened: r.reopened, Now: d.now, Interval: d.sweepEvery, OrphanGrace: d.orphanGrace, OnTimeout: d.metrics.InteractionTimeout, OnApprovalOutcome: d.metrics.ApprovalOutcome, Logger: d.log,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("interactions: the sweeper: %w", err)

@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -21,8 +22,10 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 )
 
 // ownToken is the bot token of the own connection's Secret in the test cluster.
@@ -415,6 +418,43 @@ func TestARunServesTheOlderOfTwoConnectionsOfOneSlackAppAndTellsTheOthersBinding
 	}
 	if a := cluster.stored(t, "team-a/on-a")["Accepted"]; a.Status != metav1.ConditionFalse || !strings.Contains(a.Message, "an app is served once") {
 		t.Errorf("Accepted = %+v; want False, with why", a)
+	}
+}
+
+// A question that waits on the thread of a refused connection (a second connection of the own connection's Slack app) is ended by the leader's
+// sweep as an orphan's, though the connection's Binding is in the config: nothing runs the connection, and unlike a connection that is down for now it
+// never will. This holds the leader's wiring of the sweep to the supervisor's refusals (Served).
+func TestARunEndsTheDueQuestionOfARefusedConnectionAsAnOrphans(t *testing.T) {
+	w := newConnWorld(t, nil)
+	w.c.sweepEvery, w.c.orphanGrace = 10*time.Millisecond, 50*time.Millisecond
+	w.ids["tok-twin"] = w.ids[ownToken]
+	w.team("team-b", "tok-twin")
+	w.binding("team-b", "on-b", "C0TEAMB0001")
+	seed, err := sqlite.Open(t.Context(), w.c.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := store.ConversationKey{Connection: "team-b/slack", Channel: "C0TEAMB0001", Thread: "1.1"}
+	if err := seed.UpsertSession(t.Context(), store.Session{Key: k, Binding: "team-b/on-b", ContextID: "ctx", LastActivity: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.SetSessionTask(t.Context(), k, "", "task-1", store.TaskTurn{ID: "turn"}); err != nil {
+		t.Fatal(err)
+	}
+	req, _ := json.Marshal(dialect.Interaction{Kind: dialect.AskUser, TaskID: "task-1", RequestID: "req-1", Questions: []dialect.Question{{Text: "Which?", Choices: []string{"a", "b"}}}})
+	due := store.Interaction{ID: "ix-twin", Key: k, TaskID: "task-1", Kind: store.InteractionAskUser, Request: req, CreatedAt: time.Now().Add(-2 * time.Hour), Deadline: time.Now().Add(-time.Hour)}
+	if _, err := seed.CreateInteraction(t.Context(), due); err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	r := start(t, w.c)
+	r.until("/readyz", http.StatusOK)
+
+	r.waitMetric(`agentkourier_approval_outcomes_total{binding="team-b/on-b",outcome="orphaned"} 1`)
+	if w.up("tok-twin") != 0 {
+		t.Error("the refused connection runs")
 	}
 }
 
