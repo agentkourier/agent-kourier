@@ -199,7 +199,7 @@ A running connection whose Secret can no longer be read (it was deleted, a key w
 tokens it started with, and keeps holding its app. If an older connection takes that app in the same look (its Secret now holds that app's tokens, or the
 rejection of its token has cleared), the broker stops the younger one and refuses it, as it does any second connection of an app, and its Bindings say
 `ConnectionNotServed`. It stays refused for as long as its Secret cannot be read, even once the app is free again, and it is served again at the first look
-at which its Secret reads and the app is free.
+at which its Secret reads and the app is free. If the Secret holds new tokens, Slack must also have said whose bot they are (see below).
 
 When the broker asks whose bot the tokens are after the ChatConnection or its Secret changed (`auth.test`, then `bots.info`), a failure that may pass
 leaves the connection as it was, and not started: either call timing out (each is given 10 seconds), the request failing before an answer, Slack answering

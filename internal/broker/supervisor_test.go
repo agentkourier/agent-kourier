@@ -1052,7 +1052,8 @@ func unreadableHolderWorld(t *testing.T) (w *supWorld, a1, b1 TeamConnection) {
 		t.Fatalf("running = %v; want both served", got)
 	}
 
-	for pass := 1; pass <= 2; pass++ { // and the next pass keeps it so
+	bRT := w.sup.teams["team-b/slack"].rt // the runtime the refusal stops, whose turns hold its platform
+	for pass := 1; pass <= 2; pass++ {    // and the next pass keeps it so
 		w.reconcileChecked(team("team-a/slack", 1, "tok-a2", 1), unready("team-b/slack", 1, 2))
 		if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack"}) {
 			t.Errorf("pass %d: running = %v; want the older connection alone on the app and the younger stopped", pass, got)
@@ -1065,6 +1066,18 @@ func unreadableHolderWorld(t *testing.T) (w *supWorld, a1, b1 TeamConnection) {
 		w.mu.Unlock()
 		if !slices.Contains(gone, "team-b/slack") {
 			t.Errorf("pass %d: gone = %v; want team-b told its runtime stopped", pass, gone)
+		}
+		w.mu.Lock()
+		removed := slices.Clone(w.removed)
+		w.mu.Unlock()
+		if want := []string{"team-b/slack"}; !slices.Equal(removed, want) {
+			t.Errorf("pass %d: removed = %v; want team-b told once, when it was first refused", pass, removed)
+		}
+		if bRT.stopped() == nil { // the turns that hold the stopped platform fail fast: the connection is not served any more
+			t.Errorf("pass %d: the stopped runtime of team-b is not retired; want its life retired", pass)
+		}
+		if w.sup.lives["team-b/slack"] != nil {
+			t.Errorf("pass %d: team-b still has a life; want it forgotten once retired", pass)
 		}
 		w.wantBot("BB", "UB", "")               // the refused connection's bot is not in the table
 		w.wantBot("BA2", "UA2", "team-a/slack") // the older connection's is
