@@ -645,6 +645,10 @@ func TestReadyIgnoresARetainedSecretThatIsDenied(t *testing.T) {
 		t.Fatal(err)
 	}
 	names := []config.SecretName{sn("sre", "creds"), sn("sre", "private")}
+	// Watch returns on the first denial, whether or not the others have synced: sync creds alone first, so that it is synced below.
+	if err := r.Watch(t.Context(), names[:1]); err != nil {
+		t.Fatalf("Watch of sre/creds = %v", err)
+	}
 	if err := r.Watch(t.Context(), names); !errors.Is(err, ErrAccessDenied) {
 		t.Fatalf("Watch = %v, want ErrAccessDenied", err)
 	}
@@ -829,7 +833,12 @@ func TestDenialIsPerSecret(t *testing.T) {
 	r := New(client, WithLogger(slog.New(slog.DiscardHandler)))
 	t.Cleanup(r.Stop)
 
-	err := r.Watch(t.Context(), []config.SecretName{sn("sre", "creds"), sn("sre", "private")})
+	names := []config.SecretName{sn("sre", "creds"), sn("sre", "private")}
+	// Watch returns on the first denial, whether or not creds has synced: sync it alone first, so that Keys finds it synced below.
+	if err := r.Watch(t.Context(), names[:1]); err != nil {
+		t.Fatalf("Watch of sre/creds = %v", err)
+	}
+	err := r.Watch(t.Context(), names)
 
 	if !errors.Is(err, ErrAccessDenied) || !apierrors.IsForbidden(err) || !strings.Contains(err.Error(), "sre/private") {
 		t.Errorf("Watch = %v, want ErrAccessDenied wrapping the answer and naming sre/private", err)
