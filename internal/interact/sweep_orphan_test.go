@@ -2,6 +2,7 @@ package interact_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
+	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -321,6 +323,47 @@ func TestSweepEndsTheInteractionOfAConnectionThatIsNotServed(t *testing.T) {
 			t.Errorf("the interaction is %s after %d releases; want it ended, with nothing to release", got, len(r.abandon.got()))
 		}
 	})
+}
+
+// TestSweepEndsTheInteractionOfAGoneConnectionAndKeepsOneThatIsOnlyDown: both connections run no platform (Updaters answers
+// chat.ErrConnectionDown for each) and both Bindings are in the config. Served is what tells them apart: keyB's connection is not
+// among those the config has any more (a team deleted its ChatConnection, and re-pointed the Binding to another), keyB's is, and is only
+// down. The gone one is ended after the OrphanGrace, whatever its Binding is; the down one waits, as long as it takes.
+func TestSweepEndsTheInteractionOfAGoneConnectionAndKeepsOneThatIsOnlyDown(t *testing.T) {
+	r := orphanRig(t) // ix-1: key, the connection that is down
+	req, _ := json.Marshal(dialect.Interaction{Kind: dialect.AskUser, TaskID: "task-2", RequestID: "req-ix-2", Questions: []dialect.Question{{Text: "Which?", Choices: []string{"a", "b"}}}})
+	if err := r.st.UpsertSession(t.Context(), store.Session{Key: keyB, ContextID: "ctx-2", TaskID: "task-2", Binding: "ns/b", LastActivity: t0}); err != nil {
+		t.Fatal(err)
+	}
+	r.approvalRowIn(t, keyB, "ix-2", "task-2", store.InteractionAskUser, req, t0.Add(timeout))
+	r.sess.current = "task-2"
+	r.abandon.current = "task-1"
+	sw := r.sweeper(t, func(c *interact.SweepConfig) {
+		c.Updaters = chat.PlatformSet[interact.Updater]{} // nothing runs either connection
+		c.Served = func(conn string) bool { return conn == key.Connection }
+	})
+	r.sweepOnce(t, sw)
+	r.advance(orphanGrace - time.Second)
+	r.sweepOnce(t, sw)
+	for _, id := range []string{"ix-1", "ix-2"} {
+		if got := r.state(t, id); got != store.InteractionPending {
+			t.Fatalf("%s is %s inside the grace; want it pending", id, got)
+		}
+	}
+	r.advance(time.Second)
+	r.sweepOnce(t, sw)
+	if got := r.state(t, "ix-2"); got != store.InteractionTimedOut {
+		t.Errorf("the interaction of the gone connection is %s after the grace; want it ended", got)
+	}
+	if got := r.sess.cancelled(); !slices.Equal(got, []a2a.TaskID{"task-2"}) {
+		t.Errorf("cancelled %v; want one cancel of task-2 at the agent: the Binding is in the config", got)
+	}
+	if got := r.state(t, "ix-1"); got != store.InteractionPending {
+		t.Errorf("the interaction of the connection that is only down is %s; want it pending: it is served and will run again", got)
+	}
+	if got := r.outcomes(); !slices.Equal(got, []string{"ns/b orphaned"}) {
+		t.Errorf("counted %q; want one orphaned end", got)
+	}
 }
 
 // TestSweepEndsAnApprovalOfABindingThatIsGoneWithoutDenyingIt: an approval cannot be denied without the Binding's dialect. It is ended like a

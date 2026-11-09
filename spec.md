@@ -1259,17 +1259,22 @@ pause from one is unusable and cancels the task.
    audit for its timeout, logging a failed compensation write. Recovery reuses a
    durable timeout audit, repairing a missing audit before it retries denial.
    **An interaction that cannot be ended this way** is ended without a word from the sweep.
-   Its Binding is not in the config (deleted, or not served), or the broker holds the Binding of a
-   connection it does not run because it is a second connection of a Slack app
-   (D51). `CancelTask` needs the Binding's backend, which such a Binding has not got,
-   and a timeout that retried it would never end. A connection that is served and
-   does not run for now (its credentials rejected, or not started yet) is not this: its
-   interactions wait for it. Once a sweep has found an interaction past its timeout so for five
-   minutes, without a sweep that found it otherwise in between (the count is in the
-   sweeper's memory), the sweep ends it. A Binding that is gone is not called: the runner parked
+   Its Binding is not in the config (deleted, or not served), or the broker does not serve the
+   chat connection its thread is on (D51): it is a second connection of a Slack app another
+   connection uses, or it is not among the ChatConnections of the config (deleted, say, after
+   the Binding was pointed at another connection). `CancelTask` needs the Binding's backend, which
+   a Binding that is not in the config has not got, and a timeout that retried it would never end;
+   no platform runs a connection that is not served, to edit the prompt or post the notice. A connection that is in the config and does not run for now
+   (its credentials rejected, or not started yet) is served and is not this: its
+   interactions wait for it. A Binding pointed at another connection does not end a pause on
+   the first while that connection is served: the agent is still reached through the Binding and
+   the first connection's platform edits the prompt, so the timeout ends it as it ends any.
+   Once a sweep has found an interaction past its timeout so for five minutes, without a
+   sweep that found it otherwise in between (the count is in the sweeper's memory), the sweep
+   ends it. A Binding that is gone is not called: the runner parked
    on the task is released, or the session's record of the task is cleared when there is none (after a
    restart), and the agent's task is left at the agent until the agent expires it. For
-   a refused connection the Binding is there and the task is cancelled with `CancelTask`, once
+   a connection that is not served whose Binding is in the config the task is cancelled with `CancelTask`, once
    (a transient failure is tried up to three times); if that fails, the pause is released as for
    a Binding that is gone. The sweep edits no prompt and queues no notice (the repair of ended
    prompts edits the prompt if the connection's platform runs). The interaction is recorded as
