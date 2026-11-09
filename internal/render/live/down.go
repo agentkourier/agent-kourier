@@ -21,11 +21,11 @@ type runPlatform interface {
 }
 
 // down is the platform of a turn whose connection no platform runs: every write fails with err, which wraps
-// chat.ErrConnectionDown, and Classify says that is transient, so the run treats the platform as down (a write is tried again,
-// and given up on after Config.Attempts, as for a platform that does not answer) while the outbox row of the reply waits for
-// the connection. It can do nothing a platform can (no streams, steps, edits or busy mark), so a run on it neither streams nor
-// marks the thread busy, and it cuts no text: the message that goes through the outbox is cut by the platform that posts it,
-// when the connection runs.
+// chat.ErrConnectionDown, and Classify says that is transient, so the run treats the platform as down (a write is tried again
+// every Config.Throttle, and not counted against Config.Attempts, while the outbox row of the reply waits for the connection, and the
+// run looks the connection's platform up again after each failure: reresolve). It can do nothing a platform can (no streams, steps,
+// edits or busy mark), so a run on it neither streams nor marks the thread busy, and it cuts no text: the message that goes through
+// the outbox is cut by the platform that posts it, when the connection runs.
 type down struct {
 	conn string
 	err  error
@@ -71,3 +71,35 @@ func (s downStream) Step(context.Context, chat.Step) error { return s.fail("step
 func (s downStream) Stop(context.Context, string, chat.Message, string) error { return s.fail("stop") }
 
 func (s downStream) fail(what string) error { return fmt.Errorf("live: stream %s: %w", what, s.err) }
+
+// reresolve looks the platform of the turn's connection up again, after a write failed because the platform the run holds is not the
+// connection's now: nothing ran the connection when the turn started (the run holds down), the runtime it holds was retired, or its
+// credential was rejected after a restart had halted it, and the platform it holds fails fast or is refused. A lookup that fails
+// leaves the run as it is: the platform it holds fails the same way, and the next write looks again. One that works replaces the
+// platform, what the run knows of its capabilities (the limits of the text) and the busy marking's. What the run decided at its start
+// from the capabilities it had stays: a turn that began down has no stream, steps or busy mark, and goes on without them.
+//
+// A Ref made while the connection was down does not name the platform, and is made again by the platform that runs it. A stream that
+// the earlier runtime started is not continued: the new platform's stream of the message is blind to what the old one sent (the
+// adapter's StreamAt), so the turn does what it does for a stream it lost (takeOver): the new platform stops the stream, and the
+// message is edited to the whole text, with the steps. The outbox row of the stream has the message's ts already. It returns the
+// error of the lookup, nil if it worked. It is the goroutine's.
+func (u *Run) reresolve(ctx context.Context, ref *chat.Ref) error {
+	p, err := u.cfg.Platforms.Platform(u.turn.Connection)
+	if err != nil {
+		return err
+	}
+	u.platform, u.caps = p, p.Capabilities()
+	u.busy.follow(p)
+	if ref.ID != "" && ref.Platform == "" {
+		*ref = p.RefAt(ref.Channel, ref.Thread, ref.ID)
+	}
+	if u.streamOpen() {
+		*ref = u.stream.Ref()
+		u.streaming, u.adopted, u.adoptStop, u.sent = false, true, true, ""
+		u.cfg.Logger.WarnContext(ctx, "live: the stream was started on a runtime of the connection that is gone; it is stopped and the message edited to the whole text", "connection", u.turn.Connection, "channel", u.turn.Channel)
+		return nil
+	}
+	u.cfg.Logger.InfoContext(ctx, "live: the turn's connection runs; the turn goes on through its platform", "connection", u.turn.Connection, "channel", u.turn.Channel)
+	return nil
+}

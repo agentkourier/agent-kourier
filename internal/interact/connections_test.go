@@ -29,6 +29,7 @@ var keyB = store.ConversationKey{Connection: "slack/team", Channel: key.Channel,
 type twoApps struct {
 	*decideRig
 	azA, azB   *authz
+	authorizer chat.PlatformSet[interact.Authorizer] // who may answer, by connection: a test takes a connection out to take it down
 	ephA, ephB *ephemerals
 	pl         *interact.Pipeline
 	now        time.Time
@@ -40,6 +41,7 @@ func newTwoApps(t *testing.T) *twoApps {
 	r.ephA, r.ephB = r.eph, &ephemerals{}
 	r.azA, r.azB = &authz{members: map[string]bool{"UALICE1": true}}, &authz{members: map[string]bool{"UBOB22": true}}
 	ephemeral := chat.PlatformSet[interact.Ephemeral]{key.Connection: r.ephA, keyB.Connection: r.ephB}
+	r.authorizer = chat.PlatformSet[interact.Authorizer]{key.Connection: r.azA, keyB.Connection: r.azB}
 	decider, err := interact.NewDecider(decideCfg(interact.DecideConfig{
 		Store: r.st, Auditor: r.aud, Ephemerals: ephemeral, Session: r.sess, Sessions: r.st, Outbox: r.out, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}))
@@ -49,7 +51,7 @@ func newTwoApps(t *testing.T) *twoApps {
 	b := interact.Binding{Dialect: kagentv1.New(time.Second), AskUser: true, Timeout: time.Minute, Identity: "secret:ns/tok"}
 	r.pl, err = interact.NewPipeline(pressCfg(interact.PressConfig{
 		Store: r.st, Sessions: r.st, Lookup: lookup{b}, Decider: decider, Auditor: r.aud, Ephemerals: ephemeral,
-		Authorizers: chat.PlatformSet[interact.Authorizer]{key.Connection: r.azA, keyB.Connection: r.azB},
+		Authorizers: r.authorizer,
 		Limits:      store.PressLimits{Total: 10, PerUser: 2}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: func() time.Time { return r.now },
 	}))
 	if err != nil {
@@ -303,5 +305,36 @@ func TestARateLimitPausesTheEditsOfItsOwnConnectionOnly(t *testing.T) {
 	_ = r.r.Repair(t.Context())
 	if len(a.got) != 2 {
 		t.Errorf("a made %d edits once its wait was over; want it asked again", len(a.got))
+	}
+}
+
+// TestAPressOfAConnectionThatIsDownDecidesNothingUntilItRuns: a press replayed at a takeover, for a connection that nothing runs
+// yet, cannot be checked (who may answer is the connection's platform's to say), so it is kept, and nothing reaches the session that
+// would resume the paused turn. Once the connection runs the same press is decided.
+func TestAPressOfAConnectionThatIsDownDecidesNothingUntilItRuns(t *testing.T) {
+	r := newTwoApps(t)
+	delete(r.authorizer, keyB.Connection)
+
+	res, err := r.press(t, keyB.Connection, "ix-b", "UBOB22")
+	if res != interact.Retry || !errors.Is(err, chat.ErrConnectionDown) {
+		t.Fatalf("the press of a connection that is down = %v, %v; want Retry, with an error that says the connection is down", res, err)
+	}
+	if got := r.state(t, "ix-b"); got != store.InteractionPending {
+		t.Errorf("the interaction is %s; want it still pending: nothing was decided", got)
+	}
+	if got := r.sess.answers(); len(got) != 0 {
+		t.Errorf("%d answers reached the session; want none: the turn stays paused", len(got))
+	}
+	presses, err := r.st.ListPresses(t.Context())
+	if err != nil || len(presses) != 1 {
+		t.Fatalf("presses = %v, %v; want the one press kept", presses, err)
+	}
+
+	r.authorizer[keyB.Connection] = r.azB
+	if res, err := r.pl.Process(t.Context(), presses[0]); res != interact.Done || err != nil {
+		t.Fatalf("the press once the connection runs = %v, %v", res, err)
+	}
+	if got := r.state(t, "ix-b"); got != store.InteractionAnswered {
+		t.Errorf("the interaction is %s; want it answered by the press that was kept", got)
 	}
 }

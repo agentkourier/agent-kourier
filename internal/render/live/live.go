@@ -58,6 +58,13 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
+// defaultThrottle is the least time between two writes to one message, and defaultFinalDeadline how long the final text is tried
+// for: Config.Throttle and Config.FinalDeadline when they are not set. The docs page of the limits holds them to these.
+const (
+	defaultThrottle      = 2 * time.Second
+	defaultFinalDeadline = 3 * time.Minute
+)
+
 // maxSteps is the most steps a stream shows. A turn may call tools without end, and each step is a call to the
 // platform and a card in the message: the calls after these are made, and not shown.
 const maxSteps = 50
@@ -90,21 +97,28 @@ type Config struct {
 	// stream, and says what the platform can do (Capabilities) and what an error means (Classify). A turn streams only if
 	// Capabilities say Streams. A turn whose connection has no platform running (chat.ErrConnectionDown) is rendered by a
 	// platform that fails every call with that error, which the turn treats as the platform being down: its writes are
-	// tried again as any failed write is, and its reply goes through the outbox, whose row waits for the connection.
+	// tried again every Throttle, and not counted as attempts, and its reply goes through the outbox, whose row waits for the
+	// connection. The turn asks for the connection's platform again when a write fails because the connection is down (or the
+	// platform rejects its credential), and goes on through the one it gets (Run.reresolve), so a turn finishes through the
+	// runtime of a connection that comes up, or is restarted, while it runs.
 	Platforms chat.Resolver[chat.Platform]
 	// Store is the outbox's: the renderer creates the stream's row itself, with no payload, and records its
 	// ts the moment it has one.
 	Store store.Outbox
-	// Throttle is the least time between two writes to one message (default 2 seconds).
+	// Throttle is the least time between two writes to one message (default 2 seconds), and how often a write is tried again
+	// while its connection is down.
 	Throttle time.Duration
 	// Attempts is how many times in a row a write may fail before it is given up (default 5). A
-	// rate limit is not an attempt: Slack says when to come back, and the write waits for it.
+	// rate limit is not an attempt: Slack says when to come back, and the write waits for it. Nor is a write that failed
+	// because the turn's connection is down (chat.ErrConnectionDown): it waits for the connection, up to FinalDeadline
+	// for the final text.
 	Attempts int
 	// WriteTimeout bounds each write to Slack (default 30 seconds). A write never watches the
 	// turn's context: a request cut short may still have been taken, and a retry would repeat it.
 	WriteTimeout time.Duration
 	// FinalDeadline is how long the final text is tried for, from the moment the run sees it
-	// (default 3 minutes). It outlasts the turn's context, which ends when the send returns.
+	// (default 3 minutes), the wait for a connection that is down included. It outlasts the turn's context, which ends when the
+	// send returns.
 	FinalDeadline time.Duration
 	// ActivityDelay is how long a turn goes with nothing new (no text, and no tool call under way) before it shows that
 	// it is working (default 3 seconds). It is the renderer's own setting, not the Binding's. Only the progress modes
@@ -145,7 +159,7 @@ func New(cfg Config) (*Renderer, error) {
 		return nil, errors.New("live: Config.Store is required")
 	}
 	if cfg.Throttle <= 0 {
-		cfg.Throttle = 2 * time.Second
+		cfg.Throttle = defaultThrottle
 	}
 	if cfg.Attempts <= 0 {
 		cfg.Attempts = 5
@@ -154,7 +168,7 @@ func New(cfg Config) (*Renderer, error) {
 		cfg.WriteTimeout = 30 * time.Second
 	}
 	if cfg.FinalDeadline <= 0 {
-		cfg.FinalDeadline = 3 * time.Minute
+		cfg.FinalDeadline = defaultFinalDeadline
 	}
 	if cfg.ActivityDelay <= 0 {
 		cfg.ActivityDelay = 3 * time.Second
@@ -228,8 +242,8 @@ type Turn struct {
 // Run is the rendering of one turn.
 type Run struct {
 	cfg Config
-	// platform is the platform of the turn's connection, resolved when the run started, and caps what it can do and how much
-	// it shows, asked then.
+	// platform is the platform of the turn's connection, resolved when the run started and again when a write fails because the
+	// connection is down (reresolve), and caps what it can do and how much it shows, asked then. Only the goroutine uses them.
 	platform runPlatform
 	caps     chat.Caps
 	turn     Turn
@@ -790,7 +804,9 @@ func (u *Run) run(ctx context.Context) {
 	defer func() { u.ref = ref }()
 	var next time.Time
 	fails := 0
-	shown := false // the final text is in the thread: what is left to write only adds its steps
+	_, startedDown := u.platform.(down)
+	downLogged := startedDown // the connection's being down has been logged (Start does, for a turn that began so), for the spell that goes on
+	shown := false            // the final text is in the thread: what is left to write only adds its steps
 	// giveUp ends the run on a final write that will not go through. Once the final text is shown it is the steps that were
 	// not added, and the turn was delivered: the alert on failed finals is not for them.
 	giveUp := func(outcome, msg string, args ...any) {
@@ -877,7 +893,9 @@ func (u *Run) run(ctx context.Context) {
 				return
 			}
 			if err != nil {
-				switch verdict := u.platform.Classify(chat.OpPost, err); {
+				verdict := u.platform.Classify(chat.OpPost, err)
+				down := errors.Is(err, chat.ErrConnectionDown)
+				switch {
 				case errors.Is(err, store.ErrInvalid), errors.Is(err, chat.ErrInvalid), errors.Is(err, outbox.ErrAbandoned): // retrying cannot mend them
 					giveUp("permanent_failure", "live: the message cannot be sent; giving up", "err", err)
 					return
@@ -886,6 +904,29 @@ func (u *Run) run(ctx context.Context) {
 					next = u.cfg.Now().Add(max(u.cfg.Throttle, verdict.RetryAfter))
 					continue
 				}
+				// The platform the run holds is not the connection's now: none ran the connection when the turn started, or the runtime
+				// it holds was retired, or its credential was rejected after a restart halted it, which no report can end for the
+				// runtime. The connection may run on another platform by the next try.
+				waiting := down
+				if down || verdict.Class == chat.FatalAuth {
+					// A rejected credential whose connection is down is the gap of a restart: the old runtime is out of the table
+					// and the new one is not in it yet, so the try is a wait for the connection, not an attempt. Were the new one never
+					// to come up (its Secret cannot be used), each try is one real call with the revoked token, every Throttle: bounded by
+					// the final deadline and the turn's end, as any wait is.
+					if lookup := u.reresolve(ctx, &ref); verdict.Class == chat.FatalAuth && errors.Is(lookup, chat.ErrConnectionDown) {
+						waiting = true
+					}
+				}
+				if waiting {
+					// Waiting for the connection is no attempt, as a rate limit is none: a restart of a connection takes longer than
+					// Attempts tries. It is bounded by the final's deadline (sleep) and by the turn's end.
+					if !downLogged {
+						u.cfg.Logger.WarnContext(ctx, "live: the turn's connection is not running; its writes are tried again until it is", "connection", u.turn.Connection, "channel", u.turn.Channel, "err", err)
+						downLogged = true
+					}
+					continue
+				}
+				downLogged = false
 				u.cfg.Logger.WarnContext(ctx, "live: writing the message failed; it will be tried again", "channel", u.turn.Channel, "err", err)
 				if fails++; fails >= u.cfg.Attempts {
 					if v.final {
@@ -898,7 +939,7 @@ func (u *Run) run(ctx context.Context) {
 				}
 				continue
 			}
-			fails = 0
+			fails, downLogged = 0, false
 			if u.stale {
 				u.stale, u.sent = false, "" // the post may be the old message: write once more
 				continue
