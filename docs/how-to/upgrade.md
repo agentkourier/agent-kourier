@@ -848,7 +848,7 @@ Before you set the list:
 - The pod runs the new image and is ready: `kubectl -n agent-kourier get deploy agent-kourier -o jsonpath='{.spec.template.spec.containers[0].image}'` shows the release's digest. The namespace is your release's, and so is the Deployment's name, which the chart
   makes `<release>-agent-kourier`, or the release name itself when that already contains `agent-kourier`, or `fullnameOverride` when it is set.
 - `agentkourier_chat_connected{connection="<namespace>/<name>"}` is 1 for the broker's own connection, and for each team connection once its Secret is granted.
-- `kubectl get akbinding -A` shows each Binding `READY` `True`, as before the upgrade. A Binding on a team connection that this broker does not serve, because the connection is past the 16 or its namespace was taken off the list after this broker served it, says `Accepted` `False` with `ConnectionNotServed`; one whose namespace was never on the list has no status from this broker
+- `kubectl get akbinding -A` shows each Binding `READY` `True`, as before the upgrade. A Binding on a team connection that this broker does not serve, because the connection is past the 16, is a second connection of one Slack app, or its namespace was taken off the list after this broker served it, says `Accepted` `False` with `ConnectionNotServed`; one whose namespace was never on the list has no status from this broker
   ([Binding status](../reference/binding-status.md)).
 
 ### Roll back from this release
