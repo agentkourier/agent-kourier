@@ -208,6 +208,51 @@ func unready(name string, gen int64, age int) TeamConnection {
 
 func (w *supWorld) reconcile(desired ...TeamConnection) { w.sup.reconcile(w.t.Context(), desired) }
 
+// wantBot checks the bot guard's table: the bot ID and the user of a bot belong to conn, or to none when conn is "".
+func (w *supWorld) wantBot(bot, user, conn string) {
+	w.t.Helper()
+	if got, _ := w.table.botOwner(bot); got != conn {
+		w.t.Errorf("botOwner(%s) = %q; want %q", bot, got, conn)
+	}
+	if got, _ := w.table.botUserOwner(user); got != conn {
+		w.t.Errorf("botUserOwner(%s) = %q; want %q", user, got, conn)
+	}
+}
+
+// reconcileChecked is reconcile, and then checks the invariant of the bot table: the bot of a connection is in it exactly while the connection is
+// served with an identity it knows, whether or not it runs now. The connections of desired that the pass did not refuse and whose entry knows its
+// identity have that identity in the table; no connection that is refused, or is not in desired, has one; the own connection has its own.
+func (w *supWorld) reconcileChecked(desired ...TeamConnection) {
+	w.t.Helper()
+	w.reconcile(desired...)
+	refused := w.sup.refusals.names()
+	inDesired := map[string]bool{ownName: true}
+	w.table.mu.RLock()
+	defer w.table.mu.RUnlock()
+	for _, d := range desired {
+		name := d.Name()
+		inDesired[name] = true
+		st := w.sup.teams[name]
+		if st == nil || !st.id.known() || slices.Contains(refused, name) {
+			continue
+		}
+		if got := w.table.bots[name]; got != st.id {
+			w.t.Errorf("the bot table has %+v for %s, which is served; want %+v", got, name, st.id)
+		}
+	}
+	for name, id := range w.table.bots {
+		switch {
+		case !inDesired[name]:
+			w.t.Errorf("the bot table has %+v for %s, which is not in the config", id, name)
+		case slices.Contains(refused, name):
+			w.t.Errorf("the bot table has %+v for %s, which is refused", id, name)
+		}
+	}
+	if w.table.bots[ownName] != (appIdentity{App: "AOWN", Team: "T1", User: "UOWN", Bot: "BOWN"}) {
+		w.t.Errorf("the bot table has %+v for the own connection", w.table.bots[ownName])
+	}
+}
+
 func (w *supWorld) running() []string {
 	var out []string
 	for _, rt := range w.table.all() {
@@ -347,7 +392,8 @@ func TestSupervisorLeavesTheOtherConnectionsWhenATeamConnectionIsRejected(t *tes
 func TestSupervisorServesTheOlderConnectionOfASlackApp(t *testing.T) {
 	w := newSupWorld(t)
 	app := appIdentity{App: "AAPP", Team: "T1", User: "UAPP", Bot: "BAPP"}
-	w.ids["tok-old"], w.ids["tok-young"], w.ids["tok-own-twin"] = app, app, appIdentity{App: "AOWN", Team: "T1", User: "UOWN", Bot: "BOWN"}
+	young2 := appIdentity{App: "AAPP", Team: "T2", User: "UYOUNG", Bot: "BYOUNG"} // the same app in another workspace: another bot
+	w.ids["tok-old"], w.ids["tok-young"], w.ids["tok-own-twin"] = app, young2, appIdentity{App: "AOWN", Team: "T1", User: "UOWN", Bot: "BOWN"}
 	old, young := team("team-a/slack", 1, "tok-old", 1), team("team-b/slack", 1, "tok-young", 2)
 
 	w.reconcile(old, young) // desired is oldest first, as teamConnections gives it
@@ -357,6 +403,8 @@ func TestSupervisorServesTheOlderConnectionOfASlackApp(t *testing.T) {
 	if got := w.sup.refusals.names(); !slices.Equal(got, []string{"team-b/slack"}) {
 		t.Errorf("refused = %v; want the younger connection", got)
 	}
+	w.wantBot("BAPP", "UAPP", "team-a/slack")
+	w.wantBot("BYOUNG", "UYOUNG", "") // the refused connection posts nothing: its bot is not one of the broker's
 
 	w.reconcile(young) // the older is gone
 	if got := w.running(); !slices.Equal(got, []string{ownName, "team-b/slack"}) {
@@ -365,11 +413,15 @@ func TestSupervisorServesTheOlderConnectionOfASlackApp(t *testing.T) {
 	if got := w.sup.refusals.names(); len(got) != 0 {
 		t.Errorf("refused = %v; want none", got)
 	}
+	w.wantBot("BYOUNG", "UYOUNG", "team-b/slack") // served now, so its bot is the guard's again
+	w.wantBot("BAPP", "UAPP", "")
 
 	w.reconcile(old, young) // an older connection of the app that the younger holds turns up
 	if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack"}) {
 		t.Errorf("running = %v when the older turned up; want it served and the younger stopped", got)
 	}
+	w.wantBot("BAPP", "UAPP", "team-a/slack")
+	w.wantBot("BYOUNG", "UYOUNG", "")
 
 	// A connection of the app the own connection uses is never served, whatever its age.
 	w.ids["tok-twin"] = appIdentity{App: "AOWN", Team: "T1", User: "UOWN", Bot: "BOWN"}
@@ -783,6 +835,8 @@ func TestSupervisorFreesTheAppOfAHolderWhoseNewTokenIsAnotherApp(t *testing.T) {
 	if got := w.sup.refusals.names(); len(got) != 0 {
 		t.Errorf("refused = %v; want none", got)
 	}
+	w.wantBot("BOTHER", "UOTHER", "team-a/slack")
+	w.wantBot("BAPP", "UAPP", "team-b/slack") // team-b was refused, and is served now: its bot is the guard's
 }
 
 // A refused connection whose own tokens change stays refused while Slack does not say whose bot the new ones are, and is served when they are
@@ -1067,4 +1121,69 @@ func TestSupervisorLeavesTheRefusalsAloneWhenThePassIsCancelledDuringALookup(t *
 	if got := w.sup.refusals.names(); !slices.Equal(got, []string{"team-b/slack"}) {
 		t.Errorf("refused = %v after a pass cancelled during team-a's lookup; want team-b still refused", got)
 	}
+}
+
+// A connection that was refused and is served later (its holder left, took another app, or has a token that Slack rejects) has its bot in the
+// table again: the guard must tell its posts from a person's, or two of the broker's apps in one channel would answer each other for ever.
+func TestTheBotGuardKnowsTheBotOfAConnectionThatWasRefusedAndIsServedLater(t *testing.T) {
+	w := newSupWorld(t)
+	w.ids["tok-a"] = appIdentity{App: "AAPP", Team: "T1", User: "UA", Bot: "BA"}
+	w.ids["tok-b"] = appIdentity{App: "AAPP", Team: "T2", User: "UB", Bot: "BB"} // the same app in another workspace
+	a, b := team("team-a/slack", 1, "tok-a", 1), team("team-b/slack", 1, "tok-b", 2)
+
+	w.reconcileChecked(a, b)
+	w.wantBot("BB", "UB", "")
+	w.reconcileChecked(b) // the holder leaves
+	if got := w.running(); !slices.Equal(got, []string{ownName, "team-b/slack"}) {
+		t.Fatalf("running = %v", got)
+	}
+	w.wantBot("BB", "UB", "team-b/slack")
+}
+
+// The invariant of the bot table holds after every look, along every path a connection takes to be served or not: refused and served again by the
+// holder leaving, by the holder's other app, by the holder's rejected token; a restart that fails to be asked, with a permanent answer, with a
+// new app; a start that fails; a Secret that cannot be read; a connection that leaves.
+func TestTheBotTableHoldsTheBotsOfTheServedConnectionsAfterEveryLook(t *testing.T) {
+	w := newSupWorld(t)
+	app := func(a, bot string) appIdentity {
+		return appIdentity{App: a, Team: "T-" + bot, User: "U" + bot, Bot: bot}
+	}
+	w.ids["tok-a1"], w.ids["tok-b1"], w.ids["tok-c1"] = app("AX", "BA1"), app("AX", "BB1"), app("AX", "BC1")
+	a1, b1, c1 := team("team-a/slack", 1, "tok-a1", 1), team("team-b/slack", 1, "tok-b1", 2), team("team-c/slack", 1, "tok-c1", 3)
+
+	w.reconcileChecked(a1, b1, c1) // a holds, b and c are refused
+	w.reconcileChecked(a1, b1, c1)
+
+	w.idErr["tok-a2"] = mayPass("auth.test: timed out") // the holder restarts, and Slack does not answer
+	a2 := team("team-a/slack", 1, "tok-a2", 1)
+	w.reconcileChecked(a2, b1, c1)
+	w.reconcileChecked(unready("team-a/slack", 1, 1), b1, c1)
+
+	w.idErr["tok-a2"] = errors.New(`bots.info: Slack answered "missing_scope"`) // an answer that does not pass: b is served, c refused
+	w.reconcileChecked(a2, b1, c1)
+	w.reconcileChecked(unready("team-a/slack", 1, 1), b1, c1)
+
+	delete(w.idErr, "tok-a2") // team-a is on another app: b holds AX, c is refused
+	w.ids["tok-a2"] = app("AY", "BA2")
+	w.reconcileChecked(a2, b1, c1)
+
+	w.idErr["tok-b2"] = mayPass("auth.test: timed out") // b restarts while it holds AX
+	b2 := team("team-b/slack", 1, "tok-b2", 2)
+	w.reconcileChecked(a2, b2, c1)
+
+	delete(w.idErr, "tok-b2") // and is on the app team-a has: refused
+	w.ids["tok-b2"] = app("AY", "BB2")
+	w.reconcileChecked(a2, b2, c1) // c is served now
+
+	w.idErr["tok-a3"] = &credentialsRejectedError{method: "auth.test", code: "invalid_auth"} // the holder's token is rejected: b is served
+	a3 := team("team-a/slack", 1, "tok-a3", 1)
+	w.reconcileChecked(a3, b2, c1)
+	w.reconcileChecked(unready("team-a/slack", 1, 1), b2, c1)
+
+	w.openErr["tok-d"] = errors.New("no adapter") // a start that fails
+	w.ids["tok-d"] = app("AD", "BD")
+	d := team("team-d/slack", 1, "tok-d", 4)
+	w.reconcileChecked(a3, b2, c1, d)
+	w.reconcileChecked(a3, b2, d) // c leaves
+	w.reconcileChecked()          // all leave
 }

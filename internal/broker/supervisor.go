@@ -234,7 +234,6 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 			switch {
 			case err == nil:
 				st.id, st.asked = id, true
-				s.host.table.identify(name, id) // the bot guard tells the bot from a person; it knew the bot the tokens had before
 			case errors.Is(err, errCredentialsRejected):
 				st.rejected = true
 				st.id, st.refused = appIdentity{}, false // down for its credentials: neither holding an app nor refused
@@ -278,6 +277,9 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 				s.say(ctx, name, "the ChatConnection is not served: it uses the same Slack app as the older ChatConnection "+holder+", and an app is served once", nil)
 				continue
 			}
+			// Served from here, running or not, with the bot that the guard tells from a person: written at every look and not only when the
+			// identity is learned, because a refusal that lifts finds the identity asked already and the bot forgotten (see runtimeTable.bots).
+			s.host.table.identify(name, st.id)
 			if st.rt != nil || !st.failed { // a connection whose start failed holds no app: a younger one of it may be served
 				claimed[st.id.App] = name
 			}

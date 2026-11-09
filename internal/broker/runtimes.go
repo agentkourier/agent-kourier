@@ -125,6 +125,11 @@ type runtimeTable struct {
 	// are being asked about, and the turns that hold its old platform still post as its old bot (until they finish, even if the new tokens turn
 	// out to be another app's, whose bot then replaces the old). The supervisor writes it (identify, forgetBot); the bot guard of every
 	// connection reads it (botOwner, botUserOwner).
+	//
+	// The invariant, after every look of the supervisor: a team connection has its bot here exactly while it is served with an identity that is
+	// known (the entry's id), whether or not it runs; the own connection always has its own. A connection that is refused, or that is not in the
+	// config, has none. One whose new tokens are rejected, or are not answered for, keeps the bot of its last known identity. Whatever makes a connection served again (its refusal lifts, a restart carries its id on) writes it back, since the
+	// lookup that learned it is not asked again.
 	bots map[string]appIdentity
 	// sealed is set by the shutdown when it halts the runtimes: a runtime added after it is halted as it is added, so that none runs on
 	// beyond the step that stops them.
