@@ -336,10 +336,11 @@ func TestAPressRecordedBeforeTheDeadlineHoldsTheSweepOfAnApproval(t *testing.T) 
 	}
 }
 
-// TestAnApprovalWhoseBindingIsNotKnownIsEndedAsAQuestionIs: the thread's session names a Binding the config no longer has, a
-// thread has no session, or the Binding does not allow approvals (flag false, as every Binding is today). The sweep does what it
-// did before approvals could be decided: it cancels the task, tells the thread with a question's notice, audits the timeout and
-// calls the timeout hook, and counts no approval outcome.
+// TestAnApprovalWhoseBindingIsNotKnownIsEndedAsAQuestionIs: a thread has no session, or the Binding does not allow approvals (flag
+// false, as every Binding is today). The sweep does what it did before approvals could be decided: it cancels the task, tells the
+// thread with a question's notice, audits the timeout and calls the timeout hook, and counts no approval outcome. (A Binding that the
+// config no longer has is not here: nothing can cancel through it, and the sweep ends the approval without the agent
+// (TestSweepEndsAnApprovalOfABindingThatIsGoneWithoutDenyingIt).)
 func TestAnApprovalWhoseBindingIsNotKnownIsEndedAsAQuestionIs(t *testing.T) {
 	for name, tc := range map[string]struct {
 		thread  string // the thread of the approval; "1.1" is the one with a session
@@ -347,7 +348,6 @@ func TestAnApprovalWhoseBindingIsNotKnownIsEndedAsAQuestionIs(t *testing.T) {
 		binding string // the Binding the audit names
 		warned  bool
 	}{
-		"the Binding is not in the config":     {"1.1", func(r *sweepRig) { r.look.bindings = nil }, "ns/b", true},
 		"the thread has no session":            {"9.9", func(*sweepRig) {}, "", true},
 		"the Binding does not allow approvals": {"1.1", flagFalse, "ns/b", false},
 	} {

@@ -73,7 +73,7 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 		reloadErrors: prometheus.NewCounter(prometheus.CounterOpts{Name: "agentkourier_config_reload_errors_total",
 			Help: "Config reloads that failed."}),
 		approvals: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_approval_outcomes_total",
-			Help: "What became of pauses, by Binding and outcome: turned away by the Binding's policy (auto_denied, ask_user_cancelled), or a tool approval that was decided (approved, denied, partially_approved) or timed out (timed_out)."}, []string{"binding", "outcome"}),
+			Help: "What became of pauses, by Binding and outcome: turned away by the Binding's policy (auto_denied, ask_user_cancelled), a tool approval that was decided (approved, denied, partially_approved) or timed out (timed_out), or a pause of either kind that nothing could end through its Binding and was ended without the agent after its time ran out (orphaned: the Binding is not in the config, or its chat connection is not served)."}, []string{"binding", "outcome"}),
 		timeouts: prometheus.NewCounter(prometheus.CounterOpts{Name: "agentkourier_interaction_timeouts_total",
 			Help: "Interactions that timed out unanswered."}),
 		removed: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_retention_removed_total",
@@ -186,7 +186,7 @@ func (m *Metrics) ApprovalOutcome(binding string, outcome interact.Outcome) {
 	label := string(outcome)
 	switch outcome {
 	case interact.OutcomeAskUserCancelled, interact.OutcomeAutoDenied,
-		interact.OutcomeApproved, interact.OutcomeDenied, interact.OutcomePartiallyApproved, interact.OutcomeTimedOut:
+		interact.OutcomeApproved, interact.OutcomeDenied, interact.OutcomePartiallyApproved, interact.OutcomeTimedOut, interact.OutcomeOrphaned:
 	default:
 		label = otherLabel
 	}

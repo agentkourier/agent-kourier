@@ -274,7 +274,9 @@ type sweepRig struct {
 	calls *callLog
 	logs  *logBuf
 	look  *sweepLookup
-	outs  []string // "binding outcome", for each call of OnApprovalOutcome
+	// abandon is the session as the sweep ends a pause that no agent can be asked about.
+	abandon *abandons
+	outs    []string // "binding outcome", for each call of OnApprovalOutcome
 	// reopened is what the session tells of the denials it took and did not deliver; a test plays the session with it.
 	reopened *interact.Reopened
 }
@@ -282,9 +284,14 @@ type sweepRig struct {
 // sweepLookup is the Lookup of the sweep: the Binding of a name, or err for a name it does not have.
 type sweepLookup struct {
 	bindings map[string]interact.Binding
+	// err, if set, is what every lookup answers, as a config that has not loaded does.
+	err error
 }
 
 func (l *sweepLookup) Binding(name string) (interact.Binding, error) {
+	if l.err != nil {
+		return interact.Binding{}, l.err
+	}
 	if b, ok := l.bindings[name]; ok {
 		return b, nil
 	}
@@ -294,7 +301,7 @@ func (l *sweepLookup) Binding(name string) (interact.Binding, error) {
 func (r *sweepRig) sweeper(t *testing.T, mod func(*interact.SweepConfig)) *interact.Sweeper {
 	t.Helper()
 	cfg := interact.SweepConfig{
-		Store: r.st, Sessions: r.st, Lookup: r.look, Session: r.sess, Updaters: chattest.Same[interact.Updater](r.upd), Outbox: r.enq, Auditor: r.aud, Presses: r.press, Reopened: r.reopened,
+		Store: r.st, Sessions: r.st, Lookup: r.look, Session: r.sess, Abandoner: r.abandon, Updaters: chattest.Same[interact.Updater](r.upd), Outbox: r.enq, Auditor: r.aud, Presses: r.press, Reopened: r.reopened,
 		Now:       func() time.Time { return *r.clock },
 		Logger:    slog.New(slog.NewTextHandler(r.logs, nil)),
 		OnTimeout: func(id string) { r.mu.Lock(); r.hooks = append(r.hooks, id); r.mu.Unlock() },
@@ -342,6 +349,7 @@ func newSweepRig(t *testing.T) *sweepRig {
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	r.enq = &flakyEnqueue{Outbox: r.ob}
 	r.calls, r.logs = &callLog{}, &logBuf{}
+	r.abandon = &abandons{log: r.calls}
 	r.sess.log, r.upd.log, r.enq.log, r.st.log = r.calls, r.calls, r.calls, r.calls
 	if err := st.UpsertSession(t.Context(), store.Session{Key: key, ContextID: "ctx-1", TaskID: "task-1", Binding: "ns/b", LastActivity: t0}); err != nil {
 		t.Fatal(err)

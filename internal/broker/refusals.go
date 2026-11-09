@@ -36,6 +36,16 @@ func (r *refusals) set(refused map[string]string) {
 	}
 }
 
+// served says whether the connection conn is not one of those refused: this broker holds its Bindings in the Snapshot and does not run it. It is
+// the part of "served" that the Snapshot cannot say, since a refused connection's Bindings are in it; a connection that is not in the Snapshot at
+// all has none of its Bindings in it either, which is how every part that goes by a Binding finds it gone.
+func (r *refusals) served(conn string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, refused := r.refused[conn]
+	return !refused
+}
+
 // names returns the refused connections, sorted.
 func (r *refusals) names() []string {
 	r.mu.Lock()
