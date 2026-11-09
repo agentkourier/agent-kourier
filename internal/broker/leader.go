@@ -229,6 +229,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	// The connections the supervisor does not run because they are a second connection of one Slack app are in the Snapshot, and so are
 	// their Bindings: the report that the writer reads says those Bindings are not served (refusals.overlay).
 	refused := &refusals{}
+	parts.served = refused.served // the timeout sweep ends the interactions of a refused connection without the agent
 	// The connections the verification probes the Bindings of: the supervisor publishes the list after each of its passes (supervisor.publish),
 	// and until the first the own connection's alone.
 	connsServed := h.connsServed

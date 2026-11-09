@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync/atomic"
+	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
@@ -30,7 +31,10 @@ type lateSession struct {
 	m atomic.Pointer[session.Manager]
 }
 
-var _ interact.Session = (*lateSession)(nil)
+var (
+	_ interact.Session   = (*lateSession)(nil)
+	_ interact.Abandoner = (*lateSession)(nil)
+)
 
 // bind sets the manager the session delegates to.
 func (l *lateSession) bind(m *session.Manager) { l.m.Store(m) }
@@ -51,6 +55,15 @@ func (l *lateSession) Cancel(ctx context.Context, key store.ConversationKey, id 
 	return m.Cancel(ctx, key, id, reason)
 }
 
+// Abandon implements interact.Abandoner.
+func (l *lateSession) Abandon(ctx context.Context, key store.ConversationKey, id a2a.TaskID, reason string) error {
+	m := l.m.Load()
+	if m == nil {
+		return errSessionNotReady
+	}
+	return m.Abandon(ctx, key, id, reason)
+}
+
 // interactionDeps is what the interactions are built from: the parts of Run they share. Every part but trace is required
 // (check names the one that is missing).
 type interactionDeps struct {
@@ -62,6 +75,11 @@ type interactionDeps struct {
 	metrics   *Metrics
 	log       *slog.Logger
 	trace     func(step string) // a test's: told as each step of startup is done. Optional.
+	// served says whether this broker serves the chat connection named conn ("namespace/name"), as opposed to its not running for now:
+	// the timeout sweep ends the interactions of one it does not serve without the agent (interact.SweepConfig.Served). Nil: every connection.
+	served func(conn string) bool
+	// now is the sweeper's clock; time.Now if nil. A test's.
+	now func() time.Time
 }
 
 // check refuses a deps with a part left out, and names it: the interactions are built from these in two steps (build,
@@ -173,16 +191,25 @@ func (d interactionDeps) build(inner session.Sink) (*interactionRuntime, error) 
 	return &interactionRuntime{tap: tap, late: late, replies: replies, pipeline: pipeline, votes: votes, replacer: replacer, worker: worker, reopened: interact.NewReopened(d.st), ready: ready}, nil
 }
 
+// newSweeper builds the timeout sweeper over the session manager mgr and the interactions r.
+func (d interactionDeps) newSweeper(mgr *session.Manager, r *interactionRuntime) (*interact.Sweeper, error) {
+	sweeper, err := interact.NewSweeper(interact.SweepConfig{
+		Store: d.st, Sessions: d.st, Lookup: d.bindings, Session: mgr, Abandoner: mgr, Served: d.served, Updaters: chat.Narrow[interact.Updater](d.platforms), Outbox: d.ob, Auditor: d.auditor,
+		Presses: d.st, Reopened: r.reopened, Now: d.now, OnTimeout: d.metrics.InteractionTimeout, OnApprovalOutcome: d.metrics.ApprovalOutcome, Logger: d.log,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("interactions: the sweeper: %w", err)
+	}
+	return sweeper, nil
+}
+
 // start recovers presses and starts the interaction loops after session recovery. Only then
 // may the already-constructed text handler decide replies. Stops retain their existing order.
 func (d interactionDeps) start(ctx context.Context, mgr *session.Manager, r *interactionRuntime, stops *stopList) (func(context.Context, chat.Interaction) error, error) {
 	tap, pipeline, votes, replacer, worker := r.tap, r.pipeline, r.votes, r.replacer, r.worker
-	sweeper, err := interact.NewSweeper(interact.SweepConfig{
-		Store: d.st, Sessions: d.st, Lookup: d.bindings, Session: mgr, Updaters: chat.Narrow[interact.Updater](d.platforms), Outbox: d.ob, Auditor: d.auditor,
-		Presses: d.st, Reopened: r.reopened, OnTimeout: d.metrics.InteractionTimeout, OnApprovalOutcome: d.metrics.ApprovalOutcome, Logger: d.log,
-	})
+	sweeper, err := d.newSweeper(mgr, r)
 	if err != nil {
-		return nil, fmt.Errorf("interactions: the sweeper: %w", err)
+		return nil, err
 	}
 	retention, err := interact.NewRetention(interact.RetentionConfig{Store: d.st, OnCleared: func(n int) { d.metrics.RetentionRemoved(RemovedClearedInteractions, n) }, Logger: d.log})
 	if err != nil {

@@ -27,12 +27,18 @@ type askedPlatforms struct {
 	running chat.PlatformSet[chat.Platform]
 	mu      sync.Mutex
 	asked   map[string]int
+	// stopped says why a connection that does not run is down, as the runtime table does for one whose credentials were rejected.
+	stopped map[string]error
 }
 
 func (a *askedPlatforms) Platform(conn string) (chat.Platform, error) {
 	a.mu.Lock()
 	a.asked[conn]++
+	why := a.stopped[conn]
 	a.mu.Unlock()
+	if why != nil {
+		return nil, why
+	}
 	return a.running.Platform(conn)
 }
 
@@ -75,7 +81,7 @@ func downParts(t *testing.T, bindings *Bindings) (interactionDeps, *interactionR
 	if err != nil {
 		t.Fatal(err)
 	}
-	mgr, err := session.New(session.Config{Context: t.Context(), Store: st, Questions: st, Bindings: readinessBindings{}, Users: users{platforms}, Sink: ix.tap, Audit: aud, TextReply: ix.replies.Decide, ThreadContext: session.NoThreadContext, OnTurnEnd: metrics.TurnOutcome, Logger: log})
+	mgr, err := session.New(session.Config{Context: t.Context(), Store: st, Questions: st, Bindings: bindings, Users: users{platforms}, Sink: ix.tap, Audit: aud, TextReply: ix.replies.Decide, ThreadContext: session.NoThreadContext, OnTurnEnd: metrics.TurnOutcome, Logger: log})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +134,7 @@ func startInteractions(t *testing.T, d interactionDeps, ix *interactionRuntime, 
 // turn into a thread that nothing reaches, and the notice would be queued for it. The pending interaction is timed out by a sweep
 // once the connection runs (TestSweepLeavesAnInteractionOfAConnectionThatIsDownUntilItRuns).
 func TestTheSweepLeavesTheTimeoutOfATeamConnectionThatIsDownPending(t *testing.T) {
-	d, ix, mgr, _ := downParts(t, &Bindings{})
+	d, ix, mgr, _ := downParts(t, newFixture(t).b)
 	due := time.Now().Add(-time.Hour)
 	pendingQuestion(t, d.st, downOwn, "ix-own", due, "")
 	pendingQuestion(t, d.st, downTeam, "ix-team", due, "")
