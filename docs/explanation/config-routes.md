@@ -13,7 +13,7 @@ supported. [Move the config between a ConfigMap and custom resources](../how-to/
 | Who writes them | Whoever edits the ConfigMap or the values | Whoever Kubernetes RBAC lets write the objects in each namespace |
 | One bad object | The whole config is refused | That object is refused; the others carry on |
 | What a Binding's owner sees | The broker's log and metrics | `Binding.status`, in `kubectl get akbinding` |
-| ChatConnections | Exactly one in the directory | Many in the cluster; the broker serves the one `AGENTKOURIER_CHAT_CONNECTION` names |
+| ChatConnections | Exactly one in the directory | Many in the cluster; the broker serves its own (`AGENTKOURIER_CHAT_CONNECTION`) and those of the namespaces `AGENTKOURIER_CONNECTION_NAMESPACES` admits, at most 16 in all |
 | Kubernetes | No minimum | 1.33 or later, which the chart checks |
 | Extra grants | A Role for the Secrets in each namespace | A ClusterRole to read the three kinds and write `bindings/status`, and Roles that name the Secrets |
 | Unknown fields | The loader refuses the file | The API server refuses them at apply, or drops them; the broker ignores one its own types lack (see below) |
@@ -149,9 +149,15 @@ a value. What tells an operator that the CRDs and the broker differ is `agentkou
 with, as when the CRDs come from a newer chart release than the image. It cannot see every difference: a CRD that was edited by hand keeps its annotation and reads `match`, and one that has
 no annotation reads `unannotated`. To end the mismatch, bring the CRDs and the image to the same chart release.
 
-## One ChatConnection
+## Which ChatConnections a broker serves
 
-On files the directory holds exactly one `ChatConnection`: the broker refuses to start with none or with more, and `AGENTKOURIER_CHAT_CONNECTION` is refused. On custom
-resources a cluster can hold the connections of several brokers, so each broker is told which one it serves, as `namespace/name`, in `AGENTKOURIER_CHAT_CONNECTION`, which is
-required. It serves the Bindings whose `connectionRef` names that connection, and no others. That also lets two releases share a cluster. A Binding whose `connectionRef` names a connection that does not exist is
-reported by the leader of every broker that sees it, as `ConnectionNotFound`, since none owns it.
+On files the directory holds exactly one `ChatConnection`: the broker refuses to start with none or with more, and `AGENTKOURIER_CHAT_CONNECTION` and
+`AGENTKOURIER_CONNECTION_NAMESPACES` are refused.
+
+On custom resources a cluster can hold many connections. A broker always serves its own, named as `namespace/name` in
+`AGENTKOURIER_CHAT_CONNECTION`, which is required. It also serves every ChatConnection in the namespaces that `AGENTKOURIER_CONNECTION_NAMESPACES`
+lists, so that a team can bring its own chat app without running a broker ([Let a team bring its own Slack app](../how-to/team-slack-app.md)). It
+serves at most 16 connections, its own included: the own one counts first, the others are taken oldest first (then by namespace and name), and a
+connection past the limit is not served. No setting changes the limit ([Limits](../reference/limits.md#run-the-broker)). A broker serves the Bindings
+whose `connectionRef` names a connection it serves, and no others, so two releases can still share a cluster. A Binding whose `connectionRef` names a
+connection that does not exist is reported by the leader of every broker that sees it, as `ConnectionNotFound`, since none owns it.

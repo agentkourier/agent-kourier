@@ -187,7 +187,7 @@ func connectionOf(ctx context.Context, c *v1alpha1.ChatConnection, secrets ident
 	return Connection{Ref: v1alpha1.ObjectRef{Namespace: c.Namespace, Name: c.Name}, Platform: c.Spec.Platform, Credentials: creds}, nil
 }
 
-// Connections are the ChatConnections a broker runs: its own, and the team connections it serves besides (spec D51).
+// Connections are the ChatConnections a broker runs: its own, and the team connections it serves besides (spec D52).
 type Connections struct {
 	// Own is the broker's own connection, which it always runs.
 	Own Connection

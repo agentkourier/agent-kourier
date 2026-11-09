@@ -15,7 +15,7 @@ import (
 const refusedMessage = "another ChatConnection of the same Slack app is older and is the one this broker serves, and an app is served once"
 
 // refusals are the ChatConnections that the broker holds in its Snapshot and does not run because they are a second connection of a Slack app
-// (spec D51), with why. The Snapshot serves their Bindings, so the status writer would call them accepted; overlay adds the rejection that says
+// (spec D52), with why. The Snapshot serves their Bindings, so the status writer would call them accepted; overlay adds the rejection that says
 // otherwise to the report the writer reads, in the words it uses for a connection that is not served. It is safe for concurrent use.
 type refusals struct {
 	mu      sync.Mutex
