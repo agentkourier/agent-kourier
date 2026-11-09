@@ -327,7 +327,7 @@ func TestSweepEndsTheInteractionOfAConnectionThatIsNotServed(t *testing.T) {
 
 // TestSweepEndsTheInteractionOfAGoneConnectionAndKeepsOneThatIsOnlyDown: both connections run no platform (Updaters answers
 // chat.ErrConnectionDown for each) and both Bindings are in the config. Served is what tells them apart: keyB's connection is not
-// among those the config has any more (a team deleted its ChatConnection, and re-pointed the Binding to another), keyB's is, and is only
+// among those the config has any more (a team deleted its ChatConnection, and re-pointed the Binding to another), key's is, and is only
 // down. The gone one is ended after the OrphanGrace, whatever its Binding is; the down one waits, as long as it takes.
 func TestSweepEndsTheInteractionOfAGoneConnectionAndKeepsOneThatIsOnlyDown(t *testing.T) {
 	r := orphanRig(t) // ix-1: key, the connection that is down

@@ -534,9 +534,33 @@ func TestARunEndsTheDueQuestionOfAConnectionThatIsGoneAndKeepsOneThatIsDown(t *t
 	r.until("/readyz", http.StatusOK)
 
 	r.waitMetric(`agentkourier_approval_outcomes_total{binding="team-b/on-b",outcome="orphaned"} 1`)
-	time.Sleep(20 * w.c.orphanGrace) // long enough for the sweep to have ended the other, were it to
+	// The sweep that looks at ix-down says it waits for its connection, and the sweep that does not serve it would count it down instead.
+	logged := func(msg string) bool { // a line that has msg and is about ix-down
+		for _, l := range strings.Split(w.logs.String(), "\n") {
+			if strings.Contains(l, msg) && strings.Contains(l, "interaction=ix-down") {
+				return true
+			}
+		}
+		return false
+	}
+	w.eventually("the sweep to say that it waits for team-b's connection", func() bool {
+		return logged("interact: the chat connection of interactions that are due is not running")
+	})
+	if logged("cannot be ended through its Binding") {
+		t.Errorf("the sweep counted the grace for ix-down, whose connection is in the config:\n%s", grep(w.logs.String(), "cannot be ended through its Binding"))
+	}
+	st, err := sqlite.Open(t.Context(), w.c.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	for id, want := range map[string]store.InteractionState{"ix-gone": store.InteractionTimedOut, "ix-down": store.InteractionPending} {
+		if row, err := st.GetInteraction(t.Context(), id); err != nil || row.State != want {
+			t.Errorf("%s = %+v, %v; want %s: the connection that is gone ends its question and the one that is down keeps it", id, row.State, err, want)
+		}
+	}
 	_, body := r.get("/metrics")
-	if !strings.Contains(body, `agentkourier_approval_outcomes_total{binding="team-b/on-b",outcome="orphaned"} 1`+"\n") || strings.Contains(body, "agentkourier_interaction_timeouts_total{} 1") {
-		t.Errorf("/metrics:\n%s\nwant one orphaned end, for the gone connection's question, and no timeout: the connection that is down keeps its question", grep(body, "agentkourier_interaction_timeouts_total")+"\n"+grep(body, "agentkourier_approval_outcomes_total"))
+	if strings.Contains(body, "agentkourier_interaction_timeouts_total{} 1") {
+		t.Errorf("/metrics:\n%s\nwant no timeout", grep(body, "agentkourier_interaction_timeouts_total"))
 	}
 }

@@ -118,7 +118,7 @@ type SweepConfig struct {
 	// Served says whether this broker serves the chat connection named conn ("namespace/name"): the config has it and it is not refused (a second
 	// connection of a Slack app another connection uses). A connection that is served and not running for now (it has not started, or its
 	// credentials were rejected: Updaters answers that with chat.ErrConnectionDown) is not the gone one: its interactions wait for it. A connection
-	// that is not in the config at all is not served, however its Binding is, since it can never run again. An interaction of a connection that is
+	// that is not in the config (deleted, invalid with no good generation, outside the admission list, or past the 16) is not served, however its Binding is, since it cannot run while it stays so. An interaction of a connection that is
 	// not served is an orphan's even though its Binding is in the config. Nil: every connection is served.
 	Served func(conn string) bool
 	// Reopened tells the Sweeper of the denials the session took and then failed to deliver, so that their tasks are cancelled.
