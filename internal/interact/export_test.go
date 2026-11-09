@@ -7,6 +7,13 @@ func (s *Sweeper) TakenCount() int {
 	return len(s.taken)
 }
 
+// OrphanCount is how many interactions the sweeper has seen without their Binding, or with their connection not served, and not yet ended.
+func (s *Sweeper) OrphanCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.orphanSince)
+}
+
 // UndeliveredCount is how many denials that were not delivered the sweeper still has to deal with.
 func (s *Sweeper) UndeliveredCount() int {
 	s.mu.Lock()

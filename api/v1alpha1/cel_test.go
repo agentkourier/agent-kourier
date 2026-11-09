@@ -251,11 +251,12 @@ func TestCELLiteralsEqualTheBrokersConstants(t *testing.T) {
 	})
 
 	t.Run("names the rules compare to", func(t *testing.T) {
-		if string(TriggerMention) != "mention" || string(TriggerBotMessage) != "botMessage" || string(ThreadByKey) != "key" || extractKey != "key" {
+		if string(TriggerMention) != "mention" || string(TriggerBotMessage) != "botMessage" || string(TriggerPersonMessage) != "personMessage" ||
+			string(FieldText) != "text" || string(ThreadByKey) != "key" || extractKey != "key" {
 			t.Fatal("a name that the rules write out as a literal has changed: update the rules")
 		}
 		node := bindings.at(t, trigger)
-		for _, f := range []string{"'mention'", "'botMessage'", "thread.by == 'key'", "'key' in self.extract"} {
+		for _, f := range []string{"'mention'", "'botMessage'", "'personMessage'", "k == 'text'", "thread.by == 'key'", "'key' in self.extract"} {
 			if !slices.ContainsFunc(node.rules(), func(r celRule) bool { return strings.Contains(r.Rule, f) }) {
 				t.Errorf("no rule of the trigger has %s", f)
 			}
@@ -263,13 +264,14 @@ func TestCELLiteralsEqualTheBrokersConstants(t *testing.T) {
 	})
 
 	t.Run("agents", func(t *testing.T) {
-		// The two rules of agents copy Validate's: the dialect the field is refused on, and a value that allows nothing.
-		if string(DialectA2A) != "a2a" {
+		// The two rules of agents copy Validate's: the one dialect the field is allowed on, and a value that allows nothing.
+		// The dialect rule allows the field on kagent-v1 only, so a dialect added later is refused until it says otherwise.
+		if string(DialectKagentV1) != "kagent-v1" {
 			t.Fatal("the dialect that the agents rule writes out as a literal has changed: update the rule")
 		}
 		rule := ruleWith(t, backends.at(t, "spec"), "has(self.agents)")
-		if !strings.Contains(rule, "self.dialect != 'a2a'") {
-			t.Errorf("the rule does not refuse agents on the a2a dialect: %s", rule)
+		if !strings.Contains(rule, "self.dialect == 'kagent-v1'") {
+			t.Errorf("the rule does not allow agents on kagent-v1 only: %s", rule)
 		}
 		ruleWith(t, backends.at(t, "spec.agents"), "self.sameNamespace", "size(self.namespaces) > 0")
 	})

@@ -115,6 +115,7 @@ func TestChannelAccessSaysWhichFailuresCanNeverSucceed(t *testing.T) {
 		"an app without the scope":               {status: http.StatusOK, body: slackError("missing_scope"), want: chat.ErrMissingScope, perm: chat.ReasonOther, code: "missing_scope"},
 		"a rejected token is fatal auth, not us": {status: http.StatusOK, body: slackError("invalid_auth"), fatal: true},
 		"a revoked token":                        {status: http.StatusOK, body: slackError("token_revoked"), fatal: true},
+		"an expired token":                       {status: http.StatusOK, body: slackError("token_expired"), fatal: true},
 		"a deactivated account":                  {status: http.StatusOK, body: slackError("account_inactive"), fatal: true},
 		"no token":                               {status: http.StatusOK, body: slackError("not_authed"), fatal: true},
 		"access denied names no cause":           {status: http.StatusOK, body: slackError("access_denied")},

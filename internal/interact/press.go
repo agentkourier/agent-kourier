@@ -60,15 +60,18 @@ type PressStore interface {
 
 // PressConfig configures a Pipeline. Everything but Now, Logger, Limits, EarlyFor and Notify is required.
 type PressConfig struct {
-	Store      PressStore
-	Sessions   SessionReader
-	Lookup     Lookup
-	Authorizer Authorizer
-	Ephemerals Ephemeral
-	Decider    PressDecider
-	Auditor    Auditor
-	Now        func() time.Time // time.Now if nil
-	Logger     *slog.Logger     // slog.Default() if nil
+	Store    PressStore
+	Sessions SessionReader
+	Lookup   Lookup
+	// Authorizers and Ephemerals give the platform of an interaction's connection, which says who may answer and tells a person
+	// alone what became of their press. A press is checked and answered on the connection it came in on, which is its
+	// interaction's: the press of another connection is refused (Process).
+	Authorizers chat.Resolver[Authorizer]
+	Ephemerals  chat.Resolver[Ephemeral]
+	Decider     PressDecider
+	Auditor     Auditor
+	Now         func() time.Time // time.Now if nil
+	Logger      *slog.Logger     // slog.Default() if nil
 	// Limits bounds the presses waiting (default 1000 in all, 10 for one person).
 	Limits store.PressLimits
 	// EarlyFor is how long a press for a prompt whose message is not recorded yet is tried again
@@ -93,8 +96,8 @@ type Pipeline struct{ cfg PressConfig }
 
 // NewPipeline returns a Pipeline over cfg.
 func NewPipeline(cfg PressConfig) (*Pipeline, error) {
-	if cfg.Store == nil || cfg.Sessions == nil || cfg.Lookup == nil || cfg.Authorizer == nil || cfg.Ephemerals == nil || cfg.Decider == nil || cfg.Auditor == nil {
-		return nil, errors.New("interact: Store, Sessions, Lookup, Authorizer, Ephemerals, Decider and Auditor are required")
+	if cfg.Store == nil || cfg.Sessions == nil || cfg.Lookup == nil || cfg.Authorizers == nil || cfg.Ephemerals == nil || cfg.Decider == nil || cfg.Auditor == nil {
+		return nil, errors.New("interact: Store, Sessions, Lookup, Authorizers, Ephemerals, Decider and Auditor are required")
 	}
 	if cfg.Notify == nil {
 		return nil, errors.New("interact: Notify is required")
@@ -129,7 +132,7 @@ func (p *Pipeline) Press(ctx context.Context, i chat.Interaction) error {
 	if err != nil {
 		return fmt.Errorf("interact: encode a press: %w", err)
 	}
-	press := store.Press{InteractionID: i.PromptID, User: i.User, Channel: i.At.Channel, MessageRef: i.At.ID, Inputs: inputs, PressedAt: p.cfg.Now()}
+	press := store.Press{InteractionID: i.PromptID, User: i.User, Connection: i.At.Conn, Channel: i.At.Channel, MessageRef: i.At.ID, Inputs: inputs, PressedAt: p.cfg.Now()}
 	press.TraceParent, press.TraceState = telemetry.Capture(ctx)
 	if press.Seq, err = p.cfg.Store.RecordPress(ctx, press, p.cfg.Limits); err != nil {
 		return fmt.Errorf("interact: record a press of %s: %w", i.PromptID, err)
@@ -171,6 +174,11 @@ func (p *Pipeline) Process(ctx context.Context, press store.Press) (Result, erro
 		return p.finish(ctx, press, nil, textGone)
 	case err != nil:
 		return Retry, fmt.Errorf("interact: read %s: %w", press.InteractionID, err)
+	case row.Key.Connection != press.Connection:
+		// A button is pressed on the connection whose app posted it, and a Slack ID is unlikely to collide between two apps, but
+		// nothing else holds a press of one connection from deciding the interaction of another: it is dropped, and nobody is told.
+		p.cfg.Logger.WarnContext(ctx, "interact: a press came in on another connection than its interaction's; it was dropped", "interaction", row.ID, "interaction_connection", row.Key.Connection, "press_connection", press.Connection)
+		return p.finish(ctx, press, nil, "")
 	case row.MessageRef == "":
 		if p.cfg.Now().Sub(press.PressedAt) < p.cfg.EarlyFor { // the prompt's post is not recorded yet
 			return Retry, nil
@@ -216,13 +224,17 @@ func (p *Pipeline) authorized(ctx context.Context, press store.Press, row store.
 		}
 		return p.finish(ctx, press, &row, text)
 	}
-	switch member, err := p.cfg.Authorizer.IsMember(ctx, row.Key.Channel, press.User); {
+	authz, err := p.cfg.Authorizers.Platform(row.Key.Connection)
+	if err != nil {
+		return p.unverified(row, err)
+	}
+	switch member, err := authz.IsMember(ctx, row.Key.Channel, press.User); {
 	case err != nil:
 		return p.unverified(row, err)
 	case !member:
 		return refuse(audit.Decision{Result: audit.DecisionDenied}, w.notMember)
 	}
-	if bot, err := p.cfg.Authorizer.IsBot(ctx, press.User); err != nil {
+	if bot, err := authz.IsBot(ctx, press.User); err != nil {
 		return p.unverified(row, err)
 	} else if bot {
 		return refuse(audit.Decision{Result: audit.DecisionDenied}, "")
@@ -266,7 +278,7 @@ func (p *Pipeline) authorized(ctx context.Context, press store.Press, row store.
 		// The winner's own retry (open) is not asked: their approval was authorized when it was made, and the retry only sends
 		// the recorded answer again; refusing it would leave a decision audited and not delivered, and put a refusal after it.
 		if len(b.ApproverGroups) > 0 && (row.State != store.InteractionAnswered || row.Decider != press.User) {
-			switch approver, err := p.cfg.Authorizer.IsInAnyGroup(ctx, b.ApproverGroups, press.User); {
+			switch approver, err := authz.IsInAnyGroup(ctx, b.ApproverGroups, press.User); {
 			case errors.Is(err, chat.ErrGroupsMisconfigured):
 				// The platform says no retry mends this until an operator fixes the Binding's groups (a group that does not exist or is
 				// disabled, an app without the scope to read groups, a workspace without groups), and the check ends at the first
@@ -380,11 +392,17 @@ func (p *Pipeline) finish(ctx context.Context, press store.Press, row *store.Int
 // finishWith is finish for a message that has parts, such as one that names a person.
 func (p *Pipeline) finishWith(ctx context.Context, press store.Press, row *store.Interaction, m chat.Message) (Result, error) {
 	if m.Fallback != "" || len(m.Parts) > 0 {
-		to := chat.Target{Channel: press.Channel}
+		// The person is told on the connection the press came in on, which is the interaction's; a press whose interaction is
+		// not found, or is another connection's, is answered there too.
+		to := chat.Target{Conn: press.Connection, Channel: press.Channel}
 		if row != nil {
-			to.Conn, to.Thread = row.Key.Connection, row.Key.Thread
+			to.Thread = row.Key.Thread
 		}
-		if err := p.cfg.Ephemerals.Ephemeral(ctx, to, press.User, m); err != nil {
+		e, err := p.cfg.Ephemerals.Platform(press.Connection)
+		if err == nil {
+			err = e.Ephemeral(ctx, to, press.User, m)
+		}
+		if err != nil {
 			p.cfg.Logger.WarnContext(ctx, "interact: a person could not be told the outcome of their press", "interaction", press.InteractionID, "err", err)
 		}
 	}

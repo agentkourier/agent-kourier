@@ -121,7 +121,7 @@ func (d *triggerDigest) pass(ctx context.Context) {
 func (d *triggerDigest) post(ctx context.Context, dg store.TriggerDigest) {
 	source := strings.Join([]string{"trigger-digest", dg.Connection, dg.Binding, strconv.Itoa(dg.Trigger), strconv.FormatInt(dg.Start.UnixNano(), 10)}, "/")
 	_, err := d.cfg.Queue.Enqueue(ctx, outbox.Post{
-		Source: source, Role: store.OutboxDigest, Channel: dg.Channel,
+		Source: source, Role: store.OutboxDigest, Connection: dg.Connection, Channel: dg.Channel,
 		Out: chat.Say(chat.Message{Fallback: digestText(dg)}),
 	})
 	if err != nil {
@@ -135,9 +135,11 @@ func (d *triggerDigest) post(ctx context.Context, dg store.TriggerDigest) {
 	d.cfg.Logger.InfoContext(ctx, "triggers: queued the digest line of a window of alerts that limits stopped", "binding", dg.Binding, "trigger", dg.Trigger, "channel", dg.Channel, "window", dg.End.Sub(dg.Start))
 }
 
-// digestText is the line: how many bot messages were not investigated, in how long, and which limit stopped them
-// ("7 bot messages not investigated in the last 10m (rate limit)."). When more than one limit did, each is counted. It is
-// Agent Kourier's own wording and numbers, and names no alert.
+// digestText is the line: how many messages were not investigated, in how long, and which limit stopped them
+// ("7 messages not investigated in the last 10m (rate limit)."). When more than one limit did, each is counted. It is
+// Agent Kourier's own wording and numbers, and names no alert. It says messages, whoever posted them: a botMessage trigger
+// counts a bot's, a bot's mention a bot's, a personMessage trigger a person's, and a window is named by a trigger's place in
+// the list, which a reload can give another type before the line is posted.
 func digestText(dg store.TriggerDigest) string {
 	reasons := []struct {
 		limit store.TriggerLimit
@@ -155,9 +157,9 @@ func digestText(dg store.TriggerDigest) string {
 	if len(names) > 1 {
 		why = strings.Join(counted, ", ")
 	}
-	noun := "bot messages"
+	noun := "messages"
 	if total == 1 {
-		noun = "bot message"
+		noun = "message"
 	}
 	return fmt.Sprintf("%d %s not investigated in the last %s (%s).", total, noun, compactDuration(dg.End.Sub(dg.Start)), why)
 }

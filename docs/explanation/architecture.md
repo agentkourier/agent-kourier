@@ -109,8 +109,8 @@ Secrets, the Agent Kourier Deployment and persistent storage; the reloader valid
 configuration. The two routes are never merged. [Choose a config route](config-routes.md) says how they differ. Secret
 access uses Kubernetes RBAC; cross-namespace resource references use configured namespace allowlists.
 
-A broker serves one `ChatConnection`: see [One ChatConnection](config-routes.md#one-chatconnection) for how it is chosen on each route. Multiple bindings
-can route its channels to different agents and backends. The store is SQLite with
+A broker serves its own `ChatConnection`, and with custom resources the `ChatConnection`s of the namespaces the platform team admits, up to 16 in all: see [One ChatConnection](config-routes.md#which-chatconnections-a-broker-serves) for how the own one is chosen on each route, and [Let a team bring its own Slack app](../how-to/team-slack-app.md) for the others. Multiple bindings
+can route a connection's channels to different agents and backends. The store is SQLite with
 one replica, or Postgres with one or two replicas (two are active and passive) (see
 [High availability](high-availability.md)); the broker is never active-active.
 

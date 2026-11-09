@@ -355,9 +355,9 @@ var errRefused = errors.New("invalid_chunks")
 func (e *env) spy(t *testing.T, steps bool, fail func(int) error) *atomic.Int32 {
 	t.Helper()
 	n := new(atomic.Int32)
-	caps := e.cfg.Platform.Capabilities()
+	caps := e.platform.Capabilities()
 	caps.Steps = steps
-	e.cfg.Platform = spy{Platform: e.cfg.Platform, caps: caps, steps: n, fail: fail}
+	e.use(spy{Platform: e.platform, caps: caps, steps: n, fail: fail})
 	e.live = newRenderer(t, e.cfg)
 	return n
 }
@@ -653,7 +653,7 @@ func TestAnUpdateRefusedWithItsStepsIsSentAgainWithout(t *testing.T) {
 	e := setup(t)
 	e.streamedThenLost(t)
 	refused := new(atomic.Int32)
-	e.cfg.Platform = refusesSteps{Platform: e.cfg.Platform, refused: refused}
+	e.use(refusesSteps{Platform: e.platform, refused: refused})
 	e.live = newRenderer(t, e.cfg)
 	release := e.hold()
 	t.Cleanup(release)
@@ -688,7 +688,7 @@ func TestAFinalWithNoTextRefusedWithItsStepsSaysThereWasNoOutput(t *testing.T) {
 	e := setup(t)
 	e.leftOpen(t, "", chat.Step{ID: "s1", Title: "search", State: chat.StepRunning})
 	refused := new(atomic.Int32)
-	e.cfg.Platform = refusesSteps{Platform: e.cfg.Platform, refused: refused}
+	e.use(refusesSteps{Platform: e.platform, refused: refused})
 	e.live = newRenderer(t, e.cfg)
 	release := e.hold()
 	t.Cleanup(release)
@@ -716,7 +716,7 @@ func TestAFinalRefusedWithItsStepsMakesOneUpdate(t *testing.T) {
 	e.postedLine(t)
 	before := len(e.rec.sent("/chat.update"))
 	refused := new(atomic.Int32)
-	e.cfg.Platform = refusesSteps{Platform: e.cfg.Platform, refused: refused}
+	e.use(refusesSteps{Platform: e.platform, refused: refused})
 	e.live = newRenderer(t, e.cfg)
 	release := e.hold()
 	t.Cleanup(release)
@@ -737,7 +737,7 @@ func TestAFinalRefusedWithItsStepsMakesOneUpdate(t *testing.T) {
 func TestStepsAreShownThroughTheNeutralSeamOfAnyPlatform(t *testing.T) {
 	e := setup(t)
 	fake := chattest.NewFake()
-	e.cfg.Platform = fake
+	e.use(fake)
 	e.live = newRenderer(t, e.cfg)
 	run := e.stream(t)
 	run.Handle(call("c1", "search", map[string]any{"q": "up"}))

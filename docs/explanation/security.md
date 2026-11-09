@@ -36,6 +36,14 @@ its questions; a button press or typed answer counts only from a channel member 
 per-user or group permissions in v1, with one exception: a Binding with tool approvals can set
 `interactions.approverGroups`, and then only members of those user groups may decide an approval.
 
+A trigger's limits bound how many turns it starts, not how many turns people take after. A `personMessage` trigger lets
+anyone in the channel start one with a top-level message, held to the trigger's limits; a mentioned reply in that message's
+thread is then a turn that no limit counts, as a reply in any thread Agent Kourier owns is, and as a person's mention is.
+Turns in one thread run one at a time. A start that a limit stops is audited under the person who posted the message, once for
+each window of the trigger's rate limit, so a member who spends the limits for everyone can be found without a row for every
+message they post. A trigger's `match` and `exclude` read the raw text of a message:
+they filter noise and control no access, and a zero-width character inside a word gets past an `exclude`.
+
 Bindings are namespaced, and shared resources list the namespaces allowed to refer to them in `allowedNamespaces`. A
 team's identity token Secret lives in its own namespace.
 
@@ -64,12 +72,49 @@ resource status. A Secret's value is held in a type whose every formatting path 
 watch on Secrets in each namespace that holds a Secret its config values name (a ChatConnection's credentials, a Binding's token, an AgentBackend's header
 value), in the release namespace with `store.type: postgres` (the DSN's Secret), and in each namespace of `rbac.secretNamespaces`; with `config.source: files` and none of these, in the
 release namespace. With `config.source: files` such a Role covers every Secret of its namespace. With `config.source: crds` it names the Secrets
-(`resourceNames`): the ones the config values and the DSN name, the one Secret that the served ChatConnection reads (the chart derives it from
+(`resourceNames`): the ones the config values and the DSN name, the one Secret that the broker's own ChatConnection reads (the chart derives it from
 `config.chatConnection`: the Secret of the connection's name, or `config.chatConnectionSecret`, in the connection's namespace), and the ones that `rbac.secretNames` lists for that namespace, and a
 namespace that only `config.chatConnection` or `rbac.secretNames` names gets a Role for those names. A team's Secrets, which the chart cannot see, are granted by the team, with a Role in its own namespace. A namespace of `rbac.secretNamespaces` stays namespace-wide there, whatever `rbac.secretNames` says of it (read from
 `templates/rbac.yaml`). With `config.source: crds` the chart also makes a
 ClusterRole that lets the broker list and watch the three custom resource kinds, patch `bindings/status` and get the three CRDs by name. A rejected Binding token fails the turn, is re-read,
 audited and counted; nothing falls back.
+
+## A team brings its own chat app
+
+With `config.connectionNamespaces` set, one broker holds the chat credentials of more than one app: its own connection's, and
+the bot token and app-level token of every ChatConnection in the namespaces on the list, read from the Secret each names in its own
+namespace. They sit in the memory of one pod, in the redacting type of the section above, beside the Binding tokens the broker
+already holds for every team. A reader of that pod's memory has them all, and a platform that admits a team's namespace takes on
+the tokens of the team's app: see [Let a team bring its own Slack app](../how-to/team-slack-app.md).
+
+**The admission list is the consent.** Without it, any namespace where someone may create a ChatConnection would make the broker
+open a chat connection on tokens nobody at the platform reviewed. So the broker serves its own ChatConnection (the one
+`config.chatConnection` names, in any namespace) and the ChatConnections of the namespaces on the list, and no other. Another
+ChatConnection of the release's namespace is not served unless that namespace is on the list. A ChatConnection that is not served is
+not run, and the broker does not read the Secret it names. The list is read at start: taking a namespace off it is a restart, after which the connection is no longer served.
+
+A second key stands beside it. The Secret of a team connection is in the team's namespace, and the broker's ServiceAccount can
+read it only if someone grants that: the team, with a Role that names the Secret, or the platform, with `rbac.secretNames` or
+`rbac.secretNamespaces`. `credentialsSecretRef` takes a name and never a namespace, so a team cannot point its connection at a
+Secret of another namespace. The broker reads the two keys `botToken` and `appToken` of the Secret, and uses them to call Slack.
+
+What a team that may write a ChatConnection in an admitted namespace can do, and what it cannot:
+
+- It can have the broker open Socket Mode on its app, and post as its app in the channels that app is in. A Binding posts only to the
+  channel it names, as before, and a Binding uses a connection only from the connection's namespace or a namespace in its
+  `allowedNamespaces`.
+- It can have the broker send its app's tokens to an agent, if the Secret is granted. The grant to the ServiceAccount is for the
+  Secret and not for the ChatConnection, so any Binding's `tokenSecretRef` or AgentBackend's `valueSecretRef` in that namespace can name it,
+  and the broker sends the value to that AgentBackend's `url`, as described below. Anyone who may write Bindings or AgentBackends in an admitted
+  namespace can then do this with the team's `botToken` and `appToken`. Grant the Secret only if they may hold the tokens.
+- It can fill the places. The broker serves at most 16 connections, its own first and the others oldest first, and no setting changes that.
+  A team that creates many leaves a later team's connection out, and that connection's Bindings say `ConnectionNotServed`. Bound
+  it with a `ResourceQuota` on `count/chatconnections.agentkourier.dev` in each admitted namespace, as the section below does for Bindings (Kubernetes's own object-count quota for a custom resource; not run here for this kind).
+- It cannot stop the broker or another team's connection. A rejected token, an invalid ChatConnection and a Secret that cannot be read
+  stop or hold back that connection only, with its Bindings reporting why. The broker's own connection keeps its rule: a token Slack rejects
+  ends the process.
+- It stops the broker's use of its app by deleting its ChatConnection, which takes effect without a hold. The platform stops it by taking
+  the namespace off the list, with the restart that applies the change.
 
 ## What the people who write these objects can do
 
@@ -205,9 +250,9 @@ What bounds this is what the broker can read, and where it can connect:
   for a hostile tenant is to remove its Bindings or to quota them. The limits are on [Limits](../reference/limits.md).
 
 What a writer of a Binding and an AgentBackend sees of your conversations. The agent of a Binding receives each mention of the bot in the channel, each reply in a thread the Binding owns
-(with `chat.threadReplies: all`, the default, every reply in the thread, not only the ones that mention the bot), and with a `botMessage` trigger the messages of the bot that
-the trigger names. Each comes with the sender's name, ID and email, where the chat platform gives them. That holds for any channel the bot is in, private channels too. Two
-things add more. With `chat.threadReplies: mention`, a mentioned turn carries the thread's other replies as context. And on any Binding a mention of the bot by another bot or a
+(with `chat.threadReplies: all`, the default, every reply in the thread, not only the ones that mention the bot), with a `botMessage` trigger the messages of the bot that
+the trigger names, and with a `personMessage` trigger every message a person posts outside a thread that the trigger takes. What a person wrote, a mention, a reply or such a message, comes with their name, ID and email, where the chat platform gives them; a bot's message comes with none. That holds for any channel the bot is in, private channels too. Two
+things add more. With `chat.threadReplies: mention`, and in the thread of a message a `personMessage` trigger took whatever it says, a mentioned turn carries the thread's other replies as context. And on any Binding a mention of the bot by another bot or a
 webhook makes the agent receive the thread from its root, every author's messages, whatever `threadReplies` says; that is on by default (`chat.botMentions: any`), and
 `chat.botMentions: none` stops it ([Stored data](../reference/stored-data.md) describes what is kept). The agent also posts to the channel as the bot. Whoever chooses the
 AgentBackend's `url` therefore also chooses who reads those conversations.
@@ -226,8 +271,8 @@ Other things a writer of a Binding can do:
 goes through that door. What they share, and what they do not:
 
 - **Shared.** The `url`. With `dialect: kagent-v1` the agent is named in the request path (`<url>/agents/<namespace>/<name>`), and `agent.name` and `agent.namespace` of a Binding
-  are whatever its writer types, checked for their shape and never against a list of agents; so every agent that the backend serves is in reach, unless the backend sets
-  `agents`, which limits the namespaces (below). With `dialect: a2a` the URL is the
+  are whatever its writer types, checked for their shape; `agent.name` is never checked against a list of agents, and `agent.namespace` is checked only when the backend
+  sets `agents`, against the namespaces that it allows (below). So without `agents` every agent that the backend serves is in reach, and with it every agent in the namespaces it allows. With `dialect: a2a` the URL is the
   exact endpoint and the agent name is not sent, so the backend is that one agent. The dialect. And the static `headers`, whose Secret values are read in the AgentBackend's namespace
   and sent with every request of every Binding that names it, and with every probe. A Binding's writer cannot read those values, but each request they cause carries them.
 - **Not shared.** The identity. Each Binding presents its own: the token of its own `identity.tokenSecretRef`, read in its own namespace, or its own `userId`. The connection
@@ -254,7 +299,10 @@ spec:
 - **Left out, there is no limit.** That is how every AgentBackend behaves until you set `agents`: a Binding may name an agent in any namespace, and only the backend's front door decides.
 - **Set, a Binding must match.** Its `agent.namespace` must be the Binding's own namespace, if `sameNamespace` is true, or one of `namespaces`. `sameNamespace` is the namespace of the Binding, not of the AgentBackend.
   What a Binding that names any other namespace costs depends on the route. **With custom resources** it is not served, and its `Accepted` condition is `False` with the reason `AgentNamespaceNotAllowed`;
-  the check runs each time the broker reads the config, so setting or narrowing `agents` drops the Bindings that no longer match at the next read, and the others keep running. **On the files route** the whole config
+  the check runs each time the broker reads the config, so setting or narrowing `agents` drops the Bindings that no longer match at the next read, and the others keep running. A task already sent to the agent is followed
+  until it ends, across reconnects, with the backend it started with, and the broker's own cancel of a stuck task uses that backend too. The steps that look the Binding
+  up find it gone: its next turn, one already queued included, is not sent; a pause for an approval or a question is not posted, and nothing ends that task on the agent,
+  which stays waiting, while the timeout cancel of a prompt posted earlier fails at every sweep; a button press is not decided; and after a restart the broker does not follow the turn. **On the files route** the whole config
   fails to resolve, so nothing is dropped: at start the broker exits with code 2 and serves nothing (the chart's `config.rollOnChange` restarts the pod when the ConfigMap changes, and with SQLite the old pod is already stopped), and on a reload the broker keeps serving
   every Binding under the last good config, which has the old limit or none, and sets `agentkourier_config_stale` to 1. The message names the AgentBackend and the agent namespace
   and nothing else of the backend's spec. When the AgentBackend's newest generation is invalid, or it was deleted and is held, it adds that the limit is that of the generation being served; the problems of an

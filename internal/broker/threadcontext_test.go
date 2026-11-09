@@ -152,7 +152,7 @@ func newTCWorld(t *testing.T) *tcWorld {
 func (w *tcWorld) build(p chat.Platform) *threadContext {
 	w.t.Helper()
 	return mustThreadContext(w.t, threadContextConfig{
-		Platform: p, Replies: w.turns, Logger: slog.New(slog.NewTextHandler(w.logs, nil)),
+		Platforms: chattest.Same[chat.Platform](p), Replies: w.turns, Logger: slog.New(slog.NewTextHandler(w.logs, nil)),
 		After: func(d time.Duration) <-chan time.Time {
 			w.mu.Lock()
 			w.waits = append(w.waits, d)
@@ -173,7 +173,7 @@ func mustThreadContext(t *testing.T, cfg threadContextConfig) *threadContext {
 	return tc
 }
 
-// newThreadContext refuses a config without its Platform or Replies, and the error names the field: a wiring that drops one
+// newThreadContext refuses a config without its Platforms or Replies, and the error names the field: a wiring that drops one
 // would build a context that cannot read a thread or ask which messages were turns.
 func TestNewThreadContextNamesTheFieldThatIsMissing(t *testing.T) {
 	w := newTCWorld(t)
@@ -181,8 +181,8 @@ func TestNewThreadContextNamesTheFieldThatIsMissing(t *testing.T) {
 		field string
 		cfg   threadContextConfig
 	}{
-		{"Platform", threadContextConfig{Replies: w.turns}},
-		{"Replies", threadContextConfig{Platform: w.fake}},
+		{"Platforms", threadContextConfig{Replies: w.turns}},
+		{"Replies", threadContextConfig{Platforms: chattest.Same[chat.Platform](w.fake)}},
 	} {
 		t.Run(tc.field, func(t *testing.T) {
 			if got, err := newThreadContext(tc.cfg); err == nil || got != nil || !strings.Contains(err.Error(), tc.field) {
@@ -773,7 +773,7 @@ func TestThreadContextWaitsOutARateLimitOnce(t *testing.T) {
 		w.win.script = []error{limited(time.Second)}
 		ctx, cancel := context.WithCancel(w.ctx)
 		tc := mustThreadContext(t, threadContextConfig{
-			Platform: w.win, Replies: w.turns, Logger: slog.New(slog.NewTextHandler(w.logs, nil)),
+			Platforms: chattest.Same[chat.Platform](w.win), Replies: w.turns, Logger: slog.New(slog.NewTextHandler(w.logs, nil)),
 			After: func(time.Duration) <-chan time.Time { cancel(); return make(chan time.Time) }, // never fires
 		})
 		if got := tc.Section(ctx, tcKey, tcBinding, "100.000100", "100.000900", false); got != threadReadFailed {

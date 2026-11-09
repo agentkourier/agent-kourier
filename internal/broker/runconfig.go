@@ -2,6 +2,7 @@ package broker
 
 import (
 	"cmp"
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -31,9 +33,13 @@ type RunConfig struct {
 	// ConfigDir is the directory of resource files, read with SourceFiles and required then; with SourceCRDs it is ignored.
 	// DBPath is the SQLite file on the volume (read only with the SQLite store, and required then).
 	ConfigDir, DBPath string
-	// ChatConnection is the one ChatConnection this broker serves, required with SourceCRDs, where a cluster may hold
-	// the connections of several brokers, and refused with SourceFiles, whose directory must hold exactly one.
+	// ChatConnection is this broker's own ChatConnection, which it always serves and runs, required with SourceCRDs, where a cluster
+	// may hold the connections of several brokers, and refused with SourceFiles, whose directory must hold exactly one.
 	ChatConnection v1alpha1.ObjectRef
+	// ConnectionNamespaces is the platform's admission list (AGENTKOURIER_CONNECTION_NAMESPACES): the namespaces whose ChatConnections
+	// the broker serves besides its own, which the source reads (crsource.Options.ConnectionNamespaces). Each is a DNS-1123 label. None
+	// serves the own connection alone, as before the list existed. It is refused with SourceFiles.
+	ConnectionNamespaces []string
 	// Dynamic reads the custom resources with SourceCRDs. Nil means InClusterDynamicClient.
 	Dynamic dynamic.Interface
 	// statusWarnings is the counter of the WarningHandler of a StatusClient that a test gives, which feeds it itself: nil makes
@@ -116,6 +122,21 @@ type RunConfig struct {
 	// startTrace is told as each step of the interactions' startup is done, so a test can see their order
 	// against the Slack intake opening.
 	startTrace func(step string)
+	// identify tells whose bot a connection's token is (appIdentity), in place of auth.test: a seam for this package's tests, which run
+	// connections on doubles. Nil asks Slack, except where newSlack replaces the client, and then asks nothing (identityOf).
+	identify func(ctx context.Context, conn Connection) (appIdentity, error)
+	// superviseEvery is how often the supervisor looks at the team connections (5 seconds if zero): a seam for this package's tests,
+	// which cannot wait for it.
+	superviseEvery time.Duration
+	// sweepEvery is how often the interactions' timeout sweep runs (10 seconds if zero) and orphanGrace how long it waits before it ends an
+	// interaction whose Binding is gone or whose connection is refused (5 minutes if zero): seams for this package's tests, which cannot
+	// wait for them.
+	sweepEvery, orphanGrace time.Duration
+	// transportClosed is told the connection as the idle connections of its Slack transport are closed, so a test can see that every
+	// connection's is, and after the final drain.
+	transportClosed func(conn string)
+	// outboxBuilt is given the outbox as the leader half builds it, so a test can post through it and look at its lanes.
+	outboxBuilt func(*outbox.Outbox)
 	// leaderLaunched is called once Run has launched the leader half (or its candidacy), before it waits for the
 	// signal, so a test can hold Run there and send the signal while the leader half is up.
 	leaderLaunched func()
@@ -144,6 +165,9 @@ func (c RunConfig) validateSource() error {
 		if haveConn {
 			return fmt.Errorf("%w: ChatConnection is set with the %s config source, which serves the one ChatConnection of its directory: unset it", ErrWiring, SourceFiles)
 		}
+		if len(c.ConnectionNamespaces) > 0 {
+			return fmt.Errorf("%w: ConnectionNamespaces is set with the %s config source, which serves the one ChatConnection of its directory: unset it", ErrWiring, SourceFiles)
+		}
 	case SourceCRDs:
 		if c.ChatConnection.Namespace == "" || c.ChatConnection.Name == "" {
 			return fmt.Errorf("%w: ChatConnection must be set to a namespace and a name with the %s config source: a cluster may hold the connections of several brokers, and this one serves only the one it is told", ErrWiring, SourceCRDs)
@@ -151,6 +175,11 @@ func (c RunConfig) validateSource() error {
 		// Neither part is echoed: the value is logged with the route at start, and a token pasted in its place must not follow it there.
 		if len(validation.IsDNS1123Label(c.ChatConnection.Namespace)) > 0 || len(validation.IsDNS1123Subdomain(c.ChatConnection.Name)) > 0 {
 			return fmt.Errorf("%w: ChatConnection is not a namespace that is a DNS-1123 label and a name that is a DNS-1123 subdomain, which are all Kubernetes can hold (its value is not shown)", ErrWiring)
+		}
+		for i, ns := range c.ConnectionNamespaces {
+			if len(validation.IsDNS1123Label(ns)) > 0 {
+				return fmt.Errorf("%w: ConnectionNamespaces item %d is not a namespace name, which is a DNS-1123 label (no wildcard; its value is not shown)", ErrWiring, i+1)
+			}
 		}
 	default:
 		return fmt.Errorf("%w: unknown config source %q, want %q or %q", ErrWiring, c.ConfigSource, SourceFiles, SourceCRDs)

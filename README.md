@@ -77,6 +77,9 @@ Without a broker, each of these is code in every agent that talks to chat:
   and starts an investigation in each alert's thread, with a cooldown per alert, a rate
   limit and a daily cap. There is no webhook, so alerts reach people whether or not Agent
   Kourier is running.
+- **Reports in a channel.** A `personMessage` trigger starts a turn of the person on each message they post at the
+  top level of the channel, without a mention, held to the trigger's limits; replies under it need a mention. See
+  [A person's message](docs/reference/chat-triggers.md#a-persons-message).
 - **Agents that call agents.** A mention of Agent Kourier by another bot starts a turn in
   that thread, with the thread so far as untrusted data, within fixed limits. It is on by default; a
   Binding turns it off with `chat.botMentions: none`. See
@@ -220,6 +223,7 @@ other bots, and the [trigger reference](docs/reference/chat-triggers.md) has the
 | Agent backend | Google AX, through an ADK agent in an AX Task and the `a2a` dialect. See [examples/ax](examples/ax/README.md) | Experimental |
 | Alert source | Alertmanager, through the message it posts to Slack (`botMessage` trigger, written in full) | Implemented |
 | Alert source | Any other bot that posts to the channel, with a `botMessage` trigger written in full; not exercised in the sandbox or the end-to-end tests | Implemented |
+| Chat platform | A person's message at the top level of the channel, with a `personMessage` trigger written in full; not exercised in the sandbox or the end-to-end tests | Implemented |
 | Operations | High availability: two replicas on Postgres, one leader elected by a Kubernetes Lease, fencing, and a standby that takes over. See [High availability and failover](docs/explanation/high-availability.md) | Implemented |
 
 The common interface to an agent is streaming A2A over JSON-RPC, version 1.0 or 0.3, and Agent Kourier

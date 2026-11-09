@@ -111,14 +111,16 @@ const (
 	// failed the read.
 	ReasonChatUnavailable Reason = "ChatUnavailable"
 	// ReasonChatCredentialsChanged is an Unknown ChannelJoined or ApproversReadable reason: the chat credentials changed after the
-	// connection started, so a restart is needed before they are used. It is the changed-but-not-yet-restarted case,
+	// connection started, so they are not used yet: the broker's own connection takes them at a restart of Agent Kourier, and a team
+	// connection restarts by itself. It is the changed-but-not-yet-restarted case,
 	// not the rejected one (ReasonChatCredentialsRejected), where the platform has refused the token the connection
 	// is using.
 	ReasonChatCredentialsChanged Reason = "ChatCredentialsChanged"
 
 	// ReasonChatCredentialsUnusable is an Unknown ChannelJoined or ApproversReadable reason: the Secret that holds the chat credentials, or a key of it, is
-	// gone or empty, or the Secret is of a type that is never read. The connection still uses the tokens it read, and a restart
-	// fails until the Secret is mended, which tells it from ReasonChatCredentialsChanged, where a restart is what is wanted.
+	// gone or empty, or the Secret is of a type that is never read. The connection still uses the tokens it read. For the broker's
+	// own connection a restart fails until the Secret is mended, which tells it from ReasonChatCredentialsChanged, where a restart is what is wanted; a
+	// team connection that has not started starts by itself once the Secret can be used.
 	ReasonChatCredentialsUnusable Reason = "ChatCredentialsUnusable"
 
 	// ReasonGroupNotFound is an ApproversReadable reason: a named approver group does not exist.

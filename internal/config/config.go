@@ -61,6 +61,10 @@ type Set struct {
 	// are there as the last good generation of themselves (Invalid.Served). Load and file mode never fill it. Resolve
 	// ignores it, and so does ResolvePartial: a Reloader that runs per object reads it (Report).
 	Invalid []Invalid
+	// UnservedConnections lists the ChatConnections of the namespaces the source reads that it does not serve, for a reason that is not
+	// the object's own (UnservedConnection), and that are in no list above. Load and file mode never fill it. Resolve and ResolvePartial
+	// ignore it, and a Reloader that runs per object passes it on (Report).
+	UnservedConnections []UnservedConnection
 
 	// sources maps each object to its location, "<file>#<n>" as in Load's problems. It is keyed by
 	// identity, so an object added or renamed after Load has the location Load gave its new identity, if any. A Set not

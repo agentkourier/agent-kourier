@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"slices"
@@ -17,6 +18,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
 // otherLabel is the value of a label whose input is outside the fixed set it takes.
@@ -71,7 +73,7 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 		reloadErrors: prometheus.NewCounter(prometheus.CounterOpts{Name: "agentkourier_config_reload_errors_total",
 			Help: "Config reloads that failed."}),
 		approvals: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_approval_outcomes_total",
-			Help: "What became of pauses, by Binding and outcome: turned away by the Binding's policy (auto_denied, ask_user_cancelled), or a tool approval that was decided (approved, denied, partially_approved) or timed out (timed_out)."}, []string{"binding", "outcome"}),
+			Help: "What became of pauses, by Binding and outcome: turned away by the Binding's policy (auto_denied, ask_user_cancelled), a tool approval that was decided (approved, denied, partially_approved) or timed out (timed_out), or a pause of either kind that nothing could end through its Binding and was ended without the agent after its time ran out (orphaned: the Binding is not in the config, or its chat connection is not served)."}, []string{"binding", "outcome"}),
 		timeouts: prometheus.NewCounter(prometheus.CounterOpts{Name: "agentkourier_interaction_timeouts_total",
 			Help: "Interactions that timed out unanswered."}),
 		removed: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_retention_removed_total",
@@ -93,17 +95,18 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 		probeDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "agentkourier_binding_probe_duration_seconds",
 			Help: "How long a probe of a Binding took, by condition: the time the checker took, whatever it found.", Buckets: prometheus.DefBuckets}, []string{"condition"}),
 		invalid: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_config_invalid_objects",
-			Help: "Objects of the custom resource config source that the broker refuses or holds past their deletion, by kind: a Binding of this broker (it names this broker's connection, or none that exists) that fails Default or Validate; any AgentBackend in the cluster that does, whoever uses it; this broker's own ChatConnection when it fails them or was deleted and is held; and, while that connection is held, each Binding of it and each AgentBackend they use that was deleted and is held with it. Each is served from its last good generation, or left out if it has none; a held Binding that lost its channel or whose backend is gone is counted and not served. 0 while the config is read from files, where one bad object fails the whole reload."}, []string{"kind"}),
+			Help: "Objects of the custom resource config source that the broker refuses or holds past their deletion, by kind: a Binding of this broker (it names this broker's connection, or none that exists) that fails Default or Validate; any AgentBackend in the cluster that does, whoever uses it; this broker's own ChatConnection when it fails them or was deleted and is held; and, while that connection is held, each Binding of it and each AgentBackend they use that was deleted and is held with it. Each is served from its last good generation, or left out if it has none; a held Binding that resolution leaves out, for any reason (it lost its channel, its backend is gone, or its backend no longer allows it), is counted and not served. 0 while the config is read from files, where one bad object fails the whole reload."}, []string{"kind"}),
 		heldObjects: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_config_held_objects",
-			Help: "Objects of the custom resource config source that were deleted and that the broker holds at their last good generation, by kind, while its own ChatConnection is deleted and held: the connection, the Bindings of it that are gone, and the AgentBackends that they and the Bindings of it that are still there use and that are gone. A held Binding whose backend went first, or that lost its channel, is held and not served. 0 when nothing is held, and always while the config is read from files."}, []string{"kind"}),
+			Help: "Objects of the custom resource config source that were deleted and that the broker holds at their last good generation, by kind, while its own ChatConnection is deleted and held: the connection, the Bindings of it that are gone, and the AgentBackends that they and the Bindings of it that are still there use and that are gone. A held Binding that resolution leaves out, for any reason (it lost its channel, its backend is gone, or its backend no longer allows it), is held and not served. 0 when nothing is held, and always while the config is read from files."}, []string{"kind"}),
 		bindingRej: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_config_binding_rejections",
-			Help: "Bindings of the custom resource config source that are not accepted as written, by the reason of their Accepted condition: InvalidSpec, BackendNotFound, BackendRejected, ConnectionNotFound, ConnectionRejected, NamespaceNotAllowed, AgentNamespaceNotAllowed or ChannelConflict. A Binding that is served from an older generation counts too. 0 while the config is read from files."}, []string{"reason"}),
+			Help: "Bindings of the custom resource config source that are not accepted as written, by the reason of their Accepted condition: InvalidSpec, BackendNotFound, BackendRejected, ConnectionNotFound, ConnectionRejected, ConnectionNotServed, NamespaceNotAllowed, AgentNamespaceNotAllowed or ChannelConflict. A Binding that is served from an older generation counts too. ConnectionNotServed is the leader's alone (a standby says 0): it counts the Bindings whose status the leader writes that reason to. 0 while the config is read from files."}, []string{"reason"}),
 		statusWrites: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_binding_status_writes_total",
 			Help: "Writes of a Binding's status by the leader, by result: written, put_back (written again to the words it already had, because the status had been changed: a person's edit, or another writer), or failed (the API server refused or could not be reached; it is tried again). The series exist only once the leader of a broker that reads the custom resources has tried a write."}, []string{"result"}),
 		crdSchema: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_crd_schema_state",
 			Help: "1 for what the broker found when it compared each CRD's schema hash with the one it was built with, at start and every minute, and 0 for the other states, by CRD and state (match, mismatch, unannotated or unknown). Only a broker that reads custom resources has these series; with files there are none."}, []string{"crd", "state"}),
 	}
 	m.ConfigReport(config.Report{})
+	m.UnservedBindings(0)
 	staleGauge := prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "agentkourier_config_stale",
 		Help: "1 before the first config load, and while the running config may lag its source: the latest reload failed, or the source says it cannot be reached."}, func() float64 {
 		if stale != nil && stale() {
@@ -165,6 +168,14 @@ func (m *Metrics) ConfigReport(r config.Report) {
 	m.bindingRej.WithLabelValues(otherLabel).Set(float64(reasons[otherLabel]))
 }
 
+// UnservedBindings sets the series of agentkourier_config_binding_rejections for ConnectionNotServed to n: statusConfig.OnUnserved. It is
+// the number of Bindings whose Accepted condition the status writer says ConnectionNotServed, which no source's report holds (the
+// writer composes it from the connections left out and the second connections of one Slack app), so ConfigReport leaves the series
+// alone. Only the leader runs the writer, so only the leader's series is ever above 0.
+func (m *Metrics) UnservedBindings(n int) {
+	m.bindingRej.WithLabelValues(string(config.ReasonConnectionNotServed)).Set(float64(n))
+}
+
 // StatusWrite counts a write of a Binding's status: statusConfig.OnWrite. A result outside the three the writer reports is
 // one series, "other".
 func (m *Metrics) StatusWrite(result string) {
@@ -184,7 +195,7 @@ func (m *Metrics) ApprovalOutcome(binding string, outcome interact.Outcome) {
 	label := string(outcome)
 	switch outcome {
 	case interact.OutcomeAskUserCancelled, interact.OutcomeAutoDenied,
-		interact.OutcomeApproved, interact.OutcomeDenied, interact.OutcomePartiallyApproved, interact.OutcomeTimedOut:
+		interact.OutcomeApproved, interact.OutcomeDenied, interact.OutcomePartiallyApproved, interact.OutcomeTimedOut, interact.OutcomeOrphaned:
 	default:
 		label = otherLabel
 	}
@@ -246,6 +257,17 @@ func (m *Metrics) ChatConnected(connection string, up bool) {
 		v = 1
 	}
 	m.chatUp.WithLabelValues(connection).Set(v)
+}
+
+// ConnectionRemoved is told that the ChatConnection named connection ("namespace/name") is not served by this broker: it was taken out of
+// the config or out of the set the broker serves, or it was stopped as a second connection of a Slack app another connection uses. It deletes the
+// series the connection has: agentkourier_chat_connected, which would otherwise say 0 for a connection that is not served, and the ones that
+// carry its name in the telemetry (telemetry.ForgetConnection). It is the one place that lists them, so a series that gains a connection label is
+// deleted here. A connection that restarts, or is stopped for its credentials, is still served and keeps its series. A connection with no series
+// is no error.
+func (m *Metrics) ConnectionRemoved(ctx context.Context, connection string) {
+	m.chatUp.DeleteLabelValues(connection)
+	telemetry.ForgetConnection(ctx, connection)
 }
 
 // Leader sets agentkourier_leader: 1 once this replica does Agent Kourier's work, 0 while it waits to.

@@ -30,7 +30,7 @@ func testCRs(objs ...runtime.Object) *CRs {
 }
 
 func testDynamic(objs ...runtime.Object) *dynamicfake.FakeDynamicClient {
-	kinds := map[schema.GroupVersionResource]string{BindingGVR: "BindingList", AgentBackendGVR: "AgentBackendList"}
+	kinds := map[schema.GroupVersionResource]string{BindingGVR: "BindingList", AgentBackendGVR: "AgentBackendList", ChatConnectionGVR: "ChatConnectionList"}
 	return dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), kinds, objs...)
 }
 
@@ -89,6 +89,92 @@ func TestCRsWriteOnlyInTheTeamNamespace(t *testing.T) {
 	}
 	if _, err := c.Create(ctx, BindingGVR, testBinding(TeamNamespace, "x")); err != nil {
 		t.Errorf("Create in %s = %v, want it made", TeamNamespace, err)
+	}
+}
+
+// TestCRsInWritesInTheNamespaceItChose: the scenarios of several Slack apps play a team in the namespaces named in In, and in no other: a client made for
+// one refuses a write in the next, and In refuses a namespace the runner has no Role in. Its Secrets and grants are that namespace's too.
+func TestCRsInWritesInTheNamespaceItChose(t *testing.T) {
+	c := testCRs()
+	ctx := t.Context()
+	for _, ns := range []string{TeamNamespace, MultiTeamNamespace, ScratchNamespace, ScratchNamespace2} {
+		in, err := c.In(ns)
+		if err != nil {
+			t.Fatalf("In(%s) = %v, want a client", ns, err)
+		}
+		if in.Namespace() != ns {
+			t.Errorf("In(%s).Namespace() = %s", ns, in.Namespace())
+		}
+		if _, err := in.Create(ctx, ChatConnectionGVR, testBinding(ns, "x")); err != nil {
+			t.Errorf("Create in %s through In(%s) = %v, want it made", ns, ns, err)
+		}
+		other := TeamNamespace
+		if ns == TeamNamespace {
+			other = ScratchNamespace
+		}
+		if _, err := in.Create(ctx, BindingGVR, testBinding(other, "x")); !errors.Is(err, ErrWriteRefused) {
+			t.Errorf("Create in %s through In(%s) = %v, want ErrWriteRefused", other, ns, err)
+		}
+		if err := in.Delete(ctx, ChatConnectionGVR, other, "x"); !errors.Is(err, ErrWriteRefused) {
+			t.Errorf("Delete in %s through In(%s) = %v, want ErrWriteRefused", other, ns, err)
+		}
+		if err := in.Delete(ctx, ChatConnectionGVR, ns, "x"); err != nil {
+			t.Errorf("Delete in %s through In(%s) = %v, want it gone", ns, ns, err)
+		}
+	}
+	for _, ns := range []string{"agent-kourier", "kube-system", "", "team-d"} {
+		if _, err := c.In(ns); !errors.Is(err, ErrNoSuchTeamNamespace) {
+			t.Errorf("In(%q) = %v, want ErrNoSuchTeamNamespace", ns, err)
+		}
+	}
+	if c.Namespace() != TeamNamespace {
+		t.Errorf("a client made for no namespace writes in %s, want %s", c.Namespace(), TeamNamespace)
+	}
+
+	in, err := c.In(ScratchNamespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := in.CreateSecret(ctx, "mc-slack", map[string]string{"botToken": "xoxb-fake"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := in.GrantSecret(ctx, "mc-slack"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := in.core.RbacV1().RoleBindings(ScratchNamespace).Get(ctx, roleName("mc-slack"), metav1.GetOptions{}); err != nil {
+		t.Errorf("the grant is not in %s: %v", ScratchNamespace, err)
+	}
+	if _, err := in.core.RbacV1().Roles(TeamNamespace).Get(ctx, roleName("mc-slack"), metav1.GetOptions{}); err == nil {
+		t.Errorf("the grant was made in %s, not in the namespace the client was made for", TeamNamespace)
+	}
+	if err := in.RemoveSecret(ctx, "mc-slack"); err != nil {
+		t.Errorf("RemoveSecret = %v", err)
+	}
+}
+
+// TestSetSecretDataMergesTheKeysGiven: a team that fixes a token changes the one key and leaves the others, and the Secret must be there.
+func TestSetSecretDataMergesTheKeysGiven(t *testing.T) {
+	c, err := testCRs().In(MultiTeamNamespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := t.Context()
+	if err := c.SetSecretData(ctx, "slack-team-a", map[string]string{"botToken": "xoxb-fake-new"}); err == nil {
+		t.Fatal("SetSecretData of a Secret that is not there succeeded; want the not-found error")
+	}
+	if err := c.CreateSecret(ctx, "slack-team-a", map[string]string{"botToken": "xoxb-fake-old", "appToken": "xapp-fake-old"}); err != nil {
+		t.Fatal(err)
+	}
+	// The fake clientset does not turn stringData into data, as the API server does: it keeps what the patch said, which is what is read back.
+	if err := c.SetSecretData(ctx, "slack-team-a", map[string]string{"botToken": "xoxb-fake-new"}); err != nil {
+		t.Fatalf("SetSecretData = %v", err)
+	}
+	got, err := c.core.CoreV1().Secrets(MultiTeamNamespace).Get(ctx, "slack-team-a", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.StringData["botToken"] != "xoxb-fake-new" || got.StringData["appToken"] != "xapp-fake-old" {
+		t.Errorf("the Secret holds %v after the patch; want the new botToken and the old appToken", got.StringData)
 	}
 }
 

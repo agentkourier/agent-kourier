@@ -15,7 +15,7 @@ import (
 // error as Run returns it, scrubbed and wrapped.
 func TestFatalAuthCode(t *testing.T) {
 	for code, want := range map[string]string{
-		"invalid_auth": "invalid_auth", "token_revoked": "token_revoked", "account_inactive": "account_inactive", "not_authed": "not_authed",
+		"invalid_auth": "invalid_auth", "token_revoked": "token_revoked", "token_expired": "token_expired", "account_inactive": "account_inactive", "not_authed": "not_authed",
 		"ratelimited": "", "internal_error": "", "service_unavailable": "", // a try later may work
 		"channel_not_found": "", "msg_too_long": "", // permanent for a post, not for the connection
 	} {

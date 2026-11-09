@@ -87,7 +87,7 @@ func newFake(t *testing.T, opts ...fakeslack.Option) *fakeslack.Server {
 }
 
 func clientConfig(fake *fakeslack.Server) slack.Config {
-	return slack.Config{BotToken: secret.New(botToken), AppToken: secret.New(appToken), APIURL: fake.URL() + "/",
+	return slack.Config{BotToken: secret.New(botToken), AppToken: secret.New(appToken), APIURL: fake.URL() + "/", Connection: intakeConn,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 }
 

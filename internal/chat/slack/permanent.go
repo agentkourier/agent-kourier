@@ -57,7 +57,7 @@ func reactionPermanentCode(err error) string {
 }
 
 // fatalAuthCode returns the Slack error code in err if it says that the tokens will never work: a
-// rejected, revoked or missing token, or a deactivated account. Running again cannot cure it, so the
+// rejected, revoked, expired or missing token, or a deactivated account. Running again cannot cure it, so the
 // process exits and says why, where any other error from Run is retried with a backoff. It is not
 // permanentCode, which is about one post. It reads the code scrub keeps, through any wrapping, and
 // is "" for an error that is not Slack's own, whatever its text says.
@@ -67,7 +67,7 @@ func fatalAuthCode(err error) string {
 		return ""
 	}
 	switch resp.Err {
-	case "invalid_auth", "token_revoked", "account_inactive", "not_authed":
+	case "invalid_auth", "token_revoked", "token_expired", "account_inactive", "not_authed":
 		return resp.Err
 	}
 	return ""
@@ -79,7 +79,7 @@ func fatalAuthCode(err error) string {
 // (missing_scope), a workspace whose plan has no user groups (plan_upgrade_required), a token of a type the method does
 // not take (not_allowed_token_type), a token without the permission (no_permission), and a method an Enterprise grid
 // cannot call (enterprise_is_restricted). A rate limit, a server error, a timeout and a cancelled context may pass on
-// another try. A rejected, revoked or missing token (invalid_auth, token_revoked, account_inactive, not_authed) is
+// another try. A rejected, revoked or missing token (invalid_auth, token_revoked, token_expired, account_inactive, not_authed) is
 // fatalAuthCode's, the restart policy's, and is not reclassified here: the group read is as transient as any other
 // call on a token that Run is about to find rejected. It reads the code scrub keeps, through any wrapping.
 //
@@ -110,7 +110,7 @@ func groupsMisconfiguredCode(err error) string {
 // are a channel value Slack does not accept (channel_not_found: there is no such channel, or none the bot may see) and an
 // app installed without the scope the method needs (missing_scope). A rate limit, a server error, a timeout and a
 // cancelled context may pass on another try. A rejected, revoked or missing token (invalid_auth, token_revoked,
-// account_inactive, not_authed) is fatalAuthCode's, the restart policy's, and is not reclassified here, as for
+// token_expired, account_inactive, not_authed) is fatalAuthCode's, the restart policy's, and is not reclassified here, as for
 // groupsMisconfiguredCode. The other codes of the method's page (access_denied, team_access_not_granted, no_permission,
 // not_allowed_token_type, enterprise_is_restricted and the like) stay unclassified, and a caller retries them, because
 // ChannelAccess has a sentinel for only those two causes and these name neither. That is not because they are transient:

@@ -12,20 +12,20 @@ const (
 	// MaxLimitWindow is the longest rateLimit.per, and the length of the window of maxRunsPerDay.
 	MaxLimitWindow = 24 * time.Hour
 	// DefaultDigestWindow is how long a digest line covers for limits that carry no rateLimit.per. A loaded
-	// botMessage trigger always has a rateLimit, so config never reaches this default; it is a defensive value for
+	// botMessage or personMessage trigger always has a rateLimit, so config never reaches this default; it is a defensive value for
 	// limits built in code.
 	DefaultDigestWindow = time.Hour
 )
 
-// TriggerLimits bounds how many investigations a botMessage trigger starts (spec 8.2, D26, D31): a rate limit over
-// a window and a cap for a day. A botMessage trigger sets both. Only a start is limited: a repeat, a close and a
+// TriggerLimits bounds how many investigations a botMessage or personMessage trigger starts (spec 8.2, D26, D31): a rate
+// limit over a window and a cap for a day. Such a trigger sets both. Only a start is limited: a repeat, a close and a
 // note never are.
 type TriggerLimits struct {
 	// RateLimit allows MaxRuns starts in any window of Per, and MaxConcurrent investigations running at once.
-	// Required for a botMessage trigger, with all three fields set.
+	// Required for a botMessage or personMessage trigger, with all three fields set.
 	// +optional
 	RateLimit *RateLimit `json:"rateLimit,omitempty"`
-	// MaxRunsPerDay caps starts in any 24 hours. Required for a botMessage trigger: an explicit 0 means
+	// MaxRunsPerDay caps starts in any 24 hours. Required for a botMessage or personMessage trigger: an explicit 0 means
 	// no cap.
 	// +kubebuilder:validation:Minimum=0
 	// +optional
@@ -36,7 +36,7 @@ type TriggerLimits struct {
 func (l TriggerLimits) IsZero() bool { return l.RateLimit == nil && l.MaxRunsPerDay == nil }
 
 // DigestWindow is how long one digest line covers for a trigger with these limits: rateLimit.per. The
-// DefaultDigestWindow fallback is defensive: a loaded botMessage trigger always has a rateLimit, so it is never
+// DefaultDigestWindow fallback is defensive: a loaded botMessage or personMessage trigger always has a rateLimit, so it is never
 // reached through config.
 func (l TriggerLimits) DigestWindow() time.Duration {
 	if l.RateLimit != nil && l.RateLimit.Per.Duration > 0 {

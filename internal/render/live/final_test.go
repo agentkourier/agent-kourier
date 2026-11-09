@@ -13,6 +13,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render"
@@ -178,7 +179,7 @@ func TestPermanentErrorEndsTheRunAtOnce(t *testing.T) {
 			e := setup(t)
 			send := &failingSender{err: fmt.Errorf("deliver: %w", permanent)}
 			logs := &strings.Builder{}
-			r := newRenderer(t, live.Config{Sender: send, Platform: slack.NewPlatform(nil, "ns/conn"), Store: e.store, Throttle: throttle, Now: e.clk.Now, After: e.clk.After, Logger: slog.New(slog.NewTextHandler(logs, nil))})
+			r := newRenderer(t, live.Config{Sender: send, Platforms: chattest.Same[chat.Platform](slack.NewPlatform(nil, "ns/conn")), Store: e.store, Throttle: throttle, Now: e.clk.Now, After: e.clk.After, Logger: slog.New(slog.NewTextHandler(logs, nil))})
 			run := r.Start(t.Context(), live.Turn{Source: "turn-1", Channel: "C1", Thread: e.root, Mode: v1alpha1.OutputLive})
 			run.Handle(text("a", "hello"))
 			select {

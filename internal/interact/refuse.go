@@ -38,6 +38,9 @@ const (
 	OutcomePartiallyApproved Outcome = "partially_approved"
 	// OutcomeTimedOut: an approval timed out with no decision.
 	OutcomeTimedOut Outcome = "timed_out"
+	// OutcomeOrphaned: a pause, of any kind, that the timeout sweep ended after its time ran out because its Binding is not in the config or
+	// this broker does not serve its chat connection, with nothing posted by the sweep and, for a Binding that is gone, without asking the agent.
+	OutcomeOrphaned Outcome = "orphaned"
 )
 
 // The notices are fixed text: nothing the agent wrote reaches the thread through them (spec 8.4, R2).
@@ -218,7 +221,7 @@ func (i *Intake) cancel(ctx context.Context, p Pause, reason, notice, id string)
 }
 
 func (i *Intake) enqueueNotice(ctx context.Context, p Pause, notice, id string) error {
-	post := outbox.Post{Source: id, Role: store.OutboxNotice, Channel: p.Key.Channel, Thread: p.Key.Thread, Out: chat.Say(render.Notice(notice, ""))}
+	post := outbox.Post{Source: id, Role: store.OutboxNotice, Connection: p.Key.Connection, Channel: p.Key.Channel, Thread: p.Key.Thread, Out: chat.Say(render.Notice(notice, ""))}
 	if _, err := i.cfg.Outbox.Enqueue(ctx, post); err != nil {
 		return fmt.Errorf("enqueue the notice: %w", err)
 	}
@@ -299,7 +302,7 @@ func (i *Intake) autoDeny(ctx context.Context, p Pause, b Binding, in dialect.In
 	default:
 		return nil
 	}
-	post := outbox.Post{Source: row.ID, Role: store.OutboxNotice, Channel: p.Key.Channel, Thread: p.Key.Thread, Out: chat.Say(render.Notice(noticeDenied, ""))}
+	post := outbox.Post{Source: row.ID, Role: store.OutboxNotice, Connection: p.Key.Connection, Channel: p.Key.Channel, Thread: p.Key.Thread, Out: chat.Say(render.Notice(noticeDenied, ""))}
 	if _, err := i.cfg.Outbox.Enqueue(ctx, post); err != nil {
 		return fmt.Errorf("interact: enqueue the notice of %s: %w", row.ID, err)
 	}

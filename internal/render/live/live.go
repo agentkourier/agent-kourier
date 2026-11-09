@@ -58,6 +58,13 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
+// defaultThrottle is the least time between two writes to one message, and defaultFinalDeadline how long the final text is tried
+// for: Config.Throttle and Config.FinalDeadline when they are not set. The docs page of the limits holds them to these.
+const (
+	defaultThrottle      = 2 * time.Second
+	defaultFinalDeadline = 3 * time.Minute
+)
+
 // maxSteps is the most steps a stream shows. A turn may call tools without end, and each step is a call to the
 // platform and a card in the message: the calls after these are made, and not shown.
 const maxSteps = 50
@@ -81,27 +88,37 @@ type MentionAuditor interface {
 	Mention(ctx context.Context, a audit.Actor, m audit.Mention) error
 }
 
-// Config configures a Renderer. Sender, Platform and Store are required: New refuses a Config without them.
+// Config configures a Renderer. Sender, Platforms and Store are required: New refuses a Config without them.
 type Config struct {
 	Sender Sender
 	// Audit records the mentions a turn makes. Nil records none.
 	Audit MentionAuditor
-	// Platform edits a message, runs a stream, and says what the platform can do (Capabilities) and what an
-	// error means (Classify). A turn streams only if Capabilities say Streams.
-	Platform chat.Platform
+	// Platforms gives the platform of a turn's connection (Turn.Connection) when the turn starts: it edits a message, runs a
+	// stream, and says what the platform can do (Capabilities) and what an error means (Classify). A turn streams only if
+	// Capabilities say Streams. A turn whose connection has no platform running (chat.ErrConnectionDown) is rendered by a
+	// platform that fails every call with that error, which the turn treats as the platform being down: its writes are
+	// tried again every Throttle, and not counted as attempts, and its reply goes through the outbox, whose row waits for the
+	// connection. The turn asks for the connection's platform again when a write fails because the connection is down (or the
+	// platform rejects its credential), and goes on through the one it gets (Run.reresolve), so a turn finishes through the
+	// runtime of a connection that comes up, or is restarted, while it runs.
+	Platforms chat.Resolver[chat.Platform]
 	// Store is the outbox's: the renderer creates the stream's row itself, with no payload, and records its
 	// ts the moment it has one.
 	Store store.Outbox
-	// Throttle is the least time between two writes to one message (default 2 seconds).
+	// Throttle is the least time between two writes to one message (default 2 seconds), and how often a write is tried again
+	// while its connection is down.
 	Throttle time.Duration
 	// Attempts is how many times in a row a write may fail before it is given up (default 5). A
-	// rate limit is not an attempt: Slack says when to come back, and the write waits for it.
+	// rate limit is not an attempt: Slack says when to come back, and the write waits for it. Nor is a write that failed
+	// because the turn's connection is down (chat.ErrConnectionDown): it waits for the connection, up to FinalDeadline
+	// for the final text.
 	Attempts int
 	// WriteTimeout bounds each write to Slack (default 30 seconds). A write never watches the
 	// turn's context: a request cut short may still have been taken, and a retry would repeat it.
 	WriteTimeout time.Duration
 	// FinalDeadline is how long the final text is tried for, from the moment the run sees it
-	// (default 3 minutes). It outlasts the turn's context, which ends when the send returns.
+	// (default 3 minutes), the wait for a connection that is down included. It outlasts the turn's context, which ends when the
+	// send returns.
 	FinalDeadline time.Duration
 	// ActivityDelay is how long a turn goes with nothing new (no text, and no tool call under way) before it shows that
 	// it is working (default 3 seconds). It is the renderer's own setting, not the Binding's. Only the progress modes
@@ -116,10 +133,11 @@ type Config struct {
 // Renderer starts the rendering of turns. It is safe for concurrent use.
 type Renderer struct {
 	cfg  Config
-	caps chat.Caps      // what the platform can do and how much it shows, asked once
 	runs sync.WaitGroup // the goroutines of the turns started and not over
-	// busyOff is set once the platform has said it cannot show a thread as busy (chat.ErrNoBusy): no turn asks again.
-	busyOff atomic.Bool
+	// busyOff is set once the platform of a connection has said it cannot show a thread as busy (chat.ErrNoBusy): no turn of
+	// that connection asks again, by the connection's name (the same app may lack the permission on one connection and have
+	// it on another). Guarded by mu.
+	busyOff map[string]*atomic.Bool
 	// current is the latest run of each turn that has not ended, by the turn's Source: a run of a turn that one already
 	// renders takes the message over from it (see Start).
 	mu      sync.Mutex
@@ -129,19 +147,19 @@ type Renderer struct {
 	left map[string]*Run
 }
 
-// New returns a Renderer over cfg. It refuses a Config without its Sender, Platform or Store, naming the field, so that a
+// New returns a Renderer over cfg. It refuses a Config without its Sender, Platforms or Store, naming the field, so that a
 // wiring that leaves one out fails at start-up (a Renderer with no Store would never stream, and nothing would say so).
 func New(cfg Config) (*Renderer, error) {
 	switch {
 	case cfg.Sender == nil:
 		return nil, errors.New("live: Config.Sender is required")
-	case cfg.Platform == nil:
-		return nil, errors.New("live: Config.Platform is required")
+	case cfg.Platforms == nil:
+		return nil, errors.New("live: Config.Platforms is required")
 	case cfg.Store == nil:
 		return nil, errors.New("live: Config.Store is required")
 	}
 	if cfg.Throttle <= 0 {
-		cfg.Throttle = 2 * time.Second
+		cfg.Throttle = defaultThrottle
 	}
 	if cfg.Attempts <= 0 {
 		cfg.Attempts = 5
@@ -150,7 +168,7 @@ func New(cfg Config) (*Renderer, error) {
 		cfg.WriteTimeout = 30 * time.Second
 	}
 	if cfg.FinalDeadline <= 0 {
-		cfg.FinalDeadline = 3 * time.Minute
+		cfg.FinalDeadline = defaultFinalDeadline
 	}
 	if cfg.ActivityDelay <= 0 {
 		cfg.ActivityDelay = 3 * time.Second
@@ -164,7 +182,7 @@ func New(cfg Config) (*Renderer, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
-	return &Renderer{cfg: cfg, caps: cfg.Platform.Capabilities(), current: map[string]*Run{}, left: map[string]*Run{}}, nil
+	return &Renderer{cfg: cfg, busyOff: map[string]*atomic.Bool{}, current: map[string]*Run{}, left: map[string]*Run{}}, nil
 }
 
 // Wait returns once every turn started so far has ended, or with ctx's error if that comes first, so that
@@ -184,7 +202,10 @@ func (r *Renderer) Wait(ctx context.Context) error {
 
 // Turn is where one turn's output goes.
 type Turn struct {
-	Source          string // the turn's ID, from which the outbox row of its reply is named
+	Source string // the turn's ID, from which the outbox row of its reply is named
+	// Connection is the ChatConnection ("namespace/name") whose app renders the turn: its platform is the one every call of the
+	// turn goes to, and its name is on the outbox rows the turn makes.
+	Connection      string
 	Channel, Thread string
 	// Mode is live, which updates the message as the turn runs, or final, which posts it once
 	// when the turn ends.
@@ -220,11 +241,14 @@ type Turn struct {
 
 // Run is the rendering of one turn.
 type Run struct {
-	cfg  Config
-	caps chat.Caps
-	turn Turn
-	wake chan struct{} // a slot: the state changed
-	done chan struct{}
+	cfg Config
+	// platform is the platform of the turn's connection, resolved when the run started and again when a write fails because the
+	// connection is down (reresolve), and caps what it can do and how much it shows, asked then. Only the goroutine uses them.
+	platform runPlatform
+	caps     chat.Caps
+	turn     Turn
+	wake     chan struct{} // a slot: the state changed
+	done     chan struct{}
 	// end ends the run's context, as the end of the turn's does: a later run of the same turn ends it so, with
 	// session.ErrTurnContinues (see Start).
 	end   context.CancelCauseFunc
@@ -344,19 +368,28 @@ const (
 // finished, so that the two never write the message at once and the earlier, which knows less, never writes over the
 // later. The session does this when it follows a task again under the turn whose send has not yet returned.
 func (r *Renderer) Start(ctx context.Context, t Turn) *Run {
-	streaming := t.Mode == v1alpha1.OutputLive && t.Recipient != "" && r.caps.Streams
-	u := &Run{cfg: r.cfg, caps: r.caps, owner: r, turn: t, streaming: streaming, wake: make(chan struct{}, 1), done: make(chan struct{}), texts: map[a2a.ArtifactID]string{}, progress: v1alpha1.ProgressSteps}
+	var platform runPlatform
+	var caps chat.Caps
+	if p, err := r.cfg.Platforms.Platform(t.Connection); err != nil {
+		r.cfg.Logger.WarnContext(ctx, "live: the turn's connection is not running; its writes fail until it is, and its reply waits in the outbox", "connection", t.Connection, "channel", t.Channel, "err", err)
+		d := down{conn: t.Connection, err: err}
+		platform, caps = d, d.Capabilities()
+	} else {
+		platform, caps = p, p.Capabilities()
+	}
+	streaming := t.Mode == v1alpha1.OutputLive && t.Recipient != "" && caps.Streams
+	u := &Run{cfg: r.cfg, platform: platform, caps: caps, owner: r, turn: t, streaming: streaming, wake: make(chan struct{}, 1), done: make(chan struct{}), texts: map[a2a.ArtifactID]string{}, progress: v1alpha1.ProgressSteps}
 	if t.Mode == v1alpha1.OutputLive && (t.Progress == v1alpha1.ProgressStepsAndActivity || t.Progress == v1alpha1.ProgressActivity) {
 		u.progress = t.Progress
 	}
-	u.eligible = r.caps.Steps && t.Mode == v1alpha1.OutputLive && (streaming || u.progress != v1alpha1.ProgressActivity)
+	u.eligible = caps.Steps && t.Mode == v1alpha1.OutputLive && (streaming || u.progress != v1alpha1.ProgressActivity)
 	if u.listed = u.eligible && !streaming; u.listed {
 		u.gone = map[string]bool{}
 	}
-	if r.caps.Busy && !streaming && u.progress != v1alpha1.ProgressSteps {
-		u.busy = &busyMark{m: r.cfg.Platform, off: &r.busyOff, at: chat.Target{Channel: t.Channel, Thread: t.Thread}, run: u}
+	if caps.Busy && !streaming && u.progress != v1alpha1.ProgressSteps {
+		u.busy = &busyMark{m: platform, off: r.busyOffOf(t.Connection), at: chat.Target{Conn: t.Connection, Channel: t.Channel, Thread: t.Thread}, run: u}
 	}
-	if u.timed = u.progress != v1alpha1.ProgressSteps && (!streaming || r.caps.Steps); u.timed {
+	if u.timed = u.progress != v1alpha1.ProgressSteps && (!streaming || caps.Steps); u.timed {
 		u.started = r.cfg.Now()
 		u.gapAt, u.gapOpen, u.gapSeq, u.calls = u.started, true, 1, map[string]bool{}
 	}
@@ -385,6 +418,18 @@ func (r *Renderer) Start(ctx context.Context, t Turn) *Run {
 		u.earlier = nil // a run left for a later one holds no chain of the runs before it
 	}()
 	return u
+}
+
+// busyOffOf is the flag of the connection conn that its platform cannot show a thread as busy.
+func (r *Renderer) busyOffOf(conn string) *atomic.Bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	off, ok := r.busyOff[conn]
+	if !ok {
+		off = new(atomic.Bool)
+		r.busyOff[conn] = off
+	}
+	return off
 }
 
 // forget drops u as the current run of its turn, unless a later run has taken its place. A run that left a message showing
@@ -759,7 +804,9 @@ func (u *Run) run(ctx context.Context) {
 	defer func() { u.ref = ref }()
 	var next time.Time
 	fails := 0
-	shown := false // the final text is in the thread: what is left to write only adds its steps
+	_, startedDown := u.platform.(down)
+	downLogged := startedDown // the connection's being down has been logged (Start does, for a turn that began so), for the spell that goes on
+	shown := false            // the final text is in the thread: what is left to write only adds its steps
 	// giveUp ends the run on a final write that will not go through. Once the final text is shown it is the steps that were
 	// not added, and the turn was delivered: the alert on failed finals is not for them.
 	giveUp := func(outcome, msg string, args ...any) {
@@ -846,7 +893,9 @@ func (u *Run) run(ctx context.Context) {
 				return
 			}
 			if err != nil {
-				switch verdict := u.cfg.Platform.Classify(chat.OpPost, err); {
+				verdict := u.platform.Classify(chat.OpPost, err)
+				down := errors.Is(err, chat.ErrConnectionDown)
+				switch {
 				case errors.Is(err, store.ErrInvalid), errors.Is(err, chat.ErrInvalid), errors.Is(err, outbox.ErrAbandoned): // retrying cannot mend them
 					giveUp("permanent_failure", "live: the message cannot be sent; giving up", "err", err)
 					return
@@ -855,6 +904,29 @@ func (u *Run) run(ctx context.Context) {
 					next = u.cfg.Now().Add(max(u.cfg.Throttle, verdict.RetryAfter))
 					continue
 				}
+				// The platform the run holds is not the connection's now: none ran the connection when the turn started, or the runtime
+				// it holds was retired, or its credential was rejected after a restart halted it, which no report can end for the
+				// runtime. The connection may run on another platform by the next try.
+				waiting := down
+				if down || verdict.Class == chat.FatalAuth {
+					// A rejected credential whose connection is down is the gap of a restart: the old runtime is out of the table
+					// and the new one is not in it yet, so the try is a wait for the connection, not an attempt. Were the new one never
+					// to come up (its Secret cannot be used), each try is one real call with the revoked token, every Throttle: bounded by
+					// the final deadline and the turn's end, as any wait is.
+					if lookup := u.reresolve(ctx, &ref); verdict.Class == chat.FatalAuth && errors.Is(lookup, chat.ErrConnectionDown) {
+						waiting = true
+					}
+				}
+				if waiting {
+					// Waiting for the connection is no attempt, as a rate limit is none: a restart of a connection takes longer than
+					// Attempts tries. It is bounded by the final's deadline (sleep) and by the turn's end.
+					if !downLogged {
+						u.cfg.Logger.WarnContext(ctx, "live: the turn's connection is not running; its writes are tried again until it is", "connection", u.turn.Connection, "channel", u.turn.Channel, "err", err)
+						downLogged = true
+					}
+					continue
+				}
+				downLogged = false
 				u.cfg.Logger.WarnContext(ctx, "live: writing the message failed; it will be tried again", "channel", u.turn.Channel, "err", err)
 				if fails++; fails >= u.cfg.Attempts {
 					if v.final {
@@ -867,7 +939,7 @@ func (u *Run) run(ctx context.Context) {
 				}
 				continue
 			}
-			fails = 0
+			fails, downLogged = 0, false
 			if u.stale {
 				u.stale, u.sent = false, "" // the post may be the old message: write once more
 				continue
@@ -922,7 +994,7 @@ func (u *Run) notifyMentions(ctx context.Context) {
 		telemetry.Count(ctx, "agentkourier_mentions_total", u.turn.Binding, "capped")
 	}
 	for _, m := range scan.Made {
-		post := outbox.Post{Source: outbox.MentionSource(u.turn.Source, m.User), Role: store.OutboxNotice, Channel: u.turn.Channel, Thread: u.turn.Thread, Out: chat.Say(render.MentionMessage(m))}
+		post := outbox.Post{Source: outbox.MentionSource(u.turn.Source, m.User), Role: store.OutboxNotice, Connection: u.turn.Connection, Channel: u.turn.Channel, Thread: u.turn.Thread, Out: chat.Say(render.MentionMessage(m))}
 		if _, err := u.cfg.Sender.Enqueue(ctx, post); err != nil {
 			u.cfg.Logger.WarnContext(ctx, "live: a mention of a turn was not queued", "outbox_id", outbox.ID(post.Source, post.Role), "channel", u.turn.Channel, "err", err)
 			continue
@@ -1038,7 +1110,7 @@ func (u *Run) stopEarlier(ctx context.Context) {
 	case row.MessageRef == "":
 		return
 	}
-	err = u.cfg.Platform.StreamAt(u.cfg.Platform.RefAt(u.turn.Channel, u.turn.Thread, row.MessageRef)).Stop(ctx, "", chat.Message{}, id)
+	err = u.platform.StreamAt(u.platform.RefAt(u.turn.Channel, u.turn.Thread, row.MessageRef)).Stop(ctx, "", chat.Message{}, id)
 	if err != nil && !errors.Is(err, chat.ErrNotStreaming) {
 		u.cfg.Logger.WarnContext(ctx, "live: the stream an earlier process left could not be stopped; it is left to the platform", "channel", u.turn.Channel, "err", err)
 	}
@@ -1065,7 +1137,7 @@ func (u *Run) adopt(ctx context.Context, ref *chat.Ref) bool {
 		return false
 	}
 	u.streaming = false
-	*ref, u.adoptStop = u.cfg.Platform.RefAt(u.turn.Channel, u.turn.Thread, row.MessageRef), true
+	*ref, u.adoptStop = u.platform.RefAt(u.turn.Channel, u.turn.Thread, row.MessageRef), true
 	return true
 }
 
@@ -1155,7 +1227,7 @@ func (u *Run) message(v view) chat.Message {
 // write like any other.
 func (u *Run) update(ctx context.Context, ref chat.Ref, v view) error {
 	carried := len(v.steps) > 0 && !u.stepsOff
-	err := u.cfg.Platform.Update(ctx, ref, chat.Say(u.message(v)))
+	err := u.platform.Update(ctx, ref, chat.Say(u.message(v)))
 	if err == nil && carried {
 		for _, st := range v.steps {
 			u.sentStep(st)
@@ -1164,7 +1236,7 @@ func (u *Run) update(ctx context.Context, ref chat.Ref, v view) error {
 	if err != nil && carried && u.cannotShow(err) {
 		u.cfg.Logger.WarnContext(ctx, "live: the platform refused the message with its steps; it is sent again without them", "channel", u.turn.Channel, "err", err)
 		u.stepsOff = true
-		err = u.cfg.Platform.Update(ctx, ref, chat.Say(v.posted()))
+		err = u.platform.Update(ctx, ref, chat.Say(v.posted()))
 	}
 	switch {
 	case errors.Is(err, chat.ErrWouldDropText) && !hasBody(v.m):
@@ -1189,7 +1261,7 @@ func (u *Run) cannotShow(err error) bool {
 	if errors.Is(err, chat.ErrInvalid) || errors.Is(err, chat.ErrTooLarge) {
 		return true
 	}
-	v := u.cfg.Platform.Classify(chat.OpPost, err)
+	v := u.platform.Classify(chat.OpPost, err)
 	return v.Class == chat.Permanent && v.Reason == chat.ReasonInvalidContent
 }
 
@@ -1220,7 +1292,7 @@ func (u *Run) write(ctx context.Context, ref *chat.Ref, v view) (telemetryErr er
 	}
 	if ref.ID != "" {
 		if u.adoptStop { // an earlier run's stream: end it, or the platform refuses the update
-			err := u.cfg.Platform.StreamAt(*ref).Stop(ctx, "", chat.Message{}, outbox.ID(u.turn.Source, store.OutboxReply))
+			err := u.platform.StreamAt(*ref).Stop(ctx, "", chat.Message{}, outbox.ID(u.turn.Source, store.OutboxReply))
 			if err != nil && !errors.Is(err, chat.ErrNotStreaming) {
 				return err
 			}
@@ -1239,7 +1311,7 @@ func (u *Run) write(ctx context.Context, ref *chat.Ref, v view) (telemetryErr er
 	u.sends++
 	earlier := u.sends == 1 && u.rowMadeBefore(ctx)
 	posted := v.posted()
-	got, err := u.cfg.Sender.Send(ctx, outbox.Post{Source: u.turn.Source, Role: store.OutboxReply, Channel: u.turn.Channel, Thread: u.turn.Thread, Out: chat.Say(posted)})
+	got, err := u.cfg.Sender.Send(ctx, outbox.Post{Source: u.turn.Source, Role: store.OutboxReply, Connection: u.turn.Connection, Channel: u.turn.Channel, Thread: u.turn.Thread, Out: chat.Say(posted)})
 	if err == nil {
 		*ref = got
 		// A Send that follows a failed one, or that finds the turn's row made already (by an earlier attempt, here or in an

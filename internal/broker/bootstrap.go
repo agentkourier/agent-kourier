@@ -43,12 +43,15 @@ type BootstrapOptions struct {
 	CRDs *CRDSource
 }
 
-// CRDSource says where the custom resources are read, and which ChatConnection this broker serves.
+// CRDSource says where the custom resources are read, and which ChatConnections this broker serves.
 type CRDSource struct {
 	// Client reads the three resources: InClusterDynamicClient's.
 	Client dynamic.Interface
-	// Connection is the one ChatConnection this broker serves (AGENTKOURIER_CHAT_CONNECTION).
+	// Connection is the broker's own ChatConnection (AGENTKOURIER_CHAT_CONNECTION), which it always serves.
 	Connection v1alpha1.ObjectRef
+	// ConnectionNamespaces is the admission list (AGENTKOURIER_CONNECTION_NAMESPACES): the source also reads the ChatConnections of these
+	// namespaces, and the Bindings that name them (crsource.Options.ConnectionNamespaces). None reads the own connection alone.
+	ConnectionNamespaces []string
 }
 
 // Config is the loaded config and the Secrets it reads: a Reloader whose snapshots are checked
@@ -138,7 +141,7 @@ func Bootstrap(ctx context.Context, client kubernetes.Interface, opts BootstrapO
 // is the operator's to fix wraps ErrWiring (a CRD that is not installed, an own connection that is not usable) or
 // k8ssecrets.ErrAccessDenied or crsource.ErrAccessDenied (RBAC). On failure nothing is left running.
 func bootstrapCRDs(ctx context.Context, client kubernetes.Interface, opts BootstrapOptions, log *slog.Logger) (*Config, error) {
-	src, err := crsource.New(crsource.Options{Client: opts.CRDs.Client, Connection: opts.CRDs.Connection, Logger: log})
+	src, err := crsource.New(crsource.Options{Client: opts.CRDs.Client, Connection: opts.CRDs.Connection, ConnectionNamespaces: opts.CRDs.ConnectionNamespaces, Logger: log})
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrWiring, err)
 	}

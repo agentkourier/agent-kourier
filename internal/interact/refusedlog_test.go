@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
@@ -20,7 +21,7 @@ func TestARefusedAnswerIsLoggedWithoutItsValue(t *testing.T) {
 	r := newDecideRig(t)
 	var out logBuf
 	d, err := interact.NewDecider(decideCfg(interact.DecideConfig{
-		Store: r.st, Auditor: r.aud, Ephemerals: r.eph, Session: r.sess, Sessions: r.st, Replacer: r.rep, Outbox: r.out,
+		Store: r.st, Auditor: r.aud, Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Session: r.sess, Sessions: r.st, Replacer: r.rep, Outbox: r.out,
 		Logger: slog.New(telemetry.NewJSONHandler(&out, slog.LevelDebug)),
 	}))
 	if err != nil {

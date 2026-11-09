@@ -8,6 +8,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 )
@@ -138,11 +139,11 @@ func TestTwoToolsWithDistinctOrdinaryNamesStayDistinctInThePromptTheRequestAndTh
 
 	r := newApprovalRigOf(t, request)
 	w := newWriter(t, r.st, audit.Options{Logger: quietLogger()})
-	d, err := interact.NewDecider(decideCfg(interact.DecideConfig{Store: r.st, Auditor: w, Ephemerals: r.eph, Session: r.sess, Sessions: r.st, Replacer: r.rep, Outbox: r.out}))
+	d, err := interact.NewDecider(decideCfg(interact.DecideConfig{Store: r.st, Auditor: w, Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Session: r.sess, Sessions: r.st, Replacer: r.rep, Outbox: r.out}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	pl, err := interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{approvalBinding()}, Authorizer: r.az, Ephemerals: r.eph, Decider: d, Auditor: w,
+	pl, err := interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{approvalBinding()}, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Decider: d, Auditor: w,
 		Logger: quietLogger(), Now: func() time.Time { return r.now }}))
 	if err != nil {
 		t.Fatal(err)

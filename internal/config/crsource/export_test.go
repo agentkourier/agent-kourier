@@ -6,6 +6,9 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
+// MaxServedConnections is the cap on the connections served, which a test fills.
+const MaxServedConnections = maxServedConnections
+
 // SetClockForTest replaces the clock that dates a failed list or watch, which Stale measures against.
 func (s *Source) SetClockForTest(now func() time.Time) {
 	s.errMu.Lock()

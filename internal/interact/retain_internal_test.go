@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -35,7 +36,7 @@ func TestASettledInteractionIsKeptLongerThanAnythingThatReadsIt(t *testing.T) {
 	if rt.cfg.UndeliveredGrace <= rt.cfg.ClearGrace {
 		t.Errorf("UndeliveredGrace %v; want it longer than ClearGrace %v", rt.cfg.UndeliveredGrace, rt.cfg.ClearGrace)
 	}
-	rep, err := NewReplacer(ReplacerConfig{Store: struct{ store.Interactions }{}, Updater: struct{ Editor }{}})
+	rep, err := NewReplacer(ReplacerConfig{Store: struct{ store.Interactions }{}, Updaters: chattest.Same[Editor](struct{ Editor }{})})
 	if err != nil {
 		t.Fatal(err)
 	}

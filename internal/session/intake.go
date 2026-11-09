@@ -165,7 +165,7 @@ func (m *Manager) queue(ctx context.Context, in Inbound) (Result, error) {
 		// A duplicate was already acknowledged by the original intake. Do not add a reaction again,
 		// especially after the original turn has already ended.
 		res.Acknowledgment = ""
-		telemetry.Count(ctx, "agentkourier_intake_total", "reply_queue", "duplicate")
+		telemetry.Count(ctx, "agentkourier_intake_total", "reply_queue", "duplicate", in.Key.Connection)
 	}
 	if enqueued { // this process made the row, so nothing has sent the turn yet
 		m.mu.Lock()
@@ -214,7 +214,7 @@ func (m *Manager) replyFacts(ctx context.Context, in Inbound, now time.Time) (Re
 		backend, err := m.sessionBackend(sess)
 		if errors.Is(err, ErrUnknownBinding) { // expiry cannot be judged without it, so old or not
 			f.BindingGone = true
-			if startedByBotMention(sess) {
+			if takesOnlyMentions(sess) {
 				f.ChannelMode = v1alpha1.ThreadRepliesMention
 			}
 			break
@@ -242,20 +242,22 @@ func (m *Manager) replyFacts(ctx context.Context, in Inbound, now time.Time) (Re
 	return f, binding, nil
 }
 
-// sessionBackend is the Backend that a session goes by: its Binding's, but a session a bot's mention began takes only people's
-// mentions, whatever the Binding says. People were talking in that thread, and another agent's mention must not make every word
-// they write from then on a prompt.
+// sessionBackend is the Backend that a session goes by: its Binding's, but a session that a bot's mention or a person's message
+// began takes only people's mentions, whatever the Binding says (takesOnlyMentions).
 func (m *Manager) sessionBackend(sess store.Session) (Backend, error) {
 	backend, err := m.cfg.Bindings.Backend(sess.Binding)
-	if err == nil && startedByBotMention(sess) {
+	if err == nil && takesOnlyMentions(sess) {
 		backend.ThreadReplies = v1alpha1.ThreadRepliesMention
 	}
 	return backend, err
 }
 
-// startedByBotMention says a bot's mention made the session, which its origin keeps for the session's life.
-func startedByBotMention(sess store.Session) bool {
-	return sess.Origin.Source == store.OriginBotMention
+// takesOnlyMentions says the session was begun by a bot's mention or by a person's message that a personMessage trigger took,
+// which its origin keeps for the session's life. Either thread is people's to talk in: in a bot's mention's, people were talking
+// before another agent's mention came, and under a person's report the people who discuss it would otherwise make every word
+// a prompt, each one a turn that no limit of the trigger holds.
+func takesOnlyMentions(sess store.Session) bool {
+	return sess.Origin.Source == store.OriginBotMention || sess.Origin.Source == store.OriginPersonMessage
 }
 
 // carryOut does what the admission decided: for a turn it writes the row of a new thread or touches a live one; for an

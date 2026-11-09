@@ -73,6 +73,53 @@ func TestDecodeMessageMentionedIsAgentKouriersUserTokenAnywhereInTheText(t *test
 	}
 }
 
+// A person's message whose mention of Agent Kourier is only in its blocks, which Slack sends an app_mention for, is Mentioned in its
+// message event too, so that whichever event comes first decides the same: a rich_text block's user element, and the token in a
+// section or context block's text. Another user named there, or Agent Kourier's ID as mere text, is no mention. Decoded from the
+// event's JSON, as Socket Mode delivers it.
+func TestDecodeAPersonsMentionInItsBlocksIsAMention(t *testing.T) {
+	me := self{user: "UME", bot: "BME"}
+	for _, tt := range []struct {
+		name, blocks string
+		want         bool
+	}{
+		{"a rich_text user element", `[{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"user","user_id":"UME"},{"type":"text","text":" look"}]}]}]`, true},
+		{"one in a list", `[{"type":"rich_text","elements":[{"type":"rich_text_list","style":"bullet","elements":[{"type":"rich_text_section","elements":[{"type":"user","user_id":"UME"}]}]}]}]`, true},
+		{"a section block's token", `[{"type":"section","text":{"type":"mrkdwn","text":"<@UME> look"}}]`, true},
+		{"a context block's token", `[{"type":"context","elements":[{"type":"mrkdwn","text":"<@UME|agent>"}]}]`, true},
+		{"another user", `[{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"user","user_id":"U1"}]}]}]`, false},
+		{"the ID as text", `[{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"text","text":"UME"}]}]}]`, false},
+		{"no blocks", `[]`, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var ev slackevents.MessageEvent
+			if err := json.Unmarshal([]byte(`{"type":"message","user":"U1","channel":"C1","ts":"1.1","channel_type":"channel","text":"please look","blocks":`+tt.blocks+`}`), &ev); err != nil {
+				t.Fatal(err)
+			}
+			m, v := decode(me, &ev)
+			if v != forward || m.Mentioned != tt.want {
+				t.Errorf("decode = Mentioned %v, verdict %v; want Mentioned %v and forwarded", m.Mentioned, v, tt.want)
+			}
+		})
+	}
+}
+
+// Slackbot is no person: a plain post (no subtype) of its fixed user ID that comes with no bot ID is dropped, so that no
+// personMessage trigger and no thread takes it as a person's, and so is its app_mention, so that it starts no turn as a person's
+// mention. Its reminders carry a bot ID and are a bot's posts, and its custom responses are a subtype (TestDecodeTheShapesSlackSent);
+// this holds for a plain Slackbot post with no bot ID, which no probe has seen.
+func TestDecodeSlackbotIsNoPerson(t *testing.T) {
+	for name, ev := range map[string]any{
+		"a message":           &slackevents.MessageEvent{Type: "message", User: "USLACKBOT", Channel: "C1", TimeStamp: "1.1", ChannelType: "channel", Text: "Reminder: standup."},
+		"a reply in a thread": &slackevents.MessageEvent{Type: "message", User: "USLACKBOT", Channel: "C1", TimeStamp: "1.2", ThreadTimeStamp: "1.0", ChannelType: "channel", Text: "Reminder: look at this."},
+		"an app_mention":      &slackevents.AppMentionEvent{User: "USLACKBOT", Channel: "C1", TimeStamp: "1.3", Text: "Reminder: <@UME> check the deploy."},
+	} {
+		if _, v := decode(self{user: "UME", bot: "BME"}, ev); v != dropped {
+			t.Errorf("%s: verdict %v; want dropped", name, v)
+		}
+	}
+}
+
 // With no user ID to look for, nothing is a mention: an empty ID must not match an empty token (the pattern needs an ID).
 func TestDecodeMessageWithoutABotUserIDIsNeverMentioned(t *testing.T) {
 	for _, text := range []string{"<@> hi", "<@|x> hi", "<@UME> hi"} {
@@ -193,6 +240,61 @@ func TestDecodeABotsAppMention(t *testing.T) {
 			}
 			if v == forward && (!m.Mentioned || m.Bot.ID != "B1" || m.TS != tt.ev.TimeStamp || m.ThreadTS != tt.ev.ThreadTimeStamp || m.Text != tt.ev.Text || m.User != tt.ev.User) {
 				t.Errorf("message = %+v; want it Mentioned, from B1, as the event has it", m)
+			}
+		})
+	}
+}
+
+// The events Slack sent in docs/spikes/slack-user-token-and-slackbot-probe.md, with the IDs replaced, decode as that page says. An
+// app that posts with a person's user token sends its own bot ID, so its posts and mentions are a bot's, not the person's, and no
+// personMessage trigger takes them. Slackbot's reminders carry the bot ID B01 (in the workspace probed), so they are a bot's posts,
+// and a reminder that mentions Agent Kourier is a bot's mention. The /remind command's own post, a user-token me_message and a Slackbot custom response
+// (which has no bot ID) are subtypes, and dropped.
+func TestDecodeTheShapesSlackSent(t *testing.T) {
+	const (
+		probeProfile = `"bot_profile":{"id":"BPROBE","app_id":"APROBE","name":"Kourier User-Token Probe","team_id":"TSAND","deleted":false,"updated":1794161711}`
+		mentionBlock = `"blocks":[{"type":"rich_text","block_id":"b","elements":[{"type":"rich_text_section","elements":[{"type":"text","text":"check "},{"type":"user","user_id":"UME"}]}]}]`
+		plainBlock   = `"blocks":[{"type":"rich_text","block_id":"b","elements":[{"type":"rich_text_section","elements":[{"type":"text","text":"check"}]}]}]`
+		reminderMeta = `"metadata":{"event_type":"slack_system.reminders.posted_in_channel","event_payload":{"reminder_id":"Rm1"}}`
+	)
+	for _, tt := range []struct {
+		name, event       string
+		want              verdict
+		bot, user, thread string
+		mentioned         bool
+	}{
+		{"a user-token post", `{"type":"message","channel":"C1","channel_type":"channel","user":"UPERSON","bot_id":"BPROBE","app_id":"APROBE",` + probeProfile + `,"team":"TSAND","text":"probe U1",` + plainBlock + `,"ts":"1.1","event_ts":"1.1"}`,
+			forward, "BPROBE", "UPERSON", "", false},
+		{"a user-token reply in a thread", `{"type":"message","channel":"C1","channel_type":"channel","user":"UPERSON","bot_id":"BPROBE","app_id":"APROBE",` + probeProfile + `,"team":"TSAND","text":"probe U3",` + plainBlock + `,"thread_ts":"1.1","parent_user_id":"UPERSON","ts":"1.3","event_ts":"1.3"}`,
+			forward, "BPROBE", "UPERSON", "1.1", false},
+		{"a user-token post that mentions Agent Kourier", `{"type":"message","channel":"C1","channel_type":"channel","user":"UPERSON","bot_id":"BPROBE","app_id":"APROBE",` + probeProfile + `,"team":"TSAND","text":"probe U2 <@UME>",` + mentionBlock + `,"ts":"1.2","event_ts":"1.2"}`,
+			forward, "BPROBE", "UPERSON", "", false},
+		{"the user-token post's app_mention", `{"type":"app_mention","channel":"C1","user":"UPERSON","bot_id":"BPROBE","app_id":"APROBE",` + probeProfile + `,"team":"TSAND","text":"probe U2 <@UME>",` + mentionBlock + `,"ts":"1.2","event_ts":"1.2"}`,
+			forward, "BPROBE", "UPERSON", "", true},
+		{"a user-token me_message", `{"type":"message","subtype":"me_message","channel":"C1","channel_type":"channel","user":"UPERSON","bot_id":"BPROBE","app_id":"APROBE","text":"probe U7",` + plainBlock + `,"ts":"1.7","event_ts":"1.7"}`,
+			dropped, "", "", "", false},
+		{"the /remind command's post", `{"type":"message","subtype":"reminder_add","channel":"C1","channel_type":"channel","user":"UPERSON","text":" set up a reminder “check @Agent Kourier ” in this channel at 1:18PM today.","ts":"1.8","event_ts":"1.8"}`,
+			dropped, "", "", "", false},
+		{"Slackbot's custom response", `{"type":"message","subtype":"slackbot_response","channel":"C1","channel_type":"channel","user":"USLACKBOT","text":"kourierprobe pong &lt;@UME&gt;","ts":"1.95","event_ts":"1.95"}`,
+			dropped, "", "", "", false},
+		{"Slackbot's reminder", `{"type":"message","channel":"C1","channel_type":"channel","user":"USLACKBOT","bot_id":"B01","team":"TSAND","text":"Reminder: check.",` + plainBlock + `,` + reminderMeta + `,"ts":"1.9","event_ts":"1.9"}`,
+			forward, "B01", "USLACKBOT", "", false},
+		{"Slackbot's reminder that mentions Agent Kourier", `{"type":"message","channel":"C1","channel_type":"channel","user":"USLACKBOT","bot_id":"B01","team":"TSAND","text":"Reminder: check <@UME|agent_kourier> ",` + mentionBlock + `,` + reminderMeta + `,"ts":"2.1","event_ts":"2.1"}`,
+			forward, "B01", "USLACKBOT", "", false},
+		{"the reminder's app_mention", `{"type":"app_mention","channel":"C1","user":"USLACKBOT","bot_id":"B01","team":"TSAND","text":"Reminder: check <@UME|agent_kourier> ",` + mentionBlock + `,` + reminderMeta + `,"ts":"2.1","event_ts":"2.1"}`,
+			forward, "B01", "USLACKBOT", "", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			outer, err := slackevents.ParseEvent(json.RawMessage(`{"type":"event_callback","team_id":"TSAND","event":`+tt.event+`}`), slackevents.OptionNoVerifyToken())
+			if err != nil {
+				t.Fatal(err)
+			}
+			m, v := decode(self{user: "UME", bot: "BME"}, outer.InnerEvent.Data)
+			if v != tt.want || m.Bot.ID != tt.bot || m.User != tt.user || m.ThreadTS != tt.thread || m.Mentioned != tt.mentioned {
+				t.Errorf("decode = verdict %v, bot %q, user %q, thread %q, Mentioned %v; want %v, %q, %q, %q, %v", v, m.Bot.ID, m.User, m.ThreadTS, m.Mentioned, tt.want, tt.bot, tt.user, tt.thread, tt.mentioned)
+			}
+			if fromAnotherWorkspace(outer) {
+				t.Error("an event of the workspace's own channel is from another workspace")
 			}
 		})
 	}

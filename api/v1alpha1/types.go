@@ -129,7 +129,7 @@ type AgentBackendList struct {
 
 // AgentBackendSpec is the desired state of an AgentBackend.
 //
-// +kubebuilder:validation:XValidation:rule="!has(self.agents) || self.dialect != 'a2a'",message="agents is not supported on the a2a dialect: the URL names the agent and agent.namespace is never sent",fieldPath=".agents"
+// +kubebuilder:validation:XValidation:rule="!has(self.agents) || self.dialect == 'kagent-v1'",message="agents is supported only on the kagent-v1 dialect, the only one that sends agent.namespace",fieldPath=".agents"
 type AgentBackendSpec struct {
 	// +kubebuilder:validation:Enum=a2a;kagent-v1
 	Dialect Dialect `json:"dialect"`
@@ -167,8 +167,9 @@ type AgentBackendSpec struct {
 	// Agents limits the namespaces of the agents that a Binding of this backend may name in spec.agent.namespace. Omitted, a
 	// Binding may name an agent in any namespace, and what the backend's own front door does is the only check. Set, a Binding
 	// that names any other namespace is rejected: with custom resources it is not served and its Accepted condition is False
-	// with the reason AgentNamespaceNotAllowed, and on the files route the config does not load. Only for dialect kagent-v1:
-	// on a2a the URL names the agent and spec.agent.namespace is never sent, so the field is refused there.
+	// with the reason AgentNamespaceNotAllowed, and on the files route the whole config fails when the broker resolves it, at
+	// start or on a reload (agent-kourier dry-run does not resolve it). Only for dialect kagent-v1: on a2a the URL names the
+	// agent and spec.agent.namespace is never sent, so the field is refused there.
 	// +optional
 	Agents *AgentNamespaces `json:"agents,omitempty"`
 }
@@ -226,7 +227,7 @@ type Header struct {
 	ValueSecretRef *SecretKeyRef `json:"valueSecretRef,omitempty"`
 }
 
-// ChatConnection is a workspace connection. Owned by the platform team.
+// ChatConnection is a workspace connection. The platform team owns the broker's own; a team may own one in a namespace the platform admits.
 //
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Namespaced,shortName=akconnection,categories=agentkourier

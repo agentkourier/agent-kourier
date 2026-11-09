@@ -8,7 +8,7 @@ needs, its tokens are in a Kubernetes Secret, and a ChatConnection points at it.
 - Permission to install an app in the Slack workspace. Workspace settings can require an admin to approve each app; a
   member without that permission sees **Request to Install** instead of **Install**, and can copy the bot token only
   after an admin approves the request.
-- A Slack app that no other running Agent Kourier uses (see the warning at the end of the steps).
+- A Slack app that no other running Agent Kourier uses (see the warning at the end of the steps). A team that brings an app of its own to the platform's broker does the same steps, and then follows [Let a team bring its own Slack app](team-slack-app.md).
 - `kubectl` access to the namespace Agent Kourier runs in.
 - For the check in the last step: Go, at the version in `go.mod`, and a checkout of the repository.
 
@@ -126,6 +126,7 @@ Every Slack call Agent Kourier makes, and the scope in the manifest that allows 
 | Call | Scope |
 |---|---|
 | `auth.test` | none |
+| `bots.info`, made by the leader once for each ChatConnection it serves, the broker's own included, but only when it serves a team ChatConnection, to tell which Slack app the bot belongs to | `users:read` (Slack's documentation for the method; not verified here) |
 | `users.info`, with the email for the audit log | `users:read`, `users:read.email` |
 | `chat.postMessage`, `chat.update`, `chat.postEphemeral` | `chat:write` |
 | `chat.startStream`, `chat.appendStream`, `chat.stopStream` | `chat:write` |
@@ -139,9 +140,12 @@ Every Slack call Agent Kourier makes, and the scope in the manifest that allows 
 | Events `app_mention`, `message.channels`, `message.groups` | `app_mentions:read`, `channels:history`, `groups:history` |
 | Socket Mode | the app-level token, `connections:write` |
 
+The `message.channels` and `message.groups` events carry a person's replies in a thread Agent Kourier owns and, for a Binding with a
+[`personMessage` trigger](../reference/chat-triggers.md#a-persons-message), each message a person posts outside a thread; no other scope or event is needed for it.
+
 The leader calls `conversations.info` once for each Binding's channel on each pass of [Binding verification](../reference/metrics.md#binding-verification), and `usergroups.users.list` up to once for each approver group that the Bindings setting `interactions.approverGroups` name, a group that several Bindings name once unless a read is cut short at its Binding's 8 second bound, when the next Binding that needs the group reads it again (a Binding's read stops at the first group that fails, and none is made while the chat credentials Secret differs from the tokens in use or is unusable: gone, empty, missing a key, or of a type that is never read). An app without the scope reads `False/MissingScope` on `ChannelJoined`, or on `ApproversReadable` for the groups; the calls only report, and turns still run.
 
-Agent Kourier reads `botToken` and `appToken` when it starts. A new token written to the Secret is not used until a restart, and until then `ChannelJoined` (and `ApproversReadable`, for a Binding with approver groups) reads `Unknown/ChatCredentialsChanged` and the probe does not call Slack.
+Agent Kourier reads the `botToken` and `appToken` of the broker's own connection when it starts. A new token written to its Secret is not used until a restart, and until then `ChannelJoined` (and `ApproversReadable`, for a Binding with approver groups) reads `Unknown/ChatCredentialsChanged` and the probe does not call Slack. A team ChatConnection restarts by itself at the first look after Agent Kourier has the change to its Secret or its spec, which comes every 5 seconds, and until then its Bindings read the same reason when the tokens in its Secret differ from the ones it runs on.
 
 While an agent investigates an alert thread, Agent Kourier calls `assistant.threads.setStatus`, which shows Slack's assistant
 status (`is working…`) in the thread. It does this only when `chat.progress` is not `steps` and `output` is `live`, and
@@ -189,4 +193,5 @@ a permanent group-read failure. The Binding's `ApproversReadable` condition read
 ## Related
 
 - [ChatConnection reference](../reference/chatconnection.md)
+- [Let a team bring its own Slack app](team-slack-app.md), which has the broker serve a team's app from the team's namespace.
 - [Write a Binding](write-a-binding.md), which places an agent in a channel.

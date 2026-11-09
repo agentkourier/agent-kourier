@@ -67,7 +67,7 @@ type fakeChannels struct {
 	fn    func(ctx context.Context, channel string) (Outcome, error)
 }
 
-func (f *fakeChannels) CheckChannel(ctx context.Context, ch string) (Outcome, error) {
+func (f *fakeChannels) CheckChannel(ctx context.Context, _, ch string) (Outcome, error) {
 	f.mu.Lock()
 	if f.calls == nil {
 		f.calls = map[string]int{}

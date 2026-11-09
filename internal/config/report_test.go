@@ -193,6 +193,20 @@ func TestResolvePerObject(t *testing.T) {
 					Message: "spec.agent.backendRef: AgentBackend agent-kourier-system/nope not found"},
 			},
 			[]string{"sre/chat-only"}},
+		{"a Binding at its last good generation that the agents limit then drops still has its refused spec first, at the new generation",
+			func(s *Set) {
+				s.AgentBackends[0].Spec.Agents = &v1alpha1.AgentNamespaces{Namespaces: []string{"payments"}}
+				s.Invalid = []Invalid{{Kind: KindBinding, Namespace: "sre", Name: "sre-alerts", Generation: 5, Served: 2, Message: "x"}}
+			},
+			[]Rejection{
+				{Namespace: "sre", Name: "chat-only", Reason: ReasonAgentNamespaceNotAllowed, Generation: 2,
+					Message: "spec.agent.namespace: " + backend + " does not allow agents in namespace kagent"},
+				{Namespace: "sre", Name: "sre-alerts", Reason: ReasonInvalidSpec, Generation: 5,
+					Message: "spec: Binding sre/sre-alerts generation 5 is invalid, and its last good generation 2 is not served either: x"},
+				{Namespace: "sre", Name: "sre-alerts", Reason: ReasonAgentNamespaceNotAllowed, Generation: 5,
+					Message: "spec.agent.namespace: " + backend + " does not allow agents in namespace kagent"},
+			},
+			nil},
 		{"a channel conflict is a rejection that is not served",
 			func(s *Set) {
 				sreAlerts(s).CreationTimestamp = at(2)
@@ -227,6 +241,21 @@ func TestReportUnserved(t *testing.T) {
 	}}
 	if got := r.Unserved(); !slices.Equal(got, []string{"sre/a", "sre/b"}) {
 		t.Errorf("Unserved = %v; want [sre/a sre/b]", got)
+	}
+}
+
+// A Binding that names a ChatConnection the broker leaves out exists and is not in the Snapshot: its sessions are as much an unserved
+// Binding's as a rejected one's. Report.Unserved counts it, once, whether or not a Rejection names it too.
+func TestReportUnservedCountsTheBindingsOfAConnectionLeftOut(t *testing.T) {
+	r := Report{
+		Rejections: []Rejection{{Namespace: "sre", Name: "b", Reason: ReasonInvalidSpec}},
+		UnservedConnections: []UnservedConnection{
+			{Namespace: "teams", Name: "c16", Reason: UnservedCap, Bindings: []string{"teams/on-c16", "sre/b"}},
+			{Namespace: "teams", Name: "c17", Reason: UnservedCap},
+		},
+	}
+	if got := r.Unserved(); !slices.Equal(got, []string{"sre/b", "teams/on-c16"}) {
+		t.Errorf("Unserved = %v; want [sre/b teams/on-c16]", got)
 	}
 }
 
@@ -517,6 +546,29 @@ func TestAHeldBindingThatCannotBeServedIsNotCountedAsRejected(t *testing.T) {
 	}
 	if un := (Report{Rejections: got}).Unserved(); slices.Contains(un, "sre/sre-alerts") {
 		t.Errorf("Unserved = %v; a held Binding is no Binding that exists", un)
+	}
+}
+
+// A held Binding that its backend's agents no longer allows is not served and has no rejection either, as one that lost its
+// channel: the backend is still there and was narrowed while the connection is held, and the held Binding has no status.
+func TestAHeldBindingThatTheAgentsLimitRefusesIsNotServedNorRejected(t *testing.T) {
+	set := generations(t)
+	set.AgentBackends[0].Spec.Agents = &v1alpha1.AgentNamespaces{Namespaces: []string{"payments"}}
+	set.Invalid = []Invalid{
+		{Kind: KindBinding, Namespace: "sre", Name: "sre-alerts", Served: 2, Deleted: true},
+		{Kind: KindChatConnection, Namespace: "agent-kourier-system", Name: "slack-main", Served: 6, Deleted: true},
+	}
+	snap, got := resolvePerObject(set)
+	if _, ok := snap.Binding("sre", "sre-alerts"); ok {
+		t.Error("the held Binding that the agents limit refuses is served")
+	}
+	for _, r := range got {
+		if r.Name == "sre-alerts" {
+			t.Errorf("the held Binding that the agents limit refuses has a rejection: %+v", r)
+		}
+	}
+	if !slices.ContainsFunc(got, func(r Rejection) bool { return r.Name == "chat-only" && r.Reason == ReasonAgentNamespaceNotAllowed }) {
+		t.Errorf("rejections = %+v; want the live Binding chat-only rejected for the limit", got)
 	}
 }
 

@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
@@ -72,6 +73,27 @@ func TestNewPlatformPassesTheConnectionHookToTheClient(t *testing.T) {
 	}
 	if _, err := cfg.newPlatform(conn, nil, nil); err != nil || saw.OnConnection != nil {
 		t.Errorf("newPlatform with no hook = %v; OnConnection set = %v; want none", err, saw.OnConnection != nil)
+	}
+}
+
+// The Slack client is told which ChatConnection it belongs to, as "namespace/name", so that the series it records carry the connection
+// of its own and not another's; two connections' clients are told apart.
+func TestNewPlatformTellsTheClientItsConnection(t *testing.T) {
+	var saw []slack.Config
+	cfg := RunConfig{newSlack: func(sc slack.Config) slackAPI { saw = append(saw, sc); return idleSlack{} }}
+	for _, ref := range []v1alpha1.ObjectRef{{Namespace: "platform", Name: "slack"}, {Namespace: "team-a", Name: "slack"}} {
+		conn := Connection{Ref: ref, Platform: v1alpha1.PlatformSlack,
+			Credentials: map[string]secret.Value{"botToken": secret.New("xoxb-fake"), "appToken": secret.New("xapp-fake")}}
+		if _, err := cfg.newPlatform(conn, nil, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var got []string
+	for _, sc := range saw {
+		got = append(got, sc.Connection)
+	}
+	if want := []string{"platform/slack", "team-a/slack"}; !slices.Equal(got, want) {
+		t.Errorf("the clients were configured for the connections %q; want %q", got, want)
 	}
 }
 

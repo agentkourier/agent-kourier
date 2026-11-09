@@ -18,8 +18,14 @@ func press(id, user string, at time.Time) store.Press {
 	return store.Press{InteractionID: id, User: user, Channel: "C1", MessageRef: "1700.01", Inputs: []byte(`{"q0":{"a0":"typed"}}`), PressedAt: at}
 }
 
+func pressOn(conn, id, user string, at time.Time) store.Press {
+	p := press(id, user, at)
+	p.Connection = conn
+	return p
+}
+
 func samePress(a, b store.Press) bool {
-	return a.Seq == b.Seq && a.InteractionID == b.InteractionID && a.User == b.User && a.Channel == b.Channel &&
+	return a.Seq == b.Seq && a.InteractionID == b.InteractionID && a.User == b.User && a.Connection == b.Connection && a.Channel == b.Channel &&
 		a.MessageRef == b.MessageRef && bytes.Equal(a.Inputs, b.Inputs) && a.PressedAt.Equal(b.PressedAt)
 }
 
@@ -127,6 +133,63 @@ func (su suite) presses(t *testing.T) {
 		}
 		_, err = record("U3")
 		isErr(t, err, store.ErrLimit, "full again")
+	})
+
+	su.runReopen(t, "a press keeps its connection", func(t *testing.T, s store.Store, reopen func() store.Store) {
+		ctx := t.Context()
+		a, b := pressOn("ns/a", "ix", "U1", t0), pressOn("ns/b", "ix", "U1", t0.Add(time.Second))
+		var seqs []int64
+		for _, p := range []store.Press{a, b, press("ix", "U1", t0.Add(2*time.Second))} {
+			seq, err := s.RecordPress(ctx, p, roomy)
+			noErr(t, err, "RecordPress")
+			seqs = append(seqs, seq)
+		}
+		want := []store.Press{a, b, press("ix", "U1", t0.Add(2*time.Second))}
+		for i := range want {
+			want[i].Seq = seqs[i]
+		}
+		check := func(s store.Store) {
+			t.Helper()
+			got, err := s.ListPresses(ctx)
+			if err != nil || len(got) != len(want) {
+				t.Fatalf("ListPresses = %+v, %v; want %d", got, err, len(want))
+			}
+			for i := range want {
+				if !samePress(got[i], want[i]) {
+					t.Errorf("press %d = %+v; want %+v", i, got[i], want[i])
+				}
+			}
+		}
+		check(s)
+		check(reopen())
+	})
+
+	// The cap is counted for each connection, so that a flood on one app cannot refuse the presses of another.
+	su.run(t, "the press limits are counted for each connection", func(t *testing.T, s store.Store) {
+		ctx := t.Context()
+		limits := store.PressLimits{Total: 3, PerUser: 2}
+		record := func(conn, who string) error {
+			_, err := s.RecordPress(ctx, pressOn(conn, "ix", who, t0), limits)
+			return err
+		}
+		for _, who := range []string{"U1", "U1", "U2"} {
+			noErr(t, record("ns/a", who), "A's press by "+who)
+		}
+		isErr(t, record("ns/a", "U3"), store.ErrLimit, "a fourth press of A")
+		isErr(t, record("ns/a", "U1"), store.ErrLimit, "a third press of A by U1")
+		// B is untouched by A's flood, in all and for the same person, and has limits of its own.
+		for _, who := range []string{"U1", "U1", "U2"} {
+			noErr(t, record("ns/b", who), "B's press by "+who)
+		}
+		isErr(t, record("ns/b", "U3"), store.ErrLimit, "a fourth press of B")
+		isErr(t, record("ns/b", "U1"), store.ErrLimit, "a third press of B by U1")
+		// A press with no connection (one that was recorded before they were) is counted with the rest of its own.
+		noErr(t, record("", "U1"), "the first press with no connection")
+		got, err := s.ListPresses(ctx)
+		noErr(t, err, "ListPresses")
+		if len(got) != 7 {
+			t.Errorf("%d presses stored; want 7", len(got))
+		}
 	})
 
 	su.run(t, "the limit of one user binds with room in the store", func(t *testing.T, s store.Store) {

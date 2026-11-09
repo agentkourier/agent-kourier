@@ -134,6 +134,10 @@ const (
 	// DecisionAnswerCleared is an answered interaction whose pause came again after retention had cleared the
 	// answer: it cannot be sent again, and the task is cancelled.
 	DecisionAnswerCleared DecisionResult = "answer_cleared"
+	// DecisionOrphaned is an interaction that nobody could answer or time out through its Binding, and that the sweep ended after its time
+	// ran out: its Binding is not in the config, or this broker does not serve its chat connection. The agent was not asked about the pause
+	// through a Binding that is gone, and nobody is told in the thread.
+	DecisionOrphaned DecisionResult = "orphaned"
 )
 
 // Decision is a person's (or the timeout's) decision on an interaction.
@@ -384,7 +388,7 @@ func (w *Writer) AgentCall(ctx context.Context, a Actor, c Call) error {
 // Decision records who decided an interaction, when, and the shape of the answer.
 func (w *Writer) Decision(ctx context.Context, a Actor, d Decision) error {
 	switch d.Result {
-	case DecisionAnswered, DecisionIncomplete, DecisionDenied, DecisionSuperseded, DecisionTimedOut, DecisionAutoDenied, DecisionAnswerCleared, DecisionNotApprover:
+	case DecisionAnswered, DecisionIncomplete, DecisionDenied, DecisionSuperseded, DecisionTimedOut, DecisionAutoDenied, DecisionAnswerCleared, DecisionNotApprover, DecisionOrphaned:
 	default:
 		return fail(store.ErrInvalid, "audit decision %q: unknown result %q", d.InteractionID, d.Result)
 	}

@@ -11,6 +11,9 @@
 //	AGENTKOURIER_CONFIG_DIR     with files, the resource files (default /etc/agent-kourier)
 //	AGENTKOURIER_CHAT_CONNECTION   with crds, required: namespace/name of the one ChatConnection this broker serves. With
 //	                       files it is refused, since the directory must hold exactly one ChatConnection
+//	AGENTKOURIER_CONNECTION_NAMESPACES   with crds, optional: the namespaces whose ChatConnections this broker serves besides its own,
+//	                       comma-separated, each a DNS-1123 label (no wildcard); spaces around an item are trimmed, empty items and
+//	                       repeats dropped. Unset or empty serves the own connection alone. With files it is refused
 //	AGENTKOURIER_DB_PATH        the SQLite file, on the volume (default /data/agent-kourier.db)
 //	AGENTKOURIER_STORE          sqlite (the default, one replica) or postgres
 //	AGENTKOURIER_POSTGRES_DSN_SECRET   with postgres, where the DSN is: namespace/name/key of a Secret, read through the
@@ -56,6 +59,8 @@ import (
 	"syscall"
 	"time"
 
+	"k8s.io/apimachinery/pkg/util/validation"
+
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
@@ -100,6 +105,7 @@ type envConfig struct {
 	configDir, dbPath, listen string
 	configSource              broker.ConfigSource
 	chatConnection            v1alpha1.ObjectRef // with crds only
+	connectionNamespaces      []string           // with crds only: the admission list, none when unset
 	store                     broker.StoreConfig
 	election                  broker.ElectionConfig // with postgres only; its Identity is the pod's name, made unique by run
 	syncTimeout               time.Duration
@@ -124,6 +130,9 @@ func loadEnv(getenv func(string) string) (envConfig, error) {
 	}
 	var err error
 	if c.configSource, c.chatConnection, err = loadSourceEnv(getenv); err != nil {
+		return c, err
+	}
+	if c.connectionNamespaces, err = loadConnectionNamespaces(getenv, c.configSource); err != nil {
 		return c, err
 	}
 	if c.syncTimeout, err = time.ParseDuration(get("AGENTKOURIER_SYNC_TIMEOUT", "30s")); err != nil || c.syncTimeout <= 0 {
@@ -185,6 +194,37 @@ func loadSourceEnv(getenv func(string) string) (broker.ConfigSource, v1alpha1.Ob
 		return "", conn, fmt.Errorf("%w: AGENTKOURIER_CONFIG_SOURCE is %q, want files or crds", broker.ErrWiring, getenv("AGENTKOURIER_CONFIG_SOURCE"))
 	}
 	return source, conn, nil
+}
+
+// loadConnectionNamespaces reads the admission list: the namespaces whose ChatConnections the broker serves besides its own. Each
+// item is trimmed and must be a DNS-1123 label, which leaves out a wildcard, a namespace/name and anything Kubernetes cannot hold; an
+// empty item is dropped and so is a repeat. Nothing set, or nothing but separators, is no list, which serves the own connection alone.
+// It is refused with the files source, which serves the one ChatConnection of its directory: ignoring it would serve what the person
+// did not mean. An error names the position of the bad item among the comma-separated ones (counting the empty), and never a value, since
+// the variable is one a person may paste a token into.
+func loadConnectionNamespaces(getenv func(string) string, source broker.ConfigSource) ([]string, error) {
+	const key = "AGENTKOURIER_CONNECTION_NAMESPACES"
+	raw := getenv(key)
+	if raw == "" {
+		return nil, nil
+	}
+	if source == broker.SourceFiles {
+		return nil, fmt.Errorf("%w: %s is set with AGENTKOURIER_CONFIG_SOURCE=files, which serves the one ChatConnection of its directory: unset it", broker.ErrWiring, key)
+	}
+	var out []string
+	for i, item := range strings.Split(raw, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if len(validation.IsDNS1123Label(item)) > 0 {
+			return nil, fmt.Errorf("%w: %s item %d is not a namespace name, which is a DNS-1123 label (no wildcard; its value is not shown)", broker.ErrWiring, key, i+1)
+		}
+		if !slices.Contains(out, item) {
+			out = append(out, item)
+		}
+	}
+	return out, nil
 }
 
 // loadStoreEnv reads the store's variables. The DSN is a secret and its variable holds only where it is, but a person may put the DSN
@@ -322,7 +362,7 @@ func run(args []string, ver string, stdout, stderr io.Writer, getenv func(string
 		}
 	}
 	cfg := broker.RunConfig{
-		ConfigSource: env.configSource, ChatConnection: env.chatConnection, ConfigDir: env.configDir, DBPath: env.dbPath, Store: env.store, Election: env.election, Listener: ln, SyncTimeout: env.syncTimeout, KlogVerbosity: env.klogV, Logger: log, Telemetry: env.telemetry, ServiceVersion: ver, AuditRetention: env.auditRetention,
+		ConfigSource: env.configSource, ChatConnection: env.chatConnection, ConnectionNamespaces: env.connectionNamespaces, ConfigDir: env.configDir, DBPath: env.dbPath, Store: env.store, Election: env.election, Listener: ln, SyncTimeout: env.syncTimeout, KlogVerbosity: env.klogV, Logger: log, Telemetry: env.telemetry, ServiceVersion: ver, AuditRetention: env.auditRetention,
 	}
 	applyTestHooks(log)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

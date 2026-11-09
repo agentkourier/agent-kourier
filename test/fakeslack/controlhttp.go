@@ -34,6 +34,8 @@ type (
 		Text     string `json:"text"`
 	}
 	dmReq struct {
+		// App is the AppID of the app the user writes to; empty is the default app.
+		App  string `json:"app"`
 		User string `json:"user"`
 		Text string `json:"text"`
 	}
@@ -62,6 +64,28 @@ type (
 	usergroupReq struct {
 		Usergroup string   `json:"usergroup"`
 		Users     []string `json:"users"`
+	}
+	joinReq struct {
+		Channel string `json:"channel"`
+		// App is the AppID of the app whose bot joins; empty is the default app.
+		App string `json:"app"`
+	}
+	revokedReq struct {
+		// App is the AppID of the app; empty is the default app.
+		App     string `json:"app"`
+		Revoked bool   `json:"revoked"`
+	}
+	rotateReq struct {
+		// App is the AppID of the app; empty is the default app.
+		App      string `json:"app"`
+		BotToken string `json:"bot_token"`
+		AppToken string `json:"app_token"`
+	}
+	holdReq struct {
+		// App is the AppID of the app; empty is the default app.
+		App string `json:"app"`
+		// Hold holds the app's chat.postMessage calls (HoldPosts) or releases them (ReleasePosts).
+		Hold bool `json:"hold"`
 	}
 	archivedReq struct {
 		Channel  string `json:"channel"`
@@ -120,7 +144,7 @@ func (s *Server) newControlRoutes() controlRoutes {
 	mux.HandleFunc("POST /_control/reply", post(func(q replyReq) (any, error) {
 		return s.Reply(q.Channel, q.ThreadTS, q.User, q.Text)
 	}))
-	mux.HandleFunc("POST /_control/dm", post(func(q dmReq) (any, error) { return s.DM(q.User, q.Text) }))
+	mux.HandleFunc("POST /_control/dm", post(func(q dmReq) (any, error) { return s.DMApp(s.appID(q.App), q.User, q.Text) }))
 	mux.HandleFunc("POST /_control/webhook", post(func(q WebhookPost) (any, error) { return s.Webhook(q) }))
 	mux.HandleFunc("POST /_control/click", post(func(q clickReq) (any, error) {
 		return envelopeID(s.Click(q.User, q.MessageTS, q.ActionID, q.Value))
@@ -145,6 +169,48 @@ func (s *Server) newControlRoutes() controlRoutes {
 		s.SetMembers(q.Channel, q.Users...)
 		return struct{}{}, nil
 	}))
+	mux.HandleFunc("POST /_control/join", post(func(q joinReq) (any, error) {
+		if q.Channel == "" {
+			return nil, invalid("fakeslack: a bot joins a channel, so it needs a channel")
+		}
+		return struct{}{}, s.Join(q.Channel, s.appID(q.App))
+	}))
+	mux.HandleFunc("POST /_control/revoked", post(func(q revokedReq) (any, error) {
+		return struct{}{}, s.SetRevoked(s.appID(q.App), q.Revoked)
+	}))
+	mux.HandleFunc("POST /_control/rotate", post(func(q rotateReq) (any, error) {
+		return struct{}{}, s.RotateTokens(s.appID(q.App), q.BotToken, q.AppToken)
+	}))
+	mux.HandleFunc("POST /_control/hold-posts", post(func(q holdReq) (any, error) {
+		if q.Hold {
+			return struct{}{}, s.HoldPosts(s.appID(q.App))
+		}
+		return struct{}{}, s.ReleasePosts(s.appID(q.App))
+	}))
+	// held-posts counts the app's chat.postMessage calls that wait on its hold.
+	mux.HandleFunc("GET /_control/held-posts", func(w http.ResponseWriter, r *http.Request) {
+		id := s.appID(r.URL.Query().Get("app"))
+		if _, err := s.appNamed(id); err != nil {
+			writeControlError(w, err, nil)
+			return
+		}
+		writeControl(w, http.StatusOK, map[string]int{"held": s.HeldPosts(id)})
+	})
+	// own-events lists the envelopes of the events the fake sent to the app (the default app without one) for the bot message at ts of channel, whichever
+	// app posted it (EventEnvelopes), to pass to GET /_control/acks/{id}.
+	mux.HandleFunc("GET /_control/own-events", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		id := s.appID(q.Get("app"))
+		if _, err := s.appNamed(id); err != nil {
+			writeControlError(w, err, nil)
+			return
+		}
+		ids := s.EventEnvelopes(id, q.Get("channel"), q.Get("ts"))
+		if ids == nil {
+			ids = []string{}
+		}
+		writeControl(w, http.StatusOK, map[string][]string{"envelopes": ids})
+	})
 	mux.HandleFunc("POST /_control/usergroups", post(func(q usergroupReq) (any, error) {
 		if q.Usergroup == "" {
 			return nil, invalid("fakeslack: a user group needs an id")
@@ -159,11 +225,45 @@ func (s *Server) newControlRoutes() controlRoutes {
 		s.SetArchived(q.Channel, q.Archived)
 		return struct{}{}, nil
 	}))
-	mux.HandleFunc("GET /_control/connections", func(w http.ResponseWriter, _ *http.Request) {
-		writeControl(w, http.StatusOK, map[string]int{"connections": s.Connections()})
+	mux.HandleFunc("GET /_control/apps", func(w http.ResponseWriter, _ *http.Request) {
+		type appView struct {
+			App
+			Connections int `json:"connections"`
+		}
+		out := []appView{}
+		for _, a := range s.apps {
+			out = append(out, appView{a, s.AppConnections(a.AppID)})
+		}
+		writeControl(w, http.StatusOK, out)
 	})
+	// connections counts the clients of every app, or of the one named by the app parameter.
+	mux.HandleFunc("GET /_control/connections", func(w http.ResponseWriter, r *http.Request) {
+		n := s.Connections()
+		if id := r.URL.Query().Get("app"); id != "" {
+			if _, err := s.appNamed(id); err != nil {
+				writeControlError(w, err, nil)
+				return
+			}
+			n = s.AppConnections(id)
+		}
+		out := map[string]int{"connections": n}
+		if id := r.URL.Query().Get("app"); id != "" {
+			out["opened"] = s.AppConnectionsOpened(id)
+		}
+		writeControl(w, http.StatusOK, out)
+	})
+	// messages lists a channel's, or with the app parameter only those the app posted.
 	mux.HandleFunc("GET /_control/messages", func(w http.ResponseWriter, r *http.Request) {
-		writeControl(w, http.StatusOK, views(s.Messages(r.URL.Query().Get("channel"))))
+		q := r.URL.Query()
+		msgs := s.Messages(q.Get("channel"))
+		if id := q.Get("app"); id != "" {
+			if _, err := s.appNamed(id); err != nil {
+				writeControlError(w, err, nil)
+				return
+			}
+			msgs = slices.DeleteFunc(msgs, func(m Message) bool { return m.AppID != id })
+		}
+		writeControl(w, http.StatusOK, views(msgs))
 	})
 	mux.HandleFunc("GET /_control/thread", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -182,7 +282,15 @@ func (s *Server) newControlRoutes() controlRoutes {
 			writeControlError(w, invalid("fakeslack: ephemerals need a channel"), nil)
 			return
 		}
-		writeControl(w, http.StatusOK, s.Ephemerals(channel))
+		out := s.Ephemerals(channel)
+		if id := r.URL.Query().Get("app"); id != "" {
+			if _, err := s.appNamed(id); err != nil {
+				writeControlError(w, err, nil)
+				return
+			}
+			out = slices.DeleteFunc(out, func(e Ephemeral) bool { return e.AppID != id })
+		}
+		writeControl(w, http.StatusOK, out)
 	})
 	mux.HandleFunc("GET /_control/thread-statuses", func(w http.ResponseWriter, r *http.Request) {
 		channel := r.URL.Query().Get("channel")

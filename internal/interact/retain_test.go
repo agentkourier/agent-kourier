@@ -12,6 +12,7 @@ import (
 
 	"go.uber.org/goleak"
 
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -286,7 +287,7 @@ func TestPurgingAPressTheWorkerIsOnIsHarmless(t *testing.T) {
 	}
 	presses, _ := r.st.ListPresses(t.Context())
 	pl, err := interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{interact.Binding{Dialect: kagentv1.New(time.Second), AskUser: true, Timeout: time.Minute, Identity: "secret:ns/tok"}},
-		Authorizer: r.az, Ephemerals: r.eph, Auditor: r.aud, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: func() time.Time { return r.now },
+		Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Auditor: r.aud, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: func() time.Time { return r.now },
 		Decider: purgingDecider{st: r.st, inner: r.d, at: deadline.Add(time.Hour)}}))
 	if err != nil {
 		t.Fatal(err)

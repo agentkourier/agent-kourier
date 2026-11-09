@@ -111,9 +111,10 @@ type Bindings interface {
 	Backend(name string) (Backend, error)
 }
 
-// Users resolves a chat user for attribution (the chat platform's ResolveUser).
+// Users resolves a chat user for attribution (the chat platform's ResolveUser), on the platform of the ChatConnection conn,
+// "namespace/name": a user's ID means something on one connection's app only.
 type Users interface {
-	ResolveUser(ctx context.Context, id string) (dialect.User, error)
+	ResolveUser(ctx context.Context, conn, id string) (dialect.User, error)
 }
 
 // TurnRef names the turn a Sink is asked to render.
@@ -146,8 +147,10 @@ type TurnRef struct {
 	// zero value, those of an investigation for an alert's first prompt (nobody wrote it: its user is SystemUser),
 	// and those of an answer for a person's turn or a bot's mention on a Binding with feedback.enabled.
 	Feedback store.FeedbackKind
-	// ThreadReplies is the Binding's chat.threadReplies. In mention the final message of the output tells the thread to mention
-	// Agent Kourier to ask a follow-up (D38); anything else, the empty value too, adds nothing.
+	// ThreadReplies is what the session takes of replies: the Binding's chat.threadReplies, but mention for a session that a bot's
+	// mention (D49) or a person's message (D51) began, whatever the Binding says (takesOnlyMentions). In mention the final message
+	// of the output tells the thread to mention Agent Kourier to ask a follow-up (D38); anything else, the empty value too, adds
+	// nothing.
 	ThreadReplies v1alpha1.ThreadReplies
 	// Mentions are the people the Binding declares, and MaxMentions the most a turn notifies (Backend.Mentions).
 	Mentions    []v1alpha1.ChatMention
@@ -344,6 +347,11 @@ type Config struct {
 	// reply (store.AcknowledgmentLister), so that retention does not queue it again. Its error, which says which step
 	// failed, is logged while the manager runs (not once Close has cancelled it), and retention queues the removal of a reply that was not settled. Nil sends the notice to Sink.Notice, and retention settles.
 	Unacknowledge func(ctx context.Context, key Key, source string, n Notice) error
+	// ConnectionRunning, if set, says whether the chat connection named conn ("namespace/name", the Connection of a Key) runs. Recover
+	// leaves the conversations of a connection that does not, because a turn taken up then would render into a chat that cannot be
+	// reached; RecoverConnection takes them up once it does. Nil says every connection runs. It is called with the manager's lock held, so it
+	// must not call the manager.
+	ConnectionRunning func(conn string) bool
 }
 
 // attempt is a head turn that was sent and not yet taken and recorded. unknown says an earlier
@@ -370,6 +378,9 @@ type Manager struct {
 	// attempted holds, per conversation, the head turn that was sent and not yet taken and
 	// recorded: a send of it again is a resend, and is looked up first.
 	attempted map[Key]attempt
+	// skipped holds the connections whose conversations Recover left because they did not run (Config.ConnectionRunning), until
+	// RecoverConnection takes them up. One entry for each connection, whatever the number of conversations.
+	skipped map[string]bool
 	// begun holds, per turn that has started and not ended, when its start was logged, for the
 	// duration of its end line (see begin and finish). A turn that is retried is one entry.
 	begun map[string]time.Time
@@ -438,7 +449,7 @@ func New(cfg Config) (*Manager, error) {
 	if cfg.SendGiveUp <= 0 {
 		cfg.SendGiveUp = 15 * time.Minute
 	}
-	m := &Manager{cfg: cfg, convos: map[Key]*convo{}, unrecorded: map[Key]string{}, attempted: map[Key]attempt{}, begun: map[string]time.Time{}, fresh: map[string]struct{}{}, marked: map[string]struct{}{}, cancelTimeout: cancelTimeout}
+	m := &Manager{cfg: cfg, convos: map[Key]*convo{}, unrecorded: map[Key]string{}, attempted: map[Key]attempt{}, skipped: map[string]bool{}, begun: map[string]time.Time{}, fresh: map[string]struct{}{}, marked: map[string]struct{}{}, cancelTimeout: cancelTimeout}
 	base := cfg.Context
 	if base == nil {
 		base = context.Background()

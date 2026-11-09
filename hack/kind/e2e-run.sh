@@ -6,7 +6,7 @@
 # The Job's logs are printed, the Job is deleted, and the exit status is the test result.
 # Usage: e2e-run.sh fast|full|ax. E2E_RUN=REGEXP runs only the tests whose names match it (go test -run; the Job's own pattern, the
 # whole suite, when unset), to run one scenario again. E2E_PHASE=NAME is the part of a scenario that a script runs between steps of its own
-# (hack/kind/crs-migration.sh: a Helm upgrade in the middle of a session); the scenarios that take one skip when it is empty. The tier must be up (make e2e-fast-up or e2e-full-up); both tiers
+# (hack/kind/crs-migration.sh: a Helm upgrade in the middle of a session, and hack/kind/two-apps.sh: a change of the admission list); the scenarios that take one skip when it is empty. The tier must be up (make e2e-fast-up or e2e-full-up); both tiers
 # have the same doubles in namespaces e2e and monitoring, so the same tests run in both.
 #
 # Every kubectl call names --context kind-agent-kourier-<tier> and every kind call names
@@ -82,6 +82,10 @@ echo "==> run the Job in ${CTX}"
 "${K[@]}" get namespace agent-kourier >/dev/null 2>&1 || "${K[@]}" create namespace agent-kourier >/dev/null
 # So does its Role in e2e-team, the empty namespace where the custom-resource scenarios play a team (hack/kind/e2e/runner.yaml).
 "${K[@]}" get namespace e2e-team >/dev/null 2>&1 || "${K[@]}" create namespace e2e-team >/dev/null
+# So do its Roles in team-a, team-b and team-c, the namespaces of the scenarios that bring a Slack app of their own (the MC_ tests, E2E_TWO_APPS=1 in up-fast.sh).
+for ns in team-a team-b team-c; do
+  "${K[@]}" get namespace "${ns}" >/dev/null 2>&1 || "${K[@]}" create namespace "${ns}" >/dev/null
+done
 # Where Agent Kourier reads its config from now: the Deployment says (the chart sets AGENTKOURIER_CONFIG_SOURCE only for crds), not the tier's bring-up,
 # so a tier moved between the two in place is run as it is. The CR_ tests skip unless it is crds.
 config_source=$("${K[@]}" -n agent-kourier get deploy/agent-kourier -o 'jsonpath={.spec.template.spec.containers[0].env[?(@.name=="AGENTKOURIER_CONFIG_SOURCE")].value}' --ignore-not-found) || die "could not read the Deployment agent-kourier to see where it reads its config from; a run that guessed files would skip every CR_ test and pass"
@@ -91,6 +95,11 @@ case "${config_source}" in
   *) die "the Deployment's AGENTKOURIER_CONFIG_SOURCE is '${config_source}'; want files or crds" ;;
 esac
 echo "config source: ${config_source}"
+# The namespaces whose ChatConnections the broker admits, as its Deployment says (the chart sets AGENTKOURIER_CONNECTION_NAMESPACES only for a list that is
+# not empty): the MC_ tests skip unless team-a is among them. A Deployment that cannot be read was read above.
+connection_namespaces=$("${K[@]}" -n agent-kourier get deploy/agent-kourier -o 'jsonpath={.spec.template.spec.containers[0].env[?(@.name=="AGENTKOURIER_CONNECTION_NAMESPACES")].value}' --ignore-not-found) || die "could not read the Deployment agent-kourier to see which namespaces' ChatConnections it admits"
+[[ "${connection_namespaces}" =~ ^[a-z0-9,-]*$ ]] || die "the Deployment's AGENTKOURIER_CONNECTION_NAMESPACES is '${connection_namespaces}'; want namespace names separated by commas"
+echo "admitted namespaces: ${connection_namespaces:-none}"
 # The scenarios release their gates (Stub.Release) where the tier holds them: the stub agent in the fast tier, and
 # the scenario model in the full one, which has the stub's release path.
 case "${tier}" in
@@ -98,7 +107,7 @@ case "${tier}" in
   full) gate_url=http://scenariollm.kagent.svc.cluster.local:8080 ;;
   ax) gate_url=http://ax-gates.e2e.svc.cluster.local:8080 ;;
 esac
-sed -e "s/@TIER@/${tier}/" -e "s|@STUB_URL@|${gate_url}|" -e "s/@CONFIG_SOURCE@/${config_source}/" -e "s/@PHASE@/${E2E_PHASE:-}/" "${HERE}/e2e/runner.yaml" |
+sed -e "s/@TIER@/${tier}/" -e "s|@STUB_URL@|${gate_url}|" -e "s/@CONFIG_SOURCE@/${config_source}/" -e "s/@PHASE@/${E2E_PHASE:-}/" -e "s/@CONNECTION_NAMESPACES@/${connection_namespaces}/" "${HERE}/e2e/runner.yaml" |
   { if [ -n "${E2E_RUN:-}" ]; then sed -e "s#-test.run=[^\"]*#-test.run=${E2E_RUN}#"; else cat; fi; } |
   "${K[@]}" apply -f - >/dev/null # the tier is fast or full: use_tier checked it
 result=

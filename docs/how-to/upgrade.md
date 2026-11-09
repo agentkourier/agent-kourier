@@ -790,3 +790,74 @@ spec:
   The list holds at most 256 namespaces ([Limits](../reference/limits.md)).
 - **Before a rollback to an earlier release, remove `agents` and expect the limit to end.** An earlier broker ignores the field on custom resources and serves every Binding the AgentBackend would
   have admitted, in any agent namespace.
+
+## Upgrade to the release that serves team connections
+
+A team can bring its own Slack app: the platform team lists the team's namespace in the new value `config.connectionNamespaces`, and the broker serves the team's ChatConnection beside its own
+([Let a team bring its own Slack app](team-slack-app.md)). The broker serves nothing new until that list admits a namespace: the chart renders `AGENTKOURIER_CONNECTION_NAMESPACES` only for a
+non-empty list, and a broker without it serves its own connection alone. Some changes below apply to every install, list or not.
+
+### Before you upgrade
+
+- **Bring the CRDs to this release with the image.** The ChatConnection CRD's description changed (its schema did not), and the AgentBackend CRD gains `spec.agents`
+  ([the release that limits the agents a Binding may name](#upgrade-to-the-release-that-limits-the-agents-a-binding-may-name)). The chart applies them with the release when `crds.install` is true, or unset on
+  `config.source: crds`. If you apply the CRDs yourself, apply `charts/agent-kourier/files/crds` first. Until both match, `agentkourier_crd_schema_state` reports a mismatch.
+- **Change the queries that match six series one to one.** `agentkourier_intake_total`, `agentkourier_chat_api_calls_total`, `agentkourier_slack_events_shed_total`,
+  `agentkourier_slack_ack_duration_seconds`, `agentkourier_outbox_pending` and `agentkourier_outbox_oldest_age_seconds` gain a `connection` label. A query that sums over them, or selects by the labels it
+  names, gives what it did. An expression that matches one of them with a series that has no `connection` label, such as `agentkourier_outbox_pending + agentkourier_reply_queue_depth`, returns nothing
+  from the first scrape: add `ignoring(connection)` or aggregate first ([Metrics](../reference/metrics.md#series-by-connection)).
+- **Change log alerts on the reconnect line.** The WARN `connection attempt failed; retrying` is gone. A failed reconnect now logs `slack connection ended; connecting again`, with the error and the wait, once for
+  each attempt ([Troubleshoot](troubleshoot.md#the-log-says-slack-connection-ended-connecting-again)).
+- **Expect a new outcome on the approvals counter.** `agentkourier_approval_outcomes_total` gains `outcome="orphaned"`, and `agentkourier_interaction_timeouts_total` does not count those (see below).
+  A dashboard that lists the outcomes by name needs the new one.
+
+### What changes for every install
+
+- **A database migration, 0029, runs at the first start.** On SQLite and on Postgres it adds a `connection` column to `outbox` and to `interaction_presses`, `NOT NULL DEFAULT ''`, replaces the index on the outbox's
+  channel and thread with one that starts at the connection, and makes the table `served_connections`. It adds columns and a table, replaces one index, and rewrites no row. A row written before it, or by an older image after a rollback, has the empty
+  connection; the leader gives such rows to the broker's own connection each time it starts.
+- **Reconnects are paced by the broker.** After a failed attempt the broker waits 1 second, doubling to 60, each wait cut at random by up to half; a Retry-After from Slack is honoured up to 5 minutes
+  ([Limits](../reference/limits.md#run-the-broker)). Before, the Slack library retried by itself up to 5 minutes apart.
+- **`token_expired` on a reconnect stops the broker's own connection.** The process exits with [code 1](../reference/cli.md#exit-codes), as it does for the other rejected tokens; it used to retry without end.
+  New tokens apply at a restart, as before.
+- **A pause whose Binding is gone ends.** An approval or a question still waiting after its Binding was deleted used to stay pending, with its session, for as long as the broker ran. The sweep now ends
+  it 5 minutes after it is both past its deadline and without a Binding, posts nothing, records it as `timed_out` in the store and as `orphaned` in the audit log and the metric, and leaves the agent's task
+  waiting for input at the agent. Such pauses left by an earlier release, already past their deadline, are ended about 5 minutes after the new leader starts, and their sessions can then be purged.
+
+### Admit team namespaces in a second change
+
+Upgrade with `config.connectionNamespaces` empty first, and check that the broker runs as before (below). Then set the list in its own `helm upgrade`. Until a team connection is served, a rollback is the
+ordinary one; after, it needs the steps under [Roll back](#roll-back-from-this-release).
+
+Before you set the list:
+
+- **Each app the broker serves needs `users:read`, the broker's own included.** With a team connection to serve, the leader asks Slack which app each bot belongs to (`auth.test`, then `bots.info`), its own
+  first, so that it serves one connection for each Slack app. Slack's documentation says `bots.info` needs `users:read` (not verified here); the manifest in
+  [Configure Slack](configure-slack.md#what-the-app-is-allowed-to-do) has it, for the audit log's `users.info`. If the broker cannot tell whose bot its own token is, no team connection starts, and the leader logs that
+  the identity of the own connection is not known yet. The own connection runs either way.
+- **One broker for each namespace.** Two brokers that admit one namespace both open Socket Mode on its apps, and Slack hands each event to one of them
+  ([Troubleshoot](troubleshoot.md#the-status-of-a-binding-keeps-changing)).
+- **Know how to see a Binding that is not served.** A connection that is past the 16, whose namespace was taken off the list after this broker served it, or that is a second connection of a Slack app the broker already serves has Bindings that say `Accepted` `False`
+  with `ConnectionNotServed`. The leader counts those Bindings in `agentkourier_config_binding_rejections{reason="ConnectionNotServed"}` (a standby reads 0 for it, so sum over the replicas), which `sum(agentkourier_config_binding_rejections) > 0` includes
+  ([Metrics](../reference/metrics.md)); `kubectl get akbinding -A` shows which Bindings. The Bindings of a connection in a namespace that was never on the list get no status and no count.
+- **Size for the connections.** Each further connection adds about 0.4 MiB; at 16, the most one broker serves, the container's memory charge was 29 MiB under load
+  ([chart README](https://github.com/agentkourier/agent-kourier/tree/main/charts/agent-kourier#footprint)). The default request of 64 MiB covers it.
+
+### Check the upgrade
+
+- The pod runs the new image and is ready: `kubectl -n agent-kourier get deploy agent-kourier -o jsonpath='{.spec.template.spec.containers[0].image}'` shows the release's digest. The namespace is your release's, and so is the Deployment's name, which the chart
+  makes `<release>-agent-kourier`, or the release name itself when that already contains `agent-kourier`, or `fullnameOverride` when it is set.
+- `agentkourier_chat_connected{connection="<namespace>/<name>"}` is 1 for the broker's own connection, and for each team connection once its Secret is granted.
+- `kubectl get akbinding -A` shows each Binding `READY` `True`, as before the upgrade. A Binding on a team connection that this broker does not serve, because the connection is past the 16, is a second connection of one Slack app, or its namespace was taken off the list after this broker served it, says `Accepted` `False` with `ConnectionNotServed`; one whose namespace was never on the list has no status from this broker
+  ([Binding status](../reference/binding-status.md)).
+
+### Roll back from this release
+
+- **No team connection served yet.** Roll back as [above](#roll-back), and take `config.connectionNamespaces` off the values if you set it: the chart of the earlier release refuses a `config` key it does not have.
+  The earlier image ignores the new column and table, and writes its rows with the empty connection, which a later upgrade gives back to the broker's own connection.
+  The new index stays: the earlier release deletes the settled outbox rows of an expired session by channel and thread, which an index that starts at the connection does not serve, so on SQLite each of those deletions reads the whole
+  `outbox` table until you upgrade again. It costs time, not data (Postgres was not measured).
+- **Team connections served.** Do not roll back first. The outbox of an earlier release posts every unposted row through its one chat platform, so a post waiting for a team's connection would go out through
+  the platform's app. End the team's pending interactions, delete its Bindings, wait until `agentkourier_outbox_pending` is 0 for each team connection, and take `config.connectionNamespaces` off the values
+  in the same change as the rollback. The steps are in [Let a team bring its own Slack app](team-slack-app.md#take-it-back).
+- **Remove `spec.agents` from every AgentBackend** before a rollback, as [that section](#upgrade-to-the-release-that-limits-the-agents-a-binding-may-name) says.

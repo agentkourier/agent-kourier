@@ -12,6 +12,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -129,7 +130,7 @@ func TestAFailedApproverGroupCheckIsNoDecision(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			r := newGroupRig(t, groupBinding(), store.InteractionToolApproval)
 			var out logBuf
-			pl, err := interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{groupBinding()}, Authorizer: r.az, Ephemerals: r.eph, Decider: r.d, Auditor: r.aud,
+			pl, err := interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{groupBinding()}, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Decider: r.d, Auditor: r.aud,
 				Logger: slog.New(telemetry.NewJSONHandler(&out, slog.LevelDebug)), Now: func() time.Time { return r.now }}))
 			if err != nil {
 				t.Fatal(err)
@@ -289,7 +290,7 @@ func TestSomeoneElsesPressOnADecidedApprovalIsToldWhoDecidedWithoutAGroupCheck(t
 func TestACancelledGroupCheckIsRetriedWithoutAnErrorLine(t *testing.T) {
 	r := newGroupRig(t, groupBinding(), store.InteractionToolApproval)
 	var out logBuf
-	pl, err := interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{groupBinding()}, Authorizer: r.az, Ephemerals: r.eph, Decider: r.d, Auditor: r.aud,
+	pl, err := interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{groupBinding()}, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Decider: r.d, Auditor: r.aud,
 		Logger: slog.New(telemetry.NewJSONHandler(&out, slog.LevelDebug)), Now: func() time.Time { return r.now }}))
 	if err != nil {
 		t.Fatal(err)

@@ -26,11 +26,15 @@ const (
 	shutdownGrace = time.Second
 )
 
-// Target is a Binding to probe and the chat channel it posts to.
+// Target is a Binding to probe, the chat connection it is on and the chat channel it posts to.
 type Target struct {
 	// Binding is the Binding's key, namespace/name, which is the key of its conditions. The bare name is not enough:
 	// two Bindings of one name in two namespaces are two Bindings, and the checkers look the Binding up by this key.
 	Binding string
+	// Connection is the chat connection the Binding is on, "namespace/name", which the Prober gives the ChannelChecker and the
+	// GroupChecker with each probe so that they read with the bot of that connection. It may be empty when one bot answers for every
+	// Target.
+	Connection string
 	// Channel is the chat channel the Binding is bound to.
 	Channel string
 	// Generation is the metadata.generation of the Binding as it is in the config now, zero for one read from a file. The
@@ -59,23 +63,24 @@ type AgentChecker interface {
 }
 
 // ChannelChecker probes a chat channel. It sets ChannelJoined for the Binding whose Target names the channel; each
-// Target is probed on its own, even when several name one channel. A ChannelChecker answers for one bot, so Targets
-// must hold only Bindings on that bot's chat connection: for a Binding on another connection its answer is the wrong
-// bot's, and a True it gives would be false.
+// Target is probed on its own, even when several name one channel. A channel is a channel of one chat connection, and
+// the bot that reads it is that connection's: the Prober gives the Target's Connection with each probe, and the checker
+// must read with the bot of that connection and no other, since another bot's answer is about another app and a True
+// it gave would be false.
 type ChannelChecker interface {
-	// CheckChannel reports whether the bot is in channel. It must honor ctx, which ends at the probe timeout. An
-	// error means the probe could not tell and leaves the condition Unknown.
-	CheckChannel(ctx context.Context, channel string) (Outcome, error)
+	// CheckChannel reports whether the bot of connection is in channel. It must honor ctx, which ends at the probe
+	// timeout. An error means the probe could not tell and leaves the condition Unknown.
+	CheckChannel(ctx context.Context, connection, channel string) (Outcome, error)
 }
 
 // GroupChecker probes the approver groups of a Binding. It sets ApproversReadable for the Binding whose Target names the groups, one
-// probe for all of them. A GroupChecker answers for one bot, so Targets must hold only Bindings on that bot's chat connection (see
-// ChannelChecker).
+// probe for all of them. Like a ChannelChecker it reads with the bot of the Target's connection, which the Prober gives with each
+// probe.
 type GroupChecker interface {
-	// CheckGroups reports whether the bot can read every one of groups, the platform's own IDs, which are never empty. It must
-	// honor ctx, which ends at the probe timeout, and not change groups. An error means the probe could not tell and leaves the
-	// condition Unknown; a checker that can classify a failure returns it as an Outcome with a nil error.
-	CheckGroups(ctx context.Context, groups []string) (Outcome, error)
+	// CheckGroups reports whether the bot of connection can read every one of groups, the platform's own IDs, which are never
+	// empty. It must honor ctx, which ends at the probe timeout, and not change groups. An error means the probe could not
+	// tell and leaves the condition Unknown; a checker that can classify a failure returns it as an Outcome with a nil error.
+	CheckGroups(ctx context.Context, connection string, groups []string) (Outcome, error)
 }
 
 // PassGroupChecker is a GroupChecker that can share its reads among the probes of one pass, so that a group several Targets name is
@@ -136,12 +141,12 @@ type Options struct {
 	Revision func(ctx context.Context) string
 	// Agents probes backends. Nil means BackendReachable is not tracked.
 	Agents AgentChecker
-	// Channels probes channels, one probe per Target. Nil means ChannelJoined is not tracked. Targets must hold only
-	// Bindings on the chat connection that Channels answers for (see ChannelChecker).
+	// Channels probes channels, one probe per Target, with the bot of the Target's connection (see ChannelChecker). Nil means
+	// ChannelJoined is not tracked.
 	Channels ChannelChecker
 	// Groups probes approver groups, one probe for each Target that has ApproverGroups, which is the only kind of Binding that has an
-	// ApproversReadable condition. Nil means ApproversReadable is not tracked, whatever the Targets name. Targets must hold only
-	// Bindings on the chat connection that Groups answers for (see GroupChecker). A Groups that is a PassGroupChecker probes each pass's
+	// ApproversReadable condition. Nil means ApproversReadable is not tracked, whatever the Targets name. It reads with the bot of the
+	// Target's connection (see GroupChecker). A Groups that is a PassGroupChecker probes each pass's
 	// groups with the checker ForPass returns for it.
 	Groups GroupChecker
 	// MinRevisionGap is the least time between the start of a pass and the start of one that only a change calls for: a change of
@@ -496,7 +501,7 @@ func (p *Prober) pass(ctx context.Context, targets []Target) {
 	if p.o.Channels != nil {
 		for _, t := range targets {
 			channelJobs = append(channelJobs, func(ctx context.Context) {
-				res := p.probe(ctx, probeKey{ChannelJoined, t.Binding}, func(c context.Context) (Outcome, error) { return p.o.Channels.CheckChannel(c, t.Channel) })
+				res := p.probe(ctx, probeKey{ChannelJoined, t.Binding}, func(c context.Context) (Outcome, error) { return p.o.Channels.CheckChannel(c, t.Connection, t.Channel) })
 				p.record(ctx, ChannelJoined, t, res)
 			})
 		}
@@ -508,7 +513,7 @@ func (p *Prober) pass(ctx context.Context, targets []Target) {
 				continue
 			}
 			groupJobs = append(groupJobs, func(ctx context.Context) {
-				res := p.probe(ctx, probeKey{ApproversReadable, t.Binding}, func(c context.Context) (Outcome, error) { return groups.CheckGroups(c, t.ApproverGroups) })
+				res := p.probe(ctx, probeKey{ApproversReadable, t.Binding}, func(c context.Context) (Outcome, error) { return groups.CheckGroups(c, t.Connection, t.ApproverGroups) })
 				p.record(ctx, ApproversReadable, t, res)
 			})
 		}

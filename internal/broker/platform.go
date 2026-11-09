@@ -89,18 +89,25 @@ func (c RunConfig) newPlatform(conn Connection, log *slog.Logger, onConnection f
 // and a test image sets it to reach the fake.
 func slackConfig(conn Connection, log *slog.Logger) slack.Config {
 	// AuthzTimeout is what a press is given for its membership checks, whose callers have no deadline.
-	cfg := slack.Config{BotToken: conn.Credentials["botToken"], AppToken: conn.Credentials["appToken"], Logger: log, AuthzTimeout: interact.PressAuthzTimeout}
+	cfg := slack.Config{BotToken: conn.Credentials["botToken"], AppToken: conn.Credentials["appToken"], Logger: log, AuthzTimeout: interact.PressAuthzTimeout,
+		// The connection label of the series the adapter records (see slack.Config.Connection).
+		Connection: v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)}
 	if url := testhooks.SlackAPIURL(); url != "" {
 		cfg.APIURL = url
 	}
 	return cfg
 }
 
-// users is the session manager's Users over a platform: the platform's user, as the dialects name one.
-type users struct{ p chat.Platform }
+// users is the session manager's Users over the platforms of the connections: the platform's user, as the dialects name one,
+// asked of the platform of the connection the user's turn is in.
+type users struct{ platforms chat.Resolver[chat.Platform] }
 
-func (u users) ResolveUser(ctx context.Context, id string) (dialect.User, error) {
-	user, err := u.p.ResolveUser(ctx, id)
+func (u users) ResolveUser(ctx context.Context, conn, id string) (dialect.User, error) {
+	p, err := u.platforms.Platform(conn)
+	if err != nil {
+		return dialect.User{}, err
+	}
+	user, err := p.ResolveUser(ctx, id)
 	if err != nil {
 		return dialect.User{}, err
 	}

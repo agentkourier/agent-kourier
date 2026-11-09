@@ -96,13 +96,13 @@ func TestFixedPredicates(t *testing.T) {
 			`s.task_id = ''` +
 				` AND NOT EXISTS (SELECT 1 FROM interactions i WHERE i.connection = s.connection AND i.channel = s.channel AND i.thread_ts = s.thread_ts AND i.state = 'pending')` +
 				` AND NOT EXISTS (SELECT 1 FROM reply_queue r WHERE r.connection = s.connection AND r.channel = s.channel AND r.thread_ts = s.thread_ts AND r.delivered_at IS NULL)` +
-				` AND NOT EXISTS (SELECT 1 FROM outbox o WHERE o.channel = s.channel AND o.thread_ts = s.thread_ts AND o.message_ref = '' AND o.abandoned_at = 0)` +
+				` AND NOT EXISTS (SELECT 1 FROM outbox o WHERE o.connection = s.connection AND o.channel = s.channel AND o.thread_ts = s.thread_ts AND o.message_ref = '' AND o.abandoned_at = 0)` +
 				` AND NOT EXISTS (SELECT 1 FROM reply_queue r JOIN outbox o ON o.event_id >= r.id || '/' AND o.event_id < r.id || '0'` +
 				` WHERE r.connection = s.connection AND r.channel = s.channel AND r.thread_ts = s.thread_ts AND o.message_ref = '' AND o.abandoned_at = 0)`,
 			`s.task_id = ''` +
 				` AND NOT EXISTS (SELECT 1 FROM interactions i WHERE i.connection = s.connection AND i.channel = s.channel AND i.thread_ts = s.thread_ts AND i.state = 'pending')` +
 				` AND NOT EXISTS (SELECT 1 FROM reply_queue r WHERE r.connection = s.connection AND r.channel = s.channel AND r.thread_ts = s.thread_ts AND r.delivered_at IS NULL)` +
-				` AND NOT EXISTS (SELECT 1 FROM outbox o WHERE o.channel = s.channel AND o.thread_ts = s.thread_ts AND o.message_ref = '' AND o.abandoned_at IS NULL)` +
+				` AND NOT EXISTS (SELECT 1 FROM outbox o WHERE o.connection = s.connection AND o.channel = s.channel AND o.thread_ts = s.thread_ts AND o.message_ref = '' AND o.abandoned_at IS NULL)` +
 				` AND NOT EXISTS (SELECT 1 FROM reply_queue r JOIN outbox o ON o.event_id COLLATE "C" >= r.id || '/' AND o.event_id COLLATE "C" < r.id || '0'` +
 				` WHERE r.connection = s.connection AND r.channel = s.channel AND r.thread_ts = s.thread_ts AND o.message_ref = '' AND o.abandoned_at IS NULL)`}},
 	} {

@@ -535,8 +535,8 @@ before the Slack connection is tried. Ask the gauge, or read the log:
   before the first connection). A `0` that stays means Agent Kourier cannot reach Slack or Slack turns it away.
 - `kubectl --context $CTX -n agent-kourier logs deploy/agent-kourier-sandbox | grep 'slack:'` shows the connection's life: `slack: socket mode connecting`,
   `slack: socket mode websocket opened`, `slack: socket mode connected` (Slack said hello; a `num_connections` above 1 is a reason to look for another process
-  on the same app token, not proof of one: a fresh start can read 8 with no other consumer and replies still arriving), `slack: socket mode reconnecting` (a refresh Slack asks for, which it does every so often, or a lost connection), and WARN lines for `connection attempt failed; retrying` (Agent Kourier
-  tries again by itself, with a pause that grows to 5 minutes, and repeats the same failure once a minute at most),
+  on the same app token, not proof of one: a fresh start can read 8 with no other consumer and replies still arriving), `slack: socket mode reconnecting` (a refresh Slack asks for, which it does every so often, or a lost connection), and WARN lines for `slack connection ended; connecting again` (Agent Kourier
+  tries again by itself after the wait in `after`, which doubles from 1 second to 60 seconds with a random cut; `error` says why, such as `connection attempt failed`),
   `message could not be read`, `read failed` and `write failed`. Events Slack sends are logged at DEBUG only, by type and ID, never their
   text. A fatal rejection of the tokens is not one of these lines: Agent Kourier prints `agent-kourier: slack rejected the tokens: ...` and exits 1
   (`kubectl logs --previous` after the restart).

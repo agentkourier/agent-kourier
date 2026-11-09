@@ -58,6 +58,8 @@ type Store interface {
 	SessionTasks
 	Interactions
 	Presses
+	Attribution
+	ConnectionServing
 	TriggerThreads
 	TriggerRuns
 	ReplyQueue

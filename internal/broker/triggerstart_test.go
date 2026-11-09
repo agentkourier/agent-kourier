@@ -88,10 +88,10 @@ func newStarter(t *testing.T) *starter {
 	s := &starter{sub: &startSubmitter{}, notes: &startNotes{}, aud: &startAudit{}, logs: &bytes.Buffer{}, tel: telemetrytest.New(t)}
 	var err error
 	s.triggerStarter, err = newTriggerStarter(triggerStarterConfig{
-		Conn: startConn, Submit: s.sub, Takes: alwaysTakes, Notice: s.notes.take, Audit: s.aud,
-		Link: func(r chat.Ref) (string, bool) {
+		Submit: s.sub, Takes: alwaysTakes, Notice: s.notes.take, Audit: s.aud,
+		Links: chattest.Same[chat.Permalinker](linkFunc(func(r chat.Ref) (string, bool) {
 			return "https://example.slack.com/archives/" + r.Channel + "/p" + strings.Replace(r.ID, ".", "", 1), true
-		},
+		})),
 		Log: slog.New(slog.NewTextHandler(s.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	})
 	if err != nil {
@@ -234,7 +234,7 @@ func TestOnStartLinkIsTheAgentKourierBuiltPermalinkNotTheMessagesOwnLink(t *test
 // than a guess, and the turn still starts.
 func TestOnStartWithoutAPermalinkHasAnEmptyLink(t *testing.T) {
 	s := newStarter(t)
-	s.link = noPermalink
+	s.links = noPermalink()
 	m := firing(t)
 	m.PromptTemplate = "Alert [{{ .Link }}]"
 	if err := s.OnStart(s.tel.Ctx, m); err != nil {
@@ -243,7 +243,7 @@ func TestOnStartWithoutAPermalinkHasAnEmptyLink(t *testing.T) {
 	if got := instructionOf(t, s.sub.got[0].Text); got != "Alert []" {
 		t.Errorf("instruction = %q; want an empty link", got)
 	}
-	s.link = func(chat.Ref) (string, bool) { return "", false }
+	s.links = noPermalink()
 	if err := s.OnStart(s.tel.Ctx, m); err != nil {
 		t.Fatalf("OnStart = %v", err)
 	}
@@ -256,18 +256,17 @@ func TestOnStartWithoutAPermalinkHasAnEmptyLink(t *testing.T) {
 // render nothing, queue nothing, tell no thread or audit no refusal.
 func TestNewTriggerStarterNamesTheFieldThatIsMissing(t *testing.T) {
 	full := triggerStarterConfig{
-		Conn: startConn, Submit: &startSubmitter{}, Takes: alwaysTakes, Notice: (&startNotes{}).take, Audit: &startAudit{}, Link: noPermalink, Log: slog.Default(),
+		Submit: &startSubmitter{}, Takes: alwaysTakes, Notice: (&startNotes{}).take, Audit: &startAudit{}, Links: noPermalink(), Log: slog.Default(),
 	}
 	for _, tc := range []struct {
 		field string
 		clear func(*triggerStarterConfig)
 	}{
-		{"Conn", func(c *triggerStarterConfig) { c.Conn = "" }},
 		{"Submit", func(c *triggerStarterConfig) { c.Submit = nil }},
 		{"Takes", func(c *triggerStarterConfig) { c.Takes = nil }},
 		{"Notice", func(c *triggerStarterConfig) { c.Notice = nil }},
 		{"Audit", func(c *triggerStarterConfig) { c.Audit = nil }},
-		{"Link", func(c *triggerStarterConfig) { c.Link = nil }},
+		{"Links", func(c *triggerStarterConfig) { c.Links = nil }},
 		{"Log", func(c *triggerStarterConfig) { c.Log = nil }},
 	} {
 		t.Run(tc.field, func(t *testing.T) {
@@ -283,10 +282,66 @@ func TestNewTriggerStarterNamesTheFieldThatIsMissing(t *testing.T) {
 	}
 }
 
-// noPermalink is the Link of a platform that makes none: the prompt's link is empty.
-func noPermalink(chat.Ref) (string, bool) { return "", false }
+// linkFunc is a Permalinker made of a function.
+type linkFunc func(chat.Ref) (string, bool)
 
-// Every trigger start reports botMessage as the source, in the view and in the session's origin.
+func (f linkFunc) Permalink(r chat.Ref) (string, bool) { return f(r) }
+
+// noPermalink is the Links of a platform that makes none: the prompt's link is empty.
+func noPermalink() chat.Resolver[chat.Permalinker] {
+	return chattest.Same[chat.Permalinker](linkFunc(func(chat.Ref) (string, bool) { return "", false }))
+}
+
+// The session of a start is the connection of the message, and its link is made by the platform of that connection: two
+// connections' alerts in one channel ID are two sessions, each linked by its own app.
+func TestStartIsOfTheConnectionOfTheMessage(t *testing.T) {
+	s := newStarter(t)
+	s.links = chat.PlatformSet[chat.Permalinker]{
+		"ns/a": linkFunc(func(r chat.Ref) (string, bool) { return "https://a.example/" + r.ID, true }),
+		"ns/b": linkFunc(func(r chat.Ref) (string, bool) { return "https://b.example/" + r.ID, true }),
+	}
+	for _, conn := range []string{"ns/a", "ns/b"} {
+		m := firing(t)
+		m.Message.At.Conn = conn
+		m.PromptTemplate = "{{ .Link }}"
+		if err := s.OnStart(s.tel.Ctx, m); err != nil {
+			t.Fatalf("OnStart on %s: %v", conn, err)
+		}
+	}
+	for i, conn := range []string{"ns/a", "ns/b"} {
+		got := s.sub.got[i]
+		if got.Key.Connection != conn || instructionOf(t, got.Text) != "https://"+conn[len("ns/"):]+".example/"+alertTS {
+			t.Errorf("start %d = key %+v, text %q; want the session of %s and the link its own platform made", i, got.Key, got.Text, conn)
+		}
+	}
+	// A connection no platform runs makes no link, as a platform that makes none; the start goes on.
+	m := firing(t)
+	m.Message.At.Conn = "ns/gone"
+	m.PromptTemplate = "Alert [{{ .Link }}]"
+	if err := s.OnStart(s.tel.Ctx, m); err != nil {
+		t.Fatalf("OnStart on a connection that is down: %v", err)
+	}
+	if got := instructionOf(t, s.sub.got[2].Text); got != "Alert []" || s.sub.got[2].Key.Connection != "ns/gone" {
+		t.Errorf("start on a connection that is down = %q on %+v; want an empty link", got, s.sub.got[2].Key)
+	}
+}
+
+// A message that names no connection could file a session under none, so it starts nothing: the Intake treats the start as
+// handled, and nothing is submitted.
+func TestStartRefusesAMessageThatNamesNoConnection(t *testing.T) {
+	s := newStarter(t)
+	m := firing(t)
+	m.Message.At.Conn = ""
+	if err := s.OnStart(s.tel.Ctx, m); !errors.Is(err, chat.ErrNotStarted) {
+		t.Errorf("OnStart = %v; want ErrNotStarted", err)
+	}
+	if len(s.sub.got) != 0 {
+		t.Errorf("submitted %+v; want nothing", s.sub.got)
+	}
+}
+
+// A botMessage trigger's start reports botMessage as the source, in the view and in the session's origin (a personMessage
+// trigger's reports its own: TestOnStartOfAPersonsMessageIsTheirTurn).
 func TestOnStartSourceIsTheTriggerType(t *testing.T) {
 	s := newStarter(t)
 	m := firing(t)
@@ -593,12 +648,116 @@ func TestOnStartOfABotsMentionInAThreadThatCannotContinue(t *testing.T) {
 	}
 }
 
-// A mention that a limit stopped is audited, by message and limit and with nothing the post said.
+// A mention that a limit stopped is audited, by message and limit and with nothing the post said. Nobody wrote it, so it names
+// no user.
 func TestAMentionALimitStoppedIsAudited(t *testing.T) {
 	s := newStarter(t)
-	s.MentionLimited(s.tel.Ctx, mentioned(), store.LimitRate)
-	if len(s.aud.got) != 1 || s.aud.got[0].Ref != "botMention" || s.aud.got[0].Reason != "limit_rate" || s.aud.got[0].MessageID != mentioned().MessageID || s.aud.who[0].Binding != startBinding {
-		t.Errorf("audited %+v by %+v; want one refusal of the mention by the rate limit", s.aud.got, s.aud.who)
+	if err := s.Limited(s.tel.Ctx, mentioned(), store.LimitRate); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.aud.got) != 1 || s.aud.got[0].Ref != "botMention" || s.aud.got[0].Reason != "limit_rate" || s.aud.got[0].MessageID != mentioned().MessageID || s.aud.who[0].Binding != startBinding || s.aud.who[0].User != "" {
+		t.Errorf("audited %+v by %+v; want one refusal of the mention by the rate limit, by no user", s.aud.got, s.aud.who)
+	}
+}
+
+// An alert's start that a limit stopped is counted and not audited, even if it reaches Limited.
+func TestAnAlertALimitStoppedIsNotAudited(t *testing.T) {
+	s := newStarter(t)
+	m := reported()
+	m.Person = false
+	if err := s.Limited(s.tel.Ctx, m, store.LimitRate); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.aud.got) != 0 {
+		t.Errorf("audited %+v; want nothing for an alert", s.aud.got)
+	}
+}
+
+// An audit row that could not be written is an error of Limited, so that the Intake tells the person's next stopped start again.
+func TestAStoppedReportThatWasNotAuditedSaysSo(t *testing.T) {
+	s := newStarter(t)
+	s.aud.err = errors.New("the audit log is down")
+	if err := s.Limited(s.tel.Ctx, reported(), store.LimitRate); err == nil {
+		t.Error("Limited = nil; want the failed write's error")
+	}
+}
+
+// A person's report that a limit stopped is audited under that person, by message, trigger and limit, so that a member who
+// spends the limits for everyone can be found; nothing they wrote is in it.
+func TestAPersonsReportALimitStoppedIsAuditedAsTheirs(t *testing.T) {
+	s := newStarter(t)
+	m := reported()
+	if err := s.Limited(s.tel.Ctx, m, store.LimitDaily); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.aud.got) != 1 || s.aud.got[0].Ref != "personMessage" || s.aud.got[0].Reason != "limit_daily" || s.aud.got[0].MessageID != m.MessageID || s.aud.got[0].Trigger != m.Index {
+		t.Fatalf("audited %+v; want one refusal of the report by the daily cap", s.aud.got)
+	}
+	if who := s.aud.who[0]; who.Binding != startBinding || who.User != m.Message.User {
+		t.Errorf("audited by %+v; want the Binding and the person %s", who, m.Message.User)
+	}
+	if strings.Contains(fmt.Sprintf("%+v", s.aud.got[0]), "checkout") {
+		t.Errorf("audited %+v; want nothing the person wrote", s.aud.got[0])
+	}
+}
+
+// reported is the match of a person's top-level message by a personMessage trigger: what the Intake hands the starter.
+func reported() chat.TriggerMatch {
+	return chat.TriggerMatch{
+		Binding: startBinding, Index: 1, Person: true, MessageID: "slack:" + startConn + ":C0123456789:3.3", Fields: map[string]string{},
+		PromptTemplate: "A person reported something in {{ .Channel }} ({{ .Source }}): {{ .Link }}.",
+		Received:       time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC),
+		Message: chat.Inbound{
+			At:   chat.Ref{Platform: "slack", Conn: startConn, Channel: "C0123456789", ID: "3.3"},
+			User: "U0REPORTER", Text: "checkout is down since the deploy",
+		},
+	}
+}
+
+// A person's message is that person's turn: the thread is the message's own, the turn names its author, so that the session
+// manager attributes it and audits the person, it carries no thread, and the session's origin says the source personMessage,
+// which feedback attributes to no alert. The prompt reports the source too, and holds what the person wrote in the untrusted
+// block only.
+func TestOnStartOfAPersonsMessageIsTheirTurn(t *testing.T) {
+	s := newStarter(t)
+	if err := s.OnStart(s.tel.Ctx, reported()); err != nil {
+		t.Fatalf("OnStart = %v", err)
+	}
+	if len(s.sub.got) != 1 {
+		t.Fatalf("%d turns submitted; want 1", len(s.sub.got))
+	}
+	in := s.sub.got[0]
+	if want := (session.Key{Connection: startConn, Channel: "C0123456789", Thread: "3.3"}); in.Key != want || in.MessageRef != "3.3" || in.MessageID != reported().MessageID || !in.Create || in.Binding != startBinding {
+		t.Errorf("submitted %+v; want a new session of thread %+v for the message 3.3 under %s", in, want, startBinding)
+	}
+	if in.UserID != "U0REPORTER" || in.WholeThread {
+		t.Errorf("UserID %q, WholeThread %v; want the person who wrote it, and no thread to carry", in.UserID, in.WholeThread)
+	}
+	if want := (store.Origin{Source: "personMessage"}); in.Origin != want {
+		t.Errorf("Origin = %+v; want %+v", in.Origin, want)
+	}
+	if got, want := instructionOf(t, in.Text), "A person reported something in C0123456789 (personMessage): https://example.slack.com/archives/C0123456789/p33."; got != want {
+		t.Errorf("instruction %q; want %q", got, want)
+	}
+	tag := untrustedTag(t, in.Text)
+	if before, inside, _ := strings.Cut(in.Text, "<"+tag+">"); strings.Contains(before, "checkout is down") || !strings.Contains(inside, "checkout is down since the deploy") {
+		t.Errorf("the person's text is not in the untrusted block alone:\n%s", in.Text)
+	}
+}
+
+// A prompt that is refused for a person's message is audited as that person's, as the turn would have been.
+func TestOnStartARefusedPersonsMessageIsAuditedWithThePerson(t *testing.T) {
+	s := newStarter(t)
+	m := reported()
+	m.PromptTemplate = "Report {{ .Nope }}"
+	if err := s.OnStart(s.tel.Ctx, m); !errors.Is(err, chat.ErrNotStarted) {
+		t.Fatalf("OnStart = %v; want ErrNotStarted", err)
+	}
+	if len(s.aud.who) != 1 || s.aud.who[0] != (audit.Actor{Binding: startBinding, User: "U0REPORTER"}) {
+		t.Errorf("audited by %+v; want the Binding and the person", s.aud.who)
+	}
+	if len(s.sub.got) != 0 {
+		t.Errorf("submitted %+v; want nothing", s.sub.got)
 	}
 }
 
@@ -606,7 +765,7 @@ func TestAMentionALimitStoppedIsAudited(t *testing.T) {
 func TestTakesBotMentionAsksAboutTheThreadOfTheMention(t *testing.T) {
 	var asked session.Inbound
 	s, err := newTriggerStarter(triggerStarterConfig{
-		Conn: startConn, Submit: &startSubmitter{}, Notice: (&startNotes{}).take, Audit: &startAudit{}, Link: noPermalink, Log: slog.Default(),
+		Submit: &startSubmitter{}, Notice: (&startNotes{}).take, Audit: &startAudit{}, Links: noPermalink(), Log: slog.Default(),
 		Takes: func(_ context.Context, in session.Inbound) (bool, error) { asked = in; return false, nil },
 	})
 	if err != nil {

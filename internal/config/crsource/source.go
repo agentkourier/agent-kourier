@@ -13,11 +13,15 @@
 //
 // # What it reads
 //
-// The broker owns one ChatConnection, named in Options. The Set holds that connection alone, so the broker serves exactly
-// one, and the Bindings whose connectionRef names it, or names no connection that exists (so that some broker reports it).
-// A Binding that names another existing connection belongs to the broker that serves that one, and is not in the Set and not
-// reported here. If the own connection is deleted while the broker runs, the Set keeps the last good generation of it, and
-// says so in Set.Invalid.
+// The broker has an own ChatConnection, named in Options, and may be admitted to the namespaces of Options.ConnectionNamespaces
+// (spec D52). The connections it serves are the own and every ChatConnection of an admitted namespace, up to maxServedConnections
+// (see there for the rule); the Set holds those and no others. It also holds the Bindings whose connectionRef names a served
+// connection, or names no connection that exists (so that some broker reports it). A Binding that names another existing
+// connection, one of a namespace that is not admitted among them, belongs to the broker that serves that one, and is not in the
+// Set and not reported here. So is a Binding of a connection that the cap leaves out: until a status says so, nobody reports it.
+// Without ConnectionNamespaces the served set is the own connection alone. If the own connection is deleted while the broker runs,
+// the Set keeps the last good generation of it, and says so in Set.Invalid. A connection of an admitted namespace is held by
+// nothing: it is any other object (see "The hold").
 //
 // # Unknown fields
 //
@@ -31,6 +35,9 @@
 // cannot read or that Validate refuses, is still a bad object.
 //
 // # The hold
+//
+// The hold is for the own connection alone. A deleted team connection is not held, with or without its Bindings: it stops as any
+// other object does, under the rules below, and its Bindings that are still there name a connection that does not exist.
 //
 // While the own connection is deleted and held, the Set holds with it, at their last good generation, the Bindings that
 // named it and are gone from the cluster too, and the AgentBackends that those Bindings, and the Bindings of it that are
@@ -167,8 +174,12 @@ var (
 type Options struct {
 	// Client reads the resources. In a broker it is the dynamic client of the pod's own ServiceAccount.
 	Client dynamic.Interface
-	// Connection is the ChatConnection this broker serves, as AGENTKOURIER_CHAT_CONNECTION names it.
+	// Connection is the broker's own ChatConnection, as AGENTKOURIER_CHAT_CONNECTION names it. It is always served.
 	Connection v1alpha1.ObjectRef
+	// ConnectionNamespaces is the platform's admission list (AGENTKOURIER_CONNECTION_NAMESPACES): the Source serves the
+	// ChatConnections of these namespaces besides the own, up to maxServedConnections in all. Each is a namespace name. None, the
+	// default, serves the own connection alone.
+	ConnectionNamespaces []string
 	// Logger receives the failures of a list or watch. It defaults to slog.Default().
 	Logger *slog.Logger
 }
@@ -228,13 +239,26 @@ const goneGrace = time.Minute
 // starts the wait again.
 const settleFloor = 8 * time.Second
 
+// maxServedConnections is the most ChatConnections the broker serves, its own included. The own connection is always served and
+// counts first; the ChatConnections of the admitted namespaces are ordered by creationTimestamp (the oldest first), then
+// namespace, then name (creationTimestamp has a resolution of one second, so connections made together tie and fall to namespace
+// and name), and the first maxServedConnections-1 are served. An invalid connection counts too, so that which
+// connections are served depends on the objects' ages and names and not on their specs. A connection past the limit is not served:
+// the Set lists it in UnservedConnections with the reason config.UnservedCap, the Bindings that name it are not read (they are
+// nobody's, until a status says so), and the source says once at Warn that it was left out and once at Info when it is served
+// again, which it is when a connection ahead of it goes away. A deleted connection keeps its place until its deletion takes effect
+// (it is served until then), so the limit holds at every read. The value is fixed in code and no setting changes it: it is 16 for
+// now, and the measurement of what a served connection costs (memory and goroutines each) may revise it.
+const maxServedConnections = 16
+
 // Source is a config.Source of the custom resources. Start it, and Stop it when done.
 type Source struct {
-	client dynamic.Interface
-	own    key
-	log    *slog.Logger
-	ctx    context.Context
-	cancel context.CancelFunc
+	client   dynamic.Interface
+	own      key
+	admitted map[string]bool // the namespaces whose ChatConnections are served besides the own (Options.ConnectionNamespaces)
+	log      *slog.Logger
+	ctx      context.Context
+	cancel   context.CancelFunc
 
 	mu      sync.Mutex // guards the fields below
 	factory dynamicinformer.DynamicSharedInformerFactory
@@ -257,6 +281,7 @@ type Source struct {
 
 	probeEvery, probeTimeout time.Duration
 	holding                  bool           // the own connection is deleted and held, with what went with it
+	capped                   map[key]bool   // the connections the last read left out under maxServedConnections, so that the log says each once
 	lastGone                 time.Time      // when a read last found an object gone that an earlier read found there
 	probeExited              func()         // a test's hook, called as the probe's goroutine ends
 	wg                       sync.WaitGroup // the probe
@@ -273,7 +298,12 @@ func New(opts Options) (*Source, error) {
 	s := &Source{
 		client: opts.Client, log: cmp.Or(opts.Logger, slog.Default()), good: map[key]goodObject{}, decoded: map[key]decodedObject{}, warned: map[key]warnedGeneration{},
 		own: key{config.KindChatConnection, opts.Connection.Namespace, opts.Connection.Name}, now: time.Now,
-		probeEvery: probeEvery, probeTimeout: probeTimeout,
+		probeEvery: probeEvery, probeTimeout: probeTimeout, admitted: map[string]bool{}, capped: map[key]bool{},
+	}
+	for _, ns := range opts.ConnectionNamespaces {
+		if ns != "" {
+			s.admitted[ns] = true
+		}
 	}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	return s, nil
@@ -500,6 +530,34 @@ func (s *Source) BindingStatus(namespace, name string) (BindingStatus, bool, err
 	return BindingStatus{UID: u.GetUID(), Generation: u.GetGeneration(), ResourceVersion: u.GetResourceVersion(), Conditions: ConditionsOf(u)}, true, nil
 }
 
+// ConnectionBindings is what ConnectionBindings finds of one ChatConnection.
+type ConnectionBindings struct {
+	// Exists says whether the ChatConnection exists, whether or not the broker serves it.
+	Exists bool
+	// Bindings is the "namespace/name" of each Binding that names it, sorted, an invalid one too.
+	Bindings []string
+	// Admitted is the part of Bindings that the connection allows: those of its own namespace, and those of a namespace its
+	// spec.allowedNamespaces lists. Only these may be told anything of the connection (a Binding of another namespace learns no more of
+	// an object than that it exists and allows it).
+	Admitted []string
+}
+
+// ConnectionBindings reads the ChatConnection namespace/name and the Bindings that name it from the caches, whether or not the broker
+// serves it, so the connection need not be one the Set lists: it is how the broker finds the Bindings of a connection it served before
+// and does not now (a namespace taken off the admission list), which no read of the Set names. A Binding that is invalid still says
+// which connection it means, as for UnservedConnection.Bindings. It fails with ErrNotSynced until the caches have synced, and with
+// ErrStopped after Stop.
+func (s *Source) ConnectionBindings(namespace, name string) (ConnectionBindings, error) {
+	l, err := s.list()
+	if err != nil {
+		return ConnectionBindings{}, err
+	}
+	want := key{config.KindChatConnection, namespace, name}
+	out := ConnectionBindings{Exists: l.hasConnection[want]}
+	out.Bindings, out.Admitted = l.bindingsOf(want)
+	return out, nil
+}
+
 // BindingEvents counts the events (an object added, changed or deleted) that the Binding informer has delivered, and only grows.
 // A reader of the statuses that sees it unchanged since it last looked knows that no Binding has changed since: the cache is
 // updated before the event is counted, so a change that the count has not caught up with yet is seen at the next look. It reads
@@ -544,10 +602,13 @@ func (s *Source) Set(context.Context) (*config.Set, string, error) {
 	set := &config.Set{}
 	live := map[key]bool{}
 	s.readNo++
+	served := s.selectServed(l)
+	set.UnservedConnections = served.left
+	s.noteCapped(served)
 	read(s, config.KindAgentBackend, l.backends, live, func(*unstructured.Unstructured) bool { return true }, &set.AgentBackends, &set.Invalid)
 	read(s, config.KindChatConnection, l.connections, live,
-		func(u *unstructured.Unstructured) bool { return keyOf(config.KindChatConnection, u) == s.own }, &set.ChatConnections, &set.Invalid)
-	read(s, config.KindBinding, l.bindings, live, func(u *unstructured.Unstructured) bool { return s.owns(l, u) }, &set.Bindings, &set.Invalid)
+		func(u *unstructured.Unstructured) bool { return served.keys[keyOf(config.KindChatConnection, u)] }, &set.ChatConnections, &set.Invalid)
+	read(s, config.KindBinding, l.bindings, live, func(u *unstructured.Unstructured) bool { return s.owns(l, served, u) }, &set.Bindings, &set.Invalid)
 	for k := range s.warned { // what is not read now has no generation to be told of again
 		if !live[k] {
 			delete(s.warned, k)
@@ -572,18 +633,26 @@ func (s *Source) Set(context.Context) (*config.Set, string, error) {
 	now := s.clock()
 	s.markGone(l, live, now)
 	s.forget(l, live, now, ownConn == nil)
+	reselect := s.placeFreed(served)
 	if ownConn != nil {
 		set.ChatConnections = append(set.ChatConnections, *ownConn)
 		set.Invalid = append(set.Invalid, config.Invalid{Kind: s.own.kind, Namespace: s.own.namespace, Name: s.own.name, Served: ownGood.generation, Deleted: true})
 		s.holdStarted(s.hold(l, live, set))
 	} else {
-		s.serveDeferred(l, set)
+		s.serveDeferred(l, served, set)
 		if s.holding {
 			s.holding = false
 			s.log.Info("the ChatConnection of the broker is back; what was held with it and is still gone is gone")
 		}
 	}
-	return set, s.fingerprintLocked(l, now), nil
+	fp := s.fingerprintLocked(l, now)
+	if reselect {
+		// A deletion took effect at this read and freed a place for a connection that the cap left out, which the next read serves.
+		// Fingerprint does not carry the mark, so the Reloader's next poll finds the state changed and reads again, where it
+		// would otherwise wait for its recheck.
+		fp += "|reselect"
+	}
+	return set, fp, nil
 }
 
 // fingerprintLocked is the digest of the listing, and a mark if a deletion is due to take effect, so that the Reloader reads
@@ -633,10 +702,10 @@ func (s *Source) markGone(l listing, live map[key]bool, now time.Time) {
 	}
 }
 
-// serveDeferred adds to set, at their last good generation and with no word in set.Invalid, the Bindings and AgentBackends
-// that a read found gone and whose deletion has not taken effect: they are served as if they were still there. The caller
-// holds s.mu.
-func (s *Source) serveDeferred(l listing, set *config.Set) {
+// serveDeferred adds to set, at their last good generation and with no word in set.Invalid, the Bindings, AgentBackends and team
+// ChatConnections (those of served, which counted their places) that a read found gone and whose deletion has not taken effect:
+// they are served as if they were still there. The caller holds s.mu.
+func (s *Source) serveDeferred(l listing, served servedConnections, set *config.Set) {
 	for _, k := range slices.SortedFunc(maps.Keys(s.good), compareKeys) {
 		g := s.good[k]
 		if k == s.own || g.held || g.goneAt.IsZero() || !g.settledAt.IsZero() {
@@ -653,6 +722,10 @@ func (s *Source) serveDeferred(l listing, set *config.Set) {
 		case config.KindAgentBackend:
 			if be := typedOf[v1alpha1.AgentBackend](g); be != nil {
 				set.AgentBackends = append(set.AgentBackends, *be)
+			}
+		case config.KindChatConnection:
+			if c := typedOf[v1alpha1.ChatConnection](g); c != nil && served.keys[k] {
+				set.ChatConnections = append(set.ChatConnections, *c)
 			}
 		}
 	}
@@ -703,7 +776,8 @@ func (s *Source) clock() time.Time {
 }
 
 // holdStarted says, once, that a hold has begun: how many Bindings and AgentBackends it holds, and how many of the held
-// Bindings name a backend that is gone and was not held, which are not served.
+// Bindings name a backend that is not in the set (gone and not held, or refused with no last good generation), which are
+// not served.
 func (s *Source) holdStarted(bindings, backends, withoutBackend int) {
 	if s.holding {
 		return
@@ -973,14 +1047,130 @@ func keyOf(kind string, u *unstructured.Unstructured) key {
 	return key{kind, u.GetNamespace(), u.GetName()}
 }
 
-// owns reports whether the Binding u is the broker's to serve or to report: its connectionRef names the broker's connection,
-// or names no connection that exists. One that names another existing connection is that connection's broker's. The
-// reference is read from the raw object, since a Binding that is invalid may still say which connection it means.
-func (s *Source) owns(l listing, u *unstructured.Unstructured) bool {
+// owns reports whether the Binding u is the broker's to serve or to report: its connectionRef names a connection the broker serves, or
+// names no connection that exists. One that names another existing connection is that connection's broker's, and so is one that
+// names a connection the cap left out, which no broker reports until a status says so. The reference is read from the raw object,
+// since a Binding that is invalid may still say which connection it means.
+func (s *Source) owns(l listing, served servedConnections, u *unstructured.Unstructured) bool {
 	ns, _, _ := unstructured.NestedString(u.Object, "spec", "chat", "connectionRef", "namespace")
 	name, _, _ := unstructured.NestedString(u.Object, "spec", "chat", "connectionRef", "name")
 	ref := key{config.KindChatConnection, cmp.Or(ns, u.GetNamespace()), name}
-	return ref == s.own || !l.hasConnection[ref]
+	return served.keys[ref] || !l.hasConnection[ref]
+}
+
+// servedConnections is what one read serves of the ChatConnections: the keys of the own connection and of the team connections that
+// fit under maxServedConnections, and the ones that exist and do not fit.
+type servedConnections struct {
+	keys     map[key]bool
+	left     []config.UnservedConnection
+	deferred []key // the deleted connections that still took a place in the choice
+}
+
+// selectServed chooses the connections to serve: the own, and the ChatConnections of the admitted namespaces in the order of
+// maxServedConnections, as many as there are places. A team connection that was deleted and whose deletion has not taken effect
+// still takes its place, since it is served until then (serveDeferred); the deletion that takes effect at this read frees its
+// place at the next. The caller holds s.mu.
+func (s *Source) selectServed(l listing) servedConnections {
+	type candidate struct {
+		k       key
+		created time.Time
+		listed  bool
+	}
+	var cands []candidate
+	for _, u := range l.connections {
+		if k := keyOf(config.KindChatConnection, u); k != s.own && s.admitted[k.namespace] {
+			cands = append(cands, candidate{k, u.GetCreationTimestamp().Time, true})
+		}
+	}
+	for k, g := range s.good {
+		if _, listed := l.keys[k]; k.kind == config.KindChatConnection && k != s.own && !listed && g.settledAt.IsZero() {
+			cands = append(cands, candidate{k, g.obj.GetCreationTimestamp().Time, false})
+		}
+	}
+	slices.SortFunc(cands, func(a, b candidate) int {
+		return cmp.Or(a.created.Compare(b.created), cmp.Compare(a.k.namespace, b.k.namespace), cmp.Compare(a.k.name, b.k.name))
+	})
+	out := servedConnections{keys: map[key]bool{s.own: true}}
+	for i, c := range cands {
+		if !c.listed {
+			out.deferred = append(out.deferred, c.k)
+		}
+		switch {
+		case i < maxServedConnections-1:
+			out.keys[c.k] = true
+		case c.listed:
+			out.left = append(out.left, config.UnservedConnection{Namespace: c.k.namespace, Name: c.k.name, Reason: config.UnservedCap,
+				Message: fmt.Sprintf("the broker serves at most %d chat connections", maxServedConnections)})
+		}
+	}
+	if len(out.left) > 0 {
+		out.nameBindings(l)
+	}
+	return out
+}
+
+// nameBindings gives each left-out connection the Bindings that name it, sorted, read from the raw objects: a Binding that is
+// invalid may still say which connection it means. They are in no Set, and the status and the retention of sessions need them.
+func (sc *servedConnections) nameBindings(l listing) {
+	for i := range sc.left {
+		sc.left[i].Bindings, sc.left[i].Admitted = l.bindingsOf(key{config.KindChatConnection, sc.left[i].Namespace, sc.left[i].Name})
+	}
+}
+
+// bindingsOf returns the Bindings that name the connection conn, sorted, and those of them that the connection admits: its own
+// namespace's, and the namespaces of its spec.allowedNamespaces, read from the raw object, which is readable when it is invalid.
+func (l listing) bindingsOf(conn key) (bindings, admitted []string) {
+	var allowed []string
+	for _, u := range l.connections {
+		if keyOf(config.KindChatConnection, u) == conn {
+			allowed, _, _ = unstructured.NestedStringSlice(u.Object, "spec", "allowedNamespaces")
+			break
+		}
+	}
+	for _, u := range l.bindings {
+		if refOf(config.KindChatConnection, u, "spec", "chat", "connectionRef") != conn {
+			continue
+		}
+		name := u.GetNamespace() + "/" + u.GetName()
+		bindings = append(bindings, name)
+		if u.GetNamespace() == conn.namespace || slices.Contains(allowed, u.GetNamespace()) {
+			admitted = append(admitted, name)
+		}
+	}
+	return bindings, admitted
+}
+
+// placeFreed says whether this read let a deleted connection's deletion take effect while a connection is left out under the cap:
+// the deleted one still took its place in the choice, so the left-out one waits for the next read. The caller holds s.mu, after forget.
+func (s *Source) placeFreed(served servedConnections) bool {
+	if len(served.left) == 0 {
+		return false
+	}
+	return slices.ContainsFunc(served.deferred, func(k key) bool {
+		g, ok := s.good[k]
+		return !ok || !g.settledAt.IsZero()
+	})
+}
+
+// noteCapped says, once, that a connection is left out under maxServedConnections, at Warn, and, once, that one that was left out is
+// served again, at Info. The caller holds s.mu.
+func (s *Source) noteCapped(served servedConnections) {
+	now := make(map[key]bool, len(served.left))
+	for _, u := range served.left {
+		k := key{config.KindChatConnection, u.Namespace, u.Name}
+		now[k] = true
+		if !s.capped[k] {
+			s.log.Warn("a ChatConnection is left out: the broker serves at most so many chat connections, its own and then the oldest of the admitted namespaces, "+
+				"and this one is not among them; its Bindings are not served until a place is free",
+				"connection", u.Namespace+"/"+u.Name, "limit", maxServedConnections)
+		}
+	}
+	for k := range s.capped {
+		if !now[k] && served.keys[k] {
+			s.log.Info("a ChatConnection that the limit kept out is served again", "connection", k.namespace+"/"+k.name, "limit", maxServedConnections)
+		}
+	}
+	s.capped = now
 }
 
 // listing is what the three caches held when they were listed, one after another (Bindings first, then AgentBackends, then
