@@ -63,49 +63,57 @@ func connecting(count, attempt int) socketmode.Event {
 	return socketmode.Event{Type: socketmode.EventTypeConnecting, Data: &slackgo.ConnectingEvent{ConnectionCount: count, Attempt: attempt}}
 }
 
-// A retry loop logs its first failure at once, then a failure of the same kind at most once a minute, with a
-// count of those it left out; a new kind of failure is logged at once, and so is the first one after a
-// connection was made.
-func TestConnectionErrorsAreCollapsed(t *testing.T) {
+// A failed attempt to connect ends Run: slack-go would retry it without end, with a pause that grows to 5 minutes, and
+// the broker's policy is the one that paces a reconnect. The watch records the error for Run to return, whether or not the
+// connection had been up, takes the connection down, and logs nothing: RunPlatform logs the error it is returned.
+func TestAConnectionErrorEndsTheRun(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		prior  []socketmode.Event
+		states []bool
+	}{
+		{"after the connection was up", []socketmode.Event{hello(), connecting(1, 1)}, []bool{true, false}},
+		{"before it ever was", []socketmode.Event{connecting(0, 1)}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			k := newWatched(t)
+			for _, ev := range tc.prior {
+				k.w.event(t.Context(), ev)
+			}
+			if k.w.lost != nil {
+				t.Fatalf("lost = %v before any error", k.w.lost)
+			}
+
+			k.w.event(t.Context(), connectionError(errors.New("dial tcp 10.0.0.1:443: connect: connection refused"), 1))
+
+			if k.w.lost == nil || !strings.Contains(k.w.lost.Error(), "connection attempt failed") || !strings.Contains(k.w.lost.Error(), "connection refused") {
+				t.Errorf("lost = %v; want the failed attempt and its cause", k.w.lost)
+			}
+			if k.w.up || fmt.Sprint(k.states) != fmt.Sprint(tc.states) {
+				t.Errorf("up = %v and OnConnection was told %v; want the connection down, having been told %v", k.w.up, k.states, tc.states)
+			}
+			if got := k.lines("level=WARN"); len(got) != 0 {
+				t.Errorf("the watch logged %q; want nothing, since the error it hands to Run is logged by whoever retries", got)
+			}
+		})
+	}
+}
+
+// What Classify reads is kept in the error Run returns: the code Slack refused with (a token it will never accept is
+// fatal, and slack-go itself retries token_expired without end) and the wait that Slack named.
+func TestTheErrorOfAConnectionAttemptKeepsWhatClassifyReads(t *testing.T) {
 	k := newWatched(t)
-	refused := errors.New("dial tcp 10.0.0.1:443: connect: connection refused")
-	for attempt := 1; attempt <= 5; attempt++ {
-		k.w.event(t.Context(), connectionError(refused, attempt))
-		k.now = k.now.Add(5 * time.Second)
-	}
-	if got := k.lines("level=WARN"); len(got) != 1 || !strings.Contains(got[0], "connection refused") {
-		t.Fatalf("5 identical failures in 25 s logged %q; want one WARN line", got)
+	k.w.event(t.Context(), connectionError(fmt.Errorf("open: %w", slackgo.SlackErrorResponse{Err: "token_expired"}), 1))
+	var resp slackgo.SlackErrorResponse
+	if !errors.As(k.w.lost, &resp) || resp.Err != "token_expired" {
+		t.Errorf("lost = %v; want Slack's code token_expired to be kept", k.w.lost)
 	}
 
-	k.now = k.now.Add(time.Minute)
-	k.w.event(t.Context(), connectionError(refused, 6))
-	if got := k.lines("level=WARN"); len(got) != 2 || !strings.Contains(got[1], "suppressed=4") {
-		t.Fatalf("the failure a minute later logged %q; want a second line that counts the 4 left out", got)
-	}
-
-	limited, down := errors.New("slack rate limit exceeded"), errors.New("slack server error: 503")
-	k.w.event(t.Context(), connectionError(limited, 7))
-	if got := k.lines("level=WARN"); len(got) != 3 || !strings.Contains(got[2], "rate limit") || strings.Contains(got[2], "suppressed") {
-		t.Fatalf("a different failure logged %q; want it at once, with no count: the line before it ended its run", got)
-	}
-	k.w.event(t.Context(), connectionError(limited, 8)) // one left out
-
-	// The count goes on the line that ends the run of failures, and names the error it counts.
-	k.w.event(t.Context(), connectionError(down, 9))
-	if got := k.lines("level=WARN"); len(got) != 4 || !strings.Contains(got[3], "earlier_suppressed=1") || !strings.Contains(got[3], "earlier_error=") ||
-		!strings.Contains(got[3], "rate limit") || !strings.Contains(got[3], "503") {
-		t.Fatalf("a different failure after one left out logged %q; want its own line with the earlier error and its count of 1", got)
-	}
-
-	k.w.event(t.Context(), connectionError(down, 10))
-	k.w.event(t.Context(), connectionError(down, 11)) // two left out
-	k.w.event(t.Context(), hello())
-	if got := k.lines("level=INFO"); len(got) == 0 || !strings.Contains(got[len(got)-1], "suppressed=2") || !strings.Contains(got[len(got)-1], "suppressed_error=") {
-		t.Fatalf("a hello after two left out logged %q; want the count and the error on the hello", got)
-	}
-	k.w.event(t.Context(), connectionError(down, 1))
-	if got := k.lines("level=WARN"); len(got) != 5 || strings.Contains(got[4], "suppressed") {
-		t.Fatalf("a failure after a connection logged %q; want it at once, as a new outage, with no count from the one before", got)
+	k = newWatched(t)
+	k.w.event(t.Context(), connectionError(&slackgo.RateLimitedError{RetryAfter: 42 * time.Second}, 1))
+	var limited *slackgo.RateLimitedError
+	if !errors.As(k.w.lost, &limited) || limited.RetryAfter != 42*time.Second {
+		t.Errorf("lost = %v; want the rate limit and its Retry-After to be kept", k.w.lost)
 	}
 }
 
@@ -151,6 +159,9 @@ func TestNothingIsLoggedOnceTheContextHasEnded(t *testing.T) {
 	if got := k.lines("level="); len(got) != logged {
 		t.Errorf("events after the context ended logged %q; want nothing more", got[logged:])
 	}
+	if k.w.lost != nil {
+		t.Errorf("lost = %v once the context had ended; the end of Run is not a lost connection", k.w.lost)
+	}
 	if fmt.Sprint(k.states) != fmt.Sprint([]bool{true}) {
 		t.Errorf("OnConnection was told %v; want only up: closing the watch, which Run defers, takes it down", k.states)
 	}
@@ -165,8 +176,8 @@ func TestNothingIsLoggedOnceTheContextHasEnded(t *testing.T) {
 func TestACancelledAttemptIsNotAFailure(t *testing.T) {
 	k := newWatched(t)
 	k.w.event(t.Context(), connectionError(fmt.Errorf("Post: %w", context.Canceled), 1))
-	if got := k.lines("level=WARN"); len(got) != 0 {
-		t.Errorf("a cancelled attempt logged %q; want nothing", got)
+	if got := k.lines("level=WARN"); len(got) != 0 || k.w.lost != nil {
+		t.Errorf("a cancelled attempt logged %q and ended the run with %v; want neither", got, k.w.lost)
 	}
 }
 
@@ -251,8 +262,14 @@ func TestLifecycleLinesHoldNoTokenTicketOrPayload(t *testing.T) {
 			t.Errorf("the log holds %q:\n%s", bad, logs)
 		}
 	}
-	if got := len(k.lines("level=WARN")); got != 4 {
-		t.Errorf("%d WARN lines; want one each for the connection error, the read error, the bad message and the write error:\n%s", got, logs)
+	if got := len(k.lines("level=WARN")); got != 3 {
+		t.Errorf("%d WARN lines; want one each for the read error, the bad message and the write error:\n%s", got, logs)
+	}
+	// The connection error is not logged here but returned from Run, and RunPlatform logs it: it holds no secret either.
+	for _, bad := range []string{ticket, plainTicket, "wss://", "ws://", "xapp-fake-app-token", "xoxb-fake-bot-token"} {
+		if k.w.lost == nil || strings.Contains(k.w.lost.Error(), bad) {
+			t.Errorf("the error that ends Run is %v; want one without %q", k.w.lost, bad)
+		}
 	}
 	if got := k.lines("env-2"); len(got) != 1 || !strings.Contains(got[0], "level=DEBUG") || !strings.Contains(got[0], "events_api") {
 		t.Errorf("an envelope logged %q; want its type and ID at DEBUG", got)

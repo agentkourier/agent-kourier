@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -550,4 +551,40 @@ func TestSlackConfigTakesItsAPIURLFromTestHooksWhenSet(t *testing.T) {
 	if got := slackConfig(conn, nil).APIURL; got != "" {
 		t.Errorf("APIURL = %q with %s empty, want Slack's own (empty)", got, testhooks.SlackAPIURLEnv)
 	}
+}
+
+// A socket that Slack drops, and cannot be opened again for a while, leaves the broker up with the gauge at 0 for as long
+// as Slack is out of reach (the broker's own run found the loss: RunPlatform waits and runs the adapter again), and the gauge goes
+// back to 1 when the connection is back, which then delivers a mention to a turn as before.
+func TestRunShowsTheConnectionDownWhileASocketCannotBeReopenedAndUpAgain(t *testing.T) {
+	const up = `agentkourier_chat_connected{connection="agent-kourier-system/slack-main"} `
+	w := newSlackWorld(t, "xoxb-fake-bot")
+	gate := &reconnectGate{inner: w.fake}
+	srv := httptest.NewServer(gate)
+	t.Cleanup(srv.Close)
+	t.Setenv(testhooks.SlackAPIURLEnv, srv.URL+"/")
+	r := start(t, w.cfg)
+	r.waitMetric(up + "1")
+
+	gate.down.Store(true)
+	if _, err := w.fake.DropConnections(w.fake.Apps()[0].AppID); err != nil {
+		t.Fatal(err)
+	}
+	r.waitMetric(up + "0")
+	for deadline := time.Now().Add(1500 * time.Millisecond); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if _, body := r.get("/metrics"); !strings.Contains(body, up+"0\n") {
+			t.Fatalf("the gauge left 0 while Slack could not be reached:\n%s", grep(body, "agentkourier_chat_"))
+		}
+	}
+	select {
+	case err := <-r.done:
+		r.done <- err
+		t.Fatalf("Run returned %v; a connection that is lost and not rejected is retried", err)
+	default:
+	}
+
+	gate.down.Store(false)
+	r.waitMetric(up + "1")
+	w.mention(t, r)
+	<-w.sink.seen
 }
