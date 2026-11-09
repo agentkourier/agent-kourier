@@ -39,7 +39,7 @@ const (
 	// OutcomeTimedOut: an approval timed out with no decision.
 	OutcomeTimedOut Outcome = "timed_out"
 	// OutcomeOrphaned: a pause, of any kind, that the timeout sweep ended after its time ran out because its Binding is not in the config or
-	// this broker does not serve its chat connection, without a word in the thread and, for a Binding that is gone, without asking the agent.
+	// this broker does not serve its chat connection, with nothing posted by the sweep and, for a Binding that is gone, without asking the agent.
 	OutcomeOrphaned Outcome = "orphaned"
 )
 

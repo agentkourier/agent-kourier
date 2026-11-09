@@ -284,9 +284,14 @@ type sweepRig struct {
 // sweepLookup is the Lookup of the sweep: the Binding of a name, or err for a name it does not have.
 type sweepLookup struct {
 	bindings map[string]interact.Binding
+	// err, if set, is what every lookup answers, as a config that has not loaded does.
+	err error
 }
 
 func (l *sweepLookup) Binding(name string) (interact.Binding, error) {
+	if l.err != nil {
+		return interact.Binding{}, l.err
+	}
 	if b, ok := l.bindings[name]; ok {
 		return b, nil
 	}

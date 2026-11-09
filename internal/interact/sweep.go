@@ -389,7 +389,7 @@ func (w orphanReason) words() string {
 }
 
 // endOrphan ends the interaction row, whose Binding is not in the config or whose chat connection is not served, without the agent's task
-// being ended through the Binding and without a word in the thread: the Binding's backend is not there to be called, and no platform
+// being ended through the Binding and with nothing posted by the sweep: the Binding's backend is not there to be called, and no platform
 // serves the connection to edit the prompt or post a notice. The pause is released (release), so that the parked runner lets go of its
 // task and retention can deal with the session, and the interaction is recorded as timed out: its time ran out with nobody answering. Then it is audited (DecisionOrphaned) and counted
 // (OnApprovalOutcome with OutcomeOrphaned, whatever the kind, and neither the approval's timed_out nor OnTimeout), once. The order is the timeout's: a
@@ -417,14 +417,13 @@ func (s *Sweeper) endOrphan(ctx context.Context, row store.Interaction, why orph
 		s.cfg.Logger.ErrorContext(ctx, "interact: an interaction that was ended without the agent was not audited", "interaction", row.ID, "err", err)
 	}
 	s.cfg.OnApprovalOutcome(binding, OutcomeOrphaned)
-	s.cfg.Logger.WarnContext(ctx, "interact: an interaction nobody could time out through its Binding was ended without a word in the thread",
+	s.cfg.Logger.WarnContext(ctx, "interact: an interaction nobody could time out through its Binding was ended; the sweep posted nothing",
 		"interaction", row.ID, "binding", binding, "connection", row.Key.Connection, "task", row.TaskID, "why", why.words(), "task_cancelled_at_agent", cancelled)
 	return nil
 }
 
 // release ends the pause of row's task. When the Binding is in the config (its connection is not served) the agent is asked to cancel the
-// task, once: that ends the pause too, and frees the agent of a task that waits for input for ever. A cancel that fails is not tried again, and
-// when the Binding is gone there is no backend to call, so the pause is released without the agent (Abandoner) and the task stays at the agent until
+// task: one Session.Cancel, which tries a transient failure up to three times (session cancelAttempts). That ends the pause too, and frees the agent of a task that waits for input for ever. A cancel that fails does not hold the end up: the pause is released without the agent. When the Binding is gone there is no backend to call, so the pause is released without the agent (Abandoner) and the task stays at the agent until
 // the agent's own expiry; Agent Kourier has nothing more to end it with. The release is never given up on: its failure leaves the interaction
 // pending, to be tried again. It says whether the agent cancelled the task.
 func (s *Sweeper) release(ctx context.Context, row store.Interaction, why orphanReason) (cancelled bool, err error) {
@@ -793,6 +792,18 @@ func (s *Sweeper) cancelOne(ctx context.Context, id string, u *undelivered) erro
 	var errs []error
 	if !u.cancelled {
 		took, err := s.cancelled(ctx, row, "the denial of the timed-out approval was not delivered")
+		released := false
+		if errors.Is(err, session.ErrUnknownBinding) {
+			// The Binding was deleted after the denial was taken: there is no backend to cancel through, and a cancel would fail at every
+			// sweep. The pause is released without the agent, whose task is left, as for any pause whose Binding is gone.
+			released = true
+			switch err = s.cfg.Abandoner.Abandon(ctx, row.Key, a2a.TaskID(row.TaskID), "the denial of the timed-out approval was not delivered and its Binding is not in the config"); {
+			case err == nil:
+				took = true
+			case errors.Is(err, session.ErrNotPaused):
+				took, err = false, nil
+			}
+		}
 		switch {
 		case err == nil && !took: // not paused any more: someone else ended it, or it moved on
 			s.cfg.Logger.InfoContext(ctx, "interact: the task of a denial that was not delivered is no longer paused, so it was left alone", "interaction", id, "task", row.TaskID)
@@ -802,7 +813,11 @@ func (s *Sweeper) cancelOne(ctx context.Context, id string, u *undelivered) erro
 			errs = append(errs, fmt.Errorf("interact: cancel the task of %s, whose denial was not delivered: %w", id, err))
 		default:
 			u.cancelled = true
-			s.cfg.Logger.WarnContext(ctx, "interact: the agent did not take the denial of a timed-out approval, so its task was cancelled", "interaction", id, "task", row.TaskID)
+			if released {
+				s.cfg.Logger.WarnContext(ctx, "interact: the agent did not take the denial of a timed-out approval and its Binding is gone, so the pause was released and the task is left at the agent", "interaction", id, "task", row.TaskID)
+			} else {
+				s.cfg.Logger.WarnContext(ctx, "interact: the agent did not take the denial of a timed-out approval, so its task was cancelled", "interaction", id, "task", row.TaskID)
+			}
 		}
 	}
 	if !u.told {

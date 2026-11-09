@@ -212,6 +212,28 @@ func TestSweepDoesNotEndAnInteractionWhoseBindingIsOnlyMissingNow(t *testing.T) 
 	})
 }
 
+// TestSweepDoesNotTakeAFailedLookupForAMissingBinding: only an error that says the Binding is unknown makes an orphan. A lookup that fails for
+// another reason (the config has not loaded, say) says nothing of the Binding, so however long it lasts the interaction goes down the ordinary
+// timeout path and is not released without the agent.
+func TestSweepDoesNotTakeAFailedLookupForAMissingBinding(t *testing.T) {
+	r := orphanRig(t)
+	r.sess.current = "task-1"
+	r.look.err = errors.New("broker: Binding ns/b: the config has not loaded yet")
+	sw := r.sweeper(t, nil)
+	r.sweepOnce(t, sw)
+	r.advance(2 * orphanGrace)
+	r.sweepOnce(t, sw)
+	if got := r.abandon.got(); len(got) != 0 {
+		t.Errorf("the pause was released %v; want it left to the ordinary timeout", got)
+	}
+	if got := r.state(t, "ix-1"); got != store.InteractionTimedOut || !slices.Equal(r.sess.cancelled(), []a2a.TaskID{"task-1"}) {
+		t.Errorf("state %s, cancelled %v; want it timed out as any is, the task cancelled through the session", got, r.sess.cancelled())
+	}
+	if len(r.aud.got) != 1 || r.aud.got[0].Result != audit.DecisionTimedOut || len(r.outcomes()) != 0 || len(r.hooked()) != 1 {
+		t.Errorf("audit %+v, counted %q, hooks %q; want a timeout, not an orphan's end", r.aud.got, r.outcomes(), r.hooked())
+	}
+}
+
 // TestSweepStillWaitsForAConnectionThatIsDownForNow: a connection that is served and does not run (it has not started yet, or its
 // credentials were rejected) keeps its Bindings, so it is not an orphan's: nothing is ended however long it takes, and the interaction
 // is timed out by the first sweep after the connection runs.

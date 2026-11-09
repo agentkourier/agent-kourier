@@ -81,6 +81,34 @@ func TestADenialTheAgentDidNotTakeEndsInACancelAndOneNotice(t *testing.T) {
 	}
 }
 
+// TestADenialTheAgentDidNotTakeFromABindingThatWasDeletedReleasesThePause: the denial was taken and not delivered, and then the Binding was
+// deleted. Session.Cancel fails with ErrUnknownBinding for as long as it is missing, and used to be tried at every sweep for ever, with the
+// notice told and the pause open. The sweep releases the pause without the agent, once, and is done with the denial.
+func TestADenialTheAgentDidNotTakeFromABindingThatWasDeletedReleasesThePause(t *testing.T) {
+	r, sw := timedOutAndDenied(t)
+	r.reopen(t)
+	r.look.bindings = nil
+	r.sess.always = fmt.Errorf("session Binding %q: %w", "ns/b", session.ErrUnknownBinding)
+	r.abandon.current = "task-1"
+	for range 4 {
+		if err := sw.Sweep(t.Context()); err != nil {
+			t.Fatalf("Sweep = %v; want none: there is nothing to retry", err)
+		}
+	}
+	if got := r.abandon.got(); !slices.Equal(got, []a2a.TaskID{"task-1"}) {
+		t.Errorf("the pause was released %v; want task-1, once", got)
+	}
+	if got := r.sess.cancelled(); len(got) != 1 {
+		t.Errorf("the session was asked to cancel %d times; want the one try that found the Binding gone", len(got))
+	}
+	if sw.UndeliveredCount() != 0 {
+		t.Error("the sweeper still holds a denial it dealt with")
+	}
+	if notices := r.noticeTexts(t); len(notices) != 2 {
+		t.Errorf("notices %q; want the timeout's and the denial's, once each", notices)
+	}
+}
+
 // TestTheNoticeOfADenialThatWasNotTakenIsPostedOnceFromItsOwnSource: its outbox ID is the interaction's, with a suffix, so
 // it is not the timeout's notice and is one post however often it is enqueued (the sweeper of another process says it too).
 func TestTheNoticeOfADenialThatWasNotTakenIsPostedOnceFromItsOwnSource(t *testing.T) {
