@@ -1275,8 +1275,10 @@ pause from one is unusable and cancels the task.
    prompts edits the prompt if the connection's platform runs). The interaction is recorded as
    `timed_out`, audited as `orphaned`, and counted as the outcome `orphaned`; it is not counted
    as a timeout. A press recorded by the deadline holds this off as it holds off a timeout. A
-   denial the session took and the agent did not, whose Binding was then deleted, is ended in the
-   same way, with no cancel. This is what lets the session be purged at its horizon.
+   denial the session took and the agent did not, whose Binding was then deleted, has its cancel tried
+   again at each sweep for the same five minutes (a Binding that is back lets it through, and the
+   notice says the task is being cancelled), and then its pause is released without the agent, and
+   the notice says the task is left with the agent. This is what lets the session be purged at its horizon.
 
 The audit row for an answered approval names the Binding, person and time, counts
 approved and denied tools, and lists cleaned tool names in request order, capped by
