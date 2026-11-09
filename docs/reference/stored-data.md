@@ -296,7 +296,7 @@ horizon as the deletion: the Binding's `threadTTL` plus 90 days) and still recor
    it): the task is its runner's, and clearing it from under the runner would leave the runner parked after the session is
    deleted, so that a new session under the same key waited behind it. The tick says, at WARN, that it left some. The runner
    ends it (a streaming task, when the runner gives up on it), or the interaction timeout does (a parked one; for a Binding that left
-   the config, without asking the agent, once the pause's timeout and `5m` have passed), and a restart does when neither can.
+   the config, without asking the agent, `5m` after the first sweep that finds the pause both past its timeout and without its Binding), and a restart does when neither can.
 
 1. asks the task's agent to cancel it. This is a courtesy and never stops the sweep: the call is bounded (10 seconds); an agent
    that does not answer is not asked again in that tick, so a Binding whose agent is down costs one timeout and not one for each

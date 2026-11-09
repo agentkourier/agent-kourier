@@ -164,7 +164,7 @@ team meets, in the order of this page. [Binding status](../reference/binding-sta
 |---|---|---|
 | No status, and empty `READY` and `REASON` columns | The namespace is not on the list, or the broker has not read the Binding yet (the first status comes within about 10 seconds). | Ask the platform team to admit the namespace. |
 | `Accepted` `False`, `ConnectionNotFound` | The Binding was applied before its ChatConnection existed, and the namespace is still not admitted, so nothing has rewritten the status. | Ask the platform team to admit the namespace. Apply the ChatConnection before its Bindings. |
-| `Accepted` `False`, `ConnectionNotServed` | The connection exists and the broker does not serve it: its namespace was taken off the list, it is past the 16, or it is a second connection of a Slack app that an older connection uses. `message` says which. It is written once and not put back. Only a Binding that the connection admits is told. | See below, and [the reason's row](../reference/binding-status.md#accepted). |
+| `Accepted` `False`, `ConnectionNotServed` | The connection exists and the broker does not serve it: the broker served it before and does not now (its namespace was taken off the list, or it was the broker's own connection and the platform changed that to another), it is past the 16, or it is a second connection of a Slack app that an older connection uses. `message` says which. It is written once and not put back. Only a Binding that the connection admits is told. | See below, and [the reason's row](../reference/binding-status.md#accepted). |
 | `Accepted` `False`, `ConnectionRejected` | The ChatConnection is invalid. If it had a good generation, that one runs. | Fix the ChatConnection; `kubectl apply --dry-run=server` finds what the schema checks. |
 | `ChannelJoined` `Unknown`, `ChatUnavailable` | The connection is not running: it has not started yet, it is waiting for the platform to say whose bot it is, or its Secret cannot be read now. The probe makes no call to Slack. | Wait about two minutes: a Role applied late is noticed up to about 1 m 15 s later. If it stays, check the grant with `kubectl auth can-i` as in step 2, and ask the platform team to read the log. |
 | `ChannelJoined` `Unknown`, `ChatCredentialsUnusable` | The Secret, or a key of it, is gone or empty, or the Secret is not of type `Opaque`. | Mend the Secret. The connection starts by itself. |
@@ -258,9 +258,9 @@ Mend it by writing valid tokens into the Secret.
   list at start, so the upgrade restarts it; it records the connections it serves in its store, and after the restart it
   writes `ConnectionNotServed` once on the Bindings that the connection admits. Their sessions are kept, and the
   posts waiting for the connection stay in the outbox. An interaction pending on one of their threads cannot be ended through the Binding, which the broker no longer has, so the sweep ends it
-  and posts nothing once its timeout has passed and `5m` more ([Limits](../reference/limits.md#what-a-pause-may-ask)): the task is cleared from the session record (the restart that took the namespace off the list left no runner parked), and the interaction is audited as `orphaned`.
+  and posts nothing `5m` after the first sweep that finds it both past its timeout and orphaned ([Limits](../reference/limits.md#what-a-pause-may-ask)): the task is cleared from the session record (the restart that took the namespace off the list left no runner parked), and the interaction is audited as `orphaned`.
   The agent's task is not cancelled: it stays input-required at the agent until the agent expires it.
-- **Rolling the release back.** Do not roll back to a release before 0.3.0 while team connections are served. The outbox, the
+- **Rolling the release back.** Do not roll back to a release before 0.3.0 while any team connection has an unposted row. The outbox, the
   interactions and the button presses of 0.3.0 record the connection they belong to. 0.2.1 has one chat platform, and read from its
   code (not run) it does not filter by connection in two places that matter:
   - it selects its unposted outbox rows with no regard to a connection and posts them through its one platform, so a post waiting
@@ -273,8 +273,10 @@ Mend it by writing valid tokens into the Secret.
 
   Button presses are listed without a filter too (`ListPresses`), but a press whose Binding 0.2.1 lacks decides nothing. It is ended, and 0.2.1 still sends the person who pressed an ephemeral
   note that the request is gone, in the team's channel through the platform's app (`authorized`, then `finish`, then `finishWith`,
-  which calls `Ephemerals.Ephemeral`). Check that no press of the connection waits: the table `interaction_presses`, by `connection`. A
-  session whose Binding 0.2.1 does not have is skipped when it takes up its sessions.
+  which calls `Ephemerals.Ephemeral`). A session whose Binding 0.2.1 does not have is skipped when it takes up its sessions.
+
+  The guard is the unposted rows of every team connection, not whether one is served now. A connection that was served and is not (its namespace was taken off the list, or its ChatConnection was deleted) keeps its unposted rows, up to 7 days
+  ([Limits](../reference/limits.md#what-the-broker-keeps-and-logs)), and 0.2.1 would post them through the platform's app. [Metrics](../reference/metrics.md#series-by-connection) says the series of such a connection stays while it has an unposted row.
 
   The order that leaves nothing behind, all while the team connections are still served:
   1. Let the team's pending interactions end, answered or timed out, while its Bindings still exist. A pending interaction ends at its
@@ -285,13 +287,21 @@ Mend it by writing valid tokens into the Secret.
   3. Check again for pending interactions. `agentkourier_interactions_pending` has no `connection` label: if it is 0, none is pending
      on any connection; if not, count the team's in the store (the table `interactions`, with `state = 'pending'` and
      `connection = 'team-a/team-a-slack'`). An interaction left pending after the Bindings are gone is ended by this release's sweep, without a
-     word in the thread, once its timeout has passed and `5m` more, counted from the first sweep that finds the Binding missing (a restart or a takeover starts the count again, and
+     word in the thread, `5m` after the first sweep that finds it both past its deadline and without its Binding (a restart or a takeover starts the count again, and
      the sweep is every 10 seconds). Wait for that and check again: the broker you roll back to would meet it otherwise. The agent's task is not cancelled, since the
      Binding that would call the agent is gone; it stays input-required at the agent until the agent expires it.
-  4. Wait until `agentkourier_outbox_pending{connection="team-a/team-a-slack"}` is 0 on the leader.
+  4. Check that no button press of another connection waits: no row of the table `interaction_presses` has a `connection` that is neither the broker's own (`agent-kourier/slack` below) nor empty (an empty one is the own connection's, as in step 5). A press is deleted once it is processed.
+  5. Wait until `agentkourier_outbox_pending{connection!="agent-kourier/slack"}` is 0 or has no series on the leader, with `agent-kourier/slack` the broker's own connection as `namespace/name`, the value of `AGENTKOURIER_CHAT_CONNECTION` in the pod (`config.chatConnection` may give the name alone for a connection in the release's namespace).
+     Read that only while `agentkourier_outbox_pending{connection="agent-kourier/slack"}` is present: the leader shows a 0 for each connection it serves, and a connection it does not serve shows a series only while it has an unposted row. A scrape that fails
+     (the metrics endpoint answers an error when the outbox query fails) has no series at all, which is not the same as none being unposted. The store says it directly: no row of the table `outbox` has `message_ref = ''`, an unset `abandoned_at`
+     (`abandoned_at IS NULL` on Postgres, `abandoned_at = 0` on SQLite) and a `connection` that is neither `agent-kourier/slack` nor empty. An empty `connection` is a row from before migration 0029 or from an older image, which the leader gives to the own connection when it starts.
+
+  If a row stays for a connection that is not served, admit its namespace again so that the connection runs and the row posts, and if the team deleted its ChatConnection have it made again under the same name, and for the same Slack app: the rows post through whatever app the new object's tokens belong to.
+  Or wait out the 7 days: the outbox abandons a row older than that, which drops its text and keeps the row.
 
   Then take the list off the values in the same change as the rollback: the chart of 0.2.1 refuses a `config` key it does not have,
-  and this chart refuses a non-empty list with `config.source: files`.
+  and this chart refuses a non-empty list with `config.source: files`. A `personMessage` trigger has to go first too: 0.2.1 knows only `mention` and `botMessage`, and refuses a Binding that has a `personMessage` trigger
+  ([Upgrade](upgrade.md#roll-back-from-this-release)).
 
 ## Related
 
