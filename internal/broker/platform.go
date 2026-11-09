@@ -21,7 +21,7 @@ import (
 
 // slackAPITimeout bounds one Slack Web API call as a whole: the dial, the TLS handshake, the wait for the response and the
 // reading of its body. slack-go sets no deadline on any call, including the apps.connections.open that every Socket Mode
-// reconnect makes, and a connection that a network blip left dead can hold a call for minutes (53 s and 118 s were seen)
+// reconnect makes, and a connection that a network blip left dead can hold a call for up to two minutes (53 s and 118 s were seen)
 // before the read fails. The bound is on the HTTP client, which only the Web API calls use: the Socket Mode WebSocket is
 // dialled by slack-go's own dialer (handshake cut at 45 s, a silent connection dropped by its ping check), so a connection that
 // is up for hours is not touched. The adapter makes no upload and no download, and every call it makes answers a small JSON

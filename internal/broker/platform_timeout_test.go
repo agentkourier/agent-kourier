@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/secret"
 )
@@ -58,6 +59,9 @@ func TestSlackClientBoundsTheCallThatOpensTheConnection(t *testing.T) {
 	}
 	if err == nil || errors.Is(err, context.Canceled) {
 		t.Errorf("Run = %v; want the failed attempt to open the connection, so that the supervisor connects again", err)
+	}
+	if v := built.Classify(chat.OpOther, err); v.Class != chat.Transient {
+		t.Errorf("Classify(%v) = %v; want Transient, so that the supervisor keeps connecting again", err, v.Class)
 	}
 	if opened.Load() == 0 {
 		t.Error("the fake never saw apps.connections.open: the test did not reach the call it bounds")
