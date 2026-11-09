@@ -97,12 +97,13 @@ type teamRuntime struct {
 	refused bool
 }
 
-// held says the entry holds the Slack app of its id against the younger connections: it is known, and the entry is not refused, was not found
-// rejected and did not fail to start (so a younger connection of the app can be served meanwhile). A restart does not let go of it: the id is the
-// previous tokens' until the new ones are asked about, and a lookup that fails for a moment is no reason to hand the app to a younger connection
-// for one look and take it back at the next.
+// held says the entry holds the Slack app of its id against the younger connections: it is known, and the entry is not refused and did not fail to
+// start (so a younger connection of the app can be served meanwhile). A restart does not let go of it while the lookup of the new tokens' identity
+// fails in a way that may pass (errIdentityMayPass): the id is the previous tokens' until then, and a lookup that fails for a moment is no reason to
+// hand the app to a younger connection for one look and take it back at the next. Any other answer clears the id (and the refusal), so a rejected
+// entry holds nothing.
 func (st *teamRuntime) held() bool {
-	return st.id.known() && !st.refused && !st.rejected && (st.rt != nil || !st.failed)
+	return st.id.known() && !st.refused && (st.rt != nil || !st.failed)
 }
 
 // run supervises until ctx ends: it reconciles with initial, the team connections the takeover read, and then with what each tick finds. It
@@ -233,15 +234,22 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 				s.host.table.identify(name, id) // the bot guard tells the bot from a person; it knew the bot the tokens had before
 			case errors.Is(err, errCredentialsRejected):
 				st.rejected = true
+				st.id, st.refused = appIdentity{}, false // down for its credentials: neither holding an app nor refused
 				code, _ := rejectionCode(err)
 				s.host.table.setDown(name, &connectionStopped{conn: name, rejected: true, code: code})
 				s.host.metrics.ChatConnected(name, false)
 				s.say(ctx, name, "the platform rejected the ChatConnection's credentials, so it is not started until its ChatConnection or its Secret changes", err)
 				continue
+			case !errors.Is(err, errIdentityMayPass):
+				// An answer that Slack gives again for these tokens (a scope the app lacks, a token that is no bot's): waiting for it would hold
+				// the app for ever, so the entry is as a new one is, holding nothing and not refused, and not started.
+				st.id, st.refused = appIdentity{}, false
+				s.say(ctx, name, "the identity of the ChatConnection's bot is not known yet, so it is not started", err)
+				continue
 			default:
-				// Not started on tokens that are not known to be which app's. It stays what it was: it keeps the refusal it was under, and it holds
-				// the app of its previous tokens unless an older connection holds it now (it is then not refused on that, since its new tokens may be
-				// another app's). A connection that was never asked holds nothing.
+				// Not started on tokens that are not known to be which app's, for a failure that may pass. It stays what it was: it keeps the
+				// refusal it was under, and it holds the app of its previous tokens unless an older connection holds it now (it is then not
+				// refused on that, since its new tokens may be another app's). A connection that was never asked holds nothing.
 				if st.refused {
 					refused[name] = refusedMessage
 				} else if _, taken := claimed[st.id.App]; st.id.known() && !taken {

@@ -195,10 +195,17 @@ can be served meanwhile. When the older one's Secret is fixed, the broker asks a
 that same look the broker stops the younger one, as it stops any running second connection of an app, before it starts the older. The younger
 connection's Bindings then say `ConnectionNotServed`. An older connection that was running when Slack rejected its token keeps holding the app.
 
-When Slack does not answer for a moment (a timeout, a 5xx) as the broker asks whose bot a changed Secret's token is, the connection is not started
-yet, and the broker asks again at its next look. Until Slack answers, a connection keeps holding the app of the tokens it had (unless an older connection holds it
-by now), and a connection that was refused stays refused, so a younger connection of the app is not served in between and then stopped again. If the new token turns out to be
-another app's, the app it held is free from then on. The broker also keeps the connection's bot among the bots it tells from a person while it
+When the broker asks whose bot the tokens are after the ChatConnection or its Secret changed (`auth.test`, then `bots.info`), a failure that may pass
+leaves the connection as it was, and not started: either call timing out (each is given 10 seconds), the request failing before an answer, Slack answering
+with an HTTP status other than 200 (a 5xx, or a 429), or Slack answering with the code `ratelimited`. The broker asks again at its next look, every 5 seconds,
+and there is no other bound: this goes on for as long as the calls fail this way, and ends when Slack answers. Meanwhile a connection keeps holding the app
+of the tokens it had (unless an older connection holds it by now), and a connection that was refused stays refused, so a younger connection of the app is
+not served in between and then stopped again. The leader logs one WARN, `the identity of the ChatConnection's bot is not known yet, so it is not started`,
+naming the connection and the failure (again if the failure changes), and the connection's Bindings read `ChatUnavailable`, or `ConnectionNotServed` for a refused one. If the new tokens
+turn out to be another app's, the app it held is free from then on. Every other failure is one Slack gives again for the same tokens (a scope the app
+lacks, such as `missing_scope`; a token that belongs to no bot; an answer with no app), so the broker does not wait on it: the connection holds no app and is
+not refused while it fails, as a new connection is, the leader logs the same WARN, and it is asked again at every look until the ChatConnection or the Secret is mended.
+A token Slack rejects is the first case of this section. The broker also keeps the connection's bot among the bots it tells from a person while it
 restarts, so a mention by that bot starts no turn on another connection unless a Binding's trigger names the bot, as when it runs.
 
 The ChatConnection that is not run is not deleted, and it is served again if the older one goes away. The platform's own

@@ -2,6 +2,7 @@ package broker
 
 import (
 	"cmp"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,6 +10,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	slackgo "github.com/slack-go/slack"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/secret"
@@ -122,5 +126,47 @@ func TestAnIdentityCallThatFailsIsAnErrorAndNeverAGuess(t *testing.T) {
 	defer f.mu.Unlock()
 	if last := f.calls[len(f.calls)-1]; last != "auth.test" {
 		t.Errorf("the last call was %s; want bots.info not to be asked when auth.test failed", last)
+	}
+}
+
+// identifyError marks the failures that may pass when the call is asked again (a timeout, a failed request, a status other than 200, the rate
+// limit) and no other: an answer that Slack gives again for the same token is not one, so a connection is not kept waiting for it.
+func TestIdentifyErrorMarksOnlyTheFailuresThatMayPass(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		err     error
+		mayPass bool
+	}{
+		{"a timeout", context.DeadlineExceeded, true},
+		{"a failed request", errors.New("dial tcp: connection refused"), true},
+		{"a 503", slackgo.StatusCodeError{Code: 503, Status: "503 Service Unavailable"}, true},
+		{"a 429", &slackgo.RateLimitedError{RetryAfter: time.Second}, true},
+		{"the rate limit as Slack's code", slackgo.SlackErrorResponse{Err: "ratelimited"}, true},
+		{"a missing scope", slackgo.SlackErrorResponse{Err: "missing_scope"}, false},
+		{"another code", slackgo.SlackErrorResponse{Err: "bot_not_found"}, false},
+		{"a rejected token", slackgo.SlackErrorResponse{Err: "invalid_auth"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := identifyError("bots.info", tc.err)
+			if got := errors.Is(err, errIdentityMayPass); got != tc.mayPass {
+				t.Errorf("identifyError(%v) may pass = %v, want %v: %v", tc.err, got, tc.mayPass, err)
+			}
+		})
+	}
+
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }))
+	t.Cleanup(down.Close)
+	if _, err := slackIdentity(t.Context(), connWithBotToken("xoxb-fake"), down.URL+"/"); err == nil || !errors.Is(err, errIdentityMayPass) {
+		t.Errorf("slackIdentity against a server that answers 503 = %v; want an error that may pass", err)
+	}
+
+	f := newFakeSlackWeb(t)
+	f.bots["xoxb-fake"] = struct{ team, user, bot, app string }{"TW1", "UW1", "BW1", ""}
+	if _, err := slackIdentity(t.Context(), connWithBotToken("xoxb-fake"), f.url()); err == nil || errors.Is(err, errIdentityMayPass) {
+		t.Errorf("slackIdentity with no app in the answer = %v; want an error that does not pass", err)
+	}
+	f.bots["xoxb-fake"] = struct{ team, user, bot, app string }{"TW1", "UW1", "", "AAPP"}
+	if _, err := slackIdentity(t.Context(), connWithBotToken("xoxb-fake"), f.url()); err == nil || errors.Is(err, errIdentityMayPass) {
+		t.Errorf("slackIdentity with no bot in the answer = %v; want an error that does not pass", err)
 	}
 }

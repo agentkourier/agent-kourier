@@ -726,7 +726,7 @@ func TestSupervisorKeepsTheAppOfAHolderWhoseIdentityIsBeingAsked(t *testing.T) {
 		t.Fatalf("running = %v; want team-a to serve the app and team-b refused", got)
 	}
 
-	w.idErr["tok-a2"] = errors.New("auth.test: timed out") // team-a's Secret is rotated to a token of the same app, and Slack does not answer
+	w.idErr["tok-a2"] = mayPass("auth.test: timed out") // team-a's Secret is rotated to a token of the same app, and Slack does not answer
 	a2 := team("team-a/slack", 1, "tok-a2", 1)
 	for range 2 {
 		w.reconcile(a2, b)
@@ -767,7 +767,7 @@ func TestSupervisorFreesTheAppOfAHolderWhoseNewTokenIsAnotherApp(t *testing.T) {
 	a1, b := team("team-a/slack", 1, "tok-a1", 1), team("team-b/slack", 1, "tok-b", 2)
 	w.reconcile(a1, b)
 
-	w.idErr["tok-a2"] = errors.New("auth.test: timed out")
+	w.idErr["tok-a2"] = mayPass("auth.test: timed out")
 	a2 := team("team-a/slack", 1, "tok-a2", 1)
 	w.reconcile(a2, b)
 	if got := w.sup.refusals.names(); !slices.Equal(got, []string{"team-b/slack"}) {
@@ -794,7 +794,7 @@ func TestSupervisorKeepsTheRefusalOfAConnectionWhoseIdentityIsBeingAsked(t *test
 	a, b1 := team("team-a/slack", 1, "tok-a", 1), team("team-b/slack", 1, "tok-b1", 2)
 	w.reconcile(a, b1)
 
-	w.idErr["tok-b2"] = errors.New("bots.info: timed out")
+	w.idErr["tok-b2"] = mayPass("bots.info: timed out")
 	b2 := team("team-b/slack", 1, "tok-b2", 2)
 	for range 2 {
 		w.reconcile(a, b2)
@@ -826,7 +826,7 @@ func TestSupervisorDoesNotRefuseAConnectionOnTheAppItHeldBeforeItsTokensChanged(
 	w.reconcile(team("team-a/slack", 1, "tok-a1", 1), team("team-b/slack", 1, "tok-b1", 2))
 
 	w.ids["tok-a2"] = w.ids["tok-b1"] // the older connection's Secret now holds the tokens of the app team-b held
-	w.idErr["tok-b2"] = errors.New("auth.test: timed out")
+	w.idErr["tok-b2"] = mayPass("auth.test: timed out")
 	a2, b2 := team("team-a/slack", 1, "tok-a2", 1), team("team-b/slack", 1, "tok-b2", 2)
 	w.reconcile(a2, b2)
 	if got := w.sup.refusals.names(); len(got) != 0 {
@@ -855,7 +855,7 @@ func TestTheBotGuardKeepsTheBotOfAConnectionThatRestarts(t *testing.T) {
 		t.Fatalf("botOwner(BOWN) = %q, %v; want the own connection", conn, ok)
 	}
 
-	w.idErr["tok-b2"] = errors.New("bots.info: timed out")
+	w.idErr["tok-b2"] = mayPass("bots.info: timed out")
 	w.reconcile(team("team-b/slack", 1, "tok-b2", 1))
 	if got := w.running(); !slices.Equal(got, []string{ownName}) {
 		t.Fatalf("running = %v; want team-b stopped for the restart", got)
@@ -920,12 +920,114 @@ func TestSupervisorKeepsNoAppForAHolderWhoseStartFailed(t *testing.T) {
 		t.Fatalf("running = %v; want the younger to serve the app the older cannot", got)
 	}
 
-	w.idErr["tok-old2"] = errors.New("auth.test: timed out")
+	w.idErr["tok-old2"] = mayPass("auth.test: timed out")
 	w.reconcile(team("team-a/slack", 1, "tok-old2", 1), young)
 	if got := w.running(); !slices.Equal(got, []string{ownName, "team-b/slack"}) {
 		t.Errorf("running = %v; want the younger to go on serving while the older's new tokens are not known", got)
 	}
 	if got := w.sup.refusals.names(); len(got) != 0 {
 		t.Errorf("refused = %v; want none", got)
+	}
+}
+
+// mayPass is the error of an identity call that may succeed when it is asked again (identifyError marks them).
+func mayPass(msg string) error { return mayPassError{errors.New(msg)} }
+
+// A refused connection whose Secret is rotated to a token that Slack rejects is down for its credentials, and no longer refused: the refusal it
+// was under does not come back at a look that cannot read its Secret, so its Bindings do not flip between ConnectionNotServed and
+// ChatCredentialsRejected.
+func TestSupervisorLiftsTheRefusalOfAConnectionWhoseNewTokenIsRejected(t *testing.T) {
+	w := newSupWorld(t)
+	app := appIdentity{App: "AAPP", Team: "T1", User: "UAPP", Bot: "BAPP"}
+	w.ids["tok-a"], w.ids["tok-b1"] = app, app
+	a, b1 := team("team-a/slack", 1, "tok-a", 1), team("team-b/slack", 1, "tok-b1", 2)
+	w.reconcile(a, b1)
+	if got := w.sup.refusals.names(); !slices.Equal(got, []string{"team-b/slack"}) {
+		t.Fatalf("refused = %v; want team-b", got)
+	}
+
+	w.idErr["tok-b2"] = &credentialsRejectedError{method: "auth.test", code: "invalid_auth"}
+	b2 := team("team-b/slack", 1, "tok-b2", 2)
+	for _, desired := range [][]TeamConnection{{a, b2}, {a, unready("team-b/slack", 1, 2)}, {a, b2}, {a, unready("team-b/slack", 1, 2)}} {
+		w.reconcile(desired...)
+		if got := w.sup.refusals.names(); len(got) != 0 {
+			t.Fatalf("refused = %v; want none: team-b is down for its credentials, not refused", got)
+		}
+		var cs *connectionStopped
+		if _, err := w.table.Platform("team-b/slack"); !errors.As(err, &cs) || !cs.rejected {
+			t.Fatalf("Platform(team-b) = %v; want its credentials rejected as the reason it is down", err)
+		}
+	}
+}
+
+// A connection that Slack rejected holds no app: the younger connection of its app that is served is not stopped at a look that cannot read the
+// rejected connection's Secret.
+func TestSupervisorDoesNotStopTheYoungerConnectionWhenARejectedHoldersSecretIsUnreadable(t *testing.T) {
+	w := newSupWorld(t)
+	app := appIdentity{App: "AAPP", Team: "T1", User: "UAPP", Bot: "BAPP"}
+	w.ids["tok-a1"], w.ids["tok-b"] = app, app
+	a1, b := team("team-a/slack", 1, "tok-a1", 1), team("team-b/slack", 1, "tok-b", 2)
+	w.reconcile(a1, b)
+
+	w.idErr["tok-a2"] = &credentialsRejectedError{method: "auth.test", code: "token_revoked"}
+	w.reconcile(team("team-a/slack", 1, "tok-a2", 1), b) // the holder rotates to a token Slack rejects
+	if got := w.running(); !slices.Equal(got, []string{ownName, "team-b/slack"}) {
+		t.Fatalf("running = %v; want the younger connection served in the place of the rejected holder", got)
+	}
+	w.reconcile(unready("team-a/slack", 1, 1), b)
+	if got := w.running(); !slices.Equal(got, []string{ownName, "team-b/slack"}) {
+		t.Errorf("running = %v with the rejected holder's Secret unreadable; want the younger connection not stopped", got)
+	}
+	if got := w.sup.refusals.names(); len(got) != 0 {
+		t.Errorf("refused = %v; want none", got)
+	}
+}
+
+// An answer that stays the same until the Secret changes (a missing scope, a token with no bot) does not keep a holder holding its app: the
+// younger connection is served, for good, as it was before the holder's tokens changed. The same for a refused connection, which is not kept
+// refused.
+func TestSupervisorDoesNotHoldAnAppForAnAnswerThatDoesNotPass(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"a missing scope", errors.New(`bots.info: Slack answered "missing_scope"`)},
+		{"a token with no bot", errors.New("auth.test: Slack gave no bot")},
+		{"a bot with no app", errors.New("bots.info: Slack gave no app for the bot")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newSupWorld(t)
+			app := appIdentity{App: "AAPP", Team: "T1", User: "UAPP", Bot: "BAPP"}
+			w.ids["tok-a1"], w.ids["tok-b"] = app, app
+			a1, b := team("team-a/slack", 1, "tok-a1", 1), team("team-b/slack", 1, "tok-b", 2)
+			w.reconcile(a1, b)
+
+			w.idErr["tok-a2"] = tc.err
+			a2 := team("team-a/slack", 1, "tok-a2", 1)
+			for range 20 {
+				w.reconcile(a2, b)
+			}
+			if got := w.running(); !slices.Equal(got, []string{ownName, "team-b/slack"}) {
+				t.Errorf("running = %v after 20 looks; want the younger connection serving the app the holder cannot be known to use", got)
+			}
+			if got := w.sup.refusals.names(); len(got) != 0 {
+				t.Errorf("refused = %v; want none", got)
+			}
+
+			// A refused connection whose tokens change to such an answer is not kept refused either.
+			w.reconcile(unready("team-a/slack", 1, 1), b)
+			w.idErr["tok-b2"] = tc.err
+			w.ids["tok-a3"] = app
+			a3 := team("team-a/slack", 1, "tok-a3", 1)
+			w.reconcile(a3, b) // team-a serves the app again, team-b is refused
+			if got := w.sup.refusals.names(); !slices.Equal(got, []string{"team-b/slack"}) {
+				t.Fatalf("refused = %v; want team-b refused again", got)
+			}
+			b2 := team("team-b/slack", 1, "tok-b2", 2)
+			w.reconcile(a3, b2)
+			if got := w.sup.refusals.names(); len(got) != 0 {
+				t.Errorf("refused = %v; want the refusal of a connection whose new tokens give an answer that does not pass lifted", got)
+			}
+		})
 	}
 }

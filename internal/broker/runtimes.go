@@ -122,8 +122,9 @@ type runtimeTable struct {
 	// Secret cannot be used. A connection with no entry is down without a reason this table knows (it has not started yet, or is not served).
 	down map[string]*connectionStopped
 	// bots is whose bot each served connection has (appIdentity), apart from rts: a connection that restarts has no runtime while its new tokens
-	// are being asked about, and the turns that hold its old platform still post as its old bot. The supervisor writes it (identify, forgetBot);
-	// the bot guard of every connection reads it (botOwner, botUserOwner).
+	// are being asked about, and the turns that hold its old platform still post as its old bot (until they finish, even if the new tokens turn
+	// out to be another app's, whose bot then replaces the old). The supervisor writes it (identify, forgetBot); the bot guard of every
+	// connection reads it (botOwner, botUserOwner).
 	bots map[string]appIdentity
 	// sealed is set by the shutdown when it halts the runtimes: a runtime added after it is halted as it is added, so that none runs on
 	// beyond the step that stops them.
