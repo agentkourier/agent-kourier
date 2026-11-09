@@ -72,6 +72,9 @@ const (
 	// Reopened): the task still waited for input, and Agent Kourier cancels it. It is the thread's only word of that, so it says
 	// the cancel is under way and not that it is done, which it may not be.
 	undeliveredDenialNotice = "The agent did not take Agent Kourier's denial of this request, so Agent Kourier is cancelling the task."
+	// undeliveredLeftNotice replaces it when the Binding is gone for longer than the OrphanGrace: there is nothing to cancel the task through, so
+	// the pause is released and the task is left with the agent.
+	undeliveredLeftNotice = "The agent did not take Agent Kourier's denial of this request, and Agent Kourier can no longer reach the agent to cancel the task, so the task is left with the agent."
 )
 
 // timeoutDenyReason is the reason the denial of a timed-out approval carries to the agent. It is its own, apart from
@@ -743,6 +746,10 @@ type undelivered struct {
 	cancelled bool // the session cancelled the task; it is not asked again
 	told      bool // the notice is enqueued, or given up on
 	tries     int  // sweeps that failed to enqueue the notice
+	// missingSince is when a cancel first failed because the Binding is not in the config, and every cancel since has; zero if the last did not.
+	// It is the orphan's count (SweepConfig.OrphanGrace), kept here and not in orphanSince, which Sweep prunes of the rows that are not due.
+	missingSince time.Time
+	left         bool // the pause was released without the agent: the task is left with it, and the notice says so
 }
 
 // cancelUndelivered cancels the task of each approval whose denial the session took and then failed to deliver (Reopened), and
@@ -793,13 +800,25 @@ func (s *Sweeper) cancelOne(ctx context.Context, id string, u *undelivered) erro
 	if !u.cancelled {
 		took, err := s.cancelled(ctx, row, "the denial of the timed-out approval was not delivered")
 		released := false
-		if errors.Is(err, session.ErrUnknownBinding) {
-			// The Binding was deleted after the denial was taken: there is no backend to cancel through, and a cancel would fail at every
-			// sweep. The pause is released without the agent, whose task is left, as for any pause whose Binding is gone.
+		if !errors.Is(err, session.ErrUnknownBinding) {
+			u.missingSince = time.Time{} // the Binding is there: a cancel that fails now fails for another reason, and is tried again
+		} else {
+			// The Binding was deleted after the denial was taken: there is no backend to cancel through. A Binding that is back in a moment (a
+			// reload that replaces it) lets the cancel through, so for the OrphanGrace the cancel is tried again at each sweep, and nothing is said
+			// of it. Past that the pause is released without the agent, whose task is left, as for any pause whose Binding is gone.
+			now := s.cfg.Now()
+			if u.missingSince.IsZero() {
+				u.missingSince = now
+				s.cfg.Logger.InfoContext(ctx, "interact: the Binding of a denial that was not delivered is not in the config; the task is cancelled if it is back, and the pause released without the agent if it stays so",
+					"interaction", id, "grace", s.cfg.OrphanGrace)
+			}
+			if now.Sub(u.missingSince) < s.cfg.OrphanGrace {
+				return nil
+			}
 			released = true
 			switch err = s.cfg.Abandoner.Abandon(ctx, row.Key, a2a.TaskID(row.TaskID), "the denial of the timed-out approval was not delivered and its Binding is not in the config"); {
 			case err == nil:
-				took = true
+				took, u.left = true, true
 			case errors.Is(err, session.ErrNotPaused):
 				took, err = false, nil
 			}
@@ -821,7 +840,11 @@ func (s *Sweeper) cancelOne(ctx context.Context, id string, u *undelivered) erro
 		}
 	}
 	if !u.told {
-		if err := s.notifyAs(ctx, row, id+"/undelivered", undeliveredDenialNotice); err == nil {
+		text := undeliveredDenialNotice
+		if u.left {
+			text = undeliveredLeftNotice
+		}
+		if err := s.notifyAs(ctx, row, id+"/undelivered", text); err == nil {
 			u.told = true
 		} else if u.tries++; u.tries >= maxAttempts { // as the edit and the notice of a timeout are
 			s.cfg.Logger.ErrorContext(ctx, "interact: giving up on the notice of a denial that was not delivered", "interaction", id, "err", err)
