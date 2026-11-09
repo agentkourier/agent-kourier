@@ -437,9 +437,8 @@ A ConfigMap you keep is `config.existingConfigMap`, with `rbac.secretNamespaces`
 
 ## Footprint
 
-Measured in a kind cluster against a fake Slack, a broker that serves one chat connection idles at about 61 MB of resident memory (RSS),
-and each further served connection adds about 0.44 MB (the broker serves at most 16). The chart's defaults are a 128 MiB request, 50m of CPU and a 256 MiB limit.
-The agent side is larger. A kagent
+Measured on a three-worker cluster, idle after a first answered question, the Agent Kourier pod used 15 MiB of memory and about
+2 millicores. The chart's defaults are a 64 MiB request, 50m of CPU and a 256 MiB limit. The agent side is larger. A kagent
 0.9.x controller, its Postgres, the UI, a read-only tool server and one agent together used about 390 MiB, and the agent pod
 was the largest of them at 188 MiB.
 
