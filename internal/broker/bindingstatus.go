@@ -87,9 +87,11 @@ var probedTypes = []bindingcheck.ConditionType{bindingcheck.BackendReachable, bi
 // acceptedReasonOrder is the order in which the reasons of the Rejections of one Binding give way to one: the first of them that
 // the Binding has is its Accepted reason, and the messages of all follow in the same order. It is the order of the spec's row for
 // the condition, and puts what is wrong with the object itself before what is wrong with the objects it names, and the
-// channel, which a Binding can lose only if it resolved, last. ConnectionNotServed is the writer's own (it comes from the connections
-// that the report lists as left out, not from a Rejection), and no Binding has it with another reason, since a Rejection of the
-// Binding says more.
+// channel, which a Binding can lose only if it resolved, last. ConnectionNotServed is the writer's own: it comes from the connections that
+// the report lists as left out or that the broker stopped serving, which have no Rejection of the Binding, and from the overlay of the refused
+// second connections (refusals.overlay), which adds it to a Binding that the Snapshot serves and so may already have a Rejection of the source.
+// It is ranked after what is wrong with the Binding's own spec, backend and connection, so that those say more: such a Binding says the first
+// of its reasons, and notServedCount counts it only when ConnectionNotServed is that one.
 var acceptedReasonOrder = []config.RejectionReason{
 	config.ReasonInvalidSpec, config.ReasonBackendNotFound, config.ReasonBackendRejected, config.ReasonConnectionNotFound,
 	config.ReasonConnectionRejected, config.ReasonConnectionNotServed, config.ReasonNamespaceNotAllowed, config.ReasonAgentNamespaceNotAllowed,
@@ -170,6 +172,9 @@ type statusConfig struct {
 	// OnWrite is told the result of each write, "written", "put_back" (the status was written again to the words it already had)
 	// or "failed", for a metric. Nil means none.
 	OnWrite func(result string)
+	// OnUnserved, when set, is told at each pass that moves how many Bindings the writer says ConnectionNotServed to: those of the connections the
+	// report lists as left out or the broker stopped serving, and those the overlay of the report refuses. Nil means none.
+	OnUnserved func(n int)
 	// Served, when set, is the leader's record of the chat connections it serves (servedRecord), which the writer updates at each pass and
 	// from which it tells the Bindings of the connections the broker served before and does not now. Without it the writer tells only
 	// the Bindings of the connections that the report lists as left out.
@@ -365,6 +370,9 @@ func (w *statusWriter) reconcile(ctx context.Context) {
 			delete(unserved, key)
 		}
 	}
+	if w.cfg.OnUnserved != nil { // before the cache is read: the count is of what the report and the record say, whether or not a write follows
+		w.cfg.OnUnserved(notServedCount(rejections, unserved))
+	}
 	keys := map[string]bool{}
 	for key := range rejections {
 		keys[key] = true
@@ -481,6 +489,19 @@ func (w *statusWriter) unservedBindings(ctx context.Context, rep config.Report) 
 		}
 	}
 	return out
+}
+
+// notServedCount is the number of Bindings whose Accepted reason is ConnectionNotServed: those of unserved (the caller left out any that has a Rejection), and
+// those whose Rejections (a refused second connection's, added by refusals.overlay) give it by acceptedReasonOrder. A Binding that another
+// reason comes before is counted under that reason by the metric of the source's report, as its status says that reason.
+func notServedCount(rejections map[string][]config.Rejection, unserved map[string]config.Rejection) int {
+	n := len(unserved)
+	for _, rs := range rejections {
+		if acceptedCondition(rs, 0).Reason == string(config.ReasonConnectionNotServed) {
+			n++
+		}
+	}
+	return n
 }
 
 // write applies want as the status of the Binding key and records what came of it. The call is cut at the timeout, so that one
