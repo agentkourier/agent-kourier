@@ -438,11 +438,10 @@ A ConfigMap you keep is `config.existingConfigMap`, with `rbac.secretNamespaces`
 ## Footprint
 
 Measured on a three-worker cluster, idle after a first answered question, the Agent Kourier pod used 15 MiB of memory and about
-2 millicores. The chart's defaults are a 64 MiB request, 50m of CPU and a 256 MiB limit. Each further served chat connection adds about
-0.4 MB, so 16 connections stay well under the request: the container's memory charge (the cgroup's, which is what the kubelet and the OOM killer
-count, not the process's RSS) measured 29 MiB with 16 connections and 41 MiB with 32 under load, in a kind cluster against a fake Slack.
-The agent side is larger. A kagent
-0.9.x controller, its Postgres, the UI, a read-only tool server and one agent together used about 390 MiB, and the agent pod
+2 millicores. The chart's defaults are a 64 MiB request, 50m of CPU and a 256 MiB limit. Each further served chat connection adds
+about 0.4 MiB. In a kind cluster against a fake Slack, under load, the container's memory charge (the cgroup's figure, which the kubelet
+and the OOM killer count, not the process's RSS) was 29 MiB with 16 connections, the most one broker serves, and 41 MiB with 32.
+The agent side is larger. A kagent 0.9.x controller, its Postgres, the UI, a read-only tool server and one agent together used about 390 MiB, and the agent pod
 was the largest of them at 188 MiB.
 
 ## Tests
