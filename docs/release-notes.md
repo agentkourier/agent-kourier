@@ -37,8 +37,8 @@ does not set the new field, and [the upgrade section](how-to/upgrade.md#upgrade-
   ([Troubleshoot](how-to/troubleshoot.md#the-status-of-a-binding-keeps-changing)).
 - **A database migration (0029).** The outbox and the button presses record the connection they belong to, and the broker records the connections it serves. The migration adds columns and a table, and replaces the index on the outbox's channel and thread with one that starts at the connection. Rows written before it, or by an
   older release after a rollback, belong to the own connection: the leader gives them to it when it starts.
-  A rollback does not undo the index: the retention of 0.2.1 finds the outbox rows of an expired session by channel and thread (`channel = ... AND thread_ts = ...`), which an index that starts at the connection does not serve, so on SQLite each
-  of those lookups reads the whole `outbox` table until the broker is upgraded again. It costs time, not data (Postgres was not measured).
+  A rollback does not undo the index: 0.2.1 deletes the settled outbox rows of an expired session by channel and thread (`channel = ... AND thread_ts = ...`), which an index that starts at the connection does not serve, so on SQLite each
+  of those deletions reads the whole `outbox` table until the broker is upgraded again. It costs time, not data (Postgres was not measured).
 - **Do not roll back past 0.3.0 while team connections are served.** The outbox of 0.2.1 posts every unposted row through its one chat platform, so a post waiting for a team's connection would go out through the platform's app,
   and its sweep can edit a team's prompt and post a timeout notice from the platform's app for an interaction whose session no longer records the task. While the connections are still served: let the team's pending interactions end
   (a pause ends at its deadline, up to 7 days), delete their Bindings, check again that none is pending (one left after the delete is ended by the sweep 5 minutes after its deadline, without cancelling the agent's task), wait until `agentkourier_outbox_pending` is 0 for each, then take

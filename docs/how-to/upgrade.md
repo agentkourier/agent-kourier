@@ -837,16 +837,16 @@ Before you set the list:
   the identity of the own connection is not known yet. The own connection runs either way.
 - **One broker for each namespace.** Two brokers that admit one namespace both open Socket Mode on its apps, and Slack hands each event to one of them
   ([Troubleshoot](troubleshoot.md#the-status-of-a-binding-keeps-changing)).
-- **Know how to see a Binding that is not served.** A connection that is past the 16, whose namespace is off the list, or that is a second connection of a Slack app the broker already serves has Bindings that say `Accepted` `False`
-  with `ConnectionNotServed`. The leader counts them in `agentkourier_config_binding_rejections{reason="ConnectionNotServed"}` (a standby reads 0 for it, so sum over the replicas), which `sum(agentkourier_config_binding_rejections) > 0` includes
+- **Know how to see a Binding that is not served.** A connection that is past the 16, whose namespace was taken off the list after this broker served it, or that is a second connection of a Slack app the broker already serves has Bindings that say `Accepted` `False`
+  with `ConnectionNotServed`. The Bindings of a connection in a namespace that was never on the list get no status and no count. The leader counts them in `agentkourier_config_binding_rejections{reason="ConnectionNotServed"}` (a standby reads 0 for it, so sum over the replicas), which `sum(agentkourier_config_binding_rejections) > 0` includes
   ([Metrics](../reference/metrics.md)); `kubectl get akbinding -A` shows which Bindings.
 - **Size for the connections.** Each further connection adds about 0.4 MiB; at 16, the most one broker serves, the container's memory charge was 29 MiB under load
   ([chart README](https://github.com/agentkourier/agent-kourier/tree/main/charts/agent-kourier#footprint)). The default request of 64 MiB covers it.
 
 ### Check the upgrade
 
-- The pod runs the new image and is ready: `kubectl -n agent-kourier get deploy agent-kourier -o jsonpath='{.spec.template.spec.containers[0].image}'` shows the release's digest. The namespace and the Deployment's name are
-  those of your release, which may not be `agent-kourier`: Argo CD, for one, names the release after the Application.
+- The pod runs the new image and is ready: `kubectl -n agent-kourier get deploy agent-kourier -o jsonpath='{.spec.template.spec.containers[0].image}'` shows the release's digest. The namespace is your release's, and so is the Deployment's name, which the chart
+  makes `<release>-agent-kourier`, or the release name itself when that already contains `agent-kourier`, or `fullnameOverride` when it is set.
 - `agentkourier_chat_connected{connection="<namespace>/<name>"}` is 1 for the broker's own connection, and for each team connection once its Secret is granted.
 - `kubectl get akbinding -A` shows each Binding `READY` `True`, as before the upgrade. A Binding on a team connection that this broker does not serve says `Accepted` `False` with `ConnectionNotServed`
   ([Binding status](../reference/binding-status.md)).
@@ -855,7 +855,7 @@ Before you set the list:
 
 - **No team connection served yet.** Roll back as [above](#roll-back), and take `config.connectionNamespaces` off the values if you set it: the chart of the earlier release refuses a `config` key it does not have.
   The earlier image ignores the new column and table, and writes its rows with the empty connection, which a later upgrade gives back to the broker's own connection.
-  The new index stays: the earlier release finds the outbox rows of an expired session by channel and thread, which an index that starts at the connection does not serve, so on SQLite each of those lookups reads the whole
+  The new index stays: the earlier release deletes the settled outbox rows of an expired session by channel and thread, which an index that starts at the connection does not serve, so on SQLite each of those deletions reads the whole
   `outbox` table until you upgrade again. It costs time, not data (Postgres was not measured).
 - **Team connections served.** Do not roll back first. The outbox of an earlier release posts every unposted row through its one chat platform, so a post waiting for a team's connection would go out through
   the platform's app. End the team's pending interactions, delete its Bindings, wait until `agentkourier_outbox_pending` is 0 for each team connection, and take `config.connectionNamespaces` off the values

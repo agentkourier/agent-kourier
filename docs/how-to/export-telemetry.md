@@ -54,8 +54,9 @@ agentkourier_config_held_objects > 0
 agentkourier_binding_ready == 0
 
 # With custom resources: a Binding, or an object it uses, was refused, so what runs is not what was written (or nothing runs for it).
-# This includes the Bindings of a ChatConnection the broker does not serve (reason="ConnectionNotServed": past the 16, off the list of
-# namespaces, or a second connection of one Slack app), which only the leader counts; summing over the replicas reads it
+# This includes the Bindings of a ChatConnection the broker does not serve (reason="ConnectionNotServed": past the 16, taken off the list of
+# namespaces after the broker served it, or a second connection of one Slack app), which only the leader counts; summing over the replicas reads it.
+# The Bindings of a namespace that was never on the list get no status and no count
 sum(agentkourier_config_binding_rejections) > 0
 sum(agentkourier_config_invalid_objects) > 0
 

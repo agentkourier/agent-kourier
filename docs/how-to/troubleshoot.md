@@ -377,7 +377,7 @@ applies: a problem in one resource stops the whole config, as in [The pod exits 
 A Binding with no status at all, and empty `READY` and `REASON` columns, is either new (the broker writes its status within about 10 seconds) or names a ChatConnection
 that exists and that no broker serves: nothing reads it. Point its `connectionRef` at a connection a broker serves: the one in that broker's
 `AGENTKOURIER_CHAT_CONNECTION`, or one in a namespace on its `config.connectionNamespaces`. A team's own ChatConnection is in that state until the platform team admits its
-namespace ([Let a team bring its own Slack app](team-slack-app.md)). No metric counts such a Binding: this broker does not read the connection, so it has no way to know the Binding is waiting.
+namespace ([Let a team bring its own Slack app](team-slack-app.md)). No metric counts such a Binding: this broker leaves it to the broker that serves its connection, and cannot tell whether one does.
 
 A Binding that is refused after an edit keeps running as it was: `message` says `serving generation 1`, and the other conditions describe that
 generation, while `Ready` is `False` with `Accepted:InvalidSpec`. A Binding with no earlier generation to serve is not served at all.
