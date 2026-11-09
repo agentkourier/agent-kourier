@@ -44,8 +44,8 @@ does not set the new field, and [the upgrade section](how-to/upgrade.md#upgrade-
   and its sweep can edit a team's prompt and post a timeout notice from the platform's app for an interaction whose session no longer records the task. The guard is the unposted rows, not whether a connection is served now: a team's
   posts stay in the outbox for up to 7 days after its namespace was taken off the list or its ChatConnection was deleted. While the connections are still served: let the team's pending interactions end
   (a pause ends at its deadline, up to 7 days), delete their Bindings, check again that none is pending (one left after the delete is ended by the sweep `5m` after the first sweep that finds it both past its deadline and orphaned, without cancelling the agent's task),
-  check that no button press waits (the table `interaction_presses`, by `connection`), and wait until `agentkourier_outbox_pending{connection!="<own>"}` is 0 or absent on the leader, whatever `<own>` is, then take
-  `config.connectionNamespaces` off the values in the same change as the rollback: the chart of 0.2.1 refuses a `config` key it does not have. To clear rows of a connection that is not served, admit its namespace again (and, if its ChatConnection was deleted, have the team make it again under the same name) so that they post, or wait out the 7 days.
+  check that no button press waits (the table `interaction_presses`, by `connection`), and wait until `agentkourier_outbox_pending{connection!="<own>"}` is 0 or absent on the leader while `agentkourier_outbox_pending{connection="<own>"}` is present (a failed scrape has no series at all), with `<own>` the broker's own connection as `namespace/name`, then take
+  `config.connectionNamespaces` off the values in the same change as the rollback: the chart of 0.2.1 refuses a `config` key it does not have. To clear rows of a connection that is not served, admit its namespace again (and, if its ChatConnection was deleted, have the team make it again under the same name, for the same Slack app) so that they post, or wait out the 7 days.
   The steps are in [Let a team bring its own Slack app](how-to/team-slack-app.md#take-it-back).
 - **Remove `personMessage` triggers before any rollback to 0.2.1 or earlier.** Those releases know the trigger types `mention` and `botMessage` only. On the files route one `personMessage` trigger fails the whole config: the broker exits with code 2 at start,
   and keeps the last good config on a reload. On custom resources the older broker refuses that Binding as invalid (`Accepted` `False`, `InvalidSpec`) and does not serve it.
@@ -81,6 +81,7 @@ does not set the new field, and [the upgrade section](how-to/upgrade.md#upgrade-
   stops matching at once and returns nothing: add `ignoring(connection)` or aggregate first. An `on(...)` list needs `connection` once the broker serves two connections.
   A served connection always has its two outbox gauges on the leader (0 with nothing unposted), and a connection that is no longer served has them only while it has an unposted row.
   A connection the broker stops serving has its counter and histogram series deleted, and its `agentkourier_chat_connected` series too, which used to stay at 0: an alert on `agentkourier_chat_connected == 0` no longer fires for a connection that was removed or is not served. [Metrics](reference/metrics.md#series-by-connection) has the rest.
+- Dependencies and the Go builder image are updated, including `slack-go` from v0.34.0 to v0.35.0, `a2a-go` from v2.7.0 to v2.8.0 and `modernc.org/sqlite` from v1.61.1 to v1.62.0. The builder image keeps the tag `golang:1.27.3` and has a new digest.
 
 ## Version 0.2.1
 

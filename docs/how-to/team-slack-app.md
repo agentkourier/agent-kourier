@@ -290,10 +290,14 @@ Mend it by writing valid tokens into the Secret.
      word in the thread, `5m` after the first sweep that finds it both past its deadline and without its Binding (a restart or a takeover starts the count again, and
      the sweep is every 10 seconds). Wait for that and check again: the broker you roll back to would meet it otherwise. The agent's task is not cancelled, since the
      Binding that would call the agent is gone; it stays input-required at the agent until the agent expires it.
-  4. Check that no button press of the connection waits: no row of the table `interaction_presses` has `connection = 'team-a/team-a-slack'`. A press is deleted once it is processed.
-  5. Wait until `agentkourier_outbox_pending{connection!="agent-kourier/slack"}` is 0 or has no series on the leader, with `agent-kourier/slack` the broker's own connection (the value of `config.chatConnection`). The leader shows a 0 for a connection it serves, and a connection it does not serve shows a series only while it has an unposted row.
+  4. Check that no button press of another connection waits: no row of the table `interaction_presses` has a `connection` that is neither the broker's own (`agent-kourier/slack` below) nor empty (an empty one is the own connection's, as in step 5). A press is deleted once it is processed.
+  5. Wait until `agentkourier_outbox_pending{connection!="agent-kourier/slack"}` is 0 or has no series on the leader, with `agent-kourier/slack` the broker's own connection as `namespace/name`, the value of `AGENTKOURIER_CHAT_CONNECTION` in the pod (`config.chatConnection` may give the name alone for a connection in the release's namespace).
+     Read that only while `agentkourier_outbox_pending{connection="agent-kourier/slack"}` is present: the leader shows a 0 for each connection it serves, and a connection it does not serve shows a series only while it has an unposted row. A scrape that fails
+     (the metrics endpoint answers an error when the outbox query fails) has no series at all, which is not the same as none being unposted. The store says it directly: no row of the table `outbox` has `message_ref = ''`, an unset `abandoned_at`
+     (`abandoned_at IS NULL` on Postgres, `abandoned_at = 0` on SQLite) and a `connection` that is neither `agent-kourier/slack` nor empty. An empty `connection` is a row from before migration 0029 or from an older image, which the leader gives to the own connection when it starts.
 
-  If a row stays for a connection that is not served, admit its namespace again so that the connection runs and the row posts, and if the team deleted its ChatConnection have it made again under the same name, or wait out the 7 days: the outbox abandons a row older than that, with its text.
+  If a row stays for a connection that is not served, admit its namespace again so that the connection runs and the row posts, and if the team deleted its ChatConnection have it made again under the same name, and for the same Slack app: the rows post through whatever app the new object's tokens belong to.
+  Or wait out the 7 days: the outbox abandons a row older than that, which drops its text and keeps the row.
 
   Then take the list off the values in the same change as the rollback: the chart of 0.2.1 refuses a `config` key it does not have,
   and this chart refuses a non-empty list with `config.source: files`. A `personMessage` trigger has to go first too: 0.2.1 knows only `mention` and `botMessage`, and refuses a Binding that has a `personMessage` trigger
