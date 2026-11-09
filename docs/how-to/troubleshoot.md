@@ -339,7 +339,7 @@ Agent Kourier. Whether Slack sends an event again that it could not deliver in t
 
 The waits start at 1 second and double up to 60 seconds, each cut at random by up to half, and the broker does not stop trying:
 [Limits](../reference/limits.md#run-the-broker) has the numbers. So a connection comes back within about a minute of Slack
-being reachable again. If it does not, look for the cause in `error`: egress, DNS or a proxy between the pod and `slack.com`, or
+being reachable again, or after the Retry-After that Slack names, up to 5 minutes, if its answer was a rate limit. If it does not, look for the cause in `error`: egress, DNS or a proxy between the pod and `slack.com`, or
 Slack itself. A refresh that Slack asks for is not this line: it logs `slack: socket mode reconnecting` at INFO and connects again
 at once. A token that Slack rejects is not this line either: the broker's own connection exits with code 1
 ([The pod exits with code 1](#the-pod-exits-with-code-1)), and a team connection stops.

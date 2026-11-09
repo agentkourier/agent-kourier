@@ -267,13 +267,13 @@ func TestRunPlatformWaitsForWhatSlackAskedFor(t *testing.T) {
 	limited := func(d time.Duration) func(int) error {
 		return fails(fmt.Errorf("slack socket mode connection attempt failed: %w", &slackgo.RateLimitedError{RetryAfter: d}))
 	}
-	r := &runner{steps: []func(int) error{limited(90 * time.Second), limited(time.Second), limited(0), stopAfter(cancel)}}
+	r := &runner{steps: []func(int) error{limited(90 * time.Second), limited(time.Second), limited(0), limited(time.Duration(1<<62) / 2), limited(24 * time.Hour), stopAfter(cancel)}}
 
 	_ = RunPlatform(ctx, r, nil, policy(c))
 
-	// The pauses are 1 s, 2 s and 4 s. A Retry-After of 90 s wins over the first; 1 s loses to the second; a limit that names
-	// no wait is one second (Classify), which loses to the third.
-	if want := secs(90, 2, 4); !slices.Equal(c.waits, want) {
+	// The pauses are 1 s, 2 s, 4 s, 8 s and 16 s. A Retry-After of 90 s wins over the first; 1 s loses to the second; a limit that
+	// names no wait is one second (Classify), which loses to the third; one of any size, a day included, is cut to retryAfterMax.
+	if want := secs(90, 2, 4, 300, 300); !slices.Equal(c.waits, want) {
 		t.Errorf("waits = %v; want %v", c.waits, want)
 	}
 }

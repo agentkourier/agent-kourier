@@ -125,6 +125,11 @@ func New(cfg Config) *Client {
 // it is fatal. Run logs each step (watch) and tells Config.OnConnection whether the connection is up; the connection is down
 // from the start of the attempt to connect again, whether or not that is the one that fails, until the hello of the next Run.
 //
+// A lost connection ends Run as ctx ending does: the sink calls in flight see their context end, and the events queued on the lanes
+// are dropped, all unacknowledged, which Slack then sends again on the next connection (how often is Slack's). The intake
+// deduplicates a redelivery only of an event whose first call finished (internal/chat/intake.go, seen), so one cut off in flight
+// is decided afresh, and one that had finished is not decided twice.
+//
 // The events of one channel reach the sink one at a time and in the order they arrived, and the events of different
 // channels at the same time, so a sink that is slow for one channel (a Binding whose regexes are costly to try) holds up that
 // channel's events, and not the reading of the connection. It does not keep the CPU for the others: with many busy channels
@@ -172,7 +177,10 @@ func (c *Client) Run(ctx context.Context, sink Sink) error {
 		case ev := <-smc.Events: // every type is drained, or slack-go's reader stalls
 			w.event(ctx, ev)
 			if w.lost != nil {
-				return w.lost // the deferred cancel ends slack-go's run, which was about to wait and try again
+				// slack-go's run was about to wait and try again: end it and wait for it, so that no goroutine outlives Run.
+				cancel()
+				_ = <-done
+				return w.lost
 			}
 			if ev.Request == nil {
 				continue

@@ -43,6 +43,9 @@ const (
 	defaultRunBase       = time.Second
 	defaultRunMax        = time.Minute
 	defaultRunResetAfter = 120 * time.Second
+	// retryAfterMax is the longest wait that a platform's own answer (Classify's RetryAfter) may ask for. A longer one is cut to it:
+	// slack-go reads Retry-After as any number of seconds, so a faulty or hostile answer would park the connection for good.
+	retryAfterMax = 5 * time.Minute
 )
 
 // RunPolicy is how RunPlatform paces its retries. Zero fields take their defaults.
@@ -69,7 +72,7 @@ type RunPolicy struct {
 // doubles from Base to Max and starts over from Base once a run has lasted ResetAfter; the wait is the pause cut at random
 // by up to half of it, so that connections that fail together (a network that blips) do not retry together. Max is the
 // longest wait, except for a wait the platform asks for (Classify's RetryAfter, as for a rate limit), which is waited
-// for in full when it is longer. It returns an error wrapping ctx's when ctx ends: a shutdown, not a failure. The errors
+// for when it is longer, up to retryAfterMax. It returns an error wrapping ctx's when ctx ends: a shutdown, not a failure. The errors
 // it logs come from Run, which keeps tokens out of them.
 func RunPlatform(ctx context.Context, runner PlatformRunner, sink chat.Sink, p RunPolicy) error {
 	base, limit, reset := cmp.Or(p.Base, defaultRunBase), cmp.Or(p.Max, defaultRunMax), cmp.Or(p.ResetAfter, defaultRunResetAfter)
@@ -100,7 +103,7 @@ func RunPlatform(ctx context.Context, runner PlatformRunner, sink chat.Sink, p R
 		if now().Sub(started) >= reset {
 			pause = min(base, limit)
 		}
-		wait := max(jittered(pause, random()), v.RetryAfter)
+		wait := max(jittered(pause, random()), min(v.RetryAfter, retryAfterMax))
 		log.WarnContext(ctx, "slack connection ended; connecting again", "error", err, "after", wait)
 		select {
 		case <-ctx.Done():
