@@ -241,7 +241,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 		}
 		statusW, err = newStatusWriter(statusConfig{
 			Client: h.status.client, Report: func() config.Report { return refused.overlay(boot.Reloader.Report()) }, Conditions: func() map[string][]bindingcheck.Condition { return prober.State().Snapshot() },
-			Observed: boot.Source.BindingStatus, Version: boot.Source.BindingEvents, Served: served, Timeout: statusCallTimeout(h.cfg.Election, h.leaseFence != nil), Fence: h.leaseFence, Warnings: h.status.warnings, Log: log, OnWrite: metrics.StatusWrite,
+			Observed: boot.Source.BindingStatus, Version: boot.Source.BindingEvents, Served: served, Timeout: statusCallTimeout(h.cfg.Election, h.leaseFence != nil), Fence: h.leaseFence, Warnings: h.status.warnings, Log: log, OnWrite: metrics.StatusWrite, OnUnserved: metrics.UnservedBindings,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("binding status: %w", err)

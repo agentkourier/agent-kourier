@@ -700,7 +700,7 @@ func TestABindingTheSnapshotServesIsNotToldItsConnectionIsNotServed(t *testing.T
 
 // The leader half is wired to the record: with the custom resources, the status writer tells the Bindings of a connection the store
 // records as served and that is not served now, and the retention keeps their sessions, as old as a deleted Binding's that it deletes.
-// Without Served in the writer's config, or the retention's wrapper, one of the two halves fails.
+// Without Served in the writer's config, or the retention's wrapper, one of the two halves fails; without OnUnserved the metric stays 0.
 func TestRunTellsAndKeepsTheBindingsOfAConnectionItStoppedServing(t *testing.T) {
 	c := crStartConfig(t, nil)
 	dyn := c.Dynamic.(*dynamicfake.FakeDynamicClient)
@@ -755,6 +755,8 @@ func TestRunTellsAndKeepsTheBindingsOfAConnectionItStoppedServing(t *testing.T) 
 			t.Fatalf("the Binding of the stopped connection was not told: applies = %d", cluster.count())
 		}
 	}
+	// The leader counts the Bindings it told, in the metric an operator alerts on.
+	r.waitMetric(`agentkourier_config_binding_rejections{reason="ConnectionNotServed"} 1`)
 	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) { // the store's own metric says the sweep ran
 		if _, body := r.get("/metrics"); strings.Contains(body, `operation="agentkourier.store.PurgeExpiredSessions"`) {
 			break
