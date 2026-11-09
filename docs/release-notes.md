@@ -53,6 +53,7 @@ does not set the new field, and [the upgrade section](how-to/upgrade.md#upgrade-
   stops matching at once and returns nothing: add `ignoring(connection)` or aggregate first. An `on(...)` list needs `connection` once the broker serves two connections.
   A served connection always has its two outbox gauges on the leader (0 with nothing unposted), and a connection that is no longer served has them only while it has an unposted row.
   A connection the broker stops serving has its counter and histogram series deleted, and its `agentkourier_chat_connected` series too, which used to stay at 0: an alert on `agentkourier_chat_connected == 0` no longer fires for a connection that was removed or is not served. [Metrics](reference/metrics.md#series-by-connection) has the rest.
+- **The default memory request is now 128Mi** (`resources.requests.memory`, was 64Mi). In a kind cluster a broker that serves one chat connection idles at about 61 MB of resident memory, which left little under the old request, and each further served connection adds about 0.44 MB. The limit stays 256Mi. The chart merges your `resources` over its defaults, so an install that sets `resources.requests.memory` is unaffected, while one that sets only the limit or the CPU request gets the new memory request. The pod restarts on upgrade, and a node needs 64Mi more allocatable memory for it.
 
 ## Version 0.2.1
 
