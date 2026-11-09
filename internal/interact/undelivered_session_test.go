@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -179,10 +180,26 @@ func (c *callAudit) AgentCall(_ context.Context, a audit.Actor, call audit.Call)
 
 func (c *callAudit) seen() []string { c.mu.Lock(); defer c.mu.Unlock(); return slices.Clone(c.ops) }
 
-type oneBackend struct{ ag session.AgentAPI }
+// oneBackend is the config of the process: one Binding, ns/b, for the session's backends and the interactions' lookup, until a test takes it away
+// (gone), as a deletion does.
+type oneBackend struct {
+	ag   session.AgentAPI
+	b    interact.Binding
+	gone atomic.Bool
+}
 
-func (o oneBackend) Backend(string) (session.Backend, error) {
+func (o *oneBackend) Backend(string) (session.Backend, error) {
+	if o.gone.Load() {
+		return session.Backend{}, fmt.Errorf("no Binding: %w", session.ErrUnknownBinding)
+	}
 	return session.Backend{ThreadTTL: time.Hour, Agent: o.ag}, nil
+}
+
+func (o *oneBackend) Binding(string) (interact.Binding, error) {
+	if o.gone.Load() {
+		return interact.Binding{}, fmt.Errorf("no Binding: %w", session.ErrUnknownBinding)
+	}
+	return o.b, nil
 }
 
 type userIDs struct{}
@@ -213,6 +230,7 @@ type process struct {
 	tap    *interact.Tap
 	sw     *interact.Sweeper
 	re     *interact.Reopened
+	binds  *oneBackend
 	sink   *recSink
 	calls  *callAudit
 	aud    *audits
@@ -227,21 +245,21 @@ func start(t *testing.T, st *sqlite.Store, ag *scriptedAgent, clk *clockAt, watc
 	p := &process{t: t, st: st, ag: ag, clk: clk, re: interact.NewReopened(st), sink: &recSink{}, calls: &callAudit{}, aud: &audits{}, slack: &poster{posted: map[string]string{}}}
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
 	ob := newOutbox(t, outbox.Config{Store: st, Platforms: chattest.Same[outbox.Platform](p.slack), Now: clk.now, CallTimeout: 30 * time.Second, Logger: quiet})
-	b := interact.Binding{Dialect: kagentv1.New(0), Timeout: timeout, ToolApprovals: true}
+	p.binds = &oneBackend{ag: ag, b: interact.Binding{Dialect: kagentv1.New(0), Timeout: timeout, ToolApprovals: true}}
 	count := func(binding string, o interact.Outcome) {
 		p.outsMu.Lock()
 		p.outs = append(p.outs, binding+" "+string(o))
 		p.outsMu.Unlock()
 	}
 	late := &lateMgr{}
-	in, err := interact.New(interact.Config{Store: st, AuditReader: st, Lookup: lookup{b}, Platforms: chattest.Same[interact.Fitter](p.slack), Outbox: ob, Session: late, Audit: p.aud, OnApprovalOutcome: count, Now: clk.now, Logger: quiet})
+	in, err := interact.New(interact.Config{Store: st, AuditReader: st, Lookup: p.binds, Platforms: chattest.Same[interact.Fitter](p.slack), Outbox: ob, Session: late, Audit: p.aud, OnApprovalOutcome: count, Now: clk.now, Logger: quiet})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.tap, err = interact.NewTap(interact.TapConfig{Sink: p.sink, Handler: in, Lookup: lookup{b}, Backoff: 5 * time.Millisecond, Now: clk.now, Logger: quiet}); err != nil {
+	if p.tap, err = interact.NewTap(interact.TapConfig{Sink: p.sink, Handler: in, Lookup: p.binds, Backoff: 5 * time.Millisecond, Now: clk.now, Logger: quiet}); err != nil {
 		t.Fatal(err)
 	}
-	cfg := session.Config{Context: t.Context(), Store: st, Questions: st, Bindings: oneBackend{ag}, Users: userIDs{}, Sink: p.tap, Now: func() time.Time { return t0 },
+	cfg := session.Config{Context: t.Context(), Store: st, Questions: st, Bindings: p.binds, Users: userIDs{}, Sink: p.tap, Now: func() time.Time { return t0 },
 		TextReply: session.NoTextReply, ThreadContext: session.NoThreadContext, OnTurnEnd: func(string, session.TurnOutcome) {}, Audit: p.calls, Logger: quiet,
 		RetryBase: 5 * time.Millisecond, RetryMax: 20 * time.Millisecond}
 	if watch {
@@ -252,7 +270,7 @@ func start(t *testing.T, st *sqlite.Store, ag *scriptedAgent, clk *clockAt, watc
 	}
 	late.m = p.mgr
 	upd := &updates{}
-	if p.sw, err = interact.NewSweeper(interact.SweepConfig{Store: st, Sessions: st, Lookup: lookup{b}, Session: p.mgr, Updaters: chattest.Same[interact.Updater](upd), Outbox: ob, Auditor: p.aud, Presses: st,
+	if p.sw, err = interact.NewSweeper(interact.SweepConfig{Store: st, Sessions: st, Lookup: p.binds, Session: p.mgr, Abandoner: p.mgr, Updaters: chattest.Same[interact.Updater](upd), Outbox: ob, Auditor: p.aud, Presses: st,
 		Reopened: p.re, Now: clk.now, Logger: quiet, OnTimeout: func(string) {}, OnApprovalOutcome: count}); err != nil {
 		t.Fatal(err)
 	}

@@ -128,6 +128,10 @@ type RunConfig struct {
 	// superviseEvery is how often the supervisor looks at the team connections (5 seconds if zero): a seam for this package's tests,
 	// which cannot wait for it.
 	superviseEvery time.Duration
+	// sweepEvery is how often the interactions' timeout sweep runs (10 seconds if zero) and orphanGrace how long it waits before it ends an
+	// interaction whose Binding is gone or whose connection is refused (5 minutes if zero): seams for this package's tests, which cannot
+	// wait for them.
+	sweepEvery, orphanGrace time.Duration
 	// transportClosed is told the connection as the idle connections of its Slack transport are closed, so a test can see that every
 	// connection's is, and after the final drain.
 	transportClosed func(conn string)
