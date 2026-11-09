@@ -1259,7 +1259,9 @@ func TestConnectionNamespaces(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
 	const key = "AGENTKOURIER_CONNECTION_NAMESPACES"
-	base := crMode("-f", values("crds"))
+	// The broker keeps its own connection here (config.chatConnection set): with it empty, a list means no own connection, which
+	// TestNoOwnConnection holds to its own rules.
+	base := crMode("-f", values("crds"), "--set", "config.chatConnection=agent-kourier/slack-main")
 	renderWith := func(more ...string) string {
 		t.Helper()
 		out, err := render(t.Context(), t, "agent-kourier", "agent-kourier", append(slices.Clone(base), more...)...)
@@ -1368,7 +1370,7 @@ func TestConnectionNamespacesSchema(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := render(t.Context(), t, "agent-kourier", "agent-kourier", crMode("-f", values("crds"), "--set-json", "config.connectionNamespaces="+tc.json)...)
+			_, err := render(t.Context(), t, "agent-kourier", "agent-kourier", crMode("-f", values("crds"), "--set", "config.chatConnection=agent-kourier/slack-main", "--set-json", "config.connectionNamespaces="+tc.json)...)
 			switch {
 			case tc.ok && err != nil:
 				t.Errorf("%s: %v; want it to render", tc.json, err)
@@ -1377,4 +1379,167 @@ func TestConnectionNamespacesSchema(t *testing.T) {
 			}
 		})
 	}
+}
+
+// entryJSON is a config.chatConnections value of one ChatConnection named slack-main, in the namespace given (the release's when empty), whose
+// credentials are in the Secret slack-main-creds.
+func entryJSON(ns string) string {
+	nsField := ""
+	if ns != "" {
+		nsField = `"namespace":"` + ns + `",`
+	}
+	return `config.chatConnections={"slack-main":{` + nsField + `"spec":{"platform":"slack","credentialsSecretRef":{"name":"slack-main-creds"}}}}`
+}
+
+// TestNoOwnConnection: with config.source crds, an empty config.chatConnection and a config.connectionNamespaces that holds a namespace is a
+// broker with no ChatConnection of its own. The pod gets no AGENTKOURIER_CHAT_CONNECTION (and the list, right after the route), the chart grants no
+// Secret for a connection it cannot see, a ChatConnection it renders must be in an admitted namespace (else it would be rendered and never served),
+// and chatConnectionSecret, which names an own connection's Secret, is refused. The same list with config.chatConnection set changes nothing of the
+// own connection, which keeps its variable and its rules.
+func TestNoOwnConnection(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	const key = "AGENTKOURIER_CONNECTION_NAMESPACES"
+	image := "image.repository=agent-kourier,config.source=crds"
+	args := func(set string, json ...string) []string {
+		a := crMode("--set", image+set)
+		for _, j := range json {
+			a = append(a, "--set-json", j)
+		}
+		return a
+	}
+	envNames := func(d appsv1.Deployment) []string {
+		var names []string
+		for _, e := range d.Spec.Template.Spec.Containers[0].Env {
+			names = append(names, e.Name)
+		}
+		return names
+	}
+
+	t.Run("a list alone: no variable for an own connection, no Secret granted", func(t *testing.T) {
+		t.Parallel()
+		objs := mustRender(t, "agent-kourier", "rel-ns", args("", `config.connectionNamespaces=["team-a","team-b"]`)...)
+		d := deployment(t, objs)
+		env := podEnv(d)
+		if v, has := env["AGENTKOURIER_CHAT_CONNECTION"]; has {
+			t.Errorf("AGENTKOURIER_CHAT_CONNECTION = %q; want it absent with no own connection", v)
+		}
+		if env["AGENTKOURIER_CONFIG_SOURCE"] != "crds" || env[key] != "team-a,team-b" {
+			t.Errorf("source %q, %s %q; want crds and team-a,team-b", env["AGENTKOURIER_CONFIG_SOURCE"], key, env[key])
+		}
+		if names := envNames(d); len(names) < 2 || names[0] != "AGENTKOURIER_CONFIG_SOURCE" || names[1] != key {
+			t.Errorf("environment %v; want %s right after AGENTKOURIER_CONFIG_SOURCE", names, key)
+		}
+		if got := secretRoles(t, objs); len(got) != 0 {
+			t.Errorf("Secret Roles %v; want none (each team grants its own)", got)
+		}
+		for _, o := range objs {
+			if o.kind() == "ChatConnection" {
+				t.Errorf("rendered %s/%s; want no ChatConnection", o.namespace(), o.name())
+			}
+		}
+	})
+
+	t.Run("a rendered connection in an admitted namespace is rendered and granted by its own reference", func(t *testing.T) {
+		t.Parallel()
+		for _, ns := range []string{"", "team-a"} {
+			home := ns
+			if home == "" {
+				home = "rel-ns"
+			}
+			objs := mustRender(t, "agent-kourier", "rel-ns", args("", entryJSON(ns), `config.connectionNamespaces=["`+home+`"]`)...)
+			if _, has := podEnv(deployment(t, objs))["AGENTKOURIER_CHAT_CONNECTION"]; has {
+				t.Errorf("namespace %q: AGENTKOURIER_CHAT_CONNECTION is rendered; want it absent", ns)
+			}
+			var cc v1alpha1.ChatConnection
+			find(t, objs, "ChatConnection", "slack-main", &cc)
+			if cc.Namespace != home {
+				t.Errorf("ChatConnection namespace %q; want %q", cc.Namespace, home)
+			}
+			if got, want := secretRoles(t, objs), map[string][]string{home: {"slack-main-creds"}}; !equality.Semantic.DeepEqual(got, want) {
+				t.Errorf("namespace %q: Secret Roles %v; want %v", ns, got, want)
+			}
+		}
+	})
+
+	t.Run("a rendered connection outside the list is refused, and the message names it", func(t *testing.T) {
+		t.Parallel()
+		for _, tc := range []struct{ name, ns, want string }{
+			{"the release namespace", "", `namespace "rel-ns"`},
+			{"another namespace", "platform", `namespace "platform"`},
+		} {
+			_, err := render(t.Context(), t, "agent-kourier", "rel-ns", args("", entryJSON(tc.ns), `config.connectionNamespaces=["team-a"]`)...)
+			if err == nil {
+				t.Errorf("%s: rendered; want a refusal", tc.name)
+				continue
+			}
+			for _, want := range []string{`"slack-main"`, tc.want, "config.connectionNamespaces", "never serve"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("%s: render error = %v; want one containing %q", tc.name, err, want)
+				}
+			}
+		}
+	})
+
+	t.Run("chatConnectionSecret is refused: there is no own connection for it to name", func(t *testing.T) {
+		t.Parallel()
+		_, err := render(t.Context(), t, "agent-kourier", "rel-ns", args(",config.chatConnectionSecret=slack-bot", `config.connectionNamespaces=["team-a"]`)...)
+		if err == nil || !strings.Contains(err.Error(), "names the Secret of the broker's own ChatConnection, and there is none") {
+			t.Errorf("render error = %v; want the refusal that says config.chatConnectionSecret names an own connection's Secret and there is none", err)
+		}
+	})
+
+	t.Run("with config.chatConnection set the list keeps the own connection, and its entry need not be admitted", func(t *testing.T) {
+		t.Parallel()
+		objs := mustRender(t, "agent-kourier", "rel-ns", args(",config.chatConnection=platform/slack-main,config.chatConnectionSecret=slack-bot", entryJSON("platform"), `config.connectionNamespaces=["team-a"]`)...)
+		env := podEnv(deployment(t, objs))
+		if env["AGENTKOURIER_CHAT_CONNECTION"] != "platform/slack-main" || env[key] != "team-a" {
+			t.Errorf("AGENTKOURIER_CHAT_CONNECTION %q, %s %q; want platform/slack-main and team-a", env["AGENTKOURIER_CHAT_CONNECTION"], key, env[key])
+		}
+	})
+
+	t.Run("both empty with one rendered entry: the entry is the own connection, byte for byte as explicitly set", func(t *testing.T) {
+		t.Parallel()
+		for _, ns := range []string{"", "platform"} {
+			home := ns
+			if home == "" {
+				home = "rel-ns"
+			}
+			implied, err := render(t.Context(), t, "agent-kourier", "rel-ns", args("", entryJSON(ns))...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			explicit, err := render(t.Context(), t, "agent-kourier", "rel-ns", args(",config.chatConnection="+home+"/slack-main", entryJSON(ns))...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if implied != explicit {
+				t.Errorf("namespace %q: the implied own connection renders differently from the same one set:\n%s", ns, firstDifference(explicit, implied))
+			}
+			if got := podEnv(deployment(t, decode(t, implied)))["AGENTKOURIER_CHAT_CONNECTION"]; got != home+"/slack-main" {
+				t.Errorf("namespace %q: AGENTKOURIER_CHAT_CONNECTION %q; want %s/slack-main", ns, got, home)
+			}
+		}
+	})
+
+	t.Run("both empty with no entry or two entries is refused, and the message names both ways out", func(t *testing.T) {
+		t.Parallel()
+		two := `config.chatConnections={"a":{"spec":{"platform":"slack","credentialsSecretRef":{"name":"a"}}},"b":{"spec":{"platform":"slack","credentialsSecretRef":{"name":"b"}}}}`
+		for name, a := range map[string][]string{
+			"no entry":      args(""),
+			"two":           args("", two),
+			"an empty list": args("", "config.connectionNamespaces=[]"),
+		} {
+			_, err := render(t.Context(), t, "agent-kourier", "rel-ns", a...)
+			if err == nil {
+				t.Errorf("%s: rendered; want a refusal", name)
+				continue
+			}
+			for _, want := range []string{"needs config.chatConnection", "config.connectionNamespaces", "config.source: files"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("%s: render error = %v; want one containing %q", name, err, want)
+				}
+			}
+		}
+	})
 }

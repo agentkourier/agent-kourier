@@ -77,20 +77,22 @@ true
 {{- end -}}
 
 {{/*
-The ChatConnection this broker serves with config.source crds, as namespace/name (AGENTKOURIER_CHAT_CONNECTION): config.chatConnection,
-in the release namespace when it names no namespace, or the one entry of config.chatConnections when it is empty. A cluster may hold
-the connections of several brokers, so a second entry is no guess to make.
+The ChatConnection this broker serves as its own with config.source crds, as namespace/name (AGENTKOURIER_CHAT_CONNECTION): config.chatConnection,
+in the release namespace when it names no namespace; or, when that is empty and config.connectionNamespaces is non-empty, nothing, which is a
+broker with no connection of its own (it serves the ChatConnections of those namespaces and the chart renders no variable); or, when both are
+empty, the one entry of config.chatConnections. A cluster may hold the connections of several brokers, so a second entry is no guess to make.
+Empty output means no own connection.
 */}}
 {{- define "agentkourier.chatConnection" -}}
 {{- $ref := .Values.config.chatConnection -}}
-{{- if not $ref -}}
+{{- if and (not $ref) (not .Values.config.connectionNamespaces) -}}
 {{- if ne (len .Values.config.chatConnections) 1 -}}
-{{- fail "config.source crds (the chart's default unless your values set it) needs config.chatConnection: the namespace/name of the one ChatConnection this broker serves. A cluster may hold the connections of several brokers, so it is left out only when config.chatConnections has exactly one entry. To supply the config as a ConfigMap instead, set config.source: files; https://agentkourier.dev/how-to/install-with-helm/ describes both routes" -}}
+{{- fail "config.source crds (the chart's default unless your values set it) needs config.chatConnection: the namespace/name of the one ChatConnection this broker serves. A cluster may hold the connections of several brokers, so it is left out only when config.chatConnections has exactly one entry. A broker with no connection of its own, which serves only the ChatConnections of other namespaces, leaves config.chatConnection empty and sets config.connectionNamespaces to those namespaces instead. To supply the config as a ConfigMap instead, set config.source: files; https://agentkourier.dev/how-to/install-with-helm/ describes both routes" -}}
 {{- end -}}
 {{- range $name, $r := .Values.config.chatConnections -}}
 {{- $ref = printf "%s/%s" (default $.Release.Namespace $r.namespace) $name -}}
 {{- end -}}
-{{- else if not (contains "/" $ref) -}}
+{{- else if and $ref (not (contains "/" $ref)) -}}
 {{- $ref = printf "%s/%s" .Release.Namespace $ref -}}
 {{- end -}}
 {{- $ref -}}
@@ -203,6 +205,18 @@ Checks that no values file can get past. Included by the Deployment, which every
 {{- end -}}
 {{- end -}}
 {{- $_ := include "agentkourier.chatConnection" . -}}
+{{- if and (not .Values.config.chatConnection) .Values.config.connectionNamespaces -}}
+{{- /* No connection of its own: the broker serves the ChatConnections of config.connectionNamespaces and nothing else. */ -}}
+{{- if .Values.config.chatConnectionSecret -}}
+{{- fail "config.chatConnectionSecret names the Secret of the broker's own ChatConnection, and there is none: config.chatConnection is empty and config.connectionNamespaces is set, so this broker serves only the ChatConnections of those namespaces. A team grants the Secret of its connection with a Role of its own (or rbac.secretNames does). To give the broker a connection of its own, set config.chatConnection; otherwise remove config.chatConnectionSecret" -}}
+{{- end -}}
+{{- range $name, $r := .Values.config.chatConnections -}}
+{{- $ns := default $.Release.Namespace $r.namespace -}}
+{{- if not (has $ns $.Values.config.connectionNamespaces) -}}
+{{- fail (printf "config.chatConnections entry %q is in namespace %q, which is not in config.connectionNamespaces, and config.chatConnection is empty, so this broker has no connection of its own and would render the ChatConnection and never serve it. Add %q to config.connectionNamespaces, or set config.chatConnection to serve it as the broker's own" $name $ns $ns) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- /* With files, config.chatConnection, config.chatConnectionSecret and rbac.secretNames are ignored, and the chart does not refuse them: a rollback to files keeps the values
        it had, in an incident, and they are harmless there. config.connectionNamespaces is the exception and is refused above: ignoring it would silently stop serving the ChatConnections of the
        admitted namespaces, which is not harmless, so a rollback to files sets it to [] in the same upgrade. */ -}}
