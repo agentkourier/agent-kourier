@@ -73,9 +73,9 @@ func newGuardRig(t *testing.T, triggers ...v1alpha1.Trigger) *guardRig {
 		},
 	})
 	table := newRuntimeTable()
-	table.add(&connRuntime{name: "platform/slack", id: appIdentity{Bot: "BOWN", User: "UOWN"}})
-	table.add(&connRuntime{name: "team-a/slack", id: appIdentity{Bot: "BTEAMA", User: "UTEAMA"}})
-	table.add(&connRuntime{name: "team-b/slack", id: appIdentity{Bot: "BTEAMB", User: "UTEAMB"}})
+	table.identify("platform/slack", appIdentity{Bot: "BOWN", User: "UOWN"})
+	table.identify("team-a/slack", appIdentity{Bot: "BTEAMA", User: "UTEAMA"})
+	table.identify("team-b/slack", appIdentity{Bot: "BTEAMB", User: "UTEAMB"})
 	g.guard = botGuard{in: in, self: "team-a/slack", bots: table, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	return g
 }

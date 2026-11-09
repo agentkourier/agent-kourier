@@ -79,7 +79,8 @@ type supervisor struct {
 type teamRuntime struct {
 	// fp is the fingerprint of the ChatConnection and credentials this entry is for.
 	fp string
-	// id is the connection's bot, got for fp; asked says it was.
+	// id is the connection's bot; asked says it was got for fp. A restart carries the previous entry's id over, and until the new one is asked it
+	// stands for the identity of the connection (see held): once asked, it is the new tokens'.
 	id    appIdentity
 	asked bool
 	// rt is the running runtime, nil if there is none: it is refused, it failed to start, or the identity is not known yet.
@@ -91,8 +92,17 @@ type teamRuntime struct {
 	rejected bool
 	// recovering says the turns the connection's runtime left are not taken up yet (supervisor.recover).
 	recovering bool
-	// refused says it was found to be a second connection of a Slack app, and not run for it. It stays refused while its credentials cannot be read.
+	// refused says it was found to be a second connection of a Slack app, and not run for it. It stays refused while its credentials cannot be read,
+	// and while the identity of its new tokens is not known (a restart carries it over).
 	refused bool
+}
+
+// held says the entry holds the Slack app of its id against the younger connections: it is known, and the entry is not refused, was not found
+// rejected and did not fail to start (so a younger connection of the app can be served meanwhile). A restart does not let go of it: the id is the
+// previous tokens' until the new ones are asked about, and a lookup that fails for a moment is no reason to hand the app to a younger connection
+// for one look and take it back at the next.
+func (st *teamRuntime) held() bool {
+	return st.id.known() && !st.refused && !st.rejected && (st.rt != nil || !st.failed)
 }
 
 // run supervises until ctx ends: it reconciles with initial, the team connections the takeover read, and then with what each tick finds. It
@@ -137,6 +147,7 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 			s.stop(ctx, name, st, "it is no longer served")
 		}
 		s.host.table.clearDown(name)
+		s.host.table.forgetBot(name)
 		if s.removed != nil {
 			s.removed(ctx, name)
 		}
@@ -170,7 +181,7 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 		if t.Err != nil {
 			// Its Secret is not readable now, or its platform has no adapter. What runs keeps running on the tokens it was started with:
 			// a cache that is relisting is no reason to drop a connection. Otherwise it starts once it can.
-			if st != nil && st.rt != nil && st.id.known() {
+			if st != nil && st.held() {
 				claimed[st.id.App] = name
 			}
 			if st != nil && st.refused {
@@ -194,10 +205,17 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 			continue
 		}
 		if fp := t.fingerprint(); st == nil || st.fp != fp {
+			next := &teamRuntime{fp: fp}
 			if st != nil {
+				// The connection is still served, with the refusal it was under and the app it held, until the new tokens say otherwise. A
+				// connection that held no app (its start failed, or Slack rejected its token) carries none.
+				next.refused = st.refused
+				if st.held() {
+					next.id = st.id
+				}
 				s.stop(ctx, name, st, "its ChatConnection or its Secret changed")
 			}
-			st = &teamRuntime{fp: fp}
+			st = next
 			s.teams[name] = st
 			s.host.table.clearDown(name) // the credentials or the ChatConnection changed: whatever kept it down is for the new ones to show
 			delete(s.said, name)
@@ -209,25 +227,36 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 		}
 		if !st.asked {
 			id, err := s.identify(ctx, t.Connection)
-			if err != nil {
-				if errors.Is(err, errCredentialsRejected) {
-					st.rejected = true
-					code, _ := rejectionCode(err)
-					s.host.table.setDown(name, &connectionStopped{conn: name, rejected: true, code: code})
-					s.host.metrics.ChatConnected(name, false)
-					s.say(ctx, name, "the platform rejected the ChatConnection's credentials, so it is not started until its ChatConnection or its Secret changes", err)
-					continue
+			switch {
+			case err == nil:
+				st.id, st.asked = id, true
+				s.host.table.identify(name, id) // the bot guard tells the bot from a person; it knew the bot the tokens had before
+			case errors.Is(err, errCredentialsRejected):
+				st.rejected = true
+				code, _ := rejectionCode(err)
+				s.host.table.setDown(name, &connectionStopped{conn: name, rejected: true, code: code})
+				s.host.metrics.ChatConnected(name, false)
+				s.say(ctx, name, "the platform rejected the ChatConnection's credentials, so it is not started until its ChatConnection or its Secret changes", err)
+				continue
+			default:
+				// Not started on tokens that are not known to be which app's. It stays what it was: it keeps the refusal it was under, and it holds
+				// the app of its previous tokens unless an older connection holds it now (it is then not refused on that, since its new tokens may be
+				// another app's). A connection that was never asked holds nothing.
+				if st.refused {
+					refused[name] = refusedMessage
+				} else if _, taken := claimed[st.id.App]; st.id.known() && !taken {
+					claimed[st.id.App] = name
 				}
 				s.say(ctx, name, "the identity of the ChatConnection's bot is not known yet, so it is not started", err)
 				continue
 			}
-			st.id, st.asked = id, true
 		}
 		if st.id.known() {
 			if holder, taken := claimed[st.id.App]; taken {
 				newly := !st.refused
 				st.refused = true
 				refused[name] = refusedMessage
+				s.host.table.forgetBot(name) // not served, so it posts nothing and its bot is no longer one of the broker's
 				s.retire(name)
 				s.stop(ctx, name, st, "it is a second connection of the Slack app that "+holder+" uses")
 				// Not served from here, so the series of its earlier run would only go stale. Not only when this entry ran: a restart that
@@ -287,7 +316,7 @@ func (s *supervisor) start(ctx context.Context, t TeamConnection, st *teamRuntim
 	if ctx.Err() != nil {
 		return
 	}
-	rt, err := s.host.build(t.Connection, st.id)
+	rt, err := s.host.build(t.Connection)
 	if errors.Is(err, errStopping) {
 		return
 	}

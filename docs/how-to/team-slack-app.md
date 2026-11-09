@@ -195,6 +195,12 @@ can be served meanwhile. When the older one's Secret is fixed, the broker asks a
 that same look the broker stops the younger one, as it stops any running second connection of an app, before it starts the older. The younger
 connection's Bindings then say `ConnectionNotServed`. An older connection that was running when Slack rejected its token keeps holding the app.
 
+When Slack does not answer for a moment (a timeout, a 5xx) as the broker asks whose bot a changed Secret's token is, the connection is not started
+yet, and the broker asks again at its next look. Until Slack answers, a connection keeps holding the app of the tokens it had (unless an older connection holds it
+by now), and a connection that was refused stays refused, so a younger connection of the app is not served in between and then stopped again. If the new token turns out to be
+another app's, the app it held is free from then on. The broker also keeps the connection's bot among the bots it tells from a person while it
+restarts, so a mention by that bot starts no turn on another connection unless a Binding's trigger names the bot, as when it runs.
+
 The ChatConnection that is not run is not deleted, and it is served again if the older one goes away. The platform's own
 connection always comes first, so a team that copies the platform's tokens gets the second place.
 

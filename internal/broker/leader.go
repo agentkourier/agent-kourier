@@ -84,7 +84,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	// connections that run, which the supervisor adds the team connections' to and takes them from.
 	table := newRuntimeTable()
 	host := &runtimeHost{cfg: cfg, log: log, metrics: metrics, table: table, open: h.openPlatform, parent: runCtx}
-	ownRT, err := host.build(conn, appIdentity{})
+	ownRT, err := host.build(conn)
 	if err != nil {
 		return nil, err
 	}
