@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"math/rand/v2"
 	"slices"
 	"strings"
 	"time"
@@ -37,6 +38,16 @@ type PlatformRunner interface {
 	Classify(op chat.Op, err error) chat.Verdict
 }
 
+// The defaults of RunPolicy. They are the limits docs/reference/limits.md states.
+const (
+	defaultRunBase       = time.Second
+	defaultRunMax        = time.Minute
+	defaultRunResetAfter = 120 * time.Second
+	// retryAfterMax is the longest wait that a platform's own answer (Classify's RetryAfter) may ask for. A longer one is cut to it:
+	// slack-go reads Retry-After as any number of seconds, so a faulty or hostile answer would park the connection for good.
+	retryAfterMax = 5 * time.Minute
+)
+
 // RunPolicy is how RunPlatform paces its retries. Zero fields take their defaults.
 type RunPolicy struct {
 	// Base is the first pause after a failure, doubling up to Max. Defaults: 1 s and 60 s.
@@ -48,17 +59,24 @@ type RunPolicy struct {
 	Now    func() time.Time
 	After  func(time.Duration) <-chan time.Time
 	Logger *slog.Logger // slog.Default() if nil
+	// Random is the jitter's source: a number in [0, 1). The wait is the pause cut by that share of its upper half, so
+	// between half the pause and the pause. A test injects its own, one per connection when it runs several, and a Random
+	// of 0 cuts nothing. Default: math/rand/v2's Float64. A number outside [0, 1) is held to its bounds.
+	Random func() float64
 }
 
-// RunPlatform runs the chat connection for as long as ctx lives. An adapter reconnects by itself, so
-// when Run returns, the connection failed for good or never opened. An error that the platform classifies as
-// credentials it rejects (chat.FatalAuth) ends RunPlatform at once with ErrSlackAuth, since no retry cures
-// it. Any other error is retried after a pause that doubles from Base to Max, and starts over from
-// Base once a run has lasted ResetAfter. It returns an error wrapping ctx's when ctx ends: a
-// shutdown, not a failure. The errors it logs come from Run, which keeps tokens out of them.
+// RunPlatform runs the chat connection for as long as ctx lives. An adapter reconnects by itself only for a refresh that
+// the platform asks for and for the first attempt after a loss, so when Run returns, the connection was lost and could not
+// be opened again, or never opened. An error that the platform classifies as credentials it rejects (chat.FatalAuth) ends
+// RunPlatform at once with ErrSlackAuth, since no retry cures it. Any other error is retried after a wait. The pause
+// doubles from Base to Max and starts over from Base once a run has lasted ResetAfter; the wait is the pause cut at random
+// by up to half of it, so that connections that fail together (a network that blips) do not retry together. Max is the
+// longest wait, except for a wait the platform asks for (Classify's RetryAfter, as for a rate limit), which is waited
+// for when it is longer, up to retryAfterMax. It returns an error wrapping ctx's when ctx ends: a shutdown, not a failure. The errors
+// it logs come from Run, which keeps tokens out of them.
 func RunPlatform(ctx context.Context, runner PlatformRunner, sink chat.Sink, p RunPolicy) error {
-	base, limit, reset := cmp.Or(p.Base, time.Second), cmp.Or(p.Max, time.Minute), cmp.Or(p.ResetAfter, 120*time.Second)
-	now, after, log := p.Now, p.After, p.Logger
+	base, limit, reset := cmp.Or(p.Base, defaultRunBase), cmp.Or(p.Max, defaultRunMax), cmp.Or(p.ResetAfter, defaultRunResetAfter)
+	now, after, log, random := p.Now, p.After, p.Logger, p.Random
 	if now == nil {
 		now = time.Now
 	}
@@ -68,6 +86,9 @@ func RunPlatform(ctx context.Context, runner PlatformRunner, sink chat.Sink, p R
 	if log == nil {
 		log = slog.Default()
 	}
+	if random == nil {
+		random = rand.Float64
+	}
 	pause := min(base, limit)
 	for {
 		started := now()
@@ -75,20 +96,28 @@ func RunPlatform(ctx context.Context, runner PlatformRunner, sink chat.Sink, p R
 		if ctx.Err() != nil {
 			return stopped(ctx)
 		}
-		if v := runner.Classify(chat.OpOther, err); v.Class == chat.FatalAuth {
+		v := runner.Classify(chat.OpOther, err)
+		if v.Class == chat.FatalAuth {
 			return &authRejected{code: v.Code}
 		}
 		if now().Sub(started) >= reset {
 			pause = min(base, limit)
 		}
-		log.WarnContext(ctx, "slack connection ended; connecting again", "error", err, "after", pause)
+		wait := max(jittered(pause, random()), min(v.RetryAfter, retryAfterMax))
+		log.WarnContext(ctx, "slack connection ended; connecting again", "error", err, "after", wait)
 		select {
 		case <-ctx.Done():
 			return stopped(ctx)
-		case <-after(pause):
+		case <-after(wait):
 		}
 		pause = min(pause*2, limit)
 	}
+}
+
+// jittered is pause cut by the share cut of its upper half: between half of pause (cut 1) and pause (cut 0). A cut outside [0, 1]
+// is held to it.
+func jittered(pause time.Duration, cut float64) time.Duration {
+	return pause - time.Duration(min(max(cut, 0), 1)*float64(pause/2))
 }
 
 // ChooseConnection returns the ChatConnection this broker runs, with the keys of its credentials Secret that its

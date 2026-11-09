@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -189,4 +190,75 @@ func TestSocketModePingsClient(t *testing.T) {
 		}
 	}
 	t.Fatal("no websocket ping from the fake; slack-go's client would give up after 30s")
+}
+
+// A dropped connection is closed with no disconnect envelope and no close frame, as a network that fails does: the
+// client sees its socket end, which is not what a refresh looks like, and (as slack-go does) connects again.
+func TestDropConnectionsClosesTheSocketWithoutTellingTheClient(t *testing.T) {
+	fake, smc := newSocket(t)
+	waitEvent(t, smc, socketmode.EventTypeHello)
+	app := fake.Apps()[0].AppID
+
+	n, err := fake.DropConnections(app)
+
+	if err != nil || n != 1 {
+		t.Fatalf("DropConnections = %d, %v; want 1 connection dropped", n, err)
+	}
+	if got := fake.AppConnections(app); got != 0 {
+		t.Errorf("AppConnections = %d right after the drop; want 0", got)
+	}
+	var seen []socketmode.EventType
+	timeout := time.After(30 * time.Second)
+	for second := false; !second; {
+		select {
+		case ev := <-smc.Events:
+			seen = append(seen, ev.Type)
+			second = ev.Type == socketmode.EventTypeHello
+		case <-timeout:
+			t.Fatalf("the client did not connect again; it saw %v", seen)
+		}
+	}
+	if slices.Contains(seen, socketmode.EventTypeDisconnect) {
+		t.Errorf("the client saw %v; a drop sends no disconnect envelope", seen)
+	}
+	if got := fake.AppConnectionsOpened(app); got != 2 {
+		t.Errorf("AppConnectionsOpened = %d; want the first connection and the one after the drop", got)
+	}
+}
+
+func TestDropConnectionsOfAnAppTheServerDoesNotHost(t *testing.T) {
+	fake := fakeslack.New()
+	t.Cleanup(fake.Close)
+	if n, err := fake.DropConnections("ANOSUCH"); !errors.Is(err, fakeslack.ErrNotFound) || n != 0 {
+		t.Errorf("DropConnections = %d, %v; want 0 and ErrNotFound", n, err)
+	}
+}
+
+// A drop of one app leaves the connections of another.
+func TestDropConnectionsLeavesOtherApps(t *testing.T) {
+	appA := fakeslack.App{BotUser: "UA", BotID: "BA", AppID: "AA", BotToken: "xoxb-a", AppToken: "xapp-a"}
+	appB := fakeslack.App{BotUser: "UB", BotID: "BB", AppID: "AB", BotToken: "xoxb-b", AppToken: "xapp-b"}
+	fake := fakeslack.New(fakeslack.WithApp(appA), fakeslack.WithApp(appB))
+	t.Cleanup(fake.Close)
+	for _, a := range []fakeslack.App{appA, appB} {
+		api := slack.New(a.BotToken, slack.OptionAPIURL(fake.URL()+"/"), slack.OptionAppLevelToken(a.AppToken))
+		_, u, err := api.StartSocketModeContext(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		ws, resp, err := websocket.DefaultDialer.DialContext(t.Context(), u, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		t.Cleanup(func() { _ = ws.Close() })
+	}
+	eventually(t, "both apps to connect", func() bool { return fake.Connections() == 2 })
+
+	if _, err := fake.DropConnections("AA"); err != nil {
+		t.Fatal(err)
+	}
+	if a, b := fake.AppConnections("AA"), fake.AppConnections("AB"); a != 0 || b != 1 {
+		t.Errorf("connections of A and B = %d and %d after dropping A; want 0 and 1", a, b)
+	}
 }

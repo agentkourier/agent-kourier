@@ -37,7 +37,7 @@ type Config struct {
 	Logger *slog.Logger // slog.Default() if nil
 	// HTTPClient makes the Web API calls; slack-go's default if nil.
 	HTTPClient *http.Client
-	// Now is the clock of the user cache and of the pace of repeated connection errors in the log; time.Now if nil.
+	// Now is the clock of the user cache and of the pace of the log line for shed events; time.Now if nil.
 	Now func() time.Time
 	// OnConnection, if set, is told true when the Socket Mode connection is up (Slack has said hello) and false when it is
 	// down again (the next connection attempt begins, or Run ends), so the broker can show it as a metric. It is
@@ -117,9 +117,18 @@ func New(cfg Config) *Client {
 }
 
 // Run connects over Socket Mode and gives sink each message that may be a turn and each
-// button press, until ctx ends (the error wraps ctx's) or the connection fails for
-// good, as with a rejected token. slack-go reconnects by itself otherwise, and Run logs each step of that (watch)
-// and tells Config.OnConnection whether the connection is up.
+// button press, until ctx ends (the error wraps ctx's) or the connection cannot be kept. Slack's refresh, which it asks
+// for with a disconnect, and the first attempt to connect again after a connection is lost, slack-go does by itself, at
+// once. When that attempt, or any attempt to open the connection, fails, Run returns it as an error (watch.lost) and
+// the caller connects again with its own pause: slack-go would otherwise retry inside Run without end, with a pause that
+// starts at 100 ms, doubles to 5 minutes and has no jitter. A rejected token is such an error, and Platform.Classify says
+// it is fatal. Run logs each step (watch) and tells Config.OnConnection whether the connection is up; the connection is down
+// from the start of the attempt to connect again, whether or not that is the one that fails, until the hello of the next Run.
+//
+// A lost connection ends Run as ctx ending does: the sink calls in flight see their context end, and the events queued on the lanes
+// are dropped, all unacknowledged, which Slack then sends again on the next connection (how often is Slack's). The intake
+// deduplicates a redelivery only of an event whose first call finished (internal/chat/intake.go, seen), so one cut off in flight
+// is decided afresh, and one that had finished is not decided twice.
 //
 // The events of one channel reach the sink one at a time and in the order they arrived, and the events of different
 // channels at the same time, so a sink that is slow for one channel (a Binding whose regexes are costly to try) holds up that
@@ -167,6 +176,12 @@ func (c *Client) Run(ctx context.Context, sink Sink) error {
 		select {
 		case ev := <-smc.Events: // every type is drained, or slack-go's reader stalls
 			w.event(ctx, ev)
+			if w.lost != nil {
+				// slack-go's run was about to wait and try again: end it and wait for it, so that no goroutine outlives Run.
+				cancel()
+				_ = <-done
+				return w.lost
+			}
 			if ev.Request == nil {
 				continue
 			}

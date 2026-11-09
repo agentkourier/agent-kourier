@@ -2,6 +2,7 @@ package fakeslack
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"slices"
@@ -236,6 +237,25 @@ func (sk *sockets) disconnect(appID string) {
 	}
 }
 
+// drop takes the app's connections out of the list and closes each without a word to the client, and returns how
+// many there were. Closing the connection under a client that reads it is what a network that fails looks like.
+func (sk *sockets) drop(appID string) int {
+	sk.mu.Lock()
+	var gone []*sockConn
+	sk.conns = slices.DeleteFunc(sk.conns, func(c *sockConn) bool {
+		if c.app == appID {
+			gone = append(gone, c)
+			return true
+		}
+		return false
+	})
+	sk.mu.Unlock()
+	for _, c := range gone {
+		_ = c.ws.Close()
+	}
+	return len(gone)
+}
+
 // stop stops accepting clients, drops the connected ones, and waits for their
 // goroutines.
 func (sk *sockets) stop() {
@@ -257,6 +277,20 @@ func (s *Server) Connections() int {
 	s.sock.mu.Lock()
 	defer s.sock.mu.Unlock()
 	return len(s.sock.conns)
+}
+
+// DropConnections closes the Socket Mode connections of the app appID as a failing network does: with no disconnect
+// envelope and no close frame, so the client's read fails and slack-go connects again, where Slack's own refresh and
+// SetRevoked tell the client first. It returns how many connections were dropped, and fails with ErrNotFound for an app
+// the Server does not host. Nothing keeps the client from connecting again at once.
+//
+// UNCONFIRMED(MC-15): that a client sees a connection that Slack's edge drops as the fake's close; the abnormal close
+// (1006) is what a TCP reset or a closed socket gives the client's read.
+func (s *Server) DropConnections(appID string) (int, error) {
+	if _, ok := s.appByID(appID); !ok {
+		return 0, fmt.Errorf("fakeslack: no app %q: %w", appID, ErrNotFound)
+	}
+	return s.sock.drop(appID), nil
 }
 
 // AppConnections returns the number of Socket Mode clients connected as the

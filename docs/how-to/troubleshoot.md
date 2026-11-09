@@ -120,8 +120,8 @@ or ChatConnection changes.) The word at the end is Slack's own code: `invalid_au
 from another Slack app, or one that has been revoked since.
 
 Agent Kourier checks the bot token before it opens the Socket Mode connection with the app token. At the default `info`
-log level, if no `slack: socket mode connecting` line comes before the error, Slack refused the bot token; if one does,
-look at the app token too. The dry run in [Check the values before you install](install-with-helm.md#check-the-values-before-you-install)
+log level, if the last `slack:` line before the error is not `slack: socket mode connecting` (or `slack: socket mode reconnecting`),
+Slack refused the bot token; if it is, look at the app token too. The dry run in [Check the values before you install](install-with-helm.md#check-the-values-before-you-install)
 tests the bot token on its own: it exits 1 when Slack refuses it.
 
 Replace the Secret with the right tokens, then restart rather than wait out the crash loop's back-off:
@@ -328,6 +328,21 @@ Check the Service name first, with `kubectl get svc -n <namespace>`. Argo CD nam
 release after the Application, so an Application called `my-kagent` produced
 `my-kagent-controller`, not `kagent-controller`. Then check the egress rule:
 the chart's NetworkPolicy allows the agent only through `networkPolicy.extraEgress`.
+
+## The log says `slack connection ended; connecting again`
+
+Agent Kourier lost its Socket Mode connection to Slack, or could not open one, and runs the connection again after a wait. The line's
+`after` is that wait (nanoseconds, in the JSON log) and `error` says why: `slack socket mode connection attempt failed: ...` is an
+attempt to open the connection that failed (Slack could not be reached, or refused the call), and `slack auth.test: ...` is the check of the
+bot token at the start of the run. While this goes on, `agentkourier_chat_connected` is 0 for that connection and no event reaches
+Agent Kourier. Whether Slack sends an event again that it could not deliver in the meantime is Slack's, and this page cannot tell you.
+
+The waits start at 1 second and double up to 60 seconds, each cut at random by up to half, and the broker does not stop trying:
+[Limits](../reference/limits.md#run-the-broker) has the numbers. So a connection comes back within about a minute of Slack
+being reachable again, or after the Retry-After that Slack names, up to 5 minutes, if its answer was a rate limit. If it does not, look for the cause in `error`: egress, DNS or a proxy between the pod and `slack.com`, or
+Slack itself. A refresh that Slack asks for is not this line: it logs `slack: socket mode reconnecting` at INFO and connects again
+at once. A token that Slack rejects is not this line either: the broker's own connection exits with code 1
+([The pod exits with code 1](#the-pod-exits-with-code-1)), and a team connection stops.
 
 ## The mention gets no reply and the log shows no `session turn started`
 

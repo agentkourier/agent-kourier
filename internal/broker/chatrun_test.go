@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"slices"
 	"strings"
 	"testing"
@@ -53,8 +54,9 @@ func (c *clock) After(d time.Duration) <-chan time.Time {
 	return ch
 }
 
+// policy is the clock's policy with no jitter (Random says 0, which cuts nothing off the pause), so a test reads the pause itself.
 func policy(c *clock) RunPolicy {
-	return RunPolicy{Now: c.Now, After: c.After, Logger: slog.New(slog.DiscardHandler)}
+	return RunPolicy{Now: c.Now, After: c.After, Random: func() float64 { return 0 }, Logger: slog.New(slog.DiscardHandler)}
 }
 
 func fails(err error) func(int) error { return func(int) error { return err } }
@@ -157,6 +159,122 @@ func TestRunPlatformStopsWhenTheContextEndsDuringABackoff(t *testing.T) {
 	}
 	if r.calls != 1 {
 		t.Errorf("%d runs, want the loop to stop", r.calls)
+	}
+}
+
+// failsThenStops is n steps that each fail, then one that ends the context.
+func failsThenStops(n int, cancel context.CancelFunc) []func(int) error {
+	steps := make([]func(int) error, 0, n+1)
+	for range n {
+		steps = append(steps, fails(errors.New("connection reset")))
+	}
+	return append(steps, stopAfter(cancel))
+}
+
+// The pause is cut by a random share of its upper half, so a wait is never longer than the pause (the cap is the
+// longest wait) and never shorter than half of it. The pause itself keeps doubling from what it was, not from what was waited.
+func TestRunPlatformCutsEachPauseByUpToHalf(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	c := &clock{}
+	cuts := []float64{0, 0.5, 0.999999, 0.25, 0, 0.75, 0.5, 0.999999}
+	next := 0
+	p := policy(c)
+	p.Random = func() float64 { next++; return cuts[(next-1)%len(cuts)] }
+
+	_ = RunPlatform(ctx, &runner{steps: failsThenStops(8, cancel)}, nil, p)
+
+	pauses := secs(1, 2, 4, 8, 16, 32, 60, 60)
+	if len(c.waits) != len(pauses) {
+		t.Fatalf("waits = %v; want %d of them", c.waits, len(pauses))
+	}
+	for i, pause := range pauses {
+		want := pause - time.Duration(cuts[i]*float64(pause/2))
+		if c.waits[i] != want || c.waits[i] > pause || c.waits[i] < pause/2 {
+			t.Errorf("wait %d = %v after a cut of %v; want %v, between %v and %v", i, c.waits[i], cuts[i], want, pause/2, pause)
+		}
+	}
+}
+
+// A random source that strays outside [0, 1) cannot make a wait longer than the pause or shorter than half of it.
+func TestRunPlatformClampsAStrayRandomNumber(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		r    float64
+		want time.Duration
+	}{{"negative", -3, time.Second}, {"one", 1, 500 * time.Millisecond}, {"far above one", 40, 500 * time.Millisecond}} {
+		ctx, cancel := context.WithCancel(t.Context())
+		c := &clock{}
+		p := policy(c)
+		p.Random = func() float64 { return tc.r }
+
+		_ = RunPlatform(ctx, &runner{steps: failsThenStops(1, cancel)}, nil, p)
+
+		if len(c.waits) != 1 || c.waits[0] != tc.want {
+			t.Errorf("%s: waits = %v; want [%v]", tc.name, c.waits, tc.want)
+		}
+	}
+}
+
+// Connections that fail at the same moment, as every one does when a network blips, wait different times, none past the
+// pause: they do not come back together. Each is a RunPlatform with a random source of its own.
+func TestRunPlatformSpreadsConnectionsThatFailTogether(t *testing.T) {
+	const n = 16
+	waited := map[time.Duration]bool{}
+	for i := range n {
+		ctx, cancel := context.WithCancel(t.Context())
+		c := &clock{}
+		p := policy(c)
+		p.Random = rand.New(rand.NewPCG(uint64(i), 7)).Float64
+
+		_ = RunPlatform(ctx, &runner{steps: failsThenStops(1, cancel)}, nil, p)
+
+		if len(c.waits) != 1 || c.waits[0] > time.Second || c.waits[0] < 500*time.Millisecond {
+			t.Fatalf("connection %d: waits = %v; want one between 500ms and 1s", i, c.waits)
+		}
+		waited[c.waits[0]] = true
+	}
+	if len(waited) < n*3/4 {
+		t.Errorf("%d connections that failed together waited %d different times; want them spread", n, len(waited))
+	}
+}
+
+// With no random source of its own RunPlatform draws one, so a broker's connections differ without a test's help.
+func TestRunPlatformJittersByDefault(t *testing.T) {
+	waited := map[time.Duration]bool{}
+	for range 20 {
+		ctx, cancel := context.WithCancel(t.Context())
+		c := &clock{}
+		p := policy(c)
+		p.Random = nil
+
+		_ = RunPlatform(ctx, &runner{steps: failsThenStops(1, cancel)}, nil, p)
+
+		if len(c.waits) != 1 || c.waits[0] > time.Second || c.waits[0] < 500*time.Millisecond {
+			t.Fatalf("waits = %v; want one between 500ms and 1s", c.waits)
+		}
+		waited[c.waits[0]] = true
+	}
+	if len(waited) < 2 {
+		t.Errorf("20 runs waited %d different times; want a random cut", len(waited))
+	}
+}
+
+// A platform that was told to wait (Slack's Retry-After) is waited for if that is longer than the pause, as slack-go
+// did for the reconnect, and the pause does not wait on it when it is shorter.
+func TestRunPlatformWaitsForWhatSlackAskedFor(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	c := &clock{}
+	limited := func(d time.Duration) func(int) error {
+		return fails(fmt.Errorf("slack socket mode connection attempt failed: %w", &slackgo.RateLimitedError{RetryAfter: d}))
+	}
+	r := &runner{steps: []func(int) error{limited(90 * time.Second), limited(time.Second), limited(0), limited(time.Duration(1<<62) / 2), limited(24 * time.Hour), stopAfter(cancel)}}
+
+	_ = RunPlatform(ctx, r, nil, policy(c))
+
+	// The pauses are 1 s, 2 s, 4 s, 8 s and 16 s. A Retry-After of 90 s wins over the first; 1 s loses to the second; a limit that
+	// names no wait is one second (Classify), which loses to the third; one of any size, a day included, is cut to retryAfterMax.
+	if want := secs(90, 2, 4, 300, 300); !slices.Equal(c.waits, want) {
+		t.Errorf("waits = %v; want %v", c.waits, want)
 	}
 }
 
