@@ -295,8 +295,8 @@ horizon as the deletion: the Binding's `threadTTL` plus 90 days) and still recor
 0. leaves it if this process's session manager still runs that task (parked on a question it has not given up on, or streaming
    it): the task is its runner's, and clearing it from under the runner would leave the runner parked after the session is
    deleted, so that a new session under the same key waited behind it. The tick says, at WARN, that it left some. The runner
-   ends it (a streaming task, when the runner gives up on it), or the interaction timeout does (a parked one), and a restart
-   does when neither can (a Binding that left the config makes the timeout's cancel fail for ever).
+   ends it (a streaming task, when the runner gives up on it), or the interaction timeout does (a parked one; for a Binding that left
+   the config, without asking the agent, once the pause's timeout and `5m` have passed), and a restart does when neither can.
 
 1. asks the task's agent to cancel it. This is a courtesy and never stops the sweep: the call is bounded (10 seconds); an agent
    that does not answer is not asked again in that tick, so a Binding whose agent is down costs one timeout and not one for each

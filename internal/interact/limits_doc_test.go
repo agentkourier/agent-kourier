@@ -42,6 +42,16 @@ func TestLimitsPage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWorker: %v", err)
 	}
+	// The broker builds the sweeper with no OrphanGrace.
+	sw, err := NewSweeper(SweepConfig{
+		Store: struct{ store.Interactions }{}, Sessions: struct{ SessionReader }{}, Lookup: struct{ Lookup }{}, Session: struct{ Session }{}, Abandoner: struct{ Abandoner }{},
+		Updaters: chattest.Same[Updater](struct{ Updater }{}), Outbox: struct{ Enqueuer }{}, Auditor: struct{ Auditor }{}, Presses: struct{ PressQueue }{}, Reopened: NewReopened(nil),
+		OnTimeout: func(string) {}, OnApprovalOutcome: func(string, Outcome) {},
+	})
+	if err != nil {
+		t.Fatalf("NewSweeper: %v", err)
+	}
+	limitsdoc.Duration(t, "orphanGrace", sw.cfg.OrphanGrace)
 	limitsdoc.Duration(t, "pressGiveUp", w.cfg.GiveUpAfter)
 	limitsdoc.Duration(t, "pressAuthz", PressAuthzTimeout)
 }

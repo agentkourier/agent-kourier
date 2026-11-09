@@ -243,7 +243,9 @@ Mend it by writing valid tokens into the Secret.
 - **The platform stops serving the team.** It takes the namespace off `config.connectionNamespaces`. The broker reads the
   list at start, so the upgrade restarts it; it records the connections it serves in its store, and after the restart it
   writes `ConnectionNotServed` once on the Bindings that the connection admits. Their sessions are kept, and the
-  posts waiting for the connection stay in the outbox. An interaction pending on one of their threads usually stays pending until the connection is served again, because ending it needs the Binding; one whose thread's session no longer records its task is the exception, and the sweep ends it as timed out.
+  posts waiting for the connection stay in the outbox. An interaction pending on one of their threads cannot be ended through the Binding, which the broker no longer has, so the sweep ends it
+  without a word in the thread once its timeout has passed and `5m` more ([Limits](../reference/limits.md#what-a-pause-may-ask)): the runner parked on it lets go, the task is cleared from the session, and the interaction is audited as `orphaned`.
+  The agent's task is not cancelled: it stays input-required at the agent until the agent expires it.
 - **Rolling the release back.** Do not roll back to a release before 0.3.0 while team connections are served. The outbox, the
   interactions and the button presses of 0.3.0 record the connection they belong to. 0.2.1 has one chat platform, and read from its
   code (not run) it does not filter by connection in two places that matter:
@@ -264,14 +266,14 @@ Mend it by writing valid tokens into the Secret.
   1. Let the team's pending interactions end, answered or timed out, while its Bindings still exist. A pending interaction ends at its
      deadline: 30 minutes by default, and a Binding may set up to 7 days (`interactions.timeout`,
      [Limits](../reference/limits.md#write-a-binding-an-agentbackend-or-a-chatconnection)). The broker has no switch that stops new
-     ones, so ask the team to start none.
+     ones, so ask the team to start none. Ending it while the Bindings exist cancels a question's task at the agent, or denies an approval's tools; ending it after they are gone leaves the agent's task as it is.
   2. Delete the team's Bindings.
   3. Check again for pending interactions. `agentkourier_interactions_pending` has no `connection` label: if it is 0, none is pending
      on any connection; if not, count the team's in the store (the table `interactions`, with `state = 'pending'` and
-     `connection = 'team-a/team-a-slack'`). An interaction left pending after the Bindings are gone usually stays pending: the sweep needs the
-     Binding's backend to end the pause and never gives that step up, and session retention deletes only decided interactions. Waiting does
-     not end it. The exception is an interaction whose thread's session no longer records its task: the sweep edits the prompt, queues the
-     notice and ends the interaction as timed out. Its risk after the rollback is the one in the list above, and you have to accept it or keep the Bindings until it ends.
+     `connection = 'team-a/team-a-slack'`). An interaction left pending after the Bindings are gone is ended by this release's sweep, without a
+     word in the thread, once its timeout has passed and `5m` more, counted from the first sweep that finds the Binding missing (a restart or a takeover starts the count again, and
+     the sweep is every 10 seconds). Wait for that and check again: the broker you roll back to would meet it otherwise. The agent's task is not cancelled, since the
+     Binding that would call the agent is gone; it stays input-required at the agent until the agent expires it.
   4. Wait until `agentkourier_outbox_pending{connection="team-a/team-a-slack"}` is 0 on the leader.
 
   Then take the list off the values in the same change as the rollback: the chart of 0.2.1 refuses a `config` key it does not have,
