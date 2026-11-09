@@ -87,9 +87,11 @@ var probedTypes = []bindingcheck.ConditionType{bindingcheck.BackendReachable, bi
 // acceptedReasonOrder is the order in which the reasons of the Rejections of one Binding give way to one: the first of them that
 // the Binding has is its Accepted reason, and the messages of all follow in the same order. It is the order of the spec's row for
 // the condition, and puts what is wrong with the object itself before what is wrong with the objects it names, and the
-// channel, which a Binding can lose only if it resolved, last. ConnectionNotServed is the writer's own (it comes from the connections
-// that the report lists as left out, not from a Rejection), and no Binding has it with another reason, since a Rejection of the
-// Binding says more.
+// channel, which a Binding can lose only if it resolved, last. ConnectionNotServed is the writer's own: it comes from the connections that
+// the report lists as left out or that the broker stopped serving, which have no Rejection of the Binding, and from the overlay of the refused
+// second connections (refusals.overlay), which adds it to a Binding that the Snapshot serves and so may already have a Rejection of the source.
+// It is ranked after what is wrong with the Binding's own spec, backend and connection, so that those say more: such a Binding says the first
+// of its reasons, and notServedCount counts it only when ConnectionNotServed is that one.
 var acceptedReasonOrder = []config.RejectionReason{
 	config.ReasonInvalidSpec, config.ReasonBackendNotFound, config.ReasonBackendRejected, config.ReasonConnectionNotFound,
 	config.ReasonConnectionRejected, config.ReasonConnectionNotServed, config.ReasonNamespaceNotAllowed, config.ReasonAgentNamespaceNotAllowed,

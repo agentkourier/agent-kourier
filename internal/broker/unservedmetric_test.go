@@ -123,6 +123,36 @@ func TestABindingWithAMoreSpecificRejectionIsNotCountedAsUnserved(t *testing.T) 
 	wantCount(t, m, "the Binding says ConnectionRejected", "0")
 }
 
+// A Binding that the source serves from an older generation, because its newest is invalid, is in the Snapshot, so a refused connection's overlay
+// adds ConnectionNotServed to the InvalidSpec the source gave it. The status says InvalidSpec (it comes first in acceptedReasonOrder), so the
+// Binding counts there, in the source's series, and not as ConnectionNotServed.
+func TestAServedFromAnOlderGenerationBindingOfARefusedConnectionIsCountedByItsStatusReason(t *testing.T) {
+	m := mustMetrics(t, nil)
+	c := newStatusCluster(t, storedBinding(sreAlerts, 1), storedBinding(teamBind, 2))
+	refused := &refusals{}
+	var source config.Report // what the source reports, which feeds the metric as BootstrapOptions.OnReport does
+	rig := newStatusRigWith(t, c, nil, func(cfg *statusConfig) {
+		raw := cfg.Report
+		cfg.Report = func() config.Report { source = raw(); return refused.overlay(source) }
+		cfg.OnUnserved = m.UnservedBindings
+	})
+	refused.changed = rig.w.notify
+	sr := &servedRig{statusRig: rig, record: &recordedServed{}}
+	sr.serving(t, bothServed())
+	sr.reject(config.Rejection{Namespace: "team-a", Name: "on-a", Reason: config.ReasonInvalidSpec, Generation: 2, Served: 1, Message: "spec.chat.channel: is invalid"})
+	refused.set(map[string]string{teamConn: refusedMessage})
+	sr.reconcile()
+	m.ConfigReport(source)
+
+	if a := c.stored(t, teamBind)["Accepted"]; a.Reason != "InvalidSpec" {
+		t.Errorf("Accepted = %+v; want InvalidSpec, which comes before ConnectionNotServed", a)
+	}
+	wantCount(t, m, "the Binding says InvalidSpec", "0")
+	if got := gauges(t, m, "agentkourier_config_binding_rejections"); !slices.Contains(got, "{reason=InvalidSpec} 1") {
+		t.Errorf("rejections = %v; want {reason=InvalidSpec} 1", got)
+	}
+}
+
 // The series is there from the start with the other reasons', is not set by a report of a source (a report holds no such reason), and on the
 // files route, which has no status writer, never moves from 0.
 func TestTheNotServedSeriesStartsAtZeroAndIsNotTheReportsToSet(t *testing.T) {
