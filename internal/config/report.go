@@ -101,7 +101,7 @@ const UnservedStopped UnservedReason = "stopped"
 
 // ReasonConnectionNotServed is the reason of an Accepted condition of a Binding whose ChatConnection exists and is not served by this
 // broker, because of an UnservedConnection. It is no Rejection of a source: the Bindings of such a connection are in no Rejection, the
-// status writer composes it, and it has no place among the reasons that the metric counts.
+// status writer composes it, and counts it for the metric itself (broker.Metrics.UnservedBindings), so a metric fed this Report never holds it.
 const ReasonConnectionNotServed RejectionReason = "ConnectionNotServed"
 
 // UnservedConnection says that a ChatConnection of a namespace the broker reads is not served, and why. It is not an Invalid: the

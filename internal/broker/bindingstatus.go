@@ -170,6 +170,9 @@ type statusConfig struct {
 	// OnWrite is told the result of each write, "written", "put_back" (the status was written again to the words it already had)
 	// or "failed", for a metric. Nil means none.
 	OnWrite func(result string)
+	// OnUnserved, when set, is told at each pass that moves how many Bindings the writer says ConnectionNotServed to: those of the connections the
+	// report lists as left out or the broker stopped serving, and those the overlay of the report refuses. Nil means none.
+	OnUnserved func(n int)
 	// Served, when set, is the leader's record of the chat connections it serves (servedRecord), which the writer updates at each pass and
 	// from which it tells the Bindings of the connections the broker served before and does not now. Without it the writer tells only
 	// the Bindings of the connections that the report lists as left out.
@@ -365,6 +368,9 @@ func (w *statusWriter) reconcile(ctx context.Context) {
 			delete(unserved, key)
 		}
 	}
+	if w.cfg.OnUnserved != nil { // before the cache is read: the count is of what the report and the record say, whether or not a write follows
+		w.cfg.OnUnserved(notServedCount(rejections, unserved))
+	}
 	keys := map[string]bool{}
 	for key := range rejections {
 		keys[key] = true
@@ -481,6 +487,19 @@ func (w *statusWriter) unservedBindings(ctx context.Context, rep config.Report) 
 		}
 	}
 	return out
+}
+
+// notServedCount is the number of Bindings whose Accepted reason is ConnectionNotServed: those of unserved (the caller left out any that has a Rejection), and
+// those whose Rejections (a refused second connection's, added by refusals.overlay) give it by acceptedReasonOrder. A Binding that another
+// reason comes before is counted under that reason by the metric of the source's report, as its status says that reason.
+func notServedCount(rejections map[string][]config.Rejection, unserved map[string]config.Rejection) int {
+	n := len(unserved)
+	for _, rs := range rejections {
+		if acceptedCondition(rs, 0).Reason == string(config.ReasonConnectionNotServed) {
+			n++
+		}
+	}
+	return n
 }
 
 // write applies want as the status of the Binding key and records what came of it. The call is cut at the timeout, so that one
