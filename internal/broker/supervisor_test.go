@@ -1013,6 +1013,14 @@ func TestSupervisorDoesNotHoldAnAppForAnAnswerThatDoesNotPass(t *testing.T) {
 			if got := w.sup.refusals.names(); len(got) != 0 {
 				t.Errorf("refused = %v; want none", got)
 			}
+			// Nor does the holder come back at a look that cannot read its Secret: it holds no app, and is not refused, so team-b is not touched.
+			w.reconcile(unready("team-a/slack", 1, 1), b)
+			if got := w.running(); !slices.Equal(got, []string{ownName, "team-b/slack"}) {
+				t.Errorf("running = %v with team-a's Secret unreadable; want team-b still serving", got)
+			}
+			if got := w.sup.refusals.names(); len(got) != 0 {
+				t.Errorf("refused = %v with team-a's Secret unreadable; want none", got)
+			}
 
 			// A refused connection whose tokens change to such an answer is not kept refused either.
 			w.reconcile(unready("team-a/slack", 1, 1), b)
@@ -1028,6 +1036,35 @@ func TestSupervisorDoesNotHoldAnAppForAnAnswerThatDoesNotPass(t *testing.T) {
 			if got := w.sup.refusals.names(); len(got) != 0 {
 				t.Errorf("refused = %v; want the refusal of a connection whose new tokens give an answer that does not pass lifted", got)
 			}
+			w.reconcile(a3, unready("team-b/slack", 1, 2)) // and it does not come back at a look that cannot read the Secret
+			if got := w.sup.refusals.names(); len(got) != 0 {
+				t.Errorf("refused = %v with team-b's Secret unreadable; want none", got)
+			}
 		})
+	}
+}
+
+// A pass that is cancelled while it asks whose bot the tokens are leaves the claims and the refusals as they were: the failure is the
+// cancellation's, and not an answer about the tokens, so nothing is cleared and the younger connection is not served for the pass.
+func TestSupervisorLeavesTheRefusalsAloneWhenThePassIsCancelledDuringALookup(t *testing.T) {
+	w := newSupWorld(t)
+	app := appIdentity{App: "AAPP", Team: "T1", User: "UAPP", Bot: "BAPP"}
+	w.ids["tok-a1"], w.ids["tok-b"] = app, app
+	a1, b := team("team-a/slack", 1, "tok-a1", 1), team("team-b/slack", 1, "tok-b", 2)
+	w.reconcile(a1, b)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	identify := w.sup.identify
+	w.sup.identify = func(c context.Context, conn Connection) (appIdentity, error) {
+		if conn.Credentials["botToken"].Reveal() == "tok-a2" {
+			cancel()
+			return appIdentity{}, errors.New(`bots.info: Slack answered "missing_scope"`) // as an answer that does not pass would be
+		}
+		return identify(c, conn)
+	}
+	w.sup.reconcile(ctx, []TeamConnection{team("team-a/slack", 1, "tok-a2", 1), b})
+	if got := w.sup.refusals.names(); !slices.Equal(got, []string{"team-b/slack"}) {
+		t.Errorf("refused = %v after a pass cancelled during team-a's lookup; want team-b still refused", got)
 	}
 }

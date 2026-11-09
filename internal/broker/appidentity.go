@@ -32,7 +32,7 @@ func (a appIdentity) known() bool { return a.App != "" }
 var errCredentialsRejected = errors.New("the platform rejected the credentials")
 
 // errIdentityMayPass is wrapped by the error of an identity call that failed in a way that may pass when it is asked again: it timed out, the
-// request failed, Slack answered with a status other than 200 (a 5xx, or a 429), or with the code "ratelimited". Any other failure (a scope the
+// request failed, Slack answered with a status other than 200 (a 5xx, or a 429), or with one of transientCodes. Any other failure (a scope the
 // app lacks, a token that is no bot's, an answer with no app) is given again for the same token, so the supervisor does not wait on it.
 var errIdentityMayPass = errors.New("the identity call may succeed when it is asked again")
 
@@ -47,6 +47,10 @@ func (e mayPassError) Unwrap() error { return e.error }
 
 // rejectedCodes are the codes of Slack's that mean the token is no good, as opposed to a call that failed for a reason that may pass.
 var rejectedCodes = []string{"invalid_auth", "token_revoked", "token_expired", "account_inactive", "not_authed"}
+
+// transientCodes are the codes of Slack's that say the service could not answer now, whatever the token: the call may succeed when it is asked
+// again (errIdentityMayPass). Their meanings are taken from Slack's API documentation and were not checked against Slack here.
+var transientCodes = []string{"ratelimited", "internal_error", "service_unavailable", "request_timeout", "fatal_error"}
 
 // identityOf asks the platform whose bot conn's token is, each call within identifyTimeout. RunConfig.identify replaces the call (a seam for this
 // package's tests); when a test has replaced the Slack client (newSlack) and gives no identify, the identity is not asked, since the
@@ -108,7 +112,7 @@ func identifyError(method string, err error) error {
 			return &credentialsRejectedError{method: method, code: resp.Err}
 		}
 		e := fmt.Errorf("%s: Slack answered %q", method, resp.Err)
-		if resp.Err == "ratelimited" {
+		if slices.Contains(transientCodes, resp.Err) {
 			return mayPassError{e}
 		}
 		return e

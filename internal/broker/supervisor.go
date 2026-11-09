@@ -228,6 +228,9 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 		}
 		if !st.asked {
 			id, err := s.identify(ctx, t.Connection)
+			if err != nil && ctx.Err() != nil {
+				return // cancelled during the lookup: the failure says nothing of the tokens, so no claim and no refusal is cleared or set
+			}
 			switch {
 			case err == nil:
 				st.id, st.asked = id, true
