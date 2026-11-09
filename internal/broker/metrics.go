@@ -99,13 +99,14 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 		heldObjects: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_config_held_objects",
 			Help: "Objects of the custom resource config source that were deleted and that the broker holds at their last good generation, by kind, while its own ChatConnection is deleted and held: the connection, the Bindings of it that are gone, and the AgentBackends that they and the Bindings of it that are still there use and that are gone. A held Binding that resolution leaves out, for any reason (it lost its channel, its backend is gone, or its backend no longer allows it), is held and not served. 0 when nothing is held, and always while the config is read from files."}, []string{"kind"}),
 		bindingRej: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_config_binding_rejections",
-			Help: "Bindings of the custom resource config source that are not accepted as written, by the reason of their Accepted condition: InvalidSpec, BackendNotFound, BackendRejected, ConnectionNotFound, ConnectionRejected, NamespaceNotAllowed, AgentNamespaceNotAllowed or ChannelConflict. A Binding that is served from an older generation counts too. 0 while the config is read from files."}, []string{"reason"}),
+			Help: "Bindings of the custom resource config source that are not accepted as written, by the reason of their Accepted condition: InvalidSpec, BackendNotFound, BackendRejected, ConnectionNotFound, ConnectionRejected, ConnectionNotServed, NamespaceNotAllowed, AgentNamespaceNotAllowed or ChannelConflict. A Binding that is served from an older generation counts too. ConnectionNotServed is the leader's alone (a standby says 0): it counts the Bindings whose status the leader writes that reason to. 0 while the config is read from files."}, []string{"reason"}),
 		statusWrites: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_binding_status_writes_total",
 			Help: "Writes of a Binding's status by the leader, by result: written, put_back (written again to the words it already had, because the status had been changed: a person's edit, or another writer), or failed (the API server refused or could not be reached; it is tried again). The series exist only once the leader of a broker that reads the custom resources has tried a write."}, []string{"result"}),
 		crdSchema: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_crd_schema_state",
 			Help: "1 for what the broker found when it compared each CRD's schema hash with the one it was built with, at start and every minute, and 0 for the other states, by CRD and state (match, mismatch, unannotated or unknown). Only a broker that reads custom resources has these series; with files there are none."}, []string{"crd", "state"}),
 	}
 	m.ConfigReport(config.Report{})
+	m.UnservedBindings(0)
 	staleGauge := prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "agentkourier_config_stale",
 		Help: "1 before the first config load, and while the running config may lag its source: the latest reload failed, or the source says it cannot be reached."}, func() float64 {
 		if stale != nil && stale() {
@@ -165,6 +166,14 @@ func (m *Metrics) ConfigReport(r config.Report) {
 		m.bindingRej.WithLabelValues(string(reason)).Set(float64(reasons[string(reason)]))
 	}
 	m.bindingRej.WithLabelValues(otherLabel).Set(float64(reasons[otherLabel]))
+}
+
+// UnservedBindings sets the series of agentkourier_config_binding_rejections for ConnectionNotServed to n: statusConfig.OnUnserved. It is
+// the number of Bindings whose Accepted condition the status writer says ConnectionNotServed, which no source's report holds (the
+// writer composes it from the connections left out and the second connections of one Slack app), so ConfigReport leaves the series
+// alone. Only the leader runs the writer, so only the leader's series is ever above 0.
+func (m *Metrics) UnservedBindings(n int) {
+	m.bindingRej.WithLabelValues(string(config.ReasonConnectionNotServed)).Set(float64(n))
 }
 
 // StatusWrite counts a write of a Binding's status: statusConfig.OnWrite. A result outside the three the writer reports is
