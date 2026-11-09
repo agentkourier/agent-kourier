@@ -7,7 +7,7 @@ What changed in each release, newest first, and what you must do about it. The s
 
 A team can now bring its own Slack app: the platform team lists the team's namespace, and the broker serves the ChatConnection the team
 makes there beside its own. The broker serves nothing new until that list admits a namespace; the migration and the metric labels below apply to every install. Read [Let a team bring its own Slack app](how-to/team-slack-app.md),
-and the warning on rolling back below, before you set it. An AgentBackend on `dialect: kagent-v1` can also limit which agent namespaces its Bindings may name; nothing changes for one that
+and the warning on rolling back below, before you set it. [Upgrade to the release that serves team connections](how-to/upgrade.md#upgrade-to-the-release-that-serves-team-connections) has the checklist for every install: the CRDs, the queries and log alerts to change, what changes with the list empty, and the rollback. An AgentBackend on `dialect: kagent-v1` can also limit which agent namespaces its Bindings may name; nothing changes for one that
 does not set the new field, and [the upgrade section](how-to/upgrade.md#upgrade-to-the-release-that-limits-the-agents-a-binding-may-name) says what to read before you set it.
 
 ### Team-owned chat connections
@@ -27,15 +27,18 @@ does not set the new field, and [the upgrade section](how-to/upgrade.md#upgrade-
   `agentkourier_chat_connected` is 0 for it, its Bindings read `ChannelJoined` `False` with `ChatCredentialsRejected`, and it starts again when its Secret or its
   ChatConnection changes. A changed Secret restarts a team connection by itself, at the next of the broker's looks, which come every 5 seconds. The broker's own connection is as before: a rejected token exits the process with code 1, and new tokens apply at a restart.
 - **New `Accepted` reason `ConnectionNotServed`.** A Binding on a ChatConnection that exists and that this broker does not serve says so, once: the connection's namespace was taken off the list, it is past the 16, or it is a second connection of a Slack app.
-  It is written once and not put back, so that a broker that does serve the connection has the last word. `ChatUnavailable` on `ChannelJoined` and `ApproversReadable` now also covers a
+  It is written once and not put back, so that a broker that does serve the connection has the last word. The leader counts these Bindings in the new value `ConnectionNotServed` of the `reason` label of `agentkourier_config_binding_rejections`, so that
+  `sum(agentkourier_config_binding_rejections) > 0` includes them; a standby reads 0 for it. `ChatUnavailable` on `ChannelJoined` and `ApproversReadable` now also covers a
   connection that is not running, with no call made to Slack ([Binding status](reference/binding-status.md)).
 - **A Slack app is served once.** The broker asks Slack (`auth.test`, then `bots.info`) which app a connection's bot belongs to, once per connection and again when its ChatConnection or Secret changes, and serves
   the older of two connections of one app. One app installed in two workspaces counts once. The call is made only when the broker serves a team connection, and the bot's app needs `users:read` for it (Slack's documentation; not verified here), which the manifest in [Configure Slack](how-to/configure-slack.md#what-the-app-is-allowed-to-do) has.
   A message that the bot of another connection of the same broker posts starts nothing unless a Binding's trigger names that bot, so two of its apps in one channel do not answer each other in a loop.
 - **Two brokers that admit one namespace** both serve its connections and both open Socket Mode on its apps, so Slack gives each event to one of them and the other misses it. Give each broker its own connections and its own list
   ([Troubleshoot](how-to/troubleshoot.md#the-status-of-a-binding-keeps-changing)).
-- **A database migration (0029).** The outbox and the button presses record the connection they belong to, and the broker records the connections it serves. The migration only adds columns and a table. Rows written before it, or by an
+- **A database migration (0029).** The outbox and the button presses record the connection they belong to, and the broker records the connections it serves. The migration adds columns and a table, and replaces the index on the outbox's channel and thread with one that starts at the connection. Rows written before it, or by an
   older release after a rollback, belong to the own connection: the leader gives them to it when it starts.
+  A rollback does not undo the index: 0.2.1 deletes the settled outbox rows of an expired session by channel and thread (`channel = ... AND thread_ts = ...`), which an index that starts at the connection does not serve, so on SQLite each
+  of those deletions reads the whole `outbox` table until the broker is upgraded again. It costs time, not data (Postgres was not measured).
 - **Do not roll back past 0.3.0 while team connections are served.** The outbox of 0.2.1 posts every unposted row through its one chat platform, so a post waiting for a team's connection would go out through the platform's app,
   and its sweep can edit a team's prompt and post a timeout notice from the platform's app for an interaction whose session no longer records the task. While the connections are still served: let the team's pending interactions end
   (a pause ends at its deadline, up to 7 days), delete their Bindings, check again that none is pending (one left after the delete is ended by the sweep 5 minutes after its deadline, without cancelling the agent's task), wait until `agentkourier_outbox_pending` is 0 for each, then take

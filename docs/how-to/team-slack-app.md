@@ -118,7 +118,7 @@ the pods. It adds no rule to the ClusterRole, which already lists and watches Ch
 The list is the platform team's consent: the broker holds a chat connection on the tokens in a namespace only if the
 namespace is on it. At most 16 connections are served in all, the broker's own included, and nothing changes that
 number: see [Limits](../reference/limits.md#run-the-broker). The own connection counts first and the others oldest first, so a
-connection created after the sixteenth place is taken is left out, and its Bindings say `ConnectionNotServed`.
+connection created after the sixteenth place is taken is left out, and its Bindings say `ConnectionNotServed`, which the leader counts in `agentkourier_config_binding_rejections{reason="ConnectionNotServed"}`.
 
 **If the team's Role does not exist,** the platform team names the Secret in the chart's values, and the chart renders the Role
 and RoleBinding itself in `team-a`, as `<fullname>-secrets`:
