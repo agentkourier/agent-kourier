@@ -5,6 +5,10 @@ import (
 	"testing"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/session"
@@ -35,13 +39,52 @@ func emptyConfig(t *testing.T) *config.Snapshot {
 	return snap
 }
 
+// connectionsConfig is the snapshot of a config in which the Binding sre/oncall is on the ChatConnection bindingOn, and conns are the
+// ChatConnections ("namespace/name") it has. bindingOn is one of them. Every connection admits the namespace sre.
+func connectionsConfig(t *testing.T, url, bindingOn string, conns ...string) *config.Snapshot {
+	t.Helper()
+	set := &config.Set{AgentBackends: []v1alpha1.AgentBackend{{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "platform", Name: "kagent"},
+		Spec:       v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectKagentV1, URL: url, AllowedNamespaces: []string{"sre"}},
+	}}}
+	for _, c := range conns {
+		ns, name, _ := strings.Cut(c, "/")
+		set.ChatConnections = append(set.ChatConnections, v1alpha1.ChatConnection{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+			Spec:       v1alpha1.ChatConnectionSpec{Platform: "slack", CredentialsSecretRef: v1alpha1.SecretRef{Name: "slack"}, AllowedNamespaces: []string{"sre"}},
+		})
+	}
+	ns, name, _ := strings.Cut(bindingOn, "/")
+	set.Bindings = []v1alpha1.Binding{{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "sre", Name: "oncall"},
+		Spec: v1alpha1.BindingSpec{
+			Agent:    v1alpha1.AgentRef{BackendRef: v1alpha1.ObjectRef{Namespace: "platform", Name: "kagent"}, Name: "test-agent", Namespace: "kagent"},
+			Identity: v1alpha1.Identity{TokenSecretRef: &v1alpha1.SecretKeyRef{Name: "creds"}},
+			Chat:     v1alpha1.ChatBinding{ConnectionRef: v1alpha1.ObjectRef{Namespace: ns, Name: name}, Channel: "C1"},
+			Session:  v1alpha1.Session{ThreadTTL: metav1.Duration{Duration: 36 * time.Hour}},
+		},
+	}}
+	snap, err := config.Resolve(t.Context(), set, keys{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snap
+}
+
+// setConfig makes the connections and the Binding's connection what the leader's Reloader reports from now on.
+func (r *orphanRig) setConfig(t *testing.T, bindingOn string, conns ...string) {
+	t.Helper()
+	r.snaps.p.Store(connectionsConfig(t, r.url, bindingOn, conns...))
+}
+
 func newOrphanRig(t *testing.T, conns ...string) *orphanRig {
 	t.Helper()
 	f := newFixture(t)
+	f.snaps.p.Store(connectionsConfig(t, f.url, downOwn, downOwn, downTeam))
 	d, ix, mgr, plat := downParts(t, f.b)
 	r := &orphanRig{fixture: f, d: d, ix: ix, mgr: mgr, clock: time.Now(), refused: &refusals{}, plat: plat}
 	d.now = func() time.Time { return r.clock }
-	d.served = r.refused.served
+	d.served = connectionServed(func() config.Report { return config.Report{Snapshot: f.snaps.Current()} }, downOwn, r.refused)
 	r.d = d
 	due := r.clock.Add(-time.Hour)
 	for _, conn := range conns {
@@ -249,5 +292,87 @@ func TestTheLeaderTellsTheSweepWhichConnectionsAreRefused(t *testing.T) {
 	r.set(nil)
 	if !r.served("team-a/slack") {
 		t.Error("a connection that is not refused any more is not served")
+	}
+}
+
+// TestAPausesConnectionThatIsDeletedAfterTheBindingMovedOffItIsEnded: a team points its Binding at the platform connection, then deletes its own
+// ChatConnection, while a question waits on a thread of that connection. The Binding is still in the config, and a connection that is in the
+// config but does not run (its credentials were rejected) keeps its pauses for as long as it takes; once the connection is gone from the config
+// nothing can run it again, so the pause is ended after the grace, with one request to the agent through the Binding, and nothing posted.
+func TestAPausesConnectionThatIsDeletedAfterTheBindingMovedOffItIsEnded(t *testing.T) {
+	r := newOrphanRig(t, downTeam)
+	r.plat.stopped = map[string]error{downTeam: &connectionStopped{conn: downTeam, rejected: true, code: "invalid_auth"}}
+	r.setConfig(t, downOwn, downOwn, downTeam) // the Binding moved to the platform connection; the team's still exists
+	for range 3 {
+		r.sweep(t)
+		r.clock = r.clock.Add(time.Hour)
+	}
+	if got := r.state(t, "ix-team"); got != store.InteractionPending {
+		t.Fatalf("the interaction is %s while its connection is in the config and down for rejected credentials; want it pending for as long as it takes", got)
+	}
+
+	r.setConfig(t, downOwn, downOwn) // the team deletes its ChatConnection
+	r.sweep(t)
+	if got := r.state(t, "ix-team"); got != store.InteractionPending {
+		t.Fatalf("the interaction is %s at the first sight of the connection gone; want it pending: the grace covers a reload", got)
+	}
+	r.clock = r.clock.Add(5*time.Minute - time.Second)
+	r.sweep(t)
+	if got := r.state(t, "ix-team"); got != store.InteractionPending {
+		t.Fatalf("the interaction is %s inside the grace; want it pending", got)
+	}
+	r.clock = r.clock.Add(time.Second)
+	r.sweep(t)
+	r.requireOrphaned(t, "ix-team", downTeam)
+	if got := r.lastAuth(); got == "" {
+		t.Error("the agent was not asked to cancel the task, though the Binding is in the config to ask through")
+	}
+}
+
+// TestAPausesConnectionThatRunsKeepsItsTimeoutWhenTheBindingMovedOffIt: the Binding is pointed at another connection while the first still
+// runs. The pause's thread is on the first, whose platform edits the prompt and posts the notice, and the Binding still reaches the agent, so the
+// timeout ends it as it ends any: it is not an orphan's, which would leave the prompt with its buttons.
+func TestAPausesConnectionThatRunsKeepsItsTimeoutWhenTheBindingMovedOffIt(t *testing.T) {
+	r := newOrphanRig(t, downTeam)
+	r.plat.running[downTeam] = builtPlatform{Platform: chattest.NewFake()}
+	r.setConfig(t, downOwn, downOwn, downTeam)
+	r.sweep(t)
+	r.sweep(t)
+	if got := r.state(t, "ix-team"); got != store.InteractionTimedOut {
+		t.Errorf("the interaction is %s; want it timed out at once through the Binding", got)
+	}
+	got := strings.Join(samples(t, r.d.metrics), "\n")
+	if strings.Contains(got, "outcome=orphaned") || !strings.Contains(got, "agentkourier_interaction_timeouts_total{} 1") {
+		t.Errorf("the end was counted as an orphan's, not a timeout:\n%s", got)
+	}
+}
+
+// TestConnectionServedIsWhatTheConfigAndTheSupervisorSay: served is the own connection; a connection of the Snapshot that is not refused; nothing
+// that is not in the Snapshot, whatever its Bindings say; and everything before the first load.
+func TestConnectionServedIsWhatTheConfigAndTheSupervisorSay(t *testing.T) {
+	url := "http://agent.test"
+	snap := connectionsConfig(t, url, "ns/b", "ns/b", "ns/c")
+	var current *config.Snapshot
+	refused := &refusals{}
+	served := connectionServed(func() config.Report { return config.Report{Snapshot: current} }, "ns/own", refused)
+	for _, c := range []struct {
+		name, conn string
+		snap       *config.Snapshot
+		refuse     map[string]string
+		want       bool
+	}{
+		{"before the first load", "ns/b", nil, nil, true},
+		{"in the config", "ns/b", snap, nil, true},
+		{"not in the config", "ns/gone", snap, nil, false},
+		{"refused", "ns/c", snap, map[string]string{"ns/c": refusedMessage}, false},
+		{"the own, whatever the config has", "ns/own", snap, nil, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			current = c.snap
+			refused.set(c.refuse)
+			if got := served(c.conn); got != c.want {
+				t.Errorf("served(%q) = %v; want %v", c.conn, got, c.want)
+			}
+		})
 	}
 }

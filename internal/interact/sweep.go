@@ -115,8 +115,10 @@ type SweepConfig struct {
 	// deadline and not yet decided is left, because deciding a press can take longer than the
 	// grace, and cancelling the task under it would drop an answer that came in time.
 	Presses PressQueue
-	// Served says whether this broker serves the chat connection named conn ("namespace/name"), as opposed to its not running for now (it has
-	// not started, or its credentials were rejected: Updaters answers that with chat.ErrConnectionDown). An interaction of a connection that is
+	// Served says whether this broker serves the chat connection named conn ("namespace/name"): the config has it and it is not refused (a second
+	// connection of a Slack app another connection uses). A connection that is served and not running for now (it has not started, or its
+	// credentials were rejected: Updaters answers that with chat.ErrConnectionDown) is not the gone one: its interactions wait for it. A connection
+	// that is not in the config (deleted, invalid with no good generation, outside the admission list, or past the 16) is not served, however its Binding is, since it cannot run while it stays so. An interaction of a connection that is
 	// not served is an orphan's even though its Binding is in the config. Nil: every connection is served.
 	Served func(conn string) bool
 	// Reopened tells the Sweeper of the denials the session took and then failed to deliver, so that their tasks are cancelled.
@@ -344,8 +346,9 @@ const (
 	// taken away or is not among those this broker serves, or it is rejected with no good generation). Session.Cancel needs its backend and
 	// fails, at every sweep, for as long as it is missing.
 	bindingGone
-	// connectionNotServed: the Binding is in the config, and this broker does not serve its chat connection (a second connection of a Slack
-	// app another connection uses). Nothing posts for the connection and nothing answers for it, but the agent can be asked.
+	// connectionNotServed: the Binding is in the config, and this broker does not serve the chat connection of the interaction's thread (a second
+	// connection of a Slack app another connection uses, or one that is not in the config: the Binding was pointed at another connection and this
+	// one deleted, say). Nothing posts for the connection and nothing answers for it, but the agent can be asked.
 	connectionNotServed
 )
 
