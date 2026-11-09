@@ -125,6 +125,14 @@ type runtimeTable struct {
 	// are being asked about, and the turns that hold its old platform still post as its old bot (until they finish, even if the new tokens turn
 	// out to be another app's, whose bot then replaces the old). The supervisor writes it (identify, forgetBot); the bot guard of every
 	// connection reads it (botOwner, botUserOwner).
+	//
+	// The invariant, after every look of the supervisor: a team connection has its bot here while it is served with an identity that is known
+	// (the entry's id), whether or not it runs; the own connection has its own once that identity is known (a look returns before then).
+	// A connection that is refused, or that is not in the config, has none. One whose new tokens fail the lookup keeps the bot of its last
+	// known identity, whether Slack rejected them, did not answer, or answered for good (a missing scope, a token that belongs to no bot): the
+	// old runtime and the turns that hold its platform may still post as that bot, and a post of the broker's own bot that the guard did not
+	// know would be the loop it exists to stop. A refusal that lifts writes the bot back, since the lookup that learned it is not asked again;
+	// a restart that carries its id on writes nothing, because a connection that is held was never forgotten.
 	bots map[string]appIdentity
 	// sealed is set by the shutdown when it halts the runtimes: a runtime added after it is halted as it is added, so that none runs on
 	// beyond the step that stops them.
