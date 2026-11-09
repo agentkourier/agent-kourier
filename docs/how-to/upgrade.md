@@ -838,8 +838,8 @@ Before you set the list:
 - **One broker for each namespace.** Two brokers that admit one namespace both open Socket Mode on its apps, and Slack hands each event to one of them
   ([Troubleshoot](troubleshoot.md#the-status-of-a-binding-keeps-changing)).
 - **Know how to see a Binding that is not served.** A connection that is past the 16, whose namespace was taken off the list after this broker served it, or that is a second connection of a Slack app the broker already serves has Bindings that say `Accepted` `False`
-  with `ConnectionNotServed`. The Bindings of a connection in a namespace that was never on the list get no status and no count. The leader counts them in `agentkourier_config_binding_rejections{reason="ConnectionNotServed"}` (a standby reads 0 for it, so sum over the replicas), which `sum(agentkourier_config_binding_rejections) > 0` includes
-  ([Metrics](../reference/metrics.md)); `kubectl get akbinding -A` shows which Bindings.
+  with `ConnectionNotServed`. The leader counts those Bindings in `agentkourier_config_binding_rejections{reason="ConnectionNotServed"}` (a standby reads 0 for it, so sum over the replicas), which `sum(agentkourier_config_binding_rejections) > 0` includes
+  ([Metrics](../reference/metrics.md)); `kubectl get akbinding -A` shows which Bindings. The Bindings of a connection in a namespace that was never on the list get no status and no count.
 - **Size for the connections.** Each further connection adds about 0.4 MiB; at 16, the most one broker serves, the container's memory charge was 29 MiB under load
   ([chart README](https://github.com/agentkourier/agent-kourier/tree/main/charts/agent-kourier#footprint)). The default request of 64 MiB covers it.
 
