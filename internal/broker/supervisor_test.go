@@ -1037,6 +1037,91 @@ func TestSupervisorDoesNotStopTheYoungerConnectionWhenARejectedHoldersSecretIsUn
 	}
 }
 
+// unreadableHolderWorld is a world in which team-a and team-b are served, each on its own app, and then team-a is given team-b's app (in another
+// workspace, so with another bot) while team-b's Secret cannot be read: the pass in which an older connection claims the app of a younger one that
+// holds it and cannot be asked. It returns team-a and team-b as they were before, and checks the pass.
+func unreadableHolderWorld(t *testing.T) (w *supWorld, a1, b1 TeamConnection) {
+	t.Helper()
+	w = newSupWorld(t)
+	w.ids["tok-a1"] = appIdentity{App: "AA", Team: "T1", User: "UA1", Bot: "BA1"}
+	w.ids["tok-b1"] = appIdentity{App: "AB", Team: "T1", User: "UB", Bot: "BB"}
+	w.ids["tok-a2"] = appIdentity{App: "AB", Team: "T2", User: "UA2", Bot: "BA2"}
+	a1, b1 = team("team-a/slack", 1, "tok-a1", 1), team("team-b/slack", 1, "tok-b1", 2)
+	w.reconcileChecked(a1, b1)
+	if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack", "team-b/slack"}) {
+		t.Fatalf("running = %v; want both served", got)
+	}
+
+	bRT := w.sup.teams["team-b/slack"].rt // the runtime the refusal stops, whose turns hold its platform
+	for pass := 1; pass <= 2; pass++ {    // and the next pass keeps it so
+		w.reconcileChecked(team("team-a/slack", 1, "tok-a2", 1), unready("team-b/slack", 1, 2))
+		if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack"}) {
+			t.Errorf("pass %d: running = %v; want the older connection alone on the app and the younger stopped", pass, got)
+		}
+		if got := w.sup.refusals.names(); !slices.Equal(got, []string{"team-b/slack"}) {
+			t.Errorf("pass %d: refused = %v; want the younger connection", pass, got)
+		}
+		w.mu.Lock()
+		gone := slices.Clone(w.gone)
+		w.mu.Unlock()
+		if !slices.Contains(gone, "team-b/slack") {
+			t.Errorf("pass %d: gone = %v; want team-b told its runtime stopped", pass, gone)
+		}
+		w.mu.Lock()
+		removed := slices.Clone(w.removed)
+		w.mu.Unlock()
+		if want := []string{"team-b/slack"}; !slices.Equal(removed, want) {
+			t.Errorf("pass %d: removed = %v; want team-b told once, when it was first refused", pass, removed)
+		}
+		if bRT.stopped() == nil { // the turns that hold the stopped platform fail fast: the connection is not served any more
+			t.Errorf("pass %d: the stopped runtime of team-b is not retired; want its life retired", pass)
+		}
+		if w.sup.lives["team-b/slack"] != nil {
+			t.Errorf("pass %d: team-b still has a life; want it forgotten once retired", pass)
+		}
+		w.wantBot("BB", "UB", "")               // the refused connection's bot is not in the table
+		w.wantBot("BA2", "UA2", "team-a/slack") // the older connection's is
+	}
+	return w, a1, b1
+}
+
+// A running connection whose Secret becomes unreadable holds its app until an older connection claims the app in the same pass (its Secret changed
+// to that app's tokens, say). The older is served and the younger refused and stopped, not left running beside it on the same Slack app for as
+// long as its Secret stays broken. The younger is served again once its Secret reads with another app.
+func TestSupervisorRefusesAnUnreadableHolderWhoseAppAnOlderConnectionClaims(t *testing.T) {
+	w, _, _ := unreadableHolderWorld(t)
+	w.ids["tok-b2"] = appIdentity{App: "ABB", Team: "T1", User: "UBB2", Bot: "BBB2"}
+	w.reconcileChecked(team("team-a/slack", 1, "tok-a2", 1), team("team-b/slack", 1, "tok-b2", 2))
+	if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack", "team-b/slack"}) {
+		t.Errorf("running = %v; want team-b served again", got)
+	}
+	if got := w.sup.refusals.names(); len(got) != 0 {
+		t.Errorf("refused = %v; want none", got)
+	}
+	w.wantBot("BBB2", "UBB2", "team-b/slack")
+}
+
+// The refused connection stays refused while its Secret cannot be read, even once the app is free, and is served again on the tokens it had once
+// the Secret reads.
+func TestSupervisorServesARefusedUnreadableHolderOnceItsSecretReadsAndItsAppIsFree(t *testing.T) {
+	w, a1, b1 := unreadableHolderWorld(t)
+	w.reconcileChecked(a1, unready("team-b/slack", 1, 2)) // team-a is back on its own app
+	if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack"}) {
+		t.Errorf("running = %v with the app free and team-b's Secret unreadable; want team-b not started", got)
+	}
+	if got := w.sup.refusals.names(); !slices.Equal(got, []string{"team-b/slack"}) {
+		t.Errorf("refused = %v; want team-b kept refused while its Secret cannot be read", got)
+	}
+	w.reconcileChecked(a1, b1)
+	if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack", "team-b/slack"}) {
+		t.Errorf("running = %v; want team-b served again", got)
+	}
+	if got := w.sup.refusals.names(); len(got) != 0 {
+		t.Errorf("refused = %v; want none", got)
+	}
+	w.wantBot("BB", "UB", "team-b/slack")
+}
+
 // An answer that stays the same until the Secret changes (a missing scope, a token with no bot) does not keep a holder holding its app: the
 // younger connection is served, for good, as it was before the holder's tokens changed. The same for a refused connection, which is not kept
 // refused.
@@ -1188,4 +1273,13 @@ func TestTheBotTableHoldsTheBotsOfTheServedConnectionsAfterEveryLook(t *testing.
 	w.reconcileChecked(a3, b2, c1, d)
 	w.reconcileChecked(a3, b2, d) // c leaves
 	w.reconcileChecked()          // all leave
+
+	w.ids["tok-e1"], w.ids["tok-f1"] = app("AE", "BE1"), app("AF", "BF1") // e and f serve an app each
+	e1, f1 := team("team-e/slack", 1, "tok-e1", 1), team("team-f/slack", 1, "tok-f1", 2)
+	w.reconcileChecked(e1, f1)
+	w.ids["tok-e2"] = app("AF", "BE2") // e is given f's app while f's Secret cannot be read: f is refused and stopped
+	w.reconcileChecked(team("team-e/slack", 1, "tok-e2", 1), unready("team-f/slack", 1, 2))
+	w.reconcileChecked(team("team-e/slack", 1, "tok-e2", 1), unready("team-f/slack", 1, 2))
+	w.reconcileChecked(e1, unready("team-f/slack", 1, 2)) // e leaves the app: f stays refused until its Secret reads
+	w.reconcileChecked(e1, f1)
 }

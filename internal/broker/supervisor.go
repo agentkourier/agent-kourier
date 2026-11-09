@@ -92,8 +92,9 @@ type teamRuntime struct {
 	rejected bool
 	// recovering says the turns the connection's runtime left are not taken up yet (supervisor.recover).
 	recovering bool
-	// refused says it was found to be a second connection of a Slack app, and not run for it. It stays refused while its credentials cannot be read,
-	// and while the identity of its new tokens is not known (a restart carries it over).
+	// refused says it was found to be a second connection of a Slack app, and not run for it. That includes a connection that held its app and whose
+	// credentials cannot be read now, when an older connection claims the app in the same pass: it is stopped. It stays refused while its credentials
+	// cannot be read, and while the identity of its new tokens is not known (a restart carries it over).
 	refused bool
 }
 
@@ -183,7 +184,13 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 			// Its Secret is not readable now, or its platform has no adapter. What runs keeps running on the tokens it was started with:
 			// a cache that is relisting is no reason to drop a connection. Otherwise it starts once it can.
 			if st != nil && st.held() {
-				claimed[st.id.App] = name
+				// It holds its app unless an older connection claimed it in this pass (desired is oldest first): then it is the second
+				// connection of the app and is refused, as it would be if its Secret could be read, and not left running beside the older.
+				if holder, taken := claimed[st.id.App]; taken {
+					s.refuse(ctx, name, st, holder, refused)
+				} else {
+					claimed[st.id.App] = name
+				}
 			}
 			if st != nil && st.refused {
 				refused[name] = refusedMessage
@@ -263,18 +270,7 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 		}
 		if st.id.known() {
 			if holder, taken := claimed[st.id.App]; taken {
-				newly := !st.refused
-				st.refused = true
-				refused[name] = refusedMessage
-				s.host.table.forgetBot(name) // not served, so it posts nothing and its bot is no longer one of the broker's
-				s.retire(name)
-				s.stop(ctx, name, st, "it is a second connection of the Slack app that "+holder+" uses")
-				// Not served from here, so the series of its earlier run would only go stale. Not only when this entry ran: a restart that
-				// ends in a refusal (its Secret now holds another app's tokens) made this entry fresh, and the run it replaced left series.
-				if newly && s.removed != nil {
-					s.removed(ctx, name)
-				}
-				s.say(ctx, name, "the ChatConnection is not served: it uses the same Slack app as the older ChatConnection "+holder+", and an app is served once", nil)
+				s.refuse(ctx, name, st, holder, refused)
 				continue
 			}
 			// Served from here, running or not, with the bot that the guard tells from a person: written at every look and not only when the
@@ -303,6 +299,23 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 			s.recoverTurns(ctx, name, st)
 		}
 	}
+}
+
+// refuse refuses the connection name as a second connection of the Slack app that holder, an older connection, uses: it is not served from here, so
+// its bot is no longer one of the broker's, its runtime (if any) is stopped, and it is recorded in refused.
+func (s *supervisor) refuse(ctx context.Context, name string, st *teamRuntime, holder string, refused map[string]string) {
+	newly := !st.refused
+	st.refused = true
+	refused[name] = refusedMessage
+	s.host.table.forgetBot(name) // not served, so it posts nothing and its bot is no longer one of the broker's
+	s.retire(name)
+	s.stop(ctx, name, st, "it is a second connection of the Slack app that "+holder+" uses")
+	// Not served from here, so the series of its earlier run would only go stale. Not only when this entry ran: a restart that
+	// ends in a refusal (its Secret now holds another app's tokens) made this entry fresh, and the run it replaced left series.
+	if newly && s.removed != nil {
+		s.removed(ctx, name)
+	}
+	s.say(ctx, name, "the ChatConnection is not served: it uses the same Slack app as the older ChatConnection "+holder+", and an app is served once", nil)
 }
 
 // recoverTurns asks for the turns that were left while the connection did not run to be taken up, now that it runs, and asks again at the next
