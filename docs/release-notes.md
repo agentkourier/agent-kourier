@@ -7,7 +7,7 @@ What changed in each release, newest first, and what you must do about it. The s
 
 A team can now bring its own Slack app: the platform team lists the team's namespace, and the broker serves the ChatConnection the team
 makes there beside its own. The broker serves nothing new until that list admits a namespace; the migration and the metric labels below apply to every install. Read [Let a team bring its own Slack app](how-to/team-slack-app.md),
-and the warning on rolling back below, before you set it. An AgentBackend on `dialect: kagent-v1` can also limit which agent namespaces its Bindings may name; nothing changes for one that
+and the warning on rolling back below, before you set it. [Upgrade to the release that serves team connections](how-to/upgrade.md#upgrade-to-the-release-that-serves-team-connections) has the checklist for every install: the CRDs, the queries and log alerts to change, what changes with the list empty, and the rollback. An AgentBackend on `dialect: kagent-v1` can also limit which agent namespaces its Bindings may name; nothing changes for one that
 does not set the new field, and [the upgrade section](how-to/upgrade.md#upgrade-to-the-release-that-limits-the-agents-a-binding-may-name) says what to read before you set it.
 
 ### Team-owned chat connections
