@@ -244,7 +244,7 @@ Mend it by writing valid tokens into the Secret.
   list at start, so the upgrade restarts it; it records the connections it serves in its store, and after the restart it
   writes `ConnectionNotServed` once on the Bindings that the connection admits. Their sessions are kept, and the
   posts waiting for the connection stay in the outbox. An interaction pending on one of their threads cannot be ended through the Binding, which the broker no longer has, so the sweep ends it
-  without a word in the thread once its timeout has passed and `5m` more ([Limits](../reference/limits.md#what-a-pause-may-ask)): the runner parked on it lets go, the task is cleared from the session, and the interaction is audited as `orphaned`.
+  and posts nothing once its timeout has passed and `5m` more ([Limits](../reference/limits.md#what-a-pause-may-ask)): the task is cleared from the session record (the restart that took the namespace off the list left no runner parked), and the interaction is audited as `orphaned`.
   The agent's task is not cancelled: it stays input-required at the agent until the agent expires it.
 - **Rolling the release back.** Do not roll back to a release before 0.3.0 while team connections are served. The outbox, the
   interactions and the button presses of 0.3.0 record the connection they belong to. 0.2.1 has one chat platform, and read from its

@@ -1258,13 +1258,33 @@ pause from one is unusable and cancels the task.
    person's answer wins after the timeout audit, the sweep appends a `superseded`
    audit for its timeout, logging a failed compensation write. Recovery reuses a
    durable timeout audit, repairing a missing audit before it retries denial.
+   **An interaction that cannot be ended this way** is ended without a word from the sweep.
+   Its Binding is not in the config (deleted, or not served), or the broker holds the Binding of a
+   connection it does not run because it is a second connection of a Slack app
+   (D51). `CancelTask` needs the Binding's backend, which such a Binding has not got,
+   and a timeout that retried it would never end. A connection that is served and
+   does not run for now (its credentials rejected, or not started yet) is not this: its
+   interactions wait for it. Once a sweep has found an interaction past its timeout so for five
+   minutes, without a sweep that found it otherwise in between (the count is in the
+   sweeper's memory), the sweep ends it. A Binding that is gone is not called: the runner parked
+   on the task is released, or the session's record of the task is cleared when there is none (after a
+   restart), and the agent's task is left at the agent until the agent expires it. For
+   a refused connection the Binding is there and the task is cancelled with `CancelTask`, once
+   (a transient failure is tried up to three times); if that fails, the pause is released as for
+   a Binding that is gone. The sweep edits no prompt and queues no notice (the repair of ended
+   prompts edits the prompt if the connection's platform runs). The interaction is recorded as
+   `timed_out`, audited as `orphaned`, and counted as the outcome `orphaned`; it is not counted
+   as a timeout. A press recorded by the deadline holds this off as it holds off a timeout. A
+   denial the session took and the agent did not, whose Binding was then deleted, is ended in the
+   same way, with no cancel. This is what lets the session be purged at its horizon.
 
 The audit row for an answered approval names the Binding, person and time, counts
 approved and denied tools, and lists cleaned tool names in request order, capped by
 the audit row limit. It never stores arguments or rejection reasons. The metric
 `agentkourier_approval_outcomes_total{binding,outcome}` records `approved`,
 `denied`, `partially_approved` and `timed_out`; policy refusals use `auto_denied`
-and `ask_user_cancelled`.
+and `ask_user_cancelled`; a pause of either kind ended as described in step 6 for
+a Binding or connection that is gone uses `orphaned`.
 
 **Measured in a direct run against pinned kagent 1.0.0-alpha5.**
 - kagent always calls the model with `stream=true` and always offers `ask_user` as a tool.
