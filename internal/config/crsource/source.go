@@ -1072,7 +1072,7 @@ func (s *Source) owns(l listing, served servedConnections, u *unstructured.Unstr
 	return served.keys[ref] || !l.hasConnection[ref]
 }
 
-// servedConnections is what one read serves of the ChatConnections: the keys of the own connection and of the team connections that
+// servedConnections is what one read serves of the ChatConnections: the keys of the own connection, if there is one, and of the team connections that
 // fit under maxServedConnections, and the ones that exist and do not fit.
 type servedConnections struct {
 	keys     map[key]bool
