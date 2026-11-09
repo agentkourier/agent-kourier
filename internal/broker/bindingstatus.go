@@ -492,8 +492,8 @@ func (w *statusWriter) unservedBindings(ctx context.Context, rep config.Report) 
 }
 
 // notServedCount is the number of Bindings whose Accepted reason is ConnectionNotServed: those of unserved (the caller left out any that has a Rejection), and
-// those whose Rejections (a refused second connection's, added by refusals.overlay) give it by acceptedReasonOrder. A Binding that a reason comes
-// before ConnectionNotServed in is not counted here: its status says that reason. The count is not exclusive of the other series: the source's
+// those whose Rejections (a refused second connection's, added by refusals.overlay) give it by acceptedReasonOrder. A Binding with a reason ranked
+// before ConnectionNotServed is not counted here: its status says that reason. The count is not exclusive of the other series: the source's
 // metric (Metrics.ConfigReport) counts every Rejection of a Binding, so a Binding that is counted here and also has a Rejection ranked after
 // ConnectionNotServed (NamespaceNotAllowed, AgentNamespaceNotAllowed, ChannelConflict) is counted under that reason too. The per-reason series can
 // overlap, and a Binding may be counted under more than one reason.

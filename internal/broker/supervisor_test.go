@@ -1161,6 +1161,7 @@ func TestTheBotTableHoldsTheBotsOfTheServedConnectionsAfterEveryLook(t *testing.
 
 	w.idErr["tok-a2"] = errors.New(`bots.info: Slack answered "missing_scope"`) // an answer that does not pass: b is served, c refused
 	w.reconcileChecked(a2, b1, c1)
+	w.wantBot("BA1", "UBA1", "team-a/slack") // an answer for good keeps the bot of the last known identity: the old runtime may still post as it
 	w.reconcileChecked(unready("team-a/slack", 1, 1), b1, c1)
 
 	delete(w.idErr, "tok-a2") // team-a is on another app: b holds AX, c is refused
@@ -1178,6 +1179,7 @@ func TestTheBotTableHoldsTheBotsOfTheServedConnectionsAfterEveryLook(t *testing.
 	w.idErr["tok-a3"] = &credentialsRejectedError{method: "auth.test", code: "invalid_auth"} // the holder's token is rejected: b is served
 	a3 := team("team-a/slack", 1, "tok-a3", 1)
 	w.reconcileChecked(a3, b2, c1)
+	w.wantBot("BA2", "UBA2", "team-a/slack") // so does a rejection: the bot of its last known identity stays
 	w.reconcileChecked(unready("team-a/slack", 1, 1), b2, c1)
 
 	w.openErr["tok-d"] = errors.New("no adapter") // a start that fails
