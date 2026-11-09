@@ -534,7 +534,7 @@ func TestARunEndsTheDueQuestionOfAConnectionThatIsGoneAndKeepsOneThatIsDown(t *t
 	r.until("/readyz", http.StatusOK)
 
 	r.waitMetric(`agentkourier_approval_outcomes_total{binding="team-b/on-b",outcome="orphaned"} 1`)
-	// The sweep that looks at ix-down says it waits for its connection, and the sweep that does not serve it would count it down instead.
+	// The sweep that looks at ix-down says it waits for its connection, and a sweep that did not serve it would start its orphan grace instead.
 	logged := func(msg string) bool { // a line that has msg and is about ix-down
 		for _, l := range strings.Split(w.logs.String(), "\n") {
 			if strings.Contains(l, msg) && strings.Contains(l, "interaction=ix-down") {
