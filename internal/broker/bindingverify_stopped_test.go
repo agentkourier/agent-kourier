@@ -163,3 +163,49 @@ func errIf(cond bool, msg string) error {
 	}
 	return nil
 }
+
+// With no own connection every connection is a team's, which the supervisor restarts by itself: a changed Secret, a gone one and a rejected token
+// are told as a team connection's are, for both connections, and nothing advises to restart Agent Kourier.
+func TestWithNoOwnConnectionEveryConnectionIsToldItRestartsByItself(t *testing.T) {
+	changed := func(s secretsByName) {
+		s[connA].vals["botToken"] = "bot-a-rotated"
+		s[connB].vals["botToken"] = "bot-b-rotated"
+	}
+	for _, tc := range []struct {
+		name    string
+		cond    bindingcheck.ConditionType
+		secrets func() secretsByName
+		verdict chat.Verdict
+		says    string
+	}{
+		{"a changed Secret, the channel", bindingcheck.ChannelJoined, func() secretsByName { s := bothSecretsHold(); changed(s); return s }, chat.Verdict{}, "restarts by itself to use the new ones"},
+		{"a changed Secret, the groups", bindingcheck.ApproversReadable, func() secretsByName { s := bothSecretsHold(); changed(s); return s }, chat.Verdict{}, "restarts by itself to use the new ones"},
+		{"a Secret that is gone", bindingcheck.ChannelJoined, func() secretsByName {
+			s := bothSecretsHold()
+			s[connA].missing, s[connB].missing = true, true
+			return s
+		}, chat.Verdict{}, "restarts by itself once the Secret holds others"},
+		{"a rejected token", bindingcheck.ChannelJoined, bothSecretsHold, chat.Verdict{Class: chat.FatalAuth, Code: "invalid_auth"}, "the connection starts again by itself"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			current := &snaps{}
+			current.p.Store(twoConnectionsWithApprovers(t))
+			fake := func() *accessFake {
+				return &accessFake{access: chat.Access{Member: true}, verdict: tc.verdict, err: errIf(tc.verdict.Class == chat.FatalAuth, "rejected"), groupsErr: errIf(tc.verdict.Class == chat.FatalAuth, "rejected")}
+			}
+			p := verification{
+				NoOwn: true, Bindings: &reachable{}, Platforms: chat.PlatformSet[platformReader]{connA: fake(), connB: fake()},
+				Conns: bothConnections, Snaps: current, Secrets: tc.secrets(), Revision: func(context.Context) string { return "r" },
+				Metrics: mustMetrics(t, nil), Log: slog.New(slog.DiscardHandler), Interval: time.Hour, Tick: 5 * time.Millisecond,
+			}.newProber()
+			got := settled(t, p, 4)
+
+			for _, binding := range []string{"sre/oncall", "sre/other-bot"} {
+				msg := got[binding][tc.cond].Message
+				if !strings.Contains(msg, tc.says) || strings.Contains(msg, "restart Agent Kourier") || strings.Contains(msg, "a restart fails") {
+					t.Errorf("%s says %q; want it to say %q, and not to advise a restart of Agent Kourier", binding, msg, tc.says)
+				}
+			}
+		})
+	}
+}

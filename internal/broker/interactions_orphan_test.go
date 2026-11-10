@@ -376,3 +376,17 @@ func TestConnectionServedIsWhatTheConfigAndTheSupervisorSay(t *testing.T) {
 		})
 	}
 }
+
+// With no own connection there is no connection that is served because it is the own: the empty name, which an own connection that is not there would
+// make equal to every row that names no connection, is served by nothing, and the others are what the Snapshot and the supervisor say.
+func TestConnectionServedWithNoOwnConnectionServesNoEmptyName(t *testing.T) {
+	snap := connectionsConfig(t, "http://agent.test", "ns/b", "ns/b", "ns/c")
+	refused := &refusals{}
+	refused.set(map[string]string{"ns/c": refusedMessage})
+	served := connectionServed(func() config.Report { return config.Report{Snapshot: snap} }, "", refused)
+	for conn, want := range map[string]bool{"": false, "ns/b": true, "ns/c": false, "ns/gone": false} {
+		if got := served(conn); got != want {
+			t.Errorf("served(%q) = %v with no own connection; want %v", conn, got, want)
+		}
+	}
+}

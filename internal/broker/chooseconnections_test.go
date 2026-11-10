@@ -96,6 +96,40 @@ func TestChooseConnectionsKeepsTheFailuresOfTheOwnConnection(t *testing.T) {
 	}
 }
 
+// A broker with no own connection serves every ChatConnection of the snapshot as a team connection, oldest first (the order that decides which of
+// two connections of one Slack app is served), and has no failure of its own to report: a connection whose Secret cannot be read comes back with its
+// Err, as a team connection does beside an own one.
+func TestChooseTeamConnectionsWithNoOwnReturnsEveryConnectionOldestFirst(t *testing.T) {
+	r := &reader{vals: map[string]string{
+		"team-a/creds-slack/botToken": "xoxb-a", "team-a/creds-slack/appToken": "xapp-a",
+		"team-c/creds-slack/botToken": "xoxb-c", "team-c/creds-slack/appToken": "xapp-c",
+		// team-b's Secret is not there: its informer has not synced it
+	}}
+	snap := agedConnections(t, map[string]int64{"team-a/slack": 300, "team-b/slack": 100, "team-c/slack": 100})
+
+	got := ChooseTeamConnections(t.Context(), snap, r)
+
+	if got.Own != nil {
+		t.Errorf("Own = %+v; want none: the broker has no connection of its own", got.Own)
+	}
+	var names []string
+	for _, c := range got.Team {
+		names = append(names, c.Name())
+	}
+	if want := "team-b/slack team-c/slack team-a/slack"; strings.Join(names, " ") != want {
+		t.Fatalf("Team = %v; want %s: every connection, oldest first, then by namespace and name", names, want)
+	}
+	if b := got.Team[0]; b.Err == nil || len(b.Credentials) != 0 {
+		t.Errorf("team-b = %+v; want its Secret's error and no tokens", b)
+	}
+	if c := got.Team[1]; c.Err != nil || c.Credentials["botToken"].Reveal() != "xoxb-c" {
+		t.Errorf("team-c = %+v; want its own tokens", c)
+	}
+	if none := ChooseTeamConnections(t.Context(), nil, r); none.Own != nil || len(none.Team) != 0 {
+		t.Errorf("ChooseTeamConnections(nil snapshot) = %+v; want none", none)
+	}
+}
+
 // A ChatConnection on a platform with no adapter is a wiring error of its own, and a team connection's is its Err and no more.
 func TestAChatConnectionOnAPlatformWithNoAdapterIsAWiringError(t *testing.T) {
 	c := &v1alpha1.ChatConnection{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "slack"}, Spec: v1alpha1.ChatConnectionSpec{Platform: "teams"}}

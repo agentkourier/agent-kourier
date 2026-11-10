@@ -98,6 +98,29 @@ func TestBootstrapCRDsServesTheObjectsOfTheCluster(t *testing.T) {
 	}
 }
 
+// A broker with no own connection starts with no ChatConnection to serve: there is none to find, no Secret to follow first, and no start failure for
+// the lack. The ChatConnection the cluster holds is in a namespace the broker does not admit, so it serves nothing.
+func TestBootstrapCRDsWithNoOwnConnectionStartsWithoutAnyChatConnection(t *testing.T) {
+	before := goleak.IgnoreCurrent()
+	t.Cleanup(func() { goleak.VerifyNone(t, before) })
+	dyn := crCluster(t, func(objs []*unstructured.Unstructured) { objs[1].SetNamespace("elsewhere") })
+	opts := crOptions(dyn)
+	opts.CRDs.Connection, opts.CRDs.ConnectionNamespaces = v1alpha1.ObjectRef{}, []string{"team-a"}
+
+	c, err := Bootstrap(t.Context(), cluster(), opts)
+
+	if err != nil {
+		t.Fatalf("Bootstrap = %v; want a broker with no ChatConnection of its own to start", err)
+	}
+	t.Cleanup(c.Stop)
+	if got := c.Reloader.Current().ChatConnections(); len(got) != 0 {
+		t.Errorf("the snapshot holds %d ChatConnections; want none: none is the broker's, and the one in the cluster is in a namespace it does not admit", len(got))
+	}
+	if err := c.Secrets.Ready(); err != nil {
+		t.Errorf("the Secrets are not ready: %v", err)
+	}
+}
+
 // The failures of start that are the operator's to fix are said so by their code, and leave nothing running.
 func TestBootstrapCRDsFailuresAtStart(t *testing.T) {
 	for name, tc := range map[string]struct {
