@@ -76,8 +76,9 @@ func noOwn(t *testing.T, env Env) {
 	m.waitCondition(kube.MultiTeamNamespace, "team-a", "Ready", "True", "")
 	m.postedBy(m.answered(AppTeamA, ChannelMCTeamA, crServeTimeout), AppTeamA)
 
-	// The platform's connection is not on the list, so it is not served: no series for it that says it is up, and its Bindings (mc-platform, mc-platform-final
-	// and mc-platform-loop, which the script reads) are counted under ConnectionNotServed.
+	// The platform's connection is not on the list, so it is not served: no series for it that says it is up, and its Bindings (the fast tier's and the three of
+	// the tier with two apps, mc-platform, mc-platform-final and mc-platform-loop, which the script reads) are counted under ConnectionNotServed. The metric
+	// alone would pass if it were renamed; the client count and the refused mention below are what fail when the platform's app is served.
 	err := Wait(m.ctx, 2*time.Minute, "the leader to have no series that says "+ConnPlatform+" is up", func(ctx context.Context) (bool, error) {
 		v, err := m.leaderSample(ctx, "agentkourier_chat_connected", map[string]string{"connection": ConnPlatform})
 		if errors.Is(err, ErrNoSample) {
@@ -88,7 +89,7 @@ func noOwn(t *testing.T, env Env) {
 	if err != nil {
 		t.Error(err)
 	}
-	m.waitRejections("ConnectionNotServed", func(n float64) bool { return n >= 3 }, "at least 3 (the platform's three Bindings of the tier with two apps)")
+	m.waitRejections("ConnectionNotServed", func(n float64) bool { return n >= 3 }, "at least 3 (the platform's three MC Bindings, besides the fast tier's)")
 
 	// Its app has no client, and a mention of its bot gets no reply.
 	err = Wait(m.ctx, 2*time.Minute, "no client of the platform's app", func(ctx context.Context) (bool, error) {
@@ -197,9 +198,8 @@ func newMCTeamOnly(t *testing.T, env Env) *mc {
 	return &mc{scenario: s, crs: crs, within: statusWithin}
 }
 
-// readyEverywhere checks that /readyz answers 200 on every replica, the standby of two included: readiness does not depend on a connection. It returns how
-// many replicas there are.
-func (m *mc) readyEverywhere() int {
+// readyEverywhere checks that /readyz answers 200 on every replica, the standby of two included: readiness does not depend on a connection.
+func (m *mc) readyEverywhere() {
 	m.t.Helper()
 	all, err := m.reps.All(m.ctx)
 	if err != nil {
@@ -213,7 +213,6 @@ func (m *mc) readyEverywhere() int {
 			m.t.Errorf("replica %s: %v", r.ID(), err)
 		}
 	}
-	return len(all)
 }
 
 // leaderSample reads a sample of the one replica that leads, which with no connection of its own is any replica that holds the lease: unlike

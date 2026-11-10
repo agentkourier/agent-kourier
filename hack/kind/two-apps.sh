@@ -105,7 +105,8 @@ wait_binding_field() {
   return 1
 }
 # platform_not_served: each of the platform's Bindings says Accepted=False, ConnectionNotServed, naming the connection, and says the same, with the same transition time,
-# twenty seconds on: the condition is written once and not again at each pass. Prints what failed.
+# twenty seconds on: the condition stays as it is and does not flap. (The transition time is kept while the status is unchanged, so this does not show
+# the condition is not rewritten at each pass.) Prints what failed.
 platform_not_served() {
   local b rc=0 times=() i=0 message
   for b in "${PLATFORM_BINDINGS[@]}"; do
