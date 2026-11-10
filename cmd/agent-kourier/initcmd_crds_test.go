@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -14,56 +15,63 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/config"
 )
 
-// installPage is the how-to whose "Install on custom resources" section shows the three files that init writes by default.
-const installPage = "../../docs/how-to/install-with-helm.md"
+// teamAppPage is the how-to whose recorded path ("The whole path, recorded") shows the files and the commands that init
+// writes and prints by default: a broker with no Slack app of its own, and a team that brings its own.
+const teamAppPage = "../../docs/how-to/team-slack-app.md"
 
-// The values of the page's custom-resource files.
+// The values of the page's recorded path.
 const (
-	pageTeamNamespace = "my-team"
-	pageAgentURL      = "http://my-agent.my-team.svc.cluster.local:8083/a2a/"
+	pageTeam     = "team-a"
+	pageAgentURL = "http://my-agent.team-a.svc.cluster.local:8083/a2a/"
 )
 
-// crArgs are the options that give init the values of the page's custom-resource files, and write the values to out.
+// crArgs are the options that give init the values of the page's recorded path, and write the values to out.
 func crArgs(out string, extra ...string) []string {
 	return append([]string{
-		"--out", out, "--dialect", "a2a", "--agent-url", pageAgentURL, "--agent-namespace", pageTeamNamespace,
-		"--team-namespace", pageTeamNamespace, "--agent-name", "my-agent", "--channel", "C0123456789",
+		"--out", out, "--dialect", "a2a", "--agent-url", pageAgentURL, "--agent-namespace", pageTeam,
+		"--team-namespace", pageTeam, "--agent-name", "my-agent", "--channel", "C0123456789",
 	}, extra...)
 }
 
-// crFiles are the three files of the custom-resource route for the values file out.
-func crFiles(out string) (values, platform, team string) {
-	dir := filepath.Dir(out)
-	return out, filepath.Join(dir, "platform.yaml"), filepath.Join(dir, "team.yaml")
-}
+// teamFile is the team's file that init writes beside the values file out, for the team's namespace team.
+func teamFile(out, team string) string { return filepath.Join(filepath.Dir(out), team+".yaml") }
 
 // pageSection returns the text of the page's section that starts with the heading, up to the next heading of its level.
-func pageSection(t *testing.T, heading string) string {
+func pageSection(t *testing.T, page, heading string) string {
 	t.Helper()
-	page, err := os.ReadFile(installPage)
+	text, err := os.ReadFile(page)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, after, ok := strings.Cut(string(page), "\n"+heading+"\n")
+	_, after, ok := strings.Cut(string(text), "\n"+heading+"\n")
 	if !ok {
-		t.Fatalf("%s has no section %q", installPage, heading)
+		t.Fatalf("%s has no section %q", page, heading)
 	}
 	section, _, _ := strings.Cut(after, "\n"+heading[:strings.Index(heading, " ")+1])
 	return section
 }
 
-// yamlBlock returns the YAML code block of section whose first line is opening, without its fences.
-func yamlBlock(t *testing.T, section, opening string) string {
+// codeBlocks returns the code blocks of section whose opening fence is opening, without their fences.
+func codeBlocks(t *testing.T, section, opening string) []string {
 	t.Helper()
-	_, after, ok := strings.Cut(section, "\n"+opening+"\n")
-	if !ok {
+	var blocks []string
+	rest := section
+	for {
+		_, after, ok := strings.Cut(rest, "\n"+opening+"\n")
+		if !ok {
+			break
+		}
+		block, tail, ok := strings.Cut(after, "\n```\n")
+		if !ok {
+			t.Fatalf("a block %q is not closed", opening)
+		}
+		blocks = append(blocks, block+"\n")
+		rest = "\n" + tail
+	}
+	if len(blocks) == 0 {
 		t.Fatalf("the section has no block that opens %q", opening)
 	}
-	block, _, ok := strings.Cut(after, "\n```\n")
-	if !ok {
-		t.Fatalf("the block %q is not closed", opening)
-	}
-	return block + "\n"
+	return blocks
 }
 
 // yamlDocs reads each document of a YAML stream, so that two files with the same data and other comments compare equal.
@@ -91,24 +99,21 @@ func readFile(t *testing.T, path string) string {
 	return string(b)
 }
 
-// loadCRFiles loads platform.yaml and team.yaml with the broker's loader and resolves the references between them, as
-// the broker does with the custom resources, with every Secret present, and returns the Bindings it serves.
-func loadCRFiles(t *testing.T, out string) []v1alpha1.Binding {
+// loadTeamFile loads the team's file with the broker's loader and resolves the references between its objects, as the
+// broker does with the custom resources, with every Secret present, and returns the Bindings it serves.
+func loadTeamFile(t *testing.T, path string) []v1alpha1.Binding {
 	t.Helper()
-	_, platform, team := crFiles(out)
 	dir := t.TempDir()
-	for _, f := range []string{platform, team} {
-		if err := os.WriteFile(filepath.Join(dir, filepath.Base(f)), []byte(readFile(t, f)), 0o600); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte(readFile(t, path)), 0o600); err != nil {
+		t.Fatal(err)
 	}
 	set, err := config.Load(t.Context(), dir)
 	if err != nil {
-		t.Fatalf("the files do not load: %v", err)
+		t.Fatalf("%s does not load: %v", path, err)
 	}
 	snap, err := config.Resolve(t.Context(), set, config.PresentSecrets(set))
 	if err != nil {
-		t.Fatalf("the references do not resolve: %v", err)
+		t.Fatalf("the references of %s do not resolve: %v", path, err)
 	}
 	var bindings []v1alpha1.Binding
 	for _, rb := range snap.Bindings() {
@@ -117,96 +122,93 @@ func loadCRFiles(t *testing.T, out string) []v1alpha1.Binding {
 	return bindings
 }
 
-// By default init writes the page's three files, split by owner, with the page's values in them: the page and init
-// cannot drift apart.
-func TestInitWritesThePagesCustomResources(t *testing.T) {
-	out := outFile(t)
-	stdout, stderr, code := initRun(t, "", env{}.get, "", crArgs(out)...)
-	if code != exitOK {
-		t.Fatalf("exit code %d, stderr %q", code, stderr)
+// chartVersion is the chart's version, which the pages name in their helm commands.
+func chartVersion(t *testing.T) string {
+	t.Helper()
+	for line := range strings.SplitSeq(readFile(t, "../../charts/agent-kourier/Chart.yaml"), "\n") {
+		if v, ok := strings.CutPrefix(line, "version:"); ok {
+			return strings.TrimSpace(v)
+		}
 	}
-	section := pageSection(t, "## Install on custom resources")
-	values, platform, team := crFiles(out)
+	t.Fatal("the chart has no version")
+	return ""
+}
+
+// By default init writes the page's two files, with the page's values in them, and prints the page's commands: the page
+// and init cannot drift apart. It runs in a directory of its own so that the paths it prints are the page's.
+func TestInitWritesThePagesTeamApp(t *testing.T) {
+	section := pageSection(t, teamAppPage, "### The whole path, recorded")
+	ver := "v" + chartVersion(t)
+	t.Chdir(t.TempDir())
+	opts, err := parseInit(crArgs("my-values.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := execInit(t.Context(), opts, ver, strings.NewReader(""), env{}.get, &stdout, &stderr); code != exitOK {
+		t.Fatalf("exit code %d, stderr %q", code, stderr.String())
+	}
 	for _, f := range []struct{ path, opening string }{
-		{values, "```yaml title=\"my-values.yaml\""},
-		{platform, "```yaml title=\"platform.yaml\""},
-		{team, "```yaml title=\"team.yaml\""},
+		{"my-values.yaml", "```yaml title=\"my-values.yaml\""},
+		{"team-a.yaml", "```yaml title=\"team-a.yaml\""},
 	} {
 		got := readFile(t, f.path)
-		if want := yamlBlock(t, section, f.opening); !reflect.DeepEqual(yamlDocs(t, got), yamlDocs(t, want)) {
-			t.Errorf("init's %s is not the page's:\ninit:\n%s\npage:\n%s", filepath.Base(f.path), got, want)
+		want := codeBlocks(t, section, f.opening)[0]
+		if !reflect.DeepEqual(yamlDocs(t, got), yamlDocs(t, want)) {
+			t.Errorf("init's %s is not the page's:\ninit:\n%s\npage:\n%s", f.path, got, want)
 		}
 		if !strings.Contains(got, "\n# ") && !strings.Contains(got, "\n  # ") {
-			t.Errorf("%s has no comments:\n%s", filepath.Base(f.path), got)
+			t.Errorf("%s has no comments:\n%s", f.path, got)
 		}
 	}
-	for _, want := range []string{
-		"Wrote " + values + ", " + platform + " and " + team + ".",
-		"kubectl create namespace agent-kourier\n",
-		"kubectl -n agent-kourier create secret generic slack \\\n",
-		"helm install agent-kourier " + chartReference + " --version 0.1.1 \\\n  -n agent-kourier -f " + values + "\n",
-		"kubectl apply --dry-run=server -f " + platform + " -f " + team + "\n",
-		"kubectl apply -f " + platform + "\nkubectl apply -f " + team + "\nkubectl get akbinding -A\n",
-	} {
-		if !strings.Contains(stdout, want) {
-			t.Errorf("stdout lacks %q:\n%s", want, stdout)
+	// Each of the page's commands is printed as the page shows it, its lines together.
+	for _, block := range codeBlocks(t, section, "```sh") {
+		if !strings.Contains(stdout.String(), block) {
+			t.Errorf("stdout lacks the page's commands\n%s\nstdout:\n%s", block, stdout.String())
 		}
 	}
-	if strings.Contains(stdout, agentTokenSecretName) {
-		t.Errorf("stdout names the agent token Secret without --agent-token:\n%s", stdout)
+	if !strings.Contains(stdout.String(), "Wrote my-values.yaml and team-a.yaml.") {
+		t.Errorf("stdout does not name the two files:\n%s", stdout.String())
 	}
-	if !strings.Contains(stderr, "checked: Agent Kourier loads platform.yaml and team.yaml") {
-		t.Errorf("stderr %q does not say what was checked", stderr)
+	if strings.Contains(stdout.String(), agentTokenSecretName) {
+		t.Errorf("stdout names the agent token Secret without --agent-token:\n%s", stdout.String())
 	}
-	if snap := loadCRFiles(t, out); len(snap) != 1 {
-		t.Errorf("resolved %d Bindings; want 1", len(snap))
+	if !strings.Contains(stderr.String(), "checked: Agent Kourier loads team-a.yaml") {
+		t.Errorf("stderr %q does not say what was checked", stderr.String())
+	}
+	if bindings := loadTeamFile(t, "team-a.yaml"); len(bindings) != 1 {
+		t.Errorf("resolved %d Bindings; want 1", len(bindings))
 	}
 }
 
-// With --agent-token, the Binding reads its token from a Secret in the team's namespace, the values grant that Secret as
-// the page's rbac block does, and the commands create the Secret there.
+// With --agent-token, the Binding reads its token from a Secret in the team's namespace, and the commands create that
+// Secret there and add it to the team's grant to the broker.
 func TestInitWithAnAgentTokenPutsTheSecretInTheTeamsNamespace(t *testing.T) {
 	out := outFile(t)
 	stdout, stderr, code := initRun(t, "", env{}.get, "", crArgs(out, "--agent-token")...)
 	if code != exitOK {
 		t.Fatalf("exit code %d, stderr %q", code, stderr)
 	}
-	values, _, _ := crFiles(out)
-	section := pageSection(t, "## Install on custom resources")
-	var gotValues struct {
-		Config map[string]any `json:"config"`
-		RBAC   any            `json:"rbac"`
+	b := loadTeamFile(t, teamFile(out, pageTeam))[0]
+	if ref := b.Spec.Identity.TokenSecretRef; b.Namespace != pageTeam || ref == nil || ref.Name != agentTokenSecretName || ref.Key != "token" {
+		t.Errorf("Binding %s/%s tokenSecretRef = %+v; want %s, key token, in %s", b.Namespace, b.Name, ref, agentTokenSecretName, pageTeam)
 	}
-	if err := yaml.Unmarshal([]byte(readFile(t, values)), &gotValues); err != nil {
-		t.Fatal(err)
+	for _, want := range []string{
+		"kubectl -n team-a create secret generic " + agentTokenSecretName + " --from-literal=token=\"$AGENT_TOKEN\"\n",
+		"--resource=secrets --resource-name=team-a-slack --resource-name=" + agentTokenSecretName + "\n",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("stdout lacks %q:\n%s", want, stdout)
+		}
 	}
-	var wantRBAC struct {
-		RBAC any `json:"rbac"`
-	}
-	if err := yaml.Unmarshal([]byte("rbac:\n"+yamlBlock(t, section, "```yaml\nrbac:")), &wantRBAC); err != nil {
-		t.Fatal(err)
-	}
-	if wantRBAC.RBAC == nil || !reflect.DeepEqual(gotValues.RBAC, wantRBAC.RBAC) {
-		t.Errorf("rbac = %v; want the page's %v", gotValues.RBAC, wantRBAC.RBAC)
-	}
-	if gotValues.Config["chatConnection"] != "agent-kourier/slack" {
-		t.Errorf("config = %v", gotValues.Config)
-	}
-	b := loadCRFiles(t, out)[0]
-	if ref := b.Spec.Identity.TokenSecretRef; b.Namespace != pageTeamNamespace || ref == nil || ref.Name != agentTokenSecretName || ref.Key != "token" {
-		t.Errorf("Binding %s/%s tokenSecretRef = %+v; want %s, key token, in %s", b.Namespace, b.Name, ref, agentTokenSecretName, pageTeamNamespace)
-	}
-	if want := "kubectl -n my-team create secret generic " + agentTokenSecretName + " --from-literal=token=\"$AGENT_TOKEN\"\n"; !strings.Contains(stdout, want) {
-		t.Errorf("stdout lacks %q:\n%s", want, stdout)
-	}
-	if strings.Contains(stdout, "-n agent-kourier create secret generic "+agentTokenSecretName) {
-		t.Errorf("stdout creates the agent token Secret in the release's namespace:\n%s", stdout)
+	if values := readFile(t, out); strings.Contains(values, "rbac") || strings.Contains(values, agentTokenSecretName) {
+		t.Errorf("the values grant the token Secret, which is the team's to grant:\n%s", values)
 	}
 }
 
-// Each dialect, with and without the token, in a release namespace and a team namespace of its own, makes files whose
-// references resolve: the backend and the connection allow the team's namespace, and the Binding names them there.
-func TestInitCustomResourcesResolve(t *testing.T) {
+// Each dialect, with and without the token, makes a team file whose references resolve, in the team's namespace, whatever
+// the agent's and the release's namespaces are.
+func TestInitTeamAppResolves(t *testing.T) {
 	for _, tc := range []struct {
 		name, dialect, team string
 		agentToken          bool
@@ -229,29 +231,36 @@ func TestInitCustomResourcesResolve(t *testing.T) {
 			if code != exitOK {
 				t.Fatalf("exit code %d, stderr %q", code, stderr)
 			}
-			snap := loadCRFiles(t, out)
-			if len(snap) != 1 {
-				t.Fatalf("resolved %d Bindings; want 1", len(snap))
+			bindings := loadTeamFile(t, teamFile(out, tc.team))
+			if len(bindings) != 1 {
+				t.Fatalf("resolved %d Bindings; want 1", len(bindings))
 			}
-			b := snap[0]
+			b := bindings[0]
 			if b.Namespace != tc.team || b.Spec.Agent.Namespace != "agents" || b.Spec.Agent.Name != "payments-agent" || b.Spec.Chat.Channel != "G0ABCDEF123" {
 				t.Errorf("Binding %s/%s = %+v", b.Namespace, b.Name, b.Spec)
 			}
-			if b.Spec.Agent.BackendRef.Namespace != "kourier" || b.Spec.Chat.ConnectionRef.Namespace != "kourier" {
-				t.Errorf("the Binding names %+v and %+v; want both in kourier", b.Spec.Agent.BackendRef, b.Spec.Chat.ConnectionRef)
+			if b.Spec.Chat.ConnectionRef.Name != tc.team+"-slack" || b.Spec.Chat.ConnectionRef.Namespace != "" || b.Spec.Agent.BackendRef.Namespace != "" {
+				t.Errorf("the Binding names %+v and %+v; want both in its own namespace, the connection %s-slack", b.Spec.Agent.BackendRef, b.Spec.Chat.ConnectionRef, tc.team)
 			}
 			if (b.Spec.Identity.TokenSecretRef != nil) != tc.agentToken {
 				t.Errorf("tokenSecretRef = %+v; want one: %v", b.Spec.Identity.TokenSecretRef, tc.agentToken)
 			}
-			values := readFile(t, out)
-			if !strings.Contains(values, "chatConnection: kourier/slack\n") {
-				t.Errorf("the values do not name kourier/slack:\n%s", values)
+			var values struct {
+				Config map[string]any `json:"config"`
 			}
-			if got := strings.Contains(values, tc.team+": ["+agentTokenSecretName+"]"); got != tc.agentToken {
-				t.Errorf("the values grant the token Secret = %v; want %v:\n%s", got, tc.agentToken, values)
+			if err := yaml.Unmarshal([]byte(readFile(t, out)), &values); err != nil {
+				t.Fatal(err)
 			}
-			if !strings.Contains(stdout, "kubectl -n kourier create secret generic slack") || !strings.Contains(stdout, "-n kourier -f "+out) {
-				t.Errorf("stdout does not name the namespace kourier:\n%s", stdout)
+			if want := map[string]any{"connectionNamespaces": []any{tc.team}}; !reflect.DeepEqual(values.Config, want) {
+				t.Errorf("config = %v; want %v", values.Config, want)
+			}
+			for _, want := range []string{
+				"kubectl create namespace kourier\n", "-n kourier -f " + out + "\n",
+				"--serviceaccount=kourier:agent-kourier\n", "kubectl apply -f " + teamFile(out, tc.team) + "\n",
+			} {
+				if !strings.Contains(stdout, want) {
+					t.Errorf("stdout lacks %q:\n%s", want, stdout)
+				}
 			}
 		})
 	}
@@ -266,10 +275,10 @@ func TestInitAsksForTheTeamsNamespace(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("exit code %d, stderr %q", code, stderr)
 	}
-	if !strings.Contains(stderr, "Agent namespace: Team namespace, where the Binding goes [agents]: ") {
+	if !strings.Contains(stderr, "Agent namespace: Team namespace, where its Slack app and Binding go [agents]: ") {
 		t.Errorf("stderr does not ask the team's namespace after the agent's, with the agent's as the default:\n%s", stderr)
 	}
-	if b := loadCRFiles(t, out)[0]; b.Namespace != "agents" || b.Spec.Agent.Name != "sre-agent" {
+	if b := loadTeamFile(t, teamFile(out, "agents"))[0]; b.Namespace != "agents" || b.Spec.Agent.Name != "sre-agent" {
 		t.Errorf("Binding %s/%s = %+v; want it in agents", b.Namespace, b.Name, b.Spec)
 	}
 
@@ -278,7 +287,7 @@ func TestInitAsksForTheTeamsNamespace(t *testing.T) {
 	if code != exitOK || strings.Contains(stderr, "Agent URL") {
 		t.Fatalf("exit code %d, stderr %q; want only the team's namespace asked", code, stderr)
 	}
-	if b := loadCRFiles(t, out)[0]; b.Namespace != "payments" {
+	if b := loadTeamFile(t, teamFile(out, "payments"))[0]; b.Namespace != "payments" {
 		t.Errorf("the Binding is in %s; want payments", b.Namespace)
 	}
 
@@ -295,65 +304,69 @@ func TestInitAsksForTheTeamsNamespace(t *testing.T) {
 // Wrong values of the route's own options are usage errors, and nothing is written.
 func TestInitRefusesWrongRouteValues(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		extra []string
-		want  string
+		name string
+		args func(dir string) []string
+		want string
 	}{
-		{"a source that does not exist", []string{"--source", "configmap"}, `--source "configmap" is not crds or files`},
-		{"a team namespace that is no name", []string{"--team-namespace", "My Team"}, "--team-namespace"},
-		{"a values file named like platform.yaml", []string{"--out", "platform.yaml"}, "--out"},
+		{"a source that does not exist", func(dir string) []string { return crArgs(filepath.Join(dir, "v.yaml"), "--source", "configmap") }, `--source "configmap" is not crds or files`},
+		{"a team namespace that is no name", func(dir string) []string { return crArgs(filepath.Join(dir, "v.yaml"), "--team-namespace", "My Team") }, "--team-namespace"},
+		{"a values file named like the team's file", func(dir string) []string { return crArgs(filepath.Join(dir, "team-a.yaml")) }, "is where init writes the team's file"},
+		{"a values file named like the team's file, with --force", func(dir string) []string { return crArgs(filepath.Join(dir, "team-a.yaml"), "--force") }, "is where init writes the team's file"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			out := outFile(t)
-			args := append(crArgs(out), tc.extra...)
-			if tc.extra[0] == "--out" {
-				args = crArgs(filepath.Join(filepath.Dir(out), tc.extra[1]))
-			}
-			stdout, stderr, code := initRun(t, "", env{}.get, "", args...)
+			dir := t.TempDir()
+			stdout, stderr, code := initRun(t, "", env{}.get, "", tc.args(dir)...)
 			if code != exitUsage || !strings.Contains(stderr, tc.want) || stdout != "" {
 				t.Errorf("exit code %d, stdout %q, stderr %q; want %d and %q", code, stdout, stderr, exitUsage, tc.want)
 			}
-			for _, f := range []string{out, filepath.Join(filepath.Dir(out), "platform.yaml"), filepath.Join(filepath.Dir(out), "team.yaml")} {
-				if _, err := os.Lstat(f); err == nil {
-					t.Errorf("%s was written", f)
-				}
+			if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+				t.Errorf("files were written: %v", entries)
 			}
 		})
 	}
 }
 
-// Any of the three files that exists stops init before its questions, and nothing is written, unless --force says so.
-func TestInitDoesNotOverwriteAnyOfTheThreeFiles(t *testing.T) {
-	for i, name := range []string{"values", "platform", "team"} {
+// Either file that exists stops init, the values file before the questions and the team's once its namespace is known,
+// and nothing is written, unless --force says so.
+func TestInitDoesNotOverwriteEitherFile(t *testing.T) {
+	for _, name := range []string{"values", "team"} {
 		t.Run(name, func(t *testing.T) {
 			out := outFile(t)
-			values, platform, team := crFiles(out)
-			paths := []string{values, platform, team}
-			if err := os.WriteFile(paths[i], []byte("mine\n"), 0o600); err != nil {
+			paths := []string{out, teamFile(out, pageTeam)}
+			existing, other := paths[0], paths[1]
+			if name == "team" {
+				existing, other = other, existing
+			}
+			if err := os.WriteFile(existing, []byte("mine\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			stdout, stderr, code := initRun(t, "", env{}.get, "", "--out", out)
-			if code != exitUsage || !strings.Contains(stderr, paths[i]+" exists") || !strings.Contains(stderr, "--force") || stdout != "" || strings.Contains(stderr, "Agent URL") {
-				t.Errorf("exit code %d, stdout %q, stderr %q; want %d, %s and --force named, and no question", code, stdout, stderr, exitUsage, paths[i])
+			stdout, stderr, code := initRun(t, "", env{}.get, "", crArgs(out)...)
+			if code != exitUsage || !strings.Contains(stderr, existing+" exists") || !strings.Contains(stderr, "--force") || stdout != "" {
+				t.Errorf("exit code %d, stdout %q, stderr %q; want %d, %s and --force named", code, stdout, stderr, exitUsage, existing)
 			}
-			for j, p := range paths {
-				_, err := os.Lstat(p)
-				if j != i && err == nil {
-					t.Errorf("%s was written", p)
-				}
+			if _, err := os.Lstat(other); err == nil {
+				t.Errorf("%s was written", other)
 			}
-			if got := readFile(t, paths[i]); got != "mine\n" {
-				t.Errorf("%s is now %q", paths[i], got)
+			if got := readFile(t, existing); got != "mine\n" {
+				t.Errorf("%s is now %q", existing, got)
 			}
 
 			if _, stderr, code := initRun(t, "", env{}.get, "", crArgs(out, "--force")...); code != exitOK {
 				t.Fatalf("--force: exit code %d, stderr %q", code, stderr)
 			}
-			if got := readFile(t, paths[i]); got == "mine\n" {
-				t.Errorf("--force left %s as it was", paths[i])
+			if got := readFile(t, existing); got == "mine\n" {
+				t.Errorf("--force left %s as it was", existing)
 			}
-			loadCRFiles(t, out)
+			loadTeamFile(t, paths[1])
 		})
+	}
+	// The values file is known before the questions, so an existing one stops init before them.
+	out := outFile(t)
+	if err := os.WriteFile(out, []byte("mine\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, stderr, code := initRun(t, "", env{}.get, "", "--out", out); code != exitUsage || strings.Contains(stderr, "Agent URL") {
+		t.Errorf("exit code %d, stderr %q; want %d and no question", code, stderr, exitUsage)
 	}
 }
 
@@ -378,7 +391,8 @@ func TestWriteInitFilesIsAllOrNothing(t *testing.T) {
 	}
 }
 
-// What Slack refuses writes none of the three files, and a channel name is looked up into the team's Binding.
+// What Slack refuses writes neither file, and a channel name is looked up into the team's Binding. The bot token is the
+// team's app's.
 func TestInitOnCustomResourcesChecksSlack(t *testing.T) {
 	out := outFile(t)
 	slackSrv := &initSlack{historyErr: "not_in_channel"}
@@ -386,8 +400,7 @@ func TestInitOnCustomResourcesChecksSlack(t *testing.T) {
 	if code != exitFailure || !strings.Contains(stderr, "invite the bot") {
 		t.Errorf("exit code %d, stderr %q; want %d and invite the bot", code, stderr, exitFailure)
 	}
-	values, platform, team := crFiles(out)
-	for _, p := range []string{values, platform, team} {
+	for _, p := range []string{out, teamFile(out, pageTeam)} {
 		if _, err := os.Lstat(p); err == nil {
 			t.Errorf("%s was written", p)
 		}
@@ -398,35 +411,89 @@ func TestInitOnCustomResourcesChecksSlack(t *testing.T) {
 	if code != exitOK || !strings.Contains(stderr, "the bot can read C0BBBBBBBBB") {
 		t.Fatalf("exit code %d, stderr %q", code, stderr)
 	}
-	if got := loadCRFiles(t, out)[0].Spec.Chat.Channel; got != "C0BBBBBBBBB" {
+	if got := loadTeamFile(t, teamFile(out, pageTeam))[0].Spec.Chat.Channel; got != "C0BBBBBBBBB" {
 		t.Errorf("the Binding has channel %q; want C0BBBBBBBBB", got)
 	}
 }
 
-// The commands for custom resources quote the paths, put the token Secret in the team's namespace, and apply the files
-// only after the chart, which brings the CRDs.
-func TestNextStepsOnCustomResources(t *testing.T) {
-	got := nextSteps(initOptions{source: sourceCRDs, out: "my dir/v.yaml", namespace: "team-a", teamNamespace: "payments", agentToken: true}, "v0.1.1")
-	want := `Next, with SLACK_BOT_TOKEN and SLACK_APP_TOKEN set (see https://agentkourier.dev/how-to/configure-slack/):
+// The commands for the team's app quote the paths, put the token Secret in the team's namespace and name it in the grant,
+// and apply the team's file last.
+func TestNextStepsForTheTeamsApp(t *testing.T) {
+	got := nextSteps(initOptions{source: sourceCRDs, out: "my dir/v.yaml", namespace: "kourier", teamNamespace: "payments", agentToken: true}, "v0.1.1")
+	want := `Next, as the platform team, the namespace and the broker, which serves the ChatConnections of payments:
 
-kubectl create namespace team-a
-kubectl -n team-a create secret generic slack \
-  --from-literal=botToken="$SLACK_BOT_TOKEN" \
-  --from-literal=appToken="$SLACK_APP_TOKEN"
+kubectl create namespace kourier
+helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.1 \
+  -n kourier -f 'my dir/v.yaml'
+
+Then, as the team, in its namespace payments, which must exist (see https://agentkourier.dev/how-to/team-slack-app/):
 
 # AGENT_TOKEN is the bearer token the agent accepts for the Binding's identity; the Secret goes in the Binding's namespace
 kubectl -n payments create secret generic agent-kourier-agent-token --from-literal=token="$AGENT_TOKEN"
 
-helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.1 \
-  -n team-a -f 'my dir/v.yaml'
+# The team's Slack app: a file that only you can read, with the lines botToken=<bot token> and appToken=<app-level token>
+kubectl -n payments create secret generic payments-slack \
+  --from-env-file="$HOME/.config/payments/slack-secret.env"
+kubectl -n payments create role agent-kourier-secrets-payments --verb=list,watch \
+  --resource=secrets --resource-name=payments-slack --resource-name=agent-kourier-agent-token
+kubectl -n payments create rolebinding agent-kourier-secrets-payments --role=agent-kourier-secrets-payments \
+  --serviceaccount=kourier:agent-kourier
 
-# Once the chart is installed (it brings the CRDs): the platform team's file, then the team's
-kubectl apply --dry-run=server -f 'my dir/platform.yaml' -f 'my dir/team.yaml'
-kubectl apply -f 'my dir/platform.yaml'
-kubectl apply -f 'my dir/team.yaml'
-kubectl get akbinding -A
+kubectl apply --dry-run=server -f 'my dir/payments.yaml'
+kubectl apply -f 'my dir/payments.yaml'
+kubectl -n payments get akbinding
 `
 	if got != want {
 		t.Errorf("nextSteps =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// --out is trimmed before any path is made from it, so the file written is the one the commands name.
+func TestInitTrimsTheValuesPath(t *testing.T) {
+	for route, args := range map[string]func(string, ...string) []string{"files": starterArgs, "crds": crArgs} {
+		t.Run(route, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Chdir(dir)
+			stdout, stderr, code := initRun(t, "", env{}.get, "", args("  v.yaml ")...)
+			if code != exitOK {
+				t.Fatalf("exit code %d, stderr %q", code, stderr)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "v.yaml")); err != nil {
+				t.Errorf("v.yaml was not written: %v", err)
+			}
+			if !strings.Contains(stdout, " -f v.yaml\n") {
+				t.Errorf("stdout does not name v.yaml:\n%s", stdout)
+			}
+		})
+	}
+	if _, stderr, code := initRun(t, "", env{}.get, "", "--out", "  "); code != exitUsage || !strings.Contains(stderr, "--out is empty") {
+		t.Errorf("--out of spaces: exit code %d, stderr %q", code, stderr)
+	}
+}
+
+// --force overwrites only regular files, and checks each before it writes any, so that a run cannot replace one file and
+// then stop at a symbolic link or a directory where the next goes.
+func TestInitForceRefusesWhatIsNoFile(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "my-values.yaml")
+	if err := os.WriteFile(out, []byte("mine\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("theirs\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, teamFile(out, pageTeam)); err != nil {
+		t.Skip(err)
+	}
+	stdout, stderr, code := initRun(t, "", env{}.get, "", crArgs(out, "--force")...)
+	if code != exitUsage || !strings.Contains(stderr, "is not a regular file") || stdout != "" {
+		t.Errorf("exit code %d, stdout %q, stderr %q; want %d and not a regular file", code, stdout, stderr, exitUsage)
+	}
+	if got := readFile(t, out); got != "mine\n" {
+		t.Errorf("the values file is now %q", got)
+	}
+	if got := readFile(t, target); got != "theirs\n" {
+		t.Errorf("the link's target is now %q", got)
 	}
 }

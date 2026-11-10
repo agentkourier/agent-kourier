@@ -4,7 +4,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -72,9 +71,9 @@ func TestInitValuesRenderWithTheChart(t *testing.T) {
 	}
 }
 
-// The values that init writes for custom resources render with the chart into a broker that serves the ChatConnection of
-// platform.yaml, and a Role for each Secret the files name: the connection's in the release's namespace and, with
-// --agent-token, the Binding's token in the team's. Like the test above it needs helm.
+// The values that init writes for custom resources render with the chart into a broker with no ChatConnection of its own
+// that serves the team's namespace, and no Role for a Secret: the team grants its own, as the commands init prints do.
+// Like the test above it needs helm.
 func TestInitCustomResourceValuesRenderWithTheChart(t *testing.T) {
 	helm, err := exec.LookPath("helm")
 	if err != nil {
@@ -137,15 +136,12 @@ func TestInitCustomResourceValuesRenderWithTheChart(t *testing.T) {
 					}
 				}
 			}
-			want := map[string][]string{"agent-kourier": {slackSecretName}}
-			if tc.agentToken {
-				want[pageTeamNamespace] = []string{agentTokenSecretName}
+			if len(secrets) != 0 {
+				t.Errorf("the chart's Roles name the Secrets %v; want none, since the team grants its own", secrets)
 			}
-			if !reflect.DeepEqual(secrets, want) {
-				t.Errorf("the chart's Roles name the Secrets %v; want %v", secrets, want)
-			}
-			if env["AGENTKOURIER_CONFIG_SOURCE"] != "crds" || env["AGENTKOURIER_CHAT_CONNECTION"] != "agent-kourier/slack" {
-				t.Errorf("the broker's environment is %v; want crds and agent-kourier/slack", env)
+			_, own := env["AGENTKOURIER_CHAT_CONNECTION"]
+			if env["AGENTKOURIER_CONFIG_SOURCE"] != "crds" || env["AGENTKOURIER_CONNECTION_NAMESPACES"] != pageTeam || own {
+				t.Errorf("the broker's environment is %v; want crds, the connection namespaces %s and no own connection", env, pageTeam)
 			}
 		})
 	}

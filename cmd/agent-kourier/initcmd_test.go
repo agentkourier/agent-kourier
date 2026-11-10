@@ -288,24 +288,27 @@ func TestInitRefusesWrongValues(t *testing.T) {
 		{"a dialect that does not exist", []string{"--dialect", "grpc"}, `--dialect "grpc" is not a2a or kagent-v1`},
 		{"an empty channel", []string{"--channel", "#"}, "--channel is empty"},
 		{"a namespace that is no name", []string{"--namespace", "Not_A_Name"}, "--namespace"},
-		{"an agent URL that is no URL", []string{"--agent-url", "my-agent"}, "the values would not load"},
+		{"an agent URL that is no URL", []string{"--agent-url", "my-agent"}, "would not load"},
 		{"an agent URL with credentials", []string{"--agent-url", "http://user:pass@agent.example.com/"}, "credentials"},
 		{"an agent namespace that is no name", []string{"--agent-namespace", "My Namespace"}, "spec.agent.namespace"},
-		{"an agent URL that holds a line break", []string{"--agent-url", "http://agent.example.com/\nevil: 1"}, "the values would not load"},
+		{"an agent URL that holds a line break", []string{"--agent-url", "http://agent.example.com/\nevil: 1"}, "would not load"},
 		{"a stray argument", []string{"extra"}, "unexpected argument at position 1"},
 		{"an empty --out", []string{"--out", ""}, "--out is empty"},
 		{"an option that does not exist", []string{"--bot-token", "x"}, "not defined"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			out := outFile(t)
-			stdout, stderr, code := initRun(t, "", env{}.get, "", starterArgs(out, tc.extra...)...)
-			if code != exitUsage || !strings.Contains(stderr, tc.want) || stdout != "" {
-				t.Errorf("exit code %d, stdout %q, stderr %q; want %d and %q", code, stdout, stderr, exitUsage, tc.want)
-			}
-			if _, err := os.Stat(out); err == nil {
-				t.Error("a file was written")
-			}
-		})
+		// Each route refuses them: on custom resources the check of the team's file finds what the API types refuse.
+		for route, args := range map[string]func(string, ...string) []string{"files": starterArgs, "crds": crArgs} {
+			t.Run(route+"/"+tc.name, func(t *testing.T) {
+				out := outFile(t)
+				stdout, stderr, code := initRun(t, "", env{}.get, "", args(out, tc.extra...)...)
+				if code != exitUsage || !strings.Contains(stderr, tc.want) || stdout != "" {
+					t.Errorf("exit code %d, stdout %q, stderr %q; want %d and %q", code, stdout, stderr, exitUsage, tc.want)
+				}
+				if entries, _ := os.ReadDir(filepath.Dir(out)); len(entries) != 0 {
+					t.Errorf("files were written: %v", entries)
+				}
+			})
+		}
 	}
 }
 
@@ -371,6 +374,9 @@ func TestInitNeverEchoesAToken(t *testing.T) {
 		{"as the value of a flag that takes none", []string{"--force=" + canaryToken}, ""},
 		{"as the team namespace", crArgs(outFile(t), "--team-namespace", canaryToken), ""},
 		{"as an answer", []string{"--source", "files", "--out", outFile(t)}, "a2a\n" + canaryToken + "\nn\nn\nC0123456789\n"},
+		// The agent's namespace is the default of the team's, so it must be refused before that question shows it.
+		{"as the agent namespace, answered", []string{"--out", outFile(t)}, "a2a\nhttp://a.example.com/\n" + canaryToken + "\n\nn\nC0123456789\n"},
+		{"as the agent namespace, given", crArgs(outFile(t), "--agent-namespace", canaryToken, "--team-namespace", ""), "\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stdout, stderr, code := initRun(t, "", env{}.get, tc.stdin, tc.args...)
@@ -536,6 +542,25 @@ func TestInitKeepsAnAwkwardURLWhole(t *testing.T) {
 	}
 	if got := loadWritten(t, out).AgentBackends[0].Spec.URL; got != awkward {
 		t.Errorf("the URL is %q; want %q", got, awkward)
+	}
+	// So does the team's file, and an agent name and channel that YAML would read as other types stay text.
+	out = outFile(t)
+	if _, stderr, code := initRun(t, "", env{}.get, "", crArgs(out, "--agent-url", awkward, "--agent-name", "123", "--channel", "C0123456789")...); code != exitOK {
+		t.Fatalf("crds: exit code %d, stderr %q", code, stderr)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte(readFile(t, teamFile(out, pageTeam))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	set, err := config.Load(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := set.AgentBackends[0].Spec.URL; got != awkward {
+		t.Errorf("the team's file has the URL %q; want %q", got, awkward)
+	}
+	if got := set.Bindings[0].Spec.Agent.Name; got != "123" {
+		t.Errorf("the team's file has the agent name %q; want 123", got)
 	}
 }
 

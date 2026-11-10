@@ -33,34 +33,34 @@ import (
 // initUsage is what `agent-kourier init --help` prints.
 const initUsage = `usage: agent-kourier init [options]
 
-Writes the files of a first install with the Helm chart (one Slack connection, one agent, one channel), checks them, and
-prints the commands that create the Secrets, install the chart and, on custom resources, apply them. It posts nothing and
-changes nothing in Slack or in a cluster. A value that no option gives is asked for on standard input.
+Writes the files of a first install with the Helm chart (one Slack app, one agent, one channel), checks them, and prints
+the commands that install the chart, create the Secrets and, on custom resources, grant and apply them. It posts nothing
+and changes nothing in Slack or in a cluster. A value that no option gives is asked for on standard input.
 
-On custom resources (--source crds, the chart's default route) it writes three files, split by owner:
-  my-values.yaml   the chart's values: config.chatConnection, the ChatConnection the broker serves, and with
-                   --agent-token rbac.secretNames, which grants the broker the Binding's token Secret
-  platform.yaml    the platform team's ChatConnection slack and AgentBackend agent, in the release's namespace, each
-                   allowing the team's namespace
-  team.yaml        the team's Binding my-binding, in the team's namespace, naming the two
-platform.yaml and team.yaml go in the directory of --out. With --source files it writes one values file for the
-ConfigMap route (config.source files) that holds the three resources, in the release's namespace.
+On custom resources (--source crds, the chart's default route) the broker has no Slack app of its own, and the team
+brings its own. It writes two files:
+  my-values.yaml   the platform team's values: config.connectionNamespaces, the team's namespace
+  <team>.yaml      the team's ChatConnection <team>-slack (the team's app, reading the Secret <team>-slack), its
+                   AgentBackend agent and its Binding my-binding, all in the team's namespace
+<team>.yaml goes in the directory of --out. With --source files it writes one values file for the ConfigMap route
+(config.source files) that holds the three resources, in the release's namespace, on the broker's own Slack app.
 
   --source <crds|files>     the chart's config route (default: crds)
-  --out <path>              the values file to write (default: my-values.yaml); an existing file is not overwritten, nor
-                            platform.yaml or team.yaml
-  --force                   overwrite the files
+  --out <path>              the values file to write (default: my-values.yaml); init stops if it, or the team's file,
+                            exists (see --force)
+  --force                   overwrite the files, if they are regular files
   --dialect <name>          the agent's dialect: a2a or kagent-v1 (default when asked: a2a)
   --agent-url <url>         the agent's URL, called exactly as written
   --agent-namespace <ns>    the agent's namespace
-  --team-namespace <ns>     crds only: the namespace of the team's Binding (default when asked: the agent's namespace)
+  --team-namespace <ns>     crds only: the team's namespace, which must exist (default when asked: the agent's namespace)
   --agent-name <name>       the agent's name
   --channel <id|name>       the channel, by ID (C... or G...), or by name, which is looked up in Slack and needs a bot token
   --agent-token             the agent verifies tokens: the Binding reads one from the Secret agent-kourier-agent-token,
                             in the Binding's namespace
-  --namespace <ns>          the namespace of the release (default: agent-kourier): the ChatConnection and the
-                            AgentBackend go in it, and the commands it prints name it
-  --token-file <path>       a file that holds the bot token, alone or as SLACK_BOT_TOKEN=... (mode 600)
+  --namespace <ns>          the namespace of the release (default: agent-kourier), which the commands it prints name;
+                            with --source files the resources go in it
+  --token-file <path>       a file that holds the bot token, alone or as SLACK_BOT_TOKEN=... (mode 600); on custom
+                            resources, the team's app's
 
 With a bot token, from --token-file or $SLACK_BOT_TOKEN, init also checks that the bot can read the channel (the bot needs
 channels:history, or groups:history for a private channel, and must be a member of the channel), and a channel name is
@@ -71,7 +71,7 @@ skipped, and a channel must be given by ID.
 // defaultInitNamespace is the namespace of the release when --namespace is not given: the one the install guide uses.
 const defaultInitNamespace = "agent-kourier"
 
-// The names the generated values and the printed commands use; they are the ones the install guide and the starter file use.
+// The names the generated values and the printed commands use; they are the ones the guides and the starter file use.
 const (
 	slackSecretName      = "slack"
 	agentTokenSecretName = "agent-kourier-agent-token" //nolint:gosec // G101: the name of a Secret, not a credential
@@ -83,12 +83,6 @@ const (
 const (
 	sourceCRDs  = "crds"
 	sourceFiles = "files"
-)
-
-// The files that init writes beside the values file on custom resources.
-const (
-	platformFileName = "platform.yaml"
-	teamFileName     = "team.yaml"
 )
 
 // resourceAPIVersion is the apiVersion the chart gives each resource file (templates/_helpers.tpl, agentkourier.resource).
@@ -148,6 +142,7 @@ func parseInitArgs(args []string) (initOptions, error) {
 			o.agentTokenSet = true
 		}
 	})
+	o.out = strings.TrimSpace(o.out) // before any path is made from it
 	switch {
 	case fs.NArg() > 0:
 		return o, errors.New("unexpected argument at position 1; the command takes options only")
@@ -196,16 +191,13 @@ func runInit(ctx context.Context, o initOptions, ver string, stdin io.Reader, ge
 	if err != nil {
 		return usagef("%w", err)
 	}
-	paths, err := o.paths()
-	if err != nil {
+	// The values file is known before the questions, and the team's file once the team's namespace is.
+	if err := refuseExisting(o.out, o.force); err != nil {
 		return err
 	}
-	if !o.force {
-		for _, p := range paths {
-			if _, err := os.Lstat(p); err == nil { //nolint:gosec // G703: the operator names the files, in a directory of their choosing
-				return usagef("%s exists; name another file with --out, or overwrite it with --force", p)
-			}
-		}
+	// A token in an option is refused before a question can show it as a default.
+	if err := o.refuseTokens(); err != nil {
+		return err
 	}
 	asker := &prompter{in: bufio.NewReader(stdin), out: stderr}
 	if err := o.fill(asker, haveToken); err != nil {
@@ -213,6 +205,15 @@ func runInit(ctx context.Context, o initOptions, ver string, stdin io.Reader, ge
 	}
 	if err := o.validate(); err != nil {
 		return err
+	}
+	paths, err := o.paths()
+	if err != nil {
+		return err
+	}
+	for _, p := range paths[1:] {
+		if err := refuseExisting(p, o.force); err != nil {
+			return err
+		}
 	}
 	// The signals cancel the Slack requests from here on. They are not caught while the questions are asked: a question
 	// waits on stdin, which no context ends, so a caught Ctrl-C there would be lost and the command would not stop.
@@ -258,15 +259,18 @@ func runInit(ctx context.Context, o initOptions, ver string, stdin io.Reader, ge
 		if files, err = renderInitResources(v, paths); err != nil {
 			return err
 		}
-		if err := checkInitResources(ctx, files[1:]); err != nil {
+		if err := checkInitResources(ctx, files[1]); err != nil {
 			return usagef("the resources would not load: %w", err)
 		}
-		note("checked: Agent Kourier loads %s and %s, and the Binding's references to the ChatConnection and the AgentBackend resolve", platformFileName, teamFileName)
+		note("checked: Agent Kourier loads %s, and the Binding's references to the ChatConnection and the AgentBackend resolve", filepath.Base(paths[1]))
 	}
 
 	if client != nil {
 		// Reading from now on reaches conversations.history, and so finds a missing scope or an uninvited bot.
-		conn := v1alpha1.NamespacedName(o.namespace, "slack")
+		conn := v1alpha1.NamespacedName(o.namespace, slackSecretName)
+		if o.source == sourceCRDs {
+			conn = v1alpha1.NamespacedName(o.teamNamespace, teamConnectionName(o.teamNamespace))
+		}
 		if _, err := client.History(ctx, conn, channel, time.Now()); err != nil {
 			return fmt.Errorf("check that the bot can read %s: %w%s", channel, err, slackHint(err))
 		}
@@ -282,19 +286,37 @@ func runInit(ctx context.Context, o initOptions, ver string, stdin io.Reader, ge
 	return nil
 }
 
-// paths returns the files init writes: the values file, and on custom resources platform.yaml and team.yaml in its
-// directory. The values file may not be one of the other two.
+// paths returns the files init writes: the values file, and on custom resources the team's file, named after the team's
+// namespace, in its directory. The values file may not be the team's.
 func (o initOptions) paths() ([]string, error) {
 	if o.source == sourceFiles {
 		return []string{o.out}, nil
 	}
-	dir := filepath.Dir(o.out)
-	platform, team := filepath.Join(dir, platformFileName), filepath.Join(dir, teamFileName)
-	if clean := filepath.Clean(o.out); clean == platform || clean == team {
-		return nil, usagef("--out %s is where init writes %s; name the values file otherwise", o.out, filepath.Base(clean))
+	team := filepath.Join(filepath.Dir(o.out), o.teamNamespace+".yaml")
+	if filepath.Clean(o.out) == team {
+		return nil, usagef("--out %s is where init writes the team's file, %s; name the values file otherwise", o.out, filepath.Base(team))
 	}
-	return []string{o.out, platform, team}, nil
+	return []string{o.out, team}, nil
 }
+
+// refuseExisting is the error for anything that exists at path, a symbolic link included, unless force says to overwrite
+// it. Even with force only a regular file is overwritten, so that a run with several files does not stop after replacing
+// some of them.
+func refuseExisting(path string, force bool) error {
+	fi, err := os.Lstat(path) //nolint:gosec // G703: the operator names the files, in a directory of their choosing
+	switch {
+	case err != nil:
+		return nil
+	case !force:
+		return usagef("%s exists; name another file with --out, or overwrite it with --force", path)
+	case !fi.Mode().IsRegular():
+		return usagef("%s is not a regular file, and --force overwrites only a file; name another file with --out", path)
+	}
+	return nil
+}
+
+// teamConnectionName is the name of the team's ChatConnection and of its Secret: the team-app guide's.
+func teamConnectionName(team string) string { return team + "-slack" }
 
 // joinNames returns the names as a list in a sentence: "a", "a and b", or "a, b and c".
 func joinNames(names []string) string {
@@ -356,7 +378,7 @@ func (o *initOptions) fill(p *prompter, haveToken bool) error {
 		{"agent-namespace", "Agent namespace", &none, &o.agentNamespace},
 	}
 	if o.source == sourceCRDs {
-		questions = append(questions, question{"team-namespace", "Team namespace, where the Binding goes", &o.agentNamespace, &o.teamNamespace})
+		questions = append(questions, question{"team-namespace", "Team namespace, where its Slack app and Binding go", &o.agentNamespace, &o.teamNamespace})
 	}
 	questions = append(questions,
 		question{"agent-name", "Agent name", &none, &o.agentName},
@@ -369,6 +391,9 @@ func (o *initOptions) fill(p *prompter, haveToken bool) error {
 		answer, ok := p.ask(f.label, strings.TrimSpace(*f.def), false)
 		if !ok {
 			return usagef("--%s is required: give it, or answer when it is asked (the input ended)", f.option)
+		}
+		if tokenShape.MatchString(answer) { // refused before a later question can show it as a default
+			return tokenRefusal(f.option)
 		}
 		*f.dst = answer
 	}
@@ -387,13 +412,8 @@ func (o *initOptions) validate() error {
 	}
 	o.channel = strings.TrimPrefix(o.channel, "#")
 	// A token in a value is refused before any value is echoed, here or by the check of the file.
-	for _, v := range []struct{ option, value string }{
-		{"dialect", o.dialect}, {"agent-url", o.agentURL}, {"agent-namespace", o.agentNamespace}, {"team-namespace", o.teamNamespace}, {"agent-name", o.agentName},
-		{"channel", o.channel}, {"namespace", o.namespace}, {"out", o.out},
-	} {
-		if tokenShape.MatchString(v.value) {
-			return usagef("--%s looks like a Slack token; a token is never an option or an answer", v.option)
-		}
+	if err := o.refuseTokens(); err != nil {
+		return err
 	}
 	switch {
 	case !slices.Contains([]string{string(v1alpha1.DialectA2A), string(v1alpha1.DialectKagentV1)}, o.dialect):
@@ -406,6 +426,24 @@ func (o *initOptions) validate() error {
 		return usagef("--team-namespace %q is not a namespace name: lower case letters, digits and dashes, at most 63", o.teamNamespace)
 	}
 	return nil
+}
+
+// refuseTokens refuses a value that looks like a Slack token, naming its option and not the value.
+func (o *initOptions) refuseTokens() error {
+	for _, v := range []struct{ option, value string }{
+		{"dialect", o.dialect}, {"agent-url", o.agentURL}, {"agent-namespace", o.agentNamespace}, {"team-namespace", o.teamNamespace}, {"agent-name", o.agentName},
+		{"channel", o.channel}, {"namespace", o.namespace}, {"out", o.out},
+	} {
+		if tokenShape.MatchString(v.value) {
+			return tokenRefusal(v.option)
+		}
+	}
+	return nil
+}
+
+// tokenRefusal is the usage error for a token given as the option's value or answer.
+func tokenRefusal(option string) error {
+	return usagef("--%s looks like a Slack token; a token is never an option or an answer", option)
 }
 
 // isNamespaceName reports whether s is a DNS-1123 label, what a namespace is called.
@@ -497,59 +535,45 @@ config:
         interactions: {askUser: false}
 `
 
-// The custom resources that init writes beside the values on the chart's default route: the values name the ChatConnection the
-// broker serves, platform.yaml holds the platform team's two shared resources and team.yaml the team's Binding. They are
-// the files of the install guide's "Install on custom resources" with the person's values in them; a test holds them together.
+// The files that init writes on the chart's default route, custom resources, for a broker with no Slack app of its own:
+// the values admit the team's namespace, and the team's file holds the team's ChatConnection, AgentBackend and Binding,
+// all in that namespace. They are the files of the team-app guide's recorded path with the person's values in them; a
+// test holds them together.
 const (
-	initCRValuesTemplate = `# A first install of the Agent Kourier Helm chart on custom resources, the chart's default route: one Slack
-# connection, one agent and one channel.
+	initCRValuesTemplate = `# A first install of the Agent Kourier Helm chart on custom resources, the chart's default route, for a broker
+# with no Slack app of its own: it serves the ChatConnection that the team makes in its namespace with the team's app.
 #
-# Written by "agent-kourier init", with {{ .PlatformFile }} and {{ .TeamFile }} beside it: install the chart with this file, which brings
-# the CRDs, then apply the two. The steps are in https://agentkourier.dev/how-to/install-with-helm/#install-on-custom-resources.
+# Written by "agent-kourier init", with {{ .TeamFile }} beside it, which the team applies once the chart is installed. The
+# steps are in https://agentkourier.dev/how-to/team-slack-app/#the-whole-path-recorded.
 # Keep the file: an upgrade passes it again.
 config:
-  # The ChatConnection the broker serves, as namespace/name: the one in {{ .PlatformFile }}. The chart grants the broker the
-  # Secret of the same name, which holds its tokens.
-  chatConnection: {{ q .Connection }}
-{{- if .AgentToken }}
-
-# The Binding's token Secret, in the team's namespace. No other value names it, so this grants the broker list and watch
-# on it by name.
-rbac:
-  secretNames:
-    {{ q .TeamNamespace }}: [{{ .TokenSecret }}]
-{{- end }}
+  # The namespaces whose ChatConnections the broker serves. It has none of its own, so it names no config.chatConnection.
+  connectionNamespaces: [{{ q .TeamNamespace }}]
 `
 
-	initPlatformTemplate = `# The platform team's resources for Agent Kourier: the Slack connection and the agent, shared with the team's namespace,
-# whose Binding in {{ .TeamFile }} names them. Written by "agent-kourier init"; apply it once the chart is installed.
+	initTeamTemplate = `# The team's resources for Agent Kourier, all in the team's namespace: the team's Slack app, its agent, and which
+# channel talks to which. Written by "agent-kourier init". Apply it once the chart is installed, after the Secret and the
+# Role that grants it to the broker; the ChatConnection comes first.
 apiVersion: {{ .APIVersion }}
 kind: ChatConnection
 metadata:
   name: {{ .ConnectionName }}
-  namespace: {{ q .Namespace }}
+  namespace: {{ q .TeamNamespace }}
 spec:
   platform: slack
-  # The Secret holds the bot token and the app-level token under the keys botToken and appToken, in this namespace.
-  credentialsSecretRef: {name: {{ .SlackSecret }}}
-  # The namespaces whose Bindings may name this connection.
-  allowedNamespaces: [{{ q .TeamNamespace }}]
+  # The Secret holds the team's bot token and app-level token under the keys botToken and appToken, in this namespace.
+  credentialsSecretRef: {name: {{ .ConnectionName }}}
 ---
 apiVersion: {{ .APIVersion }}
 kind: AgentBackend
 metadata:
   name: {{ .BackendName }}
-  namespace: {{ q .Namespace }}
+  namespace: {{ q .TeamNamespace }}
 spec:
   dialect: {{ q .Dialect }}
   # {{ .BackendComment }}
   url: {{ q .AgentURL }}
-  # The namespaces whose Bindings may name this backend.
-  allowedNamespaces: [{{ q .TeamNamespace }}]
-`
-
-	initTeamTemplate = `# The team's Binding: which channel talks to which agent. Written by "agent-kourier init". It is in the team's namespace
-# and names the ChatConnection and the AgentBackend of {{ .PlatformFile }} in theirs; apply it after {{ .PlatformFile }}.
+---
 apiVersion: {{ .APIVersion }}
 kind: Binding
 metadata:
@@ -557,7 +581,7 @@ metadata:
   namespace: {{ q .TeamNamespace }}
 spec:
   agent:
-    backendRef: {name: {{ .BackendName }}, namespace: {{ q .Namespace }}}
+    backendRef: {name: {{ .BackendName }}}
     namespace: {{ q .AgentNamespace }}
     name: {{ q .AgentName }}
   identity:
@@ -572,18 +596,15 @@ spec:
     userId: agent-kourier
 {{- end }}
   chat:
-    connectionRef: {name: {{ .ConnectionName }}, namespace: {{ q .Namespace }}}
+    connectionRef: {name: {{ .ConnectionName }}}
     channel: {{ q .Channel }}
     output: live
   interactions: {askUser: false}
 `
 )
 
-// The names of the ChatConnection and the AgentBackend that init writes, which the values, the Binding and the guide use.
-const (
-	initConnectionName = "slack"
-	initBackendName    = "agent"
-)
+// initBackendName is the name of the AgentBackend that init writes on either route.
+const initBackendName = "agent"
 
 // initFile is a file that init writes, and what it holds.
 type initFile struct {
@@ -596,11 +617,10 @@ func renderInitValues(v initValues) ([]byte, error) {
 	return renderInitTemplate("values", initValuesTemplate, v)
 }
 
-// renderInitResources writes the three files of the custom-resource route for v, at paths: the values, platform.yaml
-// and team.yaml.
+// renderInitResources writes the two files of the custom-resource route for v, at paths: the values and the team's file.
 func renderInitResources(v initValues, paths []string) ([]initFile, error) {
 	var files []initFile
-	for i, tmpl := range []string{initCRValuesTemplate, initPlatformTemplate, initTeamTemplate} {
+	for i, tmpl := range []string{initCRValuesTemplate, initTeamTemplate} {
 		data, err := renderInitTemplate(filepath.Base(paths[i]), tmpl, v)
 		if err != nil {
 			return nil, err
@@ -622,11 +642,10 @@ func renderInitTemplate(name, text string, v initValues) ([]byte, error) {
 	}
 	data := struct {
 		initValues
-		BindingName, TokenSecret, BackendComment, APIVersion, ConnectionName, BackendName, SlackSecret, Connection string
-		PlatformFile, TeamFile                                                                                     string
+		BindingName, TokenSecret, BackendComment, APIVersion, ConnectionName, BackendName, TeamFile string
 	}{
-		v, initBindingName, agentTokenSecretName, comment, resourceAPIVersion, initConnectionName, initBackendName, slackSecretName,
-		v1alpha1.NamespacedName(v.Namespace, initConnectionName), platformFileName, teamFileName,
+		v, initBindingName, agentTokenSecretName, comment, resourceAPIVersion, teamConnectionName(v.TeamNamespace), initBackendName,
+		v.TeamNamespace + ".yaml",
 	}
 	var b bytes.Buffer
 	if err := t.Execute(&b, data); err != nil {
@@ -638,17 +657,17 @@ func renderInitTemplate(name, text string, v initValues) ([]byte, error) {
 // checkInitResources loads the resource files with the loader of the broker, which defaults and validates each object,
 // and resolves the references between them as the broker does, with every Secret taken as present: a Binding of the
 // team's namespace may name the ChatConnection and the AgentBackend only if each allows that namespace. The error names
-// the file, the resource and the field.
-func checkInitResources(ctx context.Context, files []initFile) error {
+// checkInitResources loads the team's file with the loader of the broker, which defaults and validates each object, and
+// resolves the references between its objects as the broker does, with every Secret taken as present. The error names the
+// file, the resource and the field.
+func checkInitResources(ctx context.Context, f initFile) error {
 	dir, err := os.MkdirTemp("", "agent-kourier-init-")
 	if err != nil {
 		return fmt.Errorf("make a directory for the check: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
-	for _, f := range files {
-		if err := os.WriteFile(filepath.Join(dir, filepath.Base(f.path)), f.data, 0o600); err != nil {
-			return fmt.Errorf("write %s for the check: %w", filepath.Base(f.path), err)
-		}
+	if err := os.WriteFile(filepath.Join(dir, filepath.Base(f.path)), f.data, 0o600); err != nil {
+		return fmt.Errorf("write %s for the check: %w", filepath.Base(f.path), err)
 	}
 	set, err := config.Load(ctx, dir)
 	if err != nil {
@@ -753,13 +772,16 @@ func writeInitFile(path string, data []byte, force bool) error {
 		return usagef("%s exists; name another file with --out, or overwrite it with --force", path)
 	}
 	if err != nil {
-		return fmt.Errorf("write the values: %w", err)
-	}
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
 		return fmt.Errorf("write %s: %w", path, err)
 	}
-	if err := f.Close(); err != nil {
+	_, err = f.Write(data)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		if !force { // the file is this run's: leave no half of it
+			_ = os.Remove(path)
+		}
 		return fmt.Errorf("write %s: %w", path, err)
 	}
 	return nil
@@ -780,29 +802,54 @@ func shellWord(s string) string {
 // The install names the chart version of the release that ver is. A build that is no release (dev) names none, and
 // says so, and Helm then takes the newest chart.
 func nextSteps(o initOptions, ver string) string {
+	if o.source == sourceCRDs {
+		return teamAppNextSteps(o, ver)
+	}
 	var b strings.Builder
 	b.WriteString("Next, with SLACK_BOT_TOKEN and SLACK_APP_TOKEN set (see https://agentkourier.dev/how-to/configure-slack/):\n\n")
 	fmt.Fprintf(&b, "kubectl create namespace %s\n", o.namespace)
 	fmt.Fprintf(&b, "kubectl -n %s create secret generic %s \\\n  --from-literal=botToken=\"$SLACK_BOT_TOKEN\" \\\n  --from-literal=appToken=\"$SLACK_APP_TOKEN\"\n", o.namespace, slackSecretName)
-	switch {
-	case o.agentToken && o.source == sourceCRDs:
-		fmt.Fprintf(&b, "\n# AGENT_TOKEN is the bearer token the agent accepts for the Binding's identity; the Secret goes in the Binding's namespace\nkubectl -n %s create secret generic %s --from-literal=token=\"$AGENT_TOKEN\"\n", o.teamNamespace, agentTokenSecretName)
-	case o.agentToken:
+	if o.agentToken {
 		fmt.Fprintf(&b, "\n# AGENT_TOKEN is the bearer token the agent accepts for the Binding's identity\nkubectl -n %s create secret generic %s --from-literal=token=\"$AGENT_TOKEN\"\n", o.namespace, agentTokenSecretName)
 	}
 	b.WriteString("\n")
+	writeHelmInstall(&b, o, ver)
+	return b.String()
+}
+
+// teamAppNextSteps is nextSteps on custom resources, as the team-app guide's recorded path runs them: the platform team
+// installs the broker, and the team makes its Slack app's Secret, grants it (and the agent's token, if there is one) to the
+// broker's ServiceAccount, and applies its file. The ServiceAccount is the chart's for the release agent-kourier.
+func teamAppNextSteps(o initOptions, ver string) string {
+	team, conn := o.teamNamespace, teamConnectionName(o.teamNamespace)
+	role := "agent-kourier-secrets-" + team
+	var b strings.Builder
+	fmt.Fprintf(&b, "Next, as the platform team, the namespace and the broker, which serves the ChatConnections of %s:\n\n", team)
+	fmt.Fprintf(&b, "kubectl create namespace %s\n", o.namespace)
+	writeHelmInstall(&b, o, ver)
+	fmt.Fprintf(&b, "\nThen, as the team, in its namespace %s, which must exist (see https://agentkourier.dev/how-to/team-slack-app/):\n\n", team)
+	grant := " --resource-name=" + conn
+	if o.agentToken {
+		fmt.Fprintf(&b, "# AGENT_TOKEN is the bearer token the agent accepts for the Binding's identity; the Secret goes in the Binding's namespace\nkubectl -n %s create secret generic %s --from-literal=token=\"$AGENT_TOKEN\"\n\n", team, agentTokenSecretName)
+		grant += " --resource-name=" + agentTokenSecretName
+	}
+	b.WriteString("# The team's Slack app: a file that only you can read, with the lines botToken=<bot token> and appToken=<app-level token>\n")
+	fmt.Fprintf(&b, "kubectl -n %s create secret generic %s \\\n  --from-env-file=\"$HOME/.config/%s/slack-secret.env\"\n", team, conn, team)
+	fmt.Fprintf(&b, "kubectl -n %s create role %s --verb=list,watch \\\n  --resource=secrets%s\n", team, role, grant)
+	fmt.Fprintf(&b, "kubectl -n %s create rolebinding %s --role=%s \\\n  --serviceaccount=%s:agent-kourier\n", team, role, role, o.namespace)
+	file := shellWord(filepath.Join(filepath.Dir(o.out), team+".yaml"))
+	fmt.Fprintf(&b, "\nkubectl apply --dry-run=server -f %s\nkubectl apply -f %s\nkubectl -n %s get akbinding\n", file, file, team)
+	return b.String()
+}
+
+// writeHelmInstall writes the helm install command of the release. It names the chart version of the release that ver is;
+// a build that is no release (dev) names none, and says so, and Helm then takes the newest chart.
+func writeHelmInstall(b *strings.Builder, o initOptions, ver string) {
 	version := ""
 	if m := releaseVersion.FindStringSubmatch(ver); m != nil {
 		version = " --version " + m[1]
 	} else {
-		fmt.Fprintf(&b, "# This build is %q, not a release, so no chart version is named: Helm takes the newest chart.\n", ver)
+		fmt.Fprintf(b, "# This build is %q, not a release, so no chart version is named: Helm takes the newest chart.\n", ver)
 	}
-	fmt.Fprintf(&b, "helm install agent-kourier %s%s \\\n  -n %s -f %s\n", chartReference, version, o.namespace, shellWord(o.out))
-	if o.source == sourceCRDs {
-		dir := filepath.Dir(o.out)
-		platform, team := shellWord(filepath.Join(dir, platformFileName)), shellWord(filepath.Join(dir, teamFileName))
-		b.WriteString("\n# Once the chart is installed (it brings the CRDs): the platform team's file, then the team's\n")
-		fmt.Fprintf(&b, "kubectl apply --dry-run=server -f %s -f %s\nkubectl apply -f %s\nkubectl apply -f %s\nkubectl get akbinding -A\n", platform, team, platform, team)
-	}
-	return b.String()
+	fmt.Fprintf(b, "helm install agent-kourier %s%s \\\n  -n %s -f %s\n", chartReference, version, o.namespace, shellWord(o.out))
 }
