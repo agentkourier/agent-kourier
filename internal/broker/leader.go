@@ -58,16 +58,20 @@ func (h *leaderHalf) openPlatform(conn Connection, onConnection func(connected b
 }
 
 // start starts the leader half on the connections as they are now (a standby that leads hours after it started must not use
-// the tokens it saw at start: a takeover is a restart to the new leader): the own connection's runtime, and a supervisor that starts
-// the team connections' (supervisor), the first of them from the ones read with the own. Its parts run on
+// the tokens it saw at start: a takeover is a restart to the new leader): the own connection's runtime, if the broker has one (spec D53), and a supervisor
+// that starts the team connections' (supervisor), the first of them from the ones read with the own. Its parts run on
 // runCtx (the broker's own, which only the shutdown ends; ctx is Run's, the signal, which it only logs with). It returns the channel that says how the own
-// connection's run ended: a team connection's run ends nothing but itself. An error
+// connection's run ended: a team connection's run ends nothing but itself. With no own connection nothing ends the leader half but the shutdown and
+// the failure of a part it shares, so the channel receives only once runCtx has ended. An error
 // from a step is returned as it is; whatever started before it has registered its stop. It must not be called twice, or
 // once a shutdown has begun (Run's startGate sees to both).
 func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-chan error, error) {
 	cfg, log, sd, metrics, boot, st := h.cfg, h.log, h.sd, h.metrics, h.boot, h.st
-	conn := chosen.Own
-	connName := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
+	own := chosen.Own // nil when the broker has no own connection (spec D53)
+	var connName string
+	if own != nil {
+		connName = v1alpha1.NamespacedName(own.Ref.Namespace, own.Ref.Name)
+	}
 	var auditLog store.Audit = st
 	if cfg.auditStore != nil {
 		auditLog = cfg.auditStore(st)
@@ -84,9 +88,11 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	// connections that run, which the supervisor adds the team connections' to and takes them from.
 	table := newRuntimeTable()
 	host := &runtimeHost{cfg: cfg, log: log, metrics: metrics, table: table, open: h.openPlatform, parent: runCtx}
-	ownRT, err := host.build(conn)
-	if err != nil {
-		return nil, err
+	var ownRT *connRuntime
+	if own != nil {
+		if ownRT, err = host.build(*own); err != nil {
+			return nil, err
+		}
 	}
 	var platforms chat.Resolver[chat.Platform] = table
 	// The Bindings take the acknowledgment reaction of the platform of their own connection, so the platform is built first.
@@ -98,14 +104,20 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	}
 	sd.add(stepPool, func(context.Context) { bindings.Close() })
 
-	// The rows that were written before connections were recorded are this connection's, and are named so before the outbox
-	// reconciles or a session recovers: nothing reads a row that belongs to nobody.
-	if err := attributeStoredRows(runCtx, st, log, connName); err != nil {
+	// The rows that were written before connections were recorded are the own connection's, and are named so before the outbox
+	// reconciles or a session recovers: nothing reads a row that belongs to nobody. With no own connection there is none to name, and the start
+	// is refused while any exist.
+	if own != nil {
+		err = attributeStoredRows(runCtx, st, log, connName)
+	} else {
+		err = refuseUnattributedRows(runCtx, st)
+	}
+	if err != nil {
 		return nil, err
 	}
 	ob, err := outbox.New(outbox.Config{
 		Store: st, Platforms: table.outbox(), Logger: log, OnAbandon: metrics.OutboxAbandoned,
-		// A row whose producer names no connection is the own connection's.
+		// A row whose producer names no connection is the own connection's; with none, no producer relies on it.
 		DefaultConnection: connName,
 	})
 	if err != nil {
@@ -231,9 +243,13 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	refused := &refusals{}
 	parts.served = connectionServed(boot.Reloader.Report, connName, refused) // the timeout sweep ends the interactions of a connection that is refused or gone without the agent
 	// The connections the verification probes the Bindings of: the supervisor publishes the list after each of its passes (supervisor.publish),
-	// and until the first the own connection's alone.
+	// and until the first the own connection's alone, if there is one.
 	connsServed := h.connsServed
-	connsServed.Store(&[]Connection{conn})
+	if own != nil {
+		connsServed.Store(&[]Connection{*own})
+	} else {
+		connsServed.Store(&[]Connection{})
+	}
 	var connsChanged atomic.Uint64
 	if h.status != nil {
 		if boot.Source == nil {
@@ -247,13 +263,19 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 			return nil, fmt.Errorf("binding status: %w", err)
 		}
 	}
-	prober = verification{
-		Own: conn.Ref, Bindings: bindings, Platforms: chat.Narrow[platformReader](platforms), Conns: func() []Connection { return *connsServed.Load() },
+	verify := verification{
+		Bindings: bindings, Platforms: chat.Narrow[platformReader](platforms), Conns: func() []Connection { return *connsServed.Load() },
 		Snaps: boot.Reloader, Revision: func(ctx context.Context) string {
 			return boot.Reloader.Revision(ctx) + "/" + strconv.FormatUint(connsChanged.Load(), 10)
 		}, Secrets: boot.Secrets, Metrics: metrics, Log: log, Interval: cfg.probeEvery, Tick: cfg.probeTick, MinRevisionGap: cfg.probeGap,
 		Status: statusW,
-	}.newProber()
+	}
+	if own != nil {
+		verify.Own = own.Ref
+	} else {
+		verify.NoOwn = true
+	}
+	prober = verify.newProber()
 	if statusW != nil {
 		refused.changed = statusW.notify
 	}
@@ -287,18 +309,25 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 		}
 		return botGuard{in: chat.NewIntake(intakeCfg), self: v1alpha1.NamespacedName(ref.Namespace, ref.Name), bots: table, log: log}, nil
 	}
-	ownSink, err := newIntake(conn.Ref)
-	if err != nil {
-		return nil, err
-	}
 	chatDone := make(chan error, 1)
-	parts.traced("open-intake")
-	host.run(ownRT, ownSink, func(_ *connRuntime, err error) { chatDone <- err })
+	if own != nil {
+		ownSink, err := newIntake(own.Ref)
+		if err != nil {
+			return nil, err
+		}
+		parts.traced("open-intake")
+		host.run(ownRT, ownSink, func(_ *connRuntime, err error) { chatDone <- err })
+	} else {
+		parts.traced("open-intake")
+		// Nothing to end the leader half but the shutdown: the channel receives once the broker's own context has ended, so that the goroutine
+		// that waits on it ends with Run.
+		go func() { <-runCtx.Done(); chatDone <- nil }()
+	}
 	// The team connections: started by the supervisor, from the ones read with the own connection and then from the snapshot at each of its
 	// looks. A team connection that cannot start yet (its Secret has not synced) starts when it can, and none fails this start.
 	sup := &supervisor{
 		host: host, log: log, every: cmp.Or(cfg.superviseEvery, defaultSuperviseEvery), snapshot: boot.Reloader.Current, secrets: boot.Secrets,
-		own: conn, identify: cfg.identityOf, intake: newIntake, refusals: refused, conns: connsServed, changes: &connsChanged, gone: ob.Forget,
+		own: own, identify: cfg.identityOf, intake: newIntake, refusals: refused, conns: connsServed, changes: &connsChanged, gone: ob.Forget,
 		removed: metrics.ConnectionRemoved, recover: mgr.RecoverConnection,
 		done: make(chan struct{}), teams: map[string]*teamRuntime{}, seen: map[string]bool{}, lives: map[string]*connLife{}, said: map[string]string{},
 	}

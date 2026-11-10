@@ -707,6 +707,8 @@ type verification struct {
 	// Own is the broker's own connection. Every other connection is a team connection, which the supervisor restarts by itself, and its
 	// Bindings are told so where the own connection's are told to restart Agent Kourier. The zero value means no connection is a team's.
 	Own v1alpha1.ObjectRef
+	// NoOwn says the broker has no own connection (spec D53): every connection is a team connection, whatever Own says.
+	NoOwn bool
 	// Conns lists the connections the broker serves, running or not: the Bindings on any other are not probed. Credentials are the tokens
 	// the connection's platform was built with, which Secrets is read against to tell a changed Secret; a connection that is not
 	// running has none, and then no change is told. It is called from the probes, which run concurrently, so it must be safe for
@@ -772,7 +774,7 @@ func (v verification) chatOf(conn string) (platformReader, credentialsWatch, err
 			ref, baseline = c.Ref, c.Credentials
 		}
 	}
-	team := v.Own != (v1alpha1.ObjectRef{}) && conn != v1alpha1.NamespacedName(v.Own.Namespace, v.Own.Name)
+	team := v.NoOwn || (v.Own != (v1alpha1.ObjectRef{}) && conn != v1alpha1.NamespacedName(v.Own.Namespace, v.Own.Name))
 	return platform, credentialsWatch{baseline: baseline, secrets: v.Secrets, selfRestarting: team,
 		where: func() (string, string, bool) { return v.credentialsSecret(ref) }}, nil
 }

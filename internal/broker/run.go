@@ -13,6 +13,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/config"
+	"github.com/agentkourier/agent-kourier/internal/identity"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/postgres"
@@ -26,9 +27,9 @@ import (
 //
 // The order is klog (before anything uses client-go, so even its first line is capped and routed),
 // the Kubernetes client, the health server (so that /healthz answers from here on), Bootstrap (the
-// config, from files or, with cfg.ConfigSource crds, from the custom resources of the cluster, and the Secret caches), the one ChatConnection, the store (SQLite, or Postgres with its DSN read from
+// config, from files or, with cfg.ConfigSource crds, from the custom resources of the cluster, and the Secret caches), the broker's own ChatConnection if it has one (spec D53), the store (SQLite, or Postgres with its DSN read from
 // a Secret: cfg.Store), and then readiness: /readyz says 503 "starting" until the last of those is done. The
-// connection comes before the store, so a config that v1 cannot serve leaves no database behind. That is what every
+// own connection comes before the store, so a config that v1 cannot serve leaves no database behind. That is what every
 // replica runs, a standby included (spec 11).
 //
 // What only the leader runs follows, as leaderHalf.start has it: the audit writer, the Bindings, the chat platform,
@@ -175,16 +176,19 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	schemaDone := startSchemaWatch(runCtx, crds, log, metrics)
 	sd.add(stepResolver, func(c context.Context) { cancel(); waitFor(c, schemaDone); boot.Reloader.Wait(); boot.Stop() }) // the Reloader stops before the resolver
 
-	conn, err := ChooseConnection(runCtx, boot.Reloader.Current(), cfg.ChatConnection, boot.Secrets)
-	if err != nil {
-		return err
-	}
-	connName := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
-	log.InfoContext(ctx, "serving a ChatConnection", "connection", connName)
 	// The connections served, which the leader half's supervisor keeps (supervisor.publish): the own connection until it does, so that a replica that
-	// does not lead names its own. The store's outbox gauges say 0 for each of them that has no unposted row.
+	// does not lead names its own. The store's outbox gauges say 0 for each of them that has no unposted row. A broker with no own connection starts
+	// with none: it has no ChatConnection to find, and its team connections are the leader's to start.
 	var connsServed atomic.Pointer[[]Connection]
-	connsServed.Store(&[]Connection{conn})
+	connsServed.Store(&[]Connection{})
+	if !cfg.noOwnConnection() {
+		conn, err := ChooseConnection(runCtx, boot.Reloader.Current(), cfg.ChatConnection, boot.Secrets)
+		if err != nil {
+			return err
+		}
+		log.InfoContext(ctx, "serving a ChatConnection", "connection", v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name))
+		connsServed.Store(&[]Connection{conn})
+	}
 
 	// A write that finds another replica has led since ends the process (spec D37): the error alone would be handled
 	// by whichever part made the write, and the part could carry on. SQLite never calls it.
@@ -251,7 +255,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		}
 		// The connection and its Secrets as they are now: the startup read above only checks that the config can be served.
 		// Everything else the leader half uses (the Bindings, the config snapshot, the Secrets) it reads live.
-		current, err := ChooseConnections(runCtx, boot.Reloader.Current(), cfg.ChatConnection, boot.Secrets)
+		current, err := chooseConnections(runCtx, cfg, boot.Reloader.Current(), boot.Secrets)
 		if err != nil {
 			leave()
 			leaderDone <- err
@@ -297,6 +301,21 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		served <- err // for the cleanup, which waits for it too
 		return fmt.Errorf("the health server stopped before the broker did: %w", err)
 	}
+}
+
+// noOwnConnection says the broker has no ChatConnection of its own (spec D53): it reads the custom resources and is given none. The files
+// route always has the one connection of its directory, whose reference is the zero value too.
+func (c RunConfig) noOwnConnection() bool {
+	return c.source() == SourceCRDs && c.ChatConnection == (v1alpha1.ObjectRef{})
+}
+
+// chooseConnections are the connections a leader half starts on: the own connection, if the broker has one, and the team connections. With no
+// own connection that is every ChatConnection of the snapshot, none of which can fail the start (ChooseTeamConnections).
+func chooseConnections(ctx context.Context, cfg RunConfig, snap *config.Snapshot, secrets identity.SecretReader) (Connections, error) {
+	if cfg.noOwnConnection() {
+		return ChooseTeamConnections(ctx, snap, secrets), nil
+	}
+	return ChooseConnections(ctx, snap, cfg.ChatConnection, secrets)
 }
 
 // takeLeadership gives the store its epoch, trying again until the time the leader is allowed to renew its lease has

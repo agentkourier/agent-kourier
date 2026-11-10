@@ -23,8 +23,8 @@ const defaultSuperviseEvery = 5 * time.Second
 
 // supervisor keeps one runtime for each team ChatConnection the Snapshot serves (spec D52): it starts the ones that have none, restarts one whose
 // ChatConnection or credentials changed (the fingerprint of TeamConnection), and stops the ones the Snapshot no longer serves. A connection whose
-// Secret cannot be read yet is started once it can, and never fails the broker. The own connection is not its to start or stop: its tokens apply at a
-// restart (spec D50 (6)), and it is only counted first when two connections are of one Slack app.
+// Secret cannot be read yet is started once it can, and never fails the broker. The own connection, if the broker has one (spec D53), is not its to start
+// or stop: its tokens apply at a restart (spec D50 (6)), and it is only counted first when two connections are of one Slack app.
 //
 // Its loop is one goroutine, and everything in the struct but the host is its own. A failure of a team connection stops that connection only: its
 // run ends, it leaves the table, and the table keeps why (a rejected credential, or a Secret that cannot be used), which the verification of its
@@ -37,8 +37,9 @@ type supervisor struct {
 	every    time.Duration
 	snapshot func() *config.Snapshot
 	secrets  identity.SecretReader
-	// own is the broker's own connection, whose identity comes first when two connections are of one Slack app.
-	own      Connection
+	// own is the broker's own connection, whose identity comes first when two connections are of one Slack app. Nil when the broker has none (spec D53):
+	// there is no identity to wait for, and the oldest connection of an app holds it.
+	own      *Connection
 	identify func(ctx context.Context, conn Connection) (appIdentity, error)
 	// intake builds the Sink of a connection's platform.
 	intake   func(ref v1alpha1.ObjectRef) (chat.Sink, error)
@@ -123,12 +124,20 @@ func (s *supervisor) run(ctx context.Context, initial []TeamConnection) {
 			return
 		case <-tick.C:
 		}
-		desired = teamConnections(ctx, s.snapshot(), s.own.Ref, s.secrets)
+		desired = teamConnections(ctx, s.snapshot(), s.ownRef(), s.secrets)
 	}
 }
 
+// ownRef is the own connection's reference, or the zero value when the broker has none, which teamConnections reads as leaving none out.
+func (s *supervisor) ownRef() v1alpha1.ObjectRef {
+	if s.own == nil {
+		return v1alpha1.ObjectRef{}
+	}
+	return s.own.Ref
+}
+
 // reconcile is one pass. It stops what is no longer served or has changed or is a second connection of an app, decides who holds each Slack app (the own
-// connection first, then the team connections oldest first, since the order of desired is the age), and then starts what is to run, so that a younger
+// connection first, if there is one, then the team connections oldest first, since the order of desired is the age), and then starts what is to run, so that a younger
 // connection of an app is stopped before the older one starts.
 func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 	s.refusedNow = nil
@@ -161,8 +170,8 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 		s.refusals.set(nil)
 		return
 	}
-	if !s.ownKnown {
-		id, err := s.identify(ctx, s.own)
+	if s.own != nil && !s.ownKnown {
+		id, err := s.identify(ctx, *s.own)
 		if err != nil {
 			s.say(ctx, "", "the identity of the own connection is not known yet, so no team connection starts", err)
 			return
@@ -172,7 +181,7 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 		delete(s.said, "")
 	}
 	claimed := map[string]string{} // Slack app -> the connection that holds it
-	if s.ownID.known() {
+	if s.own != nil && s.ownID.known() {
 		claimed[s.ownID.App] = s.own.Ref.Namespace + "/" + s.own.Ref.Name
 	}
 	refused := map[string]string{}
@@ -430,7 +439,7 @@ func (s *supervisor) say(ctx context.Context, name, msg string, err error) {
 	s.log.WarnContext(ctx, msg, "connection", name)
 }
 
-// publish makes the list of connections the verification of the Bindings goes by: the own connection, with its credentials, and every team
+// publish makes the list of connections the verification of the Bindings goes by: the own connection, if there is one, with its credentials, and every team
 // connection the Snapshot serves that the pass did not refuse, with the credentials of its runtime if one is running and none otherwise (a
 // connection that is not running has no baseline to tell a changed Secret against). A refused connection is left out, so its Bindings are not
 // probed: they are told they are not served. The list is built whole and never changed after it is stored, because the probes read it from
@@ -444,7 +453,10 @@ func (s *supervisor) publish(desired []TeamConnection) {
 	if s.conns == nil {
 		return
 	}
-	list := []Connection{s.own}
+	list := []Connection{}
+	if s.own != nil {
+		list = append(list, *s.own)
+	}
 	for _, t := range desired {
 		name := t.Name()
 		if _, refused := s.refusedNow[name]; refused {

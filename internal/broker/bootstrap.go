@@ -47,7 +47,8 @@ type BootstrapOptions struct {
 type CRDSource struct {
 	// Client reads the three resources: InClusterDynamicClient's.
 	Client dynamic.Interface
-	// Connection is the broker's own ChatConnection (AGENTKOURIER_CHAT_CONNECTION), which it always serves.
+	// Connection is the broker's own ChatConnection (AGENTKOURIER_CHAT_CONNECTION), which it always serves. The zero reference means the broker
+	// has none (spec D53): it serves the ChatConnections of ConnectionNamespaces alone (crsource.Options.Connection).
 	Connection v1alpha1.ObjectRef
 	// ConnectionNamespaces is the admission list (AGENTKOURIER_CONNECTION_NAMESPACES): the source also reads the ChatConnections of these
 	// namespaces, and the Bindings that name them (crsource.Options.ConnectionNamespaces). None reads the own connection alone.
@@ -135,8 +136,8 @@ func Bootstrap(ctx context.Context, client kubernetes.Interface, opts BootstrapO
 
 // bootstrapCRDs is Bootstrap for the custom resources, which fail one object at a time. It starts the resolver (the pinned
 // Secrets), then the informers of the three kinds, and reads the objects once, to find the Secret of the broker's own
-// connection and follow it first: an own connection that is missing or invalid, and an own Secret that cannot be read, stop
-// the start. The Secrets of the Bindings and backends are not waited for here: the Reloader follows them and does not fail
+// connection, if it has one, and follow it first: an own connection that is missing or invalid, and an own Secret that cannot be read, stop
+// the start. A broker with no own connection (CRDSource.Connection zero) has no such start failure. The Secrets of the Bindings and backends are not waited for here: the Reloader follows them and does not fail
 // for one that is missing or denied, which the prober reports for the Binding it belongs to. The error of each failure that
 // is the operator's to fix wraps ErrWiring (a CRD that is not installed, an own connection that is not usable) or
 // k8ssecrets.ErrAccessDenied or crsource.ErrAccessDenied (RBAC). On failure nothing is left running.
@@ -165,15 +166,18 @@ func bootstrapCRDs(ctx context.Context, client kubernetes.Interface, opts Bootst
 		failed()
 		return nil, fmt.Errorf("read the custom resources: %w", err)
 	}
-	conn, err := ownConnection(set, opts.CRDs.Connection)
-	if err != nil {
-		failed()
-		return nil, err
-	}
-	own := config.SecretRead{SecretName: config.SecretName{Namespace: conn.Namespace, Name: conn.Spec.CredentialsSecretRef.Name}, Keys: config.ChatCredentialKeys()}
-	if err := secrets.WatchKeys(syncCtx, []config.SecretRead{own}); err != nil {
-		failed()
-		return nil, fmt.Errorf("start the secret resolver: %w", err)
+	// A broker with no own connection (a zero reference, spec D53) has none to find and no Secret to follow first, and its start fails for no ChatConnection.
+	if opts.CRDs.Connection != (v1alpha1.ObjectRef{}) {
+		conn, err := ownConnection(set, opts.CRDs.Connection)
+		if err != nil {
+			failed()
+			return nil, err
+		}
+		own := config.SecretRead{SecretName: config.SecretName{Namespace: conn.Namespace, Name: conn.Spec.CredentialsSecretRef.Name}, Keys: config.ChatCredentialKeys()}
+		if err := secrets.WatchKeys(syncCtx, []config.SecretRead{own}); err != nil {
+			failed()
+			return nil, fmt.Errorf("start the secret resolver: %w", err)
+		}
 	}
 	rl := config.NewReloader(config.ReloaderConfig{
 		Source: src, Secrets: secrets, PollInterval: opts.PollInterval, SecretsInterval: opts.SecretsInterval, SecretsWait: opts.SecretsWait,
