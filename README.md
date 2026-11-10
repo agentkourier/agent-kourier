@@ -92,14 +92,19 @@ Without a broker, each of these is code in every agent that talks to chat:
 
 ## For platform teams
 
-The platform team installs Agent Kourier and owns the shared resources: the chat app (a
-`ChatConnection`), the agent backends (`AgentBackend`), and the namespaces allowed to use
-each. Application teams connect their own agents to their own channels with a namespaced
-`Binding`, committed next to the agent's manifests.
+The platform team installs Agent Kourier and owns the shared resources: the agent backends
+(`AgentBackend`), the broker's own chat app (a `ChatConnection`), and the namespaces allowed
+to use each. Application teams connect their own agents to their own channels with a
+namespaced `Binding`, committed next to the agent's manifests. With custom resources the
+platform can also admit a team's namespace, and that team then brings its own chat app as a
+`ChatConnection` there; a broker can even have no app of its own and serve only the teams'
+([Let a team bring its own Slack app](docs/how-to/team-slack-app.md)).
 
-- **One chat app.** Every Binding that uses a `ChatConnection` posts through it, so there is
-  one set of chat credentials (on Slack, one app's tokens) to review and rotate, not one per
-  agent.
+- **Chat credentials you choose.** By default every Binding posts through the broker's own
+  `ChatConnection`, so there is one set of chat credentials (on Slack, one app's tokens) to
+  review and rotate, not one per agent. Each namespace the platform admits adds its team's
+  app. The broker serves no ChatConnection outside its own and those namespaces', and at
+  most 16 in all; no setting raises that.
 - **One audit log.** It records each agent call and approval decision with the Slack user,
   when a person started it, and the service identity it ran as.
 - **Standard operations.** A Helm chart, Prometheus metrics, optional OpenTelemetry traces,
@@ -123,7 +128,7 @@ Three resource types describe the wiring:
 | Resource | Configures | Typical owner |
 |---|---|---|
 | `AgentBackend` | The agent endpoint, protocol dialect, and namespaces allowed to use it | Platform team |
-| `ChatConnection` | The messaging connection and its Secret references | Platform team |
+| `ChatConnection` | The messaging connection and its Secret references | Platform team (the broker's own); a team in a namespace the platform admits (its own app) |
 | `Binding` | An agent, its service identity, and the channel connected to it | Application team |
 
 A team adds a binding to connect an agent to a channel. Multiple bindings can share
