@@ -372,7 +372,7 @@ slack: socket mode connected
 `crds` or `files`. With `crds` and an own connection it also has a `connection` field, the namespace/name of the ChatConnection the broker is set to serve
 (`AGENTKOURIER_CHAT_CONNECTION`), and the later `serving a ChatConnection` line confirms that the cluster has it. With `crds` and a list of namespaces
 (`AGENTKOURIER_CONNECTION_NAMESPACES`) it also has a `connection_namespaces` field with the namespace names, comma-joined; a broker with no own connection has no `connection` field,
-and `serving a ChatConnection` is logged once for each team connection it starts, after `ready`, since the leader starts them. With `files` there is no `connection` field: the one
+and `serving a ChatConnection` is logged each time it starts a team connection, after `ready`, since the leader starts them. With `files` there is no `connection` field: the one
 ChatConnection of the directory is named by `serving a ChatConnection` alone. The line is logged at `info`: at the default level, the log of a container that has just started and has no `config route` line is from a release older than the one that added it. With `logLevel: warn` or `error` no start line is shown, and a log that kubelet has rotated no longer has its first lines. The order of the first five lines is read from the code and was checked, on both
 routes, against the broker started with a fake cluster; the three `slack:` lines were not re-run against a cluster for this page.
 

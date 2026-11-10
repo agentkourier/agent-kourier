@@ -85,7 +85,7 @@ kubectl apply -f binding.yaml
 It needs two things, and the first is yours.
 
 1. **You let the broker read the Secrets that your Binding, or an AgentBackend in your namespace, names.** Skip this only when neither names one (no `tokenSecretRef`, no header with a `valueSecretRef`). In your own namespace, make a Role that names each Secret and a
-   RoleBinding to the broker's ServiceAccount. The commands name the ServiceAccount `agent-kourier` in the namespace `agent-kourier`, which is right only for a release named `agent-kourier`; in general it is `<release>-agent-kourier` (or `serviceAccount.name`, or `fullnameOverride`, when set), so ask the platform team for the real ones, or read it from the Deployment with `kubectl -n <release namespace> get deploy -l app.kubernetes.io/instance=<release> -o jsonpath='{.items[0].spec.template.spec.serviceAccountName}'`:
+   RoleBinding to the broker's ServiceAccount. The commands name the ServiceAccount `agent-kourier` in the namespace `agent-kourier`, which is right only for a release named `agent-kourier`; in general it is `serviceAccount.name` when that is set, and otherwise the chart's full name: `fullnameOverride`, or the release name when it contains `agent-kourier`, or `<release>-agent-kourier` (with `serviceAccount.create: false`, it is `serviceAccount.name`, or `default`), so ask the platform team for the real ones, or read it from the Deployment with `kubectl -n <release namespace> get deploy -l app.kubernetes.io/instance=<release> -o jsonpath='{.items[0].spec.template.spec.serviceAccountName}'`:
 
    ```sh
    kubectl -n payments create role agent-kourier-secrets-payments --verb=list,watch --resource=secrets --resource-name=payments-agent-token

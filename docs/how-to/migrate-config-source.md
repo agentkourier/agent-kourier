@@ -240,7 +240,7 @@ to do, and one is the team's.
    rendered resources is `config.chatConnections.<name>.spec.allowedNamespaces` in your values. A Binding from another namespace reads
    `Accepted=False` with the reason `NamespaceNotAllowed` until it is listed.
 3. **The team lets the broker read its Secret.** The team makes a Role in its own namespace that names the Secret, and a RoleBinding to the
-   broker's ServiceAccount (here `agent-kourier` in the namespace `agent-kourier`, which is right for a release named `agent-kourier`; in general it is `serviceAccount.name`, or the chart's full name: `fullnameOverride`, or the release name when it contains `agent-kourier`, or `<release>-agent-kourier`. `kubectl -n <release namespace> get deploy -l app.kubernetes.io/instance=<release> -o jsonpath='{.items[0].spec.template.spec.serviceAccountName}'` prints it). It needs no change to the platform's release or values:
+   broker's ServiceAccount (here `agent-kourier` in the namespace `agent-kourier`, which is right for a release named `agent-kourier`; in general it is `serviceAccount.name`, or the chart's full name: `fullnameOverride`, or the release name when it contains `agent-kourier`, or `<release>-agent-kourier`; with `serviceAccount.create: false`, `serviceAccount.name`, or `default`. `kubectl -n <release namespace> get deploy -l app.kubernetes.io/instance=<release> -o jsonpath='{.items[0].spec.template.spec.serviceAccountName}'` prints it). It needs no change to the platform's release or values:
 
    ```sh
    kubectl -n team-a create role agent-kourier-secrets-team-a --verb=list,watch --resource=secrets --resource-name=team-a-agent-token

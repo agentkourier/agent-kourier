@@ -8,7 +8,7 @@ names or error text.
 
 ## Series by connection
 
-A broker serves one or more ChatConnections ([Limits](limits.md#run-the-broker): at most 16, its own included if it has one). The series that belong to
+A broker serves up to 16 ChatConnections ([Limits](limits.md#run-the-broker): its own included if it has one, and none at all for a broker with no own connection whose listed namespaces hold none yet). The series that belong to
 one carry the label `connection`, the ChatConnection as `namespace/name`, so that one connection's numbers are not added to another's:
 `agentkourier_chat_connected`, `agentkourier_intake_total`, `agentkourier_chat_api_calls_total`, `agentkourier_slack_events_shed_total`,
 `agentkourier_slack_ack_duration_seconds`, `agentkourier_outbox_pending` and `agentkourier_outbox_oldest_age_seconds`. Series that belong to a Binding

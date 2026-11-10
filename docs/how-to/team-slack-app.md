@@ -26,9 +26,10 @@ A broker may have no connection of its own and serve only the teams': see
 - The platform team has read [what the broker then holds](../explanation/security.md#a-team-brings-its-own-chat-app).
 - The names here are placeholders. The team's namespace is `team-a`, its Secret and its ChatConnection are both called
   `team-a-slack`, and the broker's ServiceAccount is `agent-kourier` in the namespace `agent-kourier`. Ask for the real ones. The ServiceAccount
-  is named `agent-kourier` only for a release called `agent-kourier` (or with `fullnameOverride: agent-kourier`). In general it is
-  `serviceAccount.name` when that is set, and otherwise the chart's full name: `fullnameOverride`, or the release name when it contains
-  `agent-kourier`, or `<release>-agent-kourier`. The Deployment says which it is:
+  is named `agent-kourier` only for a release called `agent-kourier` (or with `fullnameOverride: agent-kourier`, or `serviceAccount.name:
+  agent-kourier`). In general it is `serviceAccount.name` when that is set, and otherwise the chart's full name: `fullnameOverride`, or the
+  release name when it contains `agent-kourier`, or `<release>-agent-kourier` (with `serviceAccount.create: false`, it is `serviceAccount.name`,
+  or `default`). The Deployment says which it is:
   `kubectl -n <release namespace> get deploy -l app.kubernetes.io/instance=<release> -o jsonpath='{.items[0].spec.template.spec.serviceAccountName}'`.
 
 ## 1. The platform team lets the team write a ChatConnection
@@ -340,7 +341,7 @@ The connection is then a team connection, so it loses what only an own connectio
 - the first of the 16 places, which it now has by age like the others;
 - the first claim of its Slack app: an older ChatConnection of the same app now wins.
 
-If you leave its namespace off the list, the broker no longer serves it, and its Bindings are told `ConnectionNotServed` once. Rows with no connection are
+For one you applied yourself: if you leave its namespace off the list, the broker no longer serves it, and its Bindings are told `ConnectionNotServed` once. Rows with no connection are
 the leader's to refuse, as above; a broker that has had an own connection has attributed its rows at each start, so you meet that only if an older image wrote more.
 To move back, set `config.chatConnection` again.
 
