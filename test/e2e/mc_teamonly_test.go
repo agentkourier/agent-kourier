@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -99,7 +100,9 @@ func noOwn(t *testing.T, env Env) {
 	}
 	if um, err := m.say(AppPlatform, ChannelMCPlatform, mcUser, "anyone there?"); err != nil {
 		// The fake answers 409 when no client of the apps in the channel is connected, which is the answer to a mention of an app nothing serves.
-		t.Logf("the mention of the platform's bot was refused by the fake: %v", err)
+		if !strings.Contains(err.Error(), "status 409") {
+			t.Errorf("the mention of the platform's bot failed with %v; want it posted, or refused by the fake with 409 because the app has no client", err)
+		}
 	} else {
 		err = Consistently(m.ctx, 20*time.Second, "the platform's app to have no client and its channel no reply", func(ctx context.Context) (bool, error) {
 			n, err := m.slack.AppConnections(ctx, AppPlatform.AppID)
