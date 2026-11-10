@@ -187,10 +187,11 @@ func connectionOf(ctx context.Context, c *v1alpha1.ChatConnection, secrets ident
 	return Connection{Ref: v1alpha1.ObjectRef{Namespace: c.Namespace, Name: c.Name}, Platform: c.Spec.Platform, Credentials: creds}, nil
 }
 
-// Connections are the ChatConnections a broker runs: its own, and the team connections it serves besides (spec D52).
+// Connections are the ChatConnections a broker runs: its own, if it has one, and the team connections it serves besides (spec D52, D53).
 type Connections struct {
-	// Own is the broker's own connection, which it always runs.
-	Own Connection
+	// Own is the broker's own connection, which it always runs. It is nil when the broker has none (spec D53): every connection is then a team
+	// connection, and the zero Connection is not a stand-in.
+	Own *Connection
 	// Team are the other ChatConnections of the snapshot, the served ones of the admitted namespaces, oldest first (the order
 	// the source serves them in, and the one that decides which of two connections of one Slack app is served).
 	Team []TeamConnection
@@ -236,11 +237,20 @@ func ChooseConnections(ctx context.Context, snap *config.Snapshot, own v1alpha1.
 	if err != nil {
 		return Connections{}, err
 	}
-	return Connections{Own: ownConn, Team: teamConnections(ctx, snap, ownConn.Ref, secrets)}, nil
+	return Connections{Own: &ownConn, Team: teamConnections(ctx, snap, ownConn.Ref, secrets)}, nil
+}
+
+// ChooseTeamConnections returns the connections of a broker with no ChatConnection of its own (spec D53): no own, and every ChatConnection of the
+// snapshot as a team connection, oldest first. It has no failure to report, as no connection is the broker's to refuse to start for: one whose
+// Secret is not readable now, or whose platform has no adapter, comes back with its Err, and the supervisor starts it when it can. It is not
+// ChooseConnections with a zero reference, which means the files, where the directory holds exactly one ChatConnection.
+func ChooseTeamConnections(ctx context.Context, snap *config.Snapshot, secrets identity.SecretReader) Connections {
+	return Connections{Team: teamConnections(ctx, snap, v1alpha1.ObjectRef{}, secrets)}
 }
 
 // teamConnections are the ChatConnections of snap other than own, oldest first (creationTimestamp, then namespace and name, the
-// source's own rule), with their credentials read through secrets. A snapshot that is not loaded has none.
+// source's own rule), with their credentials read through secrets. A zero own leaves out none, as no ChatConnection has an empty name. A
+// snapshot that is not loaded has none.
 func teamConnections(ctx context.Context, snap *config.Snapshot, own v1alpha1.ObjectRef, secrets identity.SecretReader) []TeamConnection {
 	if snap == nil {
 		return nil

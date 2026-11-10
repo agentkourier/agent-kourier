@@ -42,7 +42,7 @@ type connRuntime struct {
 	closeOnce sync.Once
 	// life is the span of the connection being served that the runtime belongs to, set by the supervisor for a team connection. Once the span is
 	// retired the platform of the runtime fails fast (stopped). A runtime that is replaced by a restart is in the same span: its turns go on with
-	// the platform they hold, which is the connection's still. Nil for the own connection, which is always served.
+	// the platform they hold, which is the connection's still. Nil for the own connection, if the broker has one, which is always served.
 	life atomic.Pointer[connLife]
 }
 
@@ -127,7 +127,7 @@ type runtimeTable struct {
 	// connection reads it (botOwner, botUserOwner).
 	//
 	// The invariant, after every look of the supervisor: a team connection has its bot here while it is served with an identity that is known
-	// (the entry's id), whether or not it runs; the own connection has its own once that identity is known (a look returns before then).
+	// (the entry's id), whether or not it runs; the own connection, if the broker has one, has its own once that identity is known (a look returns before then).
 	// A connection that is refused (also one that held its app and whose Secret cannot be read, when an older connection claims the app), or that
 	// is not in the config, has none. One whose new tokens fail the lookup keeps the bot of its last
 	// known identity, whether Slack rejected them, did not answer, or answered for good (a missing scope, a token that belongs to no bot): the

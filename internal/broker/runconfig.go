@@ -140,6 +140,9 @@ type RunConfig struct {
 	transportClosed func(conn string)
 	// outboxBuilt is given the outbox as the leader half builds it, so a test can post through it and look at its lanes.
 	outboxBuilt func(*outbox.Outbox)
+	// allowNoOwn lets a CRDs config leave ChatConnection empty, which Run then serves as a broker with no own connection (spec D53; noOwnConnection):
+	// a seam for this package's tests until the binary lets an operator do it.
+	allowNoOwn bool
 	// leaderLaunched is called once Run has launched the leader half (or its candidacy), before it waits for the
 	// signal, so a test can hold Run there and send the signal while the leader half is up.
 	leaderLaunched func()
@@ -172,11 +175,12 @@ func (c RunConfig) validateSource() error {
 			return fmt.Errorf("%w: ConnectionNamespaces is set with the %s config source, which serves the one ChatConnection of its directory: unset it", ErrWiring, SourceFiles)
 		}
 	case SourceCRDs:
-		if c.ChatConnection.Namespace == "" || c.ChatConnection.Name == "" {
+		own := !c.allowNoOwn || haveConn // a test may leave the own connection out (allowNoOwn)
+		if own && (c.ChatConnection.Namespace == "" || c.ChatConnection.Name == "") {
 			return fmt.Errorf("%w: ChatConnection must be set to a namespace and a name with the %s config source: a cluster may hold the connections of several brokers, and this one serves only the one it is told", ErrWiring, SourceCRDs)
 		}
 		// Neither part is echoed: the value is logged with the route at start, and a token pasted in its place must not follow it there.
-		if len(validation.IsDNS1123Label(c.ChatConnection.Namespace)) > 0 || len(validation.IsDNS1123Subdomain(c.ChatConnection.Name)) > 0 {
+		if own && (len(validation.IsDNS1123Label(c.ChatConnection.Namespace)) > 0 || len(validation.IsDNS1123Subdomain(c.ChatConnection.Name)) > 0) {
 			return fmt.Errorf("%w: ChatConnection is not a namespace that is a DNS-1123 label and a name that is a DNS-1123 subdomain, which are all Kubernetes can hold (its value is not shown)", ErrWiring)
 		}
 		for i, ns := range c.ConnectionNamespaces {

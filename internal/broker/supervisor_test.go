@@ -130,7 +130,12 @@ type supWorld struct {
 
 const ownName = "platform/slack"
 
-func newSupWorld(t *testing.T) *supWorld {
+func newSupWorld(t *testing.T) *supWorld { return newSupWorldWith(t, true) }
+
+// newTeamOnlySupWorld is a supervisor of a broker with no connection of its own: the table starts empty, and the supervisor has no own to know.
+func newTeamOnlySupWorld(t *testing.T) *supWorld { return newSupWorldWith(t, false) }
+
+func newSupWorldWith(t *testing.T, withOwn bool) *supWorld {
 	t.Helper()
 	w := &supWorld{t: t, table: newRuntimeTable(), ids: map[string]appIdentity{}, idErr: map[string]error{}, openErr: map[string]error{}}
 	log := slog.New(slog.NewTextHandler(&w.logs, nil))
@@ -151,13 +156,17 @@ func newSupWorld(t *testing.T) *supWorld {
 	own := Connection{Ref: v1alpha1.ObjectRef{Namespace: "platform", Name: "slack"}, Platform: v1alpha1.PlatformSlack,
 		Credentials: map[string]secret.Value{"botToken": secret.New("own-token"), "appToken": secret.New("own-app")}}
 	w.ids["own-token"] = appIdentity{App: "AOWN", Team: "T1", User: "UOWN", Bot: "BOWN"}
-	ownRT, err := w.host.build(own)
-	if err != nil {
-		t.Fatal(err)
+	var ownConn *Connection
+	if withOwn {
+		ownConn = &own
+		ownRT, err := w.host.build(own)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.host.run(ownRT, nil, nil)
 	}
-	w.host.run(ownRT, nil, nil)
 	w.sup = &supervisor{
-		host: w.host, log: log, every: time.Hour, own: own, refusals: &refusals{}, done: make(chan struct{}),
+		host: w.host, log: log, every: time.Hour, own: ownConn, refusals: &refusals{}, done: make(chan struct{}),
 		teams: map[string]*teamRuntime{}, seen: map[string]bool{}, lives: map[string]*connLife{}, said: map[string]string{},
 		identify: func(_ context.Context, c Connection) (appIdentity, error) {
 			tok := c.Credentials["botToken"].Reveal()
@@ -582,7 +591,7 @@ func TestSupervisorLetsAYoungerConnectionServeAnAppWhoseOlderCouldNotStart(t *te
 func TestTheTableTakesNoRuntimeOnceTheShutdownHasHaltedThem(t *testing.T) {
 	w := newSupWorld(t)
 	w.host.haltAll(t.Context())
-	own := w.sup.own
+	own := *w.sup.own
 	own.Ref.Name = "late"
 	if rt, err := w.host.build(own); !errors.Is(err, errStopping) || rt != nil {
 		t.Errorf("build after haltAll = %v, %v; want errStopping and no runtime", rt, err)
@@ -652,7 +661,7 @@ func TestSupervisorCountsAChangeOfThePublishedConnections(t *testing.T) {
 		{[]TeamConnection{team("team-a/slack", 2, "tok-a2", 1)}, true, "a restart on a new token"},
 		{nil, true, "a connection stopped"},
 	}
-	w.sup.conns.Store(&[]Connection{w.sup.own})
+	w.sup.conns.Store(&[]Connection{*w.sup.own})
 	for _, st := range steps {
 		before := w.sup.changes.Load()
 		w.reconcile(st.desired...)
@@ -1282,4 +1291,93 @@ func TestTheBotTableHoldsTheBotsOfTheServedConnectionsAfterEveryLook(t *testing.
 	w.reconcileChecked(team("team-e/slack", 1, "tok-e2", 1), unready("team-f/slack", 1, 2))
 	w.reconcileChecked(e1, unready("team-f/slack", 1, 2)) // e leaves the app: f stays refused until its Secret reads
 	w.reconcileChecked(e1, f1)
+}
+
+// With no own connection the oldest connection of a Slack app is served and a younger one of the app is refused, as beside an own connection, and
+// the bot guard's table holds the served connection's bot and no own bot.
+func TestSupervisorWithNoOwnServesTheOlderConnectionOfASlackApp(t *testing.T) {
+	w := newTeamOnlySupWorld(t)
+	app := appIdentity{App: "AAPP", Team: "T1", User: "UAPP", Bot: "BAPP"}
+	young2 := appIdentity{App: "AAPP", Team: "T2", User: "UYOUNG", Bot: "BYOUNG"}
+	w.ids["tok-old"], w.ids["tok-young"] = app, young2
+	old, young := team("team-a/slack", 1, "tok-old", 1), team("team-b/slack", 1, "tok-young", 2)
+
+	w.reconcile(old, young)
+	if got := w.running(); !slices.Equal(got, []string{"team-a/slack"}) {
+		t.Fatalf("running = %v; want the older connection of the app and not the younger", got)
+	}
+	if got := w.sup.refusals.names(); !slices.Equal(got, []string{"team-b/slack"}) {
+		t.Errorf("refused = %v; want the younger connection", got)
+	}
+	w.wantBot("BAPP", "UAPP", "team-a/slack")
+	w.wantBot("BYOUNG", "UYOUNG", "")
+
+	w.reconcile(young) // the older is gone
+	if got := w.running(); !slices.Equal(got, []string{"team-b/slack"}) {
+		t.Errorf("running = %v once the older is gone; want the younger to be served", got)
+	}
+	if got := w.sup.refusals.names(); len(got) != 0 {
+		t.Errorf("refused = %v; want none", got)
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if slices.Contains(w.idented, "own-token") {
+		t.Errorf("auth.test was asked for %v; the own connection has no token to ask for", w.idented)
+	}
+}
+
+// With no own connection there is no identity to wait for: the connections of three apps all start in the first pass, which asks for their
+// identities and no other.
+func TestSupervisorWithNoOwnStartsEveryConnectionInOnePass(t *testing.T) {
+	w := newTeamOnlySupWorld(t)
+	for _, n := range []string{"a", "b", "c"} {
+		w.ids["tok-"+n] = appIdentity{App: "A" + n, Team: "T1", User: "U" + n, Bot: "B" + n}
+	}
+
+	w.reconcile(team("team-a/slack", 1, "tok-a", 1), team("team-b/slack", 1, "tok-b", 2), team("team-c/slack", 1, "tok-c", 3))
+
+	if got := w.running(); !slices.Equal(got, []string{"team-a/slack", "team-b/slack", "team-c/slack"}) {
+		t.Errorf("running = %v after one pass; want the three connections", got)
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !slices.Equal(slices.Sorted(slices.Values(w.idented)), []string{"tok-a", "tok-b", "tok-c"}) {
+		t.Errorf("auth.test was asked for %v; want the three team tokens, once each", w.idented)
+	}
+}
+
+// With no own connection one connection whose bot cannot be asked about waits, and no other waits for it: the first of them is not the own
+// connection's gate.
+func TestSupervisorWithNoOwnLetsAFailingIdentityLookupHoldNoOtherConnection(t *testing.T) {
+	w := newTeamOnlySupWorld(t)
+	w.ids["tok-b"], w.ids["tok-c"] = appIdentity{App: "AB", Team: "T1", User: "UB", Bot: "BB"}, appIdentity{App: "AC", Team: "T1", User: "UC", Bot: "BC"}
+	w.idErr["tok-a"] = errors.New("auth.test: timed out")
+
+	w.reconcile(team("team-a/slack", 1, "tok-a", 1), team("team-b/slack", 1, "tok-b", 2), team("team-c/slack", 1, "tok-c", 3))
+	if got := w.running(); !slices.Equal(got, []string{"team-b/slack", "team-c/slack"}) {
+		t.Fatalf("running = %v; want team-a to wait for its identity and the others to run", got)
+	}
+
+	delete(w.idErr, "tok-a")
+	w.ids["tok-a"] = appIdentity{App: "AA", Team: "T1", User: "UA", Bot: "BA"}
+	w.reconcile(team("team-a/slack", 1, "tok-a", 1), team("team-b/slack", 1, "tok-b", 2), team("team-c/slack", 1, "tok-c", 3))
+	if got := w.running(); !slices.Equal(got, []string{"team-a/slack", "team-b/slack", "team-c/slack"}) {
+		t.Errorf("running = %v once the identity is known; want team-a to run", got)
+	}
+}
+
+// With no own connection the published list is the team connections alone, and empty with none: the verification probes no Bindings of a connection
+// that is not served.
+func TestSupervisorWithNoOwnPublishesTheTeamConnectionsAlone(t *testing.T) {
+	w := newTeamOnlySupWorld(t)
+	w.ids["tok-a"] = appIdentity{App: "AA", Team: "T1", User: "UA", Bot: "BA"}
+
+	w.reconcile()
+	if got := connectionNames(*w.sup.conns.Load()); len(got) != 0 {
+		t.Errorf("published = %v with no connection; want none", got)
+	}
+	w.reconcile(team("team-a/slack", 1, "tok-a", 1))
+	if got := connectionNames(*w.sup.conns.Load()); !slices.Equal(got, []string{"team-a/slack"}) {
+		t.Errorf("published = %v; want team-a alone", got)
+	}
 }
