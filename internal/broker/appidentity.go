@@ -86,7 +86,7 @@ func slackIdentity(ctx context.Context, conn Connection, apiURL string) (appIden
 		return appIdentity{}, identifyError("auth.test", err)
 	}
 	if auth.UserID == "" || auth.BotID == "" {
-		return appIdentity{}, errors.New("auth.test: Slack gave no bot")
+		return appIdentity{}, errors.New("auth.test call: Slack gave no bot")
 	}
 	botCtx, cancelBot := context.WithTimeout(ctx, identifyTimeout)
 	defer cancelBot()
@@ -95,7 +95,7 @@ func slackIdentity(ctx context.Context, conn Connection, apiURL string) (appIden
 		return appIdentity{}, identifyError("bots.info", err)
 	}
 	if bot.AppID == "" {
-		return appIdentity{}, errors.New("bots.info: Slack gave no app for the bot")
+		return appIdentity{}, errors.New("bots.info call: Slack gave no app for the bot")
 	}
 	return appIdentity{App: bot.AppID, Team: auth.TeamID, User: auth.UserID, Bot: auth.BotID}, nil
 }
@@ -111,19 +111,19 @@ func identifyError(method string, err error) error {
 		if slices.Contains(rejectedCodes, resp.Err) {
 			return &credentialsRejectedError{method: method, code: resp.Err}
 		}
-		e := fmt.Errorf("%s: Slack answered %q", method, resp.Err)
+		e := fmt.Errorf("%s call: Slack answered %q", method, resp.Err)
 		if slices.Contains(transientCodes, resp.Err) {
 			return mayPassError{e}
 		}
 		return e
 	case errors.Is(err, context.DeadlineExceeded):
-		return mayPassError{fmt.Errorf("%s: timed out", method)}
+		return mayPassError{fmt.Errorf("%s call: timed out", method)}
 	case errors.Is(err, context.Canceled):
-		return fmt.Errorf("%s: %w", method, context.Canceled)
+		return fmt.Errorf("%s call: %w", method, context.Canceled)
 	case errors.As(err, &status):
-		return mayPassError{fmt.Errorf("%s: Slack answered with the status %d", method, status.Code)}
+		return mayPassError{fmt.Errorf("%s call: Slack answered with the status %d", method, status.Code)}
 	case errors.As(err, &limited):
-		return mayPassError{fmt.Errorf("%s: Slack rate-limited the call", method)}
+		return mayPassError{fmt.Errorf("%s call: Slack rate-limited the call", method)}
 	}
-	return mayPassError{fmt.Errorf("%s: the request failed", method)}
+	return mayPassError{fmt.Errorf("%s call: the request failed", method)}
 }

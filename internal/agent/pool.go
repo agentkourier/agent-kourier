@@ -25,7 +25,7 @@ var (
 	// long task. Agent Kourier refuses such an agent instead.
 	ErrStreamingUnsupported = errors.New("agent: the agent card does not advertise streaming")
 	// ErrTokenRequired means a Target with TokenRequired got credentials without a token.
-	ErrTokenRequired = errors.New("agent: the Binding requires a bearer token and the credentials carry none")
+	ErrTokenRequired = errors.New("agent: the Binding requires a token and the credentials carry none")
 	// ErrTokenUnreadable means the Binding's token could not be read, or read as an empty or
 	// malformed value. The turn fails: a Binding with a token never falls back to its userId.
 	// The error wraps the cause.

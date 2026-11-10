@@ -369,7 +369,7 @@ looks like a credential (key, token, secret, auth, cookie, password), which belo
 enforces that as written. Cilium, by default, does not. It treats the API server as the `kube-apiserver` entity and not as a
 CIDR, so an `ipBlock` on a node address does not match. The `policy-cidr-match-mode` setting in `cilium-config` changes that,
 and it was empty on the first install. With the policy enabled, the pod's Secret informer times out and the pod exits with
-code 4: `bootstrap: start the secret resolver: secret caches not synced`.
+code 4: `bootstrap: start the secret resolver: secret caches for [...] are not synced`.
 
 Add a `CiliumNetworkPolicy` beside the chart's. The two add up, so the chart's policy keeps fencing DNS, Slack and the agent:
 

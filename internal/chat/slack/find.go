@@ -35,10 +35,10 @@ func (c *Client) Find(ctx context.Context, channel, threadTS, outboxID string, s
 	defer func() { c.finishChat(ctx, op, "Find", err) }()
 	auth, err := c.api.AuthTestContext(ctx)
 	if err != nil {
-		return "", false, c.scrub("auth.test", err)
+		return "", false, c.scrub("auth.test call", err)
 	}
 	if auth.UserID == "" {
-		return "", false, errors.New("slack auth.test: no bot user ID")
+		return "", false, errors.New("slack auth.test call: no bot user ID")
 	}
 	err = c.walk(ctx, channel, threadTS, since.Add(-lookupSkew), func(msgs []slackgo.Message) bool {
 		for _, m := range msgs {
