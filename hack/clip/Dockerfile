@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
-# The recorder of the install clip: vhs (charmbracelet), which drives a shell in a headless browser and writes
-# GIF and MP4, plus the kubectl, helm and vim the clip types, and gifsicle, which appends the Slack still. The base
+# The recorder of the docs' clips: vhs (charmbracelet), which drives a shell in a headless browser and writes
+# the GIF, plus the kubectl, helm and vim the clip types, and gifsicle, which appends the Slack still. The base
 # is pinned by digest and the two binaries by version and SHA-256; vim and gifsicle come unpinned from the base's
 # Debian release, so they can differ between builds. record.sh builds it as agent-kourier-clip-vhs:dev; nothing
 # pushes it.
