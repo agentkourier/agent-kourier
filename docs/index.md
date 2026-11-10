@@ -54,8 +54,8 @@ each conversation after a restart, and holds the thread while a suspended agent 
 tools and task logic.
 
 The platform team runs Agent Kourier and owns the agent backends and the broker's own chat app. Each application team connects its
-own agent to its own channel with a namespaced Binding, committed next to the agent's manifests, and a team whose namespace the
-platform admits can bring its own chat app as well ([Let a team bring its own Slack app](how-to/team-slack-app.md)).
+own agent to its own channel with a namespaced Binding, committed next to the agent's manifests, and with custom resources a team
+whose namespace the platform admits can bring its own chat app as well ([Let a team bring its own Slack app](how-to/team-slack-app.md)).
 [Why a broker](explanation/why-a-broker.md) explains the split.
 
 <figure class="ak-film">

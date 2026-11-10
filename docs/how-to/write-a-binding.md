@@ -1,14 +1,15 @@
 # Write a Binding
 
 For an application team that wants its agent in its channel: at the end, a Binding in your namespace connects your
-agent to your channel, through the backend and Slack connection the platform team runs.
+agent to your channel, through the backend the platform team runs and a Slack connection: the platform's, or your own.
 
 ## Before you start
 
-- The platform team runs Agent Kourier, an [AgentBackend](../reference/agentbackend.md) for your agent's runtime and a
-  [ChatConnection](../reference/chatconnection.md) for Slack, and lists your namespace in both resources'
-  `allowedNamespaces`.
-- The Agent Kourier bot is a member of your channel, and you have the channel's ID (it starts with `C`; a private channel created before March 2021 may start with `G`).
+- The platform team runs Agent Kourier and an [AgentBackend](../reference/agentbackend.md) for your agent's runtime that lists
+  your namespace in `allowedNamespaces`.
+- A [ChatConnection](../reference/chatconnection.md) for Slack: the platform's, listing your namespace in `allowedNamespaces`,
+  or your team's own, in a namespace the platform admits ([Let a team bring its own Slack app](team-slack-app.md)).
+- That connection's bot is a member of your channel, and you have the channel's ID (it starts with `C`; a private channel created before March 2021 may start with `G`).
 - If the backend verifies tokens, a Secret in your namespace holds the Binding's token under the key `token`.
   [Create the Binding identity](create-binding-identity.md) explains the account, how to obtain its token, and how
   to store it. For a backend that trusts `X-User-Id`, that guide explains how to choose a stable name instead.

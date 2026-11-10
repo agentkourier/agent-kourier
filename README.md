@@ -100,11 +100,11 @@ platform can also admit a team's namespace, and that team then brings its own ch
 `ChatConnection` there; a broker can even have no app of its own and serve only the teams'
 ([Let a team bring its own Slack app](docs/how-to/team-slack-app.md)).
 
-- **Chat credentials you choose.** By default every Binding posts through the broker's own
-  `ChatConnection`, so there is one set of chat credentials (on Slack, one app's tokens) to
-  review and rotate, not one per agent. Each namespace the platform admits adds its team's
-  app. The broker serves no ChatConnection outside its own and those namespaces', and at
-  most 16 in all; no setting raises that.
+- **Chat credentials you choose.** When every Binding names the broker's own
+  `ChatConnection`, there is one set of chat credentials (on Slack, one app's tokens) to
+  review and rotate, not one per agent. The ChatConnections of each namespace the platform
+  admits are served too, and no others: at most 16 in all, the broker's own included, and
+  no setting raises that.
 - **One audit log.** It records each agent call and approval decision with the Slack user,
   when a person started it, and the service identity it ran as.
 - **Standard operations.** A Helm chart, Prometheus metrics, optional OpenTelemetry traces,
