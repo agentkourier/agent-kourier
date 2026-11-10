@@ -4,6 +4,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
 	"sigs.k8s.io/yaml"
@@ -65,6 +67,85 @@ func TestInitValuesRenderWithTheChart(t *testing.T) {
 			if got.Bindings[0].Namespace != want.Bindings[0].Namespace || got.Bindings[0].Spec.Chat.Channel != want.Bindings[0].Spec.Chat.Channel ||
 				(got.Bindings[0].Spec.Identity.TokenSecretRef == nil) != (want.Bindings[0].Spec.Identity.TokenSecretRef == nil) {
 				t.Errorf("the chart's Binding is %+v; init checked %+v", got.Bindings[0], want.Bindings[0])
+			}
+		})
+	}
+}
+
+// The values that init writes for custom resources render with the chart into a broker that serves the ChatConnection of
+// platform.yaml, and a Role for each Secret the files name: the connection's in the release's namespace and, with
+// --agent-token, the Binding's token in the team's. Like the test above it needs helm.
+func TestInitCustomResourceValuesRenderWithTheChart(t *testing.T) {
+	helm, err := exec.LookPath("helm")
+	if err != nil {
+		if os.Getenv("AGENTKOURIER_REQUIRE_HELM") == "1" {
+			t.Fatal("helm is not on PATH, and AGENTKOURIER_REQUIRE_HELM=1 says the chart tests must run")
+		}
+		t.Skip("helm is not on PATH: this test renders charts/agent-kourier with `helm template` and is skipped without it")
+	}
+	for _, tc := range []struct {
+		name       string
+		agentToken bool
+	}{{"without an agent token", false}, {"with an agent token", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := outFile(t)
+			args := crArgs(out)
+			if tc.agentToken {
+				args = append(args, "--agent-token")
+			}
+			if _, stderr, code := initRun(t, "", env{}.get, "", args...); code != exitOK {
+				t.Fatalf("init: exit code %d, stderr %q", code, stderr)
+			}
+			rendered, err := exec.CommandContext(t.Context(), helm, "template", "agent-kourier", "../../charts/agent-kourier",
+				"-n", "agent-kourier", "-f", out, "--set", "image.repository=registry.example.test/agent-kourier", "--set", "image.tag=dev").Output()
+			if err != nil {
+				t.Fatalf("helm template: %v", err)
+			}
+			type object struct {
+				Kind     string `json:"kind"`
+				Metadata struct {
+					Namespace string `json:"namespace"`
+				} `json:"metadata"`
+				Rules []struct {
+					ResourceNames []string `json:"resourceNames"`
+				} `json:"rules"`
+				Spec struct {
+					Template struct {
+						Spec struct {
+							Containers []struct {
+								Env []struct{ Name, Value string } `json:"env"`
+							} `json:"containers"`
+						} `json:"spec"`
+					} `json:"template"`
+				} `json:"spec"`
+			}
+			secrets := map[string][]string{}
+			env := map[string]string{}
+			for doc := range strings.SplitSeq(string(rendered), "\n---\n") {
+				var o object
+				if err := yaml.Unmarshal([]byte(doc), &o); err != nil {
+					t.Fatal(err)
+				}
+				switch o.Kind {
+				case "Role":
+					for _, r := range o.Rules {
+						secrets[o.Metadata.Namespace] = append(secrets[o.Metadata.Namespace], r.ResourceNames...)
+					}
+				case "Deployment":
+					for _, e := range o.Spec.Template.Spec.Containers[0].Env {
+						env[e.Name] = e.Value
+					}
+				}
+			}
+			want := map[string][]string{"agent-kourier": {slackSecretName}}
+			if tc.agentToken {
+				want[pageTeamNamespace] = []string{agentTokenSecretName}
+			}
+			if !reflect.DeepEqual(secrets, want) {
+				t.Errorf("the chart's Roles name the Secrets %v; want %v", secrets, want)
+			}
+			if env["AGENTKOURIER_CONFIG_SOURCE"] != "crds" || env["AGENTKOURIER_CHAT_CONNECTION"] != "agent-kourier/slack" {
+				t.Errorf("the broker's environment is %v; want crds and agent-kourier/slack", env)
 			}
 		})
 	}
