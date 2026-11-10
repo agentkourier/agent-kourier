@@ -63,10 +63,10 @@ func (c *Client) readThread(ctx context.Context, conn, channel, threadTS, after,
 	defer func() { c.finishChat(ctx, op, "ThreadBetween", err) }()
 	auth, err := c.api.AuthTestContext(ctx)
 	if err != nil {
-		return nil, nil, 0, c.scrub("auth.test", err)
+		return nil, nil, 0, c.scrub("auth.test call", err)
 	}
 	if auth.UserID == "" { // without it Agent Kourier cannot tell its own posts that arrive with no bot_id
-		return nil, nil, 0, errors.New("slack auth.test: no bot user ID")
+		return nil, nil, 0, errors.New("slack auth.test call: no bot user ID")
 	}
 	me := self{user: auth.UserID, bot: auth.BotID}
 	var raw []slackgo.Message

@@ -168,7 +168,7 @@ func connectionOf(ctx context.Context, c *v1alpha1.ChatConnection, secrets ident
 		if err != nil {
 			// A Secret, key or value that is missing is the operator's to fix, so a usage error. One that
 			// cannot be read just now (a cache that has not synced) is not.
-			err = fmt.Errorf("ChatConnection %s: read %s of Secret %s: %w", name, key, v1alpha1.NamespacedName(c.Namespace, c.Spec.CredentialsSecretRef.Name), err)
+			err = fmt.Errorf("ChatConnection %s: read %s of Secret %s failed: %w", name, key, v1alpha1.NamespacedName(c.Namespace, c.Spec.CredentialsSecretRef.Name), err)
 			if errors.Is(err, secret.ErrKeyNotFound) || errors.Is(err, secret.ErrEmptyValue) || errors.Is(err, config.ErrSecretNotFound) {
 				err = fmt.Errorf("%w: %w", ErrWiring, err)
 			}

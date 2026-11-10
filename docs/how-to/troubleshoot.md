@@ -234,7 +234,7 @@ against `kubectl -n agent-kourier get secret`.
 ## The pod exits with code 4 and never becomes ready
 
 ```
-agent-kourier: bootstrap: start the secret resolver: secret caches not synced for [agent-kourier/slack-main]: context deadline exceeded
+agent-kourier: bootstrap: start the secret resolver: secret caches for [agent-kourier/slack-main] are not synced: context deadline exceeded ...
 ```
 
 The list names the Secrets whose caches did not sync. The pod cannot reach the Kubernetes API server, so the informers never sync and the wait ends
@@ -333,8 +333,9 @@ the chart's NetworkPolicy allows the agent only through `networkPolicy.extraEgre
 
 Agent Kourier lost its Socket Mode connection to Slack, or could not open one, and runs the connection again after a wait. The line's
 `after` is that wait (nanoseconds, in the JSON log) and `error` says why: `slack socket mode connection attempt failed: ...` is an
-attempt to open the connection that failed (Slack could not be reached, or refused the call), and `slack auth.test: ...` is the check of the
-bot token at the start of the run. While this goes on, `agentkourier_chat_connected` is 0 for that connection and no event reaches
+attempt to open the connection that failed (Slack could not be reached, or refused the call), and `slack auth.test call: ...` is the check of the
+bot token at the start of the run. The line has a `connection` field, the ChatConnection as `namespace/name`, as do the
+`slack: socket mode` lines, so that the lines of two connections can be told apart. While this goes on, `agentkourier_chat_connected` is 0 for that connection and no event reaches
 Agent Kourier. Whether Slack sends an event again that it could not deliver in the meantime is Slack's, and this page cannot tell you.
 
 The waits start at 1 second and double up to 60 seconds, each cut at random by up to half, and the broker does not stop trying:

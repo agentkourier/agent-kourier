@@ -45,9 +45,11 @@ type leaderHalf struct {
 
 // openPlatform builds the chat platform of conn, and with an election fences it: every write to the chat that the leader half
 // makes (the outbox's posts and reactions, the renderer's streams and edits, the interactions' prompts, edits and ephemerals)
-// goes through the platform that this returns, and nothing else builds one.
+// goes through the platform that this returns, and nothing else builds one. The platform's logger names the connection, as the broker's other
+// lines of a connection do ("connection", "namespace/name"), so that the lines of the Socket Mode connection of two connections can be told apart.
 func (h *leaderHalf) openPlatform(conn Connection, onConnection func(connected bool)) (builtPlatform, error) {
-	p, err := h.cfg.newPlatform(conn, h.log, onConnection)
+	log := h.log.With("connection", v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name))
+	p, err := h.cfg.newPlatform(conn, log, onConnection)
 	if err != nil {
 		return builtPlatform{}, err
 	}
