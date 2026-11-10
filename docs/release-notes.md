@@ -3,12 +3,26 @@
 What changed in each release, newest first, and what you must do about it. The steps for an upgrade are in
 [Upgrade](how-to/upgrade.md), which has a section for each change that needs one; this page says what changed and points to it.
 
-## Version 0.3.0 (unreleased)
+## Version 0.3.0
 
 A team can now bring its own Slack app: the platform team lists the team's namespace, and the broker serves the ChatConnection the team
 makes there beside its own, if it has one: a broker may now have none. The broker serves nothing new until that list admits a namespace; the migration, the metric labels, the new `ApproversReadable` condition and the other changes below apply to every install. Read [Let a team bring its own Slack app](how-to/team-slack-app.md),
 and the warning on rolling back below, before you set it. [Upgrade to the release that serves team connections](how-to/upgrade.md#upgrade-to-the-release-that-serves-team-connections) has the checklist for every install: the CRDs, the queries and log alerts to change, what changes with the list empty, and the rollback. An AgentBackend on `dialect: kagent-v1` can also limit which agent namespaces its Bindings may name; nothing changes for one that
 does not set the new field, and [the upgrade section](how-to/upgrade.md#upgrade-to-the-release-that-limits-the-agents-a-binding-may-name) says what to read before you set it.
+
+The release candidates before it (`v0.3.0-rc.1` and `v0.3.0-rc.2`) are prereleases on GitHub; what they changed is in this entry.
+
+### Breaking changes
+
+Against 0.2.1, with `config.connectionNamespaces` empty and no new field set, nothing in the values or the resources has to change. These can still break an existing install, each described below:
+
+- **Queries and alerts on six series.** They gain a `connection` label, and `agentkourier_chat_connected` stops reporting 0 for a connection that is removed or not served (see [Other changes](#other-changes)).
+- **`Ready` can turn `False`.** A Binding that sets `interactions.approverGroups` with `interactions.toolApprovals: true`, and whose bot cannot read a group, reads `False` on the new `ApproversReadable` condition.
+- **Error texts changed.** Log lines and status messages that quote a token, a Secret or a Slack call were reworded (see [Other changes](#other-changes)); a log alert that matches the old text must change.
+- **`token_expired` on a Socket Mode reconnect is fatal.** It was retried without end.
+- **The CRDs must be new.** A Binding CRD of 0.2.1 refuses a `personMessage` trigger, and all three CRDs have new schema hashes.
+- **A rollback to 0.2.1 needs steps first** if a team connection has an unposted row, a Binding has a `personMessage` trigger or a `spec.agents` field, or the broker has no connection of its own (see the warnings below and [Upgrade](how-to/upgrade.md#roll-back-from-this-release)).
+- **If you ran `v0.3.0-rc.1` with an empty `config.chatConnection`, check your values** ([below](#a-broker-with-no-connection-of-its-own)). An install that never ran rc.1 is not affected.
 
 ### Team-owned chat connections
 
@@ -94,8 +108,10 @@ does not set the new field, and [the upgrade section](how-to/upgrade.md#upgrade-
   retry together; the first attempt after a loss, and Slack's refresh, still reconnect at once. A Retry-After from Slack is honoured up to 5 minutes. `token_expired` on a reconnect is now fatal, where it used to be retried without end:
   the broker's own connection exits with code 1, and a team connection stops (`ChatCredentialsRejected`). The log line `slack connection ended; connecting again` replaces `connection attempt failed; retrying`, and
   `agentkourier_chat_connected` is 0 from when the connection is lost, which is when the library starts to connect again, until it is back ([Limits](reference/limits.md#run-the-broker), [Troubleshoot](how-to/troubleshoot.md#the-log-says-slack-connection-ended-connecting-again)).
-- **Every Slack Web API call the broker makes is cut at 30 seconds at most,** the `apps.connections.open` that opens each Socket Mode connection included, so a reconnect on a connection that a network blip left dead fails and is retried instead of hanging for minutes. The Socket Mode WebSocket is not cut. No setting changes the 30 seconds ([Limits](reference/limits.md#run-the-broker)).
-- **New field `spec.agents` on AgentBackend.** `sameNamespace: true` lets a Binding name an agent in its own namespace, and `namespaces` lists others (at most 256). Left out, there is no limit, as before.
+- **Every Slack Web API call the broker makes is cut at 30 seconds at most,** the `apps.connections.open` that opens each Socket Mode connection included, so a reconnect on a connection that a network blip left dead fails and is retried instead of hanging for minutes. A call that is not answered in time fails with a client timeout error, which is a transient failure and not a rejection of the credentials. The Socket Mode WebSocket is not cut. No setting changes the 30 seconds ([Limits](reference/limits.md#run-the-broker)).
+- **The Socket Mode log lines name their connection.** The `slack: socket mode` lines (connecting, connected, reconnecting) and the warning `slack connection ended; connecting again` carry a `connection` field, the ChatConnection as `namespace/name`, as the broker's other per-connection lines do, so that the lines of two connections can be told apart ([Troubleshoot](how-to/troubleshoot.md#the-log-says-slack-connection-ended-connecting-again)).
+- **Some error texts were reworded so that redaction leaves them whole.** The redaction reads a secret word followed by a colon as a name and its value, and had hidden causes such as `token_revoked`. The texts now read, for example, `slack auth.test call: ...` (was `slack auth.test: ...`), `secret <namespace>/<name> cannot be read: ...` (was `secret <namespace>/<name>: ...`), `secret caches for [...] are not synced: ...` (was `secret caches not synced for [...]: ...`), and the Binding message `the Binding requires a token and none was set` (was `... requires a bearer token ...`). A log alert or a script that matches the old text must change.
+- **New field `spec.agents` on AgentBackend.** `sameNamespace: true` lets a Binding name an agent in its own namespace, and `namespaces` lists others: at most 256, and a longer list is invalid (`has N items, maximum is 256`), with no setting to raise it. Left out, there is no limit, as before.
   A value that allows nothing is invalid, and so is the field on an `a2a` AgentBackend. All three CRDs change, and each has a new schema hash: the AgentBackend CRD gains `spec.agents`, the Binding CRD's trigger `type` enum gains `personMessage` with rules (CEL) that say which fields it takes, and the ChatConnection CRD's description says that a team may own one. Bring the CRDs and the image to the same release.
 - **New `Accepted` reason `AgentNamespaceNotAllowed`.** On custom resources a Binding that names an agent namespace its AgentBackend does not allow is not served, and says so in `Accepted`
   ([Binding status](reference/binding-status.md)). On the files route the config does not resolve: the broker exits with code 2 at start, and keeps the last good config on a reload. The metric
