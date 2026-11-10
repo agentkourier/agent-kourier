@@ -9,8 +9,9 @@ import (
 )
 
 // The release-version check keeps the public docs on the current release. The version a page names (in an image tag,
-// in `--version` on a helm command for the published chart, in the release workflow's signing identity, and in "the
-// current release is" and "Status: v") must be the chart's own version in charts/agent-kourier/Chart.yaml. The release
+// in `--version` on a helm command for the published chart, in "version X" right after the published chart's
+// reference or at the start of the next line, in the release workflow's signing identity, and in "the current release
+// is" and "Status: v") must be the chart's own version in charts/agent-kourier/Chart.yaml. The release
 // gate (hack/release/check-version.sh) refuses a release tag that is not that version, so cutting a release takes a
 // pull request that bumps the chart, and this check fails that pull request until no page names another version.
 
@@ -68,13 +69,23 @@ func prefixedVersions(line string) [][]int {
 // does not match.
 var helmVersion = regexp.MustCompile(`--version\s+` + "`?" + semverPattern)
 
-// chartProse matches the chart's version in prose after the chart's reference, as "the chart <ref>, version `X`", and
-// captures it. A helm --version does not match, since helmVersion counts it.
-var chartProse = regexp.MustCompile(`(?:^|[^-\w])version\s+` + "`?v?" + semverPattern)
+// chartProse matches the chart's version in prose right after the chart's reference, as "the chart `<ref>`, version
+// `X`", and captures it. It is matched against the text after the reference only, so a later "version X" in the same
+// sentence (a Kubernetes version, an older release) does not match, and neither does a helm --version.
+var chartProse = regexp.MustCompile(`^` + "`?,?" + `\s*version\s+` + "`?v?" + semverPattern)
 
 // chartProseNext matches the same version at the start of the line after the chart's reference, where a wrapped
 // sentence puts it.
 var chartProseNext = regexp.MustCompile(`^\s*version\s+` + "`?v?" + semverPattern)
+
+// fromWord moves the start of match m to word, so that a finding's span, which an allowlist entry's text must
+// contain, begins at the word and not at the punctuation before it.
+func fromWord(line string, m []int, word string) []int {
+	if k := strings.Index(line[m[0]:m[1]], word); k > 0 {
+		m[0] += k
+	}
+	return m
+}
 
 // chartVersion returns the version in the chart's Chart.yaml under root, or "" when the file does not exist, as in a
 // test tree without a chart.
@@ -131,15 +142,15 @@ func releaseVersionFindings(path, text, want string) []finding {
 			add(i, line, m)
 		}
 		after := strings.Index(line, publishedChart) + len(publishedChart)
-		for _, m := range chartProse.FindAllStringSubmatchIndex(line[after:], -1) {
+		if m := chartProse.FindStringSubmatchIndex(line[after:]); m != nil {
 			for j := range m {
 				m[j] += after
 			}
-			add(i, line, m)
+			add(i, line, fromWord(line, m, "version"))
 		}
 		if i+1 < len(lines) {
 			if m := chartProseNext.FindStringSubmatchIndex(lines[i+1]); m != nil {
-				add(i+1, lines[i+1], m)
+				add(i+1, lines[i+1], fromWord(lines[i+1], m, "version"))
 			}
 		}
 		if strings.HasSuffix(strings.TrimSpace(line), `\`) && i+1 < len(lines) {

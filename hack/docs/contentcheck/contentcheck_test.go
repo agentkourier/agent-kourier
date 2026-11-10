@@ -861,6 +861,7 @@ func TestReleaseVersionFindings(t *testing.T) {
 		{"the chart's version in prose at the chart's version", "the chart `" + publishedChart + "`, version `0.2.0`\n", nil},
 		{"a version before the chart on its line", "version `0.1.0` of the docs; the chart `" + publishedChart + "`\n", nil},
 		{"a version later on the next line", "the chart `" + publishedChart + "`\nis new since version `0.1.0`.\n", nil},
+		{"a version later on the chart's line", "the chart `" + publishedChart + "`, which replaced version `0.1.0`\n", nil},
 		{"helm --version is counted once", "helm install x " + publishedChart + " --version 0.1.0\n", []int{1}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -875,6 +876,12 @@ func TestReleaseVersionFindings(t *testing.T) {
 				t.Errorf("findings on lines %v, want %v", got, tt.want)
 			}
 		})
+	}
+	for _, text := range []string{"| Chart | `" + publishedChart + "`, version `0.1.0` |\n", "the chart `" + publishedChart + "`\n  version `0.1.0`\n"} {
+		f := releaseVersionFindings("docs/x.md", text, "0.2.0")
+		if len(f) != 1 || !strings.HasPrefix(f[0].text[f[0].start:f[0].end], "version ") {
+			t.Errorf("chart prose %q: findings %+v, want one whose span starts at \"version \"", text, f)
+		}
 	}
 	if got := releaseVersionFindings("docs/x.md", "ghcr.io/agentkourier/agent-kourier:v0.1.0\n", ""); got != nil {
 		t.Errorf("with no chart version, findings %v, want none", got)
