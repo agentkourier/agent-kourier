@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -45,10 +46,19 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	}
 	log := slog.New(telemetry.LogHandler{Handler: cfg.logger().Handler()})
 	// The first line of a log, before the exporter or klog can say anything: the two routes read the same way after it, and a pod that was moved from one to the other is told
-	// apart from its old one by it. With crds the connection is the one the broker is configured to serve, which "serving a
-	// ChatConnection" confirms once it is read; with files it is whichever the directory holds, and only that later line names it.
+	// apart from its old one by it. With crds the connection is the own one the broker is configured to serve, which "serving a
+	// ChatConnection" confirms once it is read, and it is left out when the broker has none (spec D53); connection_namespaces, when there is a
+	// list, is the namespaces whose ChatConnections it serves besides (names only, each a DNS-1123 label by now, so no pasted token can pass).
+	// With files the connection is whichever the directory holds, and only that later line names it.
 	if cfg.source() == SourceCRDs {
-		log.InfoContext(ctx, "config route", "config_source", string(SourceCRDs), "connection", v1alpha1.NamespacedName(cfg.ChatConnection.Namespace, cfg.ChatConnection.Name))
+		attrs := []any{"config_source", string(SourceCRDs)}
+		if !cfg.noOwnConnection() {
+			attrs = append(attrs, "connection", v1alpha1.NamespacedName(cfg.ChatConnection.Namespace, cfg.ChatConnection.Name))
+		}
+		if len(cfg.ConnectionNamespaces) > 0 {
+			attrs = append(attrs, "connection_namespaces", strings.Join(cfg.ConnectionNamespaces, ","))
+		}
+		log.InfoContext(ctx, "config route", attrs...)
 	} else {
 		log.InfoContext(ctx, "config route", "config_source", string(SourceFiles))
 	}

@@ -10,8 +10,9 @@ import (
 )
 
 // AGENTKOURIER_CONNECTION_NAMESPACES is the platform's admission list: comma-separated namespaces, each a DNS-1123 label, with
-// the spaces around an item trimmed and the empty items and the repeats dropped. Unset or empty serves the own connection alone,
-// and any value is refused with the files source, which serves the one ChatConnection of its directory.
+// the spaces around an item trimmed and the empty items and the repeats dropped. Unset, empty or only separators is no list, which
+// serves the own connection alone (and with no own connection is refused: configsource_test.go), and any value is refused with the files
+// source, which serves the one ChatConnection of its directory.
 func TestEnvConfigReadsTheAdmissionList(t *testing.T) {
 	const key = "AGENTKOURIER_CONNECTION_NAMESPACES"
 	crds := func(value string) env {

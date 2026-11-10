@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"k8s.io/client-go/rest"
+
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 )
 
 // valid returns a RunConfig that passes validate: every required field set.
@@ -84,7 +86,8 @@ func TestValidateRefusesWhatIsMissingAsAWiringError(t *testing.T) {
 }
 
 // The admission list is for the custom resources: the files source serves the one ChatConnection of its directory, and each item
-// of the list is a namespace name. The error names the item's position and not its value.
+// of the list is a namespace name. The error names the item's position and not its value. With the custom resources the own
+// ChatConnection is optional when the list is not empty (spec D53); both empty is refused, and so is half a reference.
 func TestValidateChecksTheAdmissionList(t *testing.T) {
 	crds := func(c *RunConfig, namespaces ...string) {
 		c.ConfigSource, c.ChatConnection, c.ConnectionNamespaces = SourceCRDs, testConnection, namespaces
@@ -93,7 +96,23 @@ func TestValidateChecksTheAdmissionList(t *testing.T) {
 		mutate func(*RunConfig)
 		want   string // "" is accepted; otherwise a piece of the wiring error
 	}{
-		"none":                   {func(c *RunConfig) { crds(c) }, ""},
+		"none": {func(c *RunConfig) { crds(c) }, ""},
+		"no own connection, a list": {func(c *RunConfig) {
+			crds(c, "team-a")
+			c.ChatConnection = v1alpha1.ObjectRef{}
+		}, ""},
+		"no own connection, no list": {func(c *RunConfig) {
+			crds(c)
+			c.ChatConnection = v1alpha1.ObjectRef{}
+		}, "set ChatConnection to the broker's own ChatConnection, or ConnectionNamespaces to the namespaces whose ChatConnections it serves, or both"},
+		"half an own connection, a list": {func(c *RunConfig) {
+			crds(c, "team-a")
+			c.ChatConnection = v1alpha1.ObjectRef{Namespace: "agent-kourier-system"}
+		}, "ChatConnection must be set to a namespace and a name"},
+		"the other half, a list": {func(c *RunConfig) {
+			crds(c, "team-a")
+			c.ChatConnection = v1alpha1.ObjectRef{Name: "slack-main"}
+		}, "ChatConnection must be set to a namespace and a name"},
 		"some":                   {func(c *RunConfig) { crds(c, "team-a", "team-b") }, ""},
 		"files refuses a list":   {func(c *RunConfig) { c.ConnectionNamespaces = []string{"team-a"} }, "ConnectionNamespaces is set with the files config source"},
 		"a wildcard":             {func(c *RunConfig) { crds(c, "team-a", "*") }, "ConnectionNamespaces item 2"},
