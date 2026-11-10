@@ -7,7 +7,7 @@ What changed in each release, newest first, and what you must do about it. The s
 
 A documentation release. The broker's code, the CRDs and the chart's templates are those of 0.3.0, so an upgrade from 0.3.0 needs no step. The image is rebuilt from that code and has a new digest, so `helm upgrade` replaces the pod as any upgrade does.
 
-- **The overview pages say a team can bring its own chat app.** The README, the home page, [Why a broker](explanation/why-a-broker.md) and [Write a Binding](how-to/write-a-binding.md) described the platform team's chat app as the only one. They now say who owns which ChatConnection. The pages on setting one up were already right in 0.3.0.
+- **The overview pages say a team can bring its own chat app.** The README, the home page, [Why a broker](explanation/why-a-broker.md) and [Write a Binding](how-to/write-a-binding.md) described the platform team's chat app as the only one. They now say who owns which ChatConnection, and Write a Binding asks for an AgentBackend's `allowedNamespaces` only when the backend is in another namespace. The pages on setting one up were already right in 0.3.0.
 - **[Install on custom resources](how-to/install-with-helm.md#install-on-custom-resources) splits the resources by owner.** `platform.yaml` holds the ChatConnection and the AgentBackend, each listing the team's namespace. `team.yaml` holds the team's Binding in its own namespace, and the Binding's token Secret goes there too. The recorded clip follows the same split.
 - **[Let a team bring its own Slack app](how-to/team-slack-app.md#the-whole-path-recorded) has a recorded clip**: a broker with no app of its own serves a team's app, and the commands it types are on the page.
 

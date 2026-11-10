@@ -856,6 +856,12 @@ func TestReleaseVersionFindings(t *testing.T) {
 		{"another project's version", "kagent 0.9.4 speaks A2A 0.3.\n", nil},
 		{"two references on one line, one stale", "ghcr.io/agentkourier/agent-kourier:v0.2.0 and ghcr.io/agentkourier/charts/agent-kourier:0.1.0\n", []int{1}},
 		{"the image with no version tag", "ghcr.io/agentkourier/agent-kourier@sha256:abc\n", nil},
+		{"the chart's version in a table row", "| Chart | `" + publishedChart + "`, version `0.1.0` |\n", []int{1}},
+		{"the chart's version on the next line", "and the Helm chart `" + publishedChart + "`\nversion `0.1.0`, which pins it.\n", []int{2}},
+		{"the chart's version in prose at the chart's version", "the chart `" + publishedChart + "`, version `0.2.0`\n", nil},
+		{"a version before the chart on its line", "version `0.1.0` of the docs; the chart `" + publishedChart + "`\n", nil},
+		{"a version later on the next line", "the chart `" + publishedChart + "`\nis new since version `0.1.0`.\n", nil},
+		{"helm --version is counted once", "helm install x " + publishedChart + " --version 0.1.0\n", []int{1}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var got []int

@@ -35,7 +35,7 @@ Each release publishes a Helm chart and a container image for `linux/amd64` and 
 
 | Artifact | Reference |
 |---|---|
-| Chart | `oci://ghcr.io/agentkourier/charts/agent-kourier`, version `0.3.0` |
+| Chart | `oci://ghcr.io/agentkourier/charts/agent-kourier`, version `0.3.1` |
 | Image | `ghcr.io/agentkourier/agent-kourier:v0.3.1` |
 
 The chart pins the image by digest, so you set no image values to install it. The

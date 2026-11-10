@@ -68,6 +68,14 @@ func prefixedVersions(line string) [][]int {
 // does not match.
 var helmVersion = regexp.MustCompile(`--version\s+` + "`?" + semverPattern)
 
+// chartProse matches the chart's version in prose after the chart's reference, as "the chart <ref>, version `X`", and
+// captures it. A helm --version does not match, since helmVersion counts it.
+var chartProse = regexp.MustCompile(`(?:^|[^-\w])version\s+` + "`?v?" + semverPattern)
+
+// chartProseNext matches the same version at the start of the line after the chart's reference, where a wrapped
+// sentence puts it.
+var chartProseNext = regexp.MustCompile(`^\s*version\s+` + "`?v?" + semverPattern)
+
 // chartVersion returns the version in the chart's Chart.yaml under root, or "" when the file does not exist, as in a
 // test tree without a chart.
 func chartVersion(root string) (string, error) {
@@ -92,7 +100,7 @@ func chartVersion(root string) (string, error) {
 
 // releaseVersionFindings returns a finding for each release version on a line of text that is not want. A helm
 // command's --version counts when the line names the published chart, or continues a line that does with a trailing
-// backslash.
+// backslash. So does a "version X" in prose after the published chart on its line, or at the start of the next line.
 func releaseVersionFindings(path, text, want string) []finding {
 	if want == "" {
 		return nil
@@ -121,6 +129,18 @@ func releaseVersionFindings(path, text, want string) []finding {
 		}
 		for _, m := range helmVersion.FindAllStringSubmatchIndex(line, -1) {
 			add(i, line, m)
+		}
+		after := strings.Index(line, publishedChart) + len(publishedChart)
+		for _, m := range chartProse.FindAllStringSubmatchIndex(line[after:], -1) {
+			for j := range m {
+				m[j] += after
+			}
+			add(i, line, m)
+		}
+		if i+1 < len(lines) {
+			if m := chartProseNext.FindStringSubmatchIndex(lines[i+1]); m != nil {
+				add(i+1, lines[i+1], m)
+			}
 		}
 		if strings.HasSuffix(strings.TrimSpace(line), `\`) && i+1 < len(lines) {
 			for _, m := range helmVersion.FindAllStringSubmatchIndex(lines[i+1], -1) {

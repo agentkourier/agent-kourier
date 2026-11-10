@@ -241,7 +241,7 @@ the contract.
 
 The current release is v0.3.1: a signed image for `linux/amd64` and `linux/arm64`,
 `ghcr.io/agentkourier/agent-kourier:v0.3.1`, and the Helm chart `oci://ghcr.io/agentkourier/charts/agent-kourier`
-version `0.3.0`, which pins that image by digest. It runs as one
+version `0.3.1`, which pins that image by digest. It runs as one
 replica with a SQLite store, or as two replicas on Postgres with a leader election
 and fencing, installed with the [Helm chart](charts/agent-kourier/README.md). Agent Kourier writes
 an audit log, exports Prometheus metrics and can export OpenTelemetry traces. See
