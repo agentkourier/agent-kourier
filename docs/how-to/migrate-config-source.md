@@ -38,7 +38,7 @@ There are two ways to hold the resources on the custom resource route, and you c
   Bindings even when the platform team's resources are rendered.
 
 The chart reads `config.*` to work out which Secrets to grant, so for resources you apply yourself it cannot see their
-Secrets. It grants the one the broker's own ChatConnection reads, and each team grants its own: see [Grant the Secrets](#grant-the-secrets).
+Secrets. It grants the one the broker's own ChatConnection reads, if it has one (this move gives it one: the ConfigMap's single ChatConnection), and each team grants its own: see [Grant the Secrets](#grant-the-secrets).
 
 ## Move to custom resources
 
@@ -114,7 +114,7 @@ helm upgrade agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --ver
 kubectl -n agent-kourier rollout status deploy/agent-kourier
 ```
 
-The pod restarts: the Deployment now sets `AGENTKOURIER_CONFIG_SOURCE=crds` and `AGENTKOURIER_CHAT_CONNECTION`, mounts no
+The pod restarts: the Deployment now sets `AGENTKOURIER_CONFIG_SOURCE=crds` and `AGENTKOURIER_CHAT_CONNECTION` (the ConfigMap's one ChatConnection becomes the broker's own), mounts no
 ConfigMap, and the chart removes the ConfigMap it rendered. A session records its Binding as `namespace/name` and the move keeps
 the names, so a conversation continues where it was: a reply in a thread that began before the move is answered after it. For about 15
 seconds a Binding reads `Unknown` with the reason `Pending`, and then `BackendReachable:Pending` until its first probes end.
@@ -240,7 +240,7 @@ to do, and one is the team's.
    rendered resources is `config.chatConnections.<name>.spec.allowedNamespaces` in your values. A Binding from another namespace reads
    `Accepted=False` with the reason `NamespaceNotAllowed` until it is listed.
 3. **The team lets the broker read its Secret.** The team makes a Role in its own namespace that names the Secret, and a RoleBinding to the
-   broker's ServiceAccount (here `agent-kourier` in the namespace `agent-kourier`). It needs no change to the platform's release or values:
+   broker's ServiceAccount (here `agent-kourier` in the namespace `agent-kourier`, which is right for a release named `agent-kourier`; in general it is `serviceAccount.name`, or the chart's full name: `fullnameOverride`, or the release name when it contains `agent-kourier`, or `<release>-agent-kourier`. `kubectl -n <release namespace> get deploy -l app.kubernetes.io/instance=<release> -o jsonpath='{.items[0].spec.template.spec.serviceAccountName}'` prints it). It needs no change to the platform's release or values:
 
    ```sh
    kubectl -n team-a create role agent-kourier-secrets-team-a --verb=list,watch --resource=secrets --resource-name=team-a-agent-token
@@ -287,7 +287,7 @@ What a team that can write these objects can do with the broker's access is in [
 ## Move back to the ConfigMap
 
 If the platform admits team namespaces (`config.connectionNamespaces`), take that list off the values in the same upgrade: the chart refuses a non-empty list with
-`config.source: files`, and the files route serves the one ChatConnection of its directory, so the team connections stop being served. The files route writes no Binding status, so the team's Bindings keep the last status written, perhaps `Ready=True`.
+`config.source: files`, and the files route serves the one ChatConnection of its directory, so the team connections stop being served (a broker with no own connection has no ChatConnection to leave in that directory: [the chart README](https://github.com/agentkourier/agent-kourier/tree/main/charts/agent-kourier) says what it needs). The files route writes no Binding status, so the team's Bindings keep the last status written, perhaps `Ready=True`.
 
 Where the chart rendered the resources from your `config.*` values, set `config.source: files` and upgrade. The ConfigMap is rendered from the same values:
 
@@ -355,7 +355,7 @@ no test deletes a CRD under a running broker. Deleting all three CRDs takes the 
 Either way the broker sets `agentkourier_config_stale` to 1 and logs `custom resource informer cannot list or watch`, and a restart exits with code 2, since the CRDs are not installed.
 
 **The move back keeps the old pods routing.** The chart deletes what it rendered one object after another while the old pods still run: the AgentBackend, the Bindings, the ChatConnection last.
-A broker that finds its own ChatConnection deleted holds it at its last good generation, and holds with it, at theirs, the Bindings that are gone and the AgentBackends that
+A broker that finds its own ChatConnection deleted holds it (only an own connection is held; a team's is dropped when its deletion settles) at its last good generation, and holds with it, at theirs, the Bindings that are gone and the AgentBackends that
 those Bindings and the Bindings still there use, until the connection is back or the broker restarts. So the old pods keep routing until they end, a failover keeps routing,
 and the new pods take over with the ConfigMap's config. A broker that restarts while it holds has no last good generation and fails at start. A deletion takes effect only at a read of
 the cluster that finds nothing newly gone, at least 8 seconds after the last read that did, so the deletes of one upgrade count as one change. An object that is deleted is still taken into the hold for a minute after its deletion takes effect, which is 10 to 60 seconds after the read that found it gone (a read later, if one runs late),
@@ -375,7 +375,7 @@ is held, a Binding that is deleted stays held, and leaves by itself once the con
 | `helm upgrade` fails with `config.connectionNamespaces is for config.source crds, and config.source is files` | The values still list namespaces whose ChatConnections the broker serves, and the files route serves one ChatConnection. Set `config.connectionNamespaces: []`, or stay on `config.source: crds`. Nothing changed. |
 | `helm upgrade` fails with `config.source crds needs the CRDs` | Step 1 was skipped, or the CRDs were deleted. Install them first. Nothing changed. |
 | `helm upgrade` fails with `config.source crds needs Kubernetes 1.33 or later` | The API server is older. The ConfigMap route has no minimum: stay on it. With `helm template`, pass the cluster's version with `--kube-version`. |
-| The pod crash-loops and `kubectl logs` says `ChatConnection agent-kourier/slack was not found` (exit code 2) | The broker has its own ChatConnection, named by `AGENTKOURIER_CHAT_CONNECTION`, and does not start without it. Apply it, or name the one that exists in `config.chatConnection`. Once the resources exist the pod starts at its next restart, with nothing else to do. |
+| The pod crash-loops and `kubectl logs` says `ChatConnection agent-kourier/slack was not found` (exit code 2) | The broker has an own ChatConnection, named by `AGENTKOURIER_CHAT_CONNECTION`, and does not start without it (a broker with none, which serves only the namespaces of `config.connectionNamespaces`, has no such failure). Apply it, or name the one that exists in `config.chatConnection`. Once the resources exist the pod starts at its next restart, with nothing else to do. |
 | `helm upgrade` fails with `conflict with "kubectl-patch"` or another manager | Someone edited a chart-rendered resource by hand, and Helm will not overwrite a field another manager set. Put the change in your values. To discard the hand edit, add `--force-conflicts`. |
 | `helm upgrade --wait` (or `helm install --wait`) fails with `resource Binding/<namespace>/<name> not ready` | Helm 4 reads the status of the Bindings the chart renders on this route, and a Binding is not `Ready` until the leader has probed it, or while its agent or channel cannot be reached. Allow a longer `--timeout`, or leave `--wait` out and check the Bindings as in [Check that it worked](#check-that-it-worked). |
 | `helm upgrade` fails with `field not declared in schema`, `Invalid value` or `namespaces "..." not found` | The API server refused one rendered object: a field the schema does not have, a value it refuses, or a Binding in a namespace that does not exist. **The objects do not stay as they were.** Helm has applied the ones before it, and the release is `failed`. In step 2, with a Binding whose channel the schema refuses, the Deployment had moved to `AGENTKOURIER_CONFIG_SOURCE=crds` with its config volume gone, and the ClusterRole and the AgentBackend were created, but the ChatConnection and the Binding were not, and the ConfigMap was still there (measured on kind 1.37.0, Helm 4.3.1). The new pod exits 2 with `ChatConnection ... was not found`, as in the row above that names it, and crash-loops (by reading the code; not run). With SQLite the Deployment's `Recreate` strategy has already stopped the old pod, so **nothing answers until you act**. With Postgres its rolling update keeps the old pod, since the new one never becomes ready (by reading the chart's Deployment; not run). Fix the values and upgrade again, or run `helm rollback agent-kourier <the last revision that says deployed in helm history>`, which restored the Deployment and removed the new objects (measured). Run the check in [step 2](#2-switch-the-route) first, since it finds these before anything is applied. |
