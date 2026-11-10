@@ -103,6 +103,11 @@ connection the broker serves, so it makes a Role in that connection's namespace 
 that has the connection's name (`slack` here). Without that Role the broker could not read the Secret and would exit with code 3 in a loop. If the
 ChatConnection's `credentialsSecretRef` names another Secret, set `config.chatConnectionSecret` to that name.
 
+This install gives the broker a ChatConnection of its own. A broker that serves only the ChatConnections of other namespaces, whose teams bring their own Slack apps,
+leaves `config.chatConnection` empty and lists those namespaces in `config.connectionNamespaces` instead: the chart then renders no `AGENTKOURIER_CHAT_CONNECTION`,
+grants the Secret of no own connection, and the pod starts without a ChatConnection to find
+([A broker with no connection of its own](team-slack-app.md#a-broker-with-no-connection-of-its-own)).
+
 ```yaml title="my-values.yaml"
 config:
   chatConnection: agent-kourier/slack
@@ -364,8 +369,10 @@ slack: socket mode connected
 ```
 
 `config route` is the first line, and it is how the log says which of [the two routes](../explanation/config-routes.md) the broker reads: its `config_source` field is
-`crds` or `files`. With `crds` it also has a `connection` field, the namespace/name of the ChatConnection the broker is set to serve
-(`AGENTKOURIER_CHAT_CONNECTION`), and the later `serving a ChatConnection` line confirms that the cluster has it. With `files` there is no `connection` field: the one
+`crds` or `files`. With `crds` and an own connection it also has a `connection` field, the namespace/name of the ChatConnection the broker is set to serve
+(`AGENTKOURIER_CHAT_CONNECTION`), and the later `serving a ChatConnection` line confirms that the cluster has it. With `crds` and a list of namespaces
+(`AGENTKOURIER_CONNECTION_NAMESPACES`) it also has a `connection_namespaces` field with the namespace names, comma-joined; a broker with no own connection has no `connection` field,
+and `serving a ChatConnection` is logged once for each team connection it starts, after `ready`, since the leader starts them. With `files` there is no `connection` field: the one
 ChatConnection of the directory is named by `serving a ChatConnection` alone. The line is logged at `info`: at the default level, the log of a container that has just started and has no `config route` line is from a release older than the one that added it. With `logLevel: warn` or `error` no start line is shown, and a log that kubelet has rotated no longer has its first lines. The order of the first five lines is read from the code and was checked, on both
 routes, against the broker started with a fake cluster; the three `slack:` lines were not re-run against a cluster for this page.
 

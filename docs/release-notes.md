@@ -6,14 +6,14 @@ What changed in each release, newest first, and what you must do about it. The s
 ## Version 0.3.0 (unreleased)
 
 A team can now bring its own Slack app: the platform team lists the team's namespace, and the broker serves the ChatConnection the team
-makes there beside its own. The broker serves nothing new until that list admits a namespace; the migration, the metric labels, the new `ApproversReadable` condition and the other changes below apply to every install. Read [Let a team bring its own Slack app](how-to/team-slack-app.md),
+makes there beside its own, if it has one: a broker may now have none. The broker serves nothing new until that list admits a namespace; the migration, the metric labels, the new `ApproversReadable` condition and the other changes below apply to every install. Read [Let a team bring its own Slack app](how-to/team-slack-app.md),
 and the warning on rolling back below, before you set it. [Upgrade to the release that serves team connections](how-to/upgrade.md#upgrade-to-the-release-that-serves-team-connections) has the checklist for every install: the CRDs, the queries and log alerts to change, what changes with the list empty, and the rollback. An AgentBackend on `dialect: kagent-v1` can also limit which agent namespaces its Bindings may name; nothing changes for one that
 does not set the new field, and [the upgrade section](how-to/upgrade.md#upgrade-to-the-release-that-limits-the-agents-a-binding-may-name) says what to read before you set it.
 
 ### Team-owned chat connections
 
 - **New value `config.connectionNamespaces`** (the environment variable `AGENTKOURIER_CONNECTION_NAMESPACES`), the platform's admission list: the namespaces whose ChatConnections the
-  broker serves besides its own, with custom resources only (the chart refuses a non-empty list with `config.source: files`). Empty, the default, serves the own connection alone, as before. The broker
+  broker serves besides its own, if it has one, with custom resources only (the chart refuses a non-empty list with `config.source: files`). Empty, the default, serves the own connection alone, as before. The broker
   reads the list at start, so a change restarts it. A team makes its ChatConnection and its Secret in its own namespace, and grants the Secret to the broker's
   ServiceAccount with a Role of its own; `rbac.secretNames` or `rbac.secretNamespaces` can grant it instead. Listing a namespace is the platform's consent: the broker then holds the team's app tokens in its memory, as it holds
   the Binding tokens ([Security model](explanation/security.md#a-team-brings-its-own-chat-app)).
@@ -21,12 +21,12 @@ does not set the new field, and [the upgrade section](how-to/upgrade.md#upgrade-
   pending, with its session and the runner parked on it, for as long as the broker ran: ending it needs the Binding's agent. The sweep now ends it, posting nothing, `5m` after the first sweep that finds it both past its timeout and orphaned (the sweep runs every 10 seconds, and a restart or a takeover starts the count again), which is not
   counted as a timeout but as the outcome `orphaned` of `agentkourier_approval_outcomes_total`, and which leaves the agent's task input-required at the agent when the Binding is gone. The session of a Binding that exists and is not served is still kept for as long as it is unserved. A connection that is served and not running
   (its credentials rejected, or not started yet) still keeps its interactions pending ([Limits](reference/limits.md#what-a-pause-may-ask)).
-- **At most 16 connections are served,** the own one included, which counts first, then the others oldest first. No setting changes the 16. A connection past it is not run, and the Bindings it admits say `ConnectionNotServed`
+- **At most 16 connections are served,** the own one included, which counts first when there is one, then the others oldest first. No setting changes the 16. A connection past it is not run, and the Bindings it admits say `ConnectionNotServed`
   ([Limits](reference/limits.md#run-the-broker)). The adapter's bounds on the events it holds, and the cap on button presses waiting, are per connection.
 - **Slack rejecting a team connection's token stops that connection only,** not the broker: a WARN names it and Slack's code,
   `agentkourier_chat_connected` is 0 for it, its Bindings read `ChannelJoined` `False` with `ChatCredentialsRejected`, and it starts again when its Secret or its
   ChatConnection changes. A changed Secret restarts a team connection by itself, at the next of the broker's looks, which come every 5 seconds. The broker's own connection is as before: a rejected token exits the process with code 1, and new tokens apply at a restart.
-- **New `Accepted` reason `ConnectionNotServed`.** A Binding on a ChatConnection that exists and that this broker does not serve says so, once: the broker served the connection before and does not now (its namespace was taken off the list, or it was the broker's own connection and `config.chatConnection` now names another), it is past the 16, or it is a second connection of a Slack app.
+- **New `Accepted` reason `ConnectionNotServed`.** A Binding on a ChatConnection that exists and that this broker does not serve says so, once: the broker served the connection before and does not now (its namespace was taken off the list, or it was the broker's own connection and `config.chatConnection` now names another or is empty, and its namespace is not on the list), it is past the 16, or it is a second connection of a Slack app.
   It is written once and not put back, so that a broker that does serve the connection has the last word. The leader counts these Bindings in the new value `ConnectionNotServed` of the `reason` label of `agentkourier_config_binding_rejections`, so that
   `sum(agentkourier_config_binding_rejections) > 0` includes them; a standby reads 0 for it. This happens with the list empty too: after you change `config.chatConnection` to another ChatConnection, the Bindings of the old one, which still exists,
   are told and counted, so that `sum(agentkourier_config_binding_rejections) > 0` fires, until that ChatConnection is deleted or this broker serves it again, even when another release serves it. `ChatUnavailable` on `ChannelJoined` and `ApproversReadable` now also covers a
@@ -37,7 +37,7 @@ does not set the new field, and [the upgrade section](how-to/upgrade.md#upgrade-
 - **Two brokers that admit one namespace** both serve its connections and both open Socket Mode on its apps, so Slack gives each event to one of them and the other misses it. Give each broker its own connections and its own list
   ([Troubleshoot](how-to/troubleshoot.md#the-status-of-a-binding-keeps-changing)).
 - **A database migration (0029).** The outbox and the button presses record the connection they belong to, and the broker records the connections it serves. The migration adds columns and a table, and replaces the index on the outbox's channel and thread with one that starts at the connection. Rows written before it, or by an
-  older release after a rollback, belong to the own connection: the leader gives them to it when it starts.
+  older release after a rollback, belong to the own connection: the leader gives them to it when it starts. A broker with no own connection has none to give them to, and its leader refuses to start while any exist (see below).
   A rollback does not undo the index: 0.2.1 deletes the settled outbox rows of an expired session by channel and thread (`channel = ... AND thread_ts = ...`), which an index that starts at the connection does not serve, so on SQLite each
   of those deletions reads the whole `outbox` table until the broker is upgraded again. It costs time, not data (Postgres was not measured).
 - **Do not roll back past 0.3.0 while a team connection has an unposted row.** The outbox of 0.2.1 posts every unposted row through its one chat platform, so a post waiting for any team's connection would go out through the platform's app,
@@ -49,6 +49,32 @@ does not set the new field, and [the upgrade section](how-to/upgrade.md#upgrade-
   The steps are in [Let a team bring its own Slack app](how-to/team-slack-app.md#take-it-back).
 - **Remove `personMessage` triggers before any rollback to 0.2.1 or earlier.** Those releases know the trigger types `mention` and `botMessage` only. On the files route one `personMessage` trigger fails the whole config: the broker exits with code 2 at start,
   and keeps the last good config on a reload. On custom resources the older broker refuses that Binding as invalid (`Accepted` `False`, `InvalidSpec`) and does not serve it.
+
+### A broker with no connection of its own
+
+- **`config.chatConnection` may be left empty with `config.connectionNamespaces` set.** The chart then renders no `AGENTKOURIER_CHAT_CONNECTION`, and the broker serves only the ChatConnections of the listed namespaces, each as a team connection.
+  This is the case for a platform whose teams all bring their own Slack apps; nothing names a connection of the platform's. With the variable unset, the broker must have a non-empty list: with neither it exits with code 2 and an error that names both variables, since it reads the list at start and could serve nothing.
+  The file route is unchanged: it still has exactly one ChatConnection and refuses both variables. A broker whose listed namespaces hold no ChatConnection yet starts, is ready and serves nothing until one appears. The chart refuses `config.chatConnectionSecret` in this shape (it names the Secret of an own connection, and there is none), and refuses a
+  `config.chatConnections` entry whose namespace is not on the list, because the chart would render it and the broker would never serve it. [A broker with no connection of its own](how-to/team-slack-app.md#a-broker-with-no-connection-of-its-own) is the how-to, with the move from an own connection to none.
+- **Values whose meaning changed since 0.3.0-rc.1.** Under rc.1 an empty `config.chatConnection` with exactly one `config.chatConnections` entry made that entry the broker's own connection, whether or not `config.connectionNamespaces` was set. Now, with the list non-empty,
+  that entry is a team connection, and the render fails if its namespace is not on the list. With the list empty, or `config.chatConnection` set, nothing changed. **If you installed rc.1 with an empty `config.chatConnection`, one entry in `config.chatConnections` and a non-empty `config.connectionNamespaces`, set `config.chatConnection` to that entry before you upgrade**:
+  otherwise it loses what only an own connection has (below), and the chart refuses to render if its namespace is not listed.
+- **What an own connection has and a team connection does not.** A token that Slack rejects ends the process with code 1 for the own connection, and stops that connection alone for a team's. The own connection's ChatConnection is held when it is deleted, and a team's is dropped when the deletion settles.
+  The own connection takes the first of the 16 places and the first claim of its Slack app; with none, the 16 places and every claim go by age (`creationTimestamp`, then namespace and name).
+- **With no own connection, a rejected token never ends the process or the pod's readiness.** If Slack rejects every token, the broker stays up and `/readyz` says ready, `agentkourier_chat_connected` is 0 for each connection, and its Bindings read `ChannelJoined` `False` with `ChatCredentialsRejected`. Alert on the metric, with
+  the label that your scrape gives the release's namespace in place of `namespace="agent-kourier"` ([Metrics](reference/metrics.md#alert-rules-for-a-broker-with-no-connection-of-its-own) says what each rule misses):
+
+  ```yaml
+  - alert: AgentKourierNoChatConnectionUp
+    expr: max(agentkourier_chat_connected{namespace="agent-kourier"}) < 1
+    for: 10m
+  - alert: AgentKourierChatConnectionDown
+    expr: agentkourier_chat_connected{namespace="agent-kourier"} == 0
+    for: 10m
+  ```
+- **Rows with no connection stop a broker that has no own connection.** Outbox rows and button presses written before migration 0029, or by an older release after a rollback, have an empty connection. With no own connection to give them to, the leader exits with code 2 when it starts, naming the two counts and
+  saying to set `config.chatConnection` to the connection that served them, let the broker start once, and unset it. Only the replica that becomes the leader makes the check.
+- **A broker with no own connection cannot be rolled back in place.** 0.2.0, 0.2.1 and 0.3.0-rc.1 exit with code 2 on `config.source: crds` without `AGENTKOURIER_CHAT_CONNECTION` (read in their source, not run). [Upgrade](how-to/upgrade.md#roll-back-from-this-release) has the steps.
 
 ### Other changes
 

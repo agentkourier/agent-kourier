@@ -94,9 +94,11 @@ type UnservedReason string
 // and this one is not among the oldest.
 const UnservedCap UnservedReason = "cap"
 
-// UnservedStopped is the reason of a connection that the broker served before and does not now, though it still exists: the
-// namespace was taken off the admission list, or the broker's own connection was changed. A source does not give it, since it cannot
-// know what the broker served before; the broker adds it from the record in its store (the status writer's served set).
+// UnservedStopped is the reason of a connection that the broker served before and does not now, though it still exists: its
+// namespace was taken off the admission list, or it was the broker's own connection and the broker now has another own connection or
+// none, and its namespace is not on the list (a former own connection whose namespace is on the list is served as a team connection,
+// and is not stopped). A source does not give it, since it cannot know what the broker served before; the broker adds it from the
+// record in its store (the status writer's served set), which compares names and not roles.
 const UnservedStopped UnservedReason = "stopped"
 
 // ReasonConnectionNotServed is the reason of an Accepted condition of a Binding whose ChatConnection exists and is not served by this

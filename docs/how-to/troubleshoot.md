@@ -113,7 +113,8 @@ The five minutes and the 200 pages are constants of the binary (`agent.DefaultLo
 agent-kourier: slack rejected the tokens: invalid_auth
 ```
 
-Slack refused a token of the broker's own connection for good, so Agent Kourier stops rather than retry. (A team ChatConnection whose
+Slack refused a token of the broker's own connection for good, so Agent Kourier stops rather than retry. A broker with no own connection
+never ends this way: every connection it serves is a team connection. (A team ChatConnection whose
 token Slack refuses does not end the process: that connection stops, its `agentkourier_chat_connected` says 0, the log has a WARN that
 names it and Slack's code, and its Bindings show `ChatCredentialsRejected` on `ChannelJoined`. It starts again by itself when its Secret
 or ChatConnection changes.) The word at the end is Slack's own code: `invalid_auth`, `not_authed`, `token_revoked`, `token_expired` or `account_inactive`. The usual cause is a token copied incompletely or
@@ -144,14 +145,23 @@ it cannot use. A restart fails the same way. The text after `the broker cannot b
 
 - `v1 serves exactly one ChatConnection, and the config has` a count other than 1: this is the files route
   (`config.source: files`), whose directory must hold exactly one. Keep exactly one entry under `config.chatConnections`. With
-  `config.source: crds` a cluster may hold many, and the broker serves its own and those of the namespaces it is told to admit, so this message does not occur.
+  `config.source: crds` a cluster may hold many, and the broker serves its own, if it has one, and those of the namespaces it is told to admit, so this message does not occur.
 - `ChatConnection agent-kourier/slack was not found: AGENTKOURIER_CHAT_CONNECTION names the one connection this broker serves, and it must exist`:
-  the custom resource route. The ChatConnection that `config.chatConnection` names, the broker's own, is not in the cluster. Apply it, or name the one that exists. The pod
+  the custom resource route, with an own connection. The ChatConnection that `config.chatConnection` names, the broker's own, is not in the cluster. Apply it, or name the one that exists. The pod
   restarts until it does, and starts at the next restart after it exists. `ChatConnection agent-kourier/slack is invalid` says why instead, in the
-  same way as the files' `load config` problems below.
+  same way as the files' `load config` problems below. A broker with no own connection has no such start failure: a listed namespace that holds no ChatConnection yet is not an error.
 - `the custom resource definitions are not installed`: the custom resource route, and the CRDs are not in the cluster. Install them first, as in
   [Move the config between a ConfigMap and custom resources](migrate-config-source.md#1-install-the-crds-still-on-the-configmap-route).
-- `AGENTKOURIER_CHAT_CONNECTION is required with AGENTKOURIER_CONFIG_SOURCE=crds`, `AGENTKOURIER_CHAT_CONNECTION is not namespace/name (its value is not shown)`, `ChatConnection is not a namespace that is a DNS-1123 label and a name that is a DNS-1123 subdomain ...`,
+- `with AGENTKOURIER_CONFIG_SOURCE=crds, set AGENTKOURIER_CHAT_CONNECTION to the broker's own ChatConnection, or AGENTKOURIER_CONNECTION_NAMESPACES to the namespaces whose ChatConnections it serves, or both`:
+  the custom resource route has neither the broker's own ChatConnection nor an admission list, so it could serve nothing until a restart, since it reads the list at start. The chart
+  refuses to render this shape (`config.source crds ... needs config.chatConnection`), so it comes from a Deployment of your own. Set `AGENTKOURIER_CONNECTION_NAMESPACES` to the namespaces to serve, or
+  `AGENTKOURIER_CHAT_CONNECTION` to an own connection; with the chart, `config.connectionNamespaces` or `config.chatConnection`
+  ([A broker with no connection of its own](team-slack-app.md#a-broker-with-no-connection-of-its-own)).
+- `N outbox rows and M button presses were written before connections were recorded, and this broker has no ChatConnection of its own to give them to: set config.chatConnection (AGENTKOURIER_CHAT_CONNECTION) to the ChatConnection that served them, let the broker start once, then unset it`:
+  a broker with no own connection became the leader on a store that holds rows written before migration 0029 recorded connections, or by an older image after a rollback. They have no connection, and an own
+  connection is what gives them one. Do what the message says: set `config.chatConnection` to the connection that served them, upgrade, wait for the leader to log `store: gave the rows written before connections were recorded to this broker's own connection`,
+  and unset it again. The message holds the two counts and no row. It ends the leader's start, so it comes after `ready` in the log; with Postgres, only a replica that has won the lease makes the check.
+- `AGENTKOURIER_CHAT_CONNECTION is not namespace/name (its value is not shown)`, `ChatConnection is not a namespace that is a DNS-1123 label and a name that is a DNS-1123 subdomain ...`,
   `is set with AGENTKOURIER_CONFIG_SOURCE=files, which serves the one ChatConnection of its directory: unset it`, and
   `AGENTKOURIER_CONFIG_SOURCE is "...", want files or crds`: the variables disagree. The chart sets them from `config.source` and
   `config.chatConnection`; check `extraEnv` for one of your own.
@@ -167,7 +177,7 @@ it cannot use. A restart fails the same way. The text after `the broker cannot b
 With the files route, a misspelt field, or a Secret that is missing or lacks a key, also exits 2, with `load config` after
 `the broker cannot be wired:`: see [The pod exits with code 2 and the error says `load config`](#the-pod-exits-with-code-2-and-the-error-says-load-config).
 With custom resources that never stops the broker: a bad object is left out and says so in its status (see
-[A Binding is not accepted](#a-binding-is-not-accepted)), except the broker's own ChatConnection, above.
+[A Binding is not accepted](#a-binding-is-not-accepted)), except the broker's own ChatConnection, above, when it has one.
 
 ## The pod exits with code 3
 
@@ -342,7 +352,7 @@ The waits start at 1 second and double up to 60 seconds, each cut at random by u
 [Limits](../reference/limits.md#run-the-broker) has the numbers. So a connection comes back within about a minute of Slack
 being reachable again, or after the Retry-After that Slack names, up to 5 minutes, if its answer was a rate limit. If it does not, look for the cause in `error`: egress, DNS or a proxy between the pod and `slack.com`, or
 Slack itself. A refresh that Slack asks for is not this line: it logs `slack: socket mode reconnecting` at INFO and connects again
-at once. A token that Slack rejects is not this line either: the broker's own connection exits with code 1
+at once. A token that Slack rejects is not this line either: the broker's own connection, if it has one, exits with code 1
 ([The pod exits with code 1](#the-pod-exits-with-code-1)), and a team connection stops.
 
 ## The mention gets no reply and the log shows no `session turn started`
@@ -377,7 +387,7 @@ applies: a problem in one resource stops the whole config, as in [The pod exits 
 
 A Binding with no status at all, and empty `READY` and `REASON` columns, is either new (the broker writes its status within about 10 seconds) or names a ChatConnection
 that exists and that no broker serves: nothing reads it. Point its `connectionRef` at a connection a broker serves: the one in that broker's
-`AGENTKOURIER_CHAT_CONNECTION`, or one in a namespace on its `config.connectionNamespaces`. A team's own ChatConnection is in that state until the platform team admits its
+`AGENTKOURIER_CHAT_CONNECTION` (a broker may have none), or one in a namespace on its `config.connectionNamespaces`. A team's own ChatConnection is in that state until the platform team admits its
 namespace ([Let a team bring its own Slack app](team-slack-app.md)). No metric counts such a Binding: this broker leaves it to the broker that serves its connection, and cannot tell whether one does.
 
 A Binding that is refused after an edit keeps running as it was: `message` says `serving generation 1`, and the other conditions describe that
