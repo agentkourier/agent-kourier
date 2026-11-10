@@ -92,7 +92,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.3.0
+    helm.sh/chart: agent-kourier-0.3.1
   name: agent-kourier-config
   namespace: agent-kourier-system
 ---
@@ -104,7 +104,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.3.0
+    helm.sh/chart: agent-kourier-0.3.1
   name: agent-kourier-token-refresh
   namespace: agent-kourier-system
 spec:
@@ -202,7 +202,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.3.0
+    helm.sh/chart: agent-kourier-0.3.1
   name: agent-kourier
   namespace: agent-kourier-system
 spec:
@@ -216,7 +216,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: 9311ba0b084c8b3c7de1065e7809c421a55a3ccb5e55e5ad52045a2e64fdb734
+        checksum/config: 1429b8d27cda6f28417bb6a78f46f6f8dbffe39ab3a1c0deec430d43342475d6
         example.test/scrape: "false"
       labels:
         app.kubernetes.io/instance: agent-kourier
@@ -332,7 +332,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.3.0
+    helm.sh/chart: agent-kourier-0.3.1
   name: agent-kourier
   namespace: agent-kourier-system
 spec:
@@ -410,7 +410,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.3.0
+    helm.sh/chart: agent-kourier-0.3.1
   name: agent-kourier-data
   namespace: agent-kourier-system
 spec:
@@ -429,7 +429,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.3.0
+    helm.sh/chart: agent-kourier-0.3.1
   name: agent-kourier-secrets
   namespace: agent-kourier-system
 rules:
@@ -449,7 +449,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.3.0
+    helm.sh/chart: agent-kourier-0.3.1
   name: agent-kourier-secrets
   namespace: sre
 rules:
@@ -469,7 +469,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.3.0
+    helm.sh/chart: agent-kourier-0.3.1
   name: agent-kourier-token-refresh
   namespace: sre
 rules:
@@ -490,7 +490,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.3.0
+    helm.sh/chart: agent-kourier-0.3.1
   name: agent-kourier-secrets
   namespace: agent-kourier-system
 roleRef:
@@ -510,7 +510,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.3.0
+    helm.sh/chart: agent-kourier-0.3.1
   name: agent-kourier-secrets
   namespace: sre
 roleRef:
@@ -530,7 +530,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.3.0
+    helm.sh/chart: agent-kourier-0.3.1
   name: agent-kourier-token-refresh
   namespace: sre
 roleRef:
@@ -550,7 +550,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.3.0
+    helm.sh/chart: agent-kourier-0.3.1
   name: agent-kourier
   namespace: agent-kourier-system
 spec:
@@ -574,7 +574,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.3.0
+    helm.sh/chart: agent-kourier-0.3.1
   name: agent-kourier
   namespace: agent-kourier-system
 ---
@@ -587,7 +587,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.3.0
+    helm.sh/chart: agent-kourier-0.3.1
   name: agent-kourier-token-refresh
   namespace: agent-kourier-system
 ---
@@ -599,7 +599,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.3.0
+    helm.sh/chart: agent-kourier-0.3.1
     release: kube-prometheus-stack
   name: agent-kourier
   namespace: monitoring
