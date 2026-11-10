@@ -2,8 +2,9 @@
 //
 // It is configured by environment variables, which the Deployment sets, and takes one flag, --version, and two
 // subcommands: dry-run (dryrun.go), which replays a channel's history through a Binding's chat triggers and
-// reads Slack with a bot token from a file or SLACK_BOT_TOKEN, and init (initcmd.go), which writes a first-install
-// Helm values file, checks it, and prints the commands to install with it:
+// reads Slack with a bot token from a file or SLACK_BOT_TOKEN, and init (initcmd.go), which writes the files of a first
+// install with the Helm chart (by default the values and the custom resources, split by owner; with --source files one
+// values file), checks them, and prints the commands to install with them:
 //
 //	AGENTKOURIER_CONFIG_SOURCE  files (the default) or crds: where the resources are read from. files reads the directory
 //	                       below, all or nothing. crds reads Binding, AgentBackend and ChatConnection from the cluster, one

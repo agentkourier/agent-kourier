@@ -3,6 +3,20 @@
 What changed in each release, newest first, and what you must do about it. The steps for an upgrade are in
 [Upgrade](how-to/upgrade.md), which has a section for each change that needs one; this page says what changed and points to it.
 
+## Version 0.4.0 (unreleased)
+
+`agent-kourier init` writes the chart's default route. The broker's code, the CRDs and the chart's templates are unchanged by it.
+
+### Breaking changes
+
+- **`agent-kourier init` writes custom resources by default.** It wrote one values file for the ConfigMap route (`config.source: files`). It now writes the three
+  files of [Install on custom resources](how-to/install-with-helm.md#install-on-custom-resources), split by owner: `my-values.yaml` (`config.chatConnection`),
+  `platform.yaml` (the ChatConnection and the AgentBackend in the release's namespace, each allowing the team's namespace) and `team.yaml` (the Binding in the
+  team's namespace). It checks that the Binding's references resolve, and stops before its questions if any of the three files exists, unless `--force`. A script
+  that wants the old file passes `--source files`, which writes it as before. Without it, a script that gives no `--team-namespace` is asked for one, and at the end of
+  its input takes the agent's namespace. With `--agent-token` the token Secret now goes in the team's namespace, and `my-values.yaml` grants the broker that Secret with
+  `rbac.secretNames`. See [Write the files with `init`](how-to/install-with-helm.md#write-the-files-with-init).
+
 ## Version 0.3.1
 
 A documentation release. The broker's code, the CRDs and the chart's templates are those of 0.3.0, so an upgrade from 0.3.0 needs no step. The image is rebuilt from that code and has a new digest, so `helm upgrade` replaces the pod as any upgrade does.
