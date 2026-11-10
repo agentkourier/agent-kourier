@@ -13,7 +13,7 @@ supported. [Move the config between a ConfigMap and custom resources](../how-to/
 | Who writes them | Whoever edits the ConfigMap or the values | Whoever Kubernetes RBAC lets write the objects in each namespace |
 | One bad object | The whole config is refused | That object is refused; the others carry on |
 | What a Binding's owner sees | The broker's log and metrics | `Binding.status`, in `kubectl get akbinding` |
-| ChatConnections | Exactly one in the directory | Many in the cluster; the broker serves its own (`AGENTKOURIER_CHAT_CONNECTION`) and those of the namespaces `AGENTKOURIER_CONNECTION_NAMESPACES` admits, at most 16 in all |
+| ChatConnections | Exactly one in the directory | Many in the cluster; the broker serves its own, if it has one (`AGENTKOURIER_CHAT_CONNECTION`), and those of the namespaces `AGENTKOURIER_CONNECTION_NAMESPACES` admits, at most 16 in all |
 | Kubernetes | No minimum | 1.33 or later, which the chart checks |
 | Extra grants | A Role for the Secrets in each namespace | A ClusterRole to read the three kinds and write `bindings/status`, and Roles that name the Secrets |
 | Unknown fields | The loader refuses the file | The API server refuses them at apply, or drops them; the broker ignores one its own types lack (see below) |
@@ -54,13 +54,13 @@ file and field. On a reload it keeps the last good config, logs `config reload f
 | A Binding names an agent namespace that its AgentBackend's `agents` field does not allow | Drops the Binding from routing, with `AgentNamespaceNotAllowed`. |
 | A Binding names an AgentBackend that is invalid | Serves the AgentBackend's last good generation, or drops the Binding if it has none, with `BackendRejected`. |
 | The broker's own ChatConnection is edited into something invalid | Keeps serving its last good generation, and each of its Bindings says `ConnectionRejected`. |
-| A Binding names a ChatConnection that exists and that this broker does not serve | If the broker served the connection before and does not now (its namespace was taken off the list, or it was the broker's own and the setting now names another), or the connection is past the 16, or it is a second connection of a Slack app, and in all three cases the connection admits the Binding's namespace, the leader writes `Accepted=False` with `ConnectionNotServed`, once, and does not put it back, so that a broker that serves the connection has the last word. Otherwise (a connection in a namespace that was never on the list, or a Binding the connection does not admit) nothing reads the Binding and nothing writes its status: `READY` stays empty. Point `connectionRef` at a connection that a broker serves. |
+| A Binding names a ChatConnection that exists and that this broker does not serve | If the broker served the connection before and does not now (its namespace was taken off the list, or it was the broker's own and the setting now names another or none, and its namespace is not on the list), or the connection is past the 16, or it is a second connection of a Slack app, and in all three cases the connection admits the Binding's namespace, the leader writes `Accepted=False` with `ConnectionNotServed`, once, and does not put it back, so that a broker that serves the connection has the last word. Otherwise (a connection in a namespace that was never on the list, or a Binding the connection does not admit) nothing reads the Binding and nothing writes its status: `READY` stays empty. Point `connectionRef` at a connection that a broker serves. |
 | A Binding's Secret is missing, unreadable or lacks the key | Keeps the Binding served. `BackendReachable` says `CredentialsUnreadable`. |
 | Two Bindings on one channel | The older holds it. The other has `ChannelConflict`. |
 | An object is edited again and again | Serves each read as it was when the read began, and reads again at the next check, so an edit is served within one check (10 seconds) plus up to two reads: the one that is running when it lands, then its own. One team editing its Binding in a loop does not hold back another's. But each read that finds a change moves the config's revision, so the Binding verification pass, which probes every Binding of the connection, runs at most every 30 seconds for as long as the loop lasts, where it would run every 5 minutes (see [Binding verification](../reference/metrics.md#binding-verification)). Measured only in a test against a fake API server in the test process, not against a real API server: a Binding of about 0.4 MiB, edited with a 10 ms pause between edits (50 to 85 edits a second in the runs), took 35 to 50 ms to read, or about 0.5 s under the race detector, and a Binding that another team added during the loop was served 50 to 150 ms later with the test's 100 ms check (1.1 to 1.2 s under the race detector). |
 | The caches have not synced, or the API server is out | Publishes nothing new. An empty or failed cache never reads as "everything was removed". |
 | The CRDs are not installed at start | The broker exits with code 2. |
-| The broker's own ChatConnection is missing or invalid at start | The broker exits with code 2. While it runs, it keeps the last good one and says so in its log and in a metric, including after the object is deleted. |
+| The broker's own ChatConnection is missing or invalid at start | The broker exits with code 2. While it runs, it keeps the last good one and says so in its log and in a metric, including after the object is deleted. A broker with no own connection has no such start failure, and a deleted team connection is dropped when the deletion settles. |
 
 Only a Binding has a status. An invalid AgentBackend or ChatConnection shows in the status of each Binding that uses it, in the log
 (`config: an object is refused`) and in `agentkourier_config_invalid_objects`. The reasons are in
@@ -85,13 +85,13 @@ namespace and name, holds the channel, and the other is not served and says `Cha
   broker makes does not, so read the log or `agentkourier_config_invalid_objects` after changing an AgentBackend or a ChatConnection.
 - **A Binding that is not served keeps its sessions.** Retention skips the sessions of a Binding that exists and was refused, until it is served
   again or deleted, so a Binding left broken keeps its sessions indefinitely.
-- **Deleting a ChatConnection does not stop routing.** A broker holds its own ChatConnection at its last good generation after it is deleted, and with it the
+- **Deleting a ChatConnection does not stop routing, if it is the broker's own.** A broker holds its own ChatConnection at its last good generation after it is deleted, and with it the
   Bindings of it that are gone and the AgentBackends they use, until the connection returns or the broker restarts. That is what lets a move back to the
   ConfigMap keep the old pods routing while they end ([the how-to](../how-to/migrate-config-source.md#move-back-to-the-configmap) has the details, and
   `agentkourier_config_held_objects` says what is held). A Binding deleted alone, while its connection exists, stops in about 10 to 20 seconds, behind a stream of other deletions in about 80 at most; one deleted while
   its connection is held stays held, so bring the connection back first. A held Binding keeps its channel against a newer one, and a Binding that was just deleted keeps it for up to about 20 seconds, longer behind a stream of other deletions.
 - **Deleting a CRD deletes every object of the kind.** Deleting the Bindings CRD alone stops the Bindings within about 20 seconds (longer behind a stream of other deletions), and a new mention gets no answer. Deleting all
-  three takes the connection with them, and the broker holds the rest and keeps routing. In both the broker sets `agentkourier_config_stale` to 1, and a restart exits with code 2.
+  three takes the own connection with them, and a broker that has one holds the rest and keeps routing. In both the broker sets `agentkourier_config_stale` to 1, and a restart exits with code 2.
 
 ## What is checked, and where
 
@@ -140,7 +140,7 @@ object runs without it, so a field that a release removed is ignored without an 
 in the `spec`, the `status` or the `metadata` of a Binding, an AgentBackend or a ChatConnection: the field is ignored and the object is read as the rest of it says. This is
 what lets an older broker keep serving under newer CRDs. The CRDs are applied before an upgrade, and rolling back only the image leaves them new; a later release can add a
 field with a default, and the API server then adds that field to every stored object it returns, without a change of the object's generation. If the broker refused such a
-field it would serve no Binding at all, and a broker that cannot read its own ChatConnection would not start. A field that the broker's types do have, with a value that they cannot
+field it would serve no Binding at all, and a broker that cannot read its own ChatConnection, if it has one, would not start. A field that the broker's types do have, with a value that they cannot
 read or that fails validation, is still refused.
 
 The broker says what it ignored: one warning for each object, for each generation of it, `a custom resource has fields this broker does not know, and ignores them`, with the
@@ -154,13 +154,18 @@ no annotation reads `unannotated`. To end the mismatch, bring the CRDs and the i
 On files the directory holds exactly one `ChatConnection`: the broker refuses to start with none or with more, and `AGENTKOURIER_CHAT_CONNECTION` and
 `AGENTKOURIER_CONNECTION_NAMESPACES` are refused.
 
-On custom resources a cluster can hold many connections. A broker always serves its own, named as `namespace/name` in
-`AGENTKOURIER_CHAT_CONNECTION`, which is required. It also serves the ChatConnections in the namespaces that `AGENTKOURIER_CONNECTION_NAMESPACES`
-lists, except a second connection of a Slack app that it already serves, which it refuses, so that a team can bring its own chat app without running a broker ([Let a team bring its own Slack app](../how-to/team-slack-app.md)). It
-serves at most 16 connections, its own included: the own one counts first, the others are taken oldest first (then by namespace and name), and a
+On custom resources a cluster can hold many connections. A broker may have an own connection, named as `namespace/name` in
+`AGENTKOURIER_CHAT_CONNECTION`; if it has one, it always serves it. It also serves the ChatConnections in the namespaces that `AGENTKOURIER_CONNECTION_NAMESPACES`
+lists, except a second connection of a Slack app that it already serves, which it refuses, so that a team can bring its own chat app without running a broker ([Let a team bring its own Slack app](../how-to/team-slack-app.md)).
+The variable may be left out when the list has at least one namespace: the broker then has no connection of its own and serves only the teams'
+([A broker with no connection of its own](../how-to/team-slack-app.md#a-broker-with-no-connection-of-its-own)). With neither, the broker exits with code 2, since it
+could serve nothing until a restart. What an own connection has that a team connection does not: a token Slack rejects ends the process with code 1, where a team connection stops alone;
+its ChatConnection is held when it is deleted; and it takes the first of the 16 places and the first claim of its Slack app. A broker with no own connection stays up, and ready, when every
+token is rejected, and serves the 16 oldest connections, the oldest claiming a Slack app first.
+It serves at most 16 connections, its own included: the own one, if there is one, counts first, the others are taken oldest first (then by namespace and name), and a
 connection past the limit is not served. No setting changes the limit ([Limits](../reference/limits.md#run-the-broker)). A broker serves the Bindings
 whose `connectionRef` names a connection it serves, and no others, so two releases can still share a cluster. A Binding whose `connectionRef` names a
 connection that does not exist is reported by the leader of every broker that sees it, as `ConnectionNotFound`, since none owns it. A Binding that names a connection that exists and that this broker does not serve is
-told `ConnectionNotServed` by its leader in three cases: the broker served the connection before (its namespace was taken off the list, or it was the broker's own and `AGENTKOURIER_CHAT_CONNECTION` now names another),
+told `ConnectionNotServed` by its leader in three cases: the broker served the connection before (its namespace was taken off the list, or it was the broker's own and `AGENTKOURIER_CHAT_CONNECTION` now names another or is unset, and its namespace is not on the list),
 the connection is past the limit, or it is a second connection of a Slack app. Only a Binding that the connection admits is told, and a connection in a namespace that was never on the list tells nobody
 ([Binding status](../reference/binding-status.md#accepted)). A broker that does serve the connection writes its own status over it.

@@ -390,7 +390,7 @@ with `files`, as step 1 of [the move](migrate-config-source.md) does; that needs
 | `config.existingConfigMap`, and no `config.source` | `config.existingConfigMap is for config.source files, and config.source is crds (the chart's default unless your values set it): Agent Kourier would read custom resources, mount no ConfigMap and ignore it. To keep reading your ConfigMap, set config.source: files ...`, and it names [the move](migrate-config-source.md#move-a-configmap-you-manage-yourself) |
 | `config.agentBackends`, `config.chatConnections` or `config.bindings`, on a cluster that does not serve the CRDs, which is every cluster that has not had them installed | `config.source crds needs the CRDs (group agentkourier.dev, version v1alpha1) to be installed before a release that renders config.agentBackends, config.chatConnections or config.bindings as custom resources, and the cluster does not serve them yet: ... To keep the ConfigMap route, set config.source: files ...` |
 | A cluster older than Kubernetes 1.33 | `config.source crds needs Kubernetes 1.33 or later (it is the chart's default unless your values set it): the API server is v1.32.9 ... To install on this cluster, set config.source: files: the ConfigMap route has no minimum.` |
-| Neither `config.*` resources nor `config.chatConnection` | `config.source crds (the chart's default unless your values set it) needs config.chatConnection: the namespace/name of the one ChatConnection this broker serves ... To supply the config as a ConfigMap instead, set config.source: files ...` |
+| `config.chatConnection` and `config.connectionNamespaces` both empty, and `config.chatConnections` without exactly one entry (none, or several) | `config.source crds (the chart's default unless your values set it) needs config.chatConnection: the namespace/name of the one ChatConnection this broker serves ... A broker with no connection of its own, which serves only the ChatConnections of other namespaces, leaves config.chatConnection empty and sets config.connectionNamespaces to those namespaces instead. To supply the config as a ConfigMap instead, set config.source: files ...` |
 
 The messages are the chart's, run with `helm template` (the Kubernetes version of the third from `--kube-version`; a real `helm upgrade` reads the cluster's). The messages say "the chart's default unless your values set it" because the chart sees the same value whether your values file says `config.source: crds` or leaves it out, so it cannot tell which you did. The second row is the one an install of this
 kind meets when it upgrades with its inline config: setting `config.source: files` is the fix.
@@ -795,7 +795,8 @@ spec:
 
 A team can bring its own Slack app: the platform team lists the team's namespace in the new value `config.connectionNamespaces`, and the broker serves the team's ChatConnection beside its own
 ([Let a team bring its own Slack app](team-slack-app.md)). The broker serves nothing new until that list admits a namespace: the chart renders `AGENTKOURIER_CONNECTION_NAMESPACES` only for a
-non-empty list, and a broker without it serves its own connection alone. Some changes below apply to every install, list or not.
+non-empty list, and a broker without it serves its own connection alone. A broker may also have no connection of its own, with `config.chatConnection` empty and the list set
+([A broker with no connection of its own](team-slack-app.md#a-broker-with-no-connection-of-its-own)). Some changes below apply to every install, list or not.
 
 ### Before you upgrade
 
@@ -803,6 +804,10 @@ non-empty list, and a broker without it serves its own connection alone. Some ch
   ([the release that limits the agents a Binding may name](#upgrade-to-the-release-that-limits-the-agents-a-binding-may-name)), the Binding CRD's trigger `type` enum gains `personMessage`, with rules (CEL) that say which fields that trigger takes
   ([A person's message](../reference/chat-triggers.md#a-persons-message)), and the ChatConnection CRD's description changed (its fields did not). The chart applies them with the release when `crds.install` is true, or unset on
   `config.source: crds`. If you apply the CRDs yourself, apply `charts/agent-kourier/files/crds` first. Until all three match, `agentkourier_crd_schema_state` reports a mismatch, and an older Binding CRD refuses a `personMessage` trigger.
+- **If you ran 0.3.0-rc.1 with an empty `config.chatConnection`, check your values.** Under rc.1 an empty `config.chatConnection` with exactly one `config.chatConnections` entry made that entry
+  the broker's own connection, even with `config.connectionNamespaces` set. Now, with the list non-empty and `config.chatConnection` empty, the broker has no own connection, and that entry is a team connection: it is served as one if its
+  namespace is on the list, and the chart refuses to render if it is not. The fix is to set `config.chatConnection` to the entry (`namespace/name`), which keeps it the own connection ([Release notes](../release-notes.md#version-030-unreleased)).
+  Values with `config.chatConnection` set, or with the list empty, mean what they meant.
 - **Change the queries that match six series one to one.** `agentkourier_intake_total`, `agentkourier_chat_api_calls_total`, `agentkourier_slack_events_shed_total`,
   `agentkourier_slack_ack_duration_seconds`, `agentkourier_outbox_pending` and `agentkourier_outbox_oldest_age_seconds` gain a `connection` label. A query that sums over them, or selects by the labels it
   names, gives what it did. An expression that matches one of them with a series that has no `connection` label, such as `agentkourier_outbox_pending + agentkourier_reply_queue_depth`, returns nothing
@@ -816,7 +821,8 @@ non-empty list, and a broker without it serves its own connection alone. Some ch
 
 - **A database migration, 0029, runs at the first start.** On SQLite and on Postgres it adds a `connection` column to `outbox` and to `interaction_presses`, `NOT NULL DEFAULT ''`, replaces the index on the outbox's
   channel and thread with one that starts at the connection, and makes the table `served_connections`. It adds columns and a table, replaces one index, and rewrites no row. A row written before it, or by an older image after a rollback, has the empty
-  connection; the leader gives such rows to the broker's own connection each time it starts.
+  connection; the leader gives such rows to the broker's own connection each time it starts. A broker with no own connection has none to give them to, and its leader
+  refuses to start while any exist (exit code 2): set `config.chatConnection` once so they get an owner, then unset it ([Troubleshoot](troubleshoot.md#the-pod-exits-with-code-2)).
 - **Reconnects are paced by the broker.** After a failed attempt the broker waits 1 second, doubling to 60, each wait cut at random by up to half; a Retry-After from Slack is honoured up to 5 minutes
   ([Limits](../reference/limits.md#run-the-broker)). Before, the Slack library retried by itself up to 5 minutes apart.
 - **`token_expired` on a reconnect stops the broker's own connection.** The process exits with [code 1](../reference/cli.md#exit-codes), as it does for the other rejected tokens; it used to retry without end.
@@ -827,9 +833,9 @@ non-empty list, and a broker without it serves its own connection alone. Some ch
 - **`Ready` also needs `ApproversReadable`.** A Binding with `interactions.toolApprovals: true` and `interactions.approverGroups` has a new condition, which the leader sets by reading each group with the connection's bot. A bot that cannot read a
   group (the app lacks `usergroups:read`, or the group does not exist; Slack's answer for a disabled group has not been measured) makes the Binding `READY` `False` and `agentkourier_binding_ready` 0, where 0.2.1 had it `True`. Turns still run. Read the Slack scopes in
   [Configure Slack](configure-slack.md#what-the-app-is-allowed-to-do) and the reasons in [Troubleshoot](troubleshoot.md#approversreadable) before you upgrade a broker whose alerts fire on `agentkourier_binding_ready == 0`.
-- **Changing the broker's own connection tells the old one's Bindings.** If you change `config.chatConnection` to another ChatConnection, the broker served the old one before, and it still exists: its Bindings say `Accepted` `False` with
+- **Changing the broker's own connection tells the old one's Bindings.** If you change `config.chatConnection` to another ChatConnection, or empty it, the broker served the old one before, and it still exists, and its namespace is not on `config.connectionNamespaces`: its Bindings say `Accepted` `False` with
   `ConnectionNotServed`, and the leader counts them in `agentkourier_config_binding_rejections{reason="ConnectionNotServed"}`, so `sum(agentkourier_config_binding_rejections) > 0` fires until that ChatConnection is deleted or this broker serves it again, even when another release serves it.
-  This needs no `connectionNamespaces`.
+  This happens with the list empty too. If the old one's namespace is on the list, it is served as a team connection and its Bindings are not told.
 
 ### Admit team namespaces in a second change
 
@@ -838,13 +844,13 @@ ordinary one; after, it needs the steps under [Roll back](#roll-back-from-this-r
 
 Before you set the list:
 
-- **Each app the broker serves needs `users:read`, the broker's own included.** With a team connection to serve, the leader asks Slack which app each bot belongs to (`auth.test`, then `bots.info`), its own
-  first, so that it serves one connection for each Slack app. Slack's documentation says `bots.info` needs `users:read` (not verified here); the manifest in
+- **Each app the broker serves needs `users:read`, the broker's own included, if it has one.** With a team connection to serve, the leader asks Slack which app each bot belongs to (`auth.test`, then `bots.info`), its own
+  first if it has one, so that it serves one connection for each Slack app. Slack's documentation says `bots.info` needs `users:read` (not verified here); the manifest in
   [Configure Slack](configure-slack.md#what-the-app-is-allowed-to-do) has it, for the audit log's `users.info`. If the broker cannot tell whose bot its own token is, no team connection starts, and the leader logs that
-  the identity of the own connection is not known yet. The own connection runs either way.
+  the identity of the own connection is not known yet. The own connection runs either way. A broker with no own connection has no such wait: it asks for each team connection's identity on its own.
 - **One broker for each namespace.** Two brokers that admit one namespace both open Socket Mode on its apps, and Slack hands each event to one of them
   ([Troubleshoot](troubleshoot.md#the-status-of-a-binding-keeps-changing)).
-- **Know how to see a Binding that is not served.** A connection that is past the 16, whose namespace was taken off the list after this broker served it, that was the broker's own and is not now, or that is a second connection of a Slack app the broker already serves has Bindings that say `Accepted` `False`
+- **Know how to see a Binding that is not served.** A connection that is past the 16, whose namespace was taken off the list after this broker served it, that was the broker's own and is not now (and whose namespace is not on the list), or that is a second connection of a Slack app the broker already serves has Bindings that say `Accepted` `False`
   with `ConnectionNotServed`. The leader counts those Bindings in `agentkourier_config_binding_rejections{reason="ConnectionNotServed"}` (a standby reads 0 for it, so sum over the replicas), which `sum(agentkourier_config_binding_rejections) > 0` includes
   ([Metrics](../reference/metrics.md)); `kubectl get akbinding -A` shows which Bindings. The Bindings of a connection in a namespace that was never on the list get no status and no count.
 - **Size for the connections.** Each further connection adds about 0.4 MiB; at 16, the most one broker serves, the container's memory charge was 29 MiB under load
@@ -854,10 +860,11 @@ Before you set the list:
 
 - The pod runs the new image and is ready: `kubectl -n agent-kourier get deploy agent-kourier -o jsonpath='{.spec.template.spec.containers[0].image}'` shows the release's digest. The namespace is your release's, and so is the Deployment's name, which the chart
   makes `<release>-agent-kourier`, or the release name itself when that already contains `agent-kourier`, or `fullnameOverride` when it is set.
-- `agentkourier_chat_connected{connection="<namespace>/<name>"}` is 1 for the broker's own connection, and for each team connection once its Secret is granted.
+- `agentkourier_chat_connected{connection="<namespace>/<name>"}` is 1 for the broker's own connection, if it has one, and for each team connection once its Secret is granted. A broker with no own connection that serves only
+  team connections has an alert to add: [Metrics](../reference/metrics.md#alert-rules-for-a-broker-with-no-connection-of-its-own).
 - `kubectl get akbinding -A` shows each Binding `READY` `True`, as before the upgrade, with two kinds of exception. A Binding with `interactions.approverGroups` whose bot cannot read a group reads `READY` `False` with an `ApproversReadable` reason
   (and `agentkourier_binding_ready` is 0 for it), because `Ready` now needs that condition too. A Binding on a ChatConnection that this broker does not serve says `Accepted` `False` with `ConnectionNotServed`: the connection is past the 16, is a second connection of one Slack app, its namespace was taken off the list after this broker served it,
-  or it was the broker's own and `config.chatConnection` now names another. One whose namespace was never on the list has no status from this broker
+  or it was the broker's own and `config.chatConnection` now names another or is empty, and its namespace is not on the list. One whose namespace was never on the list has no status from this broker
   ([Binding status](../reference/binding-status.md)).
 
 ### Roll back from this release
@@ -866,6 +873,8 @@ Before you set the list:
   The earlier image ignores the new column and table, and writes its rows with the empty connection, which a later upgrade gives back to the broker's own connection.
   The new index stays: the earlier release deletes the settled outbox rows of an expired session by channel and thread, which an index that starts at the connection does not serve, so on SQLite each of those deletions reads the whole
   `outbox` table until you upgrade again. It costs time, not data (Postgres was not measured).
+- **A broker with no connection of its own does not roll back in place.** 0.2.0, 0.2.1 and 0.3.0-rc.1 exit with [code 2](../reference/cli.md#exit-codes) on `config.source: crds` without `AGENTKOURIER_CHAT_CONNECTION` (read in their source, not run),
+  and a move to the ConfigMap route needs exactly one ChatConnection in its directory and refuses the list. Set `config.chatConnection` first (the move back is at the end of [Move a broker from its own connection to none](team-slack-app.md#move-a-broker-from-its-own-connection-to-none)), and follow the bullets here.
 - **A team connection was served.** Do not roll back while any team connection has an unposted row. The guard is those rows, not whether a connection is served now. The outbox of an earlier release posts every unposted row through its one chat platform,
   so a post waiting for any team's connection would go out through the platform's app, and a connection that was served and is not now (its namespace was taken off the list, or its ChatConnection was deleted) keeps its unposted rows for up to 7 days.
   While the connections are still served: end the team's pending interactions, delete its Bindings, check again that none is pending (one left after the delete is ended by the sweep 5 minutes after the first sweep that finds it both past its deadline and without a Binding),
