@@ -70,14 +70,16 @@ kubectl get akbinding -A
 
 [Install on custom resources](https://agentkourier.dev/how-to/install-with-helm/#install-on-custom-resources) has both files. The ChatConnection
 and the AgentBackend list the team's namespace in `allowedNamespaces`, without which a Binding of another namespace may not name them. Here the
-broker's own ChatConnection, the platform's Slack app, answers for every team. A team can bring its own Slack app instead, in a namespace that
-`config.connectionNamespaces` admits, and a broker can have no app of its own
-([Let a team bring its own Slack app](https://agentkourier.dev/how-to/team-slack-app/)).
+broker's own ChatConnection, which holds the platform's Slack app, answers for each team whose Binding names it and whose namespace it allows. A
+team can bring its own Slack app instead, in a namespace that `config.connectionNamespaces` admits
+([Let a team bring its own Slack app](https://agentkourier.dev/how-to/team-slack-app/)), and a broker can have
+[no connection of its own](https://agentkourier.dev/how-to/team-slack-app/#a-broker-with-no-connection-of-its-own).
 
 With `config.*` empty the chart cannot see the ChatConnection's Secret, but it knows which connection the broker serves, so it renders a Role in that connection's
 namespace that names one Secret: the Secret of the same name as the connection (`slack` here). A ChatConnection whose `credentialsSecretRef` names another Secret needs
 `config.chatConnectionSecret` set to that name (an `rbac.secretNames` entry for it works too); otherwise the broker could not read it and would exit with code 3 in a loop. Any other Secret that the chart
-cannot see, such as the Binding's token Secret in `my-team`, needs a Role of the team's own there or a line in `rbac.secretNames` (`my-team: [agent-kourier-agent-token]`).
+cannot see, such as a token Secret the Binding names in `identity.tokenSecretRef` (`agent-kourier-agent-token` in `my-team`), needs a Role and RoleBinding of
+the team's own there, granting it to the chart's ServiceAccount, or a line in `rbac.secretNames` (`my-team: [agent-kourier-agent-token]`).
 
 [Install with Helm](https://agentkourier.dev/how-to/install-with-helm/#write-the-values) walks through each field, the
 Secrets, and a dry run that finds a misspelt field before the pod does. The published chart has `image.repository` and
