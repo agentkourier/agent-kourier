@@ -59,6 +59,7 @@ func Run(t *testing.T, open func(t *testing.T) Instance) {
 		{"Interactions", su.interactions},
 		{"Presses", su.presses},
 		{"Attribution", su.attribution},
+		{"UnattributedRows", su.unattributedRows},
 		{"ServedConnections", su.servedConnections},
 		{"Audit", su.audit},
 		{"Retention", su.retention},

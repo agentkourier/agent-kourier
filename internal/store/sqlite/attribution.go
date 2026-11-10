@@ -23,6 +23,25 @@ func (s *adapter) AttributeConnection(ctx context.Context, connection string) (s
 	return out, nil
 }
 
+// UnattributedRows implements store.Attribution. The outbox is counted by the first column of outbox_thread, which is the
+// connection; the presses have no index on it, and the table is capped by the press limits, so its scan is short.
+func (s *adapter) UnattributedRows(ctx context.Context) (store.AttributedRows, error) {
+	var out store.AttributedRows
+	if err := s.read.QueryRowContext(ctx, unattributedOutbox).Scan(&out.Outbox); err != nil {
+		return store.AttributedRows{}, fmt.Errorf("count outbox rows with no connection: %w", err)
+	}
+	if err := s.read.QueryRowContext(ctx, unattributedPresses).Scan(&out.Presses); err != nil {
+		return store.AttributedRows{}, fmt.Errorf("count presses with no connection: %w", err)
+	}
+	return out, nil
+}
+
+// The counts UnattributedRows makes. The test that reads their plans holds them.
+const (
+	unattributedOutbox  = `SELECT COUNT(*) FROM outbox WHERE connection = ''`
+	unattributedPresses = `SELECT COUNT(*) FROM interaction_presses WHERE connection = ''`
+)
+
 // attribute runs the batch statement update until it changes nothing, and returns how many rows it changed in all.
 func (s *adapter) attribute(ctx context.Context, update, connection string) (int, error) {
 	total := 0
