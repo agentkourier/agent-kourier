@@ -34,7 +34,7 @@
 # its place and hides the two lines helm prints naming the pulled chart and its digest. Say both in the pull request
 # that brings the clip. The files a tape opens are extracted at each take from the yaml blocks of those names in its
 # page's section (clip_vars below); the commands of the tape follow that section but are written in the tape, so a
-# change to them on the page needs the same change there. The one difference is the `-w` the tapes add to the page's
+# change to them on the page needs the same change there. The one change to a page command is the `-w` the tapes add to the page's
 # `kubectl get akbinding`, to watch the Binding turn Ready.
 set -euo pipefail
 umask 077
