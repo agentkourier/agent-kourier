@@ -48,6 +48,7 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Duration(t, "reconnectMax", defaultRunMax)
 	limitsdoc.Duration(t, "reconnectReset", defaultRunResetAfter)
 	limitsdoc.Duration(t, "retryAfterMax", retryAfterMax)
+	limitsdoc.Duration(t, "slackAPITimeout", slackAPITimeout)
 
 	// The leader builds the retention loop without a reply age or a session grace, so the loop's defaults are the values.
 	r, err := newRetention(retentionConfig{

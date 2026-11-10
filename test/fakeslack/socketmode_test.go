@@ -204,9 +204,8 @@ func TestDropConnectionsClosesTheSocketWithoutTellingTheClient(t *testing.T) {
 	if err != nil || n != 1 {
 		t.Fatalf("DropConnections = %d, %v; want 1 connection dropped", n, err)
 	}
-	if got := fake.AppConnections(app); got != 0 {
-		t.Errorf("AppConnections = %d right after the drop; want 0", got)
-	}
+	// No look at AppConnections here: the client may connect again before it, as DropConnections says nothing prevents.
+	// The dropped connection is counted by n, and the second hello and AppConnectionsOpened below show the reconnection.
 	var seen []socketmode.EventType
 	timeout := time.After(30 * time.Second)
 	for second := false; !second; {

@@ -17,3 +17,13 @@ func (g *Guarded) AttributeConnection(ctx context.Context, connection string) (r
 	})
 	return rows, err
 }
+
+// UnattributedRows implements Attribution.
+func (g *Guarded) UnattributedRows(ctx context.Context) (rows AttributedRows, err error) {
+	err = g.run(ctx, "agentkourier.store.UnattributedRows", func(ctx context.Context) error {
+		var err error
+		rows, err = g.a.UnattributedRows(ctx)
+		return err
+	})
+	return rows, err
+}
