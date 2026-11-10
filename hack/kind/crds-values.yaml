@@ -6,7 +6,8 @@
 #
 # The tier's values grant the Secrets of namespace agent-kourier as a whole (rbac.secretNamespaces); here that grant is off and each Secret is
 # named, so what the broker reads is authorized by resourceNames alone (the chart names the Postgres DSN's, and the served connection's, slack-fast,
-# which config.chatConnection derives from the connection's name). A Secret in any other namespace is a team's to grant, which is what the
+# which config.chatConnection derives from the connection's name; hack/kind/two-apps.sh empties config.chatConnection for its team-only steps
+# and names slack-fast in rbac.secretNames instead). A Secret in any other namespace is a team's to grant, which is what the
 # scenarios that make a team namespace do.
 config:
   source: crds

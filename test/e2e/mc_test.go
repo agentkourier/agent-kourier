@@ -27,8 +27,9 @@ import (
 // (E2E_STORE=postgres E2E_REPLICAS=2); anywhere else they skip and say why. Which app answered is read from the fake Slack, as the bot and app IDs of the
 // messages in a thread: each app has its own.
 //
-// The cases that change the platform's admission list with Helm are mc_admission_test.go's (hack/kind/two-apps.sh runs them), and the ones about a token
-// that Slack rejects are mc_isolation_test.go's.
+// The cases that change the platform's admission list with Helm are mc_admission_test.go's, and those of a broker with no ChatConnection of its own,
+// with the platform's namespace off the list and then on it, are mc_teamonly_test.go's (hack/kind/two-apps.sh runs both). The ones about a token that
+// Slack rejects are mc_isolation_test.go's.
 
 // mcUser is the person who talks to the bots in these cases.
 const mcUser = "UMC"

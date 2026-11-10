@@ -282,7 +282,7 @@ func TestTheAdmissionListGoesInTheRouteUpgradeOnly(t *testing.T) {
 }
 
 // TestTheTwoAppsScriptRunsEveryMCTest: the main Job's pattern leaves the MC_ tests out (TestTheRunnerJobRunsEveryE2ETest), so make e2e-two-apps is what runs them,
-// all of them in one Job pass, and then the admission test in its two phases. A test of that family that the script's pattern did not select would run nowhere.
+// all of them in one Job pass, and then the admission test in its two phases, and the test of a broker with no connection of its own in three. A test of that family that the script's pattern did not select would run nowhere.
 func TestTheTwoAppsScriptRunsEveryMCTest(t *testing.T) {
 	script, err := os.ReadFile("../../hack/kind/two-apps.sh")
 	if err != nil {
@@ -298,6 +298,18 @@ func TestTheTwoAppsScriptRunsEveryMCTest(t *testing.T) {
 	for _, phase := range []string{"phase removed", "phase restored"} {
 		if !strings.Contains(string(script), phase) {
 			t.Errorf("two-apps.sh does not run the %q of the admission test", phase)
+		}
+	}
+	for _, phase := range []string{"teamonly no-own", "teamonly platform-admitted", "teamonly takeover"} {
+		if !strings.Contains(string(script), phase) {
+			t.Errorf("two-apps.sh does not run the %q of the test of a broker with no connection of its own", phase)
+		}
+	}
+	// The steps without an own connection empty config.chatConnection and, once the platform's namespace is admitted, grant its Secret by name: the chart grants
+	// an own connection's alone, and a team grants its own.
+	for _, want := range []string{"--set config.chatConnection=", "agent-kourier,team-a,team-b,team-c", "rbac.secretNames.agent-kourier={agent-kourier-agent-token,slack-fast}"} {
+		if !strings.Contains(string(script), want) {
+			t.Errorf("two-apps.sh does not have %q, which the steps without an own connection need", want)
 		}
 	}
 	if !strings.Contains(string(mk), "e2e-two-apps:") || !strings.Contains(string(mk), "hack/kind/two-apps.sh") {
