@@ -74,25 +74,25 @@ kubectl -n agent-kourier create secret generic slack \
 
 If the agent, or a front door in front of it, verifies tokens, first
 [create the Binding identity](create-binding-identity.md) and obtain its token from the accepted issuer.
-Agent Kourier does not mint `$AGENT_TOKEN`; it is the issued bearer token. Store it in the Binding's namespace, which
-for a Binding under the chart's `config` is the release namespace (`agent-kourier` here) unless the entry sets its
-own `namespace`. The Dex example on that page
-stores its token itself, as `payments-agent-token` in `payments`; for this install, change its last command to
-`kubectl -n agent-kourier create secret generic agent-kourier-agent-token`. With a token from any other issuer:
+Agent Kourier does not mint `$AGENT_TOKEN`; it is the issued bearer token. Store it in the Binding's namespace. On custom
+resources, as below, the Binding is the team's and sits in the team's namespace (`my-team` here). For a Binding under the
+chart's `config`, as on the ConfigMap route, it is the release namespace (`agent-kourier` here) unless the entry sets its
+own `namespace`. The Dex example on that page stores its token itself, as `payments-agent-token` in the team namespace
+`payments`. With a token from any other issuer (on the ConfigMap route, `-n agent-kourier`):
 
 ```sh
-kubectl -n agent-kourier create secret generic agent-kourier-agent-token --from-literal=token="$AGENT_TOKEN"
+kubectl -n my-team create secret generic agent-kourier-agent-token --from-literal=token="$AGENT_TOKEN"
 ```
 
 Tokens never go in the values file. The chart refuses a value that looks like a Slack token.
 
 ## Install on custom resources
 
-![A terminal: kubectl creates the namespace and the Slack Secret from environment variables, helm installs the agent-kourier chart, vim fills in the four lines marked yours in my-resources.yaml, kubectl applies it after a server-side dry run, and kubectl get akbinding shows the Binding go from no status to Unknown Pending to True OK. Then Slack: a mention of the bot in the channel, and the agent's answer in the thread.](../assets/clip/install.gif)
+![A terminal: kubectl creates the namespace and the Slack Secret from environment variables, and helm installs the agent-kourier chart. As the platform team, vim fills in the three lines marked yours in platform.yaml, a ChatConnection and an AgentBackend that each allow the team's namespace. As the app team, vim fills in the four lines marked yours in team.yaml, a Binding in the team's own namespace. kubectl applies both after a server-side dry run, and kubectl get akbinding shows the Binding go from no status to Unknown Pending to True OK. Then Slack: the mention of the bot and the agent's answer in its thread.](../assets/clip/install.gif)
 
 The steps below, recorded on a kind cluster with the
 [echo agent](https://github.com/agentkourier/agent-kourier/blob/main/examples/recipes/echo-agent/agent/README.md), a plain A2A agent
-with no model. The wait for the Binding to turn Ready, about 30 seconds here, is cut.
+with no model. The wait for the Binding to turn Ready, about 25 seconds here, is cut.
 
 The chart installs the CRDs and the broker, and you apply the resources. They are two steps because a release that renders the CRDs and
 resources of them fails in its first apply (Helm cannot map a kind that is not yet served), so the chart refuses to render
@@ -119,9 +119,13 @@ helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --ver
 ```
 
 The pod exits with code 2 and restarts until the ChatConnection it is told to serve exists (`ChatConnection agent-kourier/slack was not found`), so it
-is not ready yet. Apply the resources. They are the starter file's, as objects; change the four lines marked `yours`:
+is not ready yet. Apply the resources: the starter file's three, as objects, with the Binding moved to the team's namespace and
+the two others shared with it.
 
-```yaml title="my-resources.yaml"
+The platform team's file holds the shared ChatConnection and AgentBackend, in the release's namespace. Each lists the team's
+namespace in `allowedNamespaces`, without which a Binding of another namespace may not name it. Change its three lines marked `yours`:
+
+```yaml title="platform.yaml"
 apiVersion: agentkourier.dev/v1alpha1
 kind: ChatConnection
 metadata:
@@ -130,6 +134,7 @@ metadata:
 spec:
   platform: slack
   credentialsSecretRef: {name: slack}
+  allowedNamespaces: [my-team] # yours: the team's namespace
 ---
 apiVersion: agentkourier.dev/v1alpha1
 kind: AgentBackend
@@ -138,42 +143,50 @@ metadata:
   namespace: agent-kourier
 spec:
   dialect: a2a
-  url: http://my-agent.my-namespace.svc.cluster.local:8083/a2a/ # yours: the agent's A2A URL
----
+  url: http://my-agent.my-team.svc.cluster.local:8083/a2a/ # yours: the agent's A2A URL
+  allowedNamespaces: [my-team] # yours: the team's namespace
+```
+
+The team's file holds its Binding, in the team's own namespace (here the agent's), naming the two by namespace. The team can
+commit it next to its agent's manifests. Change its four lines marked `yours`:
+
+```yaml title="team.yaml"
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata:
   name: my-binding
-  namespace: agent-kourier
+  namespace: my-team # yours: the team's namespace
 spec:
   agent:
-    backendRef: {name: agent}
-    namespace: my-namespace # yours: the agent's namespace
+    backendRef: {name: agent, namespace: agent-kourier}
+    namespace: my-team # yours: the agent's namespace
     name: my-agent # yours: the agent's name
   identity:
     userId: agent-kourier
   chat:
-    connectionRef: {name: slack}
+    connectionRef: {name: slack, namespace: agent-kourier}
     channel: C0123456789 # yours: the channel's ID (starts with C), not its name
     output: live
   interactions: {askUser: false}
 ```
 
 ```sh
-kubectl apply --dry-run=server -f my-resources.yaml
-kubectl apply -f my-resources.yaml
-kubectl -n agent-kourier get akbinding
+kubectl apply --dry-run=server -f platform.yaml -f team.yaml
+kubectl apply -f platform.yaml
+kubectl apply -f team.yaml
+kubectl get akbinding -A
 ```
 
-The Role covers the one Secret `slack`. A Binding's token Secret, such as `agent-kourier-agent-token` above, is in no value the chart reads, so nothing
-grants it. If the agent verifies tokens, add `tokenSecretRef: {name: agent-kourier-agent-token}` under `identity` in the Binding, and name the Secret in
-`rbac.secretNames`, a map of namespace to Secret names, then run `helm upgrade` with the values (a Role of your own that names the Secret does the
-same, as [Let a team add its own Binding](migrate-config-source.md#let-a-team-add-its-own-binding) shows):
+The Role covers the one Secret `slack`. A Binding's token Secret, such as `agent-kourier-agent-token` in the team's namespace above, is in no
+value the chart reads, so nothing grants it. If the agent verifies tokens, add `tokenSecretRef: {name: agent-kourier-agent-token}` under `identity`
+in the Binding, and grant the Secret: the team with a Role of its own that names it, as
+[Let a team add its own Binding](migrate-config-source.md#let-a-team-add-its-own-binding) shows, or the platform with `rbac.secretNames`, a map of
+namespace to Secret names, and a `helm upgrade` with the values:
 
 ```yaml
 rbac:
   secretNames:
-    agent-kourier: [agent-kourier-agent-token]
+    my-team: [agent-kourier-agent-token]
 ```
 
 The dry run asks the API server to check each object against the CRDs' schema, and names the field of a refusal. The checks that only the broker

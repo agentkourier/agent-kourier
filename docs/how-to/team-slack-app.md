@@ -327,6 +327,78 @@ What the broker does without an own connection:
   Do that: set `config.chatConnection` to the connection that served the rows, upgrade, wait until the leader has started (it logs `store: gave the rows written before connections were recorded to this broker's own connection`),
   and unset it again. A store that no own-connection broker ever used has no such row. Only the replica that becomes the leader makes the check, so with Postgres a standby does not.
 
+### The whole path, recorded
+
+![A terminal. The platform team creates the namespace agent-kourier and installs the agent-kourier chart with values that list team-a in connectionNamespaces and name no ChatConnection, so the broker starts with no Slack app of its own. The team then creates its Slack Secret in team-a from a file, a Role and RoleBinding that let the broker's ServiceAccount list and watch it, fills in the four lines marked yours in team-a.yaml (a ChatConnection, an AgentBackend and a Binding), applies it, and kubectl get akbinding shows the Binding become True OK. Then Slack: a mention of the team's bot, and the agent's answer in its thread.](../assets/clip/team-app.gif)
+
+The same path on a kind cluster, with the
+[echo agent](https://github.com/agentkourier/agent-kourier/blob/main/examples/recipes/echo-agent/agent/README.md) as the team's agent and a
+Slack app that stands for the team's. It runs as a cluster administrator, so step 1's Role is left out, and the namespace `team-a` exists before
+it starts. The wait for the Binding to turn Ready, about 50 seconds here, is cut.
+
+The platform team installs the broker with no app of its own and admits `team-a`:
+
+```yaml title="my-values.yaml"
+config:
+  connectionNamespaces: [team-a]
+```
+
+```sh
+kubectl create namespace agent-kourier
+helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.3.0 \
+  -n agent-kourier -f my-values.yaml
+```
+
+The pod starts and is ready with no ChatConnection to serve. The team makes its Secret and grants it to the broker's ServiceAccount, as in step 2:
+
+```sh
+kubectl -n team-a create secret generic team-a-slack \
+  --from-env-file="$HOME/.config/team-a/slack-secret.env"
+kubectl -n team-a create role agent-kourier-secrets-team-a --verb=list,watch \
+  --resource=secrets --resource-name=team-a-slack
+kubectl -n team-a create rolebinding agent-kourier-secrets-team-a --role=agent-kourier-secrets-team-a \
+  --serviceaccount=agent-kourier:agent-kourier
+```
+
+Then it applies its connection, its AgentBackend and its Binding, all in `team-a`, the connection first. Change the four lines marked `yours`:
+
+```yaml title="team-a.yaml"
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: team-a-slack, namespace: team-a}
+spec:
+  platform: slack
+  credentialsSecretRef: {name: team-a-slack}
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: agent, namespace: team-a}
+spec:
+  dialect: a2a
+  url: http://my-agent.team-a.svc.cluster.local:8083/a2a/ # yours: the agent's A2A URL
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: my-binding, namespace: team-a}
+spec:
+  agent:
+    backendRef: {name: agent}
+    namespace: team-a # yours: the agent's namespace
+    name: my-agent # yours: the agent's name
+  identity:
+    userId: agent-kourier
+  chat:
+    connectionRef: {name: team-a-slack}
+    channel: C0123456789 # yours: the channel's ID (starts with C), not its name
+    output: live
+  interactions: {askUser: false}
+```
+
+```sh
+kubectl apply -f team-a.yaml
+kubectl -n team-a get akbinding
+```
+
 ### Move a broker from its own connection to none
 
 In one upgrade, set `config.chatConnection` to empty, remove `config.chatConnectionSecret` if it is set (the chart refuses it), and put the connection's namespace

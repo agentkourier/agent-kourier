@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
-# Record the install clip that README.md and docs/how-to/install-with-helm.md show: a fresh install on the custom
-# resource route, typed by vhs against a kind cluster of its own, with the echo agent of examples/recipes/echo-agent.
+# Record the two clips of the docs, typed by vhs against a kind cluster of its own, with the echo agent of
+# examples/recipes/echo-agent. CLIP picks which:
+#   CLIP=install (the default)  docs/assets/clip/install.gif, which README.md and docs/how-to/install-with-helm.md show: a
+#                               fresh install on the custom resource route, the platform team's and the app team's files
+#   CLIP=team                   docs/assets/clip/team-app.gif, which docs/how-to/team-slack-app.md shows: a broker with no
+#                               Slack app of its own, and a team in team-a that brings its own
 #
 #   record.sh up        make the cluster (kourier-clip) and start the echo agent in it
-#   record.sh take      reset the cluster to no Agent Kourier, render install.tape, record bin/clip/out/install.{gif,mp4}
+#   record.sh take      reset the cluster to no Agent Kourier, render the clip's tape, record bin/clip/out/<clip>.gif
 #   record.sh practice  the same take with fake Slack tokens, into bin/clip/practice; it stops at the first
 #                       `kubectl get akbinding` row, since a broker with a fake token never connects and the Binding never
 #                       gets to Ready. It resets the cluster as take does, so it removes the broker of a real take
 #   record.sh stitch STILL
 #                       add STILL, a screenshot of the first answer in Slack, to the end of the take and write the
-#                       published GIF, docs/assets/clip/install.gif
+#                       published GIF, docs/assets/clip/<clip>.gif
 #   record.sh down      delete the cluster
 #
 # take needs:
@@ -28,9 +32,9 @@
 # CLIP_CHART_VERSION to a release candidate of that version built from the same code (0.2.1-rc.1 for 0.2.1): the tape
 # still types the version in Chart.yaml, and a helm function in the recorder's hidden setup installs the candidate in
 # its place and hides the two lines helm prints naming the pulled chart and its digest. Say both in the pull request
-# that brings the clip. my-values.yaml and my-resources.yaml are extracted from the blocks of those names in
-# the page's "Install on custom resources" section at each take; the commands of install.tape follow that section but
-# are written in the tape, so a change to them on the page needs the same change there.
+# that brings the clip. The files a tape opens are extracted at each take from the yaml blocks of those names in its
+# page's section (clip_vars below); the commands of the tape follow that section but are written in the tape, so a
+# change to them on the page needs the same change there.
 set -euo pipefail
 umask 077
 
@@ -43,8 +47,9 @@ KCFG=${STATE}/kubeconfig
 KCFG_INTERNAL=${STATE}/kubeconfig.internal
 RECORDER=agent-kourier-clip-vhs:dev
 ECHO_IMAGE=agent-kourier-echo-agent:dev
-PAGE=${ROOT}/docs/how-to/install-with-helm.md
 CHART=oci://ghcr.io/agentkourier/charts/agent-kourier
+# The team clip's namespace, which the broker admits; it exists before that take starts, as the page says.
+TEAM_NS=team-a
 
 die() {
   echo "record.sh: $*" >&2
@@ -105,16 +110,34 @@ EOF
 reset() {
   owned || die "no cluster ${CLUSTER} made by this script: run record.sh up"
   "${H[@]}" uninstall agent-kourier -n agent-kourier --wait --ignore-not-found >/dev/null
-  "${KW[@]}" delete namespace agent-kourier --ignore-not-found --wait=true --timeout=3m
+  "${KW[@]}" delete namespace agent-kourier "${TEAM_NS}" --ignore-not-found --wait=true --timeout=3m
   "${KW[@]}" delete crd bindings.agentkourier.dev agentbackends.agentkourier.dev chatconnections.agentkourier.dev \
     --ignore-not-found --wait=true --timeout=3m
 }
 
-# extract NAME: the yaml block titled NAME in the page's "Install on custom resources" section.
+# clip_vars: set what CLIP records. TAPE is in hack/clip; SECTION is the heading, matched whole, of the PAGE section
+# whose yaml blocks titled FILES are extracted; GIF names the take's output (the tape's Output line) and the published
+# GIF.
+clip_vars() {
+  case "${CLIP:-install}" in
+    install)
+      TAPE=install.tape PAGE=${ROOT}/docs/how-to/install-with-helm.md SECTION='## Install on custom resources'
+      FILES=(my-values.yaml platform.yaml team.yaml) GIF=install PRACTICE_ROW='echo-agent\s+my-binding'
+      ;;
+    team)
+      TAPE=team.tape PAGE=${ROOT}/docs/how-to/team-slack-app.md SECTION='### The whole path, recorded'
+      FILES=(my-values.yaml team-a.yaml) GIF=team-app PRACTICE_ROW='my-binding\s{3,}'
+      ;;
+    *) die "CLIP must be install or team, not ${CLIP}" ;;
+  esac
+}
+
+# extract NAME: the yaml block titled NAME in SECTION of PAGE. The section ends at the next heading of its level or above.
 extract() {
-  awk -v name="$1" '
-    /^## Install on custom resources/ { section = 1; next }
-    section && /^## / { exit }
+  awk -v name="$1" -v heading="${SECTION}" '
+    BEGIN { level = index(heading, " ") - 1 }
+    $0 == heading { section = 1; next }
+    section && match($0, /^#+ /) && RLENGTH - 1 <= level { exit }
     section && $0 == "```yaml title=\"" name "\"" { grab = 1; next }
     grab && /^```/ { exit }
     grab { print }
@@ -135,18 +158,19 @@ record() {
   docker build -q -t "${RECORDER}" "${HERE}" >/dev/null
   reset
   rm -rf "${work}" && mkdir -p "${work}" "${out}"
-  for f in my-values.yaml my-resources.yaml; do
+  for f in "${FILES[@]}"; do
     extract "${f}" >"${work}/${f}"
-    [ -s "${work}/${f}" ] || die "no block titled ${f} in the Install on custom resources section of ${PAGE}"
+    [ -s "${work}/${f}" ] || die "no block titled ${f} in the section '${SECTION}' of ${PAGE}"
   done
+  [ "${GIF}" = team-app ] && "${K[@]}" create namespace "${TEAM_NS}" >/dev/null
   kind get kubeconfig --internal --name "${CLUSTER}" >"${KCFG_INTERNAL}"
 
-  tape=$(<"${HERE}/install.tape")
+  tape=$(<"${HERE}/${TAPE}")
   # Quoted replacements: bash 5.2's patsub_replacement would read & in them.
   tape=${tape//@VERSION@/"${version}"}
   tape=${tape//@CHANNEL@/"${channel}"}
   tape=${tape//@READY@/"${ready}"}
-  printf '%s\n' "${tape}" >"${STATE}/install.tape"
+  printf '%s\n' "${tape}" >"${STATE}/clip.tape"
   # The hidden setup sources this file. It is empty unless a candidate stands in for the typed version. Then a helm
   # function swaps the version argument for the candidate and drops the two lines helm prints when it pulls a chart,
   # "Pulled: <ref>" and "Digest: <digest>", which would name the candidate under the typed version. helm install
@@ -169,34 +193,36 @@ EOF
   docker run --rm --network kind \
     -e KUBECONFIG=/kube/config -v "${KCFG_INTERNAL}:/kube/config:ro" \
     --env-file "${env_file}" \
-    -v "${work}:/work" -v "${out}:/vhs/out" -v "${STATE}/install.tape:/vhs/install.tape:ro" -v "${STATE}/setup.sh:/vhs/setup.sh:ro" \
-    "${RECORDER}" install.tape
+    -v "${work}:/work" -v "${out}:/vhs/out" \
+    -v "${STATE}/clip.tape:/vhs/clip.tape:ro" -v "${STATE}/setup.sh:/vhs/setup.sh:ro" \
+    "${RECORDER}" clip.tape
   ls -l "${out}"
 }
 
-# stitch STILL: the published GIF, docs/assets/clip/install.gif: vhs's GIF of the take, then one frame of STILL (a
-# screenshot of the mention and the agent's answer in Slack), cropped by CLIP_CROP (w:h:x:y in the still's pixels),
-# fitted into the take's 1320x760 frame, and held for CLIP_HOLD whole seconds. It runs the recorder image's ffmpeg and
-# gifsicle. The take's own GIF is kept rather than re-encoded from the MP4, whose compression noise would differ in
-# every frame and triple the file.
+# stitch STILL: the published GIF, docs/assets/clip/<clip>.gif: vhs's GIF of the take, then one frame of STILL (a
+# capture of the Slack thread pane alone: the mention and the agent's answer, and none of the channel's earlier
+# messages), cropped by CLIP_CROP (w:h:x:y in the still's pixels) if it is set, fitted into the take's 1320x760
+# frame, and held for CLIP_HOLD whole seconds. It runs the recorder image's ffmpeg and gifsicle. The take's own GIF
+# is kept, not re-encoded. The tapes write no MP4, which nothing uses: vhs renders each output from every frame at
+# once (see the Framerate note in the tapes).
 stitch() {
-  local still=$1 out=${STATE}/out crop=${CLIP_CROP:-1034:410:400:128} hold=${CLIP_HOLD:-6}
+  local still=$1 out=${STATE}/out crop=${CLIP_CROP:-} hold=${CLIP_HOLD:-6}
   [ -f "${still}" ] || die "${still}: no such file"
-  [ -f "${out}/install.gif" ] || die "no take in ${out}: run record.sh take"
-  [[ ${crop} =~ ^[0-9]+:[0-9]+:[0-9]+:[0-9]+$ ]] || die "CLIP_CROP must be w:h:x:y in pixels"
+  [ -f "${out}/${GIF}.gif" ] || die "no take in ${out}: run CLIP=${CLIP:-install} record.sh take"
+  [[ -z ${crop} || ${crop} =~ ^[0-9]+:[0-9]+:[0-9]+:[0-9]+$ ]] || die "CLIP_CROP must be w:h:x:y in pixels"
   [[ ${hold} =~ ^[1-9][0-9]?$ ]] || die "CLIP_HOLD must be whole seconds, 1 to 99"
   docker build -q -t "${RECORDER}" "${HERE}" >/dev/null
   cp "${still}" "${out}/still"
   docker run --rm --entrypoint ffmpeg -v "${out}:/out" "${RECORDER}" -y -v error -i /out/still -filter_complex "
-      crop=${crop},scale=1264:704:force_original_aspect_ratio=decrease:flags=lanczos,
+      ${crop:+crop=${crop},}scale=1264:704:force_original_aspect_ratio=decrease:flags=lanczos,
       pad=1320:760:(ow-iw)/2:(oh-ih)/2:color=0x0b1020,split[a][b];
       [a]palettegen=max_colors=256[p];
       [b][p]paletteuse=dither=sierra2_4a" -frames:v 1 /out/still.gif
   docker run --rm --entrypoint gifsicle -v "${out}:/out" "${RECORDER}" --no-warnings --merge --loopcount=forever \
-    /out/install.gif --delay "$((hold * 100))" /out/still.gif -O2 -o /out/install-final.gif
+    "/out/${GIF}.gif" --delay "$((hold * 100))" /out/still.gif -O2 -o "/out/${GIF}-final.gif"
   mkdir -p "${ROOT}/docs/assets/clip"
-  cp "${out}/install-final.gif" "${ROOT}/docs/assets/clip/install.gif"
-  ls -l "${ROOT}/docs/assets/clip/install.gif"
+  cp "${out}/${GIF}-final.gif" "${ROOT}/docs/assets/clip/${GIF}.gif"
+  ls -l "${ROOT}/docs/assets/clip/${GIF}.gif"
 }
 
 # mode_of FILE: the permission bits in octal, with GNU stat or BSD stat. GNU first: BSD stat has no -c and fails
@@ -204,6 +230,8 @@ stitch() {
 mode_of() {
   stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"
 }
+
+clip_vars
 
 case "${1:-}" in
   up) up ;;
@@ -221,7 +249,7 @@ case "${1:-}" in
   practice)
     # Values that Slack refuses; they are not shaped like tokens, so the secret scan has nothing to match.
     printf '%s=%s\n' SLACK_BOT_TOKEN not-a-token SLACK_APP_TOKEN not-a-token >"${STATE}/practice.env"
-    record "${STATE}/practice.env" C0123456789 'agent-kourier\s+my-binding' "${STATE}/practice"
+    record "${STATE}/practice.env" C0123456789 "${PRACTICE_ROW}" "${STATE}/practice"
     ;;
   stitch)
     [ $# -eq 2 ] || die "usage: record.sh stitch STILL"
@@ -235,7 +263,7 @@ case "${1:-}" in
     rm -f "${KCFG}" "${KCFG_INTERNAL}"
     ;;
   *)
-    sed -n '2,13p' "$0" >&2
+    sed -n '2,18p' "$0" >&2
     exit 2
     ;;
 esac
