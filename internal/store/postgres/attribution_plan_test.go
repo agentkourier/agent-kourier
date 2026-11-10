@@ -59,4 +59,7 @@ func TestUnattributedRowsIsNotFenced(t *testing.T) {
 	if _, err := standby.AttributeConnection(t.Context(), "ns/own"); !errors.Is(err, store.ErrDeposed) {
 		t.Errorf("AttributeConnection of the standby = %v; want store.ErrDeposed: the count must not have changed that", err)
 	}
+	if again, err := leader.UnattributedRows(t.Context()); err != nil || again != (store.AttributedRows{Outbox: 1}) {
+		t.Errorf("UnattributedRows after the standby's count = %+v, %v; want the one outbox row still: a count changes nothing", again, err)
+	}
 }
