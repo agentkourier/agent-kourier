@@ -140,7 +140,7 @@ object runs without it, so a field that a release removed is ignored without an 
 in the `spec`, the `status` or the `metadata` of a Binding, an AgentBackend or a ChatConnection: the field is ignored and the object is read as the rest of it says. This is
 what lets an older broker keep serving under newer CRDs. The CRDs are applied before an upgrade, and rolling back only the image leaves them new; a later release can add a
 field with a default, and the API server then adds that field to every stored object it returns, without a change of the object's generation. If the broker refused such a
-field it would serve no Binding at all, and a broker that cannot read its own ChatConnection would not start. A field that the broker's types do have, with a value that they cannot
+field it would serve no Binding at all, and a broker that cannot read its own ChatConnection, if it has one, would not start. A field that the broker's types do have, with a value that they cannot
 read or that fails validation, is still refused.
 
 The broker says what it ignored: one warning for each object, for each generation of it, `a custom resource has fields this broker does not know, and ignores them`, with the

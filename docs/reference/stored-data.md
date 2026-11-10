@@ -335,7 +335,9 @@ last activity; a thread's replies, interactions and outbox rows; an outbox row's
 the outbox's thread index by it, because a channel ID names a channel only within one chat app. The sweep deletes the outbox rows of a
 session's thread for the session's connection only, and a pending outbox row holds back only the sessions of its own connection. A row
 written before the migration, or by an older version after a rollback, has an empty connection: when the broker starts leading it gives
-every such row its own connection, 1000 rows of a table to a transaction, and logs at INFO how many it changed in all (nothing, when none).
+every such row its own connection, 1000 rows of a table to a transaction, and logs at INFO how many it changed in all (nothing, when none). A broker with no own connection has none to
+give them to: it counts the outbox rows and the presses with an empty connection, and if there are any its leader does not start and the process exits with code 2, naming the two counts and no row
+([Troubleshoot](../how-to/troubleshoot.md#the-pod-exits-with-code-2)).
 
 Not deleted here: `feedback` rows, which are kept so that a review of the votes can read them.
 
