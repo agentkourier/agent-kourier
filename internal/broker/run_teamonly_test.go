@@ -98,7 +98,7 @@ func TestARunWithNoOwnConnectionAndEveryTokenRejectedStaysUpAndReady(t *testing.
 					return c.Status == "False" && c.Reason == "ChatCredentialsRejected"
 				})
 			}
-			// Settled: the pass that wrote it has run, so nothing that was going to end the process has been let go of since.
+			// Settled: every condition above was awaited; the sleep only gives a late exit a window to show before the check.
 			time.Sleep(200 * time.Millisecond)
 			select {
 			case err := <-r.done:

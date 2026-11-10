@@ -166,7 +166,7 @@ func bootstrapCRDs(ctx context.Context, client kubernetes.Interface, opts Bootst
 		failed()
 		return nil, fmt.Errorf("read the custom resources: %w", err)
 	}
-	// A broker with no own connection (a zero reference, spec D53) has none to find and no Secret to follow first, and its start fails for no ChatConnection.
+	// A broker with no own connection (a zero reference, spec D53) has none to find and no Secret to follow first, and no ChatConnection can fail its start.
 	if opts.CRDs.Connection != (v1alpha1.ObjectRef{}) {
 		conn, err := ownConnection(set, opts.CRDs.Connection)
 		if err != nil {
