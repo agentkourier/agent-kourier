@@ -928,16 +928,16 @@ func (r *Resolver) Value(ctx context.Context, namespace, name, key string) (secr
 	}
 	s, err := r.getWaiting(ctx, namespace, name, key)
 	if err != nil {
-		return secretval.Value{}, fmt.Errorf("read key %q: %w", key, err)
+		return secretval.Value{}, fmt.Errorf("read of key %q failed: %w", key, err)
 	}
 	v, ok := s.Data[key]
 	switch {
 	case !opaque(s.Type):
-		return secretval.Value{}, fmt.Errorf("secret %s/%s key %q of type %q: %w", namespace, name, key, s.Type, secretval.ErrUnsupportedType)
+		return secretval.Value{}, fmt.Errorf("key %q of secret %s/%s cannot be used (the Secret is of type %q): %w", key, namespace, name, s.Type, secretval.ErrUnsupportedType)
 	case !ok:
-		return secretval.Value{}, fmt.Errorf("secret %s/%s key %q: %w", namespace, name, key, secretval.ErrKeyNotFound)
+		return secretval.Value{}, fmt.Errorf("key %q of secret %s/%s cannot be used: %w", key, namespace, name, secretval.ErrKeyNotFound)
 	case len(v) == 0:
-		return secretval.Value{}, fmt.Errorf("secret %s/%s key %q: %w", namespace, name, key, secretval.ErrEmptyValue)
+		return secretval.Value{}, fmt.Errorf("key %q of secret %s/%s cannot be used: %w", key, namespace, name, secretval.ErrEmptyValue)
 	}
 	return secretval.New(string(v)), nil
 }

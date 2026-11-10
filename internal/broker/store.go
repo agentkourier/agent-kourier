@@ -110,12 +110,12 @@ func openStore(ctx context.Context, c StoreConfig, dbPath string, secrets secret
 	if err == nil {
 		// A Secret made from a file ends in a newline, which no DSN does.
 		if dsn = secret.New(strings.TrimSpace(dsn.Reveal())); dsn.IsEmpty() {
-			err = fmt.Errorf("secret %s/%s key %q: %w", c.PostgresDSN.Namespace, c.PostgresDSN.Name, c.PostgresDSN.Key, secret.ErrEmptyValue)
+			err = fmt.Errorf("key %q of secret %s/%s cannot be used: %w", c.PostgresDSN.Key, c.PostgresDSN.Namespace, c.PostgresDSN.Name, secret.ErrEmptyValue)
 		}
 	}
 	if err != nil {
 		// The error names the Secret and the key, which the resolver's does too, and never a value.
-		return nil, fmt.Errorf("%w: the Postgres DSN: %w", ErrWiring, err)
+		return nil, fmt.Errorf("%w: the Postgres DSN was not read: %w", ErrWiring, err)
 	}
 	// The errors of Open and of the store carry neither the DSN nor its password (internal/store/postgres).
 	st, err := postgres.Open(ctx, dsn.Reveal(), append(postgresOptions(c, log), extra...)...)

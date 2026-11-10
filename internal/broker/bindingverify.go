@@ -163,7 +163,7 @@ func credentialsOutcome(err error) bindingcheck.Outcome {
 	var ref *identity.SecretError
 	switch {
 	case errors.Is(err, agent.ErrTokenRequired):
-		out.Message = "the Binding requires a bearer token and none was set"
+		out.Message = "the Binding requires a token and none was set"
 		return out
 	case errors.As(err, &ref) && ref.Namespace == ref.BindingNamespace:
 		subject := fmt.Sprintf("the token Secret %q", ref.Name)
@@ -577,9 +577,9 @@ func (w credentialsWatch) hold(ctx context.Context) (bindingcheck.Outcome, bool)
 // rejected is the outcome of a read that the platform refused because the bot's token is not valid: False/ChatCredentialsRejected. A team
 // connection stops when it sees one, and starts again when its Secret changes, which the message says.
 func (w credentialsWatch) rejected() bindingcheck.Outcome {
-	msg := "the chat platform rejected the bot's token: replace it and restart Agent Kourier"
+	msg := "the chat platform rejected the bot's token, so replace it and restart Agent Kourier"
 	if w.selfRestarting {
-		msg = "the chat platform rejected the bot's token: replace it in the credentials Secret, and the connection starts again by itself"
+		msg = "the chat platform rejected the bot's token, so replace it in the credentials Secret, and the connection starts again by itself"
 	}
 	return bindingcheck.Outcome{Status: bindingcheck.False, Reason: bindingcheck.ReasonChatCredentialsRejected, Message: msg}
 }
