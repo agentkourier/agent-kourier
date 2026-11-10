@@ -5,17 +5,21 @@ What changed in each release, newest first, and what you must do about it. The s
 
 ## Version 0.4.0 (unreleased)
 
-`agent-kourier init` writes the chart's default route. The broker's code, the CRDs and the chart's templates are unchanged by it.
+`agent-kourier init` writes the chart's default route, for a team that brings its own Slack app. The broker's code, the CRDs and the chart's
+templates are unchanged by it.
 
 ### Breaking changes
 
-- **`agent-kourier init` writes custom resources by default.** It wrote one values file for the ConfigMap route (`config.source: files`). It now writes the three
-  files of [Install on custom resources](how-to/install-with-helm.md#install-on-custom-resources), split by owner: `my-values.yaml` (`config.chatConnection`),
-  `platform.yaml` (the ChatConnection and the AgentBackend in the release's namespace, each allowing the team's namespace) and `team.yaml` (the Binding in the
-  team's namespace). It checks that the Binding's references resolve, and stops before its questions if any of the three files exists, unless `--force`. A script
-  that wants the old file passes `--source files`, which writes it as before. Without it, a script that gives no `--team-namespace` is asked for one, and at the end of
-  its input takes the agent's namespace. With `--agent-token` the token Secret now goes in the team's namespace, and `my-values.yaml` grants the broker that Secret with
-  `rbac.secretNames`. See [Write the files with `init`](how-to/install-with-helm.md#write-the-files-with-init).
+- **`agent-kourier init` writes custom resources by default, for a broker with no Slack app of its own.** It wrote one values file for the
+  ConfigMap route (`config.source: files`), on the broker's own app. It now writes the files of
+  [the team-app path](how-to/team-slack-app.md#the-whole-path-recorded): `my-values.yaml`, whose `config.connectionNamespaces` admits the team's
+  namespace, and `<team namespace>.yaml`, the team's ChatConnection, AgentBackend and Binding in that namespace. The commands it prints create the
+  team's Slack Secret, and the agent token Secret with `--agent-token`, in the team's namespace, and grant them to the broker with a Role there.
+  A script that wants the old file passes `--source files`, which writes it as before. Without it, the new question for the team's namespace
+  (`--team-namespace`) comes right after the agent's namespace, so answers piped on standard input need one more line there (an empty line takes
+  the agent's namespace), and at the end of the input it takes the agent's namespace. See
+  [Write the files with `init`](how-to/install-with-helm.md#write-the-files-with-init).
+- **`init --force` overwrites only regular files,** and stops before it writes if a symbolic link or anything else is at a path it writes.
 
 ## Version 0.3.1
 
