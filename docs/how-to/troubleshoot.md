@@ -234,7 +234,7 @@ against `kubectl -n agent-kourier get secret`.
 ## The pod exits with code 4 and never becomes ready
 
 ```
-agent-kourier: bootstrap: start the secret resolver: secret caches for [agent-kourier/slack-main] are not synced: context deadline exceeded
+agent-kourier: bootstrap: start the secret resolver: secret caches for [agent-kourier/slack-main] are not synced: context deadline exceeded ...
 ```
 
 The list names the Secrets whose caches did not sync. The pod cannot reach the Kubernetes API server, so the informers never sync and the wait ends

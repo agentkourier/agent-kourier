@@ -96,7 +96,9 @@ func TestTheCausesOfAReadSurviveRedactionForASecretNamedLikeACredential(t *testi
 			}},
 			{"a Watch the API server denied", ErrAccessDenied, func(t *testing.T) error {
 				r := failing(t, forbidden)
-				return r.Watch(t.Context(), []config.SecretName{n})
+				ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second) // a regressed denial fails here, not at go test's timeout
+				defer cancel()
+				return r.Watch(ctx, []config.SecretName{n})
 			}},
 			{"a Secret that is not watched", ErrNotWatched, func(t *testing.T) error {
 				r := New(fake.NewClientset(), WithLogger(slog.New(slog.DiscardHandler)))
