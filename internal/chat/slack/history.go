@@ -29,10 +29,10 @@ import (
 func (c *Client) History(ctx context.Context, conn, channel string, since time.Time) ([]chat.HistoryMessage, error) {
 	auth, err := c.api.AuthTestContext(ctx)
 	if err != nil {
-		return nil, c.scrub("auth.test", err)
+		return nil, c.scrub("auth.test call", err)
 	}
 	if auth.UserID == "" { // without it Agent Kourier cannot tell its own posts that arrive with no bot_id
-		return nil, errors.New("slack auth.test: no bot user ID")
+		return nil, errors.New("slack auth.test call: no bot user ID")
 	}
 	me := self{user: auth.UserID, bot: auth.BotID}
 	var raw []slackgo.Message

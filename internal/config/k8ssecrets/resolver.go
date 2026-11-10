@@ -102,6 +102,7 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -510,6 +511,7 @@ func shutdown(infs []*informer) {
 // would run for ever at the cost of everyone who shares the client: see the package comment), and reports it: a denial once for each change of
 // what the denial says (see the package comment).
 func (r *Resolver) failed(e *entry, inf *informer, err error) {
+	err = reflectorError{err}
 	deny := forbidden(err)
 	r.mu.Lock()
 	inf.cause, inf.fresh, inf.denied = err, false, inf.denied || deny
@@ -532,6 +534,17 @@ func (r *Resolver) failed(e *entry, inf *informer, err error) {
 	}
 	r.log.Warn("secret informer cannot list or watch", "namespace", e.name.Namespace, "secret", e.name.Name, "error", err)
 }
+
+// reflectorError is the failure of a list or watch as client-go's reflector words it, "failed to list *v1.Secret: <cause>", with the colon
+// after the type written as a comma. The redaction of a log line or a status reads "Secret:" as a secret name and its value, and would show
+// the cause, which says what is wrong (the API server's "forbidden", say), as [redacted]. It wraps the failure, so errors.Is and As see it.
+type reflectorError struct{ err error }
+
+func (e reflectorError) Error() string {
+	return strings.ReplaceAll(e.err.Error(), "*v1.Secret: ", "*v1.Secret, ")
+}
+
+func (e reflectorError) Unwrap() error { return e.err }
 
 // denial returns the latest failure of e if the API server answered it with forbidden or unauthorized, and nil otherwise.
 func (r *Resolver) denial(e *entry) error {
@@ -621,27 +634,27 @@ func (r *Resolver) await(ctx context.Context, es []*entry) error {
 		}
 		for _, e := range unsynced {
 			if cause := r.denial(e); cause != nil {
-				return fmt.Errorf("secret caches not synced for %s: %w: %w", listNames(unsynced), ErrAccessDenied, cause)
+				return fmt.Errorf("secret caches for %s are not synced: %w: %w", listNames(unsynced), ErrAccessDenied, cause)
 			}
 		}
 		if r.ctx.Err() == nil {
 			for _, e := range unsynced {
 				select {
 				case <-e.ended:
-					return fmt.Errorf("secret %s: %w", e.name, ErrNotWatched)
+					return fmt.Errorf("secret %s cannot be read: %w", e.name, ErrNotWatched)
 				default:
 				}
 			}
 		}
 		select {
 		case <-ctx.Done():
-			err := fmt.Errorf("secret caches not synced for %s: %w", listNames(unsynced), context.Cause(ctx))
+			err := fmt.Errorf("secret caches for %s are not synced: %w", listNames(unsynced), context.Cause(ctx))
 			if causes := r.causesOf(unsynced); len(causes) > 0 {
 				err = fmt.Errorf("%w: %w", err, errors.Join(causes...))
 			}
 			return err
 		case <-r.ctx.Done():
-			return fmt.Errorf("secret caches not synced for %s: %w", listNames(unsynced), ErrStopped)
+			return fmt.Errorf("secret caches for %s are not synced: %w", listNames(unsynced), ErrStopped)
 		case <-t.C:
 		}
 	}
@@ -664,7 +677,7 @@ func (r *Resolver) causesOf(es []*entry) []error {
 	var out []error
 	for _, e := range es {
 		if cause := e.latestCauseLocked(); cause != nil {
-			out = append(out, fmt.Errorf("secret %s: %w", e.name, cause))
+			out = append(out, fmt.Errorf("secret %s cannot be read: %w", e.name, cause))
 		}
 	}
 	return out
@@ -774,7 +787,7 @@ func (r *Resolver) Ready() error {
 		}
 	}
 	if len(unsynced) > 0 {
-		return fmt.Errorf("secrets %s: %w", listNames(unsynced), ErrNotSynced)
+		return fmt.Errorf("secrets %s cannot be read: %w", listNames(unsynced), ErrNotSynced)
 	}
 	return nil
 }
@@ -806,27 +819,27 @@ func (r *Resolver) Stop() {
 // that reads nothing of the keys, the version, passes nil.
 func (r *Resolver) get(namespace, name string, enough func(*entry) bool) (*corev1.Secret, error) {
 	if r.ctx.Err() != nil {
-		return nil, fmt.Errorf("secret %s/%s: %w", namespace, name, ErrStopped)
+		return nil, fmt.Errorf("secret %s/%s cannot be read: %w", namespace, name, ErrStopped)
 	}
 	r.mu.Lock()
 	e, ok := r.entries[config.SecretName{Namespace: namespace, Name: name}]
 	if !ok {
 		r.mu.Unlock()
-		return nil, fmt.Errorf("secret %s/%s: %w", namespace, name, ErrNotWatched)
+		return nil, fmt.Errorf("secret %s/%s cannot be read: %w", namespace, name, ErrNotWatched)
 	}
 	inf, synced, cause := e.informer, e.synced(), e.latestCauseLocked()
 	keeps := enough == nil || enough(e)
 	r.mu.Unlock()
 	if !synced || !keeps {
 		if forbidden(cause) {
-			return nil, fmt.Errorf("secret %s/%s: %w: %w", namespace, name, ErrAccessDenied, cause)
+			return nil, fmt.Errorf("secret %s/%s cannot be read: %w: %w", namespace, name, ErrAccessDenied, cause)
 		}
-		return nil, fmt.Errorf("secret %s/%s: %w", namespace, name, ErrNotSynced)
+		return nil, fmt.Errorf("secret %s/%s cannot be read: %w", namespace, name, ErrNotSynced)
 	}
 	s, err := inf.lister.Secrets(namespace).Get(name)
 	switch {
 	case apierrors.IsNotFound(err):
-		return nil, fmt.Errorf("secret %s/%s: %w", namespace, name, config.ErrSecretNotFound)
+		return nil, fmt.Errorf("secret %s/%s cannot be read: %w", namespace, name, config.ErrSecretNotFound)
 	case err != nil:
 		return nil, fmt.Errorf("read secret %s/%s from cache: %w", namespace, name, err)
 	}
@@ -858,7 +871,7 @@ func (r *Resolver) getWaiting(parent context.Context, namespace, name, key strin
 		}
 		es, ferr := r.follow(reads, byDemand)
 		if ferr != nil {
-			return nil, fmt.Errorf("secret %s/%s: %w", namespace, name, ferr)
+			return nil, fmt.Errorf("secret %s/%s cannot be read: %w", namespace, name, ferr)
 		}
 		aerr := r.await(ctx, es)
 		if (aerr != nil && !errors.Is(aerr, ErrNotWatched)) || ctx.Err() != nil { // the bound is this function's, whatever await answers
@@ -928,16 +941,16 @@ func (r *Resolver) Value(ctx context.Context, namespace, name, key string) (secr
 	}
 	s, err := r.getWaiting(ctx, namespace, name, key)
 	if err != nil {
-		return secretval.Value{}, fmt.Errorf("read key %q: %w", key, err)
+		return secretval.Value{}, fmt.Errorf("read of key %q failed: %w", key, err)
 	}
 	v, ok := s.Data[key]
 	switch {
 	case !opaque(s.Type):
-		return secretval.Value{}, fmt.Errorf("secret %s/%s key %q of type %q: %w", namespace, name, key, s.Type, secretval.ErrUnsupportedType)
+		return secretval.Value{}, fmt.Errorf("key %q of secret %s/%s cannot be used (the Secret is of type %q): %w", key, namespace, name, s.Type, secretval.ErrUnsupportedType)
 	case !ok:
-		return secretval.Value{}, fmt.Errorf("secret %s/%s key %q: %w", namespace, name, key, secretval.ErrKeyNotFound)
+		return secretval.Value{}, fmt.Errorf("key %q of secret %s/%s cannot be used: %w", key, namespace, name, secretval.ErrKeyNotFound)
 	case len(v) == 0:
-		return secretval.Value{}, fmt.Errorf("secret %s/%s key %q: %w", namespace, name, key, secretval.ErrEmptyValue)
+		return secretval.Value{}, fmt.Errorf("key %q of secret %s/%s cannot be used: %w", key, namespace, name, secretval.ErrEmptyValue)
 	}
 	return secretval.New(string(v)), nil
 }

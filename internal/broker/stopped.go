@@ -55,7 +55,7 @@ type credentialsRejectedError struct {
 }
 
 func (e *credentialsRejectedError) Error() string {
-	return fmt.Sprintf("%s: Slack answered %q: %s", e.method, e.code, errCredentialsRejected)
+	return fmt.Sprintf("%s call: Slack answered %q, so %s", e.method, e.code, errCredentialsRejected)
 }
 
 // Is makes the error errCredentialsRejected.

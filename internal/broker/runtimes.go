@@ -360,7 +360,7 @@ func (h *runtimeHost) build(conn Connection) (*connRuntime, error) {
 func (h *runtimeHost) run(rt *connRuntime, sink chat.Sink, onEnd func(rt *connRuntime, err error)) {
 	rt.ran.Store(true)
 	go func() {
-		err := RunPlatform(rt.ctx, rt.platform, sink, RunPolicy{Logger: h.log})
+		err := RunPlatform(rt.ctx, rt.platform, sink, RunPolicy{Logger: h.log.With("connection", rt.name)})
 		if !rt.halted.Load() {
 			h.table.fail(rt, err)
 			h.closeTransport(rt) // nothing posts through it from here: the connection is down

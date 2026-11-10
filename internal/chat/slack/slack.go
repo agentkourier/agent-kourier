@@ -152,10 +152,10 @@ func New(cfg Config) *Client {
 func (c *Client) Run(ctx context.Context, sink Sink) error {
 	auth, err := c.api.AuthTestContext(ctx)
 	if err != nil {
-		return c.scrub("auth.test", err)
+		return c.scrub("auth.test call", err)
 	}
 	if auth.UserID == "" { // without it Agent Kourier cannot tell its own posts that arrive with no bot_id
-		return errors.New("slack auth.test: no bot user ID")
+		return errors.New("slack auth.test call: no bot user ID")
 	}
 	c.mu.Lock()
 	c.url = workspaceOrigin(auth.URL)

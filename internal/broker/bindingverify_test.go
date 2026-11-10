@@ -167,7 +167,7 @@ func TestClassifyAgentSaysWhichCredentialCannotBeRead(t *testing.T) {
 		{"header that is not told apart", fmt.Errorf("%w: header %q: %s", agent.ErrHeaderUnreadable, "X-Api-Key", marker),
 			"a Secret behind a header of the AgentBackend cannot be read; the operator's log has the cause"},
 		{"token required, none set", fmt.Errorf("binding sre/oncall: %w", agent.ErrTokenRequired),
-			"the Binding requires a bearer token and none was set"},
+			"the Binding requires a token and none was set"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out, ok := classifyAgent(tc.err)
