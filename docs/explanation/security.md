@@ -72,7 +72,7 @@ resource status. A Secret's value is held in a type whose every formatting path 
 watch on Secrets in each namespace that holds a Secret its config values name (a ChatConnection's credentials, a Binding's token, an AgentBackend's header
 value), in the release namespace with `store.type: postgres` (the DSN's Secret), and in each namespace of `rbac.secretNamespaces`; with `config.source: files` and none of these, in the
 release namespace. With `config.source: files` such a Role covers every Secret of its namespace. With `config.source: crds` it names the Secrets
-(`resourceNames`): the ones the config values and the DSN name, the one Secret that the broker's own ChatConnection reads (the chart derives it from
+(`resourceNames`): the ones the config values and the DSN name, the one Secret that the broker's own ChatConnection reads, if it has one (the chart derives it from
 `config.chatConnection`: the Secret of the connection's name, or `config.chatConnectionSecret`, in the connection's namespace), and the ones that `rbac.secretNames` lists for that namespace, and a
 namespace that only `config.chatConnection` or `rbac.secretNames` names gets a Role for those names. A team's Secrets, which the chart cannot see, are granted by the team, with a Role in its own namespace. A namespace of `rbac.secretNamespaces` stays namespace-wide there, whatever `rbac.secretNames` says of it (read from
 `templates/rbac.yaml`). With `config.source: crds` the chart also makes a
@@ -81,15 +81,15 @@ audited and counted; nothing falls back.
 
 ## A team brings its own chat app
 
-With `config.connectionNamespaces` set, one broker holds the chat credentials of more than one app: its own connection's, and
+With `config.connectionNamespaces` set, one broker holds the chat credentials of more than one app: its own connection's, if it has one, and
 the bot token and app-level token of every ChatConnection in the namespaces on the list, read from the Secret each names in its own
 namespace. They sit in the memory of one pod, in the redacting type of the section above, beside the Binding tokens the broker
 already holds for every team. A reader of that pod's memory has them all, and a platform that admits a team's namespace takes on
 the tokens of the team's app: see [Let a team bring its own Slack app](../how-to/team-slack-app.md).
 
 **The admission list is the consent.** Without it, any namespace where someone may create a ChatConnection would make the broker
-open a chat connection on tokens nobody at the platform reviewed. So the broker serves its own ChatConnection (the one
-`config.chatConnection` names, in any namespace) and the ChatConnections of the namespaces on the list, and no other. Another
+open a chat connection on tokens nobody at the platform reviewed. So the broker serves its own ChatConnection, if it has one (the one
+`config.chatConnection` names, in any namespace), and the ChatConnections of the namespaces on the list, and no other. Another
 ChatConnection of the release's namespace is not served unless that namespace is on the list. A ChatConnection that is not served is
 not run, and the broker does not read the Secret it names. The list is read at start: taking a namespace off it is a restart, after which the connection is no longer served.
 
@@ -107,12 +107,13 @@ What a team that may write a ChatConnection in an admitted namespace can do, and
   Secret and not for the ChatConnection, so any Binding's `tokenSecretRef` or AgentBackend's `valueSecretRef` in that namespace can name it,
   and the broker sends the value to that AgentBackend's `url`, as described below. Anyone who may write Bindings or AgentBackends in an admitted
   namespace can then do this with the team's `botToken` and `appToken`. Grant the Secret only if they may hold the tokens.
-- It can fill the places. The broker serves at most 16 connections, its own first and the others oldest first, and no setting changes that.
+- It can fill the places. The broker serves at most 16 connections, its own first, if it has one, and the others oldest first, and no setting changes that.
   A team that creates many leaves a later team's connection out, and that connection's Bindings say `ConnectionNotServed`. Bound
   it with a `ResourceQuota` on `count/chatconnections.agentkourier.dev` in each admitted namespace, as the section below does for Bindings (Kubernetes's own object-count quota for a custom resource; not run here for this kind).
 - It cannot stop the broker or another team's connection. A rejected token, an invalid ChatConnection and a Secret that cannot be read
-  stop or hold back that connection only, with its Bindings reporting why. The broker's own connection keeps its rule: a token Slack rejects
-  ends the process.
+  stop or hold back that connection only, with its Bindings reporting why. The broker's own connection, if it has one, keeps its rule: a token Slack rejects
+  ends the process. A broker with no own connection has no such rule, and with every token rejected it stays up and ready, so alert on `agentkourier_chat_connected`
+  ([Metrics](../reference/metrics.md#alert-rules-for-a-broker-with-no-connection-of-its-own)).
 - It stops the broker's use of its app by deleting its ChatConnection, which takes effect without a hold. The platform stops it by taking
   the namespace off the list, with the restart that applies the change.
 

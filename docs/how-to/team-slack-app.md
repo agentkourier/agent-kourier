@@ -5,7 +5,9 @@ answer through the team's app, served by the platform's broker, and the team's t
 
 The team owns a `ChatConnection` in its namespace, as it owns its Bindings. The platform team decides which namespaces may do
 this, with a list in the chart's values, and the broker serves the ChatConnections of the namespaces on that list besides its
-own. A ChatConnection in any other namespace is not served: the broker does not run it and does not read its Secret.
+own, if it has one. A ChatConnection in any other namespace is not served: the broker does not run it and does not read its Secret.
+A broker may have no connection of its own and serve only the teams': see
+[A broker with no connection of its own](#a-broker-with-no-connection-of-its-own).
 
 ## Before you start
 
@@ -13,15 +15,22 @@ own. A ChatConnection in any other namespace is not served: the broker does not 
   refused with `config.source: files`, which serves the one ChatConnection of its directory.
 - The team has a Slack app with its two tokens, made as in [Configure Slack](configure-slack.md): the same manifest, the same
   scopes. No other ChatConnection may use that app: see [Two connections of one Slack app](#two-connections-of-one-slack-app).
-- The broker asks Slack which app the bot of a connection belongs to (`auth.test`, then `bots.info`), for its own connection and for
+- The broker asks Slack which app the bot of a connection belongs to (`auth.test`, then `bots.info`), for its own connection, if it has one, and for
   each team's. Slack's documentation says `bots.info` needs `users:read` (not verified here), which the manifest in
   [Configure Slack](configure-slack.md#what-the-app-is-allowed-to-do) has. If the call fails for the broker's own connection,
-  no team connection starts, and the leader logs `the identity of the own connection is not known yet, so no team connection starts`; if it
+  no team connection starts, and the leader logs `the identity of the own connection is not known yet, so no team connection starts`; a broker with no
+  connection of its own asks for no identity first, so this line does not occur there. If it
   fails for a team's, that connection does not start, and the log says `the identity of the ChatConnection's bot is not known yet, so it is not started`.
-  Both are asked again at every look, unless Slack says the token is rejected.
+  Both are asked again at every look, unless Slack says the token is rejected. When the call works, nothing says so on its own: it has no log
+  line and no metric, and the app it found is logged nowhere. What shows it is that the connection then starts, which [step 4](#4-check-it) reads.
 - The platform team has read [what the broker then holds](../explanation/security.md#a-team-brings-its-own-chat-app).
 - The names here are placeholders. The team's namespace is `team-a`, its Secret and its ChatConnection are both called
-  `team-a-slack`, and the broker's ServiceAccount is `agent-kourier` in the namespace `agent-kourier`. Ask for the real ones.
+  `team-a-slack`, and the broker's ServiceAccount is `agent-kourier` in the namespace `agent-kourier`. Ask for the real ones. The ServiceAccount
+  is named `agent-kourier` only for a release called `agent-kourier` (or with `fullnameOverride: agent-kourier`, or `serviceAccount.name:
+  agent-kourier`). In general it is `serviceAccount.name` when that is set, and otherwise the chart's full name: `fullnameOverride`, or the
+  release name when it contains `agent-kourier`, or `<release>-agent-kourier` (with `serviceAccount.create: false`, it is `serviceAccount.name`,
+  or `default`). The Deployment says which it is:
+  `kubectl -n <release namespace> get deploy -l app.kubernetes.io/instance=<release> -o jsonpath='{.items[0].spec.template.spec.serviceAccountName}'`.
 
 ## 1. The platform team lets the team write a ChatConnection
 
@@ -59,14 +68,19 @@ file only the team can read, as in [Configure Slack](configure-slack.md), so tha
 kubectl -n team-a create secret generic team-a-slack --from-env-file="$HOME/.config/team-a/slack-secret.env"
 ```
 
-**The grant.** The broker reads the Secret with its own ServiceAccount, which has no right on the team's namespace yet. The
-team gives it `list` and `watch` on that one Secret, with a Role and a RoleBinding in its own namespace. It needs nothing from
-the platform's release or values:
+**The grant.** The broker reads each Secret with its own ServiceAccount, which has no right on the team's namespace yet. The
+team gives it `list` and `watch` on the Secrets it needs, with a Role and a RoleBinding in its own namespace. It needs nothing from
+the platform's release or values. The Role names two kinds of Secret: the connection's, and the token Secret of each Binding that has a
+`tokenSecretRef` (and the Secret behind each `valueSecretRef` of an AgentBackend in the namespace). Here the connection's
+is `team-a-slack` and one Binding's token Secret is `team-a-agent-token`; a Role that names only the first lets the connection run and leaves
+that Binding's `BackendReachable` condition `False` with `CredentialsUnreadable`:
 
 ```sh
-kubectl -n team-a create role agent-kourier-secrets-team-a --verb=list,watch --resource=secrets --resource-name=team-a-slack
+kubectl -n team-a create role agent-kourier-secrets-team-a --verb=list,watch --resource=secrets \
+  --resource-name=team-a-slack --resource-name=team-a-agent-token
 kubectl -n team-a create rolebinding agent-kourier-secrets-team-a --role=agent-kourier-secrets-team-a --serviceaccount=agent-kourier:agent-kourier
-kubectl auth can-i list secrets/team-a-slack -n team-a --as system:serviceaccount:agent-kourier:agent-kourier   # yes
+kubectl auth can-i list secrets/team-a-slack -n team-a --as system:serviceaccount:agent-kourier:agent-kourier        # yes
+kubectl auth can-i list secrets/team-a-agent-token -n team-a --as system:serviceaccount:agent-kourier:agent-kourier   # yes
 ```
 
 The verbs are `list` and `watch`, not `get`. Give the Role a name the chart would not (`<fullname>-secrets` is the chart's own),
@@ -75,9 +89,9 @@ AgentBackend's `valueSecretRef` in `team-a` can name this Secret too, and the br
 AgentBackend's `url`. Anyone who may write Bindings or AgentBackends in the namespace can therefore have the broker send the app's
 tokens to an agent, so grant the Secret only if those writers may hold the tokens
 ([Security model](../explanation/security.md#what-the-people-who-write-these-objects-can-do)). [Let a team add its own Binding](migrate-config-source.md#let-a-team-add-its-own-binding)
-has the same two objects as YAML.
+has the same two kinds of object as YAML. The team adds a Binding's token Secret to the Role when it writes the Binding that names it.
 
-If the team cannot create a Role, the platform team grants the Secret in its values instead, in step 3.
+If the team cannot create a Role, the platform team grants the Secrets in its values instead, in step 3.
 
 **The connection.**
 
@@ -108,7 +122,7 @@ Add the namespace to `config.connectionNamespaces` and upgrade the release:
 ```yaml
 config:
   source: crds
-  chatConnection: agent-kourier/slack     # the broker's own connection, as before
+  chatConnection: agent-kourier/slack     # the broker's own connection, as before (leave it empty for a broker with none)
   connectionNamespaces: [team-a]
 ```
 
@@ -117,16 +131,16 @@ the pods. It adds no rule to the ClusterRole, which already lists and watches Ch
 
 The list is the platform team's consent: the broker holds a chat connection on the tokens in a namespace only if the
 namespace is on it. At most 16 connections are served in all, the broker's own included, and nothing changes that
-number: see [Limits](../reference/limits.md#run-the-broker). The own connection counts first and the others oldest first, so a
+number: see [Limits](../reference/limits.md#run-the-broker). The own connection, if the broker has one, counts first and the others oldest first, so a
 connection created after the sixteenth place is taken is left out, and its Bindings say `ConnectionNotServed`, which the leader counts in `agentkourier_config_binding_rejections{reason="ConnectionNotServed"}`.
 
-**If the team's Role does not exist,** the platform team names the Secret in the chart's values, and the chart renders the Role
+**If the team's Role does not exist,** the platform team names the Secrets in the chart's values, and the chart renders the Role
 and RoleBinding itself in `team-a`, as `<fullname>-secrets`:
 
 ```yaml
 rbac:
   secretNames:
-    team-a: [team-a-slack]
+    team-a: [team-a-slack, team-a-agent-token]
 ```
 
 `rbac.secretNamespaces: [team-a]` grants every Secret of the namespace instead, which includes the Secrets of the team's
@@ -154,6 +168,16 @@ The platform team sees the connection in the leader's log (`serving a ChatConnec
 the metric `agentkourier_chat_connected{connection="team-a/team-a-slack"}`, which is 1 while the connection is up.
 [Metrics](../reference/metrics.md#series-by-connection) lists the series that carry the `connection` label.
 
+That line is also the sign that the lookup of whose bot the token is (the one the first section described) worked: the broker starts
+a connection only after it has the answer, and logs nothing for the answer itself. So:
+
+- `serving a ChatConnection` is logged: the lookup worked and the connection was started. The metric is 1 once Slack has opened the Socket Mode connection.
+- Neither the line nor a series for the connection, and a WARN `the identity of the ChatConnection's bot is not known yet, so it is not started`: the lookup has
+  not worked yet, and the WARN says why. A connection that has not started has no `agentkourier_chat_connected` series yet (unless its Secret could not be read, which sets 0:
+  [Metrics](../reference/metrics.md#series-by-connection)), so an alert on that metric does not see it;
+  its Bindings read `ChannelJoined` `Unknown` with `ChatUnavailable`, and `agentkourier_binding_ready` is 0 for them once their first probe has ended.
+- A WARN `the ChatConnection is not served: it uses the same Slack app as the older ChatConnection ...`: the lookup worked, and the app is an older connection's.
+
 ## What the team sees in its Binding's status
 
 The broker writes the status of a Binding on a connection it serves, from the connection's own bot. These are the states a
@@ -164,9 +188,10 @@ team meets, in the order of this page. [Binding status](../reference/binding-sta
 |---|---|---|
 | No status, and empty `READY` and `REASON` columns | The namespace is not on the list, or the broker has not read the Binding yet (the first status comes within about 10 seconds). | Ask the platform team to admit the namespace. |
 | `Accepted` `False`, `ConnectionNotFound` | The Binding was applied before its ChatConnection existed, and the namespace is still not admitted, so nothing has rewritten the status. | Ask the platform team to admit the namespace. Apply the ChatConnection before its Bindings. |
-| `Accepted` `False`, `ConnectionNotServed` | The connection exists and the broker does not serve it: the broker served it before and does not now (its namespace was taken off the list, or it was the broker's own connection and the platform changed that to another), it is past the 16, or it is a second connection of a Slack app that an older connection uses. `message` says which. It is written once and not put back. Only a Binding that the connection admits is told. | See below, and [the reason's row](../reference/binding-status.md#accepted). |
+| `Accepted` `False`, `ConnectionNotServed` | The connection exists and the broker does not serve it: the broker served it before and does not now (its namespace was taken off the list, or it was the broker's own connection and the platform changed that to another or to none, and its namespace is not on the list), it is past the 16, or it is a second connection of a Slack app that an older connection uses. `message` says which. It is written once and not put back. Only a Binding that the connection admits is told. | See below, and [the reason's row](../reference/binding-status.md#accepted). |
 | `Accepted` `False`, `ConnectionRejected` | The ChatConnection is invalid. If it had a good generation, that one runs. | Fix the ChatConnection; `kubectl apply --dry-run=server` finds what the schema checks. |
 | `ChannelJoined` `Unknown`, `ChatUnavailable` | The connection is not running: it has not started yet, it is waiting for the platform to say whose bot it is, or its Secret cannot be read now. The probe makes no call to Slack. | Wait about two minutes: a Role applied late is noticed up to about 1 m 15 s later. If it stays, check the grant with `kubectl auth can-i` as in step 2, and ask the platform team to read the log. |
+| `BackendReachable` `False`, `CredentialsUnreadable` | The Secret named by the Binding's `tokenSecretRef`, or behind a header of its AgentBackend, cannot be read. The `message` names the Secret and says what is wrong; for a Secret the API server denied, it says the ServiceAccount needs `list` and `watch` on it. | Add the Secret to the Role of step 2. It recovers without a restart once the grant exists, at the broker's next recheck of the config, which comes about once a minute. |
 | `ChannelJoined` `Unknown`, `ChatCredentialsUnusable` | The Secret, or a key of it, is gone or empty, or the Secret is not of type `Opaque`. | Mend the Secret. The connection starts by itself. |
 | `ChannelJoined` `Unknown`, `ChatCredentialsChanged` | The Secret holds other tokens than the connection runs on: it is restarting. The reason clears at the next probe. | Nothing; see [Rotate the tokens](#rotate-the-tokens). |
 | `ChannelJoined` `False`, `ChatCredentialsRejected` | Slack rejected a token of the connection. Only this connection is stopped. | See [When Slack rejects a token](#when-slack-rejects-a-token). |
@@ -180,7 +205,7 @@ states.
 Slack sends each Socket Mode event of an app to one of the app's open connections, which is why [Configure Slack](configure-slack.md)
 says to stop any other process on the same app token. Two ChatConnections of one app in one broker would each miss events, so
 the broker serves an app once. It asks Slack which app the bot of each connection belongs to
-(`auth.test`, then `bots.info`), and when two connections give the same app ID it serves the older: its own connection first,
+(`auth.test`, then `bots.info`), and when two connections give the same app ID it serves the older: its own connection first, if it has one,
 then the others oldest first (`creationTimestamp`, then namespace and name). The younger one is not run, and its Bindings say
 `ConnectionNotServed` with the message `another ChatConnection of the same Slack app is older and is the one this broker
 serves, and an app is served once`. The message names no other connection, which may be in a namespace the reader cannot see;
@@ -216,7 +241,7 @@ A token Slack rejects (`invalid_auth`, `token_revoked`, `token_expired`, `accoun
 restarts, so a mention by that bot starts no turn on another connection unless a Binding's trigger names the bot, as when it runs.
 
 The ChatConnection that is not run is not deleted, and it is served again if the older one goes away. The platform's own
-connection always comes first, so a team that copies the platform's tokens gets the second place.
+connection, if the broker has one, always comes first, so a team that copies the platform's tokens gets the second place; a broker with none serves the oldest.
 
 ## Rotate the tokens
 
@@ -243,7 +268,7 @@ section. It starts again at the first look after the broker has the new tokens.
 Slack rejects a token for good when it is invalid, revoked or expired (`invalid_auth`, `not_authed`, `token_revoked`,
 `token_expired`, `account_inactive`). For a team connection this stops that connection only:
 
-- the process keeps running, and so does every other connection; the broker's own connection is the exception, since its
+- the process keeps running, and so does every other connection; the broker's own connection, if it has one, is the exception, since its
   rejected token exits the process (code 1);
 - the leader logs one WARN that names the connection and Slack's code, and never a token;
 - `agentkourier_chat_connected` is 0 for that connection;
@@ -254,6 +279,71 @@ Slack rejects a token for good when it is invalid, revoked or expired (`invalid_
   tokens.
 
 Mend it by writing valid tokens into the Secret.
+
+**When the broker notices.** A running connection finds out that Slack rejects its bot token when a call made with the token is answered with a
+rejection; every call through the connection's platform reports one, and the connection stops. With no traffic, the call that comes on a schedule is
+the probe of a Binding's channel, which runs every 5 minutes, each pass shifted by up to 10% ([Limits](../reference/limits.md#run-the-broker)). In a trial with two Slack apps, a connection
+noticed a revoked token at the next of those probes and not before. So a token revoked in Slack can go unnoticed for up to about 5.5 minutes (a post, or any other call the connection makes for a turn, finds it sooner), and a connection with no Binding has no such probe. A token that is
+already rejected when a connection is first seen is found by the lookup of whose bot it is, at the look of the broker that first sees the connection (the looks come every 5 seconds).
+In that trial Slack reported the revoke as `account_inactive` and not `token_revoked`. That is what was
+observed, and it is Slack's behaviour, which this repository has not verified; the broker treats both codes alike.
+
+## A broker with no connection of its own
+
+A platform that runs the broker for its teams does not need a Slack app of its own. Leave `config.chatConnection` empty and list the
+namespaces whose ChatConnections the broker serves:
+
+```yaml
+config:
+  source: crds
+  connectionNamespaces: [team-a, team-b]
+```
+
+The chart then renders `AGENTKOURIER_CONNECTION_NAMESPACES` and no `AGENTKOURIER_CHAT_CONNECTION`, and every connection the broker serves is a
+team connection, as this page has described them. The chart checks the shape when it renders. It refuses `config.chatConnectionSecret` (it names
+the Secret of an own connection, and there is none), and it refuses a `config.chatConnections` entry whose namespace is not on the list, because the
+chart would render the ChatConnection and the broker would never serve it; the message names the entry. A ChatConnection that `config.chatConnections` renders has
+its Secret granted by the chart, from its `credentialsSecretRef`; the teams grant the Secrets of the ones they make, as in step 2. With
+`config.chatConnection` and `config.connectionNamespaces` both empty, the chart reads the one `config.chatConnections` entry as the own connection, as it
+always did, and with none or several it refuses and names both ways out.
+
+What the broker does without an own connection:
+
+- **It starts with the list alone.** At least one namespace must be on the list: with neither `AGENTKOURIER_CHAT_CONNECTION` nor a list the broker could serve
+  nothing until a restart, since it reads the list at start, so it exits with [code 2](../reference/cli.md#exit-codes) and an error that names both variables. A broker
+  whose listed namespaces hold no ChatConnection yet starts, is ready, and serves nothing until one appears.
+- **A rejected token stops one connection and never the process.** Every connection is a team connection, so none of them exits the process with code 1.
+  With every token rejected the pod stays up and `/readyz` still says ready, since readiness never includes Slack; each connection's `agentkourier_chat_connected`
+  is 0 and its Bindings read `ChannelJoined` `False` with `ChatCredentialsRejected`. A restart would not mend a rejected token, so the broker does not exit. The pod's state does not say that it serves nobody; a WARN for each connection, the metric and the
+  Bindings do: [alert on the metric](../reference/metrics.md#alert-rules-for-a-broker-with-no-connection-of-its-own).
+- **Nothing is held.** The hold that keeps an own connection's Bindings while its ChatConnection is deleted is for the own connection alone, so a deleted team
+  connection is dropped at the read that settles the deletion, as under [Take it back](#take-it-back), and `agentkourier_config_held_objects` is always 0.
+- **All 16 places and every claim of a Slack app go by age.** With no own connection to take the first place, the 16 oldest connections are served
+  (`creationTimestamp`, then namespace, then name), and when two connections are of one Slack app the older is served.
+- **Rows with no connection stop the leader.** The outbox rows and the button presses that were written before the broker recorded connections, or by an
+  older image after a rollback, have an empty connection, and an own connection takes them when the leader starts. With no own connection nobody can,
+  so the leader counts them before it posts anything, and if there are any it ends the process with code 2 and the error
+  `N outbox rows and M button presses were written before connections were recorded, and this broker has no ChatConnection of its own to give them to: set config.chatConnection (AGENTKOURIER_CHAT_CONNECTION) to the ChatConnection that served them, let the broker start once, then unset it`.
+  Do that: set `config.chatConnection` to the connection that served the rows, upgrade, wait until the leader has started (it logs `store: gave the rows written before connections were recorded to this broker's own connection`),
+  and unset it again. A store that no own-connection broker ever used has no such row. Only the replica that becomes the leader makes the check, so with Postgres a standby does not.
+
+### Move a broker from its own connection to none
+
+In one upgrade, set `config.chatConnection` to empty, remove `config.chatConnectionSecret` if it is set (the chart refuses it), and put the connection's namespace
+on `config.connectionNamespaces`. If `config.chatConnections` renders the connection, keep it there: the chart then still grants its Secret. If you applied it by hand, the
+chart no longer grants the Secret by name, because it granted only the own connection's: name it in `rbac.secretNames` or have its namespace grant it, as in step 2. Until
+it can be read the connection is not started, and its Bindings read `ChatUnavailable`. The upgrade restarts the pods.
+
+The connection is then a team connection, so it loses what only an own connection has:
+
+- a token that Slack rejects stops that connection and no longer exits the process;
+- the hold on its Bindings, when its ChatConnection is deleted;
+- the first of the 16 places, which it now has by age like the others;
+- the first claim of its Slack app: an older ChatConnection of the same app now wins.
+
+For one you applied yourself: if you leave its namespace off the list, the broker no longer serves it, and its Bindings are told `ConnectionNotServed` once. Rows with no connection are
+the leader's to refuse, as above; a broker that has had an own connection has attributed its rows at each start, so you meet that only if an older image wrote more.
+To move back, set `config.chatConnection` again.
 
 ## Take it back
 
@@ -266,6 +356,9 @@ Mend it by writing valid tokens into the Secret.
   posts waiting for the connection stay in the outbox. An interaction pending on one of their threads cannot be ended through the Binding, which the broker no longer has, so the sweep ends it
   and posts nothing `5m` after the first sweep that finds it both past its timeout and orphaned ([Limits](../reference/limits.md#what-a-pause-may-ask)): the task is cleared from the session record (the restart that took the namespace off the list left no runner parked), and the interaction is audited as `orphaned`.
   The agent's task is not cancelled: it stays input-required at the agent until the agent expires it.
+- **A broker with no connection of its own cannot be rolled back to an earlier release in place.** 0.2.0, 0.2.1 and 0.3.0-rc.1 exit with code 2 on
+  `config.source: crds` without `AGENTKOURIER_CHAT_CONNECTION`: that is what their source says (`cmd/agent-kourier/main.go` at those tags, read and not run). Set
+  `config.chatConnection` first, which makes the broker one with an own connection, and then follow the next bullet.
 - **Rolling the release back.** Do not roll back to a release before 0.3.0 while any team connection has an unposted row. The outbox, the
   interactions and the button presses of 0.3.0 record the connection they belong to. 0.2.1 has one chat platform, and read from its
   code (not run) it does not filter by connection in two places that matter:
@@ -300,7 +393,7 @@ Mend it by writing valid tokens into the Secret.
   5. Wait until `agentkourier_outbox_pending{connection!="agent-kourier/slack"}` is 0 or has no series on the leader, with `agent-kourier/slack` the broker's own connection as `namespace/name`, the value of `AGENTKOURIER_CHAT_CONNECTION` in the pod (`config.chatConnection` may give the name alone for a connection in the release's namespace).
      Read that only while `agentkourier_outbox_pending{connection="agent-kourier/slack"}` is present: the leader shows a 0 for each connection it serves, and a connection it does not serve shows a series only while it has an unposted row. A scrape that fails
      (the metrics endpoint answers an error when the outbox query fails) has no series at all, which is not the same as none being unposted. The store says it directly: no row of the table `outbox` has `message_ref = ''`, an unset `abandoned_at`
-     (`abandoned_at IS NULL` on Postgres, `abandoned_at = 0` on SQLite) and a `connection` that is neither `agent-kourier/slack` nor empty. An empty `connection` is a row from before migration 0029 or from an older image, which the leader gives to the own connection when it starts.
+     (`abandoned_at IS NULL` on Postgres, `abandoned_at = 0` on SQLite) and a `connection` that is neither `agent-kourier/slack` nor empty. An empty `connection` is a row from before migration 0029 or from an older image, which the leader gives to the own connection, if the broker has one, when it starts.
 
   If a row stays for a connection that is not served, admit its namespace again so that the connection runs and the row posts, and if the team deleted its ChatConnection have it made again under the same name, and for the same Slack app: the rows post through whatever app the new object's tokens belong to.
   Or wait out the 7 days: the outbox abandons a row older than that, which drops its text and keeps the row.
