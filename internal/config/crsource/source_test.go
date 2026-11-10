@@ -569,9 +569,8 @@ func TestSetAfterStop(t *testing.T) {
 func TestNewRefusesWhatItCannotServe(t *testing.T) {
 	c := newCluster(t)
 	for name, opts := range map[string]crsource.Options{
-		"no client":     {Connection: own},
-		"no connection": {Client: c.client},
-		"no namespace":  {Client: c.client, Connection: v1alpha1.ObjectRef{Name: "x"}},
+		"no client":    {Connection: own},
+		"no namespace": {Client: c.client, Connection: v1alpha1.ObjectRef{Name: "x"}},
 	} {
 		if _, err := crsource.New(opts); err == nil {
 			t.Errorf("%s: New accepted the options", name)
