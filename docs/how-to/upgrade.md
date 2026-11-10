@@ -4,7 +4,7 @@ For an operator running the Helm chart: at the end, Agent Kourier runs a newer r
 audit log intact, and you know how to roll back.
 
 Each release publishes a signed multi-arch image and a chart whose default image is that image by digest, as
-[Install with Helm](install-with-helm.md#the-release) describes. The current release is `0.2.1`. To run a build that is not
+[Install with Helm](install-with-helm.md#the-release) describes. The current release is `0.3.0`. To run a build that is not
 released, see [Build from source](install-with-helm.md#build-from-source).
 
 The [release notes](../release-notes.md) say what each release changed and what is breaking. 0.2.0 makes custom resources the chart's default, so a
@@ -806,7 +806,7 @@ non-empty list, and a broker without it serves its own connection alone. A broke
   `config.source: crds`. If you apply the CRDs yourself, apply `charts/agent-kourier/files/crds` first. Until all three match, `agentkourier_crd_schema_state` reports a mismatch, and an older Binding CRD refuses a `personMessage` trigger.
 - **If you ran 0.3.0-rc.1 with an empty `config.chatConnection`, check your values.** Under rc.1 an empty `config.chatConnection` with exactly one `config.chatConnections` entry made that entry
   the broker's own connection, even with `config.connectionNamespaces` set. Now, with the list non-empty and `config.chatConnection` empty, the broker has no own connection, and that entry is a team connection: it is served as one if its
-  namespace is on the list, and the chart refuses to render if it is not. The fix is to set `config.chatConnection` to the entry (`namespace/name`), which keeps it the own connection ([Release notes](../release-notes.md#version-030-unreleased)).
+  namespace is on the list, and the chart refuses to render if it is not. The fix is to set `config.chatConnection` to the entry (`namespace/name`), which keeps it the own connection ([Release notes](../release-notes.md#a-broker-with-no-connection-of-its-own)).
   Values with `config.chatConnection` set, or with the list empty, mean what they meant.
 - **Change the queries that match six series one to one.** `agentkourier_intake_total`, `agentkourier_chat_api_calls_total`, `agentkourier_slack_events_shed_total`,
   `agentkourier_slack_ack_duration_seconds`, `agentkourier_outbox_pending` and `agentkourier_outbox_oldest_age_seconds` gain a `connection` label. A query that sums over them, or selects by the labels it

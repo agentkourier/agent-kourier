@@ -18,7 +18,7 @@ breaking a Slack `Binding`. Agents speak only A2A, so a new platform needs no ch
 [Install with Helm](docs/how-to/install-with-helm.md) · [Architecture](docs/explanation/architecture.md) ·
 [Release notes](docs/release-notes.md)
 
-> **Status: v0.2.1.** Install the published chart and image with
+> **Status: v0.3.0.** Install the published chart and image with
 > [Install with Helm](docs/how-to/install-with-helm.md). The `v1alpha1` resource format can change before 1.0. See
 > [Status](#status).
 
@@ -234,9 +234,9 @@ the contract.
 
 ## Status
 
-The current release is v0.2.1: a signed image for `linux/amd64` and `linux/arm64`,
-`ghcr.io/agentkourier/agent-kourier:v0.2.1`, and the Helm chart `oci://ghcr.io/agentkourier/charts/agent-kourier`
-version `0.2.0`, which pins that image by digest. It runs as one
+The current release is v0.3.0: a signed image for `linux/amd64` and `linux/arm64`,
+`ghcr.io/agentkourier/agent-kourier:v0.3.0`, and the Helm chart `oci://ghcr.io/agentkourier/charts/agent-kourier`
+version `0.3.0`, which pins that image by digest. It runs as one
 replica with a SQLite store, or as two replicas on Postgres with a leader election
 and fencing, installed with the [Helm chart](charts/agent-kourier/README.md). Agent Kourier writes
 an audit log, exports Prometheus metrics and can export OpenTelemetry traces. See
