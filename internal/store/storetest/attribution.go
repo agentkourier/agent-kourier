@@ -1,6 +1,7 @@
 package storetest
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -72,6 +73,70 @@ func (su suite) attribution(t *testing.T) {
 	su.run(t, "AttributeConnection of an empty store changes nothing", func(t *testing.T, s store.Store) {
 		if got, err := s.AttributeConnection(t.Context(), "ns/own"); err != nil || got != (store.AttributedRows{}) || got.Total() != 0 {
 			t.Errorf("AttributeConnection = %+v, %v; want nothing", got, err)
+		}
+	})
+}
+
+// unattributedRows holds what UnattributedRows counts: the rows AttributeConnection would change, and nothing else, without
+// changing them.
+func (su suite) unattributedRows(t *testing.T) {
+	su.run(t, "UnattributedRows of an empty store is nothing", func(t *testing.T, s store.Store) {
+		if got, err := s.UnattributedRows(t.Context()); err != nil || got != (store.AttributedRows{}) || got.Total() != 0 {
+			t.Errorf("UnattributedRows = %+v, %v; want nothing", got, err)
+		}
+	})
+
+	for _, tc := range []struct {
+		name    string
+		outbox  []string // the connection of each outbox row
+		presses []string // the connection of each press
+		want    store.AttributedRows
+	}{
+		{"rows that all have a connection", []string{"ns/a", "ns/b"}, []string{"ns/a"}, store.AttributedRows{}},
+		{"outbox rows only", []string{"", "ns/a", ""}, []string{"ns/a"}, store.AttributedRows{Outbox: 2}},
+		{"presses only", []string{"ns/a"}, []string{"", "ns/a", "", ""}, store.AttributedRows{Presses: 3}},
+		{"both", []string{"", "ns/a", ""}, []string{"", "ns/b"}, store.AttributedRows{Outbox: 2, Presses: 1}},
+	} {
+		su.run(t, "UnattributedRows counts "+tc.name+", changes nothing, and reads zero after AttributeConnection", func(t *testing.T, s store.Store) {
+			ctx := t.Context()
+			for i, c := range tc.outbox {
+				id := fmt.Sprintf("o-%d", i)
+				_, err := s.CreateOutbox(ctx, store.OutboxEntry{ID: id, EventID: id, Role: store.OutboxReply, Channel: "C1", Thread: "1.1", Connection: c, CreatedAt: t0, Payload: "{}"})
+				noErr(t, err, "CreateOutbox "+id)
+			}
+			for i, c := range tc.presses {
+				_, err := s.RecordPress(ctx, pressOn(c, "ix", fmt.Sprintf("U%d", i), t0), roomy)
+				noErr(t, err, "RecordPress")
+			}
+
+			for range 2 { // a read: the second count is the first
+				got, err := s.UnattributedRows(ctx)
+				noErr(t, err, "UnattributedRows")
+				if got != tc.want {
+					t.Errorf("UnattributedRows = %+v; want %+v", got, tc.want)
+				}
+			}
+			changed, err := s.AttributeConnection(ctx, "ns/own")
+			noErr(t, err, "AttributeConnection")
+			if changed != tc.want {
+				t.Errorf("AttributeConnection changed %+v; want the %+v that UnattributedRows counted", changed, tc.want)
+			}
+			if got, err := s.UnattributedRows(ctx); err != nil || got != (store.AttributedRows{}) {
+				t.Errorf("UnattributedRows after AttributeConnection = %+v, %v; want nothing", got, err)
+			}
+		})
+	}
+
+	su.run(t, "UnattributedRows counts the rows of a table past one attribution batch", func(t *testing.T, s store.Store) {
+		ctx := t.Context()
+		const n = store.AttributeBatch + 5
+		for i := range n {
+			id := fmt.Sprintf("o-%d", i)
+			_, err := s.CreateOutbox(ctx, store.OutboxEntry{ID: id, EventID: id, Role: store.OutboxNotice, Channel: "C1", CreatedAt: t0})
+			noErr(t, err, "CreateOutbox "+id)
+		}
+		if got, err := s.UnattributedRows(ctx); err != nil || got != (store.AttributedRows{Outbox: n}) {
+			t.Errorf("UnattributedRows = %+v, %v; want %d outbox rows: the count is not one batch's", got, err, n)
 		}
 	})
 }

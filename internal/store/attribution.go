@@ -26,4 +26,8 @@ type Attribution interface {
 	// is idempotent, and a call that finds nothing to change changes nothing, so the leader calls it at every start: an
 	// older image that wrote empty rows after a rollback is covered by the next start. ErrInvalid if connection is empty.
 	AttributeConnection(ctx context.Context, connection string) (AttributedRows, error)
+	// UnattributedRows counts the outbox rows and the presses whose Connection is empty, the rows AttributeConnection would
+	// change, and changes nothing. It is a read, so it needs no leader and is not fenced. A broker with no connection of its
+	// own has none to give them, and counts them to refuse to start. The count is the whole table's, not one batch's.
+	UnattributedRows(ctx context.Context) (AttributedRows, error)
 }

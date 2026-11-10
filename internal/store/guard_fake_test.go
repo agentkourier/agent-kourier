@@ -58,6 +58,11 @@ func (f *fakeAdapter) AttributeConnection(_ context.Context, _ string) (store.At
 	return zero[store.AttributedRows](), f.err
 }
 
+func (f *fakeAdapter) UnattributedRows(_ context.Context) (store.AttributedRows, error) {
+	f.record("UnattributedRows")
+	return zero[store.AttributedRows](), f.err
+}
+
 func (f *fakeAdapter) AbandonStrandedReplies(_ context.Context, _ time.Time, _ time.Duration) (int, error) {
 	f.record("AbandonStrandedReplies")
 	return zero[int](), f.err

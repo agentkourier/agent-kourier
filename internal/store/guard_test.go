@@ -563,6 +563,7 @@ func specs() []spec {
 			"epoch":               replaceServedConnections(epoc, "ns/a"),
 		}},
 		{"AttributeConnection", attributeConnection("slack"), map[string]call{"no connection": attributeConnection("")}},
+		{"UnattributedRows", func(ctx context.Context, s store.Store) error { _, err := s.UnattributedRows(ctx); return err }, nil},
 		{"PendingPresses", pendingPresses("i1", t0), map[string]call{
 			"no ID":     pendingPresses("", t0),
 			"no before": pendingPresses("i1", time.Time{}),
