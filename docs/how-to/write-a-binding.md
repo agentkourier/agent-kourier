@@ -84,7 +84,7 @@ kubectl apply --dry-run=server -f binding.yaml   # the schema and CEL rules of t
 kubectl apply -f binding.yaml
 ```
 
-It needs two things. The first is always yours; the second is whoever owns the resource it names.
+It needs up to two things. The first is always yours; the second is whoever owns the resource it names.
 
 1. **You let the broker read the Secrets that your Binding, or an AgentBackend in your namespace, names.** Skip this only when neither names one (no `tokenSecretRef`, no header with a `valueSecretRef`). A ChatConnection of your own needs its Secret granted too, as [Let a team bring its own Slack app](team-slack-app.md#2-the-team-makes-the-secret-the-grant-and-the-connection) does. In your own namespace, make a Role that names each Secret and a
    RoleBinding to the broker's ServiceAccount. The commands name the ServiceAccount `agent-kourier` in the namespace `agent-kourier`, which is right only for a release named `agent-kourier`; in general it is `serviceAccount.name` when that is set, and otherwise the chart's full name: `fullnameOverride`, or the release name when it contains `agent-kourier`, or `<release>-agent-kourier` (with `serviceAccount.create: false`, it is `serviceAccount.name`, or `default`), so ask the platform team for the real ones, or read it from the Deployment with `kubectl -n <release namespace> get deploy -l app.kubernetes.io/instance=<release> -o jsonpath='{.items[0].spec.template.spec.serviceAccountName}'`:
@@ -101,7 +101,7 @@ It needs two things. The first is always yours; the second is whoever owns the r
    namespace: the platform team for its own, your team for a connection of its own elsewhere. A connection in your own namespace needs no list,
    but the platform team must have admitted that namespace ([Let a team bring its own Slack app](team-slack-app.md#3-the-platform-team-admits-the-namespace)).
 
-Until they exist the status says `CredentialsUnreadable` (the Role) or `NamespaceNotAllowed` (the list). The `CredentialsUnreadable` message names your Secret and says that
+Until they exist the status says `CredentialsUnreadable` (the Role) or `NamespaceNotAllowed` (the list). With a connection of your own, a namespace not yet admitted leaves the Binding with no status, and a connection Secret not yet granted shows `ChannelJoined` `Unknown` with `ChatUnavailable`: see [What the team sees in its Binding's status](team-slack-app.md#what-the-team-sees-in-its-bindings-status). The `CredentialsUnreadable` message names your Secret and says that
 Agent Kourier's ServiceAccount needs `list` and `watch` on it, when the API server denied the read:
 
 ```sh
