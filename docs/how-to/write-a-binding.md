@@ -1,14 +1,16 @@
 # Write a Binding
 
 For an application team that wants its agent in its channel: at the end, a Binding in your namespace connects your
-agent to your channel, through the backend and Slack connection the platform team runs.
+agent to your channel, through the backend the platform team runs and a Slack connection: the platform's, or your own.
 
 ## Before you start
 
-- The platform team runs Agent Kourier, an [AgentBackend](../reference/agentbackend.md) for your agent's runtime and a
-  [ChatConnection](../reference/chatconnection.md) for Slack, and lists your namespace in both resources'
-  `allowedNamespaces`.
-- The Agent Kourier bot is a member of your channel, and you have the channel's ID (it starts with `C`; a private channel created before March 2021 may start with `G`).
+- The platform team runs Agent Kourier and an [AgentBackend](../reference/agentbackend.md) for your agent's runtime that, if it is
+  in another namespace, lists yours in `allowedNamespaces`.
+- A [ChatConnection](../reference/chatconnection.md) for Slack: the platform's, listing your namespace in `allowedNamespaces`,
+  or your team's own, in a namespace the platform admits, and listing yours in `allowedNamespaces` if that is another namespace
+  ([Let a team bring its own Slack app](team-slack-app.md)).
+- That connection's bot is a member of your channel, and you have the channel's ID (it starts with `C`; a private channel created before March 2021 may start with `G`).
 - If the backend verifies tokens, a Secret in your namespace holds the Binding's token under the key `token`.
   [Create the Binding identity](create-binding-identity.md) explains the account, how to obtain its token, and how
   to store it. For a backend that trusts `X-User-Id`, that guide explains how to choose a stable name instead.
@@ -82,9 +84,9 @@ kubectl apply --dry-run=server -f binding.yaml   # the schema and CEL rules of t
 kubectl apply -f binding.yaml
 ```
 
-It needs two things, and the first is yours.
+It needs up to two things. The first is always yours; the second is whoever owns the resource it names.
 
-1. **You let the broker read the Secrets that your Binding, or an AgentBackend in your namespace, names.** Skip this only when neither names one (no `tokenSecretRef`, no header with a `valueSecretRef`). In your own namespace, make a Role that names each Secret and a
+1. **You let the broker read the Secrets that your Binding, or an AgentBackend in your namespace, names.** Skip this only when neither names one (no `tokenSecretRef`, no header with a `valueSecretRef`). A ChatConnection of your own needs its Secret granted too, as [Let a team bring its own Slack app](team-slack-app.md#2-the-team-makes-the-secret-the-grant-and-the-connection) does. In your own namespace, make a Role that names each Secret and a
    RoleBinding to the broker's ServiceAccount. The commands name the ServiceAccount `agent-kourier` in the namespace `agent-kourier`, which is right only for a release named `agent-kourier`; in general it is `serviceAccount.name` when that is set, and otherwise the chart's full name: `fullnameOverride`, or the release name when it contains `agent-kourier`, or `<release>-agent-kourier` (with `serviceAccount.create: false`, it is `serviceAccount.name`, or `default`), so ask the platform team for the real ones, or read it from the Deployment with `kubectl -n <release namespace> get deploy -l app.kubernetes.io/instance=<release> -o jsonpath='{.items[0].spec.template.spec.serviceAccountName}'`:
 
    ```sh
@@ -95,10 +97,11 @@ It needs two things, and the first is yours.
    The Role gives `list` and `watch` on the Secrets it names, and no other (repeat `--resource-name` for a second one). It needs nothing from the platform team's release or values. It is a grant to the broker, not to your Binding:
    the broker may use those Secrets for any Binding or AgentBackend in your namespace, so name only Secrets you mean it to use. [The how-to](migrate-config-source.md#let-a-team-add-its-own-binding)
    has the same objects as YAML, and how to check them with `kubectl auth can-i`.
-2. **The platform team lists your namespace** in the `allowedNamespaces` of the ChatConnection (and of the AgentBackend, if it is in another
-   namespace).
+2. **Whoever owns the ChatConnection and the AgentBackend lists your namespace** in their `allowedNamespaces`, for each that is in another
+   namespace: the platform team for its own, your team for a connection of its own elsewhere. A connection in your own namespace needs no list,
+   but the platform team must have admitted that namespace ([Let a team bring its own Slack app](team-slack-app.md#3-the-platform-team-admits-the-namespace)).
 
-Until they exist the status says `CredentialsUnreadable` (the Role) or `NamespaceNotAllowed` (the list). The `CredentialsUnreadable` message names your Secret and says that
+Until they exist the status says `CredentialsUnreadable` (the Role) or `NamespaceNotAllowed` (the list). With a connection of your own, a namespace not yet admitted leaves the Binding with no status, and a connection Secret not yet granted shows `ChannelJoined` `Unknown` with `ChatUnavailable`: see [What the team sees in its Binding's status](team-slack-app.md#what-the-team-sees-in-its-bindings-status). The `CredentialsUnreadable` message names your Secret and says that
 Agent Kourier's ServiceAccount needs `list` and `watch` on it, when the API server denied the read:
 
 ```sh
