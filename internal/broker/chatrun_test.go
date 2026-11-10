@@ -98,7 +98,7 @@ func TestRunPlatformStopsAtOnceOnAFatalAuthError(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		c := &clock{}
 		r := &runner{steps: []func(int) error{
-			fails(fmt.Errorf("slack auth.test: %w", slackgo.SlackErrorResponse{Err: code})),
+			fails(fmt.Errorf("slack auth.test call: %w", slackgo.SlackErrorResponse{Err: code})),
 			stopAfter(cancel), // a second run only happens if the error was retried
 		}}
 
@@ -119,7 +119,7 @@ func TestRunPlatformRetriesWhatIsNotFatal(t *testing.T) {
 	c := &clock{}
 	r := &runner{steps: []func(int) error{
 		fails(fmt.Errorf("slack socket mode: %w", slackgo.SlackErrorResponse{Err: "ratelimited"})),
-		fails(fmt.Errorf("slack auth.test: %w", slackgo.SlackErrorResponse{Err: "internal_error"})),
+		fails(fmt.Errorf("slack auth.test call: %w", slackgo.SlackErrorResponse{Err: "internal_error"})),
 		fails(nil), // Run ends only on error, but a nil is no reason to exit either
 		stopAfter(cancel),
 	}}

@@ -22,10 +22,10 @@ func (c *Client) TeamID(ctx context.Context) (string, error) {
 	}
 	auth, err := c.api.AuthTestContext(ctx)
 	if err != nil {
-		return "", c.scrub("auth.test", err)
+		return "", c.scrub("auth.test call", err)
 	}
 	if auth.TeamID == "" {
-		return "", errors.New("slack auth.test: no team ID")
+		return "", errors.New("slack auth.test call: no team ID")
 	}
 	c.mu.Lock()
 	c.team = auth.TeamID
