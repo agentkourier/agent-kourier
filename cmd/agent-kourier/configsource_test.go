@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,8 +13,10 @@ import (
 )
 
 // AGENTKOURIER_CONFIG_SOURCE is files until it says crds, unset included, and nothing else is a source: there is no
-// fallback and no guess. The connection is named with it, and only with it.
+// fallback and no guess. The own connection is named with crds, where it is optional if the admission list names the namespaces to serve
+// (spec D53), and it is refused with files.
 func TestEnvConfigChoosesTheConfigSource(t *testing.T) {
+	const bothEmpty = "set AGENTKOURIER_CHAT_CONNECTION to the broker's own ChatConnection, or AGENTKOURIER_CONNECTION_NAMESPACES to the namespaces whose ChatConnections it serves, or both"
 	for name, tc := range map[string]struct {
 		env    env
 		source broker.ConfigSource
@@ -26,13 +29,21 @@ func TestEnvConfigChoosesTheConfigSource(t *testing.T) {
 		"files in capitals": {env{"AGENTKOURIER_CONFIG_SOURCE": "FILES"}, broker.SourceFiles, v1alpha1.ObjectRef{}, ""},
 		"crds with a connection": {env{"AGENTKOURIER_CONFIG_SOURCE": "crds", "AGENTKOURIER_CHAT_CONNECTION": "agent-kourier-system/slack-main"},
 			broker.SourceCRDs, v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"}, ""},
-		"crds needs the connection":   {env{"AGENTKOURIER_CONFIG_SOURCE": "crds"}, "", v1alpha1.ObjectRef{}, "AGENTKOURIER_CHAT_CONNECTION is required"},
-		"a connection with no slash":  {env{"AGENTKOURIER_CONFIG_SOURCE": "crds", "AGENTKOURIER_CHAT_CONNECTION": "slack-main"}, "", v1alpha1.ObjectRef{}, "namespace/name"},
-		"a connection with a key too": {env{"AGENTKOURIER_CONFIG_SOURCE": "crds", "AGENTKOURIER_CHAT_CONNECTION": "a/b/c"}, "", v1alpha1.ObjectRef{}, "namespace/name"},
-		"a connection with no name":   {env{"AGENTKOURIER_CONFIG_SOURCE": "crds", "AGENTKOURIER_CHAT_CONNECTION": "a/"}, "", v1alpha1.ObjectRef{}, "namespace/name"},
-		"files refuses a connection":  {env{"AGENTKOURIER_CHAT_CONNECTION": "a/b"}, "", v1alpha1.ObjectRef{}, "AGENTKOURIER_CHAT_CONNECTION is set with AGENTKOURIER_CONFIG_SOURCE=files"},
-		"an unknown source":           {env{"AGENTKOURIER_CONFIG_SOURCE": "etcd"}, "", v1alpha1.ObjectRef{}, "AGENTKOURIER_CONFIG_SOURCE"},
-		"a source with a space":       {env{"AGENTKOURIER_CONFIG_SOURCE": " crds"}, "", v1alpha1.ObjectRef{}, "AGENTKOURIER_CONFIG_SOURCE"},
+		"crds with a list and no connection": {env{"AGENTKOURIER_CONFIG_SOURCE": "crds", "AGENTKOURIER_CONNECTION_NAMESPACES": "team-a,team-b"},
+			broker.SourceCRDs, v1alpha1.ObjectRef{}, ""},
+		"crds with both": {env{"AGENTKOURIER_CONFIG_SOURCE": "crds", "AGENTKOURIER_CHAT_CONNECTION": "agent-kourier-system/slack-main", "AGENTKOURIER_CONNECTION_NAMESPACES": "team-a"},
+			broker.SourceCRDs, v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"}, ""},
+		"crds with neither":                                           {env{"AGENTKOURIER_CONFIG_SOURCE": "crds"}, "", v1alpha1.ObjectRef{}, bothEmpty},
+		"crds with an empty list":                                     {env{"AGENTKOURIER_CONFIG_SOURCE": "crds", "AGENTKOURIER_CONNECTION_NAMESPACES": ""}, "", v1alpha1.ObjectRef{}, bothEmpty},
+		"crds with a list of separators only":                         {env{"AGENTKOURIER_CONFIG_SOURCE": "crds", "AGENTKOURIER_CONNECTION_NAMESPACES": " , ,,"}, "", v1alpha1.ObjectRef{}, bothEmpty},
+		"crds with an empty connection and a list of separators only": {env{"AGENTKOURIER_CONFIG_SOURCE": "crds", "AGENTKOURIER_CHAT_CONNECTION": "", "AGENTKOURIER_CONNECTION_NAMESPACES": ","}, "", v1alpha1.ObjectRef{}, bothEmpty},
+		"a bad connection is refused though a list is set":            {env{"AGENTKOURIER_CONFIG_SOURCE": "crds", "AGENTKOURIER_CHAT_CONNECTION": "slack-main", "AGENTKOURIER_CONNECTION_NAMESPACES": "team-a"}, "", v1alpha1.ObjectRef{}, "namespace/name"},
+		"a connection with no slash":                                  {env{"AGENTKOURIER_CONFIG_SOURCE": "crds", "AGENTKOURIER_CHAT_CONNECTION": "slack-main"}, "", v1alpha1.ObjectRef{}, "namespace/name"},
+		"a connection with a key too":                                 {env{"AGENTKOURIER_CONFIG_SOURCE": "crds", "AGENTKOURIER_CHAT_CONNECTION": "a/b/c"}, "", v1alpha1.ObjectRef{}, "namespace/name"},
+		"a connection with no name":                                   {env{"AGENTKOURIER_CONFIG_SOURCE": "crds", "AGENTKOURIER_CHAT_CONNECTION": "a/"}, "", v1alpha1.ObjectRef{}, "namespace/name"},
+		"files refuses a connection":                                  {env{"AGENTKOURIER_CHAT_CONNECTION": "a/b"}, "", v1alpha1.ObjectRef{}, "AGENTKOURIER_CHAT_CONNECTION is set with AGENTKOURIER_CONFIG_SOURCE=files"},
+		"an unknown source":                                           {env{"AGENTKOURIER_CONFIG_SOURCE": "etcd"}, "", v1alpha1.ObjectRef{}, "AGENTKOURIER_CONFIG_SOURCE"},
+		"a source with a space":                                       {env{"AGENTKOURIER_CONFIG_SOURCE": " crds"}, "", v1alpha1.ObjectRef{}, "AGENTKOURIER_CONFIG_SOURCE"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c, err := loadEnv(tc.env.get)
@@ -49,6 +60,23 @@ func TestEnvConfigChoosesTheConfigSource(t *testing.T) {
 				t.Errorf("source %q, connection %+v; want %q, %+v", c.configSource, c.chatConnection, tc.source, tc.conn)
 			}
 		})
+	}
+}
+
+// With crds and neither the own connection nor an admission list the broker could serve nothing until a restart (the list is read at start),
+// so it does not start: the error names both variables and the process exits 2, through run as through exitCode.
+func TestACrdsConfigWithNeitherVariableExitsWithUsageNamingBoth(t *testing.T) {
+	_, err := loadEnv(env{"AGENTKOURIER_CONFIG_SOURCE": "crds"}.get)
+	want := "with AGENTKOURIER_CONFIG_SOURCE=crds, set AGENTKOURIER_CHAT_CONNECTION to the broker's own ChatConnection, or AGENTKOURIER_CONNECTION_NAMESPACES to the namespaces whose ChatConnections it serves, or both"
+	if !errors.Is(err, broker.ErrWiring) || !strings.Contains(err.Error(), want) {
+		t.Fatalf("loadEnv = %v; want an ErrWiring saying %q", err, want)
+	}
+	if got := exitCode(err); got != exitUsage {
+		t.Errorf("exitCode = %d, want %d", got, exitUsage)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run(nil, "dev", &stdout, &stderr, env{"AGENTKOURIER_CONFIG_SOURCE": "crds"}.get); code != exitUsage || !strings.Contains(stderr.String(), want) {
+		t.Errorf("run = %d with stderr %q; want %d and the message", code, stderr.String(), exitUsage)
 	}
 }
 

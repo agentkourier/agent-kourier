@@ -87,7 +87,9 @@ func logRecords(t *testing.T, out *logBuffer) []map[string]any {
 }
 
 // The broker names the route it reads its resources from, once, before anything else is logged, so that a log tells the two routes apart: on
-// the custom resources it also names the ChatConnection it serves, which the files route learns from its directory and logs later.
+// the custom resources it also names its own ChatConnection when it has one, and the namespaces whose ChatConnections it serves when it has an
+// admission list; the files route learns its connection from its directory and logs it later. With no own connection there is no connection
+// field, not an empty one.
 func TestRunNamesTheConfigRouteAtStart(t *testing.T) {
 	named := func(t *testing.T) RunConfig {
 		c := startConfig(t)
@@ -98,10 +100,21 @@ func TestRunNamesTheConfigRouteAtStart(t *testing.T) {
 		config         func(*testing.T) RunConfig
 		wantRoute      string
 		wantConnection string // "" is no connection field
+		wantNamespaces string // "" is no connection_namespaces field
 	}{
-		"files":                        {startConfig, "files", ""},
-		"files, named":                 {named, "files", ""},
-		"custom resources, connection": {func(t *testing.T) RunConfig { return crStartConfig(t, nil) }, "crds", "agent-kourier-system/slack-main"},
+		"files":                        {startConfig, "files", "", ""},
+		"files, named":                 {named, "files", "", ""},
+		"custom resources, connection": {func(t *testing.T) RunConfig { return crStartConfig(t, nil) }, "crds", "agent-kourier-system/slack-main", ""},
+		"custom resources, connection and namespaces": {func(t *testing.T) RunConfig {
+			c := crStartConfig(t, nil)
+			c.ConnectionNamespaces = []string{"team-b", "team-a"}
+			return c
+		}, "crds", "agent-kourier-system/slack-main", "team-b,team-a"},
+		"custom resources, no own connection": {func(t *testing.T) RunConfig {
+			c := crStartConfig(t, nil)
+			c.ChatConnection, c.ConnectionNamespaces = v1alpha1.ObjectRef{}, []string{"team-a", "team-b"}
+			return c
+		}, "crds", "", "team-a,team-b"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			out := &logBuffer{}
@@ -129,6 +142,10 @@ func TestRunNamesTheConfigRouteAtStart(t *testing.T) {
 			}
 			if tc.wantConnection != "" && got != tc.wantConnection {
 				t.Errorf("connection = %v, want %q", got, tc.wantConnection)
+			}
+			gotNS, hasNS := routes[0]["connection_namespaces"]
+			if tc.wantNamespaces == "" && hasNS || tc.wantNamespaces != "" && gotNS != tc.wantNamespaces {
+				t.Errorf("connection_namespaces = %v (present %v), want %q", gotNS, hasNS, tc.wantNamespaces)
 			}
 			if recs[0]["msg"] != "config route" {
 				t.Errorf("the first line is %q; want the route, so that a log opens with it", recs[0]["msg"])

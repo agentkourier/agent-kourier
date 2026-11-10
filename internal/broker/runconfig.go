@@ -33,12 +33,15 @@ type RunConfig struct {
 	// ConfigDir is the directory of resource files, read with SourceFiles and required then; with SourceCRDs it is ignored.
 	// DBPath is the SQLite file on the volume (read only with the SQLite store, and required then).
 	ConfigDir, DBPath string
-	// ChatConnection is this broker's own ChatConnection, which it always serves and runs, required with SourceCRDs, where a cluster
-	// may hold the connections of several brokers, and refused with SourceFiles, whose directory must hold exactly one.
+	// ChatConnection is this broker's own ChatConnection, which it always serves and runs. With SourceCRDs it is optional if
+	// ConnectionNamespaces is not empty: the zero value is a broker with no ChatConnection of its own, which serves the ChatConnections of the
+	// admitted namespaces alone (spec D53), and a reference with only a namespace or only a name is refused. With SourceFiles it is
+	// refused, since the directory must hold exactly one.
 	ChatConnection v1alpha1.ObjectRef
 	// ConnectionNamespaces is the platform's admission list (AGENTKOURIER_CONNECTION_NAMESPACES): the namespaces whose ChatConnections
 	// the broker serves besides its own, which the source reads (crsource.Options.ConnectionNamespaces). Each is a DNS-1123 label. None
-	// serves the own connection alone, as before the list existed. It is refused with SourceFiles.
+	// serves the own connection alone, as before the list existed, and is refused when there is no own connection either. It is
+	// refused with SourceFiles.
 	ConnectionNamespaces []string
 	// Dynamic reads the custom resources with SourceCRDs. Nil means InClusterDynamicClient.
 	Dynamic dynamic.Interface
@@ -140,9 +143,6 @@ type RunConfig struct {
 	transportClosed func(conn string)
 	// outboxBuilt is given the outbox as the leader half builds it, so a test can post through it and look at its lanes.
 	outboxBuilt func(*outbox.Outbox)
-	// allowNoOwn lets a CRDs config leave ChatConnection empty, which Run then serves as a broker with no own connection (spec D53; noOwnConnection):
-	// a seam for this package's tests until the binary lets an operator do it.
-	allowNoOwn bool
 	// leaderLaunched is called once Run has launched the leader half (or its candidacy), before it waits for the
 	// signal, so a test can hold Run there and send the signal while the leader half is up.
 	leaderLaunched func()
@@ -175,12 +175,14 @@ func (c RunConfig) validateSource() error {
 			return fmt.Errorf("%w: ConnectionNamespaces is set with the %s config source, which serves the one ChatConnection of its directory: unset it", ErrWiring, SourceFiles)
 		}
 	case SourceCRDs:
-		own := !c.allowNoOwn || haveConn // a test may leave the own connection out (allowNoOwn)
-		if own && (c.ChatConnection.Namespace == "" || c.ChatConnection.Name == "") {
-			return fmt.Errorf("%w: ChatConnection must be set to a namespace and a name with the %s config source: a cluster may hold the connections of several brokers, and this one serves only the one it is told", ErrWiring, SourceCRDs)
-		}
-		// Neither part is echoed: the value is logged with the route at start, and a token pasted in its place must not follow it there.
-		if own && (len(validation.IsDNS1123Label(c.ChatConnection.Namespace)) > 0 || len(validation.IsDNS1123Subdomain(c.ChatConnection.Name)) > 0) {
+		switch {
+		case !haveConn && len(c.ConnectionNamespaces) == 0:
+			// The list is read at start, so such a broker could serve nothing until a restart.
+			return fmt.Errorf("%w: with the %s config source, set ChatConnection to the broker's own ChatConnection, or ConnectionNamespaces to the namespaces whose ChatConnections it serves, or both", ErrWiring, SourceCRDs)
+		case haveConn && (c.ChatConnection.Namespace == "" || c.ChatConnection.Name == ""):
+			return fmt.Errorf("%w: ChatConnection must be set to a namespace and a name with the %s config source, or left out when ConnectionNamespaces is set: a cluster may hold the connections of several brokers, and this one serves only the ones it is told", ErrWiring, SourceCRDs)
+		case haveConn && (len(validation.IsDNS1123Label(c.ChatConnection.Namespace)) > 0 || len(validation.IsDNS1123Subdomain(c.ChatConnection.Name)) > 0):
+			// Neither part is echoed: the value is logged with the route at start, and a token pasted in its place must not follow it there.
 			return fmt.Errorf("%w: ChatConnection is not a namespace that is a DNS-1123 label and a name that is a DNS-1123 subdomain, which are all Kubernetes can hold (its value is not shown)", ErrWiring)
 		}
 		for i, ns := range c.ConnectionNamespaces {

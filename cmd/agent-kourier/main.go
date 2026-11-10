@@ -9,11 +9,13 @@
 //	                       below, all or nothing. crds reads Binding, AgentBackend and ChatConnection from the cluster, one
 //	                       object at a time, and ignores the directory
 //	AGENTKOURIER_CONFIG_DIR     with files, the resource files (default /etc/agent-kourier)
-//	AGENTKOURIER_CHAT_CONNECTION   with crds, required: namespace/name of the one ChatConnection this broker serves. With
-//	                       files it is refused, since the directory must hold exactly one ChatConnection
-//	AGENTKOURIER_CONNECTION_NAMESPACES   with crds, optional: the namespaces whose ChatConnections this broker serves besides its own,
-//	                       comma-separated, each a DNS-1123 label (no wildcard); spaces around an item are trimmed, empty items and
-//	                       repeats dropped. Unset or empty serves the own connection alone. With files it is refused
+//	AGENTKOURIER_CHAT_CONNECTION   with crds, optional when the namespaces below are set: namespace/name of the broker's own
+//	                       ChatConnection, which it always serves. Unset, the broker has no ChatConnection of its own and serves the
+//	                       namespaces below alone. With files it is refused, since the directory must hold exactly one ChatConnection
+//	AGENTKOURIER_CONNECTION_NAMESPACES   with crds, required when the own connection above is unset: the namespaces whose ChatConnections
+//	                       this broker serves besides its own, comma-separated, each a DNS-1123 label (no wildcard); spaces around an
+//	                       item are trimmed, empty items and repeats dropped. Unset, empty or only separators is no list, which serves
+//	                       the own connection alone. With files it is refused
 //	AGENTKOURIER_DB_PATH        the SQLite file, on the volume (default /data/agent-kourier.db)
 //	AGENTKOURIER_STORE          sqlite (the default, one replica) or postgres
 //	AGENTKOURIER_POSTGRES_DSN_SECRET   with postgres, where the DSN is: namespace/name/key of a Secret, read through the
@@ -34,11 +36,13 @@
 //	AGENTKOURIER_AUDIT_RETENTION   how long audit entries are kept: "keep" (the default: nothing is purged) or a duration of at
 //	                       least 24h, such as 8760h, after which an entry is purged
 //
-// It exits 0 after a signal, 1 when Slack rejects the tokens, 2 for a wrong config or wiring (or an
-// unreadable variable; with crds, also CRDs that are not installed and an own ChatConnection that is missing or invalid), 3
-// when RBAC denies it the Secrets, or with crds the custom resources, 4 for any other failure, and 5 when it was the leader and
-// lost the lease, met a stale epoch, or had a chat write or an agent call refused because its lease was past the renew deadline
-// (spec D37): it ends at once, and Kubernetes restarts it as a standby.
+// It exits 0 after a signal; 1 when Slack rejects the tokens of its own connection (with files, the one of its directory; with crds and
+// no own connection a rejected token stops only that connection and not the process); 2 for a wrong config or wiring (or an unreadable
+// variable; with crds, also neither of the two variables above set, CRDs that are not installed, an own ChatConnection that is missing or
+// invalid, and, with no own connection, rows that were written before connections were recorded); 3 when RBAC denies it the Secrets, or
+// with crds the custom resources; 4 for any other failure; and 5 when it was the leader and lost the lease, met a stale epoch, or had a chat
+// write or an agent call refused because its lease was past the renew deadline (spec D37): it ends at once, and Kubernetes restarts it
+// as a standby.
 package main
 
 import (
@@ -75,7 +79,7 @@ var version = "dev"
 // The exit codes.
 const (
 	exitOK        = 0
-	exitSlackAuth = 1 // Slack rejected the tokens: a restart would be rejected again
+	exitSlackAuth = 1 // Slack rejected the tokens of the broker's own connection: a restart would be rejected again
 	exitUsage     = 2 // the config, the wiring or an environment variable is wrong
 	exitRBAC      = 3 // the API server denied access to Secrets or, with crds, to the custom resources
 	exitFailure   = 4 // anything else: a dependency failed
@@ -104,7 +108,7 @@ func exitCode(err error) int {
 type envConfig struct {
 	configDir, dbPath, listen string
 	configSource              broker.ConfigSource
-	chatConnection            v1alpha1.ObjectRef // with crds only
+	chatConnection            v1alpha1.ObjectRef // with crds only: the broker's own ChatConnection, zero when it has none (spec D53)
 	connectionNamespaces      []string           // with crds only: the admission list, none when unset
 	store                     broker.StoreConfig
 	election                  broker.ElectionConfig // with postgres only; its Identity is the pod's name, made unique by run
@@ -134,6 +138,10 @@ func loadEnv(getenv func(string) string) (envConfig, error) {
 	}
 	if c.connectionNamespaces, err = loadConnectionNamespaces(getenv, c.configSource); err != nil {
 		return c, err
+	}
+	// With neither, the broker could serve nothing, and the list is read at start, so nothing would change until a restart.
+	if c.configSource == broker.SourceCRDs && c.chatConnection == (v1alpha1.ObjectRef{}) && len(c.connectionNamespaces) == 0 {
+		return c, fmt.Errorf("%w: with AGENTKOURIER_CONFIG_SOURCE=crds, set AGENTKOURIER_CHAT_CONNECTION to the broker's own ChatConnection, or AGENTKOURIER_CONNECTION_NAMESPACES to the namespaces whose ChatConnections it serves, or both", broker.ErrWiring)
 	}
 	if c.syncTimeout, err = time.ParseDuration(get("AGENTKOURIER_SYNC_TIMEOUT", "30s")); err != nil || c.syncTimeout <= 0 {
 		return c, bad("AGENTKOURIER_SYNC_TIMEOUT", "a positive duration such as 30s", errors.Join(err, errors.New("not positive")))
@@ -166,9 +174,10 @@ func loadEnv(getenv func(string) string) (envConfig, error) {
 }
 
 // loadSourceEnv reads the variables that choose where the resources are read from. The source is files unless the variable says crds,
-// and any other value is refused: there is no fallback. The one connection the broker serves is required with crds, where a
-// cluster may hold the connections of several brokers, and refused with files, whose directory must hold exactly one: ignoring
-// it would serve the one connection the person did not name.
+// and any other value is refused: there is no fallback. The broker's own connection is optional with crds, where a cluster may hold the
+// connections of several brokers: unset, it is the zero reference and the admission list must name the namespaces to serve (loadEnv checks
+// that, once the list is read). It is refused with files, whose directory must hold exactly one: ignoring it would serve the one connection
+// the person did not name.
 func loadSourceEnv(getenv func(string) string) (broker.ConfigSource, v1alpha1.ObjectRef, error) {
 	var conn v1alpha1.ObjectRef
 	source := broker.ConfigSource(strings.ToLower(getenv("AGENTKOURIER_CONFIG_SOURCE")))
@@ -183,7 +192,7 @@ func loadSourceEnv(getenv func(string) string) (broker.ConfigSource, v1alpha1.Ob
 		}
 	case broker.SourceCRDs:
 		if ref == "" {
-			return "", conn, fmt.Errorf("%w: AGENTKOURIER_CHAT_CONNECTION is required with AGENTKOURIER_CONFIG_SOURCE=crds: set it to namespace/name of the ChatConnection this broker serves", broker.ErrWiring)
+			return source, conn, nil
 		}
 		ns, name, ok := strings.Cut(ref, "/")
 		if !ok || ns == "" || name == "" || strings.Contains(name, "/") {
@@ -198,7 +207,8 @@ func loadSourceEnv(getenv func(string) string) (broker.ConfigSource, v1alpha1.Ob
 
 // loadConnectionNamespaces reads the admission list: the namespaces whose ChatConnections the broker serves besides its own. Each
 // item is trimmed and must be a DNS-1123 label, which leaves out a wildcard, a namespace/name and anything Kubernetes cannot hold; an
-// empty item is dropped and so is a repeat. Nothing set, or nothing but separators, is no list, which serves the own connection alone.
+// empty item is dropped and so is a repeat. Nothing set, or nothing but separators, is no list, which serves the own connection alone
+// (and with no own connection is refused, in loadEnv).
 // It is refused with the files source, which serves the one ChatConnection of its directory: ignoring it would serve what the person
 // did not mean. An error names the position of the bad item among the comma-separated ones (counting the empty), and never a value, since
 // the variable is one a person may paste a token into.
