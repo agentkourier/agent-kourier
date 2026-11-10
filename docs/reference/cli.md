@@ -76,7 +76,7 @@ output is in [Tune triggers with a dry run](../how-to/tune-triggers.md).
 ## `agent-kourier init`
 
 Writes the files of a first install with the Helm chart, checks them, and prints the commands that install the chart, create the Secrets and,
-on custom resources, grant and apply them. Releases before 0.1.3 do not have it, and releases up to 0.3.1 write only the ConfigMap route. It
+on custom resources, grant them to the broker and apply the team's file. Releases before 0.1.3 do not have it, and releases up to 0.3.1 write only the ConfigMap route. It
 posts nothing to Slack and changes nothing in a cluster. The step-by-step use is in
 [Install with Helm](../how-to/install-with-helm.md#write-the-files-with-init).
 
@@ -88,7 +88,7 @@ On custom resources (`--source crds`, the default) the broker has no Slack app o
 | `--out` (`my-values.yaml`) | The chart's values: `config.connectionNamespaces: [<team namespace>]`, and no `config.chatConnection`. |
 | `<team namespace>.yaml`, beside `--out` | In the team's namespace: the ChatConnection `<team namespace>-slack`, whose `credentialsSecretRef` names the Secret of the same name; the AgentBackend `agent`; and the Binding `my-binding`, whose `backendRef` and `connectionRef` name the two without a namespace. |
 
-`--out` may not be the team's file. With `--source files` it writes one values file for the ConfigMap route (`config.source: files`) that holds
+`--out` may not be the team's file, whatever the case of its name. With `--source files` it writes one values file for the ConfigMap route (`config.source: files`) that holds
 the ChatConnection `slack`, the AgentBackend `agent` and the Binding `my-binding` under `config`, with no namespace of their own, so the chart
 puts them in the release's.
 
@@ -100,23 +100,23 @@ was. A value or an answer that looks like a Slack token is refused as soon as it
 | Flag | Default | Meaning |
 |---|---|---|
 | `--source` | `crds` | The chart's config route: `crds` (custom resources) or `files` (a ConfigMap). |
-| `--out` | `my-values.yaml` | The values file to write, trimmed of spaces. If it exists the command stops before its questions, and if the team's file exists it stops once the team's namespace is known, unless `--force` is set. A symbolic link is never followed. Without `--force`, a file that cannot be written removes the files this run wrote. |
+| `--out` | `my-values.yaml` | The values file to write, trimmed of spaces. If it exists the command stops before its questions, and if the team's file exists it stops before them when `--team-namespace` is given and after them otherwise, before any check, unless `--force` is set. A symbolic link is never followed. Without `--force`, a file that cannot be written removes the files this run wrote. |
 | `--force` | `false` | Overwrite the files. Only a regular file is overwritten: anything else at either path stops the command before it writes. |
 | `--dialect` | asked, default `a2a` | The agent's dialect: `a2a` or `kagent-v1`. |
 | `--agent-url` | asked | The agent's URL. |
 | `--agent-namespace` | asked | The agent's namespace. |
 | `--team-namespace` | asked, default the agent's namespace | `crds` only: the team's namespace, where its ChatConnection, AgentBackend and Binding go. It must exist: the commands create none. With `--source files` it is a usage error, and it is not asked. |
 | `--agent-name` | asked | The agent's name. |
-| `--channel` | asked | The channel, by ID (`C...`, or `G...`), or by name, with or without a leading `#`. A name is looked up with `conversations.list`, which needs a bot token and the scopes `channels:read` and `groups:read`; the file holds the ID. |
+| `--channel` | asked | The channel, by ID (`C...`, or `G...`), or by name, with or without a leading `#`. A name is looked up with `conversations.list`, which needs a bot token and the scopes `channels:read` and `groups:read`; the Binding's file holds the ID. |
 | `--agent-token` | `false` (asked) | The agent verifies tokens: the Binding's `identity.tokenSecretRef` names the Secret `agent-kourier-agent-token`, key `token`, in the Binding's namespace (the team's on custom resources, the release's with `files`), and the commands create it there. On custom resources the team's Role names it too. |
 | `--namespace` | `agent-kourier` | The release's namespace, which the commands name. With `files` the resources are in it. |
 | `--token-file` | | A file with the bot token, as for `dry-run`. Else `SLACK_BOT_TOKEN`. On custom resources it is the team's app's. |
 
-The checks, in order: a channel name is looked up; the resources are loaded with the broker's loader, which defaults and validates them, from
-the team's file on custom resources, where the Binding's references to the ChatConnection and the AgentBackend are then resolved as the broker
-resolves them, with every Secret taken as present, or as the chart renders them from the values with `files`; and, with a bot token, a
-`conversations.history` request for the channel shows that the bot can read it (`channels:history`, or `groups:history` for a private channel,
-and the bot in the channel). The request asks for messages newer than the moment it is made, so it fetches none. Without a bot token the Slack
+The checks, in order: a channel name is looked up; the resources are loaded and checked; and, with a bot token, a `conversations.history`
+request for the channel shows that the bot can read it (`channels:history`, or `groups:history` for a private channel, and the bot in the
+channel). On custom resources the team's file is loaded with the broker's file loader, which defaults and validates each object, and the
+Binding's references to the ChatConnection and the AgentBackend are resolved as the broker resolves them, with every Secret taken as present.
+With `files`, what the chart renders from the values is loaded, and the references are not checked. The request asks for messages newer than the moment it is made, so it fetches none. Without a bot token the Slack
 checks are skipped and the command says so. Nothing is written unless every check passes. With `files` the references between the resources are
 not checked, and on either route the Secrets are not: those errors show when the pod starts or, on custom resources, in the Binding's status.
 
@@ -124,8 +124,8 @@ On custom resources the commands it prints are the platform team's, `kubectl cre
 namespace: with `--agent-token`, the token Secret; the Secret `<team namespace>-slack`, from the file `$HOME/.config/<team namespace>/slack-secret.env`
 with `botToken=` and `appToken=` lines; a Role `agent-kourier-secrets-<team namespace>` that grants `list` and `watch` on those Secrets by name, and a
 RoleBinding of it to the ServiceAccount `agent-kourier` in `--namespace`, the chart's for the release `agent-kourier`; a `kubectl apply --dry-run=server`
-and a `kubectl apply` of the team's file; and `kubectl get akbinding`. With `files` they create the namespace, the Secret `slack` and the token Secret
-in `--namespace`, and install the chart. The `helm install` command names the chart version of the binary's own release, and none for a build that
+and a `kubectl apply` of the team's file; and `kubectl get akbinding`. With `files` they create the namespace, the Secret `slack` and, with `--agent-token`,
+the token Secret in `--namespace`, and install the chart. The `helm install` command names the chart version of the binary's own release, and none for a build that
 is not a release (version `dev`), where Helm takes the newest chart.
 
 Exit codes: 0 when the files are written; 1 when Slack rejects the token; 2 for a wrong option, answer, token file, values or resources, or an

@@ -312,6 +312,7 @@ func TestInitRefusesWrongRouteValues(t *testing.T) {
 		{"a team namespace that is no name", func(dir string) []string { return crArgs(filepath.Join(dir, "v.yaml"), "--team-namespace", "My Team") }, "--team-namespace"},
 		{"a values file named like the team's file", func(dir string) []string { return crArgs(filepath.Join(dir, "team-a.yaml")) }, "is where init writes the team's file"},
 		{"a values file named like the team's file, with --force", func(dir string) []string { return crArgs(filepath.Join(dir, "team-a.yaml"), "--force") }, "is where init writes the team's file"},
+		{"a values file named like the team's file in another case", func(dir string) []string { return crArgs(filepath.Join(dir, "Team-A.yaml"), "--force") }, "is where init writes the team's file"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -360,13 +361,21 @@ func TestInitDoesNotOverwriteEitherFile(t *testing.T) {
 			loadTeamFile(t, paths[1])
 		})
 	}
-	// The values file is known before the questions, so an existing one stops init before them.
+	// The values file is known before the questions, so an existing one stops init before them; so does the team's file
+	// when --team-namespace names it.
 	out := outFile(t)
 	if err := os.WriteFile(out, []byte("mine\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, stderr, code := initRun(t, "", env{}.get, "", "--out", out); code != exitUsage || strings.Contains(stderr, "Agent URL") {
 		t.Errorf("exit code %d, stderr %q; want %d and no question", code, stderr, exitUsage)
+	}
+	out = outFile(t)
+	if err := os.WriteFile(teamFile(out, "payments"), []byte("mine\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, stderr, code := initRun(t, "", env{}.get, "", "--out", out, "--team-namespace", "payments"); code != exitUsage || strings.Contains(stderr, "Agent URL") || !strings.Contains(stderr, "another directory") {
+		t.Errorf("exit code %d, stderr %q; want %d, no question and the team file's advice", code, stderr, exitUsage)
 	}
 }
 

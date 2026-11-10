@@ -34,8 +34,8 @@ import (
 const initUsage = `usage: agent-kourier init [options]
 
 Writes the files of a first install with the Helm chart (one Slack app, one agent, one channel), checks them, and prints
-the commands that install the chart, create the Secrets and, on custom resources, grant and apply them. It posts nothing
-and changes nothing in Slack or in a cluster. A value that no option gives is asked for on standard input.
+the commands that install the chart, create the Secrets and, on custom resources, grant them to the broker and apply the
+team's file. It posts nothing and changes nothing in Slack or in a cluster. A value that no option gives is asked for on standard input.
 
 On custom resources (--source crds, the chart's default route) the broker has no Slack app of its own, and the team
 brings its own. It writes two files:
@@ -77,6 +77,9 @@ const (
 	agentTokenSecretName = "agent-kourier-agent-token" //nolint:gosec // G101: the name of a Secret, not a credential
 	chartReference       = "oci://ghcr.io/agentkourier/charts/agent-kourier"
 	initBindingName      = "my-binding"
+	// initReleaseName is the release the printed helm install makes. The chart names its ServiceAccount after a release
+	// whose name holds agent-kourier, so the team's RoleBinding names this too.
+	initReleaseName = "agent-kourier"
 )
 
 // The routes of the chart's config.source that init writes for.
@@ -191,9 +194,17 @@ func runInit(ctx context.Context, o initOptions, ver string, stdin io.Reader, ge
 	if err != nil {
 		return usagef("%w", err)
 	}
-	// The values file is known before the questions, and the team's file once the team's namespace is.
-	if err := refuseExisting(o.out, o.force); err != nil {
+	// The values file is known before the questions, and so is the team's file when --team-namespace is given; else it
+	// is checked after them.
+	if err := refuseExisting(o.out, o.force, "name another file with --out"); err != nil {
 		return err
+	}
+	if o.source == sourceCRDs && isNamespaceName(strings.TrimSpace(o.teamNamespace)) {
+		early := o
+		early.teamNamespace = strings.TrimSpace(o.teamNamespace)
+		if err := refuseExisting(early.teamFile(), o.force, teamFileAdvice); err != nil {
+			return err
+		}
 	}
 	// A token in an option is refused before a question can show it as a default.
 	if err := o.refuseTokens(); err != nil {
@@ -211,7 +222,7 @@ func runInit(ctx context.Context, o initOptions, ver string, stdin io.Reader, ge
 		return err
 	}
 	for _, p := range paths[1:] {
-		if err := refuseExisting(p, o.force); err != nil {
+		if err := refuseExisting(p, o.force, teamFileAdvice); err != nil {
 			return err
 		}
 	}
@@ -242,7 +253,7 @@ func runInit(ctx context.Context, o initOptions, ver string, stdin io.Reader, ge
 
 	v := initValues{
 		Dialect: o.dialect, AgentURL: o.agentURL, AgentNamespace: o.agentNamespace, AgentName: o.agentName,
-		Channel: channel, AgentToken: o.agentToken, Namespace: o.namespace, TeamNamespace: o.teamNamespace,
+		Channel: channel, AgentToken: o.agentToken, TeamNamespace: o.teamNamespace,
 	}
 	var files []initFile
 	if o.source == sourceFiles {
@@ -292,25 +303,37 @@ func (o initOptions) paths() ([]string, error) {
 	if o.source == sourceFiles {
 		return []string{o.out}, nil
 	}
-	team := filepath.Join(filepath.Dir(o.out), o.teamNamespace+".yaml")
-	if filepath.Clean(o.out) == team {
+	team := o.teamFile()
+	// The comparison ignores case, since the file system may (macOS's does by default).
+	if filepath.Dir(o.out) == filepath.Dir(team) && strings.EqualFold(filepath.Base(o.out), filepath.Base(team)) {
 		return nil, usagef("--out %s is where init writes the team's file, %s; name the values file otherwise", o.out, filepath.Base(team))
 	}
 	return []string{o.out, team}, nil
 }
 
+// teamFileAdvice is how to go on when the team's file is in the way: --out names its directory, not its name.
+const teamFileAdvice = "remove it, or give --out a path in another directory"
+
+// teamFile is the path of the team's file on custom resources: named after the team's namespace, beside the values.
+func (o initOptions) teamFile() string {
+	return filepath.Join(filepath.Dir(o.out), teamFileName(o.teamNamespace))
+}
+
+// teamFileName is the name of the team's file for the team's namespace.
+func teamFileName(team string) string { return team + ".yaml" }
+
 // refuseExisting is the error for anything that exists at path, a symbolic link included, unless force says to overwrite
-// it. Even with force only a regular file is overwritten, so that a run with several files does not stop after replacing
+// it; elsewhere says how else to go on. Even with force only a regular file is overwritten, so that a run with several files does not stop after replacing
 // some of them.
-func refuseExisting(path string, force bool) error {
+func refuseExisting(path string, force bool, elsewhere string) error {
 	fi, err := os.Lstat(path) //nolint:gosec // G703: the operator names the files, in a directory of their choosing
 	switch {
 	case err != nil:
 		return nil
 	case !force:
-		return usagef("%s exists; name another file with --out, or overwrite it with --force", path)
+		return usagef("%s exists; %s, or overwrite it with --force", path, elsewhere)
 	case !fi.Mode().IsRegular():
-		return usagef("%s is not a regular file, and --force overwrites only a file; name another file with --out", path)
+		return usagef("%s is not a regular file, and --force overwrites only a file; %s", path, elsewhere)
 	}
 	return nil
 }
@@ -476,9 +499,8 @@ func lookupHint(err error) string {
 type initValues struct {
 	Dialect, AgentURL, AgentNamespace, AgentName, Channel string
 	AgentToken                                            bool
-	// Namespace is the release's, and TeamNamespace the Binding's on custom resources; the ConfigMap route's values
-	// name neither.
-	Namespace, TeamNamespace string
+	// TeamNamespace is the team's on custom resources, where its resources go; the ConfigMap route's values name none.
+	TeamNamespace string
 }
 
 // initValuesTemplate is the values file: the starter file (examples/helm/my-values.yaml) with the person's values in it. A
@@ -645,7 +667,7 @@ func renderInitTemplate(name, text string, v initValues) ([]byte, error) {
 		BindingName, TokenSecret, BackendComment, APIVersion, ConnectionName, BackendName, TeamFile string
 	}{
 		v, initBindingName, agentTokenSecretName, comment, resourceAPIVersion, teamConnectionName(v.TeamNamespace), initBackendName,
-		v.TeamNamespace + ".yaml",
+		teamFileName(v.TeamNamespace),
 	}
 	var b bytes.Buffer
 	if err := t.Execute(&b, data); err != nil {
@@ -654,9 +676,6 @@ func renderInitTemplate(name, text string, v initValues) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-// checkInitResources loads the resource files with the loader of the broker, which defaults and validates each object,
-// and resolves the references between them as the broker does, with every Secret taken as present: a Binding of the
-// team's namespace may name the ChatConnection and the AgentBackend only if each allows that namespace. The error names
 // checkInitResources loads the team's file with the loader of the broker, which defaults and validates each object, and
 // resolves the references between its objects as the broker does, with every Secret taken as present. The error names the
 // file, the resource and the field.
@@ -836,8 +855,8 @@ func teamAppNextSteps(o initOptions, ver string) string {
 	b.WriteString("# The team's Slack app: a file that only you can read, with the lines botToken=<bot token> and appToken=<app-level token>\n")
 	fmt.Fprintf(&b, "kubectl -n %s create secret generic %s \\\n  --from-env-file=\"$HOME/.config/%s/slack-secret.env\"\n", team, conn, team)
 	fmt.Fprintf(&b, "kubectl -n %s create role %s --verb=list,watch \\\n  --resource=secrets%s\n", team, role, grant)
-	fmt.Fprintf(&b, "kubectl -n %s create rolebinding %s --role=%s \\\n  --serviceaccount=%s:agent-kourier\n", team, role, role, o.namespace)
-	file := shellWord(filepath.Join(filepath.Dir(o.out), team+".yaml"))
+	fmt.Fprintf(&b, "kubectl -n %s create rolebinding %s --role=%s \\\n  --serviceaccount=%s:%s\n", team, role, role, o.namespace, initReleaseName)
+	file := shellWord(o.teamFile())
 	fmt.Fprintf(&b, "\nkubectl apply --dry-run=server -f %s\nkubectl apply -f %s\nkubectl -n %s get akbinding\n", file, file, team)
 	return b.String()
 }
@@ -851,5 +870,5 @@ func writeHelmInstall(b *strings.Builder, o initOptions, ver string) {
 	} else {
 		fmt.Fprintf(b, "# This build is %q, not a release, so no chart version is named: Helm takes the newest chart.\n", ver)
 	}
-	fmt.Fprintf(b, "helm install agent-kourier %s%s \\\n  -n %s -f %s\n", chartReference, version, o.namespace, shellWord(o.out))
+	fmt.Fprintf(b, "helm install %s %s%s \\\n  -n %s -f %s\n", initReleaseName, chartReference, version, o.namespace, shellWord(o.out))
 }

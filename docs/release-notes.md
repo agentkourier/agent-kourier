@@ -15,11 +15,15 @@ templates are unchanged by it.
   [the team-app path](how-to/team-slack-app.md#the-whole-path-recorded): `my-values.yaml`, whose `config.connectionNamespaces` admits the team's
   namespace, and `<team namespace>.yaml`, the team's ChatConnection, AgentBackend and Binding in that namespace. The commands it prints create the
   team's Slack Secret, and the agent token Secret with `--agent-token`, in the team's namespace, and grant them to the broker with a Role there.
-  A script that wants the old file passes `--source files`, which writes it as before. Without it, the new question for the team's namespace
-  (`--team-namespace`) comes right after the agent's namespace, so answers piped on standard input need one more line there (an empty line takes
-  the agent's namespace), and at the end of the input it takes the agent's namespace. See
-  [Write the files with `init`](how-to/install-with-helm.md#write-the-files-with-init).
-- **`init --force` overwrites only regular files,** and stops before it writes if a symbolic link or anything else is at a path it writes.
+  A script that wants the old file passes `--source files`, which writes it as before. On the default route, a run without `--team-namespace`
+  asks for it right after the agent's namespace, so answers piped on standard input need one more line there (an empty line, or the end of
+  the input, takes the agent's namespace). A command line that gave every other option is now also asked whether the agent verifies tokens,
+  unless it passes `--agent-token`. See [Write the files with `init`](how-to/install-with-helm.md#write-the-files-with-init).
+
+### Other changes to `init`
+
+- **`init --force` refuses a path that holds anything but a regular file** (a symbolic link, a directory, a device), with exit code 2 and
+  before it writes. It used to fail at the write with exit code 4, or write through a device or a FIFO.
 
 ## Version 0.3.1
 

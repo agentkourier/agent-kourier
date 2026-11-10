@@ -57,9 +57,9 @@ The chart is `ghcr.io/agentkourier/charts/agent-kourier@sha256:<chart digest>`, 
 
 ## Write the files with `init`
 
-`agent-kourier init` writes the files of a first install with your values in them. By default they are the custom resources of
-[a broker with no Slack app of its own](team-slack-app.md#the-whole-path-recorded): the team brings its own app, and the broker serves the
-ChatConnection the team makes in its namespace. It writes two files:
+`agent-kourier init` writes the files of a first install with your values in them. By default they are the files of
+[the recorded path](team-slack-app.md#the-whole-path-recorded) for a broker with no Slack app of its own: the team brings its own app, and
+the broker serves the ChatConnection the team makes in its namespace. It writes two files:
 
 - `my-values.yaml`, the platform team's values: `config.connectionNamespaces` with the team's namespace, and no `config.chatConnection`.
 - `<team>.yaml`, named after the team's namespace, the team's resources, all in that namespace: the ChatConnection `<team>-slack` for the
@@ -70,28 +70,36 @@ ChatConnection the team makes in its namespace. It writes two files:
 and asks for no team namespace.
 
 It asks for the agent's dialect (`a2a` or `kagent-v1`), URL and namespace, the team's namespace (the agent's when you press Enter), the agent's
-name and the channel, and then, unless you gave `--agent-token`, whether the agent verifies tokens. Before it writes, it loads the team's file
-with the loader that Agent Kourier starts with, which defaults and validates each object, and resolves the Binding's references to the
-ChatConnection and the AgentBackend; it takes the Secrets as present. With `--source files` it loads what the chart would render from the values.
-It writes nothing if the check fails, and it overwrites neither file unless you pass `--force`, which overwrites only regular files.
+name and the channel, and then, if it asked any of these and you did not give `--agent-token`, whether the agent verifies tokens. Before it
+writes, it loads the team's file with the broker's file loader, which defaults and validates each object as the broker does, and resolves the
+Binding's references to the ChatConnection and the AgentBackend; it takes the Secrets as present. With `--source files` it loads what the chart
+would render from the values. It writes nothing if the check fails, and it overwrites neither file unless you pass `--force`, which overwrites
+only regular files.
 
 Then it prints the commands of the [recorded path](team-slack-app.md#the-whole-path-recorded) with your names in them. As the platform team:
 create the release's namespace and install the chart. As the team: create the Secret of the team's app from a file that holds `botToken=` and
 `appToken=` lines, create a Role and RoleBinding that grant it to the broker's ServiceAccount (`agent-kourier`, the chart's for the release
-`agent-kourier`), and apply the team's file. It creates no team namespace: the team's namespace must exist.
+`agent-kourier`), and apply the team's file. The commands create no team namespace: it must exist. Like the recorded path, they leave out the
+Roles that let the team write its ChatConnection, AgentBackend and Binding
+([step 1](team-slack-app.md#1-the-platform-team-lets-the-team-write-a-chatconnection)); a team that is not a cluster administrator needs them
+first. Run them in place of [Create the Secrets](#create-the-secrets) and [Install on custom resources](#install-on-custom-resources) below,
+which install a broker with a Slack app of its own, then go to [Check it](#check-it).
 
-Run it from the released image, in the directory that should get the files. `-it` lets it ask its questions,
-and `--user` runs it as you, so it can write the files into your directory (the image's own user is 65532):
+Releases before 0.1.3 do not have `init`, and releases up to 0.3.1 write only the ConfigMap route, as `--source files` does now, and have no
+`--team-namespace`. Until the release after 0.3.1, run it from a checkout of this repository, naming the directory that should get the files:
+
+```sh
+go run ./cmd/agent-kourier init --out "$HOME/my-install/my-values.yaml"
+```
+
+A build that is not a release has no chart version to name, so the `helm install` command it prints has no `--version`, and Helm takes the
+newest chart. A release's image prints the chart version of its own release. Run the image in the directory that should get the files. `-it`
+lets it ask its questions, and `--user` runs it as you, so it can write the files into your directory (the image's own user is 65532):
 
 ```sh
 docker run --rm -it --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work \
   ghcr.io/agentkourier/agent-kourier:v0.3.1 init
 ```
-
-The `helm install` command it prints names the chart version of the image's release. Releases before 0.1.3 do not
-have `init`, and releases up to 0.3.1 write only the ConfigMap route, as `--source files` does now: until the release after 0.3.1, run this
-`init` from a checkout of this repository with `go run ./cmd/agent-kourier init`. A build that is not a release has no chart version to name,
-so the command it prints has no `--version`, and Helm takes the newest chart.
 
 Every question has an option, so the same run needs no terminal. Give the channel by ID, or by name when a bot token is
 set:
