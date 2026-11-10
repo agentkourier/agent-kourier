@@ -96,7 +96,7 @@ config:
   # source as files, so `helm upgrade --reuse-values` from a release that had none keeps the route it had.
   source: crds
   # With source crds, the broker's own ChatConnection, as namespace/name or, for one in the release's namespace, name
-  # (AGENTKOURIER_CHAT_CONNECTION). It is always served, and the broker owns the Bindings whose connectionRef names it, and those of the
+  # (AGENTKOURIER_CHAT_CONNECTION). When set, it is always served, and the broker owns the Bindings whose connectionRef names it, and those of the
   # connections of connectionNamespaces below. A cluster may hold the connections of several brokers, and each serves only its own and the
   # ones of the namespaces it admits. Empty with connectionNamespaces set is a broker with no connection of its own: the chart renders no
   # AGENTKOURIER_CHAT_CONNECTION, and the broker serves only the ChatConnections of the admitted namespaces. Empty with connectionNamespaces
