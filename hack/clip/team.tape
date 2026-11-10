@@ -34,7 +34,7 @@ Hide
 Type "export PS1='$ ' PS2='  ' && stty -echoctl && . /vhs/setup.sh && cd /work"
 Enter
 Wait
-Type `mkdir -p "$HOME/.config/team-a" && printf 'botToken=%s\nappToken=%s\n' "$SLACK_BOT_TOKEN" "$SLACK_APP_TOKEN" >"$HOME/.config/team-a/slack-secret.env" && chmod 600 "$HOME/.config/team-a/slack-secret.env" && clear`
+Type `umask 077 && mkdir -p "$HOME/.config/team-a" && printf 'botToken=%s\nappToken=%s\n' "$SLACK_BOT_TOKEN" "$SLACK_APP_TOKEN" >"$HOME/.config/team-a/slack-secret.env" && chmod 600 "$HOME/.config/team-a/slack-secret.env" && clear`
 Enter
 Wait
 Show

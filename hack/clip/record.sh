@@ -12,8 +12,8 @@
 #                       `kubectl get akbinding` row, since a broker with a fake token never connects and the Binding never
 #                       gets to Ready. It resets the cluster as take does, so it removes the broker of a real take
 #   record.sh stitch STILL
-#                       add STILL, a screenshot of the first answer in Slack, to the end of the take and write the
-#                       published GIF, docs/assets/clip/<clip>.gif
+#                       add STILL, a capture of the Slack thread pane with the first answer, to the end of the take
+#                       and write the published GIF, docs/assets/clip/<clip>.gif
 #   record.sh down      delete the cluster
 #
 # take needs:
@@ -34,7 +34,8 @@
 # its place and hides the two lines helm prints naming the pulled chart and its digest. Say both in the pull request
 # that brings the clip. The files a tape opens are extracted at each take from the yaml blocks of those names in its
 # page's section (clip_vars below); the commands of the tape follow that section but are written in the tape, so a
-# change to them on the page needs the same change there.
+# change to them on the page needs the same change there. The one difference is the `-w` the tapes add to the page's
+# `kubectl get akbinding`, to watch the Binding turn Ready.
 set -euo pipefail
 umask 077
 
@@ -132,15 +133,18 @@ clip_vars() {
   esac
 }
 
-# extract NAME: the yaml block titled NAME in SECTION of PAGE. The section ends at the next heading of its level or above.
+# extract NAME: the yaml block titled NAME in SECTION of PAGE. The section ends at the next heading of its level or
+# above; a line in a code fence (a YAML or shell comment) is never a heading.
 extract() {
   awk -v name="$1" -v heading="${SECTION}" '
     BEGIN { level = index(heading, " ") - 1 }
-    $0 == heading { section = 1; next }
-    section && match($0, /^#+ /) && RLENGTH - 1 <= level { exit }
-    section && $0 == "```yaml title=\"" name "\"" { grab = 1; next }
+    !section && $0 == heading { section = 1; next }
+    !section { next }
     grab && /^```/ { exit }
-    grab { print }
+    grab { print; next }
+    $0 == "```yaml title=\"" name "\"" { grab = 1; next }
+    /^```/ { fence = !fence; next }
+    !fence && match($0, /^#+ /) && RLENGTH - 1 <= level { exit }
   ' "${PAGE}"
 }
 

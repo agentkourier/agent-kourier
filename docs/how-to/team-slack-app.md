@@ -333,7 +333,7 @@ What the broker does without an own connection:
 
 The same path on a kind cluster, with the
 [echo agent](https://github.com/agentkourier/agent-kourier/blob/main/examples/recipes/echo-agent/agent/README.md) as the team's agent and a
-Slack app that stands for the team's. It runs as a cluster administrator, so step 1's Role is left out, and the namespace `team-a` exists before
+Slack app that stands for the team's. It runs as a cluster administrator, so it leaves out step 1's Role (and the Role that lets the team write its Bindings and AgentBackends), and the namespace `team-a` exists before
 it starts. The wait for the Binding to turn Ready, about 50 seconds here, is cut.
 
 The platform team installs the broker with no app of its own and admits `team-a`:

@@ -77,8 +77,9 @@ If the agent, or a front door in front of it, verifies tokens, first
 Agent Kourier does not mint `$AGENT_TOKEN`; it is the issued bearer token. Store it in the Binding's namespace. On custom
 resources, as below, the Binding is the team's and sits in the team's namespace (`my-team` here). For a Binding under the
 chart's `config`, as on the ConfigMap route, it is the release namespace (`agent-kourier` here) unless the entry sets its
-own `namespace`. The Dex example on that page stores its token itself, as `payments-agent-token` in the team namespace
-`payments`. With a token from any other issuer (on the ConfigMap route, `-n agent-kourier`):
+own `namespace`. The Dex example on that page stores its token itself, as `payments-agent-token` in `payments`; for this
+install, change its last command to `kubectl -n my-team create secret generic agent-kourier-agent-token` (`-n agent-kourier`
+on the ConfigMap route). With a token from any other issuer (on the ConfigMap route, `-n agent-kourier`):
 
 ```sh
 kubectl -n my-team create secret generic agent-kourier-agent-token --from-literal=token="$AGENT_TOKEN"
