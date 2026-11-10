@@ -303,12 +303,12 @@ func (o initOptions) paths() ([]string, error) {
 	if o.source == sourceFiles {
 		return []string{o.out}, nil
 	}
-	team := o.teamFile()
-	// The comparison ignores case, since the file system may (macOS's does by default).
-	if filepath.Dir(o.out) == filepath.Dir(team) && strings.EqualFold(filepath.Base(o.out), filepath.Base(team)) {
-		return nil, usagef("--out %s is where init writes the team's file, %s; name the values file otherwise", o.out, filepath.Base(team))
+	// The team's file is in the values file's directory, so only the names can collide. The comparison ignores case, since
+	// the file system may (macOS's does by default).
+	if name := teamFileName(o.teamNamespace); strings.EqualFold(filepath.Base(o.out), name) {
+		return nil, usagef("--out %s is where init writes the team's file, %s; name the values file otherwise", o.out, name)
 	}
-	return []string{o.out, team}, nil
+	return []string{o.out, o.teamFile()}, nil
 }
 
 // teamFileAdvice is how to go on when the team's file is in the way: --out names its directory, not its name.
@@ -788,7 +788,7 @@ func writeInitFile(path string, data []byte, force bool) error {
 	}
 	f, err := os.OpenFile(path, flags, 0o644) //nolint:gosec // the operator names the file; it holds no secret
 	if errors.Is(err, os.ErrExist) {
-		return usagef("%s exists; name another file with --out, or overwrite it with --force", path)
+		return usagef("%s exists; remove it, or overwrite it with --force", path)
 	}
 	if err != nil {
 		return fmt.Errorf("write %s: %w", path, err)

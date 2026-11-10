@@ -80,20 +80,23 @@ Then it prints the commands of the [recorded path](team-slack-app.md#the-whole-p
 create the release's namespace and install the chart. As the team: create the Secret of the team's app from a file that holds `botToken=` and
 `appToken=` lines, create a Role and RoleBinding that grant it to the broker's ServiceAccount (`agent-kourier`, the chart's for the release
 `agent-kourier`), and apply the team's file. The commands create no team namespace: it must exist. Like the recorded path, they leave out the
-Roles that let the team write its ChatConnection, AgentBackend and Binding
-([step 1](team-slack-app.md#1-the-platform-team-lets-the-team-write-a-chatconnection)); a team that is not a cluster administrator needs them
+Roles that let the team write its ChatConnection ([step 1](team-slack-app.md#1-the-platform-team-lets-the-team-write-a-chatconnection))
+and its AgentBackend and Binding ([Let a team add its own Binding](migrate-config-source.md#let-a-team-add-its-own-binding)); a team that is not a cluster administrator needs them
 first. Run them in place of [Create the Secrets](#create-the-secrets) and [Install on custom resources](#install-on-custom-resources) below,
 which install a broker with a Slack app of its own, then go to [Check it](#check-it).
 
 Releases before 0.1.3 do not have `init`, and releases up to 0.3.1 write only the ConfigMap route, as `--source files` does now, and have no
-`--team-namespace`. Until the release after 0.3.1, run it from a checkout of this repository, naming the directory that should get the files:
+`--team-namespace`. Until the release after 0.3.1, run it from a checkout of this repository, naming the values file in a directory that
+exists (`init` creates none; the team's file goes beside the values file):
 
 ```sh
+mkdir -p "$HOME/my-install"
 go run ./cmd/agent-kourier init --out "$HOME/my-install/my-values.yaml"
 ```
 
 A build that is not a release has no chart version to name, so the `helm install` command it prints has no `--version`, and Helm takes the
-newest chart. A release's image prints the chart version of its own release. Run the image in the directory that should get the files. `-it`
+newest chart. A release's image prints the chart version of its own release; the examples below, which name `--team-namespace`, need the image of a release
+after 0.3.1. Run the image in the directory that should get the files. `-it`
 lets it ask its questions, and `--user` runs it as you, so it can write the files into your directory (the image's own user is 65532):
 
 ```sh
@@ -115,7 +118,8 @@ With the bot token of the app the Binding uses (the team's, by default) in `SLAC
 or in a file named by `--token-file` (mounted into the container), `init` also looks a channel name up and checks that the bot can read the
 channel, as [the dry run](#check-the-values-before-you-install) does. Without a token it skips Slack, says so, and needs the channel's ID. Add
 `--agent-token` if the agent verifies tokens: the Binding then reads the token from the Secret `agent-kourier-agent-token` in the Binding's
-namespace (the team's, or the release's with `--source files`), and `init` prints the command that creates it there and, on custom resources,
+namespace (the team's, or the release's with `--source files`; [Create the Binding identity](create-binding-identity.md) says where the
+token comes from), and `init` prints the command that creates it there and, on custom resources,
 names it in the team's Role too. The options are in [Command line and environment](../reference/cli.md#agent-kourier-init).
 
 ## Create the Secrets

@@ -23,7 +23,7 @@ templates are unchanged by it.
 ### Other changes to `init`
 
 - **`init --force` refuses a path that holds anything but a regular file** (a symbolic link, a directory, a device), with exit code 2 and
-  before it writes. It used to fail at the write with exit code 4, or write through a device or a FIFO.
+  before it writes. It used to fail at the write with exit code 4, or write into a device, or block on a FIFO until it had a reader.
 
 ## Version 0.3.1
 

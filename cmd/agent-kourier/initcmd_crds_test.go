@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -495,14 +496,33 @@ func TestInitForceRefusesWhatIsNoFile(t *testing.T) {
 	if err := os.Symlink(target, teamFile(out, pageTeam)); err != nil {
 		t.Skip(err)
 	}
-	stdout, stderr, code := initRun(t, "", env{}.get, "", crArgs(out, "--force")...)
-	if code != exitUsage || !strings.Contains(stderr, "is not a regular file") || stdout != "" {
-		t.Errorf("exit code %d, stdout %q, stderr %q; want %d and not a regular file", code, stdout, stderr, exitUsage)
-	}
-	if got := readFile(t, out); got != "mine\n" {
-		t.Errorf("the values file is now %q", got)
-	}
-	if got := readFile(t, target); got != "theirs\n" {
-		t.Errorf("the link's target is now %q", got)
+	// With --team-namespace the team's file is checked before the questions; without it, after the team's namespace is
+	// answered (here the default, the agent's namespace).
+	withoutTeam := slices.Clone(crArgs(out, "--force"))
+	i := slices.Index(withoutTeam, "--team-namespace")
+	withoutTeam = slices.Delete(withoutTeam, i, i+2)
+	for name, tc := range map[string]struct {
+		args  []string
+		stdin string
+		asked bool
+	}{
+		"given":    {crArgs(out, "--force"), "", false},
+		"answered": {withoutTeam, "\n", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stdout, stderr, code := initRun(t, "", env{}.get, tc.stdin, tc.args...)
+			if code != exitUsage || !strings.Contains(stderr, "is not a regular file") || stdout != "" {
+				t.Errorf("exit code %d, stdout %q, stderr %q; want %d and not a regular file", code, stdout, stderr, exitUsage)
+			}
+			if got := strings.Contains(stderr, "Team namespace"); got != tc.asked {
+				t.Errorf("asked for the team's namespace: %v, want %v; stderr %q", got, tc.asked, stderr)
+			}
+			if got := readFile(t, out); got != "mine\n" {
+				t.Errorf("the values file is now %q", got)
+			}
+			if got := readFile(t, target); got != "theirs\n" {
+				t.Errorf("the link's target is now %q", got)
+			}
+		})
 	}
 }
