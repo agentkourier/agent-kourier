@@ -81,6 +81,9 @@ type RunConfig struct {
 	// package's tests, which run Run offline with a client that does not call Slack. It is
 	// unexported, so no other package, and no config, can replace the client.
 	newSlack func(slack.Config) slackAPI
+	// slackHTTPTimeout is the bound of one Slack Web API call (slackAPITimeout if zero): a seam for this package's tests,
+	// which cannot wait for 30 seconds.
+	slackHTTPTimeout time.Duration
 	// sink replaces the renderer Run builds, for this package's tests that need to see what a turn
 	// or a notice was handed. Like newSlack it is unexported, so nothing else can swap the renderer.
 	sink renderSink
