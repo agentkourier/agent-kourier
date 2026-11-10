@@ -92,7 +92,7 @@ Tokens never go in the values file. The chart refuses a value that looks like a 
 
 The steps below, recorded on a kind cluster with the
 [echo agent](https://github.com/agentkourier/agent-kourier/blob/main/examples/recipes/echo-agent/agent/README.md), a plain A2A agent
-with no model. The wait for the Binding to turn Ready, about 20 seconds here, is cut.
+with no model. The wait for the Binding to turn Ready, about 30 seconds here, is cut.
 
 The chart installs the CRDs and the broker, and you apply the resources. They are two steps because a release that renders the CRDs and
 resources of them fails in its first apply (Helm cannot map a kind that is not yet served), so the chart refuses to render

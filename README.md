@@ -28,7 +28,7 @@ breaking a Slack `Binding`. Agents speak only A2A, so a new platform needs no ch
 
 The custom resource install of [Install with Helm](docs/how-to/install-with-helm.md#install-on-custom-resources),
 recorded on a kind cluster with the [echo agent](examples/recipes/echo-agent/agent/README.md). The wait for the Binding
-to turn Ready, about 20 seconds here, is cut.
+to turn Ready, about 30 seconds here, is cut.
 
 ## What it looks like
 
