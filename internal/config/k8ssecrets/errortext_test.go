@@ -2,9 +2,18 @@ package k8ssecrets
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
+
+	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/redact"
 )
 
@@ -46,4 +55,76 @@ func TestTheErrorsOfValueSurviveRedaction(t *testing.T) {
 			t.Errorf("redaction changes the error\n got %q\nwant %q", got, err.Error())
 		}
 	})
+}
+
+// The causes that Value wraps name the Secret (a name such as slack-credentials or agent-token is itself a secret word to the redaction), so
+// the colon after it must follow a word of the broker's own: not "secret team-a/slack-credentials: secret cache not synced", which shows
+// as "...: [redacted] cache not synced". Each case is an error the resolver returns for a Secret with such a name, by the path that makes it.
+func TestTheCausesOfAReadSurviveRedactionForASecretNamedLikeACredential(t *testing.T) {
+	failing := func(t *testing.T, err error) *Resolver {
+		t.Helper()
+		client := fake.NewClientset()
+		client.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, err })
+		r := New(client, WithLogger(slog.New(slog.DiscardHandler)))
+		r.wait = 50 * time.Millisecond
+		t.Cleanup(r.Stop)
+		return r
+	}
+	forbidden := apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "x", errors.New("no grant"))
+	for _, name := range []string{"slack-credentials", "agent-token"} {
+		n := sn("team-a", name)
+		for _, tc := range []struct {
+			what string
+			want error
+			err  func(t *testing.T) error
+		}{
+			{"a cache that has not synced", ErrNotSynced, func(t *testing.T) error {
+				r := failing(t, errors.New("connection refused"))
+				_, err := r.Value(t.Context(), n.Namespace, n.Name, "botToken")
+				return err
+			}},
+			{"a Watch that waits for a cache that has not synced", context.DeadlineExceeded, func(t *testing.T) error {
+				r := failing(t, errors.New("connection refused"))
+				ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+				defer cancel()
+				return r.Watch(ctx, []config.SecretName{n})
+			}},
+			{"a read the API server denied", ErrAccessDenied, func(t *testing.T) error {
+				r := failing(t, forbidden)
+				_, err := r.Value(t.Context(), n.Namespace, n.Name, "botToken")
+				return err
+			}},
+			{"a Watch the API server denied", ErrAccessDenied, func(t *testing.T) error {
+				r := failing(t, forbidden)
+				return r.Watch(t.Context(), []config.SecretName{n})
+			}},
+			{"a Secret that is not watched", ErrNotWatched, func(t *testing.T) error {
+				r := New(fake.NewClientset(), WithLogger(slog.New(slog.DiscardHandler)))
+				t.Cleanup(r.Stop)
+				_, err := r.get(n.Namespace, n.Name, nil)
+				return err
+			}},
+			{"a Resolver that is stopped", ErrStopped, func(t *testing.T) error {
+				r := New(fake.NewClientset(), WithLogger(slog.New(slog.DiscardHandler)))
+				r.Stop()
+				_, err := r.Value(t.Context(), n.Namespace, n.Name, "botToken")
+				return err
+			}},
+			{"a Secret that does not exist", config.ErrSecretNotFound, func(t *testing.T) error {
+				r := follow(t, newAPI(t), n)
+				_, err := r.Value(t.Context(), n.Namespace, n.Name, "botToken")
+				return err
+			}},
+		} {
+			t.Run(name+"/"+tc.what, func(t *testing.T) {
+				err := tc.err(t)
+				if !errors.Is(err, tc.want) {
+					t.Fatalf("error = %v; want one that wraps %v", err, tc.want)
+				}
+				if got := redact.FreeText(err.Error()); got != err.Error() {
+					t.Errorf("redaction changes the error\n got %q\nwant %q", got, err.Error())
+				}
+			})
+		}
+	}
 }

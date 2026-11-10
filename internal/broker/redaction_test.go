@@ -64,6 +64,7 @@ func TestTheBrokersOwnMessagesSurviveRedaction(t *testing.T) {
 	})
 	t.Run("the Binding requires a token", func(t *testing.T) {
 		wantUnredacted(t, "ErrTokenRequired", credentialsOutcome(agent.ErrTokenRequired).Message)
+		wantUnredacted(t, "the error agent.ErrTokenRequired", agent.ErrTokenRequired.Error())
 	})
 	t.Run("a connection that is down", func(t *testing.T) {
 		wantUnredacted(t, "a rejected connection", (&connectionStopped{conn: "team-a/slack", rejected: true, code: "invalid_auth"}).Error())

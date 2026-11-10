@@ -12,8 +12,8 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/secret"
 )
 
-// logCapture is a slog.Handler that keeps every record it is given, with the attributes of its logger (With) and of the call, as a
-// map from key to the text of its value.
+// logCapture is a slog.Handler that keeps every record it is given, with the attributes of its logger (With) and then of the call, in
+// order and each as given, so that a key given twice is seen twice.
 type logCapture struct {
 	mu   *sync.Mutex
 	recs *[]capturedRecord
@@ -23,7 +23,28 @@ type logCapture struct {
 type capturedRecord struct {
 	level slog.Level
 	msg   string
-	attrs map[string]string
+	attrs []slog.Attr
+}
+
+// count is how many attributes of r have the key.
+func (r capturedRecord) count(key string) int {
+	n := 0
+	for _, a := range r.attrs {
+		if a.Key == key {
+			n++
+		}
+	}
+	return n
+}
+
+// get is the text of the first attribute of r with the key, or "".
+func (r capturedRecord) get(key string) string {
+	for _, a := range r.attrs {
+		if a.Key == key {
+			return a.Value.String()
+		}
+	}
+	return ""
 }
 
 func newLogCapture() *logCapture {
@@ -33,11 +54,8 @@ func newLogCapture() *logCapture {
 func (h *logCapture) Enabled(context.Context, slog.Level) bool { return true }
 
 func (h *logCapture) Handle(_ context.Context, r slog.Record) error {
-	rec := capturedRecord{level: r.Level, msg: r.Message, attrs: map[string]string{}}
-	for _, a := range h.with {
-		rec.attrs[a.Key] = a.Value.String()
-	}
-	r.Attrs(func(a slog.Attr) bool { rec.attrs[a.Key] = a.Value.String(); return true })
+	rec := capturedRecord{level: r.Level, msg: r.Message, attrs: append([]slog.Attr(nil), h.with...)}
+	r.Attrs(func(a slog.Attr) bool { rec.attrs = append(rec.attrs, a); return true })
 	h.mu.Lock()
 	*h.recs = append(*h.recs, rec)
 	h.mu.Unlock()
@@ -60,7 +78,7 @@ func (h *logCapture) records() []capturedRecord {
 // seen reports whether a record with msg has been logged that names connection.
 func (h *logCapture) seen(msg, connection string) bool {
 	for _, r := range h.records() {
-		if r.msg == msg && r.attrs["connection"] == connection {
+		if r.msg == msg && r.get("connection") == connection {
 			return true
 		}
 	}
@@ -130,7 +148,10 @@ func TestSocketModeLogLinesNameTheirConnection(t *testing.T) {
 		if !strings.HasPrefix(r.msg, "slack: socket mode") && r.msg != "slack connection ended; connecting again" {
 			continue
 		}
-		c := r.attrs["connection"]
+		if n := r.count("connection"); n != 1 {
+			t.Errorf("the line %q has %d connection attributes; want one", r.msg, n)
+		}
+		c := r.get("connection")
 		if c != names[0] && c != names[1] {
 			t.Errorf("the line %q has connection %q; want %v", r.msg, c, names)
 			continue
