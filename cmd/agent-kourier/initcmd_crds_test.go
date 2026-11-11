@@ -37,7 +37,9 @@ func crArgs(out string, extra ...string) []string {
 // teamFile is the team's file that init writes beside the values file out, for the team's namespace team.
 func teamFile(out, team string) string { return filepath.Join(filepath.Dir(out), team+".yaml") }
 
-// pageSection returns the text of the page's section that starts with the heading, up to the next heading of its level.
+// pageSection returns the text of the page's section that starts with the heading, up to the next heading of any level, so
+// without its subsections. A line in a code fence (a YAML or shell comment) is never a heading. Headings and fences are
+// read at the start of a line only, as the pages write them; an indented one (in a list) would not be seen.
 func pageSection(t *testing.T, page, heading string) string {
 	t.Helper()
 	text, err := os.ReadFile(page)
@@ -48,8 +50,18 @@ func pageSection(t *testing.T, page, heading string) string {
 	if !ok {
 		t.Fatalf("%s has no section %q", page, heading)
 	}
-	section, _, _ := strings.Cut(after, "\n"+heading[:strings.Index(heading, " ")+1])
-	return section
+	var section strings.Builder
+	fence := false
+	for line := range strings.Lines(after) {
+		if strings.HasPrefix(line, "```") {
+			fence = !fence
+		}
+		if !fence && strings.HasPrefix(strings.TrimLeft(line, "#"), " ") && strings.HasPrefix(line, "#") {
+			break
+		}
+		section.WriteString(line)
+	}
+	return section.String()
 }
 
 // codeBlocks returns the code blocks of section whose opening fence is opening, without their fences.
@@ -138,7 +150,24 @@ func chartVersion(t *testing.T) string {
 // By default init writes the page's two files, with the page's values in them, and prints the page's commands: the page
 // and init cannot drift apart. It runs in a directory of its own so that the paths it prints are the page's.
 func TestInitWritesThePagesTeamApp(t *testing.T) {
-	section := pageSection(t, teamAppPage, "### The whole path, recorded")
+	for _, page := range []struct{ path, heading string }{
+		{teamAppPage, "### The whole path, recorded"},
+		// Install with Helm leads its custom resource install with the same path; its subsection, a broker with an app of its own, is not init's.
+		{"../../docs/how-to/install-with-helm.md", "## Install on custom resources"},
+	} {
+		t.Run(filepath.Base(page.path), func(t *testing.T) {
+			section := pageSection(t, page.path, page.heading)
+			if strings.Contains(section, "platform.yaml") {
+				t.Fatalf("the section %q runs into its subsections", page.heading)
+			}
+			checkInitWritesTheTeamApp(t, section)
+		})
+	}
+}
+
+// checkInitWritesTheTeamApp runs init with the recorded path's values, and holds its files and commands to the section's.
+func checkInitWritesTheTeamApp(t *testing.T, section string) {
+	t.Helper()
 	ver := "v" + chartVersion(t)
 	t.Chdir(t.TempDir())
 	opts, err := parseInit(crArgs("my-values.yaml"))

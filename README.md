@@ -23,12 +23,12 @@ breaking a Slack `Binding`. Agents speak only A2A, so a new platform needs no ch
 > [Status](#status).
 
 <p align="center">
-  <img src="docs/assets/clip/install.gif" width="100%" alt="A terminal: kubectl creates the namespace and the Slack Secret from environment variables, and helm installs the agent-kourier chart. As the platform team, vim fills in the three lines marked yours in platform.yaml, a ChatConnection and an AgentBackend that each allow the team's namespace. As the app team, vim fills in the four lines marked yours in team.yaml, a Binding in the team's own namespace. kubectl applies both after a server-side dry run, and kubectl get akbinding shows the Binding go from no status to Unknown Pending to True OK. Then Slack: the mention of the bot and the agent's answer in its thread.">
+  <img src="docs/assets/clip/team-app.gif" width="100%" alt="A terminal. The platform team creates the namespace agent-kourier and installs the agent-kourier chart with values that list team-a in connectionNamespaces and name no ChatConnection, so the broker starts with no Slack app of its own. The team then creates its Slack Secret in team-a from a file, a Role and RoleBinding that let the broker's ServiceAccount list and watch it, fills in the four lines marked yours in team-a.yaml (a ChatConnection, an AgentBackend and a Binding), applies it, and kubectl get akbinding shows the Binding become True OK. Then Slack: a mention of the team's bot, and the agent's answer in its thread.">
 </p>
 
-The custom resource install of [Install with Helm](docs/how-to/install-with-helm.md#install-on-custom-resources),
-recorded on a kind cluster with the [echo agent](examples/recipes/echo-agent/agent/README.md). The wait for the Binding
-to turn Ready, about 30 seconds here, is cut.
+The custom resource install of [Install with Helm](docs/how-to/install-with-helm.md#install-on-custom-resources): a broker with no Slack
+app of its own, and a team that brings its own. Recorded on a kind cluster with the [echo agent](examples/recipes/echo-agent/agent/README.md)
+as the team's agent. The wait for the Binding to turn Ready, about 50 seconds here, is cut.
 
 ## What it looks like
 
