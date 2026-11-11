@@ -91,10 +91,10 @@ func initRun(t *testing.T, slackURL string, getenv func(string) string, stdin st
 	return out.String(), errb.String(), code
 }
 
-// starterArgs are the options that give init the starter file's values, and write to out.
+// starterArgs are the options that give init the starter file's values on the ConfigMap route, and write to out.
 func starterArgs(out string, extra ...string) []string {
 	return append([]string{
-		"--out", out, "--dialect", "a2a", "--agent-url", starterURL, "--agent-namespace", "my-namespace",
+		"--source", "files", "--out", out, "--dialect", "a2a", "--agent-url", starterURL, "--agent-namespace", "my-namespace",
 		"--agent-name", "my-agent", "--channel", "C0123456789",
 	}, extra...)
 }
@@ -156,7 +156,7 @@ func TestInitWithTheStartersValuesWritesTheStarter(t *testing.T) {
 	}
 }
 
-// For each dialect, the file loads with the broker's loader and says what was asked, with and without the agent token.
+// On the ConfigMap route, for each dialect, the file loads with the broker's loader and says what was asked, with and without the agent token.
 func TestInitWritesAFileThatLoads(t *testing.T) {
 	for _, tc := range []struct {
 		name, dialect string
@@ -170,7 +170,7 @@ func TestInitWritesAFileThatLoads(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			out := outFile(t)
 			args := []string{
-				"--out", out, "--dialect", tc.dialect, "--agent-url", "http://kagent-frontdoor.kagent.svc.cluster.local:4180",
+				"--source", "files", "--out", out, "--dialect", tc.dialect, "--agent-url", "http://kagent-frontdoor.kagent.svc.cluster.local:4180",
 				"--agent-namespace", "payments", "--agent-name", "payments-agent", "--channel", "G0ABCDEF123", "--namespace", "kourier",
 			}
 			if tc.agentToken {
@@ -214,7 +214,7 @@ func TestInitAsksForWhatIsMissing(t *testing.T) {
 	out := outFile(t)
 	// the dialect takes its default (an empty line), the channel is the last
 	stdin := "\nhttp://agent.agents.svc:8083/a2a/\nagents\nsre-agent\n#C0123456789\ny\n"
-	stdout, stderr, code := initRun(t, "", env{}.get, stdin, "--out", out)
+	stdout, stderr, code := initRun(t, "", env{}.get, stdin, "--source", "files", "--out", out)
 	if code != exitOK {
 		t.Fatalf("exit code %d, stderr %q", code, stderr)
 	}
@@ -288,24 +288,27 @@ func TestInitRefusesWrongValues(t *testing.T) {
 		{"a dialect that does not exist", []string{"--dialect", "grpc"}, `--dialect "grpc" is not a2a or kagent-v1`},
 		{"an empty channel", []string{"--channel", "#"}, "--channel is empty"},
 		{"a namespace that is no name", []string{"--namespace", "Not_A_Name"}, "--namespace"},
-		{"an agent URL that is no URL", []string{"--agent-url", "my-agent"}, "the values would not load"},
+		{"an agent URL that is no URL", []string{"--agent-url", "my-agent"}, "would not load"},
 		{"an agent URL with credentials", []string{"--agent-url", "http://user:pass@agent.example.com/"}, "credentials"},
 		{"an agent namespace that is no name", []string{"--agent-namespace", "My Namespace"}, "spec.agent.namespace"},
-		{"an agent URL that holds a line break", []string{"--agent-url", "http://agent.example.com/\nevil: 1"}, "the values would not load"},
+		{"an agent URL that holds a line break", []string{"--agent-url", "http://agent.example.com/\nevil: 1"}, "would not load"},
 		{"a stray argument", []string{"extra"}, "unexpected argument at position 1"},
 		{"an empty --out", []string{"--out", ""}, "--out is empty"},
 		{"an option that does not exist", []string{"--bot-token", "x"}, "not defined"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			out := outFile(t)
-			stdout, stderr, code := initRun(t, "", env{}.get, "", starterArgs(out, tc.extra...)...)
-			if code != exitUsage || !strings.Contains(stderr, tc.want) || stdout != "" {
-				t.Errorf("exit code %d, stdout %q, stderr %q; want %d and %q", code, stdout, stderr, exitUsage, tc.want)
-			}
-			if _, err := os.Stat(out); err == nil {
-				t.Error("a file was written")
-			}
-		})
+		// Each route refuses them: on custom resources the check of the team's file finds what the API types refuse.
+		for route, args := range map[string]func(string, ...string) []string{"files": starterArgs, "crds": crArgs} {
+			t.Run(route+"/"+tc.name, func(t *testing.T) {
+				out := outFile(t)
+				stdout, stderr, code := initRun(t, "", env{}.get, "", args(out, tc.extra...)...)
+				if code != exitUsage || !strings.Contains(stderr, tc.want) || stdout != "" {
+					t.Errorf("exit code %d, stdout %q, stderr %q; want %d and %q", code, stdout, stderr, exitUsage, tc.want)
+				}
+				if entries, _ := os.ReadDir(filepath.Dir(out)); len(entries) != 0 {
+					t.Errorf("files were written: %v", entries)
+				}
+			})
+		}
 	}
 }
 
@@ -315,7 +318,7 @@ func TestInitDoesNotOverwriteWithoutForce(t *testing.T) {
 	if err := os.WriteFile(out, []byte("mine\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	stdout, stderr, code := initRun(t, "", env{}.get, "", "--out", out)
+	stdout, stderr, code := initRun(t, "", env{}.get, "", "--source", "files", "--out", out)
 	if code != exitUsage || !strings.Contains(stderr, "--force") || stdout != "" || strings.Contains(stderr, "Agent URL") {
 		t.Errorf("exit code %d, stdout %q, stderr %q; want %d, --force named and no question", code, stdout, stderr, exitUsage)
 	}
@@ -369,7 +372,11 @@ func TestInitNeverEchoesAToken(t *testing.T) {
 		{"as the agent name", starterArgs(outFile(t), "--agent-name", canaryToken), ""},
 		{"as the channel", starterArgs(outFile(t), "--channel", "#"+canaryToken), ""},
 		{"as the value of a flag that takes none", []string{"--force=" + canaryToken}, ""},
-		{"as an answer", []string{"--out", outFile(t)}, "a2a\n" + canaryToken + "\nn\nn\nC0123456789\n"},
+		{"as the team namespace", crArgs(outFile(t), "--team-namespace", canaryToken), ""},
+		{"as an answer", []string{"--source", "files", "--out", outFile(t)}, "a2a\n" + canaryToken + "\nn\nn\nC0123456789\n"},
+		// The agent's namespace is the default of the team's, so it must be refused before that question shows it.
+		{"as the agent namespace, answered", []string{"--out", outFile(t)}, "a2a\nhttp://a.example.com/\n" + canaryToken + "\n\nn\nC0123456789\n"},
+		{"as the agent namespace, given", crArgs(outFile(t), "--agent-namespace", canaryToken, "--team-namespace", ""), "\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stdout, stderr, code := initRun(t, "", env{}.get, tc.stdin, tc.args...)
@@ -393,7 +400,7 @@ func TestInitHelp(t *testing.T) {
 	if code := run([]string{"init", "--help"}, "dev", &stdout, &stderr, env{}.get); code != exitOK || stdout.Len() != 0 {
 		t.Errorf("--help = %d, stdout %q; want 0 and no stdout", code, stdout.String())
 	}
-	for _, flag := range []string{"--out", "--force", "--dialect", "--agent-url", "--agent-namespace", "--agent-name", "--channel", "--agent-token", "--namespace", "--token-file"} {
+	for _, flag := range []string{"--out", "--force", "--dialect", "--agent-url", "--agent-namespace", "--agent-name", "--channel", "--agent-token", "--namespace", "--token-file", "--source", "--team-namespace"} {
 		if !strings.Contains(stderr.String(), flag) {
 			t.Errorf("the usage lacks %s", flag)
 		}
@@ -536,6 +543,25 @@ func TestInitKeepsAnAwkwardURLWhole(t *testing.T) {
 	if got := loadWritten(t, out).AgentBackends[0].Spec.URL; got != awkward {
 		t.Errorf("the URL is %q; want %q", got, awkward)
 	}
+	// So does the team's file, and an agent name and channel that YAML would read as other types stay text.
+	out = outFile(t)
+	if _, stderr, code := initRun(t, "", env{}.get, "", crArgs(out, "--agent-url", awkward, "--agent-name", "123", "--channel", "C0123456789")...); code != exitOK {
+		t.Fatalf("crds: exit code %d, stderr %q", code, stderr)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte(readFile(t, teamFile(out, pageTeam))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	set, err := config.Load(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := set.AgentBackends[0].Spec.URL; got != awkward {
+		t.Errorf("the team's file has the URL %q; want %q", got, awkward)
+	}
+	if got := set.Bindings[0].Spec.Agent.Name; got != "123" {
+		t.Errorf("the team's file has the agent name %q; want 123", got)
+	}
 }
 
 // The commands that follow name the chart's version for a release and none for a build that is no release, and quote a
@@ -583,7 +609,7 @@ func TestNextSteps(t *testing.T) {
 // The AgentBackend that init writes for kagent is the one the page about kagent shows.
 func TestInitKagentBackendIsTheDocumentedOne(t *testing.T) {
 	out := outFile(t)
-	args := []string{"--out", out, "--dialect", "kagent-v1", "--agent-url", "http://kagent-frontdoor.kagent.svc.cluster.local:4180",
+	args := []string{"--source", "files", "--out", out, "--dialect", "kagent-v1", "--agent-url", "http://kagent-frontdoor.kagent.svc.cluster.local:4180",
 		"--agent-namespace", "payments", "--agent-name", "payments-agent", "--channel", "C0123456789"}
 	if _, stderr, code := initRun(t, "", env{}.get, "", args...); code != exitOK {
 		t.Fatalf("exit code %d, stderr %q", code, stderr)

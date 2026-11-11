@@ -3,6 +3,28 @@
 What changed in each release, newest first, and what you must do about it. The steps for an upgrade are in
 [Upgrade](how-to/upgrade.md), which has a section for each change that needs one; this page says what changed and points to it.
 
+## Version 0.3.2 (unreleased)
+
+`agent-kourier init` writes the chart's default route, for a team that brings its own Slack app. The broker's code, the CRDs and the chart's
+templates are unchanged by it.
+
+### Breaking changes
+
+- **`agent-kourier init` writes custom resources by default, for a broker with no Slack app of its own.** It wrote one values file for the
+  ConfigMap route (`config.source: files`), on the broker's own app. It now writes the files of
+  [the team-app path](how-to/team-slack-app.md#the-whole-path-recorded): `my-values.yaml`, whose `config.connectionNamespaces` admits the team's
+  namespace, and `<team namespace>.yaml`, the team's ChatConnection, AgentBackend and Binding in that namespace. The commands it prints create the
+  team's Slack Secret, and the agent token Secret with `--agent-token`, in the team's namespace, and grant them to the broker with a Role there.
+  A script that wants the old file passes `--source files`, which writes it as before. On the default route, a run without `--team-namespace`
+  asks for it right after the agent's namespace, so answers piped on standard input need one more line there (an empty line, or the end of
+  the input, takes the agent's namespace). A command line that gave every other option is now also asked whether the agent verifies tokens,
+  unless it passes `--agent-token`. See [Write the files with `init`](how-to/install-with-helm.md#write-the-files-with-init).
+
+### Other changes to `init`
+
+- **`init --force` refuses a path that holds anything but a regular file** (a symbolic link, a directory, a device), with exit code 2 and
+  before it writes. It used to fail at the write with exit code 4, or write into a device, or block on a FIFO until it had a reader.
+
 ## Version 0.3.1
 
 A documentation release. The broker's code, the CRDs and the chart's templates are those of 0.3.0, so an upgrade from 0.3.0 needs no step. The image is rebuilt from that code and has a new digest, so `helm upgrade` replaces the pod as any upgrade does.

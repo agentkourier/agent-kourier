@@ -24,8 +24,9 @@ Agent Kourier reads its `ChatConnection`, `AgentBackend` and `Binding` resources
 
 - **Custom resources** (`config.source: crds`, the default) are the route to run on Kubernetes. The chart installs the CRDs and the broker, and you apply the
   three resources with `kubectl` or a GitOps tool, so that each team can own its Bindings and see what became of them in `kubectl get akbinding`. It needs Kubernetes 1.33 or later.
+  `agent-kourier init` writes the files of this route for a broker with no Slack app of its own, which serves the team's.
 - **A ConfigMap** (`config.source: files`) is the quick route for a proof of concept. The chart writes the resources of your values file into a ConfigMap, which needs
-  no CRDs, no cluster-scoped right and no minimum version. The starter file and `agent-kourier init` below write this route.
+  no CRDs, no cluster-scoped right and no minimum version. The starter file below is for this route, and `agent-kourier init --source files` writes it.
 
 [Choose a config route](../explanation/config-routes.md) says how they differ when something is wrong.
 
@@ -53,6 +54,74 @@ cosign verify ghcr.io/agentkourier/agent-kourier@sha256:<image digest> \
 ```
 
 The chart is `ghcr.io/agentkourier/charts/agent-kourier@sha256:<chart digest>`, checked the same way.
+
+## Write the files with `init`
+
+`agent-kourier init` writes the files of a first install with your values in them. By default they are the files of
+[the recorded path](team-slack-app.md#the-whole-path-recorded) for a broker with no Slack app of its own: the team brings its own app, and
+the broker serves the ChatConnection the team makes in its namespace. It writes two files:
+
+- `my-values.yaml`, the platform team's values: `config.connectionNamespaces` with the team's namespace, and no `config.chatConnection`.
+- `<team>.yaml`, named after the team's namespace, the team's resources, all in that namespace: the ChatConnection `<team>-slack` for the
+  team's app, which reads the Secret `<team>-slack`; the AgentBackend `agent`; and the Binding `my-binding`, which names the two.
+
+`<team>.yaml` goes in the directory of `my-values.yaml` (`--out`). With `--source files` it writes the one values file of
+[the ConfigMap route](#the-configmap-route) instead, in the shape of [the starter file](#download-the-starter-file), on the broker's own Slack app,
+and asks for no team namespace.
+
+It asks for the agent's dialect (`a2a` or `kagent-v1`), URL and namespace, the team's namespace (the agent's when you press Enter), the agent's
+name and the channel, and then, if it asked any of these and you did not give `--agent-token`, whether the agent verifies tokens. Before it
+writes, it loads the team's file with the broker's file loader, which defaults and validates each object as the broker does, and resolves the
+Binding's references to the ChatConnection and the AgentBackend; it takes the Secrets as present. With `--source files` it loads what the chart
+would render from the values. It writes nothing if the check fails, and it overwrites neither file unless you pass `--force`, which overwrites
+only regular files.
+
+Then it prints the commands of the [recorded path](team-slack-app.md#the-whole-path-recorded) with your names in them. As the platform team:
+create the release's namespace and install the chart. As the team: create the Secret of the team's app from a file that holds `botToken=` and
+`appToken=` lines, create a Role and RoleBinding that grant it to the broker's ServiceAccount (`agent-kourier`, the chart's for the release
+`agent-kourier`), and apply the team's file. The commands create no team namespace: it must exist. Like the recorded path, they leave out the
+Roles that let the team write its ChatConnection ([step 1](team-slack-app.md#1-the-platform-team-lets-the-team-write-a-chatconnection))
+and its AgentBackend and Binding ([Let a team add its own Binding](migrate-config-source.md#let-a-team-add-its-own-binding)); a team that is not a cluster administrator needs them
+first. Run them in place of [Create the Secrets](#create-the-secrets) and [Install on custom resources](#install-on-custom-resources) below,
+which install a broker with a Slack app of its own, then go to [Check it](#check-it).
+
+Releases before 0.1.3 do not have `init`, and releases up to 0.3.1 write only the ConfigMap route, as `--source files` does now, and have no
+`--team-namespace`. Until the release after 0.3.1, run it from a checkout of this repository, naming the values file in a directory that
+exists (`init` creates none; the team's file goes beside the values file):
+
+```sh
+mkdir -p "$HOME/my-install"
+go run ./cmd/agent-kourier init --out "$HOME/my-install/my-values.yaml"
+```
+
+A build that is not a release has no chart version to name, so the `helm install` command it prints has no `--version`, and Helm takes the
+newest chart. A release's image prints the chart version of its own release. The image of 0.3.1 has the older `init`, which writes the ConfigMap route and
+does not take `--team-namespace` (leave that option out of the second example there); a release after 0.3.1 writes the files described here.
+Run the image in the directory that should get the files. `-it`
+lets it ask its questions, and `--user` runs it as you, so it can write the files into your directory (the image's own user is 65532):
+
+```sh
+docker run --rm -it --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work \
+  ghcr.io/agentkourier/agent-kourier:v0.3.1 init
+```
+
+Every question has an option, so the same run needs no terminal. Give the channel by ID, or by name when a bot token is
+set:
+
+```sh
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work \
+  ghcr.io/agentkourier/agent-kourier:v0.3.1 init --dialect a2a \
+  --agent-url http://my-agent.team-a.svc.cluster.local:8083/a2a/ \
+  --agent-namespace team-a --team-namespace team-a --agent-name my-agent --channel C0123456789
+```
+
+With the bot token of the app the Binding uses (the team's, by default) in `SLACK_BOT_TOKEN` (exported, and passed with `-e SLACK_BOT_TOKEN`)
+or in a file named by `--token-file` (mounted into the container), `init` also looks a channel name up and checks that the bot can read the
+channel, as [the dry run](#check-the-values-before-you-install) does. Without a token it skips Slack, says so, and needs the channel's ID. Add
+`--agent-token` if the agent verifies tokens: the Binding then reads the token from the Secret `agent-kourier-agent-token` in the Binding's
+namespace (the team's, or the release's with `--source files`; [Create the Binding identity](create-binding-identity.md) says where the
+token comes from), and `init` prints the command that creates it there and, on custom resources,
+names it in the team's Role too. The options are in [Command line and environment](../reference/cli.md#agent-kourier-init).
 
 ## Create the Secrets
 
@@ -202,62 +271,25 @@ the first release's, and a second release that renders them is refused by Helm (
 ## The ConfigMap route
 
 [Write the values](#write-the-values), [Check the values before you install](#check-the-values-before-you-install) and [Install the chart](#install-the-chart)
-install the ConfigMap route, which the starter file and `agent-kourier init` name with `config.source: files`. With `files`, `crds.install` is false unless you set it, so they install no CRDs.
+install the ConfigMap route, which the starter file and `agent-kourier init --source files` name with `config.source: files`. With `files`, `crds.install` is false unless you set it, so they install no CRDs.
 Moving to custom resources later is [the how-to's](migrate-config-source.md).
 
 ## Write the values
 
 The chart takes Agent Kourier's three resource kinds under `config`: the ChatConnection, the AgentBackend and the
 Binding. They are nested, so they go in a values file rather than in `--set` flags. There are two ways to get one: let
-`agent-kourier init` write it, or download a starter file and edit it.
-
-### Write it with `init`
-
-`agent-kourier init` asks for the agent's dialect (`a2a` or `kagent-v1`), URL, namespace and name, and for the channel.
-It writes `my-values.yaml` in the shape of the starter file below, loads what the chart would render from it with the
-loader that Agent Kourier starts with, and prints the `kubectl` commands for the Secrets above and the `helm install`
-command below, with your namespace in them. It writes nothing if the values do not load, and it does not overwrite a file
-unless you pass `--force`.
-
-Run it from the released image, in the directory that should get `my-values.yaml`. `-it` lets it ask its questions,
-and `--user` runs it as you, so it can write the file into your directory (the image's own user is 65532):
-
-```sh
-docker run --rm -it --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work \
-  ghcr.io/agentkourier/agent-kourier:v0.3.1 init
-```
-
-The `helm install` command it prints names the chart version of the image's release. Releases before 0.1.3 do not
-have `init`. From a checkout of this repository, `go run ./cmd/agent-kourier init` runs the same command; a build that is
-not a release has no chart version to name, so the command it prints has no `--version`, and Helm takes the newest chart.
-
-Every question has an option, so the same run needs no terminal. Give the channel by ID, or by name when a bot token is
-set:
-
-```sh
-docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work \
-  ghcr.io/agentkourier/agent-kourier:v0.3.1 init --dialect a2a \
-  --agent-url http://my-agent.my-namespace.svc.cluster.local:8083/a2a/ \
-  --agent-namespace my-namespace --agent-name my-agent --channel C0123456789
-```
-
-With the bot token in `SLACK_BOT_TOKEN` (exported, and passed with `-e SLACK_BOT_TOKEN`) or in a file named by
-`--token-file` (mounted into the container), `init` also looks a channel name up and
-checks that the bot can read the channel, as the dry run below does. Without a token it skips Slack, says so, and needs
-the channel's ID. Add `--agent-token` if the agent verifies tokens: the Binding then reads the token from the Secret
-`agent-kourier-agent-token`, and `init` prints the command that creates it. The options are in
-[Command line and environment](../reference/cli.md#agent-kourier-init).
+`agent-kourier init --source files` write it ([Write the files with `init`](#write-the-files-with-init)), or download the starter file and edit it.
 
 ### Download the starter file
 
-Or download the starter file, a complete first install with an agent that does not exist yet:
+Download the starter file, a complete first install with an agent that does not exist yet:
 
 ```sh
 curl -fsSLo my-values.yaml https://raw.githubusercontent.com/agentkourier/agent-kourier/main/examples/helm/my-values.yaml
 ```
 
 It is this file. Change the four lines marked `yours`: the agent's URL, namespace and name, and the channel's ID, which
-starts with `C` (`G` for an older private channel), not the channel's name. `init` writes the same
+starts with `C` (`G` for an older private channel), not the channel's name. `init --source files` writes the same
 resources with those four values filled in. The `-f` flags below pass it to Helm.
 
 ```yaml title="my-values.yaml"
