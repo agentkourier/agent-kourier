@@ -6,7 +6,7 @@ What changed in each release, newest first, and what you must do about it. The s
 ## Version 0.3.2 (unreleased)
 
 `agent-kourier init` writes the chart's default route, for a team that brings its own Slack app. The broker's code, the CRDs and the chart's
-templates are unchanged by it.
+templates are unchanged by it. The image is built with Go 1.27.4.
 
 ### Breaking changes
 
@@ -31,6 +31,11 @@ templates are unchanged by it.
   own**, and a team that brings its own, as `init` writes it. The install with an app of the broker's is
   [its own section](how-to/install-with-helm.md#a-broker-with-a-slack-app-of-its-own), and the chart's README follows the same order. The
   install clip is the clip of the team-app path.
+
+### Dependencies
+
+- **The Go builder image moves from `golang:1.27.3` to `golang:1.27.4`**, and `go.mod` with it. The Go project lists security fixes to
+  `net/http`, the go command, the compiler and the linker in 1.27.4 ([Go release history](https://go.dev/doc/devel/release#go1.27.minor)).
 
 ## Version 0.3.1
 
