@@ -1,19 +1,17 @@
 #!/usr/bin/env bash
-# Record the two clips of the docs, typed by vhs against a kind cluster of its own, with the echo agent of
-# examples/recipes/echo-agent. CLIP picks which:
-#   CLIP=install (the default)  docs/assets/clip/install.gif, which README.md and docs/how-to/install-with-helm.md show: a
-#                               fresh install on the custom resource route, the platform team's and the app team's files
-#   CLIP=team                   docs/assets/clip/team-app.gif, which docs/how-to/team-slack-app.md shows: a broker with no
-#                               Slack app of its own, and a team in team-a that brings its own
+# Record the clip of the docs, docs/assets/clip/team-app.gif, typed by vhs against a kind cluster of its own, with the
+# echo agent of examples/recipes/echo-agent as the team's agent: a broker with no Slack app of its own, and a team in
+# team-a that brings its own. README.md, docs/how-to/install-with-helm.md and docs/how-to/team-slack-app.md show it; its
+# tape, team.tape, follows the section "The whole path, recorded" of docs/how-to/team-slack-app.md.
 #
 #   record.sh up        make the cluster (kourier-clip) and start the echo agent in it
-#   record.sh take      reset the cluster to no Agent Kourier, render the clip's tape, record bin/clip/out/<clip>.gif
+#   record.sh take      reset the cluster to no Agent Kourier, render the tape, record bin/clip/out/team-app.gif
 #   record.sh practice  the same take with fake Slack tokens, into bin/clip/practice; it stops at the first
 #                       `kubectl get akbinding` row, since a broker with a fake token never connects and the Binding never
 #                       gets to Ready. It resets the cluster as take does, so it removes the broker of a real take
 #   record.sh stitch STILL
 #                       add STILL, a capture of the Slack thread pane with the first answer, to the end of the take
-#                       and write the published GIF, docs/assets/clip/<clip>.gif
+#                       and write the published GIF, docs/assets/clip/team-app.gif
 #   record.sh down      delete the cluster
 #
 # take needs:
@@ -32,9 +30,9 @@
 # CLIP_CHART_VERSION to a release candidate of that version built from the same code (0.2.1-rc.1 for 0.2.1): the tape
 # still types the version in Chart.yaml, and a helm function in the recorder's hidden setup installs the candidate in
 # its place and hides the two lines helm prints naming the pulled chart and its digest. Say both in the pull request
-# that brings the clip. The files a tape opens are extracted at each take from the yaml blocks of those names in its
-# page's section (clip_vars below); the commands of the tape follow that section but are written in the tape, so a
-# change to them on the page needs the same change there. The one change to a page command is the `-w` the tapes add to the page's
+# that brings the clip. The files the tape opens are extracted at each take from the yaml blocks of those names in the
+# page's section (TAPE and FILES below); the commands of the tape follow that section but are written in the tape, so a
+# change to them on the page needs the same change there. The one change to a page command is the `-w` the tape adds to the page's
 # `kubectl get akbinding`, to watch the Binding turn Ready.
 set -euo pipefail
 umask 077
@@ -116,22 +114,10 @@ reset() {
     --ignore-not-found --wait=true --timeout=3m
 }
 
-# clip_vars: set what CLIP records. TAPE is in hack/clip; SECTION is the heading, matched whole, of the PAGE section
-# whose yaml blocks titled FILES are extracted; GIF names the take's output (the tape's Output line) and the published
-# GIF.
-clip_vars() {
-  case "${CLIP:-install}" in
-    install)
-      TAPE=install.tape PAGE=${ROOT}/docs/how-to/install-with-helm.md SECTION='## Install on custom resources'
-      FILES=(my-values.yaml platform.yaml team.yaml) GIF=install PRACTICE_ROW='echo-agent\s+my-binding'
-      ;;
-    team)
-      TAPE=team.tape PAGE=${ROOT}/docs/how-to/team-slack-app.md SECTION='### The whole path, recorded'
-      FILES=(my-values.yaml team-a.yaml) GIF=team-app PRACTICE_ROW='my-binding\s{3,}'
-      ;;
-    *) die "CLIP must be install or team, not ${CLIP}" ;;
-  esac
-}
+# What the clip records. TAPE is in hack/clip; SECTION is the heading, matched whole, of the PAGE section whose yaml
+# blocks titled FILES are extracted; GIF names the take's output (the tape's Output line) and the published GIF.
+TAPE=team.tape PAGE=${ROOT}/docs/how-to/team-slack-app.md SECTION='### The whole path, recorded'
+FILES=(my-values.yaml team-a.yaml) GIF=team-app PRACTICE_ROW='my-binding\s{3,}'
 
 # extract NAME: the yaml block titled NAME in SECTION of PAGE. The section ends at the next heading of its level or
 # above; a line in a code fence (a YAML or shell comment) is never a heading.
@@ -166,7 +152,7 @@ record() {
     extract "${f}" >"${work}/${f}"
     [ -s "${work}/${f}" ] || die "no block titled ${f} in the section '${SECTION}' of ${PAGE}"
   done
-  [ "${GIF}" = team-app ] && "${K[@]}" create namespace "${TEAM_NS}" >/dev/null
+  "${K[@]}" create namespace "${TEAM_NS}" >/dev/null
   kind get kubeconfig --internal --name "${CLUSTER}" >"${KCFG_INTERNAL}"
 
   tape=$(<"${HERE}/${TAPE}")
@@ -203,16 +189,16 @@ EOF
   ls -l "${out}"
 }
 
-# stitch STILL: the published GIF, docs/assets/clip/<clip>.gif: vhs's GIF of the take, then one frame of STILL (a
+# stitch STILL: the published GIF, docs/assets/clip/team-app.gif: vhs's GIF of the take, then one frame of STILL (a
 # capture of the Slack thread pane alone: the mention and the agent's answer, and none of the channel's earlier
 # messages), cropped by CLIP_CROP (w:h:x:y in the still's pixels) if it is set, fitted into the take's 1320x760
 # frame, and held for CLIP_HOLD whole seconds. It runs the recorder image's ffmpeg and gifsicle. The take's own GIF
-# is kept, not re-encoded. The tapes write no MP4, which nothing uses: vhs renders each output from every frame at
-# once (see the Framerate note in the tapes).
+# is kept, not re-encoded. The tape writes no MP4, which nothing uses: vhs renders each output from every frame at
+# once (see the Framerate note in the tape).
 stitch() {
   local still=$1 out=${STATE}/out crop=${CLIP_CROP:-} hold=${CLIP_HOLD:-6}
   [ -f "${still}" ] || die "${still}: no such file"
-  [ -f "${out}/${GIF}.gif" ] || die "no take in ${out}: run CLIP=${CLIP:-install} record.sh take"
+  [ -f "${out}/${GIF}.gif" ] || die "no take in ${out}: run record.sh take"
   [[ -z ${crop} || ${crop} =~ ^[0-9]+:[0-9]+:[0-9]+:[0-9]+$ ]] || die "CLIP_CROP must be w:h:x:y in pixels"
   [[ ${hold} =~ ^[1-9][0-9]?$ ]] || die "CLIP_HOLD must be whole seconds, 1 to 99"
   docker build -q -t "${RECORDER}" "${HERE}" >/dev/null
@@ -235,7 +221,6 @@ mode_of() {
   stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"
 }
 
-clip_vars
 
 case "${1:-}" in
   up) up ;;
@@ -267,7 +252,7 @@ case "${1:-}" in
     rm -f "${KCFG}" "${KCFG_INTERNAL}"
     ;;
   *)
-    sed -n '2,18p' "$0" >&2
+    sed -n '2,16p' "$0" >&2
     exit 2
     ;;
 esac

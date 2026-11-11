@@ -1,6 +1,6 @@
 # The team clip: the "whole path, recorded" section of docs/how-to/team-slack-app.md, typed against a real cluster.
 # record.sh renders this file (it replaces @VERSION@ with the version in charts/agent-kourier/Chart.yaml, and @CHANNEL@
-# and @READY@) and runs it in the recorder image with CLIP=team; it is not run by hand. my-values.yaml and team-a.yaml
+# and @READY@) and runs it in the recorder image; it is not run by hand. my-values.yaml and team-a.yaml
 # are the page's blocks, extracted at each take; the commands below follow the page's section and must be changed with
 # it. The Slack tokens are in the shell's environment; the hidden setup writes them to the file the page's command reads,
 # so they are only ever named, never printed.

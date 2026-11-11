@@ -157,21 +157,21 @@ func TestAnUpgradeThatKeepsTheOldValuesIsRefusedWithAWayOut(t *testing.T) {
 	}
 }
 
-// TestDocumentedDefaultRouteInstallsGrantTheConnectionsSecret: the install the chart README and Install with Helm give for the default route names the
-// ChatConnection and applies the resources themselves, so the chart sees no Secret reference. Their values must still render a Role for the connection's
-// Secret (named in rbac.secretNames, or derived from the connection's name), or the broker, which cannot read its own ChatConnection's Secret, exits with
-// code 3 in a loop.
-func TestDocumentedDefaultRouteInstallsGrantTheConnectionsSecret(t *testing.T) {
+// TestDocumentedOwnAppInstallsGrantTheConnectionsSecret: the install the chart README and Install with Helm give for a broker with a Slack app of its
+// own names the ChatConnection and applies the resources themselves, so the chart sees no Secret reference. Their values must still render a Role for
+// the connection's Secret (named in rbac.secretNames, or derived from the connection's name), or the broker, which cannot read its own ChatConnection's
+// Secret, exits with code 3 in a loop.
+func TestDocumentedOwnAppInstallsGrantTheConnectionsSecret(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
 	install, err := os.ReadFile("../../docs/how-to/install-with-helm.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The Secret the documented ChatConnection reads, from the resources the page applies.
-	m := regexp.MustCompile(`(?s)kind: ChatConnection\n.*?credentialsSecretRef: \{name: ([a-z0-9-]+)\}`).FindSubmatch(install)
+	// The Secret the documented own ChatConnection, the one in the release's namespace, reads, from the resources the page applies.
+	m := regexp.MustCompile("kind: ChatConnection\nmetadata:\n  name: slack\n  namespace: agent-kourier\nspec:\n  platform: slack\n  credentialsSecretRef: \\{name: ([a-z0-9-]+)\\}").FindSubmatch(install)
 	if m == nil {
-		t.Fatal("Install with Helm has no ChatConnection with a credentialsSecretRef")
+		t.Fatal("Install with Helm has no ChatConnection slack in agent-kourier with a credentialsSecretRef")
 	}
 	// The chart README carries no resources of its own: its snippet relies on the chart naming the Secret after the connection, which is the Secret
 	// that Install with Helm's ChatConnection reads, so both documents are held to the same one.
@@ -203,6 +203,45 @@ func TestDocumentedDefaultRouteInstallsGrantTheConnectionsSecret(t *testing.T) {
 			find(t, objs, "Role", "agent-kourier-secrets", &role)
 			if role.Namespace != "agent-kourier" || len(role.Rules) != 1 || !slices.Contains(role.Rules[0].ResourceNames, secret) {
 				t.Errorf("Role %+v in %q; want one rule that names the Secret %s in agent-kourier", role.Rules, role.Namespace, secret)
+			}
+		})
+	}
+}
+
+// TestDocumentedTeamAppInstalls: the install that the chart README and Install with Helm lead with is a broker with no Slack app of its own, which
+// admits team-a. Their values must render that broker (the list, and no own connection) and grant no Secret, since both say the team grants its own.
+func TestDocumentedTeamAppInstalls(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	for _, doc := range []string{"../../docs/how-to/install-with-helm.md", chartReadme} {
+		t.Run(filepath.Base(doc), func(t *testing.T) {
+			t.Parallel()
+			raw, err := os.ReadFile(doc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var block string
+			for _, part := range strings.Split(string(raw), "```yaml")[1:] {
+				body, _, _ := strings.Cut(part, "\n```")
+				if strings.Contains(body, "connectionNamespaces: [team-a]") {
+					_, block, _ = strings.Cut(body, "\n")
+					break
+				}
+			}
+			if block == "" {
+				t.Fatalf("%s has no values block that admits team-a in config.connectionNamespaces", doc)
+			}
+			file := filepath.Join(t.TempDir(), "my-values.yaml")
+			if err := os.WriteFile(file, []byte(block), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			objs := mustRender(t, "agent-kourier", "agent-kourier", "--kube-version", "v1.33.2", "--set", "image.repository=agent-kourier", "-f", file)
+			env := podEnv(deployment(t, objs))
+			if v, has := env["AGENTKOURIER_CHAT_CONNECTION"]; has || env["AGENTKOURIER_CONFIG_SOURCE"] != "crds" || env["AGENTKOURIER_CONNECTION_NAMESPACES"] != "team-a" {
+				t.Errorf("environment %v (own connection %q); want crds, the list team-a and no own connection", env, v)
+			}
+			if got := secretRoles(t, objs); len(got) != 0 {
+				t.Errorf("Secret Roles %v; want none (the team grants its own)", got)
 			}
 		})
 	}

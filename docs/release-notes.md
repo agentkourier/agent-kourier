@@ -25,6 +25,13 @@ templates are unchanged by it.
 - **`init --force` refuses a path that holds anything but a regular file** (a symbolic link, a directory, a device), with exit code 2 and
   before it writes. It used to fail at the write with exit code 4, or write into a device, or block on a FIFO until it had a reader.
 
+### Documentation
+
+- **[Install on custom resources](how-to/install-with-helm.md#install-on-custom-resources) leads with a broker with no Slack app of its
+  own**, and a team that brings its own, as `init` writes it. The install with an app of the broker's is
+  [its own section](how-to/install-with-helm.md#a-broker-with-a-slack-app-of-its-own), and the chart's README follows the same order. The
+  install clip is the clip of the team-app path.
+
 ## Version 0.3.1
 
 A documentation release. The broker's code, the CRDs and the chart's templates are those of 0.3.0, so an upgrade from 0.3.0 needs no step. The image is rebuilt from that code and has a new digest, so `helm upgrade` replaces the pod as any upgrade does.

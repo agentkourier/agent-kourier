@@ -11,7 +11,7 @@ removing a Binding from the values is the other.
 Agent Kourier does nothing without its resources: a ChatConnection, an AgentBackend and a Binding. **The chart's default,
 and the route to run on Kubernetes, reads them as custom resources** (`config.source: crds`, with the CRDs installed by `crds.install`, which follows the route and is true with this one),
 so that each team owns its own Bindings: see [Custom resources instead of a ConfigMap](#custom-resources-instead-of-a-configmap), which also says what it needs
-(Kubernetes 1.33 or later, a ChatConnection to name, and a grant of the Secret it reads). **The quick route for a proof of concept is a ConfigMap** that the chart writes from the resources under
+(Kubernetes 1.33 or later, and a grant of each Secret the broker reads). **The quick route for a proof of concept is a ConfigMap** that the chart writes from the resources under
 `config` (`config.source: files`), which needs none of that. The starter file below is that route. Put the resources in a values file,
 `my-values.yaml`: download the commented starter and change the lines it marks `yours`:
 
@@ -50,36 +50,45 @@ helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --ver
   -n agent-kourier --create-namespace -f my-values.yaml
 ```
 
-For the default route, give the chart no resources, name the ChatConnection the broker serves, and apply the three resources yourself once the CRDs are in
-(they come with the release, and the pod waits for the ChatConnection: it exits and restarts until the object exists). The chart refuses to render
-`config.chatConnections`, `config.agentBackends` or `config.bindings` as custom resources in the release that installs their CRDs, since Helm cannot map a kind in the same
-first apply (see below):
+For the default route, give the chart no resources and apply them yourself once the CRDs are in (they come with the release). The chart refuses to
+render `config.chatConnections`, `config.agentBackends` or `config.bindings` as custom resources in the release that installs their CRDs, since Helm
+cannot map a kind in the same first apply (see below). The install that [Install on custom resources](https://agentkourier.dev/how-to/install-with-helm/#install-on-custom-resources)
+leads with is a broker with no Slack app of its own: its values admit the namespaces whose ChatConnections it serves, and each team brings its own
+app and keeps all of it in its namespace (`team-a` here, which must exist):
+
+```yaml
+config:
+  connectionNamespaces: [team-a]
+```
+
+```sh
+helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.3.1 \
+  -n agent-kourier --create-namespace -f my-values.yaml
+kubectl -n team-a create secret generic team-a-slack --from-env-file="$HOME/.config/team-a/slack-secret.env"   # botToken= and appToken= lines
+kubectl -n team-a create role agent-kourier-secrets-team-a --verb=list,watch --resource=secrets --resource-name=team-a-slack
+kubectl -n team-a create rolebinding agent-kourier-secrets-team-a --role=agent-kourier-secrets-team-a \
+  --serviceaccount=agent-kourier:agent-kourier
+kubectl apply -f team-a.yaml   # the team: its ChatConnection team-a-slack, an AgentBackend and a Binding, all in team-a
+kubectl -n team-a get akbinding
+```
+
+The page has the team's file, and `agent-kourier init` (from the release after 0.3.1) writes both files with your names in them. The ClusterRole the chart makes reads the three
+kinds in every namespace, but the chart grants no Secret of an admitted namespace: the team grants its own to the chart's ServiceAccount, as
+above, with a Role that names it (`resourceNames`). A token Secret its Binding names in `identity.tokenSecretRef` (`agent-kourier-agent-token`
+in `team-a`) goes in that Role too, or in `rbac.secretNames` (`team-a: [agent-kourier-agent-token]`).
+
+A broker can instead have a Slack app of its own, the platform's, in a ChatConnection that `config.chatConnection` names as `namespace/name`
+and that answers for each team whose Binding names it and whose namespace it allows
+([A broker with a Slack app of its own](https://agentkourier.dev/how-to/install-with-helm/#a-broker-with-a-slack-app-of-its-own) has the files):
 
 ```yaml
 config:
   chatConnection: agent-kourier/slack
 ```
 
-```sh
-helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.3.1 \
-  -n agent-kourier --create-namespace -f my-values.yaml
-kubectl apply -f platform.yaml   # platform team: ChatConnection slack (reading the Secret slack) and an AgentBackend, in agent-kourier, each allowing my-team
-kubectl apply -f team.yaml       # app team: its Binding, in its own namespace my-team, naming both across namespaces
-kubectl get akbinding -A
-```
-
-[Install on custom resources](https://agentkourier.dev/how-to/install-with-helm/#install-on-custom-resources) has both files. The ChatConnection
-and the AgentBackend list the team's namespace in `allowedNamespaces`, without which a Binding of another namespace may not name them. Here the
-broker's own ChatConnection, which holds the platform's Slack app, answers for each team whose Binding names it and whose namespace it allows. A
-team can bring its own Slack app instead, in a namespace that `config.connectionNamespaces` admits
-([Let a team bring its own Slack app](https://agentkourier.dev/how-to/team-slack-app/)), and a broker can have
-[no connection of its own](https://agentkourier.dev/how-to/team-slack-app/#a-broker-with-no-connection-of-its-own).
-
-With `config.*` empty the chart cannot see the ChatConnection's Secret, but it knows which connection the broker serves, so it renders a Role in that connection's
-namespace that names one Secret: the Secret of the same name as the connection (`slack` here). A ChatConnection whose `credentialsSecretRef` names another Secret needs
-`config.chatConnectionSecret` set to that name (an `rbac.secretNames` entry for it works too); otherwise the broker could not read it and would exit with code 3 in a loop. Any other Secret that the chart
-cannot see, such as a token Secret the Binding names in `identity.tokenSecretRef` (`agent-kourier-agent-token` in `my-team`), needs a Role and RoleBinding of
-the team's own there, granting it to the chart's ServiceAccount, or a line in `rbac.secretNames` (`my-team: [agent-kourier-agent-token]`).
+The chart then renders a Role in that connection's namespace that names one Secret: the Secret of the same name as the connection (`slack`
+there), or `config.chatConnectionSecret` when its `credentialsSecretRef` names another (an `rbac.secretNames` entry for it works too); otherwise
+the broker could not read it and would exit with code 3 in a loop. The pod exits and restarts until that ChatConnection exists.
 
 [Install with Helm](https://agentkourier.dev/how-to/install-with-helm/#write-the-values) walks through each field, the
 Secrets, and a dry run that finds a misspelt field before the pod does. The published chart has `image.repository` and
