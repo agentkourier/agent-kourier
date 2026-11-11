@@ -28,7 +28,7 @@ breaking a Slack `Binding`. Agents speak only A2A, so a new platform needs no ch
 
 The custom resource install of [Install with Helm](docs/how-to/install-with-helm.md#install-on-custom-resources): a broker with no Slack
 app of its own, and a team that brings its own. Recorded on a kind cluster with the [echo agent](examples/recipes/echo-agent/agent/README.md)
-as the team's agent. The wait for the Binding to turn Ready, about 50 seconds here, is cut.
+as the team's agent. The wait for the Binding to turn Ready, about 25 seconds here, is cut.
 
 ## What it looks like
 
