@@ -36,8 +36,8 @@ Each release publishes a Helm chart and a container image for `linux/amd64` and 
 
 | Artifact | Reference |
 |---|---|
-| Chart | `oci://ghcr.io/agentkourier/charts/agent-kourier`, version `0.3.1` |
-| Image | `ghcr.io/agentkourier/agent-kourier:v0.3.1` |
+| Chart | `oci://ghcr.io/agentkourier/charts/agent-kourier`, version `0.3.2` |
+| Image | `ghcr.io/agentkourier/agent-kourier:v0.3.2` |
 
 The chart pins the image by digest, so you set no image values to install it. The
 [GitHub Release](https://github.com/agentkourier/agent-kourier/releases) of each version names both digests.
@@ -50,7 +50,7 @@ digest from the GitHub Release and name the workflow's exact identity:
 ```sh
 cosign verify ghcr.io/agentkourier/agent-kourier@sha256:<image digest> \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity https://github.com/agentkourier/agent-kourier/.github/workflows/release.yml@refs/tags/v0.3.1
+  --certificate-identity https://github.com/agentkourier/agent-kourier/.github/workflows/release.yml@refs/tags/v0.3.2
 ```
 
 The chart is `ghcr.io/agentkourier/charts/agent-kourier@sha256:<chart digest>`, checked the same way.
@@ -86,31 +86,25 @@ first. They are the commands of [Install on custom resources](#install-on-custom
 [Check it](#check-it).
 
 Releases before 0.1.3 do not have `init`, and releases up to 0.3.1 write only the ConfigMap route, as `--source files` does now, and have no
-`--team-namespace`. Until the release after 0.3.1, run it from a checkout of this repository, naming the values file in a directory that
-exists (`init` creates none; the team's file goes beside the values file):
-
-```sh
-mkdir -p "$HOME/my-install"
-go run ./cmd/agent-kourier init --out "$HOME/my-install/my-values.yaml"
-```
-
-A build that is not a release has no chart version to name, so the `helm install` command it prints has no `--version`, and Helm takes the
-newest chart. A release's image prints the chart version of its own release. The image of 0.3.1 has the older `init`, which writes the ConfigMap route and
-does not take `--team-namespace` (leave that option out of the second example there); a release after 0.3.1 writes the files described here.
-Run the image in the directory that should get the files. `-it`
+`--team-namespace`. Run the image of the release you install, in the directory that should get the files. `-it`
 lets it ask its questions, and `--user` runs it as you, so it can write the files into your directory (the image's own user is 65532):
 
 ```sh
 docker run --rm -it --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work \
-  ghcr.io/agentkourier/agent-kourier:v0.3.1 init
+  ghcr.io/agentkourier/agent-kourier:v0.3.2 init
 ```
+
+The `helm install` command it prints names the chart version of the image's release. From a checkout of this repository,
+`go run ./cmd/agent-kourier init --out <dir>/my-values.yaml` runs the same command, with `<dir>` a directory that exists (`init` creates none;
+the team's file goes beside the values file). A build that is not a release has no chart version to name, so the command it prints has no
+`--version`, and Helm takes the newest chart.
 
 Every question has an option, so the same run needs no terminal. Give the channel by ID, or by name when a bot token is
 set:
 
 ```sh
 docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work \
-  ghcr.io/agentkourier/agent-kourier:v0.3.1 init --dialect a2a \
+  ghcr.io/agentkourier/agent-kourier:v0.3.2 init --dialect a2a \
   --agent-url http://my-agent.team-a.svc.cluster.local:8083/a2a/ \
   --agent-namespace team-a --team-namespace team-a --agent-name my-agent --channel C0123456789
 ```
@@ -153,7 +147,7 @@ config:
 
 ```sh
 kubectl create namespace agent-kourier
-helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.3.1 \
+helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.3.2 \
   -n agent-kourier -f my-values.yaml
 ```
 
@@ -290,7 +284,7 @@ spec:
 ```
 
 ```sh
-helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.3.1 \
+helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.3.2 \
   -n agent-kourier -f my-values.yaml
 kubectl apply --dry-run=server -f platform.yaml -f team.yaml
 kubectl apply -f platform.yaml
@@ -381,7 +375,7 @@ resources with those four values filled in. The `-f` flags below pass it to Helm
 
 Every field is in the [Binding](../reference/binding.md), [AgentBackend](../reference/agentbackend.md) and
 [ChatConnection](../reference/chatconnection.md) references, and every chart value in [Helm values](../reference/helm-values.md).
-`helm show values oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.3.1` prints the chart's defaults with their
+`helm show values oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.3.2` prints the chart's defaults with their
 comments. Keep the file: an upgrade passes it again.
 
 ## Check the values before you install
@@ -393,7 +387,7 @@ writes, with `yq`:
 
 ```sh
 mkdir -p rendered
-helm template agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.3.1 \
+helm template agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.3.2 \
   -n agent-kourier -f my-values.yaml --show-only templates/configmap.yaml |
   yq -r '.data[] | "---\n" + .' > rendered/resources.yaml
 ```
@@ -403,7 +397,7 @@ named as `namespace/name`:
 
 ```sh
 docker run --rm -e SLACK_BOT_TOKEN -v "$PWD/rendered:/config:ro" \
-  ghcr.io/agentkourier/agent-kourier:v0.3.1 dry-run --config /config --binding agent-kourier/my-binding
+  ghcr.io/agentkourier/agent-kourier:v0.3.2 dry-run --config /config --binding agent-kourier/my-binding
 ```
 
 An error that starts `agent-kourier dry-run: load /config:` names the file, the resource and the field. The files load
@@ -420,7 +414,7 @@ refusal, as [above](#install-on-custom-resources). The checks that only the brok
 ## Install the chart
 
 ```sh
-helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.3.1 \
+helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.3.2 \
   -n agent-kourier -f my-values.yaml
 ```
 

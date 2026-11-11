@@ -345,7 +345,7 @@ config:
 
 ```sh
 kubectl create namespace agent-kourier
-helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.3.1 \
+helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.3.2 \
   -n agent-kourier -f my-values.yaml
 ```
 
