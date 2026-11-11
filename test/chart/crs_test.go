@@ -209,7 +209,8 @@ func TestDocumentedOwnAppInstallsGrantTheConnectionsSecret(t *testing.T) {
 }
 
 // TestDocumentedTeamAppInstalls: the install that the chart README and Install with Helm lead with is a broker with no Slack app of its own, which
-// admits team-a. Their values must render that broker (the list, and no own connection) and grant no Secret, since both say the team grants its own.
+// admits team-a. Their values must render that broker (the list, and no own connection) and grant no Secret, since both say the team grants its own,
+// and the ServiceAccount their RoleBinding names must be the one the chart renders.
 func TestDocumentedTeamAppInstalls(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
@@ -242,6 +243,15 @@ func TestDocumentedTeamAppInstalls(t *testing.T) {
 			}
 			if got := secretRoles(t, objs); len(got) != 0 {
 				t.Errorf("Secret Roles %v; want none (the team grants its own)", got)
+			}
+			m := regexp.MustCompile(`--serviceaccount=([a-z0-9-]+):([a-z0-9-]+)`).FindStringSubmatch(string(raw))
+			if m == nil {
+				t.Fatalf("%s has no RoleBinding command that names the broker's ServiceAccount", doc)
+			}
+			if !slices.ContainsFunc(objs, func(o object) bool {
+				return o.kind() == "ServiceAccount" && o.namespace() == m[1] && o.name() == m[2]
+			}) {
+				t.Errorf("%s grants the ServiceAccount %s:%s, which the chart does not render; objects %v", doc, m[1], m[2], kinds(objs))
 			}
 		})
 	}

@@ -158,7 +158,7 @@ helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --ver
 ```
 
 The pod starts and is ready with no ChatConnection to serve. The chart's ClusterRole lets the broker list and watch the three kinds in every
-namespace, but it grants no Secret of a team's: the team grants its own. It makes the Secret of its app from a file that only you can read,
+namespace, but with these values the chart grants no Secret in `team-a`: the team grants its own. It makes the Secret of its app from a file that only you can read,
 with the lines `botToken=<bot token>` and `appToken=<app-level token>`, and a Role and RoleBinding that let the broker's ServiceAccount
 (`agent-kourier` in `agent-kourier`, the chart's for the release `agent-kourier`) list and watch that one Secret:
 
@@ -217,7 +217,8 @@ If the agent verifies tokens, add `tokenSecretRef: {name: agent-kourier-agent-to
 `--resource-name=agent-kourier-agent-token`.
 
 The dry run asks the API server to check each object against the CRDs' schema, and names the field of a refusal. The checks that only the broker
-makes show afterwards in the Binding's status: [Check that it worked](migrate-config-source.md#check-that-it-worked) reads it.
+makes show afterwards in the Binding's status: [Check that it worked](migrate-config-source.md#check-that-it-worked) reads it. Then go to
+[Check it](#check-it).
 
 If the chart refuses with `config.source crds needs Kubernetes 1.33 or later`, the cluster is older: install the ConfigMap route below, which has no minimum.
 An installer that may not create CRDs sets `crds.install: false` (unset, it is true with custom resources), and an administrator applies them first. So does a second broker in the same cluster: the CRDs are
@@ -238,7 +239,8 @@ The chart cannot read the resources you apply yourself, but it knows which conne
 connection's namespace that grants `list` and `watch` on one Secret by name: the Secret that has the connection's name (`slack` here). Without
 that Role the broker could not read the Secret and would exit with code 3 in a loop. If the ChatConnection's `credentialsSecretRef` names
 another Secret, set `config.chatConnectionSecret` to that name. The pod exits with code 2 and restarts until the ChatConnection it is told to
-serve exists (`ChatConnection agent-kourier/slack was not found`); Kubernetes restarts it by itself once it does.
+serve exists (`ChatConnection agent-kourier/slack was not found`), and starts at the first restart after it does, which Kubernetes makes by
+itself.
 
 The platform team's file holds the shared ChatConnection and AgentBackend, in the release's namespace. Each lists the team's
 namespace in `allowedNamespaces`, without which a Binding of another namespace may not name it. Change its three lines marked `yours`:
@@ -296,8 +298,9 @@ kubectl apply -f team.yaml
 kubectl get akbinding -A
 ```
 
-The chart's Role covers the one Secret `slack`. A Binding's token Secret, such as `agent-kourier-agent-token` in the team's namespace, is in no
-value the chart reads, so nothing grants it: the team grants it with a Role of its own that names it, as
+If the agent verifies tokens, add `tokenSecretRef: {name: agent-kourier-agent-token}` under `identity` in the Binding, and create that Secret
+in `my-team` ([Create the Secrets](#create-the-secrets)). The chart's Role covers the one Secret `slack`. The token Secret is in no value the
+chart reads, so nothing grants it: the team grants it with a Role of its own that names it, as
 [Let a team add its own Binding](migrate-config-source.md#let-a-team-add-its-own-binding) shows, or the platform with `rbac.secretNames`, a map of
 namespace to Secret names, and a `helm upgrade` with the values:
 
@@ -308,7 +311,7 @@ rbac:
 ```
 
 A broker with an app of its own can serve teams' apps too, with `config.connectionNamespaces` beside `config.chatConnection`
-([Let a team bring its own Slack app](team-slack-app.md)).
+([Let a team bring its own Slack app](team-slack-app.md)). Then go to [Check it](#check-it).
 
 ## Create the Secrets
 
@@ -338,8 +341,9 @@ Agent Kourier does not mint `$AGENT_TOKEN`; it is the issued bearer token. Store
 resources the Binding is the team's and sits in the team's namespace (`team-a` above, `my-team` with an app of the broker's). For a Binding under the
 chart's `config`, as on the ConfigMap route, it is the release namespace (`agent-kourier` here) unless the entry sets its
 own `namespace`. The Dex example on that page stores its token itself, as `payments-agent-token` in `payments`; for this
-install, change its last command to `kubectl -n team-a create secret generic agent-kourier-agent-token` (`-n agent-kourier`
-on the ConfigMap route). With a token from any other issuer (on the ConfigMap route, `-n agent-kourier`):
+install, change its last command to `kubectl -n team-a create secret generic agent-kourier-agent-token` (`-n my-team` with an app of the
+broker's, `-n agent-kourier` on the ConfigMap route). With a token from any other issuer (`-n my-team` with an app of the broker's, and on the
+ConfigMap route `-n agent-kourier`):
 
 ```sh
 kubectl -n team-a create secret generic agent-kourier-agent-token --from-literal=token="$AGENT_TOKEN"
@@ -349,7 +353,7 @@ Tokens never go in the values file. The chart refuses a value that looks like a 
 
 ## The ConfigMap route
 
-[Write the values](#write-the-values), [Check the values before you install](#check-the-values-before-you-install) and [Install the chart](#install-the-chart)
+[Create the Secrets](#create-the-secrets) above, then [Write the values](#write-the-values), [Check the values before you install](#check-the-values-before-you-install) and [Install the chart](#install-the-chart)
 install the ConfigMap route, which the starter file and `agent-kourier init --source files` name with `config.source: files`. With `files`, `crds.install` is false unless you set it, so they install no CRDs.
 Moving to custom resources later is [the how-to's](migrate-config-source.md).
 
@@ -480,7 +484,7 @@ kubectl -n agent-kourier get pods
 kubectl -n agent-kourier logs deploy/agent-kourier
 ```
 
-A healthy start logs these lines, in this order (a broker with no connection of its own logs `serving a ChatConnection` after `ready`, as below):
+A healthy start logs these lines, in this order (a broker with no connection of its own logs `serving a ChatConnection` after `ready`, where it can come after the first `slack:` line, as below):
 
 ```text
 config route

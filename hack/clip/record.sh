@@ -47,7 +47,7 @@ KCFG_INTERNAL=${STATE}/kubeconfig.internal
 RECORDER=agent-kourier-clip-vhs:dev
 ECHO_IMAGE=agent-kourier-echo-agent:dev
 CHART=oci://ghcr.io/agentkourier/charts/agent-kourier
-# The team clip's namespace, which the broker admits; it exists before that take starts, as the page says.
+# The team's namespace, which the broker admits; it exists before the take starts, as the page says.
 TEAM_NS=team-a
 
 die() {
@@ -220,7 +220,6 @@ stitch() {
 mode_of() {
   stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"
 }
-
 
 case "${1:-}" in
   up) up ;;

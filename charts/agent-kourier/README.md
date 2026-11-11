@@ -72,9 +72,10 @@ kubectl apply -f team-a.yaml   # the team: its ChatConnection team-a-slack, an A
 kubectl -n team-a get akbinding
 ```
 
-The page has the team's file, and `agent-kourier init` (from the release after 0.3.1) writes both files with your names in them. The ClusterRole the chart makes reads the three
-kinds in every namespace, but the chart grants no Secret of an admitted namespace: the team grants its own to the chart's ServiceAccount, as
-above, with a Role that names it (`resourceNames`). A token Secret its Binding names in `identity.tokenSecretRef` (`agent-kourier-agent-token`
+[Install on custom resources](https://agentkourier.dev/how-to/install-with-helm/#install-on-custom-resources) has the team's file, and
+`agent-kourier init` (from the release after 0.3.1) writes both files with your names in them. The ClusterRole the chart makes lets the broker
+read the three kinds in every namespace, but with these values the chart grants no Secret in `team-a`: the team grants its own to the chart's
+ServiceAccount, as above, with a Role that names it (`resourceNames`). A token Secret its Binding names in `identity.tokenSecretRef` (`agent-kourier-agent-token`
 in `team-a`) goes in that Role too, or in `rbac.secretNames` (`team-a: [agent-kourier-agent-token]`).
 
 A broker can instead have a Slack app of its own, the platform's, in a ChatConnection that `config.chatConnection` names as `namespace/name`
