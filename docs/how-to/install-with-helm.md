@@ -95,8 +95,9 @@ go run ./cmd/agent-kourier init --out "$HOME/my-install/my-values.yaml"
 ```
 
 A build that is not a release has no chart version to name, so the `helm install` command it prints has no `--version`, and Helm takes the
-newest chart. A release's image prints the chart version of its own release; the examples below, which name `--team-namespace`, need the image of a release
-after 0.3.1. Run the image in the directory that should get the files. `-it`
+newest chart. A release's image prints the chart version of its own release. The image of 0.3.1 has the older `init`, which writes the ConfigMap route and
+does not take `--team-namespace` (leave that option out of the second example there); a release after 0.3.1 writes the files described here.
+Run the image in the directory that should get the files. `-it`
 lets it ask its questions, and `--user` runs it as you, so it can write the files into your directory (the image's own user is 65532):
 
 ```sh

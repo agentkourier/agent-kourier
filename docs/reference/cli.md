@@ -114,7 +114,7 @@ was. A value or an answer that looks like a Slack token is refused as soon as it
 
 The checks, in order: a channel name is looked up; the resources are loaded and checked; and, with a bot token, a `conversations.history`
 request for the channel shows that the bot can read it (`channels:history`, or `groups:history` for a private channel, and the bot in the
-channel); the request asks for messages newer than the moment it is made, so it fetches none. On custom resources the team's file is loaded with the broker's file loader, which defaults and validates each object, and the
+channel). The request asks for messages newer than the moment it is made, so it fetches none. On custom resources the team's file is loaded with the broker's file loader, which defaults and validates each object, and the
 Binding's references to the ChatConnection and the AgentBackend are resolved as the broker resolves them, with every Secret taken as present.
 With `files`, what the chart renders from the values is loaded. Without a bot token the Slack
 checks are skipped and the command says so. Nothing is written unless every check passes. With `files` the references between the resources are
