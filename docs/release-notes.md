@@ -3,7 +3,7 @@
 What changed in each release, newest first, and what you must do about it. The steps for an upgrade are in
 [Upgrade](how-to/upgrade.md), which has a section for each change that needs one; this page says what changed and points to it.
 
-## Version 0.3.2 (unreleased)
+## Version 0.3.2
 
 `agent-kourier init` writes the chart's default route, for a team that brings its own Slack app. The broker's code, the CRDs and the chart's
 templates are unchanged by it. The image is built with Go 1.27.4.
