@@ -484,7 +484,7 @@ kubectl -n agent-kourier get pods
 kubectl -n agent-kourier logs deploy/agent-kourier
 ```
 
-A healthy start logs these lines, in this order (a broker with no connection of its own logs `serving a ChatConnection` after `ready`, where it can come after the first `slack:` line, as below):
+A healthy start logs these lines, in this order (a broker with no connection of its own logs `serving a ChatConnection` after `ready`, where it can come after the first `slack:` line):
 
 ```text
 config route

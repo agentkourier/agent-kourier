@@ -244,14 +244,16 @@ func TestDocumentedTeamAppInstalls(t *testing.T) {
 			if got := secretRoles(t, objs); len(got) != 0 {
 				t.Errorf("Secret Roles %v; want none (the team grants its own)", got)
 			}
-			m := regexp.MustCompile(`--serviceaccount=([a-z0-9-]+):([a-z0-9-]+)`).FindStringSubmatch(string(raw))
-			if m == nil {
+			ms := regexp.MustCompile(`--serviceaccount=([a-z0-9-]+):([a-z0-9-]+)`).FindAllStringSubmatch(string(raw), -1)
+			if ms == nil {
 				t.Fatalf("%s has no RoleBinding command that names the broker's ServiceAccount", doc)
 			}
-			if !slices.ContainsFunc(objs, func(o object) bool {
-				return o.kind() == "ServiceAccount" && o.namespace() == m[1] && o.name() == m[2]
-			}) {
-				t.Errorf("%s grants the ServiceAccount %s:%s, which the chart does not render; objects %v", doc, m[1], m[2], kinds(objs))
+			for _, m := range ms {
+				if !slices.ContainsFunc(objs, func(o object) bool {
+					return o.kind() == "ServiceAccount" && o.namespace() == m[1] && o.name() == m[2]
+				}) {
+					t.Errorf("%s grants the ServiceAccount %s:%s, which the chart does not render; objects %v", doc, m[1], m[2], kinds(objs))
+				}
 			}
 		})
 	}

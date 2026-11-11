@@ -38,7 +38,8 @@ func crArgs(out string, extra ...string) []string {
 func teamFile(out, team string) string { return filepath.Join(filepath.Dir(out), team+".yaml") }
 
 // pageSection returns the text of the page's section that starts with the heading, up to the next heading of any level, so
-// without its subsections. A line in a code fence (a YAML or shell comment) is never a heading.
+// without its subsections. A line in a code fence (a YAML or shell comment) is never a heading. Headings and fences are
+// read at the start of a line only, as the pages write them; an indented one (in a list) would not be seen.
 func pageSection(t *testing.T, page, heading string) string {
 	t.Helper()
 	text, err := os.ReadFile(page)
