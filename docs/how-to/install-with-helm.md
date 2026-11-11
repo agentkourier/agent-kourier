@@ -123,7 +123,7 @@ names it in the team's Role too. The options are in [Command line and environmen
 
 The steps below, recorded on a kind cluster with the
 [echo agent](https://github.com/agentkourier/agent-kourier/blob/main/examples/recipes/echo-agent/agent/README.md), a plain A2A agent
-with no model, as the team's agent. The recording leaves out the server-side dry run. The wait for the Binding to turn Ready, about 50 seconds
+with no model, as the team's agent. The recording leaves out the server-side dry run. The wait for the Binding to turn Ready, about 25 seconds
 here, is cut.
 
 The chart installs the CRDs and the broker, and you apply the resources. They are two steps because a release that renders the CRDs and
