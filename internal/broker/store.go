@@ -100,7 +100,7 @@ func openStore(ctx context.Context, c StoreConfig, dbPath string, secrets secret
 		return nil, err
 	}
 	if c.kind() == StoreSQLite {
-		st, err := sqlite.Open(ctx, dbPath)
+		st, err := sqlite.Open(ctx, dbPath, sqlite.WithLogger(log))
 		if err != nil {
 			return nil, fmt.Errorf("open the sqlite store: %w", err)
 		}

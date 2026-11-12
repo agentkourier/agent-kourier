@@ -1,58 +1,27 @@
 package sqlite
 
 import (
-	"cmp"
 	"context"
 	"database/sql"
 	"embed"
 	"fmt"
 	"io/fs"
-	"path"
-	"slices"
-	"strconv"
-	"strings"
+	"log/slog"
 	"time"
+
+	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
 
-type migration struct {
-	version int
-	name    string
-}
-
-// listMigrations parses the migrations/<version>_<name>.sql files in fsys and
-// returns them sorted by numeric version. Two files with one version are an
-// error, so a clash fails loudly instead of one file being skipped.
-func listMigrations(fsys fs.FS) ([]migration, error) {
-	files, err := fs.Glob(fsys, "migrations/*.sql")
-	if err != nil {
-		return nil, fmt.Errorf("list migrations: %w", err)
-	}
-	seen := map[int]string{}
-	var ms []migration
-	for _, name := range files {
-		v, err := strconv.Atoi(strings.SplitN(path.Base(name), "_", 2)[0])
-		if err != nil {
-			return nil, fmt.Errorf("migration %q: filename must start with a numeric version: %w", name, err)
-		}
-		if prev, dup := seen[v]; dup {
-			return nil, fmt.Errorf("migrations %q and %q share version %d", prev, name, v)
-		}
-		seen[v] = name
-		ms = append(ms, migration{v, name})
-	}
-	slices.SortFunc(ms, func(a, b migration) int { return cmp.Compare(a.version, b.version) })
-	return ms, nil
-}
-
 // migrate applies the migrations in fsys that are not yet recorded in
 // schema_migrations, in version order. Each runs in its own transaction
 // together with its schema_migrations row, so a failure leaves earlier
-// migrations applied and the failing one not at all.
-func migrate(ctx context.Context, db *sql.DB, fsys fs.FS) error {
-	ms, err := listMigrations(fsys)
+// migrations applied and the failing one not at all. It then reports, at WARN, a database that records a migration
+// fsys does not have (store.WarnIfSchemaNewer).
+func migrate(ctx context.Context, db *sql.DB, fsys fs.FS, log *slog.Logger) error {
+	ms, err := store.ListMigrations(fsys)
 	if err != nil {
 		return err
 	}
@@ -62,13 +31,23 @@ func migrate(ctx context.Context, db *sql.DB, fsys fs.FS) error {
 	}
 	for _, m := range ms {
 		if err := applyMigration(ctx, db, fsys, m); err != nil {
-			return fmt.Errorf("migration %q: %w", m.name, err)
+			return fmt.Errorf("migration %q: %w", m.Name, err)
 		}
 	}
+	return warnIfNewer(ctx, db, ms, log)
+}
+
+// warnIfNewer reads the newest version schema_migrations records and hands it to store.WarnIfSchemaNewer.
+func warnIfNewer(ctx context.Context, db *sql.DB, known []store.Migration, log *slog.Logger) error {
+	var newest int
+	if err := db.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&newest); err != nil {
+		return fmt.Errorf("read the newest migration: %w", err)
+	}
+	store.WarnIfSchemaNewer(ctx, log, known, newest)
 	return nil
 }
 
-func applyMigration(ctx context.Context, db *sql.DB, fsys fs.FS, m migration) (err error) {
+func applyMigration(ctx context.Context, db *sql.DB, fsys fs.FS, m store.Migration) (err error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
@@ -78,7 +57,7 @@ func applyMigration(ctx context.Context, db *sql.DB, fsys fs.FS, m migration) (e
 			_ = tx.Rollback()
 		}
 	}()
-	res, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)`, m.version, time.Now().UnixNano())
+	res, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)`, m.Version, time.Now().UnixNano())
 	if err != nil {
 		return fmt.Errorf("record: %w", err)
 	}
@@ -89,7 +68,7 @@ func applyMigration(ctx context.Context, db *sql.DB, fsys fs.FS, m migration) (e
 	if n == 0 {
 		return tx.Rollback() // already applied
 	}
-	body, err := fs.ReadFile(fsys, m.name)
+	body, err := fs.ReadFile(fsys, m.Name)
 	if err != nil {
 		return fmt.Errorf("read: %w", err)
 	}

@@ -1,11 +1,14 @@
 package sqlite
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"testing/fstest"
@@ -114,10 +117,10 @@ func TestMigrateAppliesInOrderOnceAndRollsBackFailures(t *testing.T) {
 		"migrations/0001_a.sql": good["migrations/0001_a.sql"],
 		"migrations/0002_b.sql": {Data: []byte("CREATE TABLE b (x INTEGER); NOT SQL;")},
 	}
-	if err := migrate(ctx, db, broken); err == nil {
+	if err := migrate(ctx, db, broken, discardLog); err == nil {
 		t.Fatal("migrate with a broken migration returned nil")
 	}
-	if err := migrate(ctx, db, good); err != nil { // idempotent: 0001 is already applied
+	if err := migrate(ctx, db, good, discardLog); err != nil { // idempotent: 0001 is already applied
 		t.Fatalf("re-running an applied migration: %v", err)
 	}
 	var v1, v2, hasA, hasB int
@@ -131,14 +134,65 @@ func TestMigrateAppliesInOrderOnceAndRollsBackFailures(t *testing.T) {
 	}
 }
 
-func TestListMigrationsRejectsDuplicateVersionsAndSortsNumerically(t *testing.T) {
-	ok := fstest.MapFS{"migrations/10_b.sql": {}, "migrations/9_a.sql": {}}
-	ms, err := listMigrations(ok)
-	if err != nil || len(ms) != 2 || ms[0].version != 9 || ms[1].version != 10 {
-		t.Fatalf("listMigrations = %+v, %v; want 9 then 10", ms, err)
+var discardLog = slog.New(slog.DiscardHandler)
+
+// TestMigrateWarnsOfANewerSchema: a database that records a migration this binary does not have is a rollback or a
+// replica not yet upgraded. Open does not refuse it, and reports it at WARN with the attributes the Postgres store uses.
+func TestMigrateWarnsOfANewerSchema(t *testing.T) {
+	ctx := context.Background()
+	db, err := openPool(ctx, filepath.Join(t.TempDir(), "newer.db"), 1, "journal_mode(WAL)")
+	if err != nil {
+		t.Fatalf("openPool: %v", err)
 	}
-	dup := fstest.MapFS{"migrations/0002_a.sql": {}, "migrations/2_b.sql": {}}
-	if _, err := listMigrations(dup); err == nil {
-		t.Fatal("duplicate version accepted")
+	t.Cleanup(func() { _ = db.Close() })
+	two := fstest.MapFS{
+		"migrations/0001_a.sql": {Data: []byte("CREATE TABLE a (x INTEGER);")},
+		"migrations/0002_b.sql": {Data: []byte("CREATE TABLE b (x INTEGER);")},
+	}
+	one := fstest.MapFS{"migrations/0001_a.sql": two["migrations/0001_a.sql"]}
+
+	var out bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&out, nil))
+	if err := migrate(ctx, db, two, log); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("a database at the newest known migration logged %q", out.String())
+	}
+	if err := migrate(ctx, db, one, log); err != nil {
+		t.Fatalf("migrate with an older binary's files: %v", err)
+	}
+	for _, want := range []string{
+		"level=WARN", `msg="the database schema is newer than this build of Agent Kourier"`,
+		"newest_known_migration=1", "newest_in_database=2",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("log = %q; want it to contain %q", out.String(), want)
+		}
+	}
+}
+
+// TestOpenWarnsOfANewerSchemaThroughItsLogger: WithLogger is where Open reports it; the default is slog.Default().
+func TestOpenWarnsOfANewerSchemaThroughItsLogger(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "agent-kourier.db")
+	s, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := s.a.write.ExecContext(ctx, `INSERT INTO schema_migrations (version, applied_at) VALUES (999999, 0)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	s, err = Open(ctx, path, WithLogger(slog.New(slog.NewTextHandler(&out, nil))))
+	if err != nil {
+		t.Fatalf("Open on a newer schema: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	if !strings.Contains(out.String(), "newest_in_database=999999") {
+		t.Errorf("log = %q; want the warning with newest_in_database=999999", out.String())
 	}
 }
