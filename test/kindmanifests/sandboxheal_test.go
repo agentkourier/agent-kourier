@@ -298,7 +298,7 @@ func TestSandboxReadmeNamesTheHealAndWhatToLookAt(t *testing.T) {
 		"agentkourier_chat_connected":                    "../../internal/broker/metrics.go",
 		"slack: socket mode connected":                   "../../internal/chat/slack/connwatch.go",
 		"slack: socket mode reconnecting":                "../../internal/chat/slack/connwatch.go",
-		"slack: the chunks mode of a stream was refused": "../../internal/chat/slack/platform.go",
+		"slack: the chunks mode of a stream was refused": "../../internal/chat/slack/stream.go",
 	} {
 		src, err := os.ReadFile(source)
 		if err != nil {
