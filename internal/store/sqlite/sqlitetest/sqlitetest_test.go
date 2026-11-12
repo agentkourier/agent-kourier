@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 )
@@ -94,7 +96,26 @@ func TestEveryPathIsADatabaseOfItsOwn(t *testing.T) {
 	}
 }
 
-// TestSeedLeavesAFileThatIsThere: a test that reopens a database by its path seeds it each time, and what it wrote stays.
+// TestOpenIsAStoreOverAMigratedDatabaseOfItsOwn: Open gives a store that works, each over a database of its own, and
+// closes it when the test ends.
+func TestOpenIsAStoreOverAMigratedDatabaseOfItsOwn(t *testing.T) {
+	var a *sqlite.Store
+	t.Run("open", func(t *testing.T) {
+		a = sqlitetest.Open(t)
+		if err := a.AppendAudit(t.Context(), store.AuditEntry{At: time.Unix(1, 0), Kind: store.AuditEvent, Subject: "mine", Outcome: "accepted"}); err != nil {
+			t.Fatalf("a write to the store from Open: %v", err)
+		}
+		b := sqlitetest.Open(t)
+		if l, err := b.ListAudit(t.Context(), time.Time{}, 0, 10); err != nil || len(l) != 0 {
+			t.Errorf("the other store holds %+v, %v; want nothing of the first one's", l, err)
+		}
+	})
+	if _, err := a.ListAudit(t.Context(), time.Time{}, 0, 10); err == nil {
+		t.Error("the store still reads after its test ended; want it closed at cleanup")
+	}
+}
+
+// TestSeedLeavesAFileThatIsThere:a test that reopens a database by its path seeds it each time, and what it wrote stays.
 func TestSeedLeavesAFileThatIsThere(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mine.db")
 	sqlitetest.Seed(t, path)
