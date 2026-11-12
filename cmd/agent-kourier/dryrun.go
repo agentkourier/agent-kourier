@@ -196,7 +196,7 @@ func dryRunReportOf(ctx context.Context, o dryRunOptions, getenv func(string) st
 	if o.since > 0 {
 		since = time.Now().Add(-o.since)
 	}
-	conn := v1alpha1.NamespacedName(cmp.Or(b.Spec.Chat.ConnectionRef.Namespace, b.Namespace), b.Spec.Chat.ConnectionRef.Name)
+	conn := v1alpha1.NamespacedName(b.Spec.Chat.ConnectionRef.NamespaceOr(b.Namespace), b.Spec.Chat.ConnectionRef.Name)
 	history, err := client.History(ctx, conn, channel, since)
 	if err != nil {
 		return dryRunReport{}, fmt.Errorf("read %s: %w%s", channel, err, slackHint(err))

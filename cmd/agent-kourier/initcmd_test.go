@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -623,5 +624,21 @@ func TestInitKagentBackendIsTheDocumentedOne(t *testing.T) {
 	}
 	if be := loadWritten(t, out).AgentBackends[0]; be.Spec.Dialect != v1alpha1.DialectKagentV1 {
 		t.Errorf("dialect = %q", be.Spec.Dialect)
+	}
+}
+
+// TestIsNamespaceNameMatchesDNS1123Label pins isNamespaceName to the definition it had before it moved to the validation
+// package's DNS-1123 label check: the regexp ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ and at most 63 characters. The old
+// definition is the oracle, so the move cannot have changed what init accepts.
+func TestIsNamespaceNameMatchesDNS1123Label(t *testing.T) {
+	oldNamespaceName := regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+	for _, s := range []string{
+		"", "a", "0", "sre", "a-b", "a--b", "-a", "a-", "-", "A", "aB", "a.b", "a_b", "a b", " a", "a ", "a\n", "é",
+		strings.Repeat("a", 63), strings.Repeat("a", 64), strings.Repeat("a", 62) + "-", "-" + strings.Repeat("a", 62),
+		strings.Repeat("0", 63), strings.Repeat("a-", 31) + "a",
+	} {
+		if got, want := isNamespaceName(s), oldNamespaceName.MatchString(s) && len(s) <= 63; got != want {
+			t.Errorf("isNamespaceName(%q) = %v, the old definition = %v", s, got, want)
+		}
 	}
 }

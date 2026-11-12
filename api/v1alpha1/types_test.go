@@ -343,3 +343,24 @@ func TestNamespacedName(t *testing.T) {
 		t.Errorf("NamespacedName = %q; want sre/sre-alerts", got)
 	}
 }
+
+func TestObjectRefNamespaceOr(t *testing.T) {
+	tests := []struct {
+		name  string
+		ref   ObjectRef
+		owner string
+		want  string
+	}{
+		{"empty namespace is the owner's", ObjectRef{Name: "a"}, "sre", "sre"},
+		{"a named namespace wins", ObjectRef{Namespace: "ops", Name: "a"}, "sre", "ops"},
+		{"the owner's namespace named outright", ObjectRef{Namespace: "sre", Name: "a"}, "sre", "sre"},
+		{"neither", ObjectRef{Name: "a"}, "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.ref.NamespaceOr(tt.owner); got != tt.want {
+				t.Errorf("NamespaceOr(%q) = %q, want %q", tt.owner, got, tt.want)
+			}
+		})
+	}
+}

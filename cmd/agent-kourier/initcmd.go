@@ -22,6 +22,7 @@ import (
 	"time"
 
 	slackgo "github.com/slack-go/slack"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/yaml"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
@@ -90,12 +91,6 @@ const (
 
 // resourceAPIVersion is the apiVersion the chart gives each resource file (templates/_helpers.tpl, agentkourier.resource).
 const resourceAPIVersion = "agentkourier.dev/v1alpha1"
-
-// initChannelID is what api/v1alpha1 accepts as a channel ID in a Binding; anything else is a name.
-var initChannelID = regexp.MustCompile(`^[CG][A-Z0-9]+$`)
-
-// namespaceName is a DNS-1123 label, what a namespace is.
-var namespaceName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
 // releaseVersion matches a version of a release, as the binary's --version prints it: v0.1.1 or 0.1.1-rc.1.
 var releaseVersion = regexp.MustCompile(`^v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$`)
@@ -236,7 +231,7 @@ func runInit(ctx context.Context, o initOptions, ver string, stdin io.Reader, ge
 		client = slack.New(slack.Config{BotToken: token, APIURL: o.apiURL, HTTPClient: &http.Client{Timeout: 30 * time.Second}})
 	}
 	channel := o.channel
-	if !initChannelID.MatchString(channel) {
+	if !v1alpha1.IsChannelID(channel) {
 		if client == nil {
 			return usagef("--channel %q is a name: set %s (or name a file with --token-file) so that Slack can look it up, or give the channel's ID, which starts with C (G for an older private channel)", channel, botTokenKey)
 		}
@@ -470,7 +465,7 @@ func tokenRefusal(option string) error {
 }
 
 // isNamespaceName reports whether s is a DNS-1123 label, what a namespace is called.
-func isNamespaceName(s string) bool { return namespaceName.MatchString(s) && len(s) <= 63 }
+func isNamespaceName(s string) bool { return len(validation.IsDNS1123Label(s)) == 0 }
 
 // optionalBotToken is loadBotToken for a command that works without a token: it reports whether there is one. A token
 // file that was named, or a variable that is set, and is wrong is an error.

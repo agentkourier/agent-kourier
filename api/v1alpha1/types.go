@@ -1,6 +1,7 @@
 package v1alpha1
 
 import (
+	"cmp"
 	"slices"
 	"time"
 
@@ -65,6 +66,10 @@ type ObjectRef struct {
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
 	Name string `json:"name"`
 }
+
+// NamespaceOr returns the namespace the reference names, or owner, the namespace of the referring object, when it names
+// none.
+func (r ObjectRef) NamespaceOr(owner string) string { return cmp.Or(r.Namespace, owner) }
 
 // NamespacedName returns the "namespace/name" by which Agent Kourier names a resource in a conversation
 // key, a message ID, an audit row or a log line. It does no defaulting: callers resolve a
