@@ -9,9 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agentkourier/agent-kourier/internal/chat"
-	"github.com/agentkourier/agent-kourier/internal/outbox"
-	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -121,16 +118,9 @@ func (b *Backstop) isTold(id string) bool {
 
 // check tells the thread of row if the task it was for is over.
 func (b *Backstop) check(ctx context.Context, row store.Interaction, now time.Time) error {
-	sess, err := b.cfg.Sessions.GetSession(ctx, row.Key, readAll, now)
-	switch {
-	case err == nil && sess.TaskID == row.TaskID:
-		return nil // still the session's task: it may yet take the answer
-	case err != nil && !errors.Is(err, store.ErrNotFound):
-		return fmt.Errorf("interact: read the session of %s: %w", row.ID, err)
-	}
-	if _, err := b.cfg.Outbox.Enqueue(ctx, outbox.Post{Source: row.ID + "/answer", Role: store.OutboxNotice, Connection: row.Key.Connection, Channel: row.Key.Channel,
-		Thread: row.Key.Thread, Out: chat.Say(render.Notice(textClosedBefore, ""))}); err != nil {
-		return fmt.Errorf("interact: tell the thread that the answer to %s never arrived: %w", row.ID, err)
+	held, err := tellClosedBefore(ctx, b.cfg.Sessions, b.cfg.Outbox, row, now, "never arrived")
+	if err != nil || held {
+		return err // held: still the session's task, so it may yet take the answer
 	}
 	b.mu.Lock()
 	b.told[row.ID] = struct{}{}

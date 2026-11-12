@@ -897,6 +897,6 @@ func (f *fixture) wait(t *testing.T) {
 
 // taskIDOf is the task recorded for key k.
 func (f *fixture) taskIDOf(k Key) string {
-	sess, _ := f.st.GetSession(f.t.Context(), k, readAll, t0)
+	sess, _ := f.st.GetSession(f.t.Context(), k, store.AnyAge, t0)
 	return sess.TaskID
 }

@@ -17,7 +17,6 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
-	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -86,9 +85,6 @@ const timeoutDenyReason = "denied by agent-kourier: no one decided in time"
 // never given up on: a task that is still paused holds its thread and the replies queued behind it,
 // and only this sweep would end it.
 const maxAttempts = 5
-
-// readAll is a thread TTL no session outlives, to read a session whatever its age.
-const readAll = 100 * 365 * 24 * time.Hour
 
 // defaultOrphanGrace is how long a due interaction must be seen, at every sweep, without its Binding in the config or with its chat
 // connection not served, before the sweep ends it without the agent (SweepConfig.OrphanGrace). The config source defers the deletion
@@ -361,7 +357,7 @@ func (s *Sweeper) orphaned(ctx context.Context, row store.Interaction, now time.
 		return notOrphaned, ""
 	}
 	var binding string
-	if sess, err := s.cfg.Sessions.GetSession(ctx, row.Key, readAll, now); err == nil {
+	if sess, err := s.cfg.Sessions.GetSession(ctx, row.Key, store.AnyAge, now); err == nil {
 		binding = sess.Binding
 		if _, err := s.cfg.Lookup.Binding(binding); errors.Is(err, session.ErrUnknownBinding) {
 			return bindingGone, binding
@@ -607,7 +603,7 @@ func (s *Sweeper) endApproval(ctx context.Context, row store.Interaction, in dia
 	}
 	_, alreadyAudited := s.audited[row.ID]
 	asked := pauseEnd{notice: timedOutNotice, audited: alreadyAudited}
-	sess, err := s.cfg.Sessions.GetSession(ctx, row.Key, readAll, now)
+	sess, err := s.cfg.Sessions.GetSession(ctx, row.Key, store.AnyAge, now)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		s.cfg.Logger.WarnContext(ctx, "interact: a timed-out approval has no session to name its Binding, so its task is cancelled", "interaction", row.ID)
@@ -714,9 +710,7 @@ func (s *Sweeper) notify(ctx context.Context, row store.Interaction, text string
 
 // notifyAs is notify with an outbox ID that comes from source, for a notice of the interaction that is not the timeout's.
 func (s *Sweeper) notifyAs(ctx context.Context, row store.Interaction, source, text string) error {
-	_, err := s.cfg.Outbox.Enqueue(ctx, outbox.Post{Source: source, Role: store.OutboxNotice, Connection: row.Key.Connection, Channel: row.Key.Channel,
-		Thread: row.Key.Thread, Out: chat.Say(render.Notice(text, ""))})
-	return err
+	return enqueueNotice(ctx, s.cfg.Outbox, row.Key, source, text)
 }
 
 // report audits a timeout this sweep recorded and counts it: OnTimeout for any interaction, and OnApprovalOutcome for the
@@ -727,7 +721,7 @@ func (s *Sweeper) notifyAs(ctx context.Context, row store.Interaction, source, t
 func (s *Sweeper) report(ctx context.Context, row store.Interaction, end pauseEnd, now time.Time) {
 	if !end.audited {
 		var actor audit.Actor // no person decided it
-		if sess, err := s.cfg.Sessions.GetSession(ctx, row.Key, readAll, now); err == nil {
+		if sess, err := s.cfg.Sessions.GetSession(ctx, row.Key, store.AnyAge, now); err == nil {
 			actor.Binding = sess.Binding
 		} else {
 			actor.Binding = end.binding
