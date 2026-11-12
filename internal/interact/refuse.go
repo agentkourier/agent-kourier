@@ -238,7 +238,7 @@ func enqueueNotice(ctx context.Context, out Enqueuer, key store.ConversationKey,
 
 // tellClosedBefore tells the thread of row that its answer was not sent, unless the session is still on row's task (held
 // is then true, and nothing is told): the task has moved on, or the session is gone. A failed read of the session is returned
-// as it is. late says, in the error of a failed notice, which way the answer failed to arrive.
+// wrapped. late says, in the error of a failed notice, which way the answer failed to arrive.
 func tellClosedBefore(ctx context.Context, sessions SessionReader, out Enqueuer, row store.Interaction, now time.Time, late string) (held bool, err error) {
 	sess, serr := sessions.GetSession(ctx, row.Key, store.AnyAge, now)
 	switch {
