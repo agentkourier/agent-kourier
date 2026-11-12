@@ -22,7 +22,7 @@ func TestMigration0029RowsWrittenBeforeReadAsNoConnectionAndAreAttributed(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := migrate(ctx, db, migrationsThrough(t, 28)); err != nil {
+	if err := migrate(ctx, db, migrationsThrough(t, 28), discardLog); err != nil {
 		_ = db.Close()
 		t.Fatalf("migrate through 0028: %v", err)
 	}
