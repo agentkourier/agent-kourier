@@ -91,7 +91,7 @@ type openedStore interface {
 }
 
 // openStore opens the store that c chooses: the SQLite file at dbPath, or the Postgres database whose DSN is in the
-// Secret that c names, read through secrets. extra are more options for the Postgres store (SQLite takes none): Run
+// Secret that c names, read through secrets. extra are more options for the Postgres store (SQLite takes only the logger): Run
 // passes the one that ends the process when a write finds that another replica has led since (spec D37). An error wraps ErrWiring when the config is at fault, which includes a
 // Secret that cannot be read (it is missing, has no such key, or is empty), and none carries the DSN or the password
 // in it.
@@ -100,7 +100,7 @@ func openStore(ctx context.Context, c StoreConfig, dbPath string, secrets secret
 		return nil, err
 	}
 	if c.kind() == StoreSQLite {
-		st, err := sqlite.Open(ctx, dbPath)
+		st, err := sqlite.Open(ctx, dbPath, sqlite.WithLogger(log))
 		if err != nil {
 			return nil, fmt.Errorf("open the sqlite store: %w", err)
 		}

@@ -6,8 +6,9 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/redact"
 )
 
-// Truncated ends text that Truncate cut. It holds nothing an adapter needs to escape, on any platform.
-const Truncated = "… (truncated)"
+// Truncated ends text that Truncate cut. It holds nothing an adapter needs to escape, on any platform. It is
+// redact.Truncated, so a text cut for display and a text cut for a log or an audit row end the same way.
+const Truncated = redact.Truncated
 
 // Clean returns s without the characters a reader cannot see and a platform may act on: the invisible
 // characters of redact.Normalize, which owns the set, so that display and redaction cannot disagree on it.

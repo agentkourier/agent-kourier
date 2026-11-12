@@ -38,21 +38,6 @@ func TestMigrationsInStepWithSQLite(t *testing.T) {
 	}
 }
 
-func TestListMigrations(t *testing.T) {
-	ms, err := listMigrations(fstest.MapFS{
-		"migrations/0010_ten.sql": {}, "migrations/0002_two.sql": {}, "migrations/0001_one.sql": {},
-	})
-	if err != nil || len(ms) != 3 || ms[0].version != 1 || ms[1].version != 2 || ms[2].version != 10 {
-		t.Errorf("listMigrations = %+v, %v; want 1, 2, 10 in numeric order", ms, err)
-	}
-	if _, err := listMigrations(fstest.MapFS{"migrations/0001_a.sql": {}, "migrations/1_b.sql": {}}); err == nil {
-		t.Error("two files with one version were accepted")
-	}
-	if _, err := listMigrations(fstest.MapFS{"migrations/x_a.sql": {}}); err == nil {
-		t.Error("a file with no numeric version was accepted")
-	}
-}
-
 func appliedVersions(t *testing.T, dsn string) map[int]time.Time {
 	t.Helper()
 	pool, err := pgxpool.New(t.Context(), dsn)

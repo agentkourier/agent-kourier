@@ -151,7 +151,7 @@ func classifyCancel(err error) cancelKind {
 
 // recordedTask reads the session of key, and says whether it records the task id.
 func (m *Manager) recordedTask(ctx context.Context, key Key, id a2a.TaskID) (sess store.Session, isTask bool, err error) {
-	sess, err = m.cfg.Store.GetSession(ctx, key, readAll, m.cfg.Now())
+	sess, err = m.cfg.Store.GetSession(ctx, key, store.AnyAge, m.cfg.Now())
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		return sess, false, nil

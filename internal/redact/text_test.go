@@ -419,3 +419,25 @@ func TestFreeTextWholeSaysWhetherTheTextWasCut(t *testing.T) {
 		}
 	}
 }
+
+func TestRuneBoundary(t *testing.T) {
+	const s = "a€b" // '€' is the three bytes at 1, 2 and 3
+	tests := []struct {
+		name string
+		i    int
+		want int
+	}{
+		{"start", 0, 0},
+		{"on a character", 1, 1},
+		{"inside the second byte", 2, 1},
+		{"inside the third byte", 3, 1},
+		{"after the character", 4, 4},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := RuneBoundary(s, tc.i); got != tc.want {
+				t.Fatalf("RuneBoundary(%q, %d) = %d, want %d", s, tc.i, got, tc.want)
+			}
+		})
+	}
+}

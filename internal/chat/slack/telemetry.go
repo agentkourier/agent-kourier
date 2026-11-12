@@ -11,6 +11,23 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
+// codeOutcome is the outcome a call is counted under when Slack answered it with the error code. A code that rejects the
+// token is read first, so that no other case can take it.
+func codeOutcome(code string) string {
+	if TokenRejected(code) {
+		return "auth_rejected"
+	}
+	switch code {
+	case "channel_not_found", "not_in_channel", "is_archived":
+		return "channel_gone"
+	case "message_not_in_streaming_state":
+		return "not_streaming"
+	case "invalid_chunks", "streaming_mode_mismatch", "cannot_provide_both_markdown_text_and_chunks":
+		return "mode_refused" // Slack refused the chunks mode: the fallback to markdown_text follows
+	}
+	return "api_error"
+}
+
 func (c *Client) finishChat(ctx context.Context, op *telemetry.Operation, operation string, err error) {
 	outcome := telemetry.ErrorClass(err)
 	var rate *slackgo.RateLimitedError
@@ -18,18 +35,7 @@ func (c *Client) finishChat(ctx context.Context, op *telemetry.Operation, operat
 	if errors.As(err, &rate) {
 		outcome = "rate_limited"
 	} else if errors.As(err, &response) {
-		switch response.Err {
-		case "invalid_auth", "not_authed", "account_inactive", "token_revoked", "token_expired":
-			outcome = "auth_rejected"
-		case "channel_not_found", "not_in_channel", "is_archived":
-			outcome = "channel_gone"
-		case "message_not_in_streaming_state":
-			outcome = "not_streaming"
-		case "invalid_chunks", "streaming_mode_mismatch", "cannot_provide_both_markdown_text_and_chunks":
-			outcome = "mode_refused" // Slack refused the chunks mode: the fallback to markdown_text follows
-		default:
-			outcome = "api_error"
-		}
+		outcome = codeOutcome(response.Err)
 	}
 	trace.SpanFromContext(ctx).SetAttributes(attribute.String("agentkourier.platform", "slack"), attribute.String("agentkourier.chat.operation", operation))
 	telemetry.Count(ctx, "agentkourier_chat_api_calls_total", operation, outcome, c.conn)

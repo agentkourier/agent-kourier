@@ -153,14 +153,11 @@ func dryRunExitCode(err error) int {
 	switch {
 	case errors.As(err, &usageError{}):
 		return exitUsage
-	case errors.As(err, &slackErr) && slackAuthCodes[firstWord(slackErr.Err)]:
+	case errors.As(err, &slackErr) && slack.TokenRejected(firstWord(slackErr.Err)):
 		return exitSlackAuth
 	}
 	return exitFailure
 }
-
-// slackAuthCodes are the codes with which Slack rejects the token for good: a retry would be rejected again.
-var slackAuthCodes = map[string]bool{"invalid_auth": true, "not_authed": true, "token_revoked": true, "token_expired": true, "account_inactive": true}
 
 // firstWord is the text up to the first space.
 func firstWord(s string) string {

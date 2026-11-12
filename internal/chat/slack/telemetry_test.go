@@ -85,3 +85,20 @@ func TestRefusedChunksModeIsItsOwnOutcome(t *testing.T) {
 		t.Error("invalid_arguments is not an api_error")
 	}
 }
+
+func TestRejectedTokenIsItsOwnOutcome(t *testing.T) {
+	for _, code := range []string{"invalid_auth", "token_revoked", "token_expired", "account_inactive", "not_authed"} {
+		t.Run(code, func(t *testing.T) {
+			h := telemetrytest.New(t)
+			if _, err := refusingClient(t, code).Post(h.Ctx, "C1", "", slack.Content{Text: "text"}, "ob-1"); err == nil {
+				t.Fatal("Post succeeded")
+			}
+			if h.Counter(t, "agentkourier_chat_api_calls_total", map[string]string{"operation": "Post", "outcome": "auth_rejected", "connection": intakeConn}) != 1 {
+				t.Errorf("%s was not counted as auth_rejected: %s", code, h.Exported(t))
+			}
+			if s := h.Span(t, "agentkourier.chat.Post"); s.Status.Description != "auth_rejected" {
+				t.Errorf("span status = %q, want auth_rejected", s.Status.Description)
+			}
+		})
+	}
+}

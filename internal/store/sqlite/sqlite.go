@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"time"
 
@@ -38,8 +39,28 @@ type adapter struct {
 	read  *sql.DB
 }
 
+// Option configures Open.
+type Option func(*options)
+
+type options struct {
+	logger *slog.Logger
+}
+
+// WithLogger sets where Open reports what it finds worth a warning (a schema newer than this binary). The default is
+// slog.Default().
+func WithLogger(l *slog.Logger) Option {
+	return func(o *options) {
+		if l != nil {
+			o.logger = l
+		}
+	}
+}
+
 // Open opens (creating if needed) the database at path in WAL mode with
 // foreign keys on, a busy timeout and secure_delete, and applies pending migrations.
+//
+// Open does not refuse a database that records a migration this binary does not have (a rollback to an older release):
+// it logs a WARN, with the same message and attributes as the Postgres store.
 //
 // secure_delete overwrites deleted content in the database file, so that what a deleted press
 // held, or an agent's text, does not linger in a free page. The write-ahead log may still hold
@@ -47,7 +68,11 @@ type adapter struct {
 //
 // The store it returns is the guarded one (see Store): its arguments are checked and its operations recorded before the
 // SQLite adapter runs.
-func Open(ctx context.Context, path string) (*Store, error) {
+func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
+	o := options{logger: slog.Default()}
+	for _, opt := range opts {
+		opt(&o)
+	}
 	s := &adapter{}
 	var err error
 	if s.write, err = openPool(ctx, path, 1, "journal_mode(WAL)"); err != nil {
@@ -57,7 +82,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		_ = s.write.Close()
 		return nil, fmt.Errorf("open sqlite store %q (read pool): %w", path, err)
 	}
-	if err = migrate(ctx, s.write, migrationFiles); err != nil {
+	if err = migrate(ctx, s.write, migrationFiles, o.logger); err != nil {
 		_ = s.Close()
 		return nil, fmt.Errorf("open sqlite store %q: %w", path, err)
 	}

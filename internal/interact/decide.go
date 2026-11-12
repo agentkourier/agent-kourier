@@ -18,8 +18,6 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
-	"github.com/agentkourier/agent-kourier/internal/outbox"
-	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -338,16 +336,12 @@ func (d *Decider) send(ctx context.Context, pd PressDecision, msg a2a.Message, r
 	if retry {
 		return nil
 	}
-	sess, serr := d.cfg.Sessions.GetSession(ctx, row.Key, readAll, d.cfg.Now())
+	held, terr := tellClosedBefore(ctx, d.cfg.Sessions, d.cfg.Outbox, row, d.cfg.Now(), "came too late")
 	switch {
-	case serr == nil && sess.TaskID == row.TaskID:
+	case terr != nil:
+		return terr
+	case held:
 		return fmt.Errorf("interact: the session is not paused on %s yet: %w", row.TaskID, err)
-	case serr != nil && !errors.Is(serr, store.ErrNotFound):
-		return fmt.Errorf("interact: read the session of %s: %w", row.ID, serr)
-	}
-	if _, err := d.cfg.Outbox.Enqueue(ctx, outbox.Post{Source: row.ID + "/answer", Role: store.OutboxNotice, Connection: row.Key.Connection, Channel: row.Key.Channel,
-		Thread: row.Key.Thread, Out: chat.Say(render.Notice(textClosedBefore, ""))}); err != nil {
-		return fmt.Errorf("interact: tell the thread that the answer to %s came too late: %w", row.ID, err)
 	}
 	return nil
 }

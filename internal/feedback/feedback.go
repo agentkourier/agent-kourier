@@ -234,9 +234,6 @@ func (h *Handler) Press(ctx context.Context, i chat.Interaction) error {
 	return nil
 }
 
-// readAll is a threadTTL no session outlives: a message can be rated for as long as its session is stored.
-const readAll = 100 * 365 * 24 * time.Hour
-
 // Process works one recorded press through: find the session of its message and the Binding's agent, check who pressed (a
 // member of the channel, and no bot), store the vote, and tell the voter. The press of a bot, or of a person outside the
 // channel, is dropped without a word (the platform would refuse a word to the second), and a message whose session or Binding
@@ -259,7 +256,7 @@ func (h *Handler) Process(ctx context.Context, press store.Press) (interact.Resu
 	key := store.ConversationKey{Connection: in.Conn, Channel: press.Channel, Thread: v.Thread}
 	to := chat.Target{Conn: in.Conn, Channel: press.Channel, Thread: v.Thread}
 
-	sess, err := h.cfg.Sessions.GetSession(ctx, key, readAll, h.cfg.Now())
+	sess, err := h.cfg.Sessions.GetSession(ctx, key, store.AnyAge, h.cfg.Now())
 	if errors.Is(err, store.ErrNotFound) {
 		return h.finish(ctx, press, to, textGone)
 	} else if err != nil {

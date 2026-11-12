@@ -12,6 +12,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/backoff"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
@@ -63,12 +64,7 @@ func NewTap(cfg TapConfig) (*Tap, error) {
 	if cfg.Sink == nil || cfg.Handler == nil || cfg.Lookup == nil {
 		return nil, errors.New("interact: Sink, Handler and Lookup are required")
 	}
-	if cfg.Backoff <= 0 {
-		cfg.Backoff = time.Second
-	}
-	if cfg.MaxBackoff < cfg.Backoff {
-		cfg.MaxBackoff = max(30*time.Second, cfg.Backoff)
-	}
+	cfg.Backoff, cfg.MaxBackoff = retryBounds(cfg.Backoff, cfg.MaxBackoff, time.Second)
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
@@ -177,7 +173,7 @@ func (t *Tap) run(caller context.Context, id string, p Pause) {
 			return
 		}
 		t.cfg.Logger.Warn("interact: a pause could not be taken up; it will be tried again", "task", p.Task.ID, "binding", p.Binding, "tries", tries, "err", err)
-		wait := time.NewTimer(t.delay(tries))
+		wait := time.NewTimer(backoff.Doubling(t.cfg.Backoff, t.cfg.MaxBackoff, tries))
 		select {
 		case <-t.ctx.Done():
 			wait.Stop()
@@ -185,13 +181,4 @@ func (t *Tap) run(caller context.Context, id string, p Pause) {
 		case <-wait.C:
 		}
 	}
-}
-
-// delay is the wait after a pause's tries-th failure.
-func (t *Tap) delay(tries int) time.Duration {
-	d := t.cfg.Backoff
-	for i := 1; i < tries && d < t.cfg.MaxBackoff; i++ {
-		d *= 2
-	}
-	return min(d, t.cfg.MaxBackoff)
 }
