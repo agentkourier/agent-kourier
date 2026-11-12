@@ -41,7 +41,7 @@ func TestMigration0024RenamesTheStoredSystemUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := migrate(ctx, db, old); err != nil {
+	if err := migrate(ctx, db, old, discardLog); err != nil {
 		t.Fatal(err)
 	}
 	for id, user := range map[string]string{"system-turn": oldSystemUser, "person-turn": "U1"} {

@@ -14,20 +14,20 @@ import (
 
 func migrationsThrough(t *testing.T, last int) fstest.MapFS {
 	t.Helper()
-	ms, err := listMigrations(migrationFiles)
+	ms, err := store.ListMigrations(migrationFiles)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fsys := fstest.MapFS{}
 	for _, m := range ms {
-		if m.version > last {
+		if m.Version > last {
 			continue
 		}
-		body, err := fs.ReadFile(migrationFiles, m.name)
+		body, err := fs.ReadFile(migrationFiles, m.Name)
 		if err != nil {
 			t.Fatal(err)
 		}
-		fsys[m.name] = &fstest.MapFile{Data: body}
+		fsys[m.Name] = &fstest.MapFile{Data: body}
 	}
 	return fsys
 }
@@ -39,7 +39,7 @@ func TestMigration0026MovesLegacySessionAlertIntoOrigin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := migrate(ctx, db, migrationsThrough(t, 25)); err != nil {
+	if err := migrate(ctx, db, migrationsThrough(t, 25), discardLog); err != nil {
 		_ = db.Close()
 		t.Fatalf("migrate through 0025: %v", err)
 	}
