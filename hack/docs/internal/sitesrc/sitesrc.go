@@ -30,7 +30,8 @@ func ExcludedDocs(mkdocs string) ([]string, error) {
 				break // the block ends at the next key
 			}
 			name := strings.TrimSuffix(strings.TrimPrefix(t, "/"), "/")
-			if !strings.HasPrefix(t, "/") || !strings.HasSuffix(t, "/") || name == "" || strings.ContainsAny(name, "/*?[") {
+			if !strings.HasPrefix(t, "/") || !strings.HasSuffix(t, "/") || name == "" || name == "." || name == ".." ||
+				strings.ContainsAny(name, "/*?[") {
 				return nil, fmt.Errorf("mkdocs.yml exclude_docs pattern %q: only /directory/ is supported", t)
 			}
 			out = append(out, name)
@@ -42,9 +43,10 @@ func ExcludedDocs(mkdocs string) ([]string, error) {
 
 // Excluded reports whether the directory rel, a path relative to docs/, is one that excluded (from ExcludedDocs)
 // names. mkdocs reads exclude_docs as gitignore patterns, and a leading slash anchors one at docs/, so `/brand/`
-// excludes docs/brand and not docs/assets/brand: only a top-level directory matches.
+// excludes docs/brand and not docs/assets/brand: only a top-level directory matches. docs/ itself, rel ".", is never
+// excluded.
 func Excluded(excluded []string, rel string) bool {
-	return filepath.IsLocal(rel) && !strings.ContainsRune(filepath.ToSlash(rel), '/') && slices.Contains(excluded, rel)
+	return rel != "." && filepath.IsLocal(rel) && !strings.ContainsRune(filepath.ToSlash(rel), '/') && slices.Contains(excluded, rel)
 }
 
 // textExt are the extensions of the text files the site publishes; images and video are skipped.

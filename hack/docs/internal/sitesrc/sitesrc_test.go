@@ -19,6 +19,8 @@ func TestExcludedDocs(t *testing.T) {
 		"no block":      "site_name: x\n",
 		"a glob":        "exclude_docs: |\n  *.draft.md\n",
 		"a nested path": "exclude_docs: |\n  /a/b/\n",
+		"docs itself":   "exclude_docs: |\n  /./\n",
+		"the parent":    "exclude_docs: |\n  /../\n",
 	} {
 		if _, err := ExcludedDocs(bad); err == nil {
 			t.Errorf("%s: no error", name)
@@ -51,6 +53,9 @@ func TestExcluded(t *testing.T) {
 	}
 	if Excluded(nil, "brand") {
 		t.Error("Excluded(nil, \"brand\") = true, want false")
+	}
+	if Excluded([]string{"."}, ".") { // docs/ itself is never excluded
+		t.Error("Excluded([.], \".\") = true, want false")
 	}
 }
 

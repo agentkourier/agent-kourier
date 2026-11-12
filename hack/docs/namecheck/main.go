@@ -9,10 +9,11 @@
 // It reads the site's sources: docs/ (without the directories that mkdocs.yml's exclude_docs names, the brand kit and
 // the spike notes, which the site does not publish), mkdocs.yml and the theme overrides, and of those the text files
 // the site publishes (hack/docs/internal/sitesrc; images and video are skipped). Of an SVG it reads the text, not the
-// markup, so a label that a drawing tool splits across elements reads as written. It also reads every file that a
-// Markdown page of docs/ includes with the snippets extension (--8<-- "path"), found under the extension's base_path
-// in mkdocs.yml and read whole even when the page includes one section of it, and it reports an included file it
-// cannot find. Run it from the repository root, through `make docs-check`.
+// markup, so a label that a drawing tool splits across elements reads as written; the name-check markers, being
+// markup, do nothing there. It also reads every file that a Markdown page of docs/ includes with the snippets
+// extension (--8<-- "path"), found under the extension's base_path in mkdocs.yml and read whole even when the page
+// includes one section of it, and it reports an included file it cannot find. It needs mkdocs.yml with an
+// `exclude_docs: |` block, and exits 2 without one. Run it from the repository root, through `make docs-check`.
 package main
 
 import (
@@ -79,7 +80,9 @@ var svgTag = regexp.MustCompile(`<[^>\n]*>`)
 // across elements, as mermaid writes <tspan>Agent</tspan><tspan> Kourier</tspan>, reads "Agent Kourier". Lines keep
 // their numbers. A < with no > after it on its line is left in place, and the rest of the line is read as text: in
 // well-formed SVG a literal < in text is written &lt;, so such a < opens a tag that continues on the next line, whose
-// attributes are then read as text too.
+// attributes are then read as text too. The cost: a misspelling inside a tag on one line, in an attribute value such
+// as an id or aria-label or in a comment, is not reported, and a CDATA section is stripped as a tag, so text written
+// in one is not read. No SVG under docs/ has a comment or a CDATA section today.
 func svgText(text string) string {
 	return svgTag.ReplaceAllString(text, "")
 }
