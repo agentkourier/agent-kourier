@@ -836,8 +836,8 @@ func (s *Source) hold(l listing, live map[key]bool, set *config.Set) (bindings, 
 	// The backends that a Binding of the connection names, held or still there: a tenant's Binding on a backend that was
 	// rendered with the release is what the hold is for.
 	for _, b := range set.Bindings {
-		if cmp.Or(b.Spec.Chat.ConnectionRef.Namespace, b.Namespace) == s.own.namespace && b.Spec.Chat.ConnectionRef.Name == s.own.name {
-			wanted[key{config.KindAgentBackend, cmp.Or(b.Spec.Agent.BackendRef.Namespace, b.Namespace), b.Spec.Agent.BackendRef.Name}] = true
+		if b.Spec.Chat.ConnectionRef.NamespaceOr(b.Namespace) == s.own.namespace && b.Spec.Chat.ConnectionRef.Name == s.own.name {
+			wanted[key{config.KindAgentBackend, b.Spec.Agent.BackendRef.NamespaceOr(b.Namespace), b.Spec.Agent.BackendRef.Name}] = true
 		}
 	}
 	for _, k := range slices.SortedFunc(maps.Keys(wanted), compareKeys) {
@@ -873,7 +873,8 @@ func (s *Source) hold(l listing, live map[key]bool, set *config.Set) (bindings, 
 func refOf(kind string, raw *unstructured.Unstructured, path ...string) key {
 	ns, _, _ := unstructured.NestedString(raw.Object, append(path, "namespace")...)
 	name, _, _ := unstructured.NestedString(raw.Object, append(path, "name")...)
-	return key{kind, cmp.Or(ns, raw.GetNamespace()), name}
+	ref := v1alpha1.ObjectRef{Namespace: ns, Name: name}
+	return key{kind, ref.NamespaceOr(raw.GetNamespace()), ref.Name}
 }
 
 func compareKeys(a, b key) int {
@@ -1066,9 +1067,7 @@ func keyOf(kind string, u *unstructured.Unstructured) key {
 // names a connection the cap left out, which no broker reports until a status says so. The reference is read from the raw object,
 // since a Binding that is invalid may still say which connection it means.
 func (s *Source) owns(l listing, served servedConnections, u *unstructured.Unstructured) bool {
-	ns, _, _ := unstructured.NestedString(u.Object, "spec", "chat", "connectionRef", "namespace")
-	name, _, _ := unstructured.NestedString(u.Object, "spec", "chat", "connectionRef", "name")
-	ref := key{config.KindChatConnection, cmp.Or(ns, u.GetNamespace()), name}
+	ref := refOf(config.KindChatConnection, u, "spec", "chat", "connectionRef")
 	return served.keys[ref] || !l.hasConnection[ref]
 }
 
@@ -1152,7 +1151,7 @@ func (l listing) bindingsOf(conn key) (bindings, admitted []string) {
 		}
 		name := u.GetNamespace() + "/" + u.GetName()
 		bindings = append(bindings, name)
-		if u.GetNamespace() == conn.namespace || slices.Contains(allowed, u.GetNamespace()) {
+		if config.ReferenceAllowed(u.GetNamespace(), conn.namespace, allowed) {
 			admitted = append(admitted, name)
 		}
 	}

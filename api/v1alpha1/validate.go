@@ -19,6 +19,9 @@ import (
 // channelID matches Slack channel IDs, the only platform's; its literal must equal ChatBinding.Channel's Pattern marker.
 var channelID = regexp.MustCompile(`^[CG][A-Z0-9]+$`)
 
+// IsChannelID reports whether s is a channel ID as a Binding's spec.chat.channel accepts it, rather than a channel name.
+func IsChannelID(s string) bool { return channelID.MatchString(s) }
+
 // reactionName matches Slack's bare reaction names. The platform adds and removes
 // the surrounding colons; accepting only names keeps configuration out of the
 // platform adapter and prevents an invalid outbox row.
@@ -341,7 +344,7 @@ func (b *Binding) Validate() error {
 		p.add("spec.chat.channel", "required")
 	} else if len(c) > maxChatIDLen {
 		p.maxBytes("spec.chat.channel", c, maxChatIDLen) // not shown: the channel is in the messages that name a conflict
-	} else if !channelID.MatchString(c) {
+	} else if !IsChannelID(c) {
 		p.add("spec.chat.channel", "invalid channel %q: must be a channel ID such as C0123456789, not a name", c)
 	}
 	p.oneOf("spec.chat.output", string(s.Chat.Output), string(OutputLive), string(OutputFinal))

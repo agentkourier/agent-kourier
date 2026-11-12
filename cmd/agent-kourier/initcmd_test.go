@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/yaml"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
@@ -623,5 +624,19 @@ func TestInitKagentBackendIsTheDocumentedOne(t *testing.T) {
 	}
 	if be := loadWritten(t, out).AgentBackends[0]; be.Spec.Dialect != v1alpha1.DialectKagentV1 {
 		t.Errorf("dialect = %q", be.Spec.Dialect)
+	}
+}
+
+// TestIsNamespaceNameMatchesDNS1123Label proves isNamespaceName accepts and rejects what the validation package's
+// DNS-1123 label check does, the check the rest of the binary uses.
+func TestIsNamespaceNameMatchesDNS1123Label(t *testing.T) {
+	for _, s := range []string{
+		"", "a", "0", "sre", "a-b", "a--b", "-a", "a-", "-", "A", "aB", "a.b", "a_b", "a b", " a", "a ", "a\n", "é",
+		strings.Repeat("a", 63), strings.Repeat("a", 64), strings.Repeat("a", 62) + "-", "-" + strings.Repeat("a", 62),
+		strings.Repeat("0", 63), strings.Repeat("a-", 31) + "a",
+	} {
+		if got, want := isNamespaceName(s), len(validation.IsDNS1123Label(s)) == 0; got != want {
+			t.Errorf("isNamespaceName(%q) = %v, IsDNS1123Label accepts = %v", s, got, want)
+		}
 	}
 }

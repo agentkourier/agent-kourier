@@ -328,12 +328,12 @@ func index[T any, PT interface {
 // namespace must list from's namespace in the list allowed returns. A failure comes with its reason: notFound if there
 // is no such object.
 func find[T any](objects map[identity]*T, kind string, notFound RejectionReason, from identity, ref v1alpha1.ObjectRef, allowed func(*T) []string) (*T, RejectionReason, error) {
-	id := identity{kind, cmp.Or(ref.Namespace, from.namespace), ref.Name}
+	id := identity{kind, ref.NamespaceOr(from.namespace), ref.Name}
 	target := objects[id]
 	switch {
 	case target == nil:
 		return nil, notFound, fmt.Errorf("%s not found", id)
-	case id.namespace != from.namespace && !slices.Contains(allowed(target), from.namespace):
+	case !ReferenceAllowed(from.namespace, id.namespace, allowed(target)):
 		return nil, ReasonNamespaceNotAllowed, fmt.Errorf("%s does not allow namespace %s", id, from.namespace)
 	}
 	return target, "", nil

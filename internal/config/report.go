@@ -76,7 +76,7 @@ func (i Invalid) describe(withMessage, serving bool) string {
 // one, and tells nothing of the object but that it exists, which a valid one tells too; one that it allows, or the object's
 // own namespace, gets the rejected reason, with the owner's problems only in the object's own namespace.
 func (i Invalid) rejectionFor(from, path string, rejected RejectionReason) (RejectionReason, string) {
-	if i.Namespace != from && !slices.Contains(i.AllowedNamespaces, from) {
+	if !ReferenceAllowed(from, i.Namespace, i.AllowedNamespaces) {
 		return ReasonNamespaceNotAllowed, fmt.Sprintf("%s: %s does not allow namespace %s", path, i.ID(), from)
 	}
 	return rejected, path + ": " + i.describedTo(from)
@@ -193,8 +193,8 @@ func resolvePerObject(set *Set) (*Snapshot, []Rejection) {
 		bindings[identity{KindBinding, b.Namespace, b.Name}] = &bindingRefs{
 			generation: b.Generation,
 			channel:    b.Spec.Chat.Channel,
-			backend:    identity{KindAgentBackend, cmp.Or(b.Spec.Agent.BackendRef.Namespace, b.Namespace), b.Spec.Agent.BackendRef.Name},
-			conn:       identity{KindChatConnection, cmp.Or(b.Spec.Chat.ConnectionRef.Namespace, b.Namespace), b.Spec.Chat.ConnectionRef.Name},
+			backend:    identity{KindAgentBackend, b.Spec.Agent.BackendRef.NamespaceOr(b.Namespace), b.Spec.Agent.BackendRef.Name},
+			conn:       identity{KindChatConnection, b.Spec.Chat.ConnectionRef.NamespaceOr(b.Namespace), b.Spec.Chat.ConnectionRef.Name},
 		}
 	}
 
