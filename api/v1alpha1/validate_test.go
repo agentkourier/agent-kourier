@@ -399,3 +399,26 @@ func TestBindingValidate(t *testing.T) {
 			"spec.session.threadTTL: 2562047h47m16.854775807s is out of range, must be at most 8760h0m0s"},
 	})
 }
+
+func TestIsChannelID(t *testing.T) {
+	tests := []struct {
+		in   string
+		want bool
+	}{
+		{"C0123456789", true},
+		{"G0123456789", true},
+		{"C", false},
+		{"", false},
+		{"general", false},
+		{"#general", false},
+		{"D0123456789", false},
+		{"c0123456789", false},
+		{"C012345678a", false},
+		{"C0123456789\n", false},
+	}
+	for _, tt := range tests {
+		if got := IsChannelID(tt.in); got != tt.want {
+			t.Errorf("IsChannelID(%q) = %v, want %v", tt.in, got, tt.want)
+		}
+	}
+}
