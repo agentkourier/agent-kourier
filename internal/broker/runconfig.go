@@ -146,6 +146,10 @@ type RunConfig struct {
 	// leaderLaunched is called once Run has launched the leader half (or its candidacy), before it waits for the
 	// signal, so a test can hold Run there and send the signal while the leader half is up.
 	leaderLaunched func()
+	// leaderStarted is called once the leader half has finished starting and has left the start gate. A signal before
+	// that aborts the start, which ends every part at once; a signal after it leaves the parts to the shutdown's steps.
+	// A test whose signal must be of the second kind waits for this call: the Slack run begins before the start ends.
+	leaderStarted func()
 }
 
 // ConfigSource is where a broker reads its resources from (spec D50).

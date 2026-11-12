@@ -719,10 +719,12 @@ var progressScripts = []struct {
 		// waits for its window: it has read the clock for it only once its timer is pending. The clock is then set to the time
 		// the summary should give, which fires that timer, so the second step is written at once. The text and the final come
 		// after that write, to a run that waits for its next window, and reach it together; set the clock after them, or before
-		// the timer is pending, and the text is written as an append of its own, or the second step never is.
+		// the timer is pending, and the text is written as an append of its own, or the second step never is. The timer is the
+		// one the run arms after these events: the clock may still hold the delay of the turn's first gap (waitingSince).
+		armed := e.clk.mark()
 		run.Handle(call("c2", "fetch", nil))
 		run.Handle(result("c2", map[string]any{"error": "call rejected"}))
-		eventually(t, "the run to wait for its window", func() bool { return e.clk.waiting() == 1 })
+		eventually(t, "the run to wait for its window", func() bool { return e.clk.waitingSince(armed) == 1 })
 		e.advanceTo(started.Add(20 * time.Second))
 		eventually(t, "two steps", func() bool { return e.tasks()[0].Title == "Working… 2 steps, 1 failed" })
 		run.Handle(text("a", "Three pods, all ready."))
@@ -750,14 +752,18 @@ var progressScripts = []struct {
 		// The second call and its result are one write only if they reach the run while its window is shut. The window shuts
 		// when the run reads the clock after the write of the first step, which may come well after Slack has that write, and
 		// the clock stands still until both are in, so the run cannot write between them, however it is scheduled. Its timer
-		// is then the only one (the activity mode keeps no gap once the line has begun): once it is pending, the run has read
-		// the clock for it. The clock is then set to the time the line should give, which fires that timer, and the run writes
-		// both with the minutes of that moment. Set the clock before the timer is pending, and the window opens a throttle
-		// after that moment, a time the clock is never turned to; set it before the call, and the run may write the call
-		// alone, as (2 min, 1 step).
+		// is then the only one it arms (the activity mode keeps no gap once the line has begun): once it is pending, the run
+		// has read the clock for it. It is not the only one pending: a run that armed the delay of the turn's first gap before
+		// the first call came left it on the clock, due a second after the window that "one step" turned to, so the wait is
+		// for a timer made since these events and not for one timer in all (waitingSince), which that delay made two of for
+		// good, or one too soon. The clock is then set to the time the line should give, which fires that timer, and the run
+		// writes both with the minutes of that moment. Set the clock before the timer is pending, and the window opens a
+		// throttle after that moment, a time the clock is never turned to; set it before the call, and the run may write the
+		// call alone, as (2 min, 1 step).
+		armed := e.clk.mark()
 		run.Handle(call("c2", "fetch", nil))
 		run.Handle(result("c2", map[string]any{"error": "call rejected"}))
-		eventually(t, "the run to wait for its window", func() bool { return e.clk.waiting() == 1 })
+		eventually(t, "the run to wait for its window", func() bool { return e.clk.waitingSince(armed) == 1 })
 		e.advanceTo(started.Add(2*time.Minute + 5*time.Second))
 		eventually(t, "the minutes", func() bool { return strings.Contains(e.said(), "(2 min, 2 steps, 1 failed)") })
 		run.Handle(text("a", "Three pods, all ready."))
