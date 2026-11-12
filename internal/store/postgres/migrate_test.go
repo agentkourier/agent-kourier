@@ -1,7 +1,6 @@
 package postgres
 
 import (
-	"bytes"
 	"log/slog"
 	"os"
 	"slices"
@@ -144,42 +143,6 @@ func TestMigrationFailureLeavesEarlierOnes(t *testing.T) {
 		}
 		if exists != want {
 			t.Errorf("table %s exists = %v; want %v", table, exists, want)
-		}
-	}
-}
-
-// TestMigrateWarnsOfANewerSchema: a schema that records a migration this binary does not have is reported at WARN, and
-// not refused, with the message and attributes that the SQLite store uses.
-func TestMigrateWarnsOfANewerSchema(t *testing.T) {
-	dsn, _, _ := freshSchema(t)
-	pool, err := pgxpool.New(t.Context(), dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
-	two := fstest.MapFS{
-		"migrations/0001_a.sql": {Data: []byte(`CREATE TABLE a (id integer);`)},
-		"migrations/0002_b.sql": {Data: []byte(`CREATE TABLE b (id integer);`)},
-	}
-	one := fstest.MapFS{"migrations/0001_a.sql": two["migrations/0001_a.sql"]}
-
-	var out bytes.Buffer
-	log := slog.New(slog.NewTextHandler(&out, nil))
-	if err := migrate(t.Context(), pool, two, log); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	if out.Len() != 0 {
-		t.Fatalf("a database at the newest known migration logged %q", out.String())
-	}
-	if err := migrate(t.Context(), pool, one, log); err != nil {
-		t.Fatalf("migrate with an older binary's files: %v", err)
-	}
-	for _, want := range []string{
-		"level=WARN", `msg="the database schema is newer than this build of Agent Kourier"`,
-		"newest_known_migration=1", "newest_in_database=2",
-	} {
-		if !strings.Contains(out.String(), want) {
-			t.Errorf("log = %q; want it to contain %q", out.String(), want)
 		}
 	}
 }

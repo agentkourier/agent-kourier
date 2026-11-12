@@ -16,7 +16,7 @@ func TestListMigrations(t *testing.T) {
 		"migrations/0010_ten.sql": {}, "migrations/0002_two.sql": {}, "migrations/0001_one.sql": {},
 	})
 	if err != nil || len(ms) != 3 || ms[0].Version != 1 || ms[1].Version != 2 || ms[2].Version != 10 {
-		t.Errorf("ListMigrations = %+v, %v; want 1, 2, 10 in numeric order", ms, err)
+		t.Fatalf("ListMigrations = %+v, %v; want 1, 2, 10 in numeric order", ms, err)
 	}
 	if ms[0].Name != "migrations/0001_one.sql" {
 		t.Errorf("Name = %q; want the file's path", ms[0].Name)

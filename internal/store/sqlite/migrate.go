@@ -18,8 +18,9 @@ var migrationFiles embed.FS
 // migrate applies the migrations in fsys that are not yet recorded in
 // schema_migrations, in version order. Each runs in its own transaction
 // together with its schema_migrations row, so a failure leaves earlier
-// migrations applied and the failing one not at all. It then reports, at WARN, a database that records a migration
-// fsys does not have (store.WarnIfSchemaNewer).
+// migrations applied and the failing one not at all. It then reports, at
+// WARN, a database that records a migration fsys does not have
+// (store.WarnIfSchemaNewer).
 func migrate(ctx context.Context, db *sql.DB, fsys fs.FS, log *slog.Logger) error {
 	ms, err := store.ListMigrations(fsys)
 	if err != nil {

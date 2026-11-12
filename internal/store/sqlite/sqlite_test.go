@@ -136,63 +136,43 @@ func TestMigrateAppliesInOrderOnceAndRollsBackFailures(t *testing.T) {
 
 var discardLog = slog.New(slog.DiscardHandler)
 
-// TestMigrateWarnsOfANewerSchema: a database that records a migration this binary does not have is a rollback or a
-// replica not yet upgraded. Open does not refuse it, and reports it at WARN with the attributes the Postgres store uses.
-func TestMigrateWarnsOfANewerSchema(t *testing.T) {
+// TestNewerSchemaIsWarnedAbout: a database that records a migration this build does not have (a rollback, or a replica
+// not upgraded yet) opens, with a warning that names the versions; a fresh database, whose schema_migrations does not
+// exist until Open makes it, is migrated without one.
+func TestNewerSchemaIsWarnedAbout(t *testing.T) {
 	ctx := context.Background()
-	db, err := openPool(ctx, filepath.Join(t.TempDir(), "newer.db"), 1, "journal_mode(WAL)")
-	if err != nil {
-		t.Fatalf("openPool: %v", err)
+	known, err := store.ListMigrations(migrationFiles)
+	if err != nil || len(known) == 0 {
+		t.Fatalf("ListMigrations = %v, %v; want the embedded migrations", known, err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
-	two := fstest.MapFS{
-		"migrations/0001_a.sql": {Data: []byte("CREATE TABLE a (x INTEGER);")},
-		"migrations/0002_b.sql": {Data: []byte("CREATE TABLE b (x INTEGER);")},
-	}
-	one := fstest.MapFS{"migrations/0001_a.sql": two["migrations/0001_a.sql"]}
-
-	var out bytes.Buffer
-	log := slog.New(slog.NewTextHandler(&out, nil))
-	if err := migrate(ctx, db, two, log); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	if out.Len() != 0 {
-		t.Fatalf("a database at the newest known migration logged %q", out.String())
-	}
-	if err := migrate(ctx, db, one, log); err != nil {
-		t.Fatalf("migrate with an older binary's files: %v", err)
-	}
-	for _, want := range []string{
-		"level=WARN", `msg="the database schema is newer than this build of Agent Kourier"`,
-		"newest_known_migration=1", "newest_in_database=2",
-	} {
-		if !strings.Contains(out.String(), want) {
-			t.Errorf("log = %q; want it to contain %q", out.String(), want)
-		}
-	}
-}
-
-// TestOpenWarnsOfANewerSchemaThroughItsLogger: WithLogger is where Open reports it; the default is slog.Default().
-func TestOpenWarnsOfANewerSchemaThroughItsLogger(t *testing.T) {
-	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "agent-kourier.db")
-	s, err := Open(ctx, path)
+	var quiet bytes.Buffer
+	s, err := Open(ctx, path, WithLogger(slog.New(slog.NewTextHandler(&quiet, nil))))
 	if err != nil {
-		t.Fatalf("Open: %v", err)
+		t.Fatalf("Open a fresh database: %v", err)
 	}
-	if _, err := s.a.write.ExecContext(ctx, `INSERT INTO schema_migrations (version, applied_at) VALUES (999999, 0)`); err != nil {
+	if quiet.Len() != 0 {
+		t.Errorf("a fresh database logged %q", quiet.String())
+	}
+	if _, err := s.a.write.ExecContext(ctx, `INSERT INTO schema_migrations (version, applied_at) VALUES (9999, 0)`); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	var out bytes.Buffer
-	s, err = Open(ctx, path, WithLogger(slog.New(slog.NewTextHandler(&out, nil))))
+
+	var buf bytes.Buffer
+	s, err = Open(ctx, path, WithLogger(slog.New(slog.NewTextHandler(&buf, nil))))
 	if err != nil {
-		t.Fatalf("Open on a newer schema: %v", err)
+		t.Fatalf("Open a database with a newer schema: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	if !strings.Contains(out.String(), "newest_in_database=999999") {
-		t.Errorf("log = %q; want the warning with newest_in_database=999999", out.String())
+	for _, want := range []string{
+		"level=WARN", `msg="the database schema is newer than this build of Agent Kourier"`,
+		fmt.Sprintf("newest_known_migration=%d", known[len(known)-1].Version), "newest_in_database=9999",
+	} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("log = %q; want it to hold %q", buf.String(), want)
+		}
 	}
 }
