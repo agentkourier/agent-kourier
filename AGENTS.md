@@ -39,6 +39,7 @@ internal/bindingcheck   per-Binding conditions and the prober that checks them
 internal/broker         composition: Bindings, chat platform factory, lifecycle, health, leader election, shutdown order
 internal/interact       interactions: pause intake, button presses, timeout sweep
 internal/redact         shared secret redaction for display and audit text
+internal/backoff        doubling retry wait shared by the retry loops (leaf package, imports nothing of the module)
 internal/limitsdoc      test support that holds docs/reference/limits.md to the constants of the code
 internal/testhooks      test-only hooks, compiled in under the testhooks build tag
 charts/agent-kourier    Helm chart

@@ -753,9 +753,5 @@ func capped(s string, limit int) string {
 	if len(s) <= limit {
 		return s
 	}
-	cut := limit - len("...")
-	for cut > 0 && !utf8.RuneStart(s[cut]) {
-		cut--
-	}
-	return s[:cut] + "..."
+	return s[:redact.RuneBoundary(s, limit-len("..."))] + "..."
 }

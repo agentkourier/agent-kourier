@@ -59,6 +59,11 @@ type TaskTurn struct {
 	Mention          string
 }
 
+// AnyAge is a threadTTL no session outlives, for a read that wants the session whatever its age: the
+// real threadTTL is the session's Binding's, and a caller that has no Binding yet or that outlives it
+// passes this one.
+const AnyAge = 100 * 365 * 24 * time.Hour
+
 // Sessions persists the thread-to-session mapping. Key (all three parts),
 // Binding, a valid Origin and LastActivity are required; ContextID and TaskID
 // are optional. A missing or invalid required value returns ErrInvalid.

@@ -120,7 +120,7 @@ func (m *Manager) recoverable(ctx context.Context) ([]Key, error) {
 func (m *Manager) recoverKey(key Key) {
 	defer m.wg.Done()
 	log := m.cfg.Logger.With("key", key)
-	sess, err := m.cfg.Store.GetSession(m.ctx, key, readAll, m.cfg.Now())
+	sess, err := m.cfg.Store.GetSession(m.ctx, key, store.AnyAge, m.cfg.Now())
 	if err != nil {
 		log.Error("recover: read session", "error", err)
 		return
