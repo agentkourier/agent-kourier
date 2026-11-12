@@ -6,11 +6,13 @@
 // and lines between <!-- name-check: off --> and <!-- name-check: on -->, for a historical note such as an upgrade
 // from the old chart name.
 //
-// It reads the site's sources: docs/ (without the brand kit and the spike notes, which the site does not publish),
-// mkdocs.yml and the theme overrides. It also reads every file that a Markdown page of docs/ includes with the
-// snippets extension (--8<-- "path"), found under the extension's base_path in mkdocs.yml and read whole even when
-// the page includes one section of it, and it reports an included file it cannot find. Run it from the repository
-// root, through `make docs-check`.
+// It reads the site's sources: docs/ (without the directories that mkdocs.yml's exclude_docs names, the brand kit and
+// the spike notes, which the site does not publish), mkdocs.yml and the theme overrides, and of those the text files
+// the site publishes (hack/docs/internal/sitesrc; images and video are skipped). Of an SVG it reads the text, not the
+// markup, so a label that a drawing tool splits across elements reads as written. It also reads every file that a
+// Markdown page of docs/ includes with the snippets extension (--8<-- "path"), found under the extension's base_path
+// in mkdocs.yml and read whole even when the page includes one section of it, and it reports an included file it
+// cannot find. Run it from the repository root, through `make docs-check`.
 package main
 
 import (
@@ -22,23 +24,18 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
 	"syscall"
 
 	"sigs.k8s.io/yaml"
-)
 
-// excluded are the directories under docs/ that the site does not publish (mkdocs.yml, exclude_docs).
-var excluded = []string{"brand", "spikes"}
+	"github.com/agentkourier/agent-kourier/hack/docs/internal/sitesrc"
+)
 
 // sitePaths are the site's sources under the repository root.
 func sitePaths(root string) []string {
 	return []string{filepath.Join(root, "docs"), filepath.Join(root, "mkdocs.yml"), filepath.Join(root, "hack/docs/overrides")}
 }
-
-// textExt are the files read; the rest (images, video) are skipped.
-var textExt = []string{".md", ".html", ".yml", ".yaml", ".css", ".js", ".vtt", ".webmanifest", ".txt"}
 
 var (
 	// kourier and courier match in any case, as a word part.
@@ -73,6 +70,27 @@ func pathSegment(line string, start, end int) bool {
 		return false
 	}
 	return start == 0 || strings.ContainsRune(" \t\"'`(</", rune(line[start-1]))
+}
+
+// svgTag is an SVG tag that opens and closes on one line.
+var svgTag = regexp.MustCompile(`<[^>\n]*>`)
+
+// svgText returns the text of an SVG with each tag that opens and closes on one line removed, so that a label split
+// across elements, as mermaid writes <tspan>Agent</tspan><tspan> Kourier</tspan>, reads "Agent Kourier". Lines keep
+// their numbers. A < with no > after it on its line is left in place, and the rest of the line is read as text: in
+// well-formed SVG a literal < in text is written &lt;, so such a < opens a tag that continues on the next line, whose
+// attributes are then read as text too.
+func svgText(text string) string {
+	return svgTag.ReplaceAllString(text, "")
+}
+
+// fileText is the text of the file at path that the name is checked in: an SVG's text without its markup, and any
+// other file whole.
+func fileText(path string, b []byte) string {
+	if filepath.Ext(path) == ".svg" {
+		return svgText(string(b))
+	}
+	return string(b)
 }
 
 // findings returns the misspellings in text, by line.
@@ -120,18 +138,20 @@ func findings(text string) []finding {
 	return out
 }
 
-// check reads every text file under paths until ctx ends, skipping the directories named in skip, and returns the findings. It
-// reads too the files that the Markdown files among them include with the snippets extension, resolved against the
-// extension's base_path in root/mkdocs.yml, and reports each include it cannot resolve.
+// check reads every text file under paths until ctx ends, skipping the directories of root/docs that skip names (from
+// excludedDocs), and returns the findings. It reads too the files that the Markdown files among them include with the
+// snippets extension, resolved against the extension's base_path in root/mkdocs.yml, and reports each include it
+// cannot resolve.
 func check(ctx context.Context, root string, paths []string, skip []string) ([]finding, error) {
 	bases, err := snippetBases(ctx, root)
 	if err != nil {
 		return nil, err
 	}
+	docs := filepath.Join(root, "docs")
 	var out []finding
 	included := map[string]bool{} // files read as includes, each once
 	scan := func(path string, b []byte, markdown bool) error {
-		for _, f := range findings(string(b)) {
+		for _, f := range findings(fileText(path, b)) {
 			f.path = path
 			out = append(out, f)
 		}
@@ -157,7 +177,7 @@ func check(ctx context.Context, root string, paths []string, skip []string) ([]f
 				out = append(out, finding{path: path, line: inc.line, text: inc.text, msg: fmt.Sprintf("read included file: %v", err)})
 				continue
 			}
-			for _, f := range findings(string(data)) {
+			for _, f := range findings(fileText(file, data)) {
 				f.path = file
 				out = append(out, f)
 			}
@@ -176,12 +196,12 @@ func check(ctx context.Context, root string, paths []string, skip []string) ([]f
 				return err
 			}
 			if d.IsDir() {
-				if path != p && slices.Contains(skip, d.Name()) {
+				if rel, err := filepath.Rel(docs, path); err == nil && sitesrc.Excluded(skip, rel) {
 					return filepath.SkipDir
 				}
 				return nil
 			}
-			if !slices.Contains(textExt, filepath.Ext(path)) {
+			if !sitesrc.IsText(path) {
 				return nil
 			}
 			b, err := os.ReadFile(path) //nolint:gosec // the site's own sources
@@ -195,6 +215,18 @@ func check(ctx context.Context, root string, paths []string, skip []string) ([]f
 		}
 	}
 	return out, nil
+}
+
+// excludedDocs returns the directories of root/docs that root/mkdocs.yml's exclude_docs names.
+func excludedDocs(ctx context.Context, root string) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(filepath.Join(root, "mkdocs.yml")) //nolint:gosec // the site's own config
+	if err != nil {
+		return nil, fmt.Errorf("read mkdocs.yml: %w", err)
+	}
+	return sitesrc.ExcludedDocs(string(data))
 }
 
 // snippetBases returns the directories the snippets extension looks in, from root/mkdocs.yml: its base_path
@@ -328,6 +360,11 @@ func main() { os.Exit(run()) }
 func run() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	excluded, err := excludedDocs(ctx, ".")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "namecheck:", err)
+		return 2
+	}
 	got, err := check(ctx, ".", sitePaths("."), excluded)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "namecheck:", err)

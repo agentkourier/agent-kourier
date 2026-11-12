@@ -278,26 +278,6 @@ func TestLinks(t *testing.T) {
 	}
 }
 
-func TestExcludedDocs(t *testing.T) {
-	const mkdocs = "site_name: x\n\ndocs_dir: docs\n# The brand kit lives in docs/.\nexclude_docs: |\n  /brand/\n  /spikes/\n\ntheme:\n  name: material\n"
-	got, err := excludedDocs(mkdocs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := []string{"brand", "spikes"}; !slices.Equal(got, want) {
-		t.Errorf("excludedDocs = %v, want %v", got, want)
-	}
-	for name, bad := range map[string]string{
-		"no block":      "site_name: x\n",
-		"a glob":        "exclude_docs: |\n  *.draft.md\n",
-		"a nested path": "exclude_docs: |\n  /a/b/\n",
-	} {
-		if _, err := excludedDocs(bad); err == nil {
-			t.Errorf("%s: no error", name)
-		}
-	}
-}
-
 func writeTree(t *testing.T, root string, files map[string]string) {
 	t.Helper()
 	for rel, text := range files {
