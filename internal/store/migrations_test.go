@@ -21,6 +21,11 @@ func TestListMigrations(t *testing.T) {
 	if ms[0].Name != "migrations/0001_one.sql" {
 		t.Errorf("Name = %q; want the file's path", ms[0].Name)
 	}
+	// Unpadded, the file names sort 10 before 9: only a numeric sort puts 9 first.
+	ms, err = store.ListMigrations(fstest.MapFS{"migrations/10_b.sql": {}, "migrations/9_a.sql": {}})
+	if err != nil || len(ms) != 2 || ms[0].Version != 9 || ms[1].Version != 10 {
+		t.Errorf("ListMigrations = %+v, %v; want 9 then 10", ms, err)
+	}
 	if _, err := store.ListMigrations(fstest.MapFS{"migrations/0001_a.sql": {}, "migrations/1_b.sql": {}}); err == nil {
 		t.Error("two files with one version were accepted")
 	}
