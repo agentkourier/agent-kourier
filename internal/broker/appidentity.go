@@ -10,6 +10,7 @@ import (
 
 	slackgo "github.com/slack-go/slack"
 
+	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/testhooks"
 )
 
@@ -44,9 +45,6 @@ func (e mayPassError) Is(target error) bool { return target == errIdentityMayPas
 
 // Unwrap returns the error that is marked.
 func (e mayPassError) Unwrap() error { return e.error }
-
-// rejectedCodes are the codes of Slack's that mean the token is no good, as opposed to a call that failed for a reason that may pass.
-var rejectedCodes = []string{"invalid_auth", "token_revoked", "token_expired", "account_inactive", "not_authed"}
 
 // transientCodes are the codes of Slack's that say the service could not answer now, whatever the token: the call may succeed when it is asked
 // again (errIdentityMayPass). Their meanings are taken from Slack's API documentation and were not checked against Slack here.
@@ -108,7 +106,7 @@ func identifyError(method string, err error) error {
 	var limited *slackgo.RateLimitedError
 	switch {
 	case errors.As(err, &resp):
-		if slices.Contains(rejectedCodes, resp.Err) {
+		if slack.TokenRejected(resp.Err) {
 			return &credentialsRejectedError{method: method, code: resp.Err}
 		}
 		e := fmt.Errorf("%s call: Slack answered %q", method, resp.Err)

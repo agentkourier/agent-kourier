@@ -19,8 +19,6 @@ func (c *Client) finishChat(ctx context.Context, op *telemetry.Operation, operat
 		outcome = "rate_limited"
 	} else if errors.As(err, &response) {
 		switch response.Err {
-		case "invalid_auth", "not_authed", "account_inactive", "token_revoked", "token_expired":
-			outcome = "auth_rejected"
 		case "channel_not_found", "not_in_channel", "is_archived":
 			outcome = "channel_gone"
 		case "message_not_in_streaming_state":
@@ -29,6 +27,9 @@ func (c *Client) finishChat(ctx context.Context, op *telemetry.Operation, operat
 			outcome = "mode_refused" // Slack refused the chunks mode: the fallback to markdown_text follows
 		default:
 			outcome = "api_error"
+			if TokenRejected(response.Err) {
+				outcome = "auth_rejected"
+			}
 		}
 	}
 	trace.SpanFromContext(ctx).SetAttributes(attribute.String("agentkourier.platform", "slack"), attribute.String("agentkourier.chat.operation", operation))

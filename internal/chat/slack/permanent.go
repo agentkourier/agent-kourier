@@ -66,8 +66,7 @@ func fatalAuthCode(err error) string {
 	if !errors.As(err, &resp) {
 		return ""
 	}
-	switch resp.Err {
-	case "invalid_auth", "token_revoked", "token_expired", "account_inactive", "not_authed":
+	if TokenRejected(resp.Err) {
 		return resp.Err
 	}
 	return ""
