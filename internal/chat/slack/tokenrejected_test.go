@@ -6,7 +6,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 )
 
-// TestTokenRejected pins the set of codes that mean Slack refuses the token for good. The match is exact:
+// TestTokenRejected pins the set of codes with which Slack rejects a token for good. The match is exact:
 // a caller that reads a code with more text after it (a first word) cuts it first.
 func TestTokenRejected(t *testing.T) {
 	for code, want := range map[string]bool{
