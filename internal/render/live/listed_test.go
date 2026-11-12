@@ -19,6 +19,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
@@ -41,7 +42,7 @@ func TestAnAlertThreadReplyEndsWithACardPerToolCallAboveItsAnswer(t *testing.T) 
 	e := setup(t)
 	run := e.alert(t, "", false)
 	run.Handle(call("c1", "get_pods", map[string]any{"ns": "prod"}))
-	eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+	testutil.Eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
 	run.Handle(result("c1", map[string]any{"items": 3}))
 	run.Handle(call("c2", "get_logs", nil))
 	run.Handle(result("c2", map[string]any{"error": "forbidden"}))
@@ -158,7 +159,7 @@ func TestAnAlertThreadReplyWhoseCardsAreRefusedShowsTheLineAndItsAnswer(t *testi
 	e.live = newRenderer(t, e.cfg)
 	run := e.alert(t, "", false)
 	run.Handle(call("c1", "search", nil))
-	eventually(t, "the first post", func() bool { return e.reply().Text == "Calling search()" })
+	testutil.Eventually(t, "the first post", func() bool { return e.reply().Text == "Calling search()" })
 	run.Handle(result("c1", map[string]any{"items": 1}))
 	e.until(t, "the line, sent again", 3*time.Second, func() bool { return e.reply().Text == "Ran search()" })
 	if n := refused.Load(); n != 1 {
@@ -180,7 +181,7 @@ func TestAnAlertThreadReplyKeepsAWorkingCardItShowedWhenItEndsWithNoText(t *test
 	e := setup(t)
 	run := e.alert(t, v1alpha1.ProgressStepsAndActivity, false)
 	run.Handle(call("c1", "search", nil))
-	eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+	testutil.Eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
 	run.Handle(result("c1", map[string]any{"items": 1}))
 	e.until(t, "the Working… card", 8*time.Second, func() bool { got := e.tasks(); return len(got) == 2 && got[1].Title == "Working…" })
 	run.Handle(agent.FinalEvent{})
@@ -196,7 +197,7 @@ func TestAnAlertThreadReplyEndsAsNoOutputWhenItsWorkingCardWasNeverShown(t *test
 	e := setup(t)
 	run := e.alert(t, v1alpha1.ProgressStepsAndActivity, false)
 	e.until(t, "the Working… post", 6*time.Second, func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
-	eventually(t, "the message", func() bool { return e.reply().Text == "Working…" })
+	testutil.Eventually(t, "the message", func() bool { return e.reply().Text == "Working…" })
 	run.Handle(agent.FinalEvent{}) // before the window of the update that would show the card
 	e.finish(t, run)
 	if m := e.reply(); m.Text != "(no output)" || len(m.Tasks()) != 0 {
@@ -209,7 +210,7 @@ func TestAnAlertThreadReplyThatPausesForAnApprovalSaysSoOnTheCard(t *testing.T) 
 	e := setup(t)
 	run := e.alert(t, "", false)
 	run.Handle(call("c1", "search", nil))
-	eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+	testutil.Eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
 	run.Handle(result("c1", map[string]any{"items": 1}))
 	run.Handle(call("c2", "rollback", map[string]any{"to": 6}))
 	run.Handle(result("c2", map[string]any{"error": "the call requires confirmation"}))
@@ -254,7 +255,7 @@ func TestAnAlertThreadReplyOfCardsAloneReplacesTheStatusLinesText(t *testing.T) 
 	e := setup(t)
 	run := e.alert(t, "", false)
 	run.Handle(call("c1", "search", nil))
-	eventually(t, "the first post", func() bool { return e.reply().Text == "Calling search()" })
+	testutil.Eventually(t, "the first post", func() bool { return e.reply().Text == "Calling search()" })
 	run.Handle(result("c1", map[string]any{"items": 1}))
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
@@ -268,7 +269,7 @@ func TestAnAlertThreadReplyShowsAGapAsACard(t *testing.T) {
 	e := setup(t)
 	run := e.alert(t, v1alpha1.ProgressStepsAndActivity, false)
 	run.Handle(call("c1", "search", nil))
-	eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+	testutil.Eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
 	run.Handle(result("c1", map[string]any{"items": 1}))
 	e.until(t, "the Working… card", 8*time.Second, func() bool {
 		got := e.reply().Tasks()

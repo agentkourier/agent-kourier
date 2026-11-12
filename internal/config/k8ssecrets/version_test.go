@@ -17,6 +17,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/agentkourier/agent-kourier/internal/config"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // versioned returns a Secret with the given resourceVersion, keys and a value of the canary's.
@@ -133,14 +134,14 @@ func TestReloaderRevisionFollowsSecrets(t *testing.T) {
 		versioned(system, "slack-main", "1", "botToken", "appToken"),
 		versioned(sre, "agent-kourier-sre-alerts-oidc", "1", "token"),
 	)
-	secrets := New(client, WithLogger(slog.New(slog.DiscardHandler)))
+	secrets := New(client, WithLogger(testutil.DiscardLogger()))
 	t.Cleanup(secrets.Stop)
 
 	dir := t.TempDir()
 	if err := os.CopyFS(dir, os.DirFS("../../../api/v1alpha1/testdata")); err != nil {
 		t.Fatal(err)
 	}
-	rl := config.NewReloader(config.ReloaderConfig{Dir: dir, Secrets: secrets, PollInterval: time.Hour, Logger: slog.New(slog.DiscardHandler)})
+	rl := config.NewReloader(config.ReloaderConfig{Dir: dir, Secrets: secrets, PollInterval: time.Hour, Logger: testutil.DiscardLogger()})
 	if err := rl.Start(t.Context()); err != nil {
 		t.Fatal(err)
 	}

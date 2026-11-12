@@ -2,8 +2,6 @@ package slack_test
 
 import (
 	"fmt"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +10,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/secret"
 	"github.com/agentkourier/agent-kourier/internal/telemetry/telemetrytest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // refusingClient returns a Client over a Slack whose every method answers ok:false with code.
@@ -28,7 +27,7 @@ func refusingClientFor(t *testing.T, code, conn string) *slack.Client {
 	}))
 	t.Cleanup(srv.Close)
 	return slack.New(slack.Config{BotToken: secret.New(botToken), AppToken: secret.New(appToken), APIURL: srv.URL + "/", Connection: conn,
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		Logger: testutil.DiscardLogger()})
 }
 
 // A Slack error code is the server's text. Slack's own codes are a closed set, but a proxy or a

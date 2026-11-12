@@ -13,6 +13,7 @@ import (
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/socketmode"
 
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
@@ -570,7 +571,7 @@ func TestSocketsAreTheAppsThatOpenedThem(t *testing.T) {
 	socketAs(t, fake, appA)
 	socketAs(t, fake, appB)
 	runClient(t, fake.URL())
-	eventually(t, "three connections", func() bool { return fake.Connections() == 3 })
+	testutil.Eventually(t, "three connections", func() bool { return fake.Connections() == 3 }, testutil.Every(5*time.Millisecond))
 	for app, want := range map[string]int{"AAPPA": 1, "AAPPB": 1, "AFAKEAPP": 1, "ANOBODY": 0} {
 		if n := fake.AppConnections(app); n != want {
 			t.Errorf("AppConnections(%s) = %d, want %d", app, n, want)
@@ -694,7 +695,7 @@ func TestARevokedAppIsRefusedAndItsSocketsClosed(t *testing.T) {
 		return ws
 	}
 	ws := connect()
-	eventually(t, "a to be connected", func() bool { return fake.AppConnections("AAPPA") == 1 })
+	testutil.Eventually(t, "a to be connected", func() bool { return fake.AppConnections("AAPPA") == 1 }, testutil.Every(5*time.Millisecond))
 
 	if err := fake.SetRevoked("AAPPA", true); err != nil {
 		t.Fatalf("SetRevoked: %v", err)
@@ -747,7 +748,7 @@ func TestARevokedAppIsRefusedAndItsSocketsClosed(t *testing.T) {
 		t.Fatalf("SetRevoked: %v", err)
 	}
 	connect()
-	eventually(t, "a to reconnect", func() bool { return fake.AppConnections("AAPPA") == 1 })
+	testutil.Eventually(t, "a to reconnect", func() bool { return fake.AppConnections("AAPPA") == 1 }, testutil.Every(5*time.Millisecond))
 	if err := fake.SetRevoked("ANOBODY", true); !errors.Is(err, fakeslack.ErrNotFound) {
 		t.Errorf("SetRevoked of an unknown app = %v, want ErrNotFound", err)
 	}
@@ -877,7 +878,7 @@ func TestRotatedTokensReplaceTheAppsPairAndTheOldPairIsRefused(t *testing.T) {
 	fake := twoApps(t)
 	smc := socketAs(t, fake, appA)
 	_ = smc
-	eventually(t, "a to be connected", func() bool { return fake.AppConnections("AAPPA") == 1 })
+	testutil.Eventually(t, "a to be connected", func() bool { return fake.AppConnections("AAPPA") == 1 }, testutil.Every(5*time.Millisecond))
 	rotated := fakeslack.App{BotToken: "xoxb-app-a-rotated", AppToken: "xapp-app-a-rotated"}
 
 	if err := fake.RotateTokens("AAPPA", rotated.BotToken, rotated.AppToken); err != nil {

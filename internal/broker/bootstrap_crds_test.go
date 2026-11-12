@@ -25,6 +25,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/config/crsource"
 	"github.com/agentkourier/agent-kourier/internal/config/k8ssecrets"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 var (
@@ -248,13 +249,7 @@ func TestBootstrapCRDsFollowsTheClusterWhileRunning(t *testing.T) {
 	t.Cleanup(c.Stop)
 	waitFor := func(what string, cond func() bool) {
 		t.Helper()
-		deadline := time.Now().Add(10 * time.Second)
-		for !cond() {
-			if time.Now().After(deadline) {
-				t.Fatalf("%s did not happen in 10s", what)
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
+		testutil.Eventually(t, what, cond, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	}
 	update := func(gvr schema.GroupVersionResource, u *unstructured.Unstructured) {
 		t.Helper()

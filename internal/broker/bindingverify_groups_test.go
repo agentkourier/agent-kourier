@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -22,6 +21,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/secret"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // groupsFake is a groupReader with an answer, a classification and a record of its calls.
@@ -254,7 +254,7 @@ func TestGroupCheckerThroughTheRealSlackClient(t *testing.T) {
 		}
 	}))
 	t.Cleanup(func() { close(release); srv.Close() })
-	client := slack.New(slack.Config{BotToken: secret.New(bot), AppToken: secret.New(app), APIURL: srv.URL + "/", Logger: slog.New(slog.DiscardHandler)})
+	client := slack.New(slack.Config{BotToken: secret.New(bot), AppToken: secret.New(app), APIURL: srv.URL + "/", Logger: testutil.DiscardLogger()})
 	c := groupChecker{platform: slack.NewPlatform(client, "ns/conn"), timeout: 300 * time.Millisecond}
 
 	for _, tc := range []struct {
@@ -304,7 +304,7 @@ func TestTheBrokersProberProbesApproverGroupsAndTimesThem(t *testing.T) {
 	m := mustMetrics(t, nil)
 	p := verification{
 		Bindings: probeFunc(func(context.Context, string) error { return nil }), Platforms: soleBot(sreSlack, plat), Snaps: current,
-		Conns: soleConn(sreSlack), Metrics: m, Log: slog.New(slog.DiscardHandler),
+		Conns: soleConn(sreSlack), Metrics: m, Log: testutil.DiscardLogger(),
 		Interval: time.Hour, Tick: 5 * time.Millisecond, Revision: func(context.Context) string { return "r" },
 	}.newProber()
 	got := settled(t, p, 2)
@@ -391,7 +391,7 @@ func TestTheBrokersProberReadsAGroupOnceAPassForEveryBindingThatNamesIt(t *testi
 	}}
 	p := verification{
 		Bindings: probeFunc(func(context.Context, string) error { return nil }), Platforms: soleBot(sreSlack, plat), Snaps: current,
-		Conns: soleConn(sreSlack), Metrics: mustMetrics(t, nil), Log: slog.New(slog.DiscardHandler),
+		Conns: soleConn(sreSlack), Metrics: mustMetrics(t, nil), Log: testutil.DiscardLogger(),
 		Interval: time.Hour, Tick: 5 * time.Millisecond, Revision: func(context.Context) string { return "r" },
 	}.newProber()
 	got := settled(t, p, 3)

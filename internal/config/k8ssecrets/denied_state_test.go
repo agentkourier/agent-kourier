@@ -14,6 +14,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/agentkourier/agent-kourier/internal/config"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // deniedAPI is a fake API whose list of sre/creds answers forbidden until allow is set, and, while hold holds a channel, waits for it to
@@ -59,13 +60,13 @@ func TestADeniedSecretIsReportedOncePerChangeOfState(t *testing.T) {
 	}
 
 	allow.Store(true)
-	waitFor(t, "the Secret to be read again", func() bool {
+	testutil.Eventually(t, "the Secret to be read again", func() bool {
 		time.Sleep(80 * time.Millisecond)
 		_ = r.Watch(t.Context(), names)
 		_, err := r.Keys(t.Context(), "sre", "creds")
 		return err == nil
-	})
-	waitFor(t, "the recovery in the log", func() bool { return strings.Contains(logs.String(), "can list and watch again") })
+	}, testutil.Within(10*time.Second), testutil.Every(5*time.Millisecond))
+	testutil.Eventually(t, "the recovery in the log", func() bool { return strings.Contains(logs.String(), "can list and watch again") }, testutil.Within(10*time.Second), testutil.Every(5*time.Millisecond))
 	if n := strings.Count(logs.String(), "can list and watch again"); n != 1 {
 		t.Errorf("the recovery was reported %d times; want once\n%s", n, logs.String())
 	}
@@ -78,7 +79,7 @@ func TestADeniedSecretIsReportedOncePerChangeOfState(t *testing.T) {
 // status of a Binding must not flicker between the two at every recheck. A Watch waits for the try, as for any list in flight.
 func TestADeniedSecretStaysDeniedToAReadWhileItIsTried(t *testing.T) {
 	client, allow, hold, _ := deniedAPI(t)
-	r := New(client, WithLogger(slog.New(slog.DiscardHandler)), WithDeniedRetry(50*time.Millisecond))
+	r := New(client, WithLogger(testutil.DiscardLogger()), WithDeniedRetry(50*time.Millisecond))
 	t.Cleanup(r.Stop)
 	names := []config.SecretName{sn("sre", "creds")}
 	if err := r.Watch(t.Context(), names); !errors.Is(err, ErrAccessDenied) {
@@ -101,14 +102,14 @@ func TestADeniedSecretStaysDeniedToAReadWhileItIsTried(t *testing.T) {
 		t.Errorf("Keys while the try is in flight = %v, want ErrAccessDenied, as before the try", err)
 	}
 	once.Do(func() { close(release) })
-	waitFor(t, "the try to be read", func() bool { _, err := r.Keys(t.Context(), "sre", "creds"); return err == nil })
+	testutil.Eventually(t, "the try to be read", func() bool { _, err := r.Keys(t.Context(), "sre", "creds"); return err == nil }, testutil.Within(10*time.Second), testutil.Every(5*time.Millisecond))
 }
 
 // A Secret that does not exist is not denied: the list answers with no items, the informer syncs and holds one watch, and no recheck
 // asks again. Only forbidden and unauthorized end an informer.
 func TestAMissingSecretIsNotDeniedAndNotTriedAgain(t *testing.T) {
 	client := newAPI(t)
-	r := New(client, WithLogger(slog.New(slog.DiscardHandler)), WithDeniedRetry(10*time.Millisecond))
+	r := New(client, WithLogger(testutil.DiscardLogger()), WithDeniedRetry(10*time.Millisecond))
 	t.Cleanup(r.Stop)
 	names := []config.SecretName{sn("sre", "missing")}
 	if err := r.Watch(t.Context(), names); err != nil {

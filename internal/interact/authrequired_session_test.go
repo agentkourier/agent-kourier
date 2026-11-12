@@ -9,6 +9,8 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/session"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // TestAnAuthPauseIsCancelledAndTheReplyBehindItGoesOut: a task that asks for authentication (auth-required) cannot be answered
@@ -23,16 +25,16 @@ func TestAnAuthPauseIsCancelledAndTheReplyBehindItGoesOut(t *testing.T) {
 		}
 		return a2a.Task{ID: "task-2", ContextID: "ctx-1", Status: a2a.TaskStatus{State: a2a.TaskStateCompleted, Timestamp: &t0}}
 	}
-	p := start(t, openStore(t), ag, atTimes(&clockAt{}, t0.Add(time.Minute)), true)
+	p := start(t, sqlitetest.Open(t), ag, atTimes(&clockAt{}, t0.Add(time.Minute)), true)
 	if _, err := p.mgr.Submit(t.Context(), session.Inbound{Key: key, Binding: "ns/b", MessageID: "slack:main:C1:1.2", MessageRef: "1.2", UserID: "U1", Text: "hello", Create: true}); err != nil {
 		t.Fatal(err)
 	}
-	until(t, "the first turn to be sent", func() bool { return ag.sent() == 1 })
+	testutil.Eventually(t, "the first turn to be sent", func() bool { return ag.sent() == 1 }, testutil.Within(10*time.Second), testutil.Every(2*time.Millisecond))
 	if _, err := p.mgr.Submit(t.Context(), session.Inbound{Key: key, Binding: "ns/b", MessageID: "slack:main:C1:1.3", MessageRef: "1.3", UserID: "U1", Text: "and now?"}); err != nil {
 		t.Fatal(err)
 	}
 
-	until(t, "the reply behind the auth pause to be sent", func() bool { return ag.sent() == 2 })
+	testutil.Eventually(t, "the reply behind the auth pause to be sent", func() bool { return ag.sent() == 2 }, testutil.Within(10*time.Second), testutil.Every(2*time.Millisecond))
 	if got := ag.cancelled(); !slices.Equal(got, []a2a.TaskID{"task-1"}) {
 		t.Errorf("the agent was asked to cancel %v; want the auth-required task, once", got)
 	}

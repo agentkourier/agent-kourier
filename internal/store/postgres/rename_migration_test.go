@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"io/fs"
-	"log/slog"
 	"net/url"
 	"slices"
 	"testing"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // The migrations of the rename: 0023 added the Agent Kourier names beside the courier ones, and 0024 drops the
@@ -72,7 +72,7 @@ func migrateUpTo(t *testing.T, pool *pgxpool.Pool, last int) {
 		}
 		part[m.Name] = &fstest.MapFile{Data: body}
 	}
-	if err := migrate(t.Context(), pool, part, slog.New(slog.DiscardHandler)); err != nil {
+	if err := migrate(t.Context(), pool, part, testutil.DiscardLogger()); err != nil {
 		t.Fatalf("migrate up to %d: %v", last, err)
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 func mustMetrics(t *testing.T, stale func() bool) *Metrics {
@@ -408,7 +409,7 @@ func TestBindingReadyHasNoSeriesWhileItIsStillPendingInEitherProbeOrder(t *testi
 				t.Errorf("no series for the %s that ended: %v", tc.first, seriesOf(t, m, "agentkourier_binding_condition"))
 			}
 			close(release)
-			eventually(t, 10*time.Second, "the second probe's Ready series", func() bool { return ready() == tc.readyEnd })
+			testutil.Eventually(t, "the second probe's Ready series", func() bool { return ready() == tc.readyEnd }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 		})
 	}
 }

@@ -3,7 +3,6 @@ package k8ssecrets
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -14,6 +13,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/agentkourier/agent-kourier/internal/config"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // entryNames returns the Secrets that have an informer.
@@ -69,7 +69,7 @@ func TestValueOfAnUnfollowedSecretReportsDenialAndTimeout(t *testing.T) {
 		}
 		return false, nil, nil
 	})
-	r := New(client, WithLogger(slog.New(slog.DiscardHandler)))
+	r := New(client, WithLogger(testutil.DiscardLogger()))
 	t.Cleanup(r.Stop)
 
 	if _, err := r.Value(t.Context(), "sre", "private", "token"); !errors.Is(err, ErrAccessDenied) {
@@ -89,7 +89,7 @@ func TestValueKeepsTheCallersCancellation(t *testing.T) {
 	client.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, errors.New("connection refused")
 	})
-	r := New(client, WithLogger(slog.New(slog.DiscardHandler))) // the default 10 s wait, which must not be what ends it
+	r := New(client, WithLogger(testutil.DiscardLogger())) // the default 10 s wait, which must not be what ends it
 	t.Cleanup(r.Stop)
 
 	canceled, cancel := context.WithCancel(t.Context())
@@ -122,7 +122,7 @@ func TestADeniedSecretIsReadOnceTheRoleIsApplied(t *testing.T) {
 		return false, nil, nil
 	})
 	const retry = 300 * time.Millisecond
-	r := New(client, WithLogger(slog.New(slog.DiscardHandler)), WithDeniedRetry(retry))
+	r := New(client, WithLogger(testutil.DiscardLogger()), WithDeniedRetry(retry))
 	t.Cleanup(r.Stop)
 	names := []config.SecretName{sn("sre", "creds")}
 	if err := r.Watch(t.Context(), names); !errors.Is(err, ErrAccessDenied) {
@@ -152,14 +152,14 @@ func TestADeniedSecretIsReadOnceTheRoleIsApplied(t *testing.T) {
 	}
 
 	var v string
-	waitFor(t, "a Value of the Secret after a recheck once the Role is applied", func() bool {
+	testutil.Eventually(t, "a Value of the Secret after a recheck once the Role is applied", func() bool {
 		_ = r.Watch(t.Context(), names) // the recheck
 		got, err := r.Value(t.Context(), "sre", "creds", "token")
 		if err == nil {
 			v = got.Reveal()
 		}
 		return err == nil
-	})
+	}, testutil.Within(10*time.Second), testutil.Every(5*time.Millisecond))
 	if v != canary {
 		t.Errorf("Value = %q, want the Secret's", v)
 	}
@@ -193,7 +193,7 @@ func TestFailedReloadsDoNotAccumulateInformers(t *testing.T) {
 		time.Sleep(200 * time.Millisecond) // a watch that opens after the cache has synced, as on a slow runner
 		return false, nil, nil
 	})
-	r := New(client, WithPinned(sn("agent-kourier", "pg")), WithLogger(slog.New(slog.DiscardHandler)))
+	r := New(client, WithPinned(sn("agent-kourier", "pg")), WithLogger(testutil.DiscardLogger()))
 	t.Cleanup(r.Stop)
 	if err := r.Start(t.Context()); err != nil {
 		t.Fatal(err)
@@ -291,7 +291,7 @@ func TestAnotherSecretsDenialIsNotThisOnes(t *testing.T) {
 		}
 		return false, nil, nil
 	})
-	r := New(client, WithLogger(slog.New(slog.DiscardHandler)))
+	r := New(client, WithLogger(testutil.DiscardLogger()))
 	t.Cleanup(r.Stop)
 	t.Cleanup(func() { close(release) }) // runs before Stop, which waits for the informers
 
@@ -317,7 +317,7 @@ func TestReadyCountsAPinnedSecretThatHasNotSynced(t *testing.T) {
 	client.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, errors.New("connection refused")
 	})
-	r := New(client, WithPinned(sn("agent-kourier", "pg")), WithLogger(slog.New(slog.DiscardHandler)))
+	r := New(client, WithPinned(sn("agent-kourier", "pg")), WithLogger(testutil.DiscardLogger()))
 	t.Cleanup(r.Stop)
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
@@ -334,7 +334,7 @@ func TestReadyCountsAPinnedSecretThatHasNotSynced(t *testing.T) {
 // undo the pin.
 func TestAPinnedSecretTheConfigAlsoNamesStaysPinned(t *testing.T) {
 	client := newAPI(t, secret("agent-kourier", "pg"))
-	r := New(client, WithPinned(sn("agent-kourier", "pg")), WithLogger(slog.New(slog.DiscardHandler)))
+	r := New(client, WithPinned(sn("agent-kourier", "pg")), WithLogger(testutil.DiscardLogger()))
 	t.Cleanup(r.Stop)
 	if err := r.Start(t.Context()); err != nil {
 		t.Fatal(err)
@@ -388,7 +388,7 @@ func listDelay(client *api, secretName string, d time.Duration) {
 func TestValueReadsWhileAnotherReadWaitsForTheSameCache(t *testing.T) {
 	client := newAPI(t, secret("sre", "late"))
 	listDelay(client, "late", 400*time.Millisecond)
-	r := New(client, WithLogger(slog.New(slog.DiscardHandler)))
+	r := New(client, WithLogger(testutil.DiscardLogger()))
 	t.Cleanup(r.Stop)
 
 	type result struct {
@@ -426,7 +426,7 @@ func TestValueFollowsAgainWhenTheInformerItWaitsForIsReleased(t *testing.T) {
 		}
 		return false, nil, nil
 	})
-	r := New(client, WithLogger(slog.New(slog.DiscardHandler)))
+	r := New(client, WithLogger(testutil.DiscardLogger()))
 	t.Cleanup(r.Stop)
 
 	type result struct {
@@ -466,7 +466,7 @@ func TestValueWaitIsBoundedWhateverTheContext(t *testing.T) {
 	client.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, errors.New("connection refused")
 	})
-	r := New(client, WithLogger(slog.New(slog.DiscardHandler)))
+	r := New(client, WithLogger(testutil.DiscardLogger()))
 	r.wait = 100 * time.Millisecond
 	t.Cleanup(r.Stop)
 	done := make(chan error, 1)
@@ -494,7 +494,7 @@ func TestValueEndsAtOnceOnStopAndOnDenial(t *testing.T) {
 		}
 		return false, nil, nil
 	})
-	r := New(client, WithLogger(slog.New(slog.DiscardHandler))) // the default 10 s wait
+	r := New(client, WithLogger(testutil.DiscardLogger())) // the default 10 s wait
 	t.Cleanup(r.Stop)
 
 	begin := time.Now()

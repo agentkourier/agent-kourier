@@ -13,6 +13,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // attributer is a store.Attribution that answers with rows and err, and records the connection it was asked for. The count
@@ -66,7 +67,7 @@ func TestAttributeStoredRowsNamesTheOwnConnectionAndLogsWhatItChanged(t *testing
 
 func TestAttributeStoredRowsReturnsTheStoresError(t *testing.T) {
 	boom := errors.New("the store is deposed")
-	err := attributeStoredRows(t.Context(), &attributer{err: boom}, slog.New(slog.DiscardHandler), "ns/own")
+	err := attributeStoredRows(t.Context(), &attributer{err: boom}, testutil.DiscardLogger(), "ns/own")
 	if !errors.Is(err, boom) || !strings.Contains(err.Error(), "ns/own") {
 		t.Errorf("attributeStoredRows = %v; want the store's error, with the connection named", err)
 	}

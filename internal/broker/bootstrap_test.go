@@ -2,7 +2,6 @@ package broker
 
 import (
 	"errors"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/config/k8ssecrets"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // configDir copies spec 7's example config, which refers to Secrets in agent-kourier-system and sre.
@@ -51,7 +51,7 @@ func cluster() *fake.Clientset {
 func options(dir string) BootstrapOptions {
 	return BootstrapOptions{
 		Dir: dir, SyncTimeout: 30 * time.Second, PollInterval: 5 * time.Millisecond, SecretsInterval: time.Hour,
-		Logger: slog.New(slog.DiscardHandler),
+		Logger: testutil.DiscardLogger(),
 	}
 }
 

@@ -14,6 +14,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/watch"
 	k8stesting "k8s.io/client-go/testing"
+
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // A running broker keeps its own connection when it is deleted and made again invalid, which is another object with a new
@@ -79,7 +81,7 @@ func TestBootstrapCRDsIsStaleWhileAnInformerCannotWatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(c.Stop)
-	eventually(t, 10*time.Second, "the config was never reported stale", c.Stale)
+	testutil.Eventually(t, "the config was never reported stale", c.Stale, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	if n := len(c.Reloader.Current().Bindings()); n != 2 {
 		t.Errorf("%d Bindings served while stale; want both, from the cache that was kept", n)
 	}

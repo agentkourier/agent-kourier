@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"os"
 	"regexp"
 	"slices"
@@ -22,6 +20,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 const bindingName = "sre/sre-alerts"
@@ -787,11 +786,11 @@ func TestNoAlertTextIsInNotesLogsOrTheDatabase(t *testing.T) {
 func TestNotesArePostedThroughTheOutboxExactlyOnce(t *testing.T) {
 	h := newTriggered(t, trialTrigger())
 	fake := chattest.NewFake()
-	ob, err := outbox.New(outbox.Config{Store: h.st, Platforms: chattest.Same[outbox.Platform](fake), OnAbandon: outbox.NoAbandon, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	ob, err := outbox.New(outbox.Config{Store: h.st, Platforms: chattest.Same[outbox.Platform](fake), OnAbandon: outbox.NoAbandon, Logger: testutil.DiscardLogger()})
 	if err != nil {
 		t.Fatalf("outbox.New = %v", err)
 	}
-	sink := live.NewSink(nil, ob, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	sink := live.NewSink(nil, ob, testutil.DiscardLogger())
 	h.cfg.Notice = sink.QueueNotice
 	h.in = chat.NewIntake(h.cfg)
 

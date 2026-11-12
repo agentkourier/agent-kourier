@@ -2,7 +2,6 @@ package broker
 
 import (
 	"errors"
-	"log/slog"
 	"net"
 	"reflect"
 	"strings"
@@ -12,6 +11,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // valid returns a RunConfig that passes validate: every required field set.
@@ -22,7 +22,7 @@ func valid(t *testing.T) RunConfig {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = ln.Close() })
-	return RunConfig{ConfigDir: "/etc/agent-kourier", DBPath: "/data/agent-kourier.db", Listener: ln, Logger: slog.New(slog.DiscardHandler)}
+	return RunConfig{ConfigDir: "/etc/agent-kourier", DBPath: "/data/agent-kourier.db", Listener: ln, Logger: testutil.DiscardLogger()}
 }
 
 // No build can start without the renderer or the interactions, or with different ones, and none can

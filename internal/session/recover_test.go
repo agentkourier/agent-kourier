@@ -17,6 +17,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // restarted is a conversation as a restart finds it: the session records task t1 in context c1,
@@ -53,7 +54,7 @@ func TestRecoverFollowsARunningTask(t *testing.T) {
 	f.recover(t)
 	close(gate)
 	waitFinal(t, sink)
-	eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
+	testutil.Eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
 	if len(sink.refs) != 1 || !sink.refs[0].Recovered || !sink.refs[0].Restarted || sink.refs[0].Key != key || sink.refs[0].Binding != "ns/b1" {
@@ -113,7 +114,7 @@ func TestRecoverFollowsATaskWhenTheRecheckFails(t *testing.T) {
 	f.st.mu.Unlock()
 	f.recover(t)
 	waitFinal(t, sink)
-	eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
+	testutil.Eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
 	if _, _, fo := f.agent.counts(); fo != 1 {
 		t.Errorf("%d follows; want the task followed once", fo)
 	}
@@ -127,7 +128,7 @@ func TestRecoverRendersAFinishedTaskOnce(t *testing.T) {
 	}
 	f.recover(t)
 	waitFinal(t, sink)
-	eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
+	testutil.Eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
 	f.recover(t) // the session no longer lists: nothing is rendered again
 	f.retired(t)
 	sink.mu.Lock()
@@ -146,7 +147,7 @@ func TestRecoverParksAPausedTask(t *testing.T) {
 	f.recover(t)
 	f.recover(t)
 	waitFinal(t, sink) // the pause, shown again
-	eventually(t, "the runner to park", func() bool {
+	testutil.Eventually(t, "the runner to park", func() bool {
 		f.m.mu.Lock()
 		defer f.m.mu.Unlock()
 		return f.m.convos[key] != nil && f.m.convos[key].parked == "t1"
@@ -155,7 +156,7 @@ func TestRecoverParksAPausedTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFinal(t, sink)
-	eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
+	testutil.Eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
 	if _, _, fo := f.agent.counts(); fo != 1 {
 		t.Errorf("%d follows; want the second Recover to start nothing", fo)
 	}
@@ -170,7 +171,7 @@ func TestRecoverOfAPausedTaskThatIsAnsweredRendersTheAnswerUnderItsOwnTurn(t *te
 	f.agent.answer = func(_ *a2a.Message, h agent.Handler) error { return turn(h, 0, a2a.TaskStateCompleted) }
 	f.recover(t)
 	waitFinal(t, sink)
-	eventually(t, "the runner to park", func() bool {
+	testutil.Eventually(t, "the runner to park", func() bool {
 		f.m.mu.Lock()
 		defer f.m.mu.Unlock()
 		return f.m.convos[key] != nil && f.m.convos[key].parked == "t1"
@@ -194,8 +195,8 @@ func TestRecoverCancelsAWedgedTask(t *testing.T) {
 	f.agent.get = working(t0.Add(-2 * time.Hour))
 	f.agent.follow = func(a2a.TaskID, agent.Handler) error { return errors.New("follow must not run") }
 	f.recover(t)
-	eventually(t, "the wedged notice", func() bool { return len(sink.noticesOf(NoticeWedged)) == 1 })
-	eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
+	testutil.Eventually(t, "the wedged notice", func() bool { return len(sink.noticesOf(NoticeWedged)) == 1 })
+	testutil.Eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
 	if got := f.cancelled(); len(got) != 1 || got[0] != "t1" {
 		t.Errorf("cancelled %v; want t1", got)
 	}
@@ -207,7 +208,7 @@ func TestRecoverOfAGoneTaskResetsTheSession(t *testing.T) {
 	f, sink := restarted(t)
 	f.agent.get = func(a2a.TaskID) (*a2a.Task, error) { return nil, a2a.NewError(a2a.ErrTaskNotFound, "gone") }
 	f.recover(t)
-	eventually(t, "the session to be reset", func() bool {
+	testutil.Eventually(t, "the session to be reset", func() bool {
 		sess, _ := f.session()
 		return sess.ContextID == "" && sess.TaskID == "" && len(sink.noticesOf(NoticeSessionGone)) == 1
 	})
@@ -306,7 +307,7 @@ func TestRecoverTakesTheHeadForTheRunningTurn(t *testing.T) {
 	}
 	f.recover(t)
 	waitFinal(t, sink)
-	eventually(t, "the head to be delivered", f.queueEmpty)
+	testutil.Eventually(t, "the head to be delivered", f.queueEmpty)
 	if sends, _, _ := f.agent.counts(); sends != 0 {
 		t.Errorf("%d sends; want none: the head is the running turn", sends)
 	}
@@ -488,7 +489,7 @@ func TestRecoverRendersATaskUnderTheTurnRecordedForIt(t *testing.T) {
 	if len(refs) != 1 || refs[0].MessageID != inbound("1").MessageID || refs[0].UserID != "U1" || !refs[0].Recovered {
 		t.Errorf("turn refs = %+v; want one, recovered, under the recorded turn (%s) and shown to its author, U1", refs, inbound("1").MessageID)
 	}
-	eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
+	testutil.Eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
 	if sess, err := f.session(); err != nil || sess.Turn != (store.TaskTurn{}) {
 		t.Errorf("session = %+v, %v; want the turn cleared with the task", sess, err)
 	}
@@ -524,7 +525,7 @@ func TestAnAnsweredTaskIsRecordedUnderTheAnswerAndRecoveredUnderIt(t *testing.T)
 	if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the answer to be recorded as the turn of the task", func() bool {
+	testutil.Eventually(t, "the answer to be recorded as the turn of the task", func() bool {
 		sess, err := f.session()
 		return err == nil && sess.Turn.ID == "ans-1"
 	})
@@ -580,12 +581,12 @@ func TestTheAnswersTurnIsRecordedBeforeTheAgentIsAsked(t *testing.T) {
 	if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the person to be told the answer was not delivered", func() bool {
+	testutil.Eventually(t, "the person to be told the answer was not delivered", func() bool {
 		sink.mu.Lock()
 		defer sink.mu.Unlock()
 		return slices.ContainsFunc(sink.notices, func(n Notice) bool { return n.Kind == NoticeFailed })
 	})
-	eventually(t, "the runner to park again", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return f.m.convos[key].parked == "t1" })
+	testutil.Eventually(t, "the runner to park again", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return f.m.convos[key].parked == "t1" })
 	f.agent.mu.Lock()
 	sent := len(f.agent.answers)
 	f.agent.mu.Unlock()
@@ -596,7 +597,7 @@ func TestTheAnswersTurnIsRecordedBeforeTheAgentIsAsked(t *testing.T) {
 	if err := f.m.Answer(t.Context(), key, answerMsg("ans-2")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the agent to be asked", func() bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return len(f.agent.answers) == 1 })
+	testutil.Eventually(t, "the agent to be asked", func() bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return len(f.agent.answers) == 1 })
 	sess, err := f.session() // the agent has said nothing: no state event has been seen
 	if err != nil || sess.TaskID != "t1" || sess.Turn.ID != "ans-2" || sess.TurnTask != "t1" {
 		t.Fatalf("session = %+v, %v; want t1 under the answer, ans-2, before the agent has named the task", sess, err)
@@ -663,7 +664,7 @@ func TestRecoverRetriesTheHeadMatch(t *testing.T) {
 	}
 	f.recover(t)
 	waitFinal(t, sink)
-	eventually(t, "the head to be delivered", f.queueEmpty)
+	testutil.Eventually(t, "the head to be delivered", f.queueEmpty)
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
 	if len(sink.refs) != 1 || sink.refs[0].MessageID != inbound("1").MessageID {
@@ -691,7 +692,7 @@ func TestRecoverAttachesToARunnerThatWokeFirst(t *testing.T) {
 	}
 	<-inLookup // the runner is busy holding the head behind t1
 	f.recover(t)
-	eventually(t, "the recovery to be attached to the busy runner", func() bool {
+	testutil.Eventually(t, "the recovery to be attached to the busy runner", func() bool {
 		f.m.mu.Lock()
 		defer f.m.mu.Unlock()
 		return f.m.convos[key].attach != nil // the runner is held in its lookup, so it has not taken it
@@ -854,7 +855,7 @@ func TestRecoverLeavesTheConversationsOfAConnectionThatIsDownUntilItRuns(t *test
 		t.Fatal(err)
 	}
 	waitFinal(t, sink)
-	eventually(t, "the task of the connection that now runs to be cleared", func() bool { return f.taskID() == "" })
+	testutil.Eventually(t, "the task of the connection that now runs to be cleared", func() bool { return f.taskID() == "" })
 	if err := f.m.RecoverConnection(t.Context(), key.Connection); err != nil {
 		t.Fatal(err)
 	}
@@ -871,7 +872,7 @@ func TestRecoverConnectionStartsNothingForAConnectionRecoverDidNotSkip(t *testin
 	f.m.cfg.ConnectionRunning = func(string) bool { return true }
 	f.recover(t)
 	waitFinal(t, sink)
-	eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
+	testutil.Eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
 	f.retired(t)
 	f.seed("ns/b1", 0) // a task that is recorded again, which only a second take-up would follow
 	if err := f.m.RecoverConnection(t.Context(), key.Connection); err != nil {

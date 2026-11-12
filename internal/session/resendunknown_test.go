@@ -14,6 +14,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // sentIDs are the IDs of the messages the agent was sent, in order.
@@ -53,7 +54,7 @@ func TestAProtocolErrorBeforeATaskIsNamedIsNotSentAgainWhenTheListCannotBeRead(t
 	if _, err := f.submit(inbound("2")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the second send", func() bool { return sends.Load() == 2 })
+	testutil.Eventually(t, "the second send", func() bool { return sends.Load() == 2 })
 	f.retired(t)                                      // the runner retires on the error, with the turn queued
 	if _, err := f.submit(inbound("3")); err != nil { // a later message wakes the queue, where "2" is still the head
 		t.Fatal(err)
@@ -88,7 +89,7 @@ func TestATurnTheAgentTookAndNobodyRecordedIsNotSentWhenTheListCannotBeRead(t *t
 	if _, err := f.submit(inbound("2")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+	testutil.Eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
 	f.retired(t)
 	if got := f.sentIDs(); !slices.Equal(got, []string{inbound("1").MessageID}) {
 		t.Errorf("sent %v; want only the first message: a turn the agent took is never sent again", got)
@@ -123,7 +124,7 @@ func TestTaskLeftByACardThatIsTooLargeIsReadOnceAndCancellableOnceTheCardIsFixed
 		return nil
 	}
 	f.recover(t)
-	eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+	testutil.Eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
 	f.retired(t)
 	if got := sink.noticesOf(NoticeFailed); got[0].Detail != cardTooLargeDetail {
 		t.Errorf("notice = %q; want %q", got[0].Detail, cardTooLargeDetail)

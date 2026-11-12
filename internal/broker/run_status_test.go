@@ -17,6 +17,8 @@ import (
 	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/rest"
+
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // With the custom resources as the source, the broker that leads writes each Binding's status: it is a SQLite broker, so it leads
@@ -131,9 +133,9 @@ func TestRunALeaderWhoseLeaseIsFreshWritesTheStatuses(t *testing.T) {
 	c.leaseNow = func() time.Time { return now }
 	rep.running = start(t, c)
 
-	eventually(t, 10*time.Second, "no status was written", func() bool {
+	testutil.Eventually(t, "no status was written", func() bool {
 		return len(cl.stored(t, "sre/sre-alerts")) > 0 && len(cl.stored(t, "sre/chat-only")) > 0
-	})
+	}, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	select {
 	case code := <-rep.exits:
 		t.Errorf("the process stopped with exit %d; want it to lead\n%s", code, rep.logs.String())
@@ -154,7 +156,7 @@ func TestRunStopsTheStatusWriterAfterTheVerification(t *testing.T) {
 	r.until("/readyz", http.StatusOK)
 	// Readiness does not wait for the leader's work, so a signal that comes at once can end the broker before the leader half has
 	// started its loops, and there is nothing to stop in order: wait for what only the leader half produces, a status.
-	eventually(t, 10*time.Second, "the leader half wrote no status", func() bool { return cluster.count() > 0 })
+	testutil.Eventually(t, "the leader half wrote no status", func() bool { return cluster.count() > 0 }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	r.cancel()
 	if err := r.wait(); err != nil {
 		t.Fatal(err)
@@ -182,10 +184,10 @@ func TestRunTheWritersWarningsAreTheCountersOfTheClient(t *testing.T) {
 	c.StatusClient = cluster.dyn
 	r := start(t, c)
 	r.until("/readyz", http.StatusOK)
-	eventually(t, 10*time.Second, "the warnings were not said", func() bool {
+	testutil.Eventually(t, "the warnings were not said", func() bool {
 		text := logs.String()
 		return strings.Contains(text, "the API server warned") && strings.Contains(text, "warnings_per_write=7")
-	})
+	}, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	r.cancel()
 	if err := r.wait(); err != nil {
 		t.Fatal(err)

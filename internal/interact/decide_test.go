@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"slices"
 	"strings"
@@ -27,6 +26,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // These tests run far in the past, so that the real clock is always past every deadline: a decision
@@ -214,15 +214,12 @@ type decideRig struct {
 
 func newDecideRig(t *testing.T) *decideRig {
 	t.Helper()
-	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := sqlitetest.Open(t)
 	r := &decideRig{calls: &callLog{}, flow: &callLog{}, logs: &logBuf{}, eph: &ephemerals{}, sess: &answerSess{}, out: &enqueued{}, rep: &promptReplacer{}}
 	r.sess.log, r.rep.log = r.flow, r.flow
 	r.st = &orderedStore{Store: st, log: r.calls, all: r.flow}
 	r.aud = &orderedAudit{audits: &audits{}, log: r.calls, all: r.flow}
+	var err error
 	r.d, err = interact.NewDecider(decideCfg(interact.DecideConfig{
 		Store: r.st, Auditor: r.aud, Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Session: r.sess, Sessions: r.st, Replacer: r.rep, Outbox: r.out, Logger: slog.New(slog.NewTextHandler(r.logs, nil)),
 		OnDecision: func(result string) { r.mu.Lock(); r.hooks = append(r.hooks, result); r.mu.Unlock() },
@@ -709,7 +706,7 @@ func TestASessionThatCannotBeReadRetriesTheAnswer(t *testing.T) {
 	r := newDecideRig(t)
 	r.pending(t)
 	d, err := interact.NewDecider(decideCfg(interact.DecideConfig{Store: r.st, Auditor: r.aud, Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Session: r.sess, Sessions: failingSessions{errBoom},
-		Outbox: r.out, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}))
+		Outbox: r.out, Logger: testutil.DiscardLogger()}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -762,7 +759,7 @@ func TestAHungEditDoesNotHoldUpThePress(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := &hangs{}
-	rp, err := interact.NewReplacer(interact.ReplacerConfig{Store: r.st, Updaters: chattest.Same[interact.Editor](h), EditTimeout: 20 * time.Millisecond, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	rp, err := interact.NewReplacer(interact.ReplacerConfig{Store: r.st, Updaters: chattest.Same[interact.Editor](h), EditTimeout: 20 * time.Millisecond, Logger: testutil.DiscardLogger()})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,7 +1,6 @@
 package postgres
 
 import (
-	"log/slog"
 	"os"
 	"slices"
 	"strings"
@@ -11,6 +10,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 func migrationNames(t *testing.T, dir string) []string {
@@ -129,7 +130,7 @@ func TestMigrationFailureLeavesEarlierOnes(t *testing.T) {
 		"migrations/0002_bad.sql":   {Data: []byte(`CREATE TABLE half (id integer); SELECT 1/0;`)},
 		"migrations/0003_never.sql": {Data: []byte(`CREATE TABLE never (id integer);`)},
 	}
-	if err := migrate(t.Context(), pool, fsys, slog.New(slog.DiscardHandler)); err == nil || !strings.Contains(err.Error(), "0002_bad.sql") {
+	if err := migrate(t.Context(), pool, fsys, testutil.DiscardLogger()); err == nil || !strings.Contains(err.Error(), "0002_bad.sql") {
 		t.Fatalf("migrate = %v; want the failure of 0002_bad.sql", err)
 	}
 	got := appliedVersions(t, dsn)

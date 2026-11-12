@@ -3,8 +3,6 @@ package broker
 import (
 	"context"
 	"errors"
-	"io"
-	"log/slog"
 	"maps"
 	"net/http"
 	"os"
@@ -25,6 +23,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // recordedServed is a store.ConnectionServing in memory: the record of the connections a broker served, which outlives the writer
@@ -386,11 +385,7 @@ func TestABindingTheConnectionDoesNotAdmitIsToldNothing(t *testing.T) {
 // keeps those of any Binding that exists and is not served: their threadTTL is not known, and may exceed the longest that is served.
 // Those of a Binding that was deleted, as old, go. Against the real store, which also holds the record.
 func TestRetentionKeepsTheSessionsOfAStoppedConnectionsBindingAfterARestart(t *testing.T) {
-	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := sqlitetest.Open(t)
 	if err := st.ReplaceServedConnections(t.Context(), []string{ownConn, teamConn}, sweepNow.Add(-time.Hour)); err != nil { // the broker before
 		t.Fatal(err)
 	}
@@ -405,7 +400,7 @@ func TestRetentionKeepsTheSessionsOfAStoppedConnectionsBindingAfterARestart(t *t
 	snap := servedSnapshot(t, ownServed())
 	report := func() config.Report { return config.Report{Snapshot: snap} }
 	record := newServedRecord(st, bothExist().of, func() time.Time { return sweepNow })
-	known := record.retentionKnows(t.Context(), report, slog.New(slog.NewTextHandler(io.Discard, nil)), func() (map[string]time.Duration, []string, bool) {
+	known := record.retentionKnows(t.Context(), report, testutil.DiscardLogger(), func() (map[string]time.Duration, []string, bool) {
 		return map[string]time.Duration{sreAlerts: 24 * time.Hour}, nil, true
 	})
 	newSessionRetention(t, &fakeRetentionStore{}, func(c *retentionConfig) {
@@ -420,7 +415,7 @@ func TestRetentionKeepsTheSessionsOfAStoppedConnectionsBindingAfterARestart(t *t
 
 	// A record that cannot be read leaves the retention knowing nothing, so that it deletes nothing: the stopped connections are unknown.
 	broken := newServedRecord(&recordedServed{failRead: errors.New("store is down")}, bothExist().of, nil)
-	if _, _, ok := broken.retentionKnows(t.Context(), report, slog.New(slog.NewTextHandler(io.Discard, nil)),
+	if _, _, ok := broken.retentionKnows(t.Context(), report, testutil.DiscardLogger(),
 		func() (map[string]time.Duration, []string, bool) { return nil, nil, true })(); ok {
 		t.Error("the retention is told it knows the Bindings while the record cannot be read")
 	}
@@ -558,11 +553,7 @@ func TestRetentionKeepsTheSessionsOfAnOverCapConnectionsBinding(t *testing.T) {
 	}
 	t.Cleanup(b.Close)
 
-	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := sqlitetest.Open(t)
 	day := 24 * time.Hour
 	overCap := store.ConversationKey{Connection: "teams/c16", Channel: "C1", Thread: "1.1"}
 	deleted := store.ConversationKey{Connection: "teams/c16", Channel: "C1", Thread: "2.2"}
@@ -616,7 +607,7 @@ func TestAConnectionWhoseBindingsCannotBeFoundYetIsKeptAndNothingIsDeleted(t *te
 	report := r.report
 	r.mu.Unlock()
 	reported := func() config.Report { return report }
-	known := rec.retentionKnows(t.Context(), reported, slog.New(slog.NewTextHandler(io.Discard, nil)), func() (map[string]time.Duration, []string, bool) {
+	known := rec.retentionKnows(t.Context(), reported, testutil.DiscardLogger(), func() (map[string]time.Duration, []string, bool) {
 		return map[string]time.Duration{sreAlerts: time.Hour}, nil, true
 	})
 	if _, _, ok := known(); ok {
@@ -652,7 +643,7 @@ func TestRetentionKnowsReadsOneSnapshot(t *testing.T) {
 		i := 0
 		return func() config.Report { s := snaps[min(i, len(snaps)-1)]; i++; return config.Report{Snapshot: s} }
 	}
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	log := testutil.DiscardLogger()
 
 	var reads int
 	if _, unserved, ok := record().retentionKnows(t.Context(), sequence(stopped), log, known(&reads))(); !ok || reads != 1 || !slices.Equal(unserved, []string{teamBind}) {

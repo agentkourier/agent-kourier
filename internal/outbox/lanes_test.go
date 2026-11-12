@@ -1,22 +1,23 @@
 package outbox_test
 
 import (
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // TestForgetDropsTheLaneOfAConnection: a connection that delivered keeps a lane, and Forget takes it away, so that the lanes do
 // not grow with the connections a broker has served. The lane of another connection stays, and a post of the forgotten connection
 // makes its lane again.
 func TestForgetDropsTheLaneOfAConnection(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	apps := newTwoApps()
-	o := mustNew(t, outbox.Config{Store: st, Platforms: apps.set, Now: func() time.Time { return t0 }, CallTimeout: time.Second, Logger: quiet()})
+	o := mustNew(t, outbox.Config{Store: st, Platforms: apps.set, Now: func() time.Time { return t0 }, CallTimeout: time.Second, Logger: testutil.DiscardLogger()})
 	ctx := t.Context()
 	for _, c := range []string{connA, connB} {
 		if _, err := o.Send(ctx, onConn(c, "sent-"+c)); err != nil {
@@ -44,14 +45,14 @@ func TestForgetDropsTheLaneOfAConnection(t *testing.T) {
 // TestForgetWaitsForADeliveryInFlight: a lane that a post is being made on is not taken from under it, which would let a second
 // delivery of the connection begin beside it; it goes when that post is done.
 func TestForgetWaitsForADeliveryInFlight(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	release := make(chan struct{})
 	a := hangs(release)
 	o := mustNew(t, outbox.Config{Store: st, Platforms: chat.PlatformSet[outbox.Platform]{connA: a},
-		Now: func() time.Time { return t0 }, CallTimeout: time.Minute, Logger: quiet()})
+		Now: func() time.Time { return t0 }, CallTimeout: time.Minute, Logger: testutil.DiscardLogger()})
 	sent := make(chan error, 1)
 	go func() { _, err := o.Send(t.Context(), onConn(connA, "stuck")); sent <- err }()
-	eventually(t, "the post to be in flight", func() bool { posts, _ := a.counts(); return posts == 1 })
+	testutil.Eventually(t, "the post to be in flight", func() bool { posts, _ := a.counts(); return posts == 1 })
 
 	o.Forget(connA)
 	if got := o.Lanes(); got != 1 {
@@ -72,9 +73,9 @@ func TestForgetWaitsForADeliveryInFlight(t *testing.T) {
 // and Send each see the connection down on their own, so each is looked at without the others.
 func TestAConnectionThatIsDownLeavesNoLane(t *testing.T) {
 	newOutbox := func(t *testing.T) (*outbox.Outbox, store.Outbox) {
-		st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+		st := sqlitetest.Open(t)
 		res := &dynamic{m: map[string]outbox.Platform{connA: &poster{}}}
-		return mustNew(t, outbox.Config{Store: st, Platforms: res, Now: func() time.Time { return t0 }, CallTimeout: time.Second, Interval: time.Hour, Logger: quiet()}), st
+		return mustNew(t, outbox.Config{Store: st, Platforms: res, Now: func() time.Time { return t0 }, CallTimeout: time.Second, Interval: time.Hour, Logger: testutil.DiscardLogger()}), st
 	}
 	waiting := func(t *testing.T, o *outbox.Outbox, conn string) {
 		t.Helper()
@@ -100,8 +101,8 @@ func TestAConnectionThatIsDownLeavesNoLane(t *testing.T) {
 		start(t, o)
 		waiting(t, o, connB)
 		waiting(t, o, connA) // a's row is posted, which shows the pass that saw b down has been made
-		eventually(t, "a's row to be posted", func() bool { return ref(st, outbox.ID("waiting-"+connA, store.OutboxNotice)) != "" })
-		eventually(t, "the pass to leave a's lane alone", func() bool { return o.Lanes() <= 1 })
+		testutil.Eventually(t, "a's row to be posted", func() bool { return ref(st, outbox.ID("waiting-"+connA, store.OutboxNotice)) != "" })
+		testutil.Eventually(t, "the pass to leave a's lane alone", func() bool { return o.Lanes() <= 1 })
 		if got := o.Lanes(); got > 1 {
 			t.Errorf("Lanes = %d after Run found b down; want a's alone", got)
 		}

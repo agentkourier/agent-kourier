@@ -2,8 +2,6 @@ package queue
 
 import (
 	"context"
-	"io"
-	"log/slog"
 	"testing"
 	"time"
 
@@ -14,6 +12,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 	"github.com/agentkourier/agent-kourier/internal/telemetry/telemetrytest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // An event appended in one trace is handled, after a restart, in that trace: the processing span
@@ -40,7 +39,7 @@ func TestEventHandlingContinuesTheTraceOfTheEventAcrossARestart(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 	var handling trace.SpanContext
 	w, err := New(Config{Queue: st, Lease: lease, MaxAttempts: maxAttempts, Now: func() time.Time { return t0 },
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger: testutil.DiscardLogger(),
 		Handler: HandlerFunc(func(ctx context.Context, _ store.Event) error {
 			handling = trace.SpanContextFromContext(ctx)
 			return nil

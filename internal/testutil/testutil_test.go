@@ -22,7 +22,9 @@ type fakeTB struct {
 
 func (f *fakeTB) Helper() { f.helpers++ }
 
-func (f *fakeTB) Fatalf(format string, args ...any) { f.fatal = append(f.fatal, fmt.Sprintf(format, args...)) }
+func (f *fakeTB) Fatalf(format string, args ...any) {
+	f.fatal = append(f.fatal, fmt.Sprintf(format, args...))
+}
 
 func TestEventuallyReturnsOnceTheConditionHolds(t *testing.T) {
 	f := &fakeTB{TB: t}

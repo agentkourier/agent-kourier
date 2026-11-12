@@ -1,14 +1,13 @@
 package slack_test
 
 import (
-	"io"
-	"log/slog"
 	"net/http"
 	"testing"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/secret"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
@@ -18,7 +17,7 @@ func TestAWrappedClientKeepsItsCapabilities(t *testing.T) {
 	t.Run("busy mark", func(t *testing.T) {
 		rt := &statusSlack{}
 		c := slack.New(slack.Config{BotToken: secret.New("xoxb-fake-token"), AppToken: secret.New("xapp-fake-token"), APIURL: "http://slack.test/",
-			HTTPClient: &http.Client{Transport: rt}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+			HTTPClient: &http.Client{Transport: rt}, Logger: testutil.DiscardLogger()})
 		p := slack.NewPlatform(struct{ slack.API }{c}, "ns/conn")
 		if err := p.MarkBusy(t.Context(), busyThread, true); err != nil || len(rt.calls()) != 1 {
 			t.Errorf("MarkBusy = %v with %d calls; want the status set by one call", err, len(rt.calls()))

@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -18,6 +16,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 const conn = "agent-kourier-system/slack-main"
@@ -114,7 +113,7 @@ func newIntakeOn(t *testing.T, conn v1alpha1.ObjectRef, notice func(context.Cont
 	return chat.NewIntake(chat.IntakeConfig{
 		Connection: conn,
 		Snapshot:   func() *config.Snapshot { return snap }, Submitter: sub, Notice: notice,
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}), sub
+		Logger: testutil.DiscardLogger()}), sub
 }
 
 // TestTriggers checks spec 8.2's table: what each message is submitted as, if at all.
@@ -232,13 +231,13 @@ func TestIntakePassesInteractionsOn(t *testing.T) {
 	in := chat.NewIntake(chat.IntakeConfig{Interactions: func(_ context.Context, i chat.Interaction) error {
 		got = append(got, i)
 		return fail
-	}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	}, Logger: testutil.DiscardLogger()})
 	press := chat.Interaction{User: "U1", At: chat.Ref{Channel: "C1", ID: "5.5"}, PromptID: "ix-1"}
 	if err := in.Interaction(t.Context(), press); !errors.Is(err, fail) || len(got) != 1 || got[0].PromptID != "ix-1" {
 		t.Fatalf("Interaction = %v, handler saw %+v; want its error, and the press", err, got)
 	}
 	// With no handler the press is dropped, and acknowledged.
-	if err := chat.NewIntake(chat.IntakeConfig{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}).Interaction(t.Context(), press); err != nil {
+	if err := chat.NewIntake(chat.IntakeConfig{Logger: testutil.DiscardLogger()}).Interaction(t.Context(), press); err != nil {
 		t.Fatalf("Interaction with no handler = %v; want nil", err)
 	}
 }

@@ -3,12 +3,13 @@ package config
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // fakeSource is a Source that is not a directory: it hands out a fresh Set of spec 7's examples
@@ -41,7 +42,7 @@ func (f *fakeSource) Fingerprint(context.Context) string { return f.fp }
 
 func newFakeReloader(src Source, secrets SecretResolver) *Reloader {
 	// Dir names nothing: a Source overrides it, and a Reloader that read it would fail.
-	return NewReloader(ReloaderConfig{Dir: "/nonexistent/config", Source: src, Secrets: secrets, Logger: slog.New(slog.DiscardHandler)})
+	return NewReloader(ReloaderConfig{Dir: "/nonexistent/config", Source: src, Secrets: secrets, Logger: testutil.DiscardLogger()})
 }
 
 // A Reloader needs no directory: it rebuilds when the source's fingerprint moves, not when it
@@ -92,7 +93,7 @@ func TestReloaderKeepsLastGoodOnSourceFailure(t *testing.T) {
 			secrets := specSecrets()
 			src := &fakeSource{t: t, fp: "v1"}
 			var seen []error
-			r := NewReloader(ReloaderConfig{Source: src, Secrets: secrets, Logger: slog.New(slog.DiscardHandler), OnError: func(err error) { seen = append(seen, err) }})
+			r := NewReloader(ReloaderConfig{Source: src, Secrets: secrets, Logger: testutil.DiscardLogger(), OnError: func(err error) { seen = append(seen, err) }})
 			mustReload(t, r, true)
 			good, st := r.Current(), r.Status()
 

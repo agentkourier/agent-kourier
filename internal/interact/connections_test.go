@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"strconv"
 	"testing"
 	"time"
@@ -18,6 +16,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // keyB is a thread of a second connection's app that has the same channel, thread and message IDs as key's: two apps in one
@@ -43,7 +42,7 @@ func newTwoApps(t *testing.T) *twoApps {
 	ephemeral := chat.PlatformSet[interact.Ephemeral]{key.Connection: r.ephA, keyB.Connection: r.ephB}
 	r.authorizer = chat.PlatformSet[interact.Authorizer]{key.Connection: r.azA, keyB.Connection: r.azB}
 	decider, err := interact.NewDecider(decideCfg(interact.DecideConfig{
-		Store: r.st, Auditor: r.aud, Ephemerals: ephemeral, Session: r.sess, Sessions: r.st, Outbox: r.out, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Store: r.st, Auditor: r.aud, Ephemerals: ephemeral, Session: r.sess, Sessions: r.st, Outbox: r.out, Logger: testutil.DiscardLogger(),
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -52,7 +51,7 @@ func newTwoApps(t *testing.T) *twoApps {
 	r.pl, err = interact.NewPipeline(pressCfg(interact.PressConfig{
 		Store: r.st, Sessions: r.st, Lookup: lookup{b}, Decider: decider, Auditor: r.aud, Ephemerals: ephemeral,
 		Authorizers: r.authorizer,
-		Limits:      store.PressLimits{Total: 10, PerUser: 2}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: func() time.Time { return r.now },
+		Limits:      store.PressLimits{Total: 10, PerUser: 2}, Logger: testutil.DiscardLogger(), Now: func() time.Time { return r.now },
 	}))
 	if err != nil {
 		t.Fatal(err)

@@ -38,6 +38,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/identity"
 	"github.com/agentkourier/agent-kourier/internal/secret"
 	"github.com/agentkourier/agent-kourier/internal/session"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/stubagent"
 )
 
@@ -571,7 +572,7 @@ func TestChannelCheckerReportsTheCauseOfAFailedReadThroughTheRealSlackClient(t *
 		}
 	}))
 	t.Cleanup(func() { close(release); srv.Close() })
-	client := slack.New(slack.Config{BotToken: secret.New(bot), AppToken: secret.New(app), APIURL: srv.URL + "/", Logger: slog.New(slog.DiscardHandler)})
+	client := slack.New(slack.Config{BotToken: secret.New(bot), AppToken: secret.New(app), APIURL: srv.URL + "/", Logger: testutil.DiscardLogger()})
 	c := channelChecker{platform: slack.NewPlatform(client, "ns/conn"), timeout: 300 * time.Millisecond}
 
 	var outs []bindingcheck.Outcome
@@ -610,7 +611,7 @@ func TestChannelCheckerReportsTheCauseOfAFailedReadThroughTheRealSlackClient(t *
 	refused := httptest.NewServer(http.NotFoundHandler())
 	refusedURL := refused.URL
 	refused.Close()
-	closed := channelChecker{platform: slack.NewPlatform(slack.New(slack.Config{BotToken: secret.New(bot), AppToken: secret.New(app), APIURL: refusedURL + "/", Logger: slog.New(slog.DiscardHandler)}), "ns/conn"), timeout: 2 * time.Second}
+	closed := channelChecker{platform: slack.NewPlatform(slack.New(slack.Config{BotToken: secret.New(bot), AppToken: secret.New(app), APIURL: refusedURL + "/", Logger: testutil.DiscardLogger()}), "ns/conn"), timeout: 2 * time.Second}
 	if out, err := closed.CheckChannel(t.Context(), "C1"); err != nil || out.Status != bindingcheck.Unknown || out.Reason != bindingcheck.ReasonChatUnavailable ||
 		!strings.Contains(out.Message, "read failed") || !strings.Contains(out.Cause, "connection refused") || strings.Contains(out.Message, "127.0.0.1") || strings.Contains(out.Message, "answered") || strings.Contains(out.Cause, bot) {
 		t.Errorf("a closed port: CheckChannel = %+v, %v; want Unknown/ChatUnavailable, \"read failed\" with the address and \"connection refused\" in the cause only, and no claim that Slack answered", out, err)
@@ -914,7 +915,7 @@ func TestTheBrokersProberProbesTheServedConnectionAndPrunesWhatAReloadRemoves(t 
 		Bindings: probeFunc(func(context.Context, string) error { time.Sleep(40 * time.Millisecond); return nil }), Platforms: soleBot(refA, slk), Snaps: current,
 		Revision: func(context.Context) string { return fmt.Sprint(current.p.Load()) },
 		Conns:    soleConn(refA),
-		Metrics:  m, Log: slog.New(slog.DiscardHandler), Interval: time.Hour, Tick: 5 * time.Millisecond, MinRevisionGap: time.Millisecond,
+		Metrics:  m, Log: testutil.DiscardLogger(), Interval: time.Hour, Tick: 5 * time.Millisecond, MinRevisionGap: time.Millisecond,
 	}.newProber()
 	runProber(t, p)
 	got := waitSettled(t, p, 2)
@@ -983,7 +984,7 @@ func TestABindingTheReloadRemovedOrMovedAwayGetsALineWhenItsVerificationStops(t 
 
 	// ops/oncall moves to slack-b and sre/oncall is removed.
 	current.p.Store(twoConnectionsMoved(t, map[string]string{"ops/oncall": "slack-b"}, "sre/oncall"))
-	eventually(t, 10*time.Second, "the lines of the stopped verifications", func() bool { return strings.Count(buf.String(), "stopped verifying") == 2 })
+	testutil.Eventually(t, "the lines of the stopped verifications", func() bool { return strings.Count(buf.String(), "stopped verifying") == 2 }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	for _, b := range []string{"sre/oncall", "ops/oncall"} {
 		if n := countOf(buf.String(), "level=INFO", "stopped verifying a Binding", "binding="+b); n != 1 {
 			t.Errorf("%d lines that the verification of %s stopped; want one\n%s", n, b, buf.String())
@@ -1001,12 +1002,12 @@ func TestTheBrokersProberHoldsRevisionPassesToTheMinimumGap(t *testing.T) {
 		Bindings: probeFunc(func(context.Context, string) error { calls.Add(1); return nil }), Platforms: soleBot(refA, &accessFake{access: chat.Access{Member: true}}),
 		Snaps: current, Revision: func(context.Context) string { return fmt.Sprint(revision.Add(1)) },
 		Conns:   soleConn(refA),
-		Metrics: mustMetrics(t, nil), Log: slog.New(slog.DiscardHandler), Interval: time.Hour, Tick: 2 * time.Millisecond,
+		Metrics: mustMetrics(t, nil), Log: testutil.DiscardLogger(), Interval: time.Hour, Tick: 2 * time.Millisecond,
 	}.newProber()
 	runProber(t, p)
 	waitSettled(t, p, 1)
 	before := revision.Load()
-	eventually(t, 10*time.Second, "the revision did not move 50 times", func() bool { return revision.Load() >= before+50 })
+	testutil.Eventually(t, "the revision did not move 50 times", func() bool { return revision.Load() >= before+50 }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	if got := calls.Load(); got != 1 {
 		t.Errorf("%d backend probes while the revision changed at every Tick; want 1: the pass for a change waits %s", got, minRevisionGap)
 	}
@@ -1023,7 +1024,7 @@ func TestTheBrokersProberReportsAHungBackendAndAHungChatAsWhatTheyAreAndNotAsPro
 	p := verification{
 		Bindings: hungBackend, Platforms: soleBot(refA, &accessFake{wait: true}), Snaps: current, Revision: func(context.Context) string { return "r" },
 		Conns:   soleConn(refA),
-		Metrics: mustMetrics(t, nil), Log: slog.New(slog.DiscardHandler), Timeout: 300 * time.Millisecond, Interval: time.Hour, Tick: 5 * time.Millisecond,
+		Metrics: mustMetrics(t, nil), Log: testutil.DiscardLogger(), Timeout: 300 * time.Millisecond, Interval: time.Hour, Tick: 5 * time.Millisecond,
 	}.newProber()
 	runProber(t, p)
 	conds := waitSettled(t, p, 1)["sre/oncall"]

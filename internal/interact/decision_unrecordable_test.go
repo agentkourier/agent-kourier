@@ -17,6 +17,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // A decision whose audit row cannot be written as built (the audit's error wraps store.ErrInvalid, and is the same on every
@@ -82,7 +83,7 @@ func unrecordableRig(t *testing.T, ask bool, notify func(store.Press), errs ...e
 		notify = func(store.Press) {}
 	}
 	r.pl, err = interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{b}, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Decider: d, Auditor: aud,
-		Logger: quietLogger(), Now: func() time.Time { return r.now }, Notify: notify}))
+		Logger: testutil.DiscardLogger(), Now: func() time.Time { return r.now }, Notify: notify}))
 	if err != nil {
 		t.Fatal(err)
 	}

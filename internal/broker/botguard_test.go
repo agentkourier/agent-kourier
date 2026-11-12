@@ -2,8 +2,6 @@ package broker
 
 import (
 	"context"
-	"io"
-	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -15,6 +13,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/session"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // guardRig is a botGuard over a real Intake for the connection team-a/slack, whose Binding owns channel C1, and a table in which the
@@ -76,7 +75,7 @@ func newGuardRig(t *testing.T, triggers ...v1alpha1.Trigger) *guardRig {
 	table.identify("platform/slack", appIdentity{Bot: "BOWN", User: "UOWN"})
 	table.identify("team-a/slack", appIdentity{Bot: "BTEAMA", User: "UTEAMA"})
 	table.identify("team-b/slack", appIdentity{Bot: "BTEAMB", User: "UTEAMB"})
-	g.guard = botGuard{in: in, self: "team-a/slack", bots: table, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	g.guard = botGuard{in: in, self: "team-a/slack", bots: table, log: testutil.DiscardLogger()}
 	return g
 }
 

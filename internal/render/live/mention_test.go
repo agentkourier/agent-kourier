@@ -24,6 +24,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 var declaredPeople = []v1alpha1.ChatMention{{Name: "sam", User: "U0SAM"}, {Name: "lee", User: "U0LEE"}, {Name: "kim", User: "U0KIM"}}
@@ -410,7 +411,7 @@ func TestATurnCutShortMakesNoMention(t *testing.T) {
 	e := setup(t)
 	run, cancel := e.startCause(t, mentionTurn(v1alpha1.OutputLive, ""))
 	run.Handle(text("a", "ask @sam"))
-	eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+	testutil.Eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
 	cancel(errors.New("the send failed"))
 	e.finish(t, run)
 	if _, m, ok := e.mentionRow(t); ok {
@@ -536,7 +537,7 @@ func TestTheSinkPassesTheBindingsPeopleOn(t *testing.T) {
 	h := s.Turn(t.Context(), session.TurnRef{Key: session.Key{Channel: "C1", Thread: e.root}, Binding: "ns/b", MessageID: "turn-1", UserID: session.SystemUser, Mentions: declaredPeople, MaxMentions: 2})
 	h(text("a", "ask @sam"))
 	h(agent.FinalEvent{})
-	eventually(t, "the mention", func() bool {
+	testutil.Eventually(t, "the mention", func() bool {
 		if e.clk.waiting() > 0 {
 			e.clk.advance(throttle)
 		}

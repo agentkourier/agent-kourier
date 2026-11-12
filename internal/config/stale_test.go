@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // staleSource is a per-object source that can say its view lags, as an informer cache does while the API server is out.
@@ -120,7 +121,7 @@ func TestAPerObjectReloaderPublishesWhatItReadFromASourceThatIsEditedWithoutPaus
 		}
 	}
 
-	files := NewReloader(ReloaderConfig{Source: &editedWhileRead{t: t, make: generations, gen: 10}, Secrets: specSecrets(), Logger: slog.New(slog.DiscardHandler)})
+	files := NewReloader(ReloaderConfig{Source: &editedWhileRead{t: t, make: generations, gen: 10}, Secrets: specSecrets(), Logger: testutil.DiscardLogger()})
 	if err := files.Start(t.Context()); err == nil || !strings.Contains(err.Error(), "changed during the load") || files.Current() != nil {
 		t.Errorf("Start of a Reloader that is not per-object, over a source edited during every read = %v, serving a snapshot %v; want it to fail, serving none, as before", err, files.Current() != nil)
 	}

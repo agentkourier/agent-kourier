@@ -3,8 +3,6 @@ package broker
 import (
 	"context"
 	"encoding/json"
-	"io"
-	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -18,8 +16,8 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
-	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // askedPlatforms is a Resolver of the connections that run, which counts how often each connection was asked for.
@@ -57,12 +55,8 @@ const (
 // does, and downTeam is down (nothing runs it) until a test says otherwise.
 func downParts(t *testing.T, bindings *Bindings) (interactionDeps, *interactionRuntime, *session.Manager, *askedPlatforms) {
 	t.Helper()
-	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	st := sqlitetest.Open(t)
+	log := testutil.DiscardLogger()
 	aud, err := audit.New(st, audit.Options{OnFailure: audit.NoFailure, Logger: log})
 	if err != nil {
 		t.Fatal(err)
@@ -140,10 +134,10 @@ func TestTheSweepLeavesTheTimeoutOfATeamConnectionThatIsDownPending(t *testing.T
 	pendingQuestion(t, d.st, downTeam, "ix-team", due, "")
 	startInteractions(t, d, ix, mgr)
 
-	eventually(t, 15*time.Second, "the interaction of the connection that runs to be timed out", func() bool {
+	testutil.Eventually(t, "the interaction of the connection that runs to be timed out", func() bool {
 		row, err := d.st.GetInteraction(t.Context(), "ix-own")
 		return err == nil && row.State == store.InteractionTimedOut
-	})
+	}, testutil.Within(15*time.Second), testutil.Every(10*time.Millisecond))
 	row, err := d.st.GetInteraction(t.Context(), "ix-team")
 	if err != nil || row.State != store.InteractionPending {
 		t.Errorf("the interaction of the connection that is down = %+v, %v; want it pending", row.State, err)
@@ -166,7 +160,7 @@ func TestAReplayedPressOfATeamConnectionThatIsDownIsKeptUntilItRuns(t *testing.T
 	}
 	startInteractions(t, d, ix, mgr)
 
-	eventually(t, 15*time.Second, "the replayed press to be tried", func() bool { return platforms.askedFor(downTeam) > 0 })
+	testutil.Eventually(t, "the replayed press to be tried", func() bool { return platforms.askedFor(downTeam) > 0 }, testutil.Within(15*time.Second), testutil.Every(10*time.Millisecond))
 	row, err := d.st.GetInteraction(t.Context(), "ix-team")
 	if err != nil || row.State != store.InteractionPending {
 		t.Errorf("the interaction = %+v, %v; want it pending: nothing was decided", row.State, err)

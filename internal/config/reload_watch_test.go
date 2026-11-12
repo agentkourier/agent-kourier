@@ -3,13 +3,14 @@ package config
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // watchingSecrets is a SecretResolver that is also a SecretWatcher, and records what the Reloader asks of it, in order.
@@ -125,7 +126,7 @@ func TestReloaderRetainsAfterItPublishes(t *testing.T) {
 // fails and keeps the last good snapshot.
 func TestReloaderBoundsTheWaitForSecrets(t *testing.T) {
 	secrets := &watchingSecrets{fakeSecrets: specSecrets()}
-	r := NewReloader(ReloaderConfig{Dir: specDir(t), Secrets: secrets, SecretsWait: 20 * time.Millisecond, Logger: slog.New(slog.DiscardHandler)})
+	r := NewReloader(ReloaderConfig{Dir: specDir(t), Secrets: secrets, SecretsWait: 20 * time.Millisecond, Logger: testutil.DiscardLogger()})
 	mustReload(t, r, true)
 	kept := r.Current()
 

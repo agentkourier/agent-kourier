@@ -2,8 +2,6 @@ package slack_test
 
 import (
 	"context"
-	"io"
-	"log/slog"
 	"slices"
 	"sync"
 	"testing"
@@ -16,6 +14,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/session"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
@@ -66,7 +65,7 @@ func startIntake(t *testing.T) (*fakeslack.Server, *submitter) {
 	sub := &submitter{}
 	intake := chat.NewIntake(chat.IntakeConfig{
 		Connection: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"},
-		Snapshot:   func() *config.Snapshot { return snap }, Submitter: sub, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Snapshot:   func() *config.Snapshot { return snap }, Submitter: sub, Logger: testutil.DiscardLogger(),
 	})
 	fake := newFake(t)
 	platform := slack.NewPlatform(slack.New(clientConfig(fake)), intakeConn)

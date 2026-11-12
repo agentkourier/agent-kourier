@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -17,6 +16,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/config/crsource"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // weightyBinding is how many triggers the Binding that the edit loop edits has: enough that a read of the Set takes longer than the
@@ -103,7 +103,7 @@ func TestAnEditLoopDoesNotFreezeTheConfigOrStopAStart(t *testing.T) {
 
 	newReloader := func(src *crsource.Source, poll time.Duration) *config.Reloader {
 		return config.NewReloader(config.ReloaderConfig{Source: src, Secrets: noSecrets{}, PollInterval: poll, SecretsInterval: time.Hour,
-			Logger: slog.New(slog.DiscardHandler), PerObject: true})
+			Logger: testutil.DiscardLogger(), PerObject: true})
 	}
 	r := newReloader(src, 100*time.Millisecond)
 	ctx, stop := context.WithCancel(t.Context())

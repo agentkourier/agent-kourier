@@ -11,6 +11,7 @@ import (
 
 	"github.com/slack-go/slack"
 
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
@@ -30,7 +31,7 @@ func TestHeldPostsWaitForTheReleaseAndHoldUpNoOtherApp(t *testing.T) {
 		t.Fatal(err)
 	}
 	held := postAsync(t.Context(), fake, appA, "from a")
-	eventually(t, "a's post to wait", func() bool { return fake.HeldPosts("AAPPA") == 1 })
+	testutil.Eventually(t, "a's post to wait", func() bool { return fake.HeldPosts("AAPPA") == 1 }, testutil.Every(5*time.Millisecond))
 	if n := len(fake.Messages("C1")); n != 0 {
 		t.Errorf("the channel holds %d messages while a's post waits; want none: nothing is stored until the release", n)
 	}
@@ -72,12 +73,12 @@ func TestAHeldPostWhoseClientWentIsAbandoned(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	gone := postAsync(ctx, fake, appA, "never")
-	eventually(t, "the post to wait", func() bool { return fake.HeldPosts("AAPPA") == 1 })
+	testutil.Eventually(t, "the post to wait", func() bool { return fake.HeldPosts("AAPPA") == 1 }, testutil.Every(5*time.Millisecond))
 	cancel()
 	if err := <-gone; err == nil {
 		t.Error("the post of a cancelled client succeeded")
 	}
-	eventually(t, "the abandoned post to leave the count", func() bool { return fake.HeldPosts("AAPPA") == 0 })
+	testutil.Eventually(t, "the abandoned post to leave the count", func() bool { return fake.HeldPosts("AAPPA") == 0 }, testutil.Every(5*time.Millisecond))
 	if err := fake.ReleasePosts("AAPPA"); err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +108,7 @@ func TestCloseReleasesHeldPosts(t *testing.T) {
 		t.Fatal(err)
 	}
 	held := postAsync(context.Background(), fake, appA, "x")
-	eventually(t, "the post to wait", func() bool { return fake.HeldPosts("AAPPA") == 1 })
+	testutil.Eventually(t, "the post to wait", func() bool { return fake.HeldPosts("AAPPA") == 1 }, testutil.Every(5*time.Millisecond))
 	closed := make(chan struct{})
 	go func() { fake.Close(); close(closed) }()
 	select {

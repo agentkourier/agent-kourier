@@ -3,8 +3,6 @@ package live_test
 import (
 	"context"
 	"fmt"
-	"io"
-	"log/slog"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -19,6 +17,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // These tests are about the busy mark of a thread (spec 8.3): on the update path, in a progress mode that shows activity,
@@ -59,7 +58,7 @@ func setupBusy(t *testing.T, prepare ...func(*chattest.FakePlatform)) *busyEnv {
 	}
 	by := &busyFake{FakePlatform: fake}
 	e.use(by)
-	e.cfg.Sender = newOutbox(t, outbox.Config{Store: e.store, Platforms: chattest.Same[outbox.Platform](by), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	e.cfg.Sender = newOutbox(t, outbox.Config{Store: e.store, Platforms: chattest.Same[outbox.Platform](by), Logger: testutil.DiscardLogger()})
 	e.live = newRenderer(t, e.cfg)
 	return &busyEnv{env: e, fake: fake, by: by, at: chat.Target{Channel: "C1", Thread: e.root}}
 }
@@ -87,7 +86,7 @@ func (b *busyEnv) marks() []bool {
 
 func (b *busyEnv) waitMarks(t *testing.T, want ...bool) {
 	t.Helper()
-	eventually(t, fmt.Sprintf("the marks %v", want), func() bool { return slices.Equal(b.marks(), want) })
+	testutil.Eventually(t, fmt.Sprintf("the marks %v", want), func() bool { return slices.Equal(b.marks(), want) })
 }
 
 func TestTheThreadIsMarkedWhenTheTurnStartsAndClearedWhenItEnds(t *testing.T) {
@@ -122,7 +121,7 @@ func TestEachWriteIsFollowedByAMarkAndNothingElseMarks(t *testing.T) {
 	b.waitMarks(t, true)
 
 	b.elapse(30 * time.Second) // a quiet turn: its first sign of work is the Working… line at the delay, which is a write
-	eventually(t, "the Working… line", func() bool { return len(b.fake.Messages()) == 1 })
+	testutil.Eventually(t, "the Working… line", func() bool { return len(b.fake.Messages()) == 1 })
 	b.waitMarks(t, true, true)
 	posted := b.fake.Messages()[0].Updates
 

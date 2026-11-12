@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // generations gives each object of spec 7's examples a generation, as an API server's objects have, and returns the set.
@@ -281,7 +282,7 @@ func (p *perObjectSource) Set(context.Context) (*Set, string, error) { return p.
 func (p *perObjectSource) Fingerprint(context.Context) string        { return p.fp }
 
 func newPerObjectReloader(src Source, secrets SecretResolver, mutate func(*ReloaderConfig)) *Reloader {
-	cfg := ReloaderConfig{Source: src, Secrets: secrets, PerObject: true, Logger: slog.New(slog.DiscardHandler)}
+	cfg := ReloaderConfig{Source: src, Secrets: secrets, PerObject: true, Logger: testutil.DiscardLogger()}
 	if mutate != nil {
 		mutate(&cfg)
 	}
@@ -397,7 +398,7 @@ func TestReloaderOfFilesIsNotPerObject(t *testing.T) {
 		sreAlerts(set).Spec.Agent.BackendRef.Name = "nope"
 		return set
 	}
-	r := NewReloader(ReloaderConfig{Source: &perObjectSource{t: t, make: mk, fp: "v1"}, Secrets: specSecrets(), Logger: slog.New(slog.DiscardHandler)})
+	r := NewReloader(ReloaderConfig{Source: &perObjectSource{t: t, make: mk, fp: "v1"}, Secrets: specSecrets(), Logger: testutil.DiscardLogger()})
 	if err := r.reload(t.Context(), true); err == nil {
 		t.Fatal("a Reloader that is not per object published a snapshot with a Binding whose backend is missing")
 	}

@@ -6,6 +6,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // The tests below pin the status line of the update path (an alert thread) on a platform without steps, where every write
@@ -35,7 +36,7 @@ func TestACallThatReturnsBeforeTheFirstWriteIsPostedAsRan(t *testing.T) {
 	run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "search", Args: map[string]any{"q": "pods"}})
 	run.Handle(agent.ToolResultEvent{CallID: "c1", Name: "search"})
 	release()
-	eventually(t, "the post", func() bool { return strings.Contains(e.said(), "search") })
+	testutil.Eventually(t, "the post", func() bool { return strings.Contains(e.said(), "search") })
 	if got := e.said(); !strings.Contains(got, `Ran search(q=`) || strings.Contains(got, "Calling") {
 		t.Fatalf("blocks %s; want the line in past tense, a call that has returned being no call under way", got)
 	}
@@ -58,14 +59,14 @@ func TestAReturnedCallReplacesTheLineThatSaidItWasUnderWay(t *testing.T) {
 			e.spy(t, false, nil) // the status line is the update path's on a platform without steps (listed_test.go)
 			run, _ := e.start(t, v1alpha1.OutputLive, false)
 			run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "search", Args: map[string]any{"q": "pods"}})
-			eventually(t, "the post of the line", func() bool {
+			testutil.Eventually(t, "the post of the line", func() bool {
 				return len(e.rec.sent("/chat.postMessage")) == 1 && strings.Contains(e.said(), "Calling search")
 			})
 			posted := len(e.requests())
 			run.Handle(agent.ToolResultEvent{CallID: "c1", Name: "search", Response: tc.response})
-			eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
+			testutil.Eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
 			e.clk.advance(throttle)
-			eventually(t, "the line after the result", func() bool { return strings.Contains(e.said(), tc.want) })
+			testutil.Eventually(t, "the line after the result", func() bool { return strings.Contains(e.said(), tc.want) })
 			if got := e.said(); strings.Contains(got, "Calling") || (tc.want != "Ran search(q=" && strings.Contains(got, "Ran ")) {
 				t.Errorf("blocks %s; want the line of the outcome and no word of a call under way", got)
 			}
@@ -76,9 +77,9 @@ func TestAReturnedCallReplacesTheLineThatSaidItWasUnderWay(t *testing.T) {
 			}
 			// Text takes the line's place, as it always did.
 			run.Handle(text("a", "Found three pods"))
-			eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
+			testutil.Eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
 			e.clk.advance(throttle)
-			eventually(t, "the text", func() bool { return e.reply().Text == "Found three pods" })
+			testutil.Eventually(t, "the text", func() bool { return e.reply().Text == "Found three pods" })
 			if got := e.said(); strings.Contains(got, "search") {
 				t.Errorf("blocks %s; want the text to have replaced the line", got)
 			}
@@ -97,7 +98,7 @@ func TestACallReportedAgainAfterItsResultStaysReturned(t *testing.T) {
 	run.Handle(agent.ToolResultEvent{CallID: "c1", Name: "search"})
 	run.Handle(call) // the same call, reported again
 	release()
-	eventually(t, "the post", func() bool { return strings.Contains(e.said(), "search") })
+	testutil.Eventually(t, "the post", func() bool { return strings.Contains(e.said(), "search") })
 	if got := e.said(); !strings.Contains(got, "Ran search") || strings.Contains(got, "Calling") {
 		t.Errorf("blocks %s; want the call, reported again, still returned", got)
 	}
@@ -113,14 +114,14 @@ func TestTheLineFollowsTheLatestOfCallsMadeTogether(t *testing.T) {
 	run.Handle(agent.ToolCallEvent{CallID: "c2", Name: "second"})
 	run.Handle(agent.ToolResultEvent{CallID: "c1", Name: "first"}) // not the latest: the line is still of the call under way
 	release()
-	eventually(t, "the post of the latest call, under way", func() bool { return strings.Contains(e.said(), "Calling second") })
+	testutil.Eventually(t, "the post of the latest call, under way", func() bool { return strings.Contains(e.said(), "Calling second") })
 	if got := e.said(); strings.Contains(got, "first") {
 		t.Fatalf("blocks %s; want the latest call only", got)
 	}
 	run.Handle(agent.ToolResultEvent{CallID: "c2", Name: "second"})
-	eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
+	testutil.Eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
 	e.clk.advance(throttle)
-	eventually(t, "the latest call returned", func() bool { return strings.Contains(e.said(), "Ran second") })
+	testutil.Eventually(t, "the latest call returned", func() bool { return strings.Contains(e.said(), "Ran second") })
 }
 
 func TestAReturnedCallsLineIsReplacedByNoOutputWhenTheTurnEndsWithoutText(t *testing.T) {
@@ -129,7 +130,7 @@ func TestAReturnedCallsLineIsReplacedByNoOutputWhenTheTurnEndsWithoutText(t *tes
 	e.spy(t, false, nil)
 	run, _ := e.start(t, v1alpha1.OutputLive, false)
 	run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "search"})
-	eventually(t, "the post", func() bool { return strings.Contains(e.said(), "Calling search") })
+	testutil.Eventually(t, "the post", func() bool { return strings.Contains(e.said(), "Calling search") })
 	run.Handle(agent.ToolResultEvent{CallID: "c1", Name: "search"})
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)

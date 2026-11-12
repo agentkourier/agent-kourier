@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"go.uber.org/goleak"
+
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // specDir copies spec 7's examples into a fresh directory.
@@ -41,7 +43,7 @@ func (c *countingSecrets) Keys(ctx context.Context, namespace, name string) ([]s
 }
 
 func newTestReloader(dir string, secrets SecretResolver) *Reloader {
-	return NewReloader(ReloaderConfig{Dir: dir, Secrets: secrets, Logger: slog.New(slog.DiscardHandler)})
+	return NewReloader(ReloaderConfig{Dir: dir, Secrets: secrets, Logger: testutil.DiscardLogger()})
 }
 
 func mustRead(t *testing.T, path string) string {
@@ -111,7 +113,7 @@ func TestReloaderCallsOnErrorForEachCountedFailure(t *testing.T) {
 	dir := specDir(t)
 	path := filepath.Join(dir, "binding.yaml")
 	var seen []error
-	r := NewReloader(ReloaderConfig{Dir: dir, Secrets: specSecrets(), Logger: slog.New(slog.DiscardHandler), OnError: func(err error) { seen = append(seen, err) }})
+	r := NewReloader(ReloaderConfig{Dir: dir, Secrets: specSecrets(), Logger: testutil.DiscardLogger(), OnError: func(err error) { seen = append(seen, err) }})
 	mustReload(t, r, true)
 
 	writeFile(t, path, "kind: [")

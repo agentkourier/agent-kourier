@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
@@ -21,6 +20,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/config"
 	secretval "github.com/agentkourier/agent-kourier/internal/secret"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // read is the keys of a Secret that a config reads.
@@ -31,7 +31,7 @@ func readOf(namespace, name string, keys ...string) config.SecretRead {
 // keyed returns a Resolver that has been told the keys of a config, synced, and stopped at cleanup.
 func keyed(t *testing.T, client *api, reads ...config.SecretRead) *Resolver {
 	t.Helper()
-	r := New(client, WithLogger(slog.New(slog.DiscardHandler)))
+	r := New(client, WithLogger(testutil.DiscardLogger()))
 	t.Cleanup(r.Stop)
 	if err := r.WatchKeys(t.Context(), reads); err != nil {
 		t.Fatal(err)
@@ -55,11 +55,11 @@ func manyKeys(namespace, name string, n, size int) *corev1.Secret {
 // background, and WatchKeys returns before it has, so a test of what the cache keeps looks only after this.
 func settled(t *testing.T, r *Resolver, n config.SecretName) {
 	t.Helper()
-	waitFor(t, "the swap of informers to settle", func() bool {
+	testutil.Eventually(t, "the swap of informers to settle", func() bool {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		return r.entries[n].next == nil
-	})
+	}, testutil.Within(10*time.Second), testutil.Every(5*time.Millisecond))
 }
 
 // cachedData returns the keys the cache of the Secret holds, sorted.
@@ -120,10 +120,10 @@ func TestANamedKeyThatTheSecretLacksIsMissingUntilItHasIt(t *testing.T) {
 	if _, err := client.CoreV1().Secrets("sre").Update(t.Context(), s, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "the key to be read", func() bool {
+	testutil.Eventually(t, "the key to be read", func() bool {
 		v, err := r.Value(t.Context(), "sre", "creds", "later")
 		return err == nil && v.Reveal() == "value-later"
-	})
+	}, testutil.Within(10*time.Second), testutil.Every(5*time.Millisecond))
 	if keys, _ := r.Keys(t.Context(), "sre", "creds"); !slices.Equal(keys, []string{"a", "later"}) {
 		t.Errorf("Keys = %v; want a and later", keys)
 	}
@@ -145,10 +145,10 @@ func TestTheRotationOfAReferencedKeyIsSeenAndOfAnotherKeyIsNotKept(t *testing.T)
 	if _, err := client.CoreV1().Secrets("sre").Update(t.Context(), s, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "the rotation", func() bool {
+	testutil.Eventually(t, "the rotation", func() bool {
 		v, err := r.Value(t.Context(), "sre", "creds", "a")
 		return err == nil && v.Reveal() == "rotated-a"
-	})
+	}, testutil.Within(10*time.Second), testutil.Every(5*time.Millisecond))
 	if v, _ := r.SecretVersion(t.Context(), "sre", "creds"); v == v0 {
 		t.Errorf("SecretVersion = %q after a write to the Secret, as before it", v)
 	}
@@ -203,11 +203,11 @@ func TestAReferenceToAnotherKeyOfAFollowedSecretIsFetchedBeforeItIsAnswered(t *t
 	if entryOf(r, sn("sre", "creds")) != before {
 		t.Error("adding a key replaced the entry of the Secret; want the same entry, with its informer swapped")
 	}
-	waitFor(t, "the informer that was replaced to end", func() bool {
+	testutil.Eventually(t, "the informer that was replaced to end", func() bool {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		return len(cachedKeysLocked(r.entries[sn("sre", "creds")])) == 2 && r.entries[sn("sre", "creds")].next == nil
-	})
+	}, testutil.Within(10*time.Second), testutil.Every(5*time.Millisecond))
 
 	// And a key that is then rotated shows, since the informer that has it receives the watch.
 	s, _ := client.CoreV1().Secrets("sre").Get(t.Context(), "creds", metav1.GetOptions{})
@@ -217,10 +217,10 @@ func TestAReferenceToAnotherKeyOfAFollowedSecretIsFetchedBeforeItIsAnswered(t *t
 	if _, err := client.CoreV1().Secrets("sre").Update(t.Context(), s, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "the rotation of the key added later", func() bool {
+	testutil.Eventually(t, "the rotation of the key added later", func() bool {
 		v, err := r.Value(t.Context(), "sre", "creds", "b")
 		return err == nil && v.Reveal() == "rotated-b"
-	})
+	}, testutil.Within(10*time.Second), testutil.Every(5*time.Millisecond))
 }
 
 // cachedKeysLocked is the keys the entry's serving informer keeps; the caller holds Resolver.mu.
@@ -310,14 +310,14 @@ func TestASwapEndsTheInformerItReplaces(t *testing.T) {
 		settled(t, r, n)
 	}
 	for i, inf := range replaced {
-		waitFor(t, fmt.Sprintf("informer %d to be told to end", i), func() bool {
+		testutil.Eventually(t, fmt.Sprintf("informer %d to be told to end", i), func() bool {
 			select {
 			case <-inf.done:
 				return true
 			default:
 				return false
 			}
-		})
+		}, testutil.Within(10*time.Second), testutil.Every(5*time.Millisecond))
 	}
 	r.mu.Lock()
 	live := r.entries[n].informer
@@ -341,7 +341,7 @@ func TestRetainKeysDropsTheKeysThatNoSnapshotReads(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.RetainKeys(narrower)
-	waitFor(t, "the cache to keep a alone", func() bool { return slices.Equal(cachedData(t, r, sn("sre", "creds")), []string{"a"}) })
+	testutil.Eventually(t, "the cache to keep a alone", func() bool { return slices.Equal(cachedData(t, r, sn("sre", "creds")), []string{"a"}) }, testutil.Within(10*time.Second), testutil.Every(5*time.Millisecond))
 	if v, err := r.Value(t.Context(), "sre", "creds", "b"); err != nil || v.Reveal() != "value-b" {
 		t.Errorf("Value of a key that was let go = %q, %v; want it fetched again", v.Reveal(), err)
 	}
@@ -536,14 +536,14 @@ func TestAReloadThatNamesAnotherKeyOfAFollowedSecretResolves(t *testing.T) {
 	const system, sre, oidc = "agent-kourier-system", "sre", "agent-kourier-sre-alerts-oidc"
 	token := versioned(sre, oidc, "1", "token", "other", "unreferenced")
 	client := newAPI(t, versioned(system, "slack-main", "1", "botToken", "appToken"), token)
-	secrets := New(client, WithLogger(slog.New(slog.DiscardHandler)))
+	secrets := New(client, WithLogger(testutil.DiscardLogger()))
 	t.Cleanup(secrets.Stop)
 
 	dir := t.TempDir()
 	if err := os.CopyFS(dir, os.DirFS("../../../api/v1alpha1/testdata")); err != nil {
 		t.Fatal(err)
 	}
-	rl := config.NewReloader(config.ReloaderConfig{Dir: dir, Secrets: secrets, PollInterval: 20 * time.Millisecond, Logger: slog.New(slog.DiscardHandler)})
+	rl := config.NewReloader(config.ReloaderConfig{Dir: dir, Secrets: secrets, PollInterval: 20 * time.Millisecond, Logger: testutil.DiscardLogger()})
 	if err := rl.Start(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -564,20 +564,20 @@ func TestAReloadThatNamesAnotherKeyOfAFollowedSecretResolves(t *testing.T) {
 	if err := os.WriteFile(path, []byte(edited), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "the edit to be served", func() bool {
+	testutil.Eventually(t, "the edit to be served", func() bool {
 		for _, b := range rl.Current().Bindings() {
 			if ref := b.Binding.Spec.Identity.TokenSecretRef; ref != nil && ref.Key == "other" {
 				return true
 			}
 		}
 		return false
-	})
+	}, testutil.Within(10*time.Second), testutil.Every(5*time.Millisecond))
 	if st := rl.Status(); st.Stale || st.Errors != 0 {
 		t.Errorf("Status = %+v after the edit; want no failed reload", st)
 	}
-	waitFor(t, "the cache to keep the key that is read now and no other", func() bool {
+	testutil.Eventually(t, "the cache to keep the key that is read now and no other", func() bool {
 		return slices.Equal(cachedData(t, secrets, sn(sre, oidc)), []string{"other"})
-	})
+	}, testutil.Within(10*time.Second), testutil.Every(5*time.Millisecond))
 	if v, err := secrets.Value(t.Context(), sre, oidc, "other"); err != nil || v.Reveal() != canary+"1" {
 		t.Errorf("Value of the new key = %v", err)
 	}
@@ -588,7 +588,7 @@ func TestAReloadThatNamesAnotherKeyOfAFollowedSecretResolves(t *testing.T) {
 func TestAPinnedSecretKeepsEveryKeyWhateverTheConfigNames(t *testing.T) {
 	pg := sn("agent-kourier", "pg")
 	client := newAPI(t, manyKeys("agent-kourier", "pg", 3, 10), manyKeys("sre", "creds", 0, 0))
-	r := New(client, WithLogger(slog.New(slog.DiscardHandler)), WithPinned(pg))
+	r := New(client, WithLogger(testutil.DiscardLogger()), WithPinned(pg))
 	t.Cleanup(r.Stop)
 	if err := r.Start(t.Context()); err != nil {
 		t.Fatal(err)
@@ -638,7 +638,7 @@ func TestWatchNarrowsARetainedSecretBackToTheKeysTheSnapshotReads(t *testing.T) 
 	if err := r.WatchKeys(t.Context(), []config.SecretRead{readOf("sre", "other", "a")}); err != nil { // a candidate that leaves creds out
 		t.Fatal(err)
 	}
-	waitFor(t, "the cache to go back to the keys of the snapshot", func() bool {
+	testutil.Eventually(t, "the cache to go back to the keys of the snapshot", func() bool {
 		return slices.Equal(cachedData(t, r, creds), []string{"a", "b"})
-	})
+	}, testutil.Within(10*time.Second), testutil.Every(5*time.Millisecond))
 }

@@ -33,6 +33,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/config/crsource"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // statusApply is one apply of a status that the fake API server took.
@@ -1408,7 +1409,7 @@ func TestVerificationTellsTheStatusWriterOfTransitionsAndPasses(t *testing.T) {
 // A writer is not built without what it needs, and the error names what is missing.
 func TestNewStatusWriterNamesWhatIsMissing(t *testing.T) {
 	ok := statusConfig{Client: crClusterOf(), Report: func() config.Report { return config.Report{} },
-		Conditions: func() map[string][]bindingcheck.Condition { return nil }, Log: slog.New(slog.DiscardHandler),
+		Conditions: func() map[string][]bindingcheck.Condition { return nil }, Log: testutil.DiscardLogger(),
 		Observed: func(string, string) (crsource.BindingStatus, bool, error) {
 			return crsource.BindingStatus{}, false, nil
 		}}
@@ -1462,16 +1463,16 @@ func TestTheBrokersProberTellsTheStatusWriterAtTheEndOfEachPass(t *testing.T) {
 		Bindings: probeFunc(func(context.Context, string) error { calls.Add(1); return nil }), Platforms: soleBot(refA, &accessFake{access: chat.Access{Member: true}}),
 		Snaps: current, Revision: func(context.Context) string { return "r" }, Status: r.w,
 		Conns:   soleConn(refA),
-		Metrics: mustMetrics(t, nil), Log: slog.New(slog.DiscardHandler), Interval: 20 * time.Millisecond, Tick: 2 * time.Millisecond,
+		Metrics: mustMetrics(t, nil), Log: testutil.DiscardLogger(), Interval: 20 * time.Millisecond, Tick: 2 * time.Millisecond,
 	}.newProber()
 	runProber(t, p)
 	waitSettled(t, p, 1)
-	eventually(t, 10*time.Second, "no second pass", func() bool { return calls.Load() >= 3 })
+	testutil.Eventually(t, "no second pass", func() bool { return calls.Load() >= 3 }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	select { // clear what the transitions of the first pass said
 	case <-r.w.wake:
 	default:
 	}
-	eventually(t, 10*time.Second, "the end of a pass without a transition did not tell the writer", func() bool { return len(r.w.wake) == 1 })
+	testutil.Eventually(t, "the end of a pass without a transition did not tell the writer", func() bool { return len(r.w.wake) == 1 }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 }
 
 // The Prober is given each Binding's generation, so that what it stamps is the generation the Binding had when the pass began.
@@ -1708,7 +1709,7 @@ func TestAWriteIsCutAtTheTimeoutAndAHungOneHoldsUpNoOther(t *testing.T) {
 	}
 
 	// The default is the constant, and there is a deadline on the real call.
-	w, err := newStatusWriter(statusConfig{Client: c.dyn, Report: r.w.cfg.Report, Conditions: r.w.cfg.Conditions, Observed: c.observed, Log: slog.New(slog.DiscardHandler)})
+	w, err := newStatusWriter(statusConfig{Client: c.dyn, Report: r.w.cfg.Report, Conditions: r.w.cfg.Conditions, Observed: c.observed, Log: testutil.DiscardLogger()})
 	if err != nil || w.cfg.Timeout != statusTimeout {
 		t.Errorf("default timeout = %v (%v), want %v", w.cfg.Timeout, err, statusTimeout)
 	}

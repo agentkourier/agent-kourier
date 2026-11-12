@@ -12,6 +12,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 var (
@@ -84,7 +85,7 @@ func TestRealFailureStillLogsAtError(t *testing.T) {
 	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the failure line", func() bool { return len(logs.lines("session turn failed")) >= 1 })
+	testutil.Eventually(t, "the failure line", func() bool { return len(logs.lines("session turn failed")) >= 1 })
 	f.retired(t) // the turn stays queued, and the runner gives up on this wake
 	got := logs.lines("session turn failed")
 	if len(got) != 1 || got[0].level != slog.LevelError {
@@ -128,12 +129,12 @@ func TestRefusedAnswerSaysWhy(t *testing.T) {
 				if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
 					t.Fatal(err)
 				}
-				eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+				testutil.Eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
 				if got := sink.noticesOf(NoticeFailed)[0]; got.Detail != tc.want {
 					t.Errorf("detail = %q; want %q", got.Detail, tc.want)
 				}
 				if st.reopen {
-					eventually(t, "the pause to reopen", func() bool { return f.m.Answer(t.Context(), key, answerMsg("ans-2")) == nil })
+					testutil.Eventually(t, "the pause to reopen", func() bool { return f.m.Answer(t.Context(), key, answerMsg("ans-2")) == nil })
 				} else if id, want := f.nextSent(), inbound("2").MessageID; id != want {
 					t.Errorf("sent %s; want the held reply %s: the task is followed to its end", id, want)
 				}

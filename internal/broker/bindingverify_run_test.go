@@ -19,6 +19,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/stubagent"
 )
 
@@ -184,10 +185,10 @@ func TestRunProbesTheApproverGroupsOfABindingThatNamesThem(t *testing.T) {
 	if err := os.Rename(staging, file); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, 10*time.Second, "the ApproversReadable series was not deleted after the groups were taken away", func() bool {
+	testutil.Eventually(t, "the ApproversReadable series was not deleted after the groups were taken away", func() bool {
 		_, body := r.get("/metrics")
 		return !strings.Contains(body, `binding="`+verifiedBinding+`",condition="ApproversReadable"`)
-	})
+	}, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	r.waitMetric(`agentkourier_binding_ready{binding="` + verifiedBinding + `"} 1`)
 	r.waitMetric(`agentkourier_binding_condition{binding="` + verifiedBinding + `",condition="ChannelJoined",status="true"} 1`)
 	calls := slk.groupCalls.Load()
@@ -212,7 +213,7 @@ func TestRunOnlyTheLeaderProbesTheBindings(t *testing.T) {
 	ca.newSlack = func(slack.Config) slackAPI { a.built.Add(1); return slkA }
 	ca.probeEvery, ca.probeTick = 40*time.Millisecond, 10*time.Millisecond
 	a.running = start(t, ca)
-	eventually(t, 10*time.Second, "the first replica did not start the leader half", func() bool { return a.built.Load() == 1 })
+	testutil.Eventually(t, "the first replica did not start the leader half", func() bool { return a.built.Load() == 1 }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	cb, b := electionConfig(t, client, fence, "pod-b_1")
 	slkB := &accessSlack{access: map[string]chat.Access{}}
 	cb.newSlack = func(slack.Config) slackAPI { b.built.Add(1); return slkB }
@@ -220,9 +221,9 @@ func TestRunOnlyTheLeaderProbesTheBindings(t *testing.T) {
 	b.running = start(t, cb)
 	b.until("/readyz", http.StatusOK)
 
-	eventually(t, 10*time.Second, "the leader exports no verification series", func() bool {
+	testutil.Eventually(t, "the leader exports no verification series", func() bool {
 		return a.metric(`agentkourier_binding_ready{binding="`+verifiedBinding+`"} 0`) || a.metric(`agentkourier_binding_ready{binding="`+verifiedBinding+`"} 1`)
-	})
+	}, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	time.Sleep(testElection.RetryPeriod * 5)
 	if _, body := b.get("/metrics"); strings.Contains(body, "agentkourier_binding_") {
 		t.Errorf("the standby's /metrics holds verification series:\n%s", body)
@@ -255,9 +256,9 @@ func (r *running) probeCount(condition string) float64 {
 func (r *running) waitMoreProbes(condition string, n float64) {
 	r.t.Helper()
 	base := r.probeCount(condition)
-	eventually(r.t, 20*time.Second, "the leader did not make "+strconv.FormatFloat(n, 'f', 0, 64)+" more probes of "+condition, func() bool {
+	testutil.Eventually(r.t, "the leader did not make "+strconv.FormatFloat(n, 'f', 0, 64)+" more probes of "+condition, func() bool {
 		return r.probeCount(condition) >= base+n
-	})
+	}, testutil.Within(20*time.Second), testutil.Every(10*time.Millisecond))
 }
 
 // The chat credentials Secret as the broker's tokens were read from it, with its tokens changed to bot and app and any annotations.
@@ -295,7 +296,7 @@ func TestRunTellsOfChatTokensThatChangedAndNotOfAWriteThatLeavesThemAlone(t *tes
 	for rv, note := range []string{"first", "second"} {
 		before := slk.calls.Load()
 		update(slackSecret(strconv.Itoa(rv+2), old, map[string]string{"owner": note}))
-		eventually(t, 10*time.Second, "the leader did not probe again after a write to the Secret", func() bool { return slk.calls.Load() > before })
+		testutil.Eventually(t, "the leader did not probe again after a write to the Secret", func() bool { return slk.calls.Load() > before }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	}
 	if !strings.Contains(metricsOf(r), `agentkourier_binding_ready{binding="`+verifiedBinding+`"} 1`) {
 		t.Errorf("%s is not ready after a write that left the tokens alone", verifiedBinding)
@@ -308,7 +309,7 @@ func TestRunTellsOfChatTokensThatChangedAndNotOfAWriteThatLeavesThemAlone(t *tes
 	// more are counted, the pass this write calls for, which Slack is not asked for, has run.
 	calls, probes := slk.calls.Load(), r.probeCount("ChannelJoined")
 	update(slackSecret("5", rotated, map[string]string{"owner": "again"}))
-	eventually(t, 10*time.Second, "the leader did not probe again", func() bool { return r.probeCount("ChannelJoined") >= probes+2 })
+	testutil.Eventually(t, "the leader did not probe again", func() bool { return r.probeCount("ChannelJoined") >= probes+2 }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	if after := slk.calls.Load(); after != calls {
 		t.Errorf("Slack was asked %d more times after the tokens changed; want none", after-calls)
 	}
@@ -317,9 +318,9 @@ func TestRunTellsOfChatTokensThatChangedAndNotOfAWriteThatLeavesThemAlone(t *tes
 	if err := secrets.Delete(t.Context(), "slack-main", metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, 10*time.Second, "the unusable credentials were not told of", func() bool {
+	testutil.Eventually(t, "the unusable credentials were not told of", func() bool {
 		return countOf(logs.String(), "level=WARN", "binding="+verifiedBinding, "reason=ChatCredentialsUnusable") == 1
-	})
+	}, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 
 	out := logs.String()
 	if n := countOf(out, "level=WARN", "a condition is unknown", "binding="+verifiedBinding, "reason=ChatCredentialsChanged"); n != 1 {
@@ -373,7 +374,7 @@ func TestRunStopsTheVerificationBeforeTheManagerThePoolAndTheResolver(t *testing
 	}}
 	c.shutdownTrace = trace.record
 	r := start(t, c)
-	eventually(t, 10*time.Second, "the verification did not probe", func() bool { return slk.calls.Load() >= 4 })
+	testutil.Eventually(t, "the verification did not probe", func() bool { return slk.calls.Load() >= 4 }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 
 	r.cancel()
 	if err := r.wait(); err != nil {

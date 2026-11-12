@@ -10,6 +10,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // reopening is a watcher that records each answer it is told of, and what the manager had parked when it was told.
@@ -64,8 +65,8 @@ func TestAnAnswerThatWasNotDeliveredIsToldToTheWatcher(t *testing.T) {
 			if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
 				t.Fatal(err)
 			}
-			eventually(t, "the watcher to be told", func() bool { return len(w.calls()) == 1 })
-			eventually(t, "the pause to reopen", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return f.m.convos[key].parked == "t1" })
+			testutil.Eventually(t, "the watcher to be told", func() bool { return len(w.calls()) == 1 })
+			testutil.Eventually(t, "the pause to reopen", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return f.m.convos[key].parked == "t1" })
 			w.mu.Lock()
 			if w.got[0] != "t1 ans-1" || !w.held[0] {
 				t.Errorf("told %q with the runner parked %v; want the answer's ID, with the runner parked on the task", w.got, w.held)
@@ -118,14 +119,14 @@ func TestAStopWhenAnAnswerReopensThePauseEndsIt(t *testing.T) {
 	if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the watcher's stop", func() bool { w.mu.Lock(); defer w.mu.Unlock(); return len(w.did) == 1 })
+	testutil.Eventually(t, "the watcher's stop", func() bool { w.mu.Lock(); defer w.mu.Unlock(); return len(w.did) == 1 })
 	if w.did[0] != true || w.err[0] != nil {
 		t.Fatalf("Stop = %v, %v; want it to stop the task", w.did[0], w.err[0])
 	}
 	if id, want := f.nextSent(), inbound("2").MessageID; id != want {
 		t.Errorf("sent %s after the stop; want the held turn %s", id, want)
 	}
-	eventually(t, "the record to be cleared", func() bool { return f.taskID() == "" })
+	testutil.Eventually(t, "the record to be cleared", func() bool { return f.taskID() == "" })
 	f.m.mu.Lock()
 	parked := f.m.convos[key] != nil && f.m.convos[key].parked != ""
 	f.m.mu.Unlock()
@@ -170,7 +171,7 @@ func TestOnlyAnAnswerThatLeavesThePauseOpenIsToldToTheWatcher(t *testing.T) {
 				t.Fatal(err)
 			}
 			if tc.told {
-				eventually(t, "the watcher to be told", func() bool { return len(w.calls()) == 1 })
+				testutil.Eventually(t, "the watcher to be told", func() bool { return len(w.calls()) == 1 })
 				return
 			}
 			// The task ends or is followed to its end, and the held reply goes out: the answer has been dealt with.

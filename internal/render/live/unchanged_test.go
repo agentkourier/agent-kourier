@@ -8,6 +8,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // parked says whether a Run goroutine is waiting for an event: blocked in the select at the top of its loop, which
@@ -49,20 +50,20 @@ func TestAnEventThatChangesNothingShownWritesNothing(t *testing.T) {
 			e := setup(t)
 			run, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: tc.recipient})
 			run.Handle(text("a", "Hel"))
-			eventually(t, "the first message", func() bool { return len(e.rec.sent(tc.first)) == 1 })
+			testutil.Eventually(t, "the first message", func() bool { return len(e.rec.sent(tc.first)) == 1 })
 			tc.event(run)
-			eventually(t, "the renderer to wait for its window", func() bool { return e.clk.waiting() == 1 })
+			testutil.Eventually(t, "the renderer to wait for its window", func() bool { return e.clk.waiting() == 1 })
 			e.clk.advance(throttle)
 			// The window is open. The renderer has seen it when it is waiting for an event again, and what it
 			// wrote, if it wrote anything, is on the wire by then.
-			eventually(t, "the renderer to look at the state and wait again", func() bool { return e.clk.waiting() == 0 && parked() })
+			testutil.Eventually(t, "the renderer to look at the state and wait again", func() bool { return e.clk.waiting() == 0 && parked() })
 			for _, path := range []string{tc.edit, "/chat.update"} {
 				if n := len(e.rec.sent(path)); n != 0 {
 					t.Errorf("%d %s requests; want none for an event that shows nothing new", n, path)
 				}
 			}
 			run.Handle(text("a", "Hello")) // and the renderer is not stuck: a change is written
-			eventually(t, "the change to be written", func() bool {
+			testutil.Eventually(t, "the change to be written", func() bool {
 				if e.clk.waiting() > 0 {
 					e.clk.advance(throttle)
 				}

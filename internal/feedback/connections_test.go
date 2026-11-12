@@ -1,8 +1,6 @@
 package feedback_test
 
 import (
-	"io"
-	"log/slog"
 	"testing"
 	"time"
 
@@ -10,6 +8,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/feedback"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // TestAVoteIsCheckedAndAnsweredOnTheConnectionItCameIn: two apps in one workspace have the same channel and thread IDs, so
@@ -27,7 +26,7 @@ func TestAVoteIsCheckedAndAnsweredOnTheConnectionItCameIn(t *testing.T) {
 		Store: r.st, Sessions: r.st, Auditor: r.aud, Notify: func(store.Press) {}, Now: func() time.Time { return r.now },
 		Authorizers: chat.PlatformSet[interact.Authorizer]{key.Connection: r.az, keyB.Connection: azB},
 		Ephemerals:  chat.PlatformSet[interact.Ephemeral]{key.Connection: r.eph, keyB.Connection: ephB},
-		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:      testutil.DiscardLogger(),
 	})
 	if err != nil {
 		t.Fatal(err)

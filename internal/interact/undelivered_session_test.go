@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -27,6 +25,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // These tests run the real session manager, the intake with its tap, the sweeper and the outbox over one store, against an
@@ -243,7 +242,7 @@ type process struct {
 func start(t *testing.T, st *sqlite.Store, ag *scriptedAgent, clk *clockAt, watch bool) *process {
 	t.Helper()
 	p := &process{t: t, st: st, ag: ag, clk: clk, re: interact.NewReopened(st), sink: &recSink{}, calls: &callAudit{}, aud: &audits{}, slack: &poster{posted: map[string]string{}}}
-	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	quiet := testutil.DiscardLogger()
 	ob := newOutbox(t, outbox.Config{Store: st, Platforms: chattest.Same[outbox.Platform](p.slack), Now: clk.now, CallTimeout: 30 * time.Second, Logger: quiet})
 	p.binds = &oneBackend{ag: ag, b: interact.Binding{Dialect: kagentv1.New(0), Timeout: timeout, ToolApprovals: true}}
 	count := func(binding string, o interact.Outcome) {
@@ -309,33 +308,23 @@ func (p *process) waitRow(ok func(store.Interaction) bool) store.Interaction {
 		p.t.Fatal(in, err)
 	}
 	var row store.Interaction
-	until(p.t, "the interaction", func() bool {
+	testutil.Eventually(p.t, "the interaction", func() bool {
 		var err error
 		row, err = p.st.GetInteraction(p.t.Context(), interact.InteractionID(*in))
 		return err == nil && ok(row)
-	})
+	}, testutil.Within(10*time.Second), testutil.Every(2*time.Millisecond))
 	return row
-}
-
-func until(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	for deadline := time.Now().Add(10 * time.Second); !cond(); {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
 }
 
 // sweepsUntil sweeps, as the loop does, until cond holds, and returns the errors the sweeps gave.
 func (p *process) sweepsUntil(what string, cond func() bool) (errs []error) {
 	p.t.Helper()
-	until(p.t, what, func() bool {
+	testutil.Eventually(p.t, what, func() bool {
 		if err := p.sw.Sweep(p.t.Context()); err != nil {
 			errs = append(errs, err)
 		}
 		return cond()
-	})
+	}, testutil.Within(10*time.Second), testutil.Every(2*time.Millisecond))
 	return errs
 }
 
@@ -362,16 +351,6 @@ func (p *process) notices() []string {
 	return out
 }
 
-func openStore(t *testing.T) *sqlite.Store {
-	t.Helper()
-	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	return st
-}
-
 // pastDeadline is a time at which the approval of a pause made at t0 is due and past its grace.
 func pastDeadline() time.Time { return t0.Add(timeout + time.Minute) }
 
@@ -395,7 +374,7 @@ func requireNotices(t *testing.T, got []string, want ...string) {
 func TestADenialTheAgentRefusesToTakeEndsWithTheTaskCancelled(t *testing.T) {
 	ag := newScriptedAgent()
 	ag.answerAt = down
-	p := start(t, openStore(t), ag, atTimes(&clockAt{}, t0.Add(time.Minute)), true)
+	p := start(t, sqlitetest.Open(t), ag, atTimes(&clockAt{}, t0.Add(time.Minute)), true)
 	row := p.submit()
 	p.clk.set(pastDeadline())
 
@@ -428,7 +407,7 @@ func TestADenialTheAgentRefusesToTakeEndsWithTheTaskCancelled(t *testing.T) {
 	if cancels := countOf(p.calls.seen(), "cancel by \"\" ok=true"); cancels != 1 {
 		t.Errorf("agent calls audited %q; want one cancel by no person", p.calls.seen())
 	}
-	until(t, "the session to clear the task", func() bool { return !p.mgr.HoldsTask(key, "task-1") })
+	testutil.Eventually(t, "the session to clear the task", func() bool { return !p.mgr.HoldsTask(key, "task-1") }, testutil.Within(10*time.Second), testutil.Every(2*time.Millisecond))
 }
 
 func countOf(all []string, one string) int {
@@ -445,11 +424,11 @@ func countOf(all []string, one string) int {
 // and no sweep cancels it, however many follow.
 func TestADenialTheAgentTookIsNotFollowedByACancel(t *testing.T) {
 	ag := newScriptedAgent()
-	p := start(t, openStore(t), ag, atTimes(&clockAt{}, t0.Add(time.Minute)), true)
+	p := start(t, sqlitetest.Open(t), ag, atTimes(&clockAt{}, t0.Add(time.Minute)), true)
 	p.submit()
 	p.clk.set(pastDeadline())
 	p.sweepsUntil("the denial to reach the agent", func() bool { return ag.answered() == 1 })
-	until(t, "the task to end", func() bool { return !p.mgr.HoldsTask(key, "task-1") })
+	testutil.Eventually(t, "the task to end", func() bool { return !p.mgr.HoldsTask(key, "task-1") }, testutil.Within(10*time.Second), testutil.Every(2*time.Millisecond))
 	p.sweeps(5)
 	if got := ag.cancelled(); len(got) != 0 {
 		t.Errorf("the agent was asked to cancel %v after it took the denial; want nothing", got)
@@ -476,7 +455,7 @@ func TestACancelThatFailsAfterADenialThatFailedIsRetried(t *testing.T) {
 		}
 		return nil
 	}
-	p := start(t, openStore(t), ag, atTimes(&clockAt{}, t0.Add(time.Minute)), true)
+	p := start(t, sqlitetest.Open(t), ag, atTimes(&clockAt{}, t0.Add(time.Minute)), true)
 	p.submit()
 	p.clk.set(pastDeadline())
 	errs := p.sweepsUntil("the cancel to work", func() bool { return len(ag.cancelled()) >= 4 })
@@ -499,12 +478,12 @@ func TestAPersonStoppingTheTaskBeforeTheCancelLeavesNothingMoreToDo(t *testing.T
 	ag := newScriptedAgent()
 	ag.answerAt = down
 	ag.gate = make(chan struct{})
-	p := start(t, openStore(t), ag, atTimes(&clockAt{}, t0.Add(time.Minute)), true)
+	p := start(t, sqlitetest.Open(t), ag, atTimes(&clockAt{}, t0.Add(time.Minute)), true)
 	p.submit()
 	p.clk.set(pastDeadline())
 	p.sweepsUntil("the denial to be sent", func() bool { return ag.answered() == 1 })
 	close(ag.gate) // the send fails now
-	until(t, "the session to tell the watcher", func() bool { return p.re.Len() == 1 })
+	testutil.Eventually(t, "the session to tell the watcher", func() bool { return p.re.Len() == 1 }, testutil.Within(10*time.Second), testutil.Every(2*time.Millisecond))
 	if did, err := p.mgr.Stop(t.Context(), key, "task-1", "U9"); err != nil || !did {
 		t.Fatalf("Stop = %v, %v", did, err)
 	}
@@ -520,7 +499,7 @@ func TestAPersonStoppingTheTaskBeforeTheCancelLeavesNothingMoreToDo(t *testing.T
 // out, the Binding allows approvals) and, that failing too, cancels the task. Nothing is stored for it, and it is never denied
 // for ever.
 func TestADenialThatFailsAcrossARestartIsDeniedOnceMoreAndThenCancelled(t *testing.T) {
-	st, ag := openStore(t), newScriptedAgent()
+	st, ag := sqlitetest.Open(t), newScriptedAgent()
 	ag.answerAt = down
 	ag.gate = make(chan struct{}) // the send fails only when the test lets it, with no sweep to see it
 	clk := atTimes(&clockAt{}, t0.Add(time.Minute))
@@ -529,7 +508,7 @@ func TestADenialThatFailsAcrossARestartIsDeniedOnceMoreAndThenCancelled(t *testi
 	clk.set(pastDeadline())
 	first.sweepsUntil("the denial to be sent", func() bool { return ag.answered() == 1 })
 	close(ag.gate)
-	until(t, "the watcher to be told", func() bool { return first.re.Len() == 1 })
+	testutil.Eventually(t, "the watcher to be told", func() bool { return first.re.Len() == 1 }, testutil.Within(10*time.Second), testutil.Every(2*time.Millisecond))
 	first.stop() // the process dies with the cancel not made
 	if got := ag.cancelled(); len(got) != 0 {
 		t.Fatalf("cancelled %v before the restart", got)
@@ -539,7 +518,7 @@ func TestADenialThatFailsAcrossARestartIsDeniedOnceMoreAndThenCancelled(t *testi
 	if err := second.mgr.Recover(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	until(t, "the denial to be sent again", func() bool { return ag.answered() == 2 })
+	testutil.Eventually(t, "the denial to be sent again", func() bool { return ag.answered() == 2 }, testutil.Within(10*time.Second), testutil.Every(2*time.Millisecond))
 	second.sweepsUntil("the task to be cancelled", func() bool { return len(ag.cancelled()) >= 1 })
 	second.sweeps(5)
 
@@ -559,7 +538,7 @@ func TestADenialThatFailsAcrossARestartIsDeniedOnceMoreAndThenCancelled(t *testi
 // original deadline, but its first recovery audit fails. Once the audit is available again, the tap retries
 // the denial without requiring another Manager.Recover call.
 func TestARecoveredTimeoutRetryOutlivesTheOriginalDeadline(t *testing.T) {
-	st, ag := openStore(t), newScriptedAgent()
+	st, ag := sqlitetest.Open(t), newScriptedAgent()
 	ag.answerAt = func(n int) error {
 		if n == 0 {
 			return down(n)
@@ -573,7 +552,7 @@ func TestARecoveredTimeoutRetryOutlivesTheOriginalDeadline(t *testing.T) {
 	clk.set(pastDeadline())
 	first.sweepsUntil("the initial denial to be sent", func() bool { return ag.answered() == 1 })
 	close(ag.gate)
-	until(t, "the watcher to be told", func() bool { return first.re.Len() == 1 })
+	testutil.Eventually(t, "the watcher to be told", func() bool { return first.re.Len() == 1 }, testutil.Within(10*time.Second), testutil.Every(2*time.Millisecond))
 	first.stop()
 
 	second := start(t, st, ag, clk, true)
@@ -581,9 +560,9 @@ func TestARecoveredTimeoutRetryOutlivesTheOriginalDeadline(t *testing.T) {
 	if err := second.mgr.Recover(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	until(t, "the recovery audit to fail", func() bool { return second.aud.decisionCount() == 1 })
+	testutil.Eventually(t, "the recovery audit to fail", func() bool { return second.aud.decisionCount() == 1 }, testutil.Within(10*time.Second), testutil.Every(2*time.Millisecond))
 	second.aud.setError(nil)
-	until(t, "the recovered denial to be retried", func() bool { return ag.answered() == 2 })
+	testutil.Eventually(t, "the recovered denial to be retried", func() bool { return ag.answered() == 2 }, testutil.Within(10*time.Second), testutil.Every(2*time.Millisecond))
 	second.sweeps(5)
 
 	if got := ag.cancelled(); len(got) != 0 {
@@ -606,7 +585,7 @@ func TestAPersonsAnswerThatFailsToSendBehavesAsItDidBeforeTheWatcher(t *testing.
 			}
 			return nil
 		}
-		p := start(t, openStore(t), ag, atTimes(&clockAt{}, t0.Add(time.Minute)), watch)
+		p := start(t, sqlitetest.Open(t), ag, atTimes(&clockAt{}, t0.Add(time.Minute)), watch)
 		row := p.submit()
 		var in dialect.Interaction
 		if err := json.Unmarshal(row.Request, &in); err != nil {
@@ -624,7 +603,7 @@ func TestAPersonsAnswerThatFailsToSendBehavesAsItDidBeforeTheWatcher(t *testing.
 		if err := p.mgr.Answer(t.Context(), key, &msg); err != nil {
 			t.Fatal(err)
 		}
-		until(t, "the failure to be told", func() bool { return len(p.sink.seen()) == 1 })
+		testutil.Eventually(t, "the failure to be told", func() bool { return len(p.sink.seen()) == 1 }, testutil.Within(10*time.Second), testutil.Every(2*time.Millisecond))
 		p.clk.set(pastDeadline())
 		p.sweeps(3)
 		got := []string{fmt.Sprintf("cancels %v", ag.cancelled()), fmt.Sprintf("answers %d", ag.answered()), fmt.Sprintf("held %d", p.re.Len())}
@@ -634,10 +613,10 @@ func TestAPersonsAnswerThatFailsToSendBehavesAsItDidBeforeTheWatcher(t *testing.
 		}
 		// Answer returns once the runner has the answer; the task it completes ends on the runner. Both runs are compared
 		// once that turn is over: it has told the thread there was no output, and the runner has let go of the task.
-		until(t, "the second answer's turn to end", func() bool {
+		testutil.Eventually(t, "the second answer's turn to end", func() bool {
 			return slices.ContainsFunc(p.sink.seen(), func(n string) bool { return strings.HasPrefix(n, string(session.NoticeNoOutput)+" ") }) &&
 				!p.mgr.HoldsTask(key, "task-1")
-		})
+		}, testutil.Within(10*time.Second), testutil.Every(2*time.Millisecond))
 		got = append(got, p.sink.seen()...)
 		got = append(got, p.calls.seen()...)
 		got = append(got, p.notices()...)

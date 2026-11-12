@@ -22,6 +22,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/stubagent"
 )
 
@@ -230,11 +231,8 @@ func TestRunClosesTheSlackConnectionsAfterTheFinalDrain(t *testing.T) {
 	if n := openAtDrain.Load(); n != 0 {
 		t.Errorf("%d connections of the Slack client were closed when the drain began, want none: they close after it", n)
 	}
-	for deadline := time.Now().Add(2 * time.Second); closed.Load() == 0; time.Sleep(10 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the Slack client's idle connection was never closed")
-		}
-	}
+	testutil.Eventually(t, "the Slack client's idle connection was never closed", func() bool { return closed.Load() != 0 },
+		testutil.Within(2*time.Second), testutil.Every(10*time.Millisecond))
 }
 
 // rpcLog wraps a stub agent and notes the A2A methods it is asked.
@@ -302,11 +300,8 @@ func TestRunRecoversTheSessionsAnEarlierRunLeft(t *testing.T) {
 	r := start(t, c)
 	r.until("/readyz", http.StatusOK)
 
-	for deadline := time.Now().Add(10 * time.Second); !log.saw("GetTask"); time.Sleep(10 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the agent was never asked about the recorded task: Recover did not run")
-		}
-	}
+	testutil.Eventually(t, "the agent was never asked about the recorded task: Recover did not run", func() bool { return log.saw("GetTask") },
+		testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 }
 
 // What is still unposted when the shutdown reaches the outbox is posted by its final drain. The row

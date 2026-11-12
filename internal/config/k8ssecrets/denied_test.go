@@ -18,6 +18,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/agentkourier/agent-kourier/internal/config"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // tenantAPI is an API server on the wire, so that the client's own rate limiter is in the way as it is in the broker. It answers
@@ -103,7 +104,7 @@ func TestDeniedSecretsAreNotRetriedBetweenRechecksAndCostNoOneElse(t *testing.T)
 		t.Fatal("WatchKeys of Secrets that are all denied succeeded")
 	}
 	// Each Secret is reported when it is first denied (a request may fail before that, and the limiter spreads them over seconds).
-	waitFor(t, "every Secret to have been answered once", func() bool { return warnings.n.Load() >= names })
+	testutil.Eventually(t, "every Secret to have been answered once", func() bool { return warnings.n.Load() >= names }, testutil.Within(10*time.Second), testutil.Every(5*time.Millisecond))
 
 	time.Sleep(time.Second) // a retry that is going to come soon has come
 	deniedBefore, warnedBefore := api.denied.Load(), warnings.n.Load()
@@ -161,7 +162,7 @@ func TestTheTriesOfDeniedSecretsAtARecheckAreOnceEachAndPaced(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	_ = r.WatchKeys(ctx, reads)
-	waitFor(t, "every Secret to have been answered once", func() bool { return warnings.n.Load() >= names })
+	testutil.Eventually(t, "every Secret to have been answered once", func() bool { return warnings.n.Load() >= names }, testutil.Within(10*time.Second), testutil.Every(5*time.Millisecond))
 	base := api.asking()
 
 	_ = r.WatchKeys(ctx, reads) // a reload, sooner than the retry interval after the Secrets were started: a changed config
@@ -177,7 +178,7 @@ func TestTheTriesOfDeniedSecretsAtARecheckAreOnceEachAndPaced(t *testing.T) {
 	if tried := api.triedSince(base, 1); tried < deniedRetryBurst || tried > deniedRetryBurst+5 {
 		t.Errorf("%s after the recheck %d Secrets were tried; want the burst of %d and one more every %s", time.Since(begin), tried, deniedRetryBurst, deniedRetryPace)
 	}
-	waitFor(t, "the rest to be tried", func() bool { return api.triedSince(base, 2) >= names })
+	testutil.Eventually(t, "the rest to be tried", func() bool { return api.triedSince(base, 2) >= names }, testutil.Within(10*time.Second), testutil.Every(5*time.Millisecond))
 	if took := time.Since(begin); took < time.Duration(names-deniedRetryBurst-2)*deniedRetryPace {
 		t.Errorf("all %d tries were made within %s; want them paced, one every %s after the first %d", names, took, deniedRetryPace, deniedRetryBurst)
 	}

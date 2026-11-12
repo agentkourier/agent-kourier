@@ -3,7 +3,6 @@ package k8ssecrets
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"testing"
 	"time"
 
@@ -15,6 +14,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/redact"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // The errors of Value are logged and shown in a Binding's status, which redact the value of anything that reads as a secret name followed
@@ -65,7 +65,7 @@ func TestTheCausesOfAReadSurviveRedactionForASecretNamedLikeACredential(t *testi
 		t.Helper()
 		client := fake.NewClientset()
 		client.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, err })
-		r := New(client, WithLogger(slog.New(slog.DiscardHandler)))
+		r := New(client, WithLogger(testutil.DiscardLogger()))
 		r.wait = 50 * time.Millisecond
 		t.Cleanup(r.Stop)
 		return r
@@ -101,13 +101,13 @@ func TestTheCausesOfAReadSurviveRedactionForASecretNamedLikeACredential(t *testi
 				return r.Watch(ctx, []config.SecretName{n})
 			}},
 			{"a Secret that is not watched", ErrNotWatched, func(t *testing.T) error {
-				r := New(fake.NewClientset(), WithLogger(slog.New(slog.DiscardHandler)))
+				r := New(fake.NewClientset(), WithLogger(testutil.DiscardLogger()))
 				t.Cleanup(r.Stop)
 				_, err := r.get(n.Namespace, n.Name, nil)
 				return err
 			}},
 			{"a Resolver that is stopped", ErrStopped, func(t *testing.T) error {
-				r := New(fake.NewClientset(), WithLogger(slog.New(slog.DiscardHandler)))
+				r := New(fake.NewClientset(), WithLogger(testutil.DiscardLogger()))
 				r.Stop()
 				_, err := r.Value(t.Context(), n.Namespace, n.Name, "botToken")
 				return err

@@ -75,11 +75,7 @@ func newAlertWorldWith(t *testing.T, tune func(*chat.IntakeConfig, *starter, *sq
 	if err != nil {
 		t.Fatal(err)
 	}
-	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := sqlitetest.Open(t)
 
 	s := newStarter(t)
 	w := &alertWorld{sub: s.sub, notes: s.notes, aud: s.aud, now: time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)}

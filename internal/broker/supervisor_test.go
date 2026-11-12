@@ -20,6 +20,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/secret"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 	"github.com/agentkourier/agent-kourier/internal/telemetry/telemetrytest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // newTestMetrics is the broker's metrics over a registry of its own.
@@ -283,11 +284,7 @@ func (w *supWorld) tokens() []string {
 
 func (w *supWorld) eventually(what string, ok func() bool) {
 	w.t.Helper()
-	for deadline := time.Now().Add(10 * time.Second); !ok(); time.Sleep(time.Millisecond) {
-		if time.Now().After(deadline) {
-			w.t.Fatalf("timed out waiting for %s", what)
-		}
-	}
+	testutil.Eventually(w.t, what, ok, testutil.Within(10*time.Second))
 }
 
 // A team connection is started when the Snapshot serves it, left alone while it is as it was, restarted when its generation or the content of

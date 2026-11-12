@@ -8,7 +8,6 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/store"
-	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 )
 
@@ -34,11 +33,7 @@ func (a *blockingAudit) AppendAudit(ctx context.Context, e store.AuditEntry) err
 
 func TestTimeoutAuditRepairIsSerialized(t *testing.T) {
 	created := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
-	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := sqlitetest.Open(t)
 	blocked := &blockingAudit{Audit: st, started: make(chan struct{}), release: make(chan struct{})}
 	w, err := audit.New(blocked, audit.Options{OnFailure: audit.NoFailure, Now: func() time.Time { return created.Add(time.Hour) }})
 	if err != nil {

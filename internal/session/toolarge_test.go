@@ -16,6 +16,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/stubagent"
 )
 
@@ -68,7 +69,7 @@ func TestResponseTooLargeStopsTheTurnAndCancelsTheTask(t *testing.T) {
 			if _, err := f.submit(inbound("1")); err != nil {
 				t.Fatal(err)
 			}
-			eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= 1 })
+			testutil.Eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= 1 })
 			f.retired(t)
 			got := sink.noticesOf(NoticeFailed)
 			if len(got) != 1 || got[0].Detail != tooLargeSentence || got[0].ID != taskNoticeID(key, "t1", noticeTooLarge) || got[0].MessageRef != "1" {
@@ -110,7 +111,7 @@ func TestResponseTooLargeKeepsWhatWasShown(t *testing.T) {
 	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= 1 })
+	testutil.Eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= 1 })
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
 	var text string
@@ -150,7 +151,7 @@ func TestResponseTooLargeCancelFailureKeepsTheOutcome(t *testing.T) {
 			if _, err := f.submit(inbound("1")); err != nil {
 				t.Fatal(err)
 			}
-			eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= 1 })
+			testutil.Eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= 1 })
 			f.retired(t)
 			if got := sink.noticesOf(NoticeFailed); len(got) != 1 || got[0].Detail != tooLargeSentence {
 				t.Errorf("failed notices = %+v; want one saying %q whatever the cancel did", got, tooLargeSentence)
@@ -186,7 +187,7 @@ func TestResponseTooLargeCancelThatHangsIsBounded(t *testing.T) {
 	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the turn to end although the cancel never answers", func() bool { return len(logs.lines("session turn ended")) >= 1 })
+	testutil.Eventually(t, "the turn to end although the cancel never answers", func() bool { return len(logs.lines("session turn ended")) >= 1 })
 	f.retired(t)
 	if got := sink.noticesOf(NoticeFailed); len(got) != 1 || got[0].Detail != tooLargeSentence {
 		t.Errorf("failed notices = %+v; want one saying %q", got, tooLargeSentence)
@@ -249,7 +250,7 @@ func TestResponseTooLargeBeforeATaskIsNamedIsNotRetried(t *testing.T) {
 	if _, err := f.submit(in); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= 1 })
+	testutil.Eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= 1 })
 	f.retired(t)
 	got := sink.noticesOf(NoticeFailed)
 	if len(got) != 1 || got[0].Detail != tooLargeSentence || got[0].ID != in.MessageID+"/failed" {
@@ -282,7 +283,7 @@ func TestStubResponseTooLargeCancelsTheTaskAtTheAgent(t *testing.T) {
 	if _, err := e.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= 1 })
+	testutil.Eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= 1 })
 	if got := ends.get(); len(got) != 1 || got[0] != "ns/b1 "+string(TurnResponseTooLarge) {
 		t.Fatalf("outcomes reported = %v; want one, ns/b1 %s", got, TurnResponseTooLarge)
 	}
@@ -378,7 +379,7 @@ func TestResponseTooLargeOfAMessageReplyCancelsNothing(t *testing.T) {
 		if _, err := f.submit(in); err != nil {
 			t.Fatal(err)
 		}
-		eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= i+1 })
+		testutil.Eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= i+1 })
 		f.retired(t)
 	}
 	got := sink.noticesOf(NoticeFailed)
@@ -421,7 +422,7 @@ func TestResponseTooLargeSettlesTheRetryStateOfTheThread(t *testing.T) {
 	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= 1 })
+	testutil.Eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= 1 })
 	f.retired(t)
 	f.m.mu.Lock()
 	defer f.m.mu.Unlock()
@@ -442,14 +443,14 @@ func TestCardAndTooLargeNoticesOfOneTaskAreTwoPosts(t *testing.T) {
 	f, sink := restarted(t)
 	f.agent.get = func(a2a.TaskID) (*a2a.Task, error) { return nil, fmt.Errorf("get task t1: %w", errCard) }
 	f.recover(t)
-	eventually(t, "the card's notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+	testutil.Eventually(t, "the card's notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
 	f.retired(t)
 	var gets atomic.Int32
 	f.agent.mu.Lock()
 	f.agent.get = tooLargeGet(&gets) // the card is fixed, and the task is too large to read
 	f.agent.mu.Unlock()
 	f.recover(t) // a restart
-	eventually(t, "the cancel", func() bool { return len(f.cancelled()) == 1 })
+	testutil.Eventually(t, "the cancel", func() bool { return len(f.cancelled()) == 1 })
 	f.retired(t)
 	got := sink.noticesOf(NoticeFailed)
 	if len(got) != 2 || got[0].Detail != cardTooLargeDetail || got[1].Detail != tooLargeSentence {
@@ -476,8 +477,8 @@ func TestAnswerThatMeetsAnOversizedCardReopensThePauseAndCancelsNothing(t *testi
 	if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) >= 1 })
-	eventually(t, "the pause to reopen", func() bool {
+	testutil.Eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) >= 1 })
+	testutil.Eventually(t, "the pause to reopen", func() bool {
 		f.m.mu.Lock()
 		defer f.m.mu.Unlock()
 		c := f.m.convos[key]
@@ -508,7 +509,7 @@ func TestAnswerCutByAShutdownIsNotEndedAsTooLarge(t *testing.T) {
 	if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the runner to stop", func() bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return len(f.agent.answers) == 1 })
+	testutil.Eventually(t, "the runner to stop", func() bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return len(f.agent.answers) == 1 })
 	time.Sleep(50 * time.Millisecond)
 	for _, n := range sink.noticesOf(NoticeFailed) {
 		if n.Detail == tooLargeAnswerSentence || n.Detail == tooLargeSentence {

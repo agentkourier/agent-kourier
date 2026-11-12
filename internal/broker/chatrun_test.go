@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"math/rand/v2"
 	"slices"
 	"strings"
@@ -19,6 +18,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/secret"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // runner is a PlatformRunner that plays one scripted step for each Run.
@@ -56,7 +56,7 @@ func (c *clock) After(d time.Duration) <-chan time.Time {
 
 // policy is the clock's policy with no jitter (Random says 0, which cuts nothing off the pause), so a test reads the pause itself.
 func policy(c *clock) RunPolicy {
-	return RunPolicy{Now: c.Now, After: c.After, Random: func() float64 { return 0 }, Logger: slog.New(slog.DiscardHandler)}
+	return RunPolicy{Now: c.Now, After: c.After, Random: func() float64 { return 0 }, Logger: testutil.DiscardLogger()}
 }
 
 func fails(err error) func(int) error { return func(int) error { return err } }

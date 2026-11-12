@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"slices"
 	"strings"
@@ -27,6 +26,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // callLog records the order of the sweep's calls on its fakes. A nil log records nothing.
@@ -336,17 +336,13 @@ func (r *sweepRig) hooked() []string {
 
 func newSweepRig(t *testing.T) *sweepRig {
 	t.Helper()
-	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := sqlitetest.Open(t)
 	now := t0.Add(timeout + time.Minute) // a minute past the deadline of a pause made at t0
 	r := &sweepRig{st: &flakyResolve{Store: st}, sess: &sweepSess{current: "task-1"}, upd: &updates{}, aud: &audits{}, clock: &now, press: &presses{waiting: map[string]bool{}},
 		look: &sweepLookup{bindings: map[string]interact.Binding{"ns/b": {Dialect: kagentv1.New(0), Timeout: timeout, ToolApprovals: true, Platform: dialect.Platform{ID: "slack", Name: "Slack"}}}}}
 	r.reopened = interact.NewReopened(st)
 	r.ob = newOutbox(t, outbox.Config{Store: st, Platforms: chattest.Same[outbox.Platform](&poster{posted: map[string]string{}}), Now: func() time.Time { return t0 }, CallTimeout: 30 * time.Second,
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		Logger: testutil.DiscardLogger()})
 	r.enq = &flakyEnqueue{Outbox: r.ob}
 	r.calls, r.logs = &callLog{}, &logBuf{}
 	r.abandon = &abandons{log: r.calls}
@@ -623,25 +619,14 @@ func TestRunSweepsOnItsInterval(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- sw.Run(ctx) }()
-	waitFor(t, "the first interaction", func() bool { return len(r.hooked()) == 1 })
+	testutil.Eventually(t, "the first interaction", func() bool { return len(r.hooked()) == 1 })
 	r.pending(t, "ix-2", "task-9", t0.Add(timeout)) // due later, on a tick
-	waitFor(t, "the second interaction", func() bool { return len(r.hooked()) == 2 })
+	testutil.Eventually(t, "the second interaction", func() bool { return len(r.hooked()) == 2 })
 	cancel()
 	if err := <-done; err == nil {
 		t.Fatal("Run returned nil; want the context's error")
 	}
 	goleak.VerifyNone(t, before)
-}
-
-// waitFor polls cond until it holds. The deadline is only how long a condition that will never hold is waited
-// for before the test fails, and is long: a loaded machine can starve the goroutine that makes it hold.
-func waitFor(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	for deadline := time.Now().Add(30 * time.Second); !cond(); time.Sleep(time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-	}
 }
 
 // TestAnInteractionAnsweredMeanwhileIsNotReportedAsTimedOut: the answer won the race, so the

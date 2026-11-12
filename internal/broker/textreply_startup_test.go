@@ -3,8 +3,6 @@ package broker
 import (
 	"context"
 	"errors"
-	"io"
-	"log/slog"
 	"testing"
 	"time"
 
@@ -16,8 +14,8 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
-	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 type readinessSink struct{}
@@ -34,12 +32,8 @@ func (readinessBindings) Backend(string) (session.Backend, error) {
 
 func readinessParts(t *testing.T, entered chan<- struct{}) (interactionDeps, *interactionRuntime, *session.Manager) {
 	t.Helper()
-	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	st := sqlitetest.Open(t)
+	log := testutil.DiscardLogger()
 	aud, err := audit.New(st, audit.Options{OnFailure: audit.NoFailure, Logger: log})
 	if err != nil {
 		t.Fatal(err)

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"strings"
 	"testing"
@@ -21,13 +20,14 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 var thread = session.Key{Connection: "ns/conn", Channel: "C1"}
 
 func (e *env) sink(t *testing.T, q live.Enqueuer) *live.Sink {
 	t.Helper()
-	return live.NewSink(e.live, q, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return live.NewSink(e.live, q, testutil.DiscardLogger())
 }
 
 // noCalls is a platform that fails the test on any call that reaches the network: a Notice must not reach Slack.
@@ -269,7 +269,7 @@ func TestSinkPassesRecoveredOn(t *testing.T) {
 	handle := e.sink(t, e.ob).Turn(t.Context(), session.TurnRef{Key: key, MessageID: "turn-1", UserID: session.SystemUser, Recovered: true})
 	handle(text("a", "the whole answer"))
 	handle(agent.FinalEvent{})
-	eventually(t, "the message to say the whole answer", func() bool { e.clk.advance(throttle); return e.reply().Text == "the whole answer" })
+	testutil.Eventually(t, "the message to say the whole answer", func() bool { e.clk.advance(throttle); return e.reply().Text == "the whole answer" })
 	if posts := len(e.rec.sent("/chat.postMessage")); posts != 1 {
 		t.Fatalf("%d posts; want the earlier one only, updated", posts)
 	}
@@ -309,7 +309,7 @@ func TestTurnHandlerDoesNotWaitOnSlack(t *testing.T) {
 	e := setup(t)
 	slow := &blocker{release: make(chan struct{})}
 	defer close(slow.release) // Slack answers in the end, and the run's write returns
-	r := newRenderer(t, live.Config{Sender: slow, Platforms: chattest.Same[chat.Platform](slack.NewPlatform(nil, "ns/conn")), Store: e.store, Throttle: throttle, Now: e.clk.Now, After: e.clk.After, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	r := newRenderer(t, live.Config{Sender: slow, Platforms: chattest.Same[chat.Platform](slack.NewPlatform(nil, "ns/conn")), Store: e.store, Throttle: throttle, Now: e.clk.Now, After: e.clk.After, Logger: testutil.DiscardLogger()})
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	handle := live.NewSink(r, e.ob, nil).Turn(ctx, session.TurnRef{Key: thread, MessageID: "m1", UserID: session.SystemUser})
@@ -350,8 +350,8 @@ func TestModeReachesTheRenderer(t *testing.T) {
 			handle := e.sink(t, e.ob).Turn(ctx, session.TurnRef{Key: key, MessageID: "turn-1", UserID: tc.user, Output: tc.output})
 			handle(text("a", "hello"))
 			handle(agent.FinalEvent{})
-			eventually(t, "the message", func() bool { return len(e.rec.sent("/chat.startStream"))+len(e.rec.sent("/chat.postMessage")) >= 1 })
-			eventually(t, "the turn to end", func() bool { e.clk.advance(throttle); return e.reply().Text == "hello" && !e.reply().Streaming })
+			testutil.Eventually(t, "the message", func() bool { return len(e.rec.sent("/chat.startStream"))+len(e.rec.sent("/chat.postMessage")) >= 1 })
+			testutil.Eventually(t, "the turn to end", func() bool { e.clk.advance(throttle); return e.reply().Text == "hello" && !e.reply().Streaming })
 			e.drain(t, e.live)
 			if streams, posts := len(e.rec.sent("/chat.startStream")), len(e.rec.sent("/chat.postMessage")); streams != tc.wantStreams || posts != tc.wantFirstPosts {
 				t.Fatalf("%d streams and %d posts; want %d and %d", streams, posts, tc.wantStreams, tc.wantFirstPosts)
@@ -369,9 +369,9 @@ func TestTurnWithoutFinalFreesItsGoroutine(t *testing.T) {
 	key.Thread = e.root
 	handle := e.sink(t, e.ob).Turn(ctx, session.TurnRef{Key: key, MessageID: "turn-1", UserID: session.SystemUser})
 	handle(text("a", "partial"))
-	eventually(t, "the post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+	testutil.Eventually(t, "the post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
 	handle(text("a", "partial, more"))
-	eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
+	testutil.Eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
 	endTurn()
 }
 
@@ -551,7 +551,7 @@ func TestAFailedNoticeOfTheIntakeIsOneRowWhenRedelivered(t *testing.T) {
 			return session.Result{Disposition: session.Expired, Admission: session.Admission{Kind: session.AdmitNotice, Notice: session.NoticeExpired}}, nil
 		}),
 		Notice: sink.QueueNotice,
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger: testutil.DiscardLogger(),
 	})
 	m := chat.Inbound{At: chat.Ref{Platform: "slack", Conn: "ns/conn", Channel: "C1", ID: "5.5", Thread: e.root}, User: "U1", Text: "hi"}
 	if err := in.Message(t.Context(), m); err == nil {

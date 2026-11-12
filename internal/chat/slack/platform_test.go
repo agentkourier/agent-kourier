@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -19,6 +18,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/secret"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 	"go.uber.org/goleak"
 )
@@ -252,7 +252,7 @@ func slackSubject(t *testing.T) (chattest.Subject, *slack.Platform) {
 	t.Cleanup(fake.Close)
 	w := &wire{next: handlerTransport{fake}}
 	cfg := slack.Config{BotToken: secret.New(botToken), AppToken: secret.New(appToken), APIURL: "http://fakeslack.test/",
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+		Logger: testutil.DiscardLogger()}
 	cfg.HTTPClient = &http.Client{Transport: w}
 	c := slack.New(cfg)
 	const conn = "conformance/slack"

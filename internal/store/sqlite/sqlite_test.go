@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 var (
@@ -134,7 +135,7 @@ func TestMigrateAppliesInOrderOnceAndRollsBackFailures(t *testing.T) {
 	}
 }
 
-var discardLog = slog.New(slog.DiscardHandler)
+var discardLog = testutil.DiscardLogger()
 
 // TestNewerSchemaIsWarnedAbout: a database that records a migration this build does not have (a rollback, or a replica
 // not upgraded yet) opens, with a warning that names the versions; a fresh database, whose schema_migrations does not

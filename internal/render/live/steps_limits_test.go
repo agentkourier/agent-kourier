@@ -18,6 +18,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // If the second of three steps cannot be shown at the final, in a way that may pass, the stop does not wait for it and
@@ -73,14 +74,14 @@ func TestAWindowBeginsAtMostTwoStepsAndTheTextWaitsForTheRest(t *testing.T) {
 	}
 	run.Handle(text("b", "B"))
 	release()
-	eventually(t, "the first two steps", func() bool { return len(e.tasks()) == 2 })
+	testutil.Eventually(t, "the first two steps", func() bool { return len(e.tasks()) == 2 })
 	if got := e.reply().Text; got != "A" {
 		t.Fatalf("the text is %q with steps still to begin; want it held at the text that came before them", got)
 	}
 	e.window(t)
-	eventually(t, "the next two steps", func() bool { return len(e.tasks()) == 4 })
+	testutil.Eventually(t, "the next two steps", func() bool { return len(e.tasks()) == 4 })
 	e.window(t)
-	eventually(t, "the last step, and the text after it", func() bool { return len(e.tasks()) == 5 && e.reply().Text == "A\n\nB" })
+	testutil.Eventually(t, "the last step, and the text after it", func() bool { return len(e.tasks()) == 5 && e.reply().Text == "A\n\nB" })
 	want := []string{"text:A", "task:s1:in_progress", "task:s2:in_progress", "task:s3:in_progress", "task:s4:in_progress", "task:s5:in_progress", "text:\n\nB"}
 	if got := timeline(e.reply()); !slices.Equal(got, want) {
 		t.Fatalf("chunks %v; want %v", got, want)
@@ -100,13 +101,13 @@ func TestStepsThatAreOverAreFinishedAtOnceAndTheFinalBeginsTheRest(t *testing.T)
 		run.Handle(call(fmt.Sprint("c", i), "step", nil))
 	}
 	release()
-	eventually(t, "the two steps", func() bool { return len(e.tasks()) == 2 })
+	testutil.Eventually(t, "the two steps", func() bool { return len(e.tasks()) == 2 })
 	for i := 3; i <= 6; i++ {
 		run.Handle(call(fmt.Sprint("c", i), "step", nil))
 	}
 	run.Handle(result("c1", map[string]any{"output": "x"}))
 	e.window(t) // begins two of the four, and finishes the first
-	eventually(t, "the next steps", func() bool { return len(e.tasks()) == 4 && e.tasks()[0].Status == "complete" })
+	testutil.Eventually(t, "the next steps", func() bool { return len(e.tasks()) == 4 && e.tasks()[0].Status == "complete" })
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
 	if got := e.tasks(); len(got) != 6 || got[5].Status != "complete" || !strings.Contains(got[5].Output, "No result") {
@@ -128,7 +129,7 @@ func TestAStepThatIsRateLimitedWaitsAndIsNoStrikeAgainstTheSteps(t *testing.T) {
 	run := e.stream(t)
 	run.Handle(text("a", "Hel"))
 	run.Handle(call("c1", "search", nil))
-	eventually(t, "the step to be shown, after the waits", func() bool {
+	testutil.Eventually(t, "the step to be shown, after the waits", func() bool {
 		if e.clk.waiting() > 0 {
 			e.clk.advance(30 * time.Second)
 		}
@@ -185,10 +186,10 @@ func TestAReplyStillStreamsWhenSlackRefusesTheChunksMode(t *testing.T) {
 	run := e.stream(t)
 	run.Handle(text("a", "Hel"))
 	run.Handle(call("c1", "search", nil))
-	eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 2 })
+	testutil.Eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 2 })
 	run.Handle(text("b", "lo"))
 	e.window(t)
-	eventually(t, "the text", func() bool { return e.reply().Text == "Hel\n\nlo" })
+	testutil.Eventually(t, "the text", func() bool { return e.reply().Text == "Hel\n\nlo" })
 	run.Handle(result("c1", map[string]any{"output": "x"}))
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)

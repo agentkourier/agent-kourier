@@ -13,6 +13,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/secret"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // wantUnredacted fails unless text comes out of both redaction paths as it went in: the one a Binding's status message takes
@@ -106,13 +107,13 @@ func TestTheBrokersOwnMessagesSurviveRedaction(t *testing.T) {
 	})
 	t.Run("a Secret of the broker that cannot be used", func(t *testing.T) {
 		// The Postgres DSN: a Secret whose value is only white space is refused by openStore itself, and one that cannot be read is wrapped.
-		_, err := openStore(t.Context(), StoreConfig{Kind: StorePostgres, PostgresDSN: dsnRef}, "", &values{dsn: " \n"}, discard())
+		_, err := openStore(t.Context(), StoreConfig{Kind: StorePostgres, PostgresDSN: dsnRef}, "", &values{dsn: " \n"}, testutil.DiscardLogger())
 		if !errors.Is(err, secret.ErrEmptyValue) {
 			t.Fatalf("openStore with a blank DSN = %v; want secret.ErrEmptyValue", err)
 		}
 		wantUnredacted(t, "a blank DSN", err.Error())
 
-		_, err = openStore(t.Context(), StoreConfig{Kind: StorePostgres, PostgresDSN: dsnRef}, "", &values{err: errors.New("the Secret is unreadable")}, discard())
+		_, err = openStore(t.Context(), StoreConfig{Kind: StorePostgres, PostgresDSN: dsnRef}, "", &values{err: errors.New("the Secret is unreadable")}, testutil.DiscardLogger())
 		if !errors.Is(err, ErrWiring) {
 			t.Fatalf("openStore with an unreadable Secret = %v; want ErrWiring", err)
 		}

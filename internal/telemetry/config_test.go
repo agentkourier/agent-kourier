@@ -3,7 +3,6 @@ package telemetry
 import (
 	"context"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +13,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	collectortrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 func TestLoadConfig(t *testing.T) {
@@ -106,7 +107,7 @@ func TestOTLPHTTPExportAndBoundedShutdown(t *testing.T) {
 	}))
 	defer collector.Close()
 	c := Config{Endpoint: collector.URL + "/v1/traces", ServiceName: "agent-kourier-test", Environment: "test", SampleRatio: 1, Headers: map[string]string{"Authorization": "Bearer fake"}}
-	provider, shutdown, err := c.Provider(t.Context(), "test-version", slog.New(slog.DiscardHandler))
+	provider, shutdown, err := c.Provider(t.Context(), "test-version", testutil.DiscardLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +142,7 @@ func TestOTLPHTTPExportAndBoundedShutdown(t *testing.T) {
 func TestUnsampledRootsKeepMetricsAndRespectSampledParents(t *testing.T) {
 	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.Header().Set("Content-Type", "application/x-protobuf") }))
 	defer collector.Close()
-	provider, shutdown, err := (Config{Endpoint: collector.URL + "/v1/traces", ServiceName: "test", SampleRatio: 0}).Provider(t.Context(), "test", slog.New(slog.DiscardHandler))
+	provider, shutdown, err := (Config{Endpoint: collector.URL + "/v1/traces", ServiceName: "test", SampleRatio: 0}).Provider(t.Context(), "test", testutil.DiscardLogger())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -21,6 +21,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // fakeAgent is an AgentAPI whose turns a test scripts: each Send announces its messageId on
@@ -227,17 +228,6 @@ func (f *fixture) close() error {
 	return f.m.Close(ctx)
 }
 
-// eventually polls cond until it holds. The deadline is only how long a condition that will never hold is waited
-// for before the test fails, and is long: a loaded machine can starve the goroutine that makes it hold.
-func eventually(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	for deadline := time.Now().Add(30 * time.Second); !cond(); time.Sleep(time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-	}
-}
-
 func (f *fixture) taskID() string { sess, _ := f.session(); return sess.TaskID }
 
 // A turn is one text part (R18) carrying the queue's messageId, and the session's contextId,
@@ -360,7 +350,7 @@ func TestAcceptedTurnIsRecordedMidStream(t *testing.T) {
 	f.now.Store(t0.Add(time.Minute).UnixNano())
 	close(gate)
 	<-sink.finals
-	eventually(t, "the task cleared and the session touched", func() bool {
+	testutil.Eventually(t, "the task cleared and the session touched", func() bool {
 		sess, _ := f.session()
 		return sess.TaskID == "" && sess.ContextID == "c1" && sess.LastActivity.Equal(t0.Add(time.Minute))
 	})
@@ -422,7 +412,7 @@ func TestTurnsRunOneAtATimeInOrder(t *testing.T) {
 	for range want {
 		release <- struct{}{} // each Send takes one
 	}
-	eventually(t, "three turns", func() bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return len(f.agent.msgs) == 3 })
+	testutil.Eventually(t, "three turns", func() bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return len(f.agent.msgs) == 3 })
 	for i, m := range f.agent.msgs {
 		if m.ID != want[i] {
 			t.Errorf("turn %d = %s; want %s", i, m.ID, want[i])
@@ -447,7 +437,7 @@ func TestCloseLeavesAnAcceptedTurnRecorded(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-f.agent.sent
-	eventually(t, "the task to be recorded", func() bool { return f.taskID() == "t1" })
+	testutil.Eventually(t, "the task to be recorded", func() bool { return f.taskID() == "t1" })
 	if err := f.close(); err != nil {
 		t.Fatal(err)
 	}
@@ -509,7 +499,7 @@ func TestEndedTurnDoesNotReviveAnExpiredSession(t *testing.T) {
 	f.now.Store(t0.Add(2 * time.Hour).UnixNano()) // ns/b1's threadTTL is an hour
 	close(gate)
 	<-sink.finals
-	eventually(t, "the runner to retire", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.convos) == 0 })
+	testutil.Eventually(t, "the runner to retire", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.convos) == 0 })
 	if sess, _ := f.session(); sess.TaskID != "" || !sess.LastActivity.Equal(t0) {
 		t.Errorf("session = %+v; want the task cleared and the activity still %v", sess, t0)
 	}
@@ -550,13 +540,13 @@ func TestUnrecordedTurnIsReconciledNotResent(t *testing.T) {
 				t.Fatal(err)
 			}
 			if call == "mark" {
-				eventually(t, "the turn to be followed", func() bool { _, _, fo := f.agent.counts(); return fo == 1 })
+				testutil.Eventually(t, "the turn to be followed", func() bool { _, _, fo := f.agent.counts(); return fo == 1 })
 				if sends, _, _ := f.agent.counts(); sends != 1 {
 					t.Errorf("%d sends; want the turn followed through the lookup, not sent again", sends)
 				}
 				return
 			}
-			eventually(t, "the turn to be sent again", func() bool { s, _, _ := f.agent.counts(); return s == 2 })
+			testutil.Eventually(t, "the turn to be sent again", func() bool { s, _, _ := f.agent.counts(); return s == 2 })
 			f.agent.mu.Lock()
 			defer f.agent.mu.Unlock()
 			if m := f.agent.msgs[1]; m.ID != in.MessageID || m.ContextID != "" || len(f.agent.finds) != 0 {
@@ -574,7 +564,7 @@ func TestRecordingRetriesATransientFailure(t *testing.T) {
 	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the turn to be delivered and its task cleared", func() bool {
+	testutil.Eventually(t, "the turn to be delivered and its task cleared", func() bool {
 		_, err := f.st.NextReply(t.Context(), key)
 		return errors.Is(err, store.ErrNotFound) && f.taskID() == ""
 	})
@@ -652,18 +642,18 @@ func TestTurnWithNoNamedTaskIsLookedUpNotResent(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-sink.finals
-	eventually(t, "turn 1 to end", func() bool { return f.taskID() == "" })
+	testutil.Eventually(t, "turn 1 to end", func() bool { return f.taskID() == "" })
 	for range 2 { // the event, then its redelivery
 		if _, err := f.submit(inbound("2")); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	eventually(t, "the turn to be followed", func() bool { _, _, fo := f.agent.counts(); return fo >= 1 })
+	testutil.Eventually(t, "the turn to be followed", func() bool { _, _, fo := f.agent.counts(); return fo >= 1 })
 	if sends, _, _ := f.agent.counts(); sends != 2 {
 		t.Errorf("%d sends; want turn 1, and turn 2 once", sends)
 	}
-	eventually(t, "the hold to be lifted", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.unrecorded) == 0 })
+	testutil.Eventually(t, "the hold to be lifted", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.unrecorded) == 0 })
 }
 
 // A turn queued for a session whose Binding then left the config is not retried: the thread is
@@ -679,8 +669,8 @@ func TestQueuedTurnOfARemovedBindingIsDropped(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.m.start(key)
-	eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeBindingGone)) == 1 })
-	eventually(t, "the turn to leave the queue", func() bool { _, err := f.st.NextReply(t.Context(), key); return errors.Is(err, store.ErrNotFound) })
+	testutil.Eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeBindingGone)) == 1 })
+	testutil.Eventually(t, "the turn to leave the queue", func() bool { _, err := f.st.NextReply(t.Context(), key); return errors.Is(err, store.ErrNotFound) })
 	if sends, _, _ := f.agent.counts(); sends != 0 {
 		t.Errorf("%d sends; want none", sends)
 	}
@@ -723,7 +713,7 @@ func (f *fixture) countWaits() *atomic.Int32 {
 // retired waits for the runner of the conversation to stop.
 func (f *fixture) retired(t *testing.T) {
 	t.Helper()
-	eventually(t, "the runner to retire", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.convos) == 0 })
+	testutil.Eventually(t, "the runner to retire", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.convos) == 0 })
 }
 
 // fresh is bounded by the turns still queued: every way a turn leaves the queue forgets it. A
@@ -738,7 +728,7 @@ func TestFreshHoldsNoTurnThatLeftTheQueue(t *testing.T) {
 			t.Fatal(err)
 		}
 		waitFinal(t, sink)
-		eventually(t, "the turn to be forgotten", func() bool { return fresh(f) == 0 })
+		testutil.Eventually(t, "the turn to be forgotten", func() bool { return fresh(f) == 0 })
 	})
 	t.Run("a turn failed for good", func(t *testing.T) {
 		f := newFixture(t)
@@ -747,8 +737,8 @@ func TestFreshHoldsNoTurnThatLeftTheQueue(t *testing.T) {
 		if _, err := f.submit(inbound("1")); err != nil {
 			t.Fatal(err)
 		}
-		eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
-		eventually(t, "the turn to be forgotten", func() bool { return fresh(f) == 0 })
+		testutil.Eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+		testutil.Eventually(t, "the turn to be forgotten", func() bool { return fresh(f) == 0 })
 	})
 	t.Run("a turn dropped for a removed Binding", func(t *testing.T) {
 		f := newFixture(t)
@@ -763,7 +753,7 @@ func TestFreshHoldsNoTurnThatLeftTheQueue(t *testing.T) {
 			t.Fatal(err)
 		}
 		f.m.start(key)
-		eventually(t, "the turns to be dropped", func() bool { return len(sink.noticesOf(NoticeBindingGone)) == 3 })
-		eventually(t, "the turns to be forgotten", func() bool { return fresh(f) == 0 })
+		testutil.Eventually(t, "the turns to be dropped", func() bool { return len(sink.noticesOf(NoticeBindingGone)) == 3 })
+		testutil.Eventually(t, "the turns to be forgotten", func() bool { return fresh(f) == 0 })
 	})
 }

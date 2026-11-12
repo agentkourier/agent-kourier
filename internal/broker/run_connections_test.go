@@ -27,6 +27,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // ownToken is the bot token of the own connection's Secret in the test cluster.
@@ -132,11 +133,7 @@ func (w *connWorld) sink(token string) slack.Sink {
 
 func (w *connWorld) eventually(what string, ok func() bool) {
 	w.t.Helper()
-	for deadline := time.Now().Add(40 * time.Second); !ok(); time.Sleep(5 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			w.t.Fatalf("timed out waiting for %s", what)
-		}
-	}
+	testutil.Eventually(w.t, what, ok, testutil.Within(40*time.Second), testutil.Every(5*time.Millisecond))
 }
 
 // liveSlack is a Slack client that is up from Run to the end of its context.

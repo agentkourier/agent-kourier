@@ -18,6 +18,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/secret"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
@@ -279,11 +280,7 @@ func TestRunEndingReportsTheConnectionDown(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- slack.New(cfg).Run(ctx, &sink{}) }()
 	waitConnected(t, fake)
-	for deadline := time.Now().Add(5 * time.Second); !st.last(); time.Sleep(time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the client was never told it is connected")
-		}
-	}
+	testutil.Eventually(t, "the client was never told it is connected", st.last, testutil.Within(5*time.Second))
 
 	cancel()
 	_ = <-done

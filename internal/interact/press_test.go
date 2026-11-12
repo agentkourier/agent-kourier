@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"slices"
 	"strconv"
@@ -20,6 +19,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // authz is who may answer. The zero value says nobody is a member; members and bots are by user. groups lists, by group ID,
@@ -102,7 +102,7 @@ func newPressRigFor(t *testing.T, b interact.Binding) *pressRig {
 	}
 	var err error
 	r.pl, err = interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{b}, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Decider: r.d, Auditor: r.aud,
-		Limits: store.PressLimits{Total: 10, PerUser: 2}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Limits: store.PressLimits{Total: 10, PerUser: 2}, Logger: testutil.DiscardLogger(),
 		Now: func() time.Time { return r.now }, Notify: func(p store.Press) { r.got = append(r.got, p) }}))
 	if err != nil {
 		t.Fatal(err)

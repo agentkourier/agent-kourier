@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +19,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/secret"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
@@ -177,7 +177,7 @@ func (w *socketWorld) run(t *testing.T, app fakeslack.App, seed int) *socketRun 
 	r := &socketRun{app: app, clock: newSteppedClock(), sink: newRecordedSink(), states: &connStates{}, done: make(chan struct{})}
 	client := slack.New(slack.Config{
 		BotToken: secret.New(app.BotToken), AppToken: secret.New(app.AppToken), APIURL: w.srv.URL + "/",
-		Logger: slog.New(slog.DiscardHandler), OnConnection: r.states.set,
+		Logger: testutil.DiscardLogger(), OnConnection: r.states.set,
 	})
 	random := func() float64 { return 0 }
 	if seed >= 0 {
@@ -187,11 +187,11 @@ func (w *socketWorld) run(t *testing.T, app fakeslack.App, seed int) *socketRun 
 	ctx, cancel := context.WithCancel(t.Context())
 	// Now stays where it is: the connection never counts as having been up for ResetAfter, so the pause only grows.
 	frozen := time.Unix(1_700_000_000, 0)
-	policy := RunPolicy{Now: func() time.Time { return frozen }, After: r.clock.After, Random: random, Logger: slog.New(slog.DiscardHandler)}
+	policy := RunPolicy{Now: func() time.Time { return frozen }, After: r.clock.After, Random: random, Logger: testutil.DiscardLogger()}
 	go func() { r.err = RunPlatform(ctx, platform, r.sink, policy); close(r.done) }()
 	t.Cleanup(func() { cancel(); <-r.done })
 	w.waitConnections(t, app, 1)
-	waitUntil(t, "the adapter to take Slack's hello", func() bool { return slices.Equal(r.states.get(), []bool{true}) })
+	testutil.Eventually(t, "the adapter to take Slack's hello", func() bool { return slices.Equal(r.states.get(), []bool{true}) }, testutil.Within(10*time.Second))
 	return r
 }
 
@@ -262,7 +262,7 @@ func TestADroppedSocketIsReconnectedOnRunPlatformsSchedule(t *testing.T) {
 	w.gate.down.Store(false)
 	last.fire <- time.Time{}
 	w.waitConnections(t, app, 1)
-	waitUntil(t, "the connection to be reported up again", func() bool { return slices.Equal(r.states.get(), []bool{true, false, true}) })
+	testutil.Eventually(t, "the connection to be reported up again", func() bool { return slices.Equal(r.states.get(), []bool{true, false, true}) }, testutil.Within(10*time.Second))
 }
 
 // Connections that are dropped at once and cannot reconnect do not retry at the same moment: each waits a time of

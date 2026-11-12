@@ -13,6 +13,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/audit"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // pauseFirst makes turn 0 pause for input on task t1 and every later turn complete.
@@ -197,7 +198,7 @@ func TestStopWithNoActiveTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFinal(t, sink)
-	eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
+	testutil.Eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
 	if did, err := f.m.Stop(t.Context(), key, "t1", "U9"); err != nil || did || len(f.cancelled()) != 0 {
 		t.Errorf("Stop = %v, %v, cancelled %v; want stopped=false and no cancel", did, err, f.cancelled())
 	}
@@ -218,7 +219,7 @@ func TestCancelWorksAfterARestart(t *testing.T) {
 	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the held runner to retire", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.convos) == 0 })
+	testutil.Eventually(t, "the held runner to retire", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.convos) == 0 })
 	if err := f.m.Cancel(t.Context(), key, "t1", "interaction timed out"); err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +232,7 @@ func TestCancelWorksAfterARestart(t *testing.T) {
 	}
 	f.amu.Unlock()
 	waitFinal(t, sink)
-	eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
+	testutil.Eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
 	if err := f.m.Cancel(t.Context(), key, "t1", "again"); !errors.Is(err, ErrNotPaused) {
 		t.Errorf("Cancel with no task = %v; want ErrNotPaused", err)
 	}
@@ -260,7 +261,7 @@ func pausedFirstOn(t *testing.T, f *fixture, sink *fakeSink, answer func(*a2a.Me
 	}
 	waitFinal(t, sink)
 	f.nextSent()
-	eventually(t, "the runner to park", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return f.m.convos[key].parked == "t1" })
+	testutil.Eventually(t, "the runner to park", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return f.m.convos[key].parked == "t1" })
 }
 
 // answerMsg is the reply the dialect builds for the pause of task t1.
@@ -352,7 +353,7 @@ func TestAnswerRejectedAfterTheTaskIsNamedAgainIsNotALostStream(t *testing.T) {
 	if got := sink.noticesOf(NoticeAnswerRejected); len(got) != 1 {
 		t.Errorf("notices = %+v; want one", got)
 	}
-	eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
+	testutil.Eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
 	f.amu.Lock()
 	defer f.amu.Unlock()
 	if len(f.audits) == 0 || f.audits[0].Op != audit.OpAnswer {
@@ -417,7 +418,7 @@ func TestAnswerOfUnknownOutcomeReadsTheTask(t *testing.T) {
 		if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
 			t.Fatal(err)
 		}
-		eventually(t, "the pause to reopen", func() bool { return f.m.Answer(t.Context(), key, answerMsg("ans-2")) == nil })
+		testutil.Eventually(t, "the pause to reopen", func() bool { return f.m.Answer(t.Context(), key, answerMsg("ans-2")) == nil })
 	})
 	t.Run("working: the answer went through, and the task is followed", func(t *testing.T) {
 		f, sink := pausedFirst(t, unknown)
@@ -443,7 +444,7 @@ func TestAnswerOfUnknownOutcomeReadsTheTask(t *testing.T) {
 		if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
 			t.Fatal(err)
 		}
-		eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeAnswerDropped)) == 1 })
+		testutil.Eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeAnswerDropped)) == 1 })
 		if id, want := f.nextSent(), inbound("2").MessageID; id != want {
 			t.Errorf("sent %s; want the held reply %s", id, want)
 		}
@@ -479,7 +480,7 @@ func TestBusyAnswerReadsTheTask(t *testing.T) {
 			if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
 				t.Fatal(err)
 			}
-			eventually(t, "the notice", func() bool { return len(sink.noticesOf(tc.notice)) == 1 })
+			testutil.Eventually(t, "the notice", func() bool { return len(sink.noticesOf(tc.notice)) == 1 })
 			if got := len(f.cancelled()) == 1; got != tc.cancel {
 				t.Errorf("cancelled %v; want a cancel: %v", f.cancelled(), tc.cancel)
 			}
@@ -503,8 +504,8 @@ func TestAnswerThatCannotBeSentLeavesThePauseOpen(t *testing.T) {
 			if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
 				t.Fatal(err)
 			}
-			eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
-			eventually(t, "the pause to reopen", func() bool { return f.m.Answer(t.Context(), key, answerMsg("ans-2")) == nil })
+			testutil.Eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+			testutil.Eventually(t, "the pause to reopen", func() bool { return f.m.Answer(t.Context(), key, answerMsg("ans-2")) == nil })
 			f.amu.Lock()
 			defer f.amu.Unlock()
 			if errors.Is(cause, agent.ErrCredentialsRejected) != (len(f.rejected) >= 1) {
@@ -665,7 +666,7 @@ func TestStopAfterARunnerExitThatLeftTheTaskRecorded(t *testing.T) {
 			}
 			f.agent.find = lookupsFailWhileRecorded(f)
 		}, "1", "2")
-		eventually(t, "the cancel to be refused for good", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+		testutil.Eventually(t, "the cancel to be refused for good", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
 		f.nextSent() // turn 1
 		if did, err := f.m.Stop(t.Context(), key, "t1", "U9"); err != nil || !did {
 			t.Fatalf("Stop = %v, %v", did, err)
@@ -693,7 +694,7 @@ func TestStopAfterARunnerExitThatLeftTheTaskRecorded(t *testing.T) {
 			t.Fatal(err)
 		}
 		close(gate)
-		eventually(t, "the runner to wait on the failing lookup", func() bool { _, finds, _ := f.agent.counts(); return finds > 0 })
+		testutil.Eventually(t, "the runner to wait on the failing lookup", func() bool { _, finds, _ := f.agent.counts(); return finds > 0 })
 		f.st.mu.Lock()
 		delete(f.st.stuck, "mark") // the store recovers
 		f.st.mu.Unlock()
@@ -726,7 +727,7 @@ func TestACancelThatReadTheSessionBeforeAnotherControlEndedThePauseDoesNotCancel
 		if did, err := f.m.Stop(t.Context(), key, "t1", "U9"); err != nil || !did {
 			t.Errorf("Stop = %v, %v; want it to stop the task", did, err)
 		}
-		eventually(t, "the runner to clear the record and retire", func() bool {
+		testutil.Eventually(t, "the runner to clear the record and retire", func() bool {
 			f.m.mu.Lock()
 			defer f.m.mu.Unlock()
 			return len(f.m.convos) == 0 && f.taskID() == ""
@@ -898,9 +899,5 @@ func TestHoldsTaskSaysWhetherARunnerHasTheTask(t *testing.T) {
 	if did, err := f.m.Stop(t.Context(), key, "t1", "U9"); err != nil || !did {
 		t.Fatalf("Stop = %v, %v", did, err)
 	}
-	for deadline := time.Now().Add(5 * time.Second); f.m.HoldsTask(key, "t1"); time.Sleep(time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("HoldsTask is still true after the pause ended")
-		}
-	}
+	testutil.Eventually(t, "HoldsTask is still true after the pause ended", func() bool { return !f.m.HoldsTask(key, "t1") }, testutil.Within(5*time.Second))
 }

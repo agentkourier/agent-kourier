@@ -9,6 +9,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // A follow the agent refuses ends the turn for good: it is not followed again, even when a wake arrives while it
@@ -41,7 +42,7 @@ func TestRefusedFollowIsNotFollowedAgainWhenAWakeArrivesDuringIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	close(gate)
-	eventually(t, "the end of turn 1", func() bool { return len(logs.lines("session turn ended")) >= 1 })
+	testutil.Eventually(t, "the end of turn 1", func() bool { return len(logs.lines("session turn ended")) >= 1 })
 	f.retired(t)
 	if _, _, follows := f.agent.counts(); follows != 1 {
 		t.Errorf("%d follows; want the one the agent refused", follows)
@@ -70,14 +71,14 @@ func TestAnswerLegWithNoOutputIsToldAfterAQuestionThatSaidSomething(t *testing.T
 		t.Fatal(err)
 	}
 	waitFinal(t, sink)
-	eventually(t, "the runner to park", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return f.m.convos[key].parked == "t1" })
+	testutil.Eventually(t, "the runner to park", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return f.m.convos[key].parked == "t1" })
 	if got := sink.noticesOf(NoticeNoOutput); len(got) != 0 {
 		t.Fatalf("no-output notices = %+v before the answer; want none: the question said something", got)
 	}
 	if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the notice for the answer's output", func() bool { return len(sink.noticesOf(NoticeNoOutput)) >= 1 })
+	testutil.Eventually(t, "the notice for the answer's output", func() bool { return len(sink.noticesOf(NoticeNoOutput)) >= 1 })
 	f.retired(t)
 	if got := sink.noticesOf(NoticeNoOutput); len(got) != 1 {
 		t.Errorf("no-output notices = %+v; want one, for the answer's leg", got)

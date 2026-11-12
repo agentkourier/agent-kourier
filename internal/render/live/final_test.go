@@ -19,6 +19,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 func (e *env) updates() int { return len(e.rec.sent("/chat.update")) }
@@ -28,7 +29,7 @@ func (e *env) partial(t *testing.T) (*live.Run, context.CancelFunc) {
 	t.Helper()
 	run, cancel := e.start(t, v1alpha1.OutputLive, false)
 	run.Handle(text("a", "partial"))
-	eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+	testutil.Eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
 	return run, cancel
 }
 
@@ -39,7 +40,7 @@ func TestShutdownAfterTheFinalStillWritesTheFinalText(t *testing.T) {
 	run, cancel := e.partial(t)
 	run.Handle(text("a", "partial, then the final answer"))
 	run.Handle(agent.FinalEvent{})
-	eventually(t, "the final to wait for its window", func() bool { return e.clk.waiting() == 1 })
+	testutil.Eventually(t, "the final to wait for its window", func() bool { return e.clk.waiting() == 1 })
 	cancel()
 	e.finish(t, run) // the context ended, and the run still writes the final when its window opens
 	if got := e.reply().Text; got != "partial, then the final answer" {
@@ -57,10 +58,10 @@ func TestFinalFollowedAtOnceByTheCancelIsRetriedThroughARateLimit(t *testing.T) 
 	run.Handle(text("a", "the final answer"))
 	run.Handle(agent.FinalEvent{})
 	cancel()
-	eventually(t, "the final to wait for its window", func() bool { return e.clk.waiting() == 1 })
+	testutil.Eventually(t, "the final to wait for its window", func() bool { return e.clk.waiting() == 1 })
 	e.clk.advance(throttle)
-	eventually(t, "the rate-limited request", func() bool { return e.updates() == 1 })
-	eventually(t, "the wait for Retry-After", func() bool { return e.clk.waiting() == 1 })
+	testutil.Eventually(t, "the rate-limited request", func() bool { return e.updates() == 1 })
+	testutil.Eventually(t, "the wait for Retry-After", func() bool { return e.clk.waiting() == 1 })
 	e.finish(t, run)
 	if got := e.reply().Text; got != "the final answer" || e.updates() != 2 {
 		t.Fatalf("the message says %q after %d updates; want the final text on the second", got, e.updates())
@@ -76,7 +77,7 @@ func TestFinalIsGivenUpOnAtItsOwnDeadline(t *testing.T) {
 	run.Handle(text("a", "the final answer"))
 	run.Handle(agent.FinalEvent{})
 	cancel()
-	eventually(t, "the run to end at its deadline", func() bool {
+	testutil.Eventually(t, "the run to end at its deadline", func() bool {
 		select {
 		case <-run.Done():
 			return true
@@ -99,7 +100,7 @@ func TestFinalWithNothingToShowEndsTheRun(t *testing.T) {
 	// A message stands with a tool status line: it is not left up.
 	run, _ := e.start(t, v1alpha1.OutputLive, false)
 	run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "search"})
-	eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+	testutil.Eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
 	if m := e.reply(); m.Text != render.NoOutput || strings.Contains(string(m.Blocks), "Calling") {
@@ -129,11 +130,11 @@ func TestRateLimitIsWaitedOutAndIsNoAttempt(t *testing.T) {
 	run, _ := e.partial(t)
 	run.Handle(text("a", "the final answer"))
 	run.Handle(agent.FinalEvent{})
-	eventually(t, "the final to wait for its window", func() bool { return e.clk.waiting() == 1 })
+	testutil.Eventually(t, "the final to wait for its window", func() bool { return e.clk.waiting() == 1 })
 	e.clk.advance(throttle) // the window: the first request is rate-limited
 	for i := 1; i <= limits; i++ {
-		eventually(t, "the request", func() bool { return e.updates() == i })
-		eventually(t, "the wait for Retry-After", func() bool { return e.clk.waiting() == 1 })
+		testutil.Eventually(t, "the request", func() bool { return e.updates() == i })
+		testutil.Eventually(t, "the wait for Retry-After", func() bool { return e.clk.waiting() == 1 })
 		if wait := e.clk.due().Sub(e.clk.Now()); wait != 30*time.Second {
 			t.Fatalf("the write waits %v after a 429 with Retry-After 30 s; want 30 s", wait)
 		}
@@ -201,7 +202,7 @@ func TestInterruptedFirstPostStillShowsTheFinalText(t *testing.T) {
 	e.rec.losePosts = 1
 	run, _ := e.start(t, v1alpha1.OutputLive, false)
 	run.Handle(text("a", "partial"))
-	eventually(t, "the post to reach Slack", func() bool { return e.reply().TS != e.root && e.reply().Text == "partial" })
+	testutil.Eventually(t, "the post to reach Slack", func() bool { return e.reply().TS != e.root && e.reply().Text == "partial" })
 	run.Handle(text("a", "partial, then the final answer"))
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
@@ -216,8 +217,8 @@ func TestInterruptedFirstPostIsSettledAtShutdown(t *testing.T) {
 	e.rec.losePosts = 1
 	run, cancel := e.start(t, v1alpha1.OutputLive, false)
 	run.Handle(text("a", "partial"))
-	eventually(t, "the post to reach Slack", func() bool { return e.reply().TS != e.root && e.reply().Text == "partial" })
-	eventually(t, "the retry to wait", func() bool { return e.clk.waiting() == 1 })
+	testutil.Eventually(t, "the post to reach Slack", func() bool { return e.reply().TS != e.root && e.reply().Text == "partial" })
+	testutil.Eventually(t, "the retry to wait", func() bool { return e.clk.waiting() == 1 })
 	run.Handle(text("a", "partial, then the final answer"))
 	run.Handle(agent.FinalEvent{})
 	cancel()
@@ -231,7 +232,7 @@ func TestFallbackTextIsCapped(t *testing.T) {
 	e := setup(t)
 	run, _ := e.start(t, v1alpha1.OutputLive, false)
 	run.Handle(text("a", strings.Repeat("a", 1500)))
-	eventually(t, "the post", func() bool { return len(e.reply().Blocks) > 0 && e.reply().TS != e.root })
+	testutil.Eventually(t, "the post", func() bool { return len(e.reply().Blocks) > 0 && e.reply().TS != e.root })
 	m := e.reply()
 	if n := len(utf16.Encode([]rune(m.Text))); n > 1000 || !strings.HasSuffix(m.Text, "… (truncated)") || !strings.Contains(string(m.Blocks), strings.Repeat("a", 1500)) {
 		t.Fatalf("fallback text of %d units %q; want it capped at 1000 with the blocks whole", n, m.Text)
@@ -246,11 +247,11 @@ func TestEachFieldIsEscapedInItsOwnFlavour(t *testing.T) {
 	e.spy(t, false, nil)
 	run, _ := e.start(t, v1alpha1.OutputLive, false)
 	run.Handle(text("a", "<!channel> [x](https://evil.example) & \x07 end"))
-	eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+	testutil.Eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
 	run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "[t](https://evil.example)", Args: map[string]any{"v": "<!channel>"}})
-	eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
+	testutil.Eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
 	e.clk.advance(throttle)
-	eventually(t, "the tool line", func() bool { return strings.Contains(string(e.reply().Blocks), "Calling") })
+	testutil.Eventually(t, "the tool line", func() bool { return strings.Contains(string(e.reply().Blocks), "Calling") })
 	var blocks []struct {
 		Type     string
 		Text     string

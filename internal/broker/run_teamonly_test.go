@@ -12,6 +12,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // noOwn makes the broker of w one with no ChatConnection of its own: it serves the connections of the namespaces it admits (team-a and team-b)
@@ -190,7 +191,7 @@ func TestARunOfAStandbyWithNoOwnConnectionIsReadyAndTakesOver(t *testing.T) {
 	}
 	ca, a := noOwnReplica("pod-a_1")
 	a.running = start(t, ca)
-	eventually(t, 10*time.Second, "the first replica did not start the leader half", func() bool { return a.built.Load() == 1 })
+	testutil.Eventually(t, "the first replica did not start the leader half", func() bool { return a.built.Load() == 1 }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	cb, b := noOwnReplica("pod-b_1")
 	b.running = start(t, cb)
 
@@ -209,7 +210,7 @@ func TestARunOfAStandbyWithNoOwnConnectionIsReadyAndTakesOver(t *testing.T) {
 	if err := a.wait(); err != nil {
 		t.Fatalf("the leader's Run = %v after a signal; want a clean stop", err)
 	}
-	eventually(t, 10*time.Second, "the standby did not take over and serve the connection", func() bool { return b.built.Load() == 1 })
+	testutil.Eventually(t, "the standby did not take over and serve the connection", func() bool { return b.built.Load() == 1 }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	if code, _ := b.get("/readyz"); code != http.StatusOK {
 		t.Errorf("/readyz = %d after the takeover; want 200", code)
 	}
@@ -232,7 +233,7 @@ func TestRunOnPostgresAStandbyWithNoOwnConnectionIsReadyAndTakesOver(t *testing.
 	a := &replica{exits: make(chan int, 4), logs: &logBuffer{}}
 	ca.newSlack = func(slack.Config) slackAPI { a.built.Add(1); return idleSlack{} }
 	a.running = start(t, ca)
-	eventually(t, 20*time.Second, "the first replica did not lead and serve the connection", func() bool { return a.built.Load() == 1 })
+	testutil.Eventually(t, "the first replica did not lead and serve the connection", func() bool { return a.built.Load() == 1 }, testutil.Within(20*time.Second), testutil.Every(10*time.Millisecond))
 	cb, b := postgresReplica(t, ca, "pod-b_1")
 	noOwn(&cb)
 	b.running = start(t, cb)
@@ -247,7 +248,7 @@ func TestRunOnPostgresAStandbyWithNoOwnConnectionIsReadyAndTakesOver(t *testing.
 	if err := a.waitWithin(30 * time.Second); err != nil {
 		t.Fatalf("the leader's Run = %v after a signal", err)
 	}
-	eventually(t, 20*time.Second, "the standby did not take over and serve the connection", func() bool { return b.built.Load() == 1 })
+	testutil.Eventually(t, "the standby did not take over and serve the connection", func() bool { return b.built.Load() == 1 }, testutil.Within(20*time.Second), testutil.Every(10*time.Millisecond))
 	if epoch, holder := leadershipRow(t, schema); epoch != 2 || holder != "pod-b_1" {
 		t.Errorf("leadership = (%d, %q); want epoch 2 held by pod-b_1", epoch, holder)
 	}

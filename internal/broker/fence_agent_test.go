@@ -7,7 +7,6 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
-	"log/slog"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -21,6 +20,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/session"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // agentWrites are the methods of session.AgentAPI that change what the agent holds, and agentReads the ones that cannot. A
@@ -217,11 +217,11 @@ func TestRunWithSQLiteDoesNotFenceTheAgent(t *testing.T) {
 	c.leaseNow = stepping()
 	exits := make(chan int, 1)
 	c.exit = func(code int) { exits <- code }
-	c.Logger = slog.New(slog.DiscardHandler)
+	c.Logger = testutil.DiscardLogger()
 	seedQueuedTurn(t, c, url)
 	start(t, c)
 
-	eventually(t, 10*time.Second, "the queued turn did not reach the agent", func() bool { return agentStub.sends.Load() == 1 })
+	testutil.Eventually(t, "the queued turn did not reach the agent", func() bool { return agentStub.sends.Load() == 1 }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	select {
 	case code := <-exits:
 		t.Errorf("a SQLite replica stopped with exit %d", code)

@@ -16,6 +16,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/session"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // fakePauses is the intake: it records each Paused, with when, and answers as handle says (nil: success).
@@ -129,7 +130,7 @@ func TestAPausedFinalEventIsHandedOffOnceAndTheCallReturnsAtOnce(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the handler waited for the intake: it runs on the agent's stream goroutine")
 	}
-	waitFor(t, "the hand-off", func() bool { return r.pauses.calls() == 1 })
+	testutil.Eventually(t, "the hand-off", func() bool { return r.pauses.calls() == 1 })
 	r.pauses.mu.Lock()
 	got := r.pauses.got[0]
 	r.pauses.mu.Unlock()
@@ -145,7 +146,7 @@ func TestAnAuthPauseIsHandedOff(t *testing.T) {
 	task := pausedTask("task-1", "msg-1", d0)
 	task.Status.State = a2a.TaskStateAuthRequired
 	r.tap.Turn(t.Context(), tapRef)(agent.FinalEvent{Task: &task})
-	waitFor(t, "the hand-off", func() bool { return r.pauses.calls() == 1 })
+	testutil.Eventually(t, "the hand-off", func() bool { return r.pauses.calls() == 1 })
 }
 
 func TestOtherEventsAreNotHandedOff(t *testing.T) {
@@ -182,7 +183,7 @@ func TestAFailingPauseIsTriedAgainAfterAGrowingWait(t *testing.T) {
 	}
 	task := pausedTask("task-1", "msg-1", d0)
 	r.tap.Turn(t.Context(), tapRef)(agent.FinalEvent{Task: &task})
-	waitFor(t, "five tries", func() bool { return r.pauses.calls() == 5 })
+	testutil.Eventually(t, "five tries", func() bool { return r.pauses.calls() == 5 })
 	r.pauses.mu.Lock()
 	at := append([]time.Time(nil), r.pauses.at...)
 	r.pauses.mu.Unlock()
@@ -202,7 +203,7 @@ func TestTheFirstWaitIsASecond(t *testing.T) {
 	r.pauses.handle = func(context.Context, int, interact.Pause) error { return errBoom }
 	task := pausedTask("task-1", "msg-1", d0)
 	r.tap.Turn(t.Context(), tapRef)(agent.FinalEvent{Task: &task})
-	waitFor(t, "the first try", func() bool { return r.pauses.calls() == 1 })
+	testutil.Eventually(t, "the first try", func() bool { return r.pauses.calls() == 1 })
 	time.Sleep(200 * time.Millisecond) // an immediate retry, or a wait of milliseconds, would have come by now
 	if got := r.pauses.calls(); got != 1 {
 		t.Errorf("%d tries after 200ms; want one: the first wait is a second", got)
@@ -221,7 +222,7 @@ func TestAPauseIsGivenUpAtItsOwnDeadline(t *testing.T) {
 	r.pauses.handle = func(context.Context, int, interact.Pause) error { step.Add(1); return errBoom }
 	task := pausedTask("task-1", "msg-1", d0) // due at d0 + 3 minutes
 	r.tap.Turn(t.Context(), tapRef)(agent.FinalEvent{Task: &task})
-	waitFor(t, "an Error log", func() bool { return strings.Contains(r.logs.String(), "level=ERROR") })
+	testutil.Eventually(t, "an Error log", func() bool { return strings.Contains(r.logs.String(), "level=ERROR") })
 	if err := r.close(t); err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +252,7 @@ func TestARecoveredPauseRetriesAfterItsOriginalDeadline(t *testing.T) {
 	recovered := tapRef
 	recovered.Recovered, recovered.Restarted = true, true
 	r.tap.Turn(t.Context(), recovered)(agent.FinalEvent{Task: &task})
-	waitFor(t, "the recovered retry", func() bool { return r.pauses.calls() == 2 })
+	testutil.Eventually(t, "the recovered retry", func() bool { return r.pauses.calls() == 2 })
 }
 
 // TestAFollowedPauseKeepsItsOriginalRetryWindow: a lost stream continues the output of the turn, but it is not a
@@ -277,10 +278,10 @@ func TestAFollowedPauseKeepsItsOriginalRetryWindow(t *testing.T) {
 			ref.Recovered, ref.Restarted = true, restarted
 			r.tap.Turn(t.Context(), ref)(agent.FinalEvent{Task: &task})
 			if restarted {
-				waitFor(t, "the restarted retry", func() bool { return r.pauses.calls() == 2 })
+				testutil.Eventually(t, "the restarted retry", func() bool { return r.pauses.calls() == 2 })
 				return
 			}
-			waitFor(t, "the original deadline to give up", func() bool { return strings.Contains(r.logs.String(), "level=ERROR") })
+			testutil.Eventually(t, "the original deadline to give up", func() bool { return strings.Contains(r.logs.String(), "level=ERROR") })
 			if got := r.pauses.calls(); got != 1 {
 				t.Errorf("%d pause hand-offs; want one before the original deadline ends the follow", got)
 			}
@@ -295,16 +296,16 @@ func TestAPauseSeenAgainIsHandedOffAgain(t *testing.T) {
 	r := newTap(t, nil)
 	task := pausedTask("task-1", "msg-1", d0)
 	r.tap.Turn(t.Context(), tapRef)(agent.FinalEvent{Task: &task})
-	waitFor(t, "the first hand-off", func() bool { return r.pauses.calls() == 1 })
+	testutil.Eventually(t, "the first hand-off", func() bool { return r.pauses.calls() == 1 })
 	// A restart: a new tap, and the turn that finds the task again, marked recovered.
 	again := newTap(t, nil)
 	recovered := tapRef
 	recovered.Recovered, recovered.Restarted = true, true
 	again.tap.Turn(t.Context(), recovered)(agent.FinalEvent{Task: &task})
-	waitFor(t, "the hand-off after the restart", func() bool { return again.pauses.calls() == 1 })
+	testutil.Eventually(t, "the hand-off after the restart", func() bool { return again.pauses.calls() == 1 })
 	// And on the same tap, after the first is over.
 	r.tap.Turn(t.Context(), recovered)(agent.FinalEvent{Task: &task})
-	waitFor(t, "the repeat", func() bool { return r.pauses.calls() == 2 })
+	testutil.Eventually(t, "the repeat", func() bool { return r.pauses.calls() == 2 })
 }
 
 func TestAPauseInFlightIsNotHandedOffTwice(t *testing.T) {
@@ -315,10 +316,10 @@ func TestAPauseInFlightIsNotHandedOffTwice(t *testing.T) {
 	first, again, other := pausedTask("task-1", "msg-1", d0), pausedTask("task-1", "msg-1", d0), pausedTask("task-1", "msg-2", d0.Add(time.Minute))
 	h := r.tap.Turn(t.Context(), tapRef)
 	h(agent.FinalEvent{Task: &first})
-	waitFor(t, "the first", func() bool { return r.pauses.calls() == 1 })
+	testutil.Eventually(t, "the first", func() bool { return r.pauses.calls() == 1 })
 	h(agent.FinalEvent{Task: &again}) // the same pause, re-emitted while it is being taken up
 	h(agent.FinalEvent{Task: &other}) // the task paused again, on a new question
-	waitFor(t, "the other pause", func() bool { return r.pauses.calls() == 2 })
+	testutil.Eventually(t, "the other pause", func() bool { return r.pauses.calls() == 2 })
 	time.Sleep(20 * time.Millisecond) // a third hand-off would have started by now
 	if got := r.pauses.calls(); got != 2 {
 		t.Errorf("%d hand-offs; want 2: one for each pause, and none for the repeat of one in flight", got)
@@ -342,9 +343,9 @@ func TestCloseEndsTheHandOffsAndWaitsForThem(t *testing.T) {
 	h := r.tap.Turn(t.Context(), tapRef)
 	one, two := pausedTask("task-1", "m", d0), pausedTask("task-2", "m", d0)
 	h(agent.FinalEvent{Task: &one})
-	waitFor(t, "the first, which fails", func() bool { return r.pauses.calls() == 1 })
+	testutil.Eventually(t, "the first, which fails", func() bool { return r.pauses.calls() == 1 })
 	h(agent.FinalEvent{Task: &two})
-	waitFor(t, "the second, in the intake", inIntake.Load)
+	testutil.Eventually(t, "the second, in the intake", inIntake.Load)
 	if err := r.close(t); err != nil {
 		t.Fatalf("Close = %v; want nil once both are over", err)
 	}
@@ -363,7 +364,7 @@ func TestCloseIsBoundedByItsContext(t *testing.T) {
 	t.Cleanup(func() { close(stuck) })
 	task := pausedTask("task-1", "m", d0)
 	r.tap.Turn(t.Context(), tapRef)(agent.FinalEvent{Task: &task})
-	waitFor(t, "the hand-off", func() bool { return r.pauses.calls() == 1 })
+	testutil.Eventually(t, "the hand-off", func() bool { return r.pauses.calls() == 1 })
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
 	if err := r.tap.Close(ctx); !errors.Is(err, context.DeadlineExceeded) {
@@ -375,7 +376,7 @@ func TestABindingThatCannotBeReadStillGetsTheHandOffAndAWarning(t *testing.T) {
 	r := newTap(t, func(c *interact.TapConfig) { c.Lookup = lookupErr{errBoom} })
 	task := pausedTask("task-1", "msg-1", d0)
 	r.tap.Turn(t.Context(), tapRef)(agent.FinalEvent{Task: &task})
-	waitFor(t, "the hand-off", func() bool { return r.pauses.calls() == 1 })
+	testutil.Eventually(t, "the hand-off", func() bool { return r.pauses.calls() == 1 })
 	if !strings.Contains(r.logs.String(), "level=WARN") {
 		t.Errorf("log %q; want a warning that the Binding could not be read", r.logs.String())
 	}
@@ -419,5 +420,5 @@ func TestTheBindingIsReadOffTheStreamGoroutine(t *testing.T) {
 		t.Fatal("the handler waited for the Binding lookup")
 	}
 	release()
-	waitFor(t, "the hand-off", func() bool { return r.pauses.calls() == 1 })
+	testutil.Eventually(t, "the hand-off", func() bool { return r.pauses.calls() == 1 })
 }
