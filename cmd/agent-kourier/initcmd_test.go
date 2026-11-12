@@ -8,11 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
 
-	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/yaml"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
@@ -627,16 +627,18 @@ func TestInitKagentBackendIsTheDocumentedOne(t *testing.T) {
 	}
 }
 
-// TestIsNamespaceNameMatchesDNS1123Label proves isNamespaceName accepts and rejects what the validation package's
-// DNS-1123 label check does, the check the rest of the binary uses.
+// TestIsNamespaceNameMatchesDNS1123Label pins isNamespaceName to the definition it had before it moved to the validation
+// package's DNS-1123 label check: the regexp ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ and at most 63 characters. The old
+// definition is the oracle, so the move cannot have changed what init accepts.
 func TestIsNamespaceNameMatchesDNS1123Label(t *testing.T) {
+	oldNamespaceName := regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 	for _, s := range []string{
 		"", "a", "0", "sre", "a-b", "a--b", "-a", "a-", "-", "A", "aB", "a.b", "a_b", "a b", " a", "a ", "a\n", "é",
 		strings.Repeat("a", 63), strings.Repeat("a", 64), strings.Repeat("a", 62) + "-", "-" + strings.Repeat("a", 62),
 		strings.Repeat("0", 63), strings.Repeat("a-", 31) + "a",
 	} {
-		if got, want := isNamespaceName(s), len(validation.IsDNS1123Label(s)) == 0; got != want {
-			t.Errorf("isNamespaceName(%q) = %v, IsDNS1123Label accepts = %v", s, got, want)
+		if got, want := isNamespaceName(s), oldNamespaceName.MatchString(s) && len(s) <= 63; got != want {
+			t.Errorf("isNamespaceName(%q) = %v, the old definition = %v", s, got, want)
 		}
 	}
 }

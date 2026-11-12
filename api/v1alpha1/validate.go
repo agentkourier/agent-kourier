@@ -19,7 +19,8 @@ import (
 // channelID matches Slack channel IDs, the only platform's; its literal must equal ChatBinding.Channel's Pattern marker.
 var channelID = regexp.MustCompile(`^[CG][A-Z0-9]+$`)
 
-// IsChannelID reports whether s is a channel ID as a Binding's spec.chat.channel accepts it, rather than a channel name.
+// IsChannelID reports whether s has the form of a channel ID, rather than a channel name. It checks the pattern only:
+// the length cap a Binding's spec.chat.channel also has is the caller's.
 func IsChannelID(s string) bool { return channelID.MatchString(s) }
 
 // reactionName matches Slack's bare reaction names. The platform adds and removes
