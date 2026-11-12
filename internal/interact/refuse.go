@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
@@ -221,11 +222,35 @@ func (i *Intake) cancel(ctx context.Context, p Pause, reason, notice, id string)
 }
 
 func (i *Intake) enqueueNotice(ctx context.Context, p Pause, notice, id string) error {
-	post := outbox.Post{Source: id, Role: store.OutboxNotice, Connection: p.Key.Connection, Channel: p.Key.Channel, Thread: p.Key.Thread, Out: chat.Say(render.Notice(notice, ""))}
-	if _, err := i.cfg.Outbox.Enqueue(ctx, post); err != nil {
+	if err := enqueueNotice(ctx, i.cfg.Outbox, p.Key, id, notice); err != nil {
 		return fmt.Errorf("enqueue the notice: %w", err)
 	}
 	return nil
+}
+
+// enqueueNotice enqueues text as a notice in the thread of key, whose outbox ID comes from source: the one place that
+// builds the post of a notice, so a notice reads the same wherever it is told.
+func enqueueNotice(ctx context.Context, out Enqueuer, key store.ConversationKey, source, text string) error {
+	_, err := out.Enqueue(ctx, outbox.Post{Source: source, Role: store.OutboxNotice, Connection: key.Connection, Channel: key.Channel,
+		Thread: key.Thread, Out: chat.Say(render.Notice(text, ""))})
+	return err
+}
+
+// tellClosedBefore tells the thread of row that its answer was not sent, unless the session is still on row's task (held
+// is then true, and nothing is told): the task has moved on, or the session is gone. A failed read of the session is returned
+// as it is. late says, in the error of a failed notice, which way the answer failed to arrive.
+func tellClosedBefore(ctx context.Context, sessions SessionReader, out Enqueuer, row store.Interaction, now time.Time, late string) (held bool, err error) {
+	sess, serr := sessions.GetSession(ctx, row.Key, store.AnyAge, now)
+	switch {
+	case serr == nil && sess.TaskID == row.TaskID:
+		return true, nil
+	case serr != nil && !errors.Is(serr, store.ErrNotFound):
+		return false, fmt.Errorf("interact: read the session of %s: %w", row.ID, serr)
+	}
+	if err := enqueueNotice(ctx, out, row.Key, row.ID+"/answer", textClosedBefore); err != nil {
+		return false, fmt.Errorf("interact: tell the thread that the answer to %s %s: %w", row.ID, late, err)
+	}
+	return false, nil
 }
 
 // short hashes fields into a short ID that holds no agent text.
@@ -302,8 +327,7 @@ func (i *Intake) autoDeny(ctx context.Context, p Pause, b Binding, in dialect.In
 	default:
 		return nil
 	}
-	post := outbox.Post{Source: row.ID, Role: store.OutboxNotice, Connection: p.Key.Connection, Channel: p.Key.Channel, Thread: p.Key.Thread, Out: chat.Say(render.Notice(noticeDenied, ""))}
-	if _, err := i.cfg.Outbox.Enqueue(ctx, post); err != nil {
+	if err := enqueueNotice(ctx, i.cfg.Outbox, p.Key, row.ID, noticeDenied); err != nil {
 		return fmt.Errorf("interact: enqueue the notice of %s: %w", row.ID, err)
 	}
 	return i.resend(ctx, p, b, row)

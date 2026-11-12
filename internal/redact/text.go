@@ -108,7 +108,7 @@ func capAt(s string, n int) (string, bool) {
 	if len(s) <= n {
 		return s, false
 	}
-	return s[:runeBoundary(s, n)], true
+	return s[:RuneBoundary(s, n)], true
 }
 
 // Bound returns s cut to at most MaxBytes at a white-space boundary and marked with
@@ -272,7 +272,7 @@ func freeTextCut(s string, limit int, line bool) string {
 	s, cut := capAt(s, rawLimit(limit))
 	s = Normalize(rawSecrets(s))
 	if len(s) > limit {
-		s, cut = s[:runeBoundary(s, limit)], true
+		s, cut = s[:RuneBoundary(s, limit)], true
 	}
 	s = match(s, line)
 	if cut {
@@ -289,8 +289,9 @@ func rawLimit(limit int) int {
 	return limit * cutRawFactor
 }
 
-// runeBoundary returns the largest index of s that is at most i and starts a character; i must be less than len(s).
-func runeBoundary(s string, i int) int {
+// RuneBoundary returns the largest index of s that is at most i and starts a character; i must be less than len(s). It is the
+// place to cut s to a byte limit without splitting a character.
+func RuneBoundary(s string, i int) int {
 	for i > 0 && !utf8.RuneStart(s[i]) {
 		i--
 	}

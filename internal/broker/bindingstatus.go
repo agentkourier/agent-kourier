@@ -13,7 +13,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -801,11 +800,7 @@ func statusMessage(s string) string {
 	if len(text) <= maxStatusMessage {
 		return text
 	}
-	cut := maxStatusMessage - len(ellipsis)
-	for cut > 0 && !utf8.RuneStart(text[cut]) {
-		cut--
-	}
-	return text[:cut] + ellipsis
+	return text[:redact.RuneBoundary(text, maxStatusMessage-len(ellipsis))] + ellipsis
 }
 
 // byType maps each condition to its type.

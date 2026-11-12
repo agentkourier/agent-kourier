@@ -6,7 +6,6 @@ import (
 	"io"
 	"log/slog"
 	"strings"
-	"unicode/utf8"
 
 	"go.opentelemetry.io/otel/trace"
 
@@ -69,11 +68,7 @@ func LogText(v any) (text string) {
 	if len(text) <= MaxLogErrorBytes {
 		return text
 	}
-	cut := MaxLogErrorBytes
-	for cut > 0 && !utf8.RuneStart(text[cut]) {
-		cut--
-	}
-	return text[:cut] + redact.Truncated
+	return text[:redact.RuneBoundary(text, MaxLogErrorBytes)] + redact.Truncated
 }
 
 // LogHandler adds trace and span IDs to contextual logs with valid trace context.
