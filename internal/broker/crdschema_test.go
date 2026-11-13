@@ -20,6 +20,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // crdObject is a CustomResourceDefinition of the given name that carries the annotations given (none if annotations is nil).
@@ -93,16 +94,6 @@ func gatherNames(t *testing.T, m *Metrics) map[string]bool {
 	return names
 }
 
-// schemaSoon polls cond every few milliseconds, and fails the test if it is not true within 10 s.
-func schemaSoon(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	for deadline := time.Now().Add(10 * time.Second); !cond(); time.Sleep(3 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatalf("never: %s", what)
-		}
-	}
-}
-
 // countGets makes the client count each get of a CRD, and returns the count. It does not handle the get: the others do.
 func countGets(c *dynamicfake.FakeDynamicClient) *atomic.Int64 {
 	var n atomic.Int64
@@ -117,7 +108,7 @@ func countGets(c *dynamicfake.FakeDynamicClient) *atomic.Int64 {
 func afterPasses(t *testing.T, gets *atomic.Int64, n int) {
 	t.Helper()
 	want := gets.Load() + int64(3*n)
-	schemaSoon(t, "more passes of the watch", func() bool { return gets.Load() >= want })
+	testutil.Eventually(t, "more passes of the watch", func() bool { return gets.Load() >= want }, testutil.Within(10*time.Second), testutil.Every(3*time.Millisecond))
 }
 
 // runWatch runs watchCRDSchemas against client with a short period until the gauge holds a state for every CRD and several passes have been
@@ -134,14 +125,14 @@ func runWatch(t *testing.T, client *dynamicfake.FakeDynamicClient, during func()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); watchCRDSchemas(ctx, client, log, m, 4*time.Millisecond) }()
-	schemaSoon(t, "the gauge holds a state for every CRD", func() bool {
+	testutil.Eventually(t, "the gauge holds a state for every CRD", func() bool {
 		for _, n := range v1alpha1.CRDNames() {
 			if _, ok := schemaStateNow(t, m, n); !ok {
 				return false
 			}
 		}
 		return true
-	})
+	}, testutil.Within(10*time.Second), testutil.Every(3*time.Millisecond))
 	if during != nil {
 		during()
 	}
@@ -253,12 +244,12 @@ func TestWatchFollowsAChangeOfTheCRDs(t *testing.T) {
 	done := make(chan struct{})
 	go func() { defer close(done); watchCRDSchemas(ctx, c, log, m, 4*time.Millisecond) }()
 	state := func() string { s, _ := schemaStateNow(t, m, names[1]); return s }
-	schemaSoon(t, "a match", func() bool { return state() == SchemaMatch })
+	testutil.Eventually(t, "a match", func() bool { return state() == SchemaMatch }, testutil.Within(10*time.Second), testutil.Every(3*time.Millisecond))
 	set(c, other)
-	schemaSoon(t, "a mismatch after the CRD changed", func() bool { return state() == SchemaMismatch })
+	testutil.Eventually(t, "a mismatch after the CRD changed", func() bool { return state() == SchemaMismatch }, testutil.Within(10*time.Second), testutil.Every(3*time.Millisecond))
 	afterPasses(t, gets, 3) // the mismatch is seen again and again, and logged once
 	set(c, built)
-	schemaSoon(t, "a match again", func() bool { return state() == SchemaMatch })
+	testutil.Eventually(t, "a match again", func() bool { return state() == SchemaMatch }, testutil.Within(10*time.Second), testutil.Every(3*time.Millisecond))
 	afterPasses(t, gets, 3)
 	cancel()
 	<-done

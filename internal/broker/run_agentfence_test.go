@@ -17,6 +17,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/stubagent"
 )
 
@@ -103,7 +104,7 @@ func TestRunALeaderWhoseLeaseIsFreshSendsTheQueuedTurnToTheAgent(t *testing.T) {
 	c.leaseNow = func() time.Time { return now } // time stands still, so the lease is never older than its last renewal
 	rep.running = start(t, c)
 
-	eventually(t, 10*time.Second, "the queued turn did not reach the agent", func() bool { return agent.sends.Load() == 1 })
+	testutil.Eventually(t, "the queued turn did not reach the agent", func() bool { return agent.sends.Load() == 1 }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	time.Sleep(testElection.RetryPeriod * 3)
 	if n := agent.sends.Load(); n != 1 {
 		t.Errorf("%d sends reached the agent; want exactly one", n)

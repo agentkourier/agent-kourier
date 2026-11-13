@@ -11,6 +11,8 @@ import (
 
 	"github.com/go-logr/logr"
 	"go.opentelemetry.io/otel"
+
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 const leakCanary = "LEAKCANARY"
@@ -47,7 +49,7 @@ func TestExporterDiagnosticsNeverCarryEnvironmentValues(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			buf := captureDiagnostics(t)
 			t.Setenv(tc.name, tc.value)
-			_, shutdown, err := (Config{Endpoint: "https://collector.example/v1/traces", SampleRatio: 1}).Provider(t.Context(), "test", slog.New(slog.DiscardHandler))
+			_, shutdown, err := (Config{Endpoint: "https://collector.example/v1/traces", SampleRatio: 1}).Provider(t.Context(), "test", testutil.DiscardLogger())
 			if err != nil {
 				t.Fatal(err)
 			}

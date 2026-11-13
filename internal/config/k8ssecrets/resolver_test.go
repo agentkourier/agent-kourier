@@ -28,6 +28,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/config"
 	secretval "github.com/agentkourier/agent-kourier/internal/secret"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // canary is planted in every place a Secret holds a value; it must never come back out.
@@ -165,29 +166,19 @@ func (a *api) count(n config.SecretName) (lists, watches int) {
 	return a.lists[n], a.watches[n]
 }
 
-// waitFor polls until done holds, or fails the test after 10 s.
-func waitFor(t *testing.T, what string, done func() bool) {
-	t.Helper()
-	for deadline := time.Now().Add(10 * time.Second); !done(); time.Sleep(5 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatalf("%s never happened", what)
-		}
-	}
-}
-
 // watching waits until the API has a watch for each of names. The fake tracker drops events for a watch that does not
 // exist yet, and a Watch returns once the list has synced.
 func (a *api) watching(t *testing.T, names ...config.SecretName) {
 	t.Helper()
 	for _, n := range names {
-		waitFor(t, "the watch of "+n.String(), func() bool { _, w := a.count(n); return w > 0 })
+		testutil.Eventually(t, "the watch of "+n.String(), func() bool { _, w := a.count(n); return w > 0 }, testutil.Within(10*time.Second), testutil.Every(5*time.Millisecond))
 	}
 }
 
 // follow returns a Resolver that follows names, synced, and stopped at cleanup.
 func follow(t *testing.T, client *api, names ...config.SecretName) *Resolver {
 	t.Helper()
-	r := New(client, WithLogger(slog.New(slog.DiscardHandler)))
+	r := New(client, WithLogger(testutil.DiscardLogger()))
 	t.Cleanup(r.Stop)
 	if err := r.Watch(t.Context(), names); err != nil {
 		t.Fatal(err)
@@ -202,7 +193,7 @@ func unsynced(t *testing.T) *Resolver {
 	client.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, errors.New("connection refused")
 	})
-	r := New(client, WithLogger(slog.New(slog.DiscardHandler)))
+	r := New(client, WithLogger(testutil.DiscardLogger()))
 	r.wait = 50 * time.Millisecond // a Value waits this long for the cache that never syncs
 	t.Cleanup(r.Stop)
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
@@ -288,7 +279,7 @@ func TestRelistKeepsTheNameSelector(t *testing.T) {
 	})
 	r := follow(t, a, sn("sre", "creds"))
 
-	waitFor(t, "the relist", func() bool { lists, _ := a.count(sn("sre", "creds")); return lists >= 2 })
+	testutil.Eventually(t, "the relist", func() bool { lists, _ := a.count(sn("sre", "creds")); return lists >= 2 }, testutil.Within(10*time.Second), testutil.Every(5*time.Millisecond))
 	// api.selected fails the test for a request without the selector, so the relist was checked as it was made.
 	if _, err := r.Keys(t.Context(), "sre", "creds"); err != nil {
 		t.Errorf("Keys after the relist: %v", err)
@@ -359,10 +350,10 @@ func TestValue(t *testing.T) {
 	if _, err := client.CoreV1().Secrets("sre").Update(ctx, rotated, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "the rotated value in the cache", func() bool {
+	testutil.Eventually(t, "the rotated value in the cache", func() bool {
 		v, err := r.Value(ctx, "sre", "creds", "")
 		return err == nil && v.Reveal() == "rotated-value"
-	})
+	}, testutil.Within(10*time.Second), testutil.Every(5*time.Millisecond))
 	if got := before.Reveal(); got != canary {
 		t.Errorf("a Value read earlier changed to %q; it must be a snapshot", got)
 	}
@@ -471,10 +462,10 @@ func TestPicksUpSecretCreatedAfterWatch(t *testing.T) {
 	if _, err := client.CoreV1().Secrets("sre").Create(context.Background(), secret("sre", "late"), metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "the Secret in the cache", func() bool {
+	testutil.Eventually(t, "the Secret in the cache", func() bool {
 		keys, err := r.Keys(context.Background(), "sre", "late")
 		return err == nil && len(keys) == 3
-	})
+	}, testutil.Within(10*time.Second), testutil.Every(5*time.Millisecond))
 }
 
 // Asking again for a Secret that is followed starts nothing.
@@ -590,7 +581,7 @@ func TestReady(t *testing.T) {
 		}
 		return false, nil, nil
 	})
-	r := New(client, WithPinned(sn("agent-kourier", "pg")), WithLogger(slog.New(slog.DiscardHandler)))
+	r := New(client, WithPinned(sn("agent-kourier", "pg")), WithLogger(testutil.DiscardLogger()))
 	t.Cleanup(r.Stop)
 	if err := r.Ready(); !errors.Is(err, ErrNotSynced) {
 		t.Errorf("Ready before Start = %v, want ErrNotSynced", err)
@@ -639,7 +630,7 @@ func TestReadyIgnoresARetainedSecretThatIsDenied(t *testing.T) {
 		}
 		return false, nil, nil
 	})
-	r := New(client, WithPinned(sn("agent-kourier", "pg")), WithLogger(slog.New(slog.DiscardHandler)))
+	r := New(client, WithPinned(sn("agent-kourier", "pg")), WithLogger(testutil.DiscardLogger()))
 	t.Cleanup(r.Stop)
 	if err := r.Start(t.Context()); err != nil {
 		t.Fatal(err)
@@ -674,7 +665,7 @@ func TestReadyIgnoresARetainedSecretThatIsDenied(t *testing.T) {
 func TestReadyCountsAPinnedSecretThatIsDenied(t *testing.T) {
 	client := newAPI(t, secret("agent-kourier", "pg"))
 	client.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, denied() })
-	r := New(client, WithPinned(sn("agent-kourier", "pg")), WithLogger(slog.New(slog.DiscardHandler)))
+	r := New(client, WithPinned(sn("agent-kourier", "pg")), WithLogger(testutil.DiscardLogger()))
 	t.Cleanup(r.Stop)
 	if err := r.Start(t.Context()); !errors.Is(err, ErrAccessDenied) {
 		t.Fatalf("Start = %v, want ErrAccessDenied", err)
@@ -696,7 +687,7 @@ func TestWatchNamesTheUnsyncedSecretAndItsCause(t *testing.T) {
 		}
 		return false, nil, nil
 	})
-	r := New(client, WithLogger(slog.New(slog.DiscardHandler)))
+	r := New(client, WithLogger(testutil.DiscardLogger()))
 	t.Cleanup(r.Stop)
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
@@ -735,7 +726,7 @@ func TestStopUnblocksWatch(t *testing.T) {
 		}
 		return true, nil, errors.New("connection refused")
 	})
-	r := New(client, WithLogger(slog.New(slog.DiscardHandler)))
+	r := New(client, WithLogger(testutil.DiscardLogger()))
 	waiting := make(chan error, 1)
 	go func() { waiting <- r.Watch(context.Background(), []config.SecretName{sn("payments", "creds")}) }()
 	<-listed // the wait is under way
@@ -792,7 +783,7 @@ func TestWaitFailsFastAndNamesADeniedSecret(t *testing.T) {
 			t.Run(tc.name+" "+via, func(t *testing.T) {
 				client := fake.NewClientset()
 				client.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, tc.err })
-				r := New(client, WithPinned(sn("sre", "creds")), WithLogger(slog.New(slog.DiscardHandler)))
+				r := New(client, WithPinned(sn("sre", "creds")), WithLogger(testutil.DiscardLogger()))
 				t.Cleanup(r.Stop)
 				ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
 				defer cancel()
@@ -830,7 +821,7 @@ func TestDenialIsPerSecret(t *testing.T) {
 		}
 		return false, nil, nil
 	})
-	r := New(client, WithLogger(slog.New(slog.DiscardHandler)))
+	r := New(client, WithLogger(testutil.DiscardLogger()))
 	t.Cleanup(r.Stop)
 
 	names := []config.SecretName{sn("sre", "creds"), sn("sre", "private")}
@@ -865,7 +856,7 @@ func TestStartNamesATransientCauseAtTheTimeout(t *testing.T) {
 	client.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, errors.New("connection refused")
 	})
-	r := New(client, WithPinned(sn("sre", "creds")), WithLogger(slog.New(slog.DiscardHandler)))
+	r := New(client, WithPinned(sn("sre", "creds")), WithLogger(testutil.DiscardLogger()))
 	t.Cleanup(r.Stop)
 	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 	defer cancel()
@@ -895,7 +886,7 @@ func TestDeniedWatchIsReported(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start = %v; a denied watch after an allowed list must not fail it", err)
 	}
-	waitFor(t, "the forbidden watch in the log", func() bool { return strings.Contains(logs.String(), "forbidden") })
+	testutil.Eventually(t, "the forbidden watch in the log", func() bool { return strings.Contains(logs.String(), "forbidden") }, testutil.Within(10*time.Second), testutil.Every(5*time.Millisecond))
 	if !strings.Contains(logs.String(), "sre") || !strings.Contains(logs.String(), "creds") || strings.Contains(logs.String(), canary) {
 		t.Errorf("log %q should name Secret sre/creds and hold no Secret value", logs.String())
 	}

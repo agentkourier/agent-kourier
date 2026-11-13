@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -13,6 +12,8 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // reactor is a Reactor that records its calls as "channel ts name", and those that take a reaction off
@@ -60,7 +61,7 @@ func reacting(t *testing.T, st store.Outbox, p *poster, r reacts) (*outbox.Outbo
 // enqueue of the same reaction is the same row, and the drain reacts once, with no post or lookup,
 // and records the message's ts as the ref, so no later drain reacts again.
 func TestReactionIsEnqueuedOnceByIDAndMadeOnce(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	p, r := &poster{}, &reactor{}
 	o, _, _ := reacting(t, st, p, r)
 	for range 2 {
@@ -94,7 +95,7 @@ func TestReactionIsEnqueuedOnceByIDAndMadeOnce(t *testing.T) {
 // TestReactionIsDoneWhenReactIsDone: React reports success for a reaction that is there already
 // (the Slack client turns already_reacted into nil), so the row is recorded and nothing is retried.
 func TestReactionIsDoneWhenReactIsDone(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	o, hooks, _ := reacting(t, st, &poster{}, &reactor{})
 	if _, err := o.EnqueueReaction(t.Context(), queuedReaction); err != nil {
 		t.Fatal(err)
@@ -126,7 +127,7 @@ func TestPermanentReactionFailuresAbandonTheRow(t *testing.T) {
 		{context.DeadlineExceeded, "", ""},
 	} {
 		t.Run(tc.err.Error(), func(t *testing.T) {
-			st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+			st := sqlitetest.Open(t)
 			r := &reactor{fail: func(int) error { return tc.err }}
 			o, hooks, logs := reacting(t, st, &poster{}, r)
 			if _, err := o.EnqueueReaction(t.Context(), queuedReaction); err != nil {
@@ -180,7 +181,7 @@ func TestReactionIsRetriedAfterACrash(t *testing.T) {
 		"the ref was not saved": func(*reactor, *failRecord) {},
 	} {
 		t.Run(name, func(t *testing.T) {
-			base := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+			base := sqlitetest.Open(t)
 			st := &failRecord{Outbox: base, failed: name == "the reaction failed"}
 			r := &reactor{}
 			failFirst(r, st)
@@ -208,7 +209,7 @@ func TestReactionIsRetriedAfterACrash(t *testing.T) {
 // TestEnqueueReactionRefusesWhatCannotBeMade: an empty field is ErrInvalid and leaves no row, and
 // Enqueue and Send, which carry text, refuse the reaction role.
 func TestEnqueueReactionRefusesWhatCannotBeMade(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	o, _, _ := reacting(t, st, &poster{}, &reactor{})
 	for _, mod := range []func(*outbox.Reaction){
 		func(r *outbox.Reaction) { r.Source = "" }, func(r *outbox.Reaction) { r.Channel = "" },
@@ -235,21 +236,21 @@ func TestEnqueueReactionRefusesWhatCannotBeMade(t *testing.T) {
 // TestRunMakesAnEnqueuedReaction: the signal of EnqueueReaction wakes Run, though its ticker is an
 // hour away.
 func TestRunMakesAnEnqueuedReaction(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	r := &reactor{}
 	o, _, _ := reacting(t, st, &poster{}, r)
 	start(t, o)
 	if _, err := o.EnqueueReaction(t.Context(), queuedReaction); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the reaction", func() bool { return ref(st, queuedReaction.Source+"/reaction") == "1.5" })
+	testutil.Eventually(t, "the reaction", func() bool { return ref(st, queuedReaction.Source+"/reaction") == "1.5" })
 }
 
 // TestAHungReactionEndsAtCallTimeout: React does not bound its own call, so the outbox does, as for a
 // post: a Slack that never answers must not hold the delivery lock for ever. The row stays unposted,
 // for a retry, and the error is the timeout.
 func TestAHungReactionEndsAtCallTimeout(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	o, hooks, _ := abandoning(t, st, &poster{reactor: hangingReactor{}}, func(c *outbox.Config) { c.CallTimeout = 50 * time.Millisecond })
 	if _, err := o.EnqueueReaction(t.Context(), queuedReaction); err != nil {
 		t.Fatal(err)
@@ -282,7 +283,7 @@ var (
 // reaction's source, so asking twice is one row, and it is a local write. The drain makes the reaction and then
 // takes it off, in that order, with no post or lookup, and records the message's ts on each.
 func TestUnreactionIsEnqueuedOnceByIDAndTakesTheReactionOffAfterItIsMade(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	p, r := &poster{}, &reactor{}
 	o, _, _ := reacting(t, st, p, r)
 	if _, err := o.EnqueueReaction(t.Context(), queuedReaction); err != nil {
@@ -320,7 +321,7 @@ func TestUnreactionIsEnqueuedOnceByIDAndTakesTheReactionOffAfterItIsMade(t *test
 // retry must not be made after its removal, or it would stay for good. The removal cancels it (no abandon is
 // reported, since nobody gave up) and takes off whatever a cut-short delivery may have made.
 func TestUnreactionCancelsAReactionThatIsNotYetMade(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	r := &reactor{fail: func(n int) error {
 		if n == 1 {
 			return errors.New("connection reset") // the reaction's first try
@@ -358,7 +359,7 @@ func TestUnreactionCancelsAReactionThatIsNotYetMade(t *testing.T) {
 // arrives after its removal is not made and gets no row, and the removal, which finds nothing to take off, asks
 // the platform for nothing.
 func TestUnreactionEnqueuedFirstStopsTheReaction(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	r := &reactor{}
 	o, _, _ := reacting(t, st, &poster{}, r)
 	if _, err := o.EnqueueUnreaction(t.Context(), queuedReaction); err != nil {
@@ -399,7 +400,7 @@ func TestUnreactionAsksUnlessNoReactionWasEverEnqueued(t *testing.T) {
 		{"made", true, false, []string{"C1 1.5 hourglass", "- C1 1.5 hourglass"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+			st := sqlitetest.Open(t)
 			r := &reactor{fail: func(int) error {
 				if tc.failReact {
 					return slackErr("message_not_found")
@@ -439,7 +440,7 @@ func TestUnreactionAsksUnlessNoReactionWasEverEnqueued(t *testing.T) {
 // removal had cancelled the reaction. The retry, here in a restarted process, finds the reaction abandoned, and
 // must still ask Slack: the reaction may be there, and would stay for good.
 func TestUnreactionIsAskedAgainAfterItCancelledTheReactionAndFailed(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	r := &reactor{fail: func(n int) error {
 		if n <= 2 { // the reaction, then the first removal
 			return errors.New("connection reset")
@@ -483,7 +484,7 @@ func TestPermanentUnreactionFailuresAbandonTheRow(t *testing.T) {
 		{errors.New("connection reset"), ""},
 	} {
 		t.Run(tc.err.Error(), func(t *testing.T) {
-			st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+			st := sqlitetest.Open(t)
 			r := &reactor{}
 			o, hooks, _ := reacting(t, st, &poster{}, r)
 			for _, enqueue := range []func(context.Context, outbox.Reaction) (string, error){o.EnqueueReaction, o.EnqueueUnreaction} {
@@ -517,7 +518,7 @@ func TestPermanentUnreactionFailuresAbandonTheRow(t *testing.T) {
 
 // TestEnqueueUnreactionRefusesWhatCannotBeMade: an empty field is ErrInvalid and leaves no row.
 func TestEnqueueUnreactionRefusesWhatCannotBeMade(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	o, _, _ := reacting(t, st, &poster{}, &reactor{})
 	for _, mod := range []func(*outbox.Reaction){
 		func(r *outbox.Reaction) { r.Source = "" }, func(r *outbox.Reaction) { r.Channel = "" },
@@ -536,7 +537,7 @@ func TestEnqueueUnreactionRefusesWhatCannotBeMade(t *testing.T) {
 
 // TestRunTakesAReactionOff: the signal of EnqueueUnreaction wakes Run too.
 func TestRunTakesAReactionOff(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	r := &reactor{}
 	o, _, _ := reacting(t, st, &poster{}, r)
 	start(t, o)
@@ -545,7 +546,7 @@ func TestRunTakesAReactionOff(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	eventually(t, "the removal", func() bool { return ref(st, unreactionID) == "1.5" })
+	testutil.Eventually(t, "the removal", func() bool { return ref(st, unreactionID) == "1.5" })
 	if got, want := r.list(), []string{"C1 1.5 hourglass", "- C1 1.5 hourglass"}; !slices.Equal(got, want) {
 		t.Fatalf("calls = %q; want %q", got, want)
 	}
@@ -554,7 +555,7 @@ func TestRunTakesAReactionOff(t *testing.T) {
 // TestAHungUnreactionEndsAtCallTimeout: as for a reaction, the outbox bounds the call, and the row stays for a
 // retry.
 func TestAHungUnreactionEndsAtCallTimeout(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	o, hooks, _ := abandoning(t, st, &poster{reactor: hangingReactor{}}, func(c *outbox.Config) { c.CallTimeout = 50 * time.Millisecond })
 	if _, err := o.EnqueueReaction(t.Context(), queuedReaction); err != nil {
 		t.Fatal(err)

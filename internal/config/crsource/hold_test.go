@@ -15,6 +15,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/config/crsource"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // held returns the Invalid entries that are held after a deletion, as "Kind ns/name@generation", sorted.
@@ -804,7 +805,7 @@ func TestAFreshSourceHoldsNothing(t *testing.T) {
 // report resolves what src reads through a per-object Reloader and returns its report.
 func report(t *testing.T, src config.Source) config.Report {
 	t.Helper()
-	r := config.NewReloader(config.ReloaderConfig{Source: src, Secrets: noSecrets{}, PollInterval: time.Hour, Logger: slog.New(slog.DiscardHandler), PerObject: true})
+	r := config.NewReloader(config.ReloaderConfig{Source: src, Secrets: noSecrets{}, PollInterval: time.Hour, Logger: testutil.DiscardLogger(), PerObject: true})
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	if err := r.Start(ctx); err != nil {

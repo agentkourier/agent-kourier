@@ -16,6 +16,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // leftOpen makes what a process that stopped in the middle of the turn leaves behind: the turn's stream, still running, with
@@ -78,9 +79,9 @@ func TestStreamRecordsItsTsAtOnceAndAppendsOnlyTheSuffix(t *testing.T) {
 	e := setup(t)
 	run := e.stream(t)
 	run.Handle(text("a", "Hel"))
-	eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
+	testutil.Eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
 	// R16: the ts is in the outbox row before anything is appended.
-	eventually(t, "the ts to be recorded", func() bool {
+	testutil.Eventually(t, "the ts to be recorded", func() bool {
 		row, err := e.store.GetOutbox(t.Context(), outbox.ID("turn-1", "reply"))
 		return err == nil && row.MessageRef != "" && row.Payload == ""
 	})
@@ -88,11 +89,11 @@ func TestStreamRecordsItsTsAtOnceAndAppendsOnlyTheSuffix(t *testing.T) {
 		t.Fatalf("%d appends before the ts was recorded", n)
 	}
 	run.Handle(text("a", "Hello"))
-	eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
+	testutil.Eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
 	run.Handle(text("a", "Hello wor"))
 	run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "search"}) // a step, and no tool line
 	e.clk.advance(throttle)
-	eventually(t, "the append and the step", func() bool { return len(e.rec.sent("/chat.appendStream")) == 2 })
+	testutil.Eventually(t, "the append and the step", func() bool { return len(e.rec.sent("/chat.appendStream")) == 2 })
 	// The text goes first, as only its new suffix, and then the step that was begun after it.
 	if got := e.rec.sent("/chat.appendStream"); len(got) != 2 || textOf(got[0]) != "lo wor" || len(chunksOf(t, got[1])) != 1 || chunksOf(t, got[1])[0]["type"] != "task_update" {
 		t.Fatalf("appends %v; want the new suffix of the text, and then the step", got)
@@ -110,7 +111,7 @@ func TestStreamStopsWithTheTagAndNoBlocks(t *testing.T) {
 	e := setup(t)
 	run := e.stream(t)
 	run.Handle(text("a", "Hello"))
-	eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
+	testutil.Eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
 	run.Handle(text("a", "Hello world"))
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
@@ -134,12 +135,12 @@ func TestDivergentFinalIsCorrectedAfterTheStop(t *testing.T) {
 	e := setup(t)
 	run := e.stream(t)
 	run.Handle(text("a", "Hello there"))
-	eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
+	testutil.Eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
 	run.Handle(text("a", "Goodbye")) // not an extension of what was streamed
-	eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
+	testutil.Eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
 	e.clk.advance(throttle)
 	run.Handle(text("a", "Goodbye!")) // the next change waits for a new window: the divergence has been seen
-	eventually(t, "the next window", func() bool { return e.clk.waiting() == 1 })
+	testutil.Eventually(t, "the next window", func() bool { return e.clk.waiting() == 1 })
 	run.Handle(text("a", "Goodbye, all"))
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
@@ -168,8 +169,8 @@ func TestCrashBetweenStartAndRecordLeavesOneOrphan(t *testing.T) {
 	e.rf.fail.Store(true)
 	run, crash := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1"})
 	run.Handle(text("a", "partial"))
-	eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
-	eventually(t, "the failed record to be waiting", func() bool { return e.clk.waiting() == 1 })
+	testutil.Eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
+	testutil.Eventually(t, "the failed record to be waiting", func() bool { return e.clk.waiting() == 1 })
 	crash()
 	e.finish(t, run) // the run that is cut short tries to end its stream, and cannot record it either: the process is dead
 	if row, err := e.store.GetOutbox(t.Context(), outbox.ID("turn-1", "reply")); err != nil || row.MessageRef != "" {
@@ -209,10 +210,10 @@ func TestShutdownAfterTheFinalStopsTheStream(t *testing.T) {
 	e := setup(t)
 	run, cancel := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1"})
 	run.Handle(text("a", "Hello"))
-	eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
+	testutil.Eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
 	run.Handle(text("a", "Hello world"))
 	run.Handle(agent.FinalEvent{})
-	eventually(t, "the final to wait for its window", func() bool { return e.clk.waiting() == 1 })
+	testutil.Eventually(t, "the final to wait for its window", func() bool { return e.clk.waiting() == 1 })
 	cancel()
 	e.finish(t, run)
 	if m := e.reply(); m.Streaming || m.Text != "Hello world" || m.Metadata == nil {
@@ -242,7 +243,7 @@ func TestRecoveredTurnWithItsTsStopsTheStreamAndUpdatesIt(t *testing.T) {
 			} else {
 				first, cancel := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1"})
 				first.Handle(text("a", "partial"))
-				eventually(t, "the stream's ts to be recorded", func() bool {
+				testutil.Eventually(t, "the stream's ts to be recorded", func() bool {
 					row, err := e.store.GetOutbox(t.Context(), outbox.ID("turn-1", "reply"))
 					return err == nil && row.MessageRef != ""
 				})
@@ -302,7 +303,7 @@ func TestCancelDuringTheStartDoesNotOrphanAStream(t *testing.T) {
 	e.rec.holdStart = make(chan struct{})
 	run, cancel := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1"})
 	run.Handle(text("a", "hello"))
-	eventually(t, "the start to be in flight", func() bool { return e.rec.holding() })
+	testutil.Eventually(t, "the start to be in flight", func() bool { return e.rec.holding() })
 	cancel()
 	close(e.rec.holdStart)
 	e.finish(t, run)
@@ -339,7 +340,7 @@ func (e *env) postedByUpdate(t *testing.T) {
 	t.Helper()
 	first, cancel := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive})
 	first.Handle(text("a", "partial"))
-	eventually(t, "the post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+	testutil.Eventually(t, "the post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
 	cancel()
 	<-first.Done()
 }
@@ -350,7 +351,7 @@ func (e *env) postedLine(t *testing.T) {
 	t.Helper()
 	first, end := e.startCause(t, live.Turn{Mode: v1alpha1.OutputLive})
 	first.Handle(call("c0", "search", nil))
-	eventually(t, "the post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+	testutil.Eventually(t, "the post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
 	end(session.ErrTurnContinues)
 	<-first.Done()
 	e.live = newRenderer(t, e.cfg)
@@ -393,7 +394,7 @@ func TestNotStreamingIsMatchedByTypeNotByText(t *testing.T) {
 			again, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1", Recovered: true})
 			again.Handle(text("a", "the whole answer"))
 			again.Handle(agent.FinalEvent{})
-			eventually(t, "the run to end", func() bool {
+			testutil.Eventually(t, "the run to end", func() bool {
 				select {
 				case <-again.Done():
 					return true

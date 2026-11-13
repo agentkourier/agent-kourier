@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"strings"
 	"sync/atomic"
@@ -19,6 +18,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // repairRig is a replaceRig whose clock the test moves, an hour past the deadline of every interaction.
@@ -102,7 +102,7 @@ func TestRepairFindsWhatTheSweepGaveUpOn(t *testing.T) {
 		t.Fatal("the sweep did not time the question out and give up on the edit")
 	}
 	up := &edits{}
-	rp, err := interact.NewReplacer(interact.ReplacerConfig{Store: sw.st, Updaters: chattest.Same[interact.Editor](up), Now: func() time.Time { return *sw.clock }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	rp, err := interact.NewReplacer(interact.ReplacerConfig{Store: sw.st, Updaters: chattest.Same[interact.Editor](up), Now: func() time.Time { return *sw.clock }, Logger: testutil.DiscardLogger()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +297,7 @@ func TestARestartRepairsOnceMoreWithTheSameEdit(t *testing.T) {
 		t.Fatalf("%d edits; want the repair to leave what was replaced", len(r.up.list()))
 	}
 	restarted, err := interact.NewReplacer(interact.ReplacerConfig{Store: r.st, Updaters: chattest.Same[interact.Editor](r.up), Now: func() time.Time { return time.Unix(0, r.now.Load()).UTC() },
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		Logger: testutil.DiscardLogger()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,14 +317,14 @@ func TestRunDrainsAtStartRelistsAndEnds(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- r.r.Run(ctx) }()
-	waitFor(t, "the first prompt", func() bool { return len(r.up.list()) == 1 })
+	testutil.Eventually(t, "the first prompt", func() bool { return len(r.up.list()) == 1 })
 	r.decided(t, "second", asked, r.resolve(store.InteractionCancelled))
 	time.Sleep(30 * time.Millisecond) // many ticks, but no listing is due yet
 	if len(r.up.list()) != 1 {
 		t.Fatal("a prompt decided since was repaired before the next listing was due")
 	}
 	r.advance(time.Minute)
-	waitFor(t, "the second prompt", func() bool { return len(r.up.list()) == 2 })
+	testutil.Eventually(t, "the second prompt", func() bool { return len(r.up.list()) == 2 })
 	cancel()
 	if err := <-done; err == nil {
 		t.Fatal("Run returned nil; want the context's error")
@@ -340,7 +340,7 @@ func TestRunRepairsAtOnceAndNotAfterTheFirstTick(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- r.r.Run(ctx) }()
-	waitFor(t, "the prompt, long before the first tick", func() bool { return len(r.up.list()) == 1 })
+	testutil.Eventually(t, "the prompt, long before the first tick", func() bool { return len(r.up.list()) == 1 })
 	cancel()
 	_ = <-done
 }

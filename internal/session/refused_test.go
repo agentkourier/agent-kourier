@@ -10,6 +10,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // A turn that fails after the task was named, with an error that is no lost stream (a refused identity on
@@ -58,8 +59,8 @@ func TestTurnThatFailsForAGoodAfterTheTaskIsNamedIsTold(t *testing.T) {
 			if _, err := f.submit(in); err != nil {
 				t.Fatal(err)
 			}
-			eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) >= 1 })
-			eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= 1 })
+			testutil.Eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) >= 1 })
+			testutil.Eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= 1 })
 			f.retired(t)
 			wantID := in.MessageID + "/failed"
 			if tc.outcome == TurnRefused {
@@ -98,7 +99,7 @@ func TestTurnThatFailsForAGoodAfterTheTaskIsNamedIsTold(t *testing.T) {
 		if _, err := f.submit(inbound("1")); err != nil {
 			t.Fatal(err)
 		}
-		eventually(t, "the task to be recorded", func() bool { return f.taskID() == "t1" })
+		testutil.Eventually(t, "the task to be recorded", func() bool { return f.taskID() == "t1" })
 		if err := f.close(); err != nil {
 			t.Fatal(err)
 		}
@@ -145,7 +146,7 @@ func TestTextSaidBeforeALostStreamCountsAfterTheFollow(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFinal(t, sink)
-	eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
+	testutil.Eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
 	f.retired(t)
 	if _, _, follows := f.agent.counts(); follows != 1 {
 		t.Fatalf("%d follows; want the one that ends the turn", follows)

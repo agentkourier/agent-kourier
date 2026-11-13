@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"log/slog"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +23,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/secret"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
@@ -67,15 +67,11 @@ func connect(t *testing.T, fake *fakeslack.Server) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	c := slack.New(slack.Config{BotToken: secret.New("xoxb-FAKE-0123456789"), AppToken: secret.New("xapp-FAKE-0123456789"), APIURL: fake.URL() + "/",
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		Logger: testutil.DiscardLogger()})
 	done := make(chan struct{})
 	go func() { defer close(done); _ = c.Run(ctx, quietSink{}) }()
 	t.Cleanup(func() { cancel(); <-done })
-	for deadline := time.Now().Add(5 * time.Second); fake.Connections() == 0; time.Sleep(time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the client did not connect")
-		}
-	}
+	testutil.Eventually(t, "the client did not connect", func() bool { return fake.Connections() != 0 }, testutil.Within(5*time.Second))
 }
 
 // quietSink takes everything and does nothing with it.

@@ -19,6 +19,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/config/crsource"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // A running broker keeps its own connection through anything that is done to the object: deleted and made again, which is
@@ -519,7 +520,7 @@ func TestAllowedNamespacesOfARefusedObjectAreReadFromTheRawObject(t *testing.T) 
 	_ = unstructured.SetNestedField(denied.Object, "refused", "spec", "agent", "backendRef", "name")
 	src := newCluster(t, append(objs, refused, allowed, denied)...).start(t)
 
-	r := config.NewReloader(config.ReloaderConfig{Source: src, Secrets: noSecrets{}, PollInterval: time.Hour, Logger: slog.New(slog.DiscardHandler), PerObject: true})
+	r := config.NewReloader(config.ReloaderConfig{Source: src, Secrets: noSecrets{}, PollInterval: time.Hour, Logger: testutil.DiscardLogger(), PerObject: true})
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	if err := r.Start(ctx); err != nil {

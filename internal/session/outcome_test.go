@@ -13,6 +13,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/audit"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // notices returns the sink's notices of kind.
@@ -249,7 +250,7 @@ func TestForbiddenFailsTheTurnAndIsAudited(t *testing.T) {
 			if _, err := f.submit(inbound("1")); err != nil {
 				t.Fatal(err)
 			}
-			eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+			testutil.Eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
 			f.retired(t)
 			if sends, _, _ := f.agent.counts(); sends != 1 || waits.Load() != 0 {
 				t.Errorf("%d sends, %d retry waits; want one send and no retry", sends, waits.Load())
@@ -412,7 +413,7 @@ func TestUnknownOutcomeGivesUpWhenTheLookupNeverAnswers(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	eventually(t, "the turn to fail", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+	testutil.Eventually(t, "the turn to fail", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
 	if sends, _, _ := f.agent.counts(); sends != 2 {
 		t.Errorf("%d sends; want turn 1 and turn 2 once: a failed lookup never lets a resend through", sends)
 	}
@@ -539,7 +540,7 @@ func TestLostStreamWithRefusedCredentialsIsNotFollowed(t *testing.T) {
 	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+	testutil.Eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
 	f.amu.Lock()
 	defer f.amu.Unlock()
 	if len(f.rejected) != 1 || !errors.Is(f.rejected[0].Err, agent.ErrCredentialsRejected) || len(f.audits) != 0 {
@@ -701,7 +702,7 @@ func TestRefusedCredentialWithoutASourceIsAudited(t *testing.T) {
 	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+	testutil.Eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
 	f.amu.Lock()
 	defer f.amu.Unlock()
 	if len(f.audits) != 1 || !errors.Is(f.audits[0].Err, agent.ErrCredentialsRejected) {
@@ -833,7 +834,7 @@ func TestFailedCancelOfAWedgedTaskIsClassified(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, sink := wedgedFixture(t, func(f *fixture) { f.agent.cancelErr = func(int) error { return tc.cause } }, "1")
-			eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+			testutil.Eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
 			time.Sleep(50 * time.Millisecond) // a retry loop would show by now
 			f.amu.Lock()
 			defer f.amu.Unlock()
@@ -858,7 +859,7 @@ func TestFailedCancelOfAWedgedTaskIsClassified(t *testing.T) {
 				return errors.New("agent unreachable")
 			}
 		}, "1")
-		eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+		testutil.Eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
 		f.amu.Lock()
 		defer f.amu.Unlock()
 		if len(f.audits) != 1 || f.audits[0].Op != audit.OpCancel {
@@ -1010,7 +1011,7 @@ func TestBusyThenUnreachableStillGivesUp(t *testing.T) {
 	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) >= 1 })
+	testutil.Eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) >= 1 })
 	f.retired(t)
 	if got := sink.noticesOf(NoticeFailed); len(got) != 1 {
 		t.Errorf("failed notices = %+v; want exactly one", got)
@@ -1042,7 +1043,7 @@ func TestSessionGoneSurvivesAFailedResetWithOneTurn(t *testing.T) {
 			if _, err := f.submit(inbound("1")); err != nil {
 				t.Fatal(err)
 			}
-			eventually(t, "the session to be reset", func() bool {
+			testutil.Eventually(t, "the session to be reset", func() bool {
 				sess, _ := f.session()
 				return sess.ContextID == "" && sess.TaskID == "" && len(sink.noticesOf(NoticeSessionGone)) == 1
 			})
@@ -1072,7 +1073,7 @@ func TestSilentTaskIsCancelledDespiteSnapshotsReplayedByEachFollow(t *testing.T)
 	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the silent task to be presumed wedged", func() bool { return len(sink.noticesOf(NoticeWedged)) == 1 })
+	testutil.Eventually(t, "the silent task to be presumed wedged", func() bool { return len(sink.noticesOf(NoticeWedged)) == 1 })
 	if got := f.cancelled(); len(got) != 1 || got[0] != "t1" {
 		t.Errorf("cancelled %v; want t1 once", got)
 	}
@@ -1105,7 +1106,7 @@ func TestAgeWithoutAUsableTimestamp(t *testing.T) {
 			if _, err := f.submit(inbound("1")); err != nil {
 				t.Fatal(err)
 			}
-			eventually(t, "the task to be presumed wedged", func() bool { return len(sink.noticesOf(NoticeWedged)) == 1 })
+			testutil.Eventually(t, "the task to be presumed wedged", func() bool { return len(sink.noticesOf(NoticeWedged)) == 1 })
 		})
 	}
 }

@@ -15,6 +15,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/agentkourier/agent-kourier/internal/config"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // A Secret that synced is denied once, say by an expired token or an authorizer that failed for a moment, and its informer ends. It
@@ -41,7 +42,7 @@ func TestASecretThatSyncedAndWasDeniedOnceRecoversAtARecheck(t *testing.T) {
 				}
 				return false, nil, nil
 			})
-			opts := []Option{WithLogger(slog.New(slog.DiscardHandler)), WithDeniedRetry(100 * time.Millisecond)}
+			opts := []Option{WithLogger(testutil.DiscardLogger()), WithDeniedRetry(100 * time.Millisecond)}
 			if pinned {
 				opts = append(opts, WithPinned(creds))
 			}
@@ -59,12 +60,12 @@ func TestASecretThatSyncedAndWasDeniedOnceRecoversAtARecheck(t *testing.T) {
 				r.Retain([]config.SecretName{creds})
 			}
 			open.Do(func() { close(opened) })
-			waitFor(t, "the informer to end for the denial", func() bool {
+			testutil.Eventually(t, "the informer to end for the denial", func() bool {
 				e := entryOf(r, creds)
 				r.mu.Lock()
 				defer r.mu.Unlock()
 				return e.deniedLocked()
-			})
+			}, testutil.Within(10*time.Second), testutil.Every(5*time.Millisecond))
 			if v, err := r.Value(t.Context(), "sre", "creds", "token"); err != nil || v.Reveal() != canary {
 				t.Fatalf("Value while it is denied = %q, %v; want what the cache held", v.Reveal(), err)
 			}
@@ -77,11 +78,11 @@ func TestASecretThatSyncedAndWasDeniedOnceRecoversAtARecheck(t *testing.T) {
 				t.Fatal(err)
 			}
 			time.Sleep(150 * time.Millisecond) // the retry interval
-			waitFor(t, "the rotated value after a recheck", func() bool {
+			testutil.Eventually(t, "the rotated value after a recheck", func() bool {
 				_ = r.Watch(t.Context(), nil) // a recheck of a config that names nothing: a pinned Secret is tried, and a retained one is too
 				v, err := r.Value(t.Context(), "sre", "creds", "token")
 				return err == nil && v.Reveal() == "rotated"
-			})
+			}, testutil.Within(10*time.Second), testutil.Every(5*time.Millisecond))
 		})
 	}
 }
@@ -96,19 +97,19 @@ func TestADeniedAgainAfterRecoveryIsReportedAgain(t *testing.T) {
 	token := []config.SecretRead{readOf("sre", "creds", "token")}
 	_ = r.WatchKeys(t.Context(), token)
 	allow.Store(true)
-	waitFor(t, "the Secret to be read again", func() bool {
+	testutil.Eventually(t, "the Secret to be read again", func() bool {
 		time.Sleep(80 * time.Millisecond)
 		_ = r.WatchKeys(t.Context(), token)
 		_, err := r.Keys(t.Context(), "sre", "creds")
 		return err == nil
-	})
-	waitFor(t, "the recovery in the log", func() bool { return strings.Contains(logs.String(), "can list and watch again") })
+	}, testutil.Within(10*time.Second), testutil.Every(5*time.Millisecond))
+	testutil.Eventually(t, "the recovery in the log", func() bool { return strings.Contains(logs.String(), "can list and watch again") }, testutil.Within(10*time.Second), testutil.Every(5*time.Millisecond))
 
 	allow.Store(false)
 	_ = r.WatchKeys(t.Context(), []config.SecretRead{readOf("sre", "creds", "token", "alpha")}) // a new informer, which is denied
-	waitFor(t, "the second denial in the log", func() bool {
+	testutil.Eventually(t, "the second denial in the log", func() bool {
 		return strings.Count(logs.String(), "secret informer cannot list or watch") == 2
-	})
+	}, testutil.Within(10*time.Second), testutil.Every(5*time.Millisecond))
 }
 
 // A new informer for other keys is denied while the one that serves keeps working: the Secret is not read for the new keys until a
@@ -116,7 +117,7 @@ func TestADeniedAgainAfterRecoveryIsReportedAgain(t *testing.T) {
 func TestADeniedInformerForNewKeysIsTriedAgainWhileTheOneThatServesWorks(t *testing.T) {
 	client, allow, _, _ := deniedAPI(t)
 	allow.Store(true)
-	r := New(client, WithLogger(slog.New(slog.DiscardHandler)), WithDeniedRetry(50*time.Millisecond))
+	r := New(client, WithLogger(testutil.DiscardLogger()), WithDeniedRetry(50*time.Millisecond))
 	t.Cleanup(r.Stop)
 	token := []config.SecretRead{readOf("sre", "creds", "token")}
 	both := []config.SecretRead{readOf("sre", "creds", "token", "alpha")}
@@ -136,9 +137,9 @@ func TestADeniedInformerForNewKeysIsTriedAgainWhileTheOneThatServesWorks(t *test
 
 	allow.Store(true)
 	time.Sleep(80 * time.Millisecond)
-	waitFor(t, "the new key after a recheck", func() bool {
+	testutil.Eventually(t, "the new key after a recheck", func() bool {
 		_ = r.WatchKeys(t.Context(), both)
 		v, err := r.Value(t.Context(), "sre", "creds", "alpha")
 		return err == nil && v.Reveal() == canary
-	})
+	}, testutil.Within(10*time.Second), testutil.Every(5*time.Millisecond))
 }

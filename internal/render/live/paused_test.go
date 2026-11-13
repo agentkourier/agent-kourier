@@ -15,6 +15,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/dialect/generic"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
@@ -112,7 +113,7 @@ func TestOnlyTheCallsAnApprovalNamesAreRetitled(t *testing.T) {
 			run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "search", Args: map[string]any{"q": "pods"}})
 			run.Handle(agent.ToolCallEvent{CallID: "c2", Name: "delete_pod", Args: map[string]any{"name": "web-1"}})
 			run.Handle(agent.ToolResultEvent{CallID: "c2", Response: pending})
-			eventually(t, "both steps to be shown, the second failed", func() bool {
+			testutil.Eventually(t, "both steps to be shown, the second failed", func() bool {
 				if e.clk.waiting() > 0 {
 					e.clk.advance(throttle)
 				}

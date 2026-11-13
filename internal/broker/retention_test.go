@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"maps"
 	"math"
@@ -18,6 +17,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // fakeRetentionStore records what the loop asks for. purged is what each PurgeAudit returns, in turn (the last one
@@ -186,7 +186,7 @@ func runRetention(t *testing.T, cfg retentionConfig) (stop func()) {
 		cfg.Now = func() time.Time { return sweepNow }
 	}
 	if cfg.Logger == nil {
-		cfg.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+		cfg.Logger = testutil.DiscardLogger()
 	}
 	r, err := newRetention(cfg)
 	if err != nil {
@@ -210,21 +210,12 @@ func runRetention(t *testing.T, cfg retentionConfig) (stop func()) {
 	return stop
 }
 
-func waitUntil(t *testing.T, what string, ok func() bool) {
-	t.Helper()
-	for deadline := time.Now().Add(10 * time.Second); !ok(); time.Sleep(time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-	}
-}
-
 // Replies that were never drained are dropped past the age, which is long enough for any turn that waits behind a task
 // or a busy session; with the audit retention unset ("keep"), the audit log is never touched.
 func TestRetentionAbandonsStrandedRepliesAndKeepsTheAuditLogByDefault(t *testing.T) {
 	f := &fakeRetentionStore{}
 	stop := runRetention(t, retentionConfig{Store: f})
-	waitUntil(t, "three ticks", func() bool { a, _ := f.calls(); return len(a) >= 3 })
+	testutil.Eventually(t, "three ticks", func() bool { a, _ := f.calls(); return len(a) >= 3 }, testutil.Within(10*time.Second))
 	stop()
 	abandons, purges := f.calls()
 	for _, age := range abandons {
@@ -247,7 +238,7 @@ func TestRetentionRetriesAcknowledgmentAddBeforeDroppingReplies(t *testing.T) {
 			return boom
 		}
 		return nil
-	}, Now: func() time.Time { return sweepNow }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}))
+	}, Now: func() time.Time { return sweepNow }, Logger: testutil.DiscardLogger()}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +264,7 @@ func TestRetentionRetriesAcknowledgmentRemovalBeforeDroppingReplies(t *testing.T
 		}
 		cleared = append(cleared, r.ID)
 		return nil
-	}, Now: func() time.Time { return sweepNow }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}))
+	}, Now: func() time.Time { return sweepNow }, Logger: testutil.DiscardLogger()}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +295,7 @@ func TestRetentionReachesTheAcknowledgmentsOfAWrappedStore(t *testing.T) {
 	r, err := newRetention(harmless(retentionConfig{Store: struct{ retentionStore }{f},
 		EnsureAcknowledgment: func(_ context.Context, r store.Reply) error { ensured = append(ensured, r.ID); return nil },
 		ClearAcknowledgment:  func(_ context.Context, r store.Reply) error { cleared = append(cleared, r.ID); return nil },
-		Now:                  func() time.Time { return sweepNow }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}))
+		Now:                  func() time.Time { return sweepNow }, Logger: testutil.DiscardLogger()}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +317,7 @@ func TestRetentionSettlesQueuedAcknowledgmentRemovals(t *testing.T) {
 	ack := func(id string) store.Reply {
 		return store.Reply{ID: id, Key: store.ConversationKey{Connection: "slack", Channel: "C1", Thread: "1.1"}, MessageRef: "1.1", Acknowledgment: "eyes"}
 	}
-	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	quiet := testutil.DiscardLogger()
 	t.Run("a settle that fails", func(t *testing.T) {
 		f := &fakeRetentionStore{ackReplies: []store.Reply{ack("reply-1"), ack("reply-2")}, settleErr: errors.New("disk full")}
 		var queued []string
@@ -400,7 +391,7 @@ func TestRetentionSettlesQueuedAcknowledgmentRemovals(t *testing.T) {
 func TestRetentionPurgesAuditInBatchesUntilOneIsShort(t *testing.T) {
 	f := &fakeRetentionStore{purged: []int{7, 7, 3, 7}} // the fourth is never asked for
 	r, err := newRetention(harmless(retentionConfig{Store: f, AuditRetention: 90 * 24 * time.Hour, AuditBatch: 7,
-		Now: func() time.Time { return sweepNow }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}))
+		Now: func() time.Time { return sweepNow }, Logger: testutil.DiscardLogger()}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -420,7 +411,7 @@ func TestRetentionPurgesAuditInBatchesUntilOneIsShort(t *testing.T) {
 func TestRetentionBoundsTheBatchesOfOneTick(t *testing.T) {
 	f := &fakeRetentionStore{purged: []int{5}} // always a full batch
 	r, err := newRetention(harmless(retentionConfig{Store: f, AuditRetention: 24 * time.Hour, AuditBatch: 5, MaxAuditBatches: 3,
-		Now: func() time.Time { return sweepNow }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}))
+		Now: func() time.Time { return sweepNow }, Logger: testutil.DiscardLogger()}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -435,7 +426,7 @@ func TestRetentionLogsFailuresAndGoesOn(t *testing.T) {
 	f := &fakeRetentionStore{failReplies: 2, failAudit: true}
 	logs := &logBuffer{}
 	stop := runRetention(t, retentionConfig{Store: f, AuditRetention: 24 * time.Hour, Logger: slog.New(slog.NewTextHandler(logs, nil))})
-	waitUntil(t, "four ticks", func() bool { a, p := f.calls(); return len(a) >= 4 && len(p) >= 4 })
+	testutil.Eventually(t, "four ticks", func() bool { a, p := f.calls(); return len(a) >= 4 && len(p) >= 4 }, testutil.Within(10*time.Second))
 	stop()
 	if got := logs.String(); !strings.Contains(got, "replies that were never delivered could not be dropped") || !strings.Contains(got, "audit entries past the retention could not be purged") {
 		t.Errorf("the log %q; want a warning for each failure", got)
@@ -461,11 +452,7 @@ func TestNewRetentionRefusesWhatIsNotLegal(t *testing.T) {
 // Against the real store, with the entries it holds: those older than the retention go, those inside it stay, and the
 // log is as append-only as before.
 func TestRetentionPurgesOnlyAuditEntriesPastTheRetention(t *testing.T) {
-	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := sqlitetest.Open(t)
 	retention := 30 * 24 * time.Hour
 	for _, e := range []struct {
 		subject string
@@ -477,10 +464,10 @@ func TestRetentionPurgesOnlyAuditEntriesPastTheRetention(t *testing.T) {
 		}
 	}
 	stop := runRetention(t, retentionConfig{Store: st, AuditRetention: retention, AuditBatch: 1})
-	waitUntil(t, "the old entries to be purged", func() bool {
+	testutil.Eventually(t, "the old entries to be purged", func() bool {
 		l, _ := st.ListAudit(t.Context(), time.Time{}, 0, 10)
 		return len(l) == 2
-	})
+	}, testutil.Within(10*time.Second))
 	stop()
 	l, err := st.ListAudit(t.Context(), time.Time{}, 0, 10)
 	if err != nil || len(l) != 2 || l[0].Subject != "recent" || l[1].Subject != "new" {
@@ -571,7 +558,7 @@ func TestRetentionCountsWhatItRemoves(t *testing.T) {
 	var mu sync.Mutex
 	got := map[string]int{}
 	r, err := newRetention(harmless(retentionConfig{Store: f, AuditRetention: 48 * time.Hour, AuditBatch: 7, Now: func() time.Time { return sweepNow },
-		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:    testutil.DiscardLogger(),
 		OnRemoved: func(what string, n int) { mu.Lock(); got[what] += n; mu.Unlock() }}))
 	if err != nil {
 		t.Fatal(err)
@@ -602,7 +589,7 @@ func ttls() (map[string]time.Duration, bool) {
 func newSessionRetention(t *testing.T, f *fakeRetentionStore, mutate func(*retentionConfig)) *retention {
 	t.Helper()
 	cfg := retentionConfig{Store: f, ThreadTTLs: ttls, SessionBatch: 3, Now: func() time.Time { return sweepNow },
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+		Logger: testutil.DiscardLogger()}
 	if mutate != nil {
 		mutate(&cfg)
 	}
@@ -765,7 +752,7 @@ func TestRetentionLogsASessionPurgeFailureAndGoesOn(t *testing.T) {
 	f := &fakeRetentionStore{failSessions: true}
 	logs := &logBuffer{}
 	stop := runRetention(t, retentionConfig{Store: f, ThreadTTLs: ttls, Logger: slog.New(slog.NewTextHandler(logs, nil))})
-	waitUntil(t, "three ticks", func() bool { a, _ := f.calls(); return len(a) >= 3 && len(f.sessions()) >= 3 })
+	testutil.Eventually(t, "three ticks", func() bool { a, _ := f.calls(); return len(a) >= 3 && len(f.sessions()) >= 3 }, testutil.Within(10*time.Second))
 	stop()
 	if got := logs.String(); !strings.Contains(got, "expired sessions could not be deleted") {
 		t.Errorf("the log %q; want a warning for the failure", got)
@@ -775,11 +762,7 @@ func TestRetentionLogsASessionPurgeFailureAndGoesOn(t *testing.T) {
 // Against the real store, through the loop: the sessions past their Binding's horizon go with what belongs to them, the
 // one inside it stays, and a session with a task that has not ended stays whatever its age.
 func TestRetentionDeletesOnlySessionsPastTheirHorizon(t *testing.T) {
-	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := sqlitetest.Open(t)
 	day, grace := 24*time.Hour, 90*24*time.Hour
 	seed := func(thread, binding, task string, idle time.Duration) store.ConversationKey {
 		k := store.ConversationKey{Connection: "slack", Channel: "C1", Thread: thread}

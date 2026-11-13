@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"maps"
 	"slices"
@@ -21,6 +20,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // The retention loop ends a task that a crash left on a session past its horizon (data protection, DP-4): the agent is asked
@@ -541,7 +541,7 @@ func TestRetentionDoesNotEndATaskWhoseCancelWasInterrupted(t *testing.T) {
 func TestRetentionEndsStaleTasksBeforeItDropsRepliesAndPurgesSessions(t *testing.T) {
 	g := newStaleRig(t, []store.StaleTask{stale("1.1", "ns/short", "t1")}, nil)
 	stop := runRetention(t, retentionConfig{Store: g.f, ThreadTTLs: ttls, Canceller: g.agents, Audit: g.audit, Holds: func(store.ConversationKey, string) bool { return false }})
-	waitUntil(t, "a purge", func() bool { g.f.mu.Lock(); defer g.f.mu.Unlock(); return len(g.f.sessionCalls) > 0 })
+	testutil.Eventually(t, "a purge", func() bool { g.f.mu.Lock(); defer g.f.mu.Unlock(); return len(g.f.sessionCalls) > 0 }, testutil.Within(10*time.Second))
 	stop()
 	g.f.mu.Lock()
 	defer g.f.mu.Unlock()
@@ -554,11 +554,7 @@ func TestRetentionEndsStaleTasksBeforeItDropsRepliesAndPurgesSessions(t *testing
 // audited, with its pending interaction cancelled, and the session is then deleted by the next purge. A session inside its
 // horizon, a Binding's own horizon included, is left whole, its task and its question with it.
 func TestRetentionEndsAStaleTaskAndTheNextPurgeDeletesTheSession(t *testing.T) {
-	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := sqlitetest.Open(t)
 	ctx := t.Context()
 	day, grace := 24*time.Hour, 90*24*time.Hour
 	seed := func(thread, binding, task string, idle time.Duration) store.ConversationKey {
@@ -584,7 +580,7 @@ func TestRetentionEndsAStaleTaskAndTheNextPurgeDeletesTheSession(t *testing.T) {
 
 	agents := &fakeCanceller{errs: map[string]error{"ns/removed": session.ErrUnknownBinding}}
 	rig := newStaleRig(t, nil, func(c *retentionConfig) {
-		w, err := audit.New(st, audit.Options{Now: func() time.Time { return sweepNow }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), OnFailure: audit.NoFailure})
+		w, err := audit.New(st, audit.Options{Now: func() time.Time { return sweepNow }, Logger: testutil.DiscardLogger(), OnFailure: audit.NoFailure})
 		if err != nil {
 			t.Fatal(err)
 		}

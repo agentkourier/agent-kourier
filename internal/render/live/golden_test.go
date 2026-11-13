@@ -14,6 +14,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/internal/session"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // These are the golden wire comparisons of WP-37 S3: for a set of turn scripts, every request the renderer makes
@@ -186,7 +187,7 @@ func (e *env) writes() int {
 // owes, so that a window that opens does so for the events that were handled before it.
 func (e *env) settle(t *testing.T, writes int) {
 	t.Helper()
-	eventually(t, "the renderer to make the requests of the step", func() bool {
+	testutil.Eventually(t, "the renderer to make the requests of the step", func() bool {
 		if e.writes() < writes && e.clk.waiting() > 0 {
 			e.clk.advance(throttle)
 		}

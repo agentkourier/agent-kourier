@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"maps"
 	"net/http"
 	"slices"
@@ -19,6 +17,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/secret"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
@@ -88,7 +87,7 @@ func newFake(t *testing.T, opts ...fakeslack.Option) *fakeslack.Server {
 
 func clientConfig(fake *fakeslack.Server) slack.Config {
 	return slack.Config{BotToken: secret.New(botToken), AppToken: secret.New(appToken), APIURL: fake.URL() + "/", Connection: intakeConn,
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+		Logger: testutil.DiscardLogger()}
 }
 
 // run starts c.Run, which the end of the test cancels. wait returns Run's error.
@@ -132,11 +131,7 @@ func start(t *testing.T, sk slack.Sink) *fakeslack.Server {
 
 func waitConnected(t *testing.T, fake *fakeslack.Server) {
 	t.Helper()
-	for deadline := time.Now().Add(5 * time.Second); fake.Connections() == 0; time.Sleep(time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the client did not connect")
-		}
-	}
+	testutil.Eventually(t, "the client did not connect", func() bool { return fake.Connections() != 0 }, testutil.Within(5*time.Second))
 }
 
 // message returns a message event; extra overrides its fields.

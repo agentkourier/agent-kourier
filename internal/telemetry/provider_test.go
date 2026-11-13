@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/pem"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,13 +16,15 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	collectortrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // flushOne ends one span carrying attrs through Config.Provider and shuts the provider down,
 // which flushes it.
 func flushOne(t *testing.T, c Config, attrs ...attribute.KeyValue) {
 	t.Helper()
-	provider, shutdown, err := c.Provider(t.Context(), "test", slog.New(slog.DiscardHandler))
+	provider, shutdown, err := c.Provider(t.Context(), "test", testutil.DiscardLogger())
 	if err != nil {
 		t.Fatal(err)
 	}

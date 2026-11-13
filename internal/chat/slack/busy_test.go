@@ -16,6 +16,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/secret"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // statusSlack answers assistant.threads.setStatus with the body it is given, in turn (the last one repeats), and keeps the
@@ -61,7 +62,7 @@ func busyPlatform(t *testing.T, answers ...string) (*slack.Platform, *statusSlac
 	rt := &statusSlack{answers: answers}
 	logs := &bytes.Buffer{}
 	c := slack.New(slack.Config{BotToken: secret.New("xoxb-fake-token"), AppToken: secret.New("xapp-fake-token"), APIURL: "http://slack.test/",
-		HTTPClient: &http.Client{Transport: rt}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		HTTPClient: &http.Client{Transport: rt}, Logger: testutil.DiscardLogger()})
 	return slack.NewPlatform(c, "ns/conn").WithLogger(slog.New(slog.NewTextHandler(logs, nil))), rt, logs
 }
 

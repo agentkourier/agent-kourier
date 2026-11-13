@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +16,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/agentkourier/agent-kourier/internal/broker"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // A config that does not load at start exits 2 when the operator must fix it, since a restart finds the same config,
@@ -95,7 +95,7 @@ func TestExitCodeOfAConfigThatDoesNotLoad(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			c, err := broker.Bootstrap(t.Context(), tc.client(), broker.BootstrapOptions{
-				Dir: tc.dir(t), SyncTimeout: 500 * time.Millisecond, Logger: slog.New(slog.DiscardHandler),
+				Dir: tc.dir(t), SyncTimeout: 500 * time.Millisecond, Logger: testutil.DiscardLogger(),
 			})
 			if err == nil {
 				c.Stop()

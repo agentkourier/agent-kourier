@@ -14,6 +14,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/stubagent"
 )
 
@@ -107,7 +108,7 @@ func TestStubQueuedReplyIsDeliveredAfterTheTaskEnds(t *testing.T) {
 	if _, err := e.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the first task to run", func() bool { return e.taskID() != "" })
+	testutil.Eventually(t, "the first task to run", func() bool { return e.taskID() != "" })
 	res, err := e.submit(inbound("2"))
 	if err != nil || !res.Queued {
 		t.Fatalf("reply = %+v, %v; want it queued behind the running task", res, err)
@@ -163,13 +164,13 @@ func TestStubBusySessionIsRetriedUntilItIsFree(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.sink.finalTask(t, 1)
-	eventually(t, "the first turn to end", func() bool { return e.taskID() == "" })
+	testutil.Eventually(t, "the first turn to end", func() bool { return e.taskID() == "" })
 	sess, _ := e.session()
 	// Someone else starts a task in the session's context and holds it.
 	e.stub.Next(stubagent.Hold("other"), stubagent.Text("other's answer"))
 	other := &a2a.Message{ID: "other-1", ContextID: sess.ContextID, Role: a2a.MessageRoleUser, Parts: a2a.ContentParts{a2a.NewTextPart("hi")}}
 	go func() { _ = e.agent.Agent.Send(t.Context(), other, nil) }()
-	eventually(t, "the other task to run", func() bool {
+	testutil.Eventually(t, "the other task to run", func() bool {
 		task, _, err := e.agent.Agent.FindTask(t.Context(), sess.ContextID, other.ID)
 		return err == nil && task != nil
 	})
@@ -178,7 +179,7 @@ func TestStubBusySessionIsRetriedUntilItIsFree(t *testing.T) {
 	if _, err := e.submit(inbound("2")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the turn to be rejected and resent", func() bool { return e.agent.sends.Load() >= sendsBefore+3 })
+	testutil.Eventually(t, "the turn to be rejected and resent", func() bool { return e.agent.sends.Load() >= sendsBefore+3 })
 	e.srv.Release("other")
 	task := e.sink.finalTask(t, 1)
 	pausedOn(t, task)
@@ -198,7 +199,7 @@ func TestStubRefusedCredentialsFailTheTurn(t *testing.T) {
 	if _, err := e.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the failure notice", func() bool { return len(e.sink.noticesOf(NoticeFailed)) == 1 })
+	testutil.Eventually(t, "the failure notice", func() bool { return len(e.sink.noticesOf(NoticeFailed)) == 1 })
 	e.retired(t) // a retry would keep the runner alive
 	e.amu.Lock()
 	defer e.amu.Unlock()
@@ -228,7 +229,7 @@ func TestStubStopCancelsTheRunningTask(t *testing.T) {
 	if _, err := e.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the task to run", func() bool { return e.taskID() != "" })
+	testutil.Eventually(t, "the task to run", func() bool { return e.taskID() != "" })
 	task1 := a2a.TaskID(e.taskID())
 	e.stub.Next(stubagent.Text("second"))
 	if _, err := e.submit(inbound("2")); err != nil {
@@ -264,7 +265,7 @@ func TestStubAskThenAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the runner to park", func() bool { return e.m.Answer(t.Context(), key, &msg) == nil })
+	testutil.Eventually(t, "the runner to park", func() bool { return e.m.Answer(t.Context(), key, &msg) == nil })
 	if answered := e.sink.finalTask(t, 1); answered.Status.State != a2a.TaskStateCompleted || !says(answered, "chose PostgreSQL") {
 		t.Errorf("answered turn = %+v; want it completed with the chosen database", answered)
 	}
@@ -286,7 +287,7 @@ func TestStubBadAnswerWedgesAndIsCancelled(t *testing.T) {
 		t.Fatal(err)
 	}
 	msg.Metadata[kagentv1.HITLExtension].(map[string]any)["id"] = "not-the-request" // the wedge of WP-02
-	eventually(t, "the runner to park", func() bool { return e.m.Answer(t.Context(), key, &msg) == nil })
+	testutil.Eventually(t, "the runner to park", func() bool { return e.m.Answer(t.Context(), key, &msg) == nil })
 	if second := e.sink.finalTask(t, 1); !says(second, "second") {
 		t.Fatalf("second turn = %+v; want the held reply, sent after the wedge was cancelled", second)
 	}
@@ -312,7 +313,7 @@ func TestStubRestartMidTask(t *testing.T) {
 	if _, err := e.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the task to run", func() bool { return e.taskID() != "" })
+	testutil.Eventually(t, "the task to run", func() bool { return e.taskID() != "" })
 	before, _ := e.session()
 	if err := e.close(); err != nil { // Agent Kourier goes down; the agent's task does not
 		t.Fatal(err)
@@ -336,7 +337,7 @@ func TestStubRestartMidTask(t *testing.T) {
 	if task := sink.finalTask(t, 1); task.Status.State != a2a.TaskStateCompleted || !says(task, "the answer, after the restart") {
 		t.Fatalf("recovered output = %+v; want the task's answer", task)
 	}
-	eventually(t, "the task to be cleared", func() bool { return e.taskID() == "" })
+	testutil.Eventually(t, "the task to be cleared", func() bool { return e.taskID() == "" })
 	e.stub.Next(stubagent.Text("and on it goes"))
 	if _, err := m2.Submit(t.Context(), inbound("2")); err != nil {
 		t.Fatal(err)
@@ -365,7 +366,7 @@ func TestStubRestartWithAReplyQueuedBehindTheTask(t *testing.T) {
 	if _, err := e.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the task to run", func() bool { return e.taskID() != "" })
+	testutil.Eventually(t, "the task to run", func() bool { return e.taskID() != "" })
 	if res, err := e.submit(inbound("2")); err != nil || !res.Queued {
 		t.Fatalf("reply = %+v, %v; want it queued behind the task", res, err)
 	}

@@ -27,6 +27,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/testhooks"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 	"github.com/agentkourier/agent-kourier/test/stubagent"
 )
@@ -268,11 +269,7 @@ func TestRunStopsTheTapFirstWithAPauseInFlight(t *testing.T) {
 	w.cfg.shutdownTrace = trace.record
 	r := start(t, w.cfg)
 	w.mention(t, r)
-	for deadline := time.Now().Add(15 * time.Second); !tapHandOffAlive(); time.Sleep(10 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the pause never reached the tap's hand-off")
-		}
-	}
+	testutil.Eventually(t, "the pause never reached the tap's hand-off", tapHandOffAlive, testutil.Within(15*time.Second), testutil.Every(10*time.Millisecond))
 
 	r.cancel()
 	if err := r.wait(); err != nil {
@@ -412,7 +409,7 @@ func TestRunNotifiesADeclaredPersonAfterTheReply(t *testing.T) {
 	if got, _ := prompt.Load().(string); !strings.Contains(got, "You may use these names: payments-owner.") || strings.Contains(got, "U0SAM") {
 		t.Errorf("the prompt = %q; want the name and no user ID", got)
 	}
-	waitUntil(t, "the audit row", func() bool { return len(aud.outcomes()) > 0 })
+	testutil.Eventually(t, "the audit row", func() bool { return len(aud.outcomes()) > 0 }, testutil.Within(10*time.Second))
 	if got := aud.outcomes(); len(got) != 1 || !strings.Contains(got[0], "name=payments-owner user=U0SAM") {
 		t.Errorf("audit rows = %q; want one for the person", got)
 	}
@@ -451,11 +448,8 @@ func TestRunConnectsTheIntakesNoticesToTheSink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for deadline := time.Now().Add(10 * time.Second); !w.sink.noticed(session.NoticeExpired); time.Sleep(20 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the intake's expiry notice never reached the sink: IntakeConfig.Notice is not connected")
-		}
-	}
+	testutil.Eventually(t, "the intake's expiry notice never reached the sink: IntakeConfig.Notice is not connected",
+		func() bool { return w.sink.noticed(session.NoticeExpired) }, testutil.Within(10*time.Second), testutil.Every(20*time.Millisecond))
 }
 
 func TestRunTakesAMentionFromSlackThroughTheSessionToTheAgent(t *testing.T) {
@@ -519,11 +513,8 @@ func TestRunReactsToAMentionWithThePlatformsOwnReactionWhenTheBindingNamesNone(t
 
 func waitConnected(t *testing.T, f *fakeslack.Server) {
 	t.Helper()
-	for deadline := time.Now().Add(10 * time.Second); f.Connections() == 0; time.Sleep(10 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("Agent Kourier never connected to Slack")
-		}
-	}
+	testutil.Eventually(t, "Agent Kourier never connected to Slack", func() bool { return f.Connections() != 0 },
+		testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 }
 
 // A rejected token ends Run with ErrSlackAuth, which cmd/agent-kourier exits 1 on: no retry can mend it.

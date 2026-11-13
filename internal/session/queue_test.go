@@ -12,6 +12,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // nextSent takes the messageId of the next Send, or fails the test if none comes.
@@ -102,7 +103,7 @@ func TestRepliesAreHeldWhileAPauseLasts(t *testing.T) {
 	if id, want := f.nextSent(), inbound("2").MessageID; id != want {
 		t.Errorf("sent %s after the pause; want %s", id, want)
 	}
-	eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
+	testutil.Eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
 }
 
 // -32004 leaves the turn queued and resends it unchanged after a backoff, which doubles up to
@@ -190,7 +191,7 @@ func TestLookupFindsTheTurnOrFailsWithoutSending(t *testing.T) {
 	if sends != 2 || finds != 2 || !slices.Equal(follows, []a2a.TaskID{"t9"}) {
 		t.Errorf("%d sends, %d lookups, followed %v; want 2 sends (the turn once, busy), 2 lookups (failed, found) and t9 followed", sends, finds, follows)
 	}
-	eventually(t, "the turn delivered and its task cleared", func() bool { return f.taskID() == "" })
+	testutil.Eventually(t, "the turn delivered and its task cleared", func() bool { return f.taskID() == "" })
 	if _, err := f.st.NextReply(t.Context(), key); err == nil {
 		t.Error("the followed turn is still queued")
 	}
@@ -266,7 +267,7 @@ func TestEndPauseWithNoRunnerClearsTheRecordedTask(t *testing.T) {
 	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the held runner to retire", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.convos) == 0 })
+	testutil.Eventually(t, "the held runner to retire", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.convos) == 0 })
 	if err := f.m.endPause(t.Context(), key, "t9"); !errors.Is(err, ErrNotParked) {
 		t.Fatalf("endPause of another task = %v; want ErrNotParked", err)
 	}
@@ -442,7 +443,7 @@ func TestAttemptedTurnIsForgottenWhenTheQueueEmpties(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.nextSent()
-	eventually(t, "the runner to retire", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.convos) == 0 })
+	testutil.Eventually(t, "the runner to retire", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.convos) == 0 })
 	f.m.mu.Lock()
 	recorded := len(f.m.attempted)
 	f.m.mu.Unlock()
@@ -453,7 +454,7 @@ func TestAttemptedTurnIsForgottenWhenTheQueueEmpties(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.m.start(key)
-	eventually(t, "the entry to go", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.attempted) == 0 })
+	testutil.Eventually(t, "the entry to go", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.attempted) == 0 })
 }
 
 // After Close, no pause can be ended: the runner is gone, and a call must not look as if it
@@ -489,7 +490,7 @@ func TestPauseEventFollowedByALostStreamLeavesNoStalePause(t *testing.T) {
 	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the runner to wait to follow the lost stream", func() bool { return waits.Load() == 1 })
+	testutil.Eventually(t, "the runner to wait to follow the lost stream", func() bool { return waits.Load() == 1 })
 	if err := f.m.endPause(t.Context(), key, "t1"); !errors.Is(err, ErrNotParked) {
 		t.Errorf("endPause = %v; want ErrNotParked: the runner is not parked", err)
 	}
@@ -517,7 +518,7 @@ func TestReleaseOfAPauseInAFailedStreamIsDrained(t *testing.T) {
 	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the runner to wait to follow the lost stream", func() bool { return waits.Load() == 1 })
+	testutil.Eventually(t, "the runner to wait to follow the lost stream", func() bool { return waits.Load() == 1 })
 	f.m.mu.Lock()
 	defer f.m.mu.Unlock()
 	if c := f.m.convos[key]; callErr != nil || len(c.resume) != 0 || c.parked != "" {
@@ -545,7 +546,7 @@ func TestDuplicateEndPauseWhileThePauseIsBeingEnded(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFinal(t, sink)
-	eventually(t, "the runner to park", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return f.m.convos[key].parked == "t1" })
+	testutil.Eventually(t, "the runner to park", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return f.m.convos[key].parked == "t1" })
 	if err := f.m.endPause(t.Context(), key, "t1"); err != nil {
 		t.Fatal(err)
 	}

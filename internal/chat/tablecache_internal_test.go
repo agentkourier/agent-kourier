@@ -1,8 +1,6 @@
 package chat
 
 import (
-	"io"
-	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,6 +12,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/config"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 func botBinding(name string) *v1alpha1.Binding {
@@ -37,7 +36,7 @@ func TestACompileDoesNotBlockAnotherBinding(t *testing.T) {
 		}
 		return compileTrigger(i, tr)
 	}}
-	snap, log := &config.Snapshot{}, slog.New(slog.NewTextHandler(io.Discard, nil))
+	snap, log := &config.Snapshot{}, testutil.DiscardLogger()
 
 	done := make(chan triggerTable)
 	go func() { done <- c.table(snap, slow, log) }()
@@ -69,7 +68,7 @@ func TestABindingIsCompiledOncePerRoutingTable(t *testing.T) {
 		time.Sleep(20 * time.Millisecond) // long enough for every caller to arrive while it runs
 		return compileTrigger(i, tr)
 	}}
-	snap, log := &config.Snapshot{}, slog.New(slog.NewTextHandler(io.Discard, nil))
+	snap, log := &config.Snapshot{}, testutil.DiscardLogger()
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Go(func() {

@@ -15,6 +15,7 @@ import (
 	"github.com/slack-go/slack/socketmode"
 	"go.uber.org/goleak"
 
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
@@ -87,17 +88,6 @@ func dial(t *testing.T, fake *fakeslack.Server) *websocket.Conn {
 	return ws
 }
 
-// eventually polls cond until it holds. The deadline is only how long a condition that will never hold is waited
-// for before the test fails, and is long: a loaded machine can starve the goroutine that makes it hold.
-func eventually(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	for deadline := time.Now().Add(30 * time.Second); !cond(); time.Sleep(5 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-	}
-}
-
 func TestSocketModeSendsHello(t *testing.T) {
 	fake, smc := newSocket(t, fakeslack.WithBot("UBOT2", "BBOT2", "AAPP2"))
 	hello := waitEvent(t, smc, socketmode.EventTypeHello)
@@ -144,10 +134,10 @@ func TestClientDisconnectIsHandled(t *testing.T) {
 	fake := fakeslack.New()
 	t.Cleanup(fake.Close)
 	ws := dial(t, fake)
-	eventually(t, "the connection", func() bool { return fake.Connections() == 1 })
+	testutil.Eventually(t, "the connection", func() bool { return fake.Connections() == 1 }, testutil.Every(5*time.Millisecond))
 
 	_ = ws.Close()
-	eventually(t, "the disconnect", func() bool { return fake.Connections() == 0 })
+	testutil.Eventually(t, "the disconnect", func() bool { return fake.Connections() == 0 }, testutil.Every(5*time.Millisecond))
 }
 
 func TestCloseDropsConnections(t *testing.T) {
@@ -252,7 +242,7 @@ func TestDropConnectionsLeavesOtherApps(t *testing.T) {
 		_ = resp.Body.Close()
 		t.Cleanup(func() { _ = ws.Close() })
 	}
-	eventually(t, "both apps to connect", func() bool { return fake.Connections() == 2 })
+	testutil.Eventually(t, "both apps to connect", func() bool { return fake.Connections() == 2 }, testutil.Every(5*time.Millisecond))
 
 	if _, err := fake.DropConnections("AA"); err != nil {
 		t.Fatal(err)

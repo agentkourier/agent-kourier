@@ -5,7 +5,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"log/slog"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // writeCounter is a Slack client that counts the calls that write to Slack, and answers each as a Slack that has nothing
@@ -119,7 +119,7 @@ func TestRunALeaderWhoseLeaseIsFreshWritesToTheChat(t *testing.T) {
 	seedReaction(t, c)
 	rep.running = start(t, c)
 
-	eventually(t, 10*time.Second, "the post and the reaction did not reach Slack", func() bool { return api.posts.Load() == 1 && api.other.Load() == 1 })
+	testutil.Eventually(t, "the post and the reaction did not reach Slack", func() bool { return api.posts.Load() == 1 && api.other.Load() == 1 }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	select {
 	case code := <-rep.exits:
 		t.Errorf("the process stopped with exit %d; want it to lead\n%s", code, rep.logs.String())
@@ -135,11 +135,11 @@ func TestRunWithSQLiteDoesNotFenceTheChat(t *testing.T) {
 	c.leaseNow = stepping()
 	exits := make(chan int, 1)
 	c.exit = func(code int) { exits <- code }
-	c.Logger = slog.New(slog.DiscardHandler)
+	c.Logger = testutil.DiscardLogger()
 	seedPost(t, c)
 	start(t, c)
 
-	eventually(t, 10*time.Second, "the post did not reach Slack", func() bool { return api.posts.Load() == 1 })
+	testutil.Eventually(t, "the post did not reach Slack", func() bool { return api.posts.Load() == 1 }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	select {
 	case code := <-exits:
 		t.Errorf("a SQLite replica stopped with exit %d", code)

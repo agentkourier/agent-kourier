@@ -11,6 +11,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
@@ -731,11 +732,7 @@ func TestEachButtonOfAnApprovalIsDecodedToItsAction(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- w.p.Run(ctx, rec) }()
 	t.Cleanup(func() { cancel(); _ = <-done })
-	for deadline := time.Now().Add(5 * time.Second); w.fake.Connections() == 0; time.Sleep(5 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("never connected")
-		}
-	}
+	testutil.Eventually(t, "never connected", func() bool { return w.fake.Connections() != 0 }, testutil.Within(5*time.Second), testutil.Every(5*time.Millisecond))
 	radio := func(v string) map[string]any {
 		return map[string]any{"type": "radio_buttons", "selected_option": map[string]any{"value": v}}
 	}
@@ -846,11 +843,7 @@ func TestAnUnknownButtonOfAPromptNamesNoPrompt(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- w.p.Run(ctx, rec) }()
 	t.Cleanup(func() { cancel(); _ = <-done })
-	for deadline := time.Now().Add(5 * time.Second); w.fake.Connections() == 0; time.Sleep(5 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("never connected")
-		}
-	}
+	testutil.Eventually(t, "never connected", func() bool { return w.fake.Connections() != 0 }, testutil.Within(5*time.Second), testutil.Every(5*time.Millisecond))
 	// The fake can only press a button that is on a message, so the message is posted with a button that the adapter does not render.
 	blocks := `[{"type":"actions","block_id":"submit","elements":[{"type":"button","action_id":"approve_every_tool","value":"` + approvalID + `","text":{"type":"plain_text","text":"x"}}]}]`
 	ts, err := w.c.Post(t.Context(), "C1", w.target.Thread, slack.Content{Text: "x", Blocks: []byte(blocks)}, "tag-unknown")
@@ -877,11 +870,7 @@ func TestADecisionButtonInTheBlockOfAMessagePartCarriesNoAction(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- w.p.Run(ctx, rec) }()
 	t.Cleanup(func() { cancel(); _ = <-done })
-	for deadline := time.Now().Add(5 * time.Second); w.fake.Connections() == 0; time.Sleep(5 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("never connected")
-		}
-	}
+	testutil.Eventually(t, "never connected", func() bool { return w.fake.Connections() != 0 }, testutil.Within(5*time.Second), testutil.Every(5*time.Millisecond))
 	for n, action := range []string{"approve_all", "deny_all", "submit"} {
 		blocks := `[{"type":"actions","block_id":"buttons0","elements":[{"type":"button","action_id":"` + action + `","value":"` + approvalID + `","text":{"type":"plain_text","text":"x"}}]}]`
 		ts, err := w.c.Post(t.Context(), "C1", w.target.Thread, slack.Content{Text: "x", Blocks: []byte(blocks)}, "tag-part-"+action)

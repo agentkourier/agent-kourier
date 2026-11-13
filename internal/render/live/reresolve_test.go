@@ -3,8 +3,6 @@ package live_test
 import (
 	"context"
 	"fmt"
-	"io"
-	"log/slog"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -19,6 +17,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // chatRuntime is the platform of one run of a connection, as the broker gives it out: the fake of an app behind a gate that, once the
@@ -178,12 +177,8 @@ func newApp(t *testing.T, cfg live.Config, running bool) (*app, *chatRuntime) {
 	if running {
 		a.table.set(appConn, first)
 	}
-	var err error
-	if a.store, err = sqlite.Open(t.Context(), sqlitetest.Path(t)); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = a.store.Close() })
-	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	a.store = sqlitetest.Open(t)
+	quiet := testutil.DiscardLogger()
 	ob := newOutbox(t, outbox.Config{Store: a.store, Platforms: tableOutbox{a.table}, Logger: quiet, CallTimeout: time.Second})
 	cfg.Sender, cfg.Platforms, cfg.Store, cfg.Logger = ob, a.table, a.store, quiet
 	if cfg.Throttle == 0 {
@@ -226,9 +221,6 @@ func (a *app) only(t *testing.T, words string) chattest.Message {
 	return m
 }
 
-// waitFor fails the test if cond does not hold in time.
-func waitFor(t *testing.T, what string, cond func() bool) { t.Helper(); eventually(t, what, cond) }
-
 // TestATurnThatStartsWhileItsConnectionIsDownFinishesThroughTheRuntimeThatComesUp: the turn's first write goes through the outbox,
 // which finds the connection's platform at each try, and every write after it is the turn's own. The turn started with no platform,
 // so it looks the connection up again after a write fails because the connection is down, and does not count the failures as
@@ -238,13 +230,13 @@ func TestATurnThatStartsWhileItsConnectionIsDownFinishesThroughTheRuntimeThatCom
 	a, rt := newApp(t, live.Config{Attempts: 2, FinalDeadline: 20 * time.Second}, false)
 	run := a.live.Start(t.Context(), a.turn(v1alpha1.OutputLive, ""))
 	run.Handle(text("a", "first words"))
-	waitFor(t, "the first write to be tried", func() bool {
+	testutil.Eventually(t, "the first write to be tried", func() bool {
 		row, err := a.store.GetOutbox(t.Context(), outbox.ID("turn-1", store.OutboxReply))
 		return err == nil && row.Payload != ""
 	})
-	waitFor(t, "many tries, far more than Attempts", func() bool { return a.table.asked.Load() > 5 })
+	testutil.Eventually(t, "many tries, far more than Attempts", func() bool { return a.table.asked.Load() > 5 })
 	a.table.set(appConn, rt)
-	waitFor(t, "the first words to be posted by the connection that runs", func() bool { return len(a.fake.Messages()) == 1 })
+	testutil.Eventually(t, "the first words to be posted by the connection that runs", func() bool { return len(a.fake.Messages()) == 1 })
 
 	run.Handle(text("a", "first words and the final words"))
 	run.Handle(agent.FinalEvent{})
@@ -266,7 +258,7 @@ func TestATurnThatHoldsARetiredRuntimeEditsThroughTheNewOne(t *testing.T) {
 	a, old := newApp(t, live.Config{}, true)
 	run := a.live.Start(t.Context(), a.turn(v1alpha1.OutputLive, ""))
 	run.Handle(text("a", "one"))
-	waitFor(t, "the first words to be posted", func() bool { return len(a.fake.Messages()) == 1 })
+	testutil.Eventually(t, "the first words to be posted", func() bool { return len(a.fake.Messages()) == 1 })
 
 	old.retired.Store(true)
 	fresh := a.newRuntime()
@@ -288,7 +280,7 @@ func TestAStreamOfARetiredRuntimeIsEndedAndReplacedThroughTheNewOne(t *testing.T
 	a, old := newApp(t, live.Config{}, true)
 	run := a.live.Start(t.Context(), a.turn(v1alpha1.OutputLive, "U1"))
 	run.Handle(text("a", "Hello"))
-	waitFor(t, "the stream to start", func() bool {
+	testutil.Eventually(t, "the stream to start", func() bool {
 		ms := a.fake.Messages()
 		return len(ms) == 1 && ms[0].Streaming && ms[0].Streamed == "Hello"
 	})
@@ -312,7 +304,7 @@ func TestAStreamIsLeftForTheRuntimeThatComesUpAfterTheConnectionWasRemoved(t *te
 	a, old := newApp(t, live.Config{Attempts: 2, FinalDeadline: 20 * time.Second}, true)
 	run := a.live.Start(t.Context(), a.turn(v1alpha1.OutputLive, "U1"))
 	run.Handle(text("a", "Hello"))
-	waitFor(t, "the stream to start", func() bool { ms := a.fake.Messages(); return len(ms) == 1 && ms[0].Streaming })
+	testutil.Eventually(t, "the stream to start", func() bool { ms := a.fake.Messages(); return len(ms) == 1 && ms[0].Streaming })
 
 	old.retired.Store(true)
 	a.table.mu.Lock()
@@ -320,7 +312,7 @@ func TestAStreamIsLeftForTheRuntimeThatComesUpAfterTheConnectionWasRemoved(t *te
 	a.table.mu.Unlock()
 	run.Handle(text("a", "Hello world"))
 	run.Handle(agent.FinalEvent{})
-	waitFor(t, "many tries, far more than Attempts", func() bool { return a.table.asked.Load() > 5 })
+	testutil.Eventually(t, "many tries, far more than Attempts", func() bool { return a.table.asked.Load() > 5 })
 	select {
 	case <-run.Done():
 		t.Fatal("the turn gave up while its connection was down, inside the final deadline")
@@ -339,7 +331,7 @@ func TestATurnWhoseTokenWasRevokedAfterARestartResolvesAgain(t *testing.T) {
 	a, old := newApp(t, live.Config{}, true)
 	run := a.live.Start(t.Context(), a.turn(v1alpha1.OutputLive, ""))
 	run.Handle(text("a", "one"))
-	waitFor(t, "the first words to be posted", func() bool { return len(a.fake.Messages()) == 1 })
+	testutil.Eventually(t, "the first words to be posted", func() bool { return len(a.fake.Messages()) == 1 })
 
 	old.revoked.Store(true)
 	fresh := a.newRuntime()
@@ -360,7 +352,7 @@ func TestATurnThatOnlyLooksAgainWhenAWriteSaysTheConnectionIsDown(t *testing.T) 
 	a, _ := newApp(t, live.Config{}, true)
 	run := a.live.Start(t.Context(), a.turn(v1alpha1.OutputLive, ""))
 	run.Handle(text("a", "one"))
-	waitFor(t, "the first words to be posted", func() bool { return len(a.fake.Messages()) == 1 })
+	testutil.Eventually(t, "the first words to be posted", func() bool { return len(a.fake.Messages()) == 1 })
 	run.Handle(text("a", "one and two"))
 	run.Handle(agent.FinalEvent{})
 	a.end(t, run)
@@ -393,7 +385,7 @@ func TestARecoveredTurnWhoseMessageWasNamedWhileItsConnectionWasDownEditsItOnceI
 	turn.Recovered = true
 	run := a.live.Start(t.Context(), turn)
 	run.Handle(agent.FinalEvent{}) // the turn ended with nothing to show
-	waitFor(t, "the turn to have tried while the connection is down", func() bool { return a.table.asked.Load() >= 2 })
+	testutil.Eventually(t, "the turn to have tried while the connection is down", func() bool { return a.table.asked.Load() >= 2 })
 	a.table.set(appConn, rt)
 	a.end(t, run)
 
@@ -410,7 +402,7 @@ func TestATurnWhoseTokenWasRevokedWaitsOutTheGapOfTheRestart(t *testing.T) {
 	a, old := newApp(t, live.Config{Attempts: 2, FinalDeadline: 20 * time.Second}, true)
 	run := a.live.Start(t.Context(), a.turn(v1alpha1.OutputLive, ""))
 	run.Handle(text("a", "one"))
-	waitFor(t, "the first words to be posted", func() bool { return len(a.fake.Messages()) == 1 })
+	testutil.Eventually(t, "the first words to be posted", func() bool { return len(a.fake.Messages()) == 1 })
 
 	old.revoked.Store(true)
 	a.table.mu.Lock()
@@ -418,7 +410,7 @@ func TestATurnWhoseTokenWasRevokedWaitsOutTheGapOfTheRestart(t *testing.T) {
 	a.table.mu.Unlock()
 	run.Handle(text("a", "one and two"))
 	run.Handle(agent.FinalEvent{})
-	waitFor(t, "many tries, far more than Attempts", func() bool { return a.table.asked.Load() > 5 })
+	testutil.Eventually(t, "many tries, far more than Attempts", func() bool { return a.table.asked.Load() > 5 })
 	select {
 	case <-run.Done():
 		t.Fatal("the turn gave up in the gap of a restart, inside the final deadline")

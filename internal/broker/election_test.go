@@ -18,6 +18,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // testElection is an election with timings short enough for a test and long enough for a loaded machine: a lease of
@@ -25,18 +26,6 @@ import (
 var testElection = ElectionConfig{
 	Namespace: "agent-kourier", Name: "agent-kourier-leader", Identity: "pod-a_1",
 	LeaseDuration: 3 * time.Second, RenewDeadline: 2 * time.Second, RetryPeriod: 200 * time.Millisecond,
-}
-
-// eventually polls cond until it holds or d passes, and then fails the test with what.
-func eventually(t *testing.T, d time.Duration, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(d)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatalf("after %s: %s", d, what)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
 }
 
 func TestElectionConfigDefaultsTheTimingsToTheDesignsAndChecksTheOrder(t *testing.T) {
@@ -157,7 +146,7 @@ func TestTakeEpochTriesAgainUntilTheStoreGivesOne(t *testing.T) {
 	lock := errors.New("canceling statement due to lock timeout")
 	f := &scriptedFence{errs: []error{lock, lock}, epoch: 7}
 
-	epoch, err := takeEpoch(t.Context(), f, "pod-a", time.Millisecond, slog.New(slog.DiscardHandler))
+	epoch, err := takeEpoch(t.Context(), f, "pod-a", time.Millisecond, testutil.DiscardLogger())
 
 	if err != nil || epoch != 7 || f.calls.Load() != 3 {
 		t.Errorf("takeEpoch = %d, %v after %d attempts; want epoch 7 on the third", epoch, err, f.calls.Load())
@@ -173,7 +162,7 @@ func TestTakeEpochGivesUpWhenTheTimeIsUpAndSaysWhy(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 
-	_, err := takeEpoch(ctx, f, "pod-a", 5*time.Millisecond, slog.New(slog.DiscardHandler))
+	_, err := takeEpoch(ctx, f, "pod-a", 5*time.Millisecond, testutil.DiscardLogger())
 
 	if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, lock) {
 		t.Errorf("takeEpoch = %v; want it to wrap the deadline and the last attempt's error", err)
@@ -186,7 +175,7 @@ func TestTakeEpochGivesUpWhenTheTimeIsUpAndSaysWhy(t *testing.T) {
 func TestTakeEpochDoesNotRetryAnInvalidArgument(t *testing.T) {
 	f := &scriptedFence{errs: []error{store.ErrInvalid}}
 
-	_, err := takeEpoch(t.Context(), f, "", time.Millisecond, slog.New(slog.DiscardHandler))
+	_, err := takeEpoch(t.Context(), f, "", time.Millisecond, testutil.DiscardLogger())
 
 	if !errors.Is(err, store.ErrInvalid) || f.calls.Load() != 1 {
 		t.Errorf("takeEpoch = %v after %d attempts; want ErrInvalid at once", err, f.calls.Load())
@@ -213,7 +202,7 @@ func standFor(t *testing.T, client *fake.Clientset, identity string) *candidate 
 	cfg := testElection
 	cfg.Identity = identity
 	cand := &candidate{}
-	c, err := startCandidacy(t.Context(), client, cfg, slog.New(slog.DiscardHandler), nil, candidacyCallbacks{
+	c, err := startCandidacy(t.Context(), client, cfg, testutil.DiscardLogger(), nil, candidacyCallbacks{
 		gained: func(context.Context) { cand.gained.Add(1) },
 		lost:   func() { cand.lost.Add(1) },
 	})
@@ -242,7 +231,7 @@ func holder(t *testing.T, client *fake.Clientset) string {
 func TestCandidacyOnlyTheWinnerIsToldItLeads(t *testing.T) {
 	client := fake.NewClientset()
 	a := standFor(t, client, "pod-a_1")
-	eventually(t, 20*time.Second, "the first candidate was not told it leads", func() bool { return a.gained.Load() == 1 })
+	testutil.Eventually(t, "the first candidate was not told it leads", func() bool { return a.gained.Load() == 1 }, testutil.Within(20*time.Second), testutil.Every(10*time.Millisecond))
 	b := standFor(t, client, "pod-b_1")
 
 	time.Sleep(testElection.LeaseDuration + time.Second) // longer than a lease: a leader that renews keeps it
@@ -264,7 +253,7 @@ func TestCandidacyTakesTheEmptyLeaseTheChartMade(t *testing.T) {
 
 	a := standFor(t, client, "pod-a_1")
 
-	eventually(t, 20*time.Second, "the candidate did not take the empty Lease", func() bool { return a.gained.Load() == 1 })
+	testutil.Eventually(t, "the candidate did not take the empty Lease", func() bool { return a.gained.Load() == 1 }, testutil.Within(20*time.Second), testutil.Every(10*time.Millisecond))
 	if got := holder(t, client); got != "pod-a_1" {
 		t.Errorf("the Lease's holder = %q; want pod-a_1", got)
 	}
@@ -282,12 +271,12 @@ func TestCandidacyALeaderThatCannotRenewTheLeaseIsToldSo(t *testing.T) {
 		return false, nil, nil
 	})
 	a := standFor(t, client, "pod-a_1")
-	eventually(t, 20*time.Second, "not leading", func() bool { return a.gained.Load() == 1 })
+	testutil.Eventually(t, "not leading", func() bool { return a.gained.Load() == 1 }, testutil.Within(20*time.Second), testutil.Every(10*time.Millisecond))
 
 	start := time.Now()
 	unreachable.Store(true)
 
-	eventually(t, 10*time.Second, "the leader was not told it had lost the lease", func() bool { return a.lost.Load() == 1 })
+	testutil.Eventually(t, "the leader was not told it had lost the lease", func() bool { return a.lost.Load() == 1 }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	if took := time.Since(start); took < testElection.RenewDeadline-testElection.RetryPeriod || took > testElection.LeaseDuration {
 		t.Errorf("the leader gave up after %s; want about the renew deadline, %s, and before the lease duration, %s", took, testElection.RenewDeadline, testElection.LeaseDuration)
 	}
@@ -310,14 +299,14 @@ func TestCandidacyTheLeaseClockFollowsTheLeadersAcceptedRenewals(t *testing.T) {
 	cfg.Identity = "pod-a_1"
 	lease := newLeaseClock(nil)
 	var gained, lost atomic.Int32
-	c, err := startCandidacy(t.Context(), client, cfg, slog.New(slog.DiscardHandler), lease, candidacyCallbacks{
+	c, err := startCandidacy(t.Context(), client, cfg, testutil.DiscardLogger(), lease, candidacyCallbacks{
 		gained: func(context.Context) { gained.Add(1) }, lost: func() { lost.Add(1) },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { c.stop(context.WithoutCancel(t.Context())) })
-	eventually(t, 20*time.Second, "not leading", func() bool { return gained.Load() == 1 })
+	testutil.Eventually(t, "not leading", func() bool { return gained.Load() == 1 }, testutil.Within(20*time.Second), testutil.Every(10*time.Millisecond))
 	if _, ok := lease.since(); !ok {
 		t.Fatal("the leader was told it leads, and the lease clock knows of no renewal: the acquisition is one")
 	}
@@ -330,7 +319,7 @@ func TestCandidacyTheLeaseClockFollowsTheLeadersAcceptedRenewals(t *testing.T) {
 	}
 
 	unreachable.Store(true)
-	eventually(t, 10*time.Second, "the leader was not told it had lost the lease", func() bool { return lost.Load() == 1 })
+	testutil.Eventually(t, "the leader was not told it had lost the lease", func() bool { return lost.Load() == 1 }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	if age, _ := lease.since(); age < cfg.RenewDeadline-cfg.RetryPeriod {
 		t.Errorf("the elector gave up %s after the last accepted renewal; want about the renew deadline, %s, which the chat fence uses as its bound", age, cfg.RenewDeadline)
 	}
@@ -341,13 +330,13 @@ func TestCandidacyTheLeaseClockFollowsTheLeadersAcceptedRenewals(t *testing.T) {
 func TestCandidacyAStopHandsTheLeaseOverWithoutALossAndWithoutAWait(t *testing.T) {
 	client := fake.NewClientset()
 	a := standFor(t, client, "pod-a_1")
-	eventually(t, 20*time.Second, "not leading", func() bool { return a.gained.Load() == 1 })
+	testutil.Eventually(t, "not leading", func() bool { return a.gained.Load() == 1 }, testutil.Within(20*time.Second), testutil.Every(10*time.Millisecond))
 	b := standFor(t, client, "pod-b_1")
 
 	start := time.Now()
 	a.c.stop(t.Context())
 
-	eventually(t, 20*time.Second, "the other replica did not take the lease over", func() bool { return b.gained.Load() == 1 })
+	testutil.Eventually(t, "the other replica did not take the lease over", func() bool { return b.gained.Load() == 1 }, testutil.Within(20*time.Second), testutil.Every(10*time.Millisecond))
 	if took := time.Since(start); took > testElection.LeaseDuration {
 		t.Errorf("the hand-over took %s; want it quicker than the lease duration, %s", took, testElection.LeaseDuration)
 	}
@@ -362,7 +351,7 @@ func TestCandidacyAStopHandsTheLeaseOverWithoutALossAndWithoutAWait(t *testing.T
 func TestCandidacyAStandbyThatStopsIsNotALoss(t *testing.T) {
 	client := fake.NewClientset()
 	a := standFor(t, client, "pod-a_1")
-	eventually(t, 20*time.Second, "not leading", func() bool { return a.gained.Load() == 1 })
+	testutil.Eventually(t, "not leading", func() bool { return a.gained.Load() == 1 }, testutil.Within(20*time.Second), testutil.Every(10*time.Millisecond))
 	b := standFor(t, client, "pod-b_1")
 	time.Sleep(500 * time.Millisecond)
 
@@ -376,7 +365,7 @@ func TestCandidacyAStandbyThatStopsIsNotALoss(t *testing.T) {
 func TestCandidacyRefusesTimingsClientGoWouldRefuse(t *testing.T) {
 	cfg := testElection
 	cfg.RenewDeadline = cfg.LeaseDuration
-	_, err := startCandidacy(t.Context(), fake.NewClientset(), cfg, slog.New(slog.DiscardHandler), nil, candidacyCallbacks{gained: func(context.Context) {}, lost: func() {}})
+	_, err := startCandidacy(t.Context(), fake.NewClientset(), cfg, testutil.DiscardLogger(), nil, candidacyCallbacks{gained: func(context.Context) {}, lost: func() {}})
 	if !errors.Is(err, ErrWiring) {
 		t.Errorf("startCandidacy = %v; want ErrWiring", err)
 	}

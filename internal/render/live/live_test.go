@@ -31,6 +31,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
@@ -425,11 +426,8 @@ func setup(t *testing.T) *env {
 	e.root = root
 	client := slack.New(slack.Config{BotToken: secret.New("xoxb-fake"), AppToken: secret.New("xapp-fake"), APIURL: e.fake.URL() + "/", HTTPClient: &http.Client{Transport: e.rec}})
 	e.client = client
-	if e.store, err = sqlite.Open(t.Context(), sqlitetest.Path(t)); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = e.store.Close() })
-	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	e.store = sqlitetest.Open(t)
+	quiet := testutil.DiscardLogger()
 	platform := slack.NewPlatform(client, "ns/conn")
 	e.ob = newOutbox(t, outbox.Config{Store: e.store, Platforms: chattest.Same[outbox.Platform](platform), Logger: quiet})
 	e.rf = &recordFail{Outbox: e.store}
@@ -504,29 +502,18 @@ func (e *env) startFor(t *testing.T, turn live.Turn) (*live.Run, context.CancelF
 // reply is the last message in the thread.
 func (e *env) reply() fakeslack.Message { th := e.fake.Thread("C1", e.root); return th[len(th)-1] }
 
-// eventually polls cond until it holds. The deadline is only how long a condition that will never hold is
-// waited for before the test fails, and is long, since a loaded machine can starve the goroutine that makes it hold.
-func eventually(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	for deadline := time.Now().Add(30 * time.Second); !cond(); time.Sleep(time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-	}
-}
-
 // drain turns the clock until every run r started has ended, which is when each has written what it owes. r is the
 // Renderer that started the turn under test: e.live for a turn made through e.sink, and the test's own for one it built.
 // It is how a test waits for the end of a turn. A quiet clock is not: a run that has not yet asked for its next window
 // has no timer waiting, and a timer the test has just fired is gone before the run has written for it. The wait ends
-// with eventually's deadline, so that a run that never ends fails the test rather than hanging the package.
+// with testutil.Eventually's deadline, so that a run that never ends fails the test rather than hanging the package.
 func (e *env) drain(t *testing.T, r *live.Renderer) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	over := make(chan error, 1)
 	go func() { over <- r.Wait(ctx) }()
-	eventually(t, "the runs to end", func() bool {
+	testutil.Eventually(t, "the runs to end", func() bool {
 		select {
 		case err := <-over:
 			if err != nil {
@@ -548,7 +535,7 @@ func (e *env) drain(t *testing.T, r *live.Renderer) {
 // finish turns the clock until the run is done.
 func (e *env) finish(t *testing.T, run *live.Run) {
 	t.Helper()
-	eventually(t, "the run to end", func() bool {
+	testutil.Eventually(t, "the run to end", func() bool {
 		select {
 		case <-run.Done():
 			return true
@@ -569,9 +556,9 @@ func TestDeltasInOneWindowAreOneUpdate(t *testing.T) {
 	e := setup(t)
 	run, _ := e.start(t, v1alpha1.OutputLive, false)
 	run.Handle(text("a", "Hel"))
-	eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+	testutil.Eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
 	run.Handle(text("a", "Hello"))
-	eventually(t, "the update to wait for its window", func() bool { return e.clk.waiting() == 1 })
+	testutil.Eventually(t, "the update to wait for its window", func() bool { return e.clk.waiting() == 1 })
 	for _, s := range []string{"Hello wor", "Hello world"} { // more deltas while it waits
 		run.Handle(text("a", s))
 	}
@@ -579,7 +566,7 @@ func TestDeltasInOneWindowAreOneUpdate(t *testing.T) {
 		t.Fatalf("%d updates inside the window; want none", n)
 	}
 	e.clk.advance(throttle)
-	eventually(t, "the latest text", func() bool { return e.reply().Text == "Hello world" })
+	testutil.Eventually(t, "the latest text", func() bool { return e.reply().Text == "Hello world" })
 	if n := len(e.rec.sent("/chat.update")); n != 1 {
 		t.Fatalf("%d updates for the window; want one", n)
 	}
@@ -596,19 +583,19 @@ func TestFinalTextIsTheLastUpdateAndToolLinesAreDropped(t *testing.T) {
 	e.spy(t, false, nil)
 	run, _ := e.start(t, v1alpha1.OutputLive, false)
 	run.Handle(text("a", "Looking"))
-	eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+	testutil.Eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
 	run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "search", Args: map[string]any{"q": "pods"}})
-	eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
+	testutil.Eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
 	e.clk.advance(throttle)
-	eventually(t, "the live tool line", func() bool { return strings.Contains(string(e.reply().Blocks), "Calling search") })
+	testutil.Eventually(t, "the live tool line", func() bool { return strings.Contains(string(e.reply().Blocks), "Calling search") })
 	if !strings.Contains(string(e.reply().Blocks), `"context"`) || !strings.Contains(string(e.reply().Blocks), `"plain_text"`) {
 		t.Fatalf("blocks %s; want the tool line in a plain_text context block, not the markdown block", e.reply().Blocks)
 	}
 	run.Handle(agent.ToolResultEvent{CallID: "c1", Name: "search"})
 	run.Handle(text("a", "Looking again"))
-	eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
+	testutil.Eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
 	e.clk.advance(throttle)
-	eventually(t, "the tool line to go with its result", func() bool {
+	testutil.Eventually(t, "the tool line to go with its result", func() bool {
 		return e.reply().Text == "Looking again" && !strings.Contains(string(e.reply().Blocks), "Calling")
 	})
 	run.Handle(agent.ToolCallEvent{CallID: "c2", Name: "search"}) // still running when the turn ends
@@ -651,7 +638,7 @@ func TestFailedUpdateIsRetriedAndLosesNoText(t *testing.T) {
 	e.rec.failUpdates = 2
 	run, _ := e.start(t, v1alpha1.OutputLive, false)
 	run.Handle(text("a", "first"))
-	eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+	testutil.Eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
 	run.Handle(text("a", "SECRETTEXT final answer"))
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
@@ -694,7 +681,7 @@ func TestWaitGivesUpWhenItsContextEndsAndLeavesTheRunToItsOwn(t *testing.T) {
 	e := setup(t)
 	run, cancel := e.start(t, v1alpha1.OutputLive, false)
 	run.Handle(text("a", "partial"))
-	eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+	testutil.Eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
 	run.Handle(text("a", "partial, more")) // the run waits for its window and does not end of itself
 	ctx, end := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer end()
@@ -717,9 +704,9 @@ func TestAbandonedTurnSettlesItsMessageAndEnds(t *testing.T) {
 	e := setup(t)
 	run, cancel := e.start(t, v1alpha1.OutputLive, false)
 	run.Handle(text("a", "partial"))
-	eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+	testutil.Eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
 	run.Handle(text("a", "partial, more")) // leaves the goroutine waiting for its window
-	eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
+	testutil.Eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
 	cancel()
 	e.finish(t, run)
 	if m := e.reply(); m.Text != "partial, more" {

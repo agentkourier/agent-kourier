@@ -14,6 +14,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // A configured acknowledgment covers the whole accepted turn: it is added when intake accepts the
@@ -214,10 +215,10 @@ func TestAcknowledgmentIsClearedAtPauseAndRecreatedForTypedAnswer(t *testing.T) 
 		t.Fatal(err)
 	}
 	waitFinal(t, sink)
-	eventually(t, "the paused message acknowledgment to be removed", func() bool {
+	testutil.Eventually(t, "the paused message acknowledgment to be removed", func() bool {
 		return len(sink.noticesOf(NoticeUnacknowledged)) == 1
 	})
-	eventually(t, "paused acknowledgment metadata to be cleared", func() bool {
+	testutil.Eventually(t, "paused acknowledgment metadata to be cleared", func() bool {
 		sess, err := f.session()
 		return err == nil && sess.Turn.Acknowledgment == "" && sess.Turn.AcknowledgmentID == ""
 	})
@@ -272,7 +273,7 @@ func TestTypedAnswerAcknowledgmentSurvivesCrashBeforeReplySettlement(t *testing.
 	if _, err := f.submit(answer); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the answer turn to be durably paired with its source", func() bool {
+	testutil.Eventually(t, "the answer turn to be durably paired with its source", func() bool {
 		sess, err := f.session()
 		return err == nil && sess.Turn.ID == answer.MessageID+"/answer" && sess.Turn.AcknowledgmentID == answer.MessageID
 	})
@@ -308,7 +309,7 @@ func TestTypedAnswerAcknowledgmentSurvivesCrashBeforeReplySettlement(t *testing.
 		t.Fatal(err)
 	}
 	waitFinal(t, sink)
-	eventually(t, "the recovered answer task to clear", func() bool { return f.taskID() == "" })
+	testutil.Eventually(t, "the recovered answer task to clear", func() bool { return f.taskID() == "" })
 	got := sink.noticesOf(NoticeUnacknowledged)
 	var sourceRemoved bool
 	for _, n := range got {
@@ -341,7 +342,7 @@ func TestConsumedTextReplyWithoutContinuationClearsItsAcknowledgment(t *testing.
 	if _, err := f.submit(inbound("2")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the consumed answer acknowledgment to be removed", func() bool {
+	testutil.Eventually(t, "the consumed answer acknowledgment to be removed", func() bool {
 		for _, n := range sink.noticesOf(NoticeUnacknowledged) {
 			if n.ID == inbound("2").MessageID+"/acknowledgment" {
 				return true
@@ -401,7 +402,7 @@ func TestAnswerBusyReparkSettlesTheFailedAnswerAcknowledgment(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the first answer was not attempted")
 	}
-	eventually(t, "the failed answer acknowledgment to be removed", func() bool {
+	testutil.Eventually(t, "the failed answer acknowledgment to be removed", func() bool {
 		for _, n := range sink.noticesOf(NoticeUnacknowledged) {
 			if n.ID == inbound("2").MessageID+"/acknowledgment" {
 				return true
@@ -519,7 +520,7 @@ func TestRecoverRemovesPersistedAcknowledgmentAfterConfigurationDisablesIt(t *te
 	recordedTurn(t, f, store.TaskTurn{ID: original.MessageID, User: original.UserID, MessageRef: original.MessageRef, Acknowledgment: "eyes"})
 	f.recover(t)
 	waitFinal(t, sink)
-	eventually(t, "the recovered task to be cleared", func() bool { return f.taskID() == "" })
+	testutil.Eventually(t, "the recovered task to be cleared", func() bool { return f.taskID() == "" })
 	got := sink.noticesOf(NoticeUnacknowledged)
 	want := []Notice{{ID: original.MessageID + "/acknowledgment", Kind: NoticeUnacknowledged, MessageRef: original.MessageRef, Reaction: "eyes"}}
 	if !sameAcknowledgments(got, want) {
@@ -537,7 +538,7 @@ func TestRecoveredPauseClearsAcknowledgmentOwnership(t *testing.T) {
 	}
 	f.recover(t)
 	waitFinal(t, sink)
-	eventually(t, "the recovered pause to clear its durable acknowledgment", func() bool {
+	testutil.Eventually(t, "the recovered pause to clear its durable acknowledgment", func() bool {
 		sess, err := f.session()
 		return err == nil && sess.TaskID == "t1" && sess.Turn.Acknowledgment == "" && sess.Turn.AcknowledgmentID == ""
 	})

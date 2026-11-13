@@ -6,10 +6,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/secret"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // logCapture is a slog.Handler that keeps every record it is given, with the attributes of its logger (With) and then of the call, in
@@ -115,7 +117,7 @@ func TestSocketModeLogLinesNameTheirConnection(t *testing.T) {
 		world.waitConnections(t, app, 1)
 	}
 	for _, name := range names {
-		waitUntil(t, name+" to log that it connected", func() bool { return logs.seen(slack.ConnectedMessage, name) })
+		testutil.Eventually(t, name+" to log that it connected", func() bool { return logs.seen(slack.ConnectedMessage, name) }, testutil.Within(10*time.Second))
 	}
 
 	// Slack is up: a dropped socket is opened again by the adapter, which says it is reconnecting.
@@ -125,7 +127,7 @@ func TestSocketModeLogLinesNameTheirConnection(t *testing.T) {
 		}
 	}
 	for _, name := range names {
-		waitUntil(t, name+" to log that it is reconnecting", func() bool { return logs.seen("slack: socket mode reconnecting", name) })
+		testutil.Eventually(t, name+" to log that it is reconnecting", func() bool { return logs.seen("slack: socket mode reconnecting", name) }, testutil.Within(10*time.Second))
 	}
 	for i := range names {
 		world.waitConnections(t, testApp(i+1), 1)
@@ -139,7 +141,7 @@ func TestSocketModeLogLinesNameTheirConnection(t *testing.T) {
 		}
 	}
 	for _, name := range names {
-		waitUntil(t, name+" to log that its connection ended", func() bool { return logs.seen("slack connection ended; connecting again", name) })
+		testutil.Eventually(t, name+" to log that its connection ended", func() bool { return logs.seen("slack connection ended; connecting again", name) }, testutil.Within(10*time.Second))
 	}
 
 	// Every line of the Socket Mode connection names its connection, and the lines that were asked for were all seen, for both.

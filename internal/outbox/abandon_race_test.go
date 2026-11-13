@@ -2,19 +2,19 @@ package outbox_test
 
 import (
 	"context"
-	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/outbox"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 )
 
 // TestRetentionWaitsForAnInFlightDelivery: a row that is old by the time a drain starts, while its
 // post is still in flight, is not abandoned under it. The drain waits for the connection's lock, and the row ends posted, not
 // abandoned, with no report.
 func TestRetentionWaitsForAnInFlightDelivery(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	var clock atomic.Int64
 	inPost, release := make(chan struct{}), make(chan struct{})
 	p := &poster{onPost: func(context.Context) error { close(inPost); <-release; return nil }}

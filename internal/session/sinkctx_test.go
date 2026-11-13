@@ -11,13 +11,14 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // causeOf waits for the context the sink was given for turn i to end, and returns why it ended.
 func (s *fakeSink) causeOf(t *testing.T, i int) error {
 	t.Helper()
 	var ctx context.Context
-	eventually(t, "the sink's turn", func() bool {
+	testutil.Eventually(t, "the sink's turn", func() bool {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if len(s.ctxs) > i {
@@ -85,7 +86,7 @@ func TestTheSinksContextSaysWhetherTheTurnContinues(t *testing.T) {
 		if _, err := f.submit(inbound("1")); err != nil {
 			t.Fatal(err)
 		}
-		eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+		testutil.Eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
 		if cause := sink.causeOf(t, 0); cause == nil || errors.Is(cause, ErrTurnContinues) {
 			t.Errorf("the failed turn's sink context ended with %v; want the turn over", cause)
 		}
@@ -140,7 +141,7 @@ func TestAFollowThatEndsWithoutDrivingEndsTheTurnItWasHanded(t *testing.T) {
 			if _, err := f.submit(inbound("1")); err != nil {
 				t.Fatal(err)
 			}
-			eventually(t, "the notice", func() bool { return len(sink.noticesOf(tc.notice)) == 1 })
+			testutil.Eventually(t, "the notice", func() bool { return len(sink.noticesOf(tc.notice)) == 1 })
 			if cause := sink.causeOf(t, 0); !errors.Is(cause, ErrTurnContinues) {
 				t.Errorf("the lost send's sink context ended with %v; want ErrTurnContinues", cause)
 			}
@@ -224,7 +225,7 @@ func TestATurnGivenUpOnAfterAnUnknownOutcomeEndsWhatItHandedOn(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+	testutil.Eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
 	if cause := sink.causeOf(t, 1); !errors.Is(cause, ErrTurnContinues) {
 		t.Errorf("the sink context of the send of unknown outcome ended with %v; want ErrTurnContinues", cause)
 	}
@@ -279,7 +280,7 @@ func TestATurnAnEarlierProcessQueuedThatIsGivenUpOnIsEnded(t *testing.T) {
 		return nil, nil, errors.New("agent unreachable")
 	}
 	f.m.wake(key) // the restarted process finds it in the queue
-	eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+	testutil.Eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
 	if cause := sink.causeOf(t, 0); errors.Is(cause, ErrTurnContinues) {
 		t.Errorf("the sink context of the turn given up on ended with %v; want the turn over", cause)
 	}

@@ -10,6 +10,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // messageReply is what Agent.Send streams when the agent answers with one Message and no task, in c1.
@@ -111,7 +112,7 @@ func TestAnswerRepliedToWithAMessage(t *testing.T) {
 			// Each answer reopens the pause and is answered again: once the third is taken, the first
 			// answer's notice, which follows its reopening on the runner's goroutine, has been posted.
 			for _, id := range []string{"ans-2", "ans-3"} {
-				eventually(t, "the pause to reopen", func() bool { return f.m.Answer(t.Context(), key, answerMsg(id)) == nil })
+				testutil.Eventually(t, "the pause to reopen", func() bool { return f.m.Answer(t.Context(), key, answerMsg(id)) == nil })
 			}
 			got := sink.noticesOf(NoticeFailed)
 			if tc.told != (len(got) >= 1) {

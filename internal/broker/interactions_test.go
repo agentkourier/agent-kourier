@@ -25,6 +25,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // pressed is a presser that answers with the error the test sets, and counts its presses.
@@ -217,11 +218,8 @@ func TestRunProcessesThePressesAnEarlierRunLeft(t *testing.T) {
 	r := start(t, c)
 	r.until("/readyz", http.StatusOK)
 
-	for deadline := time.Now().Add(10 * time.Second); !eph.told("This question is no longer available."); time.Sleep(10 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the press was never worked on: the person was not told the question is gone")
-		}
-	}
+	testutil.Eventually(t, "the press was never worked on: the person was not told the question is gone",
+		func() bool { return eph.told("This question is no longer available.") }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 }
 
 // loopsAlive names the loops of the interactions that are running now, from the goroutines' stacks.
@@ -277,11 +275,7 @@ func TestRunStopsTheInteractionsLoopsBetweenTheIntakeAndTheManager(t *testing.T)
 // build refuses a deps with a part left out, and the error names it: the interactions are built from these parts, and one
 // that is nil would fail at its first use, or never.
 func TestInteractionDepsNameThePartThatIsMissing(t *testing.T) {
-	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := sqlitetest.Open(t)
 	full := interactionDeps{
 		st: st, ob: &outbox.Outbox{}, platforms: chattest.Same[chat.Platform](chattest.NewFake()), auditor: &audit.Writer{},
 		bindings: &Bindings{}, metrics: &Metrics{}, log: slog.Default(),

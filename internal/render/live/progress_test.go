@@ -16,6 +16,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/internal/session"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
@@ -55,7 +56,7 @@ func (e *env) until(t *testing.T, what string, limit time.Duration, cond func() 
 		time.Sleep(10 * time.Millisecond)
 	}
 	stopped := e.clk.mark()
-	eventually(t, what, func() bool {
+	testutil.Eventually(t, what, func() bool {
 		if cond() { // a window is owed nothing once the thing has come: turning for it would move the clock under the test's next step
 			return true
 		}
@@ -87,7 +88,7 @@ func (e *env) delayDue(t *testing.T, what string, cond func() bool) {
 func (e *env) turnWithinAWindow(t *testing.T, what string, cond func() bool, due func(by time.Time) time.Time) {
 	t.Helper()
 	by := e.clk.Now().Add(throttle)
-	eventually(t, what, func() bool {
+	testutil.Eventually(t, what, func() bool {
 		if cond() {
 			return true
 		}
@@ -115,7 +116,7 @@ func (e *env) tookSince(started time.Time) string {
 // writesReach waits for the renderer to have made n requests in all.
 func (e *env) writesReach(t *testing.T, n int) {
 	t.Helper()
-	eventually(t, fmt.Sprintf("%d requests", n), func() bool { return e.writes() >= n })
+	testutil.Eventually(t, fmt.Sprintf("%d requests", n), func() bool { return e.writes() >= n })
 }
 
 // cards is the task_update chunks the stream was sent, in order, as "id title status" and, if the chunk had one, " [detail]".
@@ -509,7 +510,7 @@ func TestARefusedWorkingCardEndsTheStepsOfTheTurn(t *testing.T) {
 				} else {
 					run.Handle(text("a", "Hello"))
 				}
-				eventually(t, "the card to be asked of the platform", func() bool {
+				testutil.Eventually(t, "the card to be asked of the platform", func() bool {
 					e.clk.advance(step)
 					return steps.Load() >= 1
 				})
@@ -573,7 +574,7 @@ func TestAnAlertThreadPostsWorkingWhenTheTurnIsSilent(t *testing.T) {
 	if spent := e.until(t, "the post", 6*time.Second, func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 }); spent < 3*time.Second {
 		t.Fatalf("posted after %v; want the delay, 3 s", spent)
 	}
-	eventually(t, "the message", func() bool { return e.reply().Text == "Working…" })
+	testutil.Eventually(t, "the message", func() bool { return e.reply().Text == "Working…" })
 	if m := e.reply(); !strings.Contains(string(m.Blocks), `"context"`) {
 		t.Fatalf("message %+v; want Working… as a line of small print and as the plain text", m)
 	}
@@ -612,7 +613,7 @@ func TestTheActivityLineOnAnAlertThreadCountsAndNamesNoTool(t *testing.T) {
 	e := setup(t)
 	run := e.progressRun(t, activity, "")
 	run.Handle(call("c1", "TOOLNAME_ONE", map[string]any{"q": "ARGVALUE_ONE"}))
-	eventually(t, "the line", func() bool { return strings.Contains(e.said(), "Working…") })
+	testutil.Eventually(t, "the line", func() bool { return strings.Contains(e.said(), "Working…") })
 	if got := e.said(); strings.Contains(got, "Working… (") {
 		t.Fatalf("blocks %s; want Working… alone while no result is in", got)
 	}
@@ -724,9 +725,9 @@ var progressScripts = []struct {
 		armed := e.clk.mark()
 		run.Handle(call("c2", "fetch", nil))
 		run.Handle(result("c2", map[string]any{"error": "call rejected"}))
-		eventually(t, "the run to wait for its window", func() bool { return e.clk.waitingSince(armed) == 1 })
+		testutil.Eventually(t, "the run to wait for its window", func() bool { return e.clk.waitingSince(armed) == 1 })
 		e.advanceTo(started.Add(20 * time.Second))
-		eventually(t, "two steps", func() bool { return e.tasks()[0].Title == "Working… 2 steps, 1 failed" })
+		testutil.Eventually(t, "two steps", func() bool { return e.tasks()[0].Title == "Working… 2 steps, 1 failed" })
 		run.Handle(text("a", "Three pods, all ready."))
 		run.Handle(agent.FinalEvent{})
 		e.finish(t, run)
@@ -734,7 +735,7 @@ var progressScripts = []struct {
 	{"progress-working-in-an-alert-thread", func(t *testing.T, e *env) {
 		run := e.progressRun(t, sa, "")
 		run.Handle(call("c1", "kubectl_get", map[string]any{"namespace": "prod"}))
-		eventually(t, "the line of the call", func() bool { return strings.Contains(e.said(), "Calling kubectl_get") })
+		testutil.Eventually(t, "the line of the call", func() bool { return strings.Contains(e.said(), "Calling kubectl_get") })
 		run.Handle(result("c1", map[string]any{"output": "3 pods"})) // the updates show cards in place of the post's line
 		e.until(t, "the card of the call that returned", 3*time.Second, func() bool { got := e.tasks(); return len(got) == 1 && got[0].Status == "complete" })
 		e.until(t, "the Working… card", 8*time.Second, func() bool { got := e.tasks(); return len(got) == 2 && got[1].Title == "Working…" })
@@ -746,7 +747,7 @@ var progressScripts = []struct {
 		started := e.clk.Now()
 		run := e.progressRun(t, activity, "")
 		run.Handle(call("c1", "kubectl_get", map[string]any{"namespace": "prod"}))
-		eventually(t, "the line", func() bool { return strings.Contains(e.said(), "Working…") })
+		testutil.Eventually(t, "the line", func() bool { return strings.Contains(e.said(), "Working…") })
 		run.Handle(result("c1", map[string]any{"output": "3 pods"}))
 		e.until(t, "one step", 3*time.Second, func() bool { return strings.Contains(e.said(), "Working… (1 step)") })
 		// The second call and its result are one write only if they reach the run while its window is shut. The window shuts
@@ -763,9 +764,9 @@ var progressScripts = []struct {
 		armed := e.clk.mark()
 		run.Handle(call("c2", "fetch", nil))
 		run.Handle(result("c2", map[string]any{"error": "call rejected"}))
-		eventually(t, "the run to wait for its window", func() bool { return e.clk.waitingSince(armed) == 1 })
+		testutil.Eventually(t, "the run to wait for its window", func() bool { return e.clk.waitingSince(armed) == 1 })
 		e.advanceTo(started.Add(2*time.Minute + 5*time.Second))
-		eventually(t, "the minutes", func() bool { return strings.Contains(e.said(), "(2 min, 2 steps, 1 failed)") })
+		testutil.Eventually(t, "the minutes", func() bool { return strings.Contains(e.said(), "(2 min, 2 steps, 1 failed)") })
 		run.Handle(text("a", "Three pods, all ready."))
 		run.Handle(agent.FinalEvent{})
 		e.finish(t, run)
@@ -811,7 +812,7 @@ func TestTheSinkTellsTheRendererTheProgressMode(t *testing.T) {
 			} else {
 				e.elapse(10 * time.Second)
 			}
-			eventually(t, "the message", func() bool { return !tc.wantWorking || e.reply().Text == "Working…" })
+			testutil.Eventually(t, "the message", func() bool { return !tc.wantWorking || e.reply().Text == "Working…" })
 			if got := strings.Contains(e.said(), "Working…"); got != tc.wantWorking || (!tc.wantWorking && e.writes() != 0) {
 				t.Errorf("Working… shown = %v after silence; want %v (requests %d)", got, tc.wantWorking, e.writes())
 			}
@@ -918,7 +919,7 @@ func TestACallWithNoIDHasNoWorkingBesideIt(t *testing.T) {
 		e := setup(t)
 		run := e.progressRun(t, sa, "")
 		run.Handle(call("", "search", nil))
-		eventually(t, "the line", func() bool { return strings.Contains(e.said(), "Calling search") })
+		testutil.Eventually(t, "the line", func() bool { return strings.Contains(e.said(), "Calling search") })
 		e.until(t, "the card that takes the line's place", 3*time.Second, func() bool { return len(e.tasks()) == 1 })
 		e.elapse(time.Minute)
 		if got := e.said(); strings.Contains(got, "Working") {
@@ -1073,7 +1074,7 @@ func TestAnEmptyStreamIsStoppedWhenTheTurnEndsWithNothingToShow(t *testing.T) {
 		{"steps, a call and an empty end", v1alpha1.ProgressSteps, func(t *testing.T, e *env, run *live.Run) {
 			run.Handle(call("c1", "search", nil))
 			run.Handle(result("c1", map[string]any{"output": "x"}))
-			eventually(t, "the stream to start for the step", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
+			testutil.Eventually(t, "the stream to start for the step", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
 		}, agent.FinalEvent{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

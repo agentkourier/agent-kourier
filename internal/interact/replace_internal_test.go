@@ -3,8 +3,6 @@ package interact
 import (
 	"context"
 	"errors"
-	"io"
-	"log/slog"
 	"testing"
 	"time"
 
@@ -12,8 +10,8 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/store"
-	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // failsOn is an Editor that fails for the messages in bad and succeeds for the rest.
@@ -39,11 +37,7 @@ func (failsOn) Classify(op chat.Op, err error) chat.Verdict {
 // the interaction can still be listed; otherwise both would grow by one entry per interaction for as long
 // as the process runs.
 func TestWhatLeftTheHorizonIsForgotten(t *testing.T) {
-	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := sqlitetest.Open(t)
 	base := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 	add := func(id, ref string, decidedAt time.Time) {
 		t.Helper()
@@ -65,7 +59,7 @@ func TestWhatLeftTheHorizonIsForgotten(t *testing.T) {
 	add("recent-failed", "bad", base.Add(20*time.Hour))
 	now := base.Add(21 * time.Hour)
 	r, err := NewReplacer(ReplacerConfig{Store: st, Updaters: chattest.Same[Editor](failsOn{"bad": true}), Now: func() time.Time { return now },
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		Logger: testutil.DiscardLogger()})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -15,6 +15,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
@@ -56,7 +57,7 @@ func TestAStreamIsStoppedWhenItsTurnEndsWithNoFinal(t *testing.T) {
 		}, "Checking the pods.", []string{"s1 Stopped error"}, nil},
 		{"steps, a call under way", v1alpha1.ProgressSteps, func(t *testing.T, e *env, run *live.Run) {
 			run.Handle(call("c1", "search", nil))
-			eventually(t, "the card of the call", func() bool { return len(e.tasks()) == 1 })
+			testutil.Eventually(t, "the card of the call", func() bool { return len(e.tasks()) == 1 })
 		}, "", []string{"s1 search complete"}, func(c fakeslack.Task) bool { return c.Output != "" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

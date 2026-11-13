@@ -12,6 +12,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // The text of an agent's JSON-RPC error is the agent's own: kagent puts the exception of a failed model call or tool
@@ -42,7 +43,7 @@ func TestAgentErrorTextIsRedactedAndCappedInTurnFailureLogs(t *testing.T) {
 			if _, err := f.submit(inbound("1")); err != nil {
 				t.Fatal(err)
 			}
-			eventually(t, "the failure line", func() bool { return strings.Contains(out.String(), "session turn failed") })
+			testutil.Eventually(t, "the failure line", func() bool { return strings.Contains(out.String(), "session turn failed") })
 			f.retired(t)
 
 			all := out.String()

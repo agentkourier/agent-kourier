@@ -18,6 +18,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/generic"
 	"github.com/agentkourier/agent-kourier/internal/secret"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // Through a real Pool and Agent, a task left by an agent card that is too large is released by a restart once the card is fixed. The first
@@ -69,7 +70,7 @@ func TestRestartFollowsTheTaskLeftByACardOnceItIsFixed(t *testing.T) {
 		}})
 
 	f.recover(t) // the process that meets the bad card
-	eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+	testutil.Eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
 	f.retired(t)
 	if got := sink.noticesOf(NoticeFailed); got[0].Detail != cardTooLargeDetail {
 		t.Errorf("notice = %q; want %q", got[0].Detail, cardTooLargeDetail)
@@ -81,7 +82,7 @@ func TestRestartFollowsTheTaskLeftByACardOnceItIsFixed(t *testing.T) {
 	setBad(false) // the card is fixed, and the broker restarts
 	f.recover(t)
 	waitFinal(t, sink) // the task's end, rendered by the recovery that follows it
-	eventually(t, "the record to be cleared", func() bool { return f.taskID() == "" })
+	testutil.Eventually(t, "the record to be cleared", func() bool { return f.taskID() == "" })
 	f.retired(t)
 	if got := sink.noticesOf(NoticeFailed); len(got) != 1 {
 		t.Errorf("failed notices = %+v; want the one: a restart that works tells the thread nothing more", got)

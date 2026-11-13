@@ -19,6 +19,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/secret"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // The two connections of twoConnections, as the verification names them.
@@ -162,7 +163,7 @@ func TestEachBindingIsProbedWithTheBotOfItsOwnConnection(t *testing.T) {
 	p := verification{
 		Bindings: backends, Platforms: chat.PlatformSet[platformReader]{connA: botA, connB: botB},
 		Conns: bothConnections, Snaps: current, Secrets: bothSecretsHold(), Revision: func(context.Context) string { return "r" },
-		Metrics: mustMetrics(t, nil), Log: slog.New(slog.DiscardHandler), Interval: time.Hour, Tick: 5 * time.Millisecond,
+		Metrics: mustMetrics(t, nil), Log: testutil.DiscardLogger(), Interval: time.Hour, Tick: 5 * time.Millisecond,
 	}.newProber()
 	got := settled(t, p, 4)
 
@@ -225,7 +226,7 @@ func TestAChangedSecretOfOneConnectionHoldsItsOwnBindingsOnly(t *testing.T) {
 			p := verification{
 				Bindings: &reachable{}, Platforms: chat.PlatformSet[platformReader]{connA: botA, connB: botB},
 				Conns: bothConnections, Snaps: current, Secrets: secrets, Revision: func(context.Context) string { return "r" },
-				Metrics: mustMetrics(t, nil), Log: slog.New(slog.DiscardHandler), Interval: time.Hour, Tick: 5 * time.Millisecond,
+				Metrics: mustMetrics(t, nil), Log: testutil.DiscardLogger(), Interval: time.Hour, Tick: 5 * time.Millisecond,
 			}.newProber()
 			got := settled(t, p, 4)
 
@@ -299,9 +300,9 @@ func TestABindingOfAConnectionThatIsNotRunningIsToldSoWithoutACall(t *testing.T)
 	}
 	// The operator's log has why: the INFO line of the transition carries the resolver's error, which names the connection.
 	// (The line is written by the Prober's hook, a moment after the condition is set.)
-	eventually(t, 10*time.Second, "no INFO line with the connection as the cause of sre/other-bot's ChannelJoined", func() bool {
+	testutil.Eventually(t, "no INFO line with the connection as the cause of sre/other-bot's ChannelJoined", func() bool {
 		return countOf(buf.String(), "level=INFO", "a condition is unknown", "binding=sre/other-bot", "condition=ChannelJoined", "cause=", connB) == 1
-	})
+	}, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	if strings.Contains(buf.String(), "level=WARN") {
 		t.Errorf("a connection that is not running logged a warning:\n%s", buf.String())
 	}
@@ -309,7 +310,7 @@ func TestABindingOfAConnectionThatIsNotRunningIsToldSoWithoutACall(t *testing.T)
 	// It starts: the next pass reads with its bot.
 	resolver.setDown(connB, false)
 	revision.Add(1)
-	eventually(t, 10*time.Second, "the Bindings of the connection that now runs were not read", func() bool {
+	testutil.Eventually(t, "the Bindings of the connection that now runs were not read", func() bool {
 		return p.State().Snapshot()["sre/other-bot"] != nil && func() bool {
 			for _, c := range p.State().Snapshot()["sre/other-bot"] {
 				if c.Type == bindingcheck.ChannelJoined {
@@ -318,7 +319,7 @@ func TestABindingOfAConnectionThatIsNotRunningIsToldSoWithoutACall(t *testing.T)
 			}
 			return false
 		}()
-	})
+	}, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	if botB.callCount() == 0 {
 		t.Error("the bot of slack-b was not called after the connection started")
 	}
@@ -380,7 +381,7 @@ func TestABindingThatMovesToAnotherConnectionIsReadWithThatConnectionsBot(t *tes
 	p := verification{
 		Bindings: &reachable{}, Platforms: chat.PlatformSet[platformReader]{connA: botA, connB: botB}, Conns: bothConnections, Snaps: current,
 		Revision: func(context.Context) string { return fmt.Sprint(revision.Load()) }, Secrets: bothSecretsHold(),
-		Metrics: mustMetrics(t, nil), Log: slog.New(slog.DiscardHandler), Interval: time.Hour, Tick: 5 * time.Millisecond, MinRevisionGap: time.Millisecond,
+		Metrics: mustMetrics(t, nil), Log: testutil.DiscardLogger(), Interval: time.Hour, Tick: 5 * time.Millisecond, MinRevisionGap: time.Millisecond,
 	}.newProber()
 	runProber(t, p)
 	if c := waitSettled(t, p, 1)["sre/oncall"][bindingcheck.ChannelJoined]; c.Status != bindingcheck.True {
@@ -388,14 +389,14 @@ func TestABindingThatMovesToAnotherConnectionIsReadWithThatConnectionsBot(t *tes
 	}
 	current.p.Store(twoConnectionsMoved(t, map[string]string{"sre/oncall": "slack-b"}, "ops/oncall", "ops/also-other", "sre/other-bot"))
 	revision.Add(1)
-	eventually(t, 10*time.Second, "sre/oncall was not read with the bot of slack-b", func() bool {
+	testutil.Eventually(t, "sre/oncall was not read with the bot of slack-b", func() bool {
 		for _, c := range p.State().Snapshot()["sre/oncall"] {
 			if c.Type == bindingcheck.ChannelJoined {
 				return c.Status == bindingcheck.False && c.Reason == bindingcheck.ReasonNotInChannel
 			}
 		}
 		return false
-	})
+	}, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 }
 
 // sreSlack is the one connection of the verification tests that serve one: snapshotWith's.

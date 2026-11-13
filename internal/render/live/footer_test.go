@@ -12,6 +12,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // The footer is what a turn's final message ends with under its text (Turn.Footer): the feedback buttons of spec 8.7. It
@@ -38,14 +39,14 @@ func TestTheFinalMessageOfAPostedTurnCarriesTheFooterAndNoEarlierOneDoes(t *test
 	e := setup(t)
 	run, _ := e.startFor(t, liveTurn(v1alpha1.OutputLive, ""))
 	run.Handle(text("a", "partial"))
-	eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+	testutil.Eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
 	if buttons, _ := hasFooter(string(e.reply().Blocks)); buttons {
 		t.Fatalf("a reply that is still being written carries the buttons: %s", e.reply().Blocks)
 	}
 	run.Handle(text("a", "partial, and the answer"))
-	eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
+	testutil.Eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
 	e.clk.advance(throttle)
-	eventually(t, "the update", func() bool { return e.updates() == 1 })
+	testutil.Eventually(t, "the update", func() bool { return e.updates() == 1 })
 	if buttons, _ := hasFooter(string(e.reply().Blocks)); buttons {
 		t.Fatalf("an update before the final carries the buttons: %s", e.reply().Blocks)
 	}
@@ -62,7 +63,7 @@ func TestAFinalWithTheTextAlreadyShownStillGetsTheFooter(t *testing.T) {
 	e := setup(t)
 	run, _ := e.startFor(t, liveTurn(v1alpha1.OutputLive, ""))
 	run.Handle(text("a", "the whole answer"))
-	eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+	testutil.Eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
 	if buttons, questions := hasFooter(string(e.reply().Blocks)); !buttons || questions != 1 {
@@ -88,7 +89,7 @@ func TestAStreamedTurnStopsWithTheFooterAndTheTextOnce(t *testing.T) {
 	e := setup(t)
 	run, _ := e.startFor(t, liveTurn(v1alpha1.OutputLive, "U1"))
 	run.Handle(text("a", "Hello"))
-	eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
+	testutil.Eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
 	run.Handle(text("a", "Hello world"))
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
@@ -108,9 +109,9 @@ func TestAStreamThatDivergedGetsTheFooterWithTheUpdateThatReplacesIt(t *testing.
 	e := setup(t)
 	run, _ := e.startFor(t, liveTurn(v1alpha1.OutputLive, "U1"))
 	run.Handle(text("a", "Hello there"))
-	eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
+	testutil.Eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
 	run.Handle(text("a", "Goodbye")) // not an extension of what was streamed
-	eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
+	testutil.Eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
 	e.clk.advance(throttle)
 	run.Handle(text("a", "Goodbye, all"))
 	run.Handle(agent.FinalEvent{})
@@ -130,7 +131,7 @@ func TestATurnWithNoOutputHasNoFooter(t *testing.T) {
 	e.spy(t, false, nil)
 	run, _ := e.startFor(t, liveTurn(v1alpha1.OutputLive, ""))
 	run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "search"})
-	eventually(t, "the tool line to be posted", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+	testutil.Eventually(t, "the tool line to be posted", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
 	if m := e.reply(); strings.Contains(string(m.Blocks), "feedback-useful") || !strings.Contains(m.Text, "(no output)") {
@@ -190,11 +191,11 @@ func TestAPausedTurnHasNoFooterAndTheContinuationAfterTheAnswerHasIt(t *testing.
 	paused := sink.Turn(t.Context(), session.TurnRef{Key: key, MessageID: "turn-1", UserID: session.SystemUser, Feedback: store.FeedbackInvestigation, Output: v1alpha1.OutputLive})
 	paused(text("a", "Which database?"))
 	paused(task(a2a.TaskStateInputRequired))
-	eventually(t, "the question to be posted", func() bool { e.clk.advance(throttle); return e.reply().Text == "Which database?" })
+	testutil.Eventually(t, "the question to be posted", func() bool { e.clk.advance(throttle); return e.reply().Text == "Which database?" })
 	answered := sink.Turn(t.Context(), session.TurnRef{Key: key, MessageID: "ans-1", UserID: session.SystemUser, Feedback: store.FeedbackInvestigation, Output: v1alpha1.OutputLive})
 	answered(text("a", "Use PostgreSQL."))
 	answered(task(a2a.TaskStateCompleted))
-	eventually(t, "the continuation to be posted", func() bool { e.clk.advance(throttle); return e.reply().Text == "Use PostgreSQL." })
+	testutil.Eventually(t, "the continuation to be posted", func() bool { e.clk.advance(throttle); return e.reply().Text == "Use PostgreSQL." })
 	e.drain(t, e.live)
 	th := e.fake.Thread("C1", e.root)
 	var rated []string

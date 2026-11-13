@@ -42,6 +42,7 @@ internal/redact         shared secret redaction for display and audit text
 internal/backoff        doubling retry wait shared by the retry loops (leaf package, imports nothing of the module)
 internal/limitsdoc      test support that holds docs/reference/limits.md to the constants of the code
 internal/testhooks      test-only hooks, compiled in under the testhooks build tag
+internal/testutil       helpers only tests import: Eventually (poll until a condition holds), DiscardLogger; standard library only (a migrated SQLite store for a test: internal/store/sqlite/sqlitetest)
 charts/agent-kourier    Helm chart
 examples/ax             reference A2A agent for Google AX (separate module)
 docs/                   the documentation site (mkdocs; docs/brand is the brand kit and is not published)

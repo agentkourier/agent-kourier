@@ -51,6 +51,18 @@ func Path(t testing.TB) string {
 	return path
 }
 
+// Open opens a store over a database from Path, fails the test if it cannot, and closes the store when the test ends. It
+// opens with sqlite.Open's defaults: a test that passes options, or opens a path of its own, calls sqlite.Open itself.
+func Open(t testing.TB) *sqlite.Store {
+	t.Helper()
+	st, err := sqlite.Open(t.Context(), Path(t))
+	if err != nil {
+		t.Fatalf("sqlitetest: open the store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	return st
+}
+
 // Seed writes a migrated, empty database at path, unless a file is there already: a test that opens the same path
 // twice (a restart) seeds it each time, and what it wrote stays.
 func Seed(t testing.TB, path string) {

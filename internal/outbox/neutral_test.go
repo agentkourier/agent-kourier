@@ -3,7 +3,6 @@ package outbox_test
 import (
 	"encoding/json"
 	"errors"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,13 +10,14 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 )
 
 // A post is stored as the message in the neutral model, versioned, exactly as it was given: the outbox renders
 // nothing, so what is stored holds no platform's markup, and what the platform is handed at delivery is what was
 // stored.
 func TestAPostIsStoredAsTheVersionedNeutralMessage(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	ob := newOutbox(t, st, &poster{})
 	out := chat.Say(chat.Message{Fallback: "<!channel> hi", Parts: []chat.Part{chat.Body{Markdown: "*b* [x](y)"}, chat.Mention{User: "U1", Text: "said"}}})
 
@@ -40,7 +40,7 @@ func TestAPostIsStoredAsTheVersionedNeutralMessage(t *testing.T) {
 
 // What the platform is handed at delivery is the stored message, and the tag is the row's ID.
 func TestThePlatformIsHandedTheStoredMessage(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	p := &poster{}
 	ob := newOutbox(t, st, p)
 	out := chat.Ask(chat.Prompt{ID: "ix-1", Hint: "h", Questions: []chat.Question{{Text: "q", Choices: []string{"a", "b"}}}})
@@ -61,7 +61,7 @@ func TestThePlatformIsHandedTheStoredMessage(t *testing.T) {
 // A message that cannot be shown, or a prompt that does not fit, is invalid where it is enqueued, and no retry mends it.
 func TestAMessageThatCannotBeShownIsInvalid(t *testing.T) {
 	p := &poster{fitsErr: chat.ErrTooLarge}
-	ob := newOutbox(t, openStore(t, filepath.Join(t.TempDir(), "c.db")), p)
+	ob := newOutbox(t, sqlitetest.Open(t), p)
 	for name, out := range map[string]chat.Outgoing{
 		"a message with nothing in it": chat.Say(chat.Message{}),
 		"a version that is not known":  {V: 7, Message: &chat.Message{Fallback: "x"}},
@@ -99,7 +99,7 @@ func TestALegacySlackPayloadIsAbandonedAsInvalid(t *testing.T) {
 		"not JSON":              `the old words`,
 		"a message with no one": `{"v":1}`,
 	} {
-		st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+		st := sqlitetest.Open(t)
 		if _, err := st.CreateOutbox(t.Context(), store.OutboxEntry{ID: "ev1/reply", EventID: "ev1", Role: store.OutboxReply, Channel: "C1", CreatedAt: t0, Payload: payload}); err != nil {
 			t.Fatal(err)
 		}
@@ -131,7 +131,7 @@ func TestALegacySlackPayloadIsAbandonedAsInvalid(t *testing.T) {
 // The log line of an abandoned legacy payload says what it was, so that the owner who reads it knows the loss was the
 // upgrade and not a fault.
 func TestTheLogSaysThatALegacyPayloadWasNotMigrated(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	if _, err := st.CreateOutbox(t.Context(), store.OutboxEntry{ID: "ev1/reply", EventID: "ev1", Role: store.OutboxReply, Channel: "C1", CreatedAt: t0, Payload: `{"text":"hi"}`}); err != nil {
 		t.Fatal(err)
 	}

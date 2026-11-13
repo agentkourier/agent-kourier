@@ -3,9 +3,6 @@ package outbox_test
 import (
 	"context"
 	"errors"
-	"io"
-	"log/slog"
-	"path/filepath"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -15,6 +12,8 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 const (
@@ -40,16 +39,14 @@ func newTwoApps() twoApps {
 	return twoApps{a: a, b: b, set: chat.PlatformSet[outbox.Platform]{connA: a, connB: b}}
 }
 
-func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
-
 // TestEachCallReachesThePlatformOfItsRowsConnection: a post made by Send, a post the drain makes, the lookup before a post and
 // a reaction each go to the platform of the connection the row names, with the connection in the Target, and never to the other.
 func TestEachCallReachesThePlatformOfItsRowsConnection(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	apps := newTwoApps()
 	reacts := map[string]*reactor{connA: {}, connB: {}}
 	apps.a.reactor, apps.b.reactor = reacts[connA], reacts[connB]
-	o := mustNew(t, outbox.Config{Store: st, Platforms: apps.set, Now: func() time.Time { return t0 }, CallTimeout: time.Second, Logger: quiet()})
+	o := mustNew(t, outbox.Config{Store: st, Platforms: apps.set, Now: func() time.Time { return t0 }, CallTimeout: time.Second, Logger: testutil.DiscardLogger()})
 	ctx := t.Context()
 
 	if _, err := o.Send(ctx, onConn(connA, "sent-a")); err != nil {
@@ -123,23 +120,23 @@ func hangs(release <-chan struct{}) *poster {
 // TestAConnectionThatHangsHoldsUpOnlyItsOwnPosts: with the platform of one connection not answering, the posts of another go
 // out at once, whether the drain or a Send makes them; the hung connection's post goes out when its platform answers.
 func TestAConnectionThatHangsHoldsUpOnlyItsOwnPosts(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	release := make(chan struct{})
 	a, b := hangs(release), &poster{}
 	o := mustNew(t, outbox.Config{Store: st, Platforms: chat.PlatformSet[outbox.Platform]{connA: a, connB: b},
-		Now: func() time.Time { return t0 }, CallTimeout: time.Minute, Interval: time.Hour, Logger: quiet()})
+		Now: func() time.Time { return t0 }, CallTimeout: time.Minute, Interval: time.Hour, Logger: testutil.DiscardLogger()})
 	start(t, o)
 	ctx := t.Context()
 
 	if _, err := o.Enqueue(ctx, onConn(connA, "stuck")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "a's post to be in flight", func() bool { posts, _ := a.counts(); return posts == 1 })
+	testutil.Eventually(t, "a's post to be in flight", func() bool { posts, _ := a.counts(); return posts == 1 })
 
 	if _, err := o.Enqueue(ctx, onConn(connB, "drained")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "b's queued post to go out while a hangs", func() bool { return ref(st, outbox.ID("drained", store.OutboxReply)) != "" })
+	testutil.Eventually(t, "b's queued post to go out while a hangs", func() bool { return ref(st, outbox.ID("drained", store.OutboxReply)) != "" })
 	sent := make(chan error, 1)
 	go func() { _, err := o.Send(ctx, onConn(connB, "sent")); sent <- err }()
 	select {
@@ -155,7 +152,7 @@ func TestAConnectionThatHangsHoldsUpOnlyItsOwnPosts(t *testing.T) {
 	}
 
 	close(release)
-	eventually(t, "a's post to go out once its platform answers", func() bool { return ref(st, outbox.ID("stuck", store.OutboxReply)) != "" })
+	testutil.Eventually(t, "a's post to go out once its platform answers", func() bool { return ref(st, outbox.ID("stuck", store.OutboxReply)) != "" })
 }
 
 // lookupHang is a poster that never finishes the lookup of one row.
@@ -186,13 +183,13 @@ func TestAnotherConnectionsPostsDoNotKeepALookupFromGivingUp(t *testing.T) {
 		{"the other posts are the same connection's", connA, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+			st := sqlitetest.Open(t)
 			var clock atomic.Int64
 			var abandoned []string
 			var mu sync.Mutex
 			o := mustNew(t, outbox.Config{Store: st,
 				Platforms: chat.PlatformSet[outbox.Platform]{connA: lookupHang{&poster{}, stuckID}, connB: &poster{}},
-				Now:       func() time.Time { return t0.Add(time.Duration(clock.Load())) }, CallTimeout: 20 * time.Millisecond, Logger: quiet(),
+				Now:       func() time.Time { return t0.Add(time.Duration(clock.Load())) }, CallTimeout: 20 * time.Millisecond, Logger: testutil.DiscardLogger(),
 				OnAbandon: func(id, reason string) { mu.Lock(); abandoned = append(abandoned, id+" "+reason); mu.Unlock() }})
 			ctx := t.Context()
 			if _, err := st.CreateOutbox(ctx, store.OutboxEntry{ID: stuckID, EventID: "stuck", Role: store.OutboxReply, Connection: connA, Channel: "C1", Thread: "1.1", CreatedAt: t0, Payload: neutral("stuck")}); err != nil {
@@ -239,11 +236,11 @@ func (d *dynamic) set(conn string, p outbox.Platform) {
 // a failure of any platform (no error from the drain, no delay when the connection comes), and it is posted once the
 // connection runs. Send says the connection is down, and leaves the row. A prompt that cannot be checked is not invalid.
 func TestARowOfAConnectionThatIsDownWaits(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	live, down := &poster{}, &poster{}
 	res := &dynamic{m: map[string]outbox.Platform{connA: live}}
 	var abandoned atomic.Int32
-	o := mustNew(t, outbox.Config{Store: st, Platforms: res, Now: func() time.Time { return t0 }, CallTimeout: time.Second, Logger: quiet(),
+	o := mustNew(t, outbox.Config{Store: st, Platforms: res, Now: func() time.Time { return t0 }, CallTimeout: time.Second, Logger: testutil.DiscardLogger(),
 		OnAbandon: func(string, string) { abandoned.Add(1) }})
 	ctx := t.Context()
 
@@ -294,14 +291,14 @@ func TestARowOfAConnectionThatIsDownWaits(t *testing.T) {
 // of another connection that are past Retention are abandoned all the same: one whose platform answers, and one that no
 // platform runs. The abandoning is each connection's own, so no connection's hang puts it off.
 func TestRetentionIsKeptWhileAnotherConnectionHangs(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	release := make(chan struct{})
 	a, b := hangs(release), &poster{}
 	var clock atomic.Int64
 	var mu sync.Mutex
 	var abandoned []string
 	o := mustNew(t, outbox.Config{Store: st, Platforms: chat.PlatformSet[outbox.Platform]{connA: a, connB: b},
-		Now: func() time.Time { return t0.Add(time.Duration(clock.Load())) }, CallTimeout: time.Minute, Interval: time.Hour, Retention: time.Hour, Logger: quiet(),
+		Now: func() time.Time { return t0.Add(time.Duration(clock.Load())) }, CallTimeout: time.Minute, Interval: time.Hour, Retention: time.Hour, Logger: testutil.DiscardLogger(),
 		OnAbandon: func(id, reason string) { mu.Lock(); abandoned = append(abandoned, id+" "+reason); mu.Unlock() }})
 	start(t, o)
 	ctx := t.Context()
@@ -309,7 +306,7 @@ func TestRetentionIsKeptWhileAnotherConnectionHangs(t *testing.T) {
 	if _, err := o.Enqueue(ctx, onConn(connA, "stuck")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "a's post to be in flight", func() bool { posts, _ := a.counts(); return posts == 1 })
+	testutil.Eventually(t, "a's post to be in flight", func() bool { posts, _ := a.counts(); return posts == 1 })
 
 	clock.Add(int64(2 * time.Hour)) // the rows made at t0 are past Retention, and the stuck one made just now is not
 	for _, p := range []outbox.Post{onConn(connB, "old-b"), onConn("ns/down", "old-down")} {
@@ -321,7 +318,7 @@ func TestRetentionIsKeptWhileAnotherConnectionHangs(t *testing.T) {
 	if _, err := o.Enqueue(ctx, onConn(connB, "later")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the old rows to be abandoned while a hangs", func() bool {
+	testutil.Eventually(t, "the old rows to be abandoned while a hangs", func() bool {
 		mu.Lock()
 		defer mu.Unlock()
 		return slices.Contains(abandoned, "old-down/notice "+outbox.AbandonExpired) && slices.Contains(abandoned, "old-b/notice "+outbox.AbandonExpired)
@@ -332,7 +329,7 @@ func TestRetentionIsKeptWhileAnotherConnectionHangs(t *testing.T) {
 		}
 	}
 	// The later row may be posted after the old ones are abandoned: wait for its post, then check it was the only one.
-	eventually(t, "b to post the row that is not past Retention", func() bool { posts, _ := b.counts(); return posts >= 1 })
+	testutil.Eventually(t, "b to post the row that is not past Retention", func() bool { posts, _ := b.counts(); return posts >= 1 })
 	if posts, _ := b.counts(); posts != 1 {
 		t.Errorf("b posted %d times; want only the row that is not past Retention", posts)
 	}
@@ -341,11 +338,11 @@ func TestRetentionIsKeptWhileAnotherConnectionHangs(t *testing.T) {
 
 // TestARowOfAConnectionThatStaysDownIsAbandonedAfterRetention: nothing posts it, and its text goes at the retention all the same.
 func TestARowOfAConnectionThatStaysDownIsAbandonedAfterRetention(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	var clock atomic.Int64
 	var abandoned []string
 	o := mustNew(t, outbox.Config{Store: st, Platforms: chat.PlatformSet[outbox.Platform]{connA: &poster{}},
-		Now: func() time.Time { return t0.Add(time.Duration(clock.Load())) }, CallTimeout: time.Second, Logger: quiet(),
+		Now: func() time.Time { return t0.Add(time.Duration(clock.Load())) }, CallTimeout: time.Second, Logger: testutil.DiscardLogger(),
 		OnAbandon: func(id, reason string) { abandoned = append(abandoned, id+" "+reason) }})
 	ctx := t.Context()
 	post := onConn(connB, "waiting")
@@ -380,10 +377,10 @@ func TestARowOfAConnectionThatStaysDownIsAbandonedAfterRetention(t *testing.T) {
 // is the own connection's: it is delivered through that connection's platform, in its lane, and not left for a connection ""
 // that nothing runs.
 func TestARowWithNoConnectionIsTheDefaultConnectionsUntilItIsAttributed(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	own, other := &poster{}, &poster{}
 	o := mustNew(t, outbox.Config{Store: st, Platforms: chat.PlatformSet[outbox.Platform]{connA: own, connB: other}, DefaultConnection: connA,
-		Now: func() time.Time { return t0 }, CallTimeout: time.Second, Logger: quiet()})
+		Now: func() time.Time { return t0 }, CallTimeout: time.Second, Logger: testutil.DiscardLogger()})
 	ctx := t.Context()
 	if _, err := st.CreateOutbox(ctx, store.OutboxEntry{ID: "old/reply", EventID: "old", Role: store.OutboxReply, Channel: "C1", Thread: "1.1", CreatedAt: t0, Payload: neutral("old")}); err != nil {
 		t.Fatal(err)

@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +18,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // edits records the edits made to prompts, whole.
@@ -72,16 +71,13 @@ func newReplaceRig(t *testing.T) *replaceRig { return newReplaceRigWith(t, nil) 
 // newReplaceRigWith is newReplaceRig with the Replacer's configuration changed by mod.
 func newReplaceRigWith(t *testing.T, mod func(*interact.ReplacerConfig)) *replaceRig {
 	t.Helper()
-	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := sqlitetest.Open(t)
 	rig := &replaceRig{st: st, up: &edits{}}
-	cfg := interact.ReplacerConfig{Store: st, Updaters: chattest.Same[interact.Editor](rig.up), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	cfg := interact.ReplacerConfig{Store: st, Updaters: chattest.Same[interact.Editor](rig.up), Logger: testutil.DiscardLogger()}
 	if mod != nil {
 		mod(&cfg)
 	}
+	var err error
 	rig.r, err = interact.NewReplacer(cfg)
 	if err != nil {
 		t.Fatal(err)

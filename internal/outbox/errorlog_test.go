@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -13,6 +12,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
@@ -27,7 +27,7 @@ func TestAbandonWarningRedactsAndCapsTheErrorBody(t *testing.T) {
 	if parseErr == nil || !strings.Contains(parseErr.Error(), "unknown error structure") {
 		t.Fatalf("slack-go parsed the body (%v); want its unknown error structure, the case under test", parseErr)
 	}
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	p := &poster{onPost: func(context.Context) error { return fmt.Errorf("post: %w: %w", chat.ErrInvalid, parseErr) }}
 	logs := &syncBuffer{}
 	ob, _, _ := abandoning(t, st, p, func(c *outbox.Config) { c.Logger = slog.New(telemetry.NewJSONHandler(logs, slog.LevelDebug)) })

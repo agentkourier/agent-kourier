@@ -1,15 +1,14 @@
 package outbox_test
 
 import (
-	"io"
-	"log/slog"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // TestRowsCarryTheConnectionOfTheirPostOrTheDefault: a post, a reaction and the removal of one are stored with the connection
@@ -24,9 +23,9 @@ func TestRowsCarryTheConnectionOfTheirPostOrTheDefault(t *testing.T) {
 		{"no default, none named", "", "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+			st := sqlitetest.Open(t)
 			o := mustNew(t, outbox.Config{Store: st, Platforms: chattest.Same[outbox.Platform](&poster{}), Now: func() time.Time { return t0 }, DefaultConnection: tc.def,
-				Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+				Logger: testutil.DiscardLogger()})
 			ctx := t.Context()
 
 			post := reply("ev1")
@@ -56,9 +55,9 @@ func TestRowsCarryTheConnectionOfTheirPostOrTheDefault(t *testing.T) {
 
 // TestSendStoresTheConnectionOfThePost: Send writes the same row Enqueue does.
 func TestSendStoresTheConnectionOfThePost(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	o := mustNew(t, outbox.Config{Store: st, Platforms: chattest.Same[outbox.Platform](&poster{}), Now: func() time.Time { return t0 }, DefaultConnection: "ns/own", CallTimeout: time.Second,
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		Logger: testutil.DiscardLogger()})
 	if _, err := o.Send(t.Context(), reply("ev1")); err != nil {
 		t.Fatalf("Send: %v", err)
 	}

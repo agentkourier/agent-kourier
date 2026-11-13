@@ -7,6 +7,8 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // These tests run the real session manager under the sweeper, with a runner that is really parked on the task: the sweep's fakes cannot show that
@@ -18,7 +20,7 @@ import (
 // retention may deal with the session), the task is cleared, the interaction is ended, and the agent is not called and nothing is posted.
 func TestTheBindingOfAParkedPauseIsDeletedAndTheSweepReleasesTheRunner(t *testing.T) {
 	ag := newScriptedAgent()
-	p := start(t, openStore(t), ag, atTimes(&clockAt{}, t0.Add(time.Minute)), true)
+	p := start(t, sqlitetest.Open(t), ag, atTimes(&clockAt{}, t0.Add(time.Minute)), true)
 	row := p.submit()
 	if !p.mgr.HoldsTask(key, "task-1") {
 		t.Fatal("the runner does not hold the paused task")
@@ -33,11 +35,11 @@ func TestTheBindingOfAParkedPauseIsDeletedAndTheSweepReleasesTheRunner(t *testin
 	p.clk.set(pastDeadline().Add(orphanGrace))
 	p.sweeps(1)
 
-	until(t, "the runner to let go of the task", func() bool { return !p.mgr.HoldsTask(key, "task-1") })
-	until(t, "the task to be cleared from the session", func() bool {
+	testutil.Eventually(t, "the runner to let go of the task", func() bool { return !p.mgr.HoldsTask(key, "task-1") }, testutil.Within(10*time.Second), testutil.Every(2*time.Millisecond))
+	testutil.Eventually(t, "the task to be cleared from the session", func() bool {
 		sess, err := p.st.GetSession(t.Context(), key, 100*365*24*time.Hour, p.clk.now())
 		return err == nil && sess.TaskID == ""
-	})
+	}, testutil.Within(10*time.Second), testutil.Every(2*time.Millisecond))
 	if now, err := p.st.GetInteraction(t.Context(), row.ID); err != nil || now.State != store.InteractionTimedOut {
 		t.Errorf("row %+v, %v; want it ended", now, err)
 	}
@@ -59,7 +61,7 @@ func TestTheBindingOfAParkedPauseIsDeletedAndTheSweepReleasesTheRunner(t *testin
 // TestAfterARestartTheSweepEndsTheInteractionOfABindingThatIsGone: the new process has no runner for the pause, only the record, and the Binding
 // is gone. The sweep ends the interaction and clears the task as well.
 func TestAfterARestartTheSweepEndsTheInteractionOfABindingThatIsGone(t *testing.T) {
-	st, ag, clk := openStore(t), newScriptedAgent(), atTimes(&clockAt{}, t0.Add(time.Minute))
+	st, ag, clk := sqlitetest.Open(t), newScriptedAgent(), atTimes(&clockAt{}, t0.Add(time.Minute))
 	first := start(t, st, ag, clk, true)
 	row := first.submit()
 	first.stop()
@@ -74,10 +76,10 @@ func TestAfterARestartTheSweepEndsTheInteractionOfABindingThatIsGone(t *testing.
 	if now, err := st.GetInteraction(t.Context(), row.ID); err != nil || now.State != store.InteractionTimedOut {
 		t.Fatalf("row %+v, %v; want it ended", now, err)
 	}
-	until(t, "the task to be cleared from the session", func() bool {
+	testutil.Eventually(t, "the task to be cleared from the session", func() bool {
 		sess, err := st.GetSession(t.Context(), key, 100*365*24*time.Hour, clk.now())
 		return err == nil && sess.TaskID == ""
-	})
+	}, testutil.Within(10*time.Second), testutil.Every(2*time.Millisecond))
 	if ag.answered() != 0 || len(ag.cancelled()) != 0 {
 		t.Errorf("the agent was sent %d answers and asked to cancel %v; want it not called", ag.answered(), ag.cancelled())
 	}

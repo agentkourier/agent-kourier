@@ -8,6 +8,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // A pause whose Binding has left the config cannot be cancelled: the cancel needs the Binding's backend, and Cancel fails for as long as
@@ -30,8 +31,8 @@ func TestAbandonReleasesAParkedRunnerOfABindingThatIsGone(t *testing.T) {
 	if err := f.m.Abandon(t.Context(), key, "t1", "its Binding is not in the config"); err != nil {
 		t.Fatalf("Abandon = %v; want the pause ended", err)
 	}
-	eventually(t, "the runner to let go of the task", func() bool { return !f.m.HoldsTask(key, "t1") })
-	eventually(t, "the task to be cleared from the session", func() bool { return f.taskID() == "" })
+	testutil.Eventually(t, "the runner to let go of the task", func() bool { return !f.m.HoldsTask(key, "t1") })
+	testutil.Eventually(t, "the task to be cleared from the session", func() bool { return f.taskID() == "" })
 	if got := f.cancelled(); len(got) != 0 {
 		t.Errorf("the agent was asked to cancel %v; want no call: Abandon never reaches the agent", got)
 	}
@@ -41,7 +42,7 @@ func TestAbandonReleasesAParkedRunnerOfABindingThatIsGone(t *testing.T) {
 	if calls != 0 {
 		t.Errorf("%d agent calls audited; want none: nothing was sent to the agent", calls)
 	}
-	eventually(t, "the held turn to be dropped with the notice for a Binding that is gone", func() bool { return len(sink.noticesOf(NoticeBindingGone)) == 1 })
+	testutil.Eventually(t, "the held turn to be dropped with the notice for a Binding that is gone", func() bool { return len(sink.noticesOf(NoticeBindingGone)) == 1 })
 	if err := f.m.Abandon(t.Context(), key, "t1", "again"); !errors.Is(err, ErrNotPaused) {
 		t.Errorf("a second Abandon = %v; want ErrNotPaused", err)
 	}
@@ -99,14 +100,14 @@ func TestAbandonWorksAfterARestart(t *testing.T) {
 	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the held runner to retire", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.convos) == 0 })
+	testutil.Eventually(t, "the held runner to retire", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.convos) == 0 })
 	if err := f.m.Abandon(t.Context(), key, "t1", "its Binding is not in the config"); err != nil {
 		t.Fatalf("Abandon = %v", err)
 	}
 	if id, want := f.nextSent(), inbound("1").MessageID; id != want {
 		t.Errorf("sent %s after the Abandon; want the held turn %s", id, want)
 	}
-	eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
+	testutil.Eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
 	if got := f.cancelled(); len(got) != 0 {
 		t.Errorf("the agent was asked to cancel %v; want no call", got)
 	}

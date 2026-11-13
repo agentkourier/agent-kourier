@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"slices"
 	"strings"
@@ -17,6 +16,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 const (
@@ -82,16 +82,13 @@ func (m *markFails) MarkTriggerDigested(ctx context.Context, binding string, tri
 
 func newDigestWorld(t *testing.T, wrap func(digestStore) digestStore) *digestWorld {
 	t.Helper()
-	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := sqlitetest.Open(t)
 	w := &digestWorld{st: st, q: &recordingQueue{}, logs: &logBuffer{}, clock: digestNow}
 	var ds digestStore = st
 	if wrap != nil {
 		ds = wrap(ds)
 	}
+	var err error
 	w.d, err = newTriggerDigest(triggerDigestConfig{Store: ds, Queue: w.q, Now: w.now, Logger: slog.New(slog.NewTextHandler(w.logs, nil))})
 	if err != nil {
 		t.Fatal(err)
@@ -349,18 +346,14 @@ func TestTheDigestLoopRunsUntilItsContextEnds(t *testing.T) {
 	w := newDigestWorld(t, nil)
 	w.storm(t, 2)
 	w.advance(11 * time.Minute)
-	d, err := newTriggerDigest(triggerDigestConfig{Store: w.st, Queue: w.q, Interval: time.Millisecond, Now: w.now, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	d, err := newTriggerDigest(triggerDigestConfig{Store: w.st, Queue: w.q, Interval: time.Millisecond, Now: w.now, Logger: testutil.DiscardLogger()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- d.Run(ctx) }()
-	for deadline := time.Now().Add(10 * time.Second); len(w.q.got()) == 0; time.Sleep(time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the loop posted no digest")
-		}
-	}
+	testutil.Eventually(t, "the loop posted no digest", func() bool { return len(w.q.got()) != 0 }, testutil.Within(10*time.Second))
 	cancel()
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Errorf("Run = %v; want context.Canceled", err)

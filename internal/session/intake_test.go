@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"maps"
 	"sync"
 	"sync/atomic"
@@ -22,6 +20,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 var (
@@ -239,14 +238,11 @@ func (f *fixture) dialect() string {
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	s, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s := sqlitetest.Open(t)
 	f := &fixture{t: t, st: &spyStore{Store: s, fail: map[string]error{}, stuck: map[string]error{}}, raw: s, qs: &spyQuestions{Questions: s}, agent: newFakeAgent()}
 	f.now.Store(t0.UnixNano())
-	f.m, err = New(Config{Store: f.st, Questions: f.qs, TextReply: f.decideTextReply, Bindings: f, Audit: f, Users: idOnly{}, Sink: quietSink{}, ThreadContext: NoThreadContext, OnTurnEnd: noTurnEnd, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: func() time.Time { return time.Unix(0, f.now.Load()).UTC() }})
+	var err error
+	f.m, err = New(Config{Store: f.st, Questions: f.qs, TextReply: f.decideTextReply, Bindings: f, Audit: f, Users: idOnly{}, Sink: quietSink{}, ThreadContext: NoThreadContext, OnTurnEnd: noTurnEnd, Logger: testutil.DiscardLogger(), Now: func() time.Time { return time.Unix(0, f.now.Load()).UTC() }})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/bindingcheck"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/secret"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // errorSet is a Resolver whose connections in down answer with the error the test set for them, and have the platform of any other.
@@ -97,9 +98,9 @@ func TestTheBindingsOfARejectedConnectionSayTheCredentialsWereRejectedWithoutACa
 	if c := got["sre/oncall"][bindingcheck.ChannelJoined]; c.Status != bindingcheck.True {
 		t.Errorf("sre/oncall: ChannelJoined is %s/%s; want True: its connection runs", c.Status, c.Reason)
 	}
-	eventually(t, 10*time.Second, "no WARN line for the rejected connection's ChannelJoined", func() bool {
+	testutil.Eventually(t, "no WARN line for the rejected connection's ChannelJoined", func() bool {
 		return countOf(buf.String(), "level=WARN", "a condition is false", "binding=sre/other-bot", "condition=ChannelJoined", "reason=ChatCredentialsRejected", "cause=", connB) == 1
-	})
+	}, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 }
 
 // The advice to restart Agent Kourier is the own connection's. A team connection restarts by itself when its Secret holds other tokens, and
@@ -142,7 +143,7 @@ func TestTheAdviceForAChangedOrRejectedTokenFitsTheKindOfConnection(t *testing.T
 			p := verification{
 				Own: refA, Bindings: &reachable{}, Platforms: chat.PlatformSet[platformReader]{connA: fake(), connB: fake()},
 				Conns: bothConnections, Snaps: current, Secrets: tc.secrets(), Revision: func(context.Context) string { return "r" },
-				Metrics: mustMetrics(t, nil), Log: slog.New(slog.DiscardHandler), Interval: time.Hour, Tick: 5 * time.Millisecond,
+				Metrics: mustMetrics(t, nil), Log: testutil.DiscardLogger(), Interval: time.Hour, Tick: 5 * time.Millisecond,
 			}.newProber()
 			got := settled(t, p, 4)
 
@@ -196,7 +197,7 @@ func TestWithNoOwnConnectionEveryConnectionIsToldItRestartsByItself(t *testing.T
 			p := verification{
 				NoOwn: true, Bindings: &reachable{}, Platforms: chat.PlatformSet[platformReader]{connA: fake(), connB: fake()},
 				Conns: bothConnections, Snaps: current, Secrets: tc.secrets(), Revision: func(context.Context) string { return "r" },
-				Metrics: mustMetrics(t, nil), Log: slog.New(slog.DiscardHandler), Interval: time.Hour, Tick: 5 * time.Millisecond,
+				Metrics: mustMetrics(t, nil), Log: testutil.DiscardLogger(), Interval: time.Hour, Tick: 5 * time.Millisecond,
 			}.newProber()
 			got := settled(t, p, 4)
 

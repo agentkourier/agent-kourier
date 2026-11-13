@@ -1,8 +1,6 @@
 package live_test
 
 import (
-	"io"
-	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -16,6 +14,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 const (
@@ -62,12 +61,8 @@ func newTwoConnections(t *testing.T, cfg live.Config) *twoConnections {
 	t.Helper()
 	w := &twoConnections{a: chattest.NewFake(), b: chattest.NewFake()}
 	w.apps = &apps{m: map[string]*chattest.FakePlatform{connA: w.a, connB: w.b}}
-	var err error
-	if w.store, err = sqlite.Open(t.Context(), sqlitetest.Path(t)); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = w.store.Close() })
-	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	w.store = sqlitetest.Open(t)
+	quiet := testutil.DiscardLogger()
 	w.ob = newOutbox(t, outbox.Config{Store: w.store, Platforms: outboxPlatforms{w.apps}, Logger: quiet, CallTimeout: time.Second})
 	cfg.Sender, cfg.Platforms, cfg.Store, cfg.Logger = w.ob, renderPlatforms{w.apps}, w.store, quiet
 	if cfg.Throttle == 0 {

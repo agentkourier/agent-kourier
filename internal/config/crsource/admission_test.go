@@ -17,6 +17,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/config/crsource"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 var created = time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
@@ -470,7 +471,7 @@ func TestAPlaceThatADeletionFreesIsTakenAtTheNextPoll(t *testing.T) {
 	clock := &testClock{now: time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)}
 	src, _ := c.startAdmitted(t, clock, "teams")
 	r := config.NewReloader(config.ReloaderConfig{
-		Source: src, Secrets: noSecrets{}, PollInterval: 5 * time.Millisecond, SecretsInterval: time.Hour, Logger: slog.New(slog.DiscardHandler), PerObject: true,
+		Source: src, Secrets: noSecrets{}, PollInterval: 5 * time.Millisecond, SecretsInterval: time.Hour, Logger: testutil.DiscardLogger(), PerObject: true,
 	})
 	ctx, cancel := context.WithCancel(t.Context())
 	if err := r.Start(ctx); err != nil {

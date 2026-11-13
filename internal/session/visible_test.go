@@ -15,6 +15,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/stubagent"
 )
 
@@ -70,7 +71,7 @@ func TestTerminalTaskTellsTheThread(t *testing.T) {
 				t.Fatal(err)
 			}
 			waitFinal(t, sink)
-			eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
+			testutil.Eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
 			f.retired(t)
 			sink.mu.Lock()
 			defer sink.mu.Unlock()
@@ -110,7 +111,7 @@ func TestTerminalTaskNoticeIsOneAcrossFollowAndRestart(t *testing.T) {
 		if _, err := f.submit(inbound("1")); err != nil {
 			t.Fatal(err)
 		}
-		eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeTaskFailed)) >= 1 })
+		testutil.Eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeTaskFailed)) >= 1 })
 		f.retired(t)
 		if got := sink.noticesOf(NoticeTaskFailed); len(got) != 1 || got[0].ID != failedID || got[0].Detail != wantDetail {
 			t.Errorf("notices = %+v; want one, %s", got, failedID)
@@ -122,7 +123,7 @@ func TestTerminalTaskNoticeIsOneAcrossFollowAndRestart(t *testing.T) {
 			return ending(a2a.TaskStateFailed, "", providerError)(nil, 0, h)
 		}
 		f.recover(t)
-		eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeTaskFailed)) >= 1 })
+		testutil.Eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeTaskFailed)) >= 1 })
 		f.retired(t)
 		if got := sink.noticesOf(NoticeTaskFailed); len(got) != 1 || got[0].ID != failedID || got[0].Detail != wantDetail {
 			t.Errorf("notices = %+v; want one, %s: the same post as the one the turn that sent it would have raised", got, failedID)
@@ -256,7 +257,7 @@ func TestTurnLogsItsStartAndEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFinal(t, sink)
-	eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) == 1 })
+	testutil.Eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) == 1 })
 	f.retired(t)
 
 	starts, endings := logs.lines("session turn started"), logs.lines("session turn ended")
@@ -320,7 +321,7 @@ func TestTurnLogsOneStartForRetriesAndFollows(t *testing.T) {
 			t.Fatal(err)
 		}
 		waitFinal(t, sink)
-		eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) == 1 })
+		testutil.Eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) == 1 })
 		if starts := logs.lines("session turn started"); len(starts) != 1 {
 			t.Errorf("%d start lines for three sends of one turn; want one", len(starts))
 		}
@@ -343,7 +344,7 @@ func TestTurnLogsOneStartForRetriesAndFollows(t *testing.T) {
 			t.Fatal(err)
 		}
 		waitFinal(t, sink)
-		eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) == 1 })
+		testutil.Eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) == 1 })
 		if starts := logs.lines("session turn started"); len(starts) != 1 {
 			t.Errorf("%d start lines for a send and a follow of one turn; want one", len(starts))
 		}
@@ -354,7 +355,7 @@ func TestTurnLogsOneStartForRetriesAndFollows(t *testing.T) {
 		f.m.cfg.Logger, f.m.cfg.OnTurnEnd = slog.New(logs), ends.add
 		f.recover(t)
 		waitFinal(t, sink)
-		eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) == 1 })
+		testutil.Eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) == 1 })
 		starts := logs.lines("session turn started")
 		if len(starts) != 1 || starts[0].attrs["recovered"] != true {
 			t.Errorf("start lines = %v; want one, marked recovered", starts)
@@ -382,8 +383,8 @@ func TestTurnLogsTheClassOfAFailure(t *testing.T) {
 			if _, err := f.submit(inbound("1")); err != nil {
 				t.Fatal(err)
 			}
-			eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
-			eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) == 1 })
+			testutil.Eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+			testutil.Eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) == 1 })
 			f.retired(t)
 			if starts := logs.lines("session turn started"); len(starts) != 1 {
 				t.Errorf("%d start lines; want one", len(starts))
@@ -412,8 +413,8 @@ func TestTurnLogsTheClassOfAFailure(t *testing.T) {
 		if _, err := f.submit(inbound("1")); err != nil {
 			t.Fatal(err)
 		}
-		eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
-		eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) == 1 })
+		testutil.Eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+		testutil.Eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) == 1 })
 		if end := logs.lines("session turn ended")[0].attrs; end["outcome"] != string(TurnUnreachable) || end["duration_ms"] != int64(16*60*1000) {
 			t.Errorf("the end line = %v; want outcome unreachable after the 16 minutes of trying", end)
 		}
@@ -442,7 +443,7 @@ func TestStubTerminalTasksTellTheThread(t *testing.T) {
 				t.Fatal(err)
 			}
 			e.sink.finalTask(t, 1)
-			eventually(t, "the task to be cleared", func() bool { return e.taskID() == "" })
+			testutil.Eventually(t, "the task to be cleared", func() bool { return e.taskID() == "" })
 			e.retired(t)
 			e.sink.mu.Lock()
 			defer e.sink.mu.Unlock()
@@ -468,12 +469,12 @@ func TestStubTerminalTasksTellTheThread(t *testing.T) {
 		if _, err := e.submit(inbound("1")); err != nil {
 			t.Fatal(err)
 		}
-		eventually(t, "the task to run", func() bool { return e.taskID() != "" })
+		testutil.Eventually(t, "the task to run", func() bool { return e.taskID() != "" })
 		if did, err := e.m.Stop(t.Context(), key, a2a.TaskID(e.taskID()), "U9"); err != nil || !did {
 			t.Fatalf("Stop = %v, %v", did, err)
 		}
 		e.sink.finalTask(t, 1)
-		eventually(t, "the notice", func() bool { return len(e.sink.noticesOf(NoticeTaskCanceled)) == 1 })
+		testutil.Eventually(t, "the notice", func() bool { return len(e.sink.noticesOf(NoticeTaskCanceled)) == 1 })
 		e.retired(t)
 		if got := e.sink.noticesOf(NoticeTaskCanceled); len(got) != 1 {
 			t.Errorf("canceled notices = %+v; want one", got)
@@ -496,7 +497,7 @@ func TestTurnLogsHowTheOtherEndingsClassify(t *testing.T) {
 			}
 			return out
 		}
-		eventually(t, "the end of the turn", func() bool { return len(first()) >= 1 })
+		testutil.Eventually(t, "the end of the turn", func() bool { return len(first()) >= 1 })
 		if lines := first(); len(lines) != 1 || lines[0].attrs["outcome"] != string(want) {
 			t.Errorf("end lines of turn 1 = %v; want one, outcome %s", lines, want)
 		}
@@ -514,7 +515,7 @@ func TestTurnLogsHowTheOtherEndingsClassify(t *testing.T) {
 			t.Fatal(err)
 		}
 		f.m.start(key)
-		eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= 1 })
+		testutil.Eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= 1 })
 		if lines := logs.lines("session turn ended"); len(lines) != 1 || lines[0].attrs["outcome"] != string(TurnBindingGone) || lines[0].attrs["binding"] != "ns/gone" {
 			t.Errorf("end lines = %v; want one, binding_gone, for ns/gone", lines)
 		}
@@ -535,7 +536,7 @@ func TestTurnLogsHowTheOtherEndingsClassify(t *testing.T) {
 	t.Run("a task presumed wedged", func(t *testing.T) {
 		logs, ends := newLogRecorder(), &turnEnds{}
 		_, sink := wedgedFixture(t, func(f *fixture) { f.m.cfg.Logger, f.m.cfg.OnTurnEnd = slog.New(logs), ends.add }, "1")
-		eventually(t, "the wedged notice", func() bool { return len(sink.noticesOf(NoticeWedged)) == 1 })
+		testutil.Eventually(t, "the wedged notice", func() bool { return len(sink.noticesOf(NoticeWedged)) == 1 })
 		ended(t, logs, ends, TurnWedged)
 	})
 	t.Run("a stream lost, and the front door refuses the follow", func(t *testing.T) {
@@ -586,7 +587,7 @@ func TestTurnLogsHowTheOtherEndingsClassify(t *testing.T) {
 			t.Fatal(err)
 		}
 		waitFinal(t, sink)
-		eventually(t, "the runner to park", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return f.m.convos[key].parked == "t1" })
+		testutil.Eventually(t, "the runner to park", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return f.m.convos[key].parked == "t1" })
 		if err := f.m.Cancel(t.Context(), key, "t1", "timeout"); err != nil {
 			t.Fatal(err)
 		}

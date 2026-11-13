@@ -27,11 +27,7 @@ var (
 
 func newWriter(t *testing.T) (*Writer, *sqlite.Store) {
 	t.Helper()
-	s, err := sqlite.Open(context.Background(), sqlitetest.Path(t))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s := sqlitetest.Open(t)
 	return writerOver(t, s, Options{Now: func() time.Time { return t0 }}), s
 }
 

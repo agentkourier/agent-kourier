@@ -18,6 +18,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 
 	slackgo "github.com/slack-go/slack"
@@ -93,7 +94,7 @@ func result(id string, response any) agent.ToolResultEvent {
 // window lets the renderer write what it has waited to: it waits for the window, and turns the clock.
 func (e *env) window(t *testing.T) {
 	t.Helper()
-	eventually(t, "the renderer to wait for its window", func() bool { return e.clk.waiting() == 1 })
+	testutil.Eventually(t, "the renderer to wait for its window", func() bool { return e.clk.waiting() == 1 })
 	e.clk.advance(throttle)
 }
 
@@ -105,14 +106,14 @@ func TestAToolCallIsAStepThatIsDoneWhenItsResultComes(t *testing.T) {
 	e := setup(t)
 	run := e.stream(t)
 	run.Handle(call("c1", "kubectl_get", map[string]any{"ns": "prod"}))
-	eventually(t, "the step to be shown", func() bool { return len(e.tasks()) == 1 })
+	testutil.Eventually(t, "the step to be shown", func() bool { return len(e.tasks()) == 1 })
 	want := fakeslack.Task{ID: "s1", Title: "kubectl_get", Status: "in_progress", Details: `ns="prod"`}
 	if got := e.tasks(); got[0] != want || !e.reply().Streaming {
 		t.Fatalf("tasks %+v streaming %v; want %+v, and the stream running", got, e.reply().Streaming, want)
 	}
 	run.Handle(result("c1", map[string]any{"output": "3 pods"}))
 	e.window(t)
-	eventually(t, "the step to be done", func() bool { return e.tasks()[0].Status == "complete" })
+	testutil.Eventually(t, "the step to be done", func() bool { return e.tasks()[0].Status == "complete" })
 	run.Handle(text("a", "Three pods."))
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
@@ -132,10 +133,10 @@ func TestAStepIsAnErrorWhenItsResultSaysTheCallFailed(t *testing.T) {
 	e := setup(t)
 	run := e.stream(t)
 	run.Handle(call("c1", "add_numbers", nil))
-	eventually(t, "the step to be shown", func() bool { return len(e.tasks()) == 1 })
+	testutil.Eventually(t, "the step to be shown", func() bool { return len(e.tasks()) == 1 })
 	run.Handle(result("c1", map[string]any{"error": "tool \"add_numbers\" call is rejected: <!channel> hunter2hunter2"}))
 	e.window(t)
-	eventually(t, "the step to be an error", func() bool { return e.tasks()[0].Status == "error" })
+	testutil.Eventually(t, "the step to be an error", func() bool { return e.tasks()[0].Status == "error" })
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
 	if got := e.tasks()[0]; got.Status != "error" || got.Output != "" || got.Details != "" {
@@ -160,9 +161,9 @@ func TestSeveralToolsAreStepsInOrderEachEndedByItsOwnResult(t *testing.T) {
 	run.Handle(result("c2", map[string]any{"output": "x"}))
 	run.Handle(result("c1", map[string]any{"error": "no"}))
 	release()
-	eventually(t, "the first two steps to be shown", func() bool { return len(e.tasks()) == 2 })
+	testutil.Eventually(t, "the first two steps to be shown", func() bool { return len(e.tasks()) == 2 })
 	e.window(t)
-	eventually(t, "the third step to be shown", func() bool { return len(e.tasks()) == 3 })
+	testutil.Eventually(t, "the third step to be shown", func() bool { return len(e.tasks()) == 3 })
 	want := []fakeslack.Task{{ID: "s1", Title: "first", Status: "error"}, {ID: "s2", Title: "second", Status: "complete"}, {ID: "s3", Title: "third", Status: "in_progress"}}
 	if got := e.tasks(); !slices.Equal(got, want) {
 		t.Fatalf("tasks %+v; want %+v", got, want)
@@ -181,11 +182,11 @@ func TestAStepComesWhereItsCallWasMadeInTheText(t *testing.T) {
 		e := setup(t)
 		run := e.stream(t)
 		run.Handle(text("a", "Let me look."))
-		eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
+		testutil.Eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
 		run.Handle(call("c1", "search", nil))
 		run.Handle(text("b", "Found it."))
 		e.window(t)
-		eventually(t, "the text after the step", func() bool { return e.reply().Text == "Let me look.\n\nFound it." })
+		testutil.Eventually(t, "the text after the step", func() bool { return e.reply().Text == "Let me look.\n\nFound it." })
 		run.Handle(result("c1", map[string]any{"output": "x"}))
 		run.Handle(agent.FinalEvent{})
 		e.finish(t, run)
@@ -202,7 +203,7 @@ func TestAStepComesWhereItsCallWasMadeInTheText(t *testing.T) {
 		run.Handle(call("c1", "search", nil))
 		run.Handle(text("a", "Hello"))
 		release()
-		eventually(t, "the text", func() bool { return e.reply().Text == "Hello" })
+		testutil.Eventually(t, "the text", func() bool { return e.reply().Text == "Hello" })
 		run.Handle(agent.FinalEvent{})
 		e.finish(t, run)
 		// The call has no result when the turn ends, so its step ends then, after the text.
@@ -234,7 +235,7 @@ func TestAToolWithNoResultAtTheStopIsEndedNotLeftRunningAndNotShownAsSuccess(t *
 	e := setup(t)
 	run := e.stream(t)
 	run.Handle(call("c1", "slow_query", nil))
-	eventually(t, "the step to be shown", func() bool { return len(e.tasks()) == 1 })
+	testutil.Eventually(t, "the step to be shown", func() bool { return len(e.tasks()) == 1 })
 	run.Handle(text("a", "I could not wait for it."))
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
@@ -262,7 +263,7 @@ func TestStepTitlesAreCleanedEscapedAndCapped(t *testing.T) {
 	run.Handle(call("c1", "<!channel>\n\u202e[x](https://evil.test)"+strings.Repeat("n", 500), map[string]any{
 		"q": "<@U0123456789> [y](https://evil.test) " + strings.Repeat("v", 500), "<!here>": "\u200bz",
 	}))
-	eventually(t, "the step to be shown", func() bool { return len(e.tasks()) == 1 })
+	testutil.Eventually(t, "the step to be shown", func() bool { return len(e.tasks()) == 1 })
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
 	got := e.tasks()[0]
@@ -287,7 +288,7 @@ func TestTheArgumentsOfACallAreShownInAStepOnlyAsTheirRedactedSummary(t *testing
 		"query": "up", "password": "hunter2hunter2", "token": "xoxb-123-456-abcdefghijkl",
 		"url": "https://admin:s3cretpass@db.example/x", "cfg": map[string]any{"apiKey": "k-1234567890", "name": "db1"},
 	}))
-	eventually(t, "the step to be shown", func() bool { return len(e.tasks()) == 1 })
+	testutil.Eventually(t, "the step to be shown", func() bool { return len(e.tasks()) == 1 })
 	run.Handle(result("c1", map[string]any{"output": "hunter2hunter2"}))
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
@@ -414,11 +415,11 @@ func TestAPlatformThatRefusesAStepForGoodEndsTheStepsAndNotTheReply(t *testing.T
 			run := e.stream(t)
 			run.Handle(text("a", "Hel"))
 			run.Handle(call("c1", "search", nil))
-			eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
+			testutil.Eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
 			run.Handle(text("b", "lo"))
 			run.Handle(call("c2", "fetch", nil))
 			e.window(t)
-			eventually(t, "the text", func() bool { return e.reply().Text == "Hel\n\nlo" })
+			testutil.Eventually(t, "the text", func() bool { return e.reply().Text == "Hel\n\nlo" })
 			run.Handle(agent.FinalEvent{})
 			e.finish(t, run)
 			if m := e.reply(); m.Streaming || m.Text != "Hel\n\nlo" || len(m.Tasks()) != 0 {
@@ -449,11 +450,11 @@ func TestAStepThatFailsForNowIsTriedAgainAndTheTextGoesOn(t *testing.T) {
 	run.Handle(text("a", "Hel"))
 	run.Handle(call("c1", "search", nil))
 	release()
-	eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
-	eventually(t, "the failed step to have been asked for", func() bool { return steps.Load() == 1 })
+	testutil.Eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
+	testutil.Eventually(t, "the failed step to have been asked for", func() bool { return steps.Load() == 1 })
 	run.Handle(text("b", "lo"))
 	e.window(t)
-	eventually(t, "the step and the text", func() bool { return len(e.tasks()) == 1 && e.reply().Text == "Hel\n\nlo" })
+	testutil.Eventually(t, "the step and the text", func() bool { return len(e.tasks()) == 1 && e.reply().Text == "Hel\n\nlo" })
 	if n := steps.Load(); n != 2 {
 		t.Fatalf("%d steps asked for; want the one that failed, and its retry", n)
 	}
@@ -505,7 +506,7 @@ func TestARecoveredTurnKeepsTheStepsOfTheStreamItTakesOver(t *testing.T) {
 	again.Handle(result("c1", map[string]any{"output": "x"}))
 	again.Handle(call("c2", "fetch", nil))
 	release()
-	eventually(t, "an update that shows the steps as they stand", func() bool {
+	testutil.Eventually(t, "an update that shows the steps as they stand", func() bool {
 		got := e.tasks()
 		return len(got) == 2 && got[0].Status == "complete" && got[1].Status == "in_progress" && !e.reply().Streaming
 	})
@@ -620,7 +621,7 @@ func TestAStreamThatDivergedKeepsItsStepsInTheUpdateThatReplacesIt(t *testing.T)
 	run.Handle(call("c1", "search", nil))
 	run.Handle(result("c1", map[string]any{"output": "x"}))
 	release()
-	eventually(t, "the step", func() bool { got := e.tasks(); return len(got) == 1 && got[0].Status == "complete" })
+	testutil.Eventually(t, "the step", func() bool { got := e.tasks(); return len(got) == 1 && got[0].Status == "complete" })
 	run.Handle(text("a", "The answer is 42")) // not an extension of what was streamed
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
@@ -662,12 +663,12 @@ func TestAnUpdateRefusedWithItsStepsIsSentAgainWithout(t *testing.T) {
 	again.Handle(call("c1", "search", nil))
 	again.Handle(result("c1", map[string]any{"output": "x"}))
 	release()
-	eventually(t, "the refused update and the one without steps", func() bool {
+	testutil.Eventually(t, "the refused update and the one without steps", func() bool {
 		return refused.Load() == 1 && e.updates() == 1 && e.reply().Text == "the whole answer"
 	})
 	again.Handle(call("c2", "fetch", nil)) // a change after the refusal: its update must not try the steps again
 	e.window(t)
-	eventually(t, "the next update", func() bool { return e.updates() == 2 })
+	testutil.Eventually(t, "the next update", func() bool { return e.updates() == 2 })
 	again.Handle(agent.FinalEvent{})
 	e.finish(t, again)
 	m := e.reply()
@@ -741,7 +742,7 @@ func TestStepsAreShownThroughTheNeutralSeamOfAnyPlatform(t *testing.T) {
 	e.live = newRenderer(t, e.cfg)
 	run := e.stream(t)
 	run.Handle(call("c1", "search", map[string]any{"q": "up"}))
-	eventually(t, "the step", func() bool { m := fake.Messages(); return len(m) == 1 && len(m[0].Steps) == 1 })
+	testutil.Eventually(t, "the step", func() bool { m := fake.Messages(); return len(m) == 1 && len(m[0].Steps) == 1 })
 	run.Handle(result("c1", map[string]any{"output": "x"}))
 	run.Handle(text("a", "ok"))
 	run.Handle(agent.FinalEvent{})

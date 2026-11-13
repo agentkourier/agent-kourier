@@ -18,6 +18,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // earlierText is what each test leaves in the thread for a recovered run to find: a message of the word "partial" and nothing
@@ -107,7 +108,7 @@ func TestARecoveredRunLeavesATextItCannotReplaceUntilItHasTextOfItsOwn(t *testin
 
 				again.Handle(text("a", "the whole answer"))
 				again.Handle(agent.FinalEvent{})
-				eventually(t, "the answer", func() bool { e.clk.advance(throttle); return e.reply().Text == "the whole answer" })
+				testutil.Eventually(t, "the answer", func() bool { e.clk.advance(throttle); return e.reply().Text == "the whole answer" })
 				e.finish(t, again)
 				m := e.reply()
 				if len(m.Tasks()) == 0 {
@@ -221,7 +222,7 @@ func TestAnUpdateWithTextEndsTheWait(t *testing.T) {
 	again.Handle(call("c1", "search", nil))
 	e.until(t, "the refused update", throttle, func() bool { return e.updates() == 1 })
 	again.Handle(text("a", "hello"))
-	eventually(t, "the text", func() bool { e.clk.advance(throttle); return e.reply().Text == "hello" })
+	testutil.Eventually(t, "the text", func() bool { e.clk.advance(throttle); return e.reply().Text == "hello" })
 	again.Handle(text("a", "")) // the agent replaces its text with nothing
 	again.Handle(agent.FinalEvent{})
 	e.finish(t, again)
@@ -237,7 +238,7 @@ func TestAStreamWhoseTextIsTakenBackKeepsItWithNoFailedWrite(t *testing.T) {
 	e := setup(t)
 	run, _, outcome := e.observed(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1"})
 	run.Handle(text("a", "hello"))
-	eventually(t, "the text", func() bool { e.clk.advance(throttle); return strings.Contains(e.reply().Text, "hello") })
+	testutil.Eventually(t, "the text", func() bool { e.clk.advance(throttle); return strings.Contains(e.reply().Text, "hello") })
 	run.Handle(text("a", ""))
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
@@ -294,7 +295,7 @@ func TestAStreamsPlaceholderIsTextToALaterAttempt(t *testing.T) {
 	e.spy(t, true, func(int) error { return chat.ErrNoSteps })
 	first := e.stream(t)
 	first.Handle(call("c0", "search", nil))
-	eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
+	testutil.Eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
 	first.Handle(agent.FinalEvent{})
 	e.finish(t, first)
 	if m := e.reply(); m.Text != "(no output)" || m.Streaming {
@@ -363,7 +364,7 @@ func TestTheRefusalIsHandledThroughTheNeutralSeamOfAnyPlatform(t *testing.T) {
 	e.leftOpen(t, "partial")
 	again, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1", Recovered: true})
 	again.Handle(call("c1", "search", nil))
-	eventually(t, "the refused update", func() bool { return p.refused.Load() == 1 })
+	testutil.Eventually(t, "the refused update", func() bool { return p.refused.Load() == 1 })
 	e.elapse(2 * throttle)
 	if n := p.refused.Load(); n != 1 {
 		t.Errorf("%d refused updates; want the one", n)

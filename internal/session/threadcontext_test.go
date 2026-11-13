@@ -17,6 +17,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // windowCall is one call of Config.ThreadContext.
@@ -263,7 +264,7 @@ func TestThreadContextWindowIsTheSameAfterARestart(t *testing.T) {
 	f.agent.script = func(context.Context, int, agent.Handler) error { return fmt.Errorf("send message: %w", agent.ErrBusy) }
 	f.enqueue(t, "turn", queuedRef, "U1", false)
 	f.m.wake(key)
-	eventually(t, "the first process to send the turn", func() bool { sends, _, _ := f.agent.counts(); return sends >= 1 })
+	testutil.Eventually(t, "the first process to send the turn", func() bool { sends, _, _ := f.agent.counts(); return sends >= 1 })
 	if err := f.close(); err != nil { // the process dies
 		t.Fatal(err)
 	}

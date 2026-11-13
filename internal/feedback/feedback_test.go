@@ -120,17 +120,14 @@ type rig struct {
 
 func newRig(t *testing.T) *rig {
 	t.Helper()
-	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := sqlitetest.Open(t)
 	r := &rig{st: st, az: &authz{members: map[string]bool{"UALICE1": true, "UBOB22": true}, bots: map[string]bool{"UBOT111": true}}, eph: &ephemerals{}, aud: &audits{}, tel: telemetrytest.New(t), now: t0}
 	r.members("UBOT111") // a bot is in the channel: membership does not keep it out
 	if err := st.UpsertSession(t.Context(), store.Session{Key: key, Binding: bindingID, Origin: store.Origin{Source: "alertmanager", Subject: "KubePodCrashLooping"}, Agent: agentID, LastActivity: t0}); err != nil {
 		t.Fatal(err)
 	}
 	r.message(t, key, turn, "100.9")
+	var err error
 	r.h, err = feedback.New(feedback.Config{
 		Store: st, Sessions: st, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Auditor: r.aud,
 		Limits: store.PressLimits{Total: 10, PerUser: 3}, Logger: slog.New(slog.NewTextHandler(&r.logs, nil)),

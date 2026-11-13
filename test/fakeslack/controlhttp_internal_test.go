@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 func TestControlErrorStatusAndPartialMessage(t *testing.T) {
@@ -71,11 +73,7 @@ func TestCloseEndsAckWaits(t *testing.T) {
 			_ = resp.Body.Close()
 		}
 	}()
-	for deadline := time.Now().Add(5 * time.Second); s.sock.waiters.Load() == 0; time.Sleep(time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the ack poll never reached WaitAck")
-		}
-	}
+	testutil.Eventually(t, "the ack poll never reached WaitAck", func() bool { return s.sock.waiters.Load() != 0 }, testutil.Within(5*time.Second))
 	start := time.Now()
 	s.Close()
 	<-polled

@@ -16,6 +16,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // An answer to a call that is not a stream may pass dialect.MaxResponseBytes: the history of a long task is in it, and
@@ -43,7 +44,7 @@ func TestLostStreamWhoseTaskIsTooLargeToReadEndsWithTheNotice(t *testing.T) {
 	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= 1 })
+	testutil.Eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= 1 })
 	f.retired(t)
 	if got := sink.noticesOf(NoticeFailed); len(got) != 1 || got[0].Detail != tooLargeSentence {
 		t.Errorf("failed notices = %+v; want one saying %q", got, tooLargeSentence)
@@ -70,7 +71,7 @@ func TestRecoveredTaskTooLargeToReadEndsWithTheNoticeAndTheSinksTurn(t *testing.
 	var gets atomic.Int32
 	f.agent.get = tooLargeGet(&gets)
 	f.recover(t)
-	eventually(t, "the cancel", func() bool { return len(f.cancelled()) == 1 })
+	testutil.Eventually(t, "the cancel", func() bool { return len(f.cancelled()) == 1 })
 	f.retired(t)
 	if got := sink.noticesOf(NoticeFailed); len(got) != 1 || got[0].Detail != tooLargeSentence {
 		t.Errorf("failed notices = %+v; want one saying %q", got, tooLargeSentence)
@@ -98,7 +99,7 @@ func TestCancelWhoseAnswerIsTheOversizedTaskClearsTheRecordAtOnce(t *testing.T) 
 	f.agent.follow = func(a2a.TaskID, agent.Handler) error { return fmt.Errorf("follow task t1: %w", errAnswerTooLarge) }
 	f.agent.cancelErr = func(int) error { return fmt.Errorf("cancel task t1: %w", errAnswerTooLarge) }
 	f.recover(t)
-	eventually(t, "the cancel", func() bool { return len(f.cancelled()) == 1 })
+	testutil.Eventually(t, "the cancel", func() bool { return len(f.cancelled()) == 1 })
 	f.retired(t)
 	if got := sink.noticesOf(NoticeFailed); len(got) != 1 || got[0].Detail != tooLargeSentence {
 		t.Errorf("failed notices = %+v; want one saying %q", got, tooLargeSentence)
@@ -175,7 +176,7 @@ func TestHeadThatIsTheOversizedTasksOwnTurnIsToldOnce(t *testing.T) {
 	var gets atomic.Int32
 	f.agent.get = tooLargeGet(&gets)
 	f.recover(t)
-	eventually(t, "the cancel", func() bool { return len(f.cancelled()) == 1 })
+	testutil.Eventually(t, "the cancel", func() bool { return len(f.cancelled()) == 1 })
 	f.retired(t)
 	if got := sink.noticesOf(NoticeFailed); len(got) != 1 {
 		t.Errorf("failed notices = %+v; want one", got)
@@ -197,7 +198,7 @@ func TestReplyBehindAnOversizedRecoveredTaskGoesOutWhenItIsOver(t *testing.T) {
 	f.agent.get = tooLargeGet(&gets)
 	f.recover(t)
 	waitFinal(t, sink) // the queued reply's own turn, sent after the task was ended
-	eventually(t, "the queue to be empty", f.queueEmpty)
+	testutil.Eventually(t, "the queue to be empty", f.queueEmpty)
 	if sends, _, _ := f.agent.counts(); sends != 1 {
 		t.Errorf("%d sends; want the queued reply, once", sends)
 	}
@@ -228,7 +229,7 @@ func TestResendWhoseLookupIsIncompleteFailsTheTurnWithEverySignal(t *testing.T) 
 			waitFinal(t, sink)
 		}
 	}
-	eventually(t, "the end of the second turn", func() bool { return len(logs.lines("session turn ended")) >= 2 })
+	testutil.Eventually(t, "the end of the second turn", func() bool { return len(logs.lines("session turn ended")) >= 2 })
 	f.retired(t)
 	f.agent.mu.Lock()
 	sends, finds, follows := len(f.agent.msgs), len(f.agent.finds), len(f.agent.follows)
@@ -287,7 +288,7 @@ func TestRecoverDoesNotWaitOnALookupWhosePageIsTooLargeAndDoesNotSendTheHead(t *
 	}
 	f.recover(t)
 	waitFinal(t, sink) // the recorded task, followed
-	eventually(t, "the head to fail", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+	testutil.Eventually(t, "the head to fail", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
 	f.retired(t)
 	sends, finds, follows := f.agent.counts()
 	if follows != 1 || sends != 0 {
@@ -331,9 +332,9 @@ func TestTextReplyToAPausedTaskThatIsTooLargeToReadEndsTheTurn(t *testing.T) {
 	if _, err := f.submit(inbound("2")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) >= 1 })
+	testutil.Eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) >= 1 })
 	// The pause is over, and the runner holds nothing while it goes on to the reply, which waits for the release.
-	eventually(t, "the runner to let go of the task t1", func() bool { return !f.m.HoldsTask(key, "t1") })
+	testutil.Eventually(t, "the runner to let go of the task t1", func() bool { return !f.m.HoldsTask(key, "t1") })
 	close(release)
 	f.retired(t)
 	if got := sink.noticesOf(NoticeFailed); len(got) != 1 || got[0].Detail != tooLargeSentence {
@@ -363,7 +364,7 @@ func TestAnswerOfUnknownOutcomeWhoseTaskCannotBeRead(t *testing.T) {
 		if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
 			t.Fatal(err)
 		}
-		eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) >= 1 })
+		testutil.Eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) >= 1 })
 		got := sink.noticesOf(NoticeFailed)
 		if got[0].Detail != "Agent Kourier could not tell whether the agent took the answer" {
 			t.Errorf("notice = %q; want that it could not tell, and no claim that the answer was not delivered", got[0].Detail)
@@ -375,7 +376,7 @@ func TestAnswerOfUnknownOutcomeWhoseTaskCannotBeRead(t *testing.T) {
 		if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
 			t.Fatal(err)
 		}
-		eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) >= 1 })
+		testutil.Eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) >= 1 })
 		if got := sink.noticesOf(NoticeFailed); got[0].Detail != answerUnknownDetail {
 			t.Errorf("notice = %q; want %q: a card says nothing of what the agent sent, and nothing was cancelled", got[0].Detail, answerUnknownDetail)
 		}
@@ -390,11 +391,11 @@ func TestAnswerOfUnknownOutcomeWhoseTaskCannotBeRead(t *testing.T) {
 		if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
 			t.Fatal(err)
 		}
-		eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) >= 1 })
+		testutil.Eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) >= 1 })
 		if got := sink.noticesOf(NoticeFailed); got[0].Detail != tooLargeAnswerSentence {
 			t.Errorf("notice = %q; want %q", got[0].Detail, tooLargeAnswerSentence)
 		}
-		eventually(t, "the cancel", func() bool { return len(f.cancelled()) >= 1 }) // the thread is told first
+		testutil.Eventually(t, "the cancel", func() bool { return len(f.cancelled()) >= 1 }) // the thread is told first
 		if got := f.cancelled(); len(got) != 1 || got[0] != "t1" {
 			t.Errorf("cancelled %v; want t1 once", got)
 		}
@@ -429,7 +430,7 @@ func TestLookupTooLargeBehindARecordedTaskHoldsTheHeadUntilTheTaskEnds(t *testin
 	}
 	f.recover(t)
 	waitFinal(t, sink) // the recorded task, followed
-	eventually(t, "the head to fail", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+	testutil.Eventually(t, "the head to fail", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
 	f.retired(t)
 	if sends, _, follows := f.agent.counts(); sends != 0 || follows != 1 {
 		t.Errorf("%d sends and %d follows; want the task followed once and the head never sent", sends, follows)
@@ -554,7 +555,7 @@ func TestFollowThatMeetsAnOversizedCardSaysSoAndKeepsTheTask(t *testing.T) {
 	f.agent.get = func(a2a.TaskID) (*a2a.Task, error) { return nil, fmt.Errorf("get task t1: %w", errCard) } // a real Agent meets the card on every call
 	f.agent.follow = func(a2a.TaskID, agent.Handler) error { return fmt.Errorf("follow task t1: %w", errCard) }
 	f.recover(t)
-	eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+	testutil.Eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
 	f.retired(t)
 	if got := sink.noticesOf(NoticeFailed); got[0].Detail != cardTooLargeDetail {
 		t.Errorf("notice = %q; want %q", got[0].Detail, cardTooLargeDetail)
@@ -707,7 +708,7 @@ func TestPauseThatIsTooLargeToReadLeavesNoSignalForTheNextPause(t *testing.T) {
 				}
 				return ""
 			}
-			eventually(t, "the runner to park on t2", func() bool { return parked() == "t2" })
+			testutil.Eventually(t, "the runner to park on t2", func() bool { return parked() == "t2" })
 			// A signal that was left would act at once. Nothing is awaited that the test can observe, so it looks for a while.
 			deadline := time.Now().Add(300 * time.Millisecond)
 			for time.Now().Before(deadline) {
@@ -745,7 +746,7 @@ func TestLookupIncompleteOnARestartEndsWhatTheEarlierProcessLeft(t *testing.T) {
 		return nil, nil, fmt.Errorf("%w: list tasks of context c1: %w", agent.ErrLookupIncomplete, errAnswerTooLarge)
 	}
 	f.recover(t)
-	eventually(t, "the head to fail", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+	testutil.Eventually(t, "the head to fail", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
 	f.retired(t)
 	if got := sink.noticesOf(NoticeFailed); got[0].Detail != lookupIncompleteDetail {
 		t.Errorf("failed notice = %q; want %q", got[0].Detail, lookupIncompleteDetail)
@@ -774,7 +775,7 @@ func TestACancelOfTheRunnerWhoseAnswerIsTooLargeIsWarnedAboutOnce(t *testing.T) 
 	cancelErr := func(int) error { return fmt.Errorf("cancel task t1: %w", errAnswerTooLarge) }
 	check := func(t *testing.T, f *fixture, logs *logRecorder) {
 		t.Helper()
-		eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= 1 })
+		testutil.Eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= 1 })
 		f.retired(t)
 		lines := logs.lines(unverifiedCancelWarning)
 		if len(lines) != 1 || lines[0].attrs["task"] != "t1" {
