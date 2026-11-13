@@ -403,11 +403,16 @@ func retainSessions(t *testing.T, st retention.Store, known func() (map[string]t
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- r.Run(ctx) }()
+	// The loop is stopped and joined on every path, the wait's failure too: it must not outlive the store.
+	stop := sync.OnceFunc(func() {
+		cancel()
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Errorf("Run = %v after its context ended; want context.Canceled", err)
+		}
+	})
+	t.Cleanup(stop)
 	testutil.Eventually(t, "the retention deleted a session", deleted.Load)
-	cancel()
-	if err := <-done; !errors.Is(err, context.Canceled) {
-		t.Errorf("Run = %v after its context ended; want context.Canceled", err)
-	}
+	stop()
 }
 
 // The retention keeps the sessions of a Binding of a connection the broker served before and does not now, after a restart, as it
