@@ -91,7 +91,7 @@ func TestAnApprovedCallIsOneStepThatEndsDone(t *testing.T) {
 	if got := m.Tasks(); len(got) != 1 || got[0].Title != "add_numbers" || got[0].Status != "complete" {
 		t.Fatalf("tasks %+v; want one add_numbers step, complete", got)
 	}
-	// A step that was left with no result is closed as complete too, with a note that none was reported (platform.go,
+	// A step that was left with no result is closed as complete too, with a note that none was reported (the Slack adapter's stream.go,
 	// noResult): the status alone does not tell it from done. This one had its result, so it has no such note.
 	if got := m.Tasks()[0]; got.Output != "" {
 		t.Fatalf("task %+v; want the step done by the call's result, not closed with a note at the end", got)
