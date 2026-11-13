@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/config/crsource"
+	"github.com/agentkourier/agent-kourier/internal/retention"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
@@ -381,6 +383,33 @@ func TestABindingTheConnectionDoesNotAdmitIsToldNothing(t *testing.T) {
 	}
 }
 
+// retainSessions runs the retention loop (internal/retention) over st, with the Bindings that known names, until a pass has
+// deleted a session, and stops it. The sessions have no task, so no stale task is listed, and nothing is cancelled or audited.
+func retainSessions(t *testing.T, st retention.Store, known func() (map[string]time.Duration, []string, bool)) {
+	t.Helper()
+	var deleted atomic.Bool
+	r, err := retention.New(retention.Config{Store: st, Interval: time.Millisecond, ThreadTTLsAndUnserved: known,
+		Canceller: struct{ retention.TaskCanceller }{}, Audit: struct{ retention.StaleAuditor }{},
+		Holds: func(store.ConversationKey, string) bool { return false },
+		OnRemoved: func(what string, _ int) {
+			if what == retention.RemovedExpiredSessions {
+				deleted.Store(true)
+			}
+		},
+		Now: func() time.Time { return sweepNow }, Logger: testutil.DiscardLogger()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx) }()
+	testutil.Eventually(t, "the retention deleted a session", deleted.Load)
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Errorf("Run = %v after its context ended; want context.Canceled", err)
+	}
+}
+
 // The retention keeps the sessions of a Binding of a connection the broker served before and does not now, after a restart, as it
 // keeps those of any Binding that exists and is not served: their threadTTL is not known, and may exceed the longest that is served.
 // Those of a Binding that was deleted, as old, go. Against the real store, which also holds the record.
@@ -403,9 +432,7 @@ func TestRetentionKeepsTheSessionsOfAStoppedConnectionsBindingAfterARestart(t *t
 	known := record.retentionKnows(t.Context(), report, testutil.DiscardLogger(), func() (map[string]time.Duration, []string, bool) {
 		return map[string]time.Duration{sreAlerts: 24 * time.Hour}, nil, true
 	})
-	newSessionRetention(t, &fakeRetentionStore{}, func(c *retentionConfig) {
-		c.Store, c.ThreadTTLs, c.ThreadTTLsAndUnserved = st, nil, known
-	}).purgeSessions(t.Context())
+	retainSessions(t, st, known)
 	for k, want := range map[store.ConversationKey]bool{stopped: true, deleted: false} {
 		_, err := st.GetSession(t.Context(), k, 100*365*day, sweepNow)
 		if present := err == nil; present != want {
@@ -562,9 +589,7 @@ func TestRetentionKeepsTheSessionsOfAnOverCapConnectionsBinding(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	newSessionRetention(t, &fakeRetentionStore{}, func(c *retentionConfig) {
-		c.Store, c.ThreadTTLs, c.ThreadTTLsAndUnserved = st, nil, b.ThreadTTLsAndUnserved
-	}).purgeSessions(t.Context())
+	retainSessions(t, st, b.ThreadTTLsAndUnserved)
 	for k, want := range map[store.ConversationKey]bool{overCap: true, deleted: false} {
 		_, err := st.GetSession(t.Context(), k, 100*365*day, sweepNow)
 		if present := err == nil; present != want {

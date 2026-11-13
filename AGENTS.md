@@ -31,6 +31,7 @@ internal/chat/slack     Slack adapter (Block Kit, Socket Mode); the only code, w
 internal/store          SQLite and Postgres persistence, leader fencing
 internal/outbox         durable outbound posting (the versioned neutral message)
 internal/queue          durable work queue worker
+internal/retention      store retention loop: undelivered replies, stale tasks, expired sessions, old audit entries
 internal/render         agent output to neutral messages
 internal/feedback       useful / not-useful votes on investigations
 internal/audit          audit log

@@ -1,4 +1,7 @@
-package broker
+// Package retention is the leader's time backstop of what the store keeps that no other loop owns: undelivered reply
+// text, tasks that a crash left on sessions expired for good, those sessions, and audit entries past the operator's
+// retention.
+package retention
 
 import (
 	"cmp"
@@ -58,6 +61,12 @@ const (
 // erase the log a day at a time.
 const MinAuditRetention = 24 * time.Hour
 
+// ValidAuditRetention reports whether d is an audit retention that is accepted: zero, which keeps the entries for ever
+// (the setting "keep"), or at least MinAuditRetention.
+func ValidAuditRetention(d time.Duration) bool {
+	return d == 0 || d >= MinAuditRetention
+}
+
 // What the retention loop counts as removed (agentkourier_retention_removed_total, label what). The interactions the
 // interact package clears are counted by its own hook, under RemovedClearedInteractions. A deleted session is counted
 // under RemovedExpiredSessions, and each kind of row that went with it under its own. A task that a crash left on a
@@ -76,10 +85,10 @@ const (
 	RemovedStaleInteractions   = "stale_task_interactions"
 )
 
-// retentionStore is what the retention loop asks of the store: store.ReplyQueue's backstop, the acknowledgments it
+// Store is what the retention loop asks of the store: store.ReplyQueue's backstop, the acknowledgments it
 // retries (store.AcknowledgmentLister, store.PendingAcknowledgmentLister), store.AuditRetention, store.SessionRetention
 // and store.StaleTasks.
-type retentionStore interface {
+type Store interface {
 	AbandonStrandedReplies(ctx context.Context, now time.Time, age time.Duration) (int, error)
 	store.AcknowledgmentLister
 	store.PendingAcknowledgmentLister
@@ -88,22 +97,22 @@ type retentionStore interface {
 	store.StaleTasks
 }
 
-// taskCanceller cancels a task at the agent of a Binding: Bindings. It returns the service identity the call was made
+// TaskCanceller cancels a task at the agent of a Binding: the broker's Bindings. It returns the service identity the call was made
 // under (empty when none was made), and its error wraps session.ErrUnknownBinding when the config has no such Binding.
-type taskCanceller interface {
+type TaskCanceller interface {
 	CancelTask(ctx context.Context, binding, taskID string) (identity string, err error)
 }
 
-// staleAuditor records a stale task that was ended: audit.Writer.
-type staleAuditor interface {
+// StaleAuditor records a stale task that was ended: audit.Writer.
+type StaleAuditor interface {
 	StaleTaskEnded(ctx context.Context, a audit.Actor, t audit.StaleTask) error
 }
 
-// retentionConfig configures a retention. Store, ThreadTTLs, Canceller, Audit, Holds and OnRemoved are required:
-// newRetention refuses a config without them and names the field, so that a wiring that leaves one out fails at start-up
+// Config configures a retention. Store, ThreadTTLs, Canceller, Audit, Holds and OnRemoved are required:
+// New refuses a config without them and names the field, so that a wiring that leaves one out fails at start-up
 // and the loop does not run with a pass that does nothing. The rest are tunables with defaults.
-type retentionConfig struct {
-	Store retentionStore
+type Config struct {
+	Store Store
 	// Interval is how often the loop runs (default 1 hour).
 	Interval time.Duration
 	// ReplyAge is how old an undelivered reply is before it is given up (default defaultStrandedReplyAge).
@@ -115,10 +124,10 @@ type retentionConfig struct {
 	// tick makes at most (default 1000).
 	AuditBatch, MaxAuditBatches int
 	// ThreadTTLs returns the threadTTL of each Binding of the config by "namespace/name", and false while no config
-	// is loaded: Bindings.ThreadTTLs. A session is deleted SessionGrace after its Binding's threadTTL.
+	// is loaded: the broker's Bindings.ThreadTTLs. A session is deleted SessionGrace after its Binding's threadTTL.
 	ThreadTTLs func() (map[string]time.Duration, bool)
 	// ThreadTTLsAndUnserved, when set, is used in place of ThreadTTLs: it returns the same, and with it the "namespace/name"
-	// of each Binding that exists and is not in the config (Bindings.ThreadTTLsAndUnserved), both from one snapshot, so that a
+	// of each Binding that exists and is not in the config (the broker's Bindings.ThreadTTLsAndUnserved), both from one snapshot, so that a
 	// reload between two reads cannot leave a Binding in neither. The sessions of an unserved Binding are skipped, not
 	// expired: its threadTTL is not known, and it is not a Binding that was deleted.
 	ThreadTTLsAndUnserved func() (ttls map[string]time.Duration, unserved []string, ok bool)
@@ -128,8 +137,8 @@ type retentionConfig struct {
 	// tick makes at most (default 100).
 	SessionBatch, MaxSessionBatches int
 	// Canceller cancels a stale task at its agent, and Audit records that the task was ended.
-	Canceller taskCanceller
-	Audit     staleAuditor
+	Canceller TaskCanceller
+	Audit     StaleAuditor
 	// Holds reports whether this process's session manager still runs the task on the session: parked on a question it
 	// has not given up on, or streaming it. A task it holds is left alone, for its own runner and the interaction timeout
 	// to end: clearing it from under the runner would leave the runner parked on it after the session is deleted, and a
@@ -154,30 +163,30 @@ type retentionConfig struct {
 	Logger              *slog.Logger     // slog.Default() if nil
 }
 
-// retention is the time backstop of what the store keeps that no other loop owns: the text of replies that were
+// Retention is the time backstop of what the store keeps that no other loop owns: the text of replies that were
 // never delivered, tasks that a crash left on sessions that have been expired for good, those sessions with everything
 // that belongs to them, and, if the operator sets a retention, old audit entries. What it removes is counted and logged
 // by count; only the ending of a stale task is written to the audit log, by identifiers.
-type retention struct{ cfg retentionConfig }
+type Retention struct{ cfg Config }
 
-// newRetention returns a retention over cfg.
-func newRetention(cfg retentionConfig) (*retention, error) {
+// New returns a Retention over cfg, or an error that names what cfg lacks or the audit retention it refuses.
+func New(cfg Config) (*Retention, error) {
 	switch {
 	case cfg.Store == nil:
-		return nil, errors.New("broker: a Store is required for retention")
+		return nil, errors.New("retention: a Store is required for retention")
 	case cfg.Holds == nil: // a stale task is cancelled and cleared only where the runners that may hold it are asked
-		return nil, errors.New("broker: Holds is required for retention: a task a runner holds must not be cleared from under it")
+		return nil, errors.New("retention: Holds is required for retention: a task a runner holds must not be cleared from under it")
 	case cfg.ThreadTTLs == nil && cfg.ThreadTTLsAndUnserved == nil:
-		return nil, errors.New("broker: ThreadTTLs is required for retention: without it no session is deleted and no stale task is ended")
+		return nil, errors.New("retention: ThreadTTLs is required for retention: without it no session is deleted and no stale task is ended")
 	case cfg.Canceller == nil:
-		return nil, errors.New("broker: Canceller is required for retention: a stale task is cancelled at its agent")
+		return nil, errors.New("retention: Canceller is required for retention: a stale task is cancelled at its agent")
 	case cfg.Audit == nil:
-		return nil, errors.New("broker: Audit is required for retention: an ended stale task is recorded")
+		return nil, errors.New("retention: Audit is required for retention: an ended stale task is recorded")
 	case cfg.OnRemoved == nil:
-		return nil, errors.New("broker: OnRemoved is required for retention: what it removes is counted")
+		return nil, errors.New("retention: OnRemoved is required for retention: what it removes is counted")
 	}
-	if cfg.AuditRetention < 0 || (cfg.AuditRetention > 0 && cfg.AuditRetention < MinAuditRetention) {
-		return nil, fmt.Errorf("broker: the audit retention is %v; want 0 (keep) or at least %v", cfg.AuditRetention, MinAuditRetention)
+	if !ValidAuditRetention(cfg.AuditRetention) {
+		return nil, fmt.Errorf("retention: the audit retention is %v; want 0 (keep) or at least %v", cfg.AuditRetention, MinAuditRetention)
 	}
 	if cfg.Interval <= 0 {
 		cfg.Interval = time.Hour
@@ -215,12 +224,12 @@ func newRetention(cfg retentionConfig) (*retention, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
-	return &retention{cfg}, nil
+	return &Retention{cfg}, nil
 }
 
 // Run does its work every Interval, and not before the first, until ctx ends, and returns its error. A failure is
 // logged and tried again at the next tick, and does not stop the rest.
-func (r *retention) Run(ctx context.Context) error {
+func (r *Retention) Run(ctx context.Context) error {
 	tick := time.NewTicker(r.cfg.Interval)
 	defer tick.Stop()
 	for {
@@ -236,7 +245,7 @@ func (r *retention) Run(ctx context.Context) error {
 	}
 }
 
-func (r *retention) abandonReplies(ctx context.Context) {
+func (r *Retention) abandonReplies(ctx context.Context) {
 	now := r.cfg.Now()
 	var n int
 	var err error
@@ -282,7 +291,7 @@ func eachReply(ctx context.Context, list func(context.Context) ([]store.Reply, e
 // are counted in one warning, with the last error, and the error is not returned, for their removals are queued and hold
 // nothing back; the next tick queues them again, which the outbox makes harmless, and settles them. The batches after a
 // failed one are still tried.
-func (r *retention) clearAcknowledgments(ctx context.Context, rows []store.Reply) error {
+func (r *Retention) clearAcknowledgments(ctx context.Context, rows []store.Reply) error {
 	queued := make([]string, 0, len(rows))
 	var err error
 	for _, row := range rows {
@@ -329,7 +338,7 @@ func horizon(now time.Time, ttl, grace time.Duration) time.Time {
 // threadTTL is as unknown as that of a deleted one, but a Binding with a longer one than the rest would lose its sessions
 // to the shorter reckoning of Otherwise, so its sessions are skipped (neverPast) until it is served. With none unserved, as
 // with files, the horizons are the same as without the argument.
-func (r *retention) sessionHorizons(ttls map[string]time.Duration, unserved []string, now time.Time) store.SessionHorizons {
+func (r *Retention) sessionHorizons(ttls map[string]time.Duration, unserved []string, now time.Time) store.SessionHorizons {
 	h := store.SessionHorizons{ByBinding: make(map[string]time.Time, len(ttls)+len(unserved))}
 	longest := v1alpha1.DefaultThreadTTL
 	for name, ttl := range ttls {
@@ -347,7 +356,7 @@ func (r *retention) sessionHorizons(ttls map[string]time.Duration, unserved []st
 
 // known returns the threadTTL of each Binding of the config, the Bindings that exist and are not served (none, as with
 // files, unless the config says so), and false while no config is loaded.
-func (r *retention) known() (ttls map[string]time.Duration, unserved []string, ok bool) {
+func (r *Retention) known() (ttls map[string]time.Duration, unserved []string, ok bool) {
 	if r.cfg.ThreadTTLsAndUnserved != nil {
 		return r.cfg.ThreadTTLsAndUnserved()
 	}
@@ -362,7 +371,7 @@ func (r *retention) known() (ttls map[string]time.Duration, unserved []string, o
 // clears the task, cancels its pending interactions and audits it, which the store does only while the session is still past
 // its horizon and still records that task. A session inside its horizon is never listed. It does nothing before a config is
 // loaded.
-func (r *retention) endStaleTasks(ctx context.Context) {
+func (r *Retention) endStaleTasks(ctx context.Context) {
 	ttls, unserved, ok := r.known()
 	if !ok {
 		return
@@ -438,7 +447,7 @@ list:
 // that abandonReplies does not list it and queue the removal again. Either failure is logged: a reply whose removal was not
 // queued is not settled, and abandonReplies queues it; one that was queued and not settled is queued again there, which the
 // outbox makes harmless.
-func (r *retention) clearStaleAcknowledgment(ctx context.Context, ack store.Reply) {
+func (r *Retention) clearStaleAcknowledgment(ctx context.Context, ack store.Reply) {
 	if err := r.cfg.ClearAcknowledgment(ctx, ack); err != nil {
 		if ctx.Err() == nil {
 			r.cfg.Logger.WarnContext(ctx, "retention: acknowledgment removal for an ended stale task could not be queued", "err", err)
@@ -450,7 +459,7 @@ func (r *retention) clearStaleAcknowledgment(ctx context.Context, ack store.Repl
 	}
 }
 
-func (r *retention) staleAcknowledgment(ctx context.Context, t store.StaleTask) (*store.Reply, error) {
+func (r *Retention) staleAcknowledgment(ctx context.Context, t store.StaleTask) (*store.Reply, error) {
 	if r.cfg.ClearAcknowledgment == nil {
 		return nil, nil
 	}
@@ -498,7 +507,7 @@ type staleCancel struct {
 // cancelStale asks the agent of t's Binding to cancel the task, within CancelTimeout, and says how it went. It never fails
 // the sweep. An agent that does not answer once is not asked again in the tick (down): a task of a Binding whose agent is
 // down would otherwise cost a timeout each. An agent that answers that the task is unknown or cannot be cancelled is up.
-func (r *retention) cancelStale(ctx context.Context, t store.StaleTask, down map[string]bool) staleCancel {
+func (r *Retention) cancelStale(ctx context.Context, t store.StaleTask, down map[string]bool) staleCancel {
 	if down[t.Binding] {
 		return staleCancel{how: audit.StaleCancelSkipped}
 	}
@@ -522,7 +531,7 @@ func (r *retention) cancelStale(ctx context.Context, t store.StaleTask, down map
 
 // auditStale records that t was ended, as the identity the cancel was made under when one was. The task is ended, so a
 // failure to audit is never undone by it: the writer logs and meters it, and the sweep goes on.
-func (r *retention) auditStale(ctx context.Context, t store.StaleTask, c staleCancel, interactions int) {
+func (r *Retention) auditStale(ctx context.Context, t store.StaleTask, c staleCancel, interactions int) {
 	_ = r.cfg.Audit.StaleTaskEnded(ctx, audit.Actor{Binding: t.Binding, Identity: c.identity}, audit.StaleTask{
 		TaskID: a2a.TaskID(t.TaskID), ContextID: t.ContextID, Cancel: c.how, CancelErr: c.err, Interactions: interactions})
 }
@@ -530,7 +539,7 @@ func (r *retention) auditStale(ctx context.Context, t store.StaleTask, c staleCa
 // purgeSessions deletes the sessions past their horizon, a batch at a time until one is short or the tick's share is spent
 // (a session with a task, a pending interaction, or anything undelivered is never due, however old; the store decides).
 // It does nothing before a config is loaded.
-func (r *retention) purgeSessions(ctx context.Context) {
+func (r *Retention) purgeSessions(ctx context.Context) {
 	ttls, unserved, ok := r.known()
 	if !ok {
 		return
@@ -559,7 +568,7 @@ func (r *retention) purgeSessions(ctx context.Context) {
 }
 
 // removedSessions counts what a purge deleted, a kind of row at a time, and nothing for a kind it found none of.
-func (r *retention) removedSessions(p store.PurgedSessions) {
+func (r *Retention) removedSessions(p store.PurgedSessions) {
 	for _, c := range []struct {
 		what string
 		n    int
@@ -575,7 +584,7 @@ func (r *retention) removedSessions(p store.PurgedSessions) {
 
 // purgeAudit deletes the entries before the retention, a batch at a time until one is short or the tick's share is
 // spent. It does nothing when the retention is unset.
-func (r *retention) purgeAudit(ctx context.Context) {
+func (r *Retention) purgeAudit(ctx context.Context) {
 	if r.cfg.AuditRetention == 0 {
 		return
 	}
@@ -603,6 +612,6 @@ func (r *retention) purgeAudit(ctx context.Context) {
 	}
 }
 
-func (r *retention) removed(what string, n int) {
+func (r *Retention) removed(what string, n int) {
 	r.cfg.OnRemoved(what, n)
 }

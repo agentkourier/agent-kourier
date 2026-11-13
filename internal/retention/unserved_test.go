@@ -1,4 +1,4 @@
-package broker
+package retention
 
 import (
 	"maps"
@@ -45,7 +45,7 @@ func TestRetentionSkipsTheSessionsOfAnUnservedBinding(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := &fakeRetentionStore{}
-			newSessionRetention(t, f, func(c *retentionConfig) { c.ThreadTTLsAndUnserved = known(tc.unserved) }).purgeSessions(t.Context())
+			newSessionRetention(t, f, func(c *Config) { c.ThreadTTLsAndUnserved = known(tc.unserved) }).purgeSessions(t.Context())
 			calls := f.sessions()
 			if len(calls) != 1 || !maps.EqualFunc(calls[0].horizons.ByBinding, tc.want.ByBinding, time.Time.Equal) || !calls[0].horizons.Otherwise.Equal(tc.want.Otherwise) {
 				t.Errorf("PurgeExpiredSessions calls = %+v; want one with the horizons %+v", calls, tc.want)
@@ -59,7 +59,7 @@ func TestRetentionSkipsTheSessionsOfAnUnservedBinding(t *testing.T) {
 
 // The stale tasks of an unserved Binding are not listed as past their horizon either: the same horizons.
 func TestRetentionSkipsTheStaleTasksOfAnUnservedBinding(t *testing.T) {
-	g := newStaleRig(t, nil, func(c *retentionConfig) {
+	g := newStaleRig(t, nil, func(c *Config) {
 		c.ThreadTTLsAndUnserved = known(func() []string { return []string{"ns/broken"} })
 	})
 	g.r.endStaleTasks(t.Context())

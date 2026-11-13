@@ -16,6 +16,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
+	"github.com/agentkourier/agent-kourier/internal/retention"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -219,7 +220,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 		served = newServedRecord(st, boot.Source.ConnectionBindings, nil)
 		retentionKnows = served.retentionKnows(runCtx, boot.Reloader.Report, log, retentionKnows)
 	}
-	retain, err := newRetention(retentionConfig{Store: st, Interval: cfg.retentionEvery, AuditRetention: cfg.AuditRetention, ThreadTTLsAndUnserved: retentionKnows,
+	retain, err := retention.New(retention.Config{Store: st, Interval: cfg.retentionEvery, AuditRetention: cfg.AuditRetention, ThreadTTLsAndUnserved: retentionKnows,
 		Canceller: bindings, Audit: auditor, Holds: mgr.HoldsTask, OnRemoved: metrics.RetentionRemoved, Logger: log,
 		EnsureAcknowledgment: func(ctx context.Context, r store.Reply) error {
 			return sink.QueueNotice(ctx, r.Key, session.Notice{ID: session.AcknowledgmentID(r.ID), Kind: session.NoticeAcknowledged, MessageRef: r.MessageRef, Reaction: r.Acknowledgment})

@@ -258,7 +258,7 @@ func (b *Bindings) ThreadTTLs() (map[string]time.Duration, bool) {
 // ThreadTTLsAndUnserved returns what ThreadTTLs does, and with it the "namespace/name" of each Binding that exists in the
 // cluster and is not in the snapshot: one that is not valid and has no good generation to serve, or whose references fail,
 // or that lost its channel. The retention skips the sessions of such a Binding, which are not those of one that was deleted
-// (retentionConfig.ThreadTTLsAndUnserved). Both come from one snapshot: read apart, a reload between the reads that serves
+// (retention.Config.ThreadTTLsAndUnserved). Both come from one snapshot: read apart, a reload between the reads that serves
 // a Binding would leave it in neither, and its sessions would be held to the shorter reckoning of an unknown Binding. Only a
 // source that fails one object at a time knows any unserved Binding; the files' Reloader has none, and a Snapshots that
 // cannot report none either.

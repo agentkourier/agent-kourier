@@ -73,6 +73,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/broker"
 	"github.com/agentkourier/agent-kourier/internal/config/crsource"
 	"github.com/agentkourier/agent-kourier/internal/config/k8ssecrets"
+	"github.com/agentkourier/agent-kourier/internal/retention"
 )
 
 // version is set at build time: -ldflags "-X main.version=<value>".
@@ -158,8 +159,10 @@ func loadEnv(getenv func(string) string) (envConfig, error) {
 	}
 	c.logLevel = level
 	if v := get("AGENTKOURIER_AUDIT_RETENTION", "keep"); !strings.EqualFold(v, "keep") {
-		if c.auditRetention, err = time.ParseDuration(v); err != nil || c.auditRetention < broker.MinAuditRetention {
-			return c, bad("AGENTKOURIER_AUDIT_RETENTION", "keep, or a duration of at least "+broker.MinAuditRetention.String()+" such as 8760h", errors.Join(err, errors.New("too short or not a duration")))
+		// "keep" is the only way to say keep: a zero duration, which the retention would take as keep, is refused, since it
+		// could be read as either.
+		if c.auditRetention, err = time.ParseDuration(v); err != nil || c.auditRetention == 0 || !retention.ValidAuditRetention(c.auditRetention) {
+			return c, bad("AGENTKOURIER_AUDIT_RETENTION", "keep, or a duration of at least "+retention.MinAuditRetention.String()+" such as 8760h", errors.Join(err, errors.New("too short or not a duration")))
 		}
 	}
 	if c.store, err = loadStoreEnv(getenv); err != nil {
