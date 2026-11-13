@@ -227,7 +227,7 @@ func (m *Metrics) TurnOutcome(binding string, outcome session.TurnOutcome) {
 // not a label.
 func (m *Metrics) InteractionTimeout(string) { m.timeouts.Inc() }
 
-// RetentionRemoved counts n items that retention removed: what is one of the Removed constants, a closed set.
+// RetentionRemoved counts n items that retention removed: what is one of retention's Removed constants, a closed set.
 func (m *Metrics) RetentionRemoved(what string, n int) {
 	m.removed.WithLabelValues(what).Add(float64(n))
 }

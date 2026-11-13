@@ -257,12 +257,16 @@ func TestRetentionPurgesTheSessionOfAnInteractionThatWasEndedWithoutItsBinding(t
 	if got := r.taskOf(t, downTeam); got != "task-ix-team" {
 		t.Fatalf("the session records task %q; want the pause's", got)
 	}
-	retain := newStaleRig(t, nil, func(c *retentionConfig) {
-		c.Store = r.d.st
-		c.ThreadTTLs = func() (map[string]time.Duration, bool) { return map[string]time.Duration{}, true } // the Binding is gone
-	}).r
+	// The retention's session purge (internal/retention, whose own tests hold its horizons) is this store call. The Binding is gone,
+	// and the session is past any horizon: only the pause keeps it.
+	purge := func() {
+		t.Helper()
+		if _, err := r.d.st.PurgeExpiredSessions(t.Context(), store.SessionHorizons{Otherwise: sweepNow}, 100); err != nil {
+			t.Fatal(err)
+		}
+	}
 
-	retain.purgeSessions(t.Context())
+	purge()
 	if _, err := r.d.st.GetSession(t.Context(), k, 100*365*day, sweepNow); err != nil {
 		t.Fatalf("the session was purged with a pause waiting on it: %v", err)
 	}
@@ -272,7 +276,7 @@ func TestRetentionPurgesTheSessionOfAnInteractionThatWasEndedWithoutItsBinding(t
 	if got := r.state(t, "ix-team"); got != store.InteractionTimedOut {
 		t.Fatalf("the interaction is %s; want it ended", got)
 	}
-	retain.purgeSessions(t.Context())
+	purge()
 	if _, err := r.d.st.GetSession(t.Context(), k, 100*365*day, sweepNow); err == nil {
 		t.Error("the session is still there after the pause was ended; want retention to have purged it")
 	}

@@ -11,6 +11,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/retention"
 	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
@@ -52,10 +53,10 @@ func TestValidateChecksTheAuditRetention(t *testing.T) {
 		ok        bool
 	}{
 		"keep":                {0, true},
-		"the least":           {MinAuditRetention, true},
+		"the least":           {retention.MinAuditRetention, true},
 		"ninety days":         {90 * 24 * time.Hour, true},
 		"an hour":             {time.Hour, false},
-		"a day less a moment": {MinAuditRetention - time.Second, false},
+		"a day less a moment": {retention.MinAuditRetention - time.Second, false},
 		"negative":            {-time.Hour, false},
 	} {
 		c := valid(t)

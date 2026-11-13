@@ -22,6 +22,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
+	"github.com/agentkourier/agent-kourier/internal/retention"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -71,7 +72,7 @@ type RunConfig struct {
 	KlogVerbosity int
 	Telemetry     telemetry.Config
 	// AuditRetention is how long audit entries are kept; zero keeps them for ever, which is what runs until an
-	// operator sets one (AGENTKOURIER_AUDIT_RETENTION). A value below MinAuditRetention is refused when the broker starts.
+	// operator sets one (AGENTKOURIER_AUDIT_RETENTION). A value below retention.MinAuditRetention is refused when the broker starts.
 	AuditRetention time.Duration
 	TracerProvider trace.TracerProvider // test or embedding override; caller owns its shutdown
 	ServiceVersion string
@@ -214,8 +215,8 @@ func (c RunConfig) validate() error {
 			return err
 		}
 	}
-	if c.AuditRetention < 0 || (c.AuditRetention > 0 && c.AuditRetention < MinAuditRetention) {
-		return fmt.Errorf("%w: AuditRetention is %v; want 0 (keep) or at least %v", ErrWiring, c.AuditRetention, MinAuditRetention)
+	if !retention.ValidAuditRetention(c.AuditRetention) {
+		return fmt.Errorf("%w: AuditRetention is %v; want 0 (keep) or at least %v", ErrWiring, c.AuditRetention, retention.MinAuditRetention)
 	}
 	var missing []string
 	for name, ok := range map[string]bool{

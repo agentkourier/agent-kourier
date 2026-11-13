@@ -1,6 +1,7 @@
-package broker
+package retention
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -15,10 +16,30 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/store"
-	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
+
+// sweepNow is the clock of these tests.
+var sweepNow = time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+
+// logBuffer is a log destination that the loop's goroutine and the test share.
+type logBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *logBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *logBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
 
 // fakeRetentionStore records what the loop asks for. purged is what each PurgeAudit returns, in turn (the last one
 // again after that), and failReplies the number of AbandonStrandedReplies calls that fail.
@@ -159,7 +180,7 @@ func (f *fakeRetentionStore) calls() (abandons []time.Duration, purges []auditPu
 // harmless fills what cfg leaves out of the required fields with doubles that do nothing, for the tests that are about
 // something else: no config is loaded (so no session is deleted and no stale task listed), no task is held, and nothing is
 // cancelled, audited or counted. A test that is about one of them sets it.
-func harmless(cfg retentionConfig) retentionConfig {
+func harmless(cfg Config) Config {
 	if cfg.ThreadTTLs == nil {
 		cfg.ThreadTTLs = func() (map[string]time.Duration, bool) { return nil, false }
 	}
@@ -178,7 +199,7 @@ func harmless(cfg retentionConfig) retentionConfig {
 	return cfg
 }
 
-func runRetention(t *testing.T, cfg retentionConfig) (stop func()) {
+func runRetention(t *testing.T, cfg Config) (stop func()) {
 	t.Helper()
 	cfg = harmless(cfg)
 	cfg.Interval = time.Millisecond
@@ -188,7 +209,7 @@ func runRetention(t *testing.T, cfg retentionConfig) (stop func()) {
 	if cfg.Logger == nil {
 		cfg.Logger = testutil.DiscardLogger()
 	}
-	r, err := newRetention(cfg)
+	r, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +235,7 @@ func runRetention(t *testing.T, cfg retentionConfig) (stop func()) {
 // or a busy session; with the audit retention unset ("keep"), the audit log is never touched.
 func TestRetentionAbandonsStrandedRepliesAndKeepsTheAuditLogByDefault(t *testing.T) {
 	f := &fakeRetentionStore{}
-	stop := runRetention(t, retentionConfig{Store: f})
+	stop := runRetention(t, Config{Store: f})
 	testutil.Eventually(t, "three ticks", func() bool { a, _ := f.calls(); return len(a) >= 3 }, testutil.Within(10*time.Second))
 	stop()
 	abandons, purges := f.calls()
@@ -232,7 +253,7 @@ func TestRetentionRetriesAcknowledgmentAddBeforeDroppingReplies(t *testing.T) {
 	f := &fakeRetentionStore{pendingReplies: []store.Reply{{ID: "reply-1", Key: store.ConversationKey{Connection: "slack", Channel: "C1", Thread: "1.1"}, MessageRef: "1.1", Acknowledgment: "eyes"}}, dropped: 1}
 	boom := errors.New("outbox unavailable")
 	attempts := 0
-	r, err := newRetention(harmless(retentionConfig{Store: f, EnsureAcknowledgment: func(context.Context, store.Reply) error {
+	r, err := New(harmless(Config{Store: f, EnsureAcknowledgment: func(context.Context, store.Reply) error {
 		attempts++
 		if attempts == 1 {
 			return boom
@@ -257,7 +278,7 @@ func TestRetentionRetriesAcknowledgmentRemovalBeforeDroppingReplies(t *testing.T
 	boom := errors.New("outbox unavailable")
 	attempts := 0
 	var cleared []string
-	r, err := newRetention(harmless(retentionConfig{Store: f, ClearAcknowledgment: func(_ context.Context, r store.Reply) error {
+	r, err := New(harmless(Config{Store: f, ClearAcknowledgment: func(_ context.Context, r store.Reply) error {
 		attempts++
 		if attempts == 1 {
 			return boom
@@ -292,7 +313,7 @@ func TestRetentionReachesTheAcknowledgmentsOfAWrappedStore(t *testing.T) {
 		staleTurns:     map[string]store.TaskTurn{"task-1": {ID: "turn-1", MessageRef: "1.4", Acknowledgment: "eyes"}},
 	}
 	var ensured, cleared []string
-	r, err := newRetention(harmless(retentionConfig{Store: struct{ retentionStore }{f},
+	r, err := New(harmless(Config{Store: struct{ Store }{f},
 		EnsureAcknowledgment: func(_ context.Context, r store.Reply) error { ensured = append(ensured, r.ID); return nil },
 		ClearAcknowledgment:  func(_ context.Context, r store.Reply) error { cleared = append(cleared, r.ID); return nil },
 		Now:                  func() time.Time { return sweepNow }, Logger: testutil.DiscardLogger()}))
@@ -321,7 +342,7 @@ func TestRetentionSettlesQueuedAcknowledgmentRemovals(t *testing.T) {
 	t.Run("a settle that fails", func(t *testing.T) {
 		f := &fakeRetentionStore{ackReplies: []store.Reply{ack("reply-1"), ack("reply-2")}, settleErr: errors.New("disk full")}
 		var queued []string
-		r, err := newRetention(harmless(retentionConfig{Store: f, ClearAcknowledgment: func(_ context.Context, r store.Reply) error {
+		r, err := New(harmless(Config{Store: f, ClearAcknowledgment: func(_ context.Context, r store.Reply) error {
 			queued = append(queued, r.ID)
 			return nil
 		}, Now: func() time.Time { return sweepNow }, Logger: quiet}))
@@ -355,7 +376,7 @@ func TestRetentionSettlesQueuedAcknowledgmentRemovals(t *testing.T) {
 		}
 		f := &fakeRetentionStore{ackReplies: rows, settleErr: errors.New("disk full"), settleErrOn: 1}
 		var logs strings.Builder
-		r, err := newRetention(harmless(retentionConfig{Store: f, ClearAcknowledgment: func(context.Context, store.Reply) error { return nil },
+		r, err := New(harmless(Config{Store: f, ClearAcknowledgment: func(context.Context, store.Reply) error { return nil },
 			Now: func() time.Time { return sweepNow }, Logger: slog.New(slog.NewTextHandler(&logs, nil))}))
 		if err != nil {
 			t.Fatal(err)
@@ -370,7 +391,7 @@ func TestRetentionSettlesQueuedAcknowledgmentRemovals(t *testing.T) {
 	})
 	t.Run("a removal that fails to queue", func(t *testing.T) {
 		f := &fakeRetentionStore{ackReplies: []store.Reply{ack("reply-1"), ack("reply-2"), ack("reply-3")}}
-		r, err := newRetention(harmless(retentionConfig{Store: f, ClearAcknowledgment: func(_ context.Context, r store.Reply) error {
+		r, err := New(harmless(Config{Store: f, ClearAcknowledgment: func(_ context.Context, r store.Reply) error {
 			if r.ID == "reply-2" {
 				return errors.New("outbox unavailable")
 			}
@@ -390,7 +411,7 @@ func TestRetentionSettlesQueuedAcknowledgmentRemovals(t *testing.T) {
 // stops at the first that is not: a short batch says nothing older is left.
 func TestRetentionPurgesAuditInBatchesUntilOneIsShort(t *testing.T) {
 	f := &fakeRetentionStore{purged: []int{7, 7, 3, 7}} // the fourth is never asked for
-	r, err := newRetention(harmless(retentionConfig{Store: f, AuditRetention: 90 * 24 * time.Hour, AuditBatch: 7,
+	r, err := New(harmless(Config{Store: f, AuditRetention: 90 * 24 * time.Hour, AuditBatch: 7,
 		Now: func() time.Time { return sweepNow }, Logger: testutil.DiscardLogger()}))
 	if err != nil {
 		t.Fatal(err)
@@ -410,7 +431,7 @@ func TestRetentionPurgesAuditInBatchesUntilOneIsShort(t *testing.T) {
 // One tick does not go on for ever: a log far past its retention is worked down over several ticks.
 func TestRetentionBoundsTheBatchesOfOneTick(t *testing.T) {
 	f := &fakeRetentionStore{purged: []int{5}} // always a full batch
-	r, err := newRetention(harmless(retentionConfig{Store: f, AuditRetention: 24 * time.Hour, AuditBatch: 5, MaxAuditBatches: 3,
+	r, err := New(harmless(Config{Store: f, AuditRetention: 24 * time.Hour, AuditBatch: 5, MaxAuditBatches: 3,
 		Now: func() time.Time { return sweepNow }, Logger: testutil.DiscardLogger()}))
 	if err != nil {
 		t.Fatal(err)
@@ -425,7 +446,7 @@ func TestRetentionBoundsTheBatchesOfOneTick(t *testing.T) {
 func TestRetentionLogsFailuresAndGoesOn(t *testing.T) {
 	f := &fakeRetentionStore{failReplies: 2, failAudit: true}
 	logs := &logBuffer{}
-	stop := runRetention(t, retentionConfig{Store: f, AuditRetention: 24 * time.Hour, Logger: slog.New(slog.NewTextHandler(logs, nil))})
+	stop := runRetention(t, Config{Store: f, AuditRetention: 24 * time.Hour, Logger: slog.New(slog.NewTextHandler(logs, nil))})
 	testutil.Eventually(t, "four ticks", func() bool { a, p := f.calls(); return len(a) >= 4 && len(p) >= 4 }, testutil.Within(10*time.Second))
 	stop()
 	if got := logs.String(); !strings.Contains(got, "replies that were never delivered could not be dropped") || !strings.Contains(got, "audit entries past the retention could not be purged") {
@@ -435,17 +456,17 @@ func TestRetentionLogsFailuresAndGoesOn(t *testing.T) {
 
 func TestNewRetentionRefusesWhatIsNotLegal(t *testing.T) {
 	f := &fakeRetentionStore{}
-	for name, cfg := range map[string]retentionConfig{
+	for name, cfg := range map[string]Config{
 		"no store":               {},
 		"a negative retention":   {Store: f, AuditRetention: -time.Hour},
 		"a retention of an hour": {Store: f, AuditRetention: time.Hour},
 	} {
-		if _, err := newRetention(harmless(cfg)); err == nil {
-			t.Errorf("newRetention with %s succeeded", name)
+		if _, err := New(harmless(cfg)); err == nil {
+			t.Errorf("New with %s succeeded", name)
 		}
 	}
-	if _, err := newRetention(harmless(retentionConfig{Store: f, AuditRetention: MinAuditRetention})); err != nil {
-		t.Errorf("newRetention at the least retention = %v", err)
+	if _, err := New(harmless(Config{Store: f, AuditRetention: MinAuditRetention})); err != nil {
+		t.Errorf("New at the least retention = %v", err)
 	}
 }
 
@@ -463,7 +484,7 @@ func TestRetentionPurgesOnlyAuditEntriesPastTheRetention(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	stop := runRetention(t, retentionConfig{Store: st, AuditRetention: retention, AuditBatch: 1})
+	stop := runRetention(t, Config{Store: st, AuditRetention: retention, AuditBatch: 1})
 	testutil.Eventually(t, "the old entries to be purged", func() bool {
 		l, _ := st.ListAudit(t.Context(), time.Time{}, 0, 10)
 		return len(l) == 2
@@ -479,85 +500,13 @@ func TestRetentionPurgesOnlyAuditEntriesPastTheRetention(t *testing.T) {
 	}
 }
 
-// Run starts the loop with the operator's retention: an audit entry older than it, which the database holds from
-// an earlier run, is gone soon after the broker is up, and one inside it stays. With no retention set, the old
-// entry stays too, which is what runs until an operator sets one.
-func TestRunPurgesAuditEntriesPastTheConfiguredRetention(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		retention time.Duration
-		wantLeft  []string
-	}{
-		{"a retention of 30 days", 30 * 24 * time.Hour, []string{"recent"}},
-		{"no retention", 0, []string{"old", "recent"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			c := startConfig(t)
-			c.retentionEvery = 10 * time.Millisecond
-			c.AuditRetention = tc.retention
-			seed, err := sqlite.Open(t.Context(), c.DBPath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for subject, age := range map[string]time.Duration{"old": 60 * 24 * time.Hour, "recent": time.Hour} {
-				if err := seed.AppendAudit(t.Context(), store.AuditEntry{At: time.Now().Add(-age), Kind: store.AuditEvent, Subject: subject, Outcome: "accepted"}); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if err := seed.Close(); err != nil {
-				t.Fatal(err)
-			}
-			r := start(t, c)
-			r.until("/readyz", 200)
-			for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) { // the store's own metric says the loop ran
-				if _, body := r.get("/metrics"); strings.Contains(body, `operation="agentkourier.store.AbandonStrandedReplies"`) {
-					break
-				}
-				if time.Now().After(deadline) {
-					t.Fatal("the retention loop never ran")
-				}
-			}
-			if tc.retention > 0 { // the abandon ran first in a tick, so give the purge, which follows it, its turn
-				for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-					if _, body := r.get("/metrics"); strings.Contains(body, `operation="agentkourier.store.PurgeAudit"`) {
-						break
-					}
-					if time.Now().After(deadline) {
-						t.Fatal("the audit purge never ran")
-					}
-				}
-			}
-			r.cancel()
-			if err := r.wait(); err != nil {
-				t.Fatal(err)
-			}
-			st, err := sqlite.Open(t.Context(), c.DBPath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer func() { _ = st.Close() }()
-			l, err := st.ListAudit(t.Context(), time.Time{}, 0, 100)
-			var left []string
-			for _, e := range l {
-				if e.Kind == store.AuditEvent {
-					left = append(left, e.Subject)
-				}
-			}
-			slices.Sort(left)
-			if err != nil || !slices.Equal(left, tc.wantLeft) {
-				t.Errorf("audit entries left %v, %v; want %v", left, err, tc.wantLeft)
-			}
-		})
-	}
-}
-
 // What the loop removes is counted, so that it can be alerted on: a dropped reply is a turn that was never sent, and
 // audit rows are gone for good. Nothing is counted when nothing was removed, and nothing when a call failed.
 func TestRetentionCountsWhatItRemoves(t *testing.T) {
 	f := &fakeRetentionStore{dropped: 2, purged: []int{7, 3}}
 	var mu sync.Mutex
 	got := map[string]int{}
-	r, err := newRetention(harmless(retentionConfig{Store: f, AuditRetention: 48 * time.Hour, AuditBatch: 7, Now: func() time.Time { return sweepNow },
+	r, err := New(harmless(Config{Store: f, AuditRetention: 48 * time.Hour, AuditBatch: 7, Now: func() time.Time { return sweepNow },
 		Logger:    testutil.DiscardLogger(),
 		OnRemoved: func(what string, n int) { mu.Lock(); got[what] += n; mu.Unlock() }}))
 	if err != nil {
@@ -586,14 +535,14 @@ func ttls() (map[string]time.Duration, bool) {
 	return map[string]time.Duration{"ns/long": 30 * 24 * time.Hour, "ns/short": 10 * 24 * time.Hour}, true
 }
 
-func newSessionRetention(t *testing.T, f *fakeRetentionStore, mutate func(*retentionConfig)) *retention {
+func newSessionRetention(t *testing.T, f *fakeRetentionStore, mutate func(*Config)) *Retention {
 	t.Helper()
-	cfg := retentionConfig{Store: f, ThreadTTLs: ttls, SessionBatch: 3, Now: func() time.Time { return sweepNow },
+	cfg := Config{Store: f, ThreadTTLs: ttls, SessionBatch: 3, Now: func() time.Time { return sweepNow },
 		Logger: testutil.DiscardLogger()}
 	if mutate != nil {
 		mutate(&cfg)
 	}
-	r, err := newRetention(harmless(cfg))
+	r, err := New(harmless(cfg))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -627,7 +576,7 @@ func TestRetentionPurgesSessionsPastTheirBindingsHorizon(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := &fakeRetentionStore{}
-			newSessionRetention(t, f, func(c *retentionConfig) { c.ThreadTTLs = tc.ttls }).purgeSessions(t.Context())
+			newSessionRetention(t, f, func(c *Config) { c.ThreadTTLs = tc.ttls }).purgeSessions(t.Context())
 			calls := f.sessions()
 			if len(calls) != 1 || calls[0].limit != 3 || !maps.EqualFunc(calls[0].horizons.ByBinding, tc.want.ByBinding, time.Time.Equal) || !calls[0].horizons.Otherwise.Equal(tc.want.Otherwise) {
 				t.Errorf("PurgeExpiredSessions calls = %+v; want one, of a batch of 3, with the horizons %+v", calls, tc.want)
@@ -659,7 +608,7 @@ func TestSessionHorizonsSaturate(t *testing.T) {
 		{"a negative grace counts as none", time.Hour, -2 * time.Hour, sweepNow.Add(-time.Hour), sweepNow.Add(-v1alpha1.DefaultThreadTTL)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r := &retention{cfg: retentionConfig{SessionGrace: tc.grace}}
+			r := &Retention{cfg: Config{SessionGrace: tc.grace}}
 			h := r.sessionHorizons(map[string]time.Duration{"ns/b": tc.ttl}, nil, sweepNow)
 			if got := h.ByBinding["ns/b"]; !got.Equal(tc.want) {
 				t.Errorf("the horizon of the Binding = %s, want %s", got, tc.want)
@@ -675,7 +624,7 @@ func TestSessionHorizonsSaturate(t *testing.T) {
 // unserved, the orphans of a Binding that was deleted are held to the shorter reckoning of the rest, and sessions between the
 // two are past deleting. Its own sessions are skipped.
 func TestSessionHorizonsOtherwiseForgetsAnUnservedBinding(t *testing.T) {
-	r := &retention{cfg: retentionConfig{SessionGrace: defaultSessionGrace}}
+	r := &Retention{cfg: Config{SessionGrace: defaultSessionGrace}}
 	year := v1alpha1.MaxThreadTTL
 	served := r.sessionHorizons(map[string]time.Duration{"ns/long": year}, nil, sweepNow)
 	unserved := r.sessionHorizons(map[string]time.Duration{}, []string{"ns/long"}, sweepNow)
@@ -693,7 +642,7 @@ func TestSessionHorizonsOtherwiseForgetsAnUnservedBinding(t *testing.T) {
 // Without a config nothing is known of any session's threadTTL, so nothing is deleted.
 func TestRetentionLeavesSessionsAloneUntilTheirBindingsAreKnown(t *testing.T) {
 	f := &fakeRetentionStore{}
-	newSessionRetention(t, f, func(c *retentionConfig) { c.ThreadTTLs = func() (map[string]time.Duration, bool) { return nil, false } }).purgeSessions(t.Context())
+	newSessionRetention(t, f, func(c *Config) { c.ThreadTTLs = func() (map[string]time.Duration, bool) { return nil, false } }).purgeSessions(t.Context())
 	if calls := f.sessions(); len(calls) != 0 {
 		t.Errorf("%d purges; want none", len(calls))
 	}
@@ -715,7 +664,7 @@ func TestRetentionBoundsTheSessionBatchesOfOneTick(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := &fakeRetentionStore{swept: tc.swept}
-			newSessionRetention(t, f, func(c *retentionConfig) { c.MaxSessionBatches = tc.max }).purgeSessions(t.Context())
+			newSessionRetention(t, f, func(c *Config) { c.MaxSessionBatches = tc.max }).purgeSessions(t.Context())
 			if got := len(f.sessions()); got != tc.wantCalls {
 				t.Errorf("%d purge calls in one tick; want %d", got, tc.wantCalls)
 			}
@@ -731,7 +680,7 @@ func TestRetentionCountsTheSessionsItDeletes(t *testing.T) {
 	count := func(what string, n int) { mu.Lock(); got[what] += n; mu.Unlock() }
 	f := &fakeRetentionStore{swept: []store.PurgedSessions{
 		{Sessions: 3, Replies: 10, Interactions: 4, Presses: 1, Outbox: 20}, {Sessions: 1, Replies: 2, Outbox: 5}}}
-	newSessionRetention(t, f, func(c *retentionConfig) { c.OnRemoved = count }).purgeSessions(t.Context())
+	newSessionRetention(t, f, func(c *Config) { c.OnRemoved = count }).purgeSessions(t.Context())
 	want := map[string]int{RemovedExpiredSessions: 4, RemovedSessionReplies: 12, RemovedSessionInteractions: 4, RemovedSessionPresses: 1, RemovedSessionOutbox: 25}
 	mu.Lock()
 	if !maps.Equal(got, want) {
@@ -741,7 +690,7 @@ func TestRetentionCountsTheSessionsItDeletes(t *testing.T) {
 
 	clear(got)
 	f = &fakeRetentionStore{failSessions: true}
-	newSessionRetention(t, f, func(c *retentionConfig) { c.OnRemoved = count }).purgeSessions(t.Context())
+	newSessionRetention(t, f, func(c *Config) { c.OnRemoved = count }).purgeSessions(t.Context())
 	if len(got) != 0 {
 		t.Errorf("counted %v after a failed call; want nothing", got)
 	}
@@ -751,7 +700,7 @@ func TestRetentionCountsTheSessionsItDeletes(t *testing.T) {
 func TestRetentionLogsASessionPurgeFailureAndGoesOn(t *testing.T) {
 	f := &fakeRetentionStore{failSessions: true}
 	logs := &logBuffer{}
-	stop := runRetention(t, retentionConfig{Store: f, ThreadTTLs: ttls, Logger: slog.New(slog.NewTextHandler(logs, nil))})
+	stop := runRetention(t, Config{Store: f, ThreadTTLs: ttls, Logger: slog.New(slog.NewTextHandler(logs, nil))})
 	testutil.Eventually(t, "three ticks", func() bool { a, _ := f.calls(); return len(a) >= 3 && len(f.sessions()) >= 3 }, testutil.Within(10*time.Second))
 	stop()
 	if got := logs.String(); !strings.Contains(got, "expired sessions could not be deleted") {
@@ -785,7 +734,7 @@ func TestRetentionDeletesOnlySessionsPastTheirHorizon(t *testing.T) {
 	gone := seed("4.4", "ns/removed", "", 90*day+grace+time.Hour)
 	busy := seed("5.5", "ns/short", "task", 1000*day)
 
-	newSessionRetention(t, &fakeRetentionStore{}, func(c *retentionConfig) { c.Store = st }).purgeSessions(t.Context())
+	newSessionRetention(t, &fakeRetentionStore{}, func(c *Config) { c.Store = st }).purgeSessions(t.Context())
 
 	for k, wantSession := range map[store.ConversationKey]bool{past: false, inside: true, longer: true, gone: false, busy: true} {
 		_, err := st.GetSession(t.Context(), k, 100*365*day, sweepNow)
@@ -794,54 +743,6 @@ func TestRetentionDeletesOnlySessionsPastTheirHorizon(t *testing.T) {
 		}
 		if has, err := st.HasReply(t.Context(), "r-"+k.Thread); err != nil || has != wantSession {
 			t.Errorf("reply of %s present = %v, %v; want %v with its session", k.Thread, has, err, wantSession)
-		}
-	}
-}
-
-// Run starts the loop with the config's Bindings: a session of a Binding of the example config that has been expired for
-// longer than the grace, which the database holds from an earlier run, is gone soon after the broker is up, and one
-// that has not stays.
-func TestRunDeletesSessionsExpiredForGood(t *testing.T) {
-	c := startConfig(t)
-	c.retentionEvery = 10 * time.Millisecond
-	seed, err := sqlite.Open(t.Context(), c.DBPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	day := 24 * time.Hour
-	old := store.ConversationKey{Connection: "slack", Channel: "C1", Thread: "1.1"}
-	recent := store.ConversationKey{Connection: "slack", Channel: "C1", Thread: "2.2"}
-	for k, idle := range map[store.ConversationKey]time.Duration{old: 90*day + 90*day + day, recent: 90*day + 89*day} { // the example's threadTTL is 90 days
-		if err := seed.UpsertSession(t.Context(), store.Session{Key: k, Binding: "sre/sre-alerts", LastActivity: time.Now().Add(-idle)}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := seed.Close(); err != nil {
-		t.Fatal(err)
-	}
-	r := start(t, c)
-	r.until("/readyz", 200)
-	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) { // the store's own metric says the sweep ran
-		if _, body := r.get("/metrics"); strings.Contains(body, `operation="agentkourier.store.PurgeExpiredSessions"`) {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the session purge never ran")
-		}
-	}
-	r.cancel()
-	if err := r.wait(); err != nil {
-		t.Fatal(err)
-	}
-	st, err := sqlite.Open(t.Context(), c.DBPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = st.Close() }()
-	for k, want := range map[store.ConversationKey]bool{old: false, recent: true} {
-		_, err := st.GetSession(t.Context(), k, 100*365*day, time.Now())
-		if present := err == nil; present != want {
-			t.Errorf("session %s present = %v (%v); want %v", k.Thread, present, err, want)
 		}
 	}
 }

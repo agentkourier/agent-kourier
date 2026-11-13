@@ -15,6 +15,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/feedback"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
+	"github.com/agentkourier/agent-kourier/internal/retention"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -214,7 +215,7 @@ func (d interactionDeps) start(ctx context.Context, mgr *session.Manager, r *int
 	if err != nil {
 		return nil, err
 	}
-	retention, err := interact.NewRetention(interact.RetentionConfig{Store: d.st, OnCleared: func(n int) { d.metrics.RetentionRemoved(RemovedClearedInteractions, n) }, Logger: d.log})
+	clearing, err := interact.NewRetention(interact.RetentionConfig{Store: d.st, OnCleared: func(n int) { d.metrics.RetentionRemoved(retention.RemovedClearedInteractions, n) }, Logger: d.log})
 	if err != nil {
 		return nil, fmt.Errorf("interactions: the retention loop: %w", err)
 	}
@@ -229,7 +230,7 @@ func (d interactionDeps) start(ctx context.Context, mgr *session.Manager, r *int
 
 	// Stops run last added first: the tap, which hands the intake no more pauses, then the worker, the
 	// sweeper and the rest.
-	stops.add("retention", startLoop(ctx, retention.Run))
+	stops.add("retention", startLoop(ctx, clearing.Run))
 	stops.add("backstop", startLoop(ctx, backstop.Run))
 	stops.add("replacer", startLoop(ctx, replacer.Run))
 	stops.add("sweeper", startLoop(ctx, sweeper.Run))
