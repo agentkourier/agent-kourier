@@ -12,6 +12,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/bindingcheck"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
+	"github.com/agentkourier/agent-kourier/internal/retention"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/testutil"
@@ -61,7 +62,7 @@ func TestEachHookIncrementsItsMetric(t *testing.T) {
 		{"credential rejection", func(m *Metrics) { m.CredentialRejected("sre/sre-alerts") }, `agentkourier_credential_rejections_total{binding=sre/sre-alerts} 1`},
 		{"config reload failure", func(m *Metrics) { m.ReloadError(errors.New("bad yaml")) }, `agentkourier_config_reload_errors_total{} 1`},
 		{"outbox abandon", func(m *Metrics) { m.OutboxAbandoned("row-1", "channel_gone") }, `agentkourier_outbox_abandoned_total{reason=channel_gone} 1`},
-		{"retention removal", func(m *Metrics) { m.RetentionRemoved(RemovedStrandedReplies, 1) }, `agentkourier_retention_removed_total{what=stranded_replies} 1`},
+		{"retention removal", func(m *Metrics) { m.RetentionRemoved(retention.RemovedStrandedReplies, 1) }, `agentkourier_retention_removed_total{what=stranded_replies} 1`},
 		{"turn outcome", func(m *Metrics) { m.TurnOutcome("sre/sre-alerts", session.TurnFailed) }, `agentkourier_turn_outcomes_total{binding=sre/sre-alerts,outcome=failed} 1`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

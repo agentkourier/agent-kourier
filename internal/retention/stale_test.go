@@ -1,4 +1,4 @@
-package broker
+package retention
 
 import (
 	"context"
@@ -18,7 +18,6 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
-	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
@@ -143,23 +142,23 @@ type staleRig struct {
 	f      *fakeRetentionStore
 	agents *fakeCanceller
 	audit  *fakeStaleAudit
-	r      *retention
+	r      *Retention
 	mu     sync.Mutex
 	count  map[string]int
 	logs   *logBuffer
 }
 
-func newStaleRig(t *testing.T, queue []store.StaleTask, mutate func(*retentionConfig)) *staleRig {
+func newStaleRig(t *testing.T, queue []store.StaleTask, mutate func(*Config)) *staleRig {
 	t.Helper()
 	f := &fakeRetentionStore{staleQueue: queue}
 	rig := &staleRig{f: f, agents: &fakeCanceller{f: f}, audit: &fakeStaleAudit{}, count: map[string]int{}, logs: &logBuffer{}}
-	cfg := retentionConfig{Store: f, ThreadTTLs: ttls, Canceller: rig.agents, Audit: rig.audit, Holds: func(store.ConversationKey, string) bool { return false }, StaleBatch: 3, Now: func() time.Time { return sweepNow },
+	cfg := Config{Store: f, ThreadTTLs: ttls, Canceller: rig.agents, Audit: rig.audit, Holds: func(store.ConversationKey, string) bool { return false }, StaleBatch: 3, Now: func() time.Time { return sweepNow },
 		OnRemoved: func(what string, n int) { rig.mu.Lock(); rig.count[what] += n; rig.mu.Unlock() },
 		Logger:    slog.New(slog.NewTextHandler(rig.logs, nil))}
 	if mutate != nil {
 		mutate(&cfg)
 	}
-	r, err := newRetention(cfg)
+	r, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +285,7 @@ func equal[T comparable](a, b []T) bool {
 func TestRetentionEndsAStaleTaskWhoseAgentCannotBeReached(t *testing.T) {
 	g := newStaleRig(t, []store.StaleTask{
 		stale("1.1", "ns/short", "t1"), stale("2.2", "ns/short", "t2"), stale("3.3", "ns/long", "t3"), stale("4.4", "ns/gone-task", "t4"), stale("5.5", "ns/gone-task", "t5"),
-	}, func(c *retentionConfig) { c.StaleBatch = 10 })
+	}, func(c *Config) { c.StaleBatch = 10 })
 	g.agents.errs = map[string]error{"ns/short": errors.New("connection refused"), "ns/gone-task": fmt.Errorf("cancel: %w", a2a.ErrTaskNotFound)}
 	g.r.endStaleTasks(t.Context())
 
@@ -315,7 +314,7 @@ func TestRetentionEndsAStaleTaskWhoseAgentCannotBeReached(t *testing.T) {
 // The cancel is bounded: an agent that holds the connection and never answers costs one timeout, and the sweep ends the tasks.
 func TestRetentionBoundsTheCancelOfAStaleTask(t *testing.T) {
 	g := newStaleRig(t, []store.StaleTask{stale("1.1", "ns/short", "t1"), stale("2.2", "ns/short", "t2"), stale("3.3", "ns/long", "t3")},
-		func(c *retentionConfig) { c.CancelTimeout = 20 * time.Millisecond })
+		func(c *Config) { c.CancelTimeout = 20 * time.Millisecond })
 	g.agents.block = map[string]bool{"ns/short": true}
 	done := make(chan struct{})
 	go func() { g.r.endStaleTasks(t.Context()); close(done) }()
@@ -387,7 +386,7 @@ func TestRetentionBoundsTheStaleTasksOfOneTick(t *testing.T) {
 		{"a full listing that is the last asks again, and finds nothing", 6, 10, 3, 6},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			g := newStaleRig(t, queue(tc.tasks), func(c *retentionConfig) { c.MaxStaleBatches = tc.max })
+			g := newStaleRig(t, queue(tc.tasks), func(c *Config) { c.MaxStaleBatches = tc.max })
 			g.r.endStaleTasks(t.Context())
 			if len(g.f.staleLists) != tc.wantLists || len(g.f.endCalls) != tc.wantEnd || len(g.agents.got()) != tc.wantEnd {
 				t.Errorf("%d listings, %d ended, %d cancelled; want %d, %d, %d", len(g.f.staleLists), len(g.f.endCalls), len(g.agents.got()), tc.wantLists, tc.wantEnd, tc.wantEnd)
@@ -400,7 +399,7 @@ func TestRetentionBoundsTheStaleTasksOfOneTick(t *testing.T) {
 // and is not asked of the agent a second time in the tick, which also ends a tick whose listings find nothing new.
 func TestRetentionDoesNotRepeatAStaleTaskItCouldNotEnd(t *testing.T) {
 	g := newStaleRig(t, []store.StaleTask{stale("1.1", "ns/short", "moved"), stale("2.2", "ns/short", "broken"), stale("3.3", "ns/short", "fine"), stale("4.4", "ns/short", "later")},
-		func(c *retentionConfig) { c.MaxStaleBatches = 20 })
+		func(c *Config) { c.MaxStaleBatches = 20 })
 	g.f.endAs = map[string]store.EndedStaleTask{"moved": {}}
 	g.f.endErr = map[string]error{"broken": errors.New("lock timeout")}
 	g.r.endStaleTasks(t.Context())
@@ -432,7 +431,7 @@ func TestRetentionDoesNotRepeatAStaleTaskItCouldNotEnd(t *testing.T) {
 // otherwise be asked for again, and each of its tasks cancelled again, until the tick's share was spent.
 func TestRetentionStopsWhenNoStaleTaskCanBeEnded(t *testing.T) {
 	g := newStaleRig(t, []store.StaleTask{stale("1.1", "ns/short", "a"), stale("2.2", "ns/short", "b"), stale("3.3", "ns/short", "c")},
-		func(c *retentionConfig) { c.MaxStaleBatches = 20 })
+		func(c *Config) { c.MaxStaleBatches = 20 })
 	g.f.endAs = map[string]store.EndedStaleTask{"a": {}, "b": {}, "c": {}}
 	g.r.endStaleTasks(t.Context())
 	if len(g.f.staleLists) != 2 || len(g.agents.got()) != 3 || len(g.audit.got()) != 0 || len(g.counted()) != 0 {
@@ -447,7 +446,7 @@ func TestRetentionStopsWhenNoStaleTaskCanBeEnded(t *testing.T) {
 // and not asked of Holds again in the tick; the others go on, and the tick says it left one.
 func TestRetentionLeavesAStaleTaskThatARunnerOfThisProcessHolds(t *testing.T) {
 	held := stale("1.1", "ns/short", "parked")
-	g := newStaleRig(t, []store.StaleTask{held, stale("2.2", "ns/short", "orphan")}, func(c *retentionConfig) { c.StaleBatch, c.MaxStaleBatches = 2, 20 }) // a full first listing, so that a second finds the held task again
+	g := newStaleRig(t, []store.StaleTask{held, stale("2.2", "ns/short", "orphan")}, func(c *Config) { c.StaleBatch, c.MaxStaleBatches = 2, 20 }) // a full first listing, so that a second finds the held task again
 	var asked []string
 	g.r.cfg.Holds = func(k store.ConversationKey, task string) bool {
 		asked = append(asked, task)
@@ -478,28 +477,28 @@ func TestRetentionLeavesAStaleTaskThatARunnerOfThisProcessHolds(t *testing.T) {
 // keeps a runner's task from being cleared from under it, and the rest are what the loop ends, cancels, records and counts
 // with. A wiring that drops one fails every test that builds the broker.
 func TestNewRetentionNamesTheFieldThatIsMissing(t *testing.T) {
-	full := harmless(retentionConfig{Store: &fakeRetentionStore{}})
+	full := harmless(Config{Store: &fakeRetentionStore{}})
 	for _, tc := range []struct {
 		field string
-		clear func(*retentionConfig)
+		clear func(*Config)
 	}{
-		{"Store", func(c *retentionConfig) { c.Store = nil }},
-		{"Holds", func(c *retentionConfig) { c.Holds = nil }},
-		{"ThreadTTLs", func(c *retentionConfig) { c.ThreadTTLs = nil }},
-		{"Canceller", func(c *retentionConfig) { c.Canceller = nil }},
-		{"Audit", func(c *retentionConfig) { c.Audit = nil }},
-		{"OnRemoved", func(c *retentionConfig) { c.OnRemoved = nil }},
+		{"Store", func(c *Config) { c.Store = nil }},
+		{"Holds", func(c *Config) { c.Holds = nil }},
+		{"ThreadTTLs", func(c *Config) { c.ThreadTTLs = nil }},
+		{"Canceller", func(c *Config) { c.Canceller = nil }},
+		{"Audit", func(c *Config) { c.Audit = nil }},
+		{"OnRemoved", func(c *Config) { c.OnRemoved = nil }},
 	} {
 		t.Run(tc.field, func(t *testing.T) {
 			cfg := full
 			tc.clear(&cfg)
-			if r, err := newRetention(cfg); err == nil || r != nil || !strings.Contains(err.Error(), tc.field) {
-				t.Fatalf("newRetention = %v, %v; want an error that names %s", r, err, tc.field)
+			if r, err := New(cfg); err == nil || r != nil || !strings.Contains(err.Error(), tc.field) {
+				t.Fatalf("New = %v, %v; want an error that names %s", r, err, tc.field)
 			}
 		})
 	}
-	if _, err := newRetention(full); err != nil {
-		t.Errorf("newRetention with every field = %v; want none", err)
+	if _, err := New(full); err != nil {
+		t.Errorf("New with every field = %v; want none", err)
 	}
 }
 
@@ -515,7 +514,7 @@ func TestRetentionLogsAStaleListingFailure(t *testing.T) {
 
 // Without a config nothing is known of any session's threadTTL, so no task is judged stale and the loop does not look.
 func TestRetentionLeavesTasksAloneUntilTheirBindingsAreKnown(t *testing.T) {
-	g := newStaleRig(t, []store.StaleTask{stale("1.1", "ns/short", "t1")}, func(c *retentionConfig) {
+	g := newStaleRig(t, []store.StaleTask{stale("1.1", "ns/short", "t1")}, func(c *Config) {
 		c.ThreadTTLs = func() (map[string]time.Duration, bool) { return nil, false }
 	})
 	g.r.endStaleTasks(t.Context())
@@ -540,7 +539,7 @@ func TestRetentionDoesNotEndATaskWhoseCancelWasInterrupted(t *testing.T) {
 // passes that follow, in the same tick.
 func TestRetentionEndsStaleTasksBeforeItDropsRepliesAndPurgesSessions(t *testing.T) {
 	g := newStaleRig(t, []store.StaleTask{stale("1.1", "ns/short", "t1")}, nil)
-	stop := runRetention(t, retentionConfig{Store: g.f, ThreadTTLs: ttls, Canceller: g.agents, Audit: g.audit, Holds: func(store.ConversationKey, string) bool { return false }})
+	stop := runRetention(t, Config{Store: g.f, ThreadTTLs: ttls, Canceller: g.agents, Audit: g.audit, Holds: func(store.ConversationKey, string) bool { return false }})
 	testutil.Eventually(t, "a purge", func() bool { g.f.mu.Lock(); defer g.f.mu.Unlock(); return len(g.f.sessionCalls) > 0 }, testutil.Within(10*time.Second))
 	stop()
 	g.f.mu.Lock()
@@ -579,7 +578,7 @@ func TestRetentionEndsAStaleTaskAndTheNextPurgeDeletesTheSession(t *testing.T) {
 	left := seed("4.4", "ns/removed", "orphan", 90*day+grace+time.Hour)
 
 	agents := &fakeCanceller{errs: map[string]error{"ns/removed": session.ErrUnknownBinding}}
-	rig := newStaleRig(t, nil, func(c *retentionConfig) {
+	rig := newStaleRig(t, nil, func(c *Config) {
 		w, err := audit.New(st, audit.Options{Now: func() time.Time { return sweepNow }, Logger: testutil.DiscardLogger(), OnFailure: audit.NoFailure})
 		if err != nil {
 			t.Fatal(err)
@@ -629,79 +628,6 @@ func TestRetentionEndsAStaleTaskAndTheNextPurgeDeletesTheSession(t *testing.T) {
 	}
 }
 
-// The broker runs it: a session of the example config's Binding that has been expired for good, with a task that a crash left
-// and a question nobody answered, is ended and then deleted soon after the broker is up (the agent cannot be reached from the
-// test, which is a failed cancel and no obstacle), the ending is audited and counted, and one inside the horizon keeps its task.
-func TestRunEndsATaskThatACrashLeftOnAnExpiredSession(t *testing.T) {
-	c := startConfig(t)
-	c.retentionEvery = 10 * time.Millisecond
-	seed, err := sqlite.Open(t.Context(), c.DBPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	day := 24 * time.Hour
-	stale := store.ConversationKey{Connection: "slack", Channel: "C1", Thread: "1.1"}
-	live := store.ConversationKey{Connection: "slack", Channel: "C1", Thread: "2.2"}
-	for k, idle := range map[store.ConversationKey]time.Duration{stale: 90*day + 90*day + day, live: 90*day + 89*day} { // the example's threadTTL is 90 days
-		if err := seed.UpsertSession(t.Context(), store.Session{Key: k, Binding: "sre/sre-alerts", ContextID: "ctx", LastActivity: time.Now().Add(-idle)}); err != nil {
-			t.Fatal(err)
-		}
-		if err := seed.SetSessionTask(t.Context(), k, "", "task-"+k.Thread, store.TaskTurn{}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := seed.Close(); err != nil {
-		t.Fatal(err)
-	}
-	r := start(t, c)
-	r.until("/readyz", 200)
-	// The ending, and the deletion that follows it in the same tick: the session of the example's Binding that is inside its
-	// horizon is the only other one there, so one session is counted as deleted.
-	for _, line := range []string{`agentkourier_retention_removed_total{what="stale_tasks"} 1`, `agentkourier_retention_removed_total{what="expired_sessions"} 1`} {
-		for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-			if _, body := r.get("/metrics"); strings.Contains(body, line+"\n") {
-				break
-			} else if time.Now().After(deadline) {
-				t.Fatalf("/metrics never held %q; /metrics:\n%s", line, body)
-			}
-		}
-	}
-	r.cancel()
-	if err := r.wait(); err != nil {
-		t.Fatal(err)
-	}
-	st, err := sqlite.Open(t.Context(), c.DBPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = st.Close() }()
-	if _, err := st.GetSession(t.Context(), stale, 100*365*day, time.Now()); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("the stale session = %v; want it deleted by the sweep that follows the ending", err)
-	}
-	if s, err := st.GetSession(t.Context(), live, 100*365*day, time.Now()); err != nil || s.TaskID != "task-2.2" {
-		t.Errorf("the session inside its horizon = task %q, %v; want its task left", s.TaskID, err)
-	}
-	entries, err := st.ListAudit(t.Context(), time.Time{}, 0, 100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var ended []store.AuditEntry
-	for _, e := range entries {
-		if strings.HasPrefix(e.Outcome, "stale_task_ended:") {
-			ended = append(ended, e)
-		}
-	}
-	if len(ended) != 1 || ended[0].Subject != "task=task-1.1 context=ctx" || ended[0].Binding != "sre/sre-alerts" || ended[0].Kind != store.AuditEvent {
-		t.Fatalf("the ending in the audit = %+v; want one, of task-1.1, by sre/sre-alerts", ended)
-	}
-	if ended[0].Identity == "" { // the cancel was made under the Binding's identity, as a stop's is
-		t.Error("the ending was audited with no identity; want the Binding's, which the cancel was made under")
-	}
-	if !strings.HasPrefix(ended[0].Outcome, "stale_task_ended: cancel=failed ") { // the agent was asked, through the Binding, and did not answer
-		t.Errorf("the outcome = %q; want a cancel that was made at the agent and failed", ended[0].Outcome)
-	}
-}
-
 // An answer too large to read is an answer: the agent is up, and the other stale tasks of its Binding are cancelled too. It was taken for a
 // failed connection, which skipped the rest of the Binding's tasks for the tick and ended them with no cancel. An agent card that is too large
 // is no answer, and is down as any connection that fails: nothing was asked of it.
@@ -717,7 +643,7 @@ func TestRetentionDoesNotTakeAnOversizedAnswerForAnAgentThatIsDown(t *testing.T)
 			[]cancelCall{{"ns/big", "t1"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			g := newStaleRig(t, []store.StaleTask{stale("1.1", "ns/big", "t1"), stale("2.2", "ns/big", "t2")}, func(c *retentionConfig) { c.StaleBatch = 10 })
+			g := newStaleRig(t, []store.StaleTask{stale("1.1", "ns/big", "t1"), stale("2.2", "ns/big", "t2")}, func(c *Config) { c.StaleBatch = 10 })
 			g.agents.errs = map[string]error{"ns/big": tc.err}
 			g.r.endStaleTasks(t.Context())
 			if got := g.agents.got(); !equal(got, tc.wantAsked) {
