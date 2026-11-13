@@ -94,7 +94,7 @@ golangci-lint runs as `go tool golangci-lint`, never a global install.
   version selector), `_redirects` (the root and the old unversioned paths to `/latest/`, each line's `/X.Y/` to its newest
   tag) and `_headers` at the root. It needs the tags.
 - `make docs-check` fails on a misspelt product name (`hack/docs/namecheck` reads `mkdocs.yml`, the theme
-  overrides, `docs/` except `brand` and `spikes`, and the files that pages of `docs/` include with `--8<--`, found under the
+  overrides, `docs/` except `brand` and `spikes` (of an SVG, the text and not the markup), and the files that pages of `docs/` include with `--8<--`, found under the
   snippets `base_path` in `mkdocs.yml`; an include it cannot find fails too, and `kourier/` as a path segment is not a misspelling) and, in the public sources (`README.md`, the chart
   README, all of `charts/agent-kourier/values.yaml`, the generated CRDs under `charts/agent-kourier/files/crds`, every text file under `docs/` except `brand` and `spikes`, the theme
   overrides, and every `README.md` and YAML file under `examples/recipes`), on internal plan, decision and risk IDs and `tasks/` paths, removed field and page names, API fields the types do
