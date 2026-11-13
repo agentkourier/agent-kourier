@@ -16,7 +16,6 @@ import (
 	"unicode"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
-
 	"github.com/agentkourier/agent-kourier/internal/trigger"
 )
 

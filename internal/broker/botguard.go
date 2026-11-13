@@ -5,7 +5,6 @@ import (
 	"log/slog"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
-
 	"github.com/agentkourier/agent-kourier/internal/trigger"
 )
 
