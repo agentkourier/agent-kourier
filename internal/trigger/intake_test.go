@@ -1,4 +1,4 @@
-package chat_test
+package trigger_test
 
 import (
 	"context"
@@ -17,12 +17,13 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/testutil"
+	"github.com/agentkourier/agent-kourier/internal/trigger"
 )
 
 const conn = "agent-kourier-system/slack-main"
 
 // The session manager is what Submit goes to.
-var _ chat.Submitter = (*session.Manager)(nil)
+var _ trigger.Submitter = (*session.Manager)(nil)
 
 // submitter records what the session manager is asked to submit. fn, if set, decides the
 // answer; by default a turn is Accepted.
@@ -77,22 +78,22 @@ func inbound(channel, id, thread string, mentioned bool) chat.Inbound {
 
 // newIntake returns an Intake for the connection, over a config that binds C1 to sre/sre-alerts
 // and the private channel G1 to payments/pay.
-func newIntake(t *testing.T) (*chat.Intake, *submitter) { return newIntakeNotifying(t, nil) }
+func newIntake(t *testing.T) (*trigger.Intake, *submitter) { return newIntakeNotifying(t, nil) }
 
 // newIntakeNotifying is newIntake with the func that takes a notice for a thread Agent Kourier cannot continue.
-func newIntakeNotifying(t *testing.T, notice func(context.Context, session.Key, session.Notice) error) (*chat.Intake, *submitter) {
+func newIntakeNotifying(t *testing.T, notice func(context.Context, session.Key, session.Notice) error) (*trigger.Intake, *submitter) {
 	t.Helper()
 	return newIntakeModes(t, notice, "", "")
 }
 
 // newIntakeModes is newIntakeNotifying with the chat.threadReplies of the Binding of C1 and of G1.
-func newIntakeModes(t *testing.T, notice func(context.Context, session.Key, session.Notice) error, c1, g1 v1alpha1.ThreadReplies) (*chat.Intake, *submitter) {
+func newIntakeModes(t *testing.T, notice func(context.Context, session.Key, session.Notice) error, c1, g1 v1alpha1.ThreadReplies) (*trigger.Intake, *submitter) {
 	t.Helper()
 	return newIntakeOn(t, v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"}, notice, c1, g1)
 }
 
 // newIntakeOn is newIntakeModes for the Intake of the connection conn. The Bindings are the same, whichever connection it is.
-func newIntakeOn(t *testing.T, conn v1alpha1.ObjectRef, notice func(context.Context, session.Key, session.Notice) error, c1, g1 v1alpha1.ThreadReplies) (*chat.Intake, *submitter) {
+func newIntakeOn(t *testing.T, conn v1alpha1.ObjectRef, notice func(context.Context, session.Key, session.Notice) error, c1, g1 v1alpha1.ThreadReplies) (*trigger.Intake, *submitter) {
 	t.Helper()
 	meta := func(ns, name string) metav1.ObjectMeta { return metav1.ObjectMeta{Namespace: ns, Name: name} }
 	bind := func(ns, name, channel string, mode v1alpha1.ThreadReplies) v1alpha1.Binding {
@@ -110,7 +111,7 @@ func newIntakeOn(t *testing.T, conn v1alpha1.ObjectRef, notice func(context.Cont
 		t.Fatal(err)
 	}
 	sub := &submitter{}
-	return chat.NewIntake(chat.IntakeConfig{
+	return trigger.NewIntake(trigger.IntakeConfig{
 		Connection: conn,
 		Snapshot:   func() *config.Snapshot { return snap }, Submitter: sub, Notice: notice,
 		Logger: testutil.DiscardLogger()}), sub
@@ -228,7 +229,7 @@ func TestDedupKey(t *testing.T) {
 func TestIntakePassesInteractionsOn(t *testing.T) {
 	var got []chat.Interaction
 	fail := errors.New("busy")
-	in := chat.NewIntake(chat.IntakeConfig{Interactions: func(_ context.Context, i chat.Interaction) error {
+	in := trigger.NewIntake(trigger.IntakeConfig{Interactions: func(_ context.Context, i chat.Interaction) error {
 		got = append(got, i)
 		return fail
 	}, Logger: testutil.DiscardLogger()})
@@ -237,7 +238,7 @@ func TestIntakePassesInteractionsOn(t *testing.T) {
 		t.Fatalf("Interaction = %v, handler saw %+v; want its error, and the press", err, got)
 	}
 	// With no handler the press is dropped, and acknowledged.
-	if err := chat.NewIntake(chat.IntakeConfig{Logger: testutil.DiscardLogger()}).Interaction(t.Context(), press); err != nil {
+	if err := trigger.NewIntake(trigger.IntakeConfig{Logger: testutil.DiscardLogger()}).Interaction(t.Context(), press); err != nil {
 		t.Fatalf("Interaction with no handler = %v; want nil", err)
 	}
 }

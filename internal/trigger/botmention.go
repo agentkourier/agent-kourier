@@ -1,4 +1,4 @@
-package chat
+package trigger
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
@@ -42,7 +43,7 @@ func botMentionLimits() v1alpha1.TriggerLimits {
 	}
 }
 
-// AcceptsBotMention implements BotMentionFilter: whether a mention by the bot botID in channel starts a turn. The Binding that
+// AcceptsBotMention implements chat.BotMentionFilter: whether a mention by the bot botID in channel starts a turn. The Binding that
 // owns the channel takes mentions (it has a mention trigger) and takes them from bots (chat.botMentions), and no botMessage
 // trigger of it names the bot: that bot's posts are read by the trigger, and neither their second event nor a token an
 // alert's text carries wakes the agent another way. A channel with no Binding, and an empty ID, accept none.
@@ -76,7 +77,7 @@ func mentionTriggerIndex(triggers []v1alpha1.Trigger) int {
 // botMention takes a bot's mention as a start: it asks the question the adapter asked again, for the config of this moment,
 // and then decides it as a trigger's match with no thread rules, so the limits, the counts and OnStart are the ones a
 // botMessage trigger has. Its place among the triggers is the mention trigger's, which is what the counts name.
-func (in *Intake) botMention(ctx context.Context, m Inbound) (disposition string, err error) {
+func (in *Intake) botMention(ctx context.Context, m chat.Inbound) (disposition string, err error) {
 	rb, ok := in.mentionBinding(m.At.Channel, m.Bot.ID)
 	if !ok {
 		return "ignored", nil
@@ -84,7 +85,7 @@ func (in *Intake) botMention(ctx context.Context, m Inbound) (disposition string
 	name := v1alpha1.NamespacedName(rb.Binding.Namespace, rb.Binding.Name)
 	trace.SpanFromContext(ctx).SetAttributes(attribute.String("agentkourier.binding", name))
 	index := max(mentionTriggerIndex(rb.Binding.Spec.Chat.Triggers), 0)
-	match := TriggerMatch{Binding: name, Index: index, Limits: botMentionLimits(), PromptTemplate: BotMentionPrompt, MessageID: in.messageID(m), Received: in.now(), Message: m, Mention: true}
+	match := Match{Binding: name, Index: index, Limits: botMentionLimits(), PromptTemplate: BotMentionPrompt, MessageID: in.messageID(m), Received: in.now(), Message: m, Mention: true}
 	in.log.InfoContext(ctx, "chat: a bot mentioned Agent Kourier", "binding", name, "channel", m.At.Channel, "message", m.At.ID, "thread", m.At.Thread, "bot", m.Bot.ID, "kind", m.Bot.Kind)
 	out, err := in.decideMention(ctx, match)
 	if out.decision != "" {
@@ -100,7 +101,7 @@ func (in *Intake) botMention(ctx context.Context, m Inbound) (disposition string
 
 // decideMention decides a mention, once the session it would be a turn of has said that it takes one: a thread past its threadTTL
 // never will, so a mention there is not_started with no place taken in the limits, and no limit can be said to have stopped it.
-func (in *Intake) decideMention(ctx context.Context, m TriggerMatch) (decided, error) {
+func (in *Intake) decideMention(ctx context.Context, m Match) (decided, error) {
 	if in.cfg.TakesBotMention != nil {
 		switch takes, err := in.cfg.TakesBotMention(ctx, m); {
 		case err != nil:

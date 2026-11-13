@@ -127,7 +127,7 @@ func New(cfg Config) *Client {
 //
 // A lost connection ends Run as ctx ending does: the sink calls in flight see their context end, and the events queued on the lanes
 // are dropped, all unacknowledged, which Slack then sends again on the next connection (how often is Slack's). The intake
-// deduplicates a redelivery only of an event whose first call finished (internal/chat/intake.go, seen), so one cut off in flight
+// deduplicates a redelivery only of an event whose first call finished (internal/trigger/intake.go, seen), so one cut off in flight
 // is decided afresh, and one that had finished is not decided twice.
 //
 // The events of one channel reach the sink one at a time and in the order they arrived, and the events of different

@@ -1,4 +1,4 @@
-package chat_test
+package trigger_test
 
 import (
 	"context"
@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
+
 	"github.com/agentkourier/agent-kourier/internal/session"
+	"github.com/agentkourier/agent-kourier/internal/trigger"
 )
 
 // queuedTurns is the durable record of which turns were taken, as the reply queue is: the start hook adds a turn when
@@ -62,7 +64,7 @@ func newTakeoverMarking(t *testing.T, failMark bool) (*triggered, *queuedTurns) 
 		cfg.TriggerThreads = &markFailsOnce{TriggerThreads: h.st}
 	}
 	cfg.TurnQueued = q.has
-	cfg.OnStart = func(ctx context.Context, m chat.TriggerMatch) error {
+	cfg.OnStart = func(ctx context.Context, m trigger.Match) error {
 		if err := h.hook(ctx, m); err != nil {
 			return err
 		}
@@ -70,7 +72,7 @@ func newTakeoverMarking(t *testing.T, failMark bool) (*triggered, *queuedTurns) 
 		return nil
 	}
 	h.cfg = cfg
-	h.in = chat.NewIntake(cfg)
+	h.in = trigger.NewIntake(cfg)
 	return h, q
 }
 
@@ -114,7 +116,7 @@ func TestAFireDoesNotTakeOverAThreadWhoseTurnWasQueued(t *testing.T) {
 // The check is only for a reservation whose turn was taken. One that was not (the start failed, or was refused) is
 // taken over as before, and the check is not made for a thread that started, or for the message's own redelivery.
 func TestAFireTakesOverAThreadWhoseTurnWasNotQueued(t *testing.T) {
-	for name, hookErr := range map[string]error{"a start that failed": errors.New("session store unavailable"), "a refused start": chat.ErrNotStarted} {
+	for name, hookErr := range map[string]error{"a start that failed": errors.New("session store unavailable"), "a refused start": trigger.ErrNotStarted} {
 		t.Run(name, func(t *testing.T) {
 			h, q := newTakeoverMarking(t, false)
 			h.hookErr = hookErr
@@ -185,7 +187,7 @@ func TestWithoutAQueueCheckAStaleReservationIsTakenOver(t *testing.T) {
 	h, _ := newTakeover(t)
 	cfg := h.cfg
 	cfg.TurnQueued = nil
-	h.in = chat.NewIntake(cfg)
+	h.in = trigger.NewIntake(cfg)
 	_ = h.in.Message(h.ctx, botInbound("C1", "100.1", kindFiring))
 	h.clk.advance(2 * time.Minute)
 	if got := h.send(t, "101.1", kindFiring); got != "started" {

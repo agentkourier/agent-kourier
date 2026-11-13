@@ -16,6 +16,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
+	"github.com/agentkourier/agent-kourier/internal/trigger"
 )
 
 // botMessageSource and personMessageSource are the sources a trigger start reports: the prompt view's Source and the
@@ -37,7 +38,7 @@ type triggerAuditor interface {
 // triggerStarterConfig is what a triggerStarter is made from. Every field is required: newTriggerStarter refuses a config
 // without one and names it. Link is the one that may legitimately do nothing: a platform that makes no links says false.
 type triggerStarterConfig struct {
-	Submit chat.Submitter
+	Submit trigger.Submitter
 	// Takes says whether a turn would be queued, writing nothing (session.Manager.Takes).
 	Takes func(ctx context.Context, in session.Inbound) (bool, error)
 	// Notice queues a note in a thread (live.Sink.QueueNotice); its error means the note was not written.
@@ -57,7 +58,7 @@ type triggerStarterConfig struct {
 // writes, and a wake. It calls no agent and no Slack API; the permalink comes from what the platform cached when it
 // connected.
 type triggerStarter struct {
-	submit chat.Submitter
+	submit trigger.Submitter
 	takes  func(ctx context.Context, in session.Inbound) (bool, error)
 	notice func(ctx context.Context, key session.Key, n session.Notice) error
 	audit  triggerAuditor
@@ -100,19 +101,19 @@ func newTriggerStarter(cfg triggerStarterConfig) (*triggerStarter, error) {
 //
 // A prompt that cannot be rendered, whether a value failed its check (render.RefusedError) or the template failed
 // to run, starts no turn. The thread gets a fixed note, the audit log an entry, and the counter a count (refuse),
-// and the error wraps chat.ErrNotStarted, which the Intake treats as handled.
+// and the error wraps trigger.ErrNotStarted, which the Intake treats as handled.
 //
 // An error that does not wrap it, from the manager or from queueing the note, means the start was not taken: the
 // platform delivers the event again, and the redelivery asks again, which is idempotent by the alert's message ID.
 //
 // A bot's mention (m.Mention) is a turn of the thread the mention is in, whose session may exist already, and it carries that
-// thread. The Intake asked already whether its session takes a turn (chat.IntakeConfig.TakesBotMention); one that stopped since
+// thread. The Intake asked already whether its session takes a turn (trigger.IntakeConfig.TakesBotMention); one that stopped since
 // is ErrNotStarted with no note: the bot asked, and a note answers no one.
-func (s *triggerStarter) OnStart(ctx context.Context, m chat.TriggerMatch) error {
+func (s *triggerStarter) OnStart(ctx context.Context, m trigger.Match) error {
 	at := m.Message.At
 	if at.Conn == "" { // an adapter names the connection of every message it forwards; one that does not could file the session under none
 		s.log.ErrorContext(ctx, "chat: a trigger's message names no connection, so it started nothing", "binding", m.Binding, "channel", at.Channel, "message", at.ID)
-		return fmt.Errorf("message %s names no connection: %w", m.MessageID, chat.ErrNotStarted)
+		return fmt.Errorf("message %s names no connection: %w", m.MessageID, trigger.ErrNotStarted)
 	}
 	source := botMessageSource
 	switch {
@@ -149,7 +150,7 @@ func (s *triggerStarter) OnStart(ctx context.Context, m chat.TriggerMatch) error
 		return fmt.Errorf("start the investigation of %s: %w", id, err)
 	case m.Mention && !res.Admission.Queues():
 		s.log.InfoContext(ctx, "chat: a bot's mention took no turn; the thread cannot be continued", "binding", m.Binding, "channel", at.Channel, "message", at.ID, "disposition", res.Disposition)
-		return fmt.Errorf("bot mention of %s: %w", id, chat.ErrNotStarted)
+		return fmt.Errorf("bot mention of %s: %w", id, trigger.ErrNotStarted)
 	case res.Disposition != session.Created && res.Disposition != session.Accepted:
 		return fmt.Errorf("start the investigation of %s: the session manager did not take it (%s)", id, res.Disposition)
 	}
@@ -158,7 +159,7 @@ func (s *triggerStarter) OnStart(ctx context.Context, m chat.TriggerMatch) error
 
 // authorOf is who wrote the turn a match starts: the person of a person's message, and nobody for a bot's message or mention,
 // whatever user ID the sender's message carries.
-func authorOf(m chat.TriggerMatch) string {
+func authorOf(m trigger.Match) string {
 	if m.Person {
 		return m.Message.User
 	}
@@ -174,13 +175,13 @@ func (s *triggerStarter) permalink(at chat.Ref) (string, bool) {
 	return p.Permalink(at)
 }
 
-// TakesBotMention says whether the session of a bot's mention would take it as a turn (chat.IntakeConfig.TakesBotMention).
-func (s *triggerStarter) TakesBotMention(ctx context.Context, m chat.TriggerMatch) (bool, error) {
+// TakesBotMention says whether the session of a bot's mention would take it as a turn (trigger.IntakeConfig.TakesBotMention).
+func (s *triggerStarter) TakesBotMention(ctx context.Context, m trigger.Match) (bool, error) {
 	return s.takes(ctx, session.Inbound{Key: s.keyOf(m), Binding: m.Binding, Create: true, WholeThread: true})
 }
 
 // keyOf is the session a match is a turn of: an alert's own thread, or the thread a bot's mention is in.
-func (s *triggerStarter) keyOf(m chat.TriggerMatch) session.Key {
+func (s *triggerStarter) keyOf(m trigger.Match) session.Key {
 	thread := m.Message.At.ID
 	if m.Mention {
 		thread = cmp.Or(m.Message.At.Thread, thread)
@@ -188,18 +189,18 @@ func (s *triggerStarter) keyOf(m chat.TriggerMatch) session.Key {
 	return session.Key{Connection: m.Message.At.Conn, Channel: m.Message.At.Channel, Thread: thread}
 }
 
-// Limited records that a limit stopped a bot's mention or a person's message (chat.IntakeConfig.OnLimited): a person's under that
+// Limited records that a limit stopped a bot's mention or a person's message (trigger.IntakeConfig.OnLimited): a person's under that
 // person's user ID, so that a member who spends a trigger's limits for everyone can be found, and a bot's under nobody. It names the
 // message by ID and never by what it said. Its failure is logged and counted by the Writer, undoes nothing, and is returned, so
 // that the Intake tells the person's next stopped start again.
-func (s *triggerStarter) Limited(ctx context.Context, m chat.TriggerMatch, limit store.TriggerLimit) error {
+func (s *triggerStarter) Limited(ctx context.Context, m trigger.Match, limit store.TriggerLimit) error {
 	var ref string
 	switch {
 	case m.Person:
 		ref = personMessageSource
 	case m.Mention:
 		ref = botMentionSource
-	default: // an alert's stopped start is counted, not audited (chat.IntakeConfig.OnLimited)
+	default: // an alert's stopped start is counted, not audited (trigger.IntakeConfig.OnLimited)
 		return nil
 	}
 	if err := s.audit.TriggerRefused(ctx, audit.Actor{Binding: m.Binding, User: authorOf(m)}, audit.TriggerRefusal{MessageID: m.MessageID, Trigger: m.Index, Ref: ref, Reason: "limit_" + string(limit)}); err != nil {
@@ -214,7 +215,7 @@ func (s *triggerStarter) Limited(ctx context.Context, m chat.TriggerMatch, limit
 // redelivery that follows does those once. The audit log failing is logged and counted by the Writer and does not
 // undo the refusal. Nothing here names the value: the ref and reason are from closed sets, and only the value's
 // length is kept.
-func (s *triggerStarter) refuse(ctx context.Context, m chat.TriggerMatch, cause error) error {
+func (s *triggerStarter) refuse(ctx context.Context, m trigger.Match, cause error) error {
 	at := m.Message.At
 	ref, reason, length, detail := "template", "render_error", 0, "the prompt template could not be rendered."
 	var refused *render.RefusedError
@@ -238,5 +239,5 @@ func (s *triggerStarter) refuse(ctx context.Context, m chat.TriggerMatch, cause 
 	} else {
 		s.log.WarnContext(ctx, "chat: a trigger's prompt was refused, so no turn started", "binding", m.Binding, "trigger", m.Index, "channel", at.Channel, "message", at.ID, "ref", ref, "reason", reason, "len", length)
 	}
-	return fmt.Errorf("trigger %d of %s for %s: %w", m.Index, m.Binding, id, chat.ErrNotStarted)
+	return fmt.Errorf("trigger %d of %s for %s: %w", m.Index, m.Binding, id, trigger.ErrNotStarted)
 }

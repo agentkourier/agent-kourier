@@ -331,7 +331,7 @@ requests inert, and shows a user as a mention only for an ID of its platform's o
 hostile-text corpus runs against every adapter (`chattest.Conformance`) in every place text can
 go and by every method that sends; an adapter ships only if it passes. Agent Kourier's own code keeps
 what no platform differs on: redaction, truncation policy, and the fixed words of notices. The
-trigger table of 8.2 is the neutral `chat.Intake`, which a platform's `Run` feeds. The broker
+trigger table of 8.2 is the neutral `trigger.Intake`, which a platform's `Run` feeds. The broker
 builds the adapter named by `ChatConnection.spec.platform`; a platform with no adapter is a
 wiring error, and a lint rule denies every package except the adapter, the broker and cmd (tests
 aside) the Slack adapter and its client library, so a new package is covered from its first file.
@@ -743,7 +743,7 @@ equal `closeWhen`; any other match is a *fire*. The time is when Agent Kourier t
 | close | an open thread whose turn started | `closed` | Note "Resolved at `<time>`." in that thread, and close it. No turn. The cooldown goes on. |
 | close | no thread, a closed one, or one whose turn never started | `close_unknown` | Ignored and counted. |
 | fire | would be `started`, and a limit of the trigger is reached (`limits`, below) | `limited` | No turn, nothing posted in the alert's thread, and the reservation is given back, so the key holds nothing: its next fire starts once there is capacity. Counted, and in the digest of its window. |
-| fire | the turn was refused: the session hook returned `chat.ErrNotStarted` (the first prompt failed its check, or its template could not run) | `not_started` | The event is acknowledged and not delivered again. The thread stays reserved and unmarked: no cooldown, and the key's next fire takes it over after a minute. The hook has already posted the note, audited and counted the refusal (below). |
+| fire | the turn was refused: the session hook returned `trigger.ErrNotStarted` (the first prompt failed its check, or its template could not run) | `not_started` | The event is acknowledged and not delivered again. The thread stays reserved and unmarked: no cooldown, and the key's next fire takes it over after a minute. The hook has already posted the note, audited and counted the refusal (below). |
 
 The cooldown runs from the message that started the turn, not from the last message, so a key
 starts at most one turn in each window however often it fires and resolves (a flapping alert is
@@ -760,7 +760,7 @@ longer than Alertmanager's default 4h `repeat_interval`; a `repeat_interval` of 
 needs `maxIdle` set above it. The cooldown begins when the turn has started and not
 when the thread is reserved, so a turn that could not start holds no key. A session hook that
 fails for a reason that will pass (a store error) returns an ordinary error, and the redelivery
-asks again; one that will not start the turn (a refused prompt) returns `chat.ErrNotStarted`,
+asks again; one that will not start the turn (a refused prompt) returns `trigger.ErrNotStarted`,
 which acknowledges the event and counts `not_started`. Either way the next fire, a minute after
 the reservation, takes the key over. The
 notes are fixed text and a time, never any of the message; each is one outbox row named after
@@ -839,7 +839,7 @@ fails to run) starts no turn. The thread gets a fixed note, "Not investigated: `
 failed the prompt check." (or "the prompt template could not be rendered."); the audit log gets an
 event that names the message, the trigger, the value's name, the reason and the value's length and
 never the value; and `agentkourier_trigger_refused_total{binding,trigger,ref,reason}` is counted, where
-`ref` and `reason` are from closed sets. The hook then returns `chat.ErrNotStarted`.
+`ref` and `reason` are from closed sets. The hook then returns `trigger.ErrNotStarted`.
 
 One window remains between queueing a turn and marking its thread started: a failed write or a
 crash there, with the event not delivered again, leaves a reservation whose turn was taken. A later

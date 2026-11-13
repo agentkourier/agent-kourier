@@ -1,4 +1,4 @@
-package chat
+package trigger
 
 import (
 	"context"
@@ -13,9 +13,9 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
-// TriggerDecision is what a matched bot message does to the thread of its key (spec 8.2). It is the decision
+// Decision is what a matched bot message does to the thread of its key (spec 8.2). It is the decision
 // label of agentkourier_trigger_decisions_total.
-type TriggerDecision string
+type Decision string
 
 // The decisions. A fire is a message whose extracted fields do not satisfy the trigger's closeWhen; a close is
 // one that does.
@@ -25,36 +25,36 @@ const (
 	// maxIdle, which is a resolve that never came. The message starts a new investigation, anchored to
 	// itself: the Intake reserves the thread, asks for the turn (OnStart), and, once that is taken, marks the
 	// thread started, which is when its cooldown begins.
-	DecisionStarted TriggerDecision = "started"
+	DecisionStarted Decision = "started"
 	// DecisionRepeat: a fire, and the key has a thread that is open or inside its cooldown. A note in that
 	// thread says it fired again, a closed thread is open again, and no turn starts.
-	DecisionRepeat TriggerDecision = "repeat"
+	DecisionRepeat Decision = "repeat"
 	// DecisionClosed: a close, and the key has an open thread whose turn started. A note in it says it
 	// closed, the thread is closed, and no turn starts. The cooldown, which runs from the start, goes on.
-	DecisionClosed TriggerDecision = "closed"
+	DecisionClosed Decision = "closed"
 	// DecisionCloseUnknown: a close, and no open thread of the key to close: it has none, or it is closed
 	// already, or its turn never started so there is no investigation to note. It is ignored. A redelivery of
 	// a close whose first delivery was taken, after a restart made the Intake forget it, is this too.
-	DecisionCloseUnknown TriggerDecision = "close_unknown"
+	DecisionCloseUnknown Decision = "close_unknown"
 	// DecisionDedup: Slack delivered a message again that was taken already. An Intake that remembers it does
 	// nothing. One that does not, after a restart, finds in the store that the message reserved the thread:
 	// if its turn started that is all, and if not the start is asked for again (OnStart), since the first ask
 	// failed.
-	DecisionDedup TriggerDecision = "dedup"
+	DecisionDedup Decision = "dedup"
 	// DecisionEmptyKey: a fire of a trigger that threads by key whose key came out empty, which names no
 	// thread. It is an investigation of its own each time, with no cooldown and no note, as a trigger with no
 	// thread rules is, and a warning says so, once for the trigger.
-	DecisionEmptyKey TriggerDecision = "empty_key"
+	DecisionEmptyKey Decision = "empty_key"
 	// DecisionLimited: a fire that would have started a turn, and a limit of the trigger stopped it (rate,
 	// concurrency or the daily cap: v1alpha1.TriggerLimits). No turn starts and nothing is posted in the alert's
 	// thread: the alert reached people through its own receiver, and a digest line says how many were not
 	// investigated. The key's reservation is given back and holds nothing, so a later fire of the key starts once
 	// there is capacity. Only a start is limited: a repeat, a close and a note never are.
-	DecisionLimited TriggerDecision = "limited"
+	DecisionLimited Decision = "limited"
 	// DecisionNotStarted: a fire that would have started a turn, and OnStart said it will not (ErrNotStarted),
 	// such as a prompt that was refused. The event is acknowledged, the thread is left unmarked with no
 	// cooldown, and the key's next fire takes it over once it is stale.
-	DecisionNotStarted TriggerDecision = "not_started"
+	DecisionNotStarted Decision = "not_started"
 )
 
 // ErrNotStarted is what OnStart returns, itself or wrapped, when the match will not start a turn and asking again
@@ -79,7 +79,7 @@ var errNoThreadStore = errors.New("a trigger threads by key and the Intake has n
 // decided is the outcome of deciding a match: the decision, which is empty if there is none, and what the logs
 // say of it. The key is untrusted, so they say its short hash.
 type decided struct {
-	decision TriggerDecision
+	decision Decision
 	keyHash  string // the first eight characters of the hash of the key; empty if the match has none
 	thread   string // the thread the decision is about, if known
 }
@@ -106,7 +106,7 @@ type decided struct {
 // mended by the redelivery: a note is one row of the outbox whatever its asks, and a redelivered start finds its
 // own reservation. The decision is returned with the error when it was made already (the thread was reserved,
 // the OnStart failed). Everything here is a local write, since it runs on the platform's acknowledgement path.
-func (in *Intake) decide(ctx context.Context, m TriggerMatch) (decided, error) {
+func (in *Intake) decide(ctx context.Context, m Match) (decided, error) {
 	key := m.Fields[threadKeyField]
 	closing := closes(m.Thread.CloseWhen, m.Fields)
 	if m.Thread.By != v1alpha1.ThreadByKey || key == "" {
@@ -124,7 +124,7 @@ func (in *Intake) decide(ctx context.Context, m TriggerMatch) (decided, error) {
 }
 
 // fireThread is decide for a fire of a key that has threads.
-func (in *Intake) fireThread(ctx context.Context, m TriggerMatch, hash string, out decided) (decided, error) {
+func (in *Intake) fireThread(ctx context.Context, m Match, hash string, out decided) (decided, error) {
 	at := m.Message.At.ID
 	if err := in.adoptQueuedTurn(ctx, m, hash); err != nil {
 		return out, err
@@ -166,7 +166,7 @@ func (in *Intake) fireThread(ctx context.Context, m TriggerMatch, hash string, o
 // started open thread, and the fire is a repeat in it. A reservation whose turn was not taken (the start failed or
 // was refused) is left for the takeover. Marking is idempotent, and a thread that someone else marked or took
 // over in the meantime is not this fire's to mend.
-func (in *Intake) adoptQueuedTurn(ctx context.Context, m TriggerMatch, hash string) error {
+func (in *Intake) adoptQueuedTurn(ctx context.Context, m Match, hash string) error {
 	if in.cfg.TurnQueued == nil {
 		return nil
 	}
@@ -201,7 +201,7 @@ func (in *Intake) adoptQueuedTurn(ctx context.Context, m TriggerMatch, hash stri
 }
 
 // closeThread is decide for a close of a key that has threads.
-func (in *Intake) closeThread(ctx context.Context, m TriggerMatch, hash string, out decided) (decided, error) {
+func (in *Intake) closeThread(ctx context.Context, m Match, hash string, out decided) (decided, error) {
 	th, err := in.cfg.TriggerThreads.GetTriggerThread(ctx, m.Binding, hash)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
@@ -227,7 +227,7 @@ func (in *Intake) closeThread(ctx context.Context, m TriggerMatch, hash string, 
 
 // unthreaded is decide for a match that has no thread to apply the rules to: its trigger threads by nothing, or
 // by a key that came out empty. A close is unknown, and a fire starts a turn of its own, with no cooldown.
-func (in *Intake) unthreaded(ctx context.Context, m TriggerMatch, closing bool) (decided, error) {
+func (in *Intake) unthreaded(ctx context.Context, m Match, closing bool) (decided, error) {
 	out := decided{decision: DecisionStarted, thread: m.Message.At.ID}
 	switch {
 	case closing:
@@ -258,7 +258,7 @@ func (in *Intake) unthreaded(ctx context.Context, m TriggerMatch, closing bool) 
 }
 
 // start hands the match on as a turn to start, if there is where to.
-func (in *Intake) start(ctx context.Context, m TriggerMatch) error {
+func (in *Intake) start(ctx context.Context, m Match) error {
 	if in.cfg.OnStart == nil {
 		return nil
 	}
@@ -271,7 +271,7 @@ func (in *Intake) start(ctx context.Context, m TriggerMatch) error {
 // not start (ErrNotStarted) the thread stays unmarked and the decision is not_started, with no error; the start
 // stays counted against the rate and daily limits, because the refusal still posts a note, so a storm of refusals
 // is held to the limits too.
-func (in *Intake) startThread(ctx context.Context, m TriggerMatch, hash string, out decided) (decided, error) {
+func (in *Intake) startThread(ctx context.Context, m Match, hash string, out decided) (decided, error) {
 	if adm, err := in.admit(ctx, m); err != nil {
 		return out, err
 	} else if adm.Limit != "" {
@@ -294,7 +294,7 @@ func (in *Intake) startThread(ctx context.Context, m TriggerMatch, hash string, 
 // note asks for a short note of Agent Kourier's own in the thread: its kind and the time of the match, and nothing the
 // message said. Its ID names the message and the kind, so asking again, as a redelivery does, is the same row of
 // the outbox. Without a Notice sink there is no note, and that is logged.
-func (in *Intake) note(ctx context.Context, m TriggerMatch, thread string, kind session.NoticeKind) error {
+func (in *Intake) note(ctx context.Context, m Match, thread string, kind session.NoticeKind) error {
 	if in.cfg.Notice == nil {
 		in.log.WarnContext(ctx, "chat: a trigger's note was not posted; the Intake has no notice sink", "kind", kind, "channel", m.Message.At.Channel, "thread", thread)
 		return nil

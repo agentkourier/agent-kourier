@@ -1,4 +1,4 @@
-package chat_test
+package trigger_test
 
 import (
 	"strings"
@@ -9,12 +9,13 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/trigger"
 )
 
 // BenchmarkRegexCost measures what the limits on a trigger's regexes allow, on the text the documentation names: fields of
 // 16 KiB, which is all a regex reads. It is a benchmark, so `make test` does not run it; to measure your own hardware:
 //
-//	go test ./internal/chat -run '^$' -bench BenchmarkRegexCost -benchtime 3x
+//	go test ./internal/trigger -run '^$' -bench BenchmarkRegexCost -benchtime 3x
 //
 // Each case is one Classify of a message whose six fields are the text, by the intake's own matcher:
 //   - one_regex_miss: one regex of about 2000 instructions that finds no match in the text, the cost of a regex that fails.
@@ -38,7 +39,7 @@ func BenchmarkRegexCost(b *testing.B) {
 	} {
 		run := func(name string, text string, match map[v1alpha1.MessageField]string, exclude map[v1alpha1.MessageField]string) {
 			binding := benchBinding(b, match, exclude)
-			replay, err := chat.NewReplay(binding)
+			replay, err := trigger.NewReplay(binding)
 			if err != nil {
 				b.Fatal(err)
 			}

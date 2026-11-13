@@ -18,6 +18,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/telemetry/telemetrytest"
+	"github.com/agentkourier/agent-kourier/internal/trigger"
 )
 
 const (
@@ -104,11 +105,11 @@ func newStarter(t *testing.T) *starter {
 func alwaysTakes(context.Context, session.Inbound) (bool, error) { return true, nil }
 
 // firing is the match of a kind-firing alert with the Alertmanager trigger: what the Intake hands the starter.
-func firing(t *testing.T) chat.TriggerMatch {
+func firing(t *testing.T) trigger.Match {
 	t.Helper()
 	tr := chattest.AlertmanagerTrigger("B0123456789")
 	const link = "http://alertmanager.kind.local/#/alerts?receiver=slack-critical-kind"
-	return chat.TriggerMatch{
+	return trigger.Match{
 		Binding: startBinding, Index: 1, PromptTemplate: tr.PromptTemplate, Thread: tr.Thread, MessageID: "slack:" + startConn + ":C0123456789:" + alertTS,
 		Fields:   map[string]string{"state": "FIRING", "key": "KubePodCrashLooping shop", "alertname": "KubePodCrashLooping"},
 		Received: time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC),
@@ -332,7 +333,7 @@ func TestStartRefusesAMessageThatNamesNoConnection(t *testing.T) {
 	s := newStarter(t)
 	m := firing(t)
 	m.Message.At.Conn = ""
-	if err := s.OnStart(s.tel.Ctx, m); !errors.Is(err, chat.ErrNotStarted) {
+	if err := s.OnStart(s.tel.Ctx, m); !errors.Is(err, trigger.ErrNotStarted) {
 		t.Errorf("OnStart = %v; want ErrNotStarted", err)
 	}
 	if len(s.sub.got) != 0 {
@@ -366,8 +367,8 @@ func TestOnStartRefusesAValueThatFailsItsCheck(t *testing.T) {
 	m := firing(t)
 	m.Fields["alertname"] = hostile
 	err := s.OnStart(s.tel.Ctx, m)
-	if !errors.Is(err, chat.ErrNotStarted) {
-		t.Fatalf("OnStart = %v; want an error wrapping chat.ErrNotStarted", err)
+	if !errors.Is(err, trigger.ErrNotStarted) {
+		t.Fatalf("OnStart = %v; want an error wrapping trigger.ErrNotStarted", err)
 	}
 	if len(s.sub.got) != 0 {
 		t.Fatalf("%d turns submitted after a refusal; want none", len(s.sub.got))
@@ -414,22 +415,22 @@ func TestOnStartRefusalNamesTheValueAndTheReason(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		template string
-		mutate   func(*chat.TriggerMatch)
+		mutate   func(*trigger.Match)
 		ref      string
 		reason   string
 		detail   string
 	}{
-		{"a key that has spaces, as an Alertmanager group's does", "Key {{ .Key }}", func(*chat.TriggerMatch) {}, "Key", "characters", ".Key failed the prompt check."},
-		{"a state that is too long", "{{ .State }}", func(m *chat.TriggerMatch) { m.Fields["state"] = long }, "State", "too_long", ".State failed the prompt check."},
-		{"an entry with a quote", "{{ .Fields.alertname }}", func(m *chat.TriggerMatch) { m.Fields["alertname"] = `a"b` }, "Fields.alertname", "characters", ".Fields.alertname failed the prompt check."},
-		{"a channel that is no name", "{{ .Channel }}", func(m *chat.TriggerMatch) { m.Message.At.Channel = "C 1" }, "Channel", "characters", ".Channel failed the prompt check."},
+		{"a key that has spaces, as an Alertmanager group's does", "Key {{ .Key }}", func(*trigger.Match) {}, "Key", "characters", ".Key failed the prompt check."},
+		{"a state that is too long", "{{ .State }}", func(m *trigger.Match) { m.Fields["state"] = long }, "State", "too_long", ".State failed the prompt check."},
+		{"an entry with a quote", "{{ .Fields.alertname }}", func(m *trigger.Match) { m.Fields["alertname"] = `a"b` }, "Fields.alertname", "characters", ".Fields.alertname failed the prompt check."},
+		{"a channel that is no name", "{{ .Channel }}", func(m *trigger.Match) { m.Message.At.Channel = "C 1" }, "Channel", "characters", ".Channel failed the prompt check."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newStarter(t)
 			m := firing(t)
 			m.PromptTemplate = tc.template
 			tc.mutate(&m)
-			if err := s.OnStart(s.tel.Ctx, m); !errors.Is(err, chat.ErrNotStarted) {
+			if err := s.OnStart(s.tel.Ctx, m); !errors.Is(err, trigger.ErrNotStarted) {
 				t.Fatalf("OnStart = %v; want a refusal", err)
 			}
 			if len(s.aud.got) != 1 || s.aud.got[0].Ref != tc.ref || s.aud.got[0].Reason != tc.reason {
@@ -458,7 +459,7 @@ func TestOnStartARenderErrorIsRefusedLikeACheck(t *testing.T) {
 			s := newStarter(t)
 			m := firing(t)
 			m.PromptTemplate = tmpl
-			if err := s.OnStart(s.tel.Ctx, m); !errors.Is(err, chat.ErrNotStarted) {
+			if err := s.OnStart(s.tel.Ctx, m); !errors.Is(err, trigger.ErrNotStarted) {
 				t.Fatalf("OnStart = %v; want a refusal", err)
 			}
 			if len(s.sub.got) != 0 {
@@ -486,7 +487,7 @@ func TestOnStartARefusalWhoseNoteFailedIsAnErrorAndNotYetCounted(t *testing.T) {
 	m := firing(t)
 	m.Fields["alertname"] = "bad value"
 	err := s.OnStart(s.tel.Ctx, m)
-	if err == nil || errors.Is(err, chat.ErrNotStarted) {
+	if err == nil || errors.Is(err, trigger.ErrNotStarted) {
 		t.Fatalf("OnStart = %v; want the note's error, not a refusal", err)
 	}
 	if len(s.aud.got) != 0 || s.tel.Counter(t, "agentkourier_trigger_refused_total", map[string]string{"binding": startBinding, "trigger": "1", "ref": "Fields.alertname", "reason": "characters"}) != 0 {
@@ -501,7 +502,7 @@ func TestOnStartAFailedAuditStillRefuses(t *testing.T) {
 	s.aud.err = errors.New("disk full")
 	m := firing(t)
 	m.Fields["alertname"] = "bad value"
-	if err := s.OnStart(s.tel.Ctx, m); !errors.Is(err, chat.ErrNotStarted) {
+	if err := s.OnStart(s.tel.Ctx, m); !errors.Is(err, trigger.ErrNotStarted) {
 		t.Fatalf("OnStart = %v; want a refusal", err)
 	}
 	if len(s.notes.got) != 1 {
@@ -522,7 +523,7 @@ func TestOnStartASubmitFailureIsRedelivered(t *testing.T) {
 			s := newStarter(t)
 			set(s.sub)
 			err := s.OnStart(s.tel.Ctx, firing(t))
-			if err == nil || errors.Is(err, chat.ErrNotStarted) {
+			if err == nil || errors.Is(err, trigger.ErrNotStarted) {
 				t.Fatalf("OnStart = %v; want an error that is not a refusal", err)
 			}
 			if len(s.aud.got) != 0 || len(s.notes.got) != 0 {
@@ -583,9 +584,9 @@ func untrustedTag(t *testing.T, prompt string) string {
 }
 
 // mentioned is the match of a bot's mention in a thread: what the Intake hands the starter.
-func mentioned() chat.TriggerMatch {
-	return chat.TriggerMatch{
-		Binding: startBinding, PromptTemplate: chat.BotMentionPrompt, Mention: true, MessageID: "slack:" + startConn + ":C0123456789:2.2",
+func mentioned() trigger.Match {
+	return trigger.Match{
+		Binding: startBinding, PromptTemplate: trigger.BotMentionPrompt, Mention: true, MessageID: "slack:" + startConn + ":C0123456789:2.2",
 		Received: time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC),
 		Message: chat.Inbound{
 			At:   chat.Ref{Platform: "slack", Conn: startConn, Channel: "C0123456789", Thread: "1.1", ID: "2.2"},
@@ -640,7 +641,7 @@ func TestOnStartOfATopLevelBotMentionOpensItsThread(t *testing.T) {
 func TestOnStartOfABotsMentionInAThreadThatCannotContinue(t *testing.T) {
 	s := newStarter(t)
 	s.sub.res = session.Result{Disposition: session.Expired, Admission: session.Admission{Kind: session.AdmitNotice, Notice: session.NoticeExpired}}
-	if err := s.OnStart(s.tel.Ctx, mentioned()); !errors.Is(err, chat.ErrNotStarted) {
+	if err := s.OnStart(s.tel.Ctx, mentioned()); !errors.Is(err, trigger.ErrNotStarted) {
 		t.Fatalf("OnStart = %v; want ErrNotStarted", err)
 	}
 	if len(s.notes.got) != 0 {
@@ -702,8 +703,8 @@ func TestAPersonsReportALimitStoppedIsAuditedAsTheirs(t *testing.T) {
 }
 
 // reported is the match of a person's top-level message by a personMessage trigger: what the Intake hands the starter.
-func reported() chat.TriggerMatch {
-	return chat.TriggerMatch{
+func reported() trigger.Match {
+	return trigger.Match{
 		Binding: startBinding, Index: 1, Person: true, MessageID: "slack:" + startConn + ":C0123456789:3.3", Fields: map[string]string{},
 		PromptTemplate: "A person reported something in {{ .Channel }} ({{ .Source }}): {{ .Link }}.",
 		Received:       time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC),
@@ -750,7 +751,7 @@ func TestOnStartARefusedPersonsMessageIsAuditedWithThePerson(t *testing.T) {
 	s := newStarter(t)
 	m := reported()
 	m.PromptTemplate = "Report {{ .Nope }}"
-	if err := s.OnStart(s.tel.Ctx, m); !errors.Is(err, chat.ErrNotStarted) {
+	if err := s.OnStart(s.tel.Ctx, m); !errors.Is(err, trigger.ErrNotStarted) {
 		t.Fatalf("OnStart = %v; want ErrNotStarted", err)
 	}
 	if len(s.aud.who) != 1 || s.aud.who[0] != (audit.Actor{Binding: startBinding, User: "U0REPORTER"}) {

@@ -19,6 +19,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/retention"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/trigger"
 )
 
 // leaderHalf is what Agent Kourier runs only as the leader (spec 11, D37): the Binding pool and the chat platform, the
@@ -310,7 +311,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 		if err != nil {
 			return nil, err
 		}
-		return botGuard{in: chat.NewIntake(intakeCfg), self: v1alpha1.NamespacedName(ref.Namespace, ref.Name), bots: table, log: log}, nil
+		return botGuard{in: trigger.NewIntake(intakeCfg), self: v1alpha1.NamespacedName(ref.Namespace, ref.Name), bots: table, log: log}, nil
 	}
 	chatDone := make(chan error, 1)
 	if own != nil {

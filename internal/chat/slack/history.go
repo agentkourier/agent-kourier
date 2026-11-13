@@ -18,7 +18,7 @@ import (
 // returns it oldest first, each as the adapter would have seen it arrive: decoded by the code that decodes a live
 // event, so a message that Run would drop is Ignored, Agent Kourier's own post is Own, and a bot's attachment is flattened
 // into the fields a trigger reads. conn is the "namespace/name" of the ChatConnection, which the Refs name. The dry
-// run replays it through a Binding's triggers (chat.Replay).
+// run replays it through a Binding's triggers (trigger.Replay).
 //
 // It reads through the paging that Find uses, to the end, and fails when it cannot reach it. It reads the messages
 // of the channel itself; the replies of a thread are not among them, but a reply also sent to the channel is.

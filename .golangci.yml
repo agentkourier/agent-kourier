@@ -45,6 +45,17 @@ linters:
               desc: "every package but the adapter, the broker and cmd is platform-neutral (spec 13): it speaks chat.Platform and the neutral model, and the adapter is named only by the broker, which chooses it"
             - pkg: github.com/slack-go/slack
               desc: "every package but the adapter, the broker and cmd is platform-neutral (spec 13): slack-go belongs to the Slack adapter"
+        chat-is-the-model-alone:
+          files: ["**/internal/chat/*.go", "**/internal/chat/chattest/**", "!$test"]
+          deny:
+            - pkg: github.com/agentkourier/agent-kourier/internal/session
+              desc: "package chat is the chat-neutral model and the Platform contract, and chattest tests it: what feeds the session manager is the intake's, in internal/trigger"
+            - pkg: github.com/agentkourier/agent-kourier/internal/config
+              desc: "package chat is the chat-neutral model and the Platform contract, and chattest tests it: what reads the routing table is the intake's, in internal/trigger"
+            - pkg: github.com/agentkourier/agent-kourier/internal/store
+              desc: "package chat is the chat-neutral model and the Platform contract, and chattest tests it: what keeps trigger threads and limits is the intake's, in internal/trigger"
+            - pkg: github.com/agentkourier/agent-kourier/internal/telemetry
+              desc: "package chat is the chat-neutral model and the Platform contract, and chattest tests it: what counts and traces the intake is the intake's, in internal/trigger"
     nolintlint:
       require-explanation: true
       require-specific: true

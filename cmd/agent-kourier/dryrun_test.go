@@ -24,6 +24,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/secret"
 	"github.com/agentkourier/agent-kourier/internal/testutil"
+	"github.com/agentkourier/agent-kourier/internal/trigger"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
@@ -693,7 +694,7 @@ func flapReport(t *testing.T, states string) dryRunReport {
 	if err != nil {
 		t.Fatal(err)
 	}
-	replay, err := chat.NewReplay(b)
+	replay, err := trigger.NewReplay(b)
 	if err != nil {
 		t.Fatal(err)
 	}

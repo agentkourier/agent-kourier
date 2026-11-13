@@ -16,6 +16,7 @@ import (
 	"unicode"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/trigger"
 )
 
 // The widths of the text report, in characters.
@@ -45,7 +46,7 @@ type dryRunRow struct {
 	Time string `json:"time,omitempty"`
 	// Sender is the bot, the person or Agent Kourier that posted it.
 	Sender dryRunSender `json:"sender"`
-	// Outcome is a chat.ReplayOutcome.
+	// Outcome is a trigger.ReplayOutcome.
 	Outcome string `json:"outcome"`
 	// Trigger is the index in the Binding's triggers of the one that matched; set only for a match.
 	Trigger *int `json:"trigger,omitempty"`
@@ -94,7 +95,7 @@ type dryRunFlap struct {
 
 // buildReport classifies the history by replay and totals it. closing maps the index of a trigger to the state that
 // closes its thread.
-func buildReport(binding, channel string, history []chat.HistoryMessage, replay *chat.Replay, closing map[int]string) dryRunReport {
+func buildReport(binding, channel string, history []chat.HistoryMessage, replay *trigger.Replay, closing map[int]string) dryRunReport {
 	r := dryRunReport{Binding: binding, Channel: channel, Messages: make([]dryRunRow, 0, len(history))}
 	type tally struct {
 		cycles int
@@ -108,7 +109,7 @@ func buildReport(binding, channel string, history []chat.HistoryMessage, replay 
 		v := replay.Classify(h)
 		row := dryRunRow{TS: h.Message.At.ID, Time: timeOf(h.Message.At.ID), Sender: senderOf(h), Outcome: string(v.Outcome), Title: titleOf(h.Message), Why: v.Why}
 		s.Outcomes[row.Outcome]++
-		if v.Outcome == chat.ReplayMatched {
+		if v.Outcome == trigger.ReplayMatched {
 			row.Trigger, row.Fields = &v.Trigger, v.Fields
 			s.Triggers[strconv.Itoa(v.Trigger)]++
 			if key, ok := v.Fields["key"]; ok {
@@ -224,7 +225,7 @@ func senderText(s dryRunSender) string {
 }
 
 // outcomeOrder is the order the summary lists the outcomes in.
-var outcomeOrder = []chat.ReplayOutcome{chat.ReplayMatched, chat.ReplayUnmatched, chat.ReplayExcluded, chat.ReplayOtherBot, chat.ReplayOwn, chat.ReplayPerson, chat.ReplayIgnored}
+var outcomeOrder = []trigger.ReplayOutcome{trigger.ReplayMatched, trigger.ReplayUnmatched, trigger.ReplayExcluded, trigger.ReplayOtherBot, trigger.ReplayOwn, trigger.ReplayPerson, trigger.ReplayIgnored}
 
 // writeText prints the summary: the counts per outcome and per trigger, the distinct keys, and the keys that flap.
 func (s dryRunSummary) writeText(w io.Writer) error {

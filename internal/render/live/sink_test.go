@@ -21,6 +21,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/testutil"
+	"github.com/agentkourier/agent-kourier/internal/trigger"
 )
 
 var thread = session.Key{Connection: "ns/conn", Channel: "C1"}
@@ -543,7 +544,7 @@ func TestAFailedNoticeOfTheIntakeIsOneRowWhenRedelivered(t *testing.T) {
 	flake := &flaky{q: e.ob, err: errors.New("disk full"), fails: 1}
 	sink := e.sink(t, flake)
 	submits := 0
-	in := chat.NewIntake(chat.IntakeConfig{
+	in := trigger.NewIntake(trigger.IntakeConfig{
 		Connection: v1alpha1.ObjectRef{Namespace: "ns", Name: "conn"},
 		Snapshot:   func() *config.Snapshot { return nil },
 		Submitter: submitFunc(func(session.Inbound) (session.Result, error) {

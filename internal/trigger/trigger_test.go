@@ -1,4 +1,4 @@
-package chat_test
+package trigger_test
 
 import (
 	"bytes"
@@ -22,6 +22,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
+	"github.com/agentkourier/agent-kourier/internal/trigger"
 )
 
 // webhookBot is the incoming webhook's bot ID in the owner's alert channel: it posts Alertmanager's alerts,
@@ -158,8 +159,8 @@ var noon = time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
 // to payments/pay with none. It keeps its threads in a real store, and records what the start hook is given
 // and the notices the Intake asks for; its metrics and log are readable.
 type triggered struct {
-	in      *chat.Intake
-	cfg     chat.IntakeConfig // what in was made from, for a test that wants another Intake over the same table
+	in      *trigger.Intake
+	cfg     trigger.IntakeConfig // what in was made from, for a test that wants another Intake over the same table
 	snap    atomic.Pointer[config.Snapshot]
 	sub     *submitter
 	ctx     context.Context
@@ -170,21 +171,21 @@ type triggered struct {
 	clk     *clock
 	notes   *notices
 	mu      sync.Mutex
-	matches []chat.TriggerMatch // what the start hook was given: the matches that start a turn
+	matches []trigger.Match // what the start hook was given: the matches that start a turn
 	hookErr error
 }
 
-func (h *triggered) hook(_ context.Context, m chat.TriggerMatch) error {
+func (h *triggered) hook(_ context.Context, m trigger.Match) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.matches = append(h.matches, m)
 	return h.hookErr
 }
 
-func (h *triggered) got() []chat.TriggerMatch {
+func (h *triggered) got() []trigger.Match {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return append([]chat.TriggerMatch(nil), h.matches...)
+	return append([]trigger.Match(nil), h.matches...)
 }
 
 // counter returns the value of the counter name for the Binding, 0 if it has no series.
@@ -293,12 +294,12 @@ func newTriggered(t *testing.T, triggers ...v1alpha1.Trigger) *triggered {
 		clk: &clock{now: noon}, notes: &notices{}, dbPath: sqlitetest.Path(t)}
 	h.snap.Store(snapshotOf(t, triggers))
 	h.reopenStore(t)
-	h.cfg = chat.IntakeConfig{
+	h.cfg = trigger.IntakeConfig{
 		Connection: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"},
 		Snapshot:   h.snap.Load, Submitter: h.sub, OnStart: h.hook,
 		TriggerThreads: h.st, Notice: h.notes.take, Now: h.clk.Now,
 		Logger: slog.New(slog.NewJSONHandler(h.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))}
-	h.in = chat.NewIntake(h.cfg)
+	h.in = trigger.NewIntake(h.cfg)
 	return h
 }
 
@@ -781,7 +782,7 @@ func TestAMatchWithNoHookIsLoggedAndCounted(t *testing.T) {
 	h := newTriggered(t, kindOnly())
 	cfg := h.cfg
 	cfg.OnStart = nil
-	in := chat.NewIntake(cfg)
+	in := trigger.NewIntake(cfg)
 	if err := in.Message(h.ctx, botInbound("C1", "9.9", kindFiring)); err != nil {
 		t.Fatal(err)
 	}
@@ -802,7 +803,7 @@ func TestABotMessageWithNoRoutingTableIsIgnored(t *testing.T) {
 	h := newTriggered(t, kindOnly())
 	cfg := h.cfg
 	cfg.Snapshot = func() *config.Snapshot { return nil }
-	in := chat.NewIntake(cfg)
+	in := trigger.NewIntake(cfg)
 	if err := in.Message(h.ctx, botInbound("C1", "9.9", kindFiring)); err != nil || len(h.got()) != 0 {
 		t.Fatalf("Message = %v, matches %+v; want it ignored", err, h.got())
 	}

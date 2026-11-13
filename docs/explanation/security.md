@@ -210,7 +210,7 @@ What bounds this is what the broker can read, and where it can connect:
   |---|---|
   | The informer's copy (the table above) | 1.75 MiB |
   | The decoded object, which the source keeps so that a read decodes only what changed, and which the Snapshot serves: the Snapshot copies the struct and shares the rest | 1.44 MiB |
-  | The trigger table that the intake compiles for a Binding it serves (`chat.NewReplay`) | 0.63 MiB |
+  | The trigger table that the intake compiles for a Binding it serves (`trigger.NewReplay`) | 0.63 MiB |
   | While a reload that found the Binding edited is built, the previous Snapshot, if something still holds it | 1.42 MiB more |
 
   So a Binding costs about 3.2 MiB (1.75 and 1.44) when it is not served and 3.8 MiB when it is, and the reload adds 1.4 MiB for each Binding it found edited until the previous Snapshot is released.
@@ -228,7 +228,7 @@ What bounds this is what the broker can read, and where it can connect:
   read of the six Bindings took 146 ms (24 ms for each), a read after none had changed took 24 µs, and one after all six were edited took 135 ms (Go 1.27.3, GOMAXPROCS 8, a loaded macOS machine,
   not under `-race`). By the first figure the largest 50 Bindings cost about 1.2 seconds of CPU to decode, once, and again for each one that is edited. The resolution that follows each read runs on every read.
 
-  **A Binding's regular expressions cost CPU for each message.** The limit on their instructions bounds that cost and does not make it small: `BenchmarkRegexCost` in `internal/chat` took 0.67 s for one message whose six fields are 16 KiB each, against a Binding at the budget of 5000 instructions with `.` regular expressions, and 0.81 s with `\pL`
+  **A Binding's regular expressions cost CPU for each message.** The limit on their instructions bounds that cost and does not make it small: `BenchmarkRegexCost` in `internal/trigger` took 0.67 s for one message whose six fields are 16 KiB each, against a Binding at the budget of 5000 instructions with `.` regular expressions, and 0.81 s with `\pL`
   (the figures of [the upgrade page](../how-to/upgrade.md#upgrade-to-the-release-that-bounds-what-a-triggers-regular-expressions-cost), from its run, which says the machine and the load; they swing with the load). The events
   of one channel run one at a time on a lane of their own, and the lanes of different channels run at the same time, so a channel whose messages are such text can keep a core busy, and many of them slow the acknowledgments of the others. Whoever controls the text of that bot's messages chooses it. That page has the cases and the reasoning.
 

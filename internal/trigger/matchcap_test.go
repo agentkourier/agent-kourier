@@ -1,4 +1,4 @@
-package chat_test
+package trigger_test
 
 import (
 	"strings"
@@ -6,6 +6,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/trigger"
 )
 
 // fieldCap is the bytes of a field that a trigger's regexes see.
@@ -35,7 +36,7 @@ func withField(f v1alpha1.MessageField, v string) chat.Inbound {
 var allFields = []v1alpha1.MessageField{v1alpha1.FieldText, v1alpha1.FieldTitle, v1alpha1.FieldLink, v1alpha1.FieldFallback, v1alpha1.FieldFooter, v1alpha1.FieldBody}
 
 // classify runs the message through the trigger by the intake's own matcher, as the dry run does.
-func classify(t *testing.T, tr v1alpha1.Trigger, m chat.Inbound) chat.ReplayVerdict {
+func classify(t *testing.T, tr v1alpha1.Trigger, m chat.Inbound) trigger.ReplayVerdict {
 	t.Helper()
 	return replayOf(t, newTriggered(t, tr)).Classify(chat.HistoryMessage{Message: m})
 }
@@ -54,23 +55,23 @@ func TestOnlyTheHeadOfAFieldIsMatched(t *testing.T) {
 				name string
 				tr   v1alpha1.Trigger
 				msg  chat.Inbound
-				want chat.ReplayOutcome
+				want trigger.ReplayOutcome
 			}{
-				{"a match on the head of a long field", matching(`HEADMARK`), withField(f, long), chat.ReplayMatched},
-				{"a match on the tail of a long field", matching(`TAILMARK`), withField(f, long), chat.ReplayUnmatched},
-				{"a match on the end of the head", matching(`TAIL$`), withField(f, long), chat.ReplayMatched},
-				{"a match on the tail of a field at the cap", matching(`TAIL$`), withField(f, head), chat.ReplayMatched},
-				{"a match that needs the byte after the cap", matching(`TAILM`), withField(f, long), chat.ReplayUnmatched},
+				{"a match on the head of a long field", matching(`HEADMARK`), withField(f, long), trigger.ReplayMatched},
+				{"a match on the tail of a long field", matching(`TAILMARK`), withField(f, long), trigger.ReplayUnmatched},
+				{"a match on the end of the head", matching(`TAIL$`), withField(f, long), trigger.ReplayMatched},
+				{"a match on the tail of a field at the cap", matching(`TAIL$`), withField(f, head), trigger.ReplayMatched},
+				{"a match that needs the byte after the cap", matching(`TAILM`), withField(f, long), trigger.ReplayUnmatched},
 				{"an exclude on the head of a long field", botTrigger(webhookBot, func(tr *v1alpha1.Trigger) { tr.Exclude = map[v1alpha1.MessageField]string{f: `HEADMARK`} }),
-					withField(f, long), chat.ReplayExcluded},
+					withField(f, long), trigger.ReplayExcluded},
 				{"an exclude on the tail of a long field", botTrigger(webhookBot, func(tr *v1alpha1.Trigger) { tr.Exclude = map[v1alpha1.MessageField]string{f: `TAILMARK`} }),
-					withField(f, long), chat.ReplayMatched},
+					withField(f, long), trigger.ReplayMatched},
 				{"an extract from the head of a long field", botTrigger(webhookBot, func(tr *v1alpha1.Trigger) {
 					tr.Extract = map[string]v1alpha1.Extract{"mark": {Field: f, Regex: `(?P<mark>HEADMARK)`}}
-				}), withField(f, long), chat.ReplayMatched},
+				}), withField(f, long), trigger.ReplayMatched},
 				{"an extract from the tail of a long field", botTrigger(webhookBot, func(tr *v1alpha1.Trigger) {
 					tr.Extract = map[string]v1alpha1.Extract{"mark": {Field: f, Regex: `(?P<mark>TAILMARK)`}}
-				}), withField(f, long), chat.ReplayUnmatched},
+				}), withField(f, long), trigger.ReplayUnmatched},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					if got := classify(t, tc.tr, tc.msg); got.Outcome != tc.want {
@@ -103,7 +104,7 @@ func TestAFieldIsCutOnACharacterBoundary(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := classify(t, extractAll, withField(v1alpha1.FieldBody, tc.body))
-			if got.Outcome != chat.ReplayMatched {
+			if got.Outcome != trigger.ReplayMatched {
 				t.Fatalf("outcome = %q (%s)", got.Outcome, got.Why)
 			}
 			v := got.Fields["all"]

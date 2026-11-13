@@ -17,6 +17,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/config"
+	"github.com/agentkourier/agent-kourier/internal/trigger"
 )
 
 // These tests pin the alert trial's Binding (hack/kind/sandbox/agent-kourier/alert-trial): the second Binding of the sandbox's Agent Kourier, which
@@ -419,11 +420,11 @@ func sample(bot, title, link, fallback string) chat.BotMessage {
 	return chat.BotMessage{ID: bot, Title: title, Link: link, Fallback: fallback, Body: "*" + title + "*"}
 }
 
-// TestTrialTriggerOverTheChannelsMessages runs the intake's matcher (chat.Replay, the dry run's engine) over the sandbox's real config files, with the
+// TestTrialTriggerOverTheChannelsMessages runs the intake's matcher (trigger.Replay, the dry run's engine) over the sandbox's real config files, with the
 // kind alerts and what else is in the alert channel: only the kind alerts match.
 func TestTrialTriggerOverTheChannelsMessages(t *testing.T) {
 	b, _ := trialBinding(t)
-	replay, err := chat.NewReplay(b)
+	replay, err := trigger.NewReplay(b)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -443,23 +444,23 @@ func TestTrialTriggerOverTheChannelsMessages(t *testing.T) {
 	tests := []struct {
 		name string
 		msg  chat.BotMessage
-		want chat.ReplayOutcome
+		want trigger.ReplayOutcome
 		keys map[string]string
 	}{
-		{"kind firing", kindFiring, chat.ReplayMatched, map[string]string{"state": "FIRING", "alertname": "KubePodCrashLooping", "key": "KubePodCrashLooping shop"}},
-		{"kind resolved", kindResolved, chat.ReplayMatched, map[string]string{"state": "RESOLVED", "alertname": "KubePodCrashLooping", "key": "KubePodCrashLooping shop"}},
-		{"kind group of three", kindGroup, chat.ReplayMatched, map[string]string{"state": "FIRING", "alertname": "KubePodNotReady", "key": "KubePodNotReady shop"}},
+		{"kind firing", kindFiring, trigger.ReplayMatched, map[string]string{"state": "FIRING", "alertname": "KubePodCrashLooping", "key": "KubePodCrashLooping shop"}},
+		{"kind resolved", kindResolved, trigger.ReplayMatched, map[string]string{"state": "RESOLVED", "alertname": "KubePodCrashLooping", "key": "KubePodCrashLooping shop"}},
+		{"kind group of three", kindGroup, trigger.ReplayMatched, map[string]string{"state": "FIRING", "alertname": "KubePodNotReady", "key": "KubePodNotReady shop"}},
 		{"production firing", sample(trialBot, "FIRING (1) - KubeAPIErrorBudgetBurn", sampleProdLink,
-			"[FIRING:1] KubeAPIErrorBudgetBurn kube-system (long 1h critical apiserver) | "+sampleProdLink), chat.ReplayUnmatched, nil},
+			"[FIRING:1] KubeAPIErrorBudgetBurn kube-system (long 1h critical apiserver) | "+sampleProdLink), trigger.ReplayUnmatched, nil},
 		{"production resolved", sample(trialBot, "RESOLVED - KubeAPIErrorBudgetBurn", sampleProdLink,
-			"[RESOLVED] KubeAPIErrorBudgetBurn kube-system (long 1h critical apiserver) | "+sampleProdLink), chat.ReplayUnmatched, nil},
-		{"production alert that merely mentions the kind receiver", decoy, chat.ReplayUnmatched, nil},
+			"[RESOLVED] KubeAPIErrorBudgetBurn kube-system (long 1h critical apiserver) | "+sampleProdLink), trigger.ReplayUnmatched, nil},
+		{"production alert that merely mentions the kind receiver", decoy, trigger.ReplayUnmatched, nil},
 		{"Grafana alerting", sample(trialBot, "FIRING: HighRequestLatency (payments)", "https://grafana.example.com/alerting/list",
-			"FIRING: HighRequestLatency (payments)"), chat.ReplayUnmatched, nil},
+			"FIRING: HighRequestLatency (payments)"), trigger.ReplayUnmatched, nil},
 		{"the Watchdog heartbeat", sample(trialBot, "Prometheus heartbeat", sampleBeatLink,
-			"[FIRING:1] Watchdog  (none prometheus) | "+sampleBeatLink), chat.ReplayUnmatched, nil},
-		{"a longer receiver name", longer, chat.ReplayUnmatched, nil},
-		{"a kind alert from another bot", otherBot, chat.ReplayOtherBot, nil},
+			"[FIRING:1] Watchdog  (none prometheus) | "+sampleBeatLink), trigger.ReplayUnmatched, nil},
+		{"a longer receiver name", longer, trigger.ReplayUnmatched, nil},
+		{"a kind alert from another bot", otherBot, trigger.ReplayOtherBot, nil},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -470,8 +471,8 @@ func TestTrialTriggerOverTheChannelsMessages(t *testing.T) {
 		})
 	}
 	// A person's message, and an @mention of Agent Kourier in the channel, are no input of the trial: there is no mention trigger.
-	if v := replay.Classify(chat.HistoryMessage{Message: chat.Inbound{At: chat.Ref{Platform: "slack", Channel: trialChannel, ID: "2.1"}, User: "U1", Text: "<@UAGENTKOURIER> look at this"}}); v.Outcome != chat.ReplayPerson {
-		t.Errorf("a person's message: outcome %s; want %s", v.Outcome, chat.ReplayPerson)
+	if v := replay.Classify(chat.HistoryMessage{Message: chat.Inbound{At: chat.Ref{Platform: "slack", Channel: trialChannel, ID: "2.1"}, User: "U1", Text: "<@UAGENTKOURIER> look at this"}}); v.Outcome != trigger.ReplayPerson {
+		t.Errorf("a person's message: outcome %s; want %s", v.Outcome, trigger.ReplayPerson)
 	}
 }
 

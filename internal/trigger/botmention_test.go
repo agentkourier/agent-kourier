@@ -1,4 +1,4 @@
-package chat_test
+package trigger_test
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/trigger"
 )
 
 const mentioningBot = "B0MENTIONER"
@@ -72,7 +73,7 @@ func TestABotsMentionStartsOneTurnInItsThread(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("OnStart was asked %d times; want once", len(got))
 	}
-	if !got[0].Mention || got[0].PromptTemplate != chat.BotMentionPrompt || got[0].Message.At.Thread != "4.4" || got[0].Message.At.ID != "5.5" {
+	if !got[0].Mention || got[0].PromptTemplate != trigger.BotMentionPrompt || got[0].Message.At.Thread != "4.4" || got[0].Message.At.ID != "5.5" {
 		t.Errorf("match = %+v; want a mention, with the fixed prompt, of 5.5 in the thread 4.4", got[0])
 	}
 	if subs := h.sub.submitted(); len(subs) != 0 {
@@ -86,16 +87,16 @@ func TestABotsMentionStartsOneTurnInItsThread(t *testing.T) {
 func TestAMentionWhoseSessionTakesNoTurnTouchesNoLimit(t *testing.T) {
 	h := newLimited(t)
 	var stopped []store.TriggerLimit
-	h.cfg.OnLimited = func(_ context.Context, _ chat.TriggerMatch, l store.TriggerLimit) error {
+	h.cfg.OnLimited = func(_ context.Context, _ trigger.Match, l store.TriggerLimit) error {
 		stopped = append(stopped, l)
 		return nil
 	}
 	var asked []string
-	h.cfg.TakesBotMention = func(_ context.Context, m chat.TriggerMatch) (bool, error) {
+	h.cfg.TakesBotMention = func(_ context.Context, m trigger.Match) (bool, error) {
 		asked = append(asked, m.Message.At.Thread)
 		return m.Message.At.Thread != "4.4", nil // 4.4 is the dead one
 	}
-	h.in = chat.NewIntake(h.cfg)
+	h.in = trigger.NewIntake(h.cfg)
 	for i := range 5 {
 		if err := h.in.Message(h.ctx, botMentionOf(fmt.Sprintf("5.%d", i+1), "4.4")); err != nil {
 			t.Fatal(err)
@@ -125,8 +126,8 @@ func TestAMentionWhoseSessionTakesNoTurnTouchesNoLimit(t *testing.T) {
 	if ds := h.digests(t); len(ds) != 0 {
 		t.Errorf("digests = %+v; want none", ds)
 	}
-	h.cfg.TakesBotMention = func(context.Context, chat.TriggerMatch) (bool, error) { return false, errBoomTakes }
-	h.in = chat.NewIntake(h.cfg)
+	h.cfg.TakesBotMention = func(context.Context, trigger.Match) (bool, error) { return false, errBoomTakes }
+	h.in = trigger.NewIntake(h.cfg)
 	if err := h.in.Message(h.ctx, botMentionOf("8.1", "4.4")); !errors.Is(err, errBoomTakes) {
 		t.Errorf("a store that cannot say = %v; want the event's error, so that it is delivered again", err)
 	}
@@ -150,17 +151,17 @@ func TestTheIntakeAsksAgainWhetherItTakesTheMention(t *testing.T) {
 func TestARedeliveredStoppedMentionIsToldOnce(t *testing.T) {
 	h := newLimited(t)
 	var stopped []store.TriggerLimit
-	h.cfg.OnLimited = func(_ context.Context, _ chat.TriggerMatch, l store.TriggerLimit) error {
+	h.cfg.OnLimited = func(_ context.Context, _ trigger.Match, l store.TriggerLimit) error {
 		stopped = append(stopped, l)
 		return nil
 	}
-	h.in = chat.NewIntake(h.cfg)
+	h.in = trigger.NewIntake(h.cfg)
 	for i := range 4 {
 		if err := h.in.Message(h.ctx, botMentionOf(fmt.Sprintf("5.%d", i+1), "4.4")); err != nil {
 			t.Fatal(err)
 		}
 	}
-	h.in = chat.NewIntake(h.cfg) // what remembers a message for the process is gone, and the store is not
+	h.in = trigger.NewIntake(h.cfg) // what remembers a message for the process is gone, and the store is not
 	if err := h.in.Message(h.ctx, botMentionOf("5.4", "4.4")); err != nil {
 		t.Fatal(err)
 	}
@@ -177,11 +178,11 @@ func TestARedeliveredStoppedMentionIsToldOnce(t *testing.T) {
 func TestABurstOfMentionsIsHeldToTheLimits(t *testing.T) {
 	h := newLimited(t)
 	var stopped []store.TriggerLimit
-	h.cfg.OnLimited = func(_ context.Context, _ chat.TriggerMatch, l store.TriggerLimit) error {
+	h.cfg.OnLimited = func(_ context.Context, _ trigger.Match, l store.TriggerLimit) error {
 		stopped = append(stopped, l)
 		return nil
 	}
-	h.in = chat.NewIntake(h.cfg)
+	h.in = trigger.NewIntake(h.cfg)
 	for i := range 6 {
 		if err := h.in.Message(h.ctx, botMentionOf(fmt.Sprintf("5.%d", i+1), "4.4")); err != nil {
 			t.Fatal(err)
