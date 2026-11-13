@@ -31,6 +31,13 @@ linters:
           deny:
             - pkg: github.com/agentkourier/agent-kourier/test/
               desc: packages under test/ (fakes, stubs, e2e helpers) are for tests; import them only from _test.go files and under test/
+        test-support-is-test-only:
+          files: ["$all", "!$test", "!**/test/**", "!**/internal/testutil/**", "!**/internal/store/sqlite/sqlitetest/**"]
+          deny:
+            - pkg: github.com/agentkourier/agent-kourier/internal/testutil
+              desc: internal/testutil is test support and imports testing; import it only from _test.go files, other test support and under test/
+            - pkg: github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest
+              desc: sqlitetest is test support and imports testing; import it only from _test.go files, other test support and under test/
         slack-only-in-adapter:
           files: ["$all", "!$test", "!**/internal/chat/slack/**", "!**/internal/broker/**", "!**/cmd/**", "!**/test/**"]
           deny:

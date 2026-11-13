@@ -115,7 +115,7 @@ func TestOpenIsAStoreOverAMigratedDatabaseOfItsOwn(t *testing.T) {
 	}
 }
 
-// TestSeedLeavesAFileThatIsThere:a test that reopens a database by its path seeds it each time, and what it wrote stays.
+// TestSeedLeavesAFileThatIsThere: a test that reopens a database by its path seeds it each time, and what it wrote stays.
 func TestSeedLeavesAFileThatIsThere(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mine.db")
 	sqlitetest.Seed(t, path)
