@@ -13,9 +13,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
-	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/config/crsource"
+	"github.com/agentkourier/agent-kourier/internal/trigger"
 )
 
 // This file measures what a broker holds, beyond the informer's cache, for each of the largest Bindings that Validate accepts:
@@ -112,9 +112,9 @@ func TestWhatABrokerHoldsForEachLargestOwnedBinding(t *testing.T) {
 
 	var h2 uint64
 	func() { // the tables are released when it returns: they hold the Binding they were compiled from, which the reload below replaces
-		tables := make([]*chat.Replay, 0, n)
+		tables := make([]*trigger.Replay, 0, n)
 		for _, rb := range snap.Bindings() {
-			r, err := chat.NewReplay(rb.Binding)
+			r, err := trigger.NewReplay(rb.Binding)
 			if err != nil {
 				t.Fatal(err)
 			}

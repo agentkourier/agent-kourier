@@ -1,4 +1,4 @@
-package chat_test
+package trigger_test
 
 import (
 	"testing"

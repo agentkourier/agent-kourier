@@ -14,6 +14,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/testutil"
+	"github.com/agentkourier/agent-kourier/internal/trigger"
 )
 
 // guardRig is a botGuard over a real Intake for the connection team-a/slack, whose Binding owns channel C1, and a table in which the
@@ -58,9 +59,9 @@ func newGuardRig(t *testing.T, triggers ...v1alpha1.Trigger) *guardRig {
 		t.Fatal(err)
 	}
 	g := &guardRig{}
-	in := chat.NewIntake(chat.IntakeConfig{
+	in := trigger.NewIntake(trigger.IntakeConfig{
 		Connection: v1alpha1.ObjectRef{Namespace: "team-a", Name: "slack"}, Snapshot: func() *config.Snapshot { return snap }, Submitter: noSubmit{},
-		OnStart: func(_ context.Context, m chat.TriggerMatch) error {
+		OnStart: func(_ context.Context, m trigger.Match) error {
 			g.mu.Lock()
 			who := m.Message.User
 			if m.Message.Bot != nil {

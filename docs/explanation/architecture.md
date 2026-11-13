@@ -252,6 +252,7 @@ lifecycle (task, template, egress policy) stays with the operator. See the
 | Composition and shutdown | [`internal/broker`](https://github.com/agentkourier/agent-kourier/tree/main/internal/broker) |
 | Configuration and Secret resolution | [`internal/config`](https://github.com/agentkourier/agent-kourier/tree/main/internal/config) |
 | Messaging contracts and Slack adapter | [`internal/chat`](https://github.com/agentkourier/agent-kourier/tree/main/internal/chat) |
+| Message intake, triggers and their limits, and the dry run's replay | [`internal/trigger`](https://github.com/agentkourier/agent-kourier/tree/main/internal/trigger) |
 | Conversation execution and recovery | [`internal/session`](https://github.com/agentkourier/agent-kourier/tree/main/internal/session) |
 | A2A clients and backend behavior | [`internal/agent`](https://github.com/agentkourier/agent-kourier/tree/main/internal/agent), [`internal/dialect`](https://github.com/agentkourier/agent-kourier/tree/main/internal/dialect) |
 | Binding verification | [`internal/bindingcheck`](https://github.com/agentkourier/agent-kourier/tree/main/internal/bindingcheck), [`internal/broker`](https://github.com/agentkourier/agent-kourier/tree/main/internal/broker) |

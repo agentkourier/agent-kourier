@@ -1,4 +1,4 @@
-package chat
+package trigger
 
 import (
 	"fmt"
@@ -11,13 +11,14 @@ import (
 	"unicode/utf8"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/config"
 )
 
-// TriggerMatch is a message that a botMessage or personMessage trigger of a Binding accepted (spec 8.2): which trigger, what
+// Match is a message that a botMessage or personMessage trigger of a Binding accepted (spec 8.2): which trigger, what
 // it extracted, and the message as it came. The Intake decides what it does to the thread of its key (see
-// TriggerDecision), and hands it to IntakeConfig.OnStart if it starts a turn.
-type TriggerMatch struct {
+// Decision), and hands it to IntakeConfig.OnStart if it starts a turn.
+type Match struct {
 	// Binding is the namespace/name of the Binding whose trigger matched.
 	Binding string
 	// Index is the trigger's place in the Binding's chat.triggers, which is its place after defaulting: an
@@ -41,7 +42,7 @@ type TriggerMatch struct {
 	// it, and it is the time a note names.
 	Received time.Time
 	// Message is the message, whole.
-	Message Inbound
+	Message chat.Inbound
 	// Mention says the match is a bot's mention and not a botMessage trigger's: the turn belongs in the thread the mention
 	// is in, and carries the thread.
 	Mention bool
@@ -142,7 +143,7 @@ func compileTrigger(index int, t *v1alpha1.Trigger) (messageTrigger, error) {
 // says so, on the raw text of its field, the first maxMatchedFieldBytes bytes of it; a field the message lacks is empty. An extract's value is its group's
 // text, which may be empty if the group took part in the match; a group that took no part (an optional one) is
 // a miss, like a regex that does not match, so that no message gets an empty key by default.
-func (t *messageTrigger) evaluate(m Inbound) (map[string]string, bool) {
+func (t *messageTrigger) evaluate(m chat.Inbound) (map[string]string, bool) {
 	fields, why := t.check(m)
 	return fields, why.kind == missNone
 }
@@ -167,7 +168,7 @@ type miss struct {
 
 // check is evaluate with the reason for a miss, which the dry run shows (Replay). The steps run here and
 // nowhere else, so that what the dry run reports is what the intake does.
-func (t *messageTrigger) check(m Inbound) (map[string]string, miss) {
+func (t *messageTrigger) check(m chat.Inbound) (map[string]string, miss) {
 	if !t.takesSender(m) {
 		return nil, miss{kind: missBot}
 	}
@@ -198,7 +199,7 @@ func (t *messageTrigger) check(m Inbound) (map[string]string, miss) {
 // takesSender says whether m is from the kind of sender the trigger takes: the one bot a botMessage trigger names, or a
 // person for a personMessage trigger. A person's message is one with no Bot and a user, which the adapter has decided
 // is not Agent Kourier's own.
-func (t *messageTrigger) takesSender(m Inbound) bool {
+func (t *messageTrigger) takesSender(m chat.Inbound) bool {
 	if t.person {
 		return m.Bot == nil && m.User != ""
 	}
@@ -216,7 +217,7 @@ type triggerTable []messageTrigger
 
 // match returns the first trigger that matches m, in order, and what it extracted: one that does not match
 // (another bot, a filter, an exclude, an extract that misses) lets the next try.
-func (tt triggerTable) match(m Inbound) (t *messageTrigger, fields map[string]string, ok bool) {
+func (tt triggerTable) match(m chat.Inbound) (t *messageTrigger, fields map[string]string, ok bool) {
 	for i := range tt {
 		if fields, ok := tt[i].evaluate(m); ok {
 			return &tt[i], fields, true

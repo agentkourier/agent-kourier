@@ -1,4 +1,4 @@
-package chat_test
+package trigger_test
 
 import (
 	"errors"
@@ -13,6 +13,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/trigger"
 )
 
 // storm is the word every alert of these tests carries in its name, its labels and its detail, so that a test can
@@ -37,7 +38,7 @@ func newLimited(t *testing.T, triggers ...v1alpha1.Trigger) *triggered {
 	t.Helper()
 	h := newTriggered(t, triggers...)
 	h.cfg.TriggerRuns = h.st
-	h.in = chat.NewIntake(h.cfg)
+	h.in = trigger.NewIntake(h.cfg)
 	return h
 }
 
@@ -47,7 +48,7 @@ func (h *triggered) restartLimited(t *testing.T) {
 	t.Helper()
 	h.reopenStore(t)
 	h.cfg.TriggerThreads, h.cfg.TriggerRuns = h.st, h.st
-	h.in = chat.NewIntake(h.cfg)
+	h.in = trigger.NewIntake(h.cfg)
 }
 
 // limitedCount reads agentkourier_trigger_limited_total of the test's Binding and trigger index, by limit.
@@ -322,7 +323,7 @@ func TestRepeatsAndClosesAreNeverLimited(t *testing.T) {
 // refusal in a window is limited, silent, and never reaches the hook that would note it.
 func TestARefusedStartCountsAgainstTheLimits(t *testing.T) {
 	h := newLimited(t, trialTrigger())
-	h.hookErr = chat.ErrNotStarted
+	h.hookErr = trigger.ErrNotStarted
 	var decisions []string
 	for n := range 8 {
 		decisions = append(decisions, h.fire(t, n, fmt.Sprintf("%d.1", 100+n)))
@@ -342,7 +343,7 @@ func TestARefusedStartCountsAgainstTheLimits(t *testing.T) {
 	tr := trialTrigger()
 	tr.Limits = v1alpha1.TriggerLimits{RateLimit: &v1alpha1.RateLimit{MaxRuns: 100, Per: metav1.Duration{Duration: time.Hour}, MaxConcurrent: 1}, MaxRunsPerDay: new(int32(40))}
 	h = newLimited(t, tr)
-	h.hookErr = chat.ErrNotStarted
+	h.hookErr = trigger.ErrNotStarted
 	for n := range 3 {
 		if got := h.fire(t, n, fmt.Sprintf("%d.1", 100+n)); got != "not_started" {
 			t.Errorf("refusal %d: %q; want not_started, since a refusal takes no concurrency place", n, got)

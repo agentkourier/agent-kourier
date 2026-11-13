@@ -630,8 +630,8 @@ route a Binding over a limit is not served after the upgrade, since a restarted 
 has no Binding until you edit it. An earlier release has none of these limits, so after a [rollback](#roll-back) such a config loads again.
 
 **What the limits do not make small.** They cap the cost, and the cost they allow is a fraction of a second to a second for each message. Go's regular expression engine does work in proportion to the
-instructions of the program times the length of the text, so the time grows with both, and it grows when the CPU is shared with other work. The benchmark `BenchmarkRegexCost` in `internal/chat` measures it on 16 KiB fields, which is all a
-regular expression reads; run it on your own hardware with `go test ./internal/chat -run '^$' -bench BenchmarkRegexCost -benchtime 3x` (it is not part of `make test`).
+instructions of the program times the length of the text, so the time grows with both, and it grows when the CPU is shared with other work. The benchmark `BenchmarkRegexCost` in `internal/trigger` measures it on 16 KiB fields, which is all a
+regular expression reads; run it on your own hardware with `go test ./internal/trigger -run '^$' -bench BenchmarkRegexCost -benchtime 3x` (it is not part of `make test`).
 
 One process, `GOMAXPROCS=1`, three runs of three iterations each, on an Apple M2 laptop with 8 CPUs (macOS arm64, Go 1.27, `-race` off), at a load average of 14.3 before the runs and 10.4 after, which is not an idle machine. The
 times are the median of the three, for one message whose six fields are 16 KiB each:

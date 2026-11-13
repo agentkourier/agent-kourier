@@ -5,6 +5,8 @@ import (
 	"log/slog"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
+
+	"github.com/agentkourier/agent-kourier/internal/trigger"
 )
 
 // botOwners tells whose bot a bot ID is among the connections the broker serves: a connection that is served and restarting keeps its bot, since
@@ -26,7 +28,7 @@ type botOwners interface {
 // continuation read a post with no bot ID as a person's, and Slack's posts of another app carry a bot ID (docs/spikes/slack-mention-probe.md), so this
 // is not expected, and a post of one of the broker's own apps taken as a person's would be the same loop. Everything else is the Intake's. A bot that is none of the broker's is the Intake's as before, so with one connection nothing changes.
 type botGuard struct {
-	in   *chat.Intake
+	in   *trigger.Intake
 	self string // the connection this sink is for
 	bots botOwners
 	log  *slog.Logger

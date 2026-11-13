@@ -1,4 +1,4 @@
-package chat_test
+package trigger_test
 
 import (
 	"context"
@@ -21,6 +21,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/testutil"
+	"github.com/agentkourier/agent-kourier/internal/trigger"
 )
 
 const bindingName = "sre/sre-alerts"
@@ -35,7 +36,7 @@ func (h *triggered) restart(t *testing.T) {
 	t.Helper()
 	h.reopenStore(t)
 	h.cfg.TriggerThreads = h.st
-	h.in = chat.NewIntake(h.cfg)
+	h.in = trigger.NewIntake(h.cfg)
 }
 
 // decisions reads agentkourier_trigger_decisions_total of the test's Binding, by decision.
@@ -403,7 +404,7 @@ func TestAStoreFailureLeavesTheEventToBeRedelivered(t *testing.T) {
 	boom := errors.New("disk full")
 	cfg := h.cfg
 	cfg.TriggerThreads = failingThreads{h.st, boom}
-	in := chat.NewIntake(cfg)
+	in := trigger.NewIntake(cfg)
 	for _, id := range []string{"100.1", "101.1"} {
 		m := kindFiring
 		if id == "101.1" {
@@ -540,7 +541,7 @@ func TestAFailedMarkIsMendedByTheRedelivery(t *testing.T) {
 	h := newTriggered(t, trialTrigger())
 	cfg := h.cfg
 	cfg.TriggerThreads = &markFailsOnce{TriggerThreads: h.st}
-	h.in = chat.NewIntake(cfg)
+	h.in = trigger.NewIntake(cfg)
 	if err := h.in.Message(h.ctx, botInbound("C1", "100.1", kindFiring)); err == nil {
 		t.Fatal("Message = nil; want the mark's error, so that Slack sends it again")
 	}
@@ -647,7 +648,7 @@ func TestAResolveBeforeItsFireIsLostAndMaxIdleMendsIt(t *testing.T) {
 // not_started; the hook's own error text is not in the log.
 func TestOnStartThatSaysNotStartedIsAcknowledgedAndHoldsNothing(t *testing.T) {
 	h := newTriggered(t, trialTrigger())
-	h.hookErr = fmt.Errorf("prompt refused, value SECRET-CANARY: %w", chat.ErrNotStarted)
+	h.hookErr = fmt.Errorf("prompt refused, value SECRET-CANARY: %w", trigger.ErrNotStarted)
 	if got := h.send(t, "100.1", kindFiring); got != "not_started" {
 		t.Fatalf("the refused fire: %q; want not_started", got)
 	}
@@ -677,7 +678,7 @@ func TestOnStartThatSaysNotStartedIsAcknowledgedAndHoldsNothing(t *testing.T) {
 // ErrNotStarted means the same for a match with no thread to mark.
 func TestOnStartThatSaysNotStartedForAnUnthreadedMatch(t *testing.T) {
 	h := newTriggered(t, kindOnly())
-	h.hookErr = chat.ErrNotStarted
+	h.hookErr = trigger.ErrNotStarted
 	if got := h.send(t, "100.1", kindFiring); got != "not_started" {
 		t.Errorf("a refused fire: %q; want not_started", got)
 	}
@@ -713,7 +714,7 @@ func TestAKeyedTriggerWithoutAStoreIsAnError(t *testing.T) {
 	h := newTriggered(t, trialTrigger())
 	cfg := h.cfg
 	cfg.TriggerThreads = nil
-	err := chat.NewIntake(cfg).Message(h.ctx, botInbound("C1", "100.1", kindFiring))
+	err := trigger.NewIntake(cfg).Message(h.ctx, botInbound("C1", "100.1", kindFiring))
 	if err == nil || len(h.got()) != 0 {
 		t.Errorf("Message = %v, turns %v; want an error and no turn", err, h.started())
 	}
@@ -724,7 +725,7 @@ func TestWithoutANoticeSinkTheThreadsAreStillKept(t *testing.T) {
 	h := newTriggered(t, trialTrigger())
 	cfg := h.cfg
 	cfg.Notice = nil
-	h.in = chat.NewIntake(cfg)
+	h.in = trigger.NewIntake(cfg)
 	h.send(t, "100.1", kindFiring)
 	if got := h.send(t, "101.1", kindFiring); got != "repeat" {
 		t.Errorf("fire again: %q; want repeat", got)
@@ -792,18 +793,18 @@ func TestNotesArePostedThroughTheOutboxExactlyOnce(t *testing.T) {
 	}
 	sink := live.NewSink(nil, ob, testutil.DiscardLogger())
 	h.cfg.Notice = sink.QueueNotice
-	h.in = chat.NewIntake(h.cfg)
+	h.in = trigger.NewIntake(h.cfg)
 
 	h.send(t, "100.1", kindFiring)
 	for range 3 {
 		h.clk.advance(time.Minute)
 		h.send(t, "101.1", kindFiring)
-		h.in = chat.NewIntake(h.cfg) // the Intake that remembers was lost
+		h.in = trigger.NewIntake(h.cfg) // the Intake that remembers was lost
 	}
 	h.clk.advance(time.Hour)
 	for range 3 {
 		h.send(t, "102.1", kindResolved)
-		h.in = chat.NewIntake(h.cfg)
+		h.in = trigger.NewIntake(h.cfg)
 	}
 	if err := ob.Reconcile(h.ctx); err != nil {
 		t.Fatal(err)

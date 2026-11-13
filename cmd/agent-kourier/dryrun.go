@@ -17,9 +17,9 @@ import (
 	slackgo "github.com/slack-go/slack"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
-	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/config"
+	"github.com/agentkourier/agent-kourier/internal/trigger"
 )
 
 // dryRunUsage is what `agent-kourier dry-run --help` prints.
@@ -176,7 +176,7 @@ func dryRunReportOf(ctx context.Context, o dryRunOptions, getenv func(string) st
 	if err != nil {
 		return dryRunReport{}, usagef("%w", err)
 	}
-	replay, err := chat.NewReplay(b)
+	replay, err := trigger.NewReplay(b)
 	if err != nil {
 		return dryRunReport{}, usagef("Binding %s: %w", o.binding, err)
 	}

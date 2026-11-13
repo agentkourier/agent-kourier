@@ -1,4 +1,4 @@
-package chat_test
+package trigger_test
 
 import (
 	"context"
@@ -15,6 +15,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/trigger"
 )
 
 // personTrigger is a personMessage trigger, as the Binding loader would hand it on after defaulting. Its limits are the
@@ -358,7 +359,7 @@ func TestAPersonsMentionIsNotLostToAReportALimitStopped(t *testing.T) {
 		h.matches = nil
 		h.mu.Unlock()
 	}
-	refused := func(_ *testing.T, h *triggered) { h.hookErr = chat.ErrNotStarted }
+	refused := func(_ *testing.T, h *triggered) { h.hookErr = trigger.ErrNotStarted }
 	message := personPost("C1", "9.9", "", "<@UAGENT> is checkout down?") // the adapter missed the mention
 	appMention := message
 	appMention.Mentioned = true
@@ -425,7 +426,7 @@ func TestARedeliveredReportThatStartedNothingIsADedup(t *testing.T) {
 	})
 	t.Run("refused", func(t *testing.T) {
 		h := newLimited(t, mention, personTrigger(nil))
-		h.hookErr = chat.ErrNotStarted
+		h.hookErr = trigger.ErrNotStarted
 		for range 2 {
 			if err := h.in.Message(h.ctx, personPost("C1", "9.9", "", "checkout is down")); err != nil {
 				t.Fatal(err)
@@ -443,13 +444,13 @@ func TestAPersonsReportALimitStoppedIsTold(t *testing.T) {
 	h := newLimited(t, personTrigger(func(tr *v1alpha1.Trigger) {
 		tr.Limits.RateLimit = &v1alpha1.RateLimit{MaxRuns: 1, Per: metav1.Duration{Duration: time.Hour}, MaxConcurrent: 5}
 	}))
-	var told []chat.TriggerMatch
+	var told []trigger.Match
 	var limits []store.TriggerLimit
-	h.cfg.OnLimited = func(_ context.Context, m chat.TriggerMatch, l store.TriggerLimit) error {
+	h.cfg.OnLimited = func(_ context.Context, m trigger.Match, l store.TriggerLimit) error {
 		told, limits = append(told, m), append(limits, l)
 		return nil
 	}
-	h.in = chat.NewIntake(h.cfg)
+	h.in = trigger.NewIntake(h.cfg)
 	for _, id := range []string{"9.1", "9.2", "9.2"} {
 		if err := h.in.Message(h.ctx, personPost("C1", id, "", "checkout is down")); err != nil {
 			t.Fatal(err)
@@ -464,7 +465,7 @@ func TestAPersonsReportALimitStoppedIsTold(t *testing.T) {
 // and is remembered as one: a start that was not made is asked for once, not refused, audited and counted again.
 func TestAReportThatStartedNothingIsRememberedWhereNoMentionTriggerCouldTakeIt(t *testing.T) {
 	h := newLimited(t, personTrigger(nil))
-	h.hookErr = chat.ErrNotStarted
+	h.hookErr = trigger.ErrNotStarted
 	message := personPost("C1", "9.9", "", "<@UAGENT> is checkout down?")
 	appMention := message
 	appMention.Mentioned = true
@@ -489,11 +490,11 @@ func TestAPersonsStoppedReportsAreToldOnceAWindow(t *testing.T) {
 		tr.Limits.RateLimit = &v1alpha1.RateLimit{MaxRuns: 1, Per: metav1.Duration{Duration: 10 * time.Minute}, MaxConcurrent: 5}
 	}))
 	var told []string
-	h.cfg.OnLimited = func(_ context.Context, m chat.TriggerMatch, _ store.TriggerLimit) error {
+	h.cfg.OnLimited = func(_ context.Context, m trigger.Match, _ store.TriggerLimit) error {
 		told = append(told, m.Message.User)
 		return nil
 	}
-	h.in = chat.NewIntake(h.cfg)
+	h.in = trigger.NewIntake(h.cfg)
 	post := func(id, user string) {
 		t.Helper()
 		m := personPost("C1", id, "", "checkout is down")
@@ -555,14 +556,14 @@ func TestAFailedAuditOfAStoppedReportIsTriedAgain(t *testing.T) {
 		tr.Limits.RateLimit = &v1alpha1.RateLimit{MaxRuns: 1, Per: metav1.Duration{Duration: time.Hour}, MaxConcurrent: 5}
 	}))
 	var told int
-	h.cfg.OnLimited = func(context.Context, chat.TriggerMatch, store.TriggerLimit) error {
+	h.cfg.OnLimited = func(context.Context, trigger.Match, store.TriggerLimit) error {
 		told++
 		if told == 1 {
 			return errors.New("the audit log is down")
 		}
 		return nil
 	}
-	h.in = chat.NewIntake(h.cfg)
+	h.in = trigger.NewIntake(h.cfg)
 	for _, id := range []string{"9.1", "9.2", "9.3", "9.4"} {
 		if err := h.in.Message(h.ctx, personPost("C1", id, "", "checkout is down")); err != nil {
 			t.Fatal(err)
@@ -590,7 +591,7 @@ func TestAReloadDuringTheAppMentionCannotStartTheLimitedReport(t *testing.T) {
 		}
 		return s
 	}
-	h.in = chat.NewIntake(h.cfg)
+	h.in = trigger.NewIntake(h.cfg)
 	if err := h.in.Message(h.ctx, personPost("C1", "8.8", "", "checkout is down")); err != nil {
 		t.Fatal(err)
 	}

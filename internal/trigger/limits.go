@@ -1,4 +1,4 @@
-package chat
+package trigger
 
 import (
 	"cmp"
@@ -37,7 +37,7 @@ func checks(l store.TriggerRunLimits) bool {
 // does, is the same start: it is counted once. Without IntakeConfig.TriggerRuns, or with limits that check nothing,
 // nothing stops a start; a loaded botMessage trigger always has a rate limit, so the second case arises only for a
 // match built in code.
-func (in *Intake) admit(ctx context.Context, m TriggerMatch) (store.TriggerAdmission, error) {
+func (in *Intake) admit(ctx context.Context, m Match) (store.TriggerAdmission, error) {
 	limits := runLimits(m.Limits)
 	if in.cfg.TriggerRuns == nil || !checks(limits) {
 		return store.TriggerAdmission{Admitted: true}, nil
@@ -61,7 +61,7 @@ func (in *Intake) admit(ctx context.Context, m TriggerMatch) (store.TriggerAdmis
 // is posted, since a note per alert is what a storm must not do (D26). If the release fails the decision is left
 // unset and the error returned: the redelivery finds its own reservation and is checked again. A message stopped before is
 // a redelivery, and was counted then.
-func (in *Intake) stopThread(ctx context.Context, m TriggerMatch, hash string, out decided, adm store.TriggerAdmission) (decided, error) {
+func (in *Intake) stopThread(ctx context.Context, m Match, hash string, out decided, adm store.TriggerAdmission) (decided, error) {
 	if _, err := in.cfg.TriggerThreads.ReleaseTriggerThread(ctx, m.Binding, hash, m.Message.At.ID); err != nil {
 		out.decision = ""
 		return out, fmt.Errorf("release the thread of key %s: %w", out.keyHash, err)
@@ -75,7 +75,7 @@ func (in *Intake) stopThread(ctx context.Context, m TriggerMatch, hash string, o
 
 // countLimited counts and logs a start a limit stopped. The log names the Binding, the trigger and the limit and
 // where the alert was, and never what it said.
-func (in *Intake) countLimited(ctx context.Context, m TriggerMatch, limit store.TriggerLimit) {
+func (in *Intake) countLimited(ctx context.Context, m Match, limit store.TriggerLimit) {
 	telemetry.Count(ctx, "agentkourier_trigger_limited_total", m.Binding, strconv.Itoa(m.Index), string(limit))
 	in.log.InfoContext(ctx, "chat: a trigger's start was not made; a limit is reached", "binding", m.Binding, "trigger", m.Index, "limit", limit, "channel", m.Message.At.Channel, "message", m.Message.At.ID)
 }
@@ -124,7 +124,7 @@ func (t *toldLimited) forget(key string) {
 // tellLimited tells IntakeConfig.OnLimited of a start that a limit stopped: a bot's mention always, a person's message once for each
 // person and window of the trigger (toldLimited), and an alert's never, since it is only counted. A person's window stays open only
 // if the record was written: after a failed write the next stopped start of theirs is told again.
-func (in *Intake) tellLimited(ctx context.Context, m TriggerMatch, limit store.TriggerLimit) {
+func (in *Intake) tellLimited(ctx context.Context, m Match, limit store.TriggerLimit) {
 	if in.cfg.OnLimited == nil {
 		return
 	}

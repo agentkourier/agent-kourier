@@ -16,6 +16,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/config"
+	"github.com/agentkourier/agent-kourier/internal/trigger"
 )
 
 // triggersFile is a recipe's trigger evals, relative to the recipe.
@@ -57,7 +58,7 @@ type evalMessage struct {
 
 // evalExpected is the verdict a case requires.
 type evalExpected struct {
-	// Outcome is a chat.ReplayOutcome.
+	// Outcome is a trigger.ReplayOutcome.
 	Outcome string `json:"outcome"`
 	// Trigger, for a matched message, is the index in the Binding's chat.triggers of the trigger that takes
 	// it. Unchecked when omitted.
@@ -69,8 +70,8 @@ type evalExpected struct {
 
 // evalOutcomes are the outcomes a case may expect. "own" is left out: it depends on a flag only the adapter
 // can set, so no message can produce it.
-var evalOutcomes = []chat.ReplayOutcome{chat.ReplayMatched, chat.ReplayUnmatched, chat.ReplayExcluded,
-	chat.ReplayOtherBot, chat.ReplayPerson, chat.ReplayIgnored}
+var evalOutcomes = []trigger.ReplayOutcome{trigger.ReplayMatched, trigger.ReplayUnmatched, trigger.ReplayExcluded,
+	trigger.ReplayOtherBot, trigger.ReplayPerson, trigger.ReplayIgnored}
 
 // parseTriggerEvals decodes and validates the text of a triggers.yaml. Unknown keys, duplicate keys and
 // inconsistent cases are errors, all reported together.
@@ -117,10 +118,10 @@ func (c triggerCase) problems() []string {
 	if m.Bot == "" && (m.User == "" || m.Text == "") {
 		out = append(out, "a person's message needs user and text; one without either is dropped before any trigger sees it")
 	}
-	if !slices.Contains(evalOutcomes, chat.ReplayOutcome(c.Expect.Outcome)) {
+	if !slices.Contains(evalOutcomes, trigger.ReplayOutcome(c.Expect.Outcome)) {
 		out = append(out, fmt.Sprintf("expect.outcome %q must be one of %v", c.Expect.Outcome, evalOutcomes))
 	}
-	if c.Expect.Outcome != string(chat.ReplayMatched) && (c.Expect.Trigger != nil || c.Expect.Fields != nil) {
+	if c.Expect.Outcome != string(trigger.ReplayMatched) && (c.Expect.Trigger != nil || c.Expect.Fields != nil) {
 		out = append(out, "expect.trigger and expect.fields apply only to a matched message")
 	}
 	return out
@@ -143,7 +144,7 @@ func (m evalMessage) history(b *v1alpha1.Binding) chat.HistoryMessage {
 	return chat.HistoryMessage{Message: slack.InboundOf(conn, msg)}
 }
 
-// checkTriggerEvals runs the trigger evals of the recipe at dir, if it has any, through chat.Replay (the dry
+// checkTriggerEvals runs the trigger evals of the recipe at dir, if it has any, through trigger.Replay (the dry
 // run's engine, which uses the intake's own matcher) over the Bindings of set, the recipe's loaded kourier/
 // directory. It reports every mismatch, naming the recipe, the case, what was expected and got, and the
 // verdict's reason. It returns ran false, with no error, for a recipe without evals/triggers.yaml.
@@ -160,7 +161,7 @@ func checkTriggerEvals(dir string, set *config.Set) (ran bool, err error) {
 	if err != nil {
 		return true, underFile(file, err)
 	}
-	replays := map[string]*chat.Replay{}
+	replays := map[string]*trigger.Replay{}
 	var errs []error
 	for _, c := range evals.Cases {
 		i := slices.IndexFunc(set.Bindings, func(b v1alpha1.Binding) bool { return b.Namespace+"/"+b.Name == c.Binding })
@@ -171,7 +172,7 @@ func checkTriggerEvals(dir string, set *config.Set) (ran bool, err error) {
 		b := &set.Bindings[i]
 		r := replays[c.Binding]
 		if r == nil {
-			if r, err = chat.NewReplay(b); err != nil {
+			if r, err = trigger.NewReplay(b); err != nil {
 				errs = append(errs, fmt.Errorf("case %q: Binding %s: %w", c.Name, c.Binding, err))
 				continue
 			}
@@ -193,11 +194,11 @@ func underFile(file string, err error) error {
 }
 
 // mismatch describes how v differs from what the case expects, or returns "" when it does not.
-func (c triggerCase) mismatch(v chat.ReplayVerdict) string {
+func (c triggerCase) mismatch(v trigger.ReplayVerdict) string {
 	var diffs []string
 	if string(v.Outcome) != c.Expect.Outcome {
 		diffs = append(diffs, fmt.Sprintf("outcome: want %s, got %s", c.Expect.Outcome, v.Outcome))
-	} else if v.Outcome == chat.ReplayMatched {
+	} else if v.Outcome == trigger.ReplayMatched {
 		if want := c.Expect.Trigger; want != nil && *want != v.Trigger {
 			diffs = append(diffs, fmt.Sprintf("trigger: want %d, got %d", *want, v.Trigger))
 		}
@@ -304,14 +305,14 @@ func TestTriggerEvalsMismatchReports(t *testing.T) {
 	c := triggerCase{Expect: evalExpected{Outcome: "matched", Trigger: &one, Fields: map[string]string{"a": "1"}}}
 	tests := []struct {
 		name string
-		v    chat.ReplayVerdict
+		v    trigger.ReplayVerdict
 		want string
 	}{
-		{"as expected", chat.ReplayVerdict{Outcome: chat.ReplayMatched, Trigger: 1, Fields: map[string]string{"a": "1"}}, ""},
-		{"another outcome, with why", chat.ReplayVerdict{Outcome: chat.ReplayExcluded, Why: "trigger 1: exclude title"}, "outcome: want matched, got excluded; why: trigger 1: exclude title"},
-		{"another trigger", chat.ReplayVerdict{Outcome: chat.ReplayMatched, Trigger: 2, Fields: map[string]string{"a": "1"}}, "trigger: want 1, got 2"},
-		{"other fields", chat.ReplayVerdict{Outcome: chat.ReplayMatched, Trigger: 1, Fields: map[string]string{"a": "2"}}, "fields: want map[a:1], got map[a:2]"},
-		{"an extra field", chat.ReplayVerdict{Outcome: chat.ReplayMatched, Trigger: 1, Fields: map[string]string{"a": "1", "b": "2"}}, "fields: want"},
+		{"as expected", trigger.ReplayVerdict{Outcome: trigger.ReplayMatched, Trigger: 1, Fields: map[string]string{"a": "1"}}, ""},
+		{"another outcome, with why", trigger.ReplayVerdict{Outcome: trigger.ReplayExcluded, Why: "trigger 1: exclude title"}, "outcome: want matched, got excluded; why: trigger 1: exclude title"},
+		{"another trigger", trigger.ReplayVerdict{Outcome: trigger.ReplayMatched, Trigger: 2, Fields: map[string]string{"a": "1"}}, "trigger: want 1, got 2"},
+		{"other fields", trigger.ReplayVerdict{Outcome: trigger.ReplayMatched, Trigger: 1, Fields: map[string]string{"a": "2"}}, "fields: want map[a:1], got map[a:2]"},
+		{"an extra field", trigger.ReplayVerdict{Outcome: trigger.ReplayMatched, Trigger: 1, Fields: map[string]string{"a": "1", "b": "2"}}, "fields: want"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

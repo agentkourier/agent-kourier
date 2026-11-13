@@ -1,24 +1,12 @@
-package chat
+package trigger
 
 import (
 	"fmt"
 	"strings"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 )
-
-// HistoryMessage is a message from a channel's history, as the platform's adapter would have seen it arrive
-// live. Replay classifies it.
-type HistoryMessage struct {
-	// Message is what the adapter would hand the Sink. For an Ignored message only At is set: where it was,
-	// so that a listing can show it.
-	Message Inbound
-	// Own says Agent Kourier itself posted it. The adapter never forwards such a message, whatever a trigger names.
-	Own bool
-	// Ignored says the adapter would drop it before the Sink: an edit, a deletion or any other subtype that
-	// starts nothing, and a bot's message with no content.
-	Ignored bool
-}
 
 // ReplayOutcome is what the intake would make of a message of the history.
 type ReplayOutcome string
@@ -95,7 +83,7 @@ func NewReplay(b *v1alpha1.Binding) (*Replay, error) {
 //   - A bot that no trigger names is dropped by the adapter; a bot's reply inside a thread is ignored by the intake.
 //   - Any other message is tried against the triggers in order, by the intake's own matcher: the first match
 //     wins. Where none matches, an exclude that turned it away makes it excluded, and anything else unmatched.
-func (r *Replay) Classify(h HistoryMessage) ReplayVerdict {
+func (r *Replay) Classify(h chat.HistoryMessage) ReplayVerdict {
 	m := h.Message
 	switch {
 	case h.Ignored:
