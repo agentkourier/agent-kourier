@@ -368,7 +368,7 @@ func (p *Pipeline) GiveUp(ctx context.Context, press store.Press) error {
 
 // binding is the Binding of the interaction's thread, or nil if the thread or its Binding is gone.
 func (p *Pipeline) binding(ctx context.Context, row store.Interaction) (string, *Binding, error) {
-	s, err := p.cfg.Sessions.GetSession(ctx, row.Key, readAll, p.cfg.Now())
+	s, err := p.cfg.Sessions.GetSession(ctx, row.Key, store.AnyAge, p.cfg.Now())
 	if errors.Is(err, store.ErrNotFound) {
 		return "", nil, nil
 	} else if err != nil {

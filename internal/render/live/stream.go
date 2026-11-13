@@ -29,7 +29,7 @@ import (
 // and begins no more than maxBegins new ones, which the next window goes on with (the text waits for them: it is never
 // sent ahead of a step that came before it). The final has no such limit, since it is the last window there is.
 //
-// A step that stands for time is a step like these. A Working… card is begun when the delay passes (live.go, openIdle), and
+// A step that stands for time is a step like these. A Working… card is begun when the delay passes (steps.go, openIdle), and
 // the call that claims it moves it on under the call's title, with the call's detail. Every chunk of a step carries its
 // detail, as chat.Step says; a platform that shows only the first non-empty one (Slack appends a card's detail) is the
 // adapter's to handle, so the card has the detail once.

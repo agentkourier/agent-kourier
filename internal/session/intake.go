@@ -86,9 +86,6 @@ type Result struct {
 	Admission Admission
 }
 
-// readAll is a threadTTL no session outlives: the real one is the session's Binding's.
-const readAll = 100 * 365 * 24 * time.Hour
-
 // Submit is the durable intake of a turn, called by the chat adapter before it acknowledges
 // the event (spec 6.1), and by the alert path. It decides who owns
 // the thread, writes the session row for a new one, and queues the turn (idempotently, by
@@ -175,7 +172,7 @@ func (m *Manager) queue(ctx context.Context, in Inbound) (Result, error) {
 	// It waits if turns are ahead of it, or a task of the session is active or paused. This is
 	// advisory: it races the runner, which may take the turn a moment later.
 	head, herr := m.cfg.Store.NextReply(ctx, in.Key)
-	sess, serr := m.cfg.Store.GetSession(ctx, in.Key, readAll, now)
+	sess, serr := m.cfg.Store.GetSession(ctx, in.Key, store.AnyAge, now)
 	res.Queued = (herr == nil && head.ID != in.MessageID) || (serr == nil && sess.TaskID != "")
 	return res, nil
 }
@@ -204,7 +201,7 @@ func (m *Manager) Takes(ctx context.Context, in Inbound) (bool, error) {
 func (m *Manager) replyFacts(ctx context.Context, in Inbound, now time.Time) (ReplyFacts, string, error) {
 	f := ReplyFacts{Create: in.Create, Mentioned: in.Mentioned, ChannelMode: in.ChannelThreadReplies}
 	binding := ""
-	sess, err := m.cfg.Store.GetSession(ctx, in.Key, readAll, now)
+	sess, err := m.cfg.Store.GetSession(ctx, in.Key, store.AnyAge, now)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 	case err != nil:

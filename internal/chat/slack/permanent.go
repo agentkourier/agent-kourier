@@ -2,8 +2,11 @@ package slack
 
 import (
 	"errors"
+	"time"
 
 	slackgo "github.com/slack-go/slack"
+
+	"github.com/agentkourier/agent-kourier/internal/chat"
 )
 
 // permanentCode returns the Slack error code in err if it says that the same post will never
@@ -138,3 +141,53 @@ func channelAccessCode(err error) string {
 	}
 	return ""
 }
+
+// Classify says what an error of the Client means for a retry: a rejected credential is fatal, the codes
+// that say the same call will never work are permanent, with the reason in neutral terms and Slack's own
+// code beside it, and anything else, a rate limit, a server error or a timeout, may pass. For OpOther the permanent
+// errors are those of ChannelAccess that wrap chat.ErrChannelNotFound or chat.ErrMissingScope, and only those: Slack's raw
+// code in an error that wraps neither is not read as permanent.
+func (p *Platform) Classify(op chat.Op, err error) chat.Verdict {
+	if code := fatalAuthCode(err); code != "" {
+		return chat.Verdict{Class: chat.FatalAuth, Code: code}
+	}
+	switch op {
+	case chat.OpPost:
+		if code := permanentCode(err); code != "" {
+			return chat.Verdict{Class: chat.Permanent, Reason: postReason[code], Code: code}
+		}
+	case chat.OpReact:
+		if code := reactionPermanentCode(err); code != "" {
+			return chat.Verdict{Class: chat.Permanent, Reason: reactionReason[code], Code: code}
+		}
+	case chat.OpOther:
+		// The code is Slack's own, and is empty for an error that never reached Slack (an empty channel).
+		switch {
+		case errors.Is(err, chat.ErrChannelNotFound):
+			return chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonChannelGone, Code: channelAccessCode(err)}
+		case errors.Is(err, chat.ErrMissingScope):
+			return chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonOther, Code: channelAccessCode(err)}
+		}
+	}
+	v := chat.Verdict{Class: chat.Transient}
+	if limited := new(*slackgo.RateLimitedError); errors.As(err, limited) {
+		v.RetryAfter = max((*limited).RetryAfter, time.Second) // one that names no wait is still one
+	}
+	return v
+}
+
+// The neutral reason of each code permanentCode and reactionPermanentCode give. A code not here is Other.
+var (
+	postReason = map[string]chat.Reason{
+		"channel_not_found": chat.ReasonChannelGone, "is_archived": chat.ReasonChannelGone, "not_in_channel": chat.ReasonChannelGone,
+		"msg_too_long": chat.ReasonTooLong, "invalid_blocks": chat.ReasonInvalidContent, "invalid_blocks_format": chat.ReasonInvalidContent,
+		"invalid_chunks": chat.ReasonInvalidContent, "streaming_mode_mismatch": chat.ReasonInvalidContent, "cannot_provide_both_markdown_text_and_chunks": chat.ReasonInvalidContent,
+		"block_mismatch": chat.ReasonOther, // not content that cannot be shown: the same content passes on another message
+	}
+	reactionReason = map[string]chat.Reason{
+		"message_not_found": chat.ReasonChannelGone, "channel_not_found": chat.ReasonChannelGone, "is_archived": chat.ReasonChannelGone,
+		"not_in_channel": chat.ReasonChannelGone, "no_item_specified": chat.ReasonInvalidContent, "bad_timestamp": chat.ReasonInvalidContent,
+		"invalid_name":  chat.ReasonInvalidContent,
+		"thread_locked": chat.ReasonOther, "not_reactable": chat.ReasonOther, "too_many_reactions": chat.ReasonOther, "too_many_emoji": chat.ReasonOther,
+	}
+)
