@@ -38,6 +38,10 @@ func TestErrorTagsPinned(t *testing.T) {
 		{agent.ErrStreamingUnsupported, "streaming_unsupported"},
 		{dialect.ErrCardTooLarge, "card_too_large"},
 		{agent.ErrLookupIncomplete, "lookup_incomplete"},
+		// These two differ from the agent metrics (finishAgent in internal/agent), and the two mappings must not be
+		// merged: the metrics call them already_ended and not_found and record them with no error, while this log
+		// tags every cause alike. These tags are stored rows and the metric outcomes are label values, so neither set
+		// can be renamed to match the other.
 		{a2a.ErrTaskNotCancelable, "task_not_cancelable"},
 		{a2a.ErrTaskNotFound, "task_not_found"},
 		{context.Canceled, "canceled"},
@@ -54,6 +58,7 @@ func TestErrorTagsPinned(t *testing.T) {
 }
 
 // An error that carries several causes is tagged with each, in one fixed order, which is the order of the stored row.
+// The agent metrics do not share it: finishAgent in internal/agent names one outcome, the first of its cases to match.
 func TestErrorTagsOrderPinned(t *testing.T) {
 	every := errors.Join(context.DeadlineExceeded, context.Canceled, a2a.ErrTaskNotFound, a2a.ErrTaskNotCancelable,
 		agent.ErrLookupIncomplete, dialect.ErrCardTooLarge, agent.ErrStreamingUnsupported, agent.ErrPoolClosed,
