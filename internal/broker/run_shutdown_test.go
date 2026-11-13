@@ -61,7 +61,7 @@ func (s *stepTrace) got() string {
 // slowStop is a Slack that takes its time to stop, and notes when it has.
 type slowStop struct {
 	idleSlack
-	started sync.WaitGroup // Done once Run has begun, which is when startup is over
+	started sync.WaitGroup // Done once Run has begun
 	stopped atomic.Int64   // the UnixNano at which Run returned
 }
 
@@ -87,9 +87,11 @@ func TestRunStopsTheSlackRunAndWaitsForItBeforeTheManager(t *testing.T) {
 	c := startConfig(t)
 	c.newSlack = func(slack.Config) slackAPI { return slow }
 	c.shutdownTrace = trace.record
+	started := leaderUp(t, &c)
 	r := start(t, c)
 	r.until("/readyz", http.StatusOK)
-	slow.started.Wait() // readiness comes before the Slack run does: stop only a Run that has finished starting
+	slow.started.Wait()
+	started() // readiness comes before the leader half: stop only a Run that has finished starting
 
 	r.cancel()
 	if err := r.wait(); err != nil {
@@ -139,9 +141,11 @@ func TestRunKeepsThePartsRunningUntilTheirShutdownStepAfterASignal(t *testing.T)
 	c.newSlack = func(slack.Config) slackAPI { return slk }
 	c.shutdownTrace = trace.record
 	c.leaderLaunched = func() { <-hold }
+	started := leaderUp(t, &c)
 	r := start(t, c)
 	r.until("/readyz", http.StatusOK)
-	slackCtx = <-slk.got // the Slack run has begun, so startup is over
+	slackCtx = <-slk.got
+	started() // the Slack run has begun and the leader half has finished starting, so startup is over
 
 	r.cancel()
 	select {
@@ -212,9 +216,11 @@ func TestRunClosesTheSlackConnectionsAfterTheFinalDrain(t *testing.T) {
 	c := startConfig(t)
 	c.newSlack = func(sc slack.Config) slackAPI { slk.client = sc.HTTPClient; return slk }
 	c.shutdownTrace = trace.record
+	started := leaderUp(t, &c)
 	r := start(t, c)
 	r.until("/readyz", http.StatusOK)
 	<-slk.started
+	started() // a signal during the start would abort it, and the Slack run that ends so closes its connections at once
 
 	r.cancel()
 	if err := r.wait(); err != nil {
@@ -308,7 +314,7 @@ func TestRunRecoversTheSessionsAnEarlierRunLeft(t *testing.T) {
 func TestRunPostsWhatIsPendingInAFinalDrain(t *testing.T) {
 	c := startConfig(t)
 	posted := make(chan string, 4)
-	rec := &recordingSlack{posted: posted, started: make(chan struct{})}
+	rec := &recordingSlack{posted: posted}
 	c.newSlack = func(slack.Config) slackAPI { return rec }
 	trace := &stepTrace{hook: func(step string) {
 		if step != "drain" {
@@ -326,9 +332,10 @@ func TestRunPostsWhatIsPendingInAFinalDrain(t *testing.T) {
 		}
 	}}
 	c.shutdownTrace = trace.record
+	started := leaderUp(t, &c)
 	r := start(t, c)
 	r.until("/readyz", http.StatusOK)
-	<-rec.started // readiness comes before the Slack run does: stop only a Run that has finished starting
+	started() // readiness comes before the leader half: a signal during its start aborts it, and nothing is drained through a Slack run that ended so
 
 	r.cancel()
 	if err := r.wait(); err != nil {
@@ -348,15 +355,7 @@ func TestRunPostsWhatIsPendingInAFinalDrain(t *testing.T) {
 // recordingSlack is an idle Slack that records the text of each post it takes.
 type recordingSlack struct {
 	idleSlack
-	posted  chan string
-	started chan struct{} // closed when Run begins
-	once    sync.Once
-}
-
-func (s *recordingSlack) Run(ctx context.Context, _ slack.Sink) error {
-	s.once.Do(func() { close(s.started) })
-	<-ctx.Done()
-	return ctx.Err()
+	posted chan string
 }
 
 func (s *recordingSlack) Post(_ context.Context, _, _ string, c slack.Content, _ string) (string, error) {

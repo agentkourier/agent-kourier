@@ -278,6 +278,9 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 			leaderDone <- err
 			return
 		}
+		if cfg.leaderStarted != nil {
+			cfg.leaderStarted()
+		}
 		leaderDone <- <-chatDone
 	}
 	// From here a signal ends ctx only, and the shutdown stops the parts in order. A signal during the leader half's

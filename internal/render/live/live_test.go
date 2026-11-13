@@ -143,6 +143,22 @@ func (c *clock) waiting() int {
 	return n
 }
 
+// waitingSince is how many timers are pending of those After has made since the mark since, but for the final text's deadline.
+// It is how a test waits for the one timer a run arms next. waiting counts every pending timer, and the clock keeps a timer
+// that its run has stopped waiting on until time passes it: the delay of the gap a timed turn begins with is one, which the
+// run arms only if it gets there before the turn's first event, and leaves when that event ends the gap.
+func (c *clock) waitingSince(since int) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, tm := range c.timers {
+		if !tm.long && tm.n >= since {
+			n++
+		}
+	}
+	return n
+}
+
 func (c *clock) advance(d time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -156,6 +172,26 @@ func (c *clock) advance(d time.Duration) {
 		}
 	}
 	c.timers = keep
+}
+
+// waitingSince leaves out a timer made before its mark, which waiting counts: a run that waits for one window is seen to,
+// whatever an earlier wait left pending.
+func TestWaitingSinceCountsOnlyTheTimersMadeSinceTheMark(t *testing.T) {
+	c := &clock{now: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)}
+	c.After(3 * time.Second) // a delay its run left behind
+	since := c.mark()
+	if got := c.waitingSince(since); got != 0 {
+		t.Fatalf("waitingSince = %d with only a timer made before the mark; want 0", got)
+	}
+	c.After(throttle)
+	c.After(10 * time.Minute) // the final text's deadline
+	if got, all := c.waitingSince(since), c.waiting(); got != 1 || all != 2 {
+		t.Errorf("waitingSince = %d and waiting = %d; want 1, the window, and 2, with the delay", got, all)
+	}
+	c.advance(throttle)
+	if got := c.waitingSince(since); got != 0 {
+		t.Errorf("waitingSince = %d once the window has fired; want 0", got)
+	}
 }
 
 // catchUp reaches the window a slow run armed while the clock was turning, which falls due past where the clock stopped, and

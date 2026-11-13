@@ -251,8 +251,10 @@ func TestRunStopsTheInteractionsLoopsBetweenTheIntakeAndTheManager(t *testing.T)
 	}}
 	c := startConfig(t)
 	c.shutdownTrace = trace.record
+	started := leaderUp(t, &c)
 	r := start(t, c)
 	r.until("/readyz", http.StatusOK)
+	started() // a signal during the start would abort it, and end the loops before the shutdown's first step
 	for deadline := time.Now().Add(10 * time.Second); len(loopsAlive()) < 5; time.Sleep(10 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatalf("the loops did not all start: %v", loopsAlive())

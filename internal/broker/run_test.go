@@ -213,6 +213,24 @@ func start(t *testing.T, c RunConfig) *running {
 	return r
 }
 
+// leaderUp has c say when its leader half has finished starting, and returns the wait for that, which fails the test
+// after 10 s. It is called before start. A test that stops Run to see the shutdown's steps waits for it first: the Slack
+// run begins inside the start, and a signal that lands between the two aborts the start, which ends every part at once
+// (startGate.close) and leaves the Slack run out of the table that the final drain posts through.
+func leaderUp(t *testing.T, c *RunConfig) (wait func()) {
+	t.Helper()
+	up := make(chan struct{})
+	c.leaderStarted = func() { close(up) }
+	return func() {
+		t.Helper()
+		select {
+		case <-up:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the leader half did not finish starting within 10 s")
+		}
+	}
+}
+
 // wait returns Run's error, or fails the test if Run has not returned in 10 s.
 func (r *running) wait() error {
 	r.t.Helper()
