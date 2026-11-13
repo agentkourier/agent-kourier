@@ -13,7 +13,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -22,6 +21,7 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/backoff"
 	"github.com/agentkourier/agent-kourier/internal/bindingcheck"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/config/crsource"
@@ -538,11 +538,7 @@ func (w *statusWriter) write(ctx context.Context, key string, st *statusKey, wan
 	default:
 		w.reportWrite("failed")
 		st.failures++
-		wait := w.cfg.Gap
-		for i := 1; i < st.failures && wait < statusBackoffCap; i++ {
-			wait *= 2
-		}
-		st.notBefore = now.Add(min(wait, statusBackoffCap))
+		st.notBefore = now.Add(backoff.Doubling(w.cfg.Gap, statusBackoffCap, st.failures))
 		if !st.failed {
 			st.failed = true
 			w.cfg.Log.Warn("binding status: a write failed; it is tried again, and this is said once until one succeeds",
@@ -801,11 +797,7 @@ func statusMessage(s string) string {
 	if len(text) <= maxStatusMessage {
 		return text
 	}
-	cut := maxStatusMessage - len(ellipsis)
-	for cut > 0 && !utf8.RuneStart(text[cut]) {
-		cut--
-	}
-	return text[:cut] + ellipsis
+	return text[:redact.RuneBoundary(text, maxStatusMessage-len(ellipsis))] + ellipsis
 }
 
 // byType maps each condition to its type.

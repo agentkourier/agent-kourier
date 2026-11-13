@@ -16,6 +16,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/audit"
+	"github.com/agentkourier/agent-kourier/internal/backoff"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/testhooks"
@@ -176,7 +177,7 @@ func (m *Manager) endPause(ctx context.Context, key Key, taskID a2a.TaskID) erro
 	m.mu.Unlock()
 	// No runner, or one that does not drive this task (a turn held behind a task recorded before a
 	// restart): clear the record if it is still the task's, and wake the queue.
-	sess, err := m.cfg.Store.GetSession(ctx, key, readAll, m.cfg.Now())
+	sess, err := m.cfg.Store.GetSession(ctx, key, store.AnyAge, m.cfg.Now())
 	if err != nil {
 		return err
 	}
@@ -193,11 +194,7 @@ func (m *Manager) endPause(ctx context.Context, key Key, taskID a2a.TaskID) erro
 // backoff is the pause before the next resend after tries in a row: RetryBase, doubling, up
 // to RetryMax.
 func (m *Manager) backoff(tries int) time.Duration {
-	d := m.cfg.RetryBase
-	for i := 1; i < tries && d < m.cfg.RetryMax; i++ {
-		d *= 2
-	}
-	return min(d, m.cfg.RetryMax)
+	return backoff.Doubling(m.cfg.RetryBase, m.cfg.RetryMax, tries)
 }
 
 // run drains key's queue. A turn that fails stays queued, for the next wake to retry; one that
@@ -514,7 +511,7 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 		}
 		m.mu.Unlock()
 	}
-	sess, err := m.cfg.Store.GetSession(sctx, key, readAll, m.cfg.Now())
+	sess, err := m.cfg.Store.GetSession(sctx, key, store.AnyAge, m.cfg.Now())
 	if err != nil {
 		return idle, fmt.Errorf("read session: %w", err)
 	}
@@ -713,7 +710,7 @@ func withMentionPrompt(r store.Reply, sess store.Session, b Backend) store.Reply
 // time ago: following it now would render its end again, and clear whatever the session holds
 // by then. A read that fails does not drop the task: following it is the safe side.
 func (m *Manager) superseded(t *tstate) bool {
-	sess, err := m.cfg.Store.GetSession(context.WithoutCancel(m.ctx), t.key, readAll, m.cfg.Now())
+	sess, err := m.cfg.Store.GetSession(context.WithoutCancel(m.ctx), t.key, store.AnyAge, m.cfg.Now())
 	return errors.Is(err, store.ErrNotFound) || (err == nil && sess.TaskID != string(t.taskID))
 }
 

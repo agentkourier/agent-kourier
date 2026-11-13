@@ -47,6 +47,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/agentkourier/agent-kourier/internal/backoff"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/testhooks"
@@ -554,11 +555,7 @@ func (o *Outbox) settle(id string, err error) {
 	defer o.retryMu.Unlock()
 	r := o.retry[id]
 	r.fails++
-	delay := o.cfg.RetryBase
-	for i := 1; i < r.fails && delay < o.cfg.RetryMax; i++ {
-		delay *= 2
-	}
-	r.next = o.cfg.Now().Add(min(delay, o.cfg.RetryMax))
+	r.next = o.cfg.Now().Add(backoff.Doubling(o.cfg.RetryBase, o.cfg.RetryMax, r.fails))
 	o.retry[id] = r
 }
 

@@ -42,7 +42,7 @@ func (r *TextReplies) Decide(ctx context.Context, key store.ConversationKey, rep
 	case <-r.ready:
 	}
 	p := r.pipeline
-	sess, err := p.cfg.Sessions.GetSession(ctx, key, readAll, p.cfg.Now())
+	sess, err := p.cfg.Sessions.GetSession(ctx, key, store.AnyAge, p.cfg.Now())
 	if err != nil {
 		return session.TextReplyRetry, err
 	}

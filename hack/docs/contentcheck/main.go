@@ -44,6 +44,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/agentkourier/agent-kourier/hack/docs/internal/sitesrc"
 )
 
 // rule is one content check: a pattern that must not appear in a public page, and why.
@@ -274,43 +276,9 @@ func scanText(rs []rule, path, text string) []finding {
 	return out
 }
 
-// excludedDocs returns the top-level directories of docs/ that mkdocs.yml's exclude_docs block names. It accepts only
-// the form `/name/`: another pattern would make this check read different files than the site publishes, so it is an
-// error rather than a guess.
-func excludedDocs(mkdocs string) ([]string, error) {
-	lines := strings.Split(mkdocs, "\n")
-	for i, l := range lines {
-		if strings.TrimRight(l, " \t") != "exclude_docs: |" {
-			continue
-		}
-		var out []string
-		for _, b := range lines[i+1:] {
-			t := strings.TrimSpace(b)
-			if t == "" || strings.HasPrefix(t, "#") {
-				continue
-			}
-			if !strings.HasPrefix(b, " ") && !strings.HasPrefix(b, "\t") {
-				break // the block ends at the next key
-			}
-			name := strings.TrimSuffix(strings.TrimPrefix(t, "/"), "/")
-			if !strings.HasPrefix(t, "/") || !strings.HasSuffix(t, "/") || name == "" || strings.ContainsAny(name, "/*?[") {
-				return nil, fmt.Errorf("mkdocs.yml exclude_docs pattern %q: only /directory/ is supported", t)
-			}
-			out = append(out, name)
-		}
-		return out, nil
-	}
-	return nil, fmt.Errorf("mkdocs.yml has no `exclude_docs: |` block")
-}
-
-// textExt are the extensions of the text files the site publishes; images and video are skipped.
-var textExt = []string{".md", ".html", ".yml", ".yaml", ".css", ".js", ".json", ".svg", ".vtt", ".webmanifest", ".txt"}
-
-// textNames are published text files with no extension.
-var textNames = []string{"_headers"}
-
-// textFiles returns the text files under dir (a slash-separated path relative to root) as paths relative to root,
-// skipping the top-level directories of dir that skip names. A dir that does not exist yields none.
+// textFiles returns the text files the site publishes (sitesrc.IsText) under dir, a slash-separated path relative to
+// root, as paths relative to root, skipping the top-level directories of dir that skip names (sitesrc.Excluded). A
+// dir that does not exist yields none.
 func textFiles(root, dir string, skip []string) ([]string, error) {
 	base := filepath.Join(root, filepath.FromSlash(dir))
 	if _, err := os.Stat(base); errors.Is(err, fs.ErrNotExist) {
@@ -326,12 +294,12 @@ func textFiles(root, dir string, skip []string) ([]string, error) {
 			return err
 		}
 		if d.IsDir() {
-			if rel != "." && !strings.Contains(rel, string(filepath.Separator)) && slices.Contains(skip, rel) {
+			if sitesrc.Excluded(skip, rel) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if slices.Contains(textExt, filepath.Ext(p)) || slices.Contains(textNames, d.Name()) {
+		if sitesrc.IsText(p) {
 			out = append(out, dir+"/"+filepath.ToSlash(rel))
 		}
 		return nil
@@ -348,7 +316,7 @@ func publicFiles(root string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read mkdocs.yml: %w", err)
 	}
-	skip, err := excludedDocs(string(mk))
+	skip, err := sitesrc.ExcludedDocs(string(mk))
 	if err != nil {
 		return nil, err
 	}
