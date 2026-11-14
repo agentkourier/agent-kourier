@@ -102,8 +102,10 @@ trigger, unless the Binding sets `chat.botMentions: none`. [Chat triggers](../re
 
 To have one agent call another:
 
-1. Run them as separate Slack apps. Agent Kourier never reads its own posts, and a channel belongs to at most one Binding per connection, so
-   two Bindings on one app cannot do this.
+1. Run them as separate Slack apps, each served by its own Agent Kourier. Agent Kourier never reads its own posts, and a channel belongs to at
+   most one Binding per connection, so two Bindings on one app cannot do this. Two apps that one Agent Kourier serves (its own ChatConnection and
+   a [team's](team-slack-app.md)) cannot do it by a mention either: it drops a mention by the bot of another connection it serves, and no setting
+   changes that. There, give the target's Binding a `botMessage` trigger whose `from.id` is the source's bot ID, as in the sections above.
 2. Give the target a Binding for the channel the mention will be in, and invite its bot there.
 3. On the source's Binding, declare the target's bot user under `chat.mentions`, so that its agent can write `@name`.
 4. Set `chat.threadReplies: mention` on a Binding whose thread the other agent may be mentioned in. A session that a bot's mention began takes only a
@@ -115,8 +117,8 @@ Know what this does not bound:
 - **It accepts any bot.** Any bot or incoming webhook that can post in the channel can start your agent, and a post with a mention token in its text
   or in a section or context block is enough. In a channel full of integrations, set `chat.botMentions: none`. A bot a `botMessage` trigger names
   is left to that trigger.
-- **There is no hop limit.** If two agents can each mention the other, only the limits stop them, and people see the bots trade messages until
-  then.
+- **There is no hop limit.** If two agents on two Agent Kouriers can each mention the other, only the limits stop them, and people see the bots
+  trade messages until then.
 - **The source hears nothing back.** A mention counts as made once it is posted, even if the target stopped it at a limit, or does not exist.
 - **The receiving agent decides what to trust.** The model alone decides to write a name, so a crafted alert can get one agent to mention another. The first
   prompt tells the agent to check before it acts, and the thread reaches it as untrusted data. Give an agent that can take a consequential step

@@ -23,12 +23,12 @@ flowchart TB
 ## One leader, one standby
 
 High availability is active/passive. Two replicas of one Deployment share a Postgres database. One is the **leader**:
-it holds a Kubernetes Lease and runs all of Agent Kourier's work, which is the Socket Mode connection, the session
+it holds a Kubernetes Lease and runs all of Agent Kourier's work, which is the Socket Mode connection of each ChatConnection it serves, the session
 runners, the outbox, the sweeps, the digests and the verification of Bindings. The other is the **standby**: it serves health and metrics and waits
 for the Lease.
 
 Active/active, with workers on every replica, is deferred until one replica's throughput is not enough. With one
-writer there is one place where turns are ordered, one Socket Mode connection, and one outbox, so every recovery rule
+writer there is one place where turns are ordered, one Socket Mode connection for each Slack app, and one outbox, so every recovery rule
 of a single replica holds unchanged.
 
 ## SQLite or Postgres

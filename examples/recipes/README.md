@@ -166,7 +166,7 @@ cases:
 
 These evals judge one message at a time. They do not evaluate the thread cooldown, thread keys across messages (a case
 sees the `key` it extracts, not whether a second message joins the first one's thread), the rate limit, the daily cap or
-`closeWhen`, and they do not evaluate a `mention` trigger: a person's message is always `person`. Those are covered by
+`closeWhen`, and they do not evaluate a `mention` trigger: on a Binding with no `personMessage` trigger, a person's message is always `person`. Those are covered by
 the tests of the intake itself.
 
 ### Scenarios

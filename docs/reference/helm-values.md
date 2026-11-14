@@ -34,7 +34,7 @@ Default: `""`
 | Key | Default | Description |
 |---|---|---|
 | `serviceAccount.create` | `true` |  |
-| `serviceAccount.name` | `""` | Defaults to the fullname. Agent Kourier reads Secrets through the API, so the token stays mounted. |
+| `serviceAccount.name` | `""` | Defaults to the fullname, or to the namespace's "default" ServiceAccount with create: false. Agent Kourier reads Secrets through the API, so the token stays mounted. |
 | `serviceAccount.annotations` | `{}` |  |
 
 ## listen
@@ -138,7 +138,7 @@ Where Agent Kourier keeps its state. SQLite is one file on a volume (persistence
 | Key | Default | Description |
 |---|---|---|
 | `store.type` | `sqlite` | sqlite or postgres (AGENTKOURIER_STORE) |
-| `store.postgres.dsnSecret` |  | The Secret that holds the DSN, a postgres:// URL or key/value string, in the release namespace: required with store.type postgres, and refused with sqlite. Make it yourself (by hand, Sealed Secrets, an external operator); the DSN, password included, never goes in a values file (the render refuses a postgres:// URL with a password anywhere in them). Agent Kourier reads it through the API like its other Secrets, which the Role below grants: list and watch on every Secret of the release namespace, so keep Agent Kourier's Secrets in a namespace of their own when it is shared. Percent-encode the reserved characters of a password in a URL. The role in the DSN needs the right to create tables in its schema: agent-kourier applies its own migrations at start. |
+| `store.postgres.dsnSecret` |  | The Secret that holds the DSN, a postgres:// URL or key/value string, in the release namespace: required with store.type postgres, and refused with sqlite. Make it yourself (by hand, Sealed Secrets, an external operator); the DSN, password included, never goes in a values file (the render refuses a postgres:// URL with a password anywhere in them). Agent Kourier reads it through the API like its other Secrets, which the Role below grants: list and watch on that Secret by name with config.source crds, and on every Secret of the release namespace with config.source files or with the release namespace in rbac.secretNamespaces, so keep Agent Kourier's Secrets in a namespace of their own when it is shared. Percent-encode the reserved characters of a password in a URL. The role in the DSN needs the right to create tables in its schema: agent-kourier applies its own migrations at start. |
 | `store.postgres.dsnSecret.name` | `""` |  |
 | `store.postgres.dsnSecret.key` | `""` |  |
 | `store.postgres.timeouts` | `agent-kourier` | Who sets the idle-in-transaction and statement timeouts, which end a stalled leader's transaction and free its locks. "agent-kourier" (the default) sends them as startup parameters on every connection. Connect to Postgres directly or through a pooler in SESSION mode. A pooler in TRANSACTION mode (PgBouncer's pool_mode = transaction) refuses startup parameters ("unsupported startup parameter"), and listing them in its ignore_startup_parameters silently drops the protection: there, set both on the database role (ALTER ROLE agentkourier SET idle_in_transaction_session_timeout = '10s'; ALTER ROLE agentkourier SET statement_timeout = '30s') and set this to "role", which turns Agent Kourier's own off. |
@@ -303,7 +303,7 @@ Off, and meaningful with the standby (replicaCount 2 on Postgres): minAvailable:
 
 Keeps a Binding's identity token fresh when the AgentBackend sits behind a verifying front door that takes Dex ID tokens (the sandbox tier does this, with ci/sandbox-values.yaml). An hourly CronJob asks Dex for a token with the password grant and patches it into one Secret through the API, with its own ServiceAccount, whose Role allows `patch` on that Secret and nothing else. The Dex credentials are read from a Secret into the Job's environment; they never pass through an argument list or this file.
 
-The target Secret is the Binding's identity.tokenSecretRef: its name, key and namespace (the Binding's), which the render checks against the inline config. It must exist before Agent Kourier starts. After install, run the first refresh by hand:
+The target Secret is the Binding's identity.tokenSecretRef: its name, key and namespace (the Binding's), which the render checks against the inline config with config.source files (with crds, or an existingConfigMap, it cannot see the Bindings and does not check). The Job patches the Secret and does not create it, and with config.source files it must exist before Agent Kourier starts. After install, run the first refresh by hand:
 
 ```yaml
 kubectl -n <ns> create job --from=cronjob/<fullname>-token-refresh first-token

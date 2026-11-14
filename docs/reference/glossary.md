@@ -32,8 +32,8 @@ Binding identity
     person who wrote a message is carried as attribution, never as the identity.
 
 Binding verification
-:   The leader's repeated check that a Binding can be served: that its agent's card can be fetched and that the bot is
-    in its channel. It reports through metrics and log lines and, with custom resources, in the Binding's status, and changes
+:   The leader's repeated check that a Binding can be served: that its agent's card can be fetched, that the bot is
+    in its channel and, for a Binding whose tool approvals name approver groups, that each group can be read. It reports through metrics and log lines and, with custom resources, in the Binding's status, and changes
     nothing else. See [Metrics](metrics.md#binding-verification) and [Binding status](binding-status.md).
 
 Channel
@@ -42,7 +42,7 @@ Channel
 
 ChatConnection
 :   The resource that connects Agent Kourier to one chat platform workspace, with the Secret that holds its tokens.
-    Owned by the platform team.
+    The platform team owns the broker's own; a team may own one in a namespace the platform admits.
 
 Config route
 :   Where the broker reads its resources from, chosen when it starts: `files` (usually a ConfigMap, all or nothing) or `crds`
@@ -61,7 +61,8 @@ Dialect
     it, and `a2a` reads it through the extension or as a text question.
 
 Digest line
-:   One line at the top level of a channel that counts the alerts a trigger's limits stopped in a window.
+:   One line at the top level of a channel that counts the messages that limits stopped from starting an investigation
+    in a window: a trigger's, or the fixed ones on a bot's mention.
 
 Epoch
 :   With Postgres, the leadership number in the database. A replica that takes the Lease increments it, and every write
@@ -76,11 +77,12 @@ Front door
     Required in front of kagent.
 
 Interaction
-:   A pause in which the agent waits for a person: a question (ask-user), or a tool approval when the Binding
-    enables `interactions.toolApprovals`. Structured pauses use kagent's human-in-the-loop extension.
+:   A pause in which the agent waits for a person: a question, when the Binding enables
+    `interactions.askUser`, or a tool approval, when it enables `interactions.toolApprovals`. Both default to off, and a
+    pause the Binding does not allow is refused and its task cancelled. Structured pauses use kagent's human-in-the-loop extension.
 
 Investigation
-:   A session that a trigger or an alert started rather than a person.
+:   A session that a `botMessage` or `personMessage` trigger started, such as an alert's, rather than a mention.
 
 Kind full tier
 :   The local kind cluster that `make e2e-full-up` builds from a checkout of the repository, with kagent 1.0, Agent

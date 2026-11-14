@@ -8,7 +8,7 @@ platform, and what that choice costs.
 Agent Kourier talks to every agent through the [Agent2Agent (A2A) protocol](https://a2a-protocol.org): JSON-RPC over
 HTTP, version 1.0 or 0.3, with streaming. To the broker, a kagent agent, an agent running in a Google AX Task and any
 other agent that serves A2A look the same. kagent adds one published extension, for structured questions and tool
-steps, which the `kagent-v1` dialect reads. Everything else is plain A2A, spoken by the generic `a2a` dialect.
+approvals, which both dialects read from an agent whose card lists it. Everything else is plain A2A.
 
 kagent is the first backend we tested because it is the default way to provision agents, and it is Kubernetes-native by
 design. Agent Kourier does not depend on kagent: an AX agent or any other A2A agent connects through the same `Binding`.
@@ -120,7 +120,7 @@ describes it. If A2A publishes a standard extension for approvals, Agent Kourier
 ## In practice
 
 To point a Binding at an agent that speaks A2A, see [Connect a generic A2A agent](../how-to/connect-a2a-agent.md). For
-kagent, whose dialect adds structured questions, see [Connect a kagent agent](../how-to/connect-kagent.md).
+kagent, whose agents ask structured questions through the extension, see [Connect a kagent agent](../how-to/connect-kagent.md).
 AX uses the generic dialect: see [Connect an agent on Google AX](../how-to/connect-ax.md).
 
 Plain A2A leaves some choices open, such as where an answer's text goes. The

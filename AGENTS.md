@@ -15,7 +15,7 @@ not have them; link them in from the main checkout (`ln -s <main checkout>/tasks
 Directories appear when the work package that owns them lands; do not create empty ones.
 
 ```
-cmd/agent-kourier/      entrypoint: the broker, the dry-run subcommand, --version
+cmd/agent-kourier/      entrypoint: the broker, the dry-run and init subcommands, --version
 api/v1alpha1/           resource types (Binding, AgentBackend, ChatConnection) and their validation
 internal/config         the config sources' shared core: the file loader, Binding resolution (all or nothing, or one object at a time), reload and its report
 internal/config/crsource   the custom resource source (AGENTKOURIER_CONFIG_SOURCE=crds): informers of the three kinds, the last good generation of each object
@@ -52,6 +52,7 @@ test/{fakeslack,stubagent,e2e,fixtures,kindmanifests,chart,...}
 test/crdcorpus          valid and invalid objects that the CRD schemas and the broker's Validate must treat alike (`make crd-corpus` sends them to a real API server)
 hack/kind/              kind tier scripts (fast, full, ax, sandbox)
 hack/{docs,release,postgres,crdhashes}  doc generators, release scripts, Postgres test helpers, the CRD schema hashes
+hack/{ci,github,security,clip}  CI tool installer, PR label check, scan and workflow policy, the demo clip's recording
 ```
 
 ## Make targets
@@ -59,7 +60,7 @@ hack/{docs,release,postgres,crdhashes}  doc generators, release scripts, Postgre
 Run `make` for help. Only Go and the tools pinned in `go.mod` (`tool` directive) are needed;
 golangci-lint runs as `go tool golangci-lint`, never a global install.
 
-- `make fmt lint test build tidy`: `test` runs `go test -race ./...` and then `go test -race -tags testhooks ./internal/...`; `build` writes `bin/agent-kourier`.
+- `make fmt lint test build tidy`: `test` runs `go test -race ./...`, then `go test -race -tags testhooks ./internal/...`, then the scripts' own tests (`test-scripts`: kind, security policy, release gate, PR labels, CI tool installer); `build` writes `bin/agent-kourier`.
 - `make crds` regenerates the CustomResourceDefinitions in `charts/agent-kourier/files/crds/` from the markers in `api/v1alpha1` with
   `controller-gen` (pinned as a `tool` in `go.mod`, run as `go tool controller-gen`). Run it after changing an API type or marker and commit the
   result: `TestCommittedCRDsMatchGeneration` in `make test` fails when the committed files differ from what generation produces. The

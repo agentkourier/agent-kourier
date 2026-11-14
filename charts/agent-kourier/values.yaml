@@ -29,7 +29,7 @@ fullnameOverride: ""
 
 serviceAccount:
   create: true
-  # Defaults to the fullname. Agent Kourier reads Secrets through the API, so the token stays mounted.
+  # Defaults to the fullname, or to the namespace's "default" ServiceAccount with create: false. Agent Kourier reads Secrets through the API, so the token stays mounted.
   name: ""
   annotations: {}
 
@@ -165,8 +165,9 @@ store:
     # The Secret that holds the DSN, a postgres:// URL or key/value string, in the release namespace: required with
     # store.type postgres, and refused with sqlite. Make it yourself (by hand, Sealed Secrets, an external operator); the DSN,
     # password included, never goes in a values file (the render refuses a postgres:// URL with a password anywhere in them).
-    # Agent Kourier reads it through the API like its other Secrets, which the Role below grants: list and watch on every Secret
-    # of the release namespace, so keep Agent Kourier's Secrets in a namespace of their own when it is shared. Percent-encode the
+    # Agent Kourier reads it through the API like its other Secrets, which the Role below grants: list and watch on that Secret by name
+    # with config.source crds, and on every Secret of the release namespace with config.source files or with the release namespace in
+    # rbac.secretNamespaces, so keep Agent Kourier's Secrets in a namespace of their own when it is shared. Percent-encode the
     # reserved characters of a password in a URL. The role in the DSN needs the right to create tables in its schema: agent-kourier
     # applies its own migrations at start.
     dsnSecret:
@@ -342,7 +343,8 @@ podDisruptionBudget:
 # through an argument list or this file.
 #
 # The target Secret is the Binding's identity.tokenSecretRef: its name, key and namespace (the Binding's), which the render
-# checks against the inline config. It must exist before Agent Kourier starts. After install, run the first refresh by hand:
+# checks against the inline config with config.source files (with crds, or an existingConfigMap, it cannot see the Bindings and does
+# not check). The Job patches the Secret and does not create it, and with config.source files it must exist before Agent Kourier starts. After install, run the first refresh by hand:
 #   kubectl -n <ns> create job --from=cronjob/<fullname>-token-refresh first-token
 tokenRefresh:
   enabled: false

@@ -165,7 +165,8 @@ Only with `AGENTKOURIER_STORE=postgres`.
 
 ## Reading them
 
-Duration histograms cover milliseconds through one hour. Use separate latency
+Duration histograms cover milliseconds through one hour, except
+`agentkourier_binding_probe_duration_seconds`, whose buckets end at 10 seconds. Use separate latency
 queries for execution, human wait and visible delivery. The terminal turn outcome
 counter describes the backend task; `agentkourier_render_final_total` describes what
 happened to the output in chat. A completed task can have a failed final render.

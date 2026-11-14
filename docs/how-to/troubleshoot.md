@@ -212,8 +212,8 @@ kubectl auth can-i watch secrets/<secret-name> -n agent-kourier --as system:serv
 ```
 
 The chart grants `list` and `watch` in each namespace that holds a Secret the config names (for the Secrets named, with
-`config.source: crds`, which also names the broker's own ChatConnection's Secret, if it has one, and takes `rbac.secretNames` for the other ones the chart cannot see), and `rbac.secretNamespaces` adds more. A `config.existingConfigMap` needs `rbac.secretNamespaces`, because the chart cannot
-read the ConfigMap to find the namespaces.
+`config.source: crds`, which also names the broker's own ChatConnection's Secret, if it has one, and takes `rbac.secretNames` for the other ones the chart cannot see), and `rbac.secretNamespaces` adds more. A `config.existingConfigMap` whose Secrets are outside the release namespace needs `rbac.secretNamespaces`, because the chart cannot
+read the ConfigMap to find the namespaces and grants only the release namespace when it finds none.
 
 ## The pod exits with code 2 and the error says `load config`
 

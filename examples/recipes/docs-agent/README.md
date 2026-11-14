@@ -236,7 +236,9 @@ make docs-agent-smoke   # fixed questions, a scripted model: no network, no cred
 `docs-agent-smoke` starts the real agent (ADK, the MCP server over HTTP, the A2A server) and an A2A client. A scripted
 stand-in for the language model searches for the question, reads the best hit and answers with the page it read, so the
 run checks the wiring and the retrieval, and is repeatable. It prints each answer and exits non-zero if the first does
-not cite `how-to/connect-a2a-agent.md` and its published URL, or if the last (a question with no match) cites a page.
+not cite `how-to/connect-a2a-agent.md` and its published URL, if the second (a follow-up) does not cite
+`how-to/rotate-binding-token.md`, or if the last (a question with no match) cites a page or does not say that the
+documentation does not cover it.
 
 `make docs-agent-smoke-live` runs the same flow with a real model, named by the sandbox credentials file
 ([`sandbox.env.example`](../../../hack/kind/sandbox/sandbox.env.example); `SANDBOX_ENV` overrides its path). It needs
@@ -304,7 +306,7 @@ them, for a person to read the agent's answers against.
   whose artifacts hold the answer, one context per thread, and no text from before or between tool calls left in them),
   the model settings, and the smoke flow.
 - `go test ./test/recipes` loads `kourier/` with Agent Kourier's loader and resolves its references.
-- `evals/triggers.yaml` holds **one case**: another bot's post in the help channel is not taken. That is all the
+- `evals/triggers.yaml` holds **one case**: another bot's post in the help channel that does not mention the app is not taken. That is all the
   trigger harness can say about this recipe. It judges a `botMessage` trigger, and this Binding has none: it starts from
   a mention, and the harness does not evaluate a mention (a person's message is always `person`). So the file does not
   pretend to test the mention trigger. See [Writing or changing a recipe](../README.md#writing-or-changing-a-recipe).
@@ -348,7 +350,8 @@ them, for a person to read the agent's answers against.
   history, which holds the questions asked in that thread. A list without a `contextId` is refused, so a caller cannot
   list the threads. For a token instead, put a verifying proxy in front and use `identity.tokenSecretRef`
   ([Create the Binding identity](../../../docs/how-to/create-binding-identity.md)).
-- **No per-Binding run limit.** Limits belong to `botMessage` triggers; a mention trigger takes none. Anyone who can
+- **No per-Binding run limit.** Limits belong to `botMessage` and `personMessage` triggers; a mention trigger takes none, and only a
+  bot's mention runs under fixed limits of the broker's own. Anyone who can
   mention the bot in the channel can spend model quota, so bound the key at the provider.
 - **Two model providers, over HTTPS.** OpenRouter and OpenAI-compatible endpoints, through the Chat Completions API.
   `MODEL_BASE_URL` must be an `https` URL, so an in-cluster `http` gateway needs a TLS front.
