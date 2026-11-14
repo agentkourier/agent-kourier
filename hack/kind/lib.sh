@@ -161,6 +161,38 @@ apply_doubles() {
   "${K[@]}" -n monitoring wait --for=condition=Available alertmanager/agent-kourier --timeout=180s
 }
 
+# The fast tier's prompt agent (examples/recipes/prompt-agent) and its doubles, which fast/prompt-agent/prompt-agent.yaml runs (test/kindmanifests
+# pins that it runs these): the recipe's own image, from its Dockerfile, and the fake model and the test MCP server, from fast/prompt-agent/Dockerfile.
+PROMPT_AGENT_IMAGE=agent-kourier-e2e/prompt-agent:dev
+PROMPT_FAKE_MODEL_IMAGE=agent-kourier-e2e/prompt-fake-model:dev
+PROMPT_MCP_IMAGE=agent-kourier-e2e/prompt-mcp:dev
+# The token Agent Kourier sends the prompt agent and the agent checks. A fake constant, made into the Secret of each side here and never committed.
+PROMPT_AGENT_BEARER=fake-prompt-agent-bearer
+
+# deploy_prompt_agent: build the prompt agent's three images on the host, load them into the tier's cluster, make its Secrets (the bearer in e2e, which
+# the agent mounts, and in agent-kourier, which the Binding of channel CPROMPT reads; the MCP server's token in e2e) and apply the agent, the fake model
+# and the MCP server in namespace e2e; needs apply_doubles first. Restarted, so that a rebuilt image (same tag) or a changed ConfigMap is picked up.
+# An agent that does not become ready, such as one that refuses its agent.yaml at start, is shown with its log.
+deploy_prompt_agent() {
+  local recipe=${ROOT}/examples/recipes/prompt-agent/agent python
+  python=$(sed -n 's/^FROM \([^ ]*\).*/\1/p' "${recipe}/Dockerfile")
+  [ -n "${python}" ] || die "no FROM image in ${recipe}/Dockerfile"
+  docker build -q -t "${PROMPT_AGENT_IMAGE}" "${recipe}" >/dev/null
+  docker build -q --target fake-model -f "${HERE}/fast/prompt-agent/Dockerfile" --build-arg "PYTHON_IMAGE=${python}" -t "${PROMPT_FAKE_MODEL_IMAGE}" "${recipe}" >/dev/null
+  docker build -q --target mcp -f "${HERE}/fast/prompt-agent/Dockerfile" --build-arg "PYTHON_IMAGE=${python}" -t "${PROMPT_MCP_IMAGE}" "${recipe}" >/dev/null
+  kind load docker-image "${PROMPT_AGENT_IMAGE}" "${PROMPT_FAKE_MODEL_IMAGE}" "${PROMPT_MCP_IMAGE}" --name "${CLUSTER}"
+  "${K[@]}" create namespace agent-kourier --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  "${K[@]}" -n e2e create secret generic prompt-agent-bearer --from-literal=token="${PROMPT_AGENT_BEARER}" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  "${K[@]}" -n agent-kourier create secret generic prompt-agent-bearer --from-literal=token="${PROMPT_AGENT_BEARER}" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  "${K[@]}" -n e2e create secret generic prompt-agent-mcp --from-literal=token=fake-prompt-mcp-token --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  "${K[@]}" apply -f "${HERE}/fast/prompt-agent/prompt-agent.yaml" >/dev/null
+  "${K[@]}" -n e2e rollout restart deploy/prompt-agent deploy/prompt-fake-model deploy/prompt-mcp >/dev/null
+  if ! "${K[@]}" -n e2e rollout status deploy/prompt-fake-model deploy/prompt-mcp deploy/prompt-agent --timeout=180s; then
+    "${K[@]}" -n e2e logs deploy/prompt-agent --tail=40 >&2 || true
+    die "the prompt agent, its fake model or its MCP server did not become ready"
+  fi
+}
+
 # Host-side assertions, for the verify scripts: "ok: ..." or "FAIL: ..." and exit 1. (The probe pods
 # have their own, in the scripts they run.)
 assert() { d=$1; shift; if "$@"; then echo "ok: $d"; else echo "FAIL: $d" >&2; exit 1; fi; } # DESCRIPTION COMMAND...

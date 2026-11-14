@@ -936,15 +936,15 @@ func TestCRModeGrantsTheServedConnectionsSecret(t *testing.T) {
 	}
 }
 
-// TestKindOverlayGrantsTheTiersSecretsByName: the kind tiers' overlay for the custom-resource route lists only the Binding's token in rbac.secretNames; the
-// connection's Secret, slack-fast, is the chart's to derive from config.chatConnection. Rendered over the fast tier's values, the namespace's Role names
-// both and is not namespace-wide.
+// TestKindOverlayGrantsTheTiersSecretsByName: the kind tiers' overlay for the custom-resource route lists only the Bindings' tokens in rbac.secretNames (the
+// stub agents' and the prompt agent's); the connection's Secret, slack-fast, is the chart's to derive from config.chatConnection. Rendered over the fast
+// tier's values, the namespace's Role names all three and is not namespace-wide.
 func TestKindOverlayGrantsTheTiersSecretsByName(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
 	objs := mustRender(t, "agent-kourier", "agent-kourier", crMode("-f", values("fast"), "-f", "../../hack/kind/crds-values.yaml")...)
 	got := secretRoles(t, objs)
-	if want := []string{"agent-kourier-agent-token", "slack-fast"}; !slices.Equal(got["agent-kourier"], want) {
+	if want := []string{"agent-kourier-agent-token", "prompt-agent-bearer", "slack-fast"}; !slices.Equal(got["agent-kourier"], want) {
 		t.Errorf("Secret Roles %v; want agent-kourier to name %v", got, want)
 	}
 }

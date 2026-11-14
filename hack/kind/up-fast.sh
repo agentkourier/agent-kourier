@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Bring up the fast E2E tier from nothing: a kind cluster (agent-kourier-fast) with prometheus-operator
 # and one Alertmanager, the fake Slack, the stub agent (-require-auth) and a sink webhook
-# receiver, and Agent Kourier's image when one exists (spec 12.1). Safe to re-run.
+# receiver, the prompt agent recipe on a fake model with its test MCP server (lib.sh's deploy_prompt_agent),
+# and Agent Kourier's image when one exists (spec 12.1). Safe to re-run.
 # The fast tier is its own cluster, so it runs beside the full tier; `make e2e-down` removes both
 # (hack/kind/down.sh fast removes only this one).
 #
@@ -107,6 +108,9 @@ build_doubles_image
 
 step "fake Slack, stub agent, sink, Alertmanager"
 apply_doubles
+
+step "prompt agent (examples/recipes/prompt-agent), its fake model and MCP server"
+deploy_prompt_agent
 
 if [ "${E2E_REPLICAS}" = 2 ]; then
   step "container signaler, for S16"
