@@ -140,6 +140,12 @@ config:
   # empty, a selector makes the entries of chatConnections team connections, which the chart does not check against it: it cannot see a
   # namespace's labels. The chart refuses a selector, {} included, with files, as it refuses the list. For example,
   # connectionNamespaceSelector: {matchLabels: {agentkourier.dev/serve: "true"}} admits the namespaces labelled agentkourier.dev/serve=true.
+  # Helm merges a map across values files, so a selector in a later -f file does not replace one in an earlier file: {} there keeps the
+  # earlier selector, and another selector's matchLabels are added to the earlier ones, so a namespace must match both (a matchExpressions
+  # list replaces the earlier list). To change the selector, edit the one file that sets it, give the new one with --set-json (which
+  # replaces it), or set it to null in a file before the one with the new selector. helm upgrade --reuse-values keeps the release's
+  # selector and merges a new one into it, given with --set-json or after a null too: upgrade without --reuse-values, passing all your
+  # values files.
   connectionNamespaceSelector: null
   existingConfigMap: ""
   agentBackends: {}
