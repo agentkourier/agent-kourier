@@ -234,7 +234,7 @@ func TestRunOnPostgresAStandbyWithNoOwnConnectionIsReadyAndTakesOver(t *testing.
 	}
 	ca := postgresConfig(t, dsn)
 	noOwn(&ca)
-	ca.leaveKlog = true
+	runsAlongside(&ca)
 	a := &replica{exits: make(chan int, 4), logs: &logBuffer{}}
 	ca.newSlack = func(slack.Config) slackAPI { a.built.Add(1); return idleSlack{} }
 	a.running = start(t, ca)
