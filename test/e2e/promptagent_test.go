@@ -59,17 +59,9 @@ const promptBinding = "agent-kourier/fast-prompt-a2a"
 // promptCancels is the CancelTask calls audited for the prompt agent's Binding after the entries of before: the scenarios run one at a time,
 // so they are the running scenario's.
 func promptCancels(entries, before []store.AuditEntry) []store.AuditEntry {
-	var sequence int64
-	for _, e := range before {
-		sequence = max(sequence, e.Sequence)
-	}
-	var out []store.AuditEntry
-	for _, e := range entries {
-		if e.Sequence > sequence && e.Kind == store.AuditAgentCall && e.Binding == promptBinding && strings.HasPrefix(e.Outcome, "cancel:") {
-			out = append(out, e)
-		}
-	}
-	return out
+	return auditAfter(entries, before, func(e store.AuditEntry) bool {
+		return e.Kind == store.AuditAgentCall && e.Binding == promptBinding && strings.HasPrefix(e.Outcome, "cancel:")
+	})
 }
 
 // TestA2A_ThePromptAgentStreamsAReplyThatUsedAnMCPTool: a mention makes the agent call the MCP tool runbook, and its reply, which quotes
