@@ -28,15 +28,31 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # The Go version is go.mod's. Each Go job here, in security.yml and in codeql.yml has a cache of its own (the
-      # module cache and the build cache, and golangci-lint's cache where it lints), keyed on the job, the runner OS,
-      # the Go version and the go.sum files it builds from. (setup-go's own cache gives every job one key: the first
-      # job to finish saves it and the others' saves are refused.) Every run restores, falling back to the job's
-      # newest entry for the same Go version and then for any. Only a push to main saves, and only when its key was
-      # not an exact hit, so pull requests read main's caches without filling the quota. It saves after a failed step
-      # too, though not after a cancel: a failing test leaves what was compiled valid, and a job that saved only on
-      # success would stay cold for every pull request while a flaky test kept failing it on main. The timeouts stay
-      # at the cold-cache times: a run after a go.sum change, or after an eviction, starts cold.
+      # The Go version is go.mod's. The Go jobs here, in security.yml, in codeql.yml and in docs.yml keep the module
+      # cache and the build cache (and golangci-lint's cache where they lint) in an Actions cache of their own, unless
+      # their comment names the job whose cache they restore. (setup-go's own cache gives every job one key: the first
+      # job to finish saves it and the others' saves are refused.) A key is go-<cache>-<runner OS>-go<Go version>-<hash
+      # of the go.sum files it builds from>-<commit>, and every run restores the most recently created entry whose key
+      # starts with go-<cache>-<runner OS>-: on a pull request, the newest a push to main saved, so the caches follow
+      # main. Go's build cache holds test results as well as compiled packages: where go test may reuse a result (not
+      # with -count=1, as in test-postgres and crd-corpus), a package whose test binary, and the files and environment
+      # variables its tests read, are as they were in that push's run reports "(cached)" and does not run again.
+      #
+      # Every push to main saves, unless its key was an exact hit (a re-run); a pull request never does, so it cannot
+      # touch the quota. A push saves after a failed step too, though not after a cancel: a failing test leaves what
+      # was compiled valid, and a job that saved only on success would stay cold for every pull request while a flaky
+      # test kept failing it on main. hack/ci/actions-cache.sh keeps an entry to one run's needs: mark, after the
+      # restore, and trim, before the save, drop the build cache entries the run neither read nor wrote (keeping
+      # every output an index entry it wrote names), and mark starts the module cache empty when the restored entry
+      # is from another go.sum or Go version. Then the workflow's cache-prune job deletes all but the newest entry of
+      # each cache it saves.
+      #
+      # GitHub caps a repository's caches at 10 GB in all by default; an organization owner or repository admin can
+      # raise the cap, and use past 10 GB is billed. Past the cap GitHub still saves the new entry, then deletes
+      # entries, least recently accessed first, until the total is under it; it also deletes any entry not accessed
+      # for 7 days. One entry of each cache in the four workflows, with CodeQL's own, comes to about 4 GB, and a push
+      # to main holds a second entry of each it saves until its prune jobs run. The timeouts stay at the cold-cache
+      # times: a run after an eviction starts cold.
       - id: setup-go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -54,10 +70,14 @@ jobs:
             ${{ steps.go-env.outputs.modcache }}
             ${{ steps.go-env.outputs.gocache }}
             ~/.cache/golangci-lint
-          key: go-lint-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}
-          restore-keys: |
-            go-lint-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-
-            go-lint-${{ runner.os }}-
+          key: go-lint-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: go-lint-${{ runner.os }}-
+      - name: Mark the restored Go caches
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        env:
+          CACHE_KEY: ${{ steps.go-cache.outputs.cache-primary-key }}
+          CACHE_RESTORED_KEY: ${{ steps.go-cache.outputs.cache-matched-key }}
+        run: hack/ci/actions-cache.sh mark ~/.cache/golangci-lint
       - name: fmt leaves no diff
         run: |
           make fmt
@@ -72,7 +92,11 @@ jobs:
         env:
           CONTENTCHECK_WORKSPACE: ${{ secrets.CONTENTCHECK_WORKSPACE }}
       - run: make build
-      - if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - id: go-trim
+        name: Trim the Go caches to what this run used
+        if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: hack/ci/actions-cache.sh trim ~/.cache/golangci-lint
+      - if: ${{ !cancelled() && steps.go-trim.outcome == 'success' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -81,7 +105,8 @@ jobs:
             ~/.cache/golangci-lint
           key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
-  # Observed on a cold cache: go test -race ./... took 16 minutes, with no failure. 30 is nearly twice that.
+  # Observed on a cold cache: go test -race ./... took 16 minutes, with no failure. 30 is nearly twice that. Its cache
+  # holds the race build of every package, which test-postgres restores too.
   test:
     runs-on: ubuntu-26.04
     timeout-minutes: 30
@@ -105,10 +130,14 @@ jobs:
           path: |
             ${{ steps.go-env.outputs.modcache }}
             ${{ steps.go-env.outputs.gocache }}
-          key: go-test-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}
-          restore-keys: |
-            go-test-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-
-            go-test-${{ runner.os }}-
+          key: go-test-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: go-test-${{ runner.os }}-
+      - name: Mark the restored Go caches
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        env:
+          CACHE_KEY: ${{ steps.go-cache.outputs.cache-primary-key }}
+          CACHE_RESTORED_KEY: ${{ steps.go-cache.outputs.cache-matched-key }}
+        run: hack/ci/actions-cache.sh mark
       # The chart tests (test/chart) render with helm and skip without it, so CI installs it and
       # AGENTKOURIER_REQUIRE_HELM below turns a missing helm into a failure, never a pass by skipping.
       - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
@@ -119,7 +148,11 @@ jobs:
         env:
           AGENTKOURIER_REQUIRE_HELM: "1"
       - run: make test-scripts
-      - if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - id: go-trim
+        name: Trim the Go caches to what this run used
+        if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: hack/ci/actions-cache.sh trim
+      - if: ${{ !cancelled() && steps.go-trim.outcome == 'success' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -132,7 +165,8 @@ jobs:
   # importers compile other files under the tag. hack/ci/testhooks-packages.sh computes the list with go list on each
   # run, so a package that gains such an import joins it, and fails rather than run an empty one. Every other package
   # compiles to the same packages with the tag as without it, so the first pass has already run it.
-  # It has no chart tests, so no helm. 30 is the same budget as the first pass, whose build it repeats in part.
+  # It has no chart tests, so no helm. 30 is the same budget as the first pass, whose build it repeats in part. Its
+  # cache is its own, since test's holds neither the tagged builds nor their test results.
   test-testhooks:
     runs-on: ubuntu-26.04
     timeout-minutes: 30
@@ -156,12 +190,20 @@ jobs:
           path: |
             ${{ steps.go-env.outputs.modcache }}
             ${{ steps.go-env.outputs.gocache }}
-          key: go-test-testhooks-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}
-          restore-keys: |
-            go-test-testhooks-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-
-            go-test-testhooks-${{ runner.os }}-
+          key: go-test-testhooks-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: go-test-testhooks-${{ runner.os }}-
+      - name: Mark the restored Go caches
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        env:
+          CACHE_KEY: ${{ steps.go-cache.outputs.cache-primary-key }}
+          CACHE_RESTORED_KEY: ${{ steps.go-cache.outputs.cache-matched-key }}
+        run: hack/ci/actions-cache.sh mark
       - run: make test-testhooks
-      - if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - id: go-trim
+        name: Trim the Go caches to what this run used
+        if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: hack/ci/actions-cache.sh trim
+      - if: ${{ !cancelled() && steps.go-trim.outcome == 'success' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -171,7 +213,9 @@ jobs:
 
   # The tests that need a database skip in the jobs above, which have none: without this job the store conformance
   # suite runs on SQLite only. hack/postgres/test.sh starts a throwaway Postgres container, which the runner's Docker
-  # serves, and sets the DSN those tests read, so they cannot skip here.
+  # serves, and sets the DSN those tests read, so they cannot skip here. It builds two packages that test builds, with
+  # -race as test does, and runs their tests with -count=1, which never reads a cached result, so it restores test's
+  # cache and saves none.
   test-postgres:
     runs-on: ubuntu-26.04
     timeout-minutes: 30
@@ -195,18 +239,9 @@ jobs:
           path: |
             ${{ steps.go-env.outputs.modcache }}
             ${{ steps.go-env.outputs.gocache }}
-          key: go-test-postgres-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}
-          restore-keys: |
-            go-test-postgres-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-
-            go-test-postgres-${{ runner.os }}-
+          key: go-test-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: go-test-${{ runner.os }}-
       - run: make test-postgres
-      - if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ${{ steps.go-env.outputs.modcache }}
-            ${{ steps.go-env.outputs.gocache }}
-          key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
   # The CRDs' schemas are a fast-fail copy of the broker's validation, and the invariant is that nothing the schema refuses is
   # accepted by the broker (spec D50). This job holds them to it: a kind cluster with only the three CRDs, no image and no
@@ -218,7 +253,8 @@ jobs:
   # image by digest. kind and kubectl are the pinned, checksummed binaries of hack/ci/install-kind-tools.sh (which installs
   # helm and jq with them). The runner's Docker runs kind. The jobs' names, crd-corpus (1.37) and crd-corpus (1.33), are
   # required checks of the `main` ruleset and CI_REQUIRED_JOBS in hack/release/check-ci.sh (RELEASING.md): a rename here is
-  # a change to both. One run took about 3 minutes, with warm caches; 20 leaves room for a cold build of client-go.
+  # a change to both. One run took about 3 minutes, with warm caches; 20 leaves room for a cold build of client-go. The two
+  # build the same test binary, so they share one cache, which only the 1.37 job saves.
   crd-corpus:
     name: crd-corpus (${{ matrix.k8s }})
     runs-on: ubuntu-26.04
@@ -251,16 +287,24 @@ jobs:
           path: |
             ${{ steps.go-env.outputs.modcache }}
             ${{ steps.go-env.outputs.gocache }}
-          key: go-crd-corpus-${{ matrix.k8s }}-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}
-          restore-keys: |
-            go-crd-corpus-${{ matrix.k8s }}-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-
-            go-crd-corpus-${{ matrix.k8s }}-${{ runner.os }}-
+          key: go-crd-corpus-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: go-crd-corpus-${{ runner.os }}-
+      - name: Mark the restored Go caches
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.node == 'default' }}
+        env:
+          CACHE_KEY: ${{ steps.go-cache.outputs.cache-primary-key }}
+          CACHE_RESTORED_KEY: ${{ steps.go-cache.outputs.cache-matched-key }}
+        run: hack/ci/actions-cache.sh mark
       # It puts the tools in $RUNNER_TEMP/bin and on the path of the steps after it, and fails on a checksum that is not the pin.
       - run: hack/ci/install-kind-tools.sh
       - run: make crd-corpus
         env:
           CRD_CORPUS_NODE: ${{ matrix.node }}
-      - if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - id: go-trim
+        name: Trim the Go caches to what this run used
+        if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.node == 'default' }}
+        run: hack/ci/actions-cache.sh trim
+      - if: ${{ !cancelled() && steps.go-trim.outcome == 'success' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -311,13 +355,21 @@ jobs:
             ${{ steps.go-env.outputs.modcache }}
             ${{ steps.go-env.outputs.gocache }}
             ~/.cache/golangci-lint
-          key: go-docs-agent-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum', 'examples/recipes/docs-agent/agent/go.sum') }}
-          restore-keys: |
-            go-docs-agent-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-
-            go-docs-agent-${{ runner.os }}-
+          key: go-docs-agent-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum', 'examples/recipes/docs-agent/agent/go.sum') }}-${{ github.sha }}
+          restore-keys: go-docs-agent-${{ runner.os }}-
+      - name: Mark the restored Go caches
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        env:
+          CACHE_KEY: ${{ steps.go-cache.outputs.cache-primary-key }}
+          CACHE_RESTORED_KEY: ${{ steps.go-cache.outputs.cache-matched-key }}
+        run: hack/ci/actions-cache.sh mark ~/.cache/golangci-lint
       - run: make docs-agent-test
       - run: make docs-agent-lint
-      - if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - id: go-trim
+        name: Trim the Go caches to what this run used
+        if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: hack/ci/actions-cache.sh trim ~/.cache/golangci-lint
+      - if: ${{ !cancelled() && steps.go-trim.outcome == 'success' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -328,8 +380,10 @@ jobs:
 
   # The echo-agent recipe is Python (examples/recipes/echo-agent/agent), so no Go job builds or tests it. The Makefile
   # targets make a virtualenv from the hashed requirements-dev.txt. The job's pip cache (downloads and wheels) is keyed on
-  # the requirements files and follows the Go jobs' rules: every run restores, only a push to main saves. The image
-  # build proves the Dockerfile and requirements.txt still install together.
+  # the requirements files. Every run restores and only a push to main saves, as for the Go caches, but it does not
+  # roll: what pip downloads depends on those files alone, so a push saves only when they change (a miss of the exact
+  # key), and cache-prune then deletes the entry for the old files. The image build proves the Dockerfile and
+  # requirements.txt still install together.
   echo-agent:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
@@ -360,3 +414,28 @@ jobs:
         with:
           path: ${{ steps.pip-env.outputs.cache }}
           key: ${{ steps.pip-cache.outputs.cache-primary-key }}
+
+  # On a push to main, once the jobs above have saved: deletes every entry of each of their caches but the newest
+  # (hack/ci/actions-cache.sh prune), so the quota holds one of each, as the comment in lint says. It runs after a
+  # failed job too, since a failed job still saves. Its token is the only one here that can delete caches (actions:
+  # write), and it runs nothing but the script. A listing or delete the API fails is a warning, not a failure, so a
+  # transient error does not fail main's run (which the release gate needs green); the next push's prune catches up.
+  # Deleting an entry a pull request is downloading at that moment can fail that restore, and the job then runs cold;
+  # a failed restore does not fail it.
+  cache-prune:
+    needs: [lint, test, test-testhooks, crd-corpus, docs-agent, echo-agent]
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      actions: write # deletes cache entries
+      contents: read # checks out the script
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: >-
+          hack/ci/actions-cache.sh prune "go-lint-${RUNNER_OS}-" "go-test-${RUNNER_OS}-" "go-test-testhooks-${RUNNER_OS}-"
+          "go-crd-corpus-${RUNNER_OS}-" "go-docs-agent-${RUNNER_OS}-" "pip-echo-agent-${RUNNER_OS}-"
+        env:
+          GH_TOKEN: ${{ github.token }}

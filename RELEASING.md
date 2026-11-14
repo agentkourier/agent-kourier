@@ -235,14 +235,23 @@ proves the policy still fails a set of unsafe fixtures (`hack/security/testdata/
 ignore comments hide only the findings the script lists. It runs with `contents: read` and uploads no SARIF, so it
 behaves the same on a fork's pull request. It belongs in the `main` ruleset's required checks: the owner adds
 `zizmor` from `ci` there, and the same change adds it to `CI_REQUIRED_JOBS` in `hack/release/check-ci.sh` and to
-the lists above. Each Go job in `ci.yml`, `security.yml`, `codeql.yml` and `docs.yml` restores a cache of its own
-(the module cache and the build cache, plus golangci-lint's cache in the jobs that lint), keyed on the job, the runner
-OS, the Go version and the `go.sum` files it builds from. Only a job on a push to `main` saves one, when its exact key
-is not saved yet, whether its steps passed or failed (a cancelled job saves nothing); pull requests read `main`'s caches
-and save none, so a pull request runs cold until a push run on `main` has saved them. The jobs that install Python
-packages, `echo-agent` in `ci.yml` and `build` in `docs.yml`, keep pip's cache under the same rules, keyed on the job,
-the runner OS, the Python version and the requirements files they install from. `docs.yml` runs on a push to `main`
-only when the push changes a path in its `push` trigger, so only such a push saves the `build` job's caches. Each job has its own timeout, set from the times seen on a cold cache. The kind
+the lists above. The Go jobs in `ci.yml`, `security.yml`, `codeql.yml` and `docs.yml` keep the module cache and the build cache
+(plus golangci-lint's cache in the jobs that lint) in Actions caches, one per job, except that `test-postgres` restores
+`test`'s and the two `crd-corpus` jobs share one, which `crd-corpus (1.37)` saves. A key is
+`go-<cache>-<runner OS>-go<Go version>-<hash of the go.sum files it builds from (and, for govulncheck, its script)>-<commit>`, and a run restores the newest
+entry whose key starts with `go-<cache>-<runner OS>-`, so a pull request starts from what the latest push to `main`
+saved, test results included. Every push run on `main` saves, whether its steps passed or failed (a cancelled job saves
+nothing, nor does a re-run of a job whose entry is already saved); pull requests save none. Before a push saves,
+`hack/ci/actions-cache.sh` trims the build caches to the entries that run read or wrote, and starts the module cache
+empty when the restored entry is from another `go.sum` or Go version. After the saves, each of the four workflows'
+`cache-prune` job deletes all but the newest entry of every cache it saves (`codeql.yml`'s also deletes all but the
+newest of CodeQL's overlay-base databases); a listing or delete that fails is a warning, not a failure, so an API error
+there does not stop a release, and the next push's prune catches up. One entry of each cache comes to about 4 GB of the repository's
+10 GB cache limit, GitHub's default, past which GitHub evicts the least recently accessed entries. The jobs that
+install Python packages, `echo-agent` in `ci.yml` and `build` in `docs.yml`, keep pip's cache under an exact key on
+the job, the runner OS, the Python version and the requirements files they install from: a push to `main` saves it
+only when those files or the Python version change, and `cache-prune` then deletes the old entry. `docs.yml` runs on a push to
+`main` only when the push changes a path in its `push` trigger, so only such a push saves the `build` job's caches. Each job has its own timeout, set from the times seen on a cold cache. The kind
 tiers are not in CI, which is why "Cut a release" has you run them, with the custom resource scenarios, by hand. They would need a runner with Docker and about 8 GB free, the `kind`, `kubectl`,
 `helm` and `jq` binaries installed at pinned versions (`hack/ci/install-kind-tools.sh` installs them, each checked
 against a pinned sha256), and the pinned node and base images pulled (the tiers

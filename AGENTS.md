@@ -60,7 +60,7 @@ hack/{ci,github,security,clip}  CI tool installer and testhooks package selectio
 Run `make` for help. Only Go and the tools pinned in `go.mod` (`tool` directive) are needed;
 golangci-lint runs as `go tool golangci-lint`, never a global install.
 
-- `make fmt lint test build tidy`: `test` runs `go test -race ./...`, then `go test -race -tags testhooks` over the `./internal/...` packages whose test build the tag changes (`hack/ci/testhooks-packages.sh`), then the scripts' own tests (`test-scripts`: kind, security policy, release gate, PR labels, CI tool installer, testhooks package selection); `build` writes `bin/agent-kourier`.
+- `make fmt lint test build tidy`: `test` runs `go test -race ./...`, then `go test -race -tags testhooks` over the `./internal/...` packages whose test build the tag changes (`hack/ci/testhooks-packages.sh`), then the scripts' own tests (`test-scripts`: kind, security policy, release gate, PR labels, CI tool installer, testhooks package selection, Actions cache upkeep); `build` writes `bin/agent-kourier`.
 - `make crds` regenerates the CustomResourceDefinitions in `charts/agent-kourier/files/crds/` from the markers in `api/v1alpha1` with
   `controller-gen` (pinned as a `tool` in `go.mod`, run as `go tool controller-gen`). Run it after changing an API type or marker and commit the
   result: `TestCommittedCRDsMatchGeneration` in `make test` fails when the committed files differ from what generation produces. The
