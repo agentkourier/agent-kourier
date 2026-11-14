@@ -192,13 +192,19 @@ func TestDocumentedOwnAppInstallsGrantTheConnectionsSecret(t *testing.T) {
 	}
 }
 
-// TestDocumentedTeamAppInstalls: the install that the chart README and Install with Helm lead with is a broker with no Slack app of its own, which
-// admits team-a. Their values must render that broker (the list, and no own connection) and grant no Secret, since both say the team grants its own,
+// TestDocumentedTeamAppInstalls: the install that the chart README and Install with Helm lead with is a broker with no Slack app of its own. The
+// chart README's values admit team-a (the list, and no own connection); Install with Helm's file is what init writes, comments only, which
+// renders every namespace (no list, no selector and no own connection). Both must grant no Secret, since both say the team grants its own,
 // and the ServiceAccount their RoleBinding names must be the one the chart renders.
 func TestDocumentedTeamAppInstalls(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
-	for _, doc := range []string{"../../docs/how-to/install-with-helm.md", chartReadme} {
+	for _, d := range []struct {
+		path string
+		// all is true when the page's values set no key, so that the broker serves every namespace.
+		all bool
+	}{{"../../docs/how-to/install-with-helm.md", true}, {chartReadme, false}} {
+		doc := d.path
 		t.Run(filepath.Base(doc), func(t *testing.T) {
 			t.Parallel()
 			raw, err := os.ReadFile(doc)
@@ -214,7 +220,7 @@ func TestDocumentedTeamAppInstalls(t *testing.T) {
 				}
 			}
 			if block == "" {
-				t.Fatalf("%s has no values block that admits team-a in config.connectionNamespaces", doc)
+				t.Fatalf("%s has no values block that shows team-a in config.connectionNamespaces", doc)
 			}
 			file := filepath.Join(t.TempDir(), "my-values.yaml")
 			if err := os.WriteFile(file, []byte(block), 0o600); err != nil {
@@ -222,8 +228,15 @@ func TestDocumentedTeamAppInstalls(t *testing.T) {
 			}
 			objs := mustRender(t, "agent-kourier", "agent-kourier", "--kube-version", "v1.33.2", "--set", "image.repository=agent-kourier", "-f", file)
 			env := podEnv(deployment(t, objs))
-			if v, has := env["AGENTKOURIER_CHAT_CONNECTION"]; has || env["AGENTKOURIER_CONFIG_SOURCE"] != "crds" || env["AGENTKOURIER_CONNECTION_NAMESPACES"] != "team-a" {
-				t.Errorf("environment %v (own connection %q); want crds, the list team-a and no own connection", env, v)
+			wantList := "team-a"
+			if d.all {
+				wantList = ""
+			}
+			if v, has := env["AGENTKOURIER_CHAT_CONNECTION"]; has || env["AGENTKOURIER_CONFIG_SOURCE"] != "crds" || env["AGENTKOURIER_CONNECTION_NAMESPACES"] != wantList {
+				t.Errorf("environment %v (own connection %q); want crds, the list %q and no own connection", env, v, wantList)
+			}
+			if sel, has := env["AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR"]; has {
+				t.Errorf("the selector is %q; want none", sel)
 			}
 			if got := secretRoles(t, objs); len(got) != 0 {
 				t.Errorf("Secret Roles %v; want none (the team grants its own)", got)

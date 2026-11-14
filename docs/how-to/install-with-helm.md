@@ -61,7 +61,9 @@ The chart is `ghcr.io/agentkourier/charts/agent-kourier@sha256:<chart digest>`, 
 [the recorded path](team-slack-app.md#the-whole-path-recorded) for a broker with no Slack app of its own: the team brings its own app, and
 the broker serves the ChatConnection the team makes in its namespace. It writes two files:
 
-- `my-values.yaml`, the platform team's values: `config.connectionNamespaces` with the team's namespace, and no `config.chatConnection`.
+- `my-values.yaml`, the platform team's values: comments only, and no key, so the chart renders a broker with no `config.chatConnection` that serves
+  the ChatConnections of every namespace. The comments show `config.connectionNamespaces` with the team's namespace in it, and
+  `config.connectionNamespaceSelector`, commented out, for a platform that serves fewer.
 - `<team>.yaml`, named after the team's namespace, the team's resources, all in that namespace: the ChatConnection `<team>-slack` for the
   team's app, which reads the Secret `<team>-slack`; the AgentBackend `agent`; and the Binding `my-binding`, which names the two.
 
@@ -138,11 +140,27 @@ administrator. A team that is not one first needs the Roles that let it write it
 ([Let a team add its own Binding](migrate-config-source.md#let-a-team-add-its-own-binding)). `agent-kourier init`
 [writes these files](#write-the-files-with-init) with your names in them.
 
-The platform team's values list the namespaces whose ChatConnections the broker serves, and name no ChatConnection of its own:
+The platform team's values file holds comments only. With no ChatConnection of its own, no list of namespaces and no selector, the chart
+sets none of `config.chatConnection`, `config.connectionNamespaces` and `config.connectionNamespaceSelector`, and the broker serves the
+ChatConnections of every namespace. To serve `team-a` alone, uncomment `connectionNamespaces`:
 
 ```yaml title="my-values.yaml"
-config:
-  connectionNamespaces: [team-a]
+# A first install of the Agent Kourier Helm chart on custom resources, the chart's default route, for a broker
+# with no Slack app of its own: it serves the ChatConnections that teams make in their namespaces with their own apps.
+#
+# Written by "agent-kourier init", with team-a.yaml beside it, which the team applies once the chart is installed. The
+# steps are in https://agentkourier.dev/how-to/team-slack-app/#the-whole-path-recorded.
+# Keep the file: an upgrade passes it again.
+#
+# Nothing is set, so the broker serves the ChatConnections of every namespace. That is a setting for a cluster with one
+# broker. To serve fewer, uncomment one or both of these; a namespace is served if it is on the list or matches the selector.
+#
+# config:
+#   # The namespaces by name. The broker reads the list at start, so a change restarts it.
+#   connectionNamespaces: [team-a]
+#   # The namespaces by label, followed live: one that gains the label is served with no restart, and one that loses it stops.
+#   connectionNamespaceSelector:
+#     matchLabels: {agentkourier.dev/serve: "true"}
 ```
 
 ```sh
