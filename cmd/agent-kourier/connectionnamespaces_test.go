@@ -10,8 +10,8 @@ import (
 )
 
 // AGENTKOURIER_CONNECTION_NAMESPACES is the platform's admission list: comma-separated namespaces, each a DNS-1123 label, with
-// the spaces around an item trimmed and the empty items and the repeats dropped. Unset, empty or only separators is no list, which
-// serves the own connection alone (and with no own connection is refused: configsource_test.go), and any value is refused with the files
+// the spaces around an item trimmed and the empty items and the repeats dropped. Unset or empty is no list; only separators is refused,
+// since read as no list it would serve every namespace with no own connection (configsource_test.go). Any value is refused with the files
 // source, which serves the one ChatConnection of its directory.
 func TestEnvConfigReadsTheAdmissionList(t *testing.T) {
 	const key = "AGENTKOURIER_CONNECTION_NAMESPACES"
@@ -29,7 +29,9 @@ func TestEnvConfigReadsTheAdmissionList(t *testing.T) {
 		"several, in order":                   {crds("team-b,team-a,team-c"), []string{"team-b", "team-a", "team-c"}, ""},
 		"spaces around items":                 {crds("  team-a , team-b  "), []string{"team-a", "team-b"}, ""},
 		"empty items dropped":                 {crds(",team-a,,team-b,"), []string{"team-a", "team-b"}, ""},
-		"only separators":                     {crds(" , ,"), nil, ""},
+		"only separators":                     {crds(" , ,"), nil, key + " is set and names no namespace"},
+		"only a comma":                        {crds(","), nil, key + " is set and names no namespace"},
+		"only spaces":                         {crds("   "), nil, key + " is set and names no namespace"},
 		"duplicates dropped":                  {crds("team-a,team-b,team-a, team-b"), []string{"team-a", "team-b"}, ""},
 		"digits and hyphens":                  {crds("0-team-9"), []string{"0-team-9"}, ""},
 		"a label of 63 letters":               {crds(strings.Repeat("a", 63)), []string{strings.Repeat("a", 63)}, ""},

@@ -13,10 +13,11 @@ import (
 )
 
 // AGENTKOURIER_CONFIG_SOURCE is files until it says crds, unset included, and nothing else is a source: there is no
-// fallback and no guess. The own connection is named with crds, where it is optional if the admission list names the namespaces to serve
-// (spec D53), and it is refused with files.
+// fallback and no guess. The own connection is named with crds, where it is optional (spec D53: with no list and no selector either, the
+// broker serves every namespace, spec D54), and it is refused with files. A list that is set and names no namespace is refused, so that a
+// slip in a template does not become every namespace.
 func TestEnvConfigChoosesTheConfigSource(t *testing.T) {
-	const bothEmpty = "set AGENTKOURIER_CHAT_CONNECTION to the broker's own ChatConnection, or AGENTKOURIER_CONNECTION_NAMESPACES to the namespaces whose ChatConnections it serves, or both"
+	const namesNone = "AGENTKOURIER_CONNECTION_NAMESPACES is set and names no namespace"
 	for name, tc := range map[string]struct {
 		env    env
 		source broker.ConfigSource
@@ -33,10 +34,10 @@ func TestEnvConfigChoosesTheConfigSource(t *testing.T) {
 			broker.SourceCRDs, v1alpha1.ObjectRef{}, ""},
 		"crds with both": {env{"AGENTKOURIER_CONFIG_SOURCE": "crds", "AGENTKOURIER_CHAT_CONNECTION": "agent-kourier-system/slack-main", "AGENTKOURIER_CONNECTION_NAMESPACES": "team-a"},
 			broker.SourceCRDs, v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"}, ""},
-		"crds with neither":                                           {env{"AGENTKOURIER_CONFIG_SOURCE": "crds"}, "", v1alpha1.ObjectRef{}, bothEmpty},
-		"crds with an empty list":                                     {env{"AGENTKOURIER_CONFIG_SOURCE": "crds", "AGENTKOURIER_CONNECTION_NAMESPACES": ""}, "", v1alpha1.ObjectRef{}, bothEmpty},
-		"crds with a list of separators only":                         {env{"AGENTKOURIER_CONFIG_SOURCE": "crds", "AGENTKOURIER_CONNECTION_NAMESPACES": " , ,,"}, "", v1alpha1.ObjectRef{}, bothEmpty},
-		"crds with an empty connection and a list of separators only": {env{"AGENTKOURIER_CONFIG_SOURCE": "crds", "AGENTKOURIER_CHAT_CONNECTION": "", "AGENTKOURIER_CONNECTION_NAMESPACES": ","}, "", v1alpha1.ObjectRef{}, bothEmpty},
+		"crds with neither":                                           {env{"AGENTKOURIER_CONFIG_SOURCE": "crds"}, broker.SourceCRDs, v1alpha1.ObjectRef{}, ""},
+		"crds with an empty list":                                     {env{"AGENTKOURIER_CONFIG_SOURCE": "crds", "AGENTKOURIER_CONNECTION_NAMESPACES": ""}, broker.SourceCRDs, v1alpha1.ObjectRef{}, ""},
+		"crds with a list of separators only":                         {env{"AGENTKOURIER_CONFIG_SOURCE": "crds", "AGENTKOURIER_CONNECTION_NAMESPACES": " , ,,"}, "", v1alpha1.ObjectRef{}, namesNone},
+		"crds with an empty connection and a list of separators only": {env{"AGENTKOURIER_CONFIG_SOURCE": "crds", "AGENTKOURIER_CHAT_CONNECTION": "", "AGENTKOURIER_CONNECTION_NAMESPACES": ","}, "", v1alpha1.ObjectRef{}, namesNone},
 		"a bad connection is refused though a list is set":            {env{"AGENTKOURIER_CONFIG_SOURCE": "crds", "AGENTKOURIER_CHAT_CONNECTION": "slack-main", "AGENTKOURIER_CONNECTION_NAMESPACES": "team-a"}, "", v1alpha1.ObjectRef{}, "namespace/name"},
 		"a connection with no slash":                                  {env{"AGENTKOURIER_CONFIG_SOURCE": "crds", "AGENTKOURIER_CHAT_CONNECTION": "slack-main"}, "", v1alpha1.ObjectRef{}, "namespace/name"},
 		"a connection with a key too":                                 {env{"AGENTKOURIER_CONFIG_SOURCE": "crds", "AGENTKOURIER_CHAT_CONNECTION": "a/b/c"}, "", v1alpha1.ObjectRef{}, "namespace/name"},
@@ -63,11 +64,24 @@ func TestEnvConfigChoosesTheConfigSource(t *testing.T) {
 	}
 }
 
-// With crds and neither the own connection nor an admission list the broker could serve nothing until a restart (the list is read at start),
-// so it does not start: the error names both variables and the process exits 2, through run as through exitCode.
-func TestACrdsConfigWithNeitherVariableExitsWithUsageNamingBoth(t *testing.T) {
-	_, err := loadEnv(env{"AGENTKOURIER_CONFIG_SOURCE": "crds"}.get)
-	want := "with AGENTKOURIER_CONFIG_SOURCE=crds, set AGENTKOURIER_CHAT_CONNECTION to the broker's own ChatConnection, or AGENTKOURIER_CONNECTION_NAMESPACES to the namespaces whose ChatConnections it serves, or both"
+// With crds and no own connection, no list and no selector the broker serves the ChatConnections of every namespace (spec D54): nothing is
+// refused, and no selector is made for it (the source reads that combination as every namespace, and needs no right on namespaces for it).
+func TestACrdsConfigWithNothingSetServesEveryNamespace(t *testing.T) {
+	c, err := loadEnv(env{"AGENTKOURIER_CONFIG_SOURCE": "crds"}.get)
+	if err != nil {
+		t.Fatalf("loadEnv = %v; want every namespace", err)
+	}
+	if c.chatConnection != (v1alpha1.ObjectRef{}) || c.connectionNamespaces != nil || c.connectionNamespaceSelector != nil {
+		t.Errorf("connection %+v, list %q, selector %v; want none of the three", c.chatConnection, c.connectionNamespaces, c.connectionNamespaceSelector)
+	}
+}
+
+// A list that is set and names no namespace (separators and spaces only) is a slip, not a choice: it is refused, with exit 2 through run as
+// through exitCode, and the message says what to do. Read as unset, it would serve every namespace.
+func TestAListThatNamesNoNamespaceExitsWithUsage(t *testing.T) {
+	e := env{"AGENTKOURIER_CONFIG_SOURCE": "crds", "AGENTKOURIER_CONNECTION_NAMESPACES": " , "}
+	_, err := loadEnv(e.get)
+	want := "AGENTKOURIER_CONNECTION_NAMESPACES is set and names no namespace (only commas and spaces): unset it, or name the namespaces"
 	if !errors.Is(err, broker.ErrWiring) || !strings.Contains(err.Error(), want) {
 		t.Fatalf("loadEnv = %v; want an ErrWiring saying %q", err, want)
 	}
@@ -75,7 +89,7 @@ func TestACrdsConfigWithNeitherVariableExitsWithUsageNamingBoth(t *testing.T) {
 		t.Errorf("exitCode = %d, want %d", got, exitUsage)
 	}
 	var stdout, stderr bytes.Buffer
-	if code := run(nil, "dev", &stdout, &stderr, env{"AGENTKOURIER_CONFIG_SOURCE": "crds"}.get); code != exitUsage || !strings.Contains(stderr.String(), want) {
+	if code := run(nil, "dev", &stdout, &stderr, e.get); code != exitUsage || !strings.Contains(stderr.String(), want) {
 		t.Errorf("run = %d with stderr %q; want %d and the message", code, stderr.String(), exitUsage)
 	}
 }
