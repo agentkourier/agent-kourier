@@ -238,7 +238,7 @@ behaves the same on a fork's pull request. It belongs in the `main` ruleset's re
 the lists above. The Go jobs in `ci.yml`, `security.yml`, `codeql.yml` and `docs.yml` keep the module cache and the build cache
 (plus golangci-lint's cache in the jobs that lint) in Actions caches, one per job, except that `test-postgres` restores
 `test`'s and the two `crd-corpus` jobs share one, which `crd-corpus (1.37)` saves. A key is
-`go-<cache>-<runner OS>-go<Go version>-<hash of the go.sum files it builds from>-<commit>`, and a run restores the newest
+`go-<cache>-<runner OS>-go<Go version>-<hash of the go.sum files it builds from (and, for govulncheck, its script)>-<commit>`, and a run restores the newest
 entry whose key starts with `go-<cache>-<runner OS>-`, so a pull request starts from what the latest push to `main`
 saved, test results included. Every push run on `main` saves, whether its steps passed or failed (a cancelled job saves
 nothing, nor does a re-run of a job whose entry is already saved); pull requests save none. Before a push saves,
@@ -250,7 +250,7 @@ there does not stop a release, and the next push's prune catches up. One entry o
 10 GB cache limit, GitHub's default, past which GitHub evicts the least recently accessed entries. The jobs that
 install Python packages, `echo-agent` in `ci.yml` and `build` in `docs.yml`, keep pip's cache under an exact key on
 the job, the runner OS, the Python version and the requirements files they install from: a push to `main` saves it
-only when those files change, and `cache-prune` then deletes the entry for the old ones. `docs.yml` runs on a push to
+only when those files or the Python version change, and `cache-prune` then deletes the old entry. `docs.yml` runs on a push to
 `main` only when the push changes a path in its `push` trigger, so only such a push saves the `build` job's caches. Each job has its own timeout, set from the times seen on a cold cache. The kind
 tiers are not in CI, which is why "Cut a release" has you run them, with the custom resource scenarios, by hand. They would need a runner with Docker and about 8 GB free, the `kind`, `kubectl`,
 `helm` and `jq` binaries installed at pinned versions (`hack/ci/install-kind-tools.sh` installs them, each checked
