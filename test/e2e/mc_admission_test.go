@@ -13,15 +13,16 @@ import (
 	"github.com/agentkourier/agent-kourier/test/e2e/kube"
 )
 
-// TestMC_ATeamTakenOffTheAdmissionListIsNotServed is the scenario of the platform's admission list (config.connectionNamespaces, which the broker reads at
-// start, so that a change to it is a Helm upgrade and a rollout). hack/kind/two-apps.sh (make e2e-two-apps) runs it in two phases around the upgrades, and
-// it skips without one:
+// TestMC_ATeamTakenOffTheAdmissionListIsNotServed is the scenario of the platform's admission of team-a's namespace: by the list (config.connectionNamespaces,
+// which the broker reads at start, so that a change to it is a Helm upgrade and a rollout), or by a label that the selector
+// (config.connectionNamespaceSelector) matches, which the broker follows live, with no restart. hack/kind/two-apps.sh (make e2e-two-apps) runs it in two
+// phases around the upgrades and the changes of the label, and it skips without one:
 //
-//	removed   team-a is taken off the list. Its ChatConnection is still in the cluster and the broker does not serve it: its Binding says
+//	removed   team-a is taken off the list, or loses the label. Its ChatConnection is still in the cluster and the broker does not serve it: its Binding says
 //	          Accepted=False with the reason ConnectionNotServed (the broker served it before and does not now, which it knows from the record in its store,
 //	          since a restart forgets what it ran), its app has no client, and a mention of its bot gets no reply. The platform's connection and Binding are
 //	          not touched: its Binding answers, through the platform's app.
-//	restored  team-a is put back on the list. The broker serves the connection again, its Binding is accepted and ready, and answers through team-a's app,
+//	restored  team-a is put back on the list, or gains the label. The broker serves the connection again, its Binding is accepted and ready, and answers through team-a's app,
 //	          and the platform's Binding goes on answering through its own.
 //
 // The fast tier on Postgres with two replicas, on custom resources, with E2E_TWO_APPS=1.
@@ -37,11 +38,15 @@ func TestMC_ATeamTakenOffTheAdmissionListIsNotServed(t *testing.T) {
 	if err := CheckTier(env.Tier); err != nil {
 		t.Fatal(err)
 	}
-	if env.Tier != "fast" || env.ConfigSource != "crds" || env.ConnectionNamespaces == "" {
-		t.Fatalf("phase %s runs in the fast tier on custom resources with an admission list, brought up with E2E_TWO_APPS=1; this one is tier %s, config source %s, admitted namespaces %q", env.Phase, env.Tier, env.ConfigSource, env.ConnectionNamespaces)
+	if env.Tier != "fast" || env.ConfigSource != "crds" {
+		t.Fatalf("phase %s runs in the fast tier on custom resources, brought up with E2E_TWO_APPS=1; this one is tier %s, config source %s", env.Phase, env.Tier, env.ConfigSource)
 	}
-	if want := env.Phase == "restored"; env.Admits(kube.MultiTeamNamespace) != want {
-		t.Fatalf("phase %s with the admission list %q: team-a should be on it only in phase restored", env.Phase, env.ConnectionNamespaces)
+	admitted, err := env.Admits(kube.MultiTeamNamespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := env.Phase == "restored"; admitted != want {
+		t.Fatalf("phase %s with the admission %s: team-a should be admitted only in phase restored", env.Phase, env.Admission())
 	}
 	m := newMCBare(t)
 	if err := m.slack.SetMembers(m.ctx, ChannelMCPlatform, AppPlatform.BotUser); err != nil {

@@ -453,6 +453,33 @@ deploy_two_apps() {
   echo "ok: team-a's Slack app is connected to the fake Slack"
 }
 
+# runner_admission DIR: the broker's admission (spec D54) for the E2E runner, as the Deployment agent-kourier has it: its AGENTKOURIER_CHAT_CONNECTION,
+# AGENTKOURIER_CONNECTION_NAMESPACES and AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR (a LabelSelector as JSON), and the namespaces the MC_ tests ask about
+# (agent-kourier, team-a, team-b and team-c, which must exist) with their labels, as kubectl get namespace -o json prints them. Each is written to a
+# file of DIR and goes from there, as it is, into a key of the ConfigMap e2e-admission in namespace e2e, which the Job's variables read
+# (hack/kind/e2e/runner.yaml): never through sed or the Job's YAML, since a selector holds quotes, braces and slashes. test/e2e's Env decodes the
+# selector strictly, as the broker does, and fails a scenario on one it cannot read. A Deployment that is not there reads as nothing set. Needs K.
+runner_admission() {
+  local dir=$1 pair key var list
+  mkdir -p "${dir}"
+  for pair in chat-connection=AGENTKOURIER_CHAT_CONNECTION connection-namespaces=AGENTKOURIER_CONNECTION_NAMESPACES \
+    connection-namespace-selector=AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR; do
+    key=${pair%%=*} var=${pair#*=}
+    "${K[@]}" -n agent-kourier get deploy/agent-kourier -o "jsonpath={.spec.template.spec.containers[0].env[?(@.name==\"${var}\")].value}" \
+      --ignore-not-found >"${dir}/${key}" || die "could not read the Deployment agent-kourier to see its ${var}"
+  done
+  list=$(<"${dir}/connection-namespaces")
+  [[ "${list}" =~ ^[a-z0-9,-]*$ ]] || die "the Deployment's AGENTKOURIER_CONNECTION_NAMESPACES is '${list}'; want namespace names separated by commas"
+  "${K[@]}" get namespace agent-kourier team-a team-b team-c -o json >"${dir}/namespaces" || die "could not read the labels of the namespaces agent-kourier, team-a, team-b and team-c"
+  "${K[@]}" -n e2e delete configmap e2e-admission --ignore-not-found >/dev/null
+  "${K[@]}" -n e2e create configmap e2e-admission --from-file=chat-connection="${dir}/chat-connection" \
+    --from-file=connection-namespaces="${dir}/connection-namespaces" --from-file=connection-namespace-selector="${dir}/connection-namespace-selector" \
+    --from-file=namespaces="${dir}/namespaces" >/dev/null || die "could not make the ConfigMap e2e-admission that hands the admission to the runner"
+  echo "own connection: $(<"${dir}/chat-connection")"
+  echo "admitted namespaces: ${list:-none}"
+  echo "namespace selector: $(<"${dir}/connection-namespace-selector")"
+}
+
 # apply_signaler: the container signaler (fast/signaler.yaml, in namespace e2e), which S16 uses to freeze or kill an Agent Kourier replica; the fast
 # tier on two replicas only. It shares the node's PID namespace and is published nowhere. Restarted so that a rebuilt image (same tag) is
 # picked up. Needs K, HERE.

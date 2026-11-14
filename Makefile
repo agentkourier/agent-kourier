@@ -112,7 +112,7 @@ e2e-crs-scenarios: ## The custom resource scenarios that need kubectl or Helm: u
 e2e-crs-migration: ## Move the fast tier between the ConfigMap and the custom resources with Helm, and back, with a session in flight (the tier up on Postgres, two replicas, files)
 	hack/kind/crs-migration.sh
 
-e2e-two-apps: ## Run the MC_ tests (a broker with two Slack apps) as a Job of their own, then take a team off the platform's admission list with Helm and put it back, then run with no ChatConnection of its own, the platform's namespace off the list and then on it (with a leader takeover on Postgres with two replicas): the fast tier up on E2E_TWO_APPS=1 E2E_CONFIG_SOURCE=crds
+e2e-two-apps: ## Run the MC_ tests (a broker with two Slack apps) as a Job of their own, then take a team off the platform's admission list with Helm and put it back, then run with no ChatConnection of its own, the platform's namespace off the list and then on it (with a leader takeover on Postgres with two replicas), then admit a team by a namespace label with no restart, and serve every namespace with nothing set and with the selector {}: the fast tier up on E2E_TWO_APPS=1 E2E_CONFIG_SOURCE=crds
 	hack/kind/two-apps.sh
 
 sandbox-up: ## Dogfood tier on the full tier: Agent Kourier on a real Slack, a read-only SRE agent on a real model, seeded faults (secrets file: SANDBOX_ENV)
