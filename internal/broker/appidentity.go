@@ -60,7 +60,7 @@ func (c RunConfig) identityOf(ctx context.Context, conn Connection) (appIdentity
 	case c.newSlack != nil:
 		return appIdentity{}, nil
 	}
-	return slackIdentity(ctx, conn, testhooks.SlackAPIURL())
+	return slackIdentity(ctx, conn, testhooks.SlackAPIURL(c.hooks))
 }
 
 // slackIdentity is auth.test with conn's bot token, and then bots.info for the bot it names, on a client of its own at apiURL (Slack's own when

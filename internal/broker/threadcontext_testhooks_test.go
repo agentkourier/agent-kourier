@@ -20,7 +20,9 @@ import (
 // agent after its own text, in the block of untrusted data, read from Slack's thread (the fake), without Agent Kourier's own
 // answer, the mention that was a turn, or the mention itself. A mention with nothing unmentioned before it carries no block.
 func TestRunCarriesTheUnmentionedRepliesToTheNextMentionedTurn(t *testing.T) {
+	t.Parallel()
 	w := newSlackWorld(t, "xoxb-fake-bot")
+	runsAlongside(&w.cfg)
 	w.cfg.sink = nil // the live renderer, so that Agent Kourier's own answers are in the thread, to be left out of the context
 	file := filepath.Join(w.cfg.ConfigDir, "binding.yaml")
 	raw, err := os.ReadFile(file)
