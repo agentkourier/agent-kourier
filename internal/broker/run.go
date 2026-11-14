@@ -50,8 +50,9 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	// ChatConnection" confirms once it is read, and it is left out when the broker has none (spec D53); connection_admission says which
 	// namespaces' ChatConnections it serves besides (RunConfig.admission: all, list, selector, list+selector, or own for none); connection_namespaces,
 	// when there is a list, is its namespaces (names only, each a DNS-1123 label by now, so no pasted token can pass); and
-	// connection_namespace_selector, when there is a selector that reads labels, is its string form (validated label keys and values; an
-	// empty selector is "all" and has no field). With files the connection is whichever the directory holds, and only that later line names it.
+	// connection_namespace_selector, when there is a selector that reads labels, is its string form, logged because spec D54 does not treat
+	// the selector as secret (validation does not keep a token out: a label value may hold 63 characters, upper case included); an empty
+	// selector is "all" and has no field. With files the connection is whichever the directory holds, and only that later line names it.
 	if cfg.source() == SourceCRDs {
 		attrs := []any{"config_source", string(SourceCRDs)}
 		if !cfg.noOwnConnection() {

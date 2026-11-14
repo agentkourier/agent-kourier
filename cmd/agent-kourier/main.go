@@ -289,6 +289,8 @@ func loadConnectionNamespaceSelector(getenv func(string) string, source broker.C
 	if len(obj) == 0 || obj[0] != '{' { // the decoder skips the space before a value; null comes here as the text null
 		return nil, bad("is not a JSON object; want a LabelSelector, or {} for every namespace (unset it for no selector)")
 	}
+	// Two passes, one strict check each, so that the error can say which check failed; each decodes into a value of its own, and the
+	// selector is the last one's, which is the same.
 	var ls metav1.LabelSelector
 	for _, check := range []struct {
 		opt  kjson.StrictOption
@@ -297,13 +299,15 @@ func loadConnectionNamespaceSelector(getenv func(string) string, source broker.C
 		{kjson.DisallowUnknownFields, "has a field that a LabelSelector does not have; want matchLabels and matchExpressions, whose items have key, operator and values (names are case-sensitive)"},
 		{kjson.DisallowDuplicateFields, "has a field twice"},
 	} {
-		strict, err := kjson.UnmarshalStrict(obj, &ls, check.opt)
+		var pass metav1.LabelSelector
+		strict, err := kjson.UnmarshalStrict(obj, &pass, check.opt)
 		if err != nil {
 			return nil, bad("does not have the shape of a LabelSelector; want matchLabels an object of strings and matchExpressions a list of objects")
 		}
 		if len(strict) > 0 {
 			return nil, bad(check.what)
 		}
+		ls = pass
 	}
 	// Each part on its own first, so that the error can say which part Kubernetes refuses without quoting it.
 	if _, err := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: ls.MatchLabels}); err != nil {

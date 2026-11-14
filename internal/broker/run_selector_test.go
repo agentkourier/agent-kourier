@@ -11,8 +11,50 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 )
+
+// "All" (spec D54) is served through Run: a broker with no own connection, no list and no selector, and one with an own connection and an
+// empty selector, serve the ChatConnection of a namespace that nothing names, beside the example config's connection (own or not), and read
+// no namespace to do it, so they need no right on namespaces.
+func TestARunWithNothingSetOrAnEmptySelectorServesAConnectionNobodyNamed(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		own      bool
+		selector labels.Selector
+	}{
+		"nothing set": {own: false, selector: nil},
+		"an own connection and an empty selector": {own: true, selector: labels.Everything()},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			w := newConnWorld(t, nil)
+			runsAlongside(&w.c)
+			if !tc.own {
+				w.c.ChatConnection = v1alpha1.ObjectRef{}
+			}
+			w.c.ConnectionNamespaces, w.c.ConnectionNamespaceSelector = nil, tc.selector
+			w.team("team-c", "tok-c")
+			r := start(t, w.c)
+			r.until("/readyz", http.StatusOK)
+
+			w.eventually("the connection of a namespace nobody named, and the example config's, to run", func() bool {
+				return w.up("tok-c") == 1 && w.up(ownToken) == 1
+			})
+			r.waitMetric(connected("team-c/slack", 1))
+			for _, a := range w.dyn.Actions() {
+				if a.GetResource() == crNamespaces {
+					t.Fatalf("the broker read namespaces (%s) to admit every one; want it to read none", a.GetVerb())
+				}
+			}
+			r.cancel()
+			if err := r.wait(); err != nil {
+				t.Errorf("Run = %v after a signal; want nil", err)
+			}
+		})
+	}
+}
 
 // namespace puts the Namespace name in the cluster of w, with the labels given, or replaces it.
 func (w *connWorld) namespace(name string, l map[string]string) {

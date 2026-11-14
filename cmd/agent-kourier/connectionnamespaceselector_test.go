@@ -51,6 +51,8 @@ func TestEnvConfigReadsTheConnectionNamespaceSelector(t *testing.T) {
 		"{} with spaces around": {env: crds(" \n{ }\t"), all: true},
 		"an empty matchLabels":  {env: crds(`{"matchLabels":{}}`), all: true},
 		"no expressions":        {env: crds(`{"matchExpressions":[]}`), all: true},
+		"a null matchLabels":    {env: crds(`{"matchLabels":null}`), all: true},
+		"null matchExpressions": {env: crds(`{"matchExpressions":null}`), all: true},
 		"the chart's rendering": {env: crds(fixture), admits: []admits{
 			{labels.Set{"agentkourier.dev/serve": "true", "tier": "a"}, true},
 			{labels.Set{"agentkourier.dev/serve": "true", "tier": "b", "other": "x"}, true},
