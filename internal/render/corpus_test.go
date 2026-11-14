@@ -12,6 +12,7 @@ import (
 // The thread block shows a reply's text, name and ID, and none of them holds a secret an invisible character splits,
 // or any invisible character at all.
 func TestThreadRepliesTakeTheSplitSecretCorpus(t *testing.T) {
+	t.Parallel()
 	for _, c := range redacttest.SplitSecretsSample() {
 		c.CheckKept(t, threadReplies([]ThreadReply{{UserID: "U1", Name: "Ada", Text: c.Text}}, 0))
 		c.Check(t, threadReplies([]ThreadReply{{UserID: "U1", Name: c.Text, Text: "ok"}}, 0))
@@ -27,6 +28,7 @@ func TestThreadRepliesTakeTheSplitSecretCorpus(t *testing.T) {
 // in any field, and no invisible character. The footer is identifier text, so it is held to the token layer of the
 // corpus; the other fields to every rule of free text.
 func TestAlertBlockTakesTheSplitSecretCorpus(t *testing.T) {
+	t.Parallel()
 	for _, c := range redacttest.SplitSecretsSample() {
 		c.CheckKept(t, untrustedSection(TriggerMessage{Text: c.Text}))
 		c.Check(t, untrustedSection(TriggerMessage{Title: c.Text, Link: c.Text, Fallback: c.Text, Body: c.Text}))
@@ -55,6 +57,7 @@ func TestAlertFooterKeepsPairsAndLosesTokens(t *testing.T) {
 
 // What is stored of a tool call's arguments (RedactArgs) and what is shown of them (Tool) take the corpus out alike.
 func TestToolArgumentsTakeTheSplitSecretCorpus(t *testing.T) {
+	t.Parallel()
 	for _, c := range redacttest.SplitSecretsSample() {
 		args := map[string]any{"note": c.Text, "list": []any{c.Text}}
 		got := RedactArgs(args)
@@ -175,6 +178,7 @@ func TestAlertFieldsWithoutWhiteSpaceKeepTheirStart(t *testing.T) {
 // key short of its 40 characters or a URL password without its "@", would be shown as the start of it. The last
 // run of a cut field is not shown.
 func TestAlertFieldNeverShowsWhatTheCutWentThrough(t *testing.T) {
+	t.Parallel()
 	const key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" // 40 characters: a bare AWS secret access key
 	prefix := "debug dump password=" + strings.Repeat("A", 11000) + " ok "
 	for name, straddler := range map[string]string{

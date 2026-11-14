@@ -191,6 +191,7 @@ func FuzzSecretValueNeverShown(f *testing.F) {
 // The summary is cut to maxRedactBytes at a word before it is redacted, whatever the number and size
 // of the arguments: every leaf was bounded, but together they were not.
 func TestTheJoinedSummaryIsBounded(t *testing.T) {
+	t.Parallel()
 	args := map[string]any{}
 	for i := range 100 {
 		args[strings.Repeat("k", i+1)] = strings.Repeat("word ", 800)
