@@ -3,6 +3,7 @@ package render
 import (
 	"fmt"
 	"math"
+	"reflect"
 	"regexp"
 	"slices"
 	"sort"
@@ -649,33 +650,42 @@ func itemBlock(oldest bool, n, size int) untrustedBlock {
 
 // cleanedOnce cleans the items that items(size) makes once for each of sizes, on first use, for the subtests of a sweep
 // to share: cleaning is redaction, nearly all of a sweep's cost under the race detector, and its blocks take the same
-// items again and again (see untrustedBlock.layout). A block of the sweep takes the first n of them, which are its items
-// cleaned only if no item cleans to nothing, so the getter fails the test if one does.
-func cleanedOnce(sizes []int, items func(size int) []untrustedItem) func(t *testing.T, size int) []cleanedItem {
-	once := make(map[int]func() ([]cleanedItem, int), len(sizes))
+// items again and again (see untrustedBlock.layout). The getter returns the cleaned items of a block whose items are
+// want, the first len(want) of those made for size. It fails the test unless want is exactly those first items, and
+// unless every item made cleans to something: cleaning works on each item alone and keeps no state, so the first n
+// cleaned are then want cleaned, for every block of the sweep.
+func cleanedOnce(sizes []int, items func(size int) []untrustedItem) func(t *testing.T, size int, want []untrustedItem) []cleanedItem {
+	type made struct {
+		raw     []untrustedItem
+		cleaned []cleanedItem
+	}
+	once := make(map[int]func() made, len(sizes))
 	for _, size := range sizes {
-		once[size] = sync.OnceValues(func() ([]cleanedItem, int) {
+		once[size] = sync.OnceValue(func() made {
 			raw := items(size)
-			return untrustedBlock{Items: raw}.cleanItems(), len(raw)
+			return made{raw: raw, cleaned: untrustedBlock{Items: raw}.cleanItems()}
 		})
 	}
-	return func(t *testing.T, size int) []cleanedItem {
+	return func(t *testing.T, size int, want []untrustedItem) []cleanedItem {
 		t.Helper()
 		get, ok := once[size]
 		if !ok {
 			t.Fatalf("no items of size %d were cleaned", size)
 		}
-		cleaned, n := get()
-		if len(cleaned) != n {
-			t.Fatalf("%d of the %d items of size %d cleaned to nothing", n-len(cleaned), n, size)
+		m := get()
+		if len(m.cleaned) != len(m.raw) {
+			t.Fatalf("%d of the %d items of size %d cleaned to nothing", len(m.raw)-len(m.cleaned), len(m.raw), size)
 		}
-		return cleaned
+		if len(want) > len(m.raw) || !reflect.DeepEqual(m.raw[:len(want)], want) {
+			t.Fatalf("the block's %d items of size %d are not the first of the %d that were cleaned for it", len(want), size, len(m.raw))
+		}
+		return m.cleaned[:len(want)]
 	}
 }
 
-// laidOut is b laid out from items, which must be b's items cleaned. With whole it renders b as well, cleaning its items
-// again, and fails the test if the two differ: a sweep sets it for one block of each subtest, so that items it shares are
-// seen to be the ones its blocks hold.
+// laidOut is b laid out from items, which must be b's items cleaned (cleanedOnce checks that they are). With whole it
+// renders b as well, cleaning its items again, and fails the test if the two differ: a sweep sets it for one block of
+// each subtest, as a check from end to end.
 func laidOut(t *testing.T, b untrustedBlock, items []cleanedItem, whole bool) (section string, leftOut int) {
 	t.Helper()
 	section, leftOut = b.layout(items)
@@ -717,7 +727,7 @@ func TestUntrustedBlockDropOldest(t *testing.T) {
 				for k, size := range sizes {
 					b := itemBlock(true, n, size)
 					b.Oldest.Dropped = dropped
-					items := cleaned(t, size)[:n]
+					items := cleaned(t, size, b.Items)
 					got, left := laidOut(t, b, items, k == 0)
 					_, body := checkSection(t, itemTarget(b.MaxUnits), got)
 					shown := strings.Count(body, "<entry>")
@@ -832,7 +842,7 @@ func TestUntrustedBlockDropTrailing(t *testing.T) {
 			t.Parallel()
 			for k, size := range sizes {
 				b := untrustedBlock{Opening: "Notes", Plural: true, TagPrefix: "test-block-", MaxUnits: 6000, Items: items(n, size)}
-				got, left := laidOut(t, b, cleaned(t, size)[:n], k == 0)
+				got, left := laidOut(t, b, cleaned(t, size, b.Items), k == 0)
 				_, body := checkSection(t, tg, got)
 				lines := strings.Split(strings.TrimSuffix(body, "\n"), "\n")
 				shown := 0
@@ -923,7 +933,7 @@ func TestUntrustedBlockReservesTheLeftOutLineAtItsWidest(t *testing.T) {
 					b := itemBlock(true, n, 20)
 					b.MaxUnits, b.Oldest.Dropped = 800, dropped
 					b.Items[n-1].Fields[1].Value = strings.Repeat("e", last)
-					items := append(slices.Clone(before(t, 20)[:n-1]), newest(t, last)...)
+					items := append(slices.Clone(before(t, 20, b.Items[:n-1])), newest(t, last, b.Items[n-1:])...)
 					got, left := laidOut(t, b, items, last == 1 || last == lasts[len(lasts)-1])
 					if units := chat.Units(got); units > b.MaxUnits {
 						t.Fatalf("%d dropped, %d items, the last of %d: %d units for a cap of %d, with %d left out", dropped, n, last, units, b.MaxUnits, left)

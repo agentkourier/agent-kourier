@@ -548,8 +548,9 @@ func TestThreadRepliesBlockIsBoundedAndKeepsTheNewest(t *testing.T) {
 			t.Run(fmt.Sprintf("%d x %d", n, size), func(t *testing.T) {
 				t.Parallel()
 				entries := entriesOf(n, size)
-				got, left := laidOut(t, threadRepliesBlock(entries, 0), cleaned(t, size)[:n], k == 0)
-				if k == 0 { // the block is the one ThreadRepliesCounted renders
+				b := threadRepliesBlock(entries, 0)
+				got, left := laidOut(t, b, cleaned(t, size, b.Items), false)
+				if k == 0 { // from end to end: the block is the one ThreadRepliesCounted renders
 					if want, wantLeft := ThreadRepliesCounted(entries, 0); got != want || left != wantLeft {
 						t.Fatalf("the block laid out is not what ThreadRepliesCounted returns (%d left out, want %d)", left, wantLeft)
 					}
