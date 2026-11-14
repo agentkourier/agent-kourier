@@ -688,7 +688,13 @@ func TestUntrustedBlockDropOldest(t *testing.T) {
 						t.Fatalf("%d x %d, %d dropped: the block does not end with %q:\n%s", n, size, dropped, line, got)
 					}
 					if n-shown > 0 && shown < b.Oldest.MaxItems { // the next older item would have fitted, but for the line's room at its widest
-						older, ok := b.cleanItems()[n-shown-1].render(math.MaxInt / 4)
+						// Only that item is cleaned: cleaning all n again would repeat render's redaction of every one of them.
+						// Every item of itemBlock has a body, so none is dropped and its index among the cleaned is n-shown-1.
+						one := untrustedBlock{Items: b.Items[n-shown-1 : n-shown]}.cleanItems()
+						if len(one) != 1 {
+							t.Fatalf("the item %d cleaned to nothing", n-shown-1)
+						}
+						older, ok := one[0].render(math.MaxInt / 4)
 						if !ok {
 							t.Fatal("an item does not render")
 						}
