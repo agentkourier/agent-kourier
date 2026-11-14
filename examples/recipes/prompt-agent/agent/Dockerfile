@@ -9,7 +9,8 @@ FROM python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --require-hashes -r requirements.txt
+# Wheels only: pip runs no package's build code. Every pin has a wheel for CPython 3.14 on amd64 and arm64.
+RUN pip install --require-hashes --only-binary=:all: -r requirements.txt
 COPY agent.py agent.yaml ./
 USER 65532:65532
 EXPOSE 8080

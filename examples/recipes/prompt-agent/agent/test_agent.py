@@ -12,8 +12,10 @@ from pathlib import Path
 import pytest
 import yaml
 from a2a.types.a2a_pb2 import CancelTaskRequest, ListTasksRequest
+from pydantic_ai.agent.spec import AgentSpec
 from pydantic_ai.messages import RetryPromptPart, ToolReturnPart, UserPromptPart
 from pydantic_ai.models.function import DeltaToolCall, FunctionModel
+from pydantic_ai.settings import ModelSettings
 
 import agent
 from harness import (
@@ -39,6 +41,7 @@ CALLS = {  # what the prompt makes the scripted model call
     "runbook": ("runbook", {"alert": "DiskFull"}),
     "slow": ("slow_check", {"seconds": 30}),
     "ask": ("ask_user", {"question": "Which cluster?"}),
+    "blank": ("ask_user", {"question": " \n "}),
     "inject": ("restart_cluster", {}),
 }
 
@@ -251,6 +254,19 @@ REFUSALS = {  # an agent.yaml `capabilities:` list, and what the refusal must na
     "MCP with a script path as its url": ("- MCP: {url: mcp_server.py, allowed_tools: [runbook]}", "url"),
     "MCP with a command as its url": ("- MCP: {url: 'python mcp_server.py', allowed_tools: [a]}", "url"),
     "MCP with a file url": ("- MCP: {url: 'file:///etc/passwd', allowed_tools: [a]}", "url"),
+    "MCP with a url that names no host": ("- MCP: {url: 'http:///mcp', allowed_tools: [a]}", "url"),
+    "MCP with a url that is only a scheme and a path": ("- MCP: {url: 'http:mcp', allowed_tools: [a]}", "url"),
+    "MCP with a url that ends in .py": ("- MCP: {url: 'http://x/mcp_server.py', allowed_tools: [a]}", "url"),
+    "MCP with a url that ends in .JS": ("- MCP: {url: 'https://x/server.JS', allowed_tools: [a]}", "url"),
+    "MCP with a url that is not a string": ("- MCP: {url: 5, allowed_tools: [a]}", "url"),
+    "MCP with a local url of its own": (
+        "- MCP: {url: 'http://x/mcp', allowed_tools: [a], local: 'http://other-host/mcp'}",
+        "local",
+    ),
+    "MCP with defer_loading": (
+        "- MCP: {url: 'http://x/mcp', allowed_tools: [a], defer_loading: true}",
+        "defer_loading",
+    ),
     "an allowed MCP and one that is not": (
         "- MCP: {url: 'http://x/mcp', allowed_tools: [a]}\n  - WebSearch",
         "WebSearch",
@@ -267,6 +283,113 @@ def test_the_agent_refuses_to_start_on_anything_but_mcp_over_http_with_allowed_t
     path.write_text(f"model: test\ncapabilities:\n  {capabilities}\n")
     with pytest.raises(SystemExit, match=f"{path}.*{names}"):
         agent.load_agent(str(path), scripted())
+
+
+def test_mcp_keywords_the_policy_allows_still_load(tmp_path):
+    path = tmp_path / "agent.yaml"
+    path.write_text(
+        "model: test\ncapabilities:\n  - MCP: {url: 'https://x/mcp', allowed_tools: [a], native: false, id: runbooks,"
+        " description: The runbooks, headers: {X-Team: ops}}\n"
+    )
+    loaded, secrets = agent.load_agent(str(path), scripted())
+    assert loaded.name is None and secrets == set()
+
+
+SPEC_REFUSALS = {  # an agent.yaml, after its model: line, and what the refusal must name
+    "model_settings extra_body": ("model_settings: {extra_body: {tools: [{type: web_fetch_20250910}]}}", "extra_body"),
+    "model_settings extra_headers": ("model_settings: {extra_headers: {X-Tools: web}}", "extra_headers"),
+    "model_settings openai_native_tools": (
+        "model_settings: {openai_native_tools: [{type: web_search}]}",
+        "openai_native_tools",
+    ),
+    "model_settings bedrock_additional_model_requests_fields": (
+        "model_settings: {bedrock_additional_model_requests_fields: {tools: []}}",
+        "bedrock_additional_model_requests_fields",
+    ),
+    "model_settings anthropic_ and an allowed key": (
+        "model_settings: {temperature: 0, anthropic_metadata: {user_id: x}}",
+        "anthropic_metadata",
+    ),
+    "model_settings that is not a mapping": ("model_settings: [temperature]", "model_settings"),
+    "a top-level toolsets": ("toolsets: [{type: function}]", "toolsets"),
+    "a top-level tools": ("tools: [web_search]", "tools"),
+    "a top-level native_tools": ("native_tools: [{type: web_search}]", "native_tools"),
+}
+
+
+@pytest.mark.parametrize(("rest", "names"), SPEC_REFUSALS.values(), ids=SPEC_REFUSALS.keys())
+def test_the_agent_refuses_to_start_on_settings_or_keys_that_could_add_a_tool(tmp_path, rest, names):
+    """model_settings reach the provider's request as they are: extra_body can replace the tool list, and a provider's
+    own settings can add its search or fetch tool. A key Pydantic AI does not know is ignored, so it is refused too.
+    """
+    path = tmp_path / "agent.yaml"
+    path.write_text(f"model: anthropic:claude-haiku-5-5\n{rest}\n")
+    with pytest.raises(SystemExit, match=f"{path}.*{names}"):
+        agent.load_agent(str(path))
+
+
+MODEL_REFUSALS = {  # a model: line the agent refuses, and what the refusal must name
+    "a provider the image has no client for": ("google:gemini-3-pro", "google"),
+    "a gateway": ("gateway/openai:gpt-6-luna", "gateway/openai"),
+    "a model with no provider": ("gpt-6-luna", "provider"),
+    "the test model": ("test", "provider"),
+    "no model at all": ("", "model"),
+    "OpenRouter's :online": ("openrouter:anthropic/claude-haiku-5-5:online", ":online"),
+    "an OpenAI search model": ("openai:gpt-6-luna-search-preview", "search"),
+    "a deep research model": ("openai-responses:o5-deep-research", "search"),
+    "a Perplexity model through OpenRouter": ("openrouter:perplexity/sonar-pro", "perplexity"),
+    "search in upper case": ("openai-chat:My-SEARCH-model", "search"),
+}
+
+
+@pytest.mark.parametrize(("model", "names"), MODEL_REFUSALS.values(), ids=MODEL_REFUSALS.keys())
+def test_the_agent_refuses_a_provider_it_does_not_allow_or_a_model_that_searches_on_its_own(tmp_path, model, names):
+    """A search model or :online makes the provider search the web itself: a tool agent.yaml does not list."""
+    path = tmp_path / "agent.yaml"
+    path.write_text(f"model: '{model}'\n" if model else "name: x\n")
+    with pytest.raises(SystemExit, match=f"{path}.*{names}"):
+        agent.load_agent(str(path))
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic:claude-haiku-5-5",
+        "openai:gpt-6-luna",
+        "openai-responses:gpt-6-luna",
+        "openai-chat:gemma4",
+        "openrouter:anthropic/claude-haiku-5-5",
+        "ollama:gemma4",
+        "bedrock:us.anthropic.claude-haiku-5-5",
+    ],
+)
+def test_the_providers_the_image_has_a_client_for_load_with_allowed_settings(tmp_path, monkeypatch, model):
+    """Each provider is built from its environment at start; no request is made. The keys are fake."""
+    for name in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "AWS_BEARER_TOKEN_BEDROCK"):
+        monkeypatch.setenv(name, "fake-provider-key")
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama.test/v1")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    path = tmp_path / "agent.yaml"
+    path.write_text(f"model: '{model}'\nmodel_settings: {{temperature: 0.2, max_tokens: 800, timeout: 60}}\n")
+    loaded, _ = agent.load_agent(str(path))
+    assert loaded.model_settings == {"temperature": 0.2, "max_tokens": 800, "timeout": 60}
+
+
+def test_a_model_passed_in_replaces_the_spec_string_and_is_not_policed(tmp_path):
+    """Tests pass a scripted model; the spec's `model: test` is then never built, so it is not checked."""
+    path = tmp_path / "agent.yaml"
+    path.write_text("model: test\nname: scripted\n")
+    loaded, _ = agent.load_agent(str(path), scripted())
+    assert loaded.name == "scripted"
+
+
+def test_the_allow_lists_match_the_pinned_pydantic_ai():
+    """An upgrade that adds a spec key or a provider-neutral setting fails here: someone decides whether to allow it."""
+    pinned = {
+        "spec keys": {f.alias or name for name, f in AgentSpec.model_fields.items()},
+        "settings": ModelSettings.__optional_keys__ - {"extra_body", "extra_headers"},
+    }
+    assert pinned == {"spec keys": agent.SPEC_KEYS, "settings": agent.SETTINGS}
 
 
 @pytest.mark.anyio
@@ -325,6 +448,36 @@ async def test_ask_user_pauses_with_a_text_question_and_the_answer_completes_the
 
 
 @pytest.mark.anyio
+async def test_a_blank_question_is_answered_inside_the_run_and_never_posted(spec):
+    """Contract, Task states: an input-required question is text the broker shows; a blank one it cannot."""
+    async with serve(spec, scripted()) as client:
+        _, task = await say(client, "blank")
+    assert task.status.state == DONE
+    assert artifact_text(task) == "Tool said: Ask a question with words in it."
+
+
+@pytest.mark.anyio
+async def test_only_the_first_of_several_questions_in_one_response_is_posted(spec):
+    """One question at a time: the others are answered for the model, and the answer resumes the run once."""
+    seen = []
+
+    async def stream(messages, info):
+        last = messages[-1].parts[-1]
+        if isinstance(last, UserPromptPart):
+            yield {0: DeltaToolCall(name="ask_user", json_args=json.dumps({"question": "Which cluster?"}))}
+            yield {1: DeltaToolCall(name="ask_user", json_args=json.dumps({"question": "Which region?"}))}
+        else:
+            seen.extend(sorted(p.content for p in messages[-1].parts if isinstance(p, ToolReturnPart)))
+            yield "ok"
+
+    async with serve(spec, FunctionModel(stream_function=stream)) as client:
+        _, question = await say(client, "go")
+        _, answer = await say(client, "prod-east", context_id=question.context_id, task_id=question.id)
+    assert [p.text for p in question.status.message.parts] == ["Which cluster?"]
+    assert answer.status.state == DONE and seen == ["Ask one question at a time.", "prod-east"]
+
+
+@pytest.mark.anyio
 async def test_a_question_cancelled_while_paused_leaves_the_context_usable(spec):
     """The broker cancels a question that times out; the saved history ends in an unanswered tool call."""
     async with serve(spec, scripted()) as client:
@@ -333,6 +486,37 @@ async def test_a_question_cancelled_while_paused_leaves_the_context_usable(spec)
         _, after = await say(client, "next", context_id=question.context_id)
     assert canceled.status.state == CANCELED
     assert after.status.state == DONE and artifact_text(after).endswith("You said: next")
+
+
+@pytest.mark.anyio
+async def test_a_provider_key_in_the_environment_is_redacted_from_the_failed_message(spec, monkeypatch):
+    """A provider's error can quote its key, which agent.yaml never names: secret-looking variables are redacted too."""
+    key = "sk-fake-provider-key-0123456789"
+    monkeypatch.setenv("FAKE_PROVIDER_API_KEY", f" {key}\n")
+    monkeypatch.setenv("FAKE_WEBHOOK_SECRET", "fake-webhook-secret")
+    monkeypatch.setenv("SHORT_TOKEN", "1234567")  # under 8 characters: a word like this would be cut from any text
+    monkeypatch.setenv("FAKE_REGION", "us-east-1-fake-region")  # not a secret's name: left alone
+
+    async def stream(messages, info):
+        raise RuntimeError(f"Incorrect API key provided: {key}; fake-webhook-secret 1234567 us-east-1-fake-region")
+        yield ""
+
+    async with serve(spec, FunctionModel(stream_function=stream)) as client:
+        _, task = await say(client, "hi")
+    text = task.status.message.parts[0].text
+    assert text == ("RuntimeError: Incorrect API key provided: [redacted]; [redacted] 1234567 us-east-1-fake-region")
+
+
+@pytest.mark.anyio
+async def test_a_long_failure_is_cut_to_the_failed_text_limit(spec):
+    async def stream(messages, info):
+        raise RuntimeError("x" * 5000)
+        yield ""
+
+    async with serve(spec, FunctionModel(stream_function=stream)) as client:
+        _, task = await say(client, "hi")
+    text = task.status.message.parts[0].text
+    assert len(text) == agent.MAX_FAILED_TEXT == 1000 and text.startswith("RuntimeError: xxx")
 
 
 @pytest.mark.anyio
@@ -507,6 +691,19 @@ async def test_only_the_most_recent_contexts_are_kept(spec, monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_an_answer_to_a_forgotten_question_runs_as_a_new_prompt(spec, monkeypatch):
+    """Past MAX_KEPT paused questions the oldest is forgotten: its answer resumes nothing and is a turn of its own."""
+    monkeypatch.setattr(agent, "MAX_KEPT", 2)
+    async with serve(spec, scripted()) as client:
+        _, first = await say(client, "ask")
+        await say(client, "ask")
+        await say(client, "ask")
+        _, answer = await say(client, "prod-east", context_id=first.context_id, task_id=first.id)
+    assert answer.id == first.id and answer.status.state == DONE
+    assert artifact_text(answer) == "Turn 1. You said: prod-east", "the thread's history was forgotten too"
+
+
+@pytest.mark.anyio
 async def test_list_tasks_finds_a_turn_by_its_message_id(spec):
     """Contract, Methods: ListTasks by contextId; a turn is found if a task's history holds its messageId."""
     async with serve(spec, scripted()) as client:
@@ -546,10 +743,66 @@ async def test_with_a_token_file_the_right_bearer_is_served_and_a_rotated_token_
         assert (await http.get(card)).status_code == 401
 
 
+@pytest.mark.parametrize("anonymous", ["", "true", "0", "yes", " 1", "1 "])
+def test_without_a_token_file_the_agent_refuses_to_start_unless_anonymous_is_exactly_1(spec, anonymous):
+    """It fails closed: an agent that accepts every caller spends the model key for them. Only "1" opts out, so a
+    "0" or "false" can never be read as yes, and "true" stops the start instead of being taken as one or the other.
+    """
+    with pytest.raises(SystemExit, match="PROMPT_AGENT_TOKEN_FILE.*PROMPT_AGENT_ALLOW_ANONYMOUS"):
+        agent.build_app(URL, spec, "", scripted(), anonymous)
+
+
 @pytest.mark.anyio
-async def test_without_a_token_file_every_caller_is_accepted(spec):
-    async with asgi(spec, scripted()) as http:
+async def test_with_anonymous_1_and_no_token_file_every_caller_is_accepted(spec):
+    async with asgi(spec, scripted(), "", anonymous="1") as http:
         assert (await http.get("/.well-known/agent-card.json")).status_code == 200
+        assert (await http.post("/", json={"jsonrpc": "2.0", "id": 1})).status_code == 200
+
+
+@pytest.mark.anyio
+async def test_a_token_file_turns_the_check_on_even_with_anonymous_1(spec, tmp_path):
+    token_file = tmp_path / "token"
+    token_file.write_text(TOKEN)
+    async with asgi(spec, scripted(), str(token_file), anonymous="1") as http:
+        assert (await http.get("/.well-known/agent-card.json")).status_code == 401
+
+
+@pytest.mark.anyio
+async def test_a_request_body_over_the_cap_gets_413_and_one_at_the_cap_is_read(spec):
+    """The broker's largest message is far below MAX_BODY; a larger body is refused before JSON-RPC parses it."""
+    over, at = b"x" * (agent.MAX_BODY + 1), b"x" * agent.MAX_BODY
+    async with asgi(spec, scripted()) as http:
+        assert (await http.post("/", content=over)).status_code == 413
+        assert (await http.post("/", content=at)).status_code == 200, "a JSON-RPC parse error, not a 413"
+
+
+@pytest.mark.anyio
+async def test_a_chunked_body_is_counted_too(spec):
+    """No Content-Length: the bytes are counted as they arrive."""
+
+    async def chunks(count):
+        for _ in range(count):
+            yield b"x" * 65536
+
+    async with asgi(spec, scripted()) as http:
+        over = await http.post("/", content=chunks(agent.MAX_BODY // 65536 + 1))
+        under = await http.post("/", content=chunks(2))
+    assert over.status_code == 413 and under.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_a_content_length_over_the_cap_gets_413_before_the_body_is_read(spec):
+    sent = []
+
+    async def receive():
+        raise AssertionError("the body was read")
+
+    async def send(message):
+        sent.append(message)
+
+    headers = [(b"content-length", str(agent.MAX_BODY + 1).encode())]
+    await agent.LimitBody(None)({"type": "http", "headers": headers}, receive, send)
+    assert sent[0]["status"] == 413
 
 
 @pytest.mark.anyio
@@ -561,7 +814,8 @@ async def test_anything_but_http_and_lifespan_without_the_bearer_is_closed(spec,
     async def send(message):
         sent.append(message)
 
-    await agent.build_app(URL, spec, str(token_file), scripted())({"type": "websocket", "headers": []}, None, send)
+    app = agent.build_app(URL, spec, str(token_file), scripted())
+    await app({"type": "websocket", "headers": []}, None, send)
     assert sent == [{"type": "websocket.close"}]
 
 
@@ -588,5 +842,27 @@ def test_the_deployment_takes_every_variable_the_example_expands_from_a_secret_a
     for name in names:
         assert "secretKeyRef" in env[name]["valueFrom"], f"{name} is not read from a Secret"
     assert env["PROMPT_AGENT_SPEC"]["value"] == "/etc/prompt-agent/agent.yaml"
+    assert "PROMPT_AGENT_ALLOW_ANONYMOUS" not in env, "the example requires the Binding's token"
     kinds = {doc["kind"] for f in MANIFESTS.glob("*.yaml") for doc in yaml.safe_load_all(f.read_text())}
     assert kinds == {"ConfigMap", "Deployment", "NetworkPolicy", "Service"}
+
+
+def test_the_deployment_mounts_the_bearer_token_file_from_a_secret_and_the_binding_sends_the_token():
+    """The agent refuses to start without a token file; the Binding sends the same token from its own Secret."""
+    pod = yaml.safe_load((MANIFESTS / "deployment.yaml").read_text())["spec"]["template"]["spec"]
+    container = pod["containers"][0]
+    token_file = Path({e["name"]: e for e in container["env"]}["PROMPT_AGENT_TOKEN_FILE"]["value"])
+    mount = next(m for m in container["volumeMounts"] if m["mountPath"] == str(token_file.parent))
+    volume = next(v for v in pod["volumes"] if v["name"] == mount["name"])
+    assert volume["secret"]["secretName"] == "prompt-agent-bearer" and token_file.name == "token"
+    binding = yaml.safe_load((HERE.parent / "kourier" / "binding.yaml").read_text())
+    assert binding["spec"]["identity"] == {"tokenSecretRef": {"name": "prompt-agent-bearer"}}  # key: token, the default
+
+
+def test_the_tmp_volume_is_bounded_and_only_the_broker_pods_may_connect():
+    pod = yaml.safe_load((MANIFESTS / "deployment.yaml").read_text())["spec"]["template"]["spec"]
+    assert next(v for v in pod["volumes"] if v["name"] == "tmp")["emptyDir"]["sizeLimit"]
+    policy = yaml.safe_load((MANIFESTS / "networkpolicy.yaml").read_text())
+    [peer] = policy["spec"]["ingress"][0]["from"]
+    assert peer["namespaceSelector"]["matchLabels"] == {"kubernetes.io/metadata.name": "agent-kourier"}
+    assert peer["podSelector"]["matchLabels"] == {"app.kubernetes.io/name": "agent-kourier"}

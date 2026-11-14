@@ -8,11 +8,16 @@ metadata:
 data:
   agent.yaml: |
     # An agent, in Pydantic AI's agent spec format: nothing here is specific to Agent Kourier. agent.py reads this file and
-    # stops at start on anything it does not allow (load_agent in agent.py), so a mistake here narrows the agent, never
-    # widens it.
+    # stops at start, naming what it refuses (load_agent in agent.py), on anything that could give the agent a tool this file
+    # does not list: a capability other than MCP, an MCP key other than url, allowed_tools, native: false,
+    # authorization_token, headers, description and id, a url that is not http(s)://host/..., a model_settings key that is
+    # not provider-neutral (extra_body and extra_headers included), a provider it has no client for, a model that searches
+    # the web on its own, or a key the spec does not have. What it allows it takes as written: list in allowed_tools only
+    # the tools the agent may call, on a server you trust.
     #
-    # model is provider:name. The provider reads its key from the environment (anthropic: ANTHROPIC_API_KEY, openai:
-    # OPENAI_API_KEY, openrouter: OPENROUTER_API_KEY); openai-chat: and ollama: read OPENAI_BASE_URL and OLLAMA_BASE_URL.
+    # model is provider:name, of anthropic, openai, openai-responses, openai-chat, openrouter, ollama or bedrock. The
+    # provider reads its key from the environment (anthropic: ANTHROPIC_API_KEY, openai: OPENAI_API_KEY, openrouter:
+    # OPENROUTER_API_KEY); openai-chat: and ollama: read OPENAI_BASE_URL and OLLAMA_BASE_URL.
     model: anthropic:claude-haiku-5-5
     name: ops-helper
     description: Answers questions about alerts using the team's runbooks.

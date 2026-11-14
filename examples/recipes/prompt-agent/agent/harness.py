@@ -26,6 +26,7 @@ import agent
 HERE = Path(__file__).parent
 URL = "http://prompt-agent.test"
 TOKEN = "fake-mcp-token"  # not a secret: the bearer the test MCP server is started with
+BEARER = "fake-binding-token"  # not a secret: the bearer the agent itself requires, as the Binding's token would be
 DONE, WORKING, FAILED = TaskState.TASK_STATE_COMPLETED, TaskState.TASK_STATE_WORKING, TaskState.TASK_STATE_FAILED
 CANCELED, INPUT = TaskState.TASK_STATE_CANCELED, TaskState.TASK_STATE_INPUT_REQUIRED
 
@@ -77,9 +78,17 @@ def spec_file(directory: Path, url: str, **mcp) -> str:
 
 
 @contextlib.asynccontextmanager
-async def asgi(spec_path, model, token_file="", headers=None):
-    """The app behind an in-process ASGI transport: yields a raw HTTP client."""
-    transport = httpx.ASGITransport(app=agent.build_app(URL, spec_path, token_file, model))
+async def asgi(spec_path, model, token_file=None, headers=None, anonymous=""):
+    """The app behind an in-process ASGI transport: yields a raw HTTP client.
+
+    With no token_file the agent requires BEARER, from a file next to the spec, and the client sends it, as the
+    Deployment and the Binding do. A test of the bearer check passes its own file and headers.
+    """
+    if token_file is None:
+        token_file = str(Path(spec_path).parent / "bearer")
+        Path(token_file).write_text(BEARER + "\n")
+        headers = {"Authorization": "Bearer " + BEARER, **(headers or {})}
+    transport = httpx.ASGITransport(app=agent.build_app(URL, spec_path, token_file, model, anonymous))
     async with httpx.AsyncClient(transport=transport, base_url=URL, headers=headers, timeout=60) as http:
         yield http
 

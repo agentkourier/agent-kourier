@@ -10,9 +10,20 @@
 # of its own. There are no tool approvals: the agent's tools are the MCP tools agent.yaml lists, and it never asks to
 # approve a call.
 #
-# identity.userId is sent to the agent as X-User-Id, for an agent that trusts its network. The agent spends a model key
-# for every caller it accepts, so use identity.tokenSecretRef instead and turn on the agent's bearer check (the
-# commented lines in agent/manifests/deployment.yaml) when the network is not enough.
+# identity.tokenSecretRef names the Secret prompt-agent-bearer, key token (the default key), in this Binding's namespace,
+# agent-kourier: Agent Kourier sends its value as Authorization: Bearer on every call to the agent, the card's included.
+# The agent checks it against its own copy, so the same value goes in two Secrets: this one, which Agent Kourier reads,
+# and prompt-agent-bearer in namespace prompt-agent, which the agent mounts (agent/manifests/deployment.yaml). You make
+# both, from one value with no trailing newline (kubectl create secret generic prompt-agent-bearer
+# --from-literal=token=...): Agent Kourier refuses a value with a control character, such as the newline that
+# --from-file keeps. With the chart's custom resources, grant Agent Kourier this one: rbac.secretNames: {agent-kourier:
+# [prompt-agent-bearer]}.
+#
+# When the two values differ the agent answers 401. A new turn then fails without a retry (the thread is told the
+# request failed and will not be tried again), an answer to a question leaves the question open, Agent Kourier reads
+# its Secret again for the next call, and
+# agentkourier_credential_rejections_total counts the rejection. The Binding's BackendReachable condition says
+# CredentialsRejected once its check fetches the agent card and gets the 401.
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata: {name: prompt-chat, namespace: agent-kourier}
@@ -21,7 +32,8 @@ spec:
     backendRef: {name: prompt-agents}
     name: prompt-agent         # on the a2a dialect the backend url alone selects the agent and these are labels;
     namespace: prompt-agent    # the Binding needs them either way
-  identity: {userId: agent-kourier-prompt}
+  identity:
+    tokenSecretRef: {name: prompt-agent-bearer}
   chat:
     connectionRef: {name: slack}
     channel: CREPLACEPROMPT
