@@ -316,7 +316,7 @@ legs to these steps and every other job to none of them. The limits of the reuse
   variables it reads. A test that depends on what such a program reads must read those inputs itself, or look the
   program up on `PATH`. A file outside the module is never keyed, which is why `docs-agent` runs with `-count=1`.
 - `go test` keys nothing a test reads before `m.Run` starts its log (in an `init` function, a package variable or
-  `TestMain` before `m.Run`), nor the environment read through `os.Environ`. The one such read today is
+  `TestMain` before `m.Run`), nor the environment read through `os.Environ`. The one read before `m.Run` today is
   `internal/testhooks`' `armed` variable, from a variable CI never sets in the process that runs the tests.
 - A test that is flaky, or that depends on the date, passes on a pull request when its package reuses a pass; the push
   run on `main` runs it again.
