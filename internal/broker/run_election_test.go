@@ -173,6 +173,7 @@ func TestRunTheNewLeaderUsesTheCredentialsOfNowAndNotOfItsStart(t *testing.T) {
 // A leader that cannot renew its lease ends the process at once, with exit 5 and one line, and without the shutdown
 // that would post.
 func TestRunTheProcessExitsWhenTheLeaseIsLost(t *testing.T) {
+	t.Parallel()
 	client, fence := cluster(), &fakeFence{}
 	var unreachable atomic.Bool
 	client.PrependReactor("*", "leases", func(k8stesting.Action) (bool, runtime.Object, error) {
@@ -212,6 +213,7 @@ func TestRunTheProcessExitsWhenTheLeaseIsLost(t *testing.T) {
 // A replica that cannot be given the epoch does not hold the lease for ever: after the time a leader is given to renew,
 // Run ends with the error, so that its restart, or the other replica, can try.
 func TestRunEndsWhenTheEpochCannotBeTakenAndHandsTheLeaseOver(t *testing.T) {
+	t.Parallel()
 	client, fence := cluster(), &fakeFence{failing: true}
 	ca, a := electionConfig(t, client, fence, "pod-a_1")
 	a.running = start(t, ca)

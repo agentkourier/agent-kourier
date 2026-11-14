@@ -55,6 +55,7 @@ func steppingBy(d time.Duration) func() time.Time {
 // reaches Slack, the process is stopped once, with exit 5, for the reason that a chat write was refused, and not for the
 // loss of the lease, which refuses nothing.
 func TestRunALeaderPastItsRenewDeadlineWritesNothingToTheChat(t *testing.T) {
+	t.Parallel()
 	client, fence := cluster(), &fakeFence{}
 	c, rep := electionConfig(t, client, fence, "pod-a_1")
 	api := &writeCounter{}

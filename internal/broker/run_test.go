@@ -204,6 +204,12 @@ type running struct {
 	done   chan error
 }
 
+// runsAlongside readies c for a broker that runs while other tests' brokers do (t.Parallel): it leaves klog's process-wide logger
+// alone (leaveKlog), which each Run would otherwise set while the others' informers read it. A test runs in parallel only when all
+// it starts is its own (a fake cluster, a store, a listener, doubles) and it reads or sets no environment variable, goroutine count
+// (goleak) or other process-wide value.
+func runsAlongside(c *RunConfig) { c.leaveKlog = true }
+
 func start(t *testing.T, c RunConfig) *running {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
