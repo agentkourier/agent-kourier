@@ -4,34 +4,48 @@
 # test-testhooks-shard), each leg running its part of the pass's packages, and test-scripts is a job of its own. The
 # jobs test and test-testhooks, the required checks, run nothing but a check that every job they need passed. make
 # test-postgres, which make test does not run, is a job of its own too. Nothing is retried. The testhooks pass runs only
-# the packages the testhooks tag changes, as its comment explains; nothing else is skipped but on a docs-only pull
-# request, below. The kind tiers (make e2e-fast and the others) are not here; RELEASING.md says what they would need.
-# The one job that uses kind is crd-corpus, whose cluster has only the CRDs.
+# the packages the testhooks tag changes, as its comment explains; nothing else is skipped but on a pull request that
+# changes only paths a job does not read, below. The kind tiers (make e2e-fast and the others) are not here;
+# RELEASING.md says what they would need. The one job that uses kind is crd-corpus, whose cluster has only the CRDs.
 #
-# A docs-only pull request is one whose changed paths are all on the list in hack/ci/docs-only.sh, each as a regular
-# file or deleted: maintainer prose such as spec.md and AGENTS.md, docs/brand, docs/spikes, and the site's media under
-# docs/assets, whose content no Go test, script test, image build, scanner or CodeQL reads but for two tests that repeat
-# make docs-check, which lint runs (the script says which). A symlink or submodule anywhere on the list runs everything:
-# the docs agent's tests walk the real docs/ and refuse any symlink in it. README.md and the pages under docs/ are not
-# on it: tests read them. On one, the legs of test-shard and test-testhooks-shard, test-scripts, test-postgres,
-# crd-corpus, docs-agent, echo-agent and prompt-agent still start, check out and run the docs-only step, then skip every
-# other step, and each reports success under its own name, as do govulncheck and trivy in security.yml and analyze in
-# codeql.yml; test and test-testhooks then pass, as their legs did. They skip steps, not the job: a job-level if is
-# evaluated before the matrix expands (it cannot read matrix), so a crd-corpus skipped there reports no check named
-# crd-corpus (1.37) or crd-corpus (1.33), and those required checks would wait forever. lint runs in full: it takes
-# about a minute and a half, and its make docs-check reads the text files under docs/assets (SVG, captions), as
-# docs.yml's build does on a pull request that touches docs/. zizmor runs in full, and gitleaks in security.yml.
-# hack/ci/docsonly's test holds every copy of the docs-only step to one text and the checkouts before it alike, and
-# every later step to the gate unless its if holds only on a push; it reads each if as terms joined by && and refuses
-# one with ||, a negated event or a bracket (status calls such as always() aside).
+# Each gated job (the legs of test-shard and test-testhooks-shard, test-scripts, test-postgres, crd-corpus, docs-agent,
+# echo-agent and prompt-agent here, govulncheck and trivy in security.yml, analyze in codeql.yml) passes its class to
+# hack/ci/docs-only.sh in its docs-only step, and skips every later step when each changed path is, as a regular file
+# or deleted, one its class does not read:
+#   - every class: the docs-only list, maintainer prose such as spec.md and AGENTS.md, docs/brand, docs/spikes and the
+#     site's media under docs/assets, whose content no Go test, script test, image build, scanner or CodeQL reads but
+#     for two tests that repeat make docs-check, which lint runs (the script says which);
+#   - tests (the race and testhooks legs, test-scripts, test-postgres): nothing more, since tests read README.md and
+#     pages under docs/ and elsewhere when they run (test-postgres's store suite reads docs/reference/stored-data.md);
+#   - scan (govulncheck, trivy, analyze) and crd-corpus: also Markdown outside every Go package's tree, such as
+#     README.md, the pages under docs/ and the chart's README; those jobs read Markdown only as a file a package embeds;
+#   - docs-agent: also that Markdown except under docs/ (its corpus) and examples/recipes/docs-agent/;
+#   - echo-agent: also that Markdown except under examples/recipes/echo-agent/agent/, the one directory it reads;
+#   - prompt-agent: also that Markdown except under examples/recipes/prompt-agent/agent/, the one directory it reads.
+# A Go package's tree is a directory of the merge commit with a .go file in it, and everything below: the script finds
+# them on each run, so a page a new package could embed stops being skipped with no list to edit. The script's header
+# gives each class's evidence. So a pull request that changes README.md and pages under docs/ skips crd-corpus,
+# echo-agent, prompt-agent, govulncheck, trivy and analyze; one that changes only README.md also skips docs-agent; one
+# that changes only paths on the docs-only list skips every gated job. A symlink or submodule anywhere in the changes
+# runs everything: the docs agent's tests walk the real docs/ and refuse any symlink in it. A skipped job still starts,
+# checks out and runs the docs-only step, and reports success under its own name; test and test-testhooks then pass, as
+# their legs did. They skip steps, not the job: a job-level if is evaluated before the matrix expands (it cannot read
+# matrix), so a crd-corpus skipped there reports no check named crd-corpus (1.37) or crd-corpus (1.33), and those
+# required checks would wait forever. lint runs in full: it takes about a minute and a half, and its make docs-check
+# reads the text files under docs/assets (SVG, captions) and the pages, as docs.yml's build does on a pull request that
+# touches docs/. zizmor runs in full, and gitleaks in security.yml. hack/ci/docsonly's test holds every copy of the
+# docs-only step to one text, with the class it names for the job (a job given another job's class fails it), the
+# checkouts before it alike, and every later step to the gate unless its if holds only on a push; it reads each if as
+# terms joined by && and refuses one with ||, a negated event or a bracket (status calls such as always() aside).
 #
 # The docs-only step fails open. It runs only on a pull_request event and lists the paths with git, the merge commit
 # against its first parent (the checkout fetches both parents on a pull request), so there is no cap on how many paths
-# it lists. Only its exact answer skip=true skips anything: a path off the list or not a regular file, a listing that
-# fails or is empty, a commit that is not a merge whose second parent is the pull request's head
-# (github.event.pull_request.head.sha, through env), or the step failing (continue-on-error keeps the job going) runs
-# every step. A push to main never runs the step and so runs everything, as before: main's push runs, which the release
-# gate (hack/release/check-ci.sh) reads and which save the caches, are unchanged.
+# it lists, and the merge commit's tree for the Go packages. Only its exact answer skip=true skips anything: a path its
+# class reads or not a regular file, an unknown class, a listing that fails or is empty, a commit that is not a merge
+# whose second parent is the pull request's head (github.event.pull_request.head.sha, through env), or the step
+# failing (continue-on-error keeps the job going) runs every step. A push to main never runs the step and so runs
+# everything, as before: main's push runs, which the release gate (hack/release/check-ci.sh) reads and which save the
+# caches, are unchanged.
 name: ci
 
 on:
@@ -164,15 +178,17 @@ jobs:
           persist-credentials: false
           # The merge commit and both its parents, for the docs-only step.
           fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
-      # On a docs-only pull request every step after this one skips; the header says why that is safe.
+      # On a pull request that changes only paths its class (DOCS_ONLY_CLASS) does not read, every step after this
+      # one skips; the header says why that is safe.
       - id: docs-only
         name: Classify the pull request's changes
         if: ${{ github.event_name == 'pull_request' }}
         continue-on-error: true
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DOCS_ONLY_CLASS: tests
         run: |
-          scope=$(hack/ci/docs-only.sh)
+          scope=$(hack/ci/docs-only.sh "${DOCS_ONLY_CLASS}")
           echo "${scope}" >>"${GITHUB_OUTPUT}"
       - id: setup-go
         if: ${{ steps.docs-only.outputs.skip != 'true' }}
@@ -239,15 +255,17 @@ jobs:
           persist-credentials: false
           # The merge commit and both its parents, for the docs-only step.
           fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
-      # On a docs-only pull request every step after this one skips; the header says why that is safe.
+      # On a pull request that changes only paths its class (DOCS_ONLY_CLASS) does not read, every step after this
+      # one skips; the header says why that is safe.
       - id: docs-only
         name: Classify the pull request's changes
         if: ${{ github.event_name == 'pull_request' }}
         continue-on-error: true
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DOCS_ONLY_CLASS: tests
         run: |
-          scope=$(hack/ci/docs-only.sh)
+          scope=$(hack/ci/docs-only.sh "${DOCS_ONLY_CLASS}")
           echo "${scope}" >>"${GITHUB_OUTPUT}"
       - if: ${{ steps.docs-only.outputs.skip != 'true' }}
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -302,15 +320,17 @@ jobs:
           persist-credentials: false
           # The merge commit and both its parents, for the docs-only step.
           fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
-      # On a docs-only pull request every step after this one skips; the header says why that is safe.
+      # On a pull request that changes only paths its class (DOCS_ONLY_CLASS) does not read, every step after this
+      # one skips; the header says why that is safe.
       - id: docs-only
         name: Classify the pull request's changes
         if: ${{ github.event_name == 'pull_request' }}
         continue-on-error: true
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DOCS_ONLY_CLASS: tests
         run: |
-          scope=$(hack/ci/docs-only.sh)
+          scope=$(hack/ci/docs-only.sh "${DOCS_ONLY_CLASS}")
           echo "${scope}" >>"${GITHUB_OUTPUT}"
       - id: setup-go
         if: ${{ steps.docs-only.outputs.skip != 'true' }}
@@ -388,15 +408,17 @@ jobs:
           persist-credentials: false
           # The merge commit and both its parents, for the docs-only step.
           fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
-      # On a docs-only pull request every step after this one skips; the header says why that is safe.
+      # On a pull request that changes only paths its class (DOCS_ONLY_CLASS) does not read, every step after this
+      # one skips; the header says why that is safe.
       - id: docs-only
         name: Classify the pull request's changes
         if: ${{ github.event_name == 'pull_request' }}
         continue-on-error: true
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DOCS_ONLY_CLASS: tests
         run: |
-          scope=$(hack/ci/docs-only.sh)
+          scope=$(hack/ci/docs-only.sh "${DOCS_ONLY_CLASS}")
           echo "${scope}" >>"${GITHUB_OUTPUT}"
       - id: setup-go
         if: ${{ steps.docs-only.outputs.skip != 'true' }}
@@ -452,15 +474,17 @@ jobs:
           persist-credentials: false
           # The merge commit and both its parents, for the docs-only step.
           fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
-      # On a docs-only pull request every step after this one skips; the header says why that is safe.
+      # On a pull request that changes only paths its class (DOCS_ONLY_CLASS) does not read, every step after this
+      # one skips; the header says why that is safe.
       - id: docs-only
         name: Classify the pull request's changes
         if: ${{ github.event_name == 'pull_request' }}
         continue-on-error: true
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DOCS_ONLY_CLASS: crd-corpus
         run: |
-          scope=$(hack/ci/docs-only.sh)
+          scope=$(hack/ci/docs-only.sh "${DOCS_ONLY_CLASS}")
           echo "${scope}" >>"${GITHUB_OUTPUT}"
       - id: setup-go
         if: ${{ steps.docs-only.outputs.skip != 'true' }}
@@ -535,15 +559,17 @@ jobs:
           persist-credentials: false
           # The merge commit and both its parents, for the docs-only step.
           fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
-      # On a docs-only pull request every step after this one skips; the header says why that is safe.
+      # On a pull request that changes only paths its class (DOCS_ONLY_CLASS) does not read, every step after this
+      # one skips; the header says why that is safe.
       - id: docs-only
         name: Classify the pull request's changes
         if: ${{ github.event_name == 'pull_request' }}
         continue-on-error: true
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DOCS_ONLY_CLASS: docs-agent
         run: |
-          scope=$(hack/ci/docs-only.sh)
+          scope=$(hack/ci/docs-only.sh "${DOCS_ONLY_CLASS}")
           echo "${scope}" >>"${GITHUB_OUTPUT}"
       # Its lint builds golangci-lint from the root module, so the key covers both go.sum files.
       - id: setup-go
@@ -606,15 +632,17 @@ jobs:
           persist-credentials: false
           # The merge commit and both its parents, for the docs-only step.
           fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
-      # On a docs-only pull request every step after this one skips; the header says why that is safe.
+      # On a pull request that changes only paths its class (DOCS_ONLY_CLASS) does not read, every step after this
+      # one skips; the header says why that is safe.
       - id: docs-only
         name: Classify the pull request's changes
         if: ${{ github.event_name == 'pull_request' }}
         continue-on-error: true
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DOCS_ONLY_CLASS: echo-agent
         run: |
-          scope=$(hack/ci/docs-only.sh)
+          scope=$(hack/ci/docs-only.sh "${DOCS_ONLY_CLASS}")
           echo "${scope}" >>"${GITHUB_OUTPUT}"
       - id: setup-python
         if: ${{ steps.docs-only.outputs.skip != 'true' }}
@@ -657,15 +685,17 @@ jobs:
           persist-credentials: false
           # The merge commit and both its parents, for the docs-only step.
           fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
-      # On a docs-only pull request every step after this one skips; the header says why that is safe.
+      # On a pull request that changes only paths its class (DOCS_ONLY_CLASS) does not read, every step after this
+      # one skips; the header says why that is safe.
       - id: docs-only
         name: Classify the pull request's changes
         if: ${{ github.event_name == 'pull_request' }}
         continue-on-error: true
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DOCS_ONLY_CLASS: prompt-agent
         run: |
-          scope=$(hack/ci/docs-only.sh)
+          scope=$(hack/ci/docs-only.sh "${DOCS_ONLY_CLASS}")
           echo "${scope}" >>"${GITHUB_OUTPUT}"
       - id: setup-python
         if: ${{ steps.docs-only.outputs.skip != 'true' }}

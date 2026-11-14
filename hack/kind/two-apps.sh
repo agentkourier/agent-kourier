@@ -178,16 +178,22 @@ admission_is() {
 SERVE_LABEL=agentkourier.dev/serve
 SERVE_SELECTOR='{"matchLabels":{"agentkourier.dev/serve":"true"}}'
 SERVE_SELECTOR_STRING=agentkourier.dev/serve=true
-# label_team_a on|off: team-a's namespace with the label SERVE_LABEL=true, or without it (no error when it has none).
+# label_team_a on|off: team-a's namespace with the label SERVE_LABEL=true, or without it (no error when it has none). kubectl's errors go to stderr; off
+# fails when kubectl can neither take the label off nor read the namespace.
 label_team_a() {
+  local value
   case "$1" in
     on) "${K[@]}" label namespace team-a "${SERVE_LABEL}=true" --overwrite >/dev/null ;;
-    off) "${K[@]}" label namespace team-a "${SERVE_LABEL}-" >/dev/null 2>&1 || [ -z "$("${K[@]}" get namespace team-a -o "jsonpath={.metadata.labels.agentkourier\.dev/serve}")" ] ;;
+    off)
+      "${K[@]}" label namespace team-a "${SERVE_LABEL}-" >/dev/null && return 0
+      value=$("${K[@]}" get namespace team-a -o "jsonpath={.metadata.labels.agentkourier\.dev/serve}") || return 1
+      [ -z "${value}" ]
+      ;;
   esac
 }
 # broker_pods: the broker's pods, one to a line, sorted: name, UID and the restart count of its container. A pod that is being deleted is left out.
 broker_pods() {
-  "${K[@]}" -n agent-kourier get pods -l app.kubernetes.io/name=agent-kourier,app.kubernetes.io/instance=agent-kourier \
+  "${K[@]}" -n agent-kourier get pods -l "${TIER_AGENTKOURIER_PODS}" \
     -o 'jsonpath={range .items[*]}{.metadata.name} {.metadata.uid} {.status.containerStatuses[0].restartCount} {.metadata.deletionTimestamp}{"\n"}{end}' |
     awk 'NF == 3' | sort
 }
@@ -197,7 +203,7 @@ steady_pods() {
   local deadline=$((SECONDS + 120)) pods all
   while [ "${SECONDS}" -lt "${deadline}" ]; do
     pods=$(broker_pods)
-    all=$("${K[@]}" -n agent-kourier get pods -l app.kubernetes.io/name=agent-kourier,app.kubernetes.io/instance=agent-kourier --no-headers 2>/dev/null | wc -l | tr -d ' ')
+    all=$("${K[@]}" -n agent-kourier get pods -l "${TIER_AGENTKOURIER_PODS}" --no-headers 2>/dev/null | wc -l | tr -d ' ')
     if [ -n "${pods}" ] && [ "$(wc -l <<<"${pods}" | tr -d ' ')" = "${replicas}" ] && [ "${all}" = "${replicas}" ]; then
       printf '%s\n' "${pods}"
       return 0
