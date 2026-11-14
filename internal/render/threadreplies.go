@@ -66,6 +66,12 @@ func threadItem(r ThreadReply) untrustedItem {
 // out already. It keeps the newest MaxThreadReplies entries that fit, and says how many it left out altogether, dropped
 // included, in the block's last line. It returns "" and 0 if there is no reply to show.
 func ThreadRepliesCounted(entries []ThreadReply, dropped int) (section string, leftOut int) {
+	return threadRepliesBlock(entries, dropped).render()
+}
+
+// threadRepliesBlock is the block that ThreadRepliesCounted renders. It is apart from it for the tests that lay the block out
+// from items they cleaned once (see untrustedBlock.layout).
+func threadRepliesBlock(entries []ThreadReply, dropped int) untrustedBlock {
 	// The clause ends in the comma that closes its aside, before the verb of the sentence the module writes. The aside
 	// says which of the two shows who wrote a reply: the name is what a person calls themselves, and is theirs to choose.
 	return threadBlock("Replies that people wrote in this thread since the previous turn, without mentioning Agent Kourier "+
@@ -79,10 +85,10 @@ func ThreadRepliesCounted(entries []ThreadReply, dropped int) (section string, l
 func ThreadMessagesCounted(entries []ThreadReply, pinned, dropped int) (section string, leftOut int) {
 	return threadBlock("Messages that people and other bots wrote in this thread before the mention, leaving out any that were already a request to you "+
 		"(in each, the id is who wrote it, by the platform's ID, and the from is only the name they go by),",
-		leftOutNoun{One: "earlier message", Many: "earlier messages"}, entries, pinned, dropped)
+		leftOutNoun{One: "earlier message", Many: "earlier messages"}, entries, pinned, dropped).render()
 }
 
-func threadBlock(opening string, noun leftOutNoun, entries []ThreadReply, pinned, dropped int) (section string, leftOut int) {
+func threadBlock(opening string, noun leftOutNoun, entries []ThreadReply, pinned, dropped int) untrustedBlock {
 	items := make([]untrustedItem, len(entries))
 	for i, r := range entries {
 		items[i] = threadItem(r)
@@ -97,5 +103,5 @@ func threadBlock(opening string, noun leftOutNoun, entries []ThreadReply, pinned
 		MaxUnits:      MaxThreadBlockUnits,
 		OmitWhenEmpty: true,
 		Items:         items,
-	}.render()
+	}
 }
