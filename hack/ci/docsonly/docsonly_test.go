@@ -20,8 +20,9 @@ const workflowsDir = "../../../.github/workflows"
 
 // gated names, per workflow, the jobs that have the docs-only step, and the class each passes to hack/ci/docs-only.sh:
 // the paths that the job does not read, which docs-only.sh's header justifies for each class. A job is added here on
-// purpose: gitleaks, lint and zizmor must always run in full. ci.yml's test and test-testhooks are not gated: they check
-// out nothing and only require their legs, which are, to have passed.
+// purpose: gitleaks and lint, which runs zizmor's audit of the workflows, must always run in full (TestUngatedJobsRunInFull).
+// ci.yml's test and test-testhooks are not gated: they check out nothing and only require their legs, which are, to
+// have passed.
 var gated = map[string]map[string]string{
 	"ci.yml": {
 		"crd-corpus":           "crd-corpus",
@@ -82,7 +83,9 @@ var (
 type step map[string]any
 
 type workflow struct {
-	Jobs map[string]struct {
+	Concurrency map[string]any `json:"concurrency"`
+	Jobs        map[string]struct {
+		If    any    `json:"if"`
 		Steps []step `json:"steps"`
 	} `json:"jobs"`
 }
@@ -279,13 +282,13 @@ func TestCheckFindsDrift(t *testing.T) {
 	}
 	t.Run("an ungated job with the step", func(t *testing.T) {
 		wfs := maps.Clone(repo)
-		old := "  zizmor:\n    runs-on: ubuntu-26.04\n    timeout-minutes: 10\n    steps:\n"
+		old := "  lint:\n    runs-on: ubuntu-26.04\n    timeout-minutes: 15\n    steps:\n"
 		if !strings.Contains(string(wfs["ci.yml"]), old) {
-			t.Fatalf("ci.yml has no zizmor job as expected")
+			t.Fatalf("ci.yml has no lint job as expected")
 		}
 		wfs["ci.yml"] = []byte(strings.Replace(string(wfs["ci.yml"]), old, old+"      - id: docs-only\n        run: 'true'\n", 1))
-		if problems := checkProblems(t, wfs); !slices.ContainsFunc(problems, func(p string) bool { return strings.Contains(p, "job zizmor has a docs-only step") }) {
-			t.Errorf("problems = %q, want one for zizmor", problems)
+		if problems := checkProblems(t, wfs); !slices.ContainsFunc(problems, func(p string) bool { return strings.Contains(p, "job lint has a docs-only step") }) {
+			t.Errorf("problems = %q, want one for lint", problems)
 		}
 	})
 }
@@ -403,5 +406,157 @@ func TestEveryClassIsTheScripts(t *testing.T) {
 		if got := stderr(class); !strings.Contains(got, "PR_HEAD_SHA is not set") {
 			t.Errorf("class %s: stderr %q, want the script past the class, at PR_HEAD_SHA", class, got)
 		}
+	}
+}
+
+// ungated names, per workflow, the jobs (by id) that run in full on every pull request: lint, and security.yml's
+// secrets, whose check is named gitleaks. check reports a docs-only step in any of them; this list holds them to
+// existing, so a rename cannot leave the rule covering nothing.
+var ungated = map[string][]string{
+	"ci.yml":       {"lint"},
+	"security.yml": {"secrets"},
+}
+
+// The step of ci.yml's lint that audits the workflows with zizmor, the one if it may have, and the one env: it runs
+// whatever the steps before it did, on every event, so a lint or build failure does not hide a finding; and without
+// the token hack/security/lint-workflows.sh runs zizmor offline, which drops its online audits (impostor commits,
+// known vulnerable actions) without failing.
+const (
+	auditRun   = "make lint-workflows"
+	auditIf    = "${{ !cancelled() }}"
+	auditToken = "${{ github.token }}"
+)
+
+// ungatedProblems returns what is wrong with the jobs in ungated: one that is missing, a lint with a job-level if (it
+// must run on every event), and a lint without the workflow audit as wanted.
+func ungatedProblems(t *testing.T, workflows map[string][]byte) []string {
+	t.Helper()
+	var problems []string
+	for _, file := range slices.Sorted(maps.Keys(ungated)) {
+		var wf workflow
+		if err := yaml.Unmarshal(workflows[file], &wf); err != nil {
+			t.Fatalf("%s: %v", file, err)
+		}
+		for _, name := range ungated[file] {
+			if _, ok := wf.Jobs[name]; !ok {
+				problems = append(problems, fmt.Sprintf("%s has no job %s", file, name))
+			}
+		}
+		if file != "ci.yml" {
+			continue
+		}
+		if cond := wf.Jobs["lint"].If; cond != nil {
+			problems = append(problems, fmt.Sprintf("ci.yml: job lint has the if %v; it must run on every event", cond))
+		}
+		var audits []step
+		for _, s := range wf.Jobs["lint"].Steps {
+			if s["run"] == auditRun {
+				audits = append(audits, s)
+			}
+		}
+		switch {
+		case len(audits) != 1:
+			problems = append(problems, fmt.Sprintf("ci.yml: job lint has %d steps that run %s, not one", len(audits), auditRun))
+		case audits[0]["if"] != auditIf:
+			problems = append(problems, fmt.Sprintf("ci.yml: job lint: the %s step's if is %v, not %s", auditRun, audits[0]["if"], auditIf))
+		case !reflect.DeepEqual(audits[0]["env"], map[string]any{"GH_TOKEN": auditToken}):
+			problems = append(problems, fmt.Sprintf("ci.yml: job lint: the %s step's env is %v, not GH_TOKEN: %s alone", auditRun, audits[0]["env"], auditToken))
+		}
+	}
+	return problems
+}
+
+// TestUngatedJobsRunInFull: lint and secrets exist, and lint audits the workflows on every run.
+func TestUngatedJobsRunInFull(t *testing.T) {
+	for _, p := range ungatedProblems(t, readWorkflows(t)) {
+		t.Error(p)
+	}
+}
+
+// TestUngatedProblemsFindDrift: each way the workflow audit can leave lint, or lint leave ci.yml, is reported.
+func TestUngatedProblemsFindDrift(t *testing.T) {
+	repo := readWorkflows(t)
+	const (
+		run  = "        run: " + auditRun + "\n        env:\n          GH_TOKEN: ${{ github.token }}\n"
+		step = "      - if: " + auditIf + "\n" + run
+	)
+	for _, tt := range []struct {
+		name, file, old, new, want string
+	}{
+		{"the audit dropped", "ci.yml", step, "", "has 0 steps that run make lint-workflows"},
+		{"the audit twice", "ci.yml", step, step + step, "has 2 steps that run make lint-workflows"},
+		{"the audit only on a push", "ci.yml", step, "      - if: ${{ github.event_name == 'push' }}\n" + run, "the make lint-workflows step's if is ${{ github.event_name == 'push' }}"},
+		{"the audit skipped after a failure", "ci.yml", step, "      - " + strings.TrimPrefix(run, "        "), "the make lint-workflows step's if is <nil>"},
+		{"the token dropped", "ci.yml", step, "      - if: " + auditIf + "\n        run: " + auditRun + "\n", "the make lint-workflows step's env is <nil>"},
+		{"another variable beside the token", "ci.yml", step, step + "          ZIZMOR_BIN: /tmp/zizmor\n", "the make lint-workflows step's env is"},
+		{"lint only on a push", "ci.yml", "\n  lint:\n    runs-on:", "\n  lint:\n    if: ${{ github.event_name == 'push' }}\n    runs-on:", "job lint has the if ${{ github.event_name == 'push' }}"},
+		{"lint renamed", "ci.yml", "\n  lint:\n", "\n  lint-and-build:\n", "ci.yml has no job lint"},
+		{"secrets renamed", "security.yml", "\n  secrets:\n", "\n  gitleaks-scan:\n", "security.yml has no job secrets"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			wfs := maps.Clone(repo)
+			if !strings.Contains(string(wfs[tt.file]), tt.old) {
+				t.Fatalf("%s has no %q to change", tt.file, tt.old)
+			}
+			wfs[tt.file] = []byte(strings.Replace(string(wfs[tt.file]), tt.old, tt.new, 1))
+			if problems := ungatedProblems(t, wfs); !slices.ContainsFunc(problems, func(p string) bool { return strings.Contains(p, tt.want) }) {
+				t.Errorf("problems = %q, want one with %q", problems, tt.want)
+			}
+		})
+	}
+}
+
+// codeqlConcurrency is codeql.yml's concurrency, whose comment there says why: a pull request's newer push cancels its
+// run, and every other run is a group of its own, keyed by its run id. A group that main's pushes shared (the tidier
+// ${{ github.workflow }}-${{ github.ref }}) would let a newer push cancel a pending one, whose commit the release gate
+// (hack/release/check-ci.sh) then refuses, its codeql run cancelled.
+var codeqlConcurrency = map[string]any{
+	"group":              "${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+	"cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+}
+
+// concurrencyProblems returns what is wrong with codeql.yml's concurrency: anything but codeqlConcurrency.
+func concurrencyProblems(t *testing.T, workflows map[string][]byte) []string {
+	t.Helper()
+	var wf workflow
+	if err := yaml.Unmarshal(workflows["codeql.yml"], &wf); err != nil {
+		t.Fatalf("codeql.yml: %v", err)
+	}
+	if !reflect.DeepEqual(wf.Concurrency, codeqlConcurrency) {
+		return []string{fmt.Sprintf("codeql.yml: its concurrency is %v, not %v", wf.Concurrency, codeqlConcurrency)}
+	}
+	return nil
+}
+
+// TestCodeQLConcurrencyCancelsOnlyPullRequests: codeql.yml's concurrency is the one wanted.
+func TestCodeQLConcurrencyCancelsOnlyPullRequests(t *testing.T) {
+	for _, p := range concurrencyProblems(t, readWorkflows(t)) {
+		t.Error(p)
+	}
+}
+
+// TestConcurrencyProblemsFindDrift: a group that main's pushes share, a cancel on every event, or no concurrency at
+// all is reported.
+func TestConcurrencyProblemsFindDrift(t *testing.T) {
+	repo := readWorkflows(t)
+	const (
+		group  = "  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}\n"
+		cancel = "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n"
+	)
+	for _, tt := range []struct{ name, old, new string }{
+		{"one group per ref", group, "  group: ${{ github.workflow }}-${{ github.ref }}\n"},
+		{"cancel on every event", cancel, "  cancel-in-progress: true\n"},
+		{"no concurrency", "concurrency:\n" + group + cancel, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			wfs := maps.Clone(repo)
+			if !strings.Contains(string(wfs["codeql.yml"]), tt.old) {
+				t.Fatalf("codeql.yml has no %q to change", tt.old)
+			}
+			wfs["codeql.yml"] = []byte(strings.Replace(string(wfs["codeql.yml"]), tt.old, tt.new, 1))
+			if problems := concurrencyProblems(t, wfs); len(problems) == 0 {
+				t.Error("no problem reported")
+			}
+		})
 	}
 }

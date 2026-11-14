@@ -213,7 +213,7 @@ belongs with a change to the other.
 
 ## CI
 
-`.github/workflows/ci.yml` runs `make fmt` (no diff), `make lint` and `make build` (the `lint` job), and what `make test`
+`.github/workflows/ci.yml` runs `make fmt` (no diff), `make lint`, `make build` and `make lint-workflows` (the `lint` job), and what `make test`
 runs, on pull requests and pushes to `main`, in jobs that run side by side. Each race pass is split over the legs of a
 matrix job: `test-shard (1)` and `test-shard (2)` each run part of `make test-race`, and `test-testhooks-shard (1)` and
 `test-testhooks-shard (2)` part of `make test-testhooks`; `test-scripts` runs `make test-scripts`. A leg runs its
@@ -242,13 +242,18 @@ it. It is the only job that has an API server compile the schemas' CEL rules. It
 `hack/kind/lib.sh` (`NODE_IMAGE`, Kubernetes 1.37, the job `crd-corpus (1.37)`) and on the oldest Kubernetes the chart admits
 (`NODE_IMAGE_MIN`, 1.33, the job `crd-corpus (1.33)`; `CRD_CORPUS_NODE=min make crd-corpus` runs it locally). Both are required checks of
 the `main` ruleset and are in `CI_REQUIRED_JOBS`. Renaming either job, or moving the chart's minimum Kubernetes version, is a change to the
-workflow, `NODE_IMAGE_MIN`, the ruleset and `CI_REQUIRED_JOBS` together. A run took about three minutes on a warm cache; the timeout is 20. The `zizmor` job (`make lint-workflows`, `hack/security/lint-workflows.sh`) audits
-every workflow with a pinned zizmor under the policy in `.github/zizmor.yml` and fails on any finding; it first
-proves the policy still fails a set of unsafe fixtures (`hack/security/testdata/zizmor`), and then that the inline
-ignore comments hide only the findings the script lists. It runs with `contents: read` and uploads no SARIF, so it
-behaves the same on a fork's pull request. It belongs in the `main` ruleset's required checks: the owner adds
-`zizmor` from `ci` there, and the same change adds it to `CI_REQUIRED_JOBS` in `hack/release/check-ci.sh` and to
-the lists above. The Go jobs in `ci.yml`, `security.yml`, `codeql.yml` and `docs.yml` keep the module cache and the build cache
+workflow, `NODE_IMAGE_MIN`, the ruleset and `CI_REQUIRED_JOBS` together. A run took about three minutes on a warm cache; the timeout is 20. The `lint` job's last step before its cache upkeep, `make lint-workflows`
+(`hack/security/lint-workflows.sh`), audits every workflow with a pinned zizmor under the policy in
+`.github/zizmor.yml` and fails on any finding; it first proves the policy still fails a set of unsafe fixtures
+(`hack/security/testdata/zizmor`), and then that the inline ignore comments hide only the findings the script lists.
+It runs even when an earlier step of `lint` failed. It is the only `run` step with the job's token (`contents: read`)
+in its environment, for zizmor's online audits, so `make lint`, `make build` and the other steps that run the pull
+request's code never see it; it uploads no SARIF, so it behaves the same on a fork's pull request. Because it is a
+step of `lint`, a required check, a finding blocks the merge and the release. The online audits can raise a finding
+that no change in the pull request caused: an advisory published against a pinned action fails `lint` on every pull
+request, docs-only ones included, until the pin moves. A failed download of zizmor or a GitHub API error during the
+online audits also fails `lint`; a re-run clears it. `hack/ci/docsonly`'s test fails if the step leaves `lint`, loses
+its token, or gets an `if` other than `!cancelled()`, or if `lint` gets a job-level `if`. The Go jobs in `ci.yml`, `security.yml`, `codeql.yml` and `docs.yml` keep the module cache and the build cache
 (plus golangci-lint's cache in the jobs that lint) in Actions caches, one per job and one per leg of `test-shard` and
 `test-testhooks-shard` (`go-test-<leg>-…`, `go-test-testhooks-<leg>-…`), except that `test-postgres` restores the first
 race leg's and the two `crd-corpus` jobs share one, which `crd-corpus (1.37)` saves. A key is
@@ -300,8 +305,8 @@ embeds it. So a pull request that changes `README.md` and pages under `docs/` sk
 `echo-agent`, `prompt-agent`, the `govulncheck` and `trivy` jobs and `analyze`; one that changes only `README.md` also skips
 `docs-agent`; one that changes only the docs-only list skips every gated job, and `test` and `test-testhooks` pass as
 their legs did. A pull request that skips `govulncheck` or `trivy` does not see a vulnerability published since its
-base was scanned; `main`'s push runs do, and so does the nightly `security` run's `govulncheck`. `lint`, `zizmor` and
-`gitleaks` always run in full. A symlink or submodule anywhere in the changes runs every step of every gated job: the
+base was scanned; `main`'s push runs do, and so does the nightly `security` run's `govulncheck`. `lint`, with its zizmor
+audit, and `gitleaks` always run in full. A symlink or submodule anywhere in the changes runs every step of every gated job: the
 docs agent's tests walk the real `docs/` and refuse any symlink in it. So does a path the class reads, an unknown
 class, a failure to list the paths or the merge commit's tree, or a merge commit whose second parent is not the pull
 request's head. There is no cap on how many paths it lists. A push to `main` always runs every step, so the push runs
