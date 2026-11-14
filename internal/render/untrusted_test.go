@@ -269,8 +269,10 @@ func (tg hostileTarget) hostileTexts() []string {
 // Forged tags and look-alike brackets in every place, one at a time and all together, cannot close the block, open a tag, or
 // write an element: the block has the shape of checkSection whatever the text.
 func TestUntrustedBlockHostileTextCannotLeaveItsPlace(t *testing.T) {
+	t.Parallel()
 	for _, tg := range hostileTargets() {
 		t.Run(tg.name, func(t *testing.T) {
+			t.Parallel()
 			for _, s := range tg.hostileTexts() {
 				for i, p := range tg.places {
 					got := tg.build(t, tg.fill(s, i))
@@ -339,8 +341,10 @@ func TestUntrustedBlockWritesWhatItEscapes(t *testing.T) {
 // every kind of field takes secrets out. A place of free text is held to every rule of the corpus, a place of
 // identifier text to what has the shape of a token (redacttest.Identifiers).
 func TestUntrustedBlockTakesTheSplitSecretCorpusOutOfEveryKind(t *testing.T) {
+	t.Parallel()
 	for _, tg := range hostileTargets() {
 		t.Run(tg.name, func(t *testing.T) {
+			t.Parallel()
 			var free, identifier []int
 			for i, p := range tg.places {
 				if p.kind == kindIdentifier {
@@ -369,8 +373,10 @@ func TestUntrustedBlockTakesTheSplitSecretCorpusOutOfEveryKind(t *testing.T) {
 // A place shows at most its cap, whole at exactly the cap and cut, with the mark, one unit over it, as escaped text
 // and by UTF-16 units.
 func TestUntrustedBlockCapsEachPlaceAtItsUnit(t *testing.T) {
+	t.Parallel()
 	for _, tg := range hostileTargets() {
 		t.Run(tg.name, func(t *testing.T) {
+			t.Parallel()
 			for i, p := range tg.places {
 				whole := strings.Repeat("a", p.cap)
 				if got := elemText(tg.build(t, tg.fill(whole, i)), p.elem); got != whole {
@@ -650,48 +656,52 @@ func itemTarget(limit int) hostileTarget {
 // sizes, the section is in its cap, the close tag is written, the line says the right number, and the block is as full as
 // it can be: the next older item would not have fitted, but for the room that the line takes at its widest.
 func TestUntrustedBlockDropOldest(t *testing.T) {
+	t.Parallel()
 	for _, dropped := range []int{0, 9, 99, 99_999} {
 		for _, n := range []int{1, 2, 3, 8, 13, 60} {
-			for size := 1; size <= 1000; size += 111 {
-				b := itemBlock(true, n, size)
-				b.Oldest.Dropped = dropped
-				got, left := b.render()
-				_, body := checkSection(t, itemTarget(b.MaxUnits), got)
-				shown := strings.Count(body, "<entry>")
-				if shown == 0 {
-					t.Fatalf("%d x %d, %d dropped: no item is shown, with room for one:\n%s", n, size, dropped, got)
-				}
-				if left != dropped+n-shown {
-					t.Fatalf("%d x %d, %d dropped: left out %d with %d of %d shown", n, size, dropped, left, shown, n)
-				}
-				if shown > b.Oldest.MaxItems {
-					t.Fatalf("%d items shown, want at most %d", shown, b.Oldest.MaxItems)
-				}
-				for i := range shown { // the newest, as one run up to the newest, oldest first
-					if want := fmt.Sprintf("<body>%03d", n-shown+i); !strings.Contains(body, want) {
-						t.Fatalf("%d x %d: the %dth shown is not the item %s:\n%s", n, size, i, want, got)
+			t.Run(fmt.Sprintf("%d dropped, %d items", dropped, n), func(t *testing.T) {
+				t.Parallel()
+				for size := 1; size <= 1000; size += 111 {
+					b := itemBlock(true, n, size)
+					b.Oldest.Dropped = dropped
+					got, left := b.render()
+					_, body := checkSection(t, itemTarget(b.MaxUnits), got)
+					shown := strings.Count(body, "<entry>")
+					if shown == 0 {
+						t.Fatalf("%d x %d, %d dropped: no item is shown, with room for one:\n%s", n, size, dropped, got)
+					}
+					if left != dropped+n-shown {
+						t.Fatalf("%d x %d, %d dropped: left out %d with %d of %d shown", n, size, dropped, left, shown, n)
+					}
+					if shown > b.Oldest.MaxItems {
+						t.Fatalf("%d items shown, want at most %d", shown, b.Oldest.MaxItems)
+					}
+					for i := range shown { // the newest, as one run up to the newest, oldest first
+						if want := fmt.Sprintf("<body>%03d", n-shown+i); !strings.Contains(body, want) {
+							t.Fatalf("%d x %d: the %dth shown is not the item %s:\n%s", n, size, i, want, got)
+						}
+					}
+					if hasLine := strings.Contains(body, "left out."); hasLine != (left > 0) {
+						t.Fatalf("%d x %d, %d dropped: %d left out, and a last line: %v", n, size, dropped, left, hasLine)
+					}
+					if line := b.Oldest.Noun.line(left) + "\n"; left > 0 && !strings.HasSuffix(body, line) {
+						t.Fatalf("%d x %d, %d dropped: the block does not end with %q:\n%s", n, size, dropped, line, got)
+					}
+					if n-shown > 0 && shown < b.Oldest.MaxItems { // the next older item would have fitted, but for the line's room at its widest
+						older, ok := b.cleanItems()[n-shown-1].render(math.MaxInt / 4)
+						if !ok {
+							t.Fatal("an item does not render")
+						}
+						slack := 0
+						if left > 0 {
+							slack = chat.Units(b.Oldest.Noun.line(dropped+n)) - chat.Units(b.Oldest.Noun.line(left))
+						}
+						if chat.Units(got)+chat.Units(older.text)+slack <= b.MaxUnits {
+							t.Fatalf("%d x %d, %d dropped: the section is %d units and the next older item is %d: it would have fitted", n, size, dropped, chat.Units(got), chat.Units(older.text))
+						}
 					}
 				}
-				if hasLine := strings.Contains(body, "left out."); hasLine != (left > 0) {
-					t.Fatalf("%d x %d, %d dropped: %d left out, and a last line: %v", n, size, dropped, left, hasLine)
-				}
-				if line := b.Oldest.Noun.line(left) + "\n"; left > 0 && !strings.HasSuffix(body, line) {
-					t.Fatalf("%d x %d, %d dropped: the block does not end with %q:\n%s", n, size, dropped, line, got)
-				}
-				if n-shown > 0 && shown < b.Oldest.MaxItems { // the next older item would have fitted, but for the line's room at its widest
-					older, ok := b.cleanItems()[n-shown-1].render(math.MaxInt / 4)
-					if !ok {
-						t.Fatal("an item does not render")
-					}
-					slack := 0
-					if left > 0 {
-						slack = chat.Units(b.Oldest.Noun.line(dropped+n)) - chat.Units(b.Oldest.Noun.line(left))
-					}
-					if chat.Units(got)+chat.Units(older.text)+slack <= b.MaxUnits {
-						t.Fatalf("%d x %d, %d dropped: the section is %d units and the next older item is %d: it would have fitted", n, size, dropped, chat.Units(got), chat.Units(older.text))
-					}
-				}
-			}
+			})
 		}
 	}
 }
@@ -752,6 +762,7 @@ func TestUntrustedBlockDropOldestAtTheUnit(t *testing.T) {
 // The leading items are kept, and the one that runs over the room is cut to it, with the mark; the ones after it are left out
 // and a last line, the mark, says so. The room of that line is taken, whether it is needed or not.
 func TestUntrustedBlockDropTrailing(t *testing.T) {
+	t.Parallel()
 	items := func(n, size int) []untrustedItem {
 		out := make([]untrustedItem, n)
 		for i := range out {
@@ -761,35 +772,39 @@ func TestUntrustedBlockDropTrailing(t *testing.T) {
 	}
 	tg := hostileTarget{name: "trailing", prefix: "test-block-", plural: true, maxUnits: 6000, many: true, elements: []string{"text"}}
 	for _, n := range []int{1, 2, 3, 5} {
-		for size := 1; size <= 3000; size += 97 {
-			b := untrustedBlock{Opening: "Notes", Plural: true, TagPrefix: "test-block-", MaxUnits: 6000, Items: items(n, size)}
-			got, left := b.render()
-			_, body := checkSection(t, tg, got)
-			lines := strings.Split(strings.TrimSuffix(body, "\n"), "\n")
-			shown := 0
-			for _, l := range lines {
-				if strings.HasPrefix(l, "<text>") {
-					if want := fmt.Sprintf("<text>%d", shown); !strings.HasPrefix(l, want) {
-						t.Fatalf("%d x %d: the %dth shown is %.20q, want the item %d: leading items are kept", n, size, shown, l, shown)
+		t.Run(fmt.Sprintf("%d items", n), func(t *testing.T) {
+			t.Parallel()
+			for size := 1; size <= 3000; size += 97 {
+				b := untrustedBlock{Opening: "Notes", Plural: true, TagPrefix: "test-block-", MaxUnits: 6000, Items: items(n, size)}
+				got, left := b.render()
+				_, body := checkSection(t, tg, got)
+				lines := strings.Split(strings.TrimSuffix(body, "\n"), "\n")
+				shown := 0
+				for _, l := range lines {
+					if strings.HasPrefix(l, "<text>") {
+						if want := fmt.Sprintf("<text>%d", shown); !strings.HasPrefix(l, want) {
+							t.Fatalf("%d x %d: the %dth shown is %.20q, want the item %d: leading items are kept", n, size, shown, l, shown)
+						}
+						shown++
 					}
-					shown++
+				}
+				if left != n-shown {
+					t.Fatalf("%d x %d: left out %d with %d of %d shown", n, size, left, shown, n)
+				}
+				if marked := strings.HasSuffix(body, chat.Truncated+"\n"); marked != (left > 0) {
+					t.Fatalf("%d x %d: %d left out, and the block ends with the mark: %v", n, size, left, marked)
+				}
+				if left > 0 {
+					// It is full: what is left is less than the next item's tags and a mark.
+					if room := b.MaxUnits - chat.Units(got); room > chat.Units("<text>")+chat.Units("</text>\n")+chat.Units(chat.Truncated) {
+						t.Fatalf("%d x %d: the section is %d units with %d left, and %d items were left out", n, size, chat.Units(got), room, left)
+					}
 				}
 			}
-			if left != n-shown {
-				t.Fatalf("%d x %d: left out %d with %d of %d shown", n, size, left, shown, n)
-			}
-			if marked := strings.HasSuffix(body, chat.Truncated+"\n"); marked != (left > 0) {
-				t.Fatalf("%d x %d: %d left out, and the block ends with the mark: %v", n, size, left, marked)
-			}
-			if left > 0 {
-				// It is full: what is left is less than the next item's tags and a mark.
-				if room := b.MaxUnits - chat.Units(got); room > chat.Units("<text>")+chat.Units("</text>\n")+chat.Units(chat.Truncated) {
-					t.Fatalf("%d x %d: the section is %d units with %d left, and %d items were left out", n, size, chat.Units(got), room, left)
-				}
-			}
-		}
+		})
 	}
 	t.Run("the room of the mark's line is taken", func(t *testing.T) {
+		t.Parallel()
 		// One field that is whole up to the room that is left, and cut to it, with the mark, one unit over.
 		const maxUnits = 6000
 		section := func(size int) (got, shown string) {
@@ -835,18 +850,22 @@ func TestUntrustedBlockWritesTheCloseTagWhateverTheCap(t *testing.T) {
 // caller dropped and all it was given, though fewer than that are left out. The newest item grows a unit at a time, so that some
 // section lands on each unit of the cap, and none may pass it, whatever number of digits the line comes to.
 func TestUntrustedBlockReservesTheLeftOutLineAtItsWidest(t *testing.T) {
+	t.Parallel()
 	for _, dropped := range []int{0, 8, 9, 98, 99, 998, 999, 99_998, 99_999} {
-		for _, n := range []int{4, 5, 6} {
-			for last := 1; last <= 120; last++ {
-				b := itemBlock(true, n, 20)
-				b.MaxUnits, b.Oldest.Dropped = 800, dropped
-				b.Items[n-1].Fields[1].Value = strings.Repeat("e", last)
-				got, left := b.render()
-				if units := chat.Units(got); units > b.MaxUnits {
-					t.Fatalf("%d dropped, %d items, the last of %d: %d units for a cap of %d, with %d left out", dropped, n, last, units, b.MaxUnits, left)
+		t.Run(fmt.Sprintf("%d dropped", dropped), func(t *testing.T) {
+			t.Parallel()
+			for _, n := range []int{4, 5, 6} {
+				for last := 1; last <= 120; last++ {
+					b := itemBlock(true, n, 20)
+					b.MaxUnits, b.Oldest.Dropped = 800, dropped
+					b.Items[n-1].Fields[1].Value = strings.Repeat("e", last)
+					got, left := b.render()
+					if units := chat.Units(got); units > b.MaxUnits {
+						t.Fatalf("%d dropped, %d items, the last of %d: %d units for a cap of %d, with %d left out", dropped, n, last, units, b.MaxUnits, left)
+					}
 				}
 			}
-		}
+		})
 	}
 }
 
@@ -921,6 +940,7 @@ func TestUntrustedBlockTagIsOverTheLeftOutCount(t *testing.T) {
 // Every block, built with the sizes of the production caps, has room for what its cap says: at least one item of the most that
 // an item can take, and the line that says what was left out.
 func TestUntrustedBlockCapsHoldTheLargestItem(t *testing.T) {
+	t.Parallel()
 	huge := strings.Repeat("a ", 5000)
 	got := threadReplies([]ThreadReply{{UserID: strings.Repeat("U", 5000), Name: strings.Repeat("N", 5000), Text: huge}}, 999_999_999)
 	if n := chat.Units(got); n > MaxThreadBlockUnits || strings.Count(got, "<reply>") != 1 {

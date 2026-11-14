@@ -869,6 +869,7 @@ func TestPromptParsesLikeTheLoadCheck(t *testing.T) {
 }
 
 func TestPromptCaps(t *testing.T) {
+	t.Parallel()
 	long := strings.Repeat(strings.Repeat("a", 20)+" ", 5_000) // words: an unbroken run over redact.MaxBytes is cut whole
 	hostileAll := TriggerMessage{Text: long, Title: long, Link: long, Fallback: long, Footer: long, Body: long}
 

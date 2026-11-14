@@ -97,6 +97,7 @@ func seedQueuedTurn(t *testing.T, c RunConfig, url string) {
 // The control of the test below: with a lease that is as young as renewals keep it, the queued turn is sent to the agent,
 // once, and nothing stops the process.
 func TestRunALeaderWhoseLeaseIsFreshSendsTheQueuedTurnToTheAgent(t *testing.T) {
+	t.Parallel()
 	agent, url := newSendCounter(t)
 	client, fence := clusterWithJWT(), &fakeFence{}
 	c, rep := agentConfig(t, client, fence, url)
@@ -121,6 +122,7 @@ func TestRunALeaderWhoseLeaseIsFreshSendsTheQueuedTurnToTheAgent(t *testing.T) {
 // reaches the agent, the process is stopped once, with exit 5, for the reason that an agent call was refused, and not for the loss
 // of the lease, which refuses nothing. The turn is still queued, for the leader that takes over.
 func TestRunALeaderPastItsRenewDeadlineSendsNothingToTheAgent(t *testing.T) {
+	t.Parallel()
 	agent, url := newSendCounter(t)
 	client, fence := clusterWithJWT(), &fakeFence{}
 	c, rep := agentConfig(t, client, fence, url)

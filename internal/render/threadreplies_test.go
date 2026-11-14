@@ -529,9 +529,11 @@ func TestThreadRepliesKeepTheStartOfALongUnbrokenReply(t *testing.T) {
 }
 
 func TestThreadRepliesBlockIsBoundedAndKeepsTheNewest(t *testing.T) {
+	t.Parallel()
 	for size := 1; size <= MaxThreadReplyUnits; size += 37 {
 		for _, n := range []int{3, 10, 30, 50, 60} {
 			t.Run(fmt.Sprintf("%d x %d", n, size), func(t *testing.T) {
+				t.Parallel()
 				entries := make([]ThreadReply, n)
 				for i := range entries {
 					entries[i] = ThreadReply{UserID: "U1", Name: "Ada", Text: fmt.Sprintf("%03d", i) + strings.Repeat("b", size)}
@@ -656,6 +658,7 @@ func TestThreadRepliesCapValues(t *testing.T) {
 
 // A section of exactly the cap is whole, and one unit more leaves the oldest reply out.
 func TestThreadRepliesBlockAtTheUnit(t *testing.T) {
+	t.Parallel()
 	section := func(last int) (string, int) {
 		entries := make([]ThreadReply, 7)
 		for i := range entries {

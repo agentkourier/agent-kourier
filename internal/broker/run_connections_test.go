@@ -259,7 +259,9 @@ func TestARunWhoseTeamSecretIsNotThereServesTheOwnConnectionAndStartsTheTeamOnce
 // A team connection is added, changed (its Secret) and removed on a running broker. Each has its own run; the one that is replaced or removed
 // has no run left, its outbox lane is gone, and the others are not touched.
 func TestARunAddsChangesAndRemovesATeamConnection(t *testing.T) {
+	t.Parallel()
 	w := newConnWorld(t, nil)
+	runsAlongside(&w.c)
 	w.c.ConnectionNamespaces = append(w.c.ConnectionNamespaces, "team-c")
 	r := start(t, w.c)
 	r.until("/readyz", http.StatusOK)
@@ -397,7 +399,9 @@ func TestEveryConnectionsIntakeDropsTheMentionsOfTheOtherConnectionsBots(t *test
 
 // Two ChatConnections of one Slack app are not both served: the older runs, and the Bindings of the younger are told it is not served.
 func TestARunServesTheOlderOfTwoConnectionsOfOneSlackAppAndTellsTheOthersBindings(t *testing.T) {
+	t.Parallel()
 	w := newConnWorld(t, nil)
+	runsAlongside(&w.c)
 	cluster := newStatusClusterOn(w.dyn)
 	w.c.StatusClient = cluster.dyn
 	w.ids["tok-a"] = w.ids[ownToken] // team-a's bot is the own connection's app
@@ -407,7 +411,9 @@ func TestARunServesTheOlderOfTwoConnectionsOfOneSlackAppAndTellsTheOthersBinding
 	r := start(t, w.c)
 	r.until("/readyz", http.StatusOK)
 
-	w.eventually("team-b to run", func() bool { return w.up("tok-b") == 1 })
+	// The own connection's run starts in a goroutine of its own, which nothing orders before team-b's or the status write below: wait for
+	// it as for team-b, or a status written at once (the refusal is known by the first pass) finds it not yet up.
+	w.eventually("team-b and the own connection to run", func() bool { return w.up("tok-b") == 1 && w.up(ownToken) == 1 })
 	w.eventually("the Binding of the refused connection to be told", func() bool {
 		return cluster.stored(t, "team-a/on-a")["Accepted"].Reason == "ConnectionNotServed"
 	})
@@ -452,7 +458,9 @@ func seedDueQuestions(t *testing.T, path string, qs ...dueQuestion) {
 // sweep as an orphan's, though the connection's Binding is in the config: nothing runs the connection, and unlike a connection that is down for now it
 // never will. This holds the leader's wiring of the sweep to the supervisor's refusals (Served).
 func TestARunEndsTheDueQuestionOfARefusedConnectionAsAnOrphans(t *testing.T) {
+	t.Parallel()
 	w := newConnWorld(t, nil)
+	runsAlongside(&w.c)
 	w.c.sweepEvery, w.c.orphanGrace = 10*time.Millisecond, 50*time.Millisecond
 	w.ids["tok-twin"] = w.ids[ownToken]
 	w.team("team-b", "tok-twin")
@@ -497,7 +505,9 @@ func TestATeamBindingIsProbedWithItsOwnBot(t *testing.T) {
 // is verified: the pass after it clears what the first said, within a tick, and not at the next interval. The supervisor looks slowly here, so
 // the pass the rotation calls for comes first; the interval is an hour, so only the change of the published connections can call for another.
 func TestARotatedTeamSecretIsVerifiedAgainAfterTheRestart(t *testing.T) {
+	t.Parallel()
 	w := newConnWorld(t, nil)
+	runsAlongside(&w.c)
 	w.c.probeEvery, w.c.probeTick, w.c.probeGap = time.Hour, 10*time.Millisecond, time.Millisecond
 	w.c.superviseEvery = 300 * time.Millisecond
 	w.team("team-a", "tok-a")
@@ -519,7 +529,9 @@ func TestARotatedTeamSecretIsVerifiedAgainAfterTheRestart(t *testing.T) {
 // team-z, and team-z's ChatConnection was deleted): nothing will run team-z again. A question on a connection that is in the config and down for
 // rejected credentials (team-b's) is served and waits for it, not ended. This holds the leader's Served to the config's connections.
 func TestARunEndsTheDueQuestionOfAConnectionThatIsGoneAndKeepsOneThatIsDown(t *testing.T) {
+	t.Parallel()
 	w := newConnWorld(t, nil)
+	runsAlongside(&w.c)
 	w.c.sweepEvery, w.c.orphanGrace = 10*time.Millisecond, 50*time.Millisecond
 	w.idErr["tok-b"] = &credentialsRejectedError{method: "auth.test", code: "invalid_auth"}
 	w.team("team-b", "tok-b")

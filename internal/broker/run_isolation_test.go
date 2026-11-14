@@ -94,6 +94,7 @@ func (r *running) waitNoMetric(prefix string) {
 func isolationWorld(t *testing.T) (*connWorld, *statusCluster, *running) {
 	t.Helper()
 	w := newConnWorld(t, nil)
+	runsAlongside(&w.c)
 	cluster := newStatusClusterOn(w.dyn)
 	w.c.StatusClient = cluster.dyn
 	w.c.probeEvery, w.c.probeTick, w.c.probeGap = 50*time.Millisecond, 10*time.Millisecond, time.Millisecond
@@ -171,6 +172,7 @@ func requireTold(t *testing.T, w *connWorld, cluster *statusCluster, r *running)
 // and the other team connection serve on, the metric of the stopped one says 0, one WARN names it and the code, its Binding is told the
 // credentials were rejected and Slack is not asked for it again, and a new Secret starts it again.
 func TestATeamConnectionTheSlackRunRejectsStopsThatConnectionAlone(t *testing.T) {
+	t.Parallel()
 	w, cluster, r := isolationWorld(t)
 	w.killRun("tok-a", slackErr("invalid_auth"))
 	requireIsolated(t, w, cluster, r)
@@ -180,6 +182,7 @@ func TestATeamConnectionTheSlackRunRejectsStopsThatConnectionAlone(t *testing.T)
 // The same when it is a post that finds the token rejected, which is what a token revoked while the connection is up looks like: the outbox's
 // post through the table's platform ends that connection's run, and the process goes on.
 func TestATeamConnectionWhosePostSlackRejectsStopsThatConnectionAlone(t *testing.T) {
+	t.Parallel()
 	w, cluster, r := isolationWorld(t)
 	w.fail("tok-a", "Post", slackErr("invalid_auth"))
 	_, _ = w.ob.Send(t.Context(), outbox.Post{Source: "x", Role: store.OutboxReply, Connection: "team-a/slack", Channel: "C0TEAMA0001", Thread: "1.1", Out: chat.Say(chat.Message{Fallback: "hi"})})
@@ -190,6 +193,7 @@ func TestATeamConnectionWhosePostSlackRejectsStopsThatConnectionAlone(t *testing
 // The own connection's rejection is still the broker's: Run returns ErrSlackAuth, which cmd/agent-kourier exits 1 on, whatever the team
 // connections are doing.
 func TestTheOwnConnectionsRejectionStillEndsTheBrokerWithTeamConnections(t *testing.T) {
+	t.Parallel()
 	w, _, r := isolationWorld(t)
 	w.killRun(ownToken, slackErr("invalid_auth"))
 	err := r.waitWithin(30 * time.Second)
@@ -201,6 +205,7 @@ func TestTheOwnConnectionsRejectionStillEndsTheBrokerWithTeamConnections(t *test
 // The turns a team connection left while it did not run are taken up when it does, and not before: its conversation's recorded task is asked
 // after at the agent only once the connection runs (the others' were taken up with Recover at the start).
 func TestTheTurnsOfATeamConnectionAreTakenUpWhenItRuns(t *testing.T) {
+	t.Parallel()
 	stub := stubagent.NewHandler()
 	t.Cleanup(stub.Close)
 	stub.Agent("kagent", "k8s-agent")
@@ -211,6 +216,7 @@ func TestTheTurnsOfATeamConnectionAreTakenUpWhenItRuns(t *testing.T) {
 	w := newConnWorld(t, func(objs []*unstructured.Unstructured) {
 		_ = unstructured.SetNestedField(objs[0].Object, srv.URL, "spec", "url")
 	})
+	runsAlongside(&w.c)
 	hold := make(chan struct{})
 	w.idHold["tok-a"] = hold // the bot of team-a is not known: the connection does not start
 	w.team("team-a", "tok-a")

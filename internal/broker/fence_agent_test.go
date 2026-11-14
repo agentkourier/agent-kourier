@@ -211,8 +211,10 @@ func TestBindingsWithoutAFenceHandOutTheAgentItself(t *testing.T) {
 
 // With SQLite there is no election, so no lease and no fence: the clock is not read, and the queued turn is sent whatever it says.
 func TestRunWithSQLiteDoesNotFenceTheAgent(t *testing.T) {
+	t.Parallel()
 	agentStub, url := newSendCounter(t)
 	c := startConfig(t)
+	runsAlongside(&c)
 	c.Client = clusterWithJWT()
 	c.leaseNow = stepping()
 	exits := make(chan int, 1)

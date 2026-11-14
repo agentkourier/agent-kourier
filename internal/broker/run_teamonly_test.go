@@ -27,6 +27,7 @@ func (w *connWorld) noOwn() {
 func teamOnlyWorld(t *testing.T, idErr map[string]error, edit ...func(*RunConfig)) (*connWorld, *statusCluster, *running) {
 	t.Helper()
 	w := newConnWorld(t, nil)
+	runsAlongside(&w.c)
 	w.noOwn()
 	for _, e := range edit {
 		e(&w.c)
@@ -47,6 +48,7 @@ func teamOnlyWorld(t *testing.T, idErr map[string]error, edit ...func(*RunConfig
 // A broker with no own connection serves the team connections of the namespaces it admits, is ready, runs no connection of the example config's
 // namespace, and stops cleanly: the leader half ends with the shutdown, with no connection of its own to end it.
 func TestARunWithNoOwnConnectionServesTheTeamConnections(t *testing.T) {
+	t.Parallel()
 	out := &logBuffer{}
 	w, cluster, r := teamOnlyWorld(t, nil, func(c *RunConfig) { c.Logger = slog.New(slog.NewJSONHandler(out, nil)) })
 	r.until("/readyz", http.StatusOK)
@@ -94,6 +96,7 @@ func TestARunWithNoOwnConnectionServesTheTeamConnections(t *testing.T) {
 // agentkourier_chat_connected and its Bindings say ChatCredentialsRejected. This is the case where Slack rejects the token as the connection is
 // started, and the one where the token is revoked while it runs.
 func TestARunWithNoOwnConnectionAndEveryTokenRejectedStaysUpAndReady(t *testing.T) {
+	t.Parallel()
 	rejected := &credentialsRejectedError{method: "auth.test", code: "invalid_auth"}
 	for name, tc := range map[string]struct {
 		idErr  map[string]error
@@ -103,6 +106,7 @@ func TestARunWithNoOwnConnectionAndEveryTokenRejectedStaysUpAndReady(t *testing.
 		"while it is up": {revoke: true},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			w, cluster, r := teamOnlyWorld(t, tc.idErr)
 			r.until("/readyz", http.StatusOK)
 			if tc.revoke {

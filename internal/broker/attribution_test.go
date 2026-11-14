@@ -154,8 +154,10 @@ func TestRefuseUnattributedRowsReturnsTheStoresErrorAsNotAWiringFault(t *testing
 
 // Run gives the rows that an earlier broker wrote before it knew connections to its own connection when it starts leading.
 func TestRunAttributesTheRowsWrittenBeforeConnectionsToTheOwnConnection(t *testing.T) {
+	t.Parallel()
 	const own = "agent-kourier-system/slack-main" // the ChatConnection of the example config
 	c := startConfig(t)
+	runsAlongside(&c)
 	seed, err := sqlite.Open(t.Context(), c.DBPath)
 	if err != nil {
 		t.Fatal(err)

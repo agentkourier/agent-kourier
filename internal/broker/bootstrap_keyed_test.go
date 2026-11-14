@@ -15,6 +15,7 @@ import (
 // was followed. Followed with every key instead, a Secret is listed a second time when the Reloader narrows it to the keys it reads, so
 // each Secret that the config names must have been listed once when the settling time has passed.
 func TestBootstrapFollowsEachSecretWithTheKeysTheConfigReads(t *testing.T) {
+	t.Parallel()
 	for name, start := range map[string]func(t *testing.T, kube *fake.Clientset) *Config{
 		"files": func(t *testing.T, kube *fake.Clientset) *Config {
 			c, err := Bootstrap(t.Context(), kube, options(configDir(t)))
@@ -32,6 +33,7 @@ func TestBootstrapFollowsEachSecretWithTheKeysTheConfigReads(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			kube := fake.NewClientset(
 				secretOf("agent-kourier-system", "slack-main", "botToken", "appToken", "unread"),
 				secretOf("sre", "agent-kourier-sre-alerts-oidc", "token", "unread"),
