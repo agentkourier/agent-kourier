@@ -221,9 +221,9 @@ target with `TEST_SHARD=<leg>/<legs>`, its number and the number of legs taken f
 `hack/ci/test-shard.sh` gives it its part of the pass's packages: each package goes to exactly one leg, longest first,
 balanced by the seconds in `hack/ci/test-weights` (a package not listed there weighs 10). A leg that would get no
 package, when a pass has fewer packages than legs, fails rather than run none. There are two legs per pass because the
-slowest package is the floor of its leg's time (`internal/render`, about 185 s of a race pass whose packages sum to
-about 1,410 s at four at a time, and `internal/broker`, about 115 s of 645 s in the testhooks pass), and two legs
-already reach it: a third would end no sooner and would cost a runner and a cache. A leg is added by adding its number
+slowest package is the floor of its leg's time (`internal/render`, about 185 s of a race pass whose weights sum to
+about 1,560 s at four at a time, and `internal/broker`, about 115 s of 647 s in the testhooks pass), and two legs
+are about at it: a third would end at most about 10 s sooner and would cost a runner and a cache. A leg is added by adding its number
 to the job's `matrix.leg` and its cache prefix to `cache-prune`; `hack/ci/testshards`' test fails until both are there.
 `hack/ci/test-shard.sh` says how to refresh the weights from a push run on `main`; stale weights only unbalance the
 legs. The required checks `test` and `test-testhooks` are jobs of their own that run however their legs ended and fail
@@ -266,7 +266,7 @@ the race builds of its packages' dependencies, most of which the other leg of it
 holds a second entry of each cache it saves until the prune runs: about 9.4 GB while `ci`'s are in flight, up to about
 10.8 GB if `security.yml`'s and `codeql.yml`'s land before their prunes. The limit is GitHub's default; a repository
 admin or organization owner can raise it, and use past 10 GB is then billed. Past it GitHub evicts the least recently
-restored entries first, so a cache that was restored longest ago (one the prune would delete anyway, or a `docs.yml`
+accessed entries first, so a cache that was accessed longest ago (one the prune would delete anyway, or a `docs.yml`
 cache, restored only on a docs change) can go, and the next run that wants it starts cold. The jobs that
 install Python packages, `echo-agent` in `ci.yml` and `build` in `docs.yml`, keep pip's cache under an exact key on
 the job, the runner OS, the Python version and the requirements files they install from: a push to `main` saves it
