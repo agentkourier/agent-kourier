@@ -71,7 +71,9 @@ subjects:
 {{- /* With config.source crds, what the broker does to the custom resources, and no more. Every replica reads the three kinds with informers
        (list and watch, never get: internal/config/crsource), in every namespace, which is why this is a ClusterRole; the leader writes
        Binding.status with a server-side apply, a patch on the status subresource of bindings (no create, update or get). The CRDs may be
-       got by name, and only those three, so the broker can compare the schema-sha256 annotation of each with the hash it was built with (crdschema.go). */}}
+       got by name, and only those three, so the broker can compare the schema-sha256 annotation of each with the hash it was built with (crdschema.go).
+       With config.connectionNamespaceSelector set to select by label, the broker also follows namespaces' labels with an informer (list and watch,
+       never get) to know which namespaces it admits; {} selects every namespace without reading one, and no selector reads none, so neither gets the rule. */}}
 {{- if and .Values.rbac.create (include "agentkourier.crMode" .) }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -91,6 +93,12 @@ rules:
     resources: [customresourcedefinitions]
     resourceNames: [agentbackends.agentkourier.dev, bindings.agentkourier.dev, chatconnections.agentkourier.dev]
     verbs: [get]
+  {{- $selector := include "agentkourier.connectionNamespaceSelector" . }}
+  {{- if and $selector (ne $selector "{}") }}
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [list, watch]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

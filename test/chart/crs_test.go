@@ -92,22 +92,6 @@ func TestDefaultsAreTheCRRoute(t *testing.T) {
 	}
 }
 
-// TestDefaultsWithNoConfigAreRefusedWithAWayOut: a first install that gives the chart nothing to serve has no ChatConnection for the broker, and the
-// render says so and names the route that needs no resource of its own, instead of rendering a pod that exits at start.
-func TestDefaultsWithNoConfigAreRefusedWithAWayOut(t *testing.T) {
-	t.Parallel()
-	helmPath(t)
-	_, err := render(t.Context(), t, "agent-kourier", "agent-kourier", "--kube-version", "v1.33.2", "--set", "image.repository=agent-kourier")
-	if err == nil {
-		t.Fatal("the chart rendered an install with no values; want a refusal that names config.chatConnection")
-	}
-	for _, want := range []string{"needs config.chatConnection", "config.source: files"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("render error = %v; want one containing %q", err, want)
-		}
-	}
-}
-
 // TestAnUpgradeThatKeepsTheOldValuesIsRefusedWithAWayOut: an install of the ConfigMap route that upgrades with the values it had, and so gets the
 // default route, must not be moved silently: where the chart can tell, it refuses, and the message names what keeps the install working
 // (config.source: files) and where the move is described. What no render can tell is the last case: the inline config, with the CRDs already
@@ -963,7 +947,6 @@ func TestCRModeRefusals(t *testing.T) {
 		{"Kubernetes 1.30", []string{"-f", values("crds"), "--api-versions", "agentkourier.dev/v1alpha1", "--kube-version", "v1.30.2"}, "needs Kubernetes 1.33 or later"},
 		{"a vendor build of 1.32", []string{"-f", values("crds"), "--api-versions", "agentkourier.dev/v1alpha1", "--kube-version", "v1.32.14-gke.1"}, "needs Kubernetes 1.33 or later"},
 		{"an existing ConfigMap", crMode("--set", image+",config.source=crds,config.chatConnection=c,config.existingConfigMap=mine"), "config.existingConfigMap is for config.source files"},
-		{"no connection named, and none given", crMode("--set", image+",config.source=crds"), "needs config.chatConnection"},
 		{"two connections and none chosen", crMode("--set", image+",config.source=crds", "--set-json", twoConnections), "needs config.chatConnection"},
 		{"a connection of three parts", crMode("--set", image+",config.source=crds,config.chatConnection=a/b/c"), "config.chatConnection"},
 		{"a connection in capitals", crMode("--set", image+",config.source=crds,config.chatConnection=Slack"), "config.chatConnection"},
@@ -993,12 +976,13 @@ func TestRefusalsDoNotCallTheRouteTheDefaultOfAValuesFileThatSetIt(t *testing.T)
 	helmPath(t)
 	image := "image.repository=registry.example.test/agent-kourier"
 	const unless = "the chart's default unless your values set it"
+	twoConnections := `config.chatConnections={"a":{"spec":{"platform":"slack","credentialsSecretRef":{"name":"a"}}},"b":{"spec":{"platform":"slack","credentialsSecretRef":{"name":"b"}}}}`
 	for _, set := range []struct{ name, route string }{{"config.source unset", ""}, {"config.source crds set", ",config.source=crds"}} {
 		for _, tc := range []struct {
 			name string
 			args []string
 		}{
-			{"no connection named", []string{"--set", image + set.route}},
+			{"two connections and none named", []string{"--set", image + set.route, "--set-json", twoConnections, "--api-versions", "agentkourier.dev/v1alpha1"}},
 			{"a ConfigMap of its own", []string{"--set", image + set.route + ",config.chatConnection=c,config.existingConfigMap=mine"}},
 			{"Kubernetes 1.32", []string{"--set", image + set.route + ",config.chatConnection=c", "--kube-version", "v1.32.9"}},
 			{"the CRDs are not served", []string{"--set", image + set.route + ",config.chatConnection=c,crds.install=false", "--kube-version", "v1.34.0"}},
@@ -1245,7 +1229,7 @@ func TestUpgradeFromAReleaseThatLacksTheNewValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, unset := range []string{"crds", "config.source", "config.chatConnection", "rbac.secretNames", "crds.install"} {
+	for _, unset := range []string{"crds", "config.source", "config.chatConnection", "rbac.secretNames", "crds.install", "config.connectionNamespaceSelector"} {
 		t.Run(unset, func(t *testing.T) {
 			t.Parallel()
 			got, err := render(t.Context(), t, "agent-kourier", "agent-kourier", append(slices.Clone(base), "--set", unset+"=null")...)
@@ -1573,23 +1557,24 @@ func TestNoOwnConnection(t *testing.T) {
 		}
 	})
 
-	t.Run("both empty with no entry or two entries is refused, and the message names both ways out", func(t *testing.T) {
+	t.Run("both empty with no entry serves every namespace; two entries are refused, and the message names every way out", func(t *testing.T) {
 		t.Parallel()
-		two := `config.chatConnections={"a":{"spec":{"platform":"slack","credentialsSecretRef":{"name":"a"}}},"b":{"spec":{"platform":"slack","credentialsSecretRef":{"name":"b"}}}}`
-		for name, a := range map[string][]string{
-			"no entry":      args(""),
-			"two":           args("", two),
-			"an empty list": args("", "config.connectionNamespaces=[]"),
-		} {
-			_, err := render(t.Context(), t, "agent-kourier", "rel-ns", a...)
-			if err == nil {
-				t.Errorf("%s: rendered; want a refusal", name)
-				continue
-			}
-			for _, want := range []string{"needs config.chatConnection", "config.connectionNamespaces", "config.source: files"} {
-				if !strings.Contains(err.Error(), want) {
-					t.Errorf("%s: render error = %v; want one containing %q", name, err, want)
+		for name, a := range map[string][]string{"no entry": args(""), "an empty list": args("", "config.connectionNamespaces=[]")} {
+			env := podEnv(deployment(t, mustRender(t, "agent-kourier", "rel-ns", a...)))
+			for _, k := range []string{"AGENTKOURIER_CHAT_CONNECTION", key} {
+				if v, has := env[k]; has {
+					t.Errorf("%s: %s = %q; want it absent: nothing set is every namespace", name, k, v)
 				}
+			}
+		}
+		two := `config.chatConnections={"a":{"spec":{"platform":"slack","credentialsSecretRef":{"name":"a"}}},"b":{"spec":{"platform":"slack","credentialsSecretRef":{"name":"b"}}}}`
+		_, err := render(t.Context(), t, "agent-kourier", "rel-ns", args("", two)...)
+		if err == nil {
+			t.Fatal("two entries: rendered; want a refusal")
+		}
+		for _, want := range []string{"needs config.chatConnection", "config.connectionNamespaces", "config.connectionNamespaceSelector", "config.source: files"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("two entries: render error = %v; want one containing %q", err, want)
 			}
 		}
 	})

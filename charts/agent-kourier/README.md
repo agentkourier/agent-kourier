@@ -112,7 +112,7 @@ tier's, with the token-refresh CronJob).
 | ConfigMap `<fullname>-config` | `config.source: files`, unless `config.existingConfigMap` | one `*.yaml` file per resource, from `config.*` |
 | ChatConnection, AgentBackend and Binding custom resources | `config.source: crds` (the default), and an entry in `config.*` | one per entry of `config.*`, in its namespace (default: the release's), which must exist; deleted when the release stops rendering them |
 | CustomResourceDefinitions `agentbackends`, `bindings` and `chatconnections` of `agentkourier.dev` | `crds.install`: unset, true with `config.source: crds` and false with `files`; an explicit value wins | the generated files of `files/crds`; kept on `helm uninstall` and when `crds.install` is turned off (`helm.sh/resource-policy: keep`, which is Helm's; for Argo CD see [below](#custom-resources-instead-of-a-configmap)) |
-| ClusterRole and ClusterRoleBinding `<fullname>-<namespace>-crs` | `config.source: crds`, the default (`rbac.create`) | `list` and `watch` on the three kinds, `patch` on `bindings/status`, `get` on the three CRDs by name; see Custom resources instead of a ConfigMap |
+| ClusterRole and ClusterRoleBinding `<fullname>-<namespace>-crs` | `config.source: crds`, the default (`rbac.create`) | `list` and `watch` on the three kinds, `patch` on `bindings/status`, `get` on the three CRDs by name, and `list` and `watch` on `namespaces` with a `config.connectionNamespaceSelector` other than `{}`; see Custom resources instead of a ConfigMap |
 | PersistentVolumeClaim `<fullname>-data` | `store.type: sqlite`, unless `persistence.existingClaim` | kept on `helm uninstall` (`persistence.retainOnUninstall`); none with Postgres |
 | Service | `service.enabled` | ClusterIP on the health and metrics port, and nothing else |
 | ServiceMonitor | `serviceMonitor.enabled` | prometheus-operator; needs the Service |
@@ -135,7 +135,7 @@ NetworkPolicy in another namespace for instance, needs the real name, or you set
   resource's spec exactly as the [resource reference](../../docs/reference/binding.md) describes it (the chart does not interpret it; Agent Kourier's loader validates it at start).
   `namespace` defaults to the release's. Or `config.existingConfigMap`, a ConfigMap you manage, with `rbac.secretNamespaces` to say where
   its Secrets are. Not both.
-- `config.source` (`crds`, the default, or `files`), `config.chatConnection`, `config.chatConnectionSecret`, `config.connectionNamespaces` and `crds.install` (unset: true with `crds`, false with `files`): where Agent Kourier reads those resources from
+- `config.source` (`crds`, the default, or `files`), `config.chatConnection`, `config.chatConnectionSecret`, `config.connectionNamespaces`, `config.connectionNamespaceSelector` and `crds.install` (unset: true with `crds`, false with `files`): where Agent Kourier reads those resources from
   (see Custom resources instead of a ConfigMap). An install of the ConfigMap route that upgrades with the values it had gets the default: set `config.source: files` to keep it.
 - `store.type` (`sqlite`, the default, or `postgres`) and, with Postgres, `store.postgres.dsnSecret` and `store.postgres.timeouts` (see Store).
 - `replicaCount` (2 with Postgres for a standby) and `leaderElection.*`, the Lease's timings (see High availability).
@@ -175,23 +175,57 @@ What the route needs:
   to `false`, which is the way for an installer that may not create CRDs. Helm will not take over CRDs that `kubectl` made (`invalid ownership metadata`), so choose one of the two and keep to it.
 - **`config.chatConnection`**: the broker's own `ChatConnection`, as `namespace/name` (or `name`, in the release namespace). If it is set, it is always served, and the chart renders it as
   `AGENTKOURIER_CHAT_CONNECTION`. A cluster may hold the connections of several brokers, and each serves only its own and the
-  ones of the namespaces it admits (`config.connectionNamespaces`, below), and owns only the Bindings whose `connectionRef` names one of them. Empty means one of two things.
-  With `config.connectionNamespaces` set, the broker **has no connection of its own**: the chart renders no `AGENTKOURIER_CHAT_CONNECTION`, and the broker serves only the
-  `ChatConnection`s of the admitted namespaces, each as a team connection. With `config.connectionNamespaces` empty too, it is allowed when `config.chatConnections` has exactly one entry,
-  and that entry is the own connection; with no entry or several, the chart refuses and names both ways out.
+  ones of the namespaces it admits (`config.connectionNamespaces` and `config.connectionNamespaceSelector`, below), and owns only the Bindings whose `connectionRef` names one of them.
+  What a broker serves:
+
+  | `config.chatConnection` | `config.connectionNamespaces` | `config.connectionNamespaceSelector` | The broker serves the ChatConnections of |
+  |---|---|---|---|
+  | empty | empty | `null` | every namespace, with no `config.chatConnections` entry (one entry is the own connection) |
+  | empty | any | `{}` | every namespace |
+  | empty | a list | `null` | the listed namespaces |
+  | empty | empty | a selector | the namespaces whose labels match it |
+  | empty | a list | a selector | the listed namespaces and the ones whose labels match |
+  | set | empty | `null` | none: its own alone |
+  | set | a list | `null` | its own, and the listed namespaces |
+  | set | any | a selector | its own, and the namespaces the list or the selector admits |
+  | set | any | `{}` | its own, and every namespace |
+
+  With `config.chatConnection` empty, the broker **has no connection of its own** when the list or the selector is set: the chart renders no `AGENTKOURIER_CHAT_CONNECTION`, and
+  each `ChatConnection` the broker serves is a team connection. With both unset too, the one entry of `config.chatConnections` is the own connection, no entry is every namespace,
+  and two or more are refused, with a message that names the ways out. So adding one entry to an install that serves every namespace makes that entry its own connection,
+  served alone: set the list or the selector to keep serving the teams' connections. **Every namespace is a setting for a cluster with one broker**: a second broker's
+  connection, its own included, is served by this one too, and the two Socket Mode connections of one Slack app split its events. With every namespace, what lets a team attach
+  a Slack app is the right to create a `ChatConnection` (the chart adds none to the `admin` or `edit` role) and the team's own Role that grants its Secret.
 - **`config.chatConnectionSecret`**: the name of the Secret that connection reads, in the connection's namespace, when it is not named like the connection
   (empty, the default, is the connection's own name). With `config.source: crds` and `config.chatConnection` set, the chart grants `list` and `watch` on that
   one Secret by name, since it cannot read the ChatConnection you apply. It is skipped when `config.chatConnections` renders that connection (its
-  `credentialsSecretRef` is granted instead), and ignored with `files` or when `config.chatConnection` and `config.connectionNamespaces` are both empty. The chart refuses it when
-  `config.chatConnection` is empty and `config.connectionNamespaces` is set, because it names the Secret of an own connection and there is none.
-- **`config.connectionNamespaces`**: the admission list, a list of namespace names (empty, the default). The broker serves the `ChatConnection`s of these namespaces
+  `credentialsSecretRef` is granted instead, as for the one entry that is the own connection), and ignored with `files`. The chart refuses it when the broker has no
+  connection of its own (`config.chatConnection` empty and the list or the selector set, or every namespace), because it names the Secret of an own connection and there is none.
+- **`config.connectionNamespaces`**: the admission list, a list of namespace names (empty, the default, admits none by name). The broker serves the `ChatConnection`s of these namespaces
   beside its own, if it has one, at most 16 connections in all with its own, if there is one, counted first and the others oldest first (with no own connection all 16 go by age); no setting changes the 16. Two
-  `ChatConnection`s of one Slack app (one app ID, even in two workspaces) are not both served: the older is (the own connection first, if there is one). With `config.chatConnection` empty, a non-empty list is a broker
-  with no connection of its own, and the chart refuses a `config.chatConnections` entry whose namespace is not on the list, since it would be rendered and never served. The chart renders the list as
-  `AGENTKOURIER_CONNECTION_NAMESPACES` (comma-joined) and renders nothing when it is empty, and it refuses a non-empty list with `config.source: files`. The ClusterRole
+  `ChatConnection`s of one Slack app (one app ID, even in two workspaces) are not both served: the older is (the own connection first, if there is one). With `config.chatConnection` empty and no
+  selector, the chart refuses a `config.chatConnections` entry whose namespace is not on the list, since it would be rendered and never served. The chart renders the list as
+  `AGENTKOURIER_CONNECTION_NAMESPACES` (comma-joined) and renders nothing when it is empty, and it refuses a non-empty list with `config.source: files`. The broker reads it at
+  start; a change is an upgrade, which changes the pod's environment. The ClusterRole
   above already reads the three kinds in every namespace, so the list adds no rule, and the chart grants no Secret of a listed namespace: each team grants the credentials
   Secret of its connection to the ServiceAccount with a Role of its own that names it (`resourceNames`, as for a Binding's token below), or you name it in `rbac.secretNames`
   or its namespace in `rbac.secretNamespaces`. A team connection whose Secret the broker cannot read yet is started once it can, and never stops the broker.
+- **`config.connectionNamespaceSelector`**: a label selector on namespaces (`null`, the default, is none): the broker also serves the `ChatConnection`s of the namespaces
+  whose labels match it, beside its own and the list's, under the same cap of 16. It is a Kubernetes label selector, `matchLabels` and `matchExpressions` (`key`,
+  `operator` `In`, `NotIn`, `Exists` or `DoesNotExist`, `values`), which the schema checks; `{}` selects every namespace. For example:
+
+  ```yaml
+  config:
+    connectionNamespaceSelector:
+      matchLabels: {agentkourier.dev/serve: "true"}
+  ```
+
+  The chart renders it as `AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR`, compact JSON (`{}` included, which differs from no selector). The broker reads the selector at start, as it
+  reads the list, but it follows the namespaces' labels live, with an informer on namespaces: a namespace that gains a matching label is admitted at the next read, with no restart, and one that loses it stops being admitted, and the
+  Bindings of its connections are told `ConnectionNotServed`. While the broker cannot reach the API server it keeps the labels it last read. Whoever may set a namespace's
+  labels therefore decides whether its ChatConnections are admitted. A selector that selects by label adds `list` and `watch` on `namespaces` (no `get`) to the ClusterRole;
+  `{}` and `null` add nothing. The chart does not check `config.chatConnections` entries against a selector, since it cannot see a namespace's labels, and it refuses a
+  selector, `{}` included, with `config.source: files`.
 - **Namespaces that exist.** A file can name a namespace that does not exist; a custom resource cannot.
 
 Move a running install of the ConfigMap route to it in two upgrades, each a working install, and back by the same values (keep `crds: {install: true}` in the values
@@ -214,9 +248,9 @@ kubectl get akbinding,akbackend,akconnection -A
 three) list them. **Never `kubectl get bindings`**: that is the core `bindings` resource, which is something else and fails. Going back, with
 `config.source=files`: the ConfigMap returns from the same values, and Helm deletes the custom resources the chart rendered (it stops rendering
 them), while the ones made by hand stay in the cluster, unread, as do the CRDs. The values of the route (`config.chatConnection`, `config.chatConnectionSecret`, `rbac.secretNames`)
-may stay set: with `files` they are ignored, so going back is the same values with `config.source: files`, except `config.connectionNamespaces`, which the chart refuses with `files`: set it to `[]` in the same upgrade. An install with no
-own connection (`config.chatConnection` empty and the list set) sets the list to `[]` the same way, and needs one more thing: the files route serves the one ChatConnection of its directory, and the broker refuses to start with none or several, so
-`config.chatConnections` must have exactly one entry, which a broker that serves only teams' connections usually does not render. Set `config.chatConnection` to it as well: `files` ignores it, and the same values then serve it as the own connection if you return to custom resources with the list empty. `helm uninstall` likewise deletes the
+may stay set: with `files` they are ignored, so going back is the same values with `config.source: files`, except `config.connectionNamespaces` and `config.connectionNamespaceSelector`, which the chart refuses with `files`: set the list to `[]` and the selector to `null` in the same upgrade. An install with no
+own connection (`config.chatConnection` empty, with the list or the selector set, or neither) sets them the same way, and needs one more thing: the files route serves the one ChatConnection of its directory, and the broker refuses to start with none or several, so
+`config.chatConnections` must have exactly one entry, which a broker that serves only teams' connections usually does not render. Set `config.chatConnection` to it as well: `files` ignores it, and the same values then serve it as the own connection if you return to custom resources with the list empty and no selector. `helm uninstall` likewise deletes the
 rendered resources and keeps the CRDs, and with them every custom resource of the cluster: **never delete a CRD to get out of a refusal**, since
 that deletes every team's resources. A reinstall under another release name (or in another namespace) with `crds.install: true`, which is what an unset value is on the default route, is refused by
 Helm (`invalid ownership metadata`), because the kept CRDs name the release that made them. The same holds for a second broker in the same cluster, which sets `crds.install: false`. There are two ways on, neither of which deletes

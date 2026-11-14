@@ -77,17 +77,28 @@ true
 {{- end -}}
 
 {{/*
+config.connectionNamespaceSelector as compact JSON (AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR) when it is set, and empty when it is not. Set is a
+map, the empty one included: {} selects every namespace and must render as {}, so the test is kindIs "map" and never the value's truth, which is
+false for an empty map. Unset is null, the default, or absent (a release upgraded with --reuse-values from a chart before the value).
+*/}}
+{{- define "agentkourier.connectionNamespaceSelector" -}}
+{{- $s := .Values.config.connectionNamespaceSelector -}}
+{{- if kindIs "map" $s -}}{{- toJson $s -}}{{- end -}}
+{{- end -}}
+
+{{/*
 The ChatConnection this broker serves as its own with config.source crds, as namespace/name (AGENTKOURIER_CHAT_CONNECTION): config.chatConnection,
-in the release namespace when it names no namespace; or, when that is empty and config.connectionNamespaces is non-empty, nothing, which is a
-broker with no connection of its own (it serves the ChatConnections of those namespaces and the chart renders no variable); or, when both are
-empty, the one entry of config.chatConnections. A cluster may hold the connections of several brokers, so a second entry is no guess to make.
-Empty output means no own connection.
+in the release namespace when it names no namespace. When that is empty and config.connectionNamespaces or config.connectionNamespaceSelector is set,
+nothing: a broker with no connection of its own, which serves the ChatConnections of the namespaces they admit (the chart renders no variable),
+and the entries of config.chatConnections are team connections. When all three are empty, the one entry of config.chatConnections, or with no
+entry nothing, which is the broker that serves the ChatConnections of every namespace. A cluster may hold the connections of several brokers, so
+with two or more entries there is no guess to make, and the render fails. Empty output means no own connection.
 */}}
 {{- define "agentkourier.chatConnection" -}}
 {{- $ref := .Values.config.chatConnection -}}
-{{- if and (not $ref) (not .Values.config.connectionNamespaces) -}}
-{{- if ne (len .Values.config.chatConnections) 1 -}}
-{{- fail "config.source crds (the chart's default unless your values set it) needs config.chatConnection: the namespace/name of the one ChatConnection this broker serves. A cluster may hold the connections of several brokers, so it is left out only when config.chatConnections has exactly one entry. A broker with no connection of its own, which serves only the ChatConnections of other namespaces, leaves config.chatConnection empty and sets config.connectionNamespaces to those namespaces instead. To supply the config as a ConfigMap instead, set config.source: files; https://agentkourier.dev/how-to/install-with-helm/ describes both routes" -}}
+{{- if and (not $ref) (not .Values.config.connectionNamespaces) (not (include "agentkourier.connectionNamespaceSelector" .)) -}}
+{{- if gt (len .Values.config.chatConnections) 1 -}}
+{{- fail (printf "config.source crds (the chart's default unless your values set it) needs config.chatConnection: the namespace/name of the one ChatConnection this broker serves as its own, and config.chatConnections has %d entries. A cluster may hold the connections of several brokers, so an entry is read as the own connection only when it is the only one. A broker with no connection of its own leaves config.chatConnection empty and admits the namespaces whose ChatConnections it serves: by name in config.connectionNamespaces, or by label in config.connectionNamespaceSelector; with both unset and no entry in config.chatConnections it serves the ChatConnections of every namespace. To supply the config as a ConfigMap instead, set config.source: files; https://agentkourier.dev/how-to/install-with-helm/ describes both routes" (len .Values.config.chatConnections)) -}}
 {{- end -}}
 {{- range $name, $r := .Values.config.chatConnections -}}
 {{- $ref = printf "%s/%s" (default $.Release.Namespace $r.namespace) $name -}}
@@ -182,6 +193,9 @@ Checks that no values file can get past. Included by the Deployment, which every
 {{- if and .Values.config.connectionNamespaces (not (include "agentkourier.crMode" .)) -}}
 {{- fail "config.connectionNamespaces is for config.source crds, and config.source is files (or unset, which reads as files): with config.source: files the broker serves only the one ChatConnection of its directory, so the ChatConnections of these namespaces would stop being served. To serve the ChatConnections of those namespaces, set config.source: crds; otherwise remove config.connectionNamespaces" -}}
 {{- end -}}
+{{- if and (include "agentkourier.connectionNamespaceSelector" .) (not (include "agentkourier.crMode" .)) -}}
+{{- fail "config.connectionNamespaceSelector is for config.source crds, and config.source is files (or unset, which reads as files): with config.source: files the broker serves only the one ChatConnection of its directory, so the ChatConnections of the namespaces it selects would stop being served. To serve them, set config.source: crds; otherwise set config.connectionNamespaceSelector to null" -}}
+{{- end -}}
 {{- if include "agentkourier.crMode" . -}}
 {{- if .Values.config.existingConfigMap -}}
 {{- fail "config.existingConfigMap is for config.source files, and config.source is crds (the chart's default unless your values set it): Agent Kourier would read custom resources, mount no ConfigMap and ignore it. To keep reading your ConfigMap, set config.source: files. To move to custom resources instead, remove config.existingConfigMap and follow https://agentkourier.dev/how-to/migrate-config-source/#move-a-configmap-you-manage-yourself" -}}
@@ -204,12 +218,15 @@ Checks that no values file can get past. Included by the Deployment, which every
 {{- fail "config.source crds needs the CRDs (group agentkourier.dev, version v1alpha1) to be installed before this release, and the cluster does not serve them (config.source crds is the chart's default unless your values set it). To keep the ConfigMap route, set config.source: files; https://agentkourier.dev/how-to/migrate-config-source/ describes moving to custom resources. To use custom resources, in an earlier install or upgrade set crds.install=true with config.source files, or apply the chart's files/crds yourself (kubectl apply --server-side -f charts/agent-kourier/files/crds), then set config.source crds. With helm template, add --api-versions agentkourier.dev/v1alpha1 to render as if they were installed" -}}
 {{- end -}}
 {{- end -}}
-{{- $_ := include "agentkourier.chatConnection" . -}}
-{{- if and (not .Values.config.chatConnection) .Values.config.connectionNamespaces -}}
-{{- /* No connection of its own: the broker serves the ChatConnections of config.connectionNamespaces and nothing else. */ -}}
+{{- if not (include "agentkourier.chatConnection" .) -}}
+{{- /* No connection of its own: the broker serves the ChatConnections of the namespaces that config.connectionNamespaces and
+       config.connectionNamespaceSelector admit, or of every namespace when neither is set. */ -}}
 {{- if .Values.config.chatConnectionSecret -}}
-{{- fail "config.chatConnectionSecret names the Secret of the broker's own ChatConnection, and there is none: config.chatConnection is empty and config.connectionNamespaces is set, so this broker serves only the ChatConnections of those namespaces. A team grants the Secret of its connection with a Role of its own (or rbac.secretNames does). To give the broker a connection of its own, set config.chatConnection; otherwise remove config.chatConnectionSecret" -}}
+{{- fail "config.chatConnectionSecret names the Secret of the broker's own ChatConnection, and there is none: config.chatConnection is empty, and config.connectionNamespaces or config.connectionNamespaceSelector is set (or neither is and config.chatConnections has no entry, which serves every namespace), so this broker serves only the ChatConnections of the namespaces it admits. A team grants the Secret of its connection with a Role of its own (or rbac.secretNames does). To give the broker a connection of its own, set config.chatConnection; otherwise remove config.chatConnectionSecret" -}}
 {{- end -}}
+{{- /* With only the list, a rendered entry outside it would be rendered and never served. With a selector the chart cannot tell, since it does not
+       see a namespace's labels; with neither, there is no entry (one would be the own connection). */ -}}
+{{- if and .Values.config.connectionNamespaces (not (include "agentkourier.connectionNamespaceSelector" .)) -}}
 {{- range $name, $r := .Values.config.chatConnections -}}
 {{- $ns := default $.Release.Namespace $r.namespace -}}
 {{- if not (has $ns $.Values.config.connectionNamespaces) -}}
@@ -217,9 +234,11 @@ Checks that no values file can get past. Included by the Deployment, which every
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- end -}}
 {{- /* With files, config.chatConnection, config.chatConnectionSecret and rbac.secretNames are ignored, and the chart does not refuse them: a rollback to files keeps the values
-       it had, in an incident, and they are harmless there. config.connectionNamespaces is the exception and is refused above: ignoring it would silently stop serving the ChatConnections of the
-       admitted namespaces, which is not harmless, so a rollback to files sets it to [] in the same upgrade. */ -}}
+       it had, in an incident, and they are harmless there. config.connectionNamespaces and config.connectionNamespaceSelector are the exceptions and are refused above: ignoring
+       them would silently stop serving the ChatConnections of the admitted namespaces, which is not harmless, so a rollback to files sets the list to [] and the selector to null
+       in the same upgrade. */ -}}
 {{- end -}}
 {{- if and .Values.serviceMonitor.enabled (not .Values.service.enabled) -}}
 {{- fail "serviceMonitor.enabled needs service.enabled: the ServiceMonitor selects the metrics Service" -}}
