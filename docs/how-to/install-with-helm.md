@@ -88,7 +88,8 @@ first. They are the commands of [Install on custom resources](#install-on-custom
 [Check it](#check-it).
 
 Releases before 0.1.3 do not have `init`, and releases up to 0.3.1 write only the ConfigMap route, as `--source files` does now, and have no
-`--team-namespace`. Run the image of the release you install, in the directory that should get the files. `-it`
+`--team-namespace`. Release 0.3.2 writes `config.connectionNamespaces` with the team's namespace into `my-values.yaml` instead of comments
+only, so the broker it installs serves that namespace alone. Run the image of the release you install, in the directory that should get the files. `-it`
 lets it ask its questions, and `--user` runs it as you, so it can write the files into your directory (the image's own user is 65532):
 
 ```sh
@@ -325,8 +326,9 @@ rbac:
     my-team: [agent-kourier-agent-token]
 ```
 
-A broker with an app of its own can serve teams' apps too, with `config.connectionNamespaces` beside `config.chatConnection`
-([Let a team bring its own Slack app](team-slack-app.md)). Then go to [Check it](#check-it).
+A broker with an app of its own can serve teams' apps too, with `config.connectionNamespaces` (by name) or `config.connectionNamespaceSelector`
+(by label) beside `config.chatConnection` ([Let a team bring its own Slack app](team-slack-app.md#3-the-platform-team-admits-the-namespace)).
+With neither, it serves its own connection alone. Then go to [Check it](#check-it).
 
 ## Create the Secrets
 
@@ -514,8 +516,12 @@ slack: socket mode connected
 
 `config route` is the first line, and it is how the log says which of [the two routes](../explanation/config-routes.md) the broker reads: its `config_source` field is
 `crds` or `files`. With `crds` and an own connection it also has a `connection` field, the namespace/name of the ChatConnection the broker is set to serve
-(`AGENTKOURIER_CHAT_CONNECTION`), and the later `serving a ChatConnection` line confirms that the cluster has it. With `crds` and a list of namespaces
-(`AGENTKOURIER_CONNECTION_NAMESPACES`) it also has a `connection_namespaces` field with the namespace names, comma-joined; a broker with no own connection has no `connection` field,
+(`AGENTKOURIER_CHAT_CONNECTION`), and the later `serving a ChatConnection` line confirms that the cluster has it. With `crds` it also has a
+`connection_admission` field, which says whose ChatConnections the broker serves besides its own: `all` (every namespace: no own connection, no list
+and no selector, or a selector of `{}`), `list` (`AGENTKOURIER_CONNECTION_NAMESPACES`), `selector` (`AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR`),
+`list+selector`, or `own` (none: its own connection alone). With a list there is a `connection_namespaces` field with the namespace names,
+comma-joined, and with a selector other than `{}` a `connection_namespace_selector` field with the selector in Kubernetes' text form, such as
+`agentkourier.dev/serve=true`. A broker with no own connection has no `connection` field,
 and `serving a ChatConnection` is logged each time it starts a team connection, after `ready`, since the leader starts them. With `files` there is no `connection` field: the one
 ChatConnection of the directory is named by `serving a ChatConnection` alone. The line is logged at `info`: at the default level, the log of a container that has just started and has no `config route` line is from a release older than the one that added it. With `logLevel: warn` or `error` no start line is shown, and a log that kubelet has rotated no longer has its first lines. The order of the first five lines is read from the code and was checked, on both
 routes, against the broker started with a fake cluster; the three `slack:` lines were not re-run against a cluster for this page.
