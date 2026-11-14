@@ -153,7 +153,7 @@ which in its `connection_admission` field ([Check it](install-with-helm.md#check
     To change the selector later, mind that Helm merges a map across values files: a selector in a later `-f` file does not replace
     one in an earlier file. `{}` there keeps the earlier selector, and another selector's `matchLabels` are added to the earlier ones, so a
     namespace must match both (a `matchExpressions` list replaces the earlier list). Edit the one file that sets the selector, give the
-    new one with `--set-json` in its `key=value` form (`--set-json 'config.connectionNamespaceSelector={}'` replaces it; the whole-object
+    new one with `--set-json` in its `key=value` form (`--set-json 'config.connectionNamespaceSelector={"matchLabels":{"tier":"b"}}'` replaces it; the whole-object
     form, `--set-json '{"config":{...}}'`, merges as a file does), or set it to `null` in a file before the one with the new selector.
     `helm upgrade --reuse-values` and `--reset-then-reuse-values` keep the release's selector and merge a new one into it, given with
     `--set-json` or after a `null` too (with `--reset-then-reuse-values` a `null` alone clears it, which with no own connection and no list
