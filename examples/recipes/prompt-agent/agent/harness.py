@@ -37,6 +37,14 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
+def wait_for_port(port: int) -> None:
+    """Waits up to about 10 seconds for a subprocess to listen on port."""
+    for _ in range(200):
+        with contextlib.suppress(OSError), socket.create_connection(("127.0.0.1", port), 0.1):
+            return
+        time.sleep(0.05)
+
+
 @contextlib.contextmanager
 def mcp_server(directory: Path):
     """Starts mcp_server.py with TOKEN as its bearer; yields its URL and a function that reads its call log."""
@@ -44,10 +52,7 @@ def mcp_server(directory: Path):
     env = {**os.environ, "MCP_TOKEN": TOKEN, "MCP_CALL_LOG": str(log)}
     proc = subprocess.Popen([sys.executable, str(HERE / "mcp_server.py"), str(port)], env=env)  # noqa: S603
     try:
-        for _ in range(200):
-            with contextlib.suppress(OSError), socket.create_connection(("127.0.0.1", port), 0.1):
-                break
-            time.sleep(0.05)
+        wait_for_port(port)
         yield (
             f"http://127.0.0.1:{port}/mcp",
             lambda: [json.loads(x) for x in log.read_text().splitlines()] if log.exists() else [],
@@ -57,8 +62,25 @@ def mcp_server(directory: Path):
         proc.wait()
 
 
-def spec_file(directory: Path, url: str, **mcp) -> str:
-    """Writes an agent.yaml for the test server; returns its path. `mcp` overrides the MCP arguments (None drops)."""
+@contextlib.contextmanager
+def fake_model():
+    """Starts fake_model.py; yields the base URL an OpenAI client takes (OPENAI_BASE_URL)."""
+    port = free_port()
+    proc = subprocess.Popen([sys.executable, str(HERE / "fake_model.py"), str(port)])  # noqa: S603
+    try:
+        wait_for_port(port)
+        yield f"http://127.0.0.1:{port}/v1"
+    finally:
+        proc.terminate()
+        proc.wait()
+
+
+def spec_file(directory: Path, url: str, model: str = "test", **mcp) -> str:
+    """Writes an agent.yaml for the test server; returns its path. `mcp` overrides the MCP arguments (None drops).
+
+    The default model is a placeholder that tests replace with their own; a test that names a real one (the fake
+    model's) passes no model of its own, and the spec's is built and checked as in the pod.
+    """
     args = {
         "url": url,
         "authorization_token": "Bearer ${OPS_MCP_TOKEN}",
@@ -66,7 +88,7 @@ def spec_file(directory: Path, url: str, **mcp) -> str:
         **mcp,
     }
     spec = {
-        "model": "test",  # tests pass their own model: the spec's is never built
+        "model": model,
         "name": "ops-helper",
         "description": "Answers questions about alerts.",
         "instructions": "You help on-call engineers.",

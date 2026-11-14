@@ -172,7 +172,7 @@ func TestTheCustomResourceOverlayRoutesTheTiersConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(raw)
-	for _, want := range []string{"source: crds", `existingConfigMap: ""`, "chatConnection: agent-kourier/slack-fast", "install: true", "secretNamespaces: []", "agent-kourier: [agent-kourier-agent-token]"} {
+	for _, want := range []string{"source: crds", `existingConfigMap: ""`, "chatConnection: agent-kourier/slack-fast", "install: true", "secretNamespaces: []", "agent-kourier: [agent-kourier-agent-token, prompt-agent-bearer]"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("crds-values.yaml lacks %q", want)
 		}

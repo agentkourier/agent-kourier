@@ -104,7 +104,8 @@ agent/
   Dockerfile      the image: agent.py, the example agent.yaml, the pinned packages
   requirements.in, requirements.txt   what the agent runs on, pinned with hashes
   manifests/      ConfigMap (your agent.yaml), Deployment, Service, NetworkPolicy
-  test_agent.py, harness.py, mcp_server.py, conftest.py   the module's tests (see Checks)
+  test_*.py, harness.py, conftest.py   the module's tests (see Checks)
+  mcp_server.py, fake_model.py   test doubles: an MCP server, and a model that answers by fixed rules
 ```
 
 The image holds Pydantic AI (pinned in `agent/requirements.in`) with the model clients for OpenAI, Anthropic and
@@ -285,7 +286,15 @@ Then mention the bot in the channel and ask a question your agent's tools can an
 - `make prompt-agent-lint` runs ruff and audits the pinned runtime packages with pip-audit (it needs the network).
 - `go test ./test/recipes` loads `kourier/` with Agent Kourier's loader and resolves its references.
 - The recipe has no `evals/`: its Binding starts only from a mention, which the trigger evals do not judge.
-- Nothing in this repository runs the agent against a live model, in a cluster or in Slack: those are yours to run.
+- `test_fake_model.py` runs the agent against `fake_model.py` over HTTP, with `model: openai-chat:fake` and
+  `OPENAI_BASE_URL`: an OpenAI-compatible model that streams text a word at a time and calls tools, by rules read from
+  each request (its docstring lists them).
+- `make e2e-fast-up e2e-fast` runs the recipe's image in this repository's fast kind tier, on that fake model, with
+  `mcp_server.py` as its MCP server, behind a Binding that sends a bearer token, against a fake Slack. Its four
+  scenarios: a mention's reply that used an MCP tool streams into the thread; a reply in the thread continues the
+  conversation; a typed reply answers the agent's question and the task completes; a question left past the Binding's
+  timeout is cancelled, and the next mention in the thread is answered.
+- Nothing in this repository runs the agent against a live model or in Slack: those are yours to run.
 
 ## Limits
 

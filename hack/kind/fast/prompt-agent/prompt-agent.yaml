@@ -1,0 +1,164 @@
+# The recipe's prompt agent (examples/recipes/prompt-agent) in the fast tier, in namespace e2e with the other doubles, and what it needs in
+# place of a model provider and a team's MCP server: the fake model (fake_model.py) and the recipe's test MCP server (mcp_server.py). lib.sh's
+# deploy_prompt_agent builds the three images (the agent's from the recipe's own Dockerfile, the other two from ./Dockerfile), loads them,
+# makes the Secrets and applies this file. The AgentBackend prompt-a2a and the Binding of channel CPROMPT
+# (hack/kind/fast/agent-kourier/a2a) reach the agent; test/kindmanifests pins how the pieces fit.
+#
+# Secrets, made by deploy_prompt_agent from fake constants and never committed: prompt-agent-bearer (key token), the token Agent Kourier
+# sends and the agent checks, also made in namespace agent-kourier for the Binding; prompt-agent-mcp (key token), the MCP server's bearer,
+# which the agent sends as agent.yaml says.
+#
+# The agent's Deployment is modelled on the recipe's (manifests/deployment.yaml): the same variables of the agent, mounts, readiness probe
+# and security contexts, which test/kindmanifests holds equal, with this tier's model and MCP server in place of Anthropic's and the
+# runbooks server (model openai-chat:fake with OPENAI_BASE_URL at the fake), the tier's image and labels, and no liveness probe or
+# resources. Every Service is ClusterIP, published nowhere.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prompt-agent
+  namespace: e2e
+data:
+  agent.yaml: |
+    model: openai-chat:fake
+    name: ops-helper
+    description: The recipe's prompt agent, on the fast tier's fake model.
+    instructions: |
+      You help on-call engineers with alerts. The fake model reads none of this: it answers by the rules of fake_model.py.
+    capabilities:
+      - MCP:
+          url: http://prompt-mcp.e2e.svc.cluster.local:8080/mcp
+          authorization_token: Bearer ${OPS_MCP_TOKEN}
+          allowed_tools: [runbook]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prompt-agent
+  namespace: e2e
+spec:
+  replicas: 1 # the agent keeps its conversations in memory, as the recipe says
+  selector:
+    matchLabels: {app: prompt-agent}
+  template:
+    metadata:
+      labels: {app: prompt-agent}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: prompt-agent
+          image: agent-kourier-e2e/prompt-agent:dev
+          imagePullPolicy: Never
+          ports: [{name: a2a, containerPort: 8080}]
+          env:
+            - {name: PROMPT_AGENT_URL, value: "http://prompt-agent.e2e.svc.cluster.local:8080"}
+            - {name: PROMPT_AGENT_SPEC, value: /etc/prompt-agent/agent.yaml}
+            - {name: PROMPT_AGENT_TOKEN_FILE, value: /etc/prompt-agent-token/token}
+            - {name: OPENAI_BASE_URL, value: "http://prompt-fake-model.e2e.svc.cluster.local:8080/v1"}
+            - {name: OPENAI_API_KEY, value: fake-model-key} # the OpenAI client needs a key; the fake reads none. A fake constant
+            - name: OPS_MCP_TOKEN
+              valueFrom: {secretKeyRef: {name: prompt-agent-mcp, key: token}}
+          volumeMounts:
+            - {name: spec, mountPath: /etc/prompt-agent, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+            - {name: bearer, mountPath: /etc/prompt-agent-token, readOnly: true}
+          readinessProbe: {tcpSocket: {port: a2a}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+      volumes:
+        - name: spec
+          configMap: {name: prompt-agent}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+        - name: bearer
+          secret: {secretName: prompt-agent-bearer}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prompt-agent
+  namespace: e2e
+spec:
+  type: ClusterIP
+  selector: {app: prompt-agent}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+# FAKE_MODEL_DELAY: seconds between the pieces of a streamed text, so that a reply takes several seconds and Agent Kourier, which writes a
+# live reply to the chat at most every 2 seconds, shows it while it streams.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prompt-fake-model
+  namespace: e2e
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: prompt-fake-model}
+  template:
+    metadata:
+      labels: {app: prompt-fake-model}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: prompt-fake-model
+          image: agent-kourier-e2e/prompt-fake-model:dev
+          imagePullPolicy: Never
+          env:
+            - {name: FAKE_MODEL_HOST, value: 0.0.0.0}
+            - {name: FAKE_MODEL_DELAY, value: "0.3"}
+          ports: [{containerPort: 8080}]
+          readinessProbe: {tcpSocket: {port: 8080}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prompt-fake-model
+  namespace: e2e
+spec:
+  type: ClusterIP
+  selector: {app: prompt-fake-model}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+# MCP_CALL_LOG is written on /tmp, a volume: the root file system is read-only.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prompt-mcp
+  namespace: e2e
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: prompt-mcp}
+  template:
+    metadata:
+      labels: {app: prompt-mcp}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: prompt-mcp
+          image: agent-kourier-e2e/prompt-mcp:dev
+          imagePullPolicy: Never
+          env:
+            - {name: MCP_HOST, value: 0.0.0.0}
+            - {name: MCP_CALL_LOG, value: /tmp/mcp-calls.jsonl}
+            - name: MCP_TOKEN
+              valueFrom: {secretKeyRef: {name: prompt-agent-mcp, key: token}}
+          ports: [{containerPort: 8080}]
+          readinessProbe: {tcpSocket: {port: 8080}}
+          volumeMounts: [{name: tmp, mountPath: /tmp}]
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 16Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prompt-mcp
+  namespace: e2e
+spec:
+  type: ClusterIP
+  selector: {app: prompt-mcp}
+  ports: [{port: 8080, targetPort: 8080}]

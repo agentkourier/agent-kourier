@@ -308,7 +308,7 @@ case ",$(env_of AGENTKOURIER_CONNECTION_NAMESPACES)," in *,team-a,*) ;; *) die "
 phase restored
 
 # The platform's connection is the broker's own until step 3. Without it the chart renders no AGENTKOURIER_CHAT_CONNECTION, and renders no grant for the Secret
-# of a connection that the chart did not render, so the grant of step 4 is rbac.secretNames. The agent token's, which the tier's crds-values.yaml names, stays in it.
+# of a connection that the chart did not render, so the grant of step 4 is rbac.secretNames. The agent tokens, agent-kourier-agent-token and prompt-agent-bearer, which the tier's crds-values.yaml names, stay in it.
 echo "==> step 3: no ChatConnection of its own; the platform's namespace not on the list"
 upgrade --set config.chatConnection= --set 'config.connectionNamespaces={team-a,team-b,team-c}'
 rolled_out
@@ -317,7 +317,7 @@ check platform-bindings-not-served platform_not_served
 teamonly no-own
 
 echo "==> step 4: the platform's namespace on the list"
-upgrade --set config.chatConnection= --set 'config.connectionNamespaces={agent-kourier,team-a,team-b,team-c}' --set 'rbac.secretNames.agent-kourier={agent-kourier-agent-token,slack-fast}'
+upgrade --set config.chatConnection= --set 'config.connectionNamespaces={agent-kourier,team-a,team-b,team-c}' --set 'rbac.secretNames.agent-kourier={agent-kourier-agent-token,prompt-agent-bearer,slack-fast}'
 rolled_out
 no_own_connection agent-kourier,team-a,team-b,team-c
 check platform-bindings-accepted platform_accepted
@@ -354,7 +354,7 @@ check selector-relabelled-same-pods same_pods "${pods}"
 # granted by name, as in step 4.
 echo "==> step 6: no own connection, no list, no selector: every namespace"
 label_team_a off
-upgrade --set config.chatConnection= --set-json 'config.connectionNamespaces=[]' --set 'rbac.secretNames.agent-kourier={agent-kourier-agent-token,slack-fast}'
+upgrade --set config.chatConnection= --set-json 'config.connectionNamespaces=[]' --set 'rbac.secretNames.agent-kourier={agent-kourier-agent-token,prompt-agent-bearer,slack-fast}'
 rolled_out
 no_own_connection ""
 check all-route route_says all
@@ -364,7 +364,7 @@ teamonly platform-admitted all
 
 # The selector {} is every namespace too, and reads no namespace: the chart grants no rule on them for it, so a broker that read them would not start.
 echo "==> step 7: no own connection, the selector {}: every namespace, with no rule on namespaces"
-upgrade --set config.chatConnection= --set-json 'config.connectionNamespaces=[]' --set-json 'config.connectionNamespaceSelector={}' --set 'rbac.secretNames.agent-kourier={agent-kourier-agent-token,slack-fast}'
+upgrade --set config.chatConnection= --set-json 'config.connectionNamespaces=[]' --set-json 'config.connectionNamespaceSelector={}' --set 'rbac.secretNames.agent-kourier={agent-kourier-agent-token,prompt-agent-bearer,slack-fast}'
 rolled_out
 no_own_connection "" "{}"
 check empty-selector-route route_says all
