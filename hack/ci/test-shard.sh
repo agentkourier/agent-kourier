@@ -22,11 +22,17 @@
 # second and at least 1; one reported "(cached)" keeps its weight, or stays unlisted; one with no test files weighs 0;
 # a package the output does not name is dropped. The comment lines at the top of WEIGHTS stay. It refuses, changing
 # nothing, output with a FAIL, with a package twice (two runs' logs, say) or with no result at all. To refresh after
-# a push run on main that ran every package of a pass (one that changed go.sum runs them all; otherwise unchanged
-# packages report "(cached)" and keep their weights):
+# a push run on main, which runs every package of both passes (its legs run go clean -testcache first):
 #
 #   gh run view RUN --log | grep '^test-shard (' | hack/ci/test-shard.sh refresh hack/ci/test-weights/race.txt
 #   gh run view RUN --log | grep '^test-testhooks-shard (' | hack/ci/test-shard.sh refresh hack/ci/test-weights/testhooks.txt
+#
+# A refresh can move packages to the other leg. Each leg restores only its own cache, so a package that moved finds no
+# saved result until main's next push run saves the caches under the new split. test-postgres restores the cache of the
+# race leg that runs internal/broker: after a refresh, see which leg that is (this prints 1 if leg 2 runs it, 0 if
+# leg 1 does) and point test-postgres's cache key in .github/workflows/ci.yml at it:
+#
+#   go list -race ./... | xargs hack/ci/test-shard.sh pick hack/ci/test-weights/race.txt 2/2 | grep -c '/internal/broker$'
 set -euo pipefail
 
 DEFAULT_WEIGHT=10
