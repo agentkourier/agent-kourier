@@ -260,8 +260,9 @@ replica, and it checks no token, so it relies on the NetworkPolicy. The README l
 The `prompt-agent` recipe is an agent that a team writes as one `agent.yaml` in Pydantic AI's agent spec format: a
 prompt, a model, and the MCP tools it may call. A small Python server serves it over A2A, reached through the generic
 `a2a` dialect, so it runs as a plain Deployment on any cluster that can reach a model provider and the MCP server.
-Switching between providers (Anthropic, OpenAI, OpenRouter, an OpenAI-compatible endpoint, Ollama) is a change to the
-`model:` line and the key's variable.
+Switching between providers (OpenRouter, Anthropic, OpenAI, an OpenAI-compatible endpoint, Ollama) is a change to the
+`model:` line and the key's variable. The README lists the ones that have been run, and how: Anthropic's and OpenAI's own
+APIs, and Bedrock, have not.
 
 ```yaml title="agent/agent.yaml"
 --8<-- "prompt-agent/agent/agent.yaml"
@@ -287,6 +288,17 @@ token that the agent checks, from the Secret `prompt-agent-bearer`, which `rbac.
 ```yaml title="kourier/binding.yaml"
 --8<-- "prompt-agent/kourier/binding.yaml"
 ```
+
+```yaml title="kourier/agentbackend.yaml"
+--8<-- "prompt-agent/kourier/agentbackend.yaml"
+```
+
+```yaml title="kourier/chatconnection.yaml"
+--8<-- "prompt-agent/kourier/chatconnection.yaml"
+```
+
+A mention trigger takes no limits, so anyone who can mention the bot in the channel can spend model quota, and a bot's
+mention is held only to the broker's fixed limits. Bound the key at the provider.
 
 The agent refuses to start without the token's file, unless it is told to accept every caller, so the same value goes
 in a Secret in the agent's namespace too. The recipe's

@@ -1,8 +1,9 @@
 # prompt-agent
 
 Someone mentions the Agent Kourier bot in a channel. An agent that a team defined in one YAML file, a prompt, a model
-and the MCP tools it may call, answers in the thread. To switch from Anthropic to OpenAI, OpenRouter or a local Ollama,
-you change the `model:` line and the variable that holds the key.
+and the MCP tools it may call, answers in the thread. To switch between providers (OpenRouter, Anthropic, OpenAI, an
+OpenAI-compatible endpoint, a local Ollama), you change the `model:` line and the variable that holds the key;
+[Providers](#providers) says which of them have been run, and how.
 
 `agent/agent.yaml` is written in Pydantic AI's own agent spec format, with no field of Agent Kourier's. `agent/agent.py`,
 one Python file to read top to bottom, loads it, refuses at start anything that could give the agent a tool the file
@@ -18,6 +19,10 @@ how an agent meets the contract with no model at all, read the
 - A mention of the bot in the channel, outside a thread, opens a thread and a session with the agent. A mention inside
   a thread Agent Kourier does not own does the same, anchored to that thread
   ([Chat triggers](../../../docs/reference/chat-triggers.md)).
+- A mention by another bot or an incoming webhook that can post in the channel starts a turn too, with a fixed prompt,
+  within fixed limits across every bot on the Binding: 3 turns in any 30 minutes, 1 at a time, 20 in any 24 hours
+  ([A bot's mention](../../../docs/reference/chat-triggers.md#a-bots-mention)). Such a turn can call the agent's tools
+  like any other. `chat.botMentions: none` in the Binding turns it off.
 - The agent runs the model with the prompt (`instructions`) of `agent.yaml` and the MCP tools (the Model Context
   Protocol, the standard way to give a model tools) that its `allowed_tools` lists, and one tool of the wrapper's own,
   `ask_user`, which `agent.yaml` does not list.
@@ -44,12 +49,12 @@ The wrapper enforces which tools the agent can call. It does not, and cannot, en
 - **The tool list is enforced; the model's words are not.** The agent can call the MCP tools that `allowed_tools`
   names, and `ask_user`, and nothing else. Pydantic AI offers the model only those tools, and a call to any other is
   answered as an unknown tool and never reaches the MCP server. Chat and alert text is untrusted, and a model can be
-  talked into anything in words: a model told to restart a cluster called a `restart_cluster` tool it did not have,
-  which never reached the server, and then replied "DONE". **Never trust the agent's claim that it did something.**
+  talked into anything in words. In a hand run on 2026-10-17, a model (gemma4, on Ollama) told to restart a cluster
+  called a `restart_cluster` tool it did not have, which never reached the server, and then replied "DONE". **Never trust the agent's claim that it did something.**
   Check what the tool or the system it acts on records.
 - **A cancelled action may be redone on the next turn.** A cancel stops the run, but it cannot undo what an MCP tool
   already did, and the history the agent keeps holds the call. On the next turn the model may make the same call again,
-  unasked: a model did exactly that with a slow tool cancelled in flight. Prefer read-only tools. For a tool with side
+  unasked: in the same hand run, a model (Claude Haiku) did exactly that with a slow tool cancelled in flight. Prefer read-only tools. For a tool with side
   effects, tell the agent in `instructions` to confirm with `ask_user` before it calls it, and have the MCP server
   refuse a repeat it should not run.
 - **`allowed_tools` bounds the tools' names, not their arguments.** An allowed tool can be called with any arguments
@@ -127,7 +132,8 @@ Edit `agent.yaml` in `agent/manifests/configmap.yaml`: the ConfigMap is what the
 `agent/manifests/deployment.yaml`:
 
 - Name the model key's variable after your provider: the Deployment sets `ANTHROPIC_API_KEY`, for the example's
-  `anthropic:` model. For another provider, rename it ([Providers](#providers)) and add any base URL it needs as a
+  `anthropic:` model. That route, to Anthropic's own API, is not one that has been run; `openrouter:` is
+  ([Providers](#providers)). For another provider, rename it ([Providers](#providers)) and add any base URL it needs as a
   plain `value`.
 - For each `${NAME}` in your `agent.yaml`, set a variable `NAME` from a Secret. The Deployment sets
   `RUNBOOKS_MCP_TOKEN` from the Secret `prompt-agent-mcp`, for the example's MCP entry. Remove it if your MCP server
@@ -142,6 +148,7 @@ the agent, and the bearer token, which has a copy in each of two namespaces.
 
 ```sh
 kubectl create namespace prompt-agent
+kubectl create namespace agent-kourier   # where step 5 installs Agent Kourier; skip it if it exists
 read -rs MODEL_API_KEY   # paste the model provider's key and press Enter; nothing is echoed
 printf %s "$MODEL_API_KEY" | kubectl -n prompt-agent create secret generic prompt-agent-model --from-file=api-key=/dev/stdin
 unset MODEL_API_KEY
@@ -167,17 +174,17 @@ unset token
 ```
 
 `--from-literal` adds no trailing newline; Agent Kourier refuses a token with a control character, such as the newline
-that `--from-file` keeps from a file. The namespace `agent-kourier`, where step 5 installs Agent Kourier, must exist
-first (`kubectl create namespace agent-kourier`). Agent
-Kourier reads a Secret only if the chart grants it: step 5 grants this one with `rbac.secretNames`.
+that `--from-file` keeps from a file. Agent Kourier reads a Secret only if the chart grants it: step 5 grants this
+one with `rbac.secretNames`.
 
 The agent reads the token file on every request, so a rotated token works without a restart; a mounted Secret reaches
 the pod a little after Agent Kourier sees the change, so a few requests can get 401 meanwhile. The model key and the MCP
 token are environment variables, so a changed value needs a restart of the pod. When the two copies differ, the agent
 answers 401, and `kourier/binding.yaml` says what Agent Kourier then does.
 
-To run the agent with no token at all, unset `PROMPT_AGENT_TOKEN_FILE` and set `PROMPT_AGENT_ALLOW_ANONYMOUS` to `1`
-(exactly `1`; any other value does not count). Any caller that reaches the pod can then read and add to every
+To run the agent with no token at all, remove `PROMPT_AGENT_TOKEN_FILE` and set `PROMPT_AGENT_ALLOW_ANONYMOUS` to `1`
+(exactly `1`; any other value does not count), and remove the `bearer` volume and its mount, which otherwise keep the
+pod in `ContainerCreating` without the Secret. Any caller that reaches the pod can then read and add to every
 conversation the agent holds, and spend your model key.
 
 ### 4. Apply the agent
@@ -259,7 +266,7 @@ Then mention the bot in the channel and ask a question your agent's tools can an
 - **The Binding.** The channel. `interactions.askUser: true` lets the agent's `ask_user` reach the thread: without it,
   Agent Kourier cancels the task when the agent asks and tells the thread so, so leave it on unless your
   `instructions` never ask. `chat.threadReplies: mention` makes only a reply that mentions the bot a turn, for threads
-  where people talk to each other. The names `prompt-agents`, `prompt-chat` and the namespace `prompt-agent` if they
+  where people talk to each other. `chat.botMentions: none` keeps other bots' mentions from starting turns. The names `prompt-agents`, `prompt-chat` and the namespace `prompt-agent` if they
   collide with yours. `agent.name` and `agent.namespace` are labels on the `a2a` dialect: the backend's URL alone
   selects the agent.
 - **The AgentBackend.** Its `url` is the Service, `http://prompt-agent.prompt-agent.svc.cluster.local:8080`, with no
@@ -292,8 +299,8 @@ Each value below is a constant of `agent/agent.py` or of Pydantic AI, unless it 
   it, the entry written longest ago is forgotten: a thread whose history goes starts over, with no notice in the thread;
   a resent turn whose `messageId` went runs again; and an answer to a question that went does not resume the paused run,
   but runs as a new prompt in its thread.
-- **A failed task's text is cut to 1000 characters.** Agent Kourier reads up to 4096 characters of it, only to pick a
-  failure category, so the cut only makes it shorter.
+- **A failed task's text is cut to 1000 characters.** Agent Kourier reads its first 4096 bytes, only to pick a
+  failure category, and 1000 characters are at most 4000 bytes, so the cut only makes it shorter.
 - **One question at a time.** When the model asks several questions in one response, only the first is posted. The
   answer to it resumes the run, and the others are answered "Ask one question at a time." A blank question is never
   posted: the model is told to ask one with words in it.
@@ -303,6 +310,8 @@ Each value below is a constant of `agent/agent.py` or of Pydantic AI, unless it 
 - **Tasks are kept in memory until a restart, with no bound.** One task per turn, so a pod that runs long enough grows
   until it reaches its memory limit, 512Mi in `agent/manifests/deployment.yaml` (a setting you can raise). Past it the
   pod is killed: every thread starts over, and Agent Kourier reads a task it was following as the session gone.
+- **`/tmp` holds at most 64Mi** (`sizeLimit` of its `emptyDir` in the Deployment, a setting). The libraries' temporary
+  files go there; `agent.py` writes none. Past it the pod is evicted.
 - **Everything is in memory.** A restart forgets every thread's history and paused question; the next reply in a thread
   starts over. One replica only: with two, a follow-up can reach the pod that has not seen the thread.
 - **50 model responses per run** (Pydantic AI's `UsageLimits.request_limit`), counted from 0 on each turn and on the run
@@ -314,8 +323,9 @@ Each value below is a constant of `agent/agent.py` or of Pydantic AI, unless it 
   one is `ask_user`, which never waits. Setting it changes nothing.
 - **A request body of at most 1 MiB.** Past it the agent answers 413 and reads no more. Agent Kourier's largest message,
   a person's turn, is far below it. A caller without the bearer token gets 401 before its body is read.
-- **No limit of its own on runs.** A mention trigger takes no limits, so anyone who can mention the bot in the channel
-  can spend model quota. Bound the key at the provider.
+- **No limit of its own on runs.** A mention trigger takes no limits, so any person who can mention the bot in the
+  channel can spend model quota; a bot's mention is held to the broker's fixed limits (see [What it does](#what-it-does)).
+  Bound the key at the provider.
 - **The redaction covers the failed text only.** The pod's logs are not redacted (see
   [Tokens](#tokens-name-and-the-redaction)).
 - **A rotated MCP token or model key needs a restart**: they are environment variables, read once.
@@ -329,7 +339,7 @@ agent at start, since Pydantic AI would drop a misspelt or newer key without a w
 |---|---|
 | `model` | Required. `provider:name`, of a provider in the table below. See [Providers](#providers). |
 | `name`, `description` | The agent card's name and description; the name defaults to `prompt-agent`. |
-| `instructions` | The prompt: a string, or a list of strings. It goes to the model as written; `${NAME}` is not expanded here, so a token never reaches the model through it. |
+| `instructions` | The prompt: a string, or a list of strings. `${NAME}` is not expanded here, so a token never reaches the model through it. But a string with `{{` in it is a Handlebars template to Pydantic AI, rendered with no data: `{{alertname}}` reaches the model as nothing, and one it cannot parse, such as `{{ .Values.image }}`, stops the agent at start with `HandlebarsParseError`. Write `\{{` for a literal `{{`. |
 | `capabilities` | A list of `MCP` entries, and nothing else. See [MCP entries](#mcp-entries). |
 | `model_settings` | Only the provider-neutral settings: `max_tokens`, `temperature`, `top_p`, `top_k`, `timeout`, `parallel_tool_calls`, `tool_choice`, `seed`, `presence_penalty`, `frequency_penalty`, `logit_bias`, `stop_sequences`, `thinking`, `cache`, `service_tier`. |
 | `retries` | How many times Pydantic AI lets the model retry a tool call that failed, or an output it could not use (1 by default): an integer, or `{tools: n, output: n}`. |
@@ -354,7 +364,7 @@ capabilities:
 | `allowed_tools` | Required: a non-empty list of tool names. The agent can call these and no other tool of the server. |
 | `authorization_token` | Sent as the `Authorization` header, verbatim: write the scheme too (`Bearer ${NAME}`). |
 | `headers` | A mapping of header names to values, sent on every request to the server. |
-| `id` | The entry's name. Pydantic AI names it after the URL's host otherwise. Required for an IPv6 host. |
+| `id` | The entry's name. Pydantic AI names it after the URL's host and last path segment otherwise. Required for an IPv6 host. |
 | `native` | Only `false`, the default. |
 | `description` | Allowed; used only by native MCP, which is refused, so it has no effect. |
 
@@ -363,7 +373,7 @@ capabilities:
 The provider reads its key from the environment, not from `agent.yaml`. These are the providers that have been run with
 this wrapper's approach: an `agent.yaml` that changed only the `model:` line, a pod-like environment with only that
 provider's variables, and an MCP tool called through an authenticated server. They were run by hand on 2026-10-17,
-with the Pydantic AI version this recipe pins; nothing in this repository runs them.
+with Pydantic AI 2.57.0; nothing in this repository runs them.
 
 | `model:` | Variables | What was run |
 |---|---|---|
@@ -390,9 +400,10 @@ the Deployment sets only the variables your provider needs.
 - The values are read once, at start: a rotated token needs a restart of the pod.
 - **The redaction.** A failed task's text can quote an error that quotes a header or a key, and any caller with the
   bearer token can read it with `GetTask`. So before it leaves the agent, the wrapper replaces with `[redacted]` every
-  value that `${NAME}` expanded to, and the value of every environment variable whose name has `KEY`, `TOKEN`, `SECRET`
-  or `PASSWORD` as a part between underscores (`ANTHROPIC_API_KEY`, `AWS_BEARER_TOKEN_BEDROCK`), if it is 8 characters
-  or more. Only a value quoted whole is found: a key quoted in part, such as with stars between its ends, stays as it
+  value that `${NAME}` expanded to, whatever its length. It also replaces the value of every environment variable whose
+  name has `KEY`, `TOKEN`, `SECRET` or `PASSWORD` as a part between underscores (`ANTHROPIC_API_KEY`,
+  `AWS_BEARER_TOKEN_BEDROCK`), when that value is 8 characters or more, so that a short word is not cut out of every
+  text. Only a value quoted whole is found: a key quoted in part, such as with stars between its ends, stays as it
   is. Only that text is redacted: what uvicorn, the a2a-sdk and Pydantic AI write to the pod's log goes out as it is.
 
 ### What the agent refuses, and why
