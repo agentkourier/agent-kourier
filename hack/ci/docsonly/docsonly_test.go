@@ -21,7 +21,7 @@ const workflowsDir = "../../../.github/workflows"
 // zizmor must always run in full. ci.yml's test and test-testhooks are not gated: they check out nothing and only
 // require their legs, which are, to have passed.
 var gated = map[string][]string{
-	"ci.yml":       {"crd-corpus", "docs-agent", "echo-agent", "test-postgres", "test-scripts", "test-shard", "test-testhooks-shard"},
+	"ci.yml":       {"crd-corpus", "docs-agent", "echo-agent", "prompt-agent", "test-postgres", "test-scripts", "test-shard", "test-testhooks-shard"},
 	"codeql.yml":   {"analyze"},
 	"security.yml": {"govulncheck", "image"},
 }

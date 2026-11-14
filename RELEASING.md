@@ -268,7 +268,7 @@ holds a second entry of each cache it saves until the prune runs: about 9.4 GB w
 admin or organization owner can raise it, and use past 10 GB is then billed. Past it GitHub evicts the least recently
 accessed entries first, so a cache that was accessed longest ago (one the prune would delete anyway, or a `docs.yml`
 cache, restored only on a docs change) can go, and the next run that wants it starts cold. The jobs that
-install Python packages, `echo-agent` in `ci.yml` and `build` in `docs.yml`, keep pip's cache under an exact key on
+install Python packages, `echo-agent` and `prompt-agent` in `ci.yml` and `build` in `docs.yml`, keep pip's cache under an exact key on
 the job, the runner OS, the Python version and the requirements files they install from: a push to `main` saves it
 only when those files or the Python version change, and `cache-prune` then deletes the old entry. `docs.yml` runs on a push to
 `main` only when the push changes a path in its `push` trigger, so only such a push saves the `build` job's caches. Each job has its own timeout, set from the times seen on a cold cache. The kind
@@ -283,7 +283,7 @@ deleted (maintainer prose such as `spec.md` and `AGENTS.md`, `docs/brand`, `docs
 docs-check` in `lint` repeats; `README.md` and the pages under `docs/` are not on it, since tests read them. A symlink
 or submodule on the list is not docs-only: the docs agent's tests walk the real `docs/` and refuse any symlink in it. On
 one, the `test-shard` and `test-testhooks-shard` legs, `test-scripts`, `test-postgres`, both `crd-corpus` jobs,
-`docs-agent`, `echo-agent`, the `govulncheck` and `trivy` jobs and `analyze` check out, find the pull request
+`docs-agent`, `echo-agent`, `prompt-agent`, the `govulncheck` and `trivy` jobs and `analyze` check out, find the pull request
 docs-only, and skip their other steps, so each still reports success under its own name, and `test` and
 `test-testhooks` pass as their legs did; `lint`, `zizmor` and `gitleaks` run in full. Anything else, including a failure to
 list the paths or a merge commit whose second parent is not the pull request's head, runs every step. A push to `main`

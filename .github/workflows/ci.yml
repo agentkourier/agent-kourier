@@ -14,9 +14,9 @@
 # make docs-check, which lint runs (the script says which). A symlink or submodule anywhere on the list runs everything:
 # the docs agent's tests walk the real docs/ and refuse any symlink in it. README.md and the pages under docs/ are not
 # on it: tests read them. On one, the legs of test-shard and test-testhooks-shard, test-scripts, test-postgres,
-# crd-corpus, docs-agent and echo-agent still start, check out and run the docs-only step, then skip every other step,
-# and each reports success under its own name, as do govulncheck and trivy in security.yml and analyze in codeql.yml;
-# test and test-testhooks then pass, as their legs did. They skip steps, not the job: a job-level if is
+# crd-corpus, docs-agent, echo-agent and prompt-agent still start, check out and run the docs-only step, then skip every
+# other step, and each reports success under its own name, as do govulncheck and trivy in security.yml and analyze in
+# codeql.yml; test and test-testhooks then pass, as their legs did. They skip steps, not the job: a job-level if is
 # evaluated before the matrix expands (it cannot read matrix), so a crd-corpus skipped there reports no check named
 # crd-corpus (1.37) or crd-corpus (1.33), and those required checks would wait forever. lint runs in full: it takes
 # about a minute and a half, and its make docs-check reads the text files under docs/assets (SVG, captions), as
@@ -646,6 +646,57 @@ jobs:
           path: ${{ steps.pip-env.outputs.cache }}
           key: ${{ steps.pip-cache.outputs.cache-primary-key }}
 
+  # The prompt-agent recipe is Python too (examples/recipes/prompt-agent/agent), and is built and cached the same way as
+  # the echo agent. Its tests start a small MCP server as a subprocess, and call no model.
+  prompt-agent:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The merge commit and both its parents, for the docs-only step.
+          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
+      # On a docs-only pull request every step after this one skips; the header says why that is safe.
+      - id: docs-only
+        name: Classify the pull request's changes
+        if: ${{ github.event_name == 'pull_request' }}
+        continue-on-error: true
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          scope=$(hack/ci/docs-only.sh)
+          echo "${scope}" >>"${GITHUB_OUTPUT}"
+      - id: setup-python
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+      - id: pip-env
+        name: Locate the pip cache
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
+        run: echo "cache=$(python -m pip cache dir)" >>"${GITHUB_OUTPUT}"
+      - id: pip-cache
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pip-env.outputs.cache }}
+          key: pip-prompt-agent-${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('examples/recipes/prompt-agent/agent/requirements*.txt') }}
+          restore-keys: |
+            pip-prompt-agent-${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-
+            pip-prompt-agent-${{ runner.os }}-
+      - if: ${{ steps.docs-only.outputs.skip != 'true' }}
+        run: make prompt-agent-test
+      - if: ${{ steps.docs-only.outputs.skip != 'true' }}
+        run: make prompt-agent-lint
+      - if: ${{ steps.docs-only.outputs.skip != 'true' }}
+        run: make prompt-agent-image
+      - if: ${{ !cancelled() && steps.pip-cache.outcome == 'success' && steps.pip-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pip-env.outputs.cache }}
+          key: ${{ steps.pip-cache.outputs.cache-primary-key }}
+
   # On a push to main, once the jobs above have saved: deletes every entry of each of their caches but the newest
   # (hack/ci/actions-cache.sh prune), so the quota holds one of each, as the comment in lint says. It runs after a
   # failed job too, since a failed job still saves. Its token is the only one here that can delete caches (actions:
@@ -654,7 +705,7 @@ jobs:
   # Deleting an entry a pull request is downloading at that moment can fail that restore, and the job then runs cold;
   # a failed restore does not fail it.
   cache-prune:
-    needs: [lint, test-shard, test-testhooks-shard, crd-corpus, docs-agent, echo-agent]
+    needs: [lint, test-shard, test-testhooks-shard, crd-corpus, docs-agent, echo-agent, prompt-agent]
     if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 5
@@ -669,5 +720,6 @@ jobs:
           hack/ci/actions-cache.sh prune "go-lint-${RUNNER_OS}-" "go-test-1-${RUNNER_OS}-" "go-test-2-${RUNNER_OS}-"
           "go-test-testhooks-1-${RUNNER_OS}-" "go-test-testhooks-2-${RUNNER_OS}-" "go-crd-corpus-${RUNNER_OS}-"
           "go-docs-agent-${RUNNER_OS}-" "pip-echo-agent-${RUNNER_OS}-"
+          "pip-prompt-agent-${RUNNER_OS}-"
         env:
           GH_TOKEN: ${{ github.token }}
