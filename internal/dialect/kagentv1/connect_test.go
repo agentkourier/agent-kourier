@@ -202,6 +202,8 @@ func TestHTTPStatusErrorCarriesRetryAfter(t *testing.T) {
 		{"garbage", "soon", 0, 0},
 		{"negative", "-5", 0, 0},
 		{"a plus sign: delay-seconds is digits only", "+5", 0, 0},
+		{"a day", "86400", 24 * time.Hour, 24 * time.Hour},
+		{"a second over a day: capped", "86401", 24 * time.Hour, 24 * time.Hour},
 		{"twenty digits: capped, not zero", "99999999999999999999", 24 * time.Hour, 24 * time.Hour},
 		{"absent", "", 0, 0},
 	} {
@@ -361,10 +363,41 @@ type spyBody struct {
 func (b *spyBody) Close() error { b.closed = true; return nil }
 
 // The bearer token must not follow HTTP_PROXY. net/http caches that variable per process,
-// so the test pins the transport instead of the environment.
+// so the test pins the transports instead of the environment. Both carry the token: the shared one
+// and the one for fresh connections, which must differ from it in keep-alives alone.
 func TestTransportIgnoresProxyEnvironment(t *testing.T) {
-	if tr, ok := New(0).base.(*http.Transport); !ok || tr.Proxy != nil {
-		t.Errorf("transport = %T with Proxy set, want a Transport that dials directly", New(0).base)
+	const timeout = 7 * time.Second
+	d := New(timeout)
+	base, ok := d.base.(*http.Transport)
+	if !ok {
+		t.Fatalf("shared transport = %T, want a *http.Transport", d.base)
+	}
+	fresh, ok := d.fresh.(*http.Transport)
+	if !ok {
+		t.Fatalf("fresh transport = %T, want a *http.Transport", d.fresh)
+	}
+	for name, tr := range map[string]*http.Transport{"shared": base, "fresh": fresh} {
+		if tr.Proxy != nil {
+			t.Errorf("%s transport has Proxy set, want one that dials directly", name)
+		}
+		if tr.DialContext == nil {
+			t.Errorf("%s transport has no DialContext, want the dialer with its timeout", name)
+		}
+		if tr.ResponseHeaderTimeout != timeout {
+			t.Errorf("%s transport ResponseHeaderTimeout = %v, want %v", name, tr.ResponseHeaderTimeout, timeout)
+		}
+		if tr.TLSHandshakeTimeout != base.TLSHandshakeTimeout || tr.TLSHandshakeTimeout <= 0 {
+			t.Errorf("%s transport TLSHandshakeTimeout = %v, want the shared %v, which is set", name, tr.TLSHandshakeTimeout, base.TLSHandshakeTimeout)
+		}
+		if tr.IdleConnTimeout != base.IdleConnTimeout {
+			t.Errorf("%s transport IdleConnTimeout = %v, want %v", name, tr.IdleConnTimeout, base.IdleConnTimeout)
+		}
+		if !tr.ForceAttemptHTTP2 {
+			t.Errorf("%s transport has ForceAttemptHTTP2 off, want HTTP/2 attempted", name)
+		}
+	}
+	if base.DisableKeepAlives || !fresh.DisableKeepAlives {
+		t.Errorf("DisableKeepAlives: shared %v, fresh %v; want false and true", base.DisableKeepAlives, fresh.DisableKeepAlives)
 	}
 }
 

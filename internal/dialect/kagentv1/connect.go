@@ -35,7 +35,8 @@ const (
 
 // New returns a Dialect whose calls must get their response headers within responseTimeout;
 // zero means DefaultResponseTimeout. That bounds each call's start, not its length: a
-// stream (SendStreamingMessage, SubscribeToTask) is bounded only by its caller's context.
+// stream (SendStreamingMessage, SubscribeToTask) is bounded only by its caller's context in length, and in size by event
+// (dialect.MaxEventBytes), as a card and an answer are bounded in all (dialect.MaxCardBytes, dialect.MaxResponseBytes).
 // oauth2-proxy's --upstream-timeout (10m in the pilot) bounds the wait for response
 // headers, not a stream's length (medium-high confidence, from review; not measured). What
 // to do when a stream ends early is the caller's concern (WP-27).
@@ -43,7 +44,7 @@ func New(responseTimeout time.Duration) *Dialect {
 	if responseTimeout <= 0 {
 		responseTimeout = DefaultResponseTimeout
 	}
-	return &Dialect{base: &http.Transport{
+	base := &http.Transport{
 		// No Proxy, on purpose: a nil Proxy dials the front door directly. Honoring
 		// HTTP_PROXY would let an injected environment variable receive the Binding's bearer
 		// token in cleartext.
@@ -52,21 +53,38 @@ func New(responseTimeout time.Duration) *Dialect {
 		ResponseHeaderTimeout: responseTimeout,
 		IdleConnTimeout:       90 * time.Second,
 		ForceAttemptHTTP2:     true,
-	}}
+	}
+	// The same transport without keep-alives, for a request that must open its own connection (see
+	// dialect.WithFreshConnection): every dial, TLS and proxy setting is the shared one's, and it keeps no
+	// connection (HTTP/1 sends Connection: close, HTTP/2 closes the connection once its one request is done).
+	// One narrow case under HTTP/2: a request cancelled just after its TLS handshake can leave an unused connection
+	// in this transport, which the next fresh request to that host and port rides until the idle timeout.
+	fresh := base.Clone()
+	fresh.DisableKeepAlives = true
+	return &Dialect{base: base, fresh: fresh}
 }
 
 // CloseIdleConnections closes the idle keep-alive connections of the transport that every
 // client of this Dialect shares, and the goroutines that serve them. Call it after the clients
-// are done, at shutdown: an idle connection otherwise lives until its idle timeout.
+// are done, at shutdown: an idle connection otherwise lives until its idle timeout. The transport
+// for fresh connections (dialect.WithFreshConnection) keeps no connection idle, and is closed too.
 func (d *Dialect) CloseIdleConnections() {
-	if c, ok := d.base.(interface{ CloseIdleConnections() }); ok {
-		c.CloseIdleConnections()
+	for _, rt := range []http.RoundTripper{d.base, d.fresh} {
+		if c, ok := rt.(interface{ CloseIdleConnections() }); ok {
+			c.CloseIdleConnections()
+		}
 	}
 }
 
 // cardParser reads an agent card as A2A 1.0 and, when that lists no interface, as A2A 0.3: one
 // `url` and a `preferredTransport`, with no protocolVersion, which is what kagent 0.9.x serves.
-// The 0.3 reader maps it onto the 1.0 shape, so the checks in ConnectEndpoint see one kind of card.
+// The 0.3 reader maps it onto the 1.0 shape, so the checks in ConnectEndpoint see one kind of card. A body neither
+// reader accepts fails with dialect.ErrInvalidAgentCard, which a2a-go's resolver wraps with %w, so errors.Is finds it.
+// So does JSON that both accept but that names no agent and no endpoint, such as a gateway's {"error":"login_required"}:
+// JSON decoding ignores the fields it does not know, so that is not a card with no JSON-RPC interface, but no card.
+// The test is that narrow: a body that lists any interface returns before it, and other JSON with a name, such as
+// {"name":"UnauthorizedError"}, passes it. ConnectEndpoint then reports dialect.ErrNoJSONRPCInterface unless an interface
+// is JSON-RPC.
 func cardParser(body []byte) (*a2a.AgentCard, error) {
 	card, err := agentcard.DefaultCardParser(body)
 	if err == nil && len(card.SupportedInterfaces) > 0 {
@@ -75,11 +93,22 @@ func cardParser(body []byte) (*a2a.AgentCard, error) {
 	legacy, legacyErr := a2av0.NewAgentCardParser()(body)
 	switch {
 	case legacyErr == nil:
-		return legacy, nil
-	case err == nil:
-		return card, nil // read as 1.0 but lists no interface: ConnectEndpoint's own check says so
+		card = legacy
+	case err != nil:
+		return nil, fmt.Errorf("%w: %w", dialect.ErrInvalidAgentCard, err)
 	}
-	return nil, err
+	// card was read as 1.0 with no interface if the 0.3 reader refused it: ConnectEndpoint's own check says so.
+	if !namesAgentOrEndpoint(card) {
+		return nil, fmt.Errorf("%w: it names no agent and no endpoint", dialect.ErrInvalidAgentCard)
+	}
+	return card, nil
+}
+
+// namesAgentOrEndpoint reports whether card has a name or an interface with a URL.
+func namesAgentOrEndpoint(card *a2a.AgentCard) bool {
+	return card.Name != "" || slices.ContainsFunc(card.SupportedInterfaces, func(i *a2a.AgentInterface) bool {
+		return i != nil && i.URL != ""
+	})
 }
 
 // Connect resolves the agent's card through the front door and returns an A2A client for it.
@@ -119,14 +148,14 @@ func (d *Dialect) ConnectEndpoint(ctx context.Context, endpoint string, creds di
 	}
 	for _, ext := range card.Capabilities.Extensions {
 		if ext.Required && !slices.Contains(extensions, ext.URI) {
-			return nil, errors.New("agent requires an unsupported extension")
+			return nil, dialect.ErrUnsupportedExtension
 		}
 	}
 	card.SupportedInterfaces = slices.DeleteFunc(card.SupportedInterfaces, func(i *a2a.AgentInterface) bool {
 		return i == nil || i.ProtocolBinding != a2a.TransportProtocolJSONRPC
 	})
 	if len(card.SupportedInterfaces) == 0 {
-		return nil, errors.New("agent card lists no JSON-RPC interface")
+		return nil, dialect.ErrNoJSONRPCInterface
 	}
 	for _, i := range card.SupportedInterfaces {
 		i.URL = endpoint
@@ -135,11 +164,13 @@ func (d *Dialect) ConnectEndpoint(ctx context.Context, endpoint string, creds di
 	// the 0.3 one for an agent whose interface is 0.3 (kagent 0.9.x), chosen by the interface's version.
 	client, err := a2aclient.NewFromCard(ctx, card,
 		a2aclient.WithDefaultsDisabled(),
-		a2aclient.WithCallInterceptors(a2aext.NewActivator(extensions...)),
+		a2aclient.WithCallInterceptors(a2aext.NewActivator(extensions...), messageExtensions{offered: extensions}),
 		a2aclient.WithJSONRPCTransport(hc),
 		a2av0.WithJSONRPCTransport(a2av0.JSONRPCTransportConfig{Client: hc}))
 	if err != nil {
-		return nil, fmt.Errorf("create agent client: %w", err)
+		// The transports this client registers (JSON-RPC over hc, for 1.0 and 0.3) are made without I/O and cannot
+		// fail, so a failure is the card's: its interfaces name a protocol version no registered transport speaks.
+		return nil, fmt.Errorf("create agent client: %w: %w", dialect.ErrInvalidAgentCard, err)
 	}
 	return client, nil
 }
@@ -149,18 +180,23 @@ func (d *Dialect) ConnectEndpoint(ctx context.Context, endpoint string, creds di
 // redirect, which would carry the token to wherever the redirect points.
 func (d *Dialect) httpClient(creds dialect.Credentials, frontDoor *url.URL) *http.Client {
 	return &http.Client{
-		Transport:     authTransport{next: d.base, dialect: d, creds: creds, frontDoor: frontDoor},
+		Transport:     authTransport{next: d.base, fresh: d.fresh, dialect: d, creds: creds, frontDoor: frontDoor},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 }
 
 // authTransport authenticates each request, on a copy, before sending it to the front door,
-// and turns a response that is not 2xx into a dialect.HTTPStatusError.
+// and turns a response that is not 2xx into a dialect.HTTPStatusError. A response body is bounded as boundOf says, and one
+// past its bound fails with dialect.ErrResponseTooLarge. A request whose context
+// came from dialect.WithFreshConnection goes through fresh instead of next. The same holds on both paths:
+// the host check runs before the choice, so the identity goes only to the front door, and a redirect is not
+// followed, because a 3xx is such a response: RoundTrip returns the error, so the client never reads a Location.
+// The client's CheckRedirect is the second guard, should this conversion ever change.
 type authTransport struct {
-	next      http.RoundTripper
-	dialect   *Dialect
-	creds     dialect.Credentials
-	frontDoor *url.URL
+	next, fresh http.RoundTripper // fresh is nil for a Dialect that was not built by New: next carries all
+	dialect     *Dialect
+	creds       dialect.Credentials
+	frontDoor   *url.URL
 }
 
 func (t authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -173,11 +209,16 @@ func (t authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.URL.Scheme != t.frontDoor.Scheme || !strings.EqualFold(req.URL.Host, t.frontDoor.Host) {
 		return refuse(fmt.Errorf("refusing to send credentials to %s://%s, which is not the front door", req.URL.Scheme, req.URL.Host))
 	}
+	asked := req.Header.Get("Accept") // the SDK's, before Authenticate adds the AgentBackend's headers (see boundOf)
 	req = req.Clone(req.Context())
 	if err := t.dialect.Authenticate(req, t.creds); err != nil {
 		return refuse(err)
 	}
-	resp, err := telemetry.Transport(t.next, true).RoundTrip(req)
+	next := t.next
+	if t.fresh != nil && dialect.FreshConnection(req.Context()) {
+		next = t.fresh
+	}
+	resp, err := telemetry.Transport(next, true).RoundTrip(req)
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +226,7 @@ func (t authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		_ = resp.Body.Close()
 		return nil, &dialect.HTTPStatusError{Code: resp.StatusCode, RetryAfter: retryAfter(resp.Header)}
 	}
-	return resp, nil
+	return limited(resp, boundOf(req, asked, resp))
 }
 
 // retryAfter reads a Retry-After header, which is a number of seconds or an HTTP date. It
@@ -197,10 +238,34 @@ func retryAfter(h http.Header) time.Duration {
 	// RFC 9110 delay-seconds is digits only, so ParseUint, which rejects a sign. A value too
 	// large for a uint64 is a very long delay: it takes the cap, not 0.
 	if secs, err := strconv.ParseUint(v, 10, 64); err == nil || errors.Is(err, strconv.ErrRange) {
-		return time.Duration(min(secs, uint64(day/time.Second))) * time.Second
+		if secs >= uint64(day/time.Second) {
+			return day
+		}
+		return time.Duration(secs) * time.Second
 	}
 	if at, err := http.ParseTime(v); err == nil {
 		return min(max(time.Until(at), 0), day)
 	}
 	return 0
+}
+
+// messageExtensions asks for each offered extension that an outgoing message names in its extensions, whatever the card
+// lists: a message that carries an extension's payload (an answer to a HITL pause) is sent as that extension's, so the
+// agent reads the payload as such. It only adds to what the activator asks for; a URI both ask for is sent once, because
+// a2a-go's ServiceParams.Append drops a value already present (a2aclient/middleware.go, v2.6.0).
+type messageExtensions struct {
+	a2aclient.PassthroughInterceptor
+	offered []string
+}
+
+// Before adds the A2A-Extensions values of a send.
+func (m messageExtensions) Before(ctx context.Context, req *a2aclient.Request) (context.Context, any, error) {
+	if send, ok := req.Payload.(*a2a.SendMessageRequest); ok && send.Message != nil {
+		for _, ext := range send.Message.Extensions {
+			if slices.Contains(m.offered, ext) {
+				req.ServiceParams.Append(a2a.SvcParamExtensions, ext)
+			}
+		}
+	}
+	return ctx, nil, nil
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/secret"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
@@ -104,6 +106,8 @@ type watched struct {
 	gate   *gate
 	logs   *syncBuffer
 	states *states
+	client *slack.Client
+	wait   func() error // Run's error, once it has returned
 }
 
 // startWatched runs a Client with a debug log and an OnConnection recorder, and returns once it has been told it is
@@ -126,7 +130,8 @@ func startWatched(t *testing.T) *watched {
 		Logger:       slog.New(slog.NewTextHandler(k.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		OnConnection: k.states.set,
 	})
-	run(t, c, &sink{})
+	k.client = c
+	_, k.wait = run(t, c, &sink{})
 	k.eventually(t, "the client to be told it is connected", k.states.last)
 	// The state is set before the line is logged, so being told says nothing yet of the log.
 	k.eventually(t, "the connection to be logged", func() bool { return k.logs.count("level=INFO", "socket mode connected") > 0 })
@@ -183,23 +188,39 @@ func TestConnectionIsLoggedAndReported(t *testing.T) {
 	k.noSecrets(t)
 }
 
-// A connection that is lost is a gauge that drops while Slack cannot be reached, with a WARN for each failed attempt
-// (once, however often it is retried), and one that is up again when it can: the second connection is logged like the
-// first.
-func TestLostConnectionIsReportedAndRecovers(t *testing.T) {
+// A connection that is lost while Slack cannot be reached ends Run with the failed attempt as its error, and the
+// gauge drops: slack-go would retry for as long as it takes, with a pause that grows to 5 minutes, and the pace of a
+// reconnect is the broker's (RunPlatform), which runs the client again. That second Run connects, and logs the
+// connection like the first.
+func TestLostConnectionEndsRunAndTheNextRunRecovers(t *testing.T) {
 	k := startWatched(t)
 	k.gate.failOpen.Store(true)
 	if _, err := k.fake.SendEnvelope("disconnect", map[string]any{"reason": "refresh_requested"}); err != nil {
 		t.Fatal(err)
 	}
 
-	k.eventually(t, "the connection to be reported down", func() bool { return !k.states.last() })
-	k.eventually(t, "the failed attempt to be logged", func() bool { return k.logs.count("level=WARN", "connection attempt failed") > 0 })
+	ended := make(chan error, 1)
+	go func() { ended <- k.wait() }()
+	select {
+	case err := <-ended:
+		if err == nil || !strings.Contains(err.Error(), "connection attempt failed") || errors.Is(err, context.Canceled) {
+			t.Errorf("Run = %v; want the failed attempt to connect", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("Run did not return after a connection that could not be opened again; the log:\n%s", k.logs)
+	}
+	if got := k.states.get(); len(got) != 2 || !got[0] || got[1] {
+		t.Errorf("OnConnection was told %v; want up, down", got)
+	}
 	if got := k.logs.count("level=INFO", "socket mode reconnecting"); got != 1 {
 		t.Errorf("%d lines say it was reconnecting; want 1:\n%s", got, k.logs)
 	}
+	if got := k.logs.count("level=WARN"); got != 0 {
+		t.Errorf("the adapter logged %d WARN lines for the failed attempt; want none, since the caller logs the error Run returns:\n%s", got, k.logs)
+	}
 
 	k.gate.failOpen.Store(false)
+	run(t, k.client, &sink{})
 	k.eventually(t, "the connection to be reported up again", k.states.last)
 	// The state is set before the line is logged: wait for the second line, then count.
 	k.eventually(t, "the second connection to be logged", func() bool { return k.logs.count("level=INFO", "socket mode connected") >= 2 })
@@ -208,9 +229,6 @@ func TestLostConnectionIsReportedAndRecovers(t *testing.T) {
 	}
 	if got := k.logs.count("level=INFO", "socket mode connected"); got != 2 {
 		t.Errorf("%d lines say it connected; want 2 (the first and the second):\n%s", got, k.logs)
-	}
-	if got := k.logs.count("connection attempt failed"); got != 1 {
-		t.Errorf("%d lines for the failed attempts; want the few that the pace allows, which here is 1:\n%s", got, k.logs)
 	}
 	k.noSecrets(t)
 }
@@ -262,11 +280,7 @@ func TestRunEndingReportsTheConnectionDown(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- slack.New(cfg).Run(ctx, &sink{}) }()
 	waitConnected(t, fake)
-	for deadline := time.Now().Add(5 * time.Second); !st.last(); time.Sleep(time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the client was never told it is connected")
-		}
-	}
+	testutil.Eventually(t, "the client was never told it is connected", st.last, testutil.Within(5*time.Second))
 
 	cancel()
 	_ = <-done

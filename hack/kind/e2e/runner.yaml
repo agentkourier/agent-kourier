@@ -57,6 +57,141 @@ metadata:
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: e2e-runner}
 subjects: [{kind: ServiceAccount, name: e2e-runner, namespace: e2e}]
 ---
+# The scenarios of the custom resources route (the CR_ tests; they skip unless Agent Kourier reads custom resources, E2E_CONFIG_SOURCE=crds) play a
+# team in the namespace e2e-team, which e2e-run.sh creates empty, and the runner may do nothing outside it: it makes Bindings and AgentBackends, a token
+# Secret, and the Role and RoleBinding that let Agent Kourier read that Secret (the RBAC a team must add). The Secrets are named here, one for each case
+# (the cases' name plus -token, test/e2e's cr_test.go): the runner can create one, which a Role cannot limit by name, but it can list, watch or delete only
+# those it names, so it cannot read the others of the namespace. It lists and watches them only so that Kubernetes lets it grant that (a Role cannot give
+# what its maker lacks). e2e-team is allowed by the tier's ChatConnection (allowedNamespaces), the one thing outside it that the scenarios rely on.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: e2e-runner-team
+  namespace: e2e-team
+rules:
+  - apiGroups: [agentkourier.dev]
+    resources: [bindings]
+    verbs: [get, list, create, update, delete]
+  - apiGroups: [agentkourier.dev]
+    resources: [agentbackends]
+    verbs: [list, create, delete]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [newns-token, invalid-token, conflict-token, status-token, failover-token]
+    verbs: [delete, list, watch]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [roles, rolebindings]
+    verbs: [create, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: e2e-runner-team
+  namespace: e2e-team
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: e2e-runner-team}
+subjects: [{kind: ServiceAccount, name: e2e-runner, namespace: e2e}]
+---
+# The scenarios of a broker that serves several Slack apps (the MC_ tests, which this Job's pattern leaves out: make e2e-two-apps runs them in a Job of its own,
+# with E2E_RUN=^TestMC_; they skip unless the broker admits team-a's namespace, E2E_TWO_APPS=1 in
+# up-fast.sh), which e2e-run.sh makes the namespaces team-a, team-b and team-c empty for. team-a holds a ChatConnection, a Binding and two Secrets that
+# the tier makes (hack/kind/fast/two-apps): the runner reads the Binding's status, and changes one Secret, the Slack tokens, as a team
+# does that fixes a token. It never reads a Secret, and has no get on one at all.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: e2e-runner-team-a
+  namespace: team-a
+rules:
+  - apiGroups: [agentkourier.dev]
+    resources: [bindings]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [slack-team-a]
+    verbs: [patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: e2e-runner-team-a
+  namespace: team-a
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: e2e-runner-team-a}
+subjects: [{kind: ServiceAccount, name: e2e-runner, namespace: e2e}]
+---
+# team-b and team-c are where the scenarios add a ChatConnection while the broker runs (team-b's own Slack app in one, and a second connection of team-a's
+# app in the other): the runner plays a team there as it does in e2e-team, with the Slack tokens and the agent token of each case as the only Secrets it
+# may list, watch or delete, and the ChatConnection beside the Bindings and AgentBackends. Both namespaces are on the platform's admission list.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: e2e-runner-team-b
+  namespace: team-b
+rules:
+  - apiGroups: [agentkourier.dev]
+    resources: [bindings]
+    verbs: [get, list, create, delete]
+  - apiGroups: [agentkourier.dev]
+    resources: [chatconnections]
+    verbs: [list, create, delete]
+  - apiGroups: [agentkourier.dev]
+    resources: [agentbackends]
+    verbs: [list, create, delete]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [mc-slack, mc-token]
+    verbs: [delete, list, watch]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [roles, rolebindings]
+    verbs: [create, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: e2e-runner-team-b
+  namespace: team-b
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: e2e-runner-team-b}
+subjects: [{kind: ServiceAccount, name: e2e-runner, namespace: e2e}]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: e2e-runner-team-c
+  namespace: team-c
+rules:
+  - apiGroups: [agentkourier.dev]
+    resources: [bindings]
+    verbs: [get, list, create, delete]
+  - apiGroups: [agentkourier.dev]
+    resources: [chatconnections]
+    verbs: [list, create, delete]
+  - apiGroups: [agentkourier.dev]
+    resources: [agentbackends]
+    verbs: [list, create, delete]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [mc-slack, mc-token]
+    verbs: [delete, list, watch]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [roles, rolebindings]
+    verbs: [create, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: e2e-runner-team-c
+  namespace: team-c
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: e2e-runner-team-c}
+subjects: [{kind: ServiceAccount, name: e2e-runner, namespace: e2e}]
+---
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -76,8 +211,12 @@ spec:
         - name: e2e
           image: agent-kourier-e2e/runner:dev
           imagePullPolicy: Never
-          args: ["-test.v", "-test.run=^Test(Smoke|Fault.*|S[0-9]+_.*|AX_.*|A2A_.*)$", "-test.timeout=20m"]
+          args: ["-test.v", "-test.run=^Test(Smoke|Fault.*|S[0-9]+_.*|AX_.*|A2A_.*|Verify_.*|CR_.*)$", "-test.timeout=20m"]
           # The tier the Job runs in: e2e-run.sh puts fast or full here, so that a test can tell a tier
           # that has Agent Kourier from one that does not yet.
-          env: [{name: E2E_TIER, value: "@TIER@"}, {name: E2E_STUB_URL, value: "@STUB_URL@"}]
+          # E2E_CONFIG_SOURCE is where the tier's Agent Kourier reads its config from, files (the ConfigMap) or crds (custom resources): e2e-run.sh
+          # reads it from the Deployment as it is now, so that a tier moved between the two in place is run as it is, and the CR_ tests skip on files.
+          # E2E_PHASE is the part of a scenario that a script runs between its own steps (hack/kind/crs-migration.sh, hack/kind/two-apps.sh); empty in an ordinary run.
+          # E2E_CONNECTION_NAMESPACES is the broker's admission list, as its Deployment has it (e2e-run.sh reads it): the MC_ tests (not in this pattern; E2E_RUN=^TestMC_ or make e2e-two-apps) skip unless it holds team-a.
+          env: [{name: E2E_TIER, value: "@TIER@"}, {name: E2E_STUB_URL, value: "@STUB_URL@"}, {name: E2E_CONFIG_SOURCE, value: "@CONFIG_SOURCE@"}, {name: E2E_PHASE, value: "@PHASE@"}, {name: E2E_CONNECTION_NAMESPACES, value: "@CONNECTION_NAMESPACES@"}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}

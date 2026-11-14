@@ -41,9 +41,9 @@ and recovery after a restart or failover. Slack is supported today, and other ch
 </div>
 </div>
 
-!!! note "Status: v0.1.1"
-    The current release is `0.1.1`: install the published chart and image with [Install with Helm](how-to/install-with-helm.md).
-    The `v1alpha1` resource format can change before 1.0.
+!!! note "Status: v0.3.2"
+    The current release is `0.3.2`: install the published chart and image with [Install with Helm](how-to/install-with-helm.md).
+    The `v1alpha1` resource format can change before 1.0. The [release notes](release-notes.md) say what changed in 0.3.0, which lets a team bring its own Slack app to a shared broker.
 
 ## What Agent Kourier handles
 
@@ -53,8 +53,9 @@ arrive while the agent works, streams the answer into one message, posts the age
 each conversation after a restart, and holds the thread while a suspended agent is not running. The agent keeps its
 tools and task logic.
 
-The platform team runs Agent Kourier and owns the chat app and the agent backends. Each application team connects its
-own agent to its own channel with a namespaced Binding, committed next to the agent's manifests.
+The platform team runs Agent Kourier and owns the agent backends and the broker's own chat app. Each application team connects its
+own agent to its own channel with a namespaced Binding, committed next to the agent's manifests, and with custom resources a team
+whose namespace the platform admits can bring its own chat app as well ([Let a team bring its own Slack app](how-to/team-slack-app.md)).
 [Why a broker](explanation/why-a-broker.md) explains the split.
 
 <figure class="ak-film">
@@ -63,7 +64,7 @@ own agent to its own channel with a namespaced Binding, committed next to the ag
 <track kind="captions" src="assets/film/agent-kourier-teaser.en.vtt" srclang="en" label="English" default>
 <a href="https://media.agentkourier.dev/agent-kourier-teaser-16x9.787d2408faec.mp4">Download the teaser (MP4, 20 seconds)</a>.
 </video>
-<figcaption>The teaser, 20 seconds, narrated with captions. <a href="demo/">Watch the full demo</a> (98 seconds).</figcaption>
+<figcaption>The teaser, 20 seconds, narrated with captions. <a href="demo/">Watch the full demo</a> (98 seconds), or <a href="demo/#a-cross-team-incident">a cross-team incident</a> (3 minutes).</figcaption>
 </figure>
 
 <div class="grid cards" markdown>

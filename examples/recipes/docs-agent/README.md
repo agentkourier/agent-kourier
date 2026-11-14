@@ -43,7 +43,9 @@ team is new to Agent Kourier.**
   with the final text when the turn ends. If the A2A stream drops after such a lead-in was sent and before the emptying
   update arrives, the lead-in is not cleared: Agent Kourier skips a `GetTask` or `SubscribeToTask` snapshot whose text
   is a prefix of the text it holds (`internal/agent/assemble.go`), so the lead-in can stay in the final message.
-  Thoughts are always dropped. The agent's tool calls are not shown: the `a2a` dialect has no step cards.
+  Thoughts are always dropped. The agent's tool calls are shown as step cards: ADK marks each call and result as a
+  data part (`adk_type: function_call` and `function_response`), the agent sends them in the artifacts of the turn, and the
+  `a2a` dialect reads that marker. A card shows the tool's name and arguments, and ends as done or failed by the result.
 
 ## What you'll see in Slack
 
@@ -51,6 +53,7 @@ team is new to Agent Kourier.**
 #help
   You            @Agent Kourier How do I connect a generic A2A agent?
     thread       a reaction on your message while the agent works
+    thread       a step card for each call of search_docs and read_page, in the order the agent made them
     thread       the answer streams in, ending with a Sources list of the pages it used; the same message ends
                  with "Was this useful?" and the buttons [Useful] [Not useful]
 ```
@@ -63,8 +66,12 @@ and the buttons are the Binding's `feedback.enabled`.
 
 - **Slack.** A Slack app with a bot token and an app-level token, and the bot invited to the help channel:
   [Configure Slack](../../../docs/how-to/configure-slack.md). You need the channel's ID.
-- **Agent Kourier running** in a namespace that can reach the agent's Service
-  ([Install with Helm](../../../docs/how-to/install-with-helm.md)).
+- **Agent Kourier, from a chart release that has custom resources,** in a namespace that can reach the agent's
+  Service. Step 3 installs it with `config.source: crds`, on Kubernetes 1.33 or later (the chart refuses that route on an
+  older API server); [Install with Helm](../../../docs/how-to/install-with-helm.md) has the rest. Release 0.1.6 does
+  not have the route: `crds` and `config.source` are not among its values. Check the chart you will install with
+  `helm show values oci://ghcr.io/agentkourier/charts/agent-kourier --version <version> | grep -A1 '^crds:'`.
+  Installing the CRDs needs the right to create CustomResourceDefinitions, which are cluster-scoped.
 - **A model provider and a key.** The agent speaks to a model through the Chat Completions API of OpenRouter
   (`MODEL_PROVIDER=openrouter`) or of OpenAI, or any OpenAI-compatible HTTPS endpoint (`MODEL_PROVIDER=openai` with
   `MODEL_BASE_URL`). It takes a model that supports tool calls. Bedrock and Anthropic's own API are not supported by
@@ -133,11 +140,12 @@ model quota, so keep that policy; it works only if your cluster's network plugin
 ### 3. Agent Kourier's resources
 
 1. In `kourier/binding.yaml`, replace `CREPLACEDOCS` with the help channel's ID. The three resources are in
-   namespace `agent-kourier`; if yours is another, change `metadata.namespace` in all three and the namespace in
-   `agent/manifests/networkpolicy.yaml`.
+   namespace `agent-kourier`; if yours is another, change `metadata.namespace` in all three, the namespace in
+   `agent/manifests/networkpolicy.yaml`, and the namespace in `config.chatConnection` in step 3.
 2. Make the Secret the ChatConnection names, `slack`, in namespace `agent-kourier`, with the keys `botToken` and
-   `appToken`. **These recipes call it `slack`; the [Configure Slack](../../../docs/how-to/configure-slack.md) and
-   [Install with Helm](../../../docs/how-to/install-with-helm.md) guides call it `agent-kourier-slack`. Use the recipe's
+   `appToken`. **These recipes call it `slack`, as the
+   [Configure Slack](../../../docs/how-to/configure-slack.md) and
+   [Install with Helm](../../../docs/how-to/install-with-helm.md) guides do. Use the recipe's
    name here, since `kourier/chatconnection.yaml` refers to it.**
 
    ```sh
@@ -147,22 +155,68 @@ model quota, so keep that policy; it works only if your cluster's network plugin
    ```
 
    Agent Kourier serves one ChatConnection. This recipe's `slack` is the same resource as the one in
-   [`sre-triage`](../sre-triage/README.md); if you run both, load it once and give each Binding its own channel.
-3. Put the directory in a ConfigMap and install the chart on it, naming the namespace that holds the Secret:
+   [`sre-triage`](../sre-triage/README.md); if you run both, they share it, and each Binding needs its own channel.
+3. Apply the directory as custom resources, and install the chart to read them. The values below replace the inline
+   `config` of the values file in Install with Helm; the rest of that guide applies. If Agent Kourier already runs on a
+   ConfigMap, move it with
+   [Move the config between a ConfigMap and custom resources](../../../docs/how-to/migrate-config-source.md) instead.
 
-   ```sh
-   kubectl -n agent-kourier create configmap docs-agent-config --from-file=examples/recipes/docs-agent/kourier
+   ```yaml title="docs-agent-values.yaml"
+   config:
+     source: crds
+     chatConnection: agent-kourier/slack
    ```
 
-   ```yaml
+   `config.chatConnection` names the one ChatConnection the broker serves. The chart cannot see the resources you apply yourself, but it grants
+   the Secret that has the connection's name, `slack`, in the connection's namespace. A ChatConnection that reads a Secret of another name needs
+   `config.chatConnectionSecret` set to it. Do not also set `config.chatConnections`,
+   `config.agentBackends` or `config.bindings`: the chart would render them as custom resources of its own. Then, in
+   this order:
+
+   ```sh
+   helm upgrade --install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version <version> \
+     -n agent-kourier -f docs-agent-values.yaml --set replicaCount=0
+   kubectl apply --dry-run=server -f examples/recipes/docs-agent/kourier/
+   kubectl apply -f examples/recipes/docs-agent/kourier/
+   helm upgrade --install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version <version> \
+     -n agent-kourier -f docs-agent-values.yaml
+   kubectl -n agent-kourier wait --for=condition=Ready akbinding/docs-help --timeout=120s
+   ```
+
+   The first `helm` command installs the CRDs with the release, with no broker running (`replicaCount=0`). On this route
+   the chart installs them unless `crds.install` says otherwise, and with `config.*` empty it renders no custom resource
+   of its own that would need them served first. The server-side dry run checks each resource against the CRDs' schema
+   and names the field of a refusal. The resources go in before the broker starts, because a broker that finds no
+   ChatConnection does not start. If the cluster has the CRDs already from another release, such as a second broker's,
+   or from `kubectl apply` (`kubectl get crd bindings.agentkourier.dev` finds one), add `crds.install: false` to the
+   values: two owners of one CRD conflict. A Binding that is not `Ready` says why in
+   `kubectl -n agent-kourier get akbinding docs-help -o yaml`; [Binding status](../../../docs/reference/binding-status.md)
+   explains each reason.
+
+   **To stay on a ConfigMap, or on release 0.1.6,** use this values file alone, in place of the one above. Put the
+   directory in a ConfigMap and install the chart on it, naming the namespace that holds the Secret (the chart cannot
+   read a ConfigMap you manage). `config.source: files` keeps the ConfigMap route: on its default route the chart
+   refuses `config.existingConfigMap`.
+
+   ```yaml title="docs-agent-configmap-values.yaml"
    config:
+     source: files
      existingConfigMap: docs-agent-config
    rbac:
      secretNamespaces: [agent-kourier]
    ```
 
-   Those values replace the inline `config` of the values file in Install with Helm; the rest of that guide applies.
-   Do not also set `config.chatConnections`, `config.agentBackends` or `config.bindings`: the chart refuses both.
+   ```sh
+   kubectl -n agent-kourier create configmap docs-agent-config --from-file=examples/recipes/docs-agent/kourier
+   helm upgrade --install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version <version> \
+     -n agent-kourier -f docs-agent-configmap-values.yaml
+   ```
+
+   Release 0.1.6 has only the ConfigMap route, and its values schema refuses keys it does not have, `config.source`
+   among them: delete the `source: files` line and install with `--version 0.1.6`.
+
+   [Move the config between a ConfigMap and custom resources](../../../docs/how-to/migrate-config-source.md) moves it
+   to custom resources later.
 
 Then mention the bot in the channel and ask a question, for example "How do I connect a generic A2A agent?". The bot
 adds a reaction while it works, and the answer streams into a thread under your message.
@@ -182,7 +236,9 @@ make docs-agent-smoke   # fixed questions, a scripted model: no network, no cred
 `docs-agent-smoke` starts the real agent (ADK, the MCP server over HTTP, the A2A server) and an A2A client. A scripted
 stand-in for the language model searches for the question, reads the best hit and answers with the page it read, so the
 run checks the wiring and the retrieval, and is repeatable. It prints each answer and exits non-zero if the first does
-not cite `how-to/connect-a2a-agent.md` and its published URL, or if the last (a question with no match) cites a page.
+not cite `how-to/connect-a2a-agent.md` and its published URL, if the second (a follow-up) does not cite
+`how-to/rotate-binding-token.md`, or if the last (a question with no match) cites a page or does not say that the
+documentation does not cover it.
 
 `make docs-agent-smoke-live` runs the same flow with a real model, named by the sandbox credentials file
 ([`sandbox.env.example`](../../../hack/kind/sandbox/sandbox.env.example); `SANDBOX_ENV` overrides its path). It needs
@@ -250,7 +306,7 @@ them, for a person to read the agent's answers against.
   whose artifacts hold the answer, one context per thread, and no text from before or between tool calls left in them),
   the model settings, and the smoke flow.
 - `go test ./test/recipes` loads `kourier/` with Agent Kourier's loader and resolves its references.
-- `evals/triggers.yaml` holds **one case**: another bot's post in the help channel is not taken. That is all the
+- `evals/triggers.yaml` holds **one case**: another bot's post in the help channel that does not mention the app is not taken. That is all the
   trigger harness can say about this recipe. It judges a `botMessage` trigger, and this Binding has none: it starts from
   a mention, and the harness does not evaluate a mention (a person's message is always `person`). So the file does not
   pretend to test the mention trigger. See [Writing or changing a recipe](../README.md#writing-or-changing-a-recipe).
@@ -294,7 +350,8 @@ them, for a person to read the agent's answers against.
   history, which holds the questions asked in that thread. A list without a `contextId` is refused, so a caller cannot
   list the threads. For a token instead, put a verifying proxy in front and use `identity.tokenSecretRef`
   ([Create the Binding identity](../../../docs/how-to/create-binding-identity.md)).
-- **No per-Binding run limit.** Limits belong to `botMessage` triggers; a mention trigger takes none. Anyone who can
+- **No per-Binding run limit.** Limits belong to `botMessage` and `personMessage` triggers; a mention trigger takes none, and only a
+  bot's mention runs under fixed limits of the broker's own. Anyone who can
   mention the bot in the channel can spend model quota, so bound the key at the provider.
 - **Two model providers, over HTTPS.** OpenRouter and OpenAI-compatible endpoints, through the Chat Completions API.
   `MODEL_BASE_URL` must be an `https` URL, so an in-cluster `http` gateway needs a TLS front.

@@ -11,7 +11,8 @@
 #     /healthz and /readyz on each, through its proxy), exactly one of them the leader (agentkourier_leader, which a lone replica says too), and,
 #     on the Postgres store (E2E_STORE=postgres), a Postgres that is published nowhere, and with two replicas a container signaler that
 #     is published nowhere either;
-#  3. one probe pod in the cluster: fake Slack auth.test and /_control/connections, which shows Agent Kourier
+#  3. one probe pod in the cluster: fake Slack auth.test and /_control/connections of the default app (AFAKEAPP: with a team's app in the tier, a
+#     socket of that app must not stand for the platform's own), which shows Agent Kourier
 #     connected over Socket Mode (at least one connection, waited for); the stub
 #     agent's card with an unsigned JWT (200) and without one (401) and its release endpoint
 #     (204, with no token, as the fake Slack's); Alertmanager's API; the
@@ -26,7 +27,7 @@ CTX=kind-${CLUSTER}
 NODE=${CLUSTER}-control-plane
 K=(kubectl --context "${CTX}")
 # The same curl image as full/verify.sh.
-CURL_IMAGE=curlimages/curl:8.23.0@sha256:a134550be58ab783810e613ae96fd253c38f7bdd16d9bf9be350700c7a29ac06
+CURL_IMAGE=curlimages/curl:8.23.0@sha256:3fb7e13e5d179a845c97d78204f3f1064d1907037f26a3ebf91710571151fd93
 
 for tool in kubectl docker jq; do
   command -v "${tool}" >/dev/null || die "${tool} is required"
@@ -40,16 +41,16 @@ echo "== agent-kourier: ready"
 # holds no token or Secret value, and its pod's events.
 agentkourier_fail() {
   echo "FAIL: $1" >&2
-  "${K[@]}" -n agent-kourier get pods -l app.kubernetes.io/name=agent-kourier -o wide >&2 || true
+  "${K[@]}" -n agent-kourier get pods -l "${TIER_AGENTKOURIER_PODS}" -o wide >&2 || true
   "${K[@]}" -n agent-kourier logs deploy/agent-kourier --tail=60 >&2 || true
-  "${K[@]}" -n agent-kourier describe pods -l app.kubernetes.io/name=agent-kourier 2>&1 | sed -n '/^Events:/,$p' >&2 || true
+  "${K[@]}" -n agent-kourier describe pods -l "${TIER_AGENTKOURIER_PODS}" 2>&1 | sed -n '/^Events:/,$p' >&2 || true
   exit 1
 }
 "${K[@]}" -n agent-kourier rollout status deploy/agent-kourier --timeout=180s || agentkourier_fail "agent-kourier's rollout did not finish"
 # A pod that is shutting down does not count: on Postgres the Deployment rolls with a surge, and the old pod, which hands its Lease over as it
 # stops, may still be listed (Terminating) when the rollout has finished.
 want=$("${K[@]}" -n agent-kourier get deploy/agent-kourier -o 'jsonpath={.spec.replicas}')
-pods=$("${K[@]}" -n agent-kourier get pods -l app.kubernetes.io/name=agent-kourier -o json | jq -r '[.items[] | select(.metadata.deletionTimestamp == null) | .metadata.name] | join(" ")')
+pods=$("${K[@]}" -n agent-kourier get pods -l "${TIER_AGENTKOURIER_PODS}" -o json | jq -r '[.items[] | select(.metadata.deletionTimestamp == null) | .metadata.name] | join(" ")')
 [ "$(wc -w <<<"${pods}")" -eq "${want}" ] || agentkourier_fail "want ${want} Agent Kourier pod(s), have: ${pods:-none}"
 echo "ok: ${want} Agent Kourier pod(s), ${pods}, rolled out"
 for pod in ${pods}; do
@@ -106,11 +107,11 @@ code() { curl -s -m 10 -o /dev/null -w '%{http_code}' "$@"; } # CURL ARG...
 assert "fake Slack auth.test" has "$(curl -s -m 10 -X POST -H 'Authorization: Bearer xoxb-fake-test-token' "$FS/auth.test")" '"ok":true'
 conns=0
 for _ in $(seq 30); do
-  conns=$(curl -s -m 10 "$FS/_control/connections" | sed -n 's/.*"connections":\([0-9]*\).*/\1/p')
+  conns=$(curl -s -m 10 "$FS/_control/connections?app=AFAKEAPP" | sed -n 's/.*"connections":\([0-9]*\).*/\1/p')
   [ "${conns:-0}" -ge 1 ] && break
   sleep 1
 done
-assert "Agent Kourier is connected to the fake Slack over Socket Mode (connections: ${conns:-none})" test "${conns:-0}" -ge 1
+assert "Agent Kourier is connected to the fake Slack over Socket Mode, as the default app that its own ChatConnection is (connections: ${conns:-none})" test "${conns:-0}" -ge 1
 
 jwt="$(b64 '{"alg":"none"}').$(b64 '{"email":"verify@example.test"}')."
 card=$(curl -s -m 10 -H "Authorization: Bearer $jwt" "$AGENT/.well-known/agent-card.json")

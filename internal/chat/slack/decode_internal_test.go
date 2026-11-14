@@ -85,6 +85,7 @@ func TestClassifyMapsTheCodesToNeutralReasonsAndKeepsTheRawCode(t *testing.T) {
 		{"text too long", chat.OpPost, slackError("msg_too_long"), chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonTooLong, Code: "msg_too_long"}},
 		{"blocks Slack refuses", chat.OpPost, slackError("invalid_blocks"), chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonInvalidContent, Code: "invalid_blocks"}},
 		{"blocks in a form Slack refuses", chat.OpPost, slackError("invalid_blocks_format"), chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonInvalidContent, Code: "invalid_blocks_format"}},
+		{"an update that would take a message's text away", chat.OpPost, slackError("block_mismatch"), chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonOther, Code: "block_mismatch"}},
 		{"a reaction on a message that is gone", chat.OpReact, slackError("message_not_found"), chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonChannelGone, Code: "message_not_found"}},
 		{"a reaction that is no emoji", chat.OpReact, slackError("invalid_name"), chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonInvalidContent, Code: "invalid_name"}},
 		{"a thread that is locked", chat.OpReact, slackError("thread_locked"), chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonOther, Code: "thread_locked"}},
@@ -99,6 +100,9 @@ func TestClassifyMapsTheCodesToNeutralReasonsAndKeepsTheRawCode(t *testing.T) {
 		{"a post's permanent code is not a reaction's", chat.OpReact, slackError("msg_too_long"), chat.Verdict{Class: chat.Transient}},
 		{"a reaction's permanent code is not a post's", chat.OpPost, slackError("thread_locked"), chat.Verdict{Class: chat.Transient}},
 		{"another operation has no permanent code", chat.OpOther, slackError("channel_not_found"), chat.Verdict{Class: chat.Transient}},
+		{"a channel ChannelAccess could not find", chat.OpOther, fmt.Errorf("%w: %w", chat.ErrChannelNotFound, slackError("channel_not_found")), chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonChannelGone, Code: "channel_not_found"}},
+		{"no channel to ask ChannelAccess about", chat.OpOther, fmt.Errorf("slack channel access: no channel: %w", chat.ErrChannelNotFound), chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonChannelGone}},
+		{"an app ChannelAccess found without the scope", chat.OpOther, fmt.Errorf("%w: %w", chat.ErrMissingScope, slackError("missing_scope")), chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonOther, Code: "missing_scope"}},
 		{"an error that is not Slack's", chat.OpPost, errTimeout, chat.Verdict{Class: chat.Transient}},
 		{"no error", chat.OpPost, nil, chat.Verdict{Class: chat.Transient}},
 	} {

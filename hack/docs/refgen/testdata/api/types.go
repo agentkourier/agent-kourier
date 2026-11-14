@@ -38,7 +38,7 @@ type WidgetSpec struct {
 	// +kubebuilder:validation:MaxLength=63
 	Name string `json:"name"`
 	// Mode defaults to fast.
-	// +kubebuilder:validation:Enum=fast;slow
+	// +kubebuilder:validation:Enum=fast;slow;""
 	// +kubebuilder:default=fast
 	// +optional
 	Mode string `json:"mode"`

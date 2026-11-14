@@ -4,7 +4,7 @@ LDFLAGS := -X main.version=$(VERSION)
 LINT    := go tool golangci-lint
 
 .DEFAULT_GOAL := help
-.PHONY: help fmt lint test test-race test-testhooks test-scripts test-postgres lint-workflows security security-govulncheck security-gitleaks security-image-scan build tidy image image-testhooks image-check release-image e2e-fast-up e2e-fast e2e-fast-down e2e-full-up e2e-full-down e2e-full e2e-down sandbox-up sandbox-down sandbox-heal sandbox-alert
+.PHONY: help fmt lint test test-race test-testhooks test-scripts test-postgres lint-workflows security security-govulncheck security-gitleaks security-image-scan build tidy crds crd-corpus image image-testhooks image-check release-image e2e-fast-up e2e-fast e2e-fast-down e2e-full-up e2e-full-down e2e-full e2e-down e2e-crs-scenarios e2e-crs-migration e2e-two-apps sandbox-up sandbox-down sandbox-heal sandbox-alert
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z0-9-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -12,22 +12,30 @@ help: ## Show this help
 fmt: ## Format code (gofmt and goimports rules from .golangci.yml)
 	$(LINT) fmt ./...
 
-lint: ## Run golangci-lint (also over the e2e, image and testhooks tagged code)
-	$(LINT) run --build-tags e2e,image ./...
+lint: ## Run golangci-lint (also over the e2e, image, crdcorpus and testhooks tagged code)
+	$(LINT) run --build-tags e2e,image,crdcorpus ./...
 	$(LINT) run --build-tags testhooks ./...
 
-test: test-race test-testhooks test-scripts ## Run all the unit tests: with the race detector, the testhooks-tagged ones, the kind scripts' own (CI runs the three apart)
+test: test-race test-testhooks test-scripts ## Run all the unit tests: with the race detector, again with the testhooks tag where it changes the build, the scripts' own (CI runs the three apart)
 
 test-race: ## Run unit tests with the race detector (the chart tests need helm; AGENTKOURIER_REQUIRE_HELM=1 fails without it)
 	go test -race -timeout 20m ./...
 
-test-testhooks: ## Run the testhooks-tagged unit tests with the race detector
-	go test -race -timeout 20m -tags testhooks ./internal/...
+# The testhooks pass's build flags besides -tags. The selector lists packages under the same ones: they select files too.
+TESTHOOKS_BUILD_FLAGS := -race
 
-test-scripts: ## Run kind, security policy and release gate tests (no cluster)
+test-testhooks: ## Run with the race detector and the testhooks tag the internal packages whose test build the tag changes (hack/ci/testhooks-packages.sh); the others compile as in test-race, which ran them
+	pkgs=$$(TESTHOOKS_BUILD_FLAGS='$(TESTHOOKS_BUILD_FLAGS)' hack/ci/testhooks-packages.sh ./internal/...) && \
+		go test $(TESTHOOKS_BUILD_FLAGS) -timeout 20m -tags testhooks $$pkgs
+
+test-scripts: ## Run kind, security policy, release gate, PR label, CI tool installer, testhooks package selection and Actions cache upkeep tests (no cluster)
 	hack/kind/netpol_test.sh
 	hack/security/test.sh
 	hack/release/test.sh
+	hack/github/test.sh
+	hack/ci/test.sh
+	hack/ci/testhooks-packages_test.sh
+	hack/ci/actions-cache_test.sh
 
 lint-workflows: ## Lint .github/workflows with zizmor after proving its policy fails each unsafe fixture (installs the pinned zizmor unless ZIZMOR_BIN is set; needs jq)
 	hack/security/lint-workflows.sh
@@ -57,6 +65,14 @@ build: ## Build bin/agent-kourier
 tidy: ## Tidy go.mod and go.sum
 	go mod tidy
 
+crds: ## Generate the CRDs from api/v1alpha1 into charts/agent-kourier/files/crds (controller-gen, pinned in go.mod) and their hashes into api/v1alpha1/crd_schema_hashes.go; tests fail when either drifts
+	rm -f charts/agent-kourier/files/crds/*.yaml
+	go tool controller-gen crd paths=./api/v1alpha1 output:crd:dir=charts/agent-kourier/files/crds
+	go run ./hack/crdhashes
+
+crd-corpus: ## Hold the CRD schemas to the broker's validation on a throwaway kind cluster that has only the CRDs (hack/kind/crd-corpus.sh; kind, kubectl and Docker; CRD_CORPUS_KUBECONFIG uses a local cluster you made instead)
+	hack/kind/crd-corpus.sh
+
 image: ## Build the production Agent Kourier image, agent-kourier:dev (hack/kind/build-agent-kourier.sh; Docker)
 	hack/kind/build-agent-kourier.sh
 
@@ -69,7 +85,7 @@ image-check: image image-testhooks ## Prove the production image's binary lacks 
 release-image: ## Build the multi-arch release image to bin/release (VERSION=vX.Y.Z); PUSH=1 REGISTRY=<repo> CHART_REGISTRY=oci://<repo> also pushes; see RELEASING.md
 	VERSION="$(VERSION)" REGISTRY="$(REGISTRY)" CHART_REGISTRY="$(CHART_REGISTRY)" PUSH="$(PUSH)" hack/release/release.sh
 
-e2e-fast-up: ## Bring up the fast E2E tier (kind, Alertmanager, fake Slack, stub agent, sink); E2E_STORE=postgres runs Agent Kourier on Postgres, with E2E_REPLICAS=2 on two replicas (S16, failover)
+e2e-fast-up: ## Bring up the fast E2E tier (kind, Alertmanager, fake Slack, stub agent, sink); E2E_STORE=postgres runs Agent Kourier on Postgres, with E2E_REPLICAS=2 on two replicas (S16, failover); E2E_CONFIG_SOURCE=crds reads the config from custom resources, not the ConfigMap, and with E2E_TWO_APPS=1 serves a team's Slack app beside the platform's (make e2e-two-apps runs the MC_ tests)
 	hack/kind/up-fast.sh
 
 e2e-fast: ## Run the E2E tests in the fast tier, as a Job (the tier must be up)
@@ -78,7 +94,7 @@ e2e-fast: ## Run the E2E tests in the fast tier, as a Job (the tier must be up)
 e2e-fast-down: ## Tear down the fast E2E tier only
 	hack/kind/down.sh fast
 
-e2e-full-up: ## Bring up the full E2E tier (kind, Substrate, kagent, Dex, mockllm, and the fast tier's doubles)
+e2e-full-up: ## Bring up the full E2E tier (kind, Substrate, kagent, Dex, mockllm, and the fast tier's doubles; E2E_CONFIG_SOURCE=crds reads the config from custom resources)
 	hack/kind/up-full.sh
 
 e2e-full: ## Run the E2E tests in the full tier, as a Job (the tier must be up, with its network policy live)
@@ -89,6 +105,15 @@ e2e-full-down: ## Tear down the full E2E tier only
 
 e2e-down: ## Tear down all E2E tiers
 	hack/kind/down.sh
+
+e2e-crs-scenarios: ## The custom resource scenarios that need kubectl or Helm: unknown fields, kubectl get, a stored-invalid Binding, kubectl wait (the fast tier up on E2E_CONFIG_SOURCE=crds)
+	hack/kind/crs-scenarios.sh
+
+e2e-crs-migration: ## Move the fast tier between the ConfigMap and the custom resources with Helm, and back, with a session in flight (the tier up on Postgres, two replicas, files)
+	hack/kind/crs-migration.sh
+
+e2e-two-apps: ## Run the MC_ tests (a broker with two Slack apps) as a Job of their own, then take a team off the platform's admission list with Helm and put it back, then run with no ChatConnection of its own, the platform's namespace off the list and then on it (with a leader takeover on Postgres with two replicas): the fast tier up on E2E_TWO_APPS=1 E2E_CONFIG_SOURCE=crds
+	hack/kind/two-apps.sh
 
 sandbox-up: ## Dogfood tier on the full tier: Agent Kourier on a real Slack, a read-only SRE agent on a real model, seeded faults (secrets file: SANDBOX_ENV)
 	hack/kind/sandbox/up.sh
@@ -186,7 +211,7 @@ e2e-ax-down: ## Tear down only the AX E2E tier
 
 # The documentation site (mkdocs.yml, docs/): MkDocs with Material, in a virtualenv under bin/ with the versions
 # pinned in hack/docs/requirements.txt. Needs Python 3.
-.PHONY: docs docs-build docs-ref docs-check docs-diagrams
+.PHONY: docs docs-build docs-site docs-ref docs-check docs-diagrams
 DOCS_VENV := bin/docs-venv
 
 $(DOCS_VENV)/.installed: hack/docs/requirements.txt
@@ -213,3 +238,6 @@ docs: $(DOCS_VENV)/.installed docs-ref ## Serve the documentation site at http:/
 
 docs-build: $(DOCS_VENV)/.installed docs-ref docs-check ## Build the documentation site into bin/site; any warning fails the build
 	$(DOCS_VENV)/bin/mkdocs build --strict --site-dir bin/site
+
+docs-site: $(DOCS_VENV)/.installed docs-ref docs-check ## Build the versioned site into bin/versioned-site: this tree as dev, and every final tag of the release lines in hack/docs/versions.yaml
+	go run ./hack/docs/sitebuild -venv $(DOCS_VENV) -out bin/versioned-site

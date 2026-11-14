@@ -303,7 +303,7 @@ func TestWereAdmittedPassesAStoreErrorOn(t *testing.T) {
 
 func TestIsTextQuestion(t *testing.T) {
 	ask := func(change func(*dialect.Interaction)) *dialect.Interaction {
-		in := &dialect.Interaction{Kind: dialect.AskUser, Questions: []dialect.Question{{Text: "Which service?"}}}
+		in := &dialect.Interaction{TextReplies: true, Kind: dialect.AskUser, Questions: []dialect.Question{{Text: "Which service?"}}}
 		change(in)
 		return in
 	}
@@ -315,6 +315,7 @@ func TestIsTextQuestion(t *testing.T) {
 		{"one question with no choices", ask(func(*dialect.Interaction) {}), true},
 		{"choices that are an empty list (kagent sends one for free text)", ask(func(in *dialect.Interaction) { in.Questions[0].Choices = []string{} }), true},
 		{"no interaction", nil, false},
+		{"one question with no choices, not marked for text replies", ask(func(in *dialect.Interaction) { in.TextReplies = false }), false},
 		{"one question with choices", ask(func(in *dialect.Interaction) { in.Questions[0].Choices = []string{"a", "b"} }), false},
 		{"two questions", ask(func(in *dialect.Interaction) { in.Questions = append(in.Questions, dialect.Question{Text: "Why?"}) }), false},
 		{"no question", ask(func(in *dialect.Interaction) { in.Questions = nil }), false},
@@ -355,6 +356,8 @@ func TestJudgeAnswer(t *testing.T) {
 		{"a turn after a question that closed after its prompt was posted", reply(asked.Add(time.Second), false), AskedQuestion{CreatedAt: asked, Posted: true}, AnswerDecides},
 		{"a turn after a question whose prompt is not posted yet", reply(asked.Add(time.Second), false), AskedQuestion{CreatedAt: asked, Open: true}, AnswerWaits},
 		{"a turn after a question that closed unseen", reply(asked.Add(time.Second), false), AskedQuestion{CreatedAt: asked}, AnswerNone},
+		// A turn nobody wrote: a bot's mention or a trigger's prompt, which stays a turn whatever the question.
+		{"a turn nobody wrote, after a posted open question", store.Reply{ID: "r1", UserID: SystemUser, WholeThread: true, EnqueuedAt: asked.Add(time.Second)}, seen, AnswerNone},
 		// A reply pinned to its question when it was queued.
 		{"pinned, to a posted open question", reply(asked.Add(time.Second), true), seen, AnswerDecides},
 		{"pinned, to a question that closed after its prompt was posted", reply(asked.Add(time.Second), true), AskedQuestion{CreatedAt: asked, Posted: true}, AnswerDecides},

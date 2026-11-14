@@ -3,7 +3,7 @@ package e2e
 import "testing"
 
 func TestNewEnv(t *testing.T) {
-	vars := map[string]string{"E2E_SLACK_URL": "http://s", "E2E_SINK_URL": "http://k", "E2E_STUB_URL": "http://u", "E2E_ALERTMANAGER_URL": "http://a", "E2E_SCENARIO_MCP_URL": "http://m", "E2E_AGENTKOURIER_URL": "http://c", "E2E_SIGNALER_URL": "http://g", "E2E_TIER": "full"}
+	vars := map[string]string{"E2E_SLACK_URL": "http://s", "E2E_SINK_URL": "http://k", "E2E_STUB_URL": "http://u", "E2E_ALERTMANAGER_URL": "http://a", "E2E_SCENARIO_MCP_URL": "http://m", "E2E_AGENTKOURIER_URL": "http://c", "E2E_SIGNALER_URL": "http://g", "E2E_TIER": "full", "E2E_CONFIG_SOURCE": "crds", "E2E_PHASE": "open", "E2E_CONNECTION_NAMESPACES": "team-a,team-b"}
 	for _, tc := range []struct {
 		name string
 		env  map[string]string
@@ -17,11 +17,24 @@ func TestNewEnv(t *testing.T) {
 			ScenarioMCPURL:  "http://scenariomcp.kagent.svc.cluster.local:8082",
 			AgentKourierURL: "http://agent-kourier.agent-kourier.svc.cluster.local:8080",
 			SignalerURL:     "http://signaler.e2e.svc.cluster.local:8080",
+			ConfigSource:    "files",
 		}},
-		{"every variable overrides", vars, Env{SlackURL: "http://s", SinkURL: "http://k", StubURL: "http://u", AlertmanagerURL: "http://a", ScenarioMCPURL: "http://m", AgentKourierURL: "http://c", SignalerURL: "http://g", Tier: "full"}},
+		{"every variable overrides", vars, Env{SlackURL: "http://s", SinkURL: "http://k", StubURL: "http://u", AlertmanagerURL: "http://a", ScenarioMCPURL: "http://m", AgentKourierURL: "http://c", SignalerURL: "http://g", Tier: "full", ConfigSource: "crds", Phase: "open", ConnectionNamespaces: "team-a,team-b"}},
 	} {
 		if got := NewEnv(func(k string) string { return tc.env[k] }); got != tc.want {
 			t.Errorf("%s: NewEnv() = %+v, want %+v", tc.name, got, tc.want)
 		}
+	}
+}
+
+func TestEnvAdmitsTheNamespacesOfTheList(t *testing.T) {
+	env := Env{ConnectionNamespaces: "team-a,team-b"}
+	for ns, want := range map[string]bool{"team-a": true, "team-b": true, "team-c": false, "team": false, "": false, "team-a,team-b": false} {
+		if got := env.Admits(ns); got != want {
+			t.Errorf("Admits(%q) = %v with the list %q, want %v", ns, got, env.ConnectionNamespaces, want)
+		}
+	}
+	if (Env{}).Admits("team-a") || (Env{}).Admits("") {
+		t.Error("an empty admission list admits a namespace")
 	}
 }

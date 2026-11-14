@@ -119,6 +119,55 @@ func (s *Slack) SetMembers(ctx context.Context, channel string, users ...string)
 	return s.c.do(ctx, http.MethodPost, "/_control/members", map[string]any{"channel": channel, "users": users}, nil)
 }
 
+// Join puts the bot of the app appID in channel, which registers the channel as SetMembers does, and leaves the members it has. The fake answers 404 for an
+// app it does not host.
+func (s *Slack) Join(ctx context.Context, channel, appID string) error {
+	return s.c.do(ctx, http.MethodPost, "/_control/join", map[string]string{"channel": channel, "app": appID}, nil)
+}
+
+// SetRevoked revokes the tokens of the app appID, or gives them back: while revoked its Web API calls and its Socket Mode connections are refused, and
+// revoking it ends the connections it has (fakeslack.Server.SetRevoked).
+func (s *Slack) SetRevoked(ctx context.Context, appID string, revoked bool) error {
+	return s.c.do(ctx, http.MethodPost, "/_control/revoked", map[string]any{"app": appID, "revoked": revoked}, nil)
+}
+
+// RotateTokens gives the app appID a new pair of tokens: the pair it had is refused from then on, even when the app is not revoked, and giving the old pair
+// again brings it back (fakeslack.Server.RotateTokens). It is how an operator replaces the tokens of a Slack app that has been revoked.
+func (s *Slack) RotateTokens(ctx context.Context, appID, botToken, appToken string) error {
+	return s.c.do(ctx, http.MethodPost, "/_control/rotate", map[string]string{"app": appID, "bot_token": botToken, "app_token": appToken}, nil)
+}
+
+// HoldPosts holds the chat.postMessage calls of the app appID, or lets them go: while held each waits, with nothing stored, until released or until its client
+// goes away, when it is abandoned (fakeslack.Server.HoldPosts). It makes a post certainly in flight, for a case that kills Agent Kourier then.
+func (s *Slack) HoldPosts(ctx context.Context, appID string, hold bool) error {
+	return s.c.do(ctx, http.MethodPost, "/_control/hold-posts", map[string]any{"app": appID, "hold": hold}, nil)
+}
+
+// HeldPosts returns how many chat.postMessage calls of the app wait on its hold now.
+func (s *Slack) HeldPosts(ctx context.Context, appID string) (int, error) {
+	var out struct {
+		Held int `json:"held"`
+	}
+	err := s.c.do(ctx, http.MethodGet, "/_control/held-posts?"+url.Values{"app": {appID}}.Encode(), nil, &out)
+	return out.Held, err
+}
+
+// EventEnvelopes returns the envelope_id of each event the fake sent to the app appID for the bot message at ts of channel, whichever app posted it: the
+// other apps whose bots are in the channel get the post's event too. Pass them to AckWait to know the app has taken the event up. Empty when none was sent.
+func (s *Slack) EventEnvelopes(ctx context.Context, appID, channel, ts string) ([]string, error) {
+	var out struct {
+		Envelopes []string `json:"envelopes"`
+	}
+	err := s.c.do(ctx, http.MethodGet, "/_control/own-events?"+url.Values{"app": {appID}, "channel": {channel}, "ts": {ts}}.Encode(), nil, &out)
+	return out.Envelopes, err
+}
+
+// SetArchived marks channel archived, or not, for conversations.info. It does not register the channel: SetMembers does, and the
+// fake reports channel_not_found for a channel it was not given.
+func (s *Slack) SetArchived(ctx context.Context, channel string, archived bool) error {
+	return s.c.do(ctx, http.MethodPost, "/_control/archived", map[string]any{"channel": channel, "archived": archived}, nil)
+}
+
 // SetUserGroup registers a Slack user group and replaces its membership.
 func (s *Slack) SetUserGroup(ctx context.Context, group string, users ...string) error {
 	return s.c.do(ctx, http.MethodPost, "/_control/usergroups", map[string]any{"usergroup": group, "users": users}, nil)
@@ -131,6 +180,25 @@ func (s *Slack) Connections(ctx context.Context) (int, error) {
 	}
 	err := s.c.do(ctx, http.MethodGet, "/_control/connections", nil, &out)
 	return out.Connections, err
+}
+
+// AppConnections returns how many Socket Mode clients of the app appID are connected.
+func (s *Slack) AppConnections(ctx context.Context, appID string) (int, error) {
+	var out struct {
+		Connections int `json:"connections"`
+	}
+	err := s.c.do(ctx, http.MethodGet, "/_control/connections?"+url.Values{"app": {appID}}.Encode(), nil, &out)
+	return out.Connections, err
+}
+
+// AppConnectionsOpened returns how many Socket Mode clients have connected as the app appID in all, the ones that have gone included: it is what moves when a
+// client reconnects, however quickly the new one replaces the old.
+func (s *Slack) AppConnectionsOpened(ctx context.Context, appID string) (int, error) {
+	var out struct {
+		Opened int `json:"opened"`
+	}
+	err := s.c.do(ctx, http.MethodGet, "/_control/connections?"+url.Values{"app": {appID}}.Encode(), nil, &out)
+	return out.Opened, err
 }
 
 // Messages returns everything stored in channel, in order.

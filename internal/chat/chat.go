@@ -15,8 +15,9 @@
 //     are text there, and an adapter must show them as text. There is no field in which a caller can put a
 //     platform's markup (no Blocks, no Native, no raw JSON), so nothing can bypass an adapter's escaping.
 //  2. Body.Markdown is the one rich field, and it is untrusted too: a CommonMark subset in which an
-//     adapter may allow emphasis, code and lists, and must not allow a mention, a broadcast, a link, an
-//     image, raw HTML or a date, whatever the platform's own syntax for them is.
+//     adapter may allow emphasis, code and lists, and must not allow a mention, a broadcast, a masked link, an
+//     image, raw HTML or a date, whatever the platform's own syntax for them is. A bare URL may be a link that
+//     shows its own address, where a platform has no way to stop it (chattest's AllowAutolink), and is never fetched.
 //  3. Each adapter neutralises markup for its own platform, and makes what it sends inert: no parse, no
 //     unfurl, no link names, no hidden or reordering characters (Clean), every field cut at the platform's
 //     limit (Caps.Limit) with Truncated, and a single-line field on one line.
@@ -113,10 +114,11 @@ func (w Where) String() string {
 // caller degrades (no Streams: a turn is posted once when it ends).
 type Caps struct {
 	Streams   bool // Stream works
-	Steps     bool // Stream.Step shows progress steps in a stream; needs Streams
+	Steps     bool // Stream.Step shows progress steps in a stream, and a message shows its Steps part; needs Streams
 	Ephemeral bool // Ephemeral shows a message to one person alone
 	Edits     bool // Update works
 	Inputs    bool // a Prompt's questions are answered inline; otherwise by a reply
+	Busy      bool // MarkBusy shows a thread as busy; otherwise it says ErrNoBusy, as a platform may later even when this is set
 	// AckReaction is the reaction name, without colons, that Agent Kourier puts on an accepted message while it works, when a
 	// Binding's acknowledgment names none. The API names no reaction, so each platform says which one is its own (Slack:
 	// hourglass_flowing_sand). Empty means the platform has none, and an acknowledgment that names none shows nothing.

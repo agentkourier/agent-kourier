@@ -293,9 +293,9 @@ func TestUpMakesTheFirstTokenWithTheCronJob(t *testing.T) {
 	}
 }
 
-// TestUpReplacesAHandMadeSandboxBeforeItWaitsForTheTiersPod: a sandbox brought up before the chart has a pod that is not the release's
-// (instance=sandbox), which the wait for the tier's own pod to go would never see go; so the hand-made Deployment is replaced first, and
-// the wait for the tier's Agent Kourier comes after every step that deletes the sandbox's.
+// TestUpReplacesAHandMadeSandboxBeforeItWaitsForTheTiersPod: a sandbox brought up before the chart has a Deployment the release cannot take
+// over (its pod carries instance=sandbox, and a Deployment's selector cannot change); so the hand-made Deployment is replaced first, and the
+// wait for the tier's Agent Kourier comes after every step that deletes the sandbox's.
 func TestUpReplacesAHandMadeSandboxBeforeItWaitsForTheTiersPod(t *testing.T) {
 	raw, err := os.ReadFile(sandboxDir + "up.sh")
 	if err != nil {
@@ -303,7 +303,7 @@ func TestUpReplacesAHandMadeSandboxBeforeItWaitsForTheTiersPod(t *testing.T) {
 	}
 	s := string(raw)
 	replace := strings.Index(s, `replace_unowned_deployment "${SANDBOX_RELEASE}"`)
-	wait := strings.Index(s, `wait --for=delete pod -l "app.kubernetes.io/name=agent-kourier,app.kubernetes.io/instance!=${SANDBOX_RELEASE}"`)
+	wait := strings.Index(s, "\nwait_tier_agentkourier_gone\n")
 	if replace <= 0 || wait <= replace {
 		t.Errorf("up.sh: replace the hand-made Deployment %d, wait for the tier's pod to go %d; want that order", replace, wait)
 	}

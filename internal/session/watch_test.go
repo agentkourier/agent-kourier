@@ -10,6 +10,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // reopening is a watcher that records each answer it is told of, and what the manager had parked when it was told.
@@ -64,8 +65,8 @@ func TestAnAnswerThatWasNotDeliveredIsToldToTheWatcher(t *testing.T) {
 			if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
 				t.Fatal(err)
 			}
-			eventually(t, "the watcher to be told", func() bool { return len(w.calls()) == 1 })
-			eventually(t, "the pause to reopen", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return f.m.convos[key].parked == "t1" })
+			testutil.Eventually(t, "the watcher to be told", func() bool { return len(w.calls()) == 1 })
+			testutil.Eventually(t, "the pause to reopen", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return f.m.convos[key].parked == "t1" })
 			w.mu.Lock()
 			if w.got[0] != "t1 ans-1" || !w.held[0] {
 				t.Errorf("told %q with the runner parked %v; want the answer's ID, with the runner parked on the task", w.got, w.held)
@@ -83,6 +84,57 @@ func TestAnAnswerThatWasNotDeliveredIsToldToTheWatcher(t *testing.T) {
 				t.Errorf("told %q; want once", got)
 			}
 		})
+	}
+}
+
+// stopping is a watcher that stops the task from inside AnswerReopened, as a person's Stop that comes the moment the thread is told
+// does: the reopened pause is parked, and the runner has not yet finished with the attempt that reopened it.
+type stopping struct {
+	m   *Manager
+	mu  sync.Mutex
+	did []bool
+	err []error
+}
+
+func (w *stopping) AnswerReopened(ctx context.Context, k Key, task a2a.TaskID, _ string) bool {
+	did, err := w.m.Stop(ctx, k, task, "U9")
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.did, w.err = append(w.did, did), append(w.err, err)
+	return true
+}
+
+// A Stop that lands as the pause is reopened ends it. The runner parks on the task again before it tells the watcher, and it
+// used to be driving the task still: the Stop's endPause was refused as for a task that streams, the agent was asked to cancel
+// and nothing ended the pause, so the runner stayed parked on a task that was cancelled, the record kept it, and the queue stood
+// still until a restart (a dialect with no text replies does not look again). Now the pause is the parked one's alone from the
+// moment it is reopened: one cancel, the record cleared, no runner parked, and the held turn goes out.
+func TestAStopWhenAnAnswerReopensThePauseEndsIt(t *testing.T) {
+	down := func(*a2a.Message, agent.Handler) error { return fmt.Errorf("%w: down", agent.ErrNotSent) }
+	f, _ := pausedFirst(t, down)
+	w := &stopping{m: f.m}
+	f.m.mu.Lock()
+	f.m.cfg.AnswerWatcher = w
+	f.m.mu.Unlock()
+	if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
+		t.Fatal(err)
+	}
+	testutil.Eventually(t, "the watcher's stop", func() bool { w.mu.Lock(); defer w.mu.Unlock(); return len(w.did) == 1 })
+	if w.did[0] != true || w.err[0] != nil {
+		t.Fatalf("Stop = %v, %v; want it to stop the task", w.did[0], w.err[0])
+	}
+	if id, want := f.nextSent(), inbound("2").MessageID; id != want {
+		t.Errorf("sent %s after the stop; want the held turn %s", id, want)
+	}
+	testutil.Eventually(t, "the record to be cleared", func() bool { return f.taskID() == "" })
+	f.m.mu.Lock()
+	parked := f.m.convos[key] != nil && f.m.convos[key].parked != ""
+	f.m.mu.Unlock()
+	if parked {
+		t.Error("the runner is parked on a task that was cancelled")
+	}
+	if got := f.cancelled(); len(got) != 1 {
+		t.Errorf("the agent was asked to cancel %v; want once", got)
 	}
 }
 
@@ -119,7 +171,7 @@ func TestOnlyAnAnswerThatLeavesThePauseOpenIsToldToTheWatcher(t *testing.T) {
 				t.Fatal(err)
 			}
 			if tc.told {
-				eventually(t, "the watcher to be told", func() bool { return len(w.calls()) == 1 })
+				testutil.Eventually(t, "the watcher to be told", func() bool { return len(w.calls()) == 1 })
 				return
 			}
 			// The task ends or is followed to its end, and the held reply goes out: the answer has been dealt with.

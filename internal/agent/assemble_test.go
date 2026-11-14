@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,7 +13,7 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
-	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
+	"github.com/agentkourier/agent-kourier/internal/dialect/generic"
 )
 
 const ticks = "tick 1 tick 2 tick 3 tick 4 tick 5 tick 6 tick 7 tick 8 "
@@ -48,13 +49,10 @@ func fixtureEvents(t *testing.T, name string) []a2a.Event {
 	return evs
 }
 
-// run feeds events to a fresh assembler that knows kagent's tool parts.
-func run(evs ...[]a2a.Event) (*assembler, []Event) { return runWith(kagentv1.New(0).ToolPart, evs...) }
-
-// runWith feeds events to a fresh assembler and returns what it emitted.
-func runWith(classify ToolClassifier, evs ...[]a2a.Event) (*assembler, []Event) {
+// run feeds events to a fresh assembler and returns what it emitted.
+func run(evs ...[]a2a.Event) (*assembler, []Event) {
 	var got []Event
-	asm := newAssembler(func(e Event) { got = append(got, e) }, classify)
+	asm := newAssembler(func(e Event) { got = append(got, e) })
 	for _, batch := range evs {
 		for _, ev := range batch {
 			asm.apply(ev)
@@ -227,16 +225,108 @@ func TestOnlyOneFinalEvent(t *testing.T) {
 	}
 }
 
-// Without a classifier a dialect has said nothing about data parts, so they stay opaque.
-func TestToolPartsAreOpaqueWithoutAClassifier(t *testing.T) {
-	_, got := runWith(nil, fixtureEvents(t, "approval/01-pause-approve.response.sse"))
-	for _, e := range got {
-		switch e.(type) {
-		case ToolCallEvent, ToolResultEvent:
-			t.Errorf("event %#v from an assembler with no classifier", e)
+// kagent 0.9.x sends a turn's tool calls and results only as the messages of its status updates,
+// marked kagent_type, and its final text both as a status message and as an artifact
+// (recorded from kagent 0.9.4 over A2A 0.3). The agent is reached through the a2a dialect's own connect, which
+// reads the 0.3 card and speaks 0.3, so this is what a 0.9.x backend on that dialect shows. The task that ends the
+// turn holds the tool parts in its history, which is not read: they were delivered as they happened.
+func TestV09ToolPartsInStatusMessagesAreDelivered(t *testing.T) {
+	fa := newFakeAgent(t, func(call rpc, w http.ResponseWriter) {
+		if call.Method == "tasks/get" { // the stream ends with a status update, not a task, so the send asks for it
+			reply(t, w, "v09-tools/02-gettask-after-tool-turn.response.json")
+			return
+		}
+		sse(t, w, "v09-tools/01-tool-turn.response.sse", -1)
+	})
+	fa.v03 = true
+	h, got := collector()
+	if err := fa.agentVia(t, generic.New(0)).Send(t.Context(), message("How many namespaces does the cluster have?"), h); err != nil {
+		t.Fatal(err)
+	}
+	const callID = "k8s_get_resources_0_1e73ff4e"
+	var order []string
+	for _, e := range *got {
+		switch e := e.(type) {
+		case ToolCallEvent:
+			order = append(order, "call "+e.Name)
+			if e.CallID != callID || e.Args["resource_type"] != "namespace" {
+				t.Errorf("call = %+v, want %s(resource_type=namespace)", e, callID)
+			}
+		case ToolResultEvent:
+			order = append(order, "result "+e.Name)
+			if e.CallID != callID || e.Response == nil {
+				t.Errorf("result = %+v, want a response for %s", e, callID)
+			}
+		case TextEvent:
+			order = append(order, "text "+e.Text)
 		}
 	}
-	if _, ok := got[len(got)-1].(FinalEvent); !ok {
-		t.Errorf("last event = %#v, want FinalEvent", got[len(got)-1])
+	want := []string{"call k8s_get_resources", "result k8s_get_resources", "text The cluster has 46 namespaces."}
+	if !reflect.DeepEqual(order, want) {
+		t.Errorf("events = %q\nwant %q (the status message that repeats the answer is not a second text)", order, want)
+	}
+	if got, want := states(*got), []a2a.TaskState{a2a.TaskStateSubmitted, a2a.TaskStateWorking, a2a.TaskStateCompleted}; !reflect.DeepEqual(got, want) {
+		t.Errorf("states = %v, want %v", got, want)
+	}
+	if final, ok := (*got)[len(*got)-1].(FinalEvent); !ok || final.Task.Status.State != a2a.TaskStateCompleted {
+		t.Errorf("last event = %#v, want the COMPLETED task", (*got)[len(*got)-1])
+	}
+}
+
+// v09Tool is a tool part as kagent 0.9.x marks it.
+func v09Tool(partType string, data map[string]any) *a2a.Part {
+	p := a2a.NewDataPart(data)
+	p.Metadata = map[string]any{"kagent_type": partType}
+	return p
+}
+
+// agentStatus is a WORKING status update whose message, from the agent, holds parts.
+func agentStatus(msgID string, parts ...*a2a.Part) a2a.Event {
+	return &a2a.TaskStatusUpdateEvent{Status: a2a.TaskStatus{State: a2a.TaskStateWorking,
+		Message: &a2a.Message{ID: msgID, Role: a2a.MessageRoleAgent, Parts: parts}}}
+}
+
+func toolArtifact(id string, parts ...*a2a.Part) a2a.Event {
+	return &a2a.TaskArtifactUpdateEvent{Artifact: &a2a.Artifact{ID: a2a.ArtifactID(id), Parts: parts}}
+}
+
+// tools returns "call <id>" or "result <id>" for each tool event.
+func tools(evs []Event) []string {
+	var out []string
+	for _, e := range evs {
+		switch e := e.(type) {
+		case ToolCallEvent:
+			out = append(out, "call "+e.CallID)
+		case ToolResultEvent:
+			out = append(out, "result "+e.CallID)
+		}
+	}
+	return out
+}
+
+func TestStatusMessageToolPartsAreDeliveredOnce(t *testing.T) {
+	call := v09Tool("function_call", map[string]any{"id": "c1", "name": "get", "args": map[string]any{}})
+	result := v09Tool("function_response", map[string]any{"id": "c1", "name": "get", "response": map[string]any{"ok": true}})
+	for _, tc := range []struct {
+		name string
+		evs  []a2a.Event
+		want []string
+	}{
+		{"a call then its result", []a2a.Event{agentStatus("m1", call), agentStatus("m2", result)}, []string{"call c1", "result c1"}},
+		{"a repeated message", []a2a.Event{agentStatus("m1", call), agentStatus("m1", call), agentStatus("m2", result)}, []string{"call c1", "result c1"}},
+		{"one message holding both", []a2a.Event{agentStatus("m1", call, result)}, []string{"call c1", "result c1"}},
+		{"an artifact, then a message repeating it", []a2a.Event{toolArtifact("a1", call), agentStatus("m1", call)}, []string{"call c1"}},
+		{"a message, then an artifact repeating it", []a2a.Event{agentStatus("m1", call), toolArtifact("a1", call)}, []string{"call c1"}},
+		{"a message with no tool part", []a2a.Event{agentStatus("m1", a2a.NewTextPart("thinking"))}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, got := run(tc.evs)
+			if got := tools(got); !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("tool events = %q, want %q", got, tc.want)
+			}
+			if got := texts(got); got != nil {
+				t.Errorf("texts = %q, want none: a status message's text is not an artifact", got)
+			}
+		})
 	}
 }

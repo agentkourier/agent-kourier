@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"log/slog"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +23,8 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/secret"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
+	"github.com/agentkourier/agent-kourier/internal/trigger"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
@@ -67,15 +68,11 @@ func connect(t *testing.T, fake *fakeslack.Server) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	c := slack.New(slack.Config{BotToken: secret.New("xoxb-FAKE-0123456789"), AppToken: secret.New("xapp-FAKE-0123456789"), APIURL: fake.URL() + "/",
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		Logger: testutil.DiscardLogger()})
 	done := make(chan struct{})
 	go func() { defer close(done); _ = c.Run(ctx, quietSink{}) }()
 	t.Cleanup(func() { cancel(); <-done })
-	for deadline := time.Now().Add(5 * time.Second); fake.Connections() == 0; time.Sleep(time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the client did not connect")
-		}
-	}
+	testutil.Eventually(t, "the client did not connect", func() bool { return fake.Connections() != 0 }, testutil.Within(5*time.Second))
 }
 
 // quietSink takes everything and does nothing with it.
@@ -273,6 +270,67 @@ func TestDryRunShowsWhatAnExcludeTurnedAway(t *testing.T) {
 	}
 	if r.Summary.Outcomes["excluded"] != 1 {
 		t.Errorf("outcomes = %v; want one excluded", r.Summary.Outcomes)
+	}
+}
+
+// A personMessage trigger is replayed too: of people's top-level messages, a report is matched by it with the person as the
+// sender, one its exclude turns away is excluded with the reason, and a mention stays the mention trigger's, so it is person.
+// The alert beside them is still the botMessage trigger's.
+func TestDryRunReplaysAPersonMessageTrigger(t *testing.T) {
+	fake := fakeslack.New()
+	t.Cleanup(fake.Close)
+	connect(t, fake)
+	if _, err := fake.Webhook(webhook(webhookBot, kindFiring)); err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"checkout is down since the deploy", "thanks, it is back", "<@UFAKEBOT> is this real?"} {
+		say := fake.Say
+		if strings.HasPrefix(text, "<@") {
+			say = fake.Mention
+		}
+		if _, err := say(alertChannel, "U1", text); err != nil {
+			t.Fatal(err)
+		}
+	}
+	trial, err := os.ReadFile(dryRunConfig + "/trial.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const mention = "      - type: mention\n"
+	if !bytes.Contains(trial, []byte(mention)) {
+		t.Fatal("trial.yaml no longer has the mention trigger this test adds a personMessage trigger after")
+	}
+	person := mention + `      - type: personMessage
+        exclude: {text: '^(?i:thanks)\b'}
+        limits: {rateLimit: {maxRuns: 6, per: 30m, maxConcurrent: 2}, maxRunsPerDay: 50}
+        promptTemplate: 'A person reported something in {{ .Channel }}: {{ .Link }}.'
+`
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/binding.yaml", bytes.Replace(trial, []byte(mention), []byte(person), 1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, code := dry(t, fake, "--config", dir, "--binding", "agent-kourier/trial", "--json")
+	if code != exitOK {
+		t.Fatalf("exit code %d; stderr %q", code, stderr)
+	}
+	var r dryRunReport
+	if err := json.Unmarshal([]byte(stdout), &r); err != nil {
+		t.Fatal(err)
+	}
+	type row struct{ outcome, sender, why string }
+	var got []row
+	for _, m := range r.Messages {
+		got = append(got, row{m.Outcome, m.Sender.Kind, m.Why})
+	}
+	want := []row{{"matched", "bot", ""}, {"matched", "person", ""}, {"excluded", "person", "trigger 1: exclude text"}, {"person", "person", ""}}
+	if !slices.Equal(got, want) {
+		t.Errorf("messages = %+v; want %+v", got, want)
+	}
+	if m := r.Messages[1]; m.Trigger == nil || *m.Trigger != 1 || len(m.Fields) != 0 {
+		t.Errorf("the report = %+v; want it matched by trigger 1, with nothing extracted", m)
+	}
+	if r.Summary.Triggers["1"] != 1 || r.Summary.Triggers["2"] != 1 {
+		t.Errorf("triggers = %v; want one match of the personMessage trigger and one of the botMessage trigger", r.Summary.Triggers)
 	}
 }
 
@@ -521,6 +579,82 @@ func TestDryRunCommandLine(t *testing.T) {
 	}
 }
 
+// A Binding file that carries a status is refused by dry-run as the broker refuses it: a file may not set status. The
+// load fails before the token is read or Slack is asked.
+func TestDryRunRefusesABindingFileWithStatus(t *testing.T) {
+	src, err := os.ReadFile(dryRunConfig + "/trial.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	withStatus := append(bytes.Clone(src), "status:\n  conditions:\n    - { type: Ready, status: \"True\", reason: Ready, lastTransitionTime: \"2026-11-04T10:00:00Z\" }\n"...)
+	if err := os.WriteFile(dir+"/trial.yaml", withStatus, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"dry-run", "--config", dir, "--binding", "agent-kourier/trial"}, "dev", &stdout, &stderr, env{}.get)
+	want := "trial.yaml#1 Binding agent-kourier/trial: status: a file may not set it, remove it"
+	if code != exitUsage || !strings.Contains(stderr.String(), want) || stdout.Len() > 0 {
+		t.Errorf("run = %d, stdout %q, stderr %q; want %d and an error that says %q", code, stdout.String(), stderr.String(), exitUsage, want)
+	}
+}
+
+// costlyBinding is a Binding file whose botMessage trigger has the given match, exclude and extract lines.
+func costlyBinding(match, exclude, extract string) string {
+	return `apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: trial, namespace: agent-kourier}
+spec:
+  agent: {backendRef: {namespace: agent-kourier, name: agents}, namespace: kagent, name: sandbox-sre}
+  identity: {userId: agent-kourier-sandbox}
+  chat:
+    connectionRef: {namespace: agent-kourier, name: sandbox-slack}
+    channel: C0123456789
+    triggers:
+      - type: mention
+      - type: botMessage
+        from: {id: B0123456789}
+        match: ` + match + `
+        exclude: ` + exclude + `
+        extract: ` + extract + `
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 40}
+        promptTemplate: "An alert."
+`
+}
+
+// A Binding file with a regex over the instruction limit, or whose regexes together pass the Binding's budget, is refused
+// by dry-run as the broker refuses it, with the field, the count and the limit, before the token is read or Slack is asked.
+// It is how an operator finds such a file before upgrading, so it runs with no token at all. The file that is exactly at both
+// limits loads: dry-run then fails for want of a token, which is a later step.
+func TestDryRunRefusesABindingWhoseRegexesAreTooCostly(t *testing.T) {
+	const atLimit = `'.{0,999}'` // 2000 instructions
+	two := "{text: " + atLimit + ", title: " + atLimit + "}"
+	half := "{text: '.{0,499}'}" // 1000 instructions: with two at the limit, the 5000 of the budget
+	for _, tc := range []struct {
+		name string
+		file string
+		want string // what stderr says; empty when the file loads
+	}{
+		{"one regex over the limit", costlyBinding("{title: '.{0,1000}'}", "{}", "{}"),
+			"spec.chat.triggers[1].match.title: regular expression compiles to 2002 instructions, more than the 2000 instruction limit"},
+		{"regexes that come to the budget", costlyBinding(two, half, "{}"), "SLACK_BOT_TOKEN"},
+		{"the regexes of the Binding over the budget", costlyBinding(two, half, "{state: {field: text, regex: '(?P<state>x)'}}"),
+			"spec.chat.triggers[1].extract.state.regex: the regular expressions of the Binding compile to 5005 instructions with this one, more than the 5000 instruction limit for a Binding"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(dir+"/trial.yaml", []byte(tc.file), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var stdout, stderr bytes.Buffer
+			code := run([]string{"dry-run", "--config", dir, "--binding", "agent-kourier/trial"}, "dev", &stdout, &stderr, env{}.get)
+			if code != exitUsage || !strings.Contains(stderr.String(), tc.want) || stdout.Len() > 0 {
+				t.Errorf("run = %d, stdout %q, stderr %q; want %d and an error that says %q", code, stdout.String(), stderr.String(), exitUsage, tc.want)
+			}
+		})
+	}
+}
+
 // --since is passed on to Slack: a message older than the window is not read, and the same channel read with no --since
 // gives all of it.
 func TestDryRunSinceReachesSlack(t *testing.T) {
@@ -560,7 +694,7 @@ func flapReport(t *testing.T, states string) dryRunReport {
 	if err != nil {
 		t.Fatal(err)
 	}
-	replay, err := chat.NewReplay(b)
+	replay, err := trigger.NewReplay(b)
 	if err != nil {
 		t.Fatal(err)
 	}

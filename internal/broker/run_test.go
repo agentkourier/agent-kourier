@@ -23,6 +23,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/klog/v2"
 
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/config/k8ssecrets"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
@@ -94,6 +95,27 @@ func (idleSlack) Unreact(context.Context, string, string, string) error         
 func (idleSlack) IsInAnyUserGroup(context.Context, []string, string) (bool, error) {
 	return false, nil
 }
+
+func (idleSlack) GroupsReadable(context.Context, []string) error { return nil }
+
+func (idleSlack) ChannelAccess(context.Context, string) (chat.Access, error) {
+	return chat.Access{}, nil
+}
+
+func (idleSlack) SetThreadStatus(context.Context, string, string, string) error { return nil }
+
+// ThreadBetween says the idle Slack reads no thread, so a turn goes on without the thread's context.
+func (idleSlack) ThreadBetween(context.Context, string, string, string, string, string, int) ([]chat.HistoryMessage, int, error) {
+	return nil, 0, chat.ErrNoThreadReads
+}
+
+// ThreadFromStart says the idle Slack reads no thread.
+func (idleSlack) ThreadFromStart(context.Context, string, string, string, string, int) ([]chat.HistoryMessage, int, error) {
+	return nil, 0, chat.ErrNoThreadReads
+}
+
+// WorkspaceURL is "", the address of a Slack that never connected, so the Platform makes no permalinks.
+func (idleSlack) WorkspaceURL() string { return "" }
 
 // revokedReacts is idleSlack whose reactions fail the way a revoked bot token fails them.
 type revokedReacts struct{ idleSlack }
@@ -182,6 +204,12 @@ type running struct {
 	done   chan error
 }
 
+// runsAlongside readies c for a broker that runs while other tests' brokers do (t.Parallel): it leaves klog's process-wide logger
+// alone (leaveKlog), which each Run would otherwise set while the others' informers read it. A test runs in parallel only when all
+// it starts is its own (a fake cluster, a store, a listener, doubles) and it reads or sets no environment variable, goroutine count
+// (goleak) or other process-wide value.
+func runsAlongside(c *RunConfig) { c.leaveKlog = true }
+
 func start(t *testing.T, c RunConfig) *running {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
@@ -189,6 +217,24 @@ func start(t *testing.T, c RunConfig) *running {
 	go func() { r.done <- Run(ctx, c) }()
 	t.Cleanup(func() { cancel(); _ = <-r.done })
 	return r
+}
+
+// leaderUp has c say when its leader half has finished starting, and returns the wait for that, which fails the test
+// after 10 s. It is called before start. A test that stops Run to see the shutdown's steps waits for it first: the Slack
+// run begins inside the start, and a signal that lands between the two aborts the start, which ends every part at once
+// (startGate.close) and leaves the Slack run out of the table that the final drain posts through.
+func leaderUp(t *testing.T, c *RunConfig) (wait func()) {
+	t.Helper()
+	up := make(chan struct{})
+	c.leaderStarted = func() { close(up) }
+	return func() {
+		t.Helper()
+		select {
+		case <-up:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the leader half did not finish starting within 10 s")
+		}
+	}
 }
 
 // wait returns Run's error, or fails the test if Run has not returned in 10 s.

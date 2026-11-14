@@ -55,6 +55,47 @@ func TestSpecExamplesDecode(t *testing.T) {
 	}
 }
 
+func TestAgentNamespacesDecode(t *testing.T) {
+	var be AgentBackend
+	if err := yaml.UnmarshalStrict([]byte(`spec:
+  dialect: kagent-v1
+  agents:
+    sameNamespace: true
+    namespaces: [kagent, payments]
+`), &be); err != nil {
+		t.Fatal(err)
+	}
+	if be.Spec.Agents == nil || !be.Spec.Agents.SameNamespace || !slices.Equal(be.Spec.Agents.Namespaces, []string{"kagent", "payments"}) {
+		t.Errorf("agents = %+v; want sameNamespace and the two namespaces", be.Spec.Agents)
+	}
+}
+
+func TestAgentNamespacesAllows(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		agents         *AgentNamespaces
+		binding, agent string
+		want           bool
+	}{
+		{"unset allows any namespace", nil, "sre", "kagent", true},
+		{"unset allows the Binding's own", nil, "sre", "sre", true},
+		{"the own namespace, with sameNamespace", &AgentNamespaces{SameNamespace: true}, "sre", "sre", true},
+		{"the own namespace, without sameNamespace", &AgentNamespaces{Namespaces: []string{"kagent"}}, "sre", "sre", false},
+		{"the own namespace, listed", &AgentNamespaces{Namespaces: []string{"sre"}}, "sre", "sre", true},
+		{"a listed namespace", &AgentNamespaces{Namespaces: []string{"kagent", "payments"}}, "sre", "payments", true},
+		{"a listed namespace, with sameNamespace", &AgentNamespaces{SameNamespace: true, Namespaces: []string{"kagent"}}, "sre", "kagent", true},
+		{"a namespace not listed", &AgentNamespaces{SameNamespace: true, Namespaces: []string{"kagent"}}, "sre", "payments", false},
+		{"sameNamespace is the Binding's namespace, not the backend's", &AgentNamespaces{SameNamespace: true}, "sre", "agent-kourier-system", false},
+		{"a value that allows nothing", &AgentNamespaces{}, "sre", "sre", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.agents.Allows(tc.binding, tc.agent); got != tc.want {
+				t.Errorf("Allows(%q, %q) = %t, want %t", tc.binding, tc.agent, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestToolApprovalFieldsDecode(t *testing.T) {
 	var b Binding
 	if err := yaml.UnmarshalStrict([]byte(`spec:
@@ -67,6 +108,19 @@ func TestToolApprovalFieldsDecode(t *testing.T) {
 	b.Default()
 	if !b.Spec.Interactions.ToolApprovals || !slices.Equal(b.Spec.Interactions.ApproverGroups, []string{"S0123456789", "S9876543210"}) {
 		t.Errorf("tool approval interactions = %+v; want enabled approvals and the two groups", b.Spec.Interactions)
+	}
+}
+
+func TestDefaultMaxMentionsPerTurn(t *testing.T) {
+	for _, tc := range []struct {
+		in   *int
+		want int
+	}{{nil, DefaultMaxMentionsPerTurn}, {new(0), 0}, {new(1), 1}, {new(10), 10}} {
+		b := &Binding{Spec: BindingSpec{Chat: ChatBinding{MaxMentionsPerTurn: tc.in}}}
+		b.Default()
+		if got := b.Spec.Chat.MentionCap(); got != tc.want {
+			t.Errorf("MaxMentionsPerTurn %v after Default = %d, want %d", tc.in, got, tc.want)
+		}
 	}
 }
 
@@ -84,6 +138,25 @@ func TestDefaultThreadReplies(t *testing.T) {
 			b.Default()
 			if got := b.Spec.Chat.ThreadReplies; got != tc.want {
 				t.Errorf("ThreadReplies after Default = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDefaultBotMentions(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		in, want BotMentions
+	}{
+		{"omitted", "", BotMentionsAny},
+		{"any kept", BotMentionsAny, BotMentionsAny},
+		{"none kept", BotMentionsNone, BotMentionsNone},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := &Binding{Spec: BindingSpec{Chat: ChatBinding{BotMentions: tc.in}}}
+			b.Default()
+			if got := b.Spec.Chat.BotMentions; got != tc.want {
+				t.Errorf("BotMentions after Default = %q, want %q", got, tc.want)
 			}
 		})
 	}
@@ -124,16 +197,22 @@ func boolPtr(v bool) *bool { return &v }
 
 func TestDefault(t *testing.T) {
 	b := load[Binding](t, "binding-minimal.yaml")
+	if b.Spec.Chat.Progress != ProgressStepsAndActivity {
+		t.Errorf("progress after Default = %q; want the default, %q", b.Spec.Chat.Progress, ProgressStepsAndActivity)
+	}
 	if b.Spec.Chat.Output != OutputLive || b.Spec.Interactions.Timeout.Duration != 30*time.Minute || b.Spec.Interactions.ToolApprovals || len(b.Spec.Interactions.ApproverGroups) != 0 ||
 		b.Spec.Session.ThreadTTL.Duration != 2160*time.Hour || b.Spec.Feedback.Enabled {
 		t.Errorf("defaults not applied: %+v", b.Spec)
 	}
 
 	set := &Binding{Spec: BindingSpec{
-		Chat:         ChatBinding{Output: OutputFinal},
+		Chat:         ChatBinding{Output: OutputFinal, Progress: ProgressActivity},
 		Interactions: Interactions{Timeout: metav1.Duration{Duration: time.Minute}},
 	}}
 	set.Default()
+	if set.Spec.Chat.Progress != ProgressActivity {
+		t.Errorf("Default overwrote an explicit progress: %q", set.Spec.Chat.Progress)
+	}
 	if set.Spec.Chat.Output != OutputFinal || set.Spec.Interactions.Timeout.Duration != time.Minute {
 		t.Errorf("Default overwrote explicit values: %+v", set.Spec)
 	}
@@ -179,13 +258,12 @@ func TestBindingRefusesTheRemovedWebhookFields(t *testing.T) {
 }
 
 // A field stays in the API only if it works (DA-3). The fields of features that are not built are refused by the strict
-// decoder, and return with the feature: the Binding's status and the ChatConnection's mode and directMessages.
+// decoder, and return with the feature: the ChatConnection's mode and directMessages.
 func TestTheFieldsOfUnbuiltFeaturesAreRefused(t *testing.T) {
 	for _, tc := range []struct {
 		name, in, field string
 		into            any
 	}{
-		{"status", "status: { conditions: [] }", "status", &Binding{}},
 		{"mode", "spec: { mode: socket }", "mode", &ChatConnection{}},
 		{"directMessages", "spec: { directMessages: { defaultBindingRef: { name: b } } }", "directMessages", &ChatConnection{}},
 	} {
@@ -195,6 +273,61 @@ func TestTheFieldsOfUnbuiltFeaturesAreRefused(t *testing.T) {
 				t.Errorf("strict decode error = %v, want an unknown-field error naming %s", err, tc.field)
 			}
 		})
+	}
+}
+
+// Only a Binding has a status. The other kinds are refused one, as an unknown field.
+func TestOnlyABindingHasAStatus(t *testing.T) {
+	const in = "status: { conditions: [] }"
+	for _, into := range []any{&AgentBackend{}, &ChatConnection{}} {
+		err := yaml.UnmarshalStrict([]byte(in), into)
+		if err == nil || !strings.Contains(err.Error(), "status") || !strings.Contains(err.Error(), "unknown field") {
+			t.Errorf("strict decode of %T error = %v, want an unknown-field error naming status", into, err)
+		}
+	}
+	var b Binding
+	if err := yaml.UnmarshalStrict([]byte(in), &b); err != nil {
+		t.Errorf("strict decode of a Binding with status: %v, want none", err)
+	}
+}
+
+// A Binding's status is not the user's to set, and a custom resource source will decode objects that carry it through the
+// same Default and Validate as a file, so neither looks at it. A Binding with no status marshals with no status key.
+func TestBindingStatusIsIgnoredByDefaultAndValidate(t *testing.T) {
+	var b Binding
+	data, err := os.ReadFile(filepath.Join("testdata", "binding-minimal.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.UnmarshalStrict(data, &b); err != nil {
+		t.Fatal(err)
+	}
+	b.Default()
+	if err := b.Validate(); err != nil {
+		t.Fatalf("Validate of a Binding with no status: %v", err)
+	}
+	if out, err := yaml.Marshal(b); err != nil || strings.Contains(string(out), "status") {
+		t.Errorf("a Binding with no status marshals as %q, %v; want no status key", out, err)
+	}
+
+	b.Status.Conditions = []metav1.Condition{{
+		Type: "Ready", Status: metav1.ConditionFalse, Reason: "Accepted:BackendNotFound", ObservedGeneration: 3,
+		LastTransitionTime: metav1.Date(2026, 11, 4, 10, 0, 0, 0, time.UTC), Message: "no such backend",
+	}}
+	b.Default()
+	if err := b.Validate(); err != nil {
+		t.Errorf("Validate of a Binding with a status: %v", err)
+	}
+	out, err := yaml.Marshal(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back Binding
+	if err := yaml.UnmarshalStrict(out, &back); err != nil {
+		t.Fatalf("a status round-trips through strict decoding: %v", err)
+	}
+	if len(back.Status.Conditions) != 1 || back.Status.Conditions[0].ObservedGeneration != 3 || back.Status.Conditions[0].Reason != "Accepted:BackendNotFound" {
+		t.Errorf("status after a round trip = %+v", back.Status)
 	}
 }
 
@@ -208,5 +341,26 @@ func TestChatConnectionCredentialsHaveNoKey(t *testing.T) {
 func TestNamespacedName(t *testing.T) {
 	if got := NamespacedName("sre", "sre-alerts"); got != "sre/sre-alerts" {
 		t.Errorf("NamespacedName = %q; want sre/sre-alerts", got)
+	}
+}
+
+func TestObjectRefNamespaceOr(t *testing.T) {
+	tests := []struct {
+		name  string
+		ref   ObjectRef
+		owner string
+		want  string
+	}{
+		{"empty namespace is the owner's", ObjectRef{Name: "a"}, "sre", "sre"},
+		{"a named namespace wins", ObjectRef{Namespace: "ops", Name: "a"}, "sre", "ops"},
+		{"the owner's namespace named outright", ObjectRef{Namespace: "sre", Name: "a"}, "sre", "sre"},
+		{"neither", ObjectRef{Name: "a"}, "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.ref.NamespaceOr(tt.owner); got != tt.want {
+				t.Errorf("NamespaceOr(%q) = %q, want %q", tt.owner, got, tt.want)
+			}
+		})
 	}
 }

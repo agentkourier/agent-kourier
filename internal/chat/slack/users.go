@@ -25,10 +25,10 @@ type cachedUser struct {
 // ResolveUser returns the Slack user id for attribution (spec 8.5): users.info, cached for
 // the TTL. Name is the display name, else the real name, else the handle. Email is empty
 // unless the app holds users:read.email. A failure is not cached, and its error holds no
-// token. It satisfies session.Users.
+// token. The broker's adapter over the platform makes it a session.Users, which names the connection.
 func (c *Client) ResolveUser(ctx context.Context, id string) (telemetryResult0 dialect.User, telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.ResolveUser")
-	defer func() { finishChat(ctx, op, "ResolveUser", telemetryErr) }()
+	defer func() { c.finishChat(ctx, op, "ResolveUser", telemetryErr) }()
 	now := c.now()
 	c.mu.Lock()
 	e, ok := c.users[id]

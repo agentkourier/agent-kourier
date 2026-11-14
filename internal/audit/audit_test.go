@@ -27,11 +27,7 @@ var (
 
 func newWriter(t *testing.T) (*Writer, *sqlite.Store) {
 	t.Helper()
-	s, err := sqlite.Open(context.Background(), sqlitetest.Path(t))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s := sqlitetest.Open(t)
 	return writerOver(t, s, Options{Now: func() time.Time { return t0 }}), s
 }
 
@@ -180,6 +176,38 @@ func TestTriggerRefusedCleansWhatItStores(t *testing.T) {
 	}
 }
 
+// A mention is an event of its own: one row for each person, by the name and user config gives.
+func TestMention(t *testing.T) {
+	ctx := context.Background()
+	w, s := newWriter(t)
+	good := Mention{Turn: "turn-1", Channel: "C1", Thread: "100.1", Name: "sam", User: "U0SAM"}
+	if err := w.Mention(ctx, Actor{Binding: "ns/b"}, good); err != nil {
+		t.Fatalf("Mention: %v", err)
+	}
+	got := rows(t, s)
+	if len(got) != 1 {
+		t.Fatalf("got %d rows, want 1: %+v", len(got), got)
+	}
+	if e := got[0]; e.Kind != store.AuditEvent || e.Binding != "ns/b" || e.Subject != "mention turn=turn-1 channel=C1 thread=100.1" || e.Outcome != "slack_message: mention name=sam user=U0SAM" {
+		t.Errorf("row = %+v", e)
+	}
+	for name, bad := range map[string]struct {
+		a Actor
+		m Mention
+	}{
+		"no Binding": {Actor{}, good},
+		"no turn":    {who, Mention{Channel: "C1", Thread: "1.1", Name: "sam", User: "U0SAM"}},
+		"no channel": {who, Mention{Turn: "t", Thread: "1.1", Name: "sam", User: "U0SAM"}},
+		"no thread":  {who, Mention{Turn: "t", Channel: "C1", Name: "sam", User: "U0SAM"}},
+		"no name":    {who, Mention{Turn: "t", Channel: "C1", Thread: "1.1", User: "U0SAM"}},
+		"no user":    {who, Mention{Turn: "t", Channel: "C1", Thread: "1.1", Name: "sam"}},
+	} {
+		if err := w.Mention(ctx, bad.a, bad.m); !errors.Is(err, store.ErrInvalid) {
+			t.Errorf("%s: Mention = %v, want ErrInvalid", name, err)
+		}
+	}
+}
+
 // A vote is an event of its own: who voted, on which message, and the verdict, by identifiers only. The alert's name is
 // untrusted text from the alert, and is not an identifier of the vote, so it is not a field of the call.
 func TestFeedbackVote(t *testing.T) {
@@ -305,6 +333,8 @@ func TestAgentCall(t *testing.T) {
 		{"ok", Call{Op: OpSend, TaskID: "t1", ContextID: "c1", MessageID: "m1"}, "task=t1 context=c1 message=m1", "send: ok"},
 		{"credentials rejected (D34)", Call{Op: OpSend, MessageID: "m1", Err: notSent401}, "message=m1",
 			"send: failed credentials_rejected,not_sent,http_401"},
+		{"agent not found or not permitted (a card 403)", Call{Op: OpSend, MessageID: "m1", Err: fmt.Errorf("send: %w", errors.Join(agent.ErrNotSent, agent.ErrAgentForbidden, &dialect.HTTPStatusError{Code: 403}))},
+			"message=m1", "send: failed not_sent,agent_forbidden,http_403"},
 		{"outcome unknown", Call{Op: OpSend, MessageID: "m1", Err: fmt.Errorf("x: %w", agent.ErrOutcomeUnknown)}, "message=m1", "send: failed outcome_unknown"},
 		{"stream lost names its task", Call{Op: OpSend, MessageID: "m1", Err: fmt.Errorf("x: %w", lost)}, "task=t-lost context=c-lost message=m1", "send: failed stream_lost"},
 		{"answer rejected", Call{Op: OpAnswer, TaskID: "t1", Err: agent.ErrAnswerRejected}, "task=t1", "answer: failed answer_rejected"},
@@ -318,6 +348,15 @@ func TestAgentCall(t *testing.T) {
 		{"token required (D34, never downgrade)", Call{Op: OpSend, MessageID: "m1", Err: fmt.Errorf("binding ns/b: %w", agent.ErrTokenRequired)}, "message=m1", "send: failed token_required"},
 		{"pool closed", Call{Op: OpSend, MessageID: "m1", Err: agent.ErrPoolClosed}, "message=m1", "send: failed pool_closed"},
 		{"streaming unsupported", Call{Op: OpSend, MessageID: "m1", Err: fmt.Errorf("agent ns/a: %w", agent.ErrStreamingUnsupported)}, "message=m1", "send: failed streaming_unsupported"},
+		{"find task whose page is too large to read", Call{Op: OpFindTask, ContextID: "c1", MessageID: "m1", Err: fmt.Errorf("list tasks of context c1: %w", dialect.ErrResponseTooLarge)},
+			"context=c1 message=m1", "find_task: failed response_too_large"},
+		{"find task that could not read the list in full", Call{Op: OpFindTask, ContextID: "c1", MessageID: "m1",
+			Err: fmt.Errorf("%w: %w", agent.ErrLookupIncomplete, fmt.Errorf("list tasks: %w", dialect.ErrResponseTooLarge))},
+			"context=c1 message=m1", "find_task: failed lookup_incomplete,response_too_large"},
+		{"find task whose walk passed its deadline", Call{Op: OpFindTask, ContextID: "c1", MessageID: "m1", Err: fmt.Errorf("%w: %w", agent.ErrLookupIncomplete, context.DeadlineExceeded)},
+			"context=c1 message=m1", "find_task: failed lookup_incomplete,deadline_exceeded"},
+		{"an agent card that is too large is no response that is", Call{Op: OpFindTask, ContextID: "c1", MessageID: "m1", Err: fmt.Errorf("connect to agent: %w: %w", dialect.ErrCardTooLarge, dialect.ErrResponseTooLarge)},
+			"context=c1 message=m1", "find_task: failed card_too_large"},
 		{"cancel not cancelable", Call{Op: OpCancel, TaskID: "t1", Err: a2a.ErrTaskNotCancelable}, "task=t1", "cancel: failed task_not_cancelable"},
 		{"cancel task not found", Call{Op: OpCancel, TaskID: "t1", Err: a2a.ErrTaskNotFound}, "task=t1", "cancel: failed task_not_found"},
 		{"answer rejected and its cancel failed (R17)", Call{Op: OpAnswer, TaskID: "t1", Err: errors.Join(agent.ErrAnswerRejected, a2a.ErrTaskNotCancelable)}, "task=t1",
@@ -384,6 +423,7 @@ func TestDecision(t *testing.T) {
 		{"not an approver", Decision{InteractionID: "i1", TaskID: "t1", Result: DecisionNotApprover}, t0, "denied_not_approver"},
 		{"timed out", Decision{InteractionID: "i1", TaskID: "t1", Result: DecisionTimedOut, At: decided}, decided, "timed_out"},
 		{"answer cleared", Decision{InteractionID: "i1", TaskID: "t1", Result: DecisionAnswerCleared, At: decided}, decided, "answer_cleared"},
+		{"orphaned", Decision{InteractionID: "i1", TaskID: "t1", Result: DecisionOrphaned, At: decided}, decided, "orphaned"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w, s := newWriter(t)

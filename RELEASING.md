@@ -10,31 +10,82 @@ is that image by digest. Nothing is released by hand.
 2. Open a release pull request that sets `version` in `charts/agent-kourier/Chart.yaml` to `X.Y.Z` and every
    release version the public docs name to match. `make docs-check` lists each page that still names the old version
    (`release-version`), so the pull request cannot go green with a page left behind. The chart's golden files carry
-   the version in a label: refresh them with `go test ./test/chart -update` (with `helm` installed). Merge it. Skip this for a
-   prerelease tag (`vX.Y.Z-rc.1`): while one is tried, the chart and the docs keep naming the last release.
+   the version in a label: refresh them with `go test ./test/chart -update` (with `helm` installed). For a new minor
+   version (`X.Y.0`), also add `"X.Y"` at the top of `hack/docs/versions.yaml`, so the documentation site publishes
+   the new release line's tags; until its first tag exists the site skips it. Merge it. Skip this for a prerelease tag
+   (`vX.Y.Z-rc.1`): while one is tried, the chart and the docs keep naming the last release.
 3. Before tagging, confirm that `ci.yml`, `security.yml` and `codeql.yml` have completed successfully for that
    exact commit from a push to `main`. The release gate checks the same commit and the latest attempt again; a
    missing, pending, failed or pull-request-only run blocks the release.
-4. `git tag vX.Y.Z <the release pull request's commit on main>` and `git push origin vX.Y.Z`.
-5. Watch the `release` workflow. Its job summary and the GitHub Release body name the pushed image and chart
+4. Run the kind tiers on that commit by hand, since no workflow does ([CI](#ci) says why). The custom resource
+   route has its own runs of the tiers, two scenarios that nothing else runs, and a run of the failover tests. Each tier needs Docker and
+   about 8 GB free; take each down before the next comes up:
+
+   ```sh
+   make e2e-fast-up e2e-fast e2e-fast-down                                       # the ConfigMap route
+   make e2e-full-up e2e-full e2e-full-down
+   E2E_CONFIG_SOURCE=crds make e2e-fast-up e2e-fast e2e-crs-scenarios e2e-fast-down
+   E2E_CONFIG_SOURCE=crds make e2e-full-up e2e-full e2e-full-down                # custom resources
+   E2E_STORE=postgres E2E_REPLICAS=2 make e2e-fast-up e2e-crs-migration e2e-fast-down
+   E2E_CONFIG_SOURCE=crds E2E_STORE=postgres E2E_REPLICAS=2 make e2e-fast-up e2e-fast e2e-fast-down   # failover
+   ```
+
+   `make e2e-fast` and `make e2e-full` read which route the Deployment is on and run the tests of that route. What the
+   runs cover, in the order above:
+
+   1. The fast tier on the ConfigMap route, with one SQLite replica: the suite, with every `CR_` test and S16 skipped.
+   2. The full tier on the ConfigMap route: its own suite, with the `CR_` tests and S16 skipped.
+   3. The fast tier on the custom resource route, with one replica: the suite and the `CR_` tests, except the failover test,
+      which needs two replicas, and the migration test, which runs only in its phases.
+      `make e2e-crs-scenarios` adds the scenarios that need kubectl or Helm, and needs the tier up on this route.
+   4. The full tier on the custom resource route: its own suite against an Agent Kourier that reads custom resources. It
+      runs none of the `CR_` tests, which skip off the fast tier (`test/e2e/cr_test.go`: they use the stub agent, which
+      the full tier lacks).
+   5. `make e2e-crs-migration`, which needs the fast tier up on Postgres with two replicas on the ConfigMap route (the
+      default), and runs `TestCR_MigrationKeepsASessionAlive` in its phases.
+   6. The fast tier on Postgres with two replicas on the custom resource route: the only run of the failover tests.
+      S16 (`TestS16_FailoverLosesNoEventAndDuplicatesNone`) needs the fast tier with two replicas and runs on either route;
+      `TestCR_FailoverDoesNotBlankStatus` needs the custom resource route as well. Both skip anywhere else, so no other run
+      executes them.
+
+   `make e2e-crs-scenarios` and `make e2e-crs-migration` say what they need and stop if the tier is not as they need it. A failure blocks the tag.
+5. `git tag vX.Y.Z <the release pull request's commit on main>` and `git push origin vX.Y.Z`.
+6. Watch the `release` workflow. Its job summary and the GitHub Release body name the pushed image and chart
    digests. A GitHub Release is created only after both signatures verify.
+7. Re-record the clip, since it types the version: `docs/assets/clip/team-app.gif`, which the README, Install with Helm and
+   Let a team bring its own Slack app show. `make docs-check` reads the pages, not the GIF, so nothing else
+   catches a clip of an old release. `hack/clip/record.sh` says how (`up`, `take` with the published chart, a capture of
+   the Slack thread pane with the answer, `stitch`, `down`); open a pull request with the new GIF, and update the
+   sentence under the clip in each of the three, which says how long the cut wait for Ready was in that take. `make docs-site` builds each tag from its own tree, so a clip
+   recorded after the tag reaches `main` and the site's `dev/` but never that tag: the tag's docs show the clip of the
+   release before it, and a tag cut before the clip existed shows none. For the tag to carry its own clip, record it
+   before the final tag: tag a release candidate (`vX.Y.Z-rc.N`) on the release commit, run `take` with
+   `CLIP_CHART_VERSION=X.Y.Z-rc.N`, merge the clip's pull request, and tag `vX.Y.Z` on that merge commit once its
+   checks pass. The take still types `--version X.Y.Z`; the recorder installs the candidate in its place and hides the
+   two lines helm prints naming the pulled chart and its digest. Say so in the clip's pull request.
 
 If a first release attempt fails before its GitHub Release is created, rerun that tag after fixing the failure.
 Once a published or draft GitHub Release exists for the tag, the read-only gate refuses to rebuild it.
+
+The documentation site publishes every final tag of a listed release line, whether or not that tag has a GitHub
+Release. A docs deploy from `main` while a failed attempt waits for its rerun publishes that tag's docs early. A final
+tag that is never released, such as one the gate refused, must be deleted, or the site publishes its docs, as its
+line's newest and perhaps as latest.
 
 ## What the workflow does
 
 `.github/workflows/release.yml` runs `hack/release/release.sh`, the script behind `make release-image`:
 
 - First checks the exact tagged commit through the Actions API. `ci.yml` must contain successful `lint`, `test`,
-  `test-testhooks` and `docs-agent` jobs. `security.yml` must contain successful `govulncheck (root)`,
+  `test-testhooks`, `docs-agent`, `crd-corpus (1.37)` and `crd-corpus (1.33)` jobs. `security.yml` must contain successful `govulncheck (root)`,
   `govulncheck (ax)`, `govulncheck (docs-agent)`, `gitleaks`, `trivy (linux-amd64)` and `trivy (linux-arm64)` jobs.
   `codeql.yml` must contain a successful `analyze (go)` job. These are the status checks the `main` ruleset
   requires. `codeql.yml` skips `analyze` while the repository is private, and a skipped run blocks the release.
   The scheduled released-image rescan is the only permitted skipped job. A pending run fails closed with a message
   to wait; the gate never reruns or changes a workflow run.
 - Refuses a final tag `vX.Y.Z` unless `charts/agent-kourier/Chart.yaml` at the tagged commit says `version: X.Y.Z`
-  (`hack/release/check-version.sh`), so no release goes out before the pull request that points the docs at it.
+  and `hack/docs/versions.yaml` lists `X.Y` (`hack/release/check-version.sh`), so no release goes out before the pull
+  request that points the docs at it, or without a place on the documentation site.
 - Checks the Releases API before granting the build job access to the registry. A 404 means this is the first
   release attempt; a published or draft Release, an authorization failure or any other API error stops the workflow.
 - Refuses a tag that is not on `main`.
@@ -61,8 +112,12 @@ Once a published or draft GitHub Release exists for the tag, the read-only gate 
 - In a separate read-only verification job, verifies both signatures with the OIDC issuer and the exact identity
   `https://github.com/agentkourier/agent-kourier/.github/workflows/release.yml@refs/tags/<tag>`.
 - In a final job with `contents: write` and no checkout, creates the GitHub Release with generated notes and the
-  verified digests. Re-running a completed release leaves matching release information unchanged; conflicting
+  verified digests. `.github/release.yml` groups the notes by the labels `pr-labels.yml` sets from each pull
+  request's title, and leaves out release pull requests (`chore(release): ...`). Re-running a completed release leaves matching release information unchanged; conflicting
   tag, prerelease state or digest information fails rather than being overwritten.
+- For a final tag, after the Release exists, starts `docs.yml` on `main` (`actions: write`, no checkout), which
+  rebuilds the documentation site with the new tag as a version of its own, its line's newest and, for the newest line,
+  latest. A prerelease is not published there.
 
 The job summary lists both digests. The chart's `tag` stays empty: the digest wins.
 
@@ -133,7 +188,7 @@ are applied now:
      their own pull request. Squash is the only allowed merge method.
    - Require signed commits. A squash merge in GitHub is signed by GitHub, so every commit merged this way passes.
    - Require these status checks, with the branch up to date before merging (strict): `lint`, `test`,
-     `test-testhooks` and `docs-agent` from `ci`; `govulncheck (root)`, `govulncheck (ax)`,
+     `test-testhooks`, `docs-agent`, `crd-corpus (1.37)` and `crd-corpus (1.33)` from `ci`; `govulncheck (root)`, `govulncheck (ax)`,
      `govulncheck (docs-agent)`, `gitleaks`, `trivy (linux-amd64)` and `trivy (linux-arm64)` from `security`; and
      `analyze (go)` from `codeql`. The scheduled released-image rescan is intentionally not a required check.
    - Block force pushes and restrict deletions.
@@ -161,20 +216,43 @@ belongs with a change to the other.
 `.github/workflows/ci.yml` runs `make fmt` (no diff), `make lint` and `make build` (the `lint` job), and what `make test`
 runs as two more jobs side by side, `make test-race` with `make test-scripts` (`test`) and `make test-testhooks`
 (`test-testhooks`), on pull requests and pushes to `main`. The `test` job has helm installed and `AGENTKOURIER_REQUIRE_HELM=1`
-so the chart tests cannot skip. The `zizmor` job (`make lint-workflows`, `hack/security/lint-workflows.sh`) audits
+so the chart tests cannot skip. The `test-postgres` job (`make test-postgres`, `hack/postgres/test.sh`) runs the Postgres
+store's tests, the store conformance suite among them, and the broker's Postgres tests against a throwaway Postgres
+container; those tests skip in `test` and `test-testhooks`, which have no database. It is not a required check. To make
+it one, the owner adds `test-postgres` from `ci` to the `main` ruleset, and the same change adds it to `CI_REQUIRED_JOBS` in
+`hack/release/check-ci.sh` and to the lists above. The `crd-corpus` job (`make crd-corpus`, `hack/kind/crd-corpus.sh`) brings up
+a kind cluster with only the three CRDs from `charts/agent-kourier/files/crds`, with no image and no Agent Kourier, and has
+`test/crdcorpus` send every entry of its corpus to it as a server-side dry-run create. It fails when the schema refuses
+an object the broker's own validation accepts, or when an entry's `schema:` flag no longer says what the schema does with
+it. It is the only job that has an API server compile the schemas' CEL rules. It installs kind and kubectl with
+`hack/ci/install-kind-tools.sh`, at the pins and checksums the kind tiers use, and runs twice: on the node image of
+`hack/kind/lib.sh` (`NODE_IMAGE`, Kubernetes 1.37, the job `crd-corpus (1.37)`) and on the oldest Kubernetes the chart admits
+(`NODE_IMAGE_MIN`, 1.33, the job `crd-corpus (1.33)`; `CRD_CORPUS_NODE=min make crd-corpus` runs it locally). Both are required checks of
+the `main` ruleset and are in `CI_REQUIRED_JOBS`. Renaming either job, or moving the chart's minimum Kubernetes version, is a change to the
+workflow, `NODE_IMAGE_MIN`, the ruleset and `CI_REQUIRED_JOBS` together. A run took about three minutes on a warm cache; the timeout is 20. The `zizmor` job (`make lint-workflows`, `hack/security/lint-workflows.sh`) audits
 every workflow with a pinned zizmor under the policy in `.github/zizmor.yml` and fails on any finding; it first
 proves the policy still fails a set of unsafe fixtures (`hack/security/testdata/zizmor`), and then that the inline
 ignore comments hide only the findings the script lists. It runs with `contents: read` and uploads no SARIF, so it
 behaves the same on a fork's pull request. It belongs in the `main` ruleset's required checks: the owner adds
 `zizmor` from `ci` there, and the same change adds it to `CI_REQUIRED_JOBS` in `hack/release/check-ci.sh` and to
-the lists above. Each Go job in `ci.yml`, `security.yml`, `codeql.yml` and `docs.yml` restores a cache of its own
-(the module cache and the build cache, plus golangci-lint's cache in the jobs that lint), keyed on the job, the runner
-OS, the Go version and the `go.sum` files it builds from. Only a job on a push to `main` saves one, when its exact key
-is not saved yet, whether its steps passed or failed (a cancelled job saves nothing); pull requests read `main`'s caches
-and save none, so a pull request runs cold until a push run on `main` has saved them. The jobs that install Python
-packages, `echo-agent` and `prompt-agent` in `ci.yml` and `build` in `docs.yml`, keep pip's cache under the same rules, keyed on the job,
-the runner OS, the Python version and the requirements files they install from. `docs.yml` runs on a push to `main`
-only when the push changes a path in its `push` trigger, so only such a push saves the `build` job's caches. Each job has its own timeout, set from the times seen on a cold cache. The kind
-tiers are not in CI. They would need a runner with Docker and about 8 GB free, the `kind`, `kubectl`,
-`helm` and `jq` binaries installed at pinned versions, and the pinned node and base images pulled (the tiers
-take minutes to bring up, so they are best as a separate nightly or label-triggered workflow, not on every PR).
+the lists above. The Go jobs in `ci.yml`, `security.yml`, `codeql.yml` and `docs.yml` keep the module cache and the build cache
+(plus golangci-lint's cache in the jobs that lint) in Actions caches, one per job, except that `test-postgres` restores
+`test`'s and the two `crd-corpus` jobs share one, which `crd-corpus (1.37)` saves. A key is
+`go-<cache>-<runner OS>-go<Go version>-<hash of the go.sum files it builds from (and, for govulncheck, its script)>-<commit>`, and a run restores the newest
+entry whose key starts with `go-<cache>-<runner OS>-`, so a pull request starts from what the latest push to `main`
+saved, test results included. Every push run on `main` saves, whether its steps passed or failed (a cancelled job saves
+nothing, nor does a re-run of a job whose entry is already saved); pull requests save none. Before a push saves,
+`hack/ci/actions-cache.sh` trims the build caches to the entries that run read or wrote, and starts the module cache
+empty when the restored entry is from another `go.sum` or Go version. After the saves, each of the four workflows'
+`cache-prune` job deletes all but the newest entry of every cache it saves (`codeql.yml`'s also deletes all but the
+newest of CodeQL's overlay-base databases); a listing or delete that fails is a warning, not a failure, so an API error
+there does not stop a release, and the next push's prune catches up. One entry of each cache comes to about 4 GB of the repository's
+10 GB cache limit, GitHub's default, past which GitHub evicts the least recently accessed entries. The jobs that
+install Python packages, `echo-agent` and `prompt-agent` in `ci.yml` and `build` in `docs.yml`, keep pip's cache under an exact key on
+the job, the runner OS, the Python version and the requirements files they install from: a push to `main` saves it
+only when those files or the Python version change, and `cache-prune` then deletes the old entry. `docs.yml` runs on a push to
+`main` only when the push changes a path in its `push` trigger, so only such a push saves the `build` job's caches. Each job has its own timeout, set from the times seen on a cold cache. The kind
+tiers are not in CI, which is why "Cut a release" has you run them, with the custom resource scenarios, by hand. They would need a runner with Docker and about 8 GB free, the `kind`, `kubectl`,
+`helm` and `jq` binaries installed at pinned versions (`hack/ci/install-kind-tools.sh` installs them, each checked
+against a pinned sha256), and the pinned node and base images pulled (the tiers
+take minutes to bring up, so they are best as a separate nightly or label-triggered workflow, not on every PR). The `crd-corpus` job is not a tier: its cluster has only the CRDs, and it runs on every PR.

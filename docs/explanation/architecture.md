@@ -101,22 +101,104 @@ durable in the store; traces are exported only when configured.
 
 ## Configuration and deployment
 
-Agent Kourier reads resource-shaped YAML files from `AGENTKOURIER_CONFIG_DIR`.
-GitOps deploys those files as a ConfigMap alongside Secrets, the Agent Kourier
-Deployment, and persistent storage. The reloader validates changes and keeps the
-last accepted configuration if a reload fails. Secret access uses Kubernetes
-RBAC; cross-namespace resource references use configured namespace allowlists.
+Agent Kourier reads three kinds of resource, `ChatConnection`, `AgentBackend` and `Binding`, from one of two places, chosen when
+it starts. With the chart's `config.source: crds`, its default, it reads the three kinds from the cluster as custom resources, one object
+at a time, so that teams can own their Bindings; there is no reconciliation controller, since the broker watches them itself, and the elected
+leader writes each Binding's `status`. With `config.source: files`, the quick route for a proof of concept, it reads resource-shaped YAML files from `AGENTKOURIER_CONFIG_DIR`, which GitOps deploys as a ConfigMap alongside
+Secrets, the Agent Kourier Deployment and persistent storage; the reloader validates changes and, if a reload fails, keeps the last accepted
+configuration. The two routes are never merged. [Choose a config route](config-routes.md) says how they differ. Secret
+access uses Kubernetes RBAC; cross-namespace resource references use configured namespace allowlists.
 
-The config must hold exactly one `ChatConnection`; the broker refuses to start with more. Multiple bindings
-can route its channels to different agents and backends. The store is SQLite with
+A broker serves its own `ChatConnection`, and with custom resources the `ChatConnection`s of the namespaces the platform team admits, up to 16 in all: see [One ChatConnection](config-routes.md#which-chatconnections-a-broker-serves) for how the own one is chosen on each route, and [Let a team bring its own Slack app](../how-to/team-slack-app.md) for the others. Multiple bindings
+can route a connection's channels to different agents and backends. The store is SQLite with
 one replica, or Postgres with one or two replicas (two are active and passive) (see
 [High availability](high-availability.md)); the broker is never active-active.
 
-Live Agent Kourier CRDs and a reconciliation controller are planned. Agent Kourier does not
+Agent Kourier does not
 deploy an agent when it loads an `AgentBackend` or `Binding`: the runtime's own
 manifests, operator, or deployment tooling handle that lifecycle.
 
 ## One conversation
+
+A turn crosses two protocols. Slack delivers events to Agent Kourier over a Socket Mode connection, and Agent Kourier
+writes to Slack through its Web API. Agent Kourier calls the agent over A2A and reads the reply as a stream. The first
+diagram follows one message in a chat thread; the second shows what happens when the agent pauses for an answer.
+
+```mermaid
+sequenceDiagram
+    box Slack
+        participant S as Slack
+    end
+    box Agent Kourier
+        participant A as Slack adapter and chat intake
+        participant M as Session manager
+        participant R as Renderer and outbox
+    end
+    box A2A backend
+        participant G as Agent
+    end
+    S->>A: Socket Mode event (message or app_mention)
+    A->>M: Submit the turn to the Binding's session
+    M->>M: write the session and queue the turn, keyed by message ID
+    M->>R: acknowledgment notice, unless the Binding turns it off
+    M-->>A: queued, and the session's runner woken
+    Note over S,M: Submit does not wait for the agent. If it returns an error, the event is left<br/>unacknowledged for Slack to send again. A message it rejects as invalid is dropped.
+    par
+        A->>S: acknowledge the event
+    and
+        R-)S: reactions.add (hourglass_flowing_sand by default), from the outbox, if on
+    and
+        M->>G: SendStreamingMessage as the Binding's identity,<br/>with the session's contextId (none on a first turn)
+    end
+    loop while the task runs
+        G-->>M: task, status and artifact updates
+        M->>R: output so far
+        R->>S: chat.startStream, then chat.appendStream as output arrives
+        opt the stream drops or stays silent too long
+            M->>G: GetTask
+            M->>G: SubscribeToTask, if the task has not ended, and read on from there
+        end
+    end
+    G-->>M: final status, such as completed, failed or input-required
+    R->>S: chat.stopStream
+    R-)S: reactions.remove, if on
+```
+
+A turn that no person wrote, such as the one an alert starts, has no one to show a stream to, so its reply is a
+`chat.postMessage` through the outbox, followed by `chat.update` calls as output arrives. A person's reply in that
+thread streams as above. With `output: final`, the reply is posted once, when the turn ends.
+
+```mermaid
+sequenceDiagram
+    participant S as Slack
+    participant A as Slack adapter and chat intake
+    participant I as Interactions
+    participant M as Session manager
+    participant G as Agent
+    G-->>M: input-required (a question or a tool approval)
+    M->>I: record the pause
+    I->>S: post the question through the outbox
+    S->>A: Socket Mode interactive event (a button press)
+    A->>I: record the press
+    A->>S: acknowledge the event
+    I->>I: check that the question is still open, channel membership and that the presser<br/>is not a bot. For an approval, check that the Binding still allows approvals<br/>and, if it names approver groups, that the presser is in one
+    I->>I: decide, if the press came before the deadline
+    I->>M: the answer
+    par
+        I->>S: take the controls off the question
+    and
+        M->>G: GetTask on the paused task, then SendStreamingMessage with its ID
+    end
+    G-->>M: the task streams again
+```
+
+If the agent rejects the answer with a JSON-RPC internal error (`-32603`), Agent Kourier cancels the paused task and
+posts a notice in the thread.
+
+A question that takes a typed answer is answered by a reply in the thread instead of a button. The reply comes in as
+a Socket Mode message event and Submit queues it. A session waiting on the question reads the paused task and passes
+the reply to interactions, which check it as they check a press. A reply that is not taken as the answer stays queued
+as an ordinary turn, unless intake already tied it to the question.
 
 1. The messaging adapter feeds an inbound message to chat intake, which selects
    the binding and applies the channel and thread rules.
@@ -133,9 +215,15 @@ Structured questions and approvals depend on the backend's interaction contract.
 The generic A2A dialect supports text continuation: a plain-text `input-required`
 question is persisted and posted, and a thread reply is accepted under the same
 membership, audit and deadline checks as a button press before it is sent to the
-paused task. A structured pause on that dialect is unusable and cancels the task.
-The kagent dialect additionally understands structured questions and tool step
-cards. A Binding enables its tool approval prompt with `interactions.toolApprovals`;
+paused task. For an agent whose card lists kagent's human-in-the-loop extension, the
+generic dialect asks for that extension and reads its structured questions and tool
+approvals as the kagent dialect does. Any other pause with a part that is not text is
+unusable on that dialect and cancels the task, and a kagent approval pause made without
+the extension arrives as text alone (recorded with kagent 1.0.0-alpha5), so it is handled
+as a question and its reply is sent as plain text, never as an approval.
+The kagent dialect always understands structured questions. Tool step cards do
+not depend on the dialect: every dialect shows the tool calls and results that an
+agent marks as Google ADK or kagent does. A Binding enables its tool approval prompt with `interactions.toolApprovals`;
 optional `approverGroups` narrow the eligible Slack users, while ask-user answers
 remain independent. A disabled approval is denied through the dialect with a
 thread notice. A pinned kagent 1.0.0-alpha5 runtime check approved `add_numbers`
@@ -149,8 +237,9 @@ an A2A server running as an AX Task, which you build and run (AX does not ship o
 front door sits in this path, so the agent must verify the Binding's bearer ID token
 itself, as the reference agent does (issuer, audience and subject), or an
 OIDC-verifying proxy must sit in front of a TLS gateway to the router. Chat, queued replies, restart recovery, actor suspend and resume, and
-in-thread text answers are tested in the AX kind tier. Structured tool approvals and
-tool step cards are kagent-only; the generic dialect shows no tool steps, and a structured pause cancels the task with a notice. AX's own
+in-thread text answers are tested in the AX kind tier. Structured tool approvals
+need kagent's human-in-the-loop extension, which the reference agent does not serve, so a pause with a part that is not text cancels the task with a notice. The generic dialect shows tool steps for an agent
+that marks its tool parts as Google ADK or kagent does. AX's own
 lifecycle (task, template, egress policy) stays with the operator. See the
 [AX reference agent](https://github.com/agentkourier/agent-kourier/blob/main/examples/ax/README.md) and the
 [AX kind tier](https://github.com/agentkourier/agent-kourier/blob/main/hack/kind/ax/README.md).
@@ -163,8 +252,10 @@ lifecycle (task, template, egress policy) stays with the operator. See the
 | Composition and shutdown | [`internal/broker`](https://github.com/agentkourier/agent-kourier/tree/main/internal/broker) |
 | Configuration and Secret resolution | [`internal/config`](https://github.com/agentkourier/agent-kourier/tree/main/internal/config) |
 | Messaging contracts and Slack adapter | [`internal/chat`](https://github.com/agentkourier/agent-kourier/tree/main/internal/chat) |
+| Message intake, triggers and their limits, and the dry run's replay | [`internal/trigger`](https://github.com/agentkourier/agent-kourier/tree/main/internal/trigger) |
 | Conversation execution and recovery | [`internal/session`](https://github.com/agentkourier/agent-kourier/tree/main/internal/session) |
 | A2A clients and backend behavior | [`internal/agent`](https://github.com/agentkourier/agent-kourier/tree/main/internal/agent), [`internal/dialect`](https://github.com/agentkourier/agent-kourier/tree/main/internal/dialect) |
+| Binding verification | [`internal/bindingcheck`](https://github.com/agentkourier/agent-kourier/tree/main/internal/bindingcheck), [`internal/broker`](https://github.com/agentkourier/agent-kourier/tree/main/internal/broker) |
 | Human interactions | [`internal/interact`](https://github.com/agentkourier/agent-kourier/tree/main/internal/interact) |
 | Output and durable delivery | [`internal/render/live`](https://github.com/agentkourier/agent-kourier/tree/main/internal/render/live), [`internal/outbox`](https://github.com/agentkourier/agent-kourier/tree/main/internal/outbox) |
 | Persistence and observations | [`internal/store/sqlite`](https://github.com/agentkourier/agent-kourier/tree/main/internal/store/sqlite), [`internal/store/postgres`](https://github.com/agentkourier/agent-kourier/tree/main/internal/store/postgres), [`internal/telemetry`](https://github.com/agentkourier/agent-kourier/tree/main/internal/telemetry), [`internal/audit`](https://github.com/agentkourier/agent-kourier/tree/main/internal/audit) |

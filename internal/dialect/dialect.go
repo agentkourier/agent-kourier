@@ -83,6 +83,82 @@ func (e *HTTPStatusError) Error() string {
 	return fmt.Sprintf("HTTP %d %s", e.Code, http.StatusText(e.Code))
 }
 
+var (
+	// ErrUnsupportedExtension is what Connect returns for an agent card that requires an extension
+	// the dialect does not speak.
+	ErrUnsupportedExtension = errors.New("agent requires an unsupported extension")
+	// ErrNoJSONRPCInterface is what Connect returns for an agent card that lists no JSON-RPC interface.
+	ErrNoJSONRPCInterface = errors.New("agent card lists no JSON-RPC interface")
+	// ErrInvalidAgentCard is what Connect returns when the front door answered the card fetch with a 200 whose body
+	// is not a usable agent card (an SSO login page, say), or with a card whose interfaces name no protocol version
+	// this client speaks. It says the front door answered; a dial failure or a status error is not it.
+	ErrInvalidAgentCard = errors.New("agent card is invalid")
+	// ErrResponseTooLarge is what a dialect's transport returns for a response from the backend that is larger than
+	// the bound its kind has (MaxCardBytes, MaxResponseBytes, MaxEventBytes), as the request's error or the body's
+	// read error, never a truncated body that parses: an agent card, a call's answer, or one event of a stream. The
+	// agent package returns it too for a reply that is more than a turn holds (agent.Config.MaxReplyBytes). The
+	// text says the bound and never anything the backend sent. A backend that does it again does it every time, so
+	// it is not retried as a lost stream.
+	ErrResponseTooLarge = errors.New("response from the backend is too large")
+	// ErrCardTooLarge is joined to ErrResponseTooLarge for an agent card past MaxCardBytes. It says that no connection was
+	// made: the card is what a client is built from, and it is read when a connection is opened, never as the answer to a call. A
+	// caller that means the answer to a call (a task, a page of tasks, an event) tells it apart with AnswerTooLarge, since a
+	// card that is too large says nothing of what the agent holds, and no call was made.
+	ErrCardTooLarge = errors.New("agent card is too large")
+)
+
+// AnswerTooLarge reports whether err is a response past a bound that is not the agent card: an event of a stream, the answer
+// to a call, or a reply of a turn. The card's error (ErrCardTooLarge) is an ErrResponseTooLarge too, and it reaches a call that
+// had to open a connection first, where nothing was sent and nothing was read: it must not be taken for what a task or a page of
+// tasks holds.
+func AnswerTooLarge(err error) bool {
+	return errors.Is(err, ErrResponseTooLarge) && !errors.Is(err, ErrCardTooLarge)
+}
+
+// The most a dialect's transport reads of a backend's response, by what the response is. The backend of a Binding may
+// be a tenant's, and an unbounded read would let it fill the memory of the leader. None bounds how long a stream may
+// run or how much text it carries in all; the agent package bounds what a turn holds (agent.DefaultMaxReplyBytes).
+const (
+	// MaxCardBytes is the most of an agent card, which is a few kilobytes in practice.
+	MaxCardBytes = 1 << 20
+	// MaxResponseBytes is the most of the answer to a call that is not a stream (GetTask, CancelTask, ListTasks), or
+	// of a JSON answer to a call that asked for a stream, which is a single JSON-RPC response and may hold a task
+	// with its whole history. It is twice an event: the final task of a reply at the budget, three copies of it
+	// escaped, is half of an answer (agent.DefaultMaxReplyBytes), which leaves the rest for the history. An answer
+	// is decoded whole, and what that takes depends on the shape of the JSON, which the backend chooses: about
+	// three and a half times its size for text, and about fifty times for a data part of small objects (measured in a
+	// test process), so the bound is of what is read and not of the memory it takes.
+	MaxResponseBytes = 4 << 20
+	// MaxEventBytes is the most of one event of a stream: the lines of it, line breaks included, up to the blank line
+	// that ends it. It is under the bound a2a-go puts on one line (10 MiB), so that an event split over lines cannot hold
+	// more than an event of one line, and a line is never the bound. a2a-go reads an event with a buffer that doubles
+	// from 64 KiB to the size of the largest event the stream has sent and keeps it while the stream is open, so what
+	// an open stream holds grows with this number, and a power of two wastes none of the doubling. Decoding an event
+	// takes memory by its shape, as for an answer: about four and a half times its size for text and about fifty times
+	// for small objects (measured in a test process). The final task of kagent 1.0 holds every tool call and result of
+	// the turn again, so for a turn that uses tools it is the sum of the tool output that has to fit an event.
+	MaxEventBytes = 2 << 20
+)
+
+type freshConnectionKey struct{}
+
+// WithFreshConnection marks ctx so that a Dialect's Connect sends the requests it makes under ctx on a new
+// connection: a new DNS lookup, dial and TLS handshake, and one that is closed once the response has been read.
+// A pooled keep-alive connection that a stream of a turn holds open would otherwise carry the request and hide
+// a name, certificate or network path that a new connection cannot use (agent.Pool.Check asks for it). The
+// mark affects only requests made under ctx; the clients Connect returns send their later calls under their
+// callers' contexts. One narrow case under HTTP/2: a request cancelled just after its TLS handshake can leave an
+// unused connection behind, which the next fresh request to that host and port rides until the idle timeout.
+func WithFreshConnection(ctx context.Context) context.Context {
+	return context.WithValue(ctx, freshConnectionKey{}, true)
+}
+
+// FreshConnection reports whether ctx came from WithFreshConnection.
+func FreshConnection(ctx context.Context) bool {
+	fresh, _ := ctx.Value(freshConnectionKey{}).(bool)
+	return fresh
+}
+
 // Dialect is one backend protocol variant (spec 6.2).
 type Dialect interface {
 	// Endpoint is the URL of the agent's A2A service, on the backend's verifying front door.
@@ -93,7 +169,8 @@ type Dialect interface {
 	// Attribute records the acting user on msg. The Binding identity stays the principal.
 	Attribute(msg *a2a.Message, actor User)
 	// Connect returns an A2A client for the agent that sends the Binding's identity to the
-	// backend's front door and to nowhere else.
+	// backend's front door and to nowhere else. When ctx comes from WithFreshConnection, the requests Connect makes
+	// itself (the card fetch) go on a new connection.
 	Connect(ctx context.Context, backend *v1alpha1.AgentBackend, agent v1alpha1.AgentRef, creds Credentials) (*a2aclient.Client, error)
 	// NotReady reports whether err, an error the agent answered a send with, says the session cannot take
 	// input yet (it is starting, or in a lifecycle operation), as opposed to being busy with a task. A backend
@@ -104,9 +181,6 @@ type Dialect interface {
 	// and an error wrapping ErrUnusablePause, naming the reason, when the task is paused
 	// but cannot be answered: the caller reports that in the thread and cancels the task.
 	ParseInteraction(task a2a.Task) (*Interaction, error)
-	// ToolPart classifies an artifact part as a tool call or a tool result. ok is false for
-	// any other part, which the caller treats as plain content.
-	ToolPart(part *a2a.Part) (tool ToolPart, ok bool)
 	// BuildResponse returns the message that answers in. It validates the answer itself
 	// (backends accept incomplete ones, or wedge on them) and returns an error, having
 	// built nothing, unless every question is answered or every tool decided.

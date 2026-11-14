@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
@@ -37,7 +36,7 @@ type secretRef struct {
 
 // secretRefs lists every Secret that set refers to: each ChatConnection's credentials, an
 // AgentBackend's header Secrets, and a Binding's token. Resolve checks them, and
-// SecretNamespaces reads the namespaces off them, so the two cannot drift apart. An empty key
+// SecretNames lists the Secrets off them, so the two cannot drift apart. An empty key
 // means the default, for a Set that has not been through Default.
 func (s *Set) secretRefs() []secretRef {
 	var refs []secretRef
@@ -64,14 +63,95 @@ func (s *Set) secretRefs() []secretRef {
 	return refs
 }
 
-// SecretNamespaces returns the sorted namespaces whose Secrets set refers to, which are the ones
-// a SecretResolver must be given.
-func (s *Set) SecretNamespaces() []string {
-	seen := map[string]bool{}
-	for _, ref := range s.secretRefs() {
-		seen[ref.from.namespace] = true
+// SecretName names one Secret.
+type SecretName struct{ Namespace, Name string }
+
+// String is namespace/name.
+func (n SecretName) String() string { return n.Namespace + "/" + n.Name }
+
+// secretNames returns the sorted, unique Secrets that refs name, each in the namespace of the object that names it.
+func secretNames(refs []secretRef) []SecretName {
+	names := make([]SecretName, 0, len(refs))
+	for _, ref := range refs {
+		names = append(names, SecretName{ref.from.namespace, ref.name})
 	}
-	return slices.Sorted(maps.Keys(seen))
+	slices.SortFunc(names, func(a, b SecretName) int {
+		return cmp.Or(cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name))
+	})
+	return slices.Compact(names)
+}
+
+// SecretNames returns the sorted Secrets that set refers to, each once, which are the ones a SecretWatcher must follow.
+func (s *Set) SecretNames() []SecretName { return secretNames(s.secretRefs()) }
+
+// SecretReads returns the sorted Secrets that set refers to, each once, with the keys that its objects read: what a
+// KeyedSecretWatcher is told to follow.
+func (s *Set) SecretReads() []SecretRead { return secretReads(s.secretRefs()) }
+
+// SecretRead is one Secret that objects of a Set refer to, and the keys of it that they read.
+type SecretRead struct {
+	SecretName
+	Keys []string // sorted and unique; never empty for a Secret that a reference names
+}
+
+// secretReads returns the Secrets that refs name, sorted and each once, with the keys that any of the refs reads, sorted and unique.
+func secretReads(refs []secretRef) []SecretRead {
+	byName := map[SecretName][]string{}
+	for _, ref := range refs {
+		n := SecretName{ref.from.namespace, ref.name}
+		byName[n] = append(byName[n], ref.keys...)
+	}
+	reads := make([]SecretRead, 0, len(byName))
+	for n, keys := range byName {
+		slices.Sort(keys)
+		reads = append(reads, SecretRead{n, slices.Compact(keys)})
+	}
+	slices.SortFunc(reads, func(a, b SecretRead) int {
+		return cmp.Or(cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name))
+	})
+	return reads
+}
+
+// ChatCredentialKeys returns the keys that a ChatConnection's credentials Secret must hold (spec section 7), sorted.
+func ChatCredentialKeys() []string { return []string{keyAppToken, keyBotToken} }
+
+// KeyedSecretWatcher is a resolver that follows Secrets as a SecretWatcher does, and keeps in memory of each Secret only the keys
+// that it is told are read: a Secret may hold a megabyte of keys that nothing refers to, and the namespace's writers choose them.
+// The Reloader calls it in place of a SecretWatcher's Watch and Retain, with the keys that the config's objects name, so that a
+// reload that adds a reference to another key of a Secret already followed leaves the keys that were served readable meanwhile and
+// makes the new one readable before Resolve asks for it.
+//
+// Keys answers for the keys that were named. While the keys of a Secret that were named last have not been fetched it fails, as it
+// does for a cache that has not synced, and never says that a key is missing which the Secret has.
+type KeyedSecretWatcher interface {
+	// WatchKeys is Watch for Secrets of which only the keys are kept: it follows each of reads, and waits until its keys are
+	// readable.
+	WatchKeys(ctx context.Context, reads []SecretRead) error
+	// RetainKeys is Retain for Secrets of which only the keys are kept.
+	RetainKeys(reads []SecretRead)
+}
+
+// SecretWatcher is an optional interface of a SecretResolver that follows Secrets one by one, as the cluster-backed one
+// does. The Reloader calls it around each reload, so that a Secret that a reload adds is readable without a restart and
+// the resolver holds the Secrets of the config and what it was told to keep, and little else.
+//
+// A resolver may also follow a Secret of its own accord, for a reader that still holds an older snapshot's Binding and
+// reads a Secret that a reload has dropped (the cluster-backed one does, in Value). Such a Secret is followed until the
+// next Watch or Retain that does not name it. So "the Secrets of the config" is what a reload asks for, not a promise
+// that nothing else is readable.
+type SecretWatcher interface {
+	// Watch first stops following every Secret that is not in names, was not kept by the latest Retain and is not one the
+	// resolver keeps itself: what an earlier Watch started for a config that never became a snapshot, and what a reader
+	// followed on its own. It then starts following each of names that is not followed yet, and waits until each is
+	// readable or ctx ends. The error says which is not and why. Resolve reports the same Secrets through Keys, so a caller
+	// that is about to resolve may ignore it. The Secrets of names stay followed after ctx ends, and after a Watch that
+	// failed, until a later Watch or Retain leaves them out.
+	Watch(ctx context.Context, names []SecretName) error
+	// Retain keeps following exactly names (and whatever the resolver was told to keep itself) and stops following the
+	// rest. The Reloader calls it with the Secrets of each snapshot it publishes, and never after a failed reload, so
+	// the Secrets of the last good snapshot stay readable: a Watch that follows a failed reload's names does not stop
+	// them either.
+	Retain(names []SecretName)
 }
 
 // presentSecrets is a SecretResolver for which every Secret exists and has the keys given.

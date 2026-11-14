@@ -305,13 +305,6 @@ func TestPlatformThreadBetweenNamesTheConnectionAndTheThread(t *testing.T) {
 	}
 }
 
-func TestPlatformThreadBetweenWithAnAPIThatCannotReadThreads(t *testing.T) {
-	p := slack.NewPlatform(nil, threadConn)
-	if _, _, err := p.ThreadBetween(t.Context(), chat.Target{Channel: "C1", Thread: "1.000001"}, "", "", 10); !errors.Is(err, chat.ErrNoThreadReads) {
-		t.Errorf("ThreadBetween of a platform whose API cannot read a thread = %v; want ErrNoThreadReads", err)
-	}
-}
-
 // stubThread serves pages of conversations.replies by cursor and auth.test, and records the form of each read.
 type stubThread struct {
 	mu    sync.Mutex
@@ -396,5 +389,32 @@ func TestThreadBetweenSendsNoBoundForAnEmptyOne(t *testing.T) {
 	}
 	if f := stub.forms[0]; f.Has("oldest") || f.Has("latest") || f.Get("inclusive") != "0" {
 		t.Errorf("read asked for %v; want no oldest, no latest and inclusive 0", f)
+	}
+}
+
+// A thread too long to read still has what opened it, and the error says the rest could not be read.
+func TestThreadFromStartKeepsTheParentOfAThreadTooLong(t *testing.T) {
+	th := newThread(t)
+	th.reply(20)
+	got, dropped, err := th.c.ThreadFromStart(t.Context(), threadConn, "C1", th.root, "", 100)
+	if !errors.Is(err, chat.ErrThreadTooLong) || dropped != 0 || !slices.Equal(tsOf(got), []string{th.root}) {
+		t.Errorf("ThreadFromStart = %v, %d, %v; want the parent alone and an error wrapping ErrThreadTooLong", tsOf(got), dropped, err)
+	}
+}
+
+// The read from a thread's start is one read, and it leads with what opened the thread, which the limit neither counts nor cuts.
+func TestThreadFromStartLeadsWithTheParentInOneRead(t *testing.T) {
+	th := newThread(t)
+	r := th.reply(3)
+	before := th.count.calls("conversations.replies")
+	got, dropped, err := th.c.ThreadFromStart(t.Context(), threadConn, "C1", th.root, r[2], 1)
+	if want := []string{th.root, r[1]}; err != nil || dropped != 1 || !slices.Equal(tsOf(got), want) {
+		t.Fatalf("ThreadFromStart = %v, %d, %v; want %v and 1 left out", tsOf(got), dropped, err, want)
+	}
+	if !got[0].Own {
+		t.Errorf("the parent = %+v; want it decoded as any message of the thread, here Agent Kourier's own", got[0])
+	}
+	if n := th.count.calls("conversations.replies") - before; n != 2 { // pages of 2: the parent and a reply, then the next reply
+		t.Errorf("%d pages; want the window's 2 and no read of the parent alone", n)
 	}
 }

@@ -1,0 +1,21 @@
+# The custom resources route for a kind tier (E2E_CONFIG_SOURCE=crds): an overlay that hack/kind/lib.sh's deploy_agentkourier layers over the
+# tier's values (fast-values.yaml, and the Postgres ones) in the second of the two upgrades the chart README gives for a move off the ConfigMap. The
+# first upgrade installed the CRDs with the route still files, so they are served when this one renders. The chart renders no config here: the
+# tier's own files are applied as custom resources (the same Binding, AgentBackend and ChatConnection files the ConfigMap route puts in its
+# ConfigMap), and the chart is told which connection this broker serves.
+#
+# The tier's values grant the Secrets of namespace agent-kourier as a whole (rbac.secretNamespaces); here that grant is off and each Secret is
+# named, so what the broker reads is authorized by resourceNames alone (the chart names the Postgres DSN's, and the served connection's, slack-fast,
+# which config.chatConnection derives from the connection's name; hack/kind/two-apps.sh empties config.chatConnection for its team-only steps
+# and names slack-fast in rbac.secretNames instead). A Secret in any other namespace is a team's to grant, which is what the
+# scenarios that make a team namespace do.
+config:
+  source: crds
+  existingConfigMap: "" # the ConfigMap stays in the cluster, unread, as it does for an install that moves with a ConfigMap of its own
+  chatConnection: agent-kourier/slack-fast
+crds:
+  install: true # a release without it no longer holds the CRDs (chart README), so it stays on, here and when the tier goes back to files
+rbac:
+  secretNamespaces: []
+  secretNames:
+    agent-kourier: [agent-kourier-agent-token]

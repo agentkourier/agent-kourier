@@ -80,9 +80,17 @@ type Backend struct {
 	// Output is the Binding's chat output mode (live or final), which the sink is told of each
 	// turn. Empty means live.
 	Output v1alpha1.OutputMode
+	// Progress is the Binding's chat.progress, which the sink is told of each turn. The API fills it with
+	// steps-and-activity when a Binding sets none; empty here, as in a Backend that no Binding made, means steps.
+	Progress v1alpha1.ProgressMode
 	// Feedback is the Binding's feedback.enabled: the final message of an answer to a person carries the
 	// useful and not-useful buttons (spec 8.7). An investigation that nobody asked for always does.
 	Feedback bool
+	// Mentions are the people the Binding's chat.mentions declares, and MaxMentions its chat.maxMentionsPerTurn, which the sink
+	// is told of each turn. MentionPrompt is the line a session's first prompt ends with to tell the agent the names, or "".
+	Mentions      []v1alpha1.ChatMention
+	MaxMentions   int
+	MentionPrompt string
 	// AcknowledgmentEnabled adds a temporary reaction to each accepted message. AcknowledgmentEmoji is the
 	// bare platform reaction name kept with the queued reply so a reload cannot change what is removed.
 	AcknowledgmentEnabled bool
@@ -103,9 +111,10 @@ type Bindings interface {
 	Backend(name string) (Backend, error)
 }
 
-// Users resolves a chat user for attribution (the chat platform's ResolveUser).
+// Users resolves a chat user for attribution (the chat platform's ResolveUser), on the platform of the ChatConnection conn,
+// "namespace/name": a user's ID means something on one connection's app only.
 type Users interface {
-	ResolveUser(ctx context.Context, id string) (dialect.User, error)
+	ResolveUser(ctx context.Context, conn, id string) (dialect.User, error)
 }
 
 // TurnRef names the turn a Sink is asked to render.
@@ -122,8 +131,12 @@ type TurnRef struct {
 	UserID string
 	// Output is the Binding's output mode.
 	Output v1alpha1.OutputMode
+	// Progress is the Binding's chat.progress: how much of the agent's work the renderer shows before the text arrives.
+	// The renderer ignores it when Output is final.
+	Progress v1alpha1.ProgressMode
 	// Recovered says the output continues a message that may exist already: the task was found
-	// again after a restart, or followed again after a lost stream. Some of it may be in the
+	// again after a restart, followed again after a lost stream, or looked up or sent again after
+	// a send of unknown outcome. Some of it may be in the
 	// thread, so the renderer updates what it posted before, or posts the whole. The output of an
 	// answer to a pause is not that: its MessageID is the answer's own, a new message.
 	Recovered bool
@@ -131,12 +144,17 @@ type TurnRef struct {
 	// follow continues the same output message but must keep the original pause retry window.
 	Restarted bool
 	// Feedback says which feedback buttons the final message of the output carries (spec 8.7): none for the
-	// zero value, those of an investigation for a turn that nobody wrote (an alert's first prompt: its user is
-	// SystemUser), and those of an answer for a person's turn on a Binding with feedback.enabled.
+	// zero value, those of an investigation for an alert's first prompt (nobody wrote it: its user is SystemUser),
+	// and those of an answer for a person's turn or a bot's mention on a Binding with feedback.enabled.
 	Feedback store.FeedbackKind
-	// ThreadReplies is the Binding's chat.threadReplies. In mention the final message of the output tells the thread to mention
-	// Agent Kourier to ask a follow-up (D38); anything else, the empty value too, adds nothing.
+	// ThreadReplies is what the session takes of replies: the Binding's chat.threadReplies, but mention for a session that a bot's
+	// mention (D49) or a person's message (D51) began, whatever the Binding says (takesOnlyMentions). In mention the final message
+	// of the output tells the thread to mention Agent Kourier to ask a follow-up (D38); anything else, the empty value too, adds
+	// nothing.
 	ThreadReplies v1alpha1.ThreadReplies
+	// Mentions are the people the Binding declares, and MaxMentions the most a turn notifies (Backend.Mentions).
+	Mentions    []v1alpha1.ChatMention
+	MaxMentions int
 }
 
 // NoticeKind is what a Notice tells the thread.
@@ -182,6 +200,10 @@ const (
 	// NoticeStopped says a person stopped a task that was not streaming, so there is nothing else
 	// to show it (spec 8.2).
 	NoticeStopped NoticeKind = "stopped"
+	// NoticeStopUnverified says a person stopped a task that was not streaming and Agent Kourier cannot say it stopped: the answer to the
+	// cancel, or the task, was too large to read. It claims no more than that the pause is over. Manager.Stop is its only source and has no
+	// caller in production, so no person sees it yet.
+	NoticeStopUnverified NoticeKind = "stop_unverified"
 	// NoticeWedged says a task ran past maxWorkingAge and was cancelled (R17).
 	NoticeWedged NoticeKind = "wedged"
 	// NoticeDuplicateRun says the agent ran a turn more than once (spec 8.2).
@@ -217,6 +239,13 @@ type Notice struct {
 	Detail     string // a short reason, fixed text: never agent output, never a secret
 }
 
+// ErrTurnContinues is the cause with which the context a Sink's Turn was given ends when the turn's task goes on without
+// it: its stream was lost and the task is followed again, its send's outcome is unknown and the turn is looked up and
+// followed or sent again, or the manager is shutting down and recovery follows the task after the restart. A later turn of the same message renders the rest, so a renderer leaves what the turn showed for
+// that turn to take over. Any other end of that context ends the turn for good: the send failed, the agent did not take
+// the turn, or the turn's events are over.
+var ErrTurnContinues = errors.New("session: the turn's task continues under a later turn")
+
 // Sink receives the output of turns; the renderer (WP-32) implements it. Turn returns the
 // handler for one turn's events, FinalEvent included, or nil. The handler runs on the goroutine
 // that reads the agent's stream, so it must not block: a slow renderer stalls the read, and
@@ -228,9 +257,9 @@ type Sink interface {
 
 // NoThreadContext is the ThreadContext of a manager whose mentioned turns carry their own message alone: the platform
 // cannot read a thread, or the deployment does not want it to. It adds no text, but the runner still reads where the
-// window opens (one Store.PreviousReply per mentioned turn of a mention-only Binding) before it asks the hook, and a store
+// window opens (one store read per mentioned turn of a mention-only Binding, or per bot's mention) before it asks the hook, and a store
 // that fails there holds the turn back like any other store failure of the runner.
-func NoThreadContext(context.Context, Key, string, string, string) string { return "" }
+func NoThreadContext(context.Context, Key, string, string, string, bool) string { return "" }
 
 // TextReplyOutcome says what the interaction module did with a queued reply.
 type TextReplyOutcome uint8
@@ -291,8 +320,9 @@ type Config struct {
 	// mentions enqueued against ts order), and the hook returns "" for it. It never fails, and it may do I/O, so it
 	// is called off every lock. The
 	// runner calls it once for each turn it sends, in the send of a turn only: never for a task that is followed
-	// again, found again or recovered. NoThreadContext adds nothing.
-	ThreadContext func(ctx context.Context, key Key, binding, after, before string) string
+	// again, found again or recovered. NoThreadContext adds nothing. whole says the turn is one that carries what the thread
+	// holds, every author's (store.Reply.WholeThread), and after is empty on the thread's first turn: from its root.
+	ThreadContext func(ctx context.Context, key Key, binding, after, before string, whole bool) string
 	// After waits for a duration, and defaults to time.After. A test injects a clock.
 	After func(time.Duration) <-chan time.Time
 	// RetryBase and RetryMax are the first pause before a resend, which doubles up to RetryMax.
@@ -312,6 +342,16 @@ type Config struct {
 	// AnswerWatcher, if set, is told of each answer that was not delivered (see AnswerWatcher). Nil tells no one, and the
 	// manager's notice is the only word of it.
 	AnswerWatcher AnswerWatcher
+	// Unacknowledge, if set, queues the removal of an acknowledgment, the notice n, in place of Sink.Notice, and returns
+	// the error of it; source is the reply whose reaction it is. The broker queues the removal and then settles that
+	// reply (store.AcknowledgmentLister), so that retention does not queue it again. Its error, which says which step
+	// failed, is logged while the manager runs (not once Close has cancelled it), and retention queues the removal of a reply that was not settled. Nil sends the notice to Sink.Notice, and retention settles.
+	Unacknowledge func(ctx context.Context, key Key, source string, n Notice) error
+	// ConnectionRunning, if set, says whether the chat connection named conn ("namespace/name", the Connection of a Key) runs. Recover
+	// leaves the conversations of a connection that does not, because a turn taken up then would render into a chat that cannot be
+	// reached; RecoverConnection takes them up once it does. Nil says every connection runs. It is called with the manager's lock held, so it
+	// must not call the manager.
+	ConnectionRunning func(conn string) bool
 }
 
 // attempt is a head turn that was sent and not yet taken and recorded. unknown says an earlier
@@ -338,6 +378,9 @@ type Manager struct {
 	// attempted holds, per conversation, the head turn that was sent and not yet taken and
 	// recorded: a send of it again is a resend, and is looked up first.
 	attempted map[Key]attempt
+	// skipped holds the connections whose conversations Recover left because they did not run (Config.ConnectionRunning), until
+	// RecoverConnection takes them up. One entry for each connection, whatever the number of conversations.
+	skipped map[string]bool
 	// begun holds, per turn that has started and not ended, when its start was logged, for the
 	// duration of its end line (see begin and finish). A turn that is retried is one entry.
 	begun map[string]time.Time
@@ -352,7 +395,12 @@ type Manager struct {
 	// have marked, from when the runner takes it up. Only those turns raise a NoticeDequeued: the sink is not asked
 	// to take a reaction off every turn that never had one.
 	marked map[string]struct{}
-	closed bool // set by Close: no runner starts after it, so wg.Add cannot race wg.Wait, and no convos entry leaks
+	// cancelTimeout bounds the cancel of a task whose reply was too large (see tooLarge); a test shortens it.
+	cancelTimeout time.Duration
+	// afterSessionRead, if it is set, is called by a Cancel (a call that needs a pause) just before its look at the runner, after every
+	// read of the session that comes before the look, which is where a test makes another control end the pause. Nil in production.
+	afterSessionRead func()
+	closed           bool // set by Close: no runner starts after it, so wg.Add cannot race wg.Wait, and no convos entry leaks
 	// intake serializes Submit: UpsertSession replaces a whole row, so two Submits that
 	// both found no session must not both write one.
 	intake sync.Mutex
@@ -401,7 +449,7 @@ func New(cfg Config) (*Manager, error) {
 	if cfg.SendGiveUp <= 0 {
 		cfg.SendGiveUp = 15 * time.Minute
 	}
-	m := &Manager{cfg: cfg, convos: map[Key]*convo{}, unrecorded: map[Key]string{}, attempted: map[Key]attempt{}, begun: map[string]time.Time{}, fresh: map[string]struct{}{}, marked: map[string]struct{}{}}
+	m := &Manager{cfg: cfg, convos: map[Key]*convo{}, unrecorded: map[Key]string{}, attempted: map[Key]attempt{}, skipped: map[string]bool{}, begun: map[string]time.Time{}, fresh: map[string]struct{}{}, marked: map[string]struct{}{}, cancelTimeout: cancelTimeout}
 	base := cfg.Context
 	if base == nil {
 		base = context.Background()

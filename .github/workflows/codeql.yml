@@ -49,21 +49,50 @@ jobs:
           path: |
             ${{ steps.go-env.outputs.modcache }}
             ${{ steps.go-env.outputs.gocache }}
-          key: go-codeql-${{ matrix.language }}-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}
-          restore-keys: |
-            go-codeql-${{ matrix.language }}-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-
-            go-codeql-${{ matrix.language }}-${{ runner.os }}-
-      - uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+          key: go-codeql-${{ matrix.language }}-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: go-codeql-${{ matrix.language }}-${{ runner.os }}-
+      - name: Mark the restored Go caches
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        env:
+          CACHE_KEY: ${{ steps.go-cache.outputs.cache-primary-key }}
+          CACHE_RESTORED_KEY: ${{ steps.go-cache.outputs.cache-matched-key }}
+        run: hack/ci/actions-cache.sh mark
+      - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           languages: ${{ matrix.language }}
-      - uses: github/codeql-action/autobuild@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
-      - uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+      - uses: github/codeql-action/autobuild@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+      - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           category: /language:${{ matrix.language }}
-      - if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - id: go-trim
+        name: Trim the Go caches to what this run used
+        if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: hack/ci/actions-cache.sh trim
+      - if: ${{ !cancelled() && steps.go-trim.outcome == 'success' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ${{ steps.go-env.outputs.modcache }}
             ${{ steps.go-env.outputs.gocache }}
           key: ${{ steps.go-cache.outputs.cache-primary-key }}
+
+  # On a push to main, once analyze has saved: deletes every entry of its Go cache but the newest, as ci.yml's
+  # cache-prune does for its caches (the comment in ci.yml's lint job says why), and every overlay-base database but
+  # the newest. The CodeQL action saves one of those (about 70 MB) on each push to main, restores the newest, and
+  # deletes none, so without this they stay until 7 days pass unaccessed or the cap evicts them. The language is not at
+  # the start of their keys, so with a second language in the matrix this would keep only one language's newest.
+  cache-prune:
+    needs: [analyze]
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      actions: write # deletes cache entries
+      contents: read # checks out the script
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: hack/ci/actions-cache.sh prune "go-codeql-go-${RUNNER_OS}-" codeql-overlay-base-database-
+        env:
+          GH_TOKEN: ${{ github.token }}

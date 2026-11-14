@@ -1,0 +1,100 @@
+{
+  "requests": [
+    {
+      "path": "/chat.startStream",
+      "form": {
+        "channel": "C1",
+        "chunks": [
+          {
+            "text": "Checking the pods.",
+            "type": "markdown_text"
+          }
+        ],
+        "parse": "none",
+        "recipient_user_id": "U1",
+        "thread_ts": "ROOT",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    },
+    {
+      "path": "/chat.appendStream",
+      "form": {
+        "channel": "C1",
+        "chunks": [
+          {
+            "details": "namespace=\"prod\"",
+            "id": "s1",
+            "status": "in_progress",
+            "title": "kubectl_get",
+            "type": "task_update"
+          }
+        ],
+        "parse": "none",
+        "ts": "TS1",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    },
+    {
+      "path": "/chat.appendStream",
+      "form": {
+        "channel": "C1",
+        "chunks": [
+          {
+            "id": "s1",
+            "status": "complete",
+            "title": "kubectl_get",
+            "type": "task_update"
+          }
+        ],
+        "parse": "none",
+        "ts": "TS1",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    },
+    {
+      "path": "/chat.stopStream",
+      "form": {
+        "channel": "C1",
+        "chunks": [
+          {
+            "text": "\n\nThree pods, all ready.",
+            "type": "markdown_text"
+          }
+        ],
+        "outbox_id": "turn-1/reply",
+        "parse": "none",
+        "ts": "TS1",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    }
+  ],
+  "thread": [
+    {
+      "text": "root",
+      "thread": true
+    },
+    {
+      "text": "Checking the pods.\n\nThree pods, all ready.",
+      "blocks": [
+        {
+          "text": "Checking the pods.\n\nThree pods, all ready.",
+          "type": "markdown"
+        }
+      ],
+      "thread": true,
+      "tasks": [
+        {
+          "id": "s1",
+          "title": "kubectl_get",
+          "status": "complete",
+          "details": "namespace=\"prod\""
+        }
+      ],
+      "outbox_id": "turn-1/reply"
+    }
+  ]
+}

@@ -61,7 +61,7 @@ func purgeSteps(out *store.PurgedSessions) []purgeStep {
 				WHERE ` + decided + `)`, &out.Presses},
 		{"interactions", `DELETE FROM interactions i USING ` + keys + ` WHERE i.connection = k.connection AND i.channel = k.channel AND i.thread_ts = k.thread_ts
 				AND ` + decided, &out.Interactions},
-		{"outbox rows of the threads", `DELETE FROM outbox o USING ` + keys + ` WHERE o.channel = k.channel AND o.thread_ts = k.thread_ts
+		{"outbox rows of the threads", `DELETE FROM outbox o USING ` + keys + ` WHERE o.connection = k.connection AND o.channel = k.channel AND o.thread_ts = k.thread_ts
 				AND ` + settled, &out.Outbox},
 		// An outbox row is tied to a reply that has no thread of its own by its source, in a range of the reply's ID
 		// (store.OutboxDerivedFromReplyRow).

@@ -52,6 +52,10 @@ type leaks struct {
 	cutToolArgs                                 bool // a tool too long for a prompt is cut and shown, not refused as too large
 	fitsLongTool                                bool // Fits says a tool too long for a prompt fits, while Post and Update refuse it
 	undeclaredTools                             bool // shows tool approvals, and does not say so (Subject.ToolApprovals false)
+	busyRefused                                 bool // Busy is true and a mark is refused with an error of its own
+	busyNoThread                                bool // a mark of a target with no thread is taken
+	busyUnsaid                                  bool // Busy is false and a mark is taken, with no ErrNoBusy
+	busyShowsText                               bool // a mark shows a message of its own
 	noAckReaction                               bool // says no reaction of its own, so a Binding that names none shows nothing
 
 	// Escaping that does not work for the platform's dialect, the way the suite once passed them.
@@ -94,7 +98,7 @@ func newMarkup(d dialectKind, l leaks) *markupPlatform {
 	f := NewFake()
 	// Small limits, so that the oversize checks send a few hundred characters and not twelve thousand.
 	f.SetCaps(chat.Caps{
-		Streams: true, Steps: true, Ephemeral: true, Edits: true, Inputs: true, MaxText: 300, AckReaction: "hourglass",
+		Streams: true, Steps: true, Ephemeral: true, Edits: true, Inputs: true, Busy: true, MaxText: 300, AckReaction: "hourglass",
 		Limits: map[chat.Where]int{chat.WhereHeader: 100, chat.WhereButton: 60, chat.WhereChoice: 80, chat.WhereHint: 100, chat.WhereBody: 600, chat.WhereStream: 600},
 	})
 	return &markupPlatform{FakePlatform: f, dialect: d, leaks: l}
@@ -251,6 +255,21 @@ func (m *markupPlatform) Post(ctx context.Context, t chat.Target, o chat.Outgoin
 	return ref, err
 }
 
+// MarkBusy is the fake's, but for the leaks of the busy mark.
+func (m *markupPlatform) MarkBusy(ctx context.Context, t chat.Target, busy bool) error {
+	switch {
+	case m.leaks.busyRefused:
+		return errors.New("the mark was refused")
+	case m.leaks.busyUnsaid:
+		return nil
+	case m.leaks.busyNoThread && t.Thread == "":
+		return nil
+	case m.leaks.busyShowsText:
+		m.sent = append(m.sent, m.read("Working on it"))
+	}
+	return m.FakePlatform.MarkBusy(ctx, t, busy)
+}
+
 func (m *markupPlatform) Update(ctx context.Context, r chat.Ref, o chat.Outgoing) error {
 	o = m.cutTools(o)
 	err := m.FakePlatform.Update(ctx, r, o)
@@ -346,6 +365,8 @@ func (m *markupPlatform) subject() Subject {
 			}
 			return nil
 		},
+		Channels:      m.arrangeChannel,
+		Groups:        m.arrangeGroup,
 		TooLarge:      &chat.Prompt{ID: "ix-big", Questions: make([]chat.Question, 500)},
 		ToolApprovals: !m.leaks.undeclaredTools,
 		TooLargeTools: &chat.Prompt{ID: "ix-big-tools", Tools: make([]chat.Tool, 500)},
@@ -361,6 +382,11 @@ func (m *markupPlatform) subject() Subject {
 	}
 	if m.leaks.noStepError {
 		m.SetCaps(chat.Caps{Streams: true, MaxText: 4000, Ephemeral: true, Edits: true, AckReaction: "hourglass"})
+	}
+	if m.leaks.busyUnsaid {
+		c := m.Capabilities()
+		c.Busy = false
+		m.SetCaps(c)
 	}
 	if m.leaks.noAckReaction {
 		c := m.Capabilities()
@@ -403,6 +429,10 @@ func TestEveryWayAnAdapterCanBeUnsafeIsCaught(t *testing.T) {
 		{"a stop with nothing to add that shows the streamed text again", slackPlainText, leaks{stopRepeats: true}, RuleContract, ""},
 		{"a platform with no steps that shows one when asked", slackPlainText, leaks{noStepError: true}, RuleContract, ""},
 		{"a platform that names no reaction of its own", slackPlainText, leaks{noAckReaction: true}, RuleContract, ""},
+		{"a busy mark that is refused", slackPlainText, leaks{busyRefused: true}, RuleContract, ""},
+		{"a busy mark of a target with no thread that is taken", slackPlainText, leaks{busyNoThread: true}, RuleContract, ""},
+		{"a platform with no busy mark that takes one", slackPlainText, leaks{busyUnsaid: true}, RuleContract, ""},
+		{"a busy mark that shows a message", slackPlainText, leaks{busyShowsText: true}, RuleContract, ""},
 		{"a step title dropped", slackPlainText, leaks{dropping: true, drop: chat.WhereStepTitle}, RuleDropped, ""},
 		{"a step detail dropped", slackPlainText, leaks{dropping: true, drop: chat.WhereStepDetail}, RuleDropped, ""},
 		{"a prompt that is too large said to fit", slackPlainText, leaks{tooLargeFits: true}, RuleContract, ""},
@@ -802,6 +832,303 @@ func TestEachPlaceOfAToolApprovalPutsItsTextWhereItsNameSays(t *testing.T) {
 		}
 		if held != 1 {
 			t.Errorf("%s: %d fields hold the text, want exactly one", p.name, held)
+		}
+	}
+}
+
+// accessLeaks are the ways wrongAccess answers ChannelAccess wrongly, one at a time. Each is a way a real adapter fails.
+type accessLeaks struct {
+	memberWhenNot    bool // says Member for a channel the app is not in
+	neverMember      bool // never says Member, even for a channel the app is in
+	accessOnFailure  bool // gives an Access beside the error of a failed read, which is no answer
+	accessOnCancel   bool // gives an Access beside the error of a cancelled context
+	archivedIgnored  bool // never says Archived
+	unknownPlain     bool // an unknown channel is a plain error, which a caller would retry
+	scopePlain       bool // a missing scope is a plain error
+	cancelIsNotFound bool // a cancelled context is reported as a missing channel
+	emptyPlain       bool // an empty channel is a plain error
+	retriesSentinels bool // Classify says Transient for the sentinels, so a caller that follows the contract retries them forever
+	scopeIsFatal     bool // Classify says FatalAuth for a missing scope, which would stop the restart policy for a permission
+}
+
+// wrongAccess is the fake with ChannelAccess answered as leaks says.
+type wrongAccess struct {
+	*FakePlatform
+	leaks accessLeaks
+}
+
+// Classify is the fake's, except as leaks says.
+func (w *wrongAccess) Classify(op chat.Op, err error) chat.Verdict {
+	switch {
+	case w.leaks.retriesSentinels && (errors.Is(err, chat.ErrChannelNotFound) || errors.Is(err, chat.ErrMissingScope)):
+		return chat.Verdict{Class: chat.Transient}
+	case w.leaks.scopeIsFatal && errors.Is(err, chat.ErrMissingScope):
+		return chat.Verdict{Class: chat.FatalAuth}
+	}
+	return w.FakePlatform.Classify(op, err)
+}
+
+func (w *wrongAccess) ChannelAccess(ctx context.Context, channel string) (chat.Access, error) {
+	if w.leaks.cancelIsNotFound && ctx.Err() != nil {
+		return chat.Access{}, fmt.Errorf("gone: %w", chat.ErrChannelNotFound)
+	}
+	if w.leaks.accessOnCancel && ctx.Err() != nil {
+		return chat.Access{Member: true}, ctx.Err()
+	}
+	if w.leaks.emptyPlain && channel == "" {
+		return chat.Access{}, errors.New("no channel")
+	}
+	a, err := w.FakePlatform.ChannelAccess(ctx, channel)
+	switch {
+	case errors.Is(err, chat.ErrChannelNotFound) && w.leaks.unknownPlain && channel != "":
+		return chat.Access{}, errors.New(err.Error())
+	case errors.Is(err, chat.ErrMissingScope) && w.leaks.scopePlain:
+		return chat.Access{}, errors.New(err.Error())
+	}
+	if w.leaks.memberWhenNot && err == nil {
+		a.Member = true
+	}
+	if w.leaks.neverMember {
+		a.Member = false
+	}
+	if w.leaks.accessOnFailure && err != nil && channel != "" {
+		a.Member = true
+	}
+	if w.leaks.archivedIgnored {
+		a.Archived = false
+	}
+	return a, err
+}
+
+func TestConformanceChecksChannelAccessInEveryState(t *testing.T) {
+	t.Parallel()
+	var asked []ChannelState
+	f := NewFake()
+	s := f.Subject()
+	arrange := s.Channels
+	s.Channels = func(st ChannelState) string { asked = append(asked, st); return arrange(st) }
+	if vs := CheckWith(t.Context(), s, Options{Short: true}); len(vs) != 0 {
+		t.Fatalf("violations: %v", vs)
+	}
+	// The last is the joined channel again, for the cancelled context.
+	want := []ChannelState{ChannelJoined, ChannelNotJoined, ChannelArchived, ChannelUnknown, ChannelScopeMissing, ChannelJoined}
+	if !slices.Equal(asked, want) {
+		t.Errorf("the states arranged were %v, want %v", asked, want)
+	}
+}
+
+func TestConformanceFindsAChannelAccessThatBreaksTheContract(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		leaks accessLeaks
+		bad   []string // the checks that find it
+	}{
+		"a member that is not":                                {accessLeaks{memberWhenNot: true}, []string{"not joined"}},
+		"a bot that is never a member":                        {accessLeaks{neverMember: true}, []string{"joined"}},
+		"an archived channel not marked":                      {accessLeaks{archivedIgnored: true}, []string{"archived"}},
+		"an unknown channel that is a plain error":            {accessLeaks{unknownPlain: true}, []string{"unknown channel"}},
+		"a missing scope that is a plain error":               {accessLeaks{scopePlain: true}, []string{"missing scope"}},
+		"an Access beside the error of a failed read":         {accessLeaks{accessOnFailure: true}, []string{"unknown channel", "missing scope"}},
+		"a cancelled context taken for a missing channel":     {accessLeaks{cancelIsNotFound: true}, []string{"cancelled context"}},
+		"an Access beside the error of a cancelled one":       {accessLeaks{accessOnCancel: true}, []string{"cancelled context"}},
+		"an empty channel not said to be missing":             {accessLeaks{emptyPlain: true}, []string{"no channel"}},
+		"sentinels that Classify would have retried":          {accessLeaks{retriesSentinels: true}, []string{"no channel", "unknown channel", "missing scope"}},
+		"a missing scope that Classify takes for a bad token": {accessLeaks{scopeIsFatal: true}, []string{"missing scope"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := &wrongAccess{FakePlatform: NewFake(), leaks: tc.leaks}
+			s := w.Subject()
+			s.Platform = w
+			var found []string
+			for _, v := range CheckWith(t.Context(), s, Options{Short: true}) {
+				if v.Method == "ChannelAccess" {
+					if v.Rule != RuleContract {
+						t.Errorf("violation %v, want the contract rule", v)
+					}
+					found = append(found, v.Case)
+				}
+			}
+			if !slices.Equal(found, tc.bad) {
+				t.Errorf("ChannelAccess violations in %v, want only %q", found, tc.bad)
+			}
+		})
+	}
+}
+
+// Channels is required, like Sent and Inert: a subject without it would pass with the states of ChannelAccess unchecked.
+func TestConformanceRefusesASubjectWithoutChannels(t *testing.T) {
+	t.Parallel()
+	s := NewFake().Subject()
+	s.Channels = nil
+	vs := Check(t.Context(), s)
+	if len(vs) != 1 || vs[0].Rule != RuleSetup || !strings.Contains(vs[0].Detail, "Channels") {
+		t.Errorf("Check of a subject with no Channels = %v, want one setup violation that names Channels", vs)
+	}
+}
+
+func TestConformanceRefusesAChannelOfNoName(t *testing.T) {
+	t.Parallel()
+	s := NewFake().Subject()
+	s.Channels = func(ChannelState) string { return "" }
+	var found int
+	for _, v := range CheckWith(t.Context(), s, Options{Short: true}) {
+		if v.Rule == RuleSetup && v.Method == "ChannelAccess" {
+			found++
+		}
+	}
+	if found == 0 {
+		t.Error("a Subject whose Channels names no channel gave no setup violation")
+	}
+}
+
+// groupLeaks are the ways a platform can break the contract of GroupsReadable.
+type groupLeaks struct {
+	noneIsAnError     bool // no groups is an error
+	readableFails     bool // a group that may be read is an error
+	unknownPlain      bool // an unknown group is a plain error, not a *chat.GroupError
+	unknownNoSentinel bool // an unknown group is a GroupError that does not wrap chat.ErrGroupNotFound
+	unknownRetryable  bool // an unknown group does not wrap chat.ErrGroupsMisconfigured, so a caller would retry it
+	unknownIsScope    bool // an unknown group also wraps chat.ErrMissingScope
+	scopeIsNotFound   bool // a missing scope wraps chat.ErrGroupNotFound instead of chat.ErrMissingScope
+	scopePlain        bool // a missing scope is a plain error
+	wrongGroup        bool // the error names the last group of the call, not the first that failed
+	cancelIsNotFound  bool // a cancelled context is reported as a missing group
+}
+
+// wrongGroups is the fake with GroupsReadable answered as leaks says.
+type wrongGroups struct {
+	*FakePlatform
+	leaks groupLeaks
+}
+
+func (w *wrongGroups) GroupsReadable(ctx context.Context, groups []string) error {
+	if w.leaks.cancelIsNotFound && ctx.Err() != nil {
+		return &chat.GroupError{Group: groups[0], Err: fmt.Errorf("gone: %w: %w", chat.ErrGroupNotFound, chat.ErrGroupsMisconfigured)}
+	}
+	if w.leaks.noneIsAnError && len(groups) == 0 {
+		return errors.New("no groups")
+	}
+	err := w.FakePlatform.GroupsReadable(ctx, groups)
+	var ge *chat.GroupError
+	switch {
+	case err == nil && w.leaks.readableFails && len(groups) == 1 && ctx.Err() == nil:
+		return &chat.GroupError{Group: groups[0], Err: fmt.Errorf("fake: %w", chat.ErrGroupsMisconfigured)}
+	case !errors.As(err, &ge):
+		return err
+	case errors.Is(err, chat.ErrGroupNotFound) && w.leaks.unknownPlain:
+		return errors.New(err.Error())
+	case errors.Is(err, chat.ErrGroupNotFound) && w.leaks.unknownNoSentinel:
+		return &chat.GroupError{Group: ge.Group, Err: fmt.Errorf("fake: %w", chat.ErrGroupsMisconfigured)}
+	case errors.Is(err, chat.ErrGroupNotFound) && w.leaks.unknownRetryable:
+		return &chat.GroupError{Group: ge.Group, Err: fmt.Errorf("fake: %w", chat.ErrGroupNotFound)}
+	case errors.Is(err, chat.ErrGroupNotFound) && w.leaks.unknownIsScope:
+		return &chat.GroupError{Group: ge.Group, Err: fmt.Errorf("fake: %w: %w: %w", chat.ErrGroupNotFound, chat.ErrMissingScope, chat.ErrGroupsMisconfigured)}
+	case errors.Is(err, chat.ErrMissingScope) && w.leaks.scopeIsNotFound:
+		return &chat.GroupError{Group: ge.Group, Err: fmt.Errorf("fake: %w: %w", chat.ErrGroupNotFound, chat.ErrGroupsMisconfigured)}
+	case errors.Is(err, chat.ErrMissingScope) && w.leaks.scopePlain:
+		return errors.New(err.Error())
+	case w.leaks.wrongGroup:
+		return &chat.GroupError{Group: groups[len(groups)-1], Err: ge.Err}
+	}
+	return err
+}
+
+func TestConformanceChecksGroupsReadableInEveryState(t *testing.T) {
+	t.Parallel()
+	var asked []GroupState
+	f := NewFake()
+	s := f.Subject()
+	arrange := s.Groups
+	s.Groups = func(st GroupState) string { asked = append(asked, st); return arrange(st) }
+	if vs := CheckWith(t.Context(), s, Options{Short: true}); len(vs) != 0 {
+		t.Fatalf("violations: %v", vs)
+	}
+	// The readable group is asked for again at the end, for the cancelled context.
+	want := []GroupState{GroupUnknown, GroupReadable, GroupScopeMissing, GroupReadable}
+	if !slices.Equal(asked, want) {
+		t.Errorf("the states arranged were %v, want %v", asked, want)
+	}
+}
+
+func TestConformanceFindsAGroupsReadableThatBreaksTheContract(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		leaks groupLeaks
+		bad   []string // the checks that find it
+	}{
+		"no groups an error":                          {groupLeaks{noneIsAnError: true}, []string{"no groups"}},
+		"a readable group that fails":                 {groupLeaks{readableFails: true}, []string{"readable"}},
+		"an unknown group that is a plain error":      {groupLeaks{unknownPlain: true}, []string{"unknown group"}},
+		"an unknown group without the sentinel":       {groupLeaks{unknownNoSentinel: true}, []string{"unknown group"}},
+		"an unknown group a caller would retry":       {groupLeaks{unknownRetryable: true}, []string{"unknown group"}},
+		"an unknown group that is also a scope":       {groupLeaks{unknownIsScope: true}, []string{"unknown group"}},
+		"a missing scope that is a missing group":     {groupLeaks{scopeIsNotFound: true}, []string{"missing scope"}},
+		"a missing scope that is a plain error":       {groupLeaks{scopePlain: true}, []string{"missing scope"}},
+		"an error that names the wrong group":         {groupLeaks{wrongGroup: true}, []string{"unknown group"}},
+		"a cancelled context taken for a missing one": {groupLeaks{cancelIsNotFound: true}, []string{"cancelled context"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := &wrongGroups{FakePlatform: NewFake(), leaks: tc.leaks}
+			s := w.Subject()
+			s.Platform = w
+			var found []string
+			for _, v := range CheckWith(t.Context(), s, Options{Short: true}) {
+				if v.Method == "GroupsReadable" {
+					if v.Rule != RuleContract {
+						t.Errorf("violation %v, want the contract rule", v)
+					}
+					found = append(found, v.Case)
+				}
+			}
+			if !slices.Equal(found, tc.bad) {
+				t.Errorf("GroupsReadable violations in %v, want only %q", found, tc.bad)
+			}
+		})
+	}
+}
+
+// Groups is required, like Channels: a subject without it would pass with GroupsReadable unchecked.
+func TestConformanceRefusesASubjectWithoutGroups(t *testing.T) {
+	t.Parallel()
+	s := NewFake().Subject()
+	s.Groups = nil
+	vs := Check(t.Context(), s)
+	if len(vs) != 1 || vs[0].Rule != RuleSetup || !strings.Contains(vs[0].Detail, "Groups") {
+		t.Errorf("Check of a subject with no Groups = %v, want one setup violation that names Groups", vs)
+	}
+}
+
+func TestConformanceRefusesAGroupOfNoName(t *testing.T) {
+	t.Parallel()
+	s := NewFake().Subject()
+	s.Groups = func(GroupState) string { return "" }
+	var found int
+	for _, v := range CheckWith(t.Context(), s, Options{Short: true}) {
+		if v.Rule == RuleSetup && v.Method == "GroupsReadable" {
+			found++
+		}
+	}
+	if found == 0 {
+		t.Error("a Subject whose Groups names no group gave no setup violation")
+	}
+}
+
+// A subject whose Groups resets every group before it arranges a state, which Subject.Groups allows, passes: the checks do not depend on
+// an earlier arrangement surviving the next.
+func TestConformanceAcceptsGroupsThatResetEveryGroup(t *testing.T) {
+	t.Parallel()
+	f := NewFake()
+	s := f.Subject()
+	arrange := s.Groups
+	s.Groups = func(st GroupState) string {
+		f.mu.Lock()
+		clear(f.groups)
+		f.mu.Unlock()
+		return arrange(st)
+	}
+	for _, v := range CheckWith(t.Context(), s, Options{Short: true}) {
+		if v.Method == "GroupsReadable" {
+			t.Errorf("violation: %v", v)
 		}
 	}
 }

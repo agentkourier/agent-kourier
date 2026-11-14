@@ -1,0 +1,792 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    agentkourier.dev/schema-sha256: 474c6b70686538358e9ba7449a7a47ea40d1120faf15e540fff0b0ec904d5e99
+    controller-gen.kubebuilder.io/version: v0.23.0
+  name: bindings.agentkourier.dev
+spec:
+  group: agentkourier.dev
+  names:
+    categories:
+    - agentkourier
+    kind: Binding
+    listKind: BindingList
+    plural: bindings
+    shortNames:
+    - akbinding
+    singular: binding
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].reason
+      name: Reason
+      type: string
+    - jsonPath: .spec.chat.channel
+      name: Channel
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Binding connects one agent to one chat channel.
+          Owned by an application team.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: BindingSpec is the desired state of a Binding.
+            properties:
+              agent:
+                description: AgentRef names the agent on a backend.
+                properties:
+                  backendRef:
+                    description: |-
+                      ObjectRef names a resource in a namespace. An empty namespace means the namespace of the
+                      referring object. A Binding's agent.backendRef and chat.connectionRef may name an AgentBackend or a
+                      ChatConnection in another namespace only if that resource lists the Binding's namespace in its
+                      allowedNamespaces.
+                    properties:
+                      name:
+                        description: |-
+                          Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a
+                          letter or digit.
+                        maxLength: 253
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                        type: string
+                      namespace:
+                        description: |-
+                          Namespace is a DNS-1123 label: at most 63 lowercase letters, digits or '-', starting and ending with a letter or
+                          digit.
+                        maxLength: 63
+                        pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  name:
+                    description: Name is the agent's name on the backend, at most
+                      253 bytes.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace is the agent's namespace on the backend: a DNS-1123 label of at most 63 lowercase letters, digits or
+                      '-', starting and ending with a letter or digit.
+                    maxLength: 63
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                required:
+                - backendRef
+                - name
+                - namespace
+                type: object
+              chat:
+                description: ChatBinding places the Binding in a channel.
+                properties:
+                  acknowledgment:
+                    description: |-
+                      Acknowledgment controls the temporary reaction Agent Kourier adds to an accepted message while it is being processed.
+                      It defaults to enabled with the platform's own reaction (Slack: hourglass_flowing_sand).
+                    properties:
+                      emoji:
+                        description: |-
+                          Emoji is the reaction name without colons. Left empty, the platform's own acknowledgment reaction is used
+                          (Slack: hourglass_flowing_sand). The API fills in no default, so a stored Binding does not carry one platform's
+                          reaction. At most 100 bytes.
+                        maxLength: 100
+                        pattern: ^(?:[a-z0-9][a-z0-9+_-]*|[+-][a-z0-9][a-z0-9+_-]*)?$
+                        type: string
+                      enabled:
+                        default: true
+                        description: |-
+                          Enabled adds the reaction after the message is durably accepted and removes it when processing ends.
+                          It defaults to true.
+                        type: boolean
+                    type: object
+                  botMentions:
+                    default: any
+                    description: |-
+                      BotMentions defaults to any: on a Binding with a mention trigger, a mention of Agent Kourier by any bot or
+                      incoming webhook that can post in the channel starts a turn in the mention's thread, with a fixed prompt and
+                      held to fixed limits. The platform cannot tell an agent from any other bot. With none, a bot's mention starts
+                      nothing. Agent Kourier's own posts, and a bot that a botMessage trigger names, are never taken as a mention.
+                    enum:
+                    - any
+                    - none
+                    - ""
+                    type: string
+                  channel:
+                    description: 'Channel is the platform''s channel ID, not its name
+                      (Slack: `C…` or `G…`). At most 32 bytes.'
+                    maxLength: 32
+                    pattern: ^[CG][A-Z0-9]+$
+                    type: string
+                  connectionRef:
+                    description: |-
+                      ObjectRef names a resource in a namespace. An empty namespace means the namespace of the
+                      referring object. A Binding's agent.backendRef and chat.connectionRef may name an AgentBackend or a
+                      ChatConnection in another namespace only if that resource lists the Binding's namespace in its
+                      allowedNamespaces.
+                    properties:
+                      name:
+                        description: |-
+                          Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a
+                          letter or digit.
+                        maxLength: 253
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                        type: string
+                      namespace:
+                        description: |-
+                          Namespace is a DNS-1123 label: at most 63 lowercase letters, digits or '-', starting and ending with a letter or
+                          digit.
+                        maxLength: 63
+                        pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  maxMentionsPerTurn:
+                    default: 2
+                    description: |-
+                      MaxMentionsPerTurn is the most people one turn mentions, at most 10; the people after them are not mentioned. It defaults to 2.
+                      0 is refused: to notify nobody, leave mentions empty.
+                    maximum: 10
+                    minimum: 1
+                    type: integer
+                  mentions:
+                    description: |-
+                      Mentions are the people an agent may notify, by writing `@name` in its reply. Agent Kourier then posts a message in the
+                      thread that mentions each one named, one message for each. A name not listed here notifies nobody, and an agent can never supply
+                      a user ID. Empty means no mentions, and nothing is added to the prompt. At most 50.
+                    items:
+                      description: ChatMention is one person an agent may notify.
+                      properties:
+                        name:
+                          description: |-
+                            Name is what the agent writes, after an `@`: lowercase letters, digits and `-`, starting with a letter, at most 63
+                            characters. `here`, `channel` and `everyone` are refused.
+                          maxLength: 63
+                          pattern: ^[a-z][a-z0-9-]{0,62}$
+                          type: string
+                          x-kubernetes-validations:
+                          - message: a broadcast name (here, channel or everyone)
+                              is reserved and cannot be declared
+                            rule: '!(self in [''here'', ''channel'', ''everyone''])'
+                        user:
+                          description: 'User is the platform''s user ID of the person
+                            (Slack: `U…` or `W…`). It comes only from here, never
+                            from the agent.'
+                          maxLength: 21
+                          pattern: ^[UW][A-Z0-9]{2,20}$
+                          type: string
+                      required:
+                      - name
+                      - user
+                      type: object
+                    maxItems: 50
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  output:
+                    default: live
+                    description: Output defaults to live.
+                    enum:
+                    - live
+                    - final
+                    - ""
+                    type: string
+                  progress:
+                    default: steps-and-activity
+                    description: |-
+                      Progress chooses what a live reply shows of the agent's work before its text arrives. steps shows a card for each
+                      tool call; an alert thread's first post, which cannot carry cards, shows a status line for the latest call instead,
+                      as every write does on a platform without cards. steps-and-activity shows those, and a Working… card (or line, in
+                      that first post) whenever 3 seconds pass with nothing new, titled or stood in for by the agent's own progress line.
+                      activity shows one Working… card (a line in an alert thread) that counts the steps, or the agent's working updates
+                      until the first step is counted, and names no tool, no argument and nothing the agent said. A Binding that sets none
+                      gets steps-and-activity. Output final ignores it.
+                    enum:
+                    - steps
+                    - steps-and-activity
+                    - activity
+                    - ""
+                    type: string
+                  threadReplies:
+                    default: all
+                    description: |-
+                      ThreadReplies defaults to all: any person's reply in a thread Agent Kourier owns is a turn.
+                      With mention, only a reply that mentions Agent Kourier is a turn, whether a mention or a
+                      trigger started the thread; the next mentioned turn carries the other replies as
+                      context. A typed answer to a pending question that takes text replies needs no mention.
+                    enum:
+                    - all
+                    - mention
+                    - ""
+                    type: string
+                  triggers:
+                    description: |-
+                      Triggers decide which events in the channel start or continue a turn. Empty means
+                      [{type: mention}]: a mention starts a session. A list that names triggers is the whole list. At most 50.
+                    items:
+                      description: |-
+                        Trigger is one way an event in the bound channel starts or continues a turn.
+                        Triggers are tried in order and the first that matches handles the event.
+                      properties:
+                        exclude:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            Exclude maps a message field to a regex; a message matching any entry is ignored. A personMessage trigger has
+                            the field text alone.
+                          maxProperties: 6
+                          type: object
+                          x-kubernetes-validations:
+                          - message: unsupported message field, must be one of text,
+                              title, link, fallback, footer, body
+                            rule: self.all(k, k in ['text', 'title', 'link', 'fallback',
+                              'footer', 'body'])
+                          - message: a regular expression is required
+                            rule: self.all(k, size(self[k]) > 0)
+                          - message: a regular expression is longer than the 512 byte
+                              limit
+                            rule: self.all(k, size(self[k]) <= 512)
+                        extract:
+                          additionalProperties:
+                            description: |-
+                              Extract pulls one named value out of a message field. The entry's name in Trigger.Extract
+                              must also be the name of a named group in Regex, which supplies the value.
+                            properties:
+                              field:
+                                description: Field is the message field the regex
+                                  runs on.
+                                enum:
+                                - text
+                                - title
+                                - link
+                                - fallback
+                                - footer
+                                - body
+                                type: string
+                              regex:
+                                description: Regex is a Go (RE2) regular expression
+                                  of at most 512 bytes.
+                                maxLength: 512
+                                minLength: 1
+                                type: string
+                                x-kubernetes-validations:
+                                - message: regular expression is longer than the 512
+                                    byte limit
+                                  rule: size(bytes(self)) <= 512
+                            required:
+                            - field
+                            - regex
+                            type: object
+                          description: |-
+                            Extract names the values to pull out of a message. A message in which one of these
+                            regexes does not match does not match the trigger. At most 32, each named in at most 63 bytes. A
+                            personMessage trigger takes none.
+                          maxProperties: 32
+                          type: object
+                          x-kubernetes-validations:
+                          - message: an extract name is longer than the 63 byte limit
+                            rule: self.all(k, size(k) <= 63)
+                          - message: 'invalid extract name: it must start with a lower-case
+                              letter and use only letters, digits and ''_'', so a
+                              template can read .Fields.<name>'
+                            rule: self.all(k, k.matches('^[a-z][A-Za-z0-9_]*$'))
+                          - message: every regex must have a named group (?P<name>...)
+                              that is the entry's name, and supplies the value
+                            rule: self.all(k, self[k].regex.contains('(?P<' + k +
+                              '>') || self[k].regex.contains('(?<' + k + '>'))
+                        from:
+                          description: From names the sender a botMessage trigger
+                            accepts. Required for botMessage.
+                          properties:
+                            id:
+                              description: |-
+                                ID is the sender's ID on the platform, never a display name (Slack: the bot ID, `B…`). The load cannot know
+                                Agent Kourier's own ID, so naming it loads: Agent Kourier's own posts are never forwarded, so the trigger
+                                matches nothing, and the Slack adapter logs one warning, the first time one of its posts arrives.
+                                At most 32 bytes.
+                              maxLength: 32
+                              pattern: ^B[A-Z0-9]+$
+                              type: string
+                            kind:
+                              default: bot
+                              description: Kind is what kind of sender ID names. Only
+                                bot exists today, and it is the default.
+                              enum:
+                              - bot
+                              - ""
+                              type: string
+                          required:
+                          - id
+                          type: object
+                        limits:
+                          description: |-
+                            Limits bounds how many investigations the trigger starts (rate, concurrency and a daily cap). Required
+                            for botMessage and personMessage: both rateLimit and maxRunsPerDay.
+                          properties:
+                            maxRunsPerDay:
+                              description: |-
+                                MaxRunsPerDay caps starts in any 24 hours. Required for a botMessage or personMessage trigger: an explicit 0 means
+                                no cap.
+                              format: int32
+                              minimum: 0
+                              type: integer
+                            rateLimit:
+                              description: |-
+                                RateLimit allows MaxRuns starts in any window of Per, and MaxConcurrent investigations running at once.
+                                Required for a botMessage or personMessage trigger, with all three fields set.
+                              properties:
+                                maxConcurrent:
+                                  format: int32
+                                  minimum: 1
+                                  type: integer
+                                maxRuns:
+                                  format: int32
+                                  minimum: 1
+                                  type: integer
+                                per:
+                                  description: Per is the window length.
+                                  maxLength: 64
+                                  pattern: ^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$
+                                  type: string
+                                  x-kubernetes-validations:
+                                  - message: is out of range, must be between 10s
+                                      and 24h
+                                    rule: duration(self) >= duration('10s') && duration(self)
+                                      <= duration('24h')
+                              required:
+                              - maxConcurrent
+                              - maxRuns
+                              - per
+                              type: object
+                          type: object
+                        match:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            Match maps a message field to a regex it must match. Every entry must match. A personMessage trigger has the
+                            field text alone.
+                          maxProperties: 6
+                          type: object
+                          x-kubernetes-validations:
+                          - message: unsupported message field, must be one of text,
+                              title, link, fallback, footer, body
+                            rule: self.all(k, k in ['text', 'title', 'link', 'fallback',
+                              'footer', 'body'])
+                          - message: a regular expression is required
+                            rule: self.all(k, size(self[k]) > 0)
+                          - message: a regular expression is longer than the 512 byte
+                              limit
+                            rule: self.all(k, size(self[k]) <= 512)
+                        promptTemplate:
+                          description: |-
+                            PromptTemplate is a Go template over the trigger's view of the message (.Channel,
+                            .State, .Key, .Fields, .Link, .Source). Required for botMessage and personMessage. At most 8192 bytes; it has no loops,
+                            variables or defined templates, and calls only and, eq, ge, gt, index, le, len, lt, ne, not, or and slice.
+                          maxLength: 8192
+                          type: string
+                        thread:
+                          description: |-
+                            Thread ties messages that share an extracted key to one thread. A personMessage trigger takes none: each
+                            message it matches is a thread of its own.
+                          properties:
+                            by:
+                              description: 'By is key: messages with the same extracted
+                                "key" share a thread.'
+                              enum:
+                              - key
+                              - ""
+                              type: string
+                            closeWhen:
+                              additionalProperties:
+                                type: string
+                              description: |-
+                                CloseWhen maps an extracted field to the value that closes the thread: Agent Kourier posts a
+                                note and starts no turn. Every entry must equal. It names only extracted fields, so it holds at most as many
+                                entries as extract does, 32. A value is at most 256 bytes.
+                              maxProperties: 32
+                              type: object
+                              x-kubernetes-validations:
+                              - message: the value that closes the thread is required
+                                rule: self.all(k, size(self[k]) > 0)
+                              - message: a value is longer than the 256 byte limit
+                                rule: self.all(k, size(self[k]) <= 256)
+                            cooldown:
+                              description: |-
+                                Cooldown is how long after a turn the same key starts no new turn. Required with by,
+                                and between 1m and 168h.
+                              maxLength: 64
+                              pattern: ^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$
+                              type: string
+                            maxIdle:
+                              description: |-
+                                MaxIdle is how long an open thread may go without a message of its key before Agent Kourier counts it
+                                abandoned, so that the key's next fire starts a new investigation instead of a note. It covers a
+                                resolve that never arrived. It needs by, is at least twice the cooldown, and is at most 720h; unset
+                                means the larger of 24h and twice the cooldown. It must be longer than the
+                                sender's repeat interval (Alertmanager's repeat_interval): an alert that keeps firing repeats at that
+                                interval, and a maxIdle shorter than it counts a live alert abandoned between two repeats and
+                                starts a second investigation for it. Twice the cooldown covers that only for a 4h cooldown
+                                against Alertmanager's 4h repeat_interval; a longer repeat_interval needs a maxIdle set
+                                above it.
+                              maxLength: 64
+                              pattern: ^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$
+                              type: string
+                          type: object
+                          x-kubernetes-validations:
+                          - fieldPath: .cooldown
+                            message: requires thread.by
+                            rule: (has(self.by) && self.by != "") || !has(self.cooldown)
+                              || duration(self.cooldown) == duration('0s')
+                          - fieldPath: .maxIdle
+                            message: requires thread.by
+                            rule: (has(self.by) && self.by != "") || !has(self.maxIdle)
+                              || duration(self.maxIdle) == duration('0s')
+                          - fieldPath: .closeWhen
+                            message: requires thread.by
+                            rule: (has(self.by) && self.by != "") || !has(self.closeWhen)
+                              || size(self.closeWhen) == 0
+                          - fieldPath: .cooldown
+                            message: required with thread.by
+                            rule: '!(has(self.by) && self.by != "") || (has(self.cooldown)
+                              && duration(self.cooldown) != duration(''0s''))'
+                          - fieldPath: .cooldown
+                            message: is out of range, must be between 1m and 168h
+                            rule: '!has(self.cooldown) || duration(self.cooldown)
+                              == duration(''0s'') || (duration(self.cooldown) >= duration(''1m'')
+                              && duration(self.cooldown) <= duration(''168h''))'
+                          - fieldPath: .maxIdle
+                            message: is out of range, must be between twice the cooldown
+                              and 720h
+                            rule: '!has(self.maxIdle) || duration(self.maxIdle) ==
+                              duration(''0s'') || (duration(self.maxIdle) >= (has(self.cooldown)
+                              ? duration(self.cooldown) + duration(self.cooldown)
+                              : duration(''0s'')) && duration(self.maxIdle) <= duration(''720h''))'
+                        type:
+                          description: |-
+                            Type is mention, a person @mentioning Agent Kourier, botMessage, a message a bot posts, or personMessage, a
+                            top-level message a person posts. A mention trigger takes no other field. The key is type, not on: YAML 1.1 reads a bare
+                            on as the boolean true, and the loader's decoder follows it.
+                          enum:
+                          - mention
+                          - botMessage
+                          - personMessage
+                          type: string
+                      required:
+                      - type
+                      type: object
+                      x-kubernetes-validations:
+                      - fieldPath: .from
+                        message: 'not allowed with type: mention'
+                        rule: self.type != 'mention' || !has(self.from)
+                      - fieldPath: .match
+                        message: 'not allowed with type: mention'
+                        rule: self.type != 'mention' || !has(self.match) || size(self.match)
+                          == 0
+                      - fieldPath: .exclude
+                        message: 'not allowed with type: mention'
+                        rule: self.type != 'mention' || !has(self.exclude) || size(self.exclude)
+                          == 0
+                      - fieldPath: .extract
+                        message: 'not allowed with type: mention'
+                        rule: self.type != 'mention' || !has(self.extract) || size(self.extract)
+                          == 0
+                      - fieldPath: .thread
+                        message: 'not allowed with type: mention'
+                        rule: self.type != 'mention' || !has(self.thread) || !((has(self.thread.by)
+                          && self.thread.by != "") || (has(self.thread.cooldown) &&
+                          duration(self.thread.cooldown) != duration('0s')) || (has(self.thread.maxIdle)
+                          && duration(self.thread.maxIdle) != duration('0s')) || (has(self.thread.closeWhen)
+                          && size(self.thread.closeWhen) > 0))
+                      - fieldPath: .promptTemplate
+                        message: 'not allowed with type: mention'
+                        rule: self.type != 'mention' || !has(self.promptTemplate)
+                          || self.promptTemplate == ""
+                      - fieldPath: .limits
+                        message: 'not allowed with type: mention'
+                        rule: self.type != 'mention' || !has(self.limits) || !(has(self.limits.rateLimit)
+                          || has(self.limits.maxRunsPerDay))
+                      - fieldPath: .from.id
+                        message: 'required with type: botMessage'
+                        rule: self.type != 'botMessage' || has(self.from)
+                      - fieldPath: .promptTemplate
+                        message: 'required with type: botMessage'
+                        rule: self.type != 'botMessage' || (has(self.promptTemplate)
+                          && self.promptTemplate != "")
+                      - fieldPath: .limits.rateLimit
+                        message: 'required with type: botMessage: set maxRuns, per
+                          and maxConcurrent'
+                        rule: self.type != 'botMessage' || (has(self.limits) && has(self.limits.rateLimit))
+                      - fieldPath: .limits.maxRunsPerDay
+                        message: 'required with type: botMessage: set the cap for
+                          a day, or 0 for no cap'
+                        rule: self.type != 'botMessage' || (has(self.limits) && has(self.limits.maxRunsPerDay))
+                      - fieldPath: .from
+                        message: 'not allowed with type: personMessage'
+                        rule: self.type != 'personMessage' || !has(self.from)
+                      - fieldPath: .match
+                        message: a person's message has only the field text
+                        rule: self.type != 'personMessage' || !has(self.match) ||
+                          self.match.all(k, k == 'text')
+                      - fieldPath: .exclude
+                        message: a person's message has only the field text
+                        rule: self.type != 'personMessage' || !has(self.exclude) ||
+                          self.exclude.all(k, k == 'text')
+                      - fieldPath: .extract
+                        message: 'not allowed with type: personMessage'
+                        rule: self.type != 'personMessage' || !has(self.extract) ||
+                          size(self.extract) == 0
+                      - fieldPath: .thread
+                        message: 'not allowed with type: personMessage'
+                        rule: self.type != 'personMessage' || !has(self.thread) ||
+                          !((has(self.thread.by) && self.thread.by != "") || (has(self.thread.cooldown)
+                          && duration(self.thread.cooldown) != duration('0s')) ||
+                          (has(self.thread.maxIdle) && duration(self.thread.maxIdle)
+                          != duration('0s')) || (has(self.thread.closeWhen) && size(self.thread.closeWhen)
+                          > 0))
+                      - fieldPath: .promptTemplate
+                        message: 'required with type: personMessage'
+                        rule: self.type != 'personMessage' || (has(self.promptTemplate)
+                          && self.promptTemplate != "")
+                      - fieldPath: .limits.rateLimit
+                        message: 'required with type: personMessage: set maxRuns,
+                          per and maxConcurrent'
+                        rule: self.type != 'personMessage' || (has(self.limits) &&
+                          has(self.limits.rateLimit))
+                      - fieldPath: .limits.maxRunsPerDay
+                        message: 'required with type: personMessage: set the cap for
+                          a day, or 0 for no cap'
+                        rule: self.type != 'personMessage' || (has(self.limits) &&
+                          has(self.limits.maxRunsPerDay))
+                      - fieldPath: .thread.by
+                        message: 'thread.by: key requires an extract named "key"'
+                        rule: '!(has(self.thread) && has(self.thread.by) && self.thread.by
+                          == ''key'') || (has(self.extract) && ''key'' in self.extract)'
+                      - fieldPath: .thread.closeWhen
+                        message: every key must be the name of an entry of extract
+                        rule: '!has(self.thread) || !has(self.thread.closeWhen) ||
+                          self.thread.closeWhen.all(k, has(self.extract) && k in self.extract)'
+                    maxItems: 50
+                    type: array
+                required:
+                - channel
+                - connectionRef
+                type: object
+              feedback:
+                description: |-
+                  Feedback configures the useful and not-useful buttons. The final message of an investigation that
+                  a trigger started always carries them; Enabled adds them to the Binding's chat answers too.
+                properties:
+                  enabled:
+                    default: false
+                    description: |-
+                      Enabled puts the buttons on the final message of an answer to a person's message in a thread. It does not
+                      switch them off for an investigation a trigger started. Defaults to false.
+                    type: boolean
+                type: object
+              identity:
+                description: |-
+                  Identity is the service identity every turn in the Binding runs as, whoever wrote the message. Set
+                  userId, tokenSecretRef, or both.
+                properties:
+                  tokenSecretRef:
+                    description: TokenSecretRef holds the OIDC bearer token.
+                    properties:
+                      key:
+                        default: token
+                        description: |-
+                          Key selects the entry of the Secret. It defaults to "token". It consists of at most 253 alphanumeric characters,
+                          '-', '_' or '.', and is neither "." nor "..", nor does it start with "..".
+                        maxLength: 253
+                        pattern: ^(\.?[-_a-zA-Z0-9][-._a-zA-Z0-9]*)?$
+                        type: string
+                      name:
+                        description: |-
+                          Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a
+                          letter or digit.
+                        maxLength: 253
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  userId:
+                    description: UserID is sent as X-User-Id when the backend runs
+                      in insecure mode. At most 256 bytes.
+                    maxLength: 256
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: set userId, tokenSecretRef, or both
+                  rule: (has(self.userId) && self.userId != "") || has(self.tokenSecretRef)
+              interactions:
+                description: Interactions configures agent pauses that wait on a person.
+                properties:
+                  approverGroups:
+                    description: |-
+                      ApproverGroups names the platform's user groups whose members may decide a tool approval, by the platform's ID (Slack: `S…`).
+                      An empty list allows any non-bot channel member. At most 10 groups may be named. Group IDs start with S and contain
+                      uppercase letters and digits, at most 32 bytes; duplicates and empty entries are refused.
+                    items:
+                      maxLength: 32
+                      pattern: ^S[A-Z0-9]+$
+                      type: string
+                    maxItems: 10
+                    type: array
+                    x-kubernetes-list-type: set
+                  askUser:
+                    default: false
+                    description: AskUser lets the agent ask questions in the thread.
+                      Defaults to false.
+                    type: boolean
+                  timeout:
+                    default: 30m
+                    description: Timeout is how long a pause waits for an answer.
+                      Defaults to 30m. At most 168h (7 days); a longer one is refused.
+                    maxLength: 64
+                    pattern: ^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$
+                    type: string
+                    x-kubernetes-validations:
+                    - message: must be positive; leave it out, or write 0, for the
+                        default
+                      rule: duration(self) >= duration('0s')
+                    - message: is out of range, must be at most 168h
+                      rule: duration(self) <= duration('168h')
+                  toolApprovals:
+                    default: false
+                    description: ToolApprovals lets the agent ask a person to approve
+                      tool calls in the thread. Defaults to false.
+                    type: boolean
+                type: object
+                x-kubernetes-validations:
+                - fieldPath: .approverGroups
+                  message: 'requires spec.interactions.toolApprovals: true'
+                  rule: '!has(self.approverGroups) || size(self.approverGroups) ==
+                    0 || (has(self.toolApprovals) && self.toolApprovals)'
+              session:
+                description: Session configures thread-to-session mapping.
+                properties:
+                  threadTTL:
+                    default: 2160h
+                    description: |-
+                      ThreadTTL is how long a thread keeps its session after its last activity. Defaults to 2160h
+                      (90 days). At most 8760h (365 days); a longer one is refused.
+                    maxLength: 64
+                    pattern: ^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$
+                    type: string
+                    x-kubernetes-validations:
+                    - message: must be positive; leave it out, or write 0, for the
+                        default
+                      rule: duration(self) >= duration('0s')
+                    - message: is out of range, must be at most 8760h
+                      rule: duration(self) <= duration('8760h')
+                type: object
+            required:
+            - agent
+            - chat
+            - identity
+            type: object
+          status:
+            description: |-
+              Status is the observed state of the Binding. It is set through the status subresource and never in a file: the
+              file loader refuses a Binding file that sets it.
+            properties:
+              conditions:
+                description: |-
+                  Conditions are the Binding's states, one per type. The observedGeneration of a condition is the generation of
+                  the Binding it describes.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                maxItems: 16
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

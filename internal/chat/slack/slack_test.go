@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"maps"
 	"net/http"
 	"slices"
@@ -19,6 +17,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/secret"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
@@ -87,14 +86,20 @@ func newFake(t *testing.T, opts ...fakeslack.Option) *fakeslack.Server {
 }
 
 func clientConfig(fake *fakeslack.Server) slack.Config {
-	return slack.Config{BotToken: secret.New(botToken), AppToken: secret.New(appToken), APIURL: fake.URL() + "/",
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	return slack.Config{BotToken: secret.New(botToken), AppToken: secret.New(appToken), APIURL: fake.URL() + "/", Connection: intakeConn,
+		Logger: testutil.DiscardLogger()}
 }
 
 // run starts c.Run, which the end of the test cancels. wait returns Run's error.
 func run(t *testing.T, c *slack.Client, sk slack.Sink) (cancel context.CancelFunc, wait func() error) {
 	t.Helper()
-	ctx, cancel := context.WithCancel(t.Context())
+	return runIn(t.Context(), t, c, sk)
+}
+
+// runIn is run under parent, such as a context that carries an observer.
+func runIn(parent context.Context, t *testing.T, c *slack.Client, sk slack.Sink) (cancel context.CancelFunc, wait func() error) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(parent)
 	done := make(chan error, 1)
 	go func() { done <- c.Run(ctx, sk) }()
 	wait = sync.OnceValue(func() error { return <-done })
@@ -126,11 +131,7 @@ func start(t *testing.T, sk slack.Sink) *fakeslack.Server {
 
 func waitConnected(t *testing.T, fake *fakeslack.Server) {
 	t.Helper()
-	for deadline := time.Now().Add(5 * time.Second); fake.Connections() == 0; time.Sleep(time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the client did not connect")
-		}
-	}
+	testutil.Eventually(t, "the client did not connect", func() bool { return fake.Connections() != 0 }, testutil.Within(5*time.Second))
 }
 
 // message returns a message event; extra overrides its fields.
@@ -178,8 +179,17 @@ func TestDeliversMentionsAndReplies(t *testing.T) {
 		{Channel: "G1", TS: private.TS, User: "U1", Text: botMark + " hi", Mentioned: true},
 		{Channel: "G1", TS: private.TS, User: "U1", Text: botMark + " hi", Mentioned: true, ChannelType: "group"},
 	}
-	if got := sk.messages(); !slices.Equal(got, want) {
-		t.Fatalf("messages =\n%+v\nwant\n%+v", got, want)
+	// The events of one channel arrive at the sink in order; those of different channels are handled at the same time, so
+	// only each channel's own order is held.
+	got := sk.messages()
+	if len(got) != len(want) {
+		t.Fatalf("%d messages, want %d:\n%+v", len(got), len(want), got)
+	}
+	for _, channel := range []string{"C1", "G1"} {
+		elsewhere := func(m slack.Message) bool { return m.Channel != channel }
+		if g, w := slices.DeleteFunc(slices.Clone(got), elsewhere), slices.DeleteFunc(slices.Clone(want), elsewhere); !slices.Equal(g, w) {
+			t.Fatalf("messages of %s =\n%+v\nwant\n%+v", channel, g, w)
+		}
 	}
 }
 

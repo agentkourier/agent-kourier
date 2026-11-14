@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/config"
-	"github.com/agentkourier/agent-kourier/internal/config/k8ssecrets"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/testhooks"
 )
@@ -34,21 +33,10 @@ func ConfigLoaded(s interface{ Status() config.Status }) Check {
 	}}
 }
 
-// SecretsSynced holds while the resolver's Secret caches for namespaces are synced and it has not
-// been stopped. It asks for a Secret that does not exist: a synced cache answers not found, and
-// any other answer says why it cannot.
-func SecretsSynced(r interface {
-	Keys(ctx context.Context, namespace, name string) ([]string, error)
-}, namespaces []string) Check {
-	return Check{"secrets", func(ctx context.Context) error {
-		for _, ns := range namespaces {
-			_, err := r.Keys(ctx, ns, "readyz-probe")
-			if errors.Is(err, k8ssecrets.ErrNotSynced) || errors.Is(err, k8ssecrets.ErrStopped) || errors.Is(err, k8ssecrets.ErrNamespaceNotWatched) {
-				return err
-			}
-		}
-		return nil
-	}}
+// SecretsSynced holds while the Secret caches that r depends on are synced and it has not been
+// stopped: r.Ready answers, and its error says which is not (k8ssecrets.Resolver.Ready).
+func SecretsSynced(r interface{ Ready() error }) Check {
+	return Check{"secrets", func(context.Context) error { return r.Ready() }}
 }
 
 // StoreOpen holds while the store answers a read: s is the store, and an event nobody wrote

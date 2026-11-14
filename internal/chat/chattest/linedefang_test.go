@@ -124,7 +124,7 @@ func TestALineBasedLinkDefangerIsCaught(t *testing.T) {
 		}
 	}
 	a := &lineDefangAdapter{FakePlatform: NewFake()}
-	s := Subject{Platform: a, Sent: func() []Shown { o := a.sent; a.sent = nil; return o }, Inert: func() error { return nil }}
+	s := Subject{Platform: a, Sent: func() []Shown { o := a.sent; a.sent = nil; return o }, Inert: func() error { return nil }, Channels: a.arrangeChannel, Groups: a.arrangeGroup}
 	seen := map[string]bool{}
 	names := []string{"markdown link, text over two lines", "markdown link, javascript, text over two lines", "markdown image, alt over two lines"}
 	for _, v := range catch(context.Background(), s, names...) {
@@ -175,7 +175,7 @@ func TestALabelOverTwoLinesIsALinkReferenceDefinition(t *testing.T) {
 		t.Errorf("%q goes out as %q, and the scanner finds nothing active in it", in, colonDefang(in))
 	}
 	a := &lineDefangAdapter{FakePlatform: NewFake(), escape: colonDefang}
-	s := Subject{Platform: a, Sent: func() []Shown { o := a.sent; a.sent = nil; return o }, Inert: func() error { return nil }}
+	s := Subject{Platform: a, Sent: func() []Shown { o := a.sent; a.sent = nil; return o }, Inert: func() error { return nil }, Channels: a.arrangeChannel, Groups: a.arrangeGroup}
 	seen := map[string]bool{}
 	for _, v := range catch(context.Background(), s, "markdown reference definition, label over two lines") {
 		if v.Rule == RuleActive { // a live construct, and not another way the case was found wanting
@@ -220,7 +220,7 @@ func TestAnEscapedBracketDoesNotEndALabel(t *testing.T) {
 		}
 	}
 	a := &lineDefangAdapter{FakePlatform: NewFake(), escape: spanDefang}
-	s := Subject{Platform: a, Sent: func() []Shown { o := a.sent; a.sent = nil; return o }, Inert: func() error { return nil }}
+	s := Subject{Platform: a, Sent: func() []Shown { o := a.sent; a.sent = nil; return o }, Inert: func() error { return nil }, Channels: a.arrangeChannel, Groups: a.arrangeGroup}
 	seen := map[string]bool{}
 	for _, v := range catch(context.Background(), s, "markdown reference, escaped brackets in the label") {
 		if v.Rule == RuleActive { // a live construct, and not another way the case was found wanting
@@ -251,7 +251,7 @@ func TestAnAdapterThatFencesTextAndLeavesTokensRawIsCaught(t *testing.T) {
 		}
 	}
 	a := &lineDefangAdapter{FakePlatform: NewFake(), escape: fenceRaw}
-	s := Subject{Platform: a, Sent: func() []Shown { o := a.sent; a.sent = nil; return o }, Inert: func() error { return nil }}
+	s := Subject{Platform: a, Sent: func() []Shown { o := a.sent; a.sent = nil; return o }, Inert: func() error { return nil }, Channels: a.arrangeChannel, Groups: a.arrangeGroup}
 	found := false
 	for _, v := range catch(context.Background(), s) {
 		found = found || (v.Rule == RuleActive && strings.Contains(v.Detail, "mention"))

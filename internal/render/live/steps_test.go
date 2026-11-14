@@ -11,13 +11,17 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
+
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
-	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
+
+	slackgo "github.com/slack-go/slack"
 )
 
 // chunksOf is the chunks of a streaming request.
@@ -90,7 +94,7 @@ func result(id string, response any) agent.ToolResultEvent {
 // window lets the renderer write what it has waited to: it waits for the window, and turns the clock.
 func (e *env) window(t *testing.T) {
 	t.Helper()
-	eventually(t, "the renderer to wait for its window", func() bool { return e.clk.waiting() == 1 })
+	testutil.Eventually(t, "the renderer to wait for its window", func() bool { return e.clk.waiting() == 1 })
 	e.clk.advance(throttle)
 }
 
@@ -102,14 +106,14 @@ func TestAToolCallIsAStepThatIsDoneWhenItsResultComes(t *testing.T) {
 	e := setup(t)
 	run := e.stream(t)
 	run.Handle(call("c1", "kubectl_get", map[string]any{"ns": "prod"}))
-	eventually(t, "the step to be shown", func() bool { return len(e.tasks()) == 1 })
+	testutil.Eventually(t, "the step to be shown", func() bool { return len(e.tasks()) == 1 })
 	want := fakeslack.Task{ID: "s1", Title: "kubectl_get", Status: "in_progress", Details: `ns="prod"`}
 	if got := e.tasks(); got[0] != want || !e.reply().Streaming {
 		t.Fatalf("tasks %+v streaming %v; want %+v, and the stream running", got, e.reply().Streaming, want)
 	}
 	run.Handle(result("c1", map[string]any{"output": "3 pods"}))
 	e.window(t)
-	eventually(t, "the step to be done", func() bool { return e.tasks()[0].Status == "complete" })
+	testutil.Eventually(t, "the step to be done", func() bool { return e.tasks()[0].Status == "complete" })
 	run.Handle(text("a", "Three pods."))
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
@@ -129,10 +133,10 @@ func TestAStepIsAnErrorWhenItsResultSaysTheCallFailed(t *testing.T) {
 	e := setup(t)
 	run := e.stream(t)
 	run.Handle(call("c1", "add_numbers", nil))
-	eventually(t, "the step to be shown", func() bool { return len(e.tasks()) == 1 })
+	testutil.Eventually(t, "the step to be shown", func() bool { return len(e.tasks()) == 1 })
 	run.Handle(result("c1", map[string]any{"error": "tool \"add_numbers\" call is rejected: <!channel> hunter2hunter2"}))
 	e.window(t)
-	eventually(t, "the step to be an error", func() bool { return e.tasks()[0].Status == "error" })
+	testutil.Eventually(t, "the step to be an error", func() bool { return e.tasks()[0].Status == "error" })
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
 	if got := e.tasks()[0]; got.Status != "error" || got.Output != "" || got.Details != "" {
@@ -157,9 +161,9 @@ func TestSeveralToolsAreStepsInOrderEachEndedByItsOwnResult(t *testing.T) {
 	run.Handle(result("c2", map[string]any{"output": "x"}))
 	run.Handle(result("c1", map[string]any{"error": "no"}))
 	release()
-	eventually(t, "the first two steps to be shown", func() bool { return len(e.tasks()) == 2 })
+	testutil.Eventually(t, "the first two steps to be shown", func() bool { return len(e.tasks()) == 2 })
 	e.window(t)
-	eventually(t, "the third step to be shown", func() bool { return len(e.tasks()) == 3 })
+	testutil.Eventually(t, "the third step to be shown", func() bool { return len(e.tasks()) == 3 })
 	want := []fakeslack.Task{{ID: "s1", Title: "first", Status: "error"}, {ID: "s2", Title: "second", Status: "complete"}, {ID: "s3", Title: "third", Status: "in_progress"}}
 	if got := e.tasks(); !slices.Equal(got, want) {
 		t.Fatalf("tasks %+v; want %+v", got, want)
@@ -178,11 +182,11 @@ func TestAStepComesWhereItsCallWasMadeInTheText(t *testing.T) {
 		e := setup(t)
 		run := e.stream(t)
 		run.Handle(text("a", "Let me look."))
-		eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
+		testutil.Eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
 		run.Handle(call("c1", "search", nil))
 		run.Handle(text("b", "Found it."))
 		e.window(t)
-		eventually(t, "the text after the step", func() bool { return e.reply().Text == "Let me look.\n\nFound it." })
+		testutil.Eventually(t, "the text after the step", func() bool { return e.reply().Text == "Let me look.\n\nFound it." })
 		run.Handle(result("c1", map[string]any{"output": "x"}))
 		run.Handle(agent.FinalEvent{})
 		e.finish(t, run)
@@ -199,7 +203,7 @@ func TestAStepComesWhereItsCallWasMadeInTheText(t *testing.T) {
 		run.Handle(call("c1", "search", nil))
 		run.Handle(text("a", "Hello"))
 		release()
-		eventually(t, "the text", func() bool { return e.reply().Text == "Hello" })
+		testutil.Eventually(t, "the text", func() bool { return e.reply().Text == "Hello" })
 		run.Handle(agent.FinalEvent{})
 		e.finish(t, run)
 		// The call has no result when the turn ends, so its step ends then, after the text.
@@ -231,7 +235,7 @@ func TestAToolWithNoResultAtTheStopIsEndedNotLeftRunningAndNotShownAsSuccess(t *
 	e := setup(t)
 	run := e.stream(t)
 	run.Handle(call("c1", "slow_query", nil))
-	eventually(t, "the step to be shown", func() bool { return len(e.tasks()) == 1 })
+	testutil.Eventually(t, "the step to be shown", func() bool { return len(e.tasks()) == 1 })
 	run.Handle(text("a", "I could not wait for it."))
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
@@ -259,7 +263,7 @@ func TestStepTitlesAreCleanedEscapedAndCapped(t *testing.T) {
 	run.Handle(call("c1", "<!channel>\n\u202e[x](https://evil.test)"+strings.Repeat("n", 500), map[string]any{
 		"q": "<@U0123456789> [y](https://evil.test) " + strings.Repeat("v", 500), "<!here>": "\u200bz",
 	}))
-	eventually(t, "the step to be shown", func() bool { return len(e.tasks()) == 1 })
+	testutil.Eventually(t, "the step to be shown", func() bool { return len(e.tasks()) == 1 })
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
 	got := e.tasks()[0]
@@ -284,7 +288,7 @@ func TestTheArgumentsOfACallAreShownInAStepOnlyAsTheirRedactedSummary(t *testing
 		"query": "up", "password": "hunter2hunter2", "token": "xoxb-123-456-abcdefghijkl",
 		"url": "https://admin:s3cretpass@db.example/x", "cfg": map[string]any{"apiKey": "k-1234567890", "name": "db1"},
 	}))
-	eventually(t, "the step to be shown", func() bool { return len(e.tasks()) == 1 })
+	testutil.Eventually(t, "the step to be shown", func() bool { return len(e.tasks()) == 1 })
 	run.Handle(result("c1", map[string]any{"output": "hunter2hunter2"}))
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
@@ -352,9 +356,9 @@ var errRefused = errors.New("invalid_chunks")
 func (e *env) spy(t *testing.T, steps bool, fail func(int) error) *atomic.Int32 {
 	t.Helper()
 	n := new(atomic.Int32)
-	caps := e.cfg.Platform.Capabilities()
+	caps := e.platform.Capabilities()
 	caps.Steps = steps
-	e.cfg.Platform = spy{Platform: e.cfg.Platform, caps: caps, steps: n, fail: fail}
+	e.use(spy{Platform: e.platform, caps: caps, steps: n, fail: fail})
 	e.live = newRenderer(t, e.cfg)
 	return n
 }
@@ -411,11 +415,11 @@ func TestAPlatformThatRefusesAStepForGoodEndsTheStepsAndNotTheReply(t *testing.T
 			run := e.stream(t)
 			run.Handle(text("a", "Hel"))
 			run.Handle(call("c1", "search", nil))
-			eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
+			testutil.Eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
 			run.Handle(text("b", "lo"))
 			run.Handle(call("c2", "fetch", nil))
 			e.window(t)
-			eventually(t, "the text", func() bool { return e.reply().Text == "Hel\n\nlo" })
+			testutil.Eventually(t, "the text", func() bool { return e.reply().Text == "Hel\n\nlo" })
 			run.Handle(agent.FinalEvent{})
 			e.finish(t, run)
 			if m := e.reply(); m.Streaming || m.Text != "Hel\n\nlo" || len(m.Tasks()) != 0 {
@@ -446,11 +450,11 @@ func TestAStepThatFailsForNowIsTriedAgainAndTheTextGoesOn(t *testing.T) {
 	run.Handle(text("a", "Hel"))
 	run.Handle(call("c1", "search", nil))
 	release()
-	eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
-	eventually(t, "the failed step to have been asked for", func() bool { return steps.Load() == 1 })
+	testutil.Eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
+	testutil.Eventually(t, "the failed step to have been asked for", func() bool { return steps.Load() == 1 })
 	run.Handle(text("b", "lo"))
 	e.window(t)
-	eventually(t, "the step and the text", func() bool { return len(e.tasks()) == 1 && e.reply().Text == "Hel\n\nlo" })
+	testutil.Eventually(t, "the step and the text", func() bool { return len(e.tasks()) == 1 && e.reply().Text == "Hel\n\nlo" })
 	if n := steps.Load(); n != 2 {
 		t.Fatalf("%d steps asked for; want the one that failed, and its retry", n)
 	}
@@ -478,29 +482,38 @@ func TestAFailingStepNeverHoldsBackTheStop(t *testing.T) {
 	}
 }
 
-// A run that takes over the stream of an earlier run shows no steps of its own: it ends that stream and updates the
-// message, so no step of the earlier run is shown twice.
-func TestARecoveredTurnAddsNoStepsToTheStreamItTakesOver(t *testing.T) {
+// streamedThenLost is an earlier run of the test's turn that streamed text and began the step of a call, and was lost
+// with the stream open and its ts recorded, as a process that crashed leaves it (leftOpen).
+func (e *env) streamedThenLost(t *testing.T) {
+	t.Helper()
+	e.leftOpen(t, "partial", chat.Step{ID: "s1", Title: "search", State: chat.StepRunning})
+}
+
+// A run that takes over the stream of an earlier run ends that stream and updates the message, and the update carries
+// every step the run has, since Slack drops a stream's cards from a message it updates: the steps of the earlier run are
+// shown once, by the update, and none is added to the stream. While the run goes on its updates show the steps as they
+// stand, and at the end a step with no result is ended, as a stream's is at its stop.
+func TestARecoveredTurnKeepsTheStepsOfTheStreamItTakesOver(t *testing.T) {
 	e := setup(t)
-	release := e.hold() // the first write is not throttled: text and call must be in before it, or the step waits for a window nobody turns
-	t.Cleanup(release)
-	first, cancel := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1"})
-	first.Handle(text("a", "partial"))
-	first.Handle(call("c1", "search", nil))
-	release()
-	eventually(t, "the step and the ts to be recorded", func() bool {
-		row, err := e.store.GetOutbox(t.Context(), outbox.ID("turn-1", "reply"))
-		return err == nil && row.MessageRef != "" && len(e.tasks()) == 1
-	})
-	cancel()
-	<-first.Done()
+	e.streamedThenLost(t)
 	appends := len(e.rec.sent("/chat.appendStream"))
 
+	release := e.hold()
+	t.Cleanup(release)
 	again, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1", Recovered: true})
-	again.Handle(text("a", "the whole answer"))
-	again.Handle(call("c1", "search", nil)) // the earlier run's call, said again
+	again.Handle(text("a", "the whole"))
+	again.Handle(call("c1", "search", map[string]any{"q": "up"})) // the earlier run's call, said again
 	again.Handle(result("c1", map[string]any{"output": "x"}))
 	again.Handle(call("c2", "fetch", nil))
+	release()
+	testutil.Eventually(t, "an update that shows the steps as they stand", func() bool {
+		got := e.tasks()
+		return len(got) == 2 && got[0].Status == "complete" && got[1].Status == "in_progress" && !e.reply().Streaming
+	})
+	if blocks := e.reply().Blocks; strings.Contains(string(blocks), "Calling") {
+		t.Errorf("blocks %s; want no status line beside the cards, which say the same", blocks)
+	}
+	again.Handle(text("a", "the whole answer"))
 	again.Handle(agent.FinalEvent{})
 	e.finish(t, again)
 
@@ -511,21 +524,225 @@ func TestARecoveredTurnAddsNoStepsToTheStreamItTakesOver(t *testing.T) {
 	if got := e.rec.sent("/chat.appendStream"); len(got) != appends {
 		t.Fatalf("%d appends, %d before the takeover; want the takeover to append nothing, steps included", len(got), appends)
 	}
-	if got := th[1].Tasks(); len(got) != 1 || got[0].ID != "s1" {
-		t.Fatalf("tasks %+v; want the earlier run's one step and no other", got)
+	want := []fakeslack.Task{
+		{ID: "s1", Title: "search", Status: "complete", Details: `q="up"`},
+		{ID: "s2", Title: "fetch", Status: "complete", Output: "No result was reported."},
+	}
+	if got := th[1].Tasks(); !slices.Equal(got, want) {
+		t.Fatalf("tasks %+v; want %+v: every step of the run, the one with no result ended", got, want)
+	}
+	if got := strings.Join(blockTypes(t, th[1].Blocks), ","); got != "task_card,task_card,markdown" {
+		t.Errorf("blocks %s; want the cards before the text", got)
 	}
 	e.assertLastStopIsBare(t)
+}
+
+// A run that took over a stream and ends with no text, as a pause for a question or an approval does, ends with the cards
+// its updates carry: they are what the turn shows, as a stream that stops with steps and no text shows them. No "(no
+// output)" is put under them, and a turn that showed no text has no reply to rate.
+func TestATurnThatTookOverAStreamEndsWithItsCardsAndNoPlaceholder(t *testing.T) {
+	pause := func(awaiting ...string) agent.FinalEvent {
+		return agent.FinalEvent{Task: &a2a.Task{ID: "t1", Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired}}, AwaitingApproval: awaiting}
+	}
+	for _, tc := range []struct {
+		name  string
+		final agent.FinalEvent
+		want  []fakeslack.Task
+	}{
+		{"a question", pause(), []fakeslack.Task{
+			{ID: "s1", Title: "search", Status: "complete", Details: `q="up"`},
+			{ID: "s2", Title: "delete_pod", Status: "error"},
+		}},
+		{"an approval", pause("c2"), []fakeslack.Task{
+			{ID: "s1", Title: "search", Status: "complete", Details: `q="up"`},
+			{ID: "s2", Title: "Approval requested: delete_pod", Status: "complete"},
+		}},
+		{"the end, with no text", agent.FinalEvent{}, []fakeslack.Task{
+			{ID: "s1", Title: "search", Status: "complete", Details: `q="up"`},
+			{ID: "s2", Title: "delete_pod", Status: "error"},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := setup(t)
+			e.leftOpen(t, "", chat.Step{ID: "s1", Title: "search", State: chat.StepRunning})
+			release := e.hold()
+			t.Cleanup(release)
+			again, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1", Recovered: true, Footer: []chat.Part{chat.Context{Text: "rate me"}}})
+			again.Handle(call("c1", "search", map[string]any{"q": "up"})) // the earlier run's call, said again
+			again.Handle(result("c1", map[string]any{"output": "x"}))
+			again.Handle(call("c2", "delete_pod", nil))
+			again.Handle(result("c2", map[string]any{"error": "the call requires confirmation"}))
+			again.Handle(tc.final)
+			release()
+			e.finish(t, again)
+
+			th := e.fake.Thread("C1", e.root)
+			m := th[len(th)-1]
+			if len(th) != 2 || m.Streaming {
+				t.Fatalf("thread %+v; want one message, no longer streaming", th)
+			}
+			if got := m.Tasks(); !slices.Equal(got, tc.want) {
+				t.Fatalf("tasks %+v; want %+v", got, tc.want)
+			}
+			if got := strings.Join(blockTypes(t, m.Blocks), ","); got != "task_card,task_card" {
+				t.Errorf("blocks %s; want the cards and nothing under them", m.Blocks)
+			}
+			if strings.Contains(m.Text, "(no output)") || strings.Contains(string(m.Blocks), "(no output)") {
+				t.Errorf("message %q with blocks %s; want no placeholder under the cards", m.Text, m.Blocks)
+			}
+		})
+	}
+}
+
+// blockTypes is the type of each block of raw, in order.
+func blockTypes(t *testing.T, raw json.RawMessage) []string {
+	t.Helper()
+	var blocks []struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		t.Fatalf("blocks %s: %v", raw, err)
+	}
+	var out []string
+	for _, b := range blocks {
+		out = append(out, b.Type)
+	}
+	return out
+}
+
+// A stream whose text diverged is stopped and replaced by an update, which carries its steps: Slack would drop the
+// cards the stream showed with the text it replaces.
+func TestAStreamThatDivergedKeepsItsStepsInTheUpdateThatReplacesIt(t *testing.T) {
+	e := setup(t)
+	release := e.hold()
+	t.Cleanup(release)
+	run := e.stream(t)
+	run.Handle(text("a", "The answer is 41"))
+	run.Handle(call("c1", "search", nil))
+	run.Handle(result("c1", map[string]any{"output": "x"}))
+	release()
+	testutil.Eventually(t, "the step", func() bool { got := e.tasks(); return len(got) == 1 && got[0].Status == "complete" })
+	run.Handle(text("a", "The answer is 42")) // not an extension of what was streamed
+	run.Handle(agent.FinalEvent{})
+	e.finish(t, run)
+	m := e.reply()
+	if m.Streaming || m.Text != "The answer is 42" || len(e.rec.sent("/chat.update")) != 1 {
+		t.Fatalf("message %+v after %d updates; want the final text, by one update after the stop", m, len(e.rec.sent("/chat.update")))
+	}
+	if got := m.Tasks(); len(got) != 1 || got[0].ID != "s1" || got[0].Status != "complete" {
+		t.Fatalf("tasks %+v; want the stream's step, kept by the update", got)
+	}
+}
+
+// refusesSteps is a platform that refuses an update with steps as Slack refuses blocks it cannot take.
+type refusesSteps struct {
+	chat.Platform
+	refused *atomic.Int32
+}
+
+func (p refusesSteps) Update(ctx context.Context, r chat.Ref, o chat.Outgoing) error {
+	if o.Message != nil && slices.ContainsFunc(o.Message.Parts, func(p chat.Part) bool { _, ok := p.(chat.Steps); return ok }) {
+		p.refused.Add(1)
+		return slackgo.SlackErrorResponse{Err: "invalid_blocks"}
+	}
+	return p.Platform.Update(ctx, r, o)
+}
+
+// The steps never cost the reply its text: an update that the platform refuses as content it cannot show is sent again
+// without them, at once, with a warning, and the turn shows no steps from then on.
+func TestAnUpdateRefusedWithItsStepsIsSentAgainWithout(t *testing.T) {
+	e := setup(t)
+	e.streamedThenLost(t)
+	refused := new(atomic.Int32)
+	e.use(refusesSteps{Platform: e.platform, refused: refused})
+	e.live = newRenderer(t, e.cfg)
+	release := e.hold()
+	t.Cleanup(release)
+	again, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1", Recovered: true})
+	again.Handle(text("a", "the whole answer"))
+	again.Handle(call("c1", "search", nil))
+	again.Handle(result("c1", map[string]any{"output": "x"}))
+	release()
+	testutil.Eventually(t, "the refused update and the one without steps", func() bool {
+		return refused.Load() == 1 && e.updates() == 1 && e.reply().Text == "the whole answer"
+	})
+	again.Handle(call("c2", "fetch", nil)) // a change after the refusal: its update must not try the steps again
+	e.window(t)
+	testutil.Eventually(t, "the next update", func() bool { return e.updates() == 2 })
+	again.Handle(agent.FinalEvent{})
+	e.finish(t, again)
+	m := e.reply()
+	if m.Streaming || m.Text != "the whole answer" || len(m.Tasks()) != 0 {
+		t.Fatalf("message %+v, tasks %+v; want the whole text, and no card", m, m.Tasks())
+	}
+	if n := refused.Load(); n != 1 {
+		t.Errorf("%d updates with steps; want the one that was refused, and none after it", n)
+	}
+	if !strings.Contains(e.logs.String(), "level=WARN") || !strings.Contains(e.logs.String(), "without them") {
+		t.Errorf("logs:\n%s\nwant a warning that the message was sent without its steps", e.logs)
+	}
+}
+
+// A turn that took over a stream and ends with its cards and no text shows nothing once the platform refuses the cards: the
+// update sent again without them says "(no output)", as a turn that showed nothing does, and is never a message with no text.
+func TestAFinalWithNoTextRefusedWithItsStepsSaysThereWasNoOutput(t *testing.T) {
+	e := setup(t)
+	e.leftOpen(t, "", chat.Step{ID: "s1", Title: "search", State: chat.StepRunning})
+	refused := new(atomic.Int32)
+	e.use(refusesSteps{Platform: e.platform, refused: refused})
+	e.live = newRenderer(t, e.cfg)
+	release := e.hold()
+	t.Cleanup(release)
+	again, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1", Recovered: true})
+	again.Handle(call("c1", "search", nil))
+	again.Handle(result("c1", map[string]any{"output": "x"}))
+	again.Handle(agent.FinalEvent{Task: &a2a.Task{ID: "t1", Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired}}})
+	release()
+	e.finish(t, again)
+	if m := e.reply(); m.Streaming || m.Text != "(no output)" || len(m.Tasks()) != 0 {
+		t.Fatalf("message %+v, tasks %+v; want it to say there was no output, with no card", m, m.Tasks())
+	}
+	if n := refused.Load(); n != 1 {
+		t.Errorf("%d updates with steps; want the one that was refused", n)
+	}
+	if l := e.logs.String(); strings.Contains(l, "cannot be sent") || strings.Contains(l, "no text and no parts") {
+		t.Errorf("a write of an empty message was tried:\n%s", l)
+	}
+}
+
+// The update that follows a refusal of the cards is the post's own message, the one the run then compares with the final: it is
+// made once, and no second update writes the placeholder again.
+func TestAFinalRefusedWithItsStepsMakesOneUpdate(t *testing.T) {
+	e := setup(t)
+	e.postedLine(t)
+	before := len(e.rec.sent("/chat.update"))
+	refused := new(atomic.Int32)
+	e.use(refusesSteps{Platform: e.platform, refused: refused})
+	e.live = newRenderer(t, e.cfg)
+	release := e.hold()
+	t.Cleanup(release)
+	again, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recovered: true})
+	again.Handle(call("c1", "search", nil))
+	again.Handle(agent.FinalEvent{})
+	release()
+	e.finish(t, again)
+	if n := len(e.rec.sent("/chat.update")) - before; n != 1 || refused.Load() != 1 {
+		t.Errorf("%d updates after %d refused; want one after one", n, refused.Load())
+	}
+	if m := e.reply(); m.Text != "(no output)" || strings.Contains(string(m.Blocks), "markdown") {
+		t.Errorf("message %+v, blocks %s; want the placeholder, and no text block", m, m.Blocks)
+	}
 }
 
 // The renderer of a FakePlatform with every capability shows steps through the neutral seam alone, with no Slack under it.
 func TestStepsAreShownThroughTheNeutralSeamOfAnyPlatform(t *testing.T) {
 	e := setup(t)
 	fake := chattest.NewFake()
-	e.cfg.Platform = fake
+	e.use(fake)
 	e.live = newRenderer(t, e.cfg)
 	run := e.stream(t)
 	run.Handle(call("c1", "search", map[string]any{"q": "up"}))
-	eventually(t, "the step", func() bool { m := fake.Messages(); return len(m) == 1 && len(m[0].Steps) == 1 })
+	testutil.Eventually(t, "the step", func() bool { m := fake.Messages(); return len(m) == 1 && len(m[0].Steps) == 1 })
 	run.Handle(result("c1", map[string]any{"output": "x"}))
 	run.Handle(text("a", "ok"))
 	run.Handle(agent.FinalEvent{})

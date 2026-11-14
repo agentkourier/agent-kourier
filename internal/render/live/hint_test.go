@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -21,6 +19,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // In a Binding with chat.threadReplies: mention, an unmentioned reply is ignored, so the final message of each turn says how to
@@ -58,18 +57,18 @@ func hintScenarios() []hintScenario {
 	return []hintScenario{
 		{"posted", session.SystemUser, v1alpha1.OutputLive, func(t *testing.T, e *env, h agent.Handler) {
 			h(text("a", "partial"))
-			eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+			testutil.Eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
 			answer(t, e, h)
 		}, shown("the answer"), true},
 		{"final mode", "U1", v1alpha1.OutputFinal, answer, shown("the answer"), true},
 		{"streamed", "U1", v1alpha1.OutputLive, func(t *testing.T, e *env, h agent.Handler) {
 			h(text("a", "the"))
-			eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
+			testutil.Eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
 			answer(t, e, h)
 		}, shown("the answer"), true},
 		{"a diverged stream", "U1", v1alpha1.OutputLive, func(t *testing.T, e *env, h agent.Handler) {
 			h(text("a", "Hello there"))
-			eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
+			testutil.Eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
 			h(text("a", "Goodbye")) // not an extension of what was streamed
 			h(text("a", "Goodbye, all"))
 			h(agent.FinalEvent{})
@@ -86,11 +85,11 @@ func hintScenarios() []hintScenario {
 			h(text("a", "Sign in to continue."))
 			h(ended(a2a.TaskStateAuthRequired))
 		}, shown("Sign in to continue."), false},
-		{"no output, posted", session.SystemUser, v1alpha1.OutputLive, func(t *testing.T, e *env, h agent.Handler) {
+		{"only steps, posted", session.SystemUser, v1alpha1.OutputLive, func(t *testing.T, e *env, h agent.Handler) {
 			h(agent.ToolCallEvent{CallID: "c1", Name: "search"})
-			eventually(t, "the tool line to be posted", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+			testutil.Eventually(t, "the tool line to be posted", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
 			h(agent.FinalEvent{})
-		}, func(e *env) bool { return strings.Contains(e.reply().Text, "(no output)") }, false},
+		}, func(e *env) bool { got := e.reply().Tasks(); return len(got) == 1 && got[0].Status != "in_progress" }, false},
 		{"only steps, streamed", "U1", v1alpha1.OutputLive, func(_ *testing.T, _ *env, h agent.Handler) {
 			h(agent.ToolCallEvent{CallID: "c1", Name: "search"})
 			h(agent.ToolResultEvent{CallID: "c1"})
@@ -113,7 +112,7 @@ func TestTheFinalMessageEndsWithTheHintOnlyInAMentionBinding(t *testing.T) {
 					key.Thread = e.root
 					h := e.sink(t, e.ob).Turn(t.Context(), session.TurnRef{Key: key, MessageID: "turn-1", UserID: sc.user, Output: sc.output, Feedback: feedback, ThreadReplies: mode})
 					sc.script(t, e, h)
-					eventually(t, "the turn to be shown", func() bool { e.clk.advance(throttle); return sc.settled(e) })
+					testutil.Eventually(t, "the turn to be shown", func() bool { e.clk.advance(throttle); return sc.settled(e) })
 					e.drain(t, e.live)
 					blocks := string(e.reply().Blocks)
 					wantHint := sc.footer && mode == v1alpha1.ThreadRepliesMention
@@ -150,10 +149,10 @@ func TestAStreamIsStoppedWithTheHintAndTheButtons(t *testing.T) {
 	key.Thread = e.root
 	h := e.sink(t, e.ob).Turn(t.Context(), session.TurnRef{Key: key, MessageID: "turn-1", UserID: "U1", Output: v1alpha1.OutputLive, Feedback: store.FeedbackAnswer, ThreadReplies: v1alpha1.ThreadRepliesMention})
 	h(text("a", "Hello"))
-	eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
+	testutil.Eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
 	h(text("a", "Hello world"))
 	h(agent.FinalEvent{})
-	eventually(t, "the stream to stop", func() bool { e.clk.advance(throttle); return shown("Hello world")(e) })
+	testutil.Eventually(t, "the stream to stop", func() bool { e.clk.advance(throttle); return shown("Hello world")(e) })
 	e.drain(t, e.live)
 	stops := e.rec.sent("/chat.stopStream")
 	if b := stops[0].Get("blocks"); strings.Count(b, hint) != 1 || !strings.Contains(b, "feedback-useful") {
@@ -172,6 +171,8 @@ type crashOnce struct {
 	once   sync.Once
 	stored chan string
 }
+
+func (c *crashOnce) Enqueue(context.Context, outbox.Post) (string, error) { return "", nil }
 
 func (c *crashOnce) Send(ctx context.Context, p outbox.Post) (chat.Ref, error) {
 	var crash error
@@ -212,7 +213,7 @@ func TestTheHintSurvivesTheOutboxRow(t *testing.T) {
 			key := thread
 			key.Thread = e.root
 			renderer := newRenderer(t, cfg)
-			h := live.NewSink(renderer, e.ob, slog.New(slog.NewTextHandler(io.Discard, nil))).Turn(t.Context(),
+			h := live.NewSink(renderer, e.ob, testutil.DiscardLogger()).Turn(t.Context(),
 				session.TurnRef{Key: key, MessageID: "turn-1", UserID: "U1", Output: v1alpha1.OutputFinal, Feedback: tc.feedback, ThreadReplies: v1alpha1.ThreadRepliesMention})
 			h(text("a", "the answer"))
 			h(agent.FinalEvent{})
@@ -240,7 +241,7 @@ func TestTheHintSurvivesTheOutboxRow(t *testing.T) {
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("the stored parts after the text are %v, in %s; want %v", got, payload, tc.want)
 			}
-			eventually(t, "the post to be made from the row", func() bool { e.clk.advance(throttle); return e.reply().Text == "the answer" })
+			testutil.Eventually(t, "the post to be made from the row", func() bool { e.clk.advance(throttle); return e.reply().Text == "the answer" })
 			e.drain(t, renderer)
 			blocks := string(e.reply().Blocks)
 			if strings.Count(blocks, hint) != 1 || strings.Contains(blocks, "Was this useful?") != (tc.feedback != "") {

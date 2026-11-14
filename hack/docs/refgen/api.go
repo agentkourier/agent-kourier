@@ -112,8 +112,11 @@ func (p *apiPackage) addConsts(gen *ast.GenDecl) {
 func (p *apiPackage) page(kind, apiVersion, from string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\n", kind)
-	fmt.Fprintf(&b, "This page lists every field of the %s resource, as the Go types in `%s` define it.\n\n", kind, from)
-	b.WriteString("The Default column shows what happens when a field is omitted. None means no default is supplied.\n\n")
+	fmt.Fprintf(&b, "This page lists every field of the %s resource, as the Go types in `%s` define it.", kind, from)
+	if p.hasStatus(kind) {
+		fmt.Fprintf(&b, " You do not set `status`: it is the observed state, described in [%s status](%s-status.md).", kind, strings.ToLower(kind))
+	}
+	b.WriteString("\n\nThe Default column shows what happens when a field is omitted. None means no default is supplied.\n\n")
 	fmt.Fprintf(&b, "`apiVersion: %s` · `kind: %s`\n\n", apiVersion, kind)
 	if d := description(p.docs[kind]); d != "" {
 		b.WriteString(escapeText(d, false) + "\n")
@@ -147,6 +150,27 @@ func (p *apiPackage) page(kind, apiVersion, from string) string {
 	visit(kind)
 	b.WriteString(generatedNote(from))
 	return b.String()
+}
+
+// hasStatus reports whether the kind's own struct has a field whose JSON name is status.
+func (p *apiPackage) hasStatus(kind string) bool {
+	st := p.structs[kind]
+	if st == nil {
+		return false
+	}
+	for _, f := range st.Fields.List {
+		if f.Tag == nil {
+			continue
+		}
+		s, err := strconv.Unquote(f.Tag.Value)
+		if err != nil {
+			continue
+		}
+		if name, _, _ := strings.Cut(reflect.StructTag(s).Get("json"), ","); name == "status" {
+			return true
+		}
+	}
+	return false
 }
 
 // row returns the table row of one field, and the name of the package's struct the field holds, if any.
@@ -186,7 +210,8 @@ func (p *apiPackage) row(rootKind bool, f *ast.Field) (string, string, bool) {
 	desc := escapeText(description(f.Doc), true)
 	var extra []string
 	if v, ok := marker(ms, "+kubebuilder:validation:Enum="); ok {
-		extra = append(extra, "One of "+codeList(strings.Split(v, ";"))+".")
+		// An empty value, written "" in the marker, is the field unset (Default fills it, or Validate reads it as unset), not one more choice.
+		extra = append(extra, "One of "+codeList(slices.DeleteFunc(strings.Split(v, ";"), func(e string) bool { return e == `""` }))+".")
 	}
 	if keys := p.mapKeys(f.Type); len(keys) > 0 {
 		extra = append(extra, "Keys: "+codeList(keys)+".")

@@ -7,7 +7,6 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
-	"log/slog"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -21,6 +20,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/session"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // agentWrites are the methods of session.AgentAPI that change what the agent holds, and agentReads the ones that cannot. A
@@ -211,17 +211,19 @@ func TestBindingsWithoutAFenceHandOutTheAgentItself(t *testing.T) {
 
 // With SQLite there is no election, so no lease and no fence: the clock is not read, and the queued turn is sent whatever it says.
 func TestRunWithSQLiteDoesNotFenceTheAgent(t *testing.T) {
+	t.Parallel()
 	agentStub, url := newSendCounter(t)
 	c := startConfig(t)
+	runsAlongside(&c)
 	c.Client = clusterWithJWT()
 	c.leaseNow = stepping()
 	exits := make(chan int, 1)
 	c.exit = func(code int) { exits <- code }
-	c.Logger = slog.New(slog.DiscardHandler)
+	c.Logger = testutil.DiscardLogger()
 	seedQueuedTurn(t, c, url)
 	start(t, c)
 
-	eventually(t, 10*time.Second, "the queued turn did not reach the agent", func() bool { return agentStub.sends.Load() == 1 })
+	testutil.Eventually(t, "the queued turn did not reach the agent", func() bool { return agentStub.sends.Load() == 1 }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	select {
 	case code := <-exits:
 		t.Errorf("a SQLite replica stopped with exit %d", code)
@@ -230,12 +232,13 @@ func TestRunWithSQLiteDoesNotFenceTheAgent(t *testing.T) {
 }
 
 // Nothing builds the Bindings that hand out an agent but leaderHalf.start, which fences them with an election, and nothing
-// reaches the pool's agents but Bindings.Backend, which wraps them: so that no call to the agent that the leader half makes
+// reaches the pool's agents but Bindings.Backend, which wraps them (CheckAgent may call the pool's Check, and nothing else of it: that is
+// a card fetch on a fresh connection, which sends the agent nothing and hands out no agent, so there is nothing to fence): so that no call to the agent that the leader half makes
 // goes round the fence. One scan of the non-test code of internal/ and cmd/, whole files (a package-level func literal is
 // scanned too): a call of NewBindings (broker.NewBindings under whatever name the file imports the package by) from anywhere
 // but leaderHalf.start; a call of agent.New or agent.NewPool (under whatever name the file imports the agent package by)
 // from anywhere but NewBindings; and, in this package, any use of the pool field (a copy, p := k.pool, is a use too) outside
-// NewBindings, Close and Backend. A second builder or a second use of the pool would be an unfenced agent; this fails until
+// NewBindings, Close and Backend, except the selector k.pool.Check inside CheckAgent. A second builder or a second use of the pool would be an unfenced agent; this fails until
 // the new one is decided on.
 func TestOnlyTheLeaderHalfBuildsTheBindingsAndOnlyBackendHandsOutTheAgent(t *testing.T) {
 	const (
@@ -274,8 +277,11 @@ func TestOnlyTheLeaderHalfBuildsTheBindingsAndOnlyBackendHandsOutTheAgent(t *tes
 				ast.Inspect(decl, func(n ast.Node) bool {
 					switch n := n.(type) {
 					case *ast.SelectorExpr:
+						if x, ok := n.X.(*ast.SelectorExpr); ok && x.Sel.Name == "pool" && n.Sel.Name == "Check" && where == "internal/broker/bindings.go:CheckAgent" {
+							return false // the probe: a card fetch that sends the agent nothing and hands none out
+						}
 						if inBroker && n.Sel.Name == "pool" && where != "internal/broker/bindings.go:NewBindings" && where != "internal/broker/bindings.go:Close" && where != "internal/broker/bindings.go:Backend" {
-							t.Errorf("%s: uses a pool; only NewBindings, Close and Bindings.Backend may, because Backend wraps the agent in the fence", fset.Position(n.Pos()))
+							t.Errorf("%s: uses a pool; only NewBindings, Close and Bindings.Backend may, and Bindings.CheckAgent only for pool.Check, because Backend wraps the agent in the fence", fset.Position(n.Pos()))
 						}
 					case *ast.CallExpr:
 						var name, pkg string

@@ -369,7 +369,7 @@ func s16KillMidStorm(t *testing.T) {
 	const (
 		storm   = 6
 		started = 3
-		digest  = "3 alert messages not investigated in the last 10s (rate limit)."
+		digest  = "3 messages not investigated in the last 10s (rate limit)."
 	)
 	old := f.leader()
 	before := f.restarts()

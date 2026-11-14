@@ -1,0 +1,186 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    agentkourier.dev/schema-sha256: 956beb225f5b5ef6e2be342408aaf922d2990d7446889afeb2b3527eb30f679a
+    controller-gen.kubebuilder.io/version: v0.23.0
+  name: agentbackends.agentkourier.dev
+spec:
+  group: agentkourier.dev
+  names:
+    categories:
+    - agentkourier
+    kind: AgentBackend
+    listKind: AgentBackendList
+    plural: agentbackends
+    shortNames:
+    - akbackend
+    singular: agentbackend
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: AgentBackend describes an A2A server that hosts agents. Owned
+          by the platform team.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: AgentBackendSpec is the desired state of an AgentBackend.
+            properties:
+              agents:
+                description: |-
+                  Agents limits the namespaces of the agents that a Binding of this backend may name in spec.agent.namespace. Omitted, a
+                  Binding may name an agent in any namespace, and what the backend's own front door does is the only check. Set, a Binding
+                  that names any other namespace is rejected: with custom resources it is not served and its Accepted condition is False
+                  with the reason AgentNamespaceNotAllowed, and on the files route the whole config fails when the broker resolves it, at
+                  start or on a reload (agent-kourier dry-run does not resolve it). Only for dialect kagent-v1: on a2a the URL names the
+                  agent and spec.agent.namespace is never sent, so the field is refused there.
+                properties:
+                  namespaces:
+                    description: |-
+                      Namespaces lists the namespaces whose agents any Binding that may use this backend may name. Each is a DNS-1123 label.
+                      At most 256.
+                    items:
+                      maxLength: 63
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                    maxItems: 256
+                    type: array
+                  sameNamespace:
+                    description: |-
+                      SameNamespace allows a Binding to name an agent in the Binding's own namespace. Omitted or false, it does not. It
+                      compares the Binding's namespace, in the broker's cluster, with spec.agent.namespace, a namespace on the backend: it
+                      keeps a team to its own agents only where the two mean the same, as for a kagent in the broker's cluster.
+                    type: boolean
+                type: object
+                x-kubernetes-validations:
+                - message: 'allows no agent namespace: set sameNamespace to true or
+                    list at least one namespace in namespaces'
+                  rule: (has(self.sameNamespace) && self.sameNamespace) || (has(self.namespaces)
+                    && size(self.namespaces) > 0)
+              allowedNamespaces:
+                description: |-
+                  AllowedNamespaces lists the other namespaces whose Bindings may reference this backend. Each is a DNS-1123 label.
+                  An empty list permits references only from the backend's own namespace. At most 256.
+                items:
+                  maxLength: 63
+                  pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                  type: string
+                maxItems: 256
+                type: array
+              dialect:
+                description: Dialect selects how Agent Kourier speaks to an agent
+                  backend.
+                enum:
+                - a2a
+                - kagent-v1
+                type: string
+              headers:
+                description: Headers are sent on every request. Omitted headers add
+                  no static headers. At most 32.
+                items:
+                  description: |-
+                    Header is a static HTTP header. Set exactly one of value and valueSecretRef; valueSecretRef's key
+                    defaults to "token", as for the other single-value Secret references. A header that carries or selects
+                    identity is refused, because the Binding identity owns it: Authorization, Proxy-Authorization, Cookie,
+                    X-User-Id, X-Agent-Name, X-Share-Token and X-Kagent-Insecure-Runtime-Identity.
+                  properties:
+                    name:
+                      description: Name is at most 256 bytes.
+                      maxLength: 256
+                      minLength: 1
+                      type: string
+                      x-kubernetes-validations:
+                      - message: is longer than the 256 byte limit
+                        rule: size(bytes(self)) <= 256
+                      - message: header is reserved for the Binding identity
+                        rule: '!(self.lowerAscii() in [''authorization'', ''proxy-authorization'',
+                          ''cookie'', ''x-user-id'', ''x-agent-name'', ''x-share-token'',
+                          ''x-kagent-insecure-runtime-identity''])'
+                    value:
+                      description: Value is the header's value, at most 4096 bytes.
+                        A secret goes in valueSecretRef.
+                      maxLength: 4096
+                      type: string
+                    valueSecretRef:
+                      description: SecretKeyRef names one value in a Secret in the
+                        referring object's namespace.
+                      properties:
+                        key:
+                          default: token
+                          description: |-
+                            Key selects the entry of the Secret. It defaults to "token". It consists of at most 253 alphanumeric characters,
+                            '-', '_' or '.', and is neither "." nor "..", nor does it start with "..".
+                          maxLength: 253
+                          pattern: ^(\.?[-_a-zA-Z0-9][-._a-zA-Z0-9]*)?$
+                          type: string
+                        name:
+                          description: |-
+                            Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a
+                            letter or digit.
+                          maxLength: 253
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                          type: string
+                      required:
+                      - name
+                      type: object
+                  required:
+                  - name
+                  type: object
+                  x-kubernetes-validations:
+                  - message: set exactly one of value and valueSecretRef
+                    rule: (has(self.value) && self.value != "") != has(self.valueSecretRef)
+                maxItems: 32
+                type: array
+              url:
+                description: |-
+                  URL is the http or https base URL for kagent-v1, or the exact JSON-RPC endpoint for a2a.
+                  The a2a card must be served at URL + "/.well-known/agent-card.json", as AX does.
+                  At most 2048 bytes, with no query and no fragment.
+                maxLength: 2048
+                minLength: 1
+                type: string
+                x-kubernetes-validations:
+                - message: must be an http or https URL with a host
+                  rule: self.matches('(?i)^https?://[^/?#]')
+                - message: must not contain credentials; identity comes from the Binding
+                  rule: '!self.matches(''(?i)^https?://[^/?#]*@'')'
+                - message: 'invalid URL: must not contain control characters'
+                  rule: '!self.matches(r''^[^#]*[\x00-\x1f\x7f]'')'
+                - message: 'invalid URL: the host must not contain a space, backslash,
+                    caret, backtick, brace or bar'
+                  rule: '!self.matches(r''(?i)^https?://[^/?#]*[ \\^\x60{|}]'')'
+                - message: must not have a query or fragment
+                  rule: '!self.matches(''[?#]'')'
+            required:
+            - dialect
+            - url
+            type: object
+            x-kubernetes-validations:
+            - fieldPath: .agents
+              message: agents is supported only on the kagent-v1 dialect, the only
+                one that sends agent.namespace
+              rule: '!has(self.agents) || self.dialect == ''kagent-v1'''
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true

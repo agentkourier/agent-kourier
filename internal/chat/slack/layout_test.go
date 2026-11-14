@@ -72,6 +72,21 @@ func textOf(b map[string]any) string {
 	return s
 }
 
+func TestAToolLineSaysHowFarTheCallHasGot(t *testing.T) {
+	for state, want := range map[chat.ToolState]string{
+		chat.ToolCalling: "Calling kubectl(a=1)",
+		chat.ToolRan:     "Ran kubectl(a=1)",
+		chat.ToolFailed:  "kubectl(a=1) failed",
+	} {
+		w := newWorld(t)
+		blocks := w.post(t, chat.Say(chat.Message{Fallback: "f", Parts: []chat.Part{chat.ToolLine{Name: "kubectl", Summary: "a=1", State: state}}}))
+		elements, _ := blocks[0]["elements"].([]any)
+		if len(blocks) != 1 || len(elements) != 1 || elements[0].(map[string]any)["text"] != want {
+			t.Errorf("state %q: blocks %v; want one context block saying %q", state, blocks, want)
+		}
+	}
+}
+
 func TestPostRendersEachPartAsItsBlockAndTagsTheMessage(t *testing.T) {
 	w := newWorld(t)
 	msg := chat.Message{Fallback: "the fallback", Parts: []chat.Part{
@@ -117,6 +132,76 @@ func TestPostRendersEachPartAsItsBlockAndTagsTheMessage(t *testing.T) {
 	if _, ok, _ := w.p.Find(t.Context(), w.target, "outbox-9", time.Now().Add(-time.Hour)); ok {
 		t.Error("Find found a tag that was never posted")
 	}
+}
+
+// A message of mentions alone is what registers: Slack shows a mention beside a markdown or rich_text block, and does not list
+// it as a mention (docs/spikes/slack-mention-probe.md, row N1), so each is a context line and nothing else is there, and the
+// fallback holds no token.
+func TestAMessageOfMentionsHasOnlyContextLines(t *testing.T) {
+	c, err := slack.Render(chat.Say(chat.Message{Fallback: "The agent named sam, lee in this thread.", Parts: []chat.Part{
+		chat.Mention{User: "U0123456789", Text: "was named as sam in the reply above."},
+		chat.Mention{User: "W0123456789", Text: "was named as lee in the reply above."},
+	}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var blocks []map[string]any
+	if err := json.Unmarshal(c.Blocks, &blocks); err != nil {
+		t.Fatal(err)
+	}
+	if len(blocks) != 2 || blocks[0]["type"] != "context" || blocks[1]["type"] != "context" {
+		t.Fatalf("blocks = %s; want two context lines", c.Blocks)
+	}
+	for _, want := range []string{`"text":"\u003c@U0123456789\u003e"`, `"text":"\u003c@W0123456789\u003e"`, `"text":"was named as sam in the reply above."`} {
+		if !strings.Contains(string(c.Blocks), want) {
+			t.Errorf("blocks = %s; want %s", c.Blocks, want)
+		}
+	}
+	if strings.Contains(c.Text, "<@") {
+		t.Errorf("fallback = %q; want no token in it", c.Text)
+	}
+}
+
+// A workspace message URL in a body reaches Slack whole, which makes it Slack's own reference to the message, and so does any
+// other bare URL, which is a link that shows its own address. A masked link does not (docs/spikes/slack-mention-probe.md).
+func TestABareURLInABodyReachesSlackWhole(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		{"a workspace message", "see https://example.slack.com/archives/C123/p1793581680696209 for it", "https://example.slack.com/archives/C123/p1793581680696209"},
+		{"a reply in a thread", "see https://example.slack.com/archives/C123/p1793581680817189?thread_ts=1793581680.696209&cid=C123 for it", "https://example.slack.com/archives/C123/p1793581680817189?thread_ts=1793581680.696209&amp;cid=C123"},
+		{"another host", "see https://example.com/d/abc for it", "https://example.com/d/abc"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := renderedMarkdown(t, tc.in)
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("markdown = %q; want %q in it whole", got, tc.want)
+			}
+		})
+	}
+	for _, tc := range []struct{ masked, want string }{
+		{"[here](https://example.com)", `\[here\](https://example.com)`},
+		{"![alt](https://example.com/a.png)", `!\[alt\](https://example.com/a.png)`},
+		{"<https://example.com|here>", "&lt;https://example.com|here&gt;"},
+	} {
+		if got := renderedMarkdown(t, tc.masked); got != tc.want {
+			t.Errorf("markdown of %q = %q; want the mask escaped: %q", tc.masked, got, tc.want)
+		}
+	}
+}
+
+// renderedMarkdown is the text of the markdown block of a body.
+func renderedMarkdown(t *testing.T, body string) string {
+	t.Helper()
+	c, err := slack.Render(chat.Say(chat.Message{Parts: []chat.Part{chat.Body{Markdown: body}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var blocks []struct {
+		Type, Text string
+	}
+	if err := json.Unmarshal(c.Blocks, &blocks); err != nil || len(blocks) != 1 || blocks[0].Type != "markdown" {
+		t.Fatalf("blocks = %s: %v", c.Blocks, err)
+	}
+	return blocks[0].Text
 }
 
 // A message that is only a fallback is shown as plain text, in a block of its own, so that what it says is not

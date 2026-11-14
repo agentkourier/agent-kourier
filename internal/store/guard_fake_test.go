@@ -18,6 +18,11 @@ type fakeAdapter struct {
 
 var _ store.Adapter = (*fakeAdapter)(nil)
 
+func (f *fakeAdapter) StaleTaskTurn(_ context.Context, _ store.ConversationKey, _ string) (store.TaskTurn, error) {
+	f.record("StaleTaskTurn")
+	return zero[store.TaskTurn](), f.err
+}
+
 func (f *fakeAdapter) record(name string) { f.calls = append(f.calls, name) }
 
 func zero[T any]() (z T) { return z }
@@ -37,9 +42,25 @@ func (f *fakeAdapter) AbandonOutbox(_ context.Context, _ string, _ time.Time) (b
 	return zero[bool](), f.err
 }
 
-func (f *fakeAdapter) AbandonOutboxBefore(_ context.Context, _ time.Time, _ time.Time) ([]string, error) {
-	f.record("AbandonOutboxBefore")
+func (f *fakeAdapter) ServedConnections(_ context.Context) ([]string, error) {
+	f.record("ServedConnections")
 	return zero[[]string](), f.err
+}
+
+func (f *fakeAdapter) ReplaceServedConnections(_ context.Context, a1 []string, _ time.Time) error {
+	f.record("ReplaceServedConnections")
+	f.row = a1
+	return f.err
+}
+
+func (f *fakeAdapter) AttributeConnection(_ context.Context, _ string) (store.AttributedRows, error) {
+	f.record("AttributeConnection")
+	return zero[store.AttributedRows](), f.err
+}
+
+func (f *fakeAdapter) UnattributedRows(_ context.Context) (store.AttributedRows, error) {
+	f.record("UnattributedRows")
+	return zero[store.AttributedRows](), f.err
 }
 
 func (f *fakeAdapter) AbandonStrandedReplies(_ context.Context, _ time.Time, _ time.Duration) (int, error) {
@@ -152,6 +173,11 @@ func (f *fakeAdapter) HasReplies(_ context.Context, _ []string) (map[string]bool
 	return zero[map[string]bool](), f.err
 }
 
+func (f *fakeAdapter) ListAcknowledgmentReplies(_ context.Context) ([]store.Reply, error) {
+	f.record("ListAcknowledgmentReplies")
+	return zero[[]store.Reply](), f.err
+}
+
 func (f *fakeAdapter) ListActiveSessions(_ context.Context) ([]store.Session, error) {
 	f.record("ListActiveSessions")
 	return zero[[]store.Session](), f.err
@@ -170,6 +196,11 @@ func (f *fakeAdapter) ListDecidedInteractions(_ context.Context, _ time.Time) ([
 func (f *fakeAdapter) ListDueInteractions(_ context.Context, _ time.Time) ([]store.Interaction, error) {
 	f.record("ListDueInteractions")
 	return zero[[]store.Interaction](), f.err
+}
+
+func (f *fakeAdapter) ListPendingAcknowledgmentReplies(_ context.Context) ([]store.Reply, error) {
+	f.record("ListPendingAcknowledgmentReplies")
+	return zero[[]store.Reply](), f.err
 }
 
 func (f *fakeAdapter) ListPresses(_ context.Context) ([]store.Press, error) {
@@ -252,6 +283,11 @@ func (f *fakeAdapter) PreviousReply(_ context.Context, _ store.ConversationKey, 
 	return zero[store.Reply](), f.err
 }
 
+func (f *fakeAdapter) PreviousWholeReply(_ context.Context, _ store.ConversationKey, _ int64) (store.Reply, error) {
+	f.record("PreviousWholeReply")
+	return zero[store.Reply](), f.err
+}
+
 func (f *fakeAdapter) PurgeAudit(_ context.Context, _ time.Time, _ int) (int, error) {
 	f.record("PurgeAudit")
 	return zero[int](), f.err
@@ -330,6 +366,11 @@ func (f *fakeAdapter) SetSessionTask(_ context.Context, _ store.ConversationKey,
 
 func (f *fakeAdapter) ClearSessionAcknowledgment(_ context.Context, _ store.ConversationKey, _, _ string) error {
 	f.record("ClearSessionAcknowledgment")
+	return f.err
+}
+
+func (f *fakeAdapter) SettleAcknowledgmentReplies(_ context.Context, _ []string) error {
+	f.record("SettleAcknowledgmentReplies")
 	return f.err
 }
 

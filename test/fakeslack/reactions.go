@@ -44,7 +44,7 @@ func validReactionName(name string) bool {
 }
 
 // addReaction implements reactions.add (https://docs.slack.dev/reference/methods/reactions.add/),
-// which Agent Kourier uses to mark a reply that waits for the active task. The reaction is the bot's.
+// which Agent Kourier uses to mark a reply that waits for the active task. The reaction is the calling app's bot's.
 //
 // Error codes from the docs: already_reacted, message_not_found, no_item_specified, invalid_name.
 //
@@ -53,7 +53,7 @@ func validReactionName(name string) bool {
 // code Slack gives for a message that was deleted; that a name with a colon, an upper-case letter
 // or a space is invalid_name (Agent Kourier sends the bare name); no limit on the reactions of a
 // message or of a user; and that no event is sent, which Agent Kourier would not subscribe to.
-func (s *Server) addReaction(form url.Values) (response, string) {
+func (s *Server) addReaction(app App, form url.Values) (response, string) {
 	channel, ts, name := form.Get("channel"), form.Get("timestamp"), form.Get("name")
 	switch {
 	case channel == "" || ts == "":
@@ -67,26 +67,30 @@ func (s *Server) addReaction(form url.Values) (response, string) {
 		if m.TS != ts {
 			continue
 		}
-		// Only the bot adds reactions here, so an existing one of this name is the bot's own.
-		if slices.ContainsFunc(m.Reactions, func(r Reaction) bool { return r.Name == name }) {
-			return nil, "already_reacted"
+		// Only bots add reactions here, so the users of a reaction are the bots that added it.
+		if i := slices.IndexFunc(m.Reactions, func(r Reaction) bool { return r.Name == name }); i >= 0 {
+			if slices.Contains(m.Reactions[i].Users, app.BotUser) {
+				return nil, "already_reacted"
+			}
+			m.Reactions[i].Users = append(m.Reactions[i].Users, app.BotUser)
+			return response{}, ""
 		}
-		m.Reactions = append(m.Reactions, Reaction{Name: name, Users: []string{s.bot.user}})
+		m.Reactions = append(m.Reactions, Reaction{Name: name, Users: []string{app.BotUser}})
 		return response{}, ""
 	}
 	return nil, "message_not_found"
 }
 
 // removeReaction implements reactions.remove (https://docs.slack.dev/reference/methods/reactions.remove/),
-// which Agent Kourier uses to take the queued marker off a reply when its turn is sent. Only the bot's own
-// reaction can be removed, and the bot is the only user that reacts here.
+// which Agent Kourier uses to take the queued marker off a reply when its turn is sent. Only the calling app's
+// bot's own reaction can be removed, and the bots are the only users that react here.
 //
 // Error codes from the docs: no_reaction, message_not_found, no_item_specified, invalid_name.
 //
 // UNCONFIRMED(WP-04): no_reaction for a name that is not on the message, which Agent Kourier counts as
 // success; message_not_found for a ts that is in no message of the channel; and that a reaction by
-// another user, which the fake never has, is not the bot's to remove.
-func (s *Server) removeReaction(form url.Values) (response, string) {
+// another user, or by another app's bot, is not the bot's to remove (no_reaction).
+func (s *Server) removeReaction(app App, form url.Values) (response, string) {
 	channel, ts, name := form.Get("channel"), form.Get("timestamp"), form.Get("name")
 	switch {
 	case channel == "" || ts == "":
@@ -100,11 +104,13 @@ func (s *Server) removeReaction(form url.Values) (response, string) {
 		if m.TS != ts {
 			continue
 		}
-		i := slices.IndexFunc(m.Reactions, func(r Reaction) bool { return r.Name == name })
+		i := slices.IndexFunc(m.Reactions, func(r Reaction) bool { return r.Name == name && slices.Contains(r.Users, app.BotUser) })
 		if i < 0 {
 			return nil, "no_reaction"
 		}
-		m.Reactions = slices.Delete(m.Reactions, i, i+1)
+		if m.Reactions[i].Users = slices.DeleteFunc(m.Reactions[i].Users, func(u string) bool { return u == app.BotUser }); len(m.Reactions[i].Users) == 0 {
+			m.Reactions = slices.Delete(m.Reactions, i, i+1)
+		}
 		return response{}, ""
 	}
 	return nil, "message_not_found"

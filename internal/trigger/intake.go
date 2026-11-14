@@ -1,0 +1,509 @@
+package trigger
+
+import (
+	"cmp"
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"slices"
+	"sync"
+	"time"
+
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/config"
+	"github.com/agentkourier/agent-kourier/internal/session"
+	"github.com/agentkourier/agent-kourier/internal/store"
+)
+
+// Submitter is the session manager's intake, which *session.Manager satisfies. Its Submit is
+// the persist step of a chat event (spec 6.1): a local write, idempotent by messageId.
+type Submitter interface {
+	Submit(ctx context.Context, in session.Inbound) (session.Result, error)
+}
+
+// IntakeConfig configures an Intake. Connection, Snapshot and Submitter are required; the rest are optional.
+type IntakeConfig struct {
+	// Connection is the ChatConnection this adapter serves, with a namespace and a name. It
+	// scopes every conversation key and messageId.
+	Connection v1alpha1.ObjectRef
+	// Snapshot returns the current routing table, as config.Reloader.Current does.
+	Snapshot  func() *config.Snapshot
+	Submitter Submitter
+	// Interactions takes the presses of buttons. Nil drops them, acknowledged.
+	Interactions func(ctx context.Context, i chat.Interaction) error
+	// Notice, if set, tells a thread that Agent Kourier cannot continue it: session.NoticeExpired for a
+	// thread past its threadTTL, session.NoticeBindingGone for one whose Binding left the config. It also
+	// takes the notes of a trigger's thread: session.NoticeTriggerRepeat and session.NoticeTriggerClosed.
+	// The notice ID is the message's ID and a suffix, so a notice for the same message is the same
+	// row for the outbox. It queues and does not call the platform (live.Sink.QueueNotice). Its error means
+	// the notice was not written: Message returns it, so the platform leaves the event unacknowledged and
+	// delivers it again, and the message is not remembered, so the redelivery asks again. The same ID
+	// makes that safe. Nil only logs them.
+	Notice func(ctx context.Context, key session.Key, n session.Notice) error
+	// TriggerThreads keeps the thread of each key of a botMessage trigger that threads by key. Without it
+	// such a trigger's matches are errors, so Slack redelivers them, rather than a turn for every repeat of
+	// a flapping alert; a trigger with no thread rules needs none.
+	TriggerThreads store.TriggerThreads
+	// TriggerRuns counts the starts of each botMessage and personMessage trigger and holds them to the trigger's limits (spec 8.2,
+	// D26, D31). A start that would pass a limit becomes the decision limited: no turn, no key held, no note. Nil
+	// enforces no limits; the broker always sets it.
+	TriggerRuns store.TriggerRuns
+	// OnStart, if set, takes the match that starts a turn, anchored to the match's own message
+	// (Match.Message.At.ID is the thread): a new investigation, or the redelivery of one whose first ask
+	// failed. It is called once the thread is reserved, and it is idempotent by that message's ID, as Submit
+	// is. It runs on the platform's acknowledgement path, which has a budget of seconds, so it does local writes
+	// only, such as queueing the turn, and calls no agent. When it returns nil the thread is marked started and
+	// the key's cooldown begins; the cooldown is not recorded before, so a turn that could not start, such as a
+	// prompt that was refused, holds no key. It has three outcomes. Nil: the turn started. ErrNotStarted,
+	// itself or wrapped: it will not start, so the event is acknowledged, the thread stays unmarked with no
+	// cooldown, and the decision is not_started; the hook logs its own reason. Any other error is transient:
+	// Message returns it, so the platform leaves the event unacknowledged and delivers it again, and the
+	// redelivery asks again. A turn that is never asked for again leaves a reservation that a later message of
+	// the key takes over after a minute; until then the key's messages are notes in a thread with no
+	// investigation.
+	OnStart func(ctx context.Context, m Match) error
+	// OnLimited, if set, is told of a start that a limit stopped and that someone asked for, for the audit log: a bot's mention
+	// (Match.Mention), or a person's message of a personMessage trigger (Match.Person), whose author it names, so
+	// that a member who spends the limits for everyone can be found: once for each person, trigger and window of the trigger's
+	// rateLimit.per, while the metric counts every message. An alert's is only counted. It is told once for a message, not again
+	// for its redelivery. It is a record of something decided: its error undoes nothing and only says that the record was not
+	// written, so that the person's next stopped start in the window is told again. It does local writes only.
+	OnLimited func(ctx context.Context, m Match, limit store.TriggerLimit) error
+	// TakesBotMention, if set, says whether the session would take a bot's mention as a turn now, reading only. It is asked before
+	// the mention meets the limits: a mention that a session past its threadTTL, or whose Binding left the config, will not take
+	// posts nothing and queues nothing, so it is not_started, with no count against the limits and no report that they stopped
+	// it. Its error is the event's: the platform delivers it again.
+	TakesBotMention func(ctx context.Context, m Match) (bool, error)
+	// TurnQueued, if set, says whether the turn with this ID (the MessageID of the message that started it) was
+	// durably taken: queued or already sent. It closes the window between OnStart queueing a turn and the
+	// thread being marked started (a failed write, a crash, an event Slack never delivered again): a later fire
+	// that finds that reservation stale would take the key over and start a second turn. So before it does, the
+	// Intake asks about the reservation's turn, and if it was taken marks that thread started, with its cooldown
+	// from its own message, and the fire is a repeat in it. Its error is the event's: the platform delivers it
+	// again. Nil asks nothing, and a stale reservation is always taken over.
+	TurnQueued func(ctx context.Context, messageID string) (bool, error)
+	// Now is the time the thread rules take for a bot message, which is when it arrives (time.Now if nil).
+	Now    func() time.Time
+	Logger *slog.Logger // slog.Default() if nil
+}
+
+// Intake is the chat.Sink that applies spec 8.2's trigger table, the same for every platform: it turns each
+// chat.Inbound message into a turn for the session manager, or ignores it, and passes presses on. The adapter
+// has decided what is a mention and who is who, so nothing here knows a platform's syntax. It is safe for
+// concurrent use, and a platform's Run does: the Slack adapter calls it from one goroutine for each channel with events to
+// handle, so the events of a channel are handled one at a time and in order, and those of different channels at once.
+type Intake struct {
+	cfg    IntakeConfig
+	conn   string // the connection as it appears in keys: namespace/name
+	log    *slog.Logger
+	seen   recent
+	tables tableCache
+	// matched are the messages a trigger matched, so that a redelivery of one is a dedup decision and
+	// a redelivery of an unmatched one is not.
+	matched recent
+	// awaitingMention are the person's messages that a personMessage trigger matched and a limit stopped, on a Binding with a
+	// mention trigger: they are remembered, but an event of one that says it mentions Agent Kourier is still the mention
+	// trigger's, since the adapter may miss a mention that Slack registers and sends as an app_mention.
+	awaitingMention recent
+	// toldLimited holds the windows in which each person's stopped start was told to OnLimited.
+	toldLimited toldLimited
+	// mentionless holds the Bindings that were said to have no mention trigger, so that it is said once.
+	mentionless sync.Map
+	// emptyKeyWarned are the triggers (namespace/name#index) that were warned of for an empty key.
+	emptyKeyWarned sync.Map
+}
+
+var (
+	_ chat.Sink             = (*Intake)(nil)
+	_ chat.BotFilter        = (*Intake)(nil)
+	_ chat.BotMentionFilter = (*Intake)(nil)
+)
+
+// NewIntake returns an Intake over cfg.
+func NewIntake(cfg IntakeConfig) *Intake {
+	return &Intake{cfg: cfg, conn: v1alpha1.NamespacedName(cfg.Connection.Namespace, cfg.Connection.Name), log: cmp.Or(cfg.Logger, slog.Default())}
+}
+
+// Message submits m as a turn, unless the table says to ignore it:
+//   - A mention in a channel bound to a Binding may start a session: a new thread, or one
+//     anchored to the thread it is in (the session manager decides whether Agent Kourier owns it).
+//   - Any other message in a thread continues the thread's session if Agent Kourier owns it, unless the
+//     Binding takes only mentioned replies (chat.threadReplies: mention): the session manager says
+//     Unmentioned then, and it is ignored. It says NotOwned if Agent Kourier does not own the thread, and
+//     that too is ignored.
+//   - A person's message outside a thread, in a channel whose Binding has a personMessage trigger, is tried against
+//     those triggers (personMessage), unless it mentions Agent Kourier and the Binding has a mention trigger: that is
+//     the mention trigger's.
+//   - Any other message outside a thread that does not start one is ignored without asking.
+//   - A bot's message (m.Bot set) is never submitted here: it is tried against the botMessage triggers of its
+//     channel's Binding, in order (botMessage). A match is decided (see Decision) and may be handed to
+//     IntakeConfig.OnStart; a message no trigger matches is ignored and counted.
+//   - A bot's mention (m.Bot set and m.Mentioned) goes to IntakeConfig.OnStart too, within fixed limits (botMention).
+//
+// It returns an error only when Submit failed in a way a retry may cure, so the platform leaves the
+// event unacknowledged. An invalid turn is logged and dropped; no retry could mend it.
+// A message is remembered once a turn is queued for it, or a notice written for it (see
+// IntakeConfig.Notice), so the second event of a mention (a platform may deliver it twice) is skipped; an
+// event that queued nothing, or whose notice failed to write, may be tried again. An unmentioned reply queued
+// nothing, so a later app_mention of the same message is still taken; so is the mentioned event of a person's message that a
+// limit stopped a personMessage trigger from starting (see Intake.awaitingMention).
+func (in *Intake) Message(ctx context.Context, m chat.Inbound) (telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "agentkourier.intake", attribute.String("agentkourier.source", "message"), attribute.String("agentkourier.platform", m.At.Platform))
+	disposition := "ignored"
+	defer func() {
+		if telemetryErr != nil {
+			disposition = "error"
+		}
+		telemetry.Count(ctx, "agentkourier_intake_total", "message", disposition, in.conn)
+		trace.SpanFromContext(ctx).SetAttributes(attribute.String("agentkourier.intake.disposition", disposition))
+		op.Finish(telemetryErr)
+	}()
+	seen := [2]string{m.At.Channel, m.At.ID}
+	// One config decides whether a person's event passes the dedup and how it is tried as a report: a reload between two reads could
+	// let a limited report's app_mention pass as a mention and then be decided again as the report, and start it late.
+	snap := in.cfg.Snapshot()
+	if in.seen.has(seen) && !in.mentionOfLimited(snap, m, seen) {
+		disposition = "duplicate"
+		if in.matched.has(seen) {
+			in.countDecision(ctx, m.At.Channel, DecisionDedup)
+		}
+		return nil
+	}
+	if m.Bot != nil {
+		take := in.botMessage
+		if m.Mentioned {
+			take = in.botMention
+		}
+		d, err := take(ctx, m)
+		if err != nil {
+			return err
+		}
+		if disposition = d; d != "ignored" {
+			in.seen.add(seen) // a redelivery is neither matched nor counted again
+		}
+		if d == "trigger_matched" {
+			in.matched.add(seen)
+		}
+		return nil
+	}
+	switch d, mentionMayTake, err := in.personMessage(ctx, snap, m); {
+	case err != nil:
+		return err
+	case d == "trigger_matched":
+		disposition = d
+		in.seen.add(seen) // a redelivery is a dedup: no late start once capacity is back, and no second refusal
+		in.matched.add(seen)
+		if mentionMayTake {
+			in.awaitingMention.add(seen)
+		}
+		return nil
+	case d != "ignored":
+		// Unmatched, and not remembered: the message's other event may say it mentions Agent Kourier, and then it is the
+		// mention trigger's. A redelivery is tried and counted again.
+		disposition = d
+		return nil
+	}
+	req := session.Inbound{
+		Key:        session.Key{Connection: in.conn, Channel: m.At.Channel, Thread: cmp.Or(m.At.Thread, m.At.ID)},
+		MessageID:  in.messageID(m),
+		MessageRef: m.At.ID, UserID: m.User, Text: m.Text,
+		Mentioned: m.Mentioned || m.Direct, // a direct message needs no mention
+	}
+	if m.Mentioned {
+		req.Binding, req.Create = in.binding(ctx, m.At.Channel)
+	}
+	if !req.Create && m.At.Thread == "" {
+		return nil
+	}
+	req.ChannelThreadReplies = in.channelThreadReplies(m.At.Channel)
+	trace.SpanFromContext(ctx).SetAttributes(attribute.String("agentkourier.binding", req.Binding))
+	res, err := in.cfg.Submitter.Submit(ctx, req)
+	if res.Disposition != "" {
+		disposition = string(res.Disposition)
+	}
+	switch {
+	case errors.Is(err, store.ErrInvalid):
+		disposition = "invalid"
+		in.log.WarnContext(ctx, "chat: message dropped as invalid", "channel", m.At.Channel, "message", m.At.ID, "err", err)
+		return nil
+	case err != nil:
+		return fmt.Errorf("submit %s: %w", req.MessageID, err)
+	}
+	// What the reply is was decided by the session manager (reply admission); this only acts on it.
+	switch adm := res.Admission; adm.Kind {
+	case session.AdmitTurn, session.AdmitAnswer:
+		in.seen.add(seen)
+		in.awaitingMention.remove(seen) // the mention was taken: another of its events is a duplicate
+	case session.AdmitIgnored:
+		// Not remembered and not noticed: the message's app_mention may still come, and it counts.
+		if adm.Ignored == session.IgnoredBindingGone { // chatter in a thread nobody was asked into
+			in.log.DebugContext(ctx, "chat: reply in a thread Agent Kourier cannot continue", "channel", m.At.Channel, "thread", req.Key.Thread, "disposition", res.Disposition)
+		}
+	case session.AdmitNotice:
+		in.log.WarnContext(ctx, "chat: reply in a thread Agent Kourier cannot continue", "channel", m.At.Channel, "thread", req.Key.Thread, "disposition", res.Disposition)
+		if in.cfg.Notice != nil {
+			suffix := "/" + string(adm.Notice)
+			if err := in.cfg.Notice(ctx, req.Key, session.Notice{ID: req.MessageID + suffix, Kind: adm.Notice, MessageRef: m.At.ID}); err != nil {
+				return fmt.Errorf("notice %s%s: %w", req.MessageID, suffix, err)
+			}
+			in.seen.add(seen) // the mention's other event is the same message, and the same notice
+			in.awaitingMention.remove(seen)
+		}
+	default:
+		// A kind this Intake does not know is a mismatch with the session manager, and a reply dropped in silence
+		// would be a lost turn: return it, so the platform leaves the event unacknowledged and delivers it again,
+		// and the error is counted and visible. It names the kind, never the message.
+		return fmt.Errorf("submit %s: unknown reply admission kind %q", req.MessageID, adm.Kind)
+	}
+	return nil
+}
+
+// Interaction passes a press to IntakeConfig.Interactions, and returns its error.
+func (in *Intake) Interaction(ctx context.Context, i chat.Interaction) (telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "agentkourier.intake", attribute.String("agentkourier.source", "interaction"))
+	defer func() {
+		telemetry.Count(ctx, "agentkourier_intake_total", "interaction", telemetry.ErrorClass(telemetryErr), in.conn)
+		op.Finish(telemetryErr)
+	}()
+	if in.cfg.Interactions == nil {
+		in.log.WarnContext(ctx, "chat: press dropped; no handler", "channel", i.At.Channel, "message", i.At.ID)
+		return nil
+	}
+	return in.cfg.Interactions(ctx, i)
+}
+
+// botMessage tries a bot's message against the botMessage triggers of the Binding that owns its channel, and
+// returns the disposition for the intake metric. Nothing here starts a session: a start goes to OnStart (CT-4).
+//   - A channel with no Binding, or a bot's reply inside a thread, is ignored and not counted: a trigger is about
+//     a message that opens its own, and a bot must not continue, or hijack, a thread of people or of Agent Kourier's
+//     own. The adapter has already refused Agent Kourier's own messages, and every bot no trigger names.
+//   - For the rest see matchTriggers.
+func (in *Intake) botMessage(ctx context.Context, m chat.Inbound) (disposition string, err error) {
+	snap := in.cfg.Snapshot()
+	if snap == nil {
+		return "ignored", nil
+	}
+	rb, ok := snap.BindingForChannel(in.cfg.Connection.Namespace, in.cfg.Connection.Name, m.At.Channel)
+	if !ok || !topLevel(m) {
+		return "ignored", nil
+	}
+	disposition, _, err = in.matchTriggers(ctx, snap, rb, m, "bot message", "bot", m.Bot.ID, "kind", m.Bot.Kind)
+	return disposition, err
+}
+
+// personMessage tries a person's message against the personMessage triggers of the Binding that owns its channel, if
+// triedAsPerson says it is one of their input, and returns the disposition for the intake metric. Any other message, and one
+// in a channel with no Binding, is ignored and not counted, and goes on as it would without the trigger. The adapter has
+// already refused bots' messages that no trigger names and Agent Kourier's own.
+//
+// mentionMayTake says that a limit stopped the match and that the Binding's mention trigger would take the message if its other
+// event says it mentions Agent Kourier: the adapter may miss a mention that Slack registers, and sends the app_mention as well.
+// That event must not be taken for a duplicate, or the person's mention is lost in silence (Intake.awaitingMention). A start
+// that was not made posted its note in the thread, so its app_mention is a duplicate, and no answer follows the note. Where the
+// Binding has no mention trigger, the app_mention is the same report, decided the same way.
+func (in *Intake) personMessage(ctx context.Context, snap *config.Snapshot, m chat.Inbound) (disposition string, mentionMayTake bool, err error) {
+	if snap == nil {
+		return "ignored", false, nil
+	}
+	rb, ok := snap.BindingForChannel(in.cfg.Connection.Namespace, in.cfg.Connection.Name, m.At.Channel)
+	if !ok || !triedAsPerson(rb.Binding.Spec.Chat.Triggers, m) {
+		return "ignored", false, nil
+	}
+	disposition, decision, err := in.matchTriggers(ctx, snap, rb, m, "person message")
+	return disposition, decision == DecisionLimited && mentionTriggerIn(rb.Binding.Spec.Chat.Triggers), err
+}
+
+// triedAsPerson says whether m is the input of the personMessage triggers among triggers: a person's message at the top level of
+// the channel, not a direct message, in a Binding that has such a trigger. A message that mentions Agent Kourier, where the
+// Binding has a mention trigger, is that trigger's, so that a person who asks for the agent is not also a report that uses a
+// place in the personMessage trigger's limits. The intake and the dry run (Replay) both ask it, so they cannot disagree.
+func triedAsPerson(triggers []v1alpha1.Trigger, m chat.Inbound) bool {
+	return m.Bot == nil && !m.Direct && topLevel(m) &&
+		slices.ContainsFunc(triggers, func(t v1alpha1.Trigger) bool { return t.Type == v1alpha1.TriggerPersonMessage }) &&
+		(!m.Mentioned || !mentionTriggerIn(triggers))
+}
+
+// matchTriggers tries a message that opens its own thread against the triggers of rb's Binding, in order, and decides
+// the match. what names the message in logs, and sender is the attributes that say who sent it (never what it said).
+//   - A message that no trigger matches is counted as agentkourier_trigger_unmatched_total of the Binding, so that a
+//     changed template shows up as a rising count, and logged at DEBUG with where it was, and never what it said.
+//   - A match is counted and logged, and decided: what it does to the thread of its key (decide). The decision is
+//     counted as agentkourier_trigger_decisions_total once it is made, whether or not what follows it succeeds; an
+//     error returns, and the redelivery is decided again (a dedup, for a start that was already recorded).
+func (in *Intake) matchTriggers(ctx context.Context, snap *config.Snapshot, rb config.ResolvedBinding, m chat.Inbound, what string, sender ...any) (disposition string, decision Decision, err error) {
+	name := v1alpha1.NamespacedName(rb.Binding.Namespace, rb.Binding.Name)
+	trace.SpanFromContext(ctx).SetAttributes(attribute.String("agentkourier.binding", name))
+	where := append([]any{"binding", name, "channel", m.At.Channel, "message", m.At.ID}, sender...)
+	trigger, fields, ok := in.tables.table(snap, rb.Binding, in.log).match(m)
+	if !ok {
+		telemetry.Count(ctx, "agentkourier_trigger_unmatched_total", name)
+		in.log.DebugContext(ctx, "chat: "+what+" matched no trigger", where...)
+		return "trigger_unmatched", "", nil
+	}
+	match := Match{Binding: name, Index: trigger.index, Fields: fields, Thread: trigger.thread, Limits: trigger.limits, PromptTemplate: trigger.prompt, MessageID: in.messageID(m), Received: in.now(), Message: m, Person: trigger.person}
+	in.log.InfoContext(ctx, "chat: "+what+" matched a trigger", append(where, "trigger", trigger.index)...)
+	out, err := in.decide(ctx, match)
+	if out.decision != "" {
+		telemetry.Count(ctx, "agentkourier_trigger_decisions_total", name, string(out.decision))
+		in.log.InfoContext(ctx, "chat: trigger decided", "binding", name, "trigger", trigger.index, "decision", out.decision, "keyHash", out.keyHash, "channel", m.At.Channel, "message", m.At.ID, "thread", out.thread)
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("trigger %d of %s for %s: %w", trigger.index, name, in.messageID(m), err)
+	}
+	telemetry.Count(ctx, "agentkourier_trigger_matched_total", name) // only once the match was taken: a redelivery counts it then
+	return "trigger_matched", out.decision, nil
+}
+
+// topLevel says whether m opens a thread of its own rather than replying in one: it is in none, or it is the root of
+// the thread it is in.
+func topLevel(m chat.Inbound) bool {
+	return m.At.Thread == "" || m.At.Thread == m.At.ID
+}
+
+// now is the time of the thread rules.
+func (in *Intake) now() time.Time {
+	if in.cfg.Now != nil {
+		return in.cfg.Now()
+	}
+	return time.Now()
+}
+
+// messageID is the MessageID of a message the Intake took, as the turn and the notices of it are named.
+func (in *Intake) messageID(m chat.Inbound) string {
+	return chat.MessageID(chat.Ref{Platform: m.At.Platform, Conn: in.conn, Channel: m.At.Channel, ID: m.At.ID})
+}
+
+// countDecision counts a decision for the Binding that owns channel, if there is one. It is not binding(): a
+// Binding without a mention trigger still has bot messages to count.
+func (in *Intake) countDecision(ctx context.Context, channel string, d Decision) {
+	snap := in.cfg.Snapshot()
+	if snap == nil {
+		return
+	}
+	if rb, ok := snap.BindingForChannel(in.cfg.Connection.Namespace, in.cfg.Connection.Name, channel); ok {
+		telemetry.Count(ctx, "agentkourier_trigger_decisions_total", v1alpha1.NamespacedName(rb.Binding.Namespace, rb.Binding.Name), string(d))
+	}
+}
+
+// AcceptsBot implements chat.BotFilter: it says whether a botMessage trigger of the Binding that owns channel
+// names botID, by ID and never by display name (D36). It looks at the ID alone: whether the kind matches too is the
+// trigger's own match. A channel with no Binding, and an empty ID, accept none.
+func (in *Intake) AcceptsBot(channel, botID string) bool {
+	snap := in.cfg.Snapshot()
+	if snap == nil || botID == "" {
+		return false
+	}
+	rb, ok := snap.BindingForChannel(in.cfg.Connection.Namespace, in.cfg.Connection.Name, channel)
+	if !ok {
+		return false
+	}
+	return botMessageTriggerNames(rb.Binding.Spec.Chat.Triggers, botID)
+}
+
+// botMessageTriggerNames says whether a botMessage trigger of triggers names the bot botID.
+func botMessageTriggerNames(triggers []v1alpha1.Trigger, botID string) bool {
+	return slices.ContainsFunc(triggers, func(t v1alpha1.Trigger) bool {
+		return t.Type == v1alpha1.TriggerBotMessage && t.From != nil && t.From.ID == botID
+	})
+}
+
+// binding returns the namespace/name of the Binding that owns channel on this connection and takes @mentions: a
+// Binding whose triggers are listed and leave out the mention one does not (spec 8.2), and says so, once. An empty
+// list is the mention trigger. It decides only whether a mention may create a session: a reply in a thread
+// Agent Kourier owns continues it whatever the triggers say (what it must mention is chat.threadReplies).
+func (in *Intake) binding(ctx context.Context, channel string) (name string, ok bool) {
+	snap := in.cfg.Snapshot()
+	if snap == nil {
+		return "", false
+	}
+	rb, ok := snap.BindingForChannel(in.cfg.Connection.Namespace, in.cfg.Connection.Name, channel)
+	if !ok {
+		return "", false
+	}
+	name = v1alpha1.NamespacedName(rb.Binding.Namespace, rb.Binding.Name)
+	triggers := rb.Binding.Spec.Chat.Triggers
+	if len(triggers) > 0 && !slices.ContainsFunc(triggers, func(t v1alpha1.Trigger) bool { return t.Type == v1alpha1.TriggerMention }) {
+		if _, told := in.mentionless.LoadOrStore(name, struct{}{}); !told {
+			replies := "replies in a thread Agent Kourier owns still continue it"
+			if rb.Binding.Spec.Chat.ThreadReplies == v1alpha1.ThreadRepliesMention {
+				replies = "in a thread Agent Kourier owns only a reply that mentions Agent Kourier continues it"
+			}
+			in.log.InfoContext(ctx, "chat: the triggers of a Binding have no mention trigger, so an @mention in its channel starts no session; "+replies, "binding", name)
+		}
+		return "", false
+	}
+	return name, true
+}
+
+// channelThreadReplies is the chat.threadReplies of the Binding that owns channel now, which the session manager
+// reads only for a thread whose own Binding is gone. Empty where nobody owns the channel, or there is no config yet:
+// the default mode is all, so where nobody chose mention the notice goes out as it always did.
+func (in *Intake) channelThreadReplies(channel string) v1alpha1.ThreadReplies {
+	snap := in.cfg.Snapshot()
+	if snap == nil {
+		return ""
+	}
+	rb, ok := snap.BindingForChannel(in.cfg.Connection.Namespace, in.cfg.Connection.Name, channel)
+	if !ok {
+		return ""
+	}
+	return rb.Binding.Spec.Chat.ThreadReplies
+}
+
+// recentMax bounds each generation of recent.
+const recentMax = 1024
+
+// recent remembers the messages seen lately, by (channel, ID). It keeps two generations of at
+// most recentMax each, and forgets the older when the newer fills: bounded memory, and
+// a message stays remembered for at least recentMax others, far longer than the milliseconds
+// between a mention's two events. A redelivery after that is Submit's to make idempotent.
+type recent struct {
+	mu       sync.Mutex
+	cur, old map[[2]string]struct{}
+}
+
+func (r *recent) has(k [2]string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, inCur := r.cur[k]
+	_, inOld := r.old[k]
+	return inCur || inOld
+}
+
+// mentionOfLimited says whether m is a person's event that mentions Agent Kourier, of a message that a limit stopped a
+// personMessage trigger from starting on a Binding with a mention trigger: it is the mention trigger's, though the message is
+// remembered (Intake.awaitingMention). It asks snap, the config the event is handled under, too: after a reload that took the
+// mention trigger away, the event is the report's duplicate, and is not decided again, which could start the report late.
+func (in *Intake) mentionOfLimited(snap *config.Snapshot, m chat.Inbound, seen [2]string) bool {
+	if !m.Mentioned || m.Bot != nil || !in.awaitingMention.has(seen) {
+		return false
+	}
+	if snap == nil {
+		return false
+	}
+	rb, ok := snap.BindingForChannel(in.cfg.Connection.Namespace, in.cfg.Connection.Name, m.At.Channel)
+	return ok && mentionTriggerIn(rb.Binding.Spec.Chat.Triggers)
+}
+
+// remove forgets k, in both generations.
+func (r *recent) remove(k [2]string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.cur, k)
+	delete(r.old, k)
+}
+
+func (r *recent) add(k [2]string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.cur == nil || len(r.cur) >= recentMax {
+		r.old, r.cur = r.cur, map[[2]string]struct{}{}
+	}
+	r.cur[k] = struct{}{}
+}

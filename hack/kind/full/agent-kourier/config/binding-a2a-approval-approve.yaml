@@ -1,0 +1,19 @@
+# S19 over the a2a dialect: approve the single approval-gated tool call of real kagent, reached through
+# agentbackend-a2a.yaml. The same scenario as binding-approval-approve.yaml, on a channel of its own.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: full-a2a-s19, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {namespace: agent-kourier, name: agents-a2a}
+    namespace: kagent
+    name: scenario-approval
+  identity:
+    userId: agent-kourier-full
+    tokenSecretRef: {name: agent-kourier-agent-token}
+  chat:
+    connectionRef: {namespace: agent-kourier, name: slack-fast}
+    channel: CA2AS19
+    output: live
+  interactions:
+    toolApprovals: true

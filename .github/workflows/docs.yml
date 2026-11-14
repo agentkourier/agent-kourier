@@ -1,5 +1,9 @@
 # The documentation site (mkdocs.yml, docs/): built and checked on every pull request that touches it, deployed to
 # Cloudflare Pages from main (https://agentkourier.dev), and to a preview URL from a pull request in this repository.
+# Production is the versioned site (make docs-site, hack/docs/sitebuild): main as /dev/ and every final tag of the
+# release lines in hack/docs/versions.yaml, as /X.Y.Z/, the newest as /latest/ and each line's newest as /X.Y/. A
+# preview is the pull request's tree alone.
+# A final release starts this workflow on main (release.yml): its tag changes the site without touching these paths.
 #
 # Secrets. Put them in GitHub environments, never in the repository's own secrets: a repository secret is readable by
 # any pull request that edits this file. The owner sets (Settings, Environments):
@@ -53,12 +57,15 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
+      # The full history: the versioned site builds each release from its tag.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
       # Go runs the reference generator (hack/docs/refgen), the name check (hack/docs/namecheck) and the content check
       # (hack/docs/contentcheck: internal IDs, removed names, workspace identifiers, and the READMEs' links). Its cache
-      # and pip's are the job's own and follow ci.yml's rules: every run restores, only a push to main saves.
+      # and pip's are the job's own: the Go cache follows the rules in the comment of ci.yml's lint job, and the pip
+      # cache those of ci.yml's echo-agent job. Only a push to main saves either.
       - id: setup-go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -75,13 +82,17 @@ jobs:
           path: |
             ${{ steps.go-env.outputs.modcache }}
             ${{ steps.go-env.outputs.gocache }}
-          key: go-docs-build-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}
-          restore-keys: |
-            go-docs-build-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-
-            go-docs-build-${{ runner.os }}-
+          key: go-docs-build-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: go-docs-build-${{ runner.os }}-
+      - name: Mark the restored Go caches
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        env:
+          CACHE_KEY: ${{ steps.go-cache.outputs.cache-primary-key }}
+          CACHE_RESTORED_KEY: ${{ steps.go-cache.outputs.cache-matched-key }}
+        run: hack/ci/actions-cache.sh mark
       # pip's download and wheel cache, keyed on the requirements file the docs virtualenv installs from.
       - id: setup-python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - id: pip-env
@@ -103,7 +114,16 @@ jobs:
           CONTENTCHECK_WORKSPACE: ${{ secrets.CONTENTCHECK_WORKSPACE }}
       - name: The committed reference pages are current
         run: git diff --exit-code -- docs/reference
-      - if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      # Every run builds the versioned site, so a pull request that breaks it (or a tag's build) fails here; only main
+      # deploys it.
+      - run: make docs-site
+        env:
+          CONTENTCHECK_WORKSPACE: ${{ secrets.CONTENTCHECK_WORKSPACE }}
+      - id: go-trim
+        name: Trim the Go caches to what this run used
+        if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: hack/ci/actions-cache.sh trim
+      - if: ${{ !cancelled() && steps.go-trim.outcome == 'success' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -118,7 +138,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: site
-          path: bin/site
+          path: ${{ github.event_name == 'pull_request' && 'bin/site' || 'bin/versioned-site' }}
           retention-days: 7
           if-no-files-found: error
 
@@ -227,3 +247,21 @@ jobs:
         env:
           URL: ${{ steps.deploy.outputs.deployment-url }}
         run: echo "Deployed to ${URL}" >> "${GITHUB_STEP_SUMMARY}"
+
+  # On a push to main, once build has saved: deletes every entry of its Go and pip caches but the newest, as ci.yml's
+  # cache-prune does for its caches (the comment in ci.yml's lint job says why).
+  cache-prune:
+    needs: [build]
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      actions: write # deletes cache entries
+      contents: read # checks out the script
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: hack/ci/actions-cache.sh prune "go-docs-build-${RUNNER_OS}-" "pip-docs-build-${RUNNER_OS}-"
+        env:
+          GH_TOKEN: ${{ github.token }}

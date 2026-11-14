@@ -19,3 +19,7 @@ func LoadedAlertmanagerTriggerForTest(t *testing.T) v1alpha1.Trigger {
 	}
 	return set.Bindings[0].Spec.Chat.Triggers[0]
 }
+
+// NewDirSource returns the Source of the config directory dir, which is what a Reloader reads when it is given Dir and no
+// Source, for the conformance test of the sources (sourcetest) in this package's external tests.
+func NewDirSource(dir string) Source { return dirSource{dir} }

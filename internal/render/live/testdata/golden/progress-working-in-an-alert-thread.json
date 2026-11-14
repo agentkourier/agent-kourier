@@ -1,0 +1,199 @@
+{
+  "requests": [
+    {
+      "path": "/chat.postMessage",
+      "form": {
+        "blocks": [
+          {
+            "elements": [
+              {
+                "text": "Calling kubectl_get(namespace=\"prod\")",
+                "type": "plain_text"
+              }
+            ],
+            "type": "context"
+          }
+        ],
+        "channel": "C1",
+        "outbox_id": "turn-1/reply",
+        "parse": "none",
+        "text": "Calling kubectl_get(namespace=\"prod\")",
+        "thread_ts": "ROOT",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    },
+    {
+      "path": "/chat.update",
+      "form": {
+        "blocks": [
+          {
+            "details": {
+              "elements": [
+                {
+                  "elements": [
+                    {
+                      "text": "namespace=\"prod\"",
+                      "type": "text"
+                    }
+                  ],
+                  "type": "rich_text_section"
+                }
+              ],
+              "type": "rich_text"
+            },
+            "status": "complete",
+            "task_id": "s1",
+            "title": "kubectl_get",
+            "type": "task_card"
+          }
+        ],
+        "channel": "C1",
+        "parse": "none",
+        "text": "Ran kubectl_get(namespace=\"prod\")",
+        "ts": "TS1",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    },
+    {
+      "path": "/chat.update",
+      "form": {
+        "blocks": [
+          {
+            "details": {
+              "elements": [
+                {
+                  "elements": [
+                    {
+                      "text": "namespace=\"prod\"",
+                      "type": "text"
+                    }
+                  ],
+                  "type": "rich_text_section"
+                }
+              ],
+              "type": "rich_text"
+            },
+            "status": "complete",
+            "task_id": "s1",
+            "title": "kubectl_get",
+            "type": "task_card"
+          },
+          {
+            "status": "in_progress",
+            "task_id": "s2",
+            "title": "Working…",
+            "type": "task_card"
+          }
+        ],
+        "channel": "C1",
+        "parse": "none",
+        "text": "Working…",
+        "ts": "TS1",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    },
+    {
+      "path": "/chat.update",
+      "form": {
+        "blocks": [
+          {
+            "details": {
+              "elements": [
+                {
+                  "elements": [
+                    {
+                      "text": "namespace=\"prod\"",
+                      "type": "text"
+                    }
+                  ],
+                  "type": "rich_text_section"
+                }
+              ],
+              "type": "rich_text"
+            },
+            "status": "complete",
+            "task_id": "s1",
+            "title": "kubectl_get",
+            "type": "task_card"
+          },
+          {
+            "status": "complete",
+            "task_id": "s2",
+            "title": "Wrote the answer",
+            "type": "task_card"
+          },
+          {
+            "text": "Three pods, all ready.",
+            "type": "markdown"
+          }
+        ],
+        "channel": "C1",
+        "parse": "none",
+        "text": "Three pods, all ready.",
+        "ts": "TS1",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    }
+  ],
+  "thread": [
+    {
+      "text": "root",
+      "thread": true
+    },
+    {
+      "text": "Three pods, all ready.",
+      "blocks": [
+        {
+          "details": {
+            "elements": [
+              {
+                "elements": [
+                  {
+                    "text": "namespace=\"prod\"",
+                    "type": "text"
+                  }
+                ],
+                "type": "rich_text_section"
+              }
+            ],
+            "type": "rich_text"
+          },
+          "status": "complete",
+          "task_id": "s1",
+          "title": "kubectl_get",
+          "type": "task_card"
+        },
+        {
+          "status": "complete",
+          "task_id": "s2",
+          "title": "Wrote the answer",
+          "type": "task_card"
+        },
+        {
+          "text": "Three pods, all ready.",
+          "type": "markdown"
+        }
+      ],
+      "thread": true,
+      "tasks": [
+        {
+          "id": "s1",
+          "title": "kubectl_get",
+          "status": "complete",
+          "details": "namespace=\"prod\""
+        },
+        {
+          "id": "s2",
+          "title": "Wrote the answer",
+          "status": "complete"
+        }
+      ],
+      "edited": true,
+      "outbox_id": "turn-1/reply"
+    }
+  ]
+}

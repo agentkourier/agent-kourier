@@ -27,21 +27,38 @@ func AcceptsResponsePayload() EnvelopeOption {
 }
 
 // SendEnvelope sends a Socket Mode envelope of the given type ("events_api",
-// "interactive", "slash_commands", ...) carrying payload, and returns its
-// envelope_id. It fails with ErrNoConnection if no client is connected, or if
-// the write to the newest one fails.
+// "interactive", "slash_commands", ...) carrying payload to the default app, and
+// returns its envelope_id. It fails with ErrNoConnection if the default app has
+// no client connected, or if the write to the one chosen fails. SendEnvelopeTo
+// names the app.
+//
+// An app with several clients connected gets the envelope on its newest one, or
+// on each in turn with WithSocketSpread.
 //
 // UNCONFIRMED(WP-04): that envelopes go to the newest connection only, where
-// Slack spreads them over up to 10; and that the fake never redelivers an
+// Slack spreads them over up to 10 (see WithSocketSpread); and that the fake never redelivers an
 // envelope that is not acked, where Slack retries with retry_attempt set.
 func (s *Server) SendEnvelope(typ string, payload any, opts ...EnvelopeOption) (string, error) {
+	return s.sendEnvelope(s.defaultApp().AppID, typ, payload, opts...)
+}
+
+// SendEnvelopeTo is SendEnvelope for the app appID. It fails with ErrNotFound for
+// an app the Server does not host.
+func (s *Server) SendEnvelopeTo(appID, typ string, payload any, opts ...EnvelopeOption) (string, error) {
+	if _, ok := s.appByID(appID); !ok {
+		return "", fmt.Errorf("fakeslack: no app %q: %w", appID, ErrNotFound)
+	}
+	return s.sendEnvelope(appID, typ, payload, opts...)
+}
+
+func (s *Server) sendEnvelope(appID, typ string, payload any, opts ...EnvelopeOption) (string, error) {
 	sk := &s.sock
 	sk.mu.Lock()
-	if len(sk.conns) == 0 {
+	c := sk.pickLocked(appID, s.spread)
+	if c == nil {
 		sk.mu.Unlock()
 		return "", ErrNoConnection
 	}
-	c := sk.conns[len(sk.conns)-1]
 	sk.issued++
 	id := fmt.Sprintf("env-%06d", sk.issued)
 	sk.pending[id] = &envelope{acked: make(chan struct{})}
@@ -55,6 +72,30 @@ func (s *Server) SendEnvelope(typ string, payload any, opts ...EnvelopeOption) (
 		return "", fmt.Errorf("fakeslack: sending envelope %s: %w: %w", id, ErrNoConnection, err)
 	}
 	return id, nil
+}
+
+// pickLocked chooses the connection of the app that gets the next envelope: its
+// newest, or with spread the next in turn, oldest first. It is nil when the app
+// has none. The caller holds mu.
+func (sk *sockets) pickLocked(appID string, spread bool) *sockConn {
+	var mine []*sockConn
+	for _, c := range sk.conns {
+		if c.app == appID {
+			mine = append(mine, c)
+		}
+	}
+	switch {
+	case len(mine) == 0:
+		return nil
+	case !spread:
+		return mine[len(mine)-1]
+	}
+	if sk.turn == nil {
+		sk.turn = map[string]int{}
+	}
+	c := mine[sk.turn[appID]%len(mine)]
+	sk.turn[appID]++
+	return c
 }
 
 // ack records a client's acknowledgement. Messages that are not JSON, or that

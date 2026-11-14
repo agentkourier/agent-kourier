@@ -2,9 +2,8 @@ package storetest
 
 import (
 	"fmt"
-	"slices"
+	"maps"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -47,7 +46,7 @@ func outboxIDs(l []store.OutboxEntry) []string {
 
 // sameOutbox compares what an outbox row is, times as instants, leaving out its trace context.
 func sameOutbox(a, b store.OutboxEntry) bool {
-	return a.ID == b.ID && a.EventID == b.EventID && a.Role == b.Role && a.Channel == b.Channel && a.Thread == b.Thread &&
+	return a.ID == b.ID && a.EventID == b.EventID && a.Role == b.Role && a.Connection == b.Connection && a.Channel == b.Channel && a.Thread == b.Thread &&
 		a.CreatedAt.Equal(b.CreatedAt) && a.MessageRef == b.MessageRef && a.Payload == b.Payload && a.AbandonedAt.Equal(b.AbandonedAt)
 }
 
@@ -91,6 +90,37 @@ func (su suite) outbox(t *testing.T) {
 		if c, err := s.CreateOutbox(ctx, root); err != nil || !c {
 			t.Fatalf("a second row of the same event = %v, %v; want it created", c, err)
 		}
+	})
+
+	su.runReopen(t, "an outbox row keeps its connection, and a row made with none has none", func(t *testing.T, s store.Store, reopen func() store.Store) {
+		ctx := t.Context()
+		a := store.OutboxEntry{ID: "a", EventID: "e", Role: store.OutboxReply, Connection: "ns/a", Channel: "C1", Thread: "1.1", CreatedAt: t0, Payload: "{}"}
+		b := a
+		b.ID, b.Connection = "b", "ns/b" // the same channel and thread on another app
+		none := a
+		none.ID, none.Connection = "none", ""
+		for _, o := range []store.OutboxEntry{a, b, none} {
+			if c, err := s.CreateOutbox(ctx, o); err != nil || !c {
+				t.Fatalf("CreateOutbox(%s) = %v, %v", o.ID, c, err)
+			}
+		}
+		check := func(s store.Store) {
+			t.Helper()
+			for _, want := range []store.OutboxEntry{a, b, none} {
+				if got := getOutbox(t, s, want.ID); got.Connection != want.Connection || !sameOutbox(got, want) {
+					t.Errorf("GetOutbox(%s) = %+v; want connection %q", want.ID, got, want.Connection)
+				}
+			}
+			listed := map[string]string{}
+			for _, o := range unposted(t, s) {
+				listed[o.ID] = o.Connection
+			}
+			if want := (map[string]string{"a": "ns/a", "b": "ns/b", "none": ""}); !maps.Equal(listed, want) {
+				t.Errorf("ListUnposted connections = %v; want %v", listed, want)
+			}
+		}
+		check(s)
+		check(reopen())
 	})
 
 	su.run(t, "a new row is unposted and not abandoned whatever the caller says", func(t *testing.T, s store.Store) {
@@ -268,10 +298,6 @@ func (su suite) outbox(t *testing.T) {
 		for _, bad := range []time.Time{{}, time.Unix(0, 0), time.Unix(-5, 0)} {
 			_, err := s.AbandonOutbox(ctx, "a", bad)
 			isErr(t, err, store.ErrInvalid, fmt.Sprintf("AbandonOutbox at %v", bad))
-			_, err = s.AbandonOutboxBefore(ctx, t0, bad)
-			isErr(t, err, store.ErrInvalid, fmt.Sprintf("AbandonOutboxBefore as of %v", bad))
-			_, err = s.AbandonOutboxBefore(ctx, bad, t0)
-			isErr(t, err, store.ErrInvalid, fmt.Sprintf("AbandonOutboxBefore before %v", bad))
 		}
 		if got := getOutbox(t, s, "a"); got.Payload == "" || !got.AbandonedAt.IsZero() {
 			t.Fatalf("row after the refusals = %+v; want it untouched", got)
@@ -286,66 +312,6 @@ func (su suite) outbox(t *testing.T) {
 		noErr(t, s.RecordMessageRef(t.Context(), "a", "5.5"), "RecordMessageRef on an abandoned row")
 		if got := getOutbox(t, s, "a"); got.MessageRef != "5.5" || got.AbandonedAt.IsZero() {
 			t.Fatalf("row = %+v; want the ref recorded and the abandon kept", got)
-		}
-	})
-
-	// The retention purge takes only a row that is old, unrecorded, not yet abandoned and has a payload.
-	su.run(t, "AbandonOutboxBefore takes only old, unposted rows that still hold a payload", func(t *testing.T, s store.Store) {
-		ctx := t.Context()
-		cut := t0.Add(-7 * 24 * time.Hour)
-		addOutbox(t, s, "old", cut.Add(-time.Second), `{"text":"hi"}`)
-		addOutbox(t, s, "boundary", cut, `{"text":"hi"}`)              // not older than the cut
-		addOutbox(t, s, "recent", t0.Add(-time.Hour), `{"text":"hi"}`) // young
-		addOutbox(t, s, "stream", cut.Add(-time.Hour), "")             // no payload to purge
-		addOutbox(t, s, "done", cut.Add(-time.Hour), `{"text":"hi"}`)  // recorded: its payload is gone
-		addOutbox(t, s, "gone", cut.Add(-time.Hour), `{"text":"hi"}`)  // abandoned before
-		noErr(t, s.RecordMessageRef(ctx, "done", "5.5"), "RecordMessageRef")
-		early := t0.Add(-time.Hour)
-		_, err := s.AbandonOutbox(ctx, "gone", early)
-		noErr(t, err, "AbandonOutbox")
-		ids, err := s.AbandonOutboxBefore(ctx, cut, t0)
-		if err != nil || !slices.Equal(ids, []string{"old"}) {
-			t.Fatalf("AbandonOutboxBefore = %v, %v; want only old", ids, err)
-		}
-		for id, want := range map[string]time.Time{"old": t0, "gone": early, "boundary": {}, "recent": {}, "stream": {}, "done": {}} {
-			if got := getOutbox(t, s, id); !got.AbandonedAt.Equal(want) {
-				t.Errorf("%s abandoned at %v; want %v", id, got.AbandonedAt, want)
-			}
-		}
-		if got := getOutbox(t, s, "old"); got.Payload != "" {
-			t.Errorf("the purged row kept its payload %q", got.Payload)
-		}
-		if ids, err := s.AbandonOutboxBefore(ctx, cut, t0); err != nil || len(ids) != 0 {
-			t.Fatalf("second purge = %v, %v; want nothing", ids, err)
-		}
-	})
-
-	su.run(t, "of concurrent retention purges each row is abandoned by one of them", func(t *testing.T, s store.Store) {
-		const rows, purgers = 40, 6
-		cut := t0.Add(time.Hour)
-		for i := range rows {
-			addOutbox(t, s, fmt.Sprintf("o%02d", i), t0, `{"text":"hi"}`)
-		}
-		var mu sync.Mutex
-		got := map[string]int{}
-		parallel(purgers, func(int) {
-			ids, err := s.AbandonOutboxBefore(t.Context(), cut, cut)
-			if err != nil {
-				t.Errorf("AbandonOutboxBefore: %v", err)
-			}
-			mu.Lock()
-			defer mu.Unlock()
-			for _, id := range ids {
-				got[id]++
-			}
-		})
-		if len(got) != rows {
-			t.Errorf("%d rows were abandoned; want %d", len(got), rows)
-		}
-		for id, n := range got {
-			if n != 1 {
-				t.Errorf("row %s was abandoned by %d purges; want 1", id, n)
-			}
 		}
 	})
 }

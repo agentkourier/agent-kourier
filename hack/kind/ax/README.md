@@ -29,7 +29,7 @@ Bedrock image contains neither that model nor the test control endpoints.
 | S5 | Agent Kourier crash after posting, outbox adoption without duplication |
 | S11 | Explicitly skipped: structured tool-approval metadata is specific to kagent |
 | S12 | Failed provider and empty completion, safe user notice and outcome metric |
-| S13 | Explicitly skipped: generic A2A does not interpret kagent tool-step metadata |
+| S13 | Explicitly skipped: the tier's agent has none of the scenario's tools (check_status, restart_service) |
 | S14/S15/S17/S18 | Fast-only alert-trigger fixtures, also skipped by kagent |
 | AX deadline | Question expires and cancels without synthesizing an answer |
 

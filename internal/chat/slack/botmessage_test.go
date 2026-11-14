@@ -18,6 +18,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
+	"github.com/agentkourier/agent-kourier/internal/trigger"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
@@ -147,7 +148,8 @@ func TestAnAppPostIsABotMessageAndNeverAMention(t *testing.T) {
 }
 
 // What is not a bot's new message is dropped, and acknowledged, though the bot is one the sink takes: edits,
-// deletions, a bot's other subtypes, an app_mention by a bot, a message with nothing in it, a direct message.
+// deletions, a bot's other subtypes, an app_mention by a bot to a sink that cannot say whether it takes one, a message with
+// nothing in it, a direct message.
 func TestABotsEditsDeletionsAndOtherSubtypesAreIgnored(t *testing.T) {
 	fake, sk, _ := startBots(t, "C1", webhookBot)
 	post := map[string]any{"subtype": "bot_message", "bot_id": webhookBot, "username": "Alertmanager", "user": "", "text": "",
@@ -305,10 +307,10 @@ type botIntake struct {
 	reg     *prometheus.Registry
 	logs    *syncBuffer
 	mu      sync.Mutex
-	matches []chat.TriggerMatch
+	matches []trigger.Match
 }
 
-func (b *botIntake) got() []chat.TriggerMatch {
+func (b *botIntake) got() []trigger.Match {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return slices.Clone(b.matches)
@@ -357,10 +359,10 @@ func startBotIntake(t *testing.T, triggers ...v1alpha1.Trigger) *botIntake {
 	}
 	log := slog.New(slog.NewTextHandler(bi.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	sub := &submitter{}
-	intake := chat.NewIntake(chat.IntakeConfig{
+	intake := trigger.NewIntake(trigger.IntakeConfig{
 		Connection: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"},
 		Snapshot:   func() *config.Snapshot { return snap }, Submitter: sub, Logger: log,
-		OnStart: func(_ context.Context, m chat.TriggerMatch) error {
+		OnStart: func(_ context.Context, m trigger.Match) error {
 			bi.mu.Lock()
 			defer bi.mu.Unlock()
 			bi.matches = append(bi.matches, m)

@@ -65,10 +65,72 @@ type Subject struct {
 	// TooLargeTools, if set and ToolApprovals is, is a prompt of tools too large for the platform: Fits must refuse it
 	// with chat.ErrTooLarge.
 	TooLargeTools *chat.Prompt
+	// Channels puts the platform in each ChannelState the contract of ChannelAccess names, and returns the channel that is then
+	// in it: Conformance asks ChannelAccess of that channel. It is how an adapter lets the suite reach states that only its
+	// platform can be put in (an archived channel, a missing permission). It is required: a Subject without it is a setup
+	// violation, so that a new adapter cannot pass with ChannelAccess unchecked. It may change what the platform answers for
+	// every channel, and the suite calls it again before it asks about the next state.
+	Channels func(ChannelState) string
+	// Groups puts the platform in each GroupState the contract of GroupsReadable names, and returns a group ID then in it:
+	// Conformance asks GroupsReadable of it. Like Channels it is required, so that a new adapter cannot pass with GroupsReadable
+	// unchecked, and it may change what the platform answers for every group: the suite calls it again before it asks about the
+	// next state. The suite arranges GroupUnknown, then GroupReadable, and asks about the two groups together, so arranging a state
+	// may reset the others but must not make the unknown group readable.
+	Groups func(GroupState) string
 	// MentionUser is a user ID the platform shows as a mention, in a chat.Mention part, or "" if the platform has
 	// none: then a Mention shows its user as nothing but text. The checks send it, and require exactly one mention
 	// of it and nothing else the platform acts on; every other user ID they send is forged, and must never act.
 	MentionUser string
+}
+
+// ChannelState is a state the platform's channel can be in, as ChannelAccess tells them apart.
+type ChannelState int
+
+// The states Subject.Channels puts the platform in.
+const (
+	ChannelJoined       ChannelState = iota // Agent Kourier is a member of a channel that is not archived
+	ChannelNotJoined                        // a channel that exists, which Agent Kourier is not a member of
+	ChannelArchived                         // an archived channel
+	ChannelUnknown                          // a channel the platform has never heard of (or hides from Agent Kourier)
+	ChannelScopeMissing                     // any channel, asked of an app that lacks the permission to read it
+)
+
+func (s ChannelState) String() string {
+	switch s {
+	case ChannelJoined:
+		return "joined"
+	case ChannelNotJoined:
+		return "not joined"
+	case ChannelArchived:
+		return "archived"
+	case ChannelUnknown:
+		return "unknown channel"
+	case ChannelScopeMissing:
+		return "missing scope"
+	}
+	return fmt.Sprintf("ChannelState(%d)", int(s))
+}
+
+// GroupState is a state the platform's user groups can be in, as GroupsReadable tells them apart.
+type GroupState int
+
+// The states Subject.Groups puts the platform in.
+const (
+	GroupReadable     GroupState = iota // a group that exists, which Agent Kourier may read
+	GroupUnknown                        // a group the platform has never heard of
+	GroupScopeMissing                   // any group, asked of an app that lacks the permission to read groups
+)
+
+func (s GroupState) String() string {
+	switch s {
+	case GroupReadable:
+		return "readable"
+	case GroupUnknown:
+		return "unknown group"
+	case GroupScopeMissing:
+		return "missing scope"
+	}
+	return fmt.Sprintf("GroupState(%d)", int(s))
 }
 
 // Concession is a construct of the kinds Kinds that the platform acts on in the text of the place Where
@@ -195,8 +257,8 @@ func ConformanceSharded(t *testing.T, shards int, newSubject func(t *testing.T) 
 
 // checkShard runs the checks of some places, and the contract if asked.
 func checkShard(ctx context.Context, s Subject, opts Options, places []placement, contract bool) []Violation {
-	if s.Platform == nil || s.Sent == nil || s.Inert == nil {
-		return []Violation{{Rule: RuleSetup, Case: "subject", Detail: "Platform, Sent and Inert are all required"}}
+	if s.Platform == nil || s.Sent == nil || s.Inert == nil || s.Channels == nil || s.Groups == nil {
+		return []Violation{{Rule: RuleSetup, Case: "subject", Detail: "Platform, Sent, Inert, Channels and Groups are all required"}}
 	}
 	for _, cc := range s.Concessions {
 		if cc.Why == "" || len(cc.Kinds) == 0 {
@@ -307,7 +369,189 @@ func (c *checker) contract() {
 		c.zeroStop()
 		c.stepContract()
 	}
+	if c.caps.Steps {
+		c.messageSteps()
+	}
+	c.busyContract()
+	c.accessContract(c.ctx)
+	c.groupsContract(c.ctx)
 	c.s.Sent() // the contract checks are not text checks
+	_ = c.s.Inert()
+}
+
+// accessContract checks what a platform promises of ChannelAccess (see the method): it answers for Agent Kourier's membership
+// and for the archived flag, says ErrChannelNotFound for a channel it does not know and for none, ErrMissingScope for an app
+// that lacks the permission, and leaves the Access zero on those errors. A cancelled context, the one other failure the suite
+// can force on every platform, wraps neither sentinel and leaves the Access zero if it fails the call. The suite does not ask
+// Classify about it, or check other failures. Classify(OpOther) agrees with the sentinels: Permanent for both, with
+// ReasonChannelGone for a channel not found, so a caller that does not retry them is not told to by Classify. The states are
+// reached through Subject.Channels, which every subject sets.
+func (c *checker) accessContract(ctx context.Context) {
+	p := c.s.Platform
+	// classified checks that Classify(OpOther) agrees with the sentinel err wraps: Permanent, as the contract says a caller
+	// does not retry it, and for a channel not found the reason ReasonChannelGone.
+	classified := func(cs string, err, sentinel error) {
+		v := p.Classify(chat.OpOther, err)
+		switch {
+		case v.Class != chat.Permanent:
+			c.add(RuleContract, 0, "ChannelAccess", cs, "Classify(OpOther) of %v is %+v, want Permanent: a caller does not retry an error that wraps %v", err, v, sentinel)
+		case errors.Is(sentinel, chat.ErrChannelNotFound) && v.Reason != chat.ReasonChannelGone:
+			c.add(RuleContract, 0, "ChannelAccess", cs, "Classify(OpOther) of %v has the reason %q, want %q", err, v.Reason, chat.ReasonChannelGone)
+		case v.Reason == chat.ReasonNone:
+			c.add(RuleContract, 0, "ChannelAccess", cs, "Classify(OpOther) of %v is Permanent with no reason", err)
+		}
+	}
+	// failed checks the error and Access of a call that must fail with want, and with no other sentinel.
+	failed := func(cs string, a chat.Access, err, want error) {
+		for _, sentinel := range []error{chat.ErrChannelNotFound, chat.ErrMissingScope} {
+			if errors.Is(err, sentinel) != errors.Is(want, sentinel) {
+				c.add(RuleContract, 0, "ChannelAccess", cs, "gave %v, want an error that wraps %v and no other of the sentinels of ChannelAccess", err, want)
+				return
+			}
+		}
+		if a != (chat.Access{}) {
+			c.add(RuleContract, 0, "ChannelAccess", cs, "gave the Access %+v with the error %v, want the zero Access", a, err)
+		}
+		classified(cs, err, want)
+	}
+	a, err := p.ChannelAccess(ctx, "")
+	failed("no channel", a, err, chat.ErrChannelNotFound)
+	channelIn := func(st ChannelState) (string, bool) {
+		ch := c.s.Channels(st)
+		if ch == "" {
+			c.add(RuleSetup, 0, "ChannelAccess", st.String(), "Subject.Channels named no channel for the state")
+		}
+		return ch, ch != ""
+	}
+	for _, tc := range []struct {
+		state ChannelState
+		ok    func(chat.Access) bool // for a state that is an answer
+		want  string
+		fail  error // for a state that is an error
+	}{
+		{ChannelJoined, func(a chat.Access) bool { return a.Member && !a.Archived }, "a member, not archived", nil},
+		{ChannelNotJoined, func(a chat.Access) bool { return !a.Member && !a.Archived }, "not a member, not archived", nil},
+		{ChannelArchived, func(a chat.Access) bool { return a.Archived }, "archived", nil},
+		{ChannelUnknown, nil, "", chat.ErrChannelNotFound},
+		{ChannelScopeMissing, nil, "", chat.ErrMissingScope},
+	} {
+		ch, ok := channelIn(tc.state)
+		if !ok {
+			continue
+		}
+		a, err := p.ChannelAccess(ctx, ch)
+		switch {
+		case tc.fail != nil:
+			failed(tc.state.String(), a, err, tc.fail)
+		case err != nil:
+			c.add(RuleContract, 0, "ChannelAccess", tc.state.String(), "failed: %v, want %s", err, tc.want)
+		case !tc.ok(a):
+			c.add(RuleContract, 0, "ChannelAccess", tc.state.String(), "gave %+v, want %s", a, tc.want)
+		}
+	}
+	// A cancelled context is not a verdict on the channel: it never says the channel is missing, or the permission is.
+	if ch, ok := channelIn(ChannelJoined); ok {
+		cancelled, cancel := context.WithCancel(ctx)
+		cancel()
+		if a, err := p.ChannelAccess(cancelled, ch); err != nil {
+			if errors.Is(err, chat.ErrChannelNotFound) || errors.Is(err, chat.ErrMissingScope) {
+				c.add(RuleContract, 0, "ChannelAccess", "cancelled context", "gave %v, want an error that wraps neither chat.ErrChannelNotFound nor chat.ErrMissingScope", err)
+			} else if a != (chat.Access{}) {
+				c.add(RuleContract, 0, "ChannelAccess", "cancelled context", "gave the Access %+v with the error %v, want the zero Access", a, err)
+			}
+		}
+	}
+}
+
+// groupsContract checks what a platform promises of GroupsReadable (see the method): no groups is nil, a group it may read is nil,
+// and the first group it cannot read ends the call with a *chat.GroupError that names it and wraps chat.ErrGroupsMisconfigured, and
+// also chat.ErrGroupNotFound for a group that is not there and chat.ErrMissingScope for an app without the permission, and neither
+// of those for the other. A cancelled context, the one other failure the suite can force on every platform, wraps none of the three.
+// The states are reached through Subject.Groups, which every subject sets.
+func (c *checker) groupsContract(ctx context.Context) {
+	p := c.s.Platform
+	if err := p.GroupsReadable(ctx, nil); err != nil {
+		c.add(RuleContract, 0, "GroupsReadable", "no groups", "gave %v, want nil: no groups is no call and no error", err)
+	}
+	groupIn := func(st GroupState) (string, bool) {
+		g := c.s.Groups(st)
+		if g == "" {
+			c.add(RuleSetup, 0, "GroupsReadable", st.String(), "Subject.Groups named no group for the state")
+		}
+		return g, g != ""
+	}
+	// failed checks the error of a call over groups that must fail at the group named want, with the sentinel and no other.
+	failed := func(cs string, groups []string, want string, sentinel error) {
+		err := p.GroupsReadable(ctx, groups)
+		var ge *chat.GroupError
+		switch {
+		case !errors.As(err, &ge):
+			c.add(RuleContract, 0, "GroupsReadable", cs, "gave %v, want a *chat.GroupError", err)
+			return
+		case ge.Group != want:
+			c.add(RuleContract, 0, "GroupsReadable", cs, "the error names the group %q, want %q: the first group that cannot be read", ge.Group, want)
+		case !errors.Is(err, chat.ErrGroupsMisconfigured):
+			c.add(RuleContract, 0, "GroupsReadable", cs, "gave %v, want an error that wraps chat.ErrGroupsMisconfigured: no retry mends it", err)
+		}
+		for _, other := range []error{chat.ErrGroupNotFound, chat.ErrMissingScope} {
+			if errors.Is(err, other) != errors.Is(sentinel, other) {
+				c.add(RuleContract, 0, "GroupsReadable", cs, "gave %v, want an error that wraps %v and no other of the sentinels of GroupsReadable", err, sentinel)
+				return
+			}
+		}
+	}
+	// The unknown group is arranged first and the readable one after it, and then both are asked for together, so that a Subject.Groups
+	// that resets every group when it arranges a state still has the readable group readable and the unknown one not there.
+	unknown, okUnknown := groupIn(GroupUnknown)
+	readable, ok := groupIn(GroupReadable)
+	if ok {
+		if err := p.GroupsReadable(ctx, []string{readable}); err != nil {
+			c.add(RuleContract, 0, "GroupsReadable", GroupReadable.String(), "failed: %v, want nil for a group that may be read", err)
+		}
+	}
+	if ok && okUnknown {
+		failed(GroupUnknown.String(), []string{readable, unknown, readable}, unknown, chat.ErrGroupNotFound)
+	}
+	if scope, ok := groupIn(GroupScopeMissing); ok {
+		failed(GroupScopeMissing.String(), []string{scope}, scope, chat.ErrMissingScope)
+	}
+	// A cancelled context is not a verdict on the group: it never says the group is missing, or the permission is.
+	if g, ok := groupIn(GroupReadable); ok {
+		cancelled, cancel := context.WithCancel(ctx)
+		cancel()
+		if err := p.GroupsReadable(cancelled, []string{g}); err != nil &&
+			(errors.Is(err, chat.ErrGroupNotFound) || errors.Is(err, chat.ErrMissingScope) || errors.Is(err, chat.ErrGroupsMisconfigured)) {
+			c.add(RuleContract, 0, "GroupsReadable", "cancelled context", "gave %v, want an error that wraps none of the sentinels of GroupsReadable", err)
+		}
+	}
+}
+
+// busyContract checks what a platform promises of the busy mark (chat.BusyMarker). A platform whose Caps.Busy is false says
+// ErrNoBusy, and one whose Caps.Busy is true sets and clears a mark without error or ErrNoBusy (which a platform may say
+// later, once it finds it cannot), refuses a target with no thread as invalid, and shows no text for any of it: the mark's
+// words are the platform's own.
+func (c *checker) busyContract() {
+	b := c.s.Platform
+	c.s.Sent()
+	_ = c.s.Inert()
+	for _, busy := range []bool{true, false} {
+		err := b.MarkBusy(c.ctx, c.target, busy)
+		switch {
+		case !c.caps.Busy && !errors.Is(err, chat.ErrNoBusy):
+			c.add(RuleContract, 0, "MarkBusy", "no busy", "a platform with Busy false gave %v for busy %t, want chat.ErrNoBusy", err, busy)
+		case c.caps.Busy && err != nil && !errors.Is(err, chat.ErrNoBusy):
+			c.add(RuleContract, 0, "MarkBusy", "busy", "busy %t was refused: %v", busy, err)
+		}
+	}
+	if shown := c.s.Sent(); len(shown) > 0 {
+		c.add(RuleContract, 0, "MarkBusy", "busy text", "a mark and a clear showed %d texts, want none: the mark has words of the platform's own, which are not text of the turn", len(shown))
+	}
+	if c.caps.Busy {
+		if err := b.MarkBusy(c.ctx, chat.Target{Conn: c.target.Conn, Channel: c.target.Channel}, true); !errors.Is(err, chat.ErrInvalid) && !errors.Is(err, chat.ErrNoBusy) {
+			c.add(RuleContract, 0, "MarkBusy", "no thread", "a target with no thread gave %v, want an error wrapping chat.ErrInvalid (or chat.ErrNoBusy, from a platform that has said it cannot)", err)
+		}
+	}
+	c.s.Sent()
 	_ = c.s.Inert()
 }
 
@@ -373,6 +617,18 @@ func (c *checker) stepContract() {
 		if len(shown) > 0 {
 			c.add(RuleContract, chat.WhereStepTitle, "Step", "no steps", "a platform with Steps false showed %d texts for a step", len(shown))
 		}
+		_ = st.Stop(c.ctx, "", chat.Message{}, "tag-step")
+		c.s.Sent()
+		_ = c.s.Inert()
+		out := chat.Say(chat.Message{Fallback: "fallback", Parts: []chat.Part{chat.Steps{Steps: []chat.Step{step}}, chat.Body{Markdown: "text"}}})
+		if _, err := c.s.Platform.Post(c.ctx, c.target, out, "tag-steps"); err != nil {
+			c.add(RuleContract, chat.WhereStepTitle, "Post", "no steps", "a platform with Steps false refused a message with steps: %v, want it to show the rest", err)
+		}
+		for _, s := range c.s.Sent() {
+			if strings.Contains(s.Displayed, canary) {
+				c.add(RuleContract, chat.WhereStepTitle, "Post", "no steps", "a platform with Steps false showed a message's step (%q)", s.Displayed)
+			}
+		}
 		return
 	}
 	if err != nil {
@@ -389,6 +645,51 @@ func (c *checker) stepContract() {
 	}
 	if err := st.Step(c.ctx, step); !errors.Is(err, chat.ErrNotStreaming) {
 		c.add(RuleContract, chat.WhereStepTitle, "Step", "after stop", "a step of a stopped stream gave %v, want an error wrapping chat.ErrNotStreaming", err)
+	}
+}
+
+// messageSteps checks a message with a Steps part on a platform that shows steps, not in a stream: a message that is posted,
+// and one that replaces another, as the reply of an alert thread does each time it is updated. Each is taken, and shows its
+// step's title and the text that follows the steps. (A platform with Steps false shows none of them: stepContract.)
+func (c *checker) messageSteps() {
+	out := chat.Say(chat.Message{Fallback: "fallback", Parts: []chat.Part{
+		chat.Steps{Steps: []chat.Step{{ID: "s1", Title: canary + " tool", Detail: "k=v", State: chat.StepDone}}},
+		chat.Body{Markdown: canary + " text"},
+	}})
+	var ref chat.Ref
+	for _, m := range []struct {
+		name string
+		prep func() error
+		do   func() error
+	}{
+		{name: "Post", do: func() error { _, err := c.s.Platform.Post(c.ctx, c.target, out, "tag-msg-steps"); return err }},
+		{name: "Update",
+			prep: func() (err error) {
+				ref, err = c.s.Platform.Post(c.ctx, c.target, chat.Say(chat.Message{Fallback: "seed"}), "tag-msg-steps-seed")
+				return err
+			},
+			do: func() error { return c.s.Platform.Update(c.ctx, ref, out) }},
+	} {
+		if m.prep != nil {
+			if err := m.prep(); err != nil {
+				c.add(RuleContract, chat.WhereStepTitle, m.name, "message steps", "the message to replace was not posted: %v", err)
+				continue
+			}
+		}
+		c.s.Sent()
+		_ = c.s.Inert()
+		if err := m.do(); err != nil {
+			c.add(RuleContract, chat.WhereStepTitle, m.name, "message steps", "a message with steps was refused: %v", err)
+			continue
+		}
+		var step, text bool
+		for _, s := range c.s.Sent() {
+			step = step || strings.Contains(s.Displayed, canary+" tool")
+			text = text || strings.Contains(s.Displayed, canary+" text")
+		}
+		if !step || !text {
+			c.add(RuleContract, chat.WhereStepTitle, m.name, "message steps", "a message with steps showed its step: %t, and its text: %t; want both", step, text)
+		}
 	}
 }
 
@@ -571,6 +872,10 @@ func placements(mentionUser string, approvals bool) []placement {
 		{chat.WhereStream, "stream", func(s string) call { return call{md: s} }, false, false},
 		{chat.WhereStepTitle, "step title", func(s string) call { return call{step: &chat.Step{ID: "s1", Title: s}} }, false, false},
 		{chat.WhereStepDetail, "step detail", func(s string) call { return call{step: &chat.Step{ID: "s1", Title: "tool", Detail: s}} }, false, false},
+		{chat.WhereStepTitle, "message step title", func(s string) call { return msg(chat.Steps{Steps: []chat.Step{{ID: "s1", Title: s}}}) }, false, false},
+		{chat.WhereStepDetail, "message step detail", func(s string) call {
+			return msg(chat.Steps{Steps: []chat.Step{{ID: "s1", Title: "tool", Detail: s, State: chat.StepEnded}}})
+		}, false, false},
 	}
 	if approvals {
 		out = append(out, toolPlacements()...)
@@ -597,6 +902,9 @@ func (c *checker) run(p placement, name, text string) {
 	if st := p.build(text).step; st != nil {
 		c.step(p, name, text, *st)
 		return
+	}
+	if (p.where == chat.WhereStepTitle || p.where == chat.WhereStepDetail) && !c.caps.Steps {
+		return // a message's steps are shown only by a platform that has steps, and stepContract checks that one without shows none
 	}
 	var ref chat.Ref // the message of a plain post, which Update replaces
 	methods := []struct {
@@ -702,7 +1010,9 @@ func (c *checker) stream(p placement, name, text string) {
 }
 
 // step sends text as a step of a stream in each state a step goes through: begun, done, failed, and ended with no
-// outcome, which a platform shows with words of its own beside the text.
+// outcome, which a platform shows with words of its own beside the text. Each state is a step of its own, first sent
+// in that state, since a platform may send a step's detail only with the first call for it (Slack appends a card's
+// details, so a detail sent again is shown twice).
 func (c *checker) step(p placement, name, text string, st chat.Step) {
 	if !c.caps.Streams || !c.caps.Steps {
 		return
@@ -712,8 +1022,9 @@ func (c *checker) step(p placement, name, text string, st chat.Step) {
 		c.add(RuleRejected, p.where, "Stream", name, "a stream of plain text was refused: %v", err)
 		return
 	}
+	id := st.ID
 	for _, state := range []chat.StepState{chat.StepRunning, chat.StepDone, chat.StepFailed, chat.StepEnded} {
-		st.State = state
+		st.ID, st.State = id+"-"+state.String(), state
 		c.s.Sent()
 		_ = c.s.Inert()
 		c.verify(p, "Step ("+state.String()+")", name, text, stream.Step(c.ctx, st))

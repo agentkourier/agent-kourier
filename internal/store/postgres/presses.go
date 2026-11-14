@@ -10,9 +10,9 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
-// RecordPress implements store.Presses. The counts and the insert are one transaction under an advisory
-// lock that every RecordPress takes, so the limits hold under concurrent presses: READ COMMITTED would
-// let two callers count the same free place. The lock also makes the order of Seq the order of commits.
+// RecordPress implements store.Presses. The counts, over the presses of p's connection, and the insert are one transaction
+// under an advisory lock that every RecordPress takes, so the limits hold under concurrent presses: READ COMMITTED would let
+// two callers count the same free place. The lock also makes the order of Seq the order of commits.
 func (s *adapter) RecordPress(ctx context.Context, p store.Press, limits store.PressLimits) (int64, error) {
 	var seq int64
 	if p.Inputs == nil {
@@ -23,15 +23,15 @@ func (s *adapter) RecordPress(ctx context.Context, p store.Press, limits store.P
 			return err
 		}
 		var total, user int
-		if err := tx.QueryRow(ctx, `SELECT COUNT(*), COUNT(*) FILTER (WHERE user_id = $1) FROM interaction_presses`, p.User).Scan(&total, &user); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT COUNT(*), COUNT(*) FILTER (WHERE user_id = $1) FROM interaction_presses WHERE connection = $2`, p.User, p.Connection).Scan(&total, &user); err != nil {
 			return fmt.Errorf("count presses: %w", err)
 		}
 		if total >= limits.Total || user >= limits.PerUser {
 			return fmt.Errorf("%d presses wait, %d from %s: %w", total, user, p.User, store.ErrLimit)
 		}
-		return tx.QueryRow(ctx, `INSERT INTO interaction_presses (interaction_id, user_id, channel, message_ts, inputs, pressed_at, trace_parent, trace_state)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING seq`,
-			p.InteractionID, p.User, p.Channel, p.MessageRef, p.Inputs, p.PressedAt, p.TraceParent, p.TraceState).Scan(&seq)
+		return tx.QueryRow(ctx, `INSERT INTO interaction_presses (interaction_id, user_id, connection, channel, message_ts, inputs, pressed_at, trace_parent, trace_state)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING seq`,
+			p.InteractionID, p.User, p.Connection, p.Channel, p.MessageRef, p.Inputs, p.PressedAt, p.TraceParent, p.TraceState).Scan(&seq)
 	})
 	if err != nil {
 		return 0, fmt.Errorf("record press of %s: %w", p.InteractionID, err)
@@ -41,7 +41,7 @@ func (s *adapter) RecordPress(ctx context.Context, p store.Press, limits store.P
 
 // ListPresses implements store.Presses.
 func (s *adapter) ListPresses(ctx context.Context) ([]store.Press, error) {
-	rows, err := s.pool.Query(ctx, `SELECT seq, interaction_id, user_id, channel, message_ts, inputs, pressed_at, trace_parent, trace_state
+	rows, err := s.pool.Query(ctx, `SELECT seq, interaction_id, user_id, connection, channel, message_ts, inputs, pressed_at, trace_parent, trace_state
 		FROM interaction_presses ORDER BY seq`)
 	if err != nil {
 		return nil, fmt.Errorf("list presses: %w", err)
@@ -51,7 +51,7 @@ func (s *adapter) ListPresses(ctx context.Context) ([]store.Press, error) {
 	for rows.Next() {
 		var p store.Press
 		var at time.Time
-		if err := rows.Scan(&p.Seq, &p.InteractionID, &p.User, &p.Channel, &p.MessageRef, &p.Inputs, &at, &p.TraceParent, &p.TraceState); err != nil {
+		if err := rows.Scan(&p.Seq, &p.InteractionID, &p.User, &p.Connection, &p.Channel, &p.MessageRef, &p.Inputs, &at, &p.TraceParent, &p.TraceState); err != nil {
 			return nil, fmt.Errorf("list presses: %w", err)
 		}
 		p.PressedAt = utc(at)
@@ -91,8 +91,8 @@ func (s *adapter) PendingPresses(ctx context.Context, interactionID string, befo
 		OR EXISTS (SELECT 1 FROM interactions i JOIN reply_queue r
 		ON r.connection = i.connection AND r.channel = i.channel AND r.thread_ts = i.thread_ts
 		WHERE i.id = $1 AND i.text_replies AND i.state = 'pending' AND i.message_ref <> ''
-		AND r.interaction_id = '' AND r.delivered_at IS NULL AND r.enqueued_at >= i.created_at
-		AND r.enqueued_at <= $2)`, interactionID, before).Scan(&found)
+		AND r.interaction_id = '' AND r.user_id <> $3 AND r.delivered_at IS NULL AND r.enqueued_at >= i.created_at
+		AND r.enqueued_at <= $2)`, interactionID, before, store.SystemUser).Scan(&found)
 	if err != nil {
 		return false, fmt.Errorf("pending presses of %s: %w", interactionID, err)
 	}

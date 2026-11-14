@@ -25,8 +25,12 @@ func finishAgent(op *telemetry.Operation, err error) {
 		op.FinishOutcome(err, "credentials_rejected")
 	case errors.Is(err, ErrForbidden):
 		op.FinishOutcome(err, "forbidden")
+	case errors.Is(err, ErrAgentForbidden):
+		op.FinishOutcome(err, "agent_forbidden")
 	case errors.Is(err, ErrOutcomeUnknown):
 		op.FinishOutcome(err, "outcome_unknown")
+	case errors.Is(err, ErrLookupIncomplete):
+		op.FinishOutcome(err, "lookup_incomplete")
 	case errors.Is(err, ErrStreamLost):
 		op.FinishOutcome(err, "stream_lost")
 	case errors.Is(err, ErrAnswerRejected):

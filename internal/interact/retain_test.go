@@ -2,7 +2,6 @@ package interact_test
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"strings"
 	"sync"
@@ -12,9 +11,11 @@ import (
 
 	"go.uber.org/goleak"
 
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // purges is a store that only counts the purges and clears it is asked for. failFirst of the purges fail, and
@@ -93,8 +94,8 @@ func startRetention(t *testing.T, cfg interact.RetentionConfig) (stop func() err
 func TestRetentionPurgesOnEveryTickWithItsGraceAndTheClock(t *testing.T) {
 	p := &purges{}
 	startRetention(t, interact.RetentionConfig{Store: p, Interval: 5 * time.Millisecond, Grace: 90 * time.Minute, Now: func() time.Time { return d0 },
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
-	waitFor(t, "three purges", func() bool { return len(p.list()) >= 3 })
+		Logger: testutil.DiscardLogger()})
+	testutil.Eventually(t, "three purges", func() bool { return len(p.list()) >= 3 })
 	for _, got := range p.list() {
 		if got.now != d0 || got.grace != 90*time.Minute {
 			t.Errorf("purge = %+v; want the clock's now and the configured grace", got)
@@ -107,8 +108,8 @@ func TestRetentionPurgesOnEveryTickWithItsGraceAndTheClock(t *testing.T) {
 func TestRetentionClearsSettledInteractionsOnEveryTickWithItsGracesAndTheClock(t *testing.T) {
 	p := &purges{}
 	startRetention(t, interact.RetentionConfig{Store: p, Interval: 5 * time.Millisecond, ClearGrace: 30 * time.Hour, UndeliveredGrace: 50 * time.Hour,
-		Now: func() time.Time { return d0 }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
-	waitFor(t, "three clears", func() bool { return len(p.clears()) >= 3 })
+		Now: func() time.Time { return d0 }, Logger: testutil.DiscardLogger()})
+	testutil.Eventually(t, "three clears", func() bool { return len(p.clears()) >= 3 })
 	for _, got := range p.clears() {
 		if got != (clearing{d0, 30 * time.Hour, 50 * time.Hour}) {
 			t.Errorf("clear = %+v; want the clock's now and the configured graces", got)
@@ -134,19 +135,19 @@ func TestRetentionClearsAfterTheGraceAndNotBefore(t *testing.T) {
 	logs := &logBuf{}
 	startRetention(t, interact.RetentionConfig{Store: r.st, Interval: 5 * time.Millisecond, ClearGrace: time.Hour, UndeliveredGrace: time.Hour,
 		Now: func() time.Time { tick.Add(1); return time.Unix(0, now.Load()).UTC() }, Logger: slog.New(slog.NewTextHandler(logs, nil))})
-	waitFor(t, "ticks inside the grace", func() bool { return tick.Load() >= 5 })
+	testutil.Eventually(t, "ticks inside the grace", func() bool { return tick.Load() >= 5 })
 	if got := r.row(t); len(got.Request) == 0 || len(got.Answer) == 0 {
 		t.Fatalf("row %+v a second inside the grace; want it kept whole", got)
 	}
 	now.Store(r.now.Add(time.Hour).UnixNano())
-	waitFor(t, "the row to be cleared", func() bool { return len(r.row(t).Request) == 0 })
+	testutil.Eventually(t, "the row to be cleared", func() bool { return len(r.row(t).Request) == 0 })
 	got := r.row(t)
 	want := decided
 	want.Request, want.Answer = nil, nil
 	if len(got.Answer) != 0 || got.State != want.State || got.Decider != want.Decider || !got.DecidedAt.Equal(want.DecidedAt) || got.MessageRef != want.MessageRef || got.ID != want.ID {
 		t.Errorf("cleared row %+v; want only the request and answer gone: %+v", got, want)
 	}
-	waitFor(t, "the clearing to be logged", func() bool { return strings.Contains(logs.String(), "cleared=1") })
+	testutil.Eventually(t, "the clearing to be logged", func() bool { return strings.Contains(logs.String(), "cleared=1") })
 }
 
 // TestRetentionDoesNotPurgeBeforeItsFirstTick: nothing is deleted at once; a restart does not purge ahead of
@@ -174,13 +175,13 @@ func TestRetentionKeepsPressesWithinTheGraceAndPurgesThemAfter(t *testing.T) {
 	now.Store(deadline.Add(time.Hour - time.Second).UnixNano())
 	var tick atomic.Int32
 	startRetention(t, interact.RetentionConfig{Store: r.st, Interval: 5 * time.Millisecond, Grace: time.Hour,
-		Now: func() time.Time { tick.Add(1); return time.Unix(0, now.Load()).UTC() }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
-	waitFor(t, "purges", func() bool { return tick.Load() >= 5 })
+		Now: func() time.Time { tick.Add(1); return time.Unix(0, now.Load()).UTC() }, Logger: testutil.DiscardLogger()})
+	testutil.Eventually(t, "purges", func() bool { return tick.Load() >= 5 })
 	if r.waiting(t) != 1 {
 		t.Fatalf("%d presses waiting a second inside the grace; want it kept", r.waiting(t))
 	}
 	now.Store(deadline.Add(time.Hour).UnixNano())
-	waitFor(t, "the press to be purged", func() bool { return r.waiting(t) == 0 })
+	testutil.Eventually(t, "the press to be purged", func() bool { return r.waiting(t) == 0 })
 }
 
 // TestRetentionLogsAFailedPurgeAndGoesOn: the backstop is only a backstop, so a store that fails for a while
@@ -189,7 +190,7 @@ func TestRetentionLogsAFailedPurgeAndGoesOn(t *testing.T) {
 	p := &purges{failFirst: 2}
 	logs := &logBuf{}
 	startRetention(t, interact.RetentionConfig{Store: p, Interval: 5 * time.Millisecond, Logger: slog.New(slog.NewTextHandler(logs, nil))})
-	waitFor(t, "purges after the failures", func() bool { return len(p.list()) >= 4 })
+	testutil.Eventually(t, "purges after the failures", func() bool { return len(p.list()) >= 4 })
 	if out := logs.String(); strings.Count(out, "level=WARN") != 2 || !strings.Contains(out, "boom") {
 		t.Errorf("log = %q; want one warning with the error for each of the two failures", out)
 	}
@@ -218,9 +219,9 @@ func TestRetentionLogsWhatItPurged(t *testing.T) {
 	counted := &countingPurger{RetentionStore: r.st}
 	startRetention(t, interact.RetentionConfig{Store: counted, Interval: 5 * time.Millisecond, Grace: time.Hour, Logger: slog.New(slog.NewTextHandler(logs, nil)),
 		Now: func() time.Time { return deadline.Add(2 * time.Hour) }})
-	waitFor(t, "the purge to be logged", func() bool { return strings.Contains(logs.String(), "purged=1") })
+	testutil.Eventually(t, "the purge to be logged", func() bool { return strings.Contains(logs.String(), "purged=1") })
 	seen := counted.n.Load()
-	waitFor(t, "two more ticks, which purge nothing", func() bool { return counted.n.Load() >= seen+2 })
+	testutil.Eventually(t, "two more ticks, which purge nothing", func() bool { return counted.n.Load() >= seen+2 })
 	if out := logs.String(); strings.Count(out, "level=INFO") != 1 || !strings.Contains(out, "purged=1") {
 		t.Errorf("log = %q; want the purge logged once, with its count", out)
 	}
@@ -231,7 +232,7 @@ func TestRetentionEndsWithItsContextAndLeavesNoGoroutine(t *testing.T) {
 	before := goleak.IgnoreCurrent()
 	p := &purges{}
 	stop := startRetention(t, interact.RetentionConfig{Store: p, Interval: 5 * time.Millisecond})
-	waitFor(t, "a purge", func() bool { return len(p.list()) >= 1 })
+	testutil.Eventually(t, "a purge", func() bool { return len(p.list()) >= 1 })
 	if err := stop(); err == nil {
 		t.Fatal("Run returned nil; want the context's error")
 	}
@@ -255,7 +256,7 @@ func TestAFailedClearIsLoggedAndDoesNotStopThePurge(t *testing.T) {
 	p := &purges{failClear: true}
 	logs := &logBuf{}
 	startRetention(t, interact.RetentionConfig{Store: p, Interval: 5 * time.Millisecond, Logger: slog.New(slog.NewTextHandler(logs, nil))})
-	waitFor(t, "purges and clears", func() bool { return len(p.list()) >= 3 && len(p.clears()) >= 3 })
+	testutil.Eventually(t, "purges and clears", func() bool { return len(p.list()) >= 3 && len(p.clears()) >= 3 })
 	if out := logs.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "could not be cleared") || strings.Contains(out, "could not be purged") {
 		t.Errorf("log = %q; want warnings for the clears, and none for the purges", out)
 	}
@@ -286,7 +287,7 @@ func TestPurgingAPressTheWorkerIsOnIsHarmless(t *testing.T) {
 	}
 	presses, _ := r.st.ListPresses(t.Context())
 	pl, err := interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{interact.Binding{Dialect: kagentv1.New(time.Second), AskUser: true, Timeout: time.Minute, Identity: "secret:ns/tok"}},
-		Authorizer: r.az, Ephemerals: r.eph, Auditor: r.aud, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: func() time.Time { return r.now },
+		Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Auditor: r.aud, Logger: testutil.DiscardLogger(), Now: func() time.Time { return r.now },
 		Decider: purgingDecider{st: r.st, inner: r.d, at: deadline.Add(time.Hour)}}))
 	if err != nil {
 		t.Fatal(err)
@@ -309,8 +310,8 @@ func TestRetentionCountsWhatItCleared(t *testing.T) {
 	var cleared, calls atomic.Int32
 	startRetention(t, interact.RetentionConfig{Store: r.st, Interval: 5 * time.Millisecond, ClearGrace: time.Hour, UndeliveredGrace: time.Hour,
 		Now:       func() time.Time { return r.now.Add(2 * time.Hour) },
-		OnCleared: func(n int) { calls.Add(1); cleared.Add(int32(n)) }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
-	waitFor(t, "the clearing to be counted", func() bool { return cleared.Load() == 1 })
+		OnCleared: func(n int) { calls.Add(1); cleared.Add(int32(n)) }, Logger: testutil.DiscardLogger()})
+	testutil.Eventually(t, "the clearing to be counted", func() bool { return cleared.Load() == 1 })
 	time.Sleep(30 * time.Millisecond) // more ticks, which clear nothing
 	if cleared.Load() != 1 || calls.Load() != 1 {
 		t.Errorf("counted %d in %d calls; want 1 in one: a pass that clears nothing is not reported", cleared.Load(), calls.Load())

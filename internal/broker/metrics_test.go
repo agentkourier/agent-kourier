@@ -1,15 +1,21 @@
 package broker
 
 import (
+	"context"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/bindingcheck"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
+	"github.com/agentkourier/agent-kourier/internal/retention"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 func mustMetrics(t *testing.T, stale func() bool) *Metrics {
@@ -56,7 +62,7 @@ func TestEachHookIncrementsItsMetric(t *testing.T) {
 		{"credential rejection", func(m *Metrics) { m.CredentialRejected("sre/sre-alerts") }, `agentkourier_credential_rejections_total{binding=sre/sre-alerts} 1`},
 		{"config reload failure", func(m *Metrics) { m.ReloadError(errors.New("bad yaml")) }, `agentkourier_config_reload_errors_total{} 1`},
 		{"outbox abandon", func(m *Metrics) { m.OutboxAbandoned("row-1", "channel_gone") }, `agentkourier_outbox_abandoned_total{reason=channel_gone} 1`},
-		{"retention removal", func(m *Metrics) { m.RetentionRemoved(RemovedStrandedReplies, 1) }, `agentkourier_retention_removed_total{what=stranded_replies} 1`},
+		{"retention removal", func(m *Metrics) { m.RetentionRemoved(retention.RemovedStrandedReplies, 1) }, `agentkourier_retention_removed_total{what=stranded_replies} 1`},
 		{"turn outcome", func(m *Metrics) { m.TurnOutcome("sre/sre-alerts", session.TurnFailed) }, `agentkourier_turn_outcomes_total{binding=sre/sre-alerts,outcome=failed} 1`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -142,14 +148,33 @@ func TestMetricLabelsAreBounded(t *testing.T) {
 	}
 }
 
+// turnOutcomeLabels are the values of the label outcome of agentkourier_turn_outcomes_total, as docs/reference/metrics.md names them and
+// as operators write them into alert rules. They are literals, not session.TurnOutcomes(): a test that iterates the list it checks
+// passes when an outcome is dropped from it, and a dropped outcome is counted as "other", which no alert on its name sees.
+var turnOutcomeLabels = []string{"completed", "failed", "rejected", "canceled", "credentials_rejected", "forbidden", "unreachable",
+	"session_gone", "binding_gone", "wedged", "uncancellable", "pause_ended", "answer_rejected", "refused", "no_final", "response_too_large",
+	"lookup_incomplete"}
+
 // Every outcome the session manager can report is its own label, and one it cannot is "other".
 func TestEveryTurnOutcomeHasItsOwnLabel(t *testing.T) {
+	var listed []string
 	for _, o := range session.TurnOutcomes() {
+		listed = append(listed, string(o))
+	}
+	if !slices.Equal(listed, turnOutcomeLabels) {
+		t.Errorf("session.TurnOutcomes() = %q, want %q: an outcome that is not listed is counted as other", listed, turnOutcomeLabels)
+	}
+	for _, label := range turnOutcomeLabels {
 		m := mustMetrics(t, nil)
-		m.TurnOutcome("ns/b", o)
-		if got := samples(t, m); !slices.Contains(got, "agentkourier_turn_outcomes_total{binding=ns/b,outcome="+string(o)+"} 1") {
-			t.Errorf("outcome %q: samples = %v; want its own label", o, got)
+		m.TurnOutcome("ns/b", session.TurnOutcome(label))
+		if got := samples(t, m); !slices.Contains(got, "agentkourier_turn_outcomes_total{binding=ns/b,outcome="+label+"} 1") {
+			t.Errorf("outcome %q: samples = %v; want its own label", label, got)
 		}
+	}
+	m := mustMetrics(t, nil)
+	m.TurnOutcome("ns/b", session.TurnOutcome("made_up"))
+	if got := samples(t, m); !slices.Contains(got, "agentkourier_turn_outcomes_total{binding=ns/b,outcome=other} 1") {
+		t.Errorf("an outcome the session cannot report: samples = %v; want it counted as other", got)
 	}
 }
 
@@ -172,5 +197,220 @@ func TestEveryAbandonReasonHasItsOwnLabel(t *testing.T) {
 		if got := samples(t, m); !slices.Contains(got, "agentkourier_outbox_abandoned_total{reason=other} 1") || strings.Contains(strings.Join(got, "\n"), code) {
 			t.Errorf("code %q: samples = %v; want it counted as other, and never as a label", code, got)
 		}
+	}
+}
+
+// transition is a change of one condition of one Binding to status, for the metric hooks.
+func transition(binding string, t bindingcheck.ConditionType, status bindingcheck.Status) bindingcheck.Transition {
+	return bindingcheck.Transition{Binding: binding, New: bindingcheck.Condition{Type: t, Status: status, Reason: bindingcheck.ReasonOK}}
+}
+
+// seriesOf is the samples of the registry whose name starts with prefix.
+func seriesOf(t *testing.T, m *Metrics, prefix string) []string {
+	t.Helper()
+	var out []string
+	for _, s := range samples(t, m) {
+		if strings.HasPrefix(s, prefix) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// A condition's status is three series, one at 1 and the others at 0, and Ready also sets the 0 or 1 gauge: 1 for True, and 0 for False and for
+// Unknown, which is not a yes.
+func TestBindingConditionSetsTheStatusSeriesAndReadyIsOneOnlyForTrue(t *testing.T) {
+	const b = "sre/sre-alerts"
+	for _, tc := range []struct {
+		status bindingcheck.Status
+		ready  string
+	}{{bindingcheck.True, "1"}, {bindingcheck.False, "0"}, {bindingcheck.Unknown, "0"}} {
+		t.Run(string(tc.status), func(t *testing.T) {
+			m := mustMetrics(t, nil)
+			m.BindingCondition(transition(b, bindingcheck.Ready, tc.status))
+			got := seriesOf(t, m, "agentkourier_binding_")
+			want := []string{"agentkourier_binding_ready{binding=" + b + "} " + tc.ready}
+			for _, s := range []string{"true", "false", "unknown"} {
+				v := "0"
+				if s == strings.ToLower(string(tc.status)) {
+					v = "1"
+				}
+				want = append(want, "agentkourier_binding_condition{binding="+b+",condition=Ready,status="+s+"} "+v)
+			}
+			slices.Sort(got)
+			slices.Sort(want)
+			if !slices.Equal(got, want) {
+				t.Errorf("series = %v; want %v", got, want)
+			}
+		})
+	}
+}
+
+// A condition that is not Ready leaves the ready gauge alone, and a later transition replaces what an earlier one set.
+func TestBindingConditionOfAnotherTypeLeavesReadyAloneAndALaterTransitionReplaces(t *testing.T) {
+	const b = "sre/sre-alerts"
+	m := mustMetrics(t, nil)
+	m.BindingCondition(transition(b, bindingcheck.BackendReachable, bindingcheck.False))
+	if got := seriesOf(t, m, "agentkourier_binding_ready"); len(got) != 0 {
+		t.Errorf("a BackendReachable transition set %v; Ready alone sets the ready gauge", got)
+	}
+	m.BindingCondition(transition(b, bindingcheck.BackendReachable, bindingcheck.True))
+	got := seriesOf(t, m, "agentkourier_binding_condition")
+	for _, want := range []string{
+		"agentkourier_binding_condition{binding=sre/sre-alerts,condition=BackendReachable,status=true} 1",
+		"agentkourier_binding_condition{binding=sre/sre-alerts,condition=BackendReachable,status=false} 0",
+	} {
+		if !slices.Contains(got, want) {
+			t.Errorf("series = %v; want %q", got, want)
+		}
+	}
+}
+
+// Pruning a Binding deletes all of its series, the ready gauge and every condition's, and no other Binding's.
+func TestBindingsPrunedDeletesTheSeriesOfThoseBindingsOnly(t *testing.T) {
+	m := mustMetrics(t, nil)
+	for _, b := range []string{"a/one", "a/two"} {
+		for _, c := range []bindingcheck.ConditionType{bindingcheck.BackendReachable, bindingcheck.ChannelJoined, bindingcheck.ApproversReadable, bindingcheck.Ready} {
+			m.BindingCondition(transition(b, c, bindingcheck.False))
+		}
+	}
+	m.BindingsPruned([]string{"a/one"})
+	got := strings.Join(seriesOf(t, m, "agentkourier_binding_"), "\n")
+	if strings.Contains(got, "a/one") {
+		t.Errorf("series after the prune:\n%s\nwant none of a/one's", got)
+	}
+	if !strings.Contains(got, "agentkourier_binding_ready{binding=a/two} 0") || strings.Count(got, "a/two") != 13 {
+		t.Errorf("series after the prune:\n%s\nwant all 13 of a/two's (4 conditions of 3 statuses, and the ready gauge)", got)
+	}
+}
+
+// Dropping a condition deletes that condition's series of that Binding, its three statuses, and nothing else: not the Binding's other
+// conditions, its ready gauge, or the same condition of another Binding.
+func TestBindingConditionDroppedDeletesThatConditionsSeriesOnly(t *testing.T) {
+	m := mustMetrics(t, nil)
+	for _, b := range []string{"a/one", "a/two"} {
+		for _, c := range []bindingcheck.ConditionType{bindingcheck.BackendReachable, bindingcheck.ApproversReadable, bindingcheck.Ready} {
+			m.BindingCondition(transition(b, c, bindingcheck.False))
+		}
+	}
+	m.BindingConditionDropped("a/one", bindingcheck.ApproversReadable)
+	got := strings.Join(seriesOf(t, m, "agentkourier_binding_"), "\n")
+	if strings.Contains(got, "binding=a/one,condition=ApproversReadable") {
+		t.Errorf("series after the drop:\n%s\nwant none of a/one's ApproversReadable", got)
+	}
+	for _, want := range []string{"binding=a/one,condition=BackendReachable,status=false} 1", "binding=a/one,condition=Ready,status=false} 1", "agentkourier_binding_ready{binding=a/one} 0",
+		"binding=a/two,condition=ApproversReadable,status=false} 1", "binding=a/two,condition=ApproversReadable,status=true} 0", "binding=a/two,condition=ApproversReadable,status=unknown} 0"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("series after the drop:\n%s\nwant %q still there", got, want)
+		}
+	}
+	// A condition with no series is no error.
+	m.BindingConditionDropped("a/nobody", bindingcheck.ApproversReadable)
+}
+
+// A probe's duration lands in the histogram of its condition.
+func TestBindingProbedObservesTheDurationByCondition(t *testing.T) {
+	m := mustMetrics(t, nil)
+	m.BindingProbed(bindingcheck.BackendReachable, 50*time.Millisecond)
+	m.BindingProbed(bindingcheck.ChannelJoined, time.Second)
+	fams, err := m.reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]uint64{}
+	for _, f := range fams {
+		if f.GetName() != "agentkourier_binding_probe_duration_seconds" {
+			continue
+		}
+		for _, s := range f.GetMetric() {
+			counts[s.GetLabel()[0].GetValue()] = s.GetHistogram().GetSampleCount()
+		}
+	}
+	if want := map[string]uint64{"BackendReachable": 1, "ChannelJoined": 1}; !maps.Equal(counts, want) {
+		t.Errorf("observations by condition = %v; want %v", counts, want)
+	}
+}
+
+// A Ready that is still Pending is exported nowhere: not as the ready gauge and not as a Ready condition, so a rule on == 0 does not fire
+// for the length of the slower first probe. The conditions that have ended are exported as they end. Whichever probe ends first, the Ready
+// series come with the second, and a probe that finds the Binding not ready sets them at once, with the other still in flight.
+func TestBindingReadyHasNoSeriesWhileItIsStillPendingInEitherProbeOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		first        bindingcheck.ConditionType
+		second       bindingcheck.ConditionType
+		firstStatus  bindingcheck.Status
+		secondStatus bindingcheck.Status
+		readyAfter   string // the ready gauge after the first probe: "" for none
+		readyEnd     string
+		hooks        int // OnTransition calls the first result causes: its condition's, and Ready's if Ready changes
+	}{
+		{"backend first, then channel", bindingcheck.BackendReachable, bindingcheck.ChannelJoined, bindingcheck.True, bindingcheck.True, "", "1", 2},
+		{"channel first, then backend", bindingcheck.ChannelJoined, bindingcheck.BackendReachable, bindingcheck.True, bindingcheck.True, "", "1", 1},
+		{"backend first, false", bindingcheck.BackendReachable, bindingcheck.ChannelJoined, bindingcheck.False, bindingcheck.True, "0", "0", 2},
+		{"channel first, false", bindingcheck.ChannelJoined, bindingcheck.BackendReachable, bindingcheck.False, bindingcheck.True, "0", "0", 2},
+		{"backend first, unknown: still hidden, as in the other order", bindingcheck.BackendReachable, bindingcheck.ChannelJoined, bindingcheck.Unknown, bindingcheck.True, "", "0", 2},
+		{"channel first, unknown: hidden too", bindingcheck.ChannelJoined, bindingcheck.BackendReachable, bindingcheck.Unknown, bindingcheck.True, "", "0", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			release := make(chan struct{})
+			m := mustMetrics(t, nil)
+			seen := make(chan struct{}, 8)
+			outcome := func(s bindingcheck.Status) bindingcheck.Outcome {
+				switch s {
+				case bindingcheck.True:
+					return bindingcheck.Outcome{Status: s, Reason: bindingcheck.ReasonOK}
+				case bindingcheck.False:
+					return bindingcheck.Outcome{Status: s, Reason: bindingcheck.ReasonAgentNotFound}
+				}
+				return bindingcheck.Outcome{Status: s, Reason: bindingcheck.ReasonChatUnavailable}
+			}
+			status := map[bindingcheck.ConditionType]bindingcheck.Status{tc.first: tc.firstStatus, tc.second: tc.secondStatus}
+			p := bindingcheck.NewProber(bindingcheck.Options{
+				Targets: func() []bindingcheck.Target { return []bindingcheck.Target{{Binding: "sre/oncall", Channel: "C1"}} },
+				Agents: agentFunc(func(_ context.Context, _ string) (bindingcheck.Outcome, error) {
+					if tc.first != bindingcheck.BackendReachable {
+						<-release
+					}
+					return outcome(status[bindingcheck.BackendReachable]), nil
+				}),
+				Channels: channelFunc(func(_ context.Context, _, _ string) (bindingcheck.Outcome, error) {
+					if tc.first != bindingcheck.ChannelJoined {
+						<-release
+					}
+					out := outcome(status[bindingcheck.ChannelJoined])
+					if out.Status == bindingcheck.False {
+						out.Reason = bindingcheck.ReasonNotInChannel
+					}
+					return out, nil
+				}),
+				Tick: 5 * time.Millisecond, Interval: time.Hour, Concurrency: 2,
+				OnTransition: func(tr bindingcheck.Transition) {
+					m.BindingCondition(tr)
+					seen <- struct{}{}
+				},
+			})
+			runProber(t, p)
+			for range tc.hooks {
+				<-seen
+			}
+			ready := func() string {
+				for _, s := range seriesOf(t, m, "agentkourier_binding_ready") {
+					return s[len(s)-1:]
+				}
+				return ""
+			}
+			if got := ready(); got != tc.readyAfter {
+				t.Errorf("ready gauge with %s ended and %s in flight = %q; want %q", tc.first, tc.second, got, tc.readyAfter)
+			}
+			if tc.readyAfter == "" && slices.ContainsFunc(seriesOf(t, m, "agentkourier_binding_condition"), func(s string) bool { return strings.Contains(s, "condition=Ready") }) {
+				t.Errorf("a Ready condition series exists while Ready is pending: %v", seriesOf(t, m, "agentkourier_binding_condition"))
+			}
+			if !slices.ContainsFunc(seriesOf(t, m, "agentkourier_binding_condition"), func(s string) bool { return strings.Contains(s, "condition="+string(tc.first)+",") }) {
+				t.Errorf("no series for the %s that ended: %v", tc.first, seriesOf(t, m, "agentkourier_binding_condition"))
+			}
+			close(release)
+			testutil.Eventually(t, "the second probe's Ready series", func() bool { return ready() == tc.readyEnd }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
+		})
 	}
 }

@@ -30,9 +30,11 @@ Without `askUser: true`, Agent Kourier cancels the agent's task and says so in t
 === "Generic A2A"
 
     The `a2a` dialect shows an agent's text-only `input-required` pause as one text question, which you can
-    answer with **Submit** or with a typed reply in the thread; its prompt says so. A pause with structured parts
-    cannot be used, so the task is cancelled and the thread is told. In a Binding with
-    `chat.threadReplies: mention`, that reply needs no mention.
+    answer with **Submit** or with a typed reply in the thread; its prompt says so. A pause with a part that is
+    not text cannot be used, so the task is cancelled and the thread is told. In a Binding with
+    `chat.threadReplies: mention`, that reply needs no mention. An agent whose card lists kagent's human-in-the-loop
+    extension gets the structured questions of the `kagent-v1` tab instead, answered with the prompt's controls only
+    (see [Connect a generic A2A agent](connect-a2a-agent.md#what-works-on-this-dialect)).
 
 ## How an answer is taken
 
@@ -47,8 +49,11 @@ Without `askUser: true`, Agent Kourier cancels the agent's task and says so in t
 
 ## Tool approvals
 
-Tool approvals are available for a Binding that uses the `kagent-v1` dialect. They are disabled by default. Enable them
-with a separate policy from questions:
+Tool approvals are available for a Binding that uses the `kagent-v1` dialect, and for an `a2a` Binding whose agent card
+lists kagent's human-in-the-loop extension. Any other `a2a` agent can pause for an approval only with text, which Agent
+Kourier handles as a question whose reply is sent as plain text, never as an approval (see
+[Connect a generic A2A agent](connect-a2a-agent.md#what-works-on-this-dialect)). Approvals are disabled by default.
+Enable them with a separate policy from questions:
 
 ```yaml
 spec:
@@ -74,6 +79,11 @@ A prompt with several tools shows each tool and its arguments with an Approve/De
 all**, and **Deny all**. The prompt refuses a tool name or argument that cannot be shown exactly, contains an unsupported
 value, or does not fit in one message; Agent Kourier does not truncate an approval prompt. Secrets are replaced with
 `[redacted]` before the prompt is stored and shown.
+
+In a chat thread, the reply that the agent paused in ends at the pause, and its card for each call the approval is about
+ends complete and titled `Approval requested: name`, not as an error: the call is waiting, not failed. The cards of an
+approval that a sub-agent raised are not retitled. The reply after the decision shows the call again with how it ended,
+an error when it was denied.
 
 The first complete, authorized decision wins. An incomplete press is rejected with an ephemeral message and does not reach
 the agent. Agent Kourier audits the decision before sending it under the Binding's service identity, then replaces the

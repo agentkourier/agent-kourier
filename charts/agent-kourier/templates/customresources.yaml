@@ -1,0 +1,17 @@
+{{- /* With config.source crds the config.* values are custom resources, which Agent Kourier reads, and no ConfigMap (configmap.yaml). They are
+       not kept on uninstall or on a switch back to files: the values render them again. agentkourier.validate (the Deployment includes
+       it) has checked that the cluster already serves the CRDs, so a CRD and its resources are never in one release's first apply. */ -}}
+{{- if include "agentkourier.crMode" . }}
+{{- range $name, $entry := .Values.config.chatConnections }}
+---
+{{ include "agentkourier.resource" (dict "kind" "ChatConnection" "name" $name "entry" $entry "root" $ "labels" true) }}
+{{- end }}
+{{- range $name, $entry := .Values.config.agentBackends }}
+---
+{{ include "agentkourier.resource" (dict "kind" "AgentBackend" "name" $name "entry" $entry "root" $ "labels" true) }}
+{{- end }}
+{{- range $name, $entry := .Values.config.bindings }}
+---
+{{ include "agentkourier.resource" (dict "kind" "Binding" "name" $name "entry" $entry "root" $ "labels" true) }}
+{{- end }}
+{{- end }}

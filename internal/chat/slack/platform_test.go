@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -19,6 +18,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/secret"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 	"go.uber.org/goleak"
 )
@@ -216,6 +216,11 @@ func walk(v any, out *[]chattest.Shown) {
 			*out = append(*out, richTextShown(v)...)
 			return
 		}
+		// A task_card's title is the characters it holds, with no construct in it: the probe of 2026-10-21 in the web client
+		// showed hostile titles (tokens, links, markdown, entities) as typed, acting on none (layout.go, taskCard).
+		if s, isString := v["title"].(string); typ == "task_card" && isString {
+			*out = append(*out, chattest.Shown{Displayed: s})
+		}
 		switch s, isString := v["text"].(string); {
 		case typ == "plain_text" && isString:
 			*out = append(*out, chattest.ScanSlackPlain(s))
@@ -247,7 +252,7 @@ func slackSubject(t *testing.T) (chattest.Subject, *slack.Platform) {
 	t.Cleanup(fake.Close)
 	w := &wire{next: handlerTransport{fake}}
 	cfg := slack.Config{BotToken: secret.New(botToken), AppToken: secret.New(appToken), APIURL: "http://fakeslack.test/",
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+		Logger: testutil.DiscardLogger()}
 	cfg.HTTPClient = &http.Client{Transport: w}
 	c := slack.New(cfg)
 	const conn = "conformance/slack"
@@ -268,6 +273,8 @@ func slackSubject(t *testing.T) (chattest.Subject, *slack.Platform) {
 			return out
 		},
 		Inert:    inertRequests(w),
+		Channels: slackChannels(fake),
+		Groups:   slackGroups(fake),
 		TooLarge: &chat.Prompt{ID: "ix-big", Questions: make([]chat.Question, 60)},
 		// A prompt of tools too large for one message: 30 tools take 62 blocks.
 		ToolApprovals: true,
@@ -277,7 +284,8 @@ func slackSubject(t *testing.T) (chattest.Subject, *slack.Platform) {
 		// Slack makes a bare URL in text and in markdown into a link that shows its own address, and no escape
 		// stops it: a backslash before a colon is shown as a backslash, and Slack has no escape for mrkdwn. The
 		// link goes where the text says and nowhere else, and every request is inert (no unfurl, so Slack does
-		// not fetch it). UNCONFIRMED(WP-04): whether a plain_text object does the same.
+		// not fetch it). A URL of a message in the workspace is Slack's own reference to the message. A plain_text
+		// object makes no link (docs/spikes/slack-mention-probe.md).
 		AllowAutolink: true,
 		Concessions: []chattest.Concession{{
 			Where: chat.WhereToolArgs, Kinds: []chattest.Kind{chattest.KindCode},
@@ -297,6 +305,42 @@ func slackSubject(t *testing.T) (chattest.Subject, *slack.Platform) {
 				"it cannot show the blocks, and the adapter sends every message's text as a plain_text block too, which is what is read",
 		}},
 	}, p
+}
+
+// slackChannels puts the fake Slack in each state of a channel the contract of ChannelAccess names: the bot is a member or not
+// of the channel, which is archived or not, Slack has never heard of it, or the app lacks the scope. The bot is the fake's own
+// (fakeslack.WithBot's default user).
+func slackChannels(fake *fakeslack.Server) func(chattest.ChannelState) string {
+	return func(state chattest.ChannelState) string {
+		fake.SetMissingScope("conversations.info", state == chattest.ChannelScopeMissing)
+		switch state {
+		case chattest.ChannelJoined, chattest.ChannelScopeMissing:
+			fake.SetMembers("C0JOINED", "U1", "UFAKEBOT")
+			return "C0JOINED"
+		case chattest.ChannelNotJoined:
+			fake.SetMembers("C0NOTJOINED", "U1")
+			return "C0NOTJOINED"
+		case chattest.ChannelArchived:
+			fake.SetMembers("C0ARCHIVED", "UFAKEBOT")
+			fake.SetArchived("C0ARCHIVED", true)
+			return "C0ARCHIVED"
+		}
+		return "C0UNKNOWN"
+	}
+}
+
+// slackGroups puts the fake Slack in each state of a user group the contract of GroupsReadable names: the group exists, Slack has never
+// heard of it, or the app lacks the scope to read groups.
+func slackGroups(fake *fakeslack.Server) func(chattest.GroupState) string {
+	return func(state chattest.GroupState) string {
+		fake.SetMissingScope("usergroups.users.list", state == chattest.GroupScopeMissing)
+		switch state {
+		case chattest.GroupReadable, chattest.GroupScopeMissing:
+			fake.SetUserGroup("S0READABLE", "U1")
+			return "S0READABLE"
+		}
+		return "S0UNKNOWN"
+	}
 }
 
 // inertRequests checks that every request was sent with Slack's parsing and unfurling off.
@@ -411,5 +455,29 @@ func TestTheReadingOfARichTextBlockFindsWhatIsNotPlainText(t *testing.T) {
 func TestSlackSuppliesTheDefaultAcknowledgmentReaction(t *testing.T) {
 	if got := slack.NewPlatform(nil, "ns/conn").Capabilities().AckReaction; got != "hourglass_flowing_sand" {
 		t.Errorf("AckReaction = %q, want hourglass_flowing_sand", got)
+	}
+}
+
+// An update that takes the text from a message that holds only text is ErrWouldDropText, which no retry mends, and the message
+// is as it was. One that brings text passes.
+func TestUpdateSaysItWouldDropText(t *testing.T) {
+	fake := newFake(t)
+	p := slack.NewPlatform(slack.New(clientConfig(fake)), "ns/conn")
+	r, err := p.Post(t.Context(), chat.Target{Channel: "C1"}, chat.Say(chat.Message{Fallback: "body", Parts: []chat.Part{chat.Body{Markdown: "body"}}}), "ev1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	steps := chat.Message{Fallback: "search", Parts: []chat.Part{chat.Steps{Steps: []chat.Step{{ID: "s1", Title: "search", State: chat.StepDone}}}}}
+	err = p.Update(t.Context(), r, chat.Say(steps))
+	if !errors.Is(err, chat.ErrWouldDropText) {
+		t.Fatalf("Update with no text = %v; want ErrWouldDropText", err)
+	}
+	if v := p.Classify(chat.OpPost, err); v.Class != chat.Permanent || v.Code != "block_mismatch" {
+		t.Errorf("Classify = %+v; want it permanent, with the code", v)
+	}
+	withText := steps
+	withText.Parts = append(slices.Clone(steps.Parts), chat.Body{Markdown: "new"})
+	if err := p.Update(t.Context(), r, chat.Say(withText)); err != nil {
+		t.Errorf("Update with text = %v; want it to pass", err)
 	}
 }

@@ -23,6 +23,8 @@ serviceAccount:
   annotations: {example.test/owner: platform}
 
 config:
+  # The ConfigMap route, named: config.source defaults to crds. crds.install is left unset, which is false with files: no CRD.
+  source: files
   chatConnections:
     slack-main:
       spec:

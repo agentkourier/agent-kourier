@@ -63,6 +63,24 @@ func TestAPIReferenceHeaderAndDoc(t *testing.T) {
 	}
 }
 
+// TestAPIReferenceSaysStatusIsNotSet checks the sentence that tells a reader of a page with a status that it is not
+// theirs to set: the page of a kind that has a status has it, and the page of one that has none does not.
+func TestAPIReferenceSaysStatusIsNotSet(t *testing.T) {
+	const sentence = "You do not set `status`: it is the observed state, described in ["
+	if page := fixturePages(t)["Widget"]; !strings.Contains(page, sentence) {
+		t.Errorf("the page of a Widget, which has a status, lacks %q:\n%s", sentence, page)
+	}
+	pages, err := apiReference(filepath.Join(root, "api/v1alpha1"), "api/v1alpha1", v1alpha1.APIVersion)
+	if err != nil {
+		t.Fatalf("apiReference: %v", err)
+	}
+	for kind, want := range map[string]bool{"Binding": true, "AgentBackend": false, "ChatConnection": false} {
+		if got := strings.Contains(pages[kind], sentence); got != want {
+			t.Errorf("the page of %s has the sentence = %v, want %v", kind, got, want)
+		}
+	}
+}
+
 func TestAPIReferenceFieldRows(t *testing.T) {
 	page := fixturePages(t)["Widget"]
 	spec := section(t, page, "WidgetSpec")
@@ -118,6 +136,7 @@ func TestAPIReferenceDefaultsMatchRuntime(t *testing.T) {
 		{"AgentBackend", "SecretKeyRef", "key", "string", backend.Spec.Headers[0].ValueSecretRef.Key},
 		{"Binding", "ChatBinding", "output", "string", string(binding.Spec.Chat.Output)},
 		{"Binding", "ChatBinding", "threadReplies", "string", string(binding.Spec.Chat.ThreadReplies)},
+		{"Binding", "ChatBinding", "botMentions", "string", string(binding.Spec.Chat.BotMentions)},
 		{"Binding", "ChatBinding", "triggers", "[][Trigger](#trigger)", "[{type: " + string(binding.Spec.Chat.Triggers[0].Type) + "}]"},
 		{"Binding", "Interactions", "askUser", "boolean", fmt.Sprint(binding.Spec.Interactions.AskUser)},
 		{"Binding", "Interactions", "timeout", "duration", fmt.Sprintf("%dm", binding.Spec.Interactions.Timeout.Duration/time.Minute)},

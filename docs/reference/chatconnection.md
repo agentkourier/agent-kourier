@@ -6,7 +6,7 @@ The Default column shows what happens when a field is omitted. None means no def
 
 `apiVersion: agentkourier.dev/v1alpha1` · `kind: ChatConnection`
 
-ChatConnection is a workspace connection. Owned by the platform team.
+ChatConnection is a workspace connection. The platform team owns the broker's own; a team may own one in a namespace the platform admits.
 
 ## ChatConnection
 
@@ -23,7 +23,7 @@ ChatConnectionSpec is the desired state of a ChatConnection.
 |---|---|---|---|---|
 | `platform` | string | Yes | None | One of `slack`. |
 | `credentialsSecretRef` | [SecretRef](#secretref) | Yes | None | CredentialsSecretRef names one Secret with the fixed keys botToken and appToken (Socket Mode). |
-| `allowedNamespaces` | []string | No | Empty list | AllowedNamespaces lists the other namespaces whose Bindings may reference this connection. Each is a DNS-1123 label. An empty list permits references only from the connection's own namespace. |
+| `allowedNamespaces` | []string | No | Empty list | AllowedNamespaces lists the other namespaces whose Bindings may reference this connection. Each is a DNS-1123 label. An empty list permits references only from the connection's own namespace. At most 256. |
 
 ## SecretRef
 
@@ -31,7 +31,7 @@ SecretRef names a Secret in the referring object's namespace whose keys are fixe
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | string | Yes | None | Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a letter or digit. |
+| `name` | string | Yes | None | Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a letter or digit. Pattern `^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`. At most 253 characters. |
 
 ---
 

@@ -10,6 +10,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // messageReply is what Agent.Send streams when the agent answers with one Message and no task, in c1.
@@ -111,7 +112,7 @@ func TestAnswerRepliedToWithAMessage(t *testing.T) {
 			// Each answer reopens the pause and is answered again: once the third is taken, the first
 			// answer's notice, which follows its reopening on the runner's goroutine, has been posted.
 			for _, id := range []string{"ans-2", "ans-3"} {
-				eventually(t, "the pause to reopen", func() bool { return f.m.Answer(t.Context(), key, answerMsg(id)) == nil })
+				testutil.Eventually(t, "the pause to reopen", func() bool { return f.m.Answer(t.Context(), key, answerMsg(id)) == nil })
 			}
 			got := sink.noticesOf(NoticeFailed)
 			if tc.told != (len(got) >= 1) {
@@ -194,5 +195,48 @@ func TestLifeStartsAgainForEachMessageReply(t *testing.T) {
 		if len(l.text) != 1 {
 			t.Errorf("reply %s: life holds %d texts, want only this reply's", id, len(l.text))
 		}
+	}
+}
+
+// A live working update is life of the task (R17's age), every time: a snapshot never makes one, so it is always news.
+func TestAWorkingUpdateRenewsLife(t *testing.T) {
+	var l life
+	l.renews(agent.StateEvent{TaskID: "t1", ContextID: "c1", State: a2a.TaskStateWorking})
+	for range 2 {
+		if !l.renews(agent.ProgressEvent{}) {
+			t.Error("a working update was not new life")
+		}
+	}
+}
+
+// A follow reads the task with a new assembler, which has not seen the status that the server repeats on every resubscribe.
+// The life is the session's, and spans them: the same status again is no new life, or a wedged task would never reach its age.
+func TestARepeatedWorkingUpdateIsNoNewLife(t *testing.T) {
+	var l life
+	l.renews(agent.StateEvent{TaskID: "t1", ContextID: "c1", State: a2a.TaskStateWorking})
+	for _, tc := range []struct {
+		name string
+		ev   agent.ProgressEvent
+		want bool
+	}{
+		{"a status", agent.ProgressEvent{ID: "m1", Text: "a"}, true},
+		{"that status again, opening a follow", agent.ProgressEvent{ID: "m1", Text: "a", Opening: true}, false},
+		{"that status again, live on the stream", agent.ProgressEvent{ID: "m1", Text: "a"}, true},
+		{"the same text under another ID, opening a follow", agent.ProgressEvent{ID: "m2", Text: "a", Opening: true}, true},
+		{"text with no ID", agent.ProgressEvent{Text: "b"}, true},
+		{"that text again, live: a heartbeat", agent.ProgressEvent{Text: "b"}, true},
+		{"and again", agent.ProgressEvent{Text: "b"}, true},
+		{"that text again, opening a follow", agent.ProgressEvent{Text: "b", Opening: true}, false},
+		{"an update with nothing to tell it by", agent.ProgressEvent{}, true},
+		{"another", agent.ProgressEvent{}, true},
+		{"another, opening a follow", agent.ProgressEvent{Opening: true}, false},
+	} {
+		if got := l.renews(tc.ev); got != tc.want {
+			t.Errorf("%s: renews = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	l.renews(agent.StateEvent{TaskID: "t2", ContextID: "c1", State: a2a.TaskStateWorking})
+	if !l.renews(agent.ProgressEvent{Text: "b", Opening: true}) {
+		t.Error("the text of an earlier task was not new on a new task")
 	}
 }

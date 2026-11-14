@@ -29,7 +29,7 @@ fullnameOverride: ""
 
 serviceAccount:
   create: true
-  # Defaults to the fullname. Agent Kourier reads Secrets through the API, so the token stays mounted.
+  # Defaults to the fullname, or to the namespace's "default" ServiceAccount with create: false. Agent Kourier reads Secrets through the API, so the token stays mounted.
   name: ""
   annotations: {}
 
@@ -52,11 +52,22 @@ auditRetention: ""
 # valueFrom.secretKeyRef, never as a value.
 extraEnv: []
 
-# What Agent Kourier reads. Either the resources below, which the chart writes into a ConfigMap mounted at /etc/agent-kourier, or
-# existingConfigMap, the name of a ConfigMap you manage (one key per file, each ending .yaml). Not both.
+# What Agent Kourier reads, and from where. config.source picks the route (AGENTKOURIER_CONFIG_SOURCE). With crds, the default and the route
+# to run on Kubernetes, it reads Binding, AgentBackend and ChatConnection custom resources of the cluster with informers: other teams may make
+# their own, and one bad resource does not stop the others. The resources below, if you give any, are rendered as custom resources and not as a
+# ConfigMap. That needs Kubernetes 1.33 or later and the CRDs (crds.install below, which follows this route, or yours) installed BEFORE a release that renders any
+# resource below (a release that gives none installs them with it, and you apply the resources yourself). The broker serves a ChatConnection of
+# its own (config.chatConnection below, or the only one of chatConnections), the ChatConnections of the namespaces it admits, or both (the table
+# at config.chatConnection). The pod then mounts no ConfigMap, and a config change does not roll it. With files, the quick route for a proof of
+# concept, it reads the resources below, which the chart writes into a ConfigMap mounted at /etc/agent-kourier, or existingConfigMap, the name of a ConfigMap you manage (one key per file, each ending .yaml). Not both. A config with one
+# bad resource is not loaded: all or nothing; and files has no Kubernetes minimum. The two routes are never merged and there is no fallback: with
+# files, custom resources in the cluster are ignored.
+#
+# An install of the ConfigMap route that upgrades with its old values gets the default, crds: set config.source files to keep it. The chart refuses the cases it can tell are wrong (existingConfigMap, a cluster below 1.33, CRDs not yet served
+# for resources it would render) and says so; https://agentkourier.dev/how-to/upgrade/ has the rest.
 #
 # Each entry is keyed by its name and holds the resource's spec exactly as the resource reference describes it (the chart does
-# not interpret it) and, optionally, the namespace (default: the release's). Secrets are referenced by name
+# not interpret it) and, optionally, the namespace (default: the release's; with crds it must exist). Secrets are referenced by name
 # (credentialsSecretRef, tokenSecretRef, valueSecretRef) and live in the cluster, made by you or Sealed Secrets:
 # no token value belongs in this file or in any values file (the render refuses a Slack token, and a header value whose name
 # looks like a credential).
@@ -80,13 +91,89 @@ extraEnv: []
 # A commented first-install file for any A2A agent, to download and fill in, is the repository's
 # examples/helm/my-values.yaml: https://agentkourier.dev/how-to/install-with-helm/#write-the-values
 config:
+  # crds or files. The route is chosen at start and a reload cannot change it: switching is an upgrade of the release, and with resources in config.*
+  # the CRDs come first (crds.install below, and the chart README). The chart passes AGENTKOURIER_CONFIG_SOURCE only for crds, and reads an unset
+  # source as files, so `helm upgrade --reuse-values` from a release that had none keeps the route it had.
+  source: crds
+  # With source crds, the broker's own ChatConnection, as namespace/name or, for one in the release's namespace, name
+  # (AGENTKOURIER_CHAT_CONNECTION). When set, it is always served, and the broker owns the Bindings whose connectionRef names it, and those of the
+  # connections of the namespaces it admits: the ones on connectionNamespaces and the ones whose labels match connectionNamespaceSelector
+  # (below; {} matches every namespace). With chatConnection set and neither of those, it serves its own alone. With chatConnection empty and
+  # either of them set, it has no connection of its own: the chart renders no AGENTKOURIER_CHAT_CONNECTION, and every ChatConnection it serves
+  # is a team connection. With all three empty (the list empty, the selector null), the one entry of chatConnections below is the own
+  # connection; with no entry the broker serves the ChatConnections of every namespace, and two or more are refused. So adding one entry to an install that serves every namespace makes that entry its own connection,
+  # served alone: set connectionNamespaces or connectionNamespaceSelector to keep serving the teams' connections. Every namespace is a setting
+  # for a cluster with one broker: a second broker's connection, its own included, is served by this one too, and the two Socket Mode
+  # connections of one Slack app split its events. With every namespace, what lets a team attach a Slack app is the right to create a
+  # ChatConnection (the chart adds none to the admin or edit role) and the team's own Role that grants its Secret. Ignored with files, which
+  # serves the one ChatConnection of its directory, so a rollback to files may keep it set.
+  chatConnection: ""
+  # With source crds and chatConnection set, the Secret that connection reads, by name, in the connection's namespace: the chart cannot see the
+  # ChatConnection you apply, and a broker that cannot read its Secret exits at start, so the chart grants this one Secret (rbac below). Empty
+  # is the connection's own name: a ChatConnection `slack` whose credentialsSecretRef names the Secret `slack` needs nothing here. Set it when
+  # the Secret is named otherwise. Ignored when chatConnections below renders the connection (its credentialsSecretRef is granted instead),
+  # which the one entry that is the own connection does, and with files. The chart refuses it when the broker has no connection of its own
+  # (chatConnection empty and connectionNamespaces or connectionNamespaceSelector set, or every namespace): there is none for it to name.
+  chatConnectionSecret: ""
+  # With source crds, the platform's admission list (AGENTKOURIER_CONNECTION_NAMESPACES): the namespaces whose ChatConnections this broker
+  # admits. It serves them beside the one chatConnection names, if any, at most 16 connections in all, the own connection counted first and the
+  # others oldest first (creationTimestamp, then namespace and name); a connection past the 16 is not served, and no setting changes the 16.
+  # Each item is a namespace name (a DNS-1123 label, no wildcard). Empty, the default, admits no namespace by name: the broker serves its own
+  # connection alone, or every namespace with no own connection and no selector (see chatConnection above). With chatConnection empty and no
+  # selector, a non-empty list is the broker with no connection of its own, and the chart refuses a chatConnections entry whose namespace is
+  # not in it (it would be rendered and never served). The broker reads the list at start, and a change to it changes the pod's environment.
+  # Listing a namespace is the platform's consent to the ChatConnections created there. Two ChatConnections of one Slack app (one app ID,
+  # even in two workspaces) are not both served: the older is. Each team grants the credentials Secret of its connection to this chart's
+  # ServiceAccount with a Role of its own in its namespace that names the Secret (resourceNames), as it grants its Binding tokens (see rbac
+  # below); rbac.secretNames or rbac.secretNamespaces may grant it instead. A team connection whose Secret the broker cannot read yet is
+  # started once it can, and never stops the broker. The chart refuses a non-empty list with files, which serves the one ChatConnection of
+  # its directory.
+  connectionNamespaces: []
+  # With source crds, a label selector on namespaces (AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR, which the chart renders as JSON): the broker
+  # also admits the ChatConnections of the namespaces whose labels match it, beside its own connection and the list's namespaces, under the same
+  # cap of 16. It is a Kubernetes label selector: matchLabels, and matchExpressions of key, operator (In, NotIn, Exists, DoesNotExist) and
+  # values. {} selects every namespace; null, the default, is no selector. The broker reads the selector at start, as it reads the list, but
+  # it follows the namespaces' labels live, with an informer on namespaces: a namespace that gains a matching label is admitted at the next
+  # read, with no restart, and one that loses it stops being admitted, and the Bindings of its connections are told ConnectionNotServed.
+  # While the broker cannot reach the API server it keeps the labels it last read. Whoever may set a namespace's labels therefore decides whether its ChatConnections are admitted. A selector that
+  # selects by label adds list and watch on namespaces (no get) to the ClusterRole (rbac below); {} and null add nothing. With chatConnection
+  # empty, a selector makes the entries of chatConnections team connections, which the chart does not check against it: it cannot see a
+  # namespace's labels. The chart refuses a selector, {} included, with files, as it refuses the list. For example,
+  # connectionNamespaceSelector: {matchLabels: {agentkourier.dev/serve: "true"}} admits the namespaces labelled agentkourier.dev/serve=true.
+  connectionNamespaceSelector: null
   existingConfigMap: ""
   agentBackends: {}
   chatConnections: {}
   bindings: {}
-  # Roll the pod when the rendered ConfigMap changes. Agent Kourier reloads its files in place, but a reload that adds a
-  # Secret namespace fails until the process restarts. Has no effect with existingConfigMap.
+  # Roll the pod when the rendered ConfigMap changes. Agent Kourier reloads its files in place, and follows a Secret that a
+  # reload adds, in any namespace its ServiceAccount may list and watch it in; a Secret it may not read fails that reload,
+  # and the last good config stays. Has no effect with existingConfigMap, and none with source crds, which renders no ConfigMap.
   rollOnChange: true
+
+# The CustomResourceDefinitions of Binding, AgentBackend and ChatConnection (group agentkourier.dev), which config.source crds reads. They are
+# generated from the API types (make crds) and rendered from the chart's templates, not its crds/ directory, which Helm's documentation says it
+# installs once and never upgrades or deletes, so a chart upgrade carries a changed schema.
+#
+# Unset (null), the default, this follows the route: true with config.source crds, which reads the CRDs, and false with files, which needs none. An
+# explicit true or false always wins: true with files is the first step of a move to custom resources, and false with crds is for an installer that
+# may not create CRDs (creating one needs a cluster-scoped right that a namespace-scoped installer lacks). A platform team can install the CRDs once
+# itself (kubectl apply --server-side -f charts/agent-kourier/files/crds) and set this to false: Helm will not take over CRDs that kubectl made
+# (invalid ownership metadata). Render them from one release only: two releases that render the same CRD conflict.
+#
+# Each carries the annotation agentkourier.dev/schema-sha256, which the generated file holds (the SHA-256 of the file without that line), so that
+# whatever applies the file applies it (Helm and kubectl do, measured; a GitOps tool should, unverified). The broker compares it with the hash it was built with, at start and every minute (a mismatch warns when a CRD's result changes, and is a metric, agentkourier_crd_schema_state;
+# it stops nothing). It states which files were applied: it is not proof of what the API server serves. A CRD from an older chart or file has none, which is reported as unannotated and is no fault.
+#
+# They carry helm.sh/resource-policy: keep, so uninstalling the release, or turning this off, leaves them there, and with them every custom
+# resource: deleting a CRD deletes its resources too. Nor does a release that has this off upgrade them: a chart upgrade that changes a schema
+# needs it set, so a release that goes back to files keeps it true in the values file for as long as the chart is meant to look after the CRDs.
+#
+# "Kept" is Helm's guarantee only. Under Argo CD with prune, turning this off, or deleting the Application, may delete the CRDs, and every team's
+# Binding, AgentBackend and ChatConnection with them. The chart also renders argocd.argoproj.io/sync-options: Prune=false,Delete=false on each CRD,
+# which Argo CD's documentation says stops that (unverified: Argo CD has not been run against this chart). Another tool that prunes needs its own
+# way to be told to leave the CRDs, or the CRDs applied outside what it prunes.
+crds:
+  install: null
 
 # Where Agent Kourier keeps its state. SQLite is one file on a volume (persistence below), for one replica. Postgres is
 # a database you run (the chart does not install one), for more than one replica: they elect a leader (leaderElection below).
@@ -96,8 +183,9 @@ store:
     # The Secret that holds the DSN, a postgres:// URL or key/value string, in the release namespace: required with
     # store.type postgres, and refused with sqlite. Make it yourself (by hand, Sealed Secrets, an external operator); the DSN,
     # password included, never goes in a values file (the render refuses a postgres:// URL with a password anywhere in them).
-    # Agent Kourier reads it through the API like its other Secrets, which the Role below grants: list and watch on every Secret
-    # of the release namespace, so keep Agent Kourier's Secrets in a namespace of their own when it is shared. Percent-encode the
+    # Agent Kourier reads it through the API like its other Secrets, which the Role below grants: list and watch on that Secret by name
+    # with config.source crds, and on every Secret of the release namespace with config.source files or with the release namespace in
+    # rbac.secretNamespaces, so keep Agent Kourier's Secrets in a namespace of their own when it is shared. Percent-encode the
     # reserved characters of a password in a URL. The role in the DSN needs the right to create tables in its schema: agent-kourier
     # applies its own migrations at start.
     dsnSecret:
@@ -168,6 +256,11 @@ securityContext:
   readOnlyRootFilesystem: true
   capabilities: {drop: [ALL]}
 
+# The memory limit sets GOMEMLIMIT too: when limits.memory is a plain quantity (a number of bytes, optionally fractional, with no suffix or one of Ki, Mi,
+# Gi, Ti, Pi, k, M, G, T, P), the container gets GOMEMLIMIT at 80% of it, in bytes, so that the Go runtime collects harder as its memory nears the limit.
+# It is a soft limit: it caps nothing, and memory that is live (many large replies from agents decoded at once) can still pass the limit and be OOM-killed. No
+# variable is set without a memory limit, for a quantity this does not read (an exponent, milli-bytes) or one under 1Mi, or when extraEnv sets
+# GOMEMLIMIT, which then wins. The variable is part of the pod template: the first upgrade to a chart that sets it restarts the pod.
 resources:
   requests: {cpu: 50m, memory: 64Mi}
   limits: {memory: 256Mi}
@@ -175,10 +268,26 @@ resources:
 # Agent Kourier reads the Secrets that its config names, and the Postgres DSN's, through the API (list and watch, in a
 # namespace-scoped Role; it never issues a get). Roles are made in each namespace that holds a referenced Secret, found from
 # config.* above, and the release namespace with store.type postgres.
+#
+# With config.source files, such a Role covers every Secret of its namespace. With config.source crds it covers only the Secrets that the
+# chart can name: the ones config.* and the Postgres DSN refer to, the one the broker's own ChatConnection reads, if it has one
+# (config.chatConnection, and config.chatConnectionSecret when the Secret is not named like it), and rbac.secretNames, which list and watch
+# authorize by resourceNames because Agent Kourier's requests carry a metadata.name field selector. Teams that make their own Bindings grant their own Secrets the same
+# way (a Role with resourceNames in their namespace, bound to this ServiceAccount), or you name their namespace in secretNamespaces.
+#
+# With crds the chart also makes a ClusterRole (list and watch on the three kinds, patch on bindings/status, get on the three CRDs by name, and
+# list and watch on namespaces with a config.connectionNamespaceSelector other than {}), and binds it to the ServiceAccount, unless rbac.create is false. For example, secretNames: {agent-kourier: [slack-main]} grants the one
+# Secret slack-main of namespace agent-kourier.
 rbac:
   create: true
-  # More namespaces to grant that Role in. Needed with config.existingConfigMap, which the chart cannot read.
+  # More namespaces to grant the Role in, for every Secret of the namespace. Needed with config.existingConfigMap, which the chart cannot
+  # read. With crds a namespace listed here is namespace-wide, whatever rbac.secretNames says of it.
   secretNamespaces: []
+  # With config.source crds, more Secrets to grant by name, as a map of namespace to Secret names. For Secrets the chart cannot
+  # see, other than the broker's own ChatConnection's (which config.chatConnection already grants): a Binding's token in the release
+  # namespace, say. A team's own Secrets are the team's to grant with a Role in its namespace. Ignored with files, whose Roles are
+  # namespace-wide, so a rollback to files may keep it set.
+  secretNames: {}
 
 # A ClusterIP Service on the metrics port (/metrics, and the health paths). Never published; there is nothing else to serve yet.
 service:
@@ -252,7 +361,8 @@ podDisruptionBudget:
 # through an argument list or this file.
 #
 # The target Secret is the Binding's identity.tokenSecretRef: its name, key and namespace (the Binding's), which the render
-# checks against the inline config. It must exist before Agent Kourier starts. After install, run the first refresh by hand:
+# checks against the inline config with config.source files (with crds, or an existingConfigMap, it cannot see the Bindings and does
+# not check). The Job patches the Secret and does not create it, and with config.source files it must exist before Agent Kourier starts. After install, run the first refresh by hand:
 #   kubectl -n <ns> create job --from=cronjob/<fullname>-token-refresh first-token
 tokenRefresh:
   enabled: false

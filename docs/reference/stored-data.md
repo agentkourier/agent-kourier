@@ -17,18 +17,19 @@ Agent text that streams to a thread is never stored. Spans, metric labels and th
 | `interactions.request` | The agent's pause: its hint, the questions and choices, a tool's name and arguments, as JSON. Secrets are taken out before it is stored (below). | Until the interaction is settled and the grace has passed; then emptied. |
 | `interactions.answer` | The person's answer, free text included. | The same. |
 | `interactions` (the rest of the row) | IDs, kind, state, times, the decider's platform ID, the prompt's message ref. | No content. The row goes with its session (below). |
-| `reply_queue.text` | A thread reply, or an alert prompt, waiting for its turn. | Cleared when the turn is delivered. A reply that was never delivered is dropped, with its text, after 30 days (below). |
+| `reply_queue.text` | A thread reply, an alert prompt, or the prompt of a person's message that a `personMessage` trigger took, which holds what the person wrote, waiting for its turn. | Cleared when the turn is delivered. A reply that was never delivered is dropped, with its text, after 30 days (below). |
 | `interaction_presses.inputs` | What a person typed into a prompt. | Until the press is processed, or the worker gives up (an hour); purged an hour after the interaction's deadline at the latest. |
 | `outbox.payload` | The message to post. | Cleared once posted or abandoned. A row still unposted after 7 days is abandoned (reason `expired`) and its payload emptied; the row stays until its session is deleted. |
-| `sessions`, `reply_queue` (delivered), `interactions`, `interaction_presses`, `outbox` | IDs, keys, refs and times of a thread: no message text is left in them. | Until the session has been expired for 90 days, then all deleted together (below). |
+| `sessions`, `reply_queue` (delivered), `interactions`, `interaction_presses`, `outbox` | IDs, keys, refs and times of a thread: no message text is left in them. The ID of an `outbox` row for a mention holds the platform user ID of the person mentioned, and logs and traces show that ID too, as `outbox_id` and `agentkourier.outbox.id`. | Until the session has been expired for 90 days, then all deleted together (below). `AGENTKOURIER_AUDIT_RETENTION` does not shorten this. |
 | `feedback` | A person's verdict on a message of an investigation or an answer: the session and turn, the voter's platform ID, the Binding, the agent, the alert name and the verdict, and when. No free text. | For good: kept so that a review of the votes can read them. No retention loop deletes a row, and the deletion of a session 90 days after it expired (below) leaves its feedback rows. |
 | `sessions.origin_source`, `sessions.origin_subject`, `sessions.agent_name` | The bounded source and subject that caused the thread, each in the name shape (ASCII letters, digits and `_.-:`, at most 128 bytes), and the agent of the Binding when the session was made. Both origin values are empty for an ordinary conversation; a source may have no subject. Follow-up turns keep the origin and agent captured when the session was created. | As long as the session row, which is deleted with its thread (below). |
-| `audit` | IDs, codes, outcomes and lengths, never message text; the platform user ID of a voter or presser; an `email` column that nothing writes today; and, for an unusable pause, one redacted reason of at most 120 bytes. For oversized or abandoned prompts with a stored interaction, the refusal reason is audited before the interaction closes; recovery records a cancellation only when its result is known, so `ErrNotPaused` and a crash after cancellation before the audit do not produce an invented success row. An answered tool approval also stores approved and denied counts and up to 20 cleaned tool names in request order, when they fit within the audit row limit; it stores no arguments or rejection reasons. | For ever, unless `AGENTKOURIER_AUDIT_RETENTION` is set (below). |
+| `audit` | IDs, codes, outcomes and lengths, never message text; the platform user ID of a voter or presser, of a person a reply mentioned with the name the Binding declares for them, and of a person whose top-level message a `personMessage` trigger did not start because its prompt was refused or a limit stopped it; an `email` column that nothing writes today; and, for an unusable pause, one redacted reason of at most 120 bytes. For oversized or abandoned prompts with a stored interaction, the refusal reason is audited before the interaction closes; recovery records a cancellation only when its result is known, so `ErrNotPaused` and a crash after cancellation before the audit do not produce an invented success row. An answered tool approval also stores approved and denied counts and up to 20 cleaned tool names in request order, when they fit within the audit row limit; it stores no arguments or rejection reasons. | For ever, unless `AGENTKOURIER_AUDIT_RETENTION` is set (below). |
+| `served_connections` | The `namespace/name` of each chat connection the leader serves now, and of each it served before and that still exists in the cluster, with when it was first served. No content. The leader compares it with the connections it serves when it starts, to find those it stopped serving. | A connection stays until it is served again (it then stays as served) or its ChatConnection is deleted. |
 | `events.payload` | Nothing writes it. | n/a |
 
 ### Feedback
 
-The useful and not-useful buttons store one row for each person and message, in table `feedback` of both stores. The feedback adapter maps the origins `botMessage` (what every trigger start records) and `legacy` (migrated from the older session schema), with validated `alertname` subjects, to alert-name attribution. It also maps `alertmanager`, which Agent Kourier no longer writes: only sessions created before that origin was retired keep it, and their votes still count under their alert's name:
+The useful and not-useful buttons store one row for each person and message, in table `feedback` of both stores. The feedback adapter maps the origins `botMessage` (what a `botMessage` trigger's start records) and `legacy` (migrated from the older session schema), with validated `alertname` subjects, to alert-name attribution; a `personMessage` trigger's start records `personMessage`, which names no alert. It also maps `alertmanager`, which Agent Kourier no longer writes: only sessions created before that origin was retired keep it, and their votes still count under their alert's name:
 
 | Column | Holds |
 |---|---|
@@ -36,7 +37,7 @@ The useful and not-useful buttons store one row for each person and message, in 
 | `turn_id` | The turn whose output is the rated message. A thread's several answers are rated apart. |
 | `user_id` | The platform's ID of who voted (a pseudonym, not a name or an email). |
 | `binding`, `agent`, `alert_name` | The Binding, its agent (`namespace/name` on the backend) and the alert name of the thread, as they were at the person's first vote. |
-| `kind` | `investigation` (the final message of a thread that a trigger or an alert started) or `answer` (an answer to a person, on a Binding with `feedback.enabled`). |
+| `kind` | `investigation` (the final message of a thread that a `botMessage` trigger or an alert started) or `answer` (an answer to a person, a person's message that a `personMessage` trigger took or a bot's mention, on a Binding with `feedback.enabled`). |
 | `verdict` | `useful` or `not_useful`. A later press of the other button replaces it. |
 | `first_at`, `voted_at` | The first vote, and the latest. |
 
@@ -210,8 +211,16 @@ of the default `threadTTL`, after which a session is expired and recovery skips 
 and counted in `agentkourier_retention_removed_total{what="stranded_replies"}`. The retention sweep queues removal of a
 dropped reply's configured acknowledgment reaction through the outbox.
 
-The reply row keeps the original acknowledgment emoji and source message reference, and an active task's session keeps
-them with its turn. These values let recovery remove the same reaction after a restart or Binding configuration change.
+The reply row keeps the source message reference, and the original acknowledgment emoji until the removal of its reaction
+is queued. While a task runs, its session keeps the emoji with its turn, with the ID of the reply it belongs to, and clears
+them when the task pauses on a question; an answer that continues the task records its own. The session's copy lets
+recovery remove the same reaction after a restart or Binding configuration change, and the reply row's lets the retention
+sweep remove it. Agent Kourier queues the removal in the outbox, and then clears the emoji from the delivered reply row, when
+the reaction is no longer wanted: when a turn ends or pauses on a question, when an answer fails and its question waits
+again, and when a typed answer is consumed without continuing the task. The retention sweep takes every delivered reply
+that still has an emoji, except the one that its session's recorded task holds the emoji for: a reply dropped because it
+was never delivered, one whose removal or clear failed, and one left by a crash. It queues their removals, which changes
+nothing for one already queued, and clears their emoji, so a reply is not swept again once its emoji is cleared.
 
 ### Thread replies in a mention-only Binding
 
@@ -225,6 +234,17 @@ Before that they reach neither the agent nor its provider (with `all`, every rep
 sent and held in memory while that turn is the head of its session's queue, `reply_queue.text` holds only what the person who
 mentioned Agent Kourier wrote, and no reply's content is logged. A typed answer to a question that takes text replies needs no
 mention: it is queued pinned to the question and kept as its answer (`interactions.answer`, above).
+
+A bot's mention reads the thread on any Binding, whatever `chat.threadReplies` says: on the first bot's mention in the thread, what opened it and every
+author's messages up to the mention; on a later one, every author's messages since the previous bot's mention. So what people wrote in a thread
+reaches the agent, and so its model provider, once a bot mentions Agent Kourier there, without anyone having mentioned it themselves. Set
+`chat.botMentions: none` to stop that. Those messages are cleaned, redacted, cut and not stored, as above; `reply_queue.text` holds the fixed prompt
+and the bot's post.
+
+A `personMessage` trigger sends what people post at the top level of the channel to the agent, and so to its model provider, without anyone
+mentioning Agent Kourier: each message it takes is in `reply_queue.text`, after the template's output, until the turn is delivered. Its thread takes
+only mentioned replies, whatever `chat.threadReplies` says, so a reply there reaches the agent only when someone later mentions Agent Kourier in the
+thread, and then as above.
 
 ### Sessions and what belongs to them
 
@@ -253,7 +273,8 @@ digest or a root post, which no thread or reply names, and a notice that is post
 **The threadTTL is the Binding's**, read from the config at each sweep. A session whose Binding has left the config has no
 threadTTL to go by: it is held to the longest `threadTTL` of any Binding in the config (at least the 90-day default) plus the
 90 days, so that a Binding missing for a while, from a config that lost it and is mended, does not have its sessions deleted on
-a shorter reckoning than it would have kept them by. Nothing is deleted before a config has loaded.
+a shorter reckoning than it would have kept them by. A `threadTTL` is at most 365 days, so no such session is kept past its last activity by more than 455 days (365 plus the 90).
+When no Binding has a `threadTTL` over the default, it is 180 days (the default's 90 plus the 90). A Binding that exists in the cluster and is not served (on custom resources) keeps its own sessions, which are not deleted while it is not served, and is not counted in that longest: while it is unserved, the horizon of a deleted Binding's sessions is the one the served Bindings give. The holds below apply as to any session. Nothing is deleted before a config has loaded.
 
 **Never deleted, whatever its age**, while any of these holds, so that a session is not deleted from under work that still reads it:
 
@@ -274,8 +295,8 @@ horizon as the deletion: the Binding's `threadTTL` plus 90 days) and still recor
 0. leaves it if this process's session manager still runs that task (parked on a question it has not given up on, or streaming
    it): the task is its runner's, and clearing it from under the runner would leave the runner parked after the session is
    deleted, so that a new session under the same key waited behind it. The tick says, at WARN, that it left some. The runner
-   ends it (a streaming task, when the runner gives up on it), or the interaction timeout does (a parked one), and a restart
-   does when neither can (a Binding that left the config makes the timeout's cancel fail for ever).
+   ends it (a streaming task, when the runner gives up on it), or the interaction timeout does (a parked one; for a Binding that left
+   the config, without asking the agent, `5m` after the first sweep that finds the pause both past its timeout and without its Binding), and a restart does when neither can.
 
 1. asks the task's agent to cancel it. This is a courtesy and never stops the sweep: the call is bounded (10 seconds); an agent
    that does not answer is not asked again in that tick, so a Binding whose agent is down costs one timeout and not one for each
@@ -309,6 +330,14 @@ leader's epoch first, and a session that a writer holds locked is left for the n
 `agentkourier_retention_removed_total`: `expired_sessions`, and the rows that went with them as `session_replies`,
 `session_interactions`, `session_presses` and `session_outbox` (and, for a stale task, as above). Migration 0022 adds the indexes the sweep reads by (a session's
 last activity; a thread's replies, interactions and outbox rows; an outbox row's source, in the C collation with Postgres).
+
+**Connection of an outbox row and a press.** Migration 0029 adds a `connection` column to `outbox` and `interaction_presses` and keys
+the outbox's thread index by it, because a channel ID names a channel only within one chat app. The sweep deletes the outbox rows of a
+session's thread for the session's connection only, and a pending outbox row holds back only the sessions of its own connection. A row
+written before the migration, or by an older version after a rollback, has an empty connection: when the broker starts leading it gives
+every such row its own connection, 1000 rows of a table to a transaction, and logs at INFO how many it changed in all (nothing, when none). A broker with no own connection has none to
+give them to: it counts the outbox rows and the presses with an empty connection, and if there are any its leader does not start and the process exits with code 2, naming the two counts and no row
+([Troubleshoot](../how-to/troubleshoot.md#the-pod-exits-with-code-2)).
 
 Not deleted here: `feedback` rows, which are kept so that a review of the votes can read them.
 

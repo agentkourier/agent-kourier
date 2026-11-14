@@ -42,7 +42,7 @@ func (r *TextReplies) Decide(ctx context.Context, key store.ConversationKey, rep
 	case <-r.ready:
 	}
 	p := r.pipeline
-	sess, err := p.cfg.Sessions.GetSession(ctx, key, readAll, p.cfg.Now())
+	sess, err := p.cfg.Sessions.GetSession(ctx, key, store.AnyAge, p.cfg.Now())
 	if err != nil {
 		return session.TextReplyRetry, err
 	}
@@ -99,13 +99,7 @@ func (p *Pipeline) textReply(ctx context.Context, key store.ConversationKey, rep
 		return session.TextReplyRetry, fmt.Errorf("text reply %s: unknown answer verdict %q", reply.ID, v)
 	}
 	if queued.Kind == session.AdmitTurn {
-		claims, ok := p.cfg.Store.(interface {
-			ClaimReplyInteraction(context.Context, string, string) error
-		})
-		if !ok {
-			return session.TextReplyRetry, errors.New("text replies require durable question claims")
-		}
-		if err := claims.ClaimReplyInteraction(ctx, reply.ID, id); err != nil {
+		if err := p.cfg.Store.ClaimReplyInteraction(ctx, reply.ID, id); err != nil {
 			return session.TextReplyRetry, err
 		}
 	}
@@ -113,7 +107,7 @@ func (p *Pipeline) textReply(ctx context.Context, key store.ConversationKey, rep
 	if !row.DeliveredAt.IsZero() && row.Decider == reply.UserID {
 		return session.TextReplyConsumed, nil
 	}
-	press := store.Press{InteractionID: row.ID, User: reply.UserID, Channel: key.Channel, MessageRef: row.MessageRef, PressedAt: reply.EnqueuedAt}
+	press := store.Press{InteractionID: row.ID, User: reply.UserID, Connection: key.Connection, Channel: key.Channel, MessageRef: row.MessageRef, PressedAt: reply.EnqueuedAt}
 	if row.MessageRef == "" { // a legacy claim still waiting for its prompt
 		if p.cfg.Now().Sub(reply.EnqueuedAt) >= p.cfg.GiveUpAfter {
 			return textReplyResult(p.GiveUp(ctx, press))

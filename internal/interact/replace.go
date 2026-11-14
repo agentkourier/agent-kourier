@@ -31,12 +31,13 @@ type Editor interface {
 	Classify(op chat.Op, err error) chat.Verdict
 }
 
-// ReplacerConfig configures a Replacer. Store and Updater are required.
+// ReplacerConfig configures a Replacer. Store and Updaters are required.
 type ReplacerConfig struct {
-	Store   store.Interactions
-	Updater Editor
-	Now     func() time.Time // time.Now if nil
-	Logger  *slog.Logger     // slog.Default() if nil
+	Store store.Interactions
+	// Updaters gives the platform of an interaction's connection, which edits its prompt.
+	Updaters chat.Resolver[Editor]
+	Now      func() time.Time // time.Now if nil
+	Logger   *slog.Logger     // slog.Default() if nil
 	// Horizon is how far back the repair looks for interactions that ended (default RepairHorizon): the
 	// prompt of an older one that was never replaced stays as it is.
 	Horizon time.Duration
@@ -63,15 +64,15 @@ type Replacer struct {
 	mu        sync.Mutex
 	done      map[string]struct{} // replaced, or given up on, by this process
 	failures  map[string]int
-	todo      []string  // the interactions the last listing found
-	listed    time.Time // when it did
-	waitUntil time.Time // Slack asked for no edits before this
+	todo      []todoItem           // the interactions the last listing found
+	listed    time.Time            // when it did
+	waitUntil map[string]time.Time // by connection: the platform asked for no edits before this
 }
 
 // NewReplacer returns a Replacer over cfg.
 func NewReplacer(cfg ReplacerConfig) (*Replacer, error) {
-	if cfg.Store == nil || cfg.Updater == nil {
-		return nil, errors.New("interact: Store and Updater are required")
+	if cfg.Store == nil || cfg.Updaters == nil {
+		return nil, errors.New("interact: Store and Updaters are required")
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -94,7 +95,7 @@ func NewReplacer(cfg ReplacerConfig) (*Replacer, error) {
 	if cfg.Batch <= 0 {
 		cfg.Batch = 10
 	}
-	return &Replacer{cfg: cfg, done: map[string]struct{}{}, failures: map[string]int{}}, nil
+	return &Replacer{cfg: cfg, done: map[string]struct{}{}, failures: map[string]int{}, waitUntil: map[string]time.Time{}}, nil
 }
 
 // Replace edits the prompt of the interaction id into its replacement, built from the row: who
@@ -118,10 +119,14 @@ func (r *Replacer) Replace(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("interact: render the replacement of %s: %w", id, err)
 	}
+	u, err := r.cfg.Updaters.Platform(row.Key.Connection)
+	if err != nil {
+		return fmt.Errorf("interact: the platform to replace the prompt of %s: %w", id, err)
+	}
 	editCtx, cancel := context.WithTimeout(ctx, r.cfg.EditTimeout)
 	defer cancel()
-	if err := r.cfg.Updater.Update(editCtx, r.cfg.Updater.RefAt(row.Key.Channel, row.Key.Thread, row.MessageRef), out); err != nil {
-		return fmt.Errorf("interact: replace the prompt of %s: %w", id, err)
+	if err := u.Update(editCtx, u.RefAt(row.Key.Channel, row.Key.Thread, row.MessageRef), out); err != nil {
+		return &editFailed{err: fmt.Errorf("interact: replace the prompt of %s: %w", id, err), retryAfter: u.Classify(chat.OpPost, err).RetryAfter}
 	}
 	r.mu.Lock()
 	r.done[id] = struct{}{}
@@ -148,18 +153,16 @@ func (r *Replacer) Run(ctx context.Context) error {
 // Repair replaces the prompts of up to Batch of the interactions that ended within the Horizon and that
 // this process has not replaced. The store is read when none has been or ListEvery has passed since. A
 // failed edit is counted and tried again by the next repair; after maxEditFailures it is given up on,
-// and logged at Error. A rate limit is none of that: Slack's Retry-After is waited out, and the edit is
-// not counted. It goes on past a prompt it cannot edit, and returns every such error joined.
+// and logged at Error. A rate limit is none of that: the platform's Retry-After is waited out, by the connection that was
+// limited alone (the limits are the app's own), and the edit is not counted. A prompt whose connection is waiting, or is down,
+// is skipped and takes no place in the batch. It goes on past a prompt it cannot edit, and returns every such error joined.
 func (r *Replacer) Repair(ctx context.Context) error {
 	r.run.Lock()
 	defer r.run.Unlock()
 	now := r.cfg.Now()
 	r.mu.Lock()
-	waiting, relist := now.Before(r.waitUntil), r.listed.IsZero() || now.Sub(r.listed) >= r.cfg.ListEvery
+	relist := r.listed.IsZero() || now.Sub(r.listed) >= r.cfg.ListEvery
 	r.mu.Unlock()
-	if waiting {
-		return nil
-	}
 	if relist {
 		rows, err := r.cfg.Store.ListDecidedInteractions(ctx, now.Add(-r.cfg.Horizon))
 		if err != nil {
@@ -171,7 +174,7 @@ func (r *Replacer) Repair(ctx context.Context) error {
 		for _, row := range rows {
 			listed[row.ID] = struct{}{}
 			if row.MessageRef != "" {
-				r.todo = append(r.todo, row.ID)
+				r.todo = append(r.todo, todoItem{id: row.ID, conn: row.Key.Connection})
 			}
 		}
 		// What is no longer listed is past the horizon and will not be looked at again, so what is kept of
@@ -185,11 +188,12 @@ func (r *Replacer) Repair(ctx context.Context) error {
 	r.mu.Unlock()
 	var errs []error
 	tried := 0
-	for _, id := range todo {
+	for _, item := range todo {
+		id := item.id
 		if tried == r.cfg.Batch {
 			break
 		}
-		if r.isDone(id) {
+		if r.isDone(id) || r.limited(item.conn) {
 			continue
 		}
 		tried++
@@ -197,16 +201,36 @@ func (r *Replacer) Repair(ctx context.Context) error {
 		if err == nil {
 			continue
 		}
-		if retry := r.cfg.Updater.Classify(chat.OpPost, err).RetryAfter; retry > 0 { // the platform said when to come back
+		if errors.Is(err, chat.ErrConnectionDown) { // the prompt waits for its connection: no failure of an edit, and no place in the batch
+			tried--
+			continue
+		}
+		var failed *editFailed
+		if errors.As(err, &failed) && failed.retryAfter > 0 { // the platform said when to come back
 			r.mu.Lock()
-			r.waitUntil = r.cfg.Now().Add(max(retry, time.Second)) // from when it arrived: the pass may have been long
+			r.waitUntil[item.conn] = r.cfg.Now().Add(max(failed.retryAfter, time.Second)) // from when it arrived: the pass may have been long
 			r.mu.Unlock()
-			return errors.Join(errs...)
+			continue
 		}
 		errs = append(errs, err)
 		r.fail(ctx, id, err)
 	}
 	return errors.Join(errs...)
+}
+
+// todoItem is an interaction to look at, with the connection whose platform edits its prompt.
+type todoItem struct{ id, conn string }
+
+// limited says whether the platform of conn has asked for no edits yet.
+func (r *Replacer) limited(conn string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	until, ok := r.waitUntil[conn]
+	if ok && !r.cfg.Now().Before(until) {
+		delete(r.waitUntil, conn)
+		return false
+	}
+	return ok
 }
 
 func (r *Replacer) isDone(id string) bool {
@@ -215,6 +239,16 @@ func (r *Replacer) isDone(id string) bool {
 	_, ok := r.done[id]
 	return ok
 }
+
+// editFailed is the error of an edit that the platform refused, with how long the platform asked the caller to wait.
+type editFailed struct {
+	err        error
+	retryAfter time.Duration
+}
+
+func (e *editFailed) Error() string { return e.err.Error() }
+
+func (e *editFailed) Unwrap() error { return e.err }
 
 // fail counts a failed edit of the prompt of id, and leaves the prompt once it has failed too often.
 func (r *Replacer) fail(ctx context.Context, id string, err error) {

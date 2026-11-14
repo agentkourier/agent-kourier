@@ -11,7 +11,7 @@ are A2A 1.0's, with the 0.3 name in brackets.
 | Serve A2A 1.0 or 0.3 over JSON-RPC, on HTTP or HTTPS | Interfaces that are not JSON-RPC are dropped from the card. A card with none left fails the turn with `agent card lists no JSON-RPC interface` |
 | Serve its card at the endpoint, with any trailing slash trimmed, plus `/.well-known/agent-card.json`. On `a2a` the endpoint is the AgentBackend's `url` as written; on `kagent-v1` it is `url` plus `/agents/<namespace>/<name>` | The card fetch fails and the turn is retried, then fails after 15 minutes |
 | Set `capabilities.streaming: true` on the card | The agent is refused, as above. The non-streaming send is never used |
-| Mark no extension `required` that the dialect does not speak. `kagent-v1` speaks kagent's human-in-the-loop extension; `a2a` speaks none | The connect fails with `agent requires an unsupported extension` |
+| Mark no extension `required` that the dialect does not speak. Both dialects speak kagent's human-in-the-loop extension and no other | The connect fails with `agent requires an unsupported extension` |
 | Answer at the endpoint itself, without a redirect | A 3xx is a failed call; no redirect is followed |
 | Send response headers within 30 seconds of every call, streams included | The call fails as a lost connection |
 
@@ -29,7 +29,8 @@ change.
 | `CancelTask` (`tasks/cancel`) | When a question times out; for a question the Binding does not allow or the dialect cannot show; for a task that shows no sign of life for an hour after its stream was lost; after the agent rejects an answer | The cancel is retried a few times and reported as failed. The task keeps running on the agent |
 | `ListTasks` (1.0 only) | Before a turn whose outcome is unknown is sent again into an existing context, and on recovery after a restart | The lookup is retried, then the turn fails after 15 minutes |
 
-`ListTasks` is called with the session's `contextId` and follows `nextPageToken` for up to 100 pages. A turn counts
+`ListTasks` is called with the session's `contextId` and follows `nextPageToken` for up to 200 pages and five
+minutes in all. A turn counts
 as found only if a task's `history` holds a message with the turn's `messageId`. A list without history makes every
 turn look absent, so it is sent, and may run, again. An A2A 0.3 agent is never asked; its turns are always sent
 again.
@@ -54,8 +55,9 @@ the identity that calls the agent is always the Binding's.
 
 Every request carries one identity header, `Authorization: Bearer` from the Binding's `identity.tokenSecretRef` or
 `X-User-Id` from `identity.userId`, plus the AgentBackend's static `headers`. It may also carry the W3C trace context headers
-`traceparent` and `tracestate`. On `kagent-v1`, the `A2A-Extensions` header asks for kagent's human-in-the-loop
-extension when the card lists it.
+`traceparent` and `tracestate`. On both dialects, the `A2A-Extensions` header asks for kagent's human-in-the-loop
+extension when the card lists it, and on every message that names the extension in its `extensions` (an answer to one of
+its pauses) whatever the card lists.
 
 ## Replies
 
@@ -91,8 +93,96 @@ An update with no text part leaves the artifact's text as it was, so to take tex
 An artifact whose text is empty is left out of the message.
 A task snapshot (from `GetTask`, `SubscribeToTask` or a replayed send) whose text for an artifact is a prefix of the text already
 received is taken as older and skipped, so a take-back that is missed when the stream drops is not applied.
-File parts are never shown. Data parts are not shown either, except on `kagent-v1`, which shows kagent's tool call
-and tool result parts as step cards.
+File parts are never shown. Data parts are not shown either, except the tool call and tool result parts below.
+
+### Tool calls and results
+
+A2A defines no tool call, so Agent Kourier reads the conventions of the frameworks that write one. On every dialect, a data
+part is a tool call or a tool result when its metadata holds exactly one of these keys with the string value
+`function_call` or `function_response`:
+
+| Metadata key | Written by |
+|---|---|
+| `adk_type` | Google ADK's A2A converter |
+| `kagent_type` | kagent 0.9.x, which uses that converter with its own prefix |
+| `kagent.dev/a2a/part-type` | kagent 1.0 |
+
+The part's `data` must be an object with a non-empty string `name`. Its `id` is the call's ID, which the result repeats,
+and a call's `args` and a result's `response` are its arguments and what it returned. Any other part stays unread,
+including a marked part with no `name`, one that holds two of the keys, and ADK's other types (`tool_call`,
+`tool_response`, `executable_code` and `code_execution_result`).
+
+Agent Kourier reads these parts in three places. ADK's newer converter and kagent 1.0 put them in the artifacts of a
+task; ADK's older converter and kagent 0.9.x put them in status messages.
+
+- The artifacts, in every chunk and in every task snapshot (`GetTask`, `SubscribeToTask`, a replayed send).
+- The message of a status update, when it is the agent's own (role `agent`) and the task is `working`. A task snapshot's
+  status message is read on the same terms.
+- The agent's own messages in the `history` of a task snapshot since the last message of the user, whatever the task's
+  state, since a history message carries none. That is how a call or result sent while the stream was down, or before a
+  restart, is found. The messages before the user's last one are an earlier turn's, and are not read. A pause message in
+  the history that holds a marked tool part would show as a step too.
+
+The text of a status message is not shown as the answer; a working update's text is the agent's progress line (see
+[Working updates](#working-updates)). A part is delivered once, and what counts as a repeat depends on where the part is:
+
+- In an artifact, a chunk with `append: true` adds parts after the ones already sent, so each is new even though its
+  index restarts at 0: ADK's default output is one artifact for a whole run, and each call and result in it is such a
+  chunk. A chunk that replaces the artifact, and a task snapshot, hold the parts again, wherever the replace puts them, and
+  a part is new only past the number of parts that say the same that the artifact has delivered. Two calls that say
+  the same, with no call ID, are two calls.
+- In a status message, a part is its message's `messageId` and its index. A message with no `messageId` is told by what
+  it says.
+- A part found in an artifact and again in a message is one part when it says the same, and two when it does not. A part
+  of the same kind and call ID that says something else is delivered as another part; the card is still decided by the
+  first result it gets, because a step finishes at the first result of its call and a later result changes nothing.
+- A task snapshot is history and the stream is the news. A snapshot's result for a call whose result the stream already
+  delivered from the same source (artifacts, or messages) is ignored, and of several results of one call in a snapshot
+  the last counts.
+- An answer to a paused task (a question or an approval) is about a task that goes on, whose snapshots hold the paused
+  turn's calls and results too. Before it sends the answer, Agent Kourier reads the task with one `GetTask` and counts
+  every tool part in it as delivered, so the answer shows its own steps and not the paused turn's again. A task that
+  cannot be read is answered without it. A follow after a restart has no such snapshot, so it reads only the history
+  since the user's last message, and the artifacts of a task that went on from an earlier turn replay that turn's
+  calls and results.
+- Two artifacts of one source that hold the same call are two calls. This matters if an agent sends a call in a partial
+  artifact and again in the main one; no agent measured does.
+
+A result is delivered after its call. When a result arrives in the stream for a call that the send has not delivered,
+and the send answers a paused task, Agent Kourier delivers the call it finds in the task it read before sending,
+then the result, so the step begins where the call was made and not after the text. Only that call is taken from the
+task, so the error that stood for the pause is not delivered. When the call is nowhere, the result waits for it, and is
+delivered when the send ends, or when it fails. A send that fails and is followed starts again from the task's snapshot,
+so a follow may deliver a result again; the card keeps the first.
+
+Each tool call is a step card in a chat thread, finished when its result arrives, and a failed one if the result has an
+`error` entry that holds something or an `isError` entry that is true. Structured tool approvals are separate: they need
+the pause payload of kagent's human-in-the-loop extension, which `kagent-v1` always reads and `a2a` reads when the agent
+card lists the extension.
+
+### Working updates
+
+On every dialect, a status update in state `working` whose message holds no tool part is a working update: a sign that
+the agent is at work, whether or not Agent Kourier understands anything in it. The update that makes the task `working`,
+at the start of a turn or after a pause, counts only if its message has text. An update whose message is the agent's and
+holds a tool part counts as its tool call or result instead. The user's message echoed back, as kagent 1.0 sends it when an
+approval is answered, does not count. Neither does a message whose metadata holds `kagent_adk_partial` set to `true`, a
+fragment of the model's output. A task snapshot, the one `GetTask` returns or a resubscribe opens with, holds no working
+update; the updates that stream after it do. An update that opens a resubscribed stream with the same `timestamp`, message ID
+and text as the one before it is taken for the server repeating itself and does not count, so a stream that always drops
+after such an update is given up on as one that says nothing is. Later on a stream every update counts, so an agent can
+send the same words as a heartbeat. A heartbeat that opens a resubscribed stream cannot be told from a repeat without a
+`timestamp`, so send one with each update.
+
+When the update's message is the agent's own (role `agent`), its text parts, joined by line breaks, are the agent's
+progress line. A text part whose metadata holds `adk_thought`, `kagent_thought` or `kagent.dev/a2a/thought` set to
+`true` is the model's reasoning, as Google ADK and kagent mark it, and is left out. Agent Kourier redacts secrets from the line, puts it on one line and cuts it to 160 UTF-16 units. The line is untrusted text,
+shown literally, and never part of the answer. What a reply shows of it depends on the Binding's `chat.progress`
+([Output](../explanation/threads-and-sessions.md#output)): `steps-and-activity`, the default, shows the line in place of
+`Working…` when no tool call is under way, and `activity` counts the updates and shows none of their text.
+
+Send a working update when the agent starts a step it has no tool part for, such as `Reading the pod logs`, and not
+for every token: Agent Kourier writes a reply by default at most once every 2 seconds, and shows the latest line.
 
 ## Task states
 
@@ -106,22 +196,90 @@ and tool result parts as step cards.
 | `auth-required` | Not supported, on either dialect. Agent Kourier tells the thread that the agent paused in a way it cannot use, cancels the task, and then sends the replies queued behind it |
 | Any other terminal state | Treated as `failed` |
 
-A question on `a2a` is a status message made only of non-empty text parts, with a `messageId` or a status
-`timestamp` that differs from the last question's. Anything else in `input-required` cannot be shown, so the task is
-cancelled and the thread is told. The answer is one text part sent to the paused `taskId` and `contextId`. On
-`kagent-v1`, the question is kagent's human-in-the-loop payload in the status message's metadata.
+On `kagent-v1`, the question is kagent's human-in-the-loop payload in the status message's metadata. On `a2a`, a status
+message that names that extension in its `extensions` and carries the payload is read the same way. Any other question
+on `a2a` is a status message, on a task with an ID, whose parts are all text, and whose text is not blank once the parts
+are joined and trimmed. The task ID with the message's `messageId`, or with its status `timestamp` when it has no
+`messageId`, names the question. The same name with the same text is the same question, and is not posted again. Give
+each new question a new name: a different question under a name already used cannot be shown, unless the earlier
+question was settled long enough ago for its request to have been
+[cleared](stored-data.md#interactions-request-and-answer), in which case it is taken for the earlier question. A pause
+that breaks these rules, and anything else in `input-required`, cannot be shown, so the task is cancelled and the thread
+is told. The answer to a text question is one text part sent to the paused `taskId` and `contextId`.
+
+## Structured questions and tool approvals
+
+Questions with choices, several questions at once, and tool approvals use kagent's human-in-the-loop extension,
+`https://kagent.dev/extensions/hitl/v1`. kagent 1.0 speaks it. Any other agent gets them on the `a2a` dialect by
+speaking it the same way. Agent Kourier reads no framework's own approval format, so an agent built on another framework
+speaks this extension through an adapter of its own; see
+[Why approvals use one extension](../explanation/why-a2a.md#why-approvals-use-one-extension).
+
+| The agent must | Otherwise |
+|---|---|
+| List `https://kagent.dev/extensions/hitl/v1` in the card's `capabilities.extensions` (`required` may be true) | Requests carry no `A2A-Extensions` header for it, so an agent that sends its structured pause only when asked (as kagent does) sends text alone |
+| Pause in `input-required` on a task with an ID, with a status message whose `extensions` names the URI and whose `metadata` holds the request under the URI as key | The pause is read as a text question if its parts are text alone, and as unusable otherwise: the task is cancelled and the thread told |
+| For a tool approval, send `{"type": "tool_approval_request", "hint": "...", "tools": [{"id": "...", "call_id": "...", "name": "...", "args": {...}}]}`: 1 to 20 tools, each with an `id` | The pause is unusable. A name or argument that Agent Kourier's cleaning would change, or that does not fit in one message, also makes it unusable, because the approver would not see what runs |
+| For questions, send `{"type": "ask_user_request", "id": "...", "hint": "...", "questions": [{"question": "...", "choices": [...], "multiple": false}]}`: an `id`, and 1 to 20 questions of at most 100 choices each. No choices (`[]` or none) asks for free text | The pause is unusable |
+| For a pause a sub-agent raised, add `"nested": {"subagent_name": "...", "task_id": "...", "context_id": "...", "tools": [...]}`, with the sub-agent's name and task. A nested approval needs exactly one outer tool, with an `id`, and decides the nested tools. A nested question needs exactly one nested tool named `ask_user`, with an `id`, which the answer echoes | The pause is unusable |
+| Take the answer on the paused task, and resume it | A JSON-RPC `-32603` to the answer cancels the task and tells the thread |
+
+The answer is a user message to the paused `taskId` and `contextId`, with `extensions` naming the URI, the
+`A2A-Extensions` header naming it whatever the card lists, the actor under `agentkourier.dev/actor`, and one text part.
+Its payload, under the URI in `metadata`, is:
+
+- For a tool approval: `{"type": "tool_approval_response", "approvals": [{"id": "...", "approved": true}]}`, one entry
+  per tool, by its `id`, in the request's order. A denied tool has `"approved": false` and a `rejection_reason`: "denied
+  by an approver in chat" for a person's denial, "denied by agent-kourier: no one decided in time" at the timeout, and
+  "denied by agent-kourier: this Binding does not allow tool approvals" when the Binding sets no
+  `interactions.toolApprovals`. The text part is `approved`, or `rejected` when any tool is denied.
+- For questions: `{"type": "ask_user_response", "id": "...", "answers": [{"answer": ["..."]}]}`, echoing the request's
+  `id` (for a nested question, the nested tool's), with one entry per question in order, each holding the chosen choices
+  or the free text. The text part is each question's answers joined with `, `, and the questions joined with `; `.
+
+The text part is not prefixed with the actor, as a turn's is. Agent Kourier checks every answer before sending it: each
+question answered, each answer one of its choices when there are any, each tool decided once.
+
+Notes for an agent author:
+
+- States and roles are written here in their short form. On the A2A 1.0 wire they are `TASK_STATE_INPUT_REQUIRED`,
+  `ROLE_AGENT` and so on, and on 0.3 `input-required` and `agent`; the SDKs spell them for you.
+- Send the payload whenever you pause, whether or not the request asked for the extension. Agent Kourier asks when the
+  card lists it, and reads a pause that names it either way.
+- Text parts beside the payload are allowed and are not shown: the prompt is built from the payload. They are for a
+  client without the extension.
+- A tool's `id` is what its decision names. Make each unique within the request, and give every new pause on a task new
+  IDs (for questions, a new `id`): Agent Kourier tells one pause from another by the task, the request's `id` and the
+  tool IDs. `call_id` is optional; it is kept with the request and not shown.
+- `hint` is optional. It is the prompt's heading, and stays on the prompt after it ends, so keep it to one line;
+  it may be shown cut. Without one, the heading is "The agent needs your approval" for a tool approval and "The agent
+  needs your input" for questions. A hint that starts "Please approve or reject the tool call" and names
+  `ToolConfirmation` is dropped: that is the instruction ADK writes for a client, which kagent sends as the hint, and
+  it is not for the approver.
+- A tool's `name` and `args` are shown as sent, apart from redacted secrets. Arguments may be any JSON value, nested.
+  A pause is unusable when the prompt could not show a tool exactly: a name, key or string with a control character
+  other than tab and line ends, or too long to show whole; a name or key with characters or spacing that cleaning would
+  change, or a name the audit log cannot write whole (300 ASCII characters at most); an integer of magnitude 2^53 or more.
+- Read the decision from the payload, matching approvals by `id`. The text part of the answer is a summary.
+  Agent Kourier always sends a `rejection_reason` with a denial.
+- Agent Kourier never sends an incomplete or unknown answer. If you refuse one anyway with `-32603`, Agent Kourier cancels the task and tells the thread.
+- Gated tool calls need not appear as tool parts. If they do, they are shown as steps (see
+  [Tool calls and results](#tool-calls-and-results)).
 
 ## Errors
 
 | The agent answers | What Agent Kourier does |
 |---|---|
-| HTTP 401 or 403, at any call | The credentials are rejected: the turn fails without a retry, and `agentkourier_credential_rejections_total` counts it |
+| HTTP 401 at any request, or HTTP 403 at an A2A call | The credentials are rejected. A send or a followed task fails without a retry, an answer leaves the pause open, and `agentkourier_credential_rejections_total` counts them. A lookup before a resend is retried and not counted: the turn fails as unreachable after 15 minutes, or is retried with no limit if it is held |
+| HTTP 403 at the agent card fetch | The agent does not exist, or does not permit the identity. A send fails without a retry and is audited. An answer by a button leaves the pause open, and a followed task is not followed again. A lookup before a resend is retried: the turn fails as unreachable after 15 minutes, or is retried with no limit if it is held. A typed answer, and recovery with a reply queued behind the task, keep trying with nothing said in the thread. None of these is a rejected credential, so `agentkourier_credential_rejections_total` does not count them |
 | JSON-RPC `-31403` | The identity is refused for this session: the turn fails |
 | JSON-RPC `-32004` to a send | Busy: the same message is sent again after a backoff, for as long as it takes, and the thread is told after 2 minutes. Do not use `-32004` for an operation the agent does not support, or a turn waits for ever |
 | JSON-RPC `-32603` to an answer | The answer is rejected: the paused task is cancelled and the thread told |
 | JSON-RPC `-32001` (task not found) while a task is followed | The session is gone: the thread is told and the next turn starts a new context |
 | Another HTTP 4xx, other than 408 and 429, before any event | Not sent: retried, then failed after 15 minutes |
 | HTTP 5xx, or a dropped connection, before any event | Outcome unknown: looked up with `ListTasks` where it can be, then sent again |
+| One event of a stream of more than 2 MiB, an answer to a call of more than 4 MiB, or more than 341 KiB of reply in one turn | Not read past the bound: the turn ends with the outcome `response_too_large`, and the task is cancelled if it was named. [Limits](limits.md#build-or-connect-an-agent-backend) has each bound and what it counts |
+| A `ListTasks` walk that cannot be read in full (a page of more than 4 MiB at the smallest page size it is asked for at, more than 200 pages, more than five minutes, or a page token that comes again) before it finds the turn | The turn is not sent again, since the agent may have it: it ends with the outcome `lookup_incomplete` |
 
 A `Retry-After` header is honoured on reconnects, up to a day. An error's message is never shown in the thread. For
 a `failed` task, the status message's text, up to 32 parts and 4096 characters, and the metadata keys `code`,

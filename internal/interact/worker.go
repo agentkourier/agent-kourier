@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/backoff"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
@@ -67,6 +68,18 @@ type job struct {
 	tries int
 }
 
+// retryBounds fills the retry wait of a Worker or a Tap: a base that is not positive becomes defaultBase, and a ceiling
+// below the base becomes the larger of 30 seconds and the base.
+func retryBounds(base, ceiling, defaultBase time.Duration) (time.Duration, time.Duration) {
+	if base <= 0 {
+		base = defaultBase
+	}
+	if ceiling < base {
+		ceiling = max(30*time.Second, base)
+	}
+	return base, ceiling
+}
+
 // NewWorker returns a Worker over cfg.
 func NewWorker(cfg WorkerConfig) (*Worker, error) {
 	if cfg.Processor == nil {
@@ -75,12 +88,7 @@ func NewWorker(cfg WorkerConfig) (*Worker, error) {
 	if cfg.Workers <= 0 {
 		cfg.Workers = 4
 	}
-	if cfg.Backoff <= 0 {
-		cfg.Backoff = 5 * time.Second
-	}
-	if cfg.MaxBackoff < cfg.Backoff {
-		cfg.MaxBackoff = max(30*time.Second, cfg.Backoff)
-	}
+	cfg.Backoff, cfg.MaxBackoff = retryBounds(cfg.Backoff, cfg.MaxBackoff, 5*time.Second)
 	if cfg.GiveUpAfter <= 0 {
 		cfg.GiveUpAfter = defaultGiveUpAfter
 	}
@@ -222,7 +230,7 @@ func (w *Worker) work(ctx context.Context, l *lane) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if !w.closed {
-		l.timer = time.AfterFunc(w.delay(j.tries), func() { w.requeue(l) })
+		l.timer = time.AfterFunc(backoff.Doubling(w.cfg.Backoff, w.cfg.MaxBackoff, j.tries), func() { w.requeue(l) })
 	}
 }
 
@@ -247,13 +255,4 @@ func (w *Worker) requeue(l *lane) {
 		w.ready = append(w.ready, l)
 		w.signal()
 	}
-}
-
-// delay is the wait after a press's tries-th failure.
-func (w *Worker) delay(tries int) time.Duration {
-	d := w.cfg.Backoff
-	for i := 1; i < tries && d < w.cfg.MaxBackoff; i++ {
-		d *= 2
-	}
-	return min(d, w.cfg.MaxBackoff)
 }

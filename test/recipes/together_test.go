@@ -207,7 +207,7 @@ func checkTogether(ctx context.Context, dirs []string) error {
 		return fmt.Errorf("recipes applied together (a file is named <recipe>-<file>): %w", err)
 	}
 	// The broker serves one ChatConnection (internal/broker/chatrun.go, ChooseConnection), which Resolve does not check.
-	if _, err := broker.ChooseConnection(ctx, snap, fakeSecrets{}); err != nil {
+	if _, err := broker.ChooseConnection(ctx, snap, v1alpha1.ObjectRef{}, fakeSecrets{}); err != nil {
 		return fmt.Errorf("recipes applied together: %w", err)
 	}
 	return nil

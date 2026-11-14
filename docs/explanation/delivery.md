@@ -9,6 +9,15 @@ Slack expects an acknowledgement within about 3 seconds (documented for HTTP del
 adapter writes the turn locally, by its message ID, and only then acknowledges. If the write fails, the event is not
 acknowledged, and Slack delivers it again. Because the write is keyed by the message, a redelivery is the same turn.
 
+The events of one channel are handled one at a time and in the order they arrive, and different channels at the same
+time, so a Binding whose regular expressions are slow to try holds up its own channel's events first. It does not keep the
+CPU for the others: with many busy channels, the acknowledgments of healthy ones slow too. The broker holds a bounded number
+of events (see [Limits](../reference/limits.md#start-investigations-triggers-rates-and-probes)). An event that arrives past
+the bound is left unacknowledged, as if its write had failed, and Slack may send it again. Slack's retries are finite (not
+verified here), so a shed event can be lost, and one that comes back after a later event of its channel was taken is handled
+after it. Order within a thread therefore holds only while the bounds do, and the metric `agentkourier_slack_events_shed_total`
+says when they did not.
+
 ## Going out: an outbox, so a crash does not repeat a post
 
 Slack's `chat.postMessage` has no idempotency key, so a crash between posting and recording the result would otherwise
@@ -37,13 +46,22 @@ for one holding the turn's message ID. Found, it follows that task; absent, it s
 tasks, so that question cannot be asked: a resend treats the turn as absent, and the turn may run twice. That is
 harmless for a read-only agent and not for one that changes things.
 
+An agent that can list its tasks can still fail to answer. Each task in a page of the list carries its history, and a page of more than 4 MiB is not read:
+Agent Kourier asks for that page again at half the size, down to three tasks, and for the pages after it at the size that worked. The walk as a whole has five minutes and 200 pages. If an earlier page held the
+turn, that is the answer, and the task is followed. If none did and the list still cannot be read in full, Agent Kourier does not know whether the agent has the turn
+and cannot find out, so it does not send it. The turn fails: the thread is told that Agent Kourier could not tell, that the agent may be running it, and that
+posting the message again runs it. The failure is logged, audited as a `find_task` call that failed with `lookup_incomplete`, and counted as the turn
+outcome `lookup_incomplete` (see [Troubleshoot](../how-to/troubleshoot.md#the-thread-says-agent-kourier-could-not-tell-if-the-agent-already-started-this-message)). The difference from an agent that
+cannot list is on purpose: that agent never could be asked, and the turn is sent, and this one could be asked and its answer is lost, so a turn that may have run is not run again by Agent Kourier. A reply
+that Agent Kourier queued itself and that the agent never took (it was refused as busy, or held behind a task) is not such a turn, and is sent.
+
 ## Audit writes
 
 A record that authorizes an action is written first, and the action fails if the write fails: an answer to a question is
 recorded before it is sent. A record of something already done is logged and counted but never blocks the follow-up.
 These are what the audit log holds for the chat path: agent calls, the decisions on a question (such as answered, denied
 or timed out), a pause that could not be used and its cancel, a vote on a message, a trigger's start that was
-refused, and a stale task that was ended. A message that arrives is not recorded as such.
+refused, a mention of a declared person that a reply queued, and a stale task that was ended. A message that arrives is not recorded as such.
 
 ## With two replicas
 

@@ -28,9 +28,9 @@ spec:
         {{- with omit .Values.podLabels "app.kubernetes.io/name" "app.kubernetes.io/instance" }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- if or .Values.podAnnotations (and .Values.config.rollOnChange (not .Values.config.existingConfigMap)) }}
+      {{- if or .Values.podAnnotations (and .Values.config.rollOnChange (not .Values.config.existingConfigMap) (not (include "agentkourier.crMode" .))) }}
       annotations:
-        {{- if and .Values.config.rollOnChange (not .Values.config.existingConfigMap) }}
+        {{- if and .Values.config.rollOnChange (not .Values.config.existingConfigMap) (not (include "agentkourier.crMode" .)) }}
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
         {{- end }}
         {{- with .Values.podAnnotations }}
@@ -55,7 +55,22 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           # cmd/agent-kourier takes no arguments: it is configured by this environment.
           env:
+            {{- if include "agentkourier.crMode" . }}
+            {{- /* Only for crds: the default's template carries no variable of this route. With crds there is no directory to read. */}}
+            - {name: AGENTKOURIER_CONFIG_SOURCE, value: crds}
+            {{- with include "agentkourier.chatConnection" . }}
+            - {name: AGENTKOURIER_CHAT_CONNECTION, value: {{ . | quote }}}
+            {{- end }}
+            {{- with .Values.config.connectionNamespaces }}
+            - {name: AGENTKOURIER_CONNECTION_NAMESPACES, value: {{ join "," . | quote }}}
+            {{- end }}
+            {{- /* Compact JSON, {} included: an empty map is false in a template, so the with is on the helper's JSON, never on the value. */}}
+            {{- with include "agentkourier.connectionNamespaceSelector" . }}
+            - {name: AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR, value: {{ . | quote }}}
+            {{- end }}
+            {{- else }}
             - {name: AGENTKOURIER_CONFIG_DIR, value: /etc/agent-kourier}
+            {{- end }}
             - {name: AGENTKOURIER_STORE, value: {{ .Values.store.type | quote }}}
             {{- if include "agentkourier.sqlite" . }}
             - {name: AGENTKOURIER_DB_PATH, value: {{ printf "/data/%s" .Values.persistence.dbFile | quote }}}
@@ -87,6 +102,10 @@ spec:
             {{- with .Values.auditRetention }}
             - {name: AGENTKOURIER_AUDIT_RETENTION, value: {{ . | quote }}}
             {{- end }}
+            {{- /* Before extraEnv, which may set GOMEMLIMIT itself: the helper renders nothing then. */}}
+            {{- with include "agentkourier.goMemLimit" . }}
+            - {name: GOMEMLIMIT, value: {{ . | quote }}}
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -104,7 +123,9 @@ spec:
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           volumeMounts:
+            {{- if not (include "agentkourier.crMode" .) }}
             - {name: config, mountPath: /etc/agent-kourier, readOnly: true}
+            {{- end }}
             {{- if include "agentkourier.sqlite" . }}
             - {name: data, mountPath: /data}
             {{- end }}
@@ -122,8 +143,10 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       volumes:
+        {{- if not (include "agentkourier.crMode" .) }}
         - name: config
           configMap: {name: {{ include "agentkourier.configMapName" . }}}
+        {{- end }}
         {{- if include "agentkourier.sqlite" . }}
         - name: data
           persistentVolumeClaim: {claimName: {{ include "agentkourier.pvcName" . }}}

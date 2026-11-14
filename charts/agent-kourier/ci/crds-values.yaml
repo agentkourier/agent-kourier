@@ -1,0 +1,50 @@
+# The config route of custom resources (config.source crds), for a platform that installs the CRDs itself (crds.install is off): resources like
+# minimal-values.yaml's, with a header from a Secret and the Binding in a namespace of its own, which the chart renders as custom resources and
+# not as a ConfigMap, a ClusterRole that reads them, and Roles that grant each Secret by name. The render needs the CRDs to be served, so
+# test/chart gives helm template --api-versions agentkourier.dev/v1alpha1 and --kube-version. A cluster is
+# brought to this by installing or upgrading a release of the files route with crds.install=true first (the chart README).
+image:
+  repository: registry.example.test/agent-kourier
+  tag: v0.1.0
+
+# The platform installs the CRDs itself, so the chart does not render them (crds.install is true when unset with crds, so the file says false).
+crds:
+  install: false
+
+config:
+  source: crds
+  # chatConnection is left out: one entry of chatConnections is the connection this broker serves.
+  chatConnections:
+    slack-main:
+      spec:
+        platform: slack
+        credentialsSecretRef: {name: slack-main}
+  agentBackends:
+    agents:
+      spec:
+        dialect: kagent-v1
+        url: http://kagent-frontdoor.kagent.svc.cluster.local:4180
+        headers:
+          - {name: X-Team, valueSecretRef: {name: agents-team, key: team}}
+  bindings:
+    sre:
+      namespace: sre
+      spec:
+        agent:
+          backendRef: {name: agents, namespace: agent-kourier}
+          namespace: kagent
+          name: k8s-agent
+        identity:
+          userId: agent-kourier-sre
+          tokenSecretRef: {name: agent-kourier-agent-token}
+        chat:
+          connectionRef: {name: slack-main, namespace: agent-kourier}
+          channel: C0123456789
+          output: live
+
+rbac:
+  # Teams make their own Bindings, so they grant their own Secrets. These two are what the platform grants for them: one Secret of a namespace by
+  # name, and every Secret of another namespace.
+  secretNames:
+    platform: [shared-token]
+  secretNamespaces: [team-b]

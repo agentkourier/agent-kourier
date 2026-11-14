@@ -2,8 +2,6 @@ package slack_test
 
 import (
 	"fmt"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,18 +10,24 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/secret"
 	"github.com/agentkourier/agent-kourier/internal/telemetry/telemetrytest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // refusingClient returns a Client over a Slack whose every method answers ok:false with code.
 func refusingClient(t *testing.T, code string) *slack.Client {
+	return refusingClientFor(t, code, intakeConn)
+}
+
+// refusingClientFor is refusingClient for a client that belongs to the connection conn.
+func refusingClientFor(t *testing.T, code, conn string) *slack.Client {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprintf(w, `{"ok":false,"error":%q}`, code)
 	}))
 	t.Cleanup(srv.Close)
-	return slack.New(slack.Config{BotToken: secret.New(botToken), AppToken: secret.New(appToken), APIURL: srv.URL + "/",
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	return slack.New(slack.Config{BotToken: secret.New(botToken), AppToken: secret.New(appToken), APIURL: srv.URL + "/", Connection: conn,
+		Logger: testutil.DiscardLogger()})
 }
 
 // A Slack error code is the server's text. Slack's own codes are a closed set, but a proxy or a
@@ -37,14 +41,16 @@ func TestChatErrorsAreNotExported(t *testing.T) {
 	_, errPost := c.Post(ctx, "C1", "", slack.Content{Text: "private-message-text"}, "ob-1")
 	errAppend := c.AppendStream(ctx, "C1", "1.0", "private-stream-text", slack.ChunksMode)
 	errStep := c.AppendStep(ctx, "C1", "1.0", slack.TaskUpdate{ID: "s1", Title: "private-step-title", Status: "in_progress"})
-	for _, err := range []error{errPost, errAppend, errStep} {
+	_, errAccess := c.ChannelAccess(ctx, "C1")
+	errGroups := c.GroupsReadable(ctx, []string{"S1"})
+	for _, err := range []error{errPost, errAppend, errStep, errAccess, errGroups} {
 		if err == nil || !strings.Contains(err.Error(), canary) {
 			t.Fatalf("err = %v; want the failure, which holds the code the test must keep out of telemetry", err)
 		}
 	}
 	h.RequireNone(t, canary, botToken, appToken, "private-message-text", "private-stream-text", "private-step-title")
-	for _, op := range []string{"Post", "AppendStream", "AppendStep"} {
-		if h.Counter(t, "agentkourier_chat_api_calls_total", map[string]string{"operation": op, "outcome": "api_error"}) != 1 {
+	for _, op := range []string{"Post", "AppendStream", "AppendStep", "ChannelAccess", "GroupsReadable"} {
+		if h.Counter(t, "agentkourier_chat_api_calls_total", map[string]string{"operation": op, "outcome": "api_error", "connection": intakeConn}) != 1 {
 			t.Errorf("%s was not counted once as an api_error", op)
 		}
 	}
@@ -63,7 +69,7 @@ func TestRefusedChunksModeIsItsOwnOutcome(t *testing.T) {
 			if err == nil {
 				t.Fatal("AppendStream succeeded")
 			}
-			if h.Counter(t, "agentkourier_chat_api_calls_total", map[string]string{"operation": "AppendStream", "outcome": "mode_refused"}) != 1 {
+			if h.Counter(t, "agentkourier_chat_api_calls_total", map[string]string{"operation": "AppendStream", "outcome": "mode_refused", "connection": intakeConn}) != 1 {
 				t.Errorf("%s was not counted as mode_refused: %s", code, h.Exported(t))
 			}
 			if s := h.Span(t, "agentkourier.chat.AppendStream"); s.Status.Description != "mode_refused" {
@@ -74,7 +80,24 @@ func TestRefusedChunksModeIsItsOwnOutcome(t *testing.T) {
 	// Other API errors, and the arguments error that also starts the fallback, stay api_error.
 	h := telemetrytest.New(t)
 	_ = refusingClient(t, "invalid_arguments").AppendStream(h.Ctx, "C1", "1.0", "text", slack.ChunksMode)
-	if h.Counter(t, "agentkourier_chat_api_calls_total", map[string]string{"operation": "AppendStream", "outcome": "api_error"}) != 1 {
+	if h.Counter(t, "agentkourier_chat_api_calls_total", map[string]string{"operation": "AppendStream", "outcome": "api_error", "connection": intakeConn}) != 1 {
 		t.Error("invalid_arguments is not an api_error")
+	}
+}
+
+func TestRejectedTokenIsItsOwnOutcome(t *testing.T) {
+	for _, code := range []string{"invalid_auth", "token_revoked", "token_expired", "account_inactive", "not_authed"} {
+		t.Run(code, func(t *testing.T) {
+			h := telemetrytest.New(t)
+			if _, err := refusingClient(t, code).Post(h.Ctx, "C1", "", slack.Content{Text: "text"}, "ob-1"); err == nil {
+				t.Fatal("Post succeeded")
+			}
+			if h.Counter(t, "agentkourier_chat_api_calls_total", map[string]string{"operation": "Post", "outcome": "auth_rejected", "connection": intakeConn}) != 1 {
+				t.Errorf("%s was not counted as auth_rejected: %s", code, h.Exported(t))
+			}
+			if s := h.Span(t, "agentkourier.chat.Post"); s.Status.Description != "auth_rejected" {
+				t.Errorf("span status = %q, want auth_rejected", s.Status.Description)
+			}
+		})
 	}
 }

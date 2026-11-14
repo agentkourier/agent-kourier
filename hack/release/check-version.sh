@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Refuse a release tag that is not the chart's version.
+# Refuse a release tag that is not the chart's version, or whose release line the documentation site does not list.
 #
-# Usage: check-version.sh TAG [CHART_YAML]
+# Usage: check-version.sh TAG [CHART_YAML [VERSIONS_YAML]]
 #
 # A release tag vX.Y.Z must be the version in charts/agent-kourier/Chart.yaml (X.Y.Z). The public docs name that
 # version, and `make docs-check` fails while any page names another (hack/docs/contentcheck, release.go), so a release
-# goes out only after a pull request that bumps the chart and the docs together. A prerelease tag (vX.Y.Z-rc.1) is not
-# checked: while it is tried, the chart and the docs still name the last release.
+# goes out only after a pull request that bumps the chart and the docs together. Its release line X.Y must be listed in
+# hack/docs/versions.yaml, which the documentation site builds from (hack/docs/sitebuild): without it, the release would
+# ship and the site's build would then fail on the unlisted tag. A prerelease tag (vX.Y.Z-rc.1) is not checked: while
+# it is tried, the chart and the docs still name the last release.
 set -euo pipefail
 
 die() {
@@ -15,7 +17,9 @@ die() {
 }
 
 TAG=${1:-}
-CHART=${2:-"$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)/charts/agent-kourier/Chart.yaml"}
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+CHART=${2:-"${ROOT}/charts/agent-kourier/Chart.yaml"}
+VERSIONS=${3:-"${ROOT}/hack/docs/versions.yaml"}
 
 [[ "${TAG}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]] ||
   die "TAG must be a version tag such as v1.2.3 or v1.2.3-rc.1 (got '${TAG}')"
@@ -31,3 +35,10 @@ got=$(sed -n 's/^version:[[:space:]]*//p' "${CHART}" | head -n 1 | tr -d "\"'[:s
 [ "${got}" = "${want}" ] ||
   die "the tag ${TAG} is version ${want}, but the chart's version is ${got}: merge a pull request that sets the chart's version to ${want} and the docs to match (make docs-check), then tag that commit"
 echo "ok: ${TAG} is the chart's version ${got}"
+
+line=${want%.*}
+[ -f "${VERSIONS}" ] || die "${VERSIONS} does not exist"
+# A list item of the release line, quoted or not: - "1.2"
+grep -Eq "^[[:space:]]*-[[:space:]]*[\"']?${line//./\\.}[\"']?[[:space:]]*(#.*)?$" "${VERSIONS}" ||
+  die "${VERSIONS} does not list the release line ${line}: add \"${line}\" at its top in the release pull request, so the documentation site publishes ${TAG}, then tag that commit"
+echo "ok: the documentation site lists the release line ${line}"

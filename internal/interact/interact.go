@@ -65,16 +65,17 @@ type Sender interface {
 	Enqueue(ctx context.Context, p outbox.Post) (string, error)
 }
 
-// Config configures an Intake. Store, AuditReader, Lookup, Platform, Outbox, Session and Audit are required.
+// Config configures an Intake. Store, AuditReader, Lookup, Platforms, Outbox, Session and Audit are required.
 type Config struct {
 	Store store.Interactions
 	// AuditReader is the durable audit log used to prove and repair recovery actions.
 	AuditReader store.Audit
 	Lookup      Lookup
-	Platform    Fitter
-	Outbox      Sender
-	Session     Session
-	Audit       Auditor
+	// Platforms gives the platform of a pause's connection, which says whether its prompt fits.
+	Platforms chat.Resolver[Fitter]
+	Outbox    Sender
+	Session   Session
+	Audit     Auditor
 	// OnApprovalOutcome is called once for each pause a Binding's policy turned away, for the
 	// approval-outcome metric (WP-35f2). The outcomes are a closed set. Required.
 	OnApprovalOutcome func(binding string, outcome Outcome)
@@ -91,8 +92,8 @@ type Intake struct {
 
 // New returns an Intake over cfg.
 func New(cfg Config) (*Intake, error) {
-	if cfg.Store == nil || cfg.AuditReader == nil || cfg.Lookup == nil || cfg.Platform == nil || cfg.Outbox == nil || cfg.Session == nil || cfg.Audit == nil {
-		return nil, errors.New("interact: Store, AuditReader, Lookup, Platform, Outbox, Session and Audit are required")
+	if cfg.Store == nil || cfg.AuditReader == nil || cfg.Lookup == nil || cfg.Platforms == nil || cfg.Outbox == nil || cfg.Session == nil || cfg.Audit == nil {
+		return nil, errors.New("interact: Store, AuditReader, Lookup, Platforms, Outbox, Session and Audit are required")
 	}
 	if cfg.OnApprovalOutcome == nil {
 		return nil, errors.New("interact: OnApprovalOutcome is required")
@@ -518,10 +519,14 @@ func (i *Intake) post(ctx context.Context, p Pause, row store.Interaction, in di
 	if err != nil {
 		return fmt.Errorf("interact: make the prompt of %s: %w", row.ID, err)
 	}
-	if err := i.cfg.Platform.Fits(prompt); err != nil {
+	fitter, err := i.cfg.Platforms.Platform(p.Key.Connection)
+	if err != nil {
+		return fmt.Errorf("interact: the platform to post the prompt of %s: %w", row.ID, err)
+	}
+	if err := fitter.Fits(prompt); err != nil {
 		return fmt.Errorf("%w (the prompt of %s)", err, row.ID) // the reason first: an audit row keeps the start of it
 	}
-	ref, err := i.cfg.Outbox.Send(ctx, outbox.Post{Source: row.ID, Role: store.OutboxReply, Channel: p.Key.Channel, Thread: p.Key.Thread, Out: chat.Ask(prompt)})
+	ref, err := i.cfg.Outbox.Send(ctx, outbox.Post{Source: row.ID, Role: store.OutboxReply, Connection: p.Key.Connection, Channel: p.Key.Channel, Thread: p.Key.Thread, Out: chat.Ask(prompt)})
 	if err != nil {
 		return fmt.Errorf("interact: post the prompt of %s: %w", row.ID, err)
 	}

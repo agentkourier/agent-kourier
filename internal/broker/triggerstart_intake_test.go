@@ -19,6 +19,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/trigger"
 )
 
 // everyKey is a SecretResolver whose Secrets have every key.
@@ -31,7 +32,7 @@ func (everyKey) Keys(context.Context, string, string) ([]string, error) {
 // alertWorld is a real Intake over a real store and the starter, with a clock the test moves, for the paths where the
 // thread rules and the start meet. The Binding sre/sre-alerts owns C0123456789 with the Alertmanager trigger written in full.
 type alertWorld struct {
-	in    *chat.Intake
+	in    *trigger.Intake
 	sub   *startSubmitter
 	notes *startNotes
 	aud   *startAudit
@@ -55,7 +56,7 @@ func newAlertWorld(t *testing.T) (*alertWorld, *starter) { return newAlertWorldW
 
 // newAlertWorldWith is newAlertWorld whose Intake config and starter tune may change before the Intake is made, given
 // the store they share.
-func newAlertWorldWith(t *testing.T, tune func(*chat.IntakeConfig, *starter, *sqlite.Store)) (*alertWorld, *starter) {
+func newAlertWorldWith(t *testing.T, tune func(*trigger.IntakeConfig, *starter, *sqlite.Store)) (*alertWorld, *starter) {
 	t.Helper()
 	meta := func(ns, name string) metav1.ObjectMeta { return metav1.ObjectMeta{Namespace: ns, Name: name} }
 	b := v1alpha1.Binding{ObjectMeta: meta("sre", "sre-alerts"), Spec: v1alpha1.BindingSpec{
@@ -75,22 +76,18 @@ func newAlertWorldWith(t *testing.T, tune func(*chat.IntakeConfig, *starter, *sq
 	if err != nil {
 		t.Fatal(err)
 	}
-	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := sqlitetest.Open(t)
 
 	s := newStarter(t)
 	w := &alertWorld{sub: s.sub, notes: s.notes, aud: s.aud, now: time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)}
-	cfg := chat.IntakeConfig{
+	cfg := trigger.IntakeConfig{
 		Connection: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"}, Snapshot: func() *config.Snapshot { return snap },
 		Submitter: s.sub, Notice: s.notes.take, TriggerThreads: st, OnStart: s.OnStart, Now: w.clock, Logger: s.log,
 	}
 	if tune != nil {
 		tune(&cfg, s, st)
 	}
-	w.in = chat.NewIntake(cfg)
+	w.in = trigger.NewIntake(cfg)
 	return w, s
 }
 
@@ -238,7 +235,7 @@ func (m *marksFailOnce) MarkTriggerStarted(ctx context.Context, binding, keyHash
 // not start a second investigation: the broker's check of the reply queue finds the first turn, and the fire is a
 // repeat in the first alert's thread. Without the check it would start a second turn in its own thread.
 func TestAnAlertWhoseMarkWasLostIsNotInvestigatedTwice(t *testing.T) {
-	w, _ := newAlertWorldWith(t, func(cfg *chat.IntakeConfig, s *starter, st *sqlite.Store) {
+	w, _ := newAlertWorldWith(t, func(cfg *trigger.IntakeConfig, s *starter, st *sqlite.Store) {
 		s.submit = queuesInStore{st: st, next: s.sub}
 		cfg.TriggerThreads = &marksFailOnce{TriggerThreads: st}
 		cfg.TurnQueued = st.HasReply

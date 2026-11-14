@@ -19,7 +19,7 @@ import (
 // lead-in; answerParts retracts what got through anyway, when the response turns out not to be the answer: on an
 // aggregated response that carries a tool call, each text part becomes an empty text part. An empty replacement is
 // needed because Agent Kourier ignores an update without a text part, and a replace is what clears an artifact. The
-// tool call itself stays, as a data part Agent Kourier does not show.
+// tool call itself stays, as a data part that ADK marks adk_type: function_call, which Agent Kourier shows as a step card.
 //
 // Thoughts are never part of an answer, so they are dropped from every response.
 func answerParts(_ context.Context, ev *session.Event, part *genai.Part) (*a2a.Part, error) {

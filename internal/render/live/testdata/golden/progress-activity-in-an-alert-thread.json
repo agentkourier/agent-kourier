@@ -1,0 +1,106 @@
+{
+  "requests": [
+    {
+      "path": "/chat.postMessage",
+      "form": {
+        "blocks": [
+          {
+            "elements": [
+              {
+                "text": "Working…",
+                "type": "plain_text"
+              }
+            ],
+            "type": "context"
+          }
+        ],
+        "channel": "C1",
+        "outbox_id": "turn-1/reply",
+        "parse": "none",
+        "text": "Working…",
+        "thread_ts": "ROOT",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    },
+    {
+      "path": "/chat.update",
+      "form": {
+        "blocks": [
+          {
+            "elements": [
+              {
+                "text": "Working… (1 step)",
+                "type": "plain_text"
+              }
+            ],
+            "type": "context"
+          }
+        ],
+        "channel": "C1",
+        "parse": "none",
+        "text": "Working… (1 step)",
+        "ts": "TS1",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    },
+    {
+      "path": "/chat.update",
+      "form": {
+        "blocks": [
+          {
+            "elements": [
+              {
+                "text": "Working… (2 min, 2 steps, 1 failed)",
+                "type": "plain_text"
+              }
+            ],
+            "type": "context"
+          }
+        ],
+        "channel": "C1",
+        "parse": "none",
+        "text": "Working… (2 min, 2 steps, 1 failed)",
+        "ts": "TS1",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    },
+    {
+      "path": "/chat.update",
+      "form": {
+        "blocks": [
+          {
+            "text": "Three pods, all ready.",
+            "type": "markdown"
+          }
+        ],
+        "channel": "C1",
+        "parse": "none",
+        "text": "Three pods, all ready.",
+        "ts": "TS1",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    }
+  ],
+  "thread": [
+    {
+      "text": "root",
+      "thread": true
+    },
+    {
+      "text": "Three pods, all ready.",
+      "blocks": [
+        {
+          "text": "Three pods, all ready.",
+          "type": "markdown"
+        }
+      ],
+      "thread": true,
+      "edited": true,
+      "outbox_id": "turn-1/reply"
+    }
+  ]
+}

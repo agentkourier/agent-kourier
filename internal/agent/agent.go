@@ -9,6 +9,7 @@ import (
 	"iter"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -48,6 +49,21 @@ type Config struct {
 	// that is busy with a task (ErrNotReady). A Pool sets it from its dialect. Nil says never, and every
 	// -32004 is plain busy.
 	NotReady func(err error) bool
+	// ParseInteraction reads the interaction a task paused on input waits on: the dialect's ParseInteraction. It is
+	// what tells a tool approval from a question, as on an answer, and the final event of a pause for a tool approval
+	// names the calls the approval waits on with it (FinalEvent.AwaitingApproval). A Pool sets it from its dialect.
+	// Nil reads none.
+	ParseInteraction func(task a2a.Task) (*dialect.Interaction, error)
+	// LookupTimeout bounds the whole walk of FindTask, which asks for each page of the list of tasks and asks again for a page that is over
+	// the bound at a smaller size. A walk that passes it is incomplete (ErrLookupIncomplete). Default DefaultLookupTimeout, 5 minutes.
+	LookupTimeout time.Duration
+	// MaxReplyBytes bounds what one send or follow holds of the agent's reply in memory: the text of its artifacts, the
+	// tool results that wait for their call, and the bookkeeping of each tool part, which the agent decides and a
+	// stream's length does not limit. It does not bound how long a reply is in all: the dialect bounds each event and
+	// each answer (dialect.MaxEventBytes, dialect.MaxResponseBytes), and a stream that sends text that is thrown away
+	// can run as long as its context. A reply past it ends the send or follow with an error that wraps
+	// dialect.ErrResponseTooLarge, which is not a lost stream and is not reconnected. Default DefaultMaxReplyBytes.
+	MaxReplyBytes int
 }
 
 func (c Config) withDefaults() Config {
@@ -66,20 +82,25 @@ func (c Config) withDefaults() Config {
 	if c.ConnectTimeout <= 0 {
 		c.ConnectTimeout = 30 * time.Second
 	}
+	if c.LookupTimeout <= 0 {
+		c.LookupTimeout = DefaultLookupTimeout
+	}
+	if c.MaxReplyBytes <= 0 {
+		c.MaxReplyBytes = DefaultMaxReplyBytes
+	}
 	return c
 }
 
 // Agent talks to one agent through a Source. It is safe for concurrent use.
 type Agent struct {
 	source Source
-	tool   ToolClassifier
 	cfg    Config
 }
 
-// New returns an Agent that gets its connection from source and recognizes tool parts with
-// tool, normally the backend dialect's ToolPart. A nil tool leaves data parts opaque.
-func New(source Source, tool ToolClassifier, cfg Config) *Agent {
-	return &Agent{source: source, tool: tool, cfg: cfg.withDefaults()}
+// New returns an Agent that gets its connection from source. It reads tool parts the same way
+// whatever the backend's dialect (dialect.DecodeToolPart).
+func New(source Source, cfg Config) *Agent {
+	return &Agent{source: source, cfg: cfg.withDefaults()}
 }
 
 // Send sends msg and delivers the reply to h as it streams, returning when the task ends
@@ -117,8 +138,17 @@ func (a *Agent) send(ctx context.Context, msg *a2a.Message, h Handler, answer bo
 	if err != nil {
 		return fmt.Errorf("%w: connect to agent: %w", ErrNotSent, typed(err, false))
 	}
-	asm := newAssembler(h, a.tool)
+	asm := newAssembler(h)
+	asm.interaction, asm.limit = a.cfg.ParseInteraction, a.cfg.MaxReplyBytes
 	asm.replies = !answer // an answer's task is msg.TaskID: a Message must not end it as a reply with no task
+	defer asm.release("") // a result still waiting for its call has no later assembler to deliver it
+	if answer && msg.TaskID != "" {
+		// The paused task, as it is before the answer: what it holds is not this turn's news (see (*assembler).seed). One
+		// unary call per answer, which a person made; a task that cannot be read is answered without it.
+		if paused, err := a.getTask(ctx, conn, msg.TaskID); err == nil && paused != nil {
+			asm.seed(paused, a.approval(paused))
+		}
+	}
 	err = a.read(ctx, conn, asm, func(ctx context.Context) iter.Seq2[a2a.Event, error] {
 		return conn.SendStreamingMessage(ctx, &a2a.SendMessageRequest{Message: msg})
 	})
@@ -139,10 +169,20 @@ func (a *Agent) send(ctx context.Context, msg *a2a.Message, h Handler, answer bo
 	switch err = a.reconnect(ctx, asm, err); {
 	case err == nil:
 		return nil
-	case ctx.Err() != nil:
+	case ctx.Err() != nil || tooLarge(err): // the agent would send the same again: no lost stream to follow
 		return fmt.Errorf("send message: %w", err)
 	}
 	return &StreamLostError{TaskID: asm.taskID, ContextID: asm.contextID, Err: typed(err, false)}
+}
+
+// approval reports whether the paused task waits on a tool approval, as the backend's dialect reads it. A task it cannot
+// read, or reads as a question, does not.
+func (a *Agent) approval(paused *a2a.Task) bool {
+	if a.cfg.ParseInteraction == nil {
+		return false
+	}
+	in, err := a.cfg.ParseInteraction(*paused)
+	return err == nil && in != nil && in.Kind == dialect.ToolApproval
 }
 
 // cancelWedged cancels the task a rejected answer left in WORKING, which refuses every
@@ -160,7 +200,8 @@ func (a *Agent) cancelWedged(ctx context.Context, rejected error, id a2a.TaskID)
 
 // reconnect resumes the task, after err ended its stream, until the task settles. It gives
 // up when MaxReconnects in a row change nothing (the opening snapshot of a resubscribe does
-// not count), and on an error that is not a lost connection.
+// not count, nor a working update that repeats the last, and any other working update does: the
+// agent is at work), and on an error that is not a lost connection.
 func (a *Agent) reconnect(ctx context.Context, asm *assembler, err error) error {
 	for failures := 0; err != nil; {
 		if failures++; !dropped(ctx, err) || permanent(err) || failures > a.cfg.MaxReconnects {
@@ -197,6 +238,7 @@ func (a *Agent) resume(ctx context.Context, conn Conn, asm *assembler) error {
 	if asm.final != nil {
 		return nil
 	}
+	asm.opening = true
 	return a.read(ctx, conn, asm, func(ctx context.Context) iter.Seq2[a2a.Event, error] {
 		return conn.SubscribeToTask(ctx, &a2a.SubscribeToTaskRequest{ID: asm.taskID})
 	})
@@ -211,8 +253,11 @@ var errInactive = errors.New("agent: no event within the inactivity timeout")
 // A stream that ends cleanly after a status update that settled the task, without the full
 // task (as the a2a-sdk Python server has been seen to end its streams), is not a drop: one GetTask on conn,
 // at once, supplies the final task. Only if that fails, or finds the task unsettled, does
-// read return io.ErrUnexpectedEOF.
+// read return io.ErrUnexpectedEOF; an answer that is too large (dialect.ErrResponseTooLarge) is returned as it is.
 func (a *Agent) read(ctx context.Context, conn Conn, asm *assembler, open func(context.Context) iter.Seq2[a2a.Event, error]) error {
+	if asm.over != nil { // the snapshot a resume opened with spent the budget (the seed of an answer is not charged to it)
+		return asm.over
+	}
 	sctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	watchdog := time.AfterFunc(a.cfg.InactivityTimeout, cancel)
@@ -225,6 +270,10 @@ func (a *Agent) read(ctx context.Context, conn Conn, asm *assembler, open func(c
 		}
 		watchdog.Reset(a.cfg.InactivityTimeout)
 		asm.apply(ev)
+		if asm.over != nil { // ending the loop closes the stream
+			err = asm.over
+			break
+		}
 		if asm.final != nil {
 			return nil
 		}
@@ -235,8 +284,15 @@ func (a *Agent) read(ctx context.Context, conn Conn, asm *assembler, open func(c
 	case err != nil:
 		return err
 	case ctx.Err() == nil && settled(asm.state) && asm.taskID != "":
-		if task, gerr := a.getTask(ctx, conn, asm.taskID); gerr == nil {
+		task, gerr := a.getTask(ctx, conn, asm.taskID)
+		if tooLarge(gerr) { // no lost stream: a reconnect reads the same answer
+			return gerr
+		}
+		if gerr == nil {
 			asm.apply(task)
+			if asm.over != nil {
+				return asm.over
+			}
 			if asm.final != nil {
 				return nil
 			}
@@ -259,8 +315,8 @@ func (a *Agent) GetTask(ctx context.Context, id a2a.TaskID) (telemetryResult0 *a
 	return a.getTask(ctx, conn, id)
 }
 
-// CancelTask cancels the task and returns it as the agent left it. It backs the thread's
-// stop control, and Answer calls it for a wedged task (R17). UnaryTimeout bounds it,
+// CancelTask cancels the task and returns it as the agent left it. It backs the session's
+// cancels (the interaction timeout's, the wedged task's; a thread stop control is not built), and Answer calls it for a wedged task (R17). UnaryTimeout bounds it,
 // resolving the connection included.
 func (a *Agent) CancelTask(ctx context.Context, id a2a.TaskID) (telemetryResult0 *a2a.Task, telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.agent.cancel")

@@ -18,8 +18,6 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
-	"github.com/agentkourier/agent-kourier/internal/outbox"
-	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -72,9 +70,10 @@ type PromptReplacer interface {
 
 // DecideConfig configures a Decider. Everything but Now and Logger is required.
 type DecideConfig struct {
-	Store      store.Interactions
-	Auditor    Auditor
-	Ephemerals Ephemeral
+	Store   store.Interactions
+	Auditor Auditor
+	// Ephemerals gives the platform of an interaction's connection, which tells a person alone what became of their press.
+	Ephemerals chat.Resolver[Ephemeral]
 	// Session takes the answers, and Outbox the notice for one that arrives too late. Sessions is read
 	// to tell a task that has ended from one the session has not parked on yet.
 	Session  Session
@@ -337,16 +336,12 @@ func (d *Decider) send(ctx context.Context, pd PressDecision, msg a2a.Message, r
 	if retry {
 		return nil
 	}
-	sess, serr := d.cfg.Sessions.GetSession(ctx, row.Key, readAll, d.cfg.Now())
+	held, terr := tellClosedBefore(ctx, d.cfg.Sessions, d.cfg.Outbox, row, d.cfg.Now(), "came too late")
 	switch {
-	case serr == nil && sess.TaskID == row.TaskID:
+	case terr != nil:
+		return terr
+	case held:
 		return fmt.Errorf("interact: the session is not paused on %s yet: %w", row.TaskID, err)
-	case serr != nil && !errors.Is(serr, store.ErrNotFound):
-		return fmt.Errorf("interact: read the session of %s: %w", row.ID, serr)
-	}
-	if _, err := d.cfg.Outbox.Enqueue(ctx, outbox.Post{Source: row.ID + "/answer", Role: store.OutboxNotice, Channel: row.Key.Channel,
-		Thread: row.Key.Thread, Out: chat.Say(render.Notice(textClosedBefore, ""))}); err != nil {
-		return fmt.Errorf("interact: tell the thread that the answer to %s came too late: %w", row.ID, err)
 	}
 	return nil
 }
@@ -416,7 +411,11 @@ func (d *Decider) countApproval(pd PressDecision) {
 // tell shows m to the person alone. It is told once and kept nowhere, so a failure is only logged.
 func (d *Decider) tell(ctx context.Context, row store.Interaction, user string, m chat.Message) {
 	to := chat.Target{Conn: row.Key.Connection, Channel: row.Key.Channel, Thread: row.Key.Thread}
-	if err := d.cfg.Ephemerals.Ephemeral(ctx, to, user, m); err != nil {
+	e, err := d.cfg.Ephemerals.Platform(row.Key.Connection)
+	if err == nil {
+		err = e.Ephemeral(ctx, to, user, m)
+	}
+	if err != nil {
 		d.cfg.Logger.WarnContext(ctx, "interact: a person could not be told the outcome of their press", "interaction", row.ID, "err", err)
 	}
 }

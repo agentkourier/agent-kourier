@@ -36,6 +36,9 @@ func TestFindings(t *testing.T) {
 		{"the word without a slash", "the kourier directory\n", []int{1}},
 		{"a path segment does not excuse a misspelling on the line", "kourier/binding.yaml and then Kourier alone\n", []int{1}},
 		{"a path segment does not excuse courier", "kourier/courier.yaml\n", []int{1}},
+		{"a link to the incident demo repository", "See the [repository](https://github.com/agentkourier/kourier-incident-demo).\n", nil},
+		{"the repository name alone is still the name", "Clone kourier-incident-demo.\n", []int{1}},
+		{"a repository path does not excuse the rest of the line", "agentkourier/kourier-incident-demo and Kourier alone\n", []int{1}},
 		{"a historical block", "a\n<!-- name-check: off -->\nhelm install courier ./chart\n<!-- name-check: on -->\ncourier\n", []int{5}},
 	}
 	for _, tt := range tests {
@@ -79,6 +82,88 @@ func TestCheckSkipsExcludedDirectories(t *testing.T) {
 	}
 	if len(got) != 1 || filepath.Base(got[0].path) != "guide.md" {
 		t.Errorf("check = %v, want one finding, in docs/guide.md", got)
+	}
+}
+
+// mkdocs.yml's exclude_docs anchors /brand/ at docs/: docs/assets/brand is published, and so read, and the theme
+// overrides are not under docs/ at all.
+func TestCheckExcludesOnlyTopLevelDirectoriesOfDocs(t *testing.T) {
+	root := t.TempDir()
+	write := writeTree(t, root)
+	write("docs/brand/notes.md", "courier\n")
+	write("docs/assets/brand/mark.svg", "<title>courier</title>\n")
+	write("hack/docs/overrides/brand/logo.html", "Kourier\n")
+	got, err := check(t.Context(), root, []string{filepath.Join(root, "docs"), filepath.Join(root, "hack/docs/overrides")}, []string{"brand"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFindings(t, root, got, "docs/assets/brand/mark.svg:1 ", "hack/docs/overrides/brand/logo.html:1 ")
+}
+
+// Every text file the site publishes is read: JSON, SVG and the extensionless _headers too.
+func TestCheckReadsEveryPublishedTextFile(t *testing.T) {
+	root := t.TempDir()
+	write := writeTree(t, root)
+	write("docs/_headers", "/*\n  X-Courier: 1\n")
+	write("docs/versions.json", "{\"title\": \"Kourier\"}\n")
+	write("docs/assets/diagrams/map.svg", "<svg><text>courier</text></svg>\n")
+	write("docs/assets/logo.png", "courier")
+	write("docs/headers", "courier\n")
+	wantFindings(t, root, checkSite(t, root),
+		"docs/_headers:2 ", "docs/assets/diagrams/map.svg:1 ", "docs/versions.json:1 ")
+}
+
+// In an SVG the name is checked in the text, not the markup, so a label that mermaid splits across tspans reads as
+// written. Only SVG files lose their markup.
+func TestCheckReadsTheTextOfAnSVG(t *testing.T) {
+	root := t.TempDir()
+	write := writeTree(t, root)
+	write("docs/map.svg", "<svg>\n"+
+		"<text><tspan x=\"0\">Agent</tspan><tspan> Kourier</tspan> broker</text>\n"+ // the full name, split
+		"<text><tspan>the</tspan><tspan> courier</tspan></text>\n"+ // a misspelling in the text
+		"<g id=\"courier\" class=\"Kourier\">\n"+ // markup only
+		"a < b courier\n"+ // an unclosed < is text, and so is the rest of the line
+		"<title>Kourier</title>\n")
+	write("docs/page.html", "<span>Agent</span><span> Kourier</span>\n")
+	wantFindings(t, root, checkSite(t, root), "docs/map.svg:3 ", "docs/map.svg:5 ", "docs/map.svg:6 ", "docs/page.html:1 ")
+}
+
+func TestSVGText(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{`<tspan x="0">Agent</tspan><tspan> Kourier</tspan>`, "Agent Kourier"},
+		{`<g id="a" class="b">`, ""},
+		{"", ""},
+		{"<", "<"},
+		{"a < b", "a < b"},
+		{"a <b> c", "a  c"},
+		{"<<>courier", "courier"},
+		// A tag across lines is not stripped: each line is read alone, and keeps its number.
+		{"<g\n  id=\"courier\">\n<text>x</text>", "<g\n  id=\"courier\">\nx"},
+	}
+	for _, tt := range tests {
+		if got := svgText(tt.in); got != tt.want {
+			t.Errorf("svgText(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestExcludedDocs(t *testing.T) {
+	root := t.TempDir()
+	write := writeTree(t, root)
+	if _, err := excludedDocs(t.Context(), root); err == nil {
+		t.Error("excludedDocs with no mkdocs.yml: no error")
+	}
+	write("mkdocs.yml", "site_name: x\n")
+	if _, err := excludedDocs(t.Context(), root); err == nil {
+		t.Error("excludedDocs with no exclude_docs block: no error")
+	}
+	write("mkdocs.yml", "site_name: x\nexclude_docs: |\n  /brand/\n  /spikes/\ntheme:\n  name: material\n")
+	got, err := excludedDocs(t.Context(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"brand", "spikes"}; !slices.Equal(got, want) {
+		t.Errorf("excludedDocs = %v, want %v", got, want)
 	}
 }
 
@@ -225,7 +310,12 @@ func TestSnippetBases(t *testing.T) {
 
 // TestSiteSpellsTheName runs the check over the real site sources, so `go test ./...` fails on a misspelt name.
 func TestSiteSpellsTheName(t *testing.T) {
-	got, err := check(t.Context(), "../../..", sitePaths("../../.."), excluded)
+	const root = "../../.."
+	excluded, err := excludedDocs(t.Context(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := check(t.Context(), root, sitePaths(root), excluded)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,6 +332,9 @@ func TestCheckStopsWhenTheContextEnds(t *testing.T) {
 	cancel()
 	if _, err := check(ctx, dir, []string{filepath.Join(dir, "docs")}, nil); !errors.Is(err, context.Canceled) {
 		t.Errorf("check with a cancelled context = %v, want context.Canceled", err)
+	}
+	if _, err := excludedDocs(ctx, dir); !errors.Is(err, context.Canceled) {
+		t.Errorf("excludedDocs with a cancelled context = %v, want context.Canceled", err)
 	}
 	if _, err := snippetBases(ctx, dir); !errors.Is(err, context.Canceled) {
 		t.Errorf("snippetBases with a cancelled context = %v, want context.Canceled", err)

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,6 +16,8 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 func slackErr(code string) error { return slackgo.SlackErrorResponse{Err: code} }
@@ -71,7 +72,7 @@ func TestPermanentFailuresAbandonTheRow(t *testing.T) {
 		{fmt.Errorf("blocks: %w", chat.ErrInvalid), outbox.AbandonInvalid, ""},
 	}
 	for _, tt := range tests {
-		st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+		st := sqlitetest.Open(t)
 		p := &poster{onPost: func(context.Context) error { return tt.err }}
 		ob, hooks, logs := abandoning(t, st, p, nil)
 		if _, err := ob.Send(t.Context(), reply("ev1")); !errors.Is(err, outbox.ErrAbandoned) {
@@ -107,7 +108,7 @@ func TestPermanentFailuresAbandonTheRow(t *testing.T) {
 func TestTransientFailuresNeverAbandon(t *testing.T) {
 	for _, cause := range []error{slackErr("ratelimited"), slackErr("internal_error"), slackErr("invalid_auth"),
 		errors.New("connection reset"), context.DeadlineExceeded} {
-		st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+		st := sqlitetest.Open(t)
 		ob, hooks, _ := abandoning(t, st, &poster{onPost: func(context.Context) error { return cause }}, nil)
 		_, err := ob.Send(t.Context(), reply("ev1"))
 		row, _ := st.GetOutbox(t.Context(), "ev1/reply")
@@ -123,7 +124,7 @@ func TestTransientFailuresNeverAbandon(t *testing.T) {
 // working Slack), and the hour since it is long past.
 func TestFiveLookupTimeoutsInARowAbandon(t *testing.T) {
 	const script = "TTTTNTTTTT"
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	if _, err := st.CreateOutbox(t.Context(), store.OutboxEntry{ID: "ev1/reply", EventID: "ev1", Role: store.OutboxReply, Channel: "C1", CreatedAt: t0, Payload: neutral("hi")}); err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +170,7 @@ func TestFiveLookupTimeoutsInARowAbandon(t *testing.T) {
 // TestRetentionAbandonsOldUnpostedText: the purge runs before a drain looks at the rows, so an
 // expired row is not looked up, and a young row or a stream's is left alone.
 func TestRetentionAbandonsOldUnpostedText(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	add := func(id string, age time.Duration, payload string) {
 		e := store.OutboxEntry{ID: id, EventID: id, Role: store.OutboxReply, Channel: "C1", CreatedAt: t0.Add(-age), Payload: payload}
 		if _, err := st.CreateOutbox(t.Context(), e); err != nil {
@@ -206,7 +207,7 @@ func TestRetentionAbandonsOldUnpostedText(t *testing.T) {
 
 // TestACorruptPayloadIsAbandoned: a row whose payload is not a message will never post.
 func TestACorruptPayloadIsAbandoned(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	if _, err := st.CreateOutbox(t.Context(), store.OutboxEntry{ID: "ev1/reply", EventID: "ev1", Role: store.OutboxReply, Channel: "C1", CreatedAt: t0, Payload: "{"}); err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +223,7 @@ func TestACorruptPayloadIsAbandoned(t *testing.T) {
 
 // TestRunReportsAnAbandonOnce: Run's own warning for a failed drain does not say it again.
 func TestRunReportsAnAbandonOnce(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	p := &poster{onPost: func(context.Context) error { return slackErr("is_archived") }}
 	ob, hooks, logs := abandoning(t, st, p, nil)
 	start(t, ob)
@@ -230,12 +231,12 @@ func TestRunReportsAnAbandonOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the abandon", func() bool { row, _ := st.GetOutbox(t.Context(), id); return !row.AbandonedAt.IsZero() })
+	testutil.Eventually(t, "the abandon", func() bool { row, _ := st.GetOutbox(t.Context(), id); return !row.AbandonedAt.IsZero() })
 	p.mu.Lock()
 	p.onPost = nil // a second row, to make Run drain once more after the abandon
 	p.mu.Unlock()
 	next, _ := ob.Enqueue(t.Context(), reply("ev2"))
-	eventually(t, "the next drain", func() bool { return ref(st, next) != "" })
+	testutil.Eventually(t, "the next drain", func() bool { return ref(st, next) != "" })
 	if got := hooks.list(); len(got) != 1 || warnings(logs) != 1 {
 		t.Fatalf("OnAbandon calls = %q, warnings = %d (%s); want one of each", got, warnings(logs), logs.String())
 	}
@@ -250,7 +251,7 @@ func (failingAbandon) AbandonOutbox(context.Context, string, time.Time) (bool, e
 
 // TestAnAbandonThatCannotBeRecordedIsNotReported: the row is still work, so no hook and no ErrAbandoned.
 func TestAnAbandonThatCannotBeRecordedIsNotReported(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	p := &poster{onPost: func(context.Context) error { return slackErr("is_archived") }}
 	ob, hooks, _ := abandoning(t, failingAbandon{st}, p, nil)
 	if _, err := ob.Send(t.Context(), reply("ev1")); err == nil || errors.Is(err, outbox.ErrAbandoned) || len(hooks.list()) != 0 {
@@ -261,7 +262,7 @@ func TestAnAbandonThatCannotBeRecordedIsNotReported(t *testing.T) {
 // TestADeadlineOfTheCallersDoesNotCountAsALookupTimeout: only the call timeout does. A caller whose
 // own deadline has passed (a shutdown) must not push a row towards abandonment.
 func TestADeadlineOfTheCallersDoesNotCountAsALookupTimeout(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	if _, err := st.CreateOutbox(t.Context(), store.OutboxEntry{ID: "ev1/reply", EventID: "ev1", Role: store.OutboxReply, Channel: "C1", CreatedAt: t0, Payload: neutral("hi")}); err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +289,7 @@ func (lateAbandon) AbandonOutbox(context.Context, string, time.Time) (bool, erro
 
 // TestAnAbandonSomeoneElseMadeIsNotReportedAgain: only the call that abandons a row reports it.
 func TestAnAbandonSomeoneElseMadeIsNotReportedAgain(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	p := &poster{onPost: func(context.Context) error { return slackErr("is_archived") }}
 	ob, hooks, logs := abandoning(t, lateAbandon{st}, p, nil)
 	if _, err := ob.Send(t.Context(), reply("ev1")); !errors.Is(err, outbox.ErrAbandoned) || len(hooks.list()) != 0 || warnings(logs) != 0 {

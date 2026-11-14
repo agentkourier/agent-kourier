@@ -1,10 +1,12 @@
 package broker
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 
@@ -16,6 +18,16 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/secret"
 	"github.com/agentkourier/agent-kourier/internal/testhooks"
 )
+
+// slackAPITimeout bounds one Slack Web API call as a whole: the dial, the TLS handshake, the wait for the response and the
+// reading of its body. slack-go sets no deadline on any call, including the apps.connections.open that every Socket Mode
+// reconnect makes, and a connection that a network blip left dead can hold a call for up to two minutes (53 s and 118 s were seen)
+// before the read fails. The bound is on the HTTP client, which only the Web API calls use: the Socket Mode WebSocket is
+// dialled by slack-go's own dialer (handshake cut at 45 s, a silent connection dropped by its ping check), so a connection that
+// is up for hours is not touched. The adapter makes no upload and no download, and every call it makes answers a small JSON
+// body, so no call is slow by design; Slack answers in well under a second normally. 30 s is the bound the CLI's own Slack
+// clients already use (dry-run, init).
+const slackAPITimeout = 30 * time.Second
 
 // Connection is the one ChatConnection v1 serves, with its credentials as read at startup: the Secret keys that
 // its platform needs (platformFor), as secret.Values, which print as redacted.
@@ -71,7 +83,7 @@ func (c RunConfig) newPlatform(conn Connection, log *slog.Logger, onConnection f
 	if conn.Platform == v1alpha1.PlatformSlack { // a second platform is one more case here, and one more entry in platformKeys
 		transport := http.DefaultTransport.(*http.Transport).Clone()
 		sc := slackConfig(conn, log)
-		sc.HTTPClient = &http.Client{Transport: telemetry.Transport(transport, false)}
+		sc.HTTPClient = &http.Client{Transport: telemetry.Transport(transport, false), Timeout: cmp.Or(c.slackHTTPTimeout, slackAPITimeout)}
 		sc.OnConnection = onConnection
 		var api slack.API
 		if c.newSlack != nil {
@@ -89,18 +101,25 @@ func (c RunConfig) newPlatform(conn Connection, log *slog.Logger, onConnection f
 // and a test image sets it to reach the fake.
 func slackConfig(conn Connection, log *slog.Logger) slack.Config {
 	// AuthzTimeout is what a press is given for its membership checks, whose callers have no deadline.
-	cfg := slack.Config{BotToken: conn.Credentials["botToken"], AppToken: conn.Credentials["appToken"], Logger: log, AuthzTimeout: interact.PressAuthzTimeout}
+	cfg := slack.Config{BotToken: conn.Credentials["botToken"], AppToken: conn.Credentials["appToken"], Logger: log, AuthzTimeout: interact.PressAuthzTimeout,
+		// The connection label of the series the adapter records (see slack.Config.Connection).
+		Connection: v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)}
 	if url := testhooks.SlackAPIURL(); url != "" {
 		cfg.APIURL = url
 	}
 	return cfg
 }
 
-// users is the session manager's Users over a platform: the platform's user, as the dialects name one.
-type users struct{ p chat.Platform }
+// users is the session manager's Users over the platforms of the connections: the platform's user, as the dialects name one,
+// asked of the platform of the connection the user's turn is in.
+type users struct{ platforms chat.Resolver[chat.Platform] }
 
-func (u users) ResolveUser(ctx context.Context, id string) (dialect.User, error) {
-	user, err := u.p.ResolveUser(ctx, id)
+func (u users) ResolveUser(ctx context.Context, conn, id string) (dialect.User, error) {
+	p, err := u.platforms.Platform(conn)
+	if err != nil {
+		return dialect.User{}, err
+	}
+	user, err := p.ResolveUser(ctx, id)
 	if err != nil {
 		return dialect.User{}, err
 	}

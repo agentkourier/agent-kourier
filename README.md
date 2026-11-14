@@ -15,11 +15,20 @@ interface and its conformance suite, and the resource API takes a second platfor
 breaking a Slack `Binding`. Agents speak only A2A, so a new platform needs no change to them.
 
 [Documentation](https://agentkourier.dev) · [Try it in a kind sandbox](docs/tutorials/first-agent-in-slack.md) ·
-[Install with Helm](docs/how-to/install-with-helm.md) · [Architecture](docs/explanation/architecture.md)
+[Install with Helm](docs/how-to/install-with-helm.md) · [Architecture](docs/explanation/architecture.md) ·
+[Release notes](docs/release-notes.md)
 
-> **Status: v0.1.1.** Install the published chart and image with
+> **Status: v0.3.2.** Install the published chart and image with
 > [Install with Helm](docs/how-to/install-with-helm.md). The `v1alpha1` resource format can change before 1.0. See
 > [Status](#status).
+
+<p align="center">
+  <img src="docs/assets/clip/team-app.gif" width="100%" alt="A terminal. The platform team creates the namespace agent-kourier and installs the agent-kourier chart with values that list team-a in connectionNamespaces and name no ChatConnection, so the broker starts with no Slack app of its own. The team then creates its Slack Secret in team-a from a file, a Role and RoleBinding that let the broker's ServiceAccount list and watch it, fills in the four lines marked yours in team-a.yaml (a ChatConnection, an AgentBackend and a Binding), applies it, and kubectl get akbinding shows the Binding become True OK. Then Slack: a mention of the team's bot, and the agent's answer in its thread.">
+</p>
+
+The custom resource install of [Install with Helm](docs/how-to/install-with-helm.md#install-on-custom-resources): a broker with no Slack
+app of its own, and a team that brings its own. Recorded on a kind cluster with the [echo agent](examples/recipes/echo-agent/agent/README.md)
+as the team's agent. The wait for the Binding to turn Ready, about 25 seconds here, is cut.
 
 ## What it looks like
 
@@ -52,10 +61,13 @@ Without a broker, each of these is code in every agent that talks to chat:
 - **Replies during a turn.** Agent Kourier queues a reply sent while the agent works and
   sends it, in order, when the task ends. A reaction shows that it accepted the reply.
 - **Streamed output.** With `output: live`, the answer streams into one chat message, with
-  tool calls shown as status lines where the backend reports them.
+  tool calls shown as step cards or status lines where the backend reports them, and a `Working…` sign of life while the agent is
+  silent (`chat.progress`).
 - **Questions and approvals.** With `interactions.askUser`, the agent's question appears in
-  the thread and the answer resumes the same task. With kagent, a tool call can wait for an
-  Approve or Deny press, optionally limited to Slack user groups.
+  the thread and the answer resumes the same task. With kagent, or an agent on the `a2a` dialect
+  whose card lists kagent's human-in-the-loop extension, a tool call can wait for an Approve or
+  Deny press, optionally limited to Slack user groups
+  ([Connect a generic A2A agent](docs/how-to/connect-a2a-agent.md#what-works-on-this-dialect)).
 - **Restart recovery.** Agent Kourier stores sessions, queued replies and pending questions,
   and posts through a durable outbox, so a crash does not repeat a post
   ([one exception](docs/explanation/delivery.md#the-one-window)).
@@ -65,6 +77,13 @@ Without a broker, each of these is code in every agent that talks to chat:
   and starts an investigation in each alert's thread, with a cooldown per alert, a rate
   limit and a daily cap. There is no webhook, so alerts reach people whether or not Agent
   Kourier is running.
+- **Reports in a channel.** A `personMessage` trigger starts a turn of the person on each message they post at the
+  top level of the channel, without a mention, held to the trigger's limits; replies under it need a mention. See
+  [A person's message](docs/reference/chat-triggers.md#a-persons-message).
+- **Agents that call agents.** A mention of Agent Kourier by another bot starts a turn in
+  that thread, with the thread so far as untrusted data, within fixed limits. It is on by default; a
+  Binding turns it off with `chat.botMentions: none`. See
+  [Let another agent start yours](docs/how-to/any-bot-trigger.md#let-another-agent-start-yours).
 - **Feedback.** An investigation's final message has useful and not-useful buttons, and
   Prometheus counts the votes per agent and alert name.
 - **Backend choice.** kagent, an agent in Google AX, and any A2A 1.0 or 0.3 agent whose card
@@ -73,14 +92,19 @@ Without a broker, each of these is code in every agent that talks to chat:
 
 ## For platform teams
 
-The platform team installs Agent Kourier and owns the shared resources: the chat app (a
-`ChatConnection`), the agent backends (`AgentBackend`), and the namespaces allowed to use
-each. Application teams connect their own agents to their own channels with a namespaced
-`Binding`, committed next to the agent's manifests.
+The platform team installs Agent Kourier and owns the shared resources: the agent backends
+(`AgentBackend`), the broker's own chat app (a `ChatConnection`), and the namespaces allowed
+to use each. Application teams connect their own agents to their own channels with a
+namespaced `Binding`, committed next to the agent's manifests. With custom resources the
+platform can also admit a team's namespace, and that team then brings its own chat app as a
+`ChatConnection` there; a broker can even have no app of its own and serve only the teams'
+([Let a team bring its own Slack app](docs/how-to/team-slack-app.md)).
 
-- **One chat app.** Every Binding that uses a `ChatConnection` posts through it, so there is
-  one set of chat credentials (on Slack, one app's tokens) to review and rotate, not one per
-  agent.
+- **Chat credentials you choose.** When every Binding names the broker's own
+  `ChatConnection`, there is one set of chat credentials (on Slack, one app's tokens) to
+  review and rotate, not one per agent. The ChatConnections of each namespace the platform
+  admits are served too, and no others: at most 16 in all, the broker's own included, and
+  no setting raises that.
 - **One audit log.** It records each agent call and approval decision with the Slack user,
   when a person started it, and the service identity it ran as.
 - **Standard operations.** A Helm chart, Prometheus metrics, optional OpenTelemetry traces,
@@ -104,17 +128,19 @@ Three resource types describe the wiring:
 | Resource | Configures | Typical owner |
 |---|---|---|
 | `AgentBackend` | The agent endpoint, protocol dialect, and namespaces allowed to use it | Platform team |
-| `ChatConnection` | The messaging connection and its Secret references | Platform team |
+| `ChatConnection` | The messaging connection and its Secret references | Platform team (the broker's own); a team in a namespace the platform admits (its own app) |
 | `Binding` | An agent, its service identity, and the channel connected to it | Application team |
 
 A team adds a binding to connect an agent to a channel. Multiple bindings can share
 a backend and messaging connection. Cross-namespace references require the owning
 resource to allow the referring namespace.
 
-The resources below look like Kubernetes objects, but they are **configuration files**, loaded from
-`AGENTKOURIER_CONFIG_DIR`, usually through a mounted ConfigMap. They are not yet live
-custom resources reconciled by an Agent Kourier controller. GitOps can manage the
-ConfigMap, Secrets, and Deployment; CRD/controller reconciliation is planned.
+The resources below are Kubernetes objects. On Kubernetes the Helm chart installs the CRDs and the broker reads the resources from the
+cluster as **custom resources** (`config.source: crds`, the chart's default, which needs Kubernetes 1.33 or later; see
+the [chart README](charts/agent-kourier/README.md)). There is no controller: the broker reads them with informers, and the leader writes each Binding's status.
+For a quick proof of concept the chart can instead write them into a ConfigMap, as **configuration files** loaded from
+`AGENTKOURIER_CONFIG_DIR` (`config.source: files`), which GitOps can manage with the Secrets and the Deployment; [how to move a running install](docs/how-to/migrate-config-source.md)
+goes from one to the other. The two routes are never merged.
 
 For example, this configuration connects a payments agent hosted by kagent to a
 Slack channel through shared infrastructure:
@@ -138,7 +164,7 @@ metadata:
 spec:
   platform: slack
   credentialsSecretRef:
-    name: agent-kourier-slack
+    name: slack
   allowedNamespaces: [payments]
 ---
 apiVersion: agentkourier.dev/v1alpha1
@@ -169,7 +195,7 @@ spec:
 
 This example assumes the agent and authenticated backend endpoint already exist.
 Replace the endpoint, agent reference, and channel ID for your deployment. The
-`agent-kourier-slack` Secret belongs in `agent-kourier` with `botToken` and `appToken`
+`slack` Secret belongs in `agent-kourier` with `botToken` and `appToken`
 keys; `payments-agent-token` belongs in `payments` with a `token` key. Each binding
 uses a service identity for agent calls; individual Slack users do not supply the
 backend's authorization identity.
@@ -197,11 +223,12 @@ other bots, and the [trigger reference](docs/reference/chat-triggers.md) has the
 | Chat platform | Slack direct messages | Planned |
 | Chat platform | Other platforms, through the `chat.Platform` interface and its conformance suite | Planned |
 | Agent backend | kagent 1.0, `kagent-v1` dialect, with structured questions and optional Slack tool approvals. Tested against 1.0.0-alpha5. Needs a cluster that serves the pod-certificate APIs, which managed EKS through 1.36 cannot; see [Connect a kagent agent](docs/how-to/connect-kagent.md) | Implemented |
-| Agent backend | Any A2A agent, 1.0 or 0.3, whose card advertises streaming and a JSON-RPC interface, `a2a` dialect. Questions arrive as text | Implemented |
-| Agent backend | kagent 0.9.x, `a2a` dialect over A2A 0.3. Tested against 0.9.4 on a real cluster. It has no task list, so a resend can run a turn twice, and the dialect renders no tool calls as step cards. See [Connect a kagent agent](docs/how-to/connect-kagent.md) | Implemented |
+| Agent backend | Any A2A agent, 1.0 or 0.3, whose card advertises streaming and a JSON-RPC interface, `a2a` dialect. Questions arrive as text, or as kagent's structured questions and tool approvals when the card lists its human-in-the-loop extension | Implemented |
+| Agent backend | kagent 0.9.x, `a2a` dialect over A2A 0.3. Tested against 0.9.4 on a real cluster. It has no task list, so a resend can run a turn twice, and the dialect shows its tool calls as step cards. See [Connect a kagent agent](docs/how-to/connect-kagent.md) | Implemented |
 | Agent backend | Google AX, through an ADK agent in an AX Task and the `a2a` dialect. See [examples/ax](examples/ax/README.md) | Experimental |
 | Alert source | Alertmanager, through the message it posts to Slack (`botMessage` trigger, written in full) | Implemented |
 | Alert source | Any other bot that posts to the channel, with a `botMessage` trigger written in full; not exercised in the sandbox or the end-to-end tests | Implemented |
+| Chat platform | A person's message at the top level of the channel, with a `personMessage` trigger written in full; not exercised in the sandbox or the end-to-end tests | Implemented |
 | Operations | High availability: two replicas on Postgres, one leader elected by a Kubernetes Lease, fencing, and a standby that takes over. See [High availability and failover](docs/explanation/high-availability.md) | Implemented |
 
 The common interface to an agent is streaming A2A over JSON-RPC, version 1.0 or 0.3, and Agent Kourier
@@ -212,9 +239,9 @@ the contract.
 
 ## Status
 
-The current release is v0.1.1: a signed image for `linux/amd64` and `linux/arm64`,
-`ghcr.io/agentkourier/agent-kourier:v0.1.1`, and the Helm chart `oci://ghcr.io/agentkourier/charts/agent-kourier`
-version `0.1.1`, which pins that image by digest. It runs as one
+The current release is v0.3.2: a signed image for `linux/amd64` and `linux/arm64`,
+`ghcr.io/agentkourier/agent-kourier:v0.3.2`, and the Helm chart `oci://ghcr.io/agentkourier/charts/agent-kourier`
+version `0.3.2`, which pins that image by digest. It runs as one
 replica with a SQLite store, or as two replicas on Postgres with a leader election
 and fencing, installed with the [Helm chart](charts/agent-kourier/README.md). Agent Kourier writes
 an audit log, exports Prometheus metrics and can export OpenTelemetry traces. See

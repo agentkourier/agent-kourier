@@ -75,6 +75,32 @@ func (h holdStep) play(r *run) bool {
 	}
 }
 
+// RefuseAnswer refuses the answer instead of taking it, when it is among the steps that the then of Ask or
+// RequestApproval returns: the answer's send waits at the gate until Server.Release opens it, holding no lock, so
+// the task can be read and other calls served meanwhile, and then answers -32004 with msg, as kagent answers a send
+// that its session cannot take. No step of the continuation runs, the answer is not in the task's history, and the
+// task still waits for input with the same request. A client that leaves before the gate opens gets nothing. The
+// steps of a continuation run only once the answer is taken, so Hold cannot delay the send's answer; this step
+// does. In a turn that no answer resumed it has nothing to refuse, and it ends the task FAILED, so the mistake shows.
+func RefuseAnswer(gate, msg string) Step { return refuseStep{gate, msg} }
+
+type refuseStep struct{ gate, msg string }
+
+func (refuseStep) play(r *run) bool {
+	r.finish(failed, "stubagent: RefuseAnswer outside the steps that an answer resumes")
+	return false
+}
+
+// refusal returns the first RefuseAnswer of steps, if there is one.
+func refusal(steps []Step) (refuseStep, bool) {
+	for _, st := range steps {
+		if rf, ok := st.(refuseStep); ok {
+			return rf, true
+		}
+	}
+	return refuseStep{}, false
+}
+
 // run is one playing turn of a task.
 type run struct {
 	s    *Server

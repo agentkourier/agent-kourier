@@ -47,13 +47,22 @@ type Session struct {
 // paused and answered, the answer. ID names the outbox row of the output (and so the message, a stream's included), and User
 // is the platform's ID of the person it is shown to, which a stream needs. MessageRef and Acknowledgment preserve the
 // source message and reaction for recovery. AcknowledgmentID names the accepted chat reply that owns
-// that reaction when it differs from the output ID (as it does for a typed answer). The zero value is none.
+// that reaction when it differs from the output ID (as it does for a typed answer). Mention is the message of the trigger's start
+// whose turn began the task, for a start that holds its place in the trigger's limits for its own turn alone: a bot's mention, or a
+// person's message that a personMessage trigger took. An answer does not change it, and it is empty for any other turn, an
+// alert's included. The zero value is none.
 type TaskTurn struct {
 	ID, User         string
 	MessageRef       string
 	Acknowledgment   string
 	AcknowledgmentID string
+	Mention          string
 }
+
+// AnyAge is a threadTTL no session outlives, for a read that wants the session whatever its age: the
+// real threadTTL is the session's Binding's, and a caller that has no Binding yet or that outlives it
+// passes this one.
+const AnyAge = 100 * 365 * 24 * time.Hour
 
 // Sessions persists the thread-to-session mapping. Key (all three parts),
 // Binding, a valid Origin and LastActivity are required; ContextID and TaskID

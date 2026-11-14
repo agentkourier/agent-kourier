@@ -2,7 +2,8 @@
 // the validation of 2026-10-11 found internal planning IDs, removed field names and workspace identifiers in pages that
 // the site and the repository publish, and nothing would have noticed them coming back.
 //
-// It reads the public sources: README.md, charts/agent-kourier/README.md, charts/agent-kourier/values.yaml (all of it,
+// It reads the public sources: README.md, charts/agent-kourier/README.md, the generated CRDs under
+// charts/agent-kourier/files/crds, charts/agent-kourier/values.yaml (all of it,
 // not only its comments: the comments feed docs/reference/helm-values.md and the values are the defaults the page
 // shows), every README.md and every YAML file under examples/recipes (the recipes' pages and their resources and evals,
 // at any depth; their code is not scanned yet), every text file under docs/ except the directories that mkdocs.yml's exclude_docs names (the brand kit and the
@@ -43,6 +44,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/agentkourier/agent-kourier/hack/docs/internal/sitesrc"
 )
 
 // rule is one content check: a pattern that must not appear in a public page, and why.
@@ -273,43 +276,9 @@ func scanText(rs []rule, path, text string) []finding {
 	return out
 }
 
-// excludedDocs returns the top-level directories of docs/ that mkdocs.yml's exclude_docs block names. It accepts only
-// the form `/name/`: another pattern would make this check read different files than the site publishes, so it is an
-// error rather than a guess.
-func excludedDocs(mkdocs string) ([]string, error) {
-	lines := strings.Split(mkdocs, "\n")
-	for i, l := range lines {
-		if strings.TrimRight(l, " \t") != "exclude_docs: |" {
-			continue
-		}
-		var out []string
-		for _, b := range lines[i+1:] {
-			t := strings.TrimSpace(b)
-			if t == "" || strings.HasPrefix(t, "#") {
-				continue
-			}
-			if !strings.HasPrefix(b, " ") && !strings.HasPrefix(b, "\t") {
-				break // the block ends at the next key
-			}
-			name := strings.TrimSuffix(strings.TrimPrefix(t, "/"), "/")
-			if !strings.HasPrefix(t, "/") || !strings.HasSuffix(t, "/") || name == "" || strings.ContainsAny(name, "/*?[") {
-				return nil, fmt.Errorf("mkdocs.yml exclude_docs pattern %q: only /directory/ is supported", t)
-			}
-			out = append(out, name)
-		}
-		return out, nil
-	}
-	return nil, fmt.Errorf("mkdocs.yml has no `exclude_docs: |` block")
-}
-
-// textExt are the extensions of the text files the site publishes; images and video are skipped.
-var textExt = []string{".md", ".html", ".yml", ".yaml", ".css", ".js", ".json", ".svg", ".vtt", ".webmanifest", ".txt"}
-
-// textNames are published text files with no extension.
-var textNames = []string{"_headers"}
-
-// textFiles returns the text files under dir (a slash-separated path relative to root) as paths relative to root,
-// skipping the top-level directories of dir that skip names. A dir that does not exist yields none.
+// textFiles returns the text files the site publishes (sitesrc.IsText) under dir, a slash-separated path relative to
+// root, as paths relative to root, skipping the top-level directories of dir that skip names (sitesrc.Excluded). A
+// dir that does not exist yields none.
 func textFiles(root, dir string, skip []string) ([]string, error) {
 	base := filepath.Join(root, filepath.FromSlash(dir))
 	if _, err := os.Stat(base); errors.Is(err, fs.ErrNotExist) {
@@ -325,12 +294,12 @@ func textFiles(root, dir string, skip []string) ([]string, error) {
 			return err
 		}
 		if d.IsDir() {
-			if rel != "." && !strings.Contains(rel, string(filepath.Separator)) && slices.Contains(skip, rel) {
+			if sitesrc.Excluded(skip, rel) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if slices.Contains(textExt, filepath.Ext(p)) || slices.Contains(textNames, d.Name()) {
+		if sitesrc.IsText(p) {
 			out = append(out, dir+"/"+filepath.ToSlash(rel))
 		}
 		return nil
@@ -347,7 +316,7 @@ func publicFiles(root string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read mkdocs.yml: %w", err)
 	}
-	skip, err := excludedDocs(string(mk))
+	skip, err := sitesrc.ExcludedDocs(string(mk))
 	if err != nil {
 		return nil, err
 	}
@@ -373,7 +342,12 @@ func publicFiles(root string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return slices.Concat(files, recipes, helmExamples, docs, overrides), nil
+	// The CRDs are generated from the API types' comments, so a maintainer reference left in one reaches kubectl explain.
+	crds, err := textFiles(root, "charts/agent-kourier/files/crds", nil)
+	if err != nil {
+		return nil, err
+	}
+	return slices.Concat(files, recipes, helmExamples, crds, docs, overrides), nil
 }
 
 // allowEntry is one deliberate exception: a line of path that matches rule and holds text.

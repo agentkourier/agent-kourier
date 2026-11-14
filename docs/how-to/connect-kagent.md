@@ -6,7 +6,8 @@ Binding's turns reach one of its agents.
 === "kagent 1.0"
 
     kagent 1.0 uses the `kagent-v1` dialect, which speaks A2A 1.0 and kagent's human-in-the-loop extension: structured
-    questions with choices, and tool calls shown as step cards. It is tested against kagent 1.0.0-alpha5.
+    questions with choices, and tool approvals. It shows tool calls as step cards, as every dialect does. It is tested
+    against kagent 1.0.0-alpha5.
 
     **1. Check the cluster can run it.** kagent 1.0 runs every agent session on Agent Substrate, which needs the
     pod-certificate APIs: the `ClusterTrustBundle`, `ClusterTrustBundleProjection` and `PodCertificateRequest` feature
@@ -38,6 +39,13 @@ Binding's turns reach one of its agents.
             allowedNamespaces: [payments]
     ```
 
+    When teams share the backend and each should name only the agents of its own namespace, add
+    `agents: {sameNamespace: true}` to the spec. Without `agents` a Binding may name an agent in any namespace of the kagent install. With
+    custom resources (`config.source: crds`, the chart's default) a Binding whose `agent.namespace` the field does not allow is not served
+    and says `AgentNamespaceNotAllowed`, and the others keep running. With `config.source: files` the config resolves all or nothing: one
+    such Binding stops the broker from starting (exit code 2), or keeps it on the last good config on a reload. See
+    [Security](../explanation/security.md#what-the-people-who-write-these-objects-can-do) for what the field does and does not bound.
+
     **4. Give each Binding its own token.** A Binding's `identity.tokenSecretRef` names a Secret with an OIDC token the
     front door accepts. [Create the Binding identity](create-binding-identity.md) shows how to provision the account
     and issue the first token with Dex. In the tested 1.0.0-alpha5 OIDC setup, kagent binds a session to the identity
@@ -62,7 +70,9 @@ Binding's turns reach one of its agents.
 === "kagent 0.9.x"
 
     kagent 0.9.x speaks A2A 0.3, which the generic `a2a` dialect reads. It runs on a cluster without the
-    pod-certificate APIs. It is tested against kagent 0.9.4 on a real cluster.
+    pod-certificate APIs. It is tested against kagent 0.9.4 on a real cluster. The `a2a` dialect shows its tool calls as
+    step cards: kagent 0.9.x sends them in the messages of its status updates, marked `kagent_type`, and Agent Kourier
+    reads them there. The tests replay a turn recorded from kagent 0.9.4.
 
     **1. Find the controller's Service.** Its name depends on the Helm release name. Argo CD names the release after the
     Application, so an Application called `my-kagent` makes the Service
@@ -92,10 +102,16 @@ Binding's turns reach one of its agents.
     - A 0.3 agent has no task list. After a restart, or after a send whose outcome is unknown, Agent Kourier cannot ask
       whether the agent already has the turn. It sends again, and the agent may run the turn twice. That is harmless for
       a read-only agent and not for one that changes things.
-    - The `a2a` dialect does not see tool calls, so the agent's own tool list and the role behind its tools are the only
-      fence on a write. It shows no step cards.
+    - The `a2a` dialect shows tool calls, but it approves or denies them only for an agent whose card lists kagent's
+      human-in-the-loop extension, and whether kagent 0.9.x's card does has not been checked. Without it no approval
+      prompt is posted, whatever `interactions.toolApprovals` says, and the agent's own tool list and the role behind
+      its tools are the only fence on a write.
     - A text `input-required` pause is shown as a question, and the reply is sent as text, only when the Binding sets
       `interactions.askUser: true`. Whether kagent 0.9.x ever pauses with a text question has not been tested.
+    - Whether kagent 0.9.x pauses for a tool approval has not been tested. kagent 1.0.0-alpha5, asked without its
+      extension, pauses for one with text alone, asking for a `FunctionResponse`. A pause like that is handled as the
+      question above: its reply is sent as plain text, never as an approval, and what kagent does with that text has
+      not been tested.
     - The controller accepted a placeholder token in the first install, so nothing verifies the Binding's identity. Put
       a verifying front door in front of it if that matters.
 

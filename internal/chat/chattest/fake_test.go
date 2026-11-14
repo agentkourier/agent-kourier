@@ -122,6 +122,36 @@ func TestAStepIsBegunOnceAndThenMovedForward(t *testing.T) {
 	}
 }
 
+// An update that carries steps, as an alert thread's reply does, is recorded with them: the fake keeps the message it was
+// given, steps and all, and shows each step's title.
+func TestAnUpdateWithStepsIsRecordedWithThem(t *testing.T) {
+	f := NewFake()
+	ref, err := f.Post(ctx, tgt, chat.Say(chat.Message{Fallback: "Calling search()"}), "tag")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent := f.Subject().Sent
+	sent()
+	steps := chat.Steps{Steps: []chat.Step{{ID: "s1", Title: "search", Detail: "q=1", State: chat.StepDone}}}
+	if err := f.Update(ctx, ref, chat.Say(chat.Message{Parts: []chat.Part{steps, chat.Body{Markdown: "found it"}}})); err != nil {
+		t.Fatal(err)
+	}
+	m := f.Messages()[0]
+	if m.Updates != 1 || m.Out.Message == nil || len(m.Out.Message.Parts) != 2 {
+		t.Fatalf("message %+v; want it updated once to the message with its steps", m)
+	}
+	if got, ok := m.Out.Message.Parts[0].(chat.Steps); !ok || !slices.Equal(got.Steps, steps.Steps) {
+		t.Errorf("first part %+v; want the steps, as given", m.Out.Message.Parts[0])
+	}
+	var shown []string
+	for _, s := range sent() {
+		shown = append(shown, s.Displayed)
+	}
+	if !slices.Contains(shown, "search") || !slices.Contains(shown, "found it") {
+		t.Errorf("shown %q; want the step's title and the text", shown)
+	}
+}
+
 func TestAPlatformWithNoStepsSaysSoAndShowsNone(t *testing.T) {
 	f := NewFake()
 	f.SetCaps(chat.Caps{Streams: true, MaxText: 4000})
@@ -248,6 +278,84 @@ func TestGroupMembershipFailsClosed(t *testing.T) {
 	}
 	if got, err := f.IsInAnyGroup(ctx, []string{"G1"}, "U1"); err != nil || !got {
 		t.Errorf("IsInAnyGroup after the failure = %t, %v; want true", got, err)
+	}
+}
+
+func TestGroupsReadable(t *testing.T) {
+	f := NewFake()
+	f.SetGroup("G1", "U1")
+	f.SetGroup("G2")
+	for _, tc := range []struct {
+		name   string
+		groups []string
+		failed string // the group the error names, if any
+	}{
+		{"no groups", nil, ""},
+		{"groups the fake was told of, one with no one in it", []string{"G1", "G2"}, ""},
+		{"a group the fake was not told of", []string{"G1", "G404", "G2"}, "G404"},
+	} {
+		err := f.GroupsReadable(ctx, tc.groups)
+		var ge *chat.GroupError
+		switch {
+		case tc.failed == "" && err != nil:
+			t.Errorf("%s: GroupsReadable(%v) = %v, want nil", tc.name, tc.groups, err)
+		case tc.failed != "" && (!errors.As(err, &ge) || ge.Group != tc.failed || !errors.Is(err, chat.ErrGroupNotFound) || !errors.Is(err, chat.ErrGroupsMisconfigured)):
+			t.Errorf("%s: GroupsReadable(%v) = %v, want a *chat.GroupError for %s that wraps chat.ErrGroupNotFound and chat.ErrGroupsMisconfigured", tc.name, tc.groups, err, tc.failed)
+		}
+	}
+	// An injected failure is returned as it is: a plain one may pass on a retry, one that wraps the scope sentinel never will.
+	f.FailNext("GroupsReadable", errors.New("boom"), fmt.Errorf("scope: %w", chat.ErrMissingScope))
+	if err := f.GroupsReadable(ctx, []string{"G1"}); err == nil || errors.Is(err, chat.ErrMissingScope) || errors.Is(err, chat.ErrGroupsMisconfigured) {
+		t.Errorf("GroupsReadable with an injected plain failure = %v; want an error that is not the permanent kind", err)
+	}
+	if err := f.GroupsReadable(ctx, []string{"G1"}); !errors.Is(err, chat.ErrMissingScope) {
+		t.Errorf("GroupsReadable with an injected missing scope = %v; want chat.ErrMissingScope", err)
+	}
+	if err := f.GroupsReadable(ctx, []string{"G1"}); err != nil {
+		t.Errorf("GroupsReadable after the failures = %v; want nil", err)
+	}
+}
+
+func TestChannelAccess(t *testing.T) {
+	f := NewFake()
+	f.SetAccess("CJOINED", chat.Access{Member: true})
+	f.SetAccess("COUT", chat.Access{})
+	f.SetAccess("CARCHIVED", chat.Access{Member: true, Archived: true})
+	for _, tc := range []struct {
+		name    string
+		channel string
+		want    chat.Access
+		err     error
+	}{
+		{"joined", "CJOINED", chat.Access{Member: true}, nil},
+		{"not joined", "COUT", chat.Access{}, nil},
+		{"archived", "CARCHIVED", chat.Access{Member: true, Archived: true}, nil},
+		{"a channel the fake was not told of", "C404", chat.Access{}, chat.ErrChannelNotFound},
+		{"no channel", "", chat.Access{}, chat.ErrChannelNotFound},
+	} {
+		got, err := f.ChannelAccess(ctx, tc.channel)
+		if got != tc.want || !errors.Is(err, tc.err) || (tc.err == nil && err != nil) {
+			t.Errorf("%s: ChannelAccess(%q) = %+v, %v; want %+v, %v", tc.name, tc.channel, got, err, tc.want, tc.err)
+		}
+	}
+	// The kinds of failure a caller must tell apart: a plain one may pass on a retry, the sentinels never will. None is an
+	// answer, so the Access is zero.
+	f.FailNext("ChannelAccess", errors.New("boom"), fmt.Errorf("scope: %w", chat.ErrMissingScope))
+	if got, err := f.ChannelAccess(ctx, "CJOINED"); got != (chat.Access{}) || err == nil || errors.Is(err, chat.ErrMissingScope) || errors.Is(err, chat.ErrChannelNotFound) {
+		t.Errorf("ChannelAccess with an injected plain failure = %+v, %v; want the zero Access and an unclassified error", got, err)
+	} else if v := f.Classify(chat.OpOther, err); v.Class != chat.Transient {
+		t.Errorf("Classify of the plain failure = %+v, want Transient", v)
+	}
+	if got, err := f.ChannelAccess(ctx, "CJOINED"); got != (chat.Access{}) || !errors.Is(err, chat.ErrMissingScope) {
+		t.Errorf("ChannelAccess with an injected missing scope = %+v, %v; want the zero Access and chat.ErrMissingScope", got, err)
+	} else if v := f.Classify(chat.OpOther, err); v.Class != chat.Permanent || v.Reason == chat.ReasonNone {
+		t.Errorf("Classify of the missing scope = %+v, want Permanent with a reason", v)
+	}
+	if _, err := f.ChannelAccess(ctx, "C404"); f.Classify(chat.OpOther, err) != (chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonChannelGone, Code: "channel_not_found"}) {
+		t.Errorf("Classify of a channel not found = %+v, want Permanent, ReasonChannelGone", f.Classify(chat.OpOther, err))
+	}
+	if got, err := f.ChannelAccess(ctx, "CJOINED"); err != nil || !got.Member {
+		t.Errorf("ChannelAccess after the failures = %+v, %v; want the channel as set", got, err)
 	}
 }
 
@@ -521,5 +629,63 @@ func TestATooLongToolIsRefusedNotCutAndALongEndingIsShown(t *testing.T) {
 	over := tool(strings.Repeat("n", 21), strings.Repeat("a", 51))
 	if _, err := f.Post(ctx, tgt, chat.End(chat.Ending{Outcome: chat.TimedOut, Prompt: over}), "t-end"); err != nil {
 		t.Errorf("Post of an ending of a tool over the limit = %v, want it accepted: an ending is cut, not refused", err)
+	}
+}
+
+func TestAThreadIsBusyFromTheMarkUntilTheClearOrAPostInIt(t *testing.T) {
+	f := NewFake()
+	other := chat.Target{Channel: "C1", Thread: "2.2"}
+	for _, step := range []struct {
+		name string
+		do   func() error
+		want [2]bool // busy in tgt, and in other
+	}{
+		{"nothing yet", func() error { return nil }, [2]bool{false, false}},
+		{"a mark", func() error { return f.MarkBusy(ctx, tgt, true) }, [2]bool{true, false}},
+		{"the mark again", func() error { return f.MarkBusy(ctx, tgt, true) }, [2]bool{true, false}},
+		{"a post in another thread", func() error { _, err := f.Post(ctx, other, say("x"), "t1"); return err }, [2]bool{true, false}},
+		{"a post in the thread", func() error { _, err := f.Post(ctx, tgt, say("x"), "t2"); return err }, [2]bool{false, false}},
+		{"a mark after it", func() error { return f.MarkBusy(ctx, tgt, true) }, [2]bool{true, false}},
+		{"a stream in the thread", func() error {
+			if err := f.MarkBusy(ctx, tgt, true); err != nil {
+				return err
+			}
+			_, err := f.Stream(ctx, tgt, "U1", "x")
+			return err
+		}, [2]bool{false, false}},
+		{"a mark and a clear", func() error {
+			if err := f.MarkBusy(ctx, tgt, true); err != nil {
+				return err
+			}
+			return f.MarkBusy(ctx, tgt, false)
+		}, [2]bool{false, false}},
+		{"a clear of nothing", func() error { return f.MarkBusy(ctx, tgt, false) }, [2]bool{false, false}},
+	} {
+		if err := step.do(); err != nil {
+			t.Fatalf("%s: %v", step.name, err)
+		}
+		if got := [2]bool{f.Busy(tgt), f.Busy(other)}; got != step.want {
+			t.Errorf("%s: busy = %v, want %v", step.name, got, step.want)
+		}
+	}
+	if got := f.BusyCalls(); len(got) != 7 || got[0] != (BusyCall{Target: tgt, Busy: true}) || got[6].Busy {
+		t.Errorf("BusyCalls = %+v, want the seven calls in order, each as made", got)
+	}
+}
+
+func TestAMarkNeedsAThreadAndTheCaps(t *testing.T) {
+	f := NewFake()
+	if err := f.MarkBusy(ctx, chat.Target{Channel: "C1"}, true); !errors.Is(err, chat.ErrInvalid) {
+		t.Errorf("MarkBusy of no thread = %v, want ErrInvalid", err)
+	}
+	f.SetCaps(chat.Caps{Streams: true, MaxText: 4000})
+	if err := f.MarkBusy(ctx, tgt, true); !errors.Is(err, chat.ErrNoBusy) || f.Busy(tgt) {
+		t.Errorf("MarkBusy with Busy false = %v, busy %v, want ErrNoBusy and no mark", err, f.Busy(tgt))
+	}
+	f.SetCaps(chat.Caps{Busy: true, MaxText: 4000})
+	boom := errors.New("boom")
+	f.FailNext("MarkBusy", boom)
+	if err := f.MarkBusy(ctx, tgt, true); !errors.Is(err, boom) || f.Busy(tgt) {
+		t.Errorf("a failed MarkBusy = %v, busy %v, want the error and no mark", err, f.Busy(tgt))
 	}
 }

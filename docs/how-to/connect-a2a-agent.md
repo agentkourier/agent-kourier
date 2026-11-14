@@ -51,12 +51,32 @@ In the Binding's `identity`:
 
 ## What works on this dialect
 
-- Chat and alert investigations, with streamed answers.
+- Chat and alert investigations. A chat answer is streamed; an alert investigation's is posted and then updated.
 - An agent's question, when it pauses with `input-required` and text, if the Binding sets `interactions.askUser: true`.
   A single question with no choices also takes a typed reply in the thread.
-- Not: structured choices, tool approvals, or tool calls as step cards. The generic `a2a` dialect accepts only a
-  text-only input-required question; a structured pause is refused and the task is cancelled. These capabilities come
-  from kagent's extension, which only the `kagent-v1` dialect speaks, so no Binding approval setting enables them here.
+- A `Working…` card while the agent is silent for 3 seconds, with the default `chat.progress` (a line instead, in an
+  alert thread's first post). The text of a status update in state `working` titles that card, or, in an alert thread
+  with no card open, is a line at the next write: see [Working updates](../reference/agent-contract.md#working-updates).
+- Tool calls as step cards, when the agent marks its tool parts as Google ADK or kagent does (`adk_type`, `kagent_type`
+  or `kagent.dev/a2a/part-type`, set to `function_call` or `function_response`): see
+  [Tool calls and results](../reference/agent-contract.md#tool-calls-and-results). Without that marker the calls are
+  not shown.
+- Structured questions (with choices, several at once, or from a sub-agent) and tool approvals, when the agent card
+  lists kagent's human-in-the-loop extension, `https://kagent.dev/extensions/hitl/v1`, under
+  `capabilities.extensions`. Agent Kourier then asks for the extension, and reads and answers a pause that names it as
+  the `kagent-v1` dialect does; the [agent contract](../reference/agent-contract.md#structured-questions-and-tool-approvals)
+  has what is sent and read. `interactions.askUser`, `toolApprovals` and `approverGroups` apply as described in
+  [Agent questions](agent-questions.md). A structured question takes its answer from the prompt's controls only, never
+  from a typed reply. kagent 1.0.0-alpha5's agent card lists the extension; 0.9.x has not been checked.
+- Not: structured pauses from an agent without that extension. Agent Kourier does not read a framework's own approval
+  format (see [Why approvals use one extension](../explanation/why-a2a.md#why-approvals-use-one-extension)). Any other
+  pause must be text alone; a pause with any part that is not text cannot be used, so the task is cancelled. A payload that the status message does not name in its
+  `extensions` is not read, and the pause is handled as text.
+- A kagent agent paused for a tool approval without the extension (its card does not list it, or a request did not ask
+  for it) sends text alone, asking for a `FunctionResponse` (recorded with kagent 1.0.0-alpha5). Agent Kourier handles
+  that pause as a question. On a Binding with `interactions.askUser: false` it cancels the task and tells the thread the
+  agent asked a question. With `askUser: true` it posts kagent's text, and the reply goes to kagent as plain text, never
+  as an approval; what kagent does with plain text has not been tested.
 - An A2A 0.3 agent has no task list, so after a restart a turn may be sent, and run, twice.
 
 ## Check it

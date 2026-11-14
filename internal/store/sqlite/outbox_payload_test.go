@@ -45,7 +45,7 @@ func databaseAt(t *testing.T, path string, last int) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := migrate(ctx, db, old); err != nil {
+	if err := migrate(ctx, db, old, discardLog); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `INSERT INTO outbox (id, event_id, role, channel, thread_ts, created_at, message_ref) VALUES

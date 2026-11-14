@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
@@ -216,17 +217,11 @@ func (r *recorder) Interaction(_ context.Context, i chat.Interaction) error {
 // for before the test fails, and is long: a loaded machine can starve the goroutine that makes it hold.
 func (r *recorder) wait(t *testing.T, what string, done func() bool) {
 	t.Helper()
-	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+	testutil.Eventually(t, what, func() bool {
 		r.mu.Lock()
-		ok := done()
-		r.mu.Unlock()
-		if ok {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-	}
+		defer r.mu.Unlock()
+		return done()
+	}, testutil.Every(5*time.Millisecond))
 }
 
 // Run hands the neutral sink what people write, as the model has it: where the message is and its thread, who wrote
@@ -239,11 +234,7 @@ func TestRunGivesTheNeutralSinkMessagesAndPresses(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- w.p.Run(ctx, rec) }()
 	t.Cleanup(func() { cancel(); _ = <-done })
-	for deadline := time.Now().Add(5 * time.Second); w.fake.Connections() == 0; time.Sleep(5 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("never connected")
-		}
-	}
+	testutil.Eventually(t, "never connected", func() bool { return w.fake.Connections() != 0 }, testutil.Within(5*time.Second), testutil.Every(5*time.Millisecond))
 
 	mention, err := w.fake.Mention("C1", "U1", botMark+" why?")
 	if err != nil {
@@ -295,11 +286,7 @@ func TestASinkThatCannotTakeAMessageLeavesItUnacknowledged(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- w.p.Run(ctx, rec) }()
 	t.Cleanup(func() { cancel(); _ = <-done })
-	for deadline := time.Now().Add(5 * time.Second); w.fake.Connections() == 0; time.Sleep(5 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("never connected")
-		}
-	}
+	testutil.Eventually(t, "never connected", func() bool { return w.fake.Connections() != 0 }, testutil.Within(5*time.Second), testutil.Every(5*time.Millisecond))
 
 	if _, err := w.fake.Mention("C1", "U1", botMark+" hi"); err != nil {
 		t.Fatal(err)

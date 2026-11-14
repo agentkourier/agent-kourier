@@ -48,6 +48,72 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- default (printf "%s-config" (include "agentkourier.fullname" .)) .Values.config.existingConfigMap -}}
 {{- end -}}
 
+{{/*
+True (non-empty) when Agent Kourier reads its resources from custom resources (config.source crds), not from files. The chart's default is crds. An
+unset source reads as files: `helm upgrade --reuse-values` from a release that had no config.source hands the chart no such key, and that release
+read files.
+*/}}
+{{- define "agentkourier.crMode" -}}
+{{- if eq (default "files" .Values.config.source) "crds" -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+True (non-empty) when the release renders the CustomResourceDefinitions (crds.install). Unset, which is the default, it follows the route: true with
+config.source crds, which reads them, and false with files, which does not. An explicit true or false always wins, so true with files is the first
+step of a move to custom resources, and false with crds is a platform that applied the CRDs itself.
+*/}}
+{{- define "agentkourier.installCRDs" -}}
+{{- $set := (.Values.crds).install -}}
+{{- if kindIs "invalid" $set -}}
+{{- include "agentkourier.crMode" . -}}
+{{- else if $set -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/* True (non-empty) when config.* holds a resource of any kind, which the chart renders as a custom resource with config.source crds. */}}
+{{- define "agentkourier.inlineResources" -}}
+{{- if or .Values.config.agentBackends .Values.config.chatConnections .Values.config.bindings -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+config.connectionNamespaceSelector as compact JSON (AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR) when it is set, and empty when it is not. Set is a
+map, the empty one included: {} selects every namespace and must render as {}, so the test is kindIs "map" and never the value's truth, which is
+false for an empty map. Unset is null, the default, or absent (a release upgraded with --reuse-values from a chart before the value).
+*/}}
+{{- define "agentkourier.connectionNamespaceSelector" -}}
+{{- $s := .Values.config.connectionNamespaceSelector -}}
+{{- if kindIs "map" $s -}}{{- toJson $s -}}{{- end -}}
+{{- end -}}
+
+{{/*
+The ChatConnection this broker serves as its own with config.source crds, as namespace/name (AGENTKOURIER_CHAT_CONNECTION): config.chatConnection,
+in the release namespace when it names no namespace. When that is empty and config.connectionNamespaces or config.connectionNamespaceSelector is set,
+nothing: a broker with no connection of its own, which serves the ChatConnections of the namespaces they admit (the chart renders no variable),
+and the entries of config.chatConnections are team connections. When all three are empty, the one entry of config.chatConnections, or with no
+entry nothing, which is the broker that serves the ChatConnections of every namespace. A cluster may hold the connections of several brokers, so
+with two or more entries there is no guess to make, and the render fails. Empty output means no own connection.
+*/}}
+{{- define "agentkourier.chatConnection" -}}
+{{- $ref := .Values.config.chatConnection -}}
+{{- if and (not $ref) (not .Values.config.connectionNamespaces) (not (include "agentkourier.connectionNamespaceSelector" .)) -}}
+{{- if gt (len .Values.config.chatConnections) 1 -}}
+{{- fail (printf "config.source crds (the chart's default unless your values set it) needs config.chatConnection: the namespace/name of the one ChatConnection this broker serves as its own, and config.chatConnections has %d entries. A cluster may hold the connections of several brokers, so an entry is read as the own connection only when it is the only one. A broker with no connection of its own leaves config.chatConnection empty and admits the namespaces whose ChatConnections it serves: by name in config.connectionNamespaces, or by label in config.connectionNamespaceSelector; with both unset and no entry in config.chatConnections it serves the ChatConnections of every namespace. To supply the config as a ConfigMap instead, set config.source: files; https://agentkourier.dev/how-to/install-with-helm/ describes both routes" (len .Values.config.chatConnections)) -}}
+{{- end -}}
+{{- range $name, $r := .Values.config.chatConnections -}}
+{{- $ref = printf "%s/%s" (default $.Release.Namespace $r.namespace) $name -}}
+{{- end -}}
+{{- else if and $ref (not (contains "/" $ref)) -}}
+{{- $ref = printf "%s/%s" .Release.Namespace $ref -}}
+{{- end -}}
+{{- $ref -}}
+{{- end -}}
+
+{{/* The ClusterRole (and its binding) that reads the custom resources: cluster-scoped, so the release namespace is in the name. */}}
+{{- define "agentkourier.clusterRoleName" -}}
+{{- printf "%s-%s-crs" (include "agentkourier.fullname" .) .Release.Namespace | trunc 253 | trimSuffix "-" -}}
+{{- end -}}
+
 {{/* True (non-empty) when Agent Kourier keeps its state in SQLite on a volume. */}}
 {{- define "agentkourier.sqlite" -}}
 {{- if ne .Values.store.type "postgres" -}}true{{- end -}}
@@ -60,6 +126,34 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 
 {{- define "agentkourier.pvcName" -}}
 {{- default (printf "%s-data" (include "agentkourier.fullname" .)) .Values.persistence.existingClaim -}}
+{{- end -}}
+
+{{/*
+The Go runtime's soft memory limit (GOMEMLIMIT) in bytes: four fifths of resources.limits.memory, which leaves the rest for what the Go
+runtime does not count and for the moment between the limit being reached and a collection finishing. Empty, so that no variable is rendered, when:
+there is no memory limit; the limit is not a plain, binary (Ki Mi Gi Ti Pi) or decimal (k M G T P) quantity, which this does not read and
+Kubernetes still accepts (it is never a reason to fail the render); it is under 1 MiB; or extraEnv sets GOMEMLIMIT itself, which then wins and is
+not duplicated. The value may arrive as a string ("256Mi"), a whole number from --set, or a float64 from a values file (1000000000).
+resourceFieldRef with a divisor cannot do this: a divisor only scales the limit to a unit, never to a percentage, and with no limit it yields
+the node's allocatable memory.
+*/}}
+{{- define "agentkourier.goMemLimit" -}}
+{{- $own := false -}}
+{{- range .Values.extraEnv -}}
+{{- if and (kindIs "map" .) (eq (toString (get . "name")) "GOMEMLIMIT") -}}{{- $own = true -}}{{- end -}}
+{{- end -}}
+{{- $mem := dig "limits" "memory" "" (.Values.resources | default dict) -}}
+{{- $text := toString $mem -}}
+{{- if kindIs "float64" $mem -}}{{- $text = printf "%.0f" $mem -}}{{- end -}}
+{{- $number := regexFind "^[0-9]+(\\.[0-9]+)?" $text -}}
+{{- $unit := trimPrefix $number $text -}}
+{{- $units := dict "" 1 "k" 1000 "M" 1000000 "G" 1000000000 "T" 1000000000000 "P" 1000000000000000 "Ki" 1024 "Mi" 1048576 "Gi" 1073741824 "Ti" 1099511627776 "Pi" 1125899906842624 -}}
+{{- if and (not $own) $number (hasKey $units $unit) -}}
+{{- $bytes := int64 (floor (mulf (float64 $number) (float64 (get $units $unit)))) -}}
+{{- if and (ge $bytes 1048576) (lt $bytes 1000000000000000000) -}}
+{{- div (mul $bytes 4) 5 -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/*
@@ -95,6 +189,56 @@ Checks that no values file can get past. Included by the Deployment, which every
 {{- end -}}
 {{- if and .Values.config.existingConfigMap (or .Values.config.agentBackends .Values.config.chatConnections .Values.config.bindings) -}}
 {{- fail "config.existingConfigMap and config.agentBackends/chatConnections/bindings are two ways to supply the same files: set one" -}}
+{{- end -}}
+{{- if and .Values.config.connectionNamespaces (not (include "agentkourier.crMode" .)) -}}
+{{- fail "config.connectionNamespaces is for config.source crds, and config.source is files (or unset, which reads as files): with config.source: files the broker serves only the one ChatConnection of its directory, so the ChatConnections of these namespaces would stop being served. To serve the ChatConnections of those namespaces, set config.source: crds; otherwise remove config.connectionNamespaces" -}}
+{{- end -}}
+{{- if and (include "agentkourier.connectionNamespaceSelector" .) (not (include "agentkourier.crMode" .)) -}}
+{{- fail "config.connectionNamespaceSelector is for config.source crds, and config.source is files (or unset, which reads as files): with config.source: files the broker serves only the one ChatConnection of its directory, so the ChatConnections of the namespaces it selects would stop being served. To serve them, set config.source: crds; otherwise set config.connectionNamespaceSelector to null" -}}
+{{- end -}}
+{{- if include "agentkourier.crMode" . -}}
+{{- if .Values.config.existingConfigMap -}}
+{{- fail "config.existingConfigMap is for config.source files, and config.source is crds (the chart's default unless your values set it): Agent Kourier would read custom resources, mount no ConfigMap and ignore it. To keep reading your ConfigMap, set config.source: files. To move to custom resources instead, remove config.existingConfigMap and follow https://agentkourier.dev/how-to/migrate-config-source/#move-a-configmap-you-manage-yourself" -}}
+{{- end -}}
+{{- /* The minimum is 1.33, the first minor on which the status write of a stored-invalid Binding ratchets (measured; it is refused on 1.30 to 1.32). The -0 lets a
+       vendor suffix (v1.33.1-gke.1, v1.33.0-eks-abc) pass. */ -}}
+{{- if not (semverCompare ">=1.33.0-0" .Capabilities.KubeVersion.Version) -}}
+{{- fail (printf "config.source crds needs Kubernetes 1.33 or later (it is the chart's default unless your values set it): the API server is %s. 1.33 is the first minor tried on which a status write of a Binding that a rule of the CRDs now refuses is accepted (it is refused on 1.30 to 1.32). To install on this cluster, set config.source: files: the ConfigMap route has no minimum. With helm template, pass the cluster's version (--kube-version): Helm's default is its own" .Capabilities.KubeVersion.Version) -}}
+{{- end -}}
+{{- /* A CRD and the custom resources of it in one release can fail where Helm maps the kind, so the CRDs come first: they must already be served
+       when the chart renders. A render that does not ask the cluster (helm template, helm install --dry-run=client) has only the versions it is given.
+       With the CRDs installed by this release and nothing in config.*, the release renders no custom resource, so there is nothing for Helm to map and
+       the CRDs may come with it: that is a first install of the default, where the teams apply their own resources. */ -}}
+{{- if not (.Capabilities.APIVersions.Has "agentkourier.dev/v1alpha1") -}}
+{{- if include "agentkourier.installCRDs" . -}}
+{{- if include "agentkourier.inlineResources" . -}}
+{{- fail "config.source crds needs the CRDs (group agentkourier.dev, version v1alpha1) to be installed before a release that renders config.agentBackends, config.chatConnections or config.bindings as custom resources, and the cluster does not serve them yet: crds.install installs them with this release, too late for the resources of it. To keep the ConfigMap route, set config.source: files; https://agentkourier.dev/how-to/migrate-config-source/ describes moving to custom resources. To use custom resources, install the CRDs first: in an earlier install or upgrade set crds.install=true with config.source files, or leave config.* empty here, name the ChatConnection in config.chatConnection and apply the resources with kubectl once the CRDs are in, then set config.source crds. With helm template, add --api-versions agentkourier.dev/v1alpha1 to render as if they were installed" -}}
+{{- end -}}
+{{- else -}}
+{{- fail "config.source crds needs the CRDs (group agentkourier.dev, version v1alpha1) to be installed before this release, and the cluster does not serve them (config.source crds is the chart's default unless your values set it). To keep the ConfigMap route, set config.source: files; https://agentkourier.dev/how-to/migrate-config-source/ describes moving to custom resources. To use custom resources, in an earlier install or upgrade set crds.install=true with config.source files, or apply the chart's files/crds yourself (kubectl apply --server-side -f charts/agent-kourier/files/crds), then set config.source crds. With helm template, add --api-versions agentkourier.dev/v1alpha1 to render as if they were installed" -}}
+{{- end -}}
+{{- end -}}
+{{- if not (include "agentkourier.chatConnection" .) -}}
+{{- /* No connection of its own: the broker serves the ChatConnections of the namespaces that config.connectionNamespaces and
+       config.connectionNamespaceSelector admit, or of every namespace when neither is set. */ -}}
+{{- if .Values.config.chatConnectionSecret -}}
+{{- fail "config.chatConnectionSecret names the Secret of the broker's own ChatConnection, and there is none: config.chatConnection is empty, and config.connectionNamespaces or config.connectionNamespaceSelector is set (or neither is and config.chatConnections has no entry, which serves every namespace), so this broker serves only the ChatConnections of the namespaces it admits. A team grants the Secret of its connection with a Role of its own (or rbac.secretNames does). To give the broker a connection of its own, set config.chatConnection; otherwise remove config.chatConnectionSecret" -}}
+{{- end -}}
+{{- /* With only the list, a rendered entry outside it would be rendered and never served. With a selector the chart cannot tell, since it does not
+       see a namespace's labels; with neither, there is no entry (one would be the own connection). */ -}}
+{{- if and .Values.config.connectionNamespaces (not (include "agentkourier.connectionNamespaceSelector" .)) -}}
+{{- range $name, $r := .Values.config.chatConnections -}}
+{{- $ns := default $.Release.Namespace $r.namespace -}}
+{{- if not (has $ns $.Values.config.connectionNamespaces) -}}
+{{- fail (printf "config.chatConnections entry %q is in namespace %q, which is not in config.connectionNamespaces, and config.chatConnection is empty, so this broker has no connection of its own and would render the ChatConnection and never serve it. Add %q to config.connectionNamespaces, or set config.chatConnection to serve it as the broker's own" $name $ns $ns) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- /* With files, config.chatConnection, config.chatConnectionSecret and rbac.secretNames are ignored, and the chart does not refuse them: a rollback to files keeps the values
+       it had, in an incident, and they are harmless there. config.connectionNamespaces and config.connectionNamespaceSelector are the exceptions and are refused above: ignoring
+       them would silently stop serving the ChatConnections of the admitted namespaces, which is not harmless, so a rollback to files sets the list to [] and the selector to null
+       in the same upgrade. */ -}}
 {{- end -}}
 {{- if and .Values.serviceMonitor.enabled (not .Values.service.enabled) -}}
 {{- fail "serviceMonitor.enabled needs service.enabled: the ServiceMonitor selects the metrics Service" -}}
@@ -184,13 +328,80 @@ says where its Secrets are). With none of these, the release namespace.
 {{- keys $found | sortAlpha | toJson -}}
 {{- end -}}
 
-{{/* One Agent Kourier resource as a file of the config directory. Called with the kind, the name, the entry and the root. */}}
+{{/*
+With config.source crds, the Secrets that the chart can name, by namespace, as a JSON object of sorted lists: the ChatConnections'
+credentials, the Bindings' identity tokens, the AgentBackends' header values, the Postgres DSN's (in the release namespace), the Secret
+of the served ChatConnection when config.chatConnection names it (see below) and rbac.secretNames. The Roles of the Secrets name exactly
+these (resourceNames). It parallels agentkourier.secretNamespaces, which files
+mode keeps as it is: test/chart holds the two to the same references.
+*/}}
+{{- define "agentkourier.secretNames" -}}
+{{- $found := dict -}}
+{{- range $_, $r := .Values.config.chatConnections -}}
+{{- with dig "credentialsSecretRef" "name" "" (default (dict) $r.spec) -}}
+{{- include "agentkourier.addSecret" (dict "found" $found "namespace" (default $.Release.Namespace $r.namespace) "name" .) -}}
+{{- end -}}
+{{- end -}}
+{{- range $_, $r := .Values.config.bindings -}}
+{{- with dig "identity" "tokenSecretRef" "name" "" (default (dict) $r.spec) -}}
+{{- include "agentkourier.addSecret" (dict "found" $found "namespace" (default $.Release.Namespace $r.namespace) "name" .) -}}
+{{- end -}}
+{{- end -}}
+{{- range $_, $r := .Values.config.agentBackends -}}
+{{- range $h := (default (list) (dig "headers" (list) (default (dict) $r.spec))) -}}
+{{- with dig "valueSecretRef" "name" "" $h -}}
+{{- include "agentkourier.addSecret" (dict "found" $found "namespace" (default $.Release.Namespace $r.namespace) "name" .) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if eq .Values.store.type "postgres" -}}
+{{- include "agentkourier.addSecret" (dict "found" $found "namespace" $.Release.Namespace "name" .Values.store.postgres.dsnSecret.name) -}}
+{{- end -}}
+{{- /* The chart cannot see a ChatConnection that is applied by hand, but it knows which one the broker serves, and a broker that cannot read
+       its Secret exits at start. A reference is namespace-local, so the Secret is in the connection's namespace: config.chatConnectionSecret,
+       or the connection's own name when that is empty. A connection that config.chatConnections renders is granted by its own
+       credentialsSecretRef above, and a derived name would only add a second Secret to the grant. */ -}}
+{{- if .Values.config.chatConnection -}}
+{{- $served := include "agentkourier.chatConnection" . -}}
+{{- $rendered := false -}}
+{{- range $name, $r := .Values.config.chatConnections -}}
+{{- if eq $served (printf "%s/%s" (default $.Release.Namespace $r.namespace) $name) -}}
+{{- $rendered = true -}}
+{{- end -}}
+{{- end -}}
+{{- if not $rendered -}}
+{{- $parts := splitList "/" $served -}}
+{{- include "agentkourier.addSecret" (dict "found" $found "namespace" (first $parts) "name" (default (last $parts) .Values.config.chatConnectionSecret)) -}}
+{{- end -}}
+{{- end -}}
+{{- range $ns, $names := .Values.rbac.secretNames -}}
+{{- range $name := $names -}}
+{{- include "agentkourier.addSecret" (dict "found" $found "namespace" $ns "name" $name) -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $found -}}
+{{- end -}}
+
+{{/* Adds a Secret name to the list of its namespace in a dict (found), keeping each list sorted and without repeats. Prints nothing. */}}
+{{- define "agentkourier.addSecret" -}}
+{{- $names := default (list) (get .found .namespace) -}}
+{{- $_ := set .found .namespace (append $names .name | uniq | sortAlpha) -}}
+{{- end -}}
+
+{{/*
+One Agent Kourier resource, as a file of the config directory or, with labels, as a custom resource. Called with the kind, the name, the
+entry, the root and optionally labels. The files do not carry the labels: they stay as they always were.
+*/}}
 {{- define "agentkourier.resource" -}}
 apiVersion: agentkourier.dev/v1alpha1
 kind: {{ .kind }}
 metadata:
   name: {{ .name }}
   namespace: {{ default .root.Release.Namespace .entry.namespace }}
+  {{- if .labels }}
+  labels:
+    {{- include "agentkourier.labels" .root | nindent 4 }}
+  {{- end }}
 spec:
   {{- required (printf "config entry %s %q needs a spec" .kind .name) .entry.spec | toYaml | nindent 2 }}
 {{- end -}}

@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,13 +13,16 @@ import (
 
 	"go.uber.org/goleak"
 
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // drainConfig is a Config for Run: a ticker too slow to matter unless a test sets it.
 func drainConfig(st store.Outbox, p *poster) outbox.Config {
-	return outbox.Config{Store: st, Platform: p, Now: func() time.Time { return t0 }, CallTimeout: time.Second, Interval: time.Hour}
+	return outbox.Config{Store: st, Platforms: chattest.Same[outbox.Platform](p), Now: func() time.Time { return t0 }, CallTimeout: time.Second, Interval: time.Hour}
 }
 
 // start runs o.Run until the end of the test, which checks that Run returned the context's error.
@@ -37,17 +39,6 @@ func start(t *testing.T, o *outbox.Outbox) {
 	})
 }
 
-// eventually fails the test if cond does not hold within thirty seconds: the deadline is only how long a condition that
-// will never hold is waited for, and is long, since a loaded machine can starve the goroutine that makes it hold.
-func eventually(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	for deadline := time.Now().Add(30 * time.Second); !cond(); time.Sleep(time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-	}
-}
-
 func ref(st store.Outbox, id string) string {
 	row, _ := st.GetOutbox(context.Background(), id)
 	return row.MessageRef
@@ -56,7 +47,7 @@ func ref(st store.Outbox, id string) string {
 // TestEnqueueIsOneLocalWrite: no Slack call, one row for one ID, and no blocking when nothing is
 // draining (a notice is enqueued on Slack's acknowledgement path).
 func TestEnqueueIsOneLocalWrite(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	p := &poster{}
 	o := mustNew(t, drainConfig(st, p))
 	done := make(chan struct{})
@@ -86,7 +77,7 @@ func TestEnqueueIsOneLocalWrite(t *testing.T) {
 // crash left; then delivers an enqueued one on its signal. Both are looked up first, and the one
 // Slack already has is not posted again.
 func TestRunDeliversWhatWasLeftAndWhatIsEnqueued(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	left := store.OutboxEntry{ID: "left/notice", EventID: "left", Role: store.OutboxNotice, Channel: "C1", CreatedAt: t0, Payload: neutral("hi")}
 	if _, err := st.CreateOutbox(t.Context(), left); err != nil {
 		t.Fatal(err)
@@ -96,7 +87,7 @@ func TestRunDeliversWhatWasLeftAndWhatIsEnqueued(t *testing.T) {
 	p := &poster{found: map[string]string{"left/notice": "55.5"}}
 	o := mustNew(t, drainConfig(st, p))
 	start(t, o) // nothing is enqueued yet, so only the drain at start can deliver the row a crash left
-	eventually(t, "the drain at start", func() bool { return ref(st, "left/notice") == "55.5" })
+	testutil.Eventually(t, "the drain at start", func() bool { return ref(st, "left/notice") == "55.5" })
 
 	if _, err := st.CreateOutbox(t.Context(), stream); err != nil {
 		t.Fatal(err)
@@ -106,7 +97,7 @@ func TestRunDeliversWhatWasLeftAndWhatIsEnqueued(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	eventually(t, "the enqueued post", func() bool { return ref(st, "ev1/reply") != "" })
+	testutil.Eventually(t, "the enqueued post", func() bool { return ref(st, "ev1/reply") != "" })
 	if posts, finds := p.counts(); posts != 1 || finds != 2 || ref(st, "s1/reply") != "" {
 		t.Fatalf("posts = %d, finds = %d, stream ref %q; want 1 post, 2 finds, and the stream left alone", posts, finds, ref(st, "s1/reply"))
 	}
@@ -114,7 +105,7 @@ func TestRunDeliversWhatWasLeftAndWhatIsEnqueued(t *testing.T) {
 
 // TestRunEndsWithItsContext: Run returns once its context ends, and leaves no goroutine.
 func TestRunEndsWithItsContext(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	before := goleak.IgnoreCurrent()
 	o := mustNew(t, drainConfig(st, &poster{}))
 	ctx, cancel := context.WithCancel(t.Context())
@@ -143,7 +134,7 @@ func (s *syncBuffer) String() string { s.mu.Lock(); defer s.mu.Unlock(); return 
 // TestAFailingRowBacksOff: a post that fails is retried, after a lookup, on a delay that doubles
 // to a cap, and a row that keeps failing is logged at Warn without its text.
 func TestAFailingRowBacksOff(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	var clock atomic.Int64
 	p := &poster{}
 	var logs syncBuffer
@@ -179,7 +170,7 @@ func TestAFailingRowBacksOff(t *testing.T) {
 	}
 	for i, s := range steps {
 		clock.Add(int64(s.advance))
-		eventually(t, "the step's retry", func() bool { return posts() >= s.posts && warns() >= s.warns })
+		testutil.Eventually(t, "the step's retry", func() bool { return posts() >= s.posts && warns() >= s.warns })
 		if s.hold {
 			time.Sleep(50 * time.Millisecond) // many ticks: none may retry
 		}
@@ -187,7 +178,7 @@ func TestAFailingRowBacksOff(t *testing.T) {
 			t.Fatalf("step %d: %d posts; want %d", i, got, s.posts)
 		}
 	}
-	eventually(t, "the ref", func() bool { return ref(st, "ev1/reply") != "" })
+	testutil.Eventually(t, "the ref", func() bool { return ref(st, "ev1/reply") != "" })
 	if _, finds := p.counts(); finds != 4 {
 		t.Errorf("finds = %d; want 4, one before each post", finds)
 	}
@@ -199,7 +190,7 @@ func TestAFailingRowBacksOff(t *testing.T) {
 // TestEnqueueRefusesEmptyContent: a notice whose text came out empty must fail where it is
 // enqueued, not become a row that is never delivered and holds its ID.
 func TestEnqueueRefusesEmptyContent(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	o := mustNew(t, drainConfig(st, &poster{}))
 	if id, err := o.Enqueue(t.Context(), outbox.Post{Source: "n1", Role: store.OutboxNotice, Channel: "C1"}); !errors.Is(err, store.ErrInvalid) || id != "" {
 		t.Fatalf("Enqueue with no content = %q, %v; want ErrInvalid", id, err)
@@ -212,7 +203,7 @@ func TestEnqueueRefusesEmptyContent(t *testing.T) {
 // TestASignalDuringADrainIsNotLost holds a drain inside a post and enqueues another row: the drain
 // that follows must take it, though the ticker is an hour away.
 func TestASignalDuringADrainIsNotLost(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	inPost, release := make(chan struct{}), make(chan struct{})
 	var first atomic.Bool
 	p := &poster{onPost: func(context.Context) error {
@@ -232,5 +223,5 @@ func TestASignalDuringADrainIsNotLost(t *testing.T) {
 		t.Fatal(err)
 	}
 	close(release)
-	eventually(t, "the row enqueued during the drain", func() bool { return ref(st, "ev2/reply") != "" })
+	testutil.Eventually(t, "the row enqueued during the drain", func() bool { return ref(st, "ev2/reply") != "" })
 }

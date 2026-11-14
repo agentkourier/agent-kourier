@@ -36,12 +36,22 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "source": {"enum": ["files", "crds"], "description": "crds (the default): Binding, AgentBackend and ChatConnection custom resources, read from the cluster; files: the ConfigMap route, for a proof of concept"},
+        "chatConnection": {"type": "string", "pattern": "^(([a-z0-9]([-a-z0-9]*[a-z0-9])?)/)?[a-z0-9]([-a-z0-9.]*[a-z0-9])?$|^$", "maxLength": 253, "description": "with source crds: the broker's own ChatConnection, namespace/name or name (in the release namespace); empty with connectionNamespaces or connectionNamespaceSelector set is a broker with no connection of its own, and empty with both unset is the one entry of chatConnections, or with no entry a broker that serves every namespace"},
+        "chatConnectionSecret": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$|^$", "maxLength": 253, "description": "with source crds: the name of the Secret the served ChatConnection reads, in the connection's namespace, when it is not named like the connection; empty is the connection's own name"},
+        "connectionNamespaces": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", "maxLength": 63}, "description": "with source crds: the namespaces whose ChatConnections this broker serves besides its own, if it has one (the admission list), read at start; each a namespace name"},
+        "connectionNamespaceSelector": {"type": ["object", "null"], "additionalProperties": false, "properties": {"matchLabels": {"type": "object", "minProperties": 1, "patternProperties": {"^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$": {"$ref": "#/definitions/labelValue"}}, "additionalProperties": false}, "matchExpressions": {"type": "array", "minItems": 1, "items": {"$ref": "#/definitions/labelSelectorRequirement"}}}, "description": "with source crds: a label selector (matchLabels, matchExpressions) on namespaces whose ChatConnections this broker serves besides its own and the list's, read live; {} selects every namespace, null (the default) is unset"},
         "existingConfigMap": {"type": "string"},
         "agentBackends": {"$ref": "#/definitions/resources"},
         "chatConnections": {"$ref": "#/definitions/resources"},
         "bindings": {"$ref": "#/definitions/resources"},
         "rollOnChange": {"type": "boolean"}
       }
+    },
+    "crds": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"install": {"type": ["boolean", "null"], "description": "render the CustomResourceDefinitions of the three kinds, kept on uninstall; unset, it follows the route (true with config.source crds, false with files), and an explicit value wins: true with files is the first step of a move, false with crds is for an installer that may not create a CRD"}}
     },
     "store": {
       "type": "object",
@@ -107,7 +117,15 @@
     "rbac": {
       "type": "object",
       "additionalProperties": false,
-      "properties": {"create": {"type": "boolean"}, "secretNamespaces": {"type": "array", "items": {"type": "string"}}}
+      "properties": {
+        "create": {"type": "boolean"},
+        "secretNamespaces": {"type": "array", "items": {"type": "string"}},
+        "secretNames": {
+          "type": "object",
+          "description": "with source crds: namespace to the names of the Secrets to grant list and watch on, by resourceNames",
+          "additionalProperties": {"type": "array", "items": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$", "maxLength": 253}}
+        }
+      }
     },
     "service": {
       "type": "object",
@@ -188,6 +206,18 @@
     }
   },
   "definitions": {
+    "labelKey": {"type": "string", "maxLength": 317, "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$", "description": "a label key: an optional DNS subdomain prefix and a slash, then a name of at most 63 characters"},
+    "labelValue": {"type": "string", "pattern": "^([A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?)?$", "description": "a label value: at most 63 characters, empty allowed"},
+    "labelSelectorRequirement": {
+      "description": "one matchExpressions entry: In and NotIn need values, Exists and DoesNotExist take none",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "operator"],
+      "properties": {"key": {"$ref": "#/definitions/labelKey"}, "operator": {"enum": ["In", "NotIn", "Exists", "DoesNotExist"]}, "values": {"type": "array", "items": {"$ref": "#/definitions/labelValue"}}},
+      "if": {"properties": {"operator": {"enum": ["In", "NotIn"]}}},
+      "then": {"required": ["values"], "properties": {"values": {"minItems": 1}}},
+      "else": {"properties": {"values": {"maxItems": 0}}}
+    },
     "resources": {
       "description": "Agent Kourier resources keyed by name: each has a spec, and optionally a namespace (default: the release's)",
       "type": "object",

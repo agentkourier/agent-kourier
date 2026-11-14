@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -26,6 +27,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/testhooks"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 	"github.com/agentkourier/agent-kourier/test/stubagent"
 )
@@ -250,7 +252,8 @@ func tapHandOffAlive() bool {
 
 // A pause the intake cannot take up is in the tap's hands, retrying, when the shutdown comes. The tap is
 // stopped first in the interactions' step, so that the intake is handed no more and nothing is left
-// retrying, then the worker and the rest in the reverse order of their start, and no goroutine is left
+// retrying, then the worker and the rest in the reverse order of their start (the verification of the Bindings, started before the
+// interactions, among the loops that stop after them), and no goroutine is left
 // (the package's goleak).
 func TestRunStopsTheTapFirstWithAPauseInFlight(t *testing.T) {
 	w := askWorld(t)
@@ -266,11 +269,7 @@ func TestRunStopsTheTapFirstWithAPauseInFlight(t *testing.T) {
 	w.cfg.shutdownTrace = trace.record
 	r := start(t, w.cfg)
 	w.mention(t, r)
-	for deadline := time.Now().Add(15 * time.Second); !tapHandOffAlive(); time.Sleep(10 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the pause never reached the tap's hand-off")
-		}
-	}
+	testutil.Eventually(t, "the pause never reached the tap's hand-off", tapHandOffAlive, testutil.Within(15*time.Second), testutil.Every(10*time.Millisecond))
 
 	r.cancel()
 	if err := r.wait(); err != nil {
@@ -280,7 +279,7 @@ func TestRunStopsTheTapFirstWithAPauseInFlight(t *testing.T) {
 	if !aliveAtStep.Load() {
 		t.Error("no hand-off was in flight when the interactions' step began (the control: the scan finds it)")
 	}
-	if want := "tap,worker,sweeper,replacer,backstop,retention,store-retention,trigger-digest,trigger-threads"; notes.got() != want {
+	if want := "tap,worker,sweeper,replacer,backstop,retention,binding-verification,store-retention,trigger-digest,trigger-threads"; notes.got() != want {
 		t.Errorf("the interactions stopped as %s, want %s", notes.got(), want)
 	}
 	if tapHandOffAlive() {
@@ -339,6 +338,83 @@ func TestRunPostsTheAgentsAnswerThroughItsOwnRenderer(t *testing.T) {
 	w.waitFor(t, "the agent's answer", func(m fakeslack.Message) bool { return strings.Contains(m.Text, "the answer") && !m.Streaming })
 }
 
+// mentionAudit is a store that keeps the audit rows of mentions.
+type mentionAudit struct {
+	store.Audit
+	mu   sync.Mutex
+	rows []store.AuditEntry
+}
+
+func (a *mentionAudit) AppendAudit(ctx context.Context, e store.AuditEntry) error {
+	if strings.HasPrefix(e.Subject, "mention ") {
+		a.mu.Lock()
+		a.rows = append(a.rows, e)
+		a.mu.Unlock()
+	}
+	return a.Audit.AppendAudit(ctx, e)
+}
+
+func (a *mentionAudit) outcomes() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]string, len(a.rows))
+	for i, e := range a.rows {
+		out[i] = e.Outcome
+	}
+	return out
+}
+
+// A reply that names a person the Binding declares reaches Slack as written, and is followed in the thread by a message of
+// context lines that mention the person, through Run's own renderer and outbox, and the audit log says so. The prompt told
+// the agent the name.
+func TestRunNotifiesADeclaredPersonAfterTheReply(t *testing.T) {
+	w := newSlackWorld(t, "xoxb-fake-bot")
+	w.cfg.sink = nil
+	binding := filepath.Join(w.cfg.ConfigDir, "binding.yaml")
+	raw, err := os.ReadFile(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withMentions := strings.Replace(string(raw), "\n  chat:\n", "\n  chat:\n    mentions:\n      - { name: payments-owner, user: U0SAM }\n", 1)
+	if withMentions == string(raw) {
+		t.Fatal("the example Binding has no chat block to add mentions to")
+	}
+	if err := os.WriteFile(binding, []byte(withMentions), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var prompt atomic.Value
+	w.stub.Agent("kagent", "k8s-agent").Reply(func(p string) []stubagent.Step {
+		prompt.Store(p)
+		return []stubagent.Step{stubagent.Text("ask @payments-owner, not @here")}
+	})
+	aud := &mentionAudit{}
+	w.cfg.auditStore = func(s store.Audit) store.Audit { aud.Audit = s; return aud }
+	r := start(t, w.cfg)
+
+	w.mention(t, r)
+
+	note := w.waitFor(t, "the mention", func(m fakeslack.Message) bool { return strings.Contains(string(m.Blocks), "@U0SAM") })
+	if strings.Contains(note.Text, "@U0SAM") || strings.Contains(string(note.Blocks), `"type":"markdown"`) || strings.Contains(string(note.Blocks), `"type":"rich_text"`) {
+		t.Errorf("the mention = %q, blocks %s; want context lines, and no token in its text", note.Text, note.Blocks)
+	}
+	thread := w.fake.Thread("C0123456789", note.ThreadTS)
+	if at := slices.IndexFunc(thread, func(m fakeslack.Message) bool { return strings.Contains(m.Text, "ask @payments-owner") }); at < 0 || thread[len(thread)-1].TS != note.TS {
+		t.Errorf("thread = %+v; want the reply, and the mention last", thread)
+	}
+	for _, m := range thread {
+		if m.TS != note.TS && strings.Contains(string(m.Blocks)+m.Text, "@U0SAM") {
+			t.Errorf("another message holds the token: %+v", m)
+		}
+	}
+	if got, _ := prompt.Load().(string); !strings.Contains(got, "You may use these names: payments-owner.") || strings.Contains(got, "U0SAM") {
+		t.Errorf("the prompt = %q; want the name and no user ID", got)
+	}
+	testutil.Eventually(t, "the audit row", func() bool { return len(aud.outcomes()) > 0 }, testutil.Within(10*time.Second))
+	if got := aud.outcomes(); len(got) != 1 || !strings.Contains(got[0], "name=payments-owner user=U0SAM") {
+		t.Errorf("audit rows = %q; want one for the person", got)
+	}
+}
+
 // A thread that has expired is told so by the notice the intake raises, which Run connects to the same
 // sink as the turns' output: here the notice is what the test's sink is handed.
 func TestRunConnectsTheIntakesNoticesToTheSink(t *testing.T) {
@@ -372,11 +448,8 @@ func TestRunConnectsTheIntakesNoticesToTheSink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for deadline := time.Now().Add(10 * time.Second); !w.sink.noticed(session.NoticeExpired); time.Sleep(20 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the intake's expiry notice never reached the sink: IntakeConfig.Notice is not connected")
-		}
-	}
+	testutil.Eventually(t, "the intake's expiry notice never reached the sink: IntakeConfig.Notice is not connected",
+		func() bool { return w.sink.noticed(session.NoticeExpired) }, testutil.Within(10*time.Second), testutil.Every(20*time.Millisecond))
 }
 
 func TestRunTakesAMentionFromSlackThroughTheSessionToTheAgent(t *testing.T) {
@@ -440,11 +513,8 @@ func TestRunReactsToAMentionWithThePlatformsOwnReactionWhenTheBindingNamesNone(t
 
 func waitConnected(t *testing.T, f *fakeslack.Server) {
 	t.Helper()
-	for deadline := time.Now().Add(10 * time.Second); f.Connections() == 0; time.Sleep(10 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("Agent Kourier never connected to Slack")
-		}
-	}
+	testutil.Eventually(t, "Agent Kourier never connected to Slack", func() bool { return f.Connections() != 0 },
+		testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 }
 
 // A rejected token ends Run with ErrSlackAuth, which cmd/agent-kourier exits 1 on: no retry can mend it.
@@ -472,4 +542,40 @@ func TestSlackConfigTakesItsAPIURLFromTestHooksWhenSet(t *testing.T) {
 	if got := slackConfig(conn, nil).APIURL; got != "" {
 		t.Errorf("APIURL = %q with %s empty, want Slack's own (empty)", got, testhooks.SlackAPIURLEnv)
 	}
+}
+
+// A socket that Slack drops, and cannot be opened again for a while, leaves the broker up with the gauge at 0 for as long
+// as Slack is out of reach (the broker's own run found the loss: RunPlatform waits and runs the adapter again), and the gauge goes
+// back to 1 when the connection is back, which then delivers a mention to a turn as before.
+func TestRunShowsTheConnectionDownWhileASocketCannotBeReopenedAndUpAgain(t *testing.T) {
+	const up = `agentkourier_chat_connected{connection="agent-kourier-system/slack-main"} `
+	w := newSlackWorld(t, "xoxb-fake-bot")
+	gate := &reconnectGate{inner: w.fake}
+	srv := httptest.NewServer(gate)
+	t.Cleanup(srv.Close)
+	t.Setenv(testhooks.SlackAPIURLEnv, srv.URL+"/")
+	r := start(t, w.cfg)
+	r.waitMetric(up + "1")
+
+	gate.down.Store(true)
+	if _, err := w.fake.DropConnections(w.fake.Apps()[0].AppID); err != nil {
+		t.Fatal(err)
+	}
+	r.waitMetric(up + "0")
+	for deadline := time.Now().Add(1500 * time.Millisecond); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if _, body := r.get("/metrics"); !strings.Contains(body, up+"0\n") {
+			t.Fatalf("the gauge left 0 while Slack could not be reached:\n%s", grep(body, "agentkourier_chat_"))
+		}
+	}
+	select {
+	case err := <-r.done:
+		r.done <- err
+		t.Fatalf("Run returned %v; a connection that is lost and not rejected is retried", err)
+	default:
+	}
+
+	gate.down.Store(false)
+	r.waitMetric(up + "1")
+	w.mention(t, r)
+	<-w.sink.seen
 }

@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"maps"
 	"sync"
 	"sync/atomic"
@@ -22,6 +20,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 var (
@@ -41,6 +40,7 @@ type spyStore struct {
 	onSet      func()           // runs when a task is cleared
 	onClearAck func()           // runs before ClearSessionAcknowledgment updates the active task turn
 	onNext     func()           // runs before NextReply reads the queue
+	onEnqueued func()           // runs after EnqueueReply wrote a row
 	gate       chan struct{}    // when set, the first GetSession waits for a second, or 200 ms
 	reads      int
 }
@@ -147,7 +147,14 @@ func (s *spyStore) EnqueueReply(ctx context.Context, r store.Reply) (bool, error
 	if err := s.failOnce("enqueue"); err != nil {
 		return false, err
 	}
-	return s.Store.EnqueueReply(ctx, r)
+	enqueued, err := s.Store.EnqueueReply(ctx, r)
+	s.mu.Lock()
+	hook := s.onEnqueued
+	s.mu.Unlock()
+	if hook != nil && enqueued {
+		hook()
+	}
+	return enqueued, err
 }
 
 type fixture struct {
@@ -173,7 +180,11 @@ type fixture struct {
 	textReplies      bool
 	feedback         bool // the Backend has feedback.enabled
 	output           v1alpha1.OutputMode
+	progress         v1alpha1.ProgressMode
 	threadReplies    v1alpha1.ThreadReplies // the Binding's chat.threadReplies; empty is all
+	mentionPrompt    string                 // the line a session's first prompt ends with; empty is none
+	mentions         []v1alpha1.ChatMention // the Binding's chat.mentions
+	maxMentions      int                    // the Binding's chat.maxMentionsPerTurn
 	ackConfigured    bool
 	ackEnabled       bool
 	ackEmoji         string
@@ -210,7 +221,7 @@ func (f *fixture) Backend(name string) (Backend, error) {
 	if f.real != nil {
 		ag = f.real
 	}
-	b := Backend{AgentName: "kagent/agent-1", Dialect: f.dialect(), ThreadTTL: ttl, Agent: ag, Attribute: f.attr, Platform: f.platform, Rejected: f.reject, Identity: "secret:ns/token", Output: f.output, Feedback: f.feedback, ThreadReplies: f.threadReplies, AcknowledgmentConfigured: f.ackConfigured, AcknowledgmentEnabled: f.ackEnabled, AcknowledgmentEmoji: f.ackEmoji}
+	b := Backend{AgentName: "kagent/agent-1", Dialect: f.dialect(), ThreadTTL: ttl, Agent: ag, Attribute: f.attr, Platform: f.platform, Rejected: f.reject, Identity: "secret:ns/token", Output: f.output, Progress: f.progress, Feedback: f.feedback, ThreadReplies: f.threadReplies, Mentions: f.mentions, MaxMentions: f.maxMentions, MentionPrompt: f.mentionPrompt, AcknowledgmentConfigured: f.ackConfigured, AcknowledgmentEnabled: f.ackEnabled, AcknowledgmentEmoji: f.ackEmoji}
 	if f.noRejected {
 		b.Rejected = nil
 	}
@@ -227,14 +238,11 @@ func (f *fixture) dialect() string {
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	s, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s := sqlitetest.Open(t)
 	f := &fixture{t: t, st: &spyStore{Store: s, fail: map[string]error{}, stuck: map[string]error{}}, raw: s, qs: &spyQuestions{Questions: s}, agent: newFakeAgent()}
 	f.now.Store(t0.UnixNano())
-	f.m, err = New(Config{Store: f.st, Questions: f.qs, TextReply: f.decideTextReply, Bindings: f, Audit: f, Users: idOnly{}, Sink: quietSink{}, ThreadContext: NoThreadContext, OnTurnEnd: noTurnEnd, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: func() time.Time { return time.Unix(0, f.now.Load()).UTC() }})
+	var err error
+	f.m, err = New(Config{Store: f.st, Questions: f.qs, TextReply: f.decideTextReply, Bindings: f, Audit: f, Users: idOnly{}, Sink: quietSink{}, ThreadContext: NoThreadContext, OnTurnEnd: noTurnEnd, Logger: testutil.DiscardLogger(), Now: func() time.Time { return time.Unix(0, f.now.Load()).UTC() }})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -252,7 +260,7 @@ func (quietSink) Notice(context.Context, Key, Notice)         {}
 // idOnly resolves every user to their ID alone, which is what a turn is attributed by when the platform knows no one.
 type idOnly struct{}
 
-func (idOnly) ResolveUser(_ context.Context, id string) (dialect.User, error) {
+func (idOnly) ResolveUser(_ context.Context, _, id string) (dialect.User, error) {
 	return dialect.User{ID: id}, nil
 }
 

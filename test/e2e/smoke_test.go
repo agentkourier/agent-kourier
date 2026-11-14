@@ -57,7 +57,7 @@ func TestSmoke(t *testing.T) {
 	if err := CheckTier(env.Tier); err != nil {
 		t.Fatal(err)
 	}
-	deployed, err := pods.List(ctx, kube.AgentKourierNamespace, "app.kubernetes.io/name=agent-kourier")
+	deployed, err := pods.List(ctx, kube.AgentKourierNamespace, agentKourierPods)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestSmoke(t *testing.T) {
 		t.Fatal("the tier has no Agent Kourier pod: its Deployment is missing or was rejected")
 	}
 	err = Wait(ctx, 2*time.Minute, "Agent Kourier to connect to the fake Slack", func(ctx context.Context) (bool, error) {
-		n, err := sl.Connections(ctx)
+		n, err := sl.AppConnections(ctx, AppPlatform.AppID)
 		return n > 0, err
 	})
 	if err != nil {

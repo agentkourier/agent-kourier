@@ -11,6 +11,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 func textPauseFixture(t *testing.T) (*fixture, *fakeSink) {
@@ -296,12 +297,12 @@ func TestQueuedTextReplyAnswersPauseAndLaterRepliesRemainTurns(t *testing.T) {
 	if _, err := f.submit(inbound("2")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "text answer", func() bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return len(f.agent.answers) == 1 })
+	testutil.Eventually(t, "text answer", func() bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return len(f.agent.answers) == 1 })
 	if _, err := f.submit(inbound("3")); err != nil {
 		t.Fatal(err)
 	}
 	close(hold)
-	eventually(t, "second normal turn", func() bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return len(f.agent.msgs) == 2 })
+	testutil.Eventually(t, "second normal turn", func() bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return len(f.agent.msgs) == 2 })
 	f.retired(t)
 	if decided.Load() != 1 {
 		t.Fatalf("text decisions=%d", decided.Load())
@@ -341,7 +342,7 @@ func TestTextReplyWaitsForPromptWithoutLosingQueue(t *testing.T) {
 	if _, err := f.submit(inbound("2")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "retried answer", func() bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return len(f.agent.answers) == 1 })
+	testutil.Eventually(t, "retried answer", func() bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return len(f.agent.answers) == 1 })
 	f.retired(t)
 	if tries.Load() != 3 {
 		t.Fatalf("tries=%d", tries.Load())
@@ -375,11 +376,11 @@ func TestTextReplyDrainsRejectedRepliesWhenWakesCoalesce(t *testing.T) {
 		}
 	}
 	ready.Store(true)
-	eventually(t, "rejected queue drained", func() bool {
+	testutil.Eventually(t, "rejected queue drained", func() bool {
 		_, err := f.st.NextReply(t.Context(), key)
 		return consumed.Load() == 3 && err != nil
 	})
-	eventually(t, "consumed replies released", func() bool {
+	testutil.Eventually(t, "consumed replies released", func() bool {
 		f.m.mu.Lock()
 		defer f.m.mu.Unlock()
 		return len(f.m.fresh) == 0
@@ -416,7 +417,7 @@ func TestRunnerWaitsForBlockingTextHandlerAndClearsReaction(t *testing.T) {
 		t.Fatal("answer sent before readiness")
 	}
 	close(ready)
-	eventually(t, "answer after readiness", func() bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return len(f.agent.answers) == 1 })
+	testutil.Eventually(t, "answer after readiness", func() bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return len(f.agent.answers) == 1 })
 	f.retired(t)
 	if got := sink.dequeued(); len(got) != 1 || got[0] != queuedID(in.MessageID)+" "+in.MessageRef {
 		t.Fatalf("dequeued notices = %v", got)
@@ -783,7 +784,7 @@ func TestPinnedReplyToAClosedQuestionIsConsumedAndBlocksNothing(t *testing.T) {
 				t.Fatalf("Submit = %+v, %v; want Accepted", res, err)
 			}
 		}
-		eventually(t, "the pinned reply to be consumed", func() bool { return consumed.Load() == 1 })
+		testutil.Eventually(t, "the pinned reply to be consumed", func() bool { return consumed.Load() == 1 })
 		if err := f.m.Cancel(t.Context(), key, "t1", "the question timed out"); err != nil {
 			t.Fatal(err)
 		}

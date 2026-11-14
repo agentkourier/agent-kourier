@@ -14,6 +14,7 @@ package render
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"sort"
 	"strings"
 
@@ -37,11 +38,13 @@ const MaxFallback = 1000
 // NoOutput is what a message says when its turn ended with nothing to show.
 const NoOutput = "(no output)"
 
+// MaxNoticeDetail is the most of a notice's detail, in UTF-16 units, that a thread shows: the rest is cut and marked. A fixed sentence that
+// Agent Kourier means to be read whole is held to it by a test of its own.
+const MaxNoticeDetail = 200
+
 const (
 	maxToolName = 64  // units of a tool name in a status line
 	maxToolArgs = 160 // units of the argument summary in a status line
-
-	maxNoticeDetail = 200 // units of a notice's detail
 )
 
 // Body returns the text of a turn: each artifact's latest text, in the order the artifacts first appeared, one
@@ -80,8 +83,19 @@ func Tool(name string, args map[string]any) chat.ToolLine {
 	}
 }
 
-// ToolText is the status line as plain text, "Calling name(summary)", for a message that has nothing but it to say.
-func ToolText(t chat.ToolLine) string { return "Calling " + t.Name + "(" + t.Summary + ")" }
+// ToolText is the status line as plain text, for a message that has nothing but it to say: "Calling name(summary)"
+// while the call is under way, "Ran name(summary)" once it has its result, and "name(summary) failed" if the
+// result reports a failure.
+func ToolText(t chat.ToolLine) string {
+	call := t.Name + "(" + t.Summary + ")"
+	switch t.State {
+	case chat.ToolRan:
+		return "Ran " + call
+	case chat.ToolFailed:
+		return call + " failed"
+	}
+	return "Calling " + call
+}
 
 // toolSummary is the arguments, already redacted one by one, as "name=json, ...", redacted again as a whole for
 // what only shows there. It is cut to redact.MaxBytes at a word first: each argument was bounded, but a call may
@@ -110,17 +124,21 @@ func jsonValue(v any) string {
 	return strings.TrimSpace(b.String())
 }
 
-// Turn is the message of a turn that has not ended, or has: the text so far as its body, and, while tool is not nil,
-// the status line of the call under way. The text is bounded at what the platform shows in a body (caps), and its
-// plain fallback at MaxFallback or, with no text, is the status line. ok is false if there is nothing to show yet.
-func Turn(events []agent.TextEvent, tool *agent.ToolCallEvent, caps chat.Caps) (m chat.Message, ok bool) {
+// Turn is the message of a turn that has not ended, or has: the text so far as its body and, if tool is not nil, the
+// status line of the latest call, in the state given (chat.ToolCalling while it is under way, else how it ended). A
+// call under way has its line beside the text. A call that has its result has its line only while there is no text,
+// so that a returned call is not left standing as "Calling" and does not sit under the text that followed it. The text
+// is bounded at what the platform shows in a body (caps), and its plain fallback at MaxFallback or, with no text, is the
+// status line. ok is false if there is nothing to show yet.
+func Turn(events []agent.TextEvent, tool *agent.ToolCallEvent, state chat.ToolState, caps chat.Caps) (m chat.Message, ok bool) {
 	body := Body(events, caps.Limit(chat.WhereBody))
 	m.Fallback = Body(events, MaxFallback)
 	if body != "" {
 		m.Parts = append(m.Parts, chat.Body{Markdown: body})
 	}
-	if tool != nil {
+	if tool != nil && (state == chat.ToolCalling || body == "") {
 		line := Tool(tool.Name, tool.Args)
+		line.State = state
 		m.Parts = append(m.Parts, line)
 		if m.Fallback == "" {
 			m.Fallback = ToolText(line)
@@ -129,10 +147,22 @@ func Turn(events []agent.TextEvent, tool *agent.ToolCallEvent, caps chat.Caps) (
 	return m, len(m.Parts) > 0
 }
 
+// WithStatus is m with a line of small print under its parts, the activity indicator of a message that is updated:
+// Working… or its counts. Where m has no text, the line is its fallback too. m is not changed.
+func WithStatus(m chat.Message, line string) chat.Message {
+	m.Parts = append(slices.Clone(m.Parts), chat.Context{Text: line})
+	if m.Fallback == "" {
+		m.Fallback = line
+	}
+	return m
+}
+
 // Nothing is the message of a turn that ended with nothing to show: it is there so that a tool status line is not
-// left standing as if the agent were still at work.
+// left standing as if the agent were still at work. It is a fallback and no Body, because it is no text of the agent's: a platform
+// that keeps a message's text from being replaced with no text (chat.ErrWouldDropText) must let a later attempt's cards replace
+// this, and must not let this replace text an earlier attempt wrote.
 func Nothing() chat.Message {
-	return chat.Message{Fallback: NoOutput, Parts: []chat.Part{chat.Body{Markdown: NoOutput}}}
+	return chat.Message{Fallback: NoOutput}
 }
 
 // Notice is the message of a notice: fixed wording that Agent Kourier wrote, and, if there is one, a short detail, which
@@ -140,7 +170,7 @@ func Nothing() chat.Message {
 func Notice(fixed, detail string) chat.Message {
 	text := fixed
 	if detail != "" {
-		text += " " + chat.Truncate(chat.Clean(detail, true), maxNoticeDetail)
+		text += " " + chat.Truncate(chat.Clean(detail, true), MaxNoticeDetail)
 	}
 	return chat.Message{Fallback: text}
 }

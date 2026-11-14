@@ -23,7 +23,7 @@ import (
 // fake says so), and which codes a message that is gone gives (the fake says message_not_found).
 func (c *Client) React(ctx context.Context, channel, ts, name string) (telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.React")
-	defer func() { finishChat(ctx, op, "React", telemetryErr) }()
+	defer func() { c.finishChat(ctx, op, "React", telemetryErr) }()
 	if channel == "" || ts == "" || name == "" {
 		return fmt.Errorf("slack react: the channel, ts and name are required: %w", store.ErrInvalid)
 	}
@@ -49,7 +49,7 @@ func (c *Client) React(ctx context.Context, channel, ts, name string) (telemetry
 // says so), and which codes a message that is gone gives (the fake says message_not_found).
 func (c *Client) Unreact(ctx context.Context, channel, ts, name string) (telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.Unreact")
-	defer func() { finishChat(ctx, op, "Unreact", telemetryErr) }()
+	defer func() { c.finishChat(ctx, op, "Unreact", telemetryErr) }()
 	if channel == "" || ts == "" || name == "" {
 		return fmt.Errorf("slack unreact: the channel, ts and name are required: %w", store.ErrInvalid)
 	}

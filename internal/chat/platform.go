@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
@@ -20,8 +21,8 @@ type Inbound struct {
 	Text string
 	// Mentioned says the message mentions Agent Kourier. Direct says it is in a conversation of its own with
 	// Agent Kourier, a direct message, where no mention is needed. The adapter decides both, so the routing
-	// that uses them knows nothing of a platform's syntax. A bot's message is never Mentioned: only a
-	// person's mention starts a session (D36).
+	// that uses them knows nothing of a platform's syntax. A bot's message is Mentioned only when the
+	// platform says the bot mentioned Agent Kourier; its other event of the same post is not (D36).
 	Mentioned, Direct bool
 	// Bot is set when a bot posted the message, and only then. A platform forwards a bot's message only
 	// if the Sink takes it (BotFilter), and never Agent Kourier's own.
@@ -74,18 +75,19 @@ func (m Inbound) Field(f v1alpha1.MessageField) string {
 	return ""
 }
 
-// Permalinker is an optional interface of a Platform: it builds a link to a message from what the platform learned when
-// it connected, with no call of its own, so it is fit for the acknowledgement path, where a call is not allowed.
+// Permalinker is the part of a Platform that builds a link to a message from what the platform learned when it
+// connected, with no call of its own, so it is fit for the acknowledgement path, where a call is not allowed. A platform
+// that makes no links says false.
 type Permalinker interface {
 	// Permalink returns the link to the message r, and false if the platform cannot make one: it has not connected
 	// yet, or r does not name a message of the platform's.
 	Permalink(r Ref) (string, bool)
 }
 
-// ThreadReader is an optional interface of a Platform: it reads the replies in a thread that people wrote between two
-// messages, which a mention-only Binding shows an agent as the context of the mention (spec 8.2). A platform that cannot
-// read a thread does not implement it, and one that does may still be unable to at the moment (ErrNoThreadReads), so a
-// caller asks and goes on without the context when it is told no.
+// ThreadReader is the part of a Platform that reads the replies in a thread that people wrote between two messages,
+// which a mention-only Binding shows an agent as the context of the mention (spec 8.2). A platform that cannot read a
+// thread, for good or at the moment, says ErrNoThreadReads, so a caller asks and goes on without the context when it is
+// told no.
 type ThreadReader interface {
 	// ThreadBetween returns the messages of the thread t.Thread whose IDs are strictly after after and strictly before
 	// before, oldest first, each decoded as the adapter decodes a live message: a message that Run would drop is Ignored,
@@ -99,9 +101,14 @@ type ThreadReader interface {
 	// of the whole window. Check ErrThreadTooLong and ErrNoThreadReads with errors.Is before Classify, which does not
 	// know them; any other error classifies as the platform's (Classify, OpOther), a rate limit with its RetryAfter.
 	ThreadBetween(ctx context.Context, t Target, after, before string, limit int) (msgs []HistoryMessage, dropped int, err error)
+	// ThreadFromStart is ThreadBetween with no lower bound, for a turn that carries the thread from its start, and with the message
+	// that opened the thread first, which limit does not count or cut. A thread whose first message the platform no longer has
+	// starts with its first reply. ErrThreadTooLong may come with what opened the thread, and nothing else.
+	ThreadFromStart(ctx context.Context, t Target, before string, limit int) (msgs []HistoryMessage, dropped int, err error)
 }
 
-// Sink receives what Platform.Run decodes.
+// Sink receives what Platform.Run decodes. A platform may call it from several goroutines at once, so a Sink is safe for
+// concurrent use; a platform keeps the events of one channel in order and calls for one channel one at a time.
 type Sink interface {
 	// Message takes m. An error means it was not taken, and the platform delivers it again.
 	Message(ctx context.Context, m Inbound) error
@@ -119,6 +126,14 @@ type BotFilter interface {
 	// AcceptsBot says whether a botMessage trigger of the Binding that owns channel names botID. It is a first cut by ID
 	// alone, so that a sender no trigger can match is dropped at the adapter: the trigger's own match also holds the kind.
 	AcceptsBot(channel, botID string) bool
+}
+
+// BotMentionFilter is an optional interface of a Sink that takes bots' mentions. A platform asks it before it forwards
+// one, and a Sink that does not implement it is given none: a platform fails closed. Agent Kourier's own mention is never
+// forwarded, whatever the answer.
+type BotMentionFilter interface {
+	// AcceptsBotMention says whether a mention by the bot botID in channel is to be taken.
+	AcceptsBotMention(channel, botID string) bool
 }
 
 // Stream is a message that grows while an agent writes it. The markdown that Append and Stop take is
@@ -155,12 +170,15 @@ var (
 	// ErrNotStreaming is wrapped by the error of an Append or a Stop of a message that is not streaming: it ended,
 	// or it never was a stream. The caller that is finishing a stream it did not start tolerates it.
 	ErrNotStreaming = errors.New("chat: the message is not streaming")
+	// ErrWouldDropText is wrapped by the error of an Update that the platform refuses because the message holds only text
+	// and the new content has none: the text can be changed, and not taken away. The message is as it was, and the same
+	// content is refused however often it is tried, until a call has text to put in its place, which is accepted.
+	ErrWouldDropText = errors.New("chat: the update would take away the text that is all the message holds")
 	// ErrTooLarge is returned by Fits for a prompt that does not fit in one message even in its
 	// plainest form. No retry mends it, and the caller reports the pause as unusable.
 	ErrTooLarge = errors.New("chat: the prompt does not fit in one message")
-	// ErrNoThreadReads is returned by ThreadBetween of a platform that cannot read a thread: it does not implement
-	// ThreadReader (the broker's wrapper says it for the platform it wraps), or the adapter has no way to. The caller
-	// goes on without the thread's earlier replies; no retry mends it.
+	// ErrNoThreadReads is returned by ThreadBetween of a platform that cannot read a thread, for good or at the moment.
+	// The caller goes on without the thread's earlier replies; no retry mends it.
 	ErrNoThreadReads = errors.New("chat: the platform cannot read the replies of a thread")
 	// ErrThreadTooLong is wrapped by the error of a ThreadBetween whose window is longer than the platform will read in
 	// one call. No retry mends it: the same window is as long the next time. The caller goes on without the replies, as
@@ -172,7 +190,48 @@ var (
 	// the press at once instead of retrying. An error that does not wrap it may pass on another try (a timeout, a server
 	// error, a rate limit), and a cancelled context is never wrapped in it.
 	ErrGroupsMisconfigured = errors.New("chat: the approver groups cannot be read until the platform's configuration is fixed")
+	// ErrChannelNotFound is wrapped by the error of a ChannelAccess for a channel the platform says is not there, or
+	// is not there for Agent Kourier: it never existed, it was deleted, or (on a platform that hides a private
+	// conversation from a member who is not in it) it is private and Agent Kourier is not in it. A caller checks it with
+	// errors.Is and does not retry: the same channel is as missing on the next try, until an operator changes the
+	// Binding or invites the bot. An error that does not wrap it may pass on another try, and a cancelled context is
+	// never wrapped in it.
+	ErrChannelNotFound = errors.New("chat: the platform has no such channel, or none that Agent Kourier can see")
+	// ErrMissingScope is wrapped by the error of a ChannelAccess or a GroupsReadable that the platform refuses because the app
+	// was installed without the permission the read needs (Slack: missing_scope). A caller checks it with errors.Is and does not
+	// retry: only an operator who adds the permission and reinstalls the app mends it. An error that does not wrap it may pass
+	// on another try, and a cancelled context is never wrapped in it.
+	ErrMissingScope = errors.New("chat: the app lacks a permission the platform needs for this read")
+	// ErrGroupNotFound is wrapped by the error of a GroupsReadable for a group the platform says is not there, or not there for
+	// Agent Kourier (Slack: no_such_subteam; whether a disabled group is the same is not confirmed). It also wraps
+	// ErrGroupsMisconfigured. A caller checks it with errors.Is and does not retry: the same group is as missing on the next try,
+	// until an operator changes the Binding or the workspace. A cancelled context is never wrapped in it.
+	ErrGroupNotFound = errors.New("chat: the platform has no such group, or none that Agent Kourier can see")
 )
+
+// GroupError is the error of a GroupsReadable for one group: Group is the platform's ID of the group that could not be read, as the
+// caller gave it, and Err is why. A caller finds it with errors.As, and Err's sentinels with errors.Is on the GroupError.
+type GroupError struct {
+	// Group is the ID of the group that could not be read.
+	Group string
+	// Err is the platform's error for that group. It holds no token.
+	Err error
+}
+
+// Error describes the failure, with the group's ID.
+func (e *GroupError) Error() string { return fmt.Sprintf("group %s: %v", e.Group, e.Err) }
+
+// Unwrap returns the platform's error.
+func (e *GroupError) Unwrap() error { return e.Err }
+
+// Access is how Agent Kourier stands to one conversation, as Platform.ChannelAccess reads it.
+type Access struct {
+	// Member says Agent Kourier is in the conversation. It is the platform's own flag, and independent of Archived: a
+	// platform may say true for an archived conversation that Agent Kourier was in when it was archived.
+	Member bool
+	// Archived says the platform has archived the conversation.
+	Archived bool
+}
 
 // Platform is a chat platform: Slack today. An adapter implements it, and nothing else in Agent Kourier names
 // the platform it adapts. Every method is safe for concurrent use.
@@ -192,7 +251,10 @@ type Platform interface {
 	// Find returns the message in t tagged with tag, posted no earlier than about since, if there is one.
 	// Its error is not "not found": that is found false.
 	Find(ctx context.Context, t Target, tag string, since time.Time) (Ref, bool, error)
-	// Update replaces the content of the message at r with o.
+	// Update replaces the content of the message at r with o. A platform may keep a message's text from being replaced by
+	// content with none, and says so with ErrWouldDropText. A caller that does not know what the message holds can give
+	// content with no text and take that answer, but must not count on it: a platform may also take such content, and the
+	// text is then gone.
 	Update(ctx context.Context, r Ref, o Outgoing) error
 	// RefAt is the Ref of the message with the platform's ID id in a conversation, which a caller that recorded the ID alone
 	// (the outbox, the interactions) gets back whole, so that no caller writes a platform's fields by hand.
@@ -226,6 +288,32 @@ type Platform interface {
 	// ever "yes". An empty groups, or an empty user, is false with no error and no call: what no groups
 	// means is the caller's to decide, and it asks only when groups are configured.
 	IsInAnyGroup(ctx context.Context, groups []string, user string) (bool, error)
+	// GroupsReadable says whether Agent Kourier can read the members of every one of groups, the platform's own group IDs as
+	// IsInAnyGroup takes them, without asking whose they are: it is the check that IsInAnyGroup would fail on, made before a
+	// person presses. The groups are read at the call and never cached, in order, and the first that cannot be read ends the call
+	// with a *GroupError that names it (no later group is read, so one failure hides the ones after it until it is mended). An
+	// error wraps ErrGroupsMisconfigured when the platform says the read can never succeed until an operator fixes the
+	// configuration, and then also ErrGroupNotFound for a group that does not exist (a disabled group is expected to be the same, which is unconfirmed), and ErrMissingScope for an
+	// app without the permission to read groups; a caller that wants the other causes (a workspace without groups, a token of a
+	// type the read does not take) finds ErrGroupsMisconfigured and neither of those. Any other error (a timeout, a server
+	// error, a rate limit, a cancelled context, a credential the platform rejects, which Classify says is FatalAuth) may pass on
+	// another try, and wraps none of the three. An empty groups is nil with no call.
+	GroupsReadable(ctx context.Context, groups []string) error
+	// ChannelAccess says how Agent Kourier itself stands to the conversation channel, read at the call and never cached:
+	// whether it is a member (Access.Member) and whether the conversation is archived (Access.Archived). It reads
+	// nothing else and posts nothing, and it does not page through the members of the channel to answer, so its cost
+	// does not grow with the channel. An error leaves the Access zero, which is not an answer: the caller treats an error
+	// as "unknown", never as "not a member". An error wraps ErrChannelNotFound when the platform says there is no such
+	// channel for Agent Kourier to see, and ErrMissingScope when the platform refuses the read for want of a permission
+	// the app was installed without; the caller checks them with errors.Is and does not retry. Classify agrees: for
+	// OpOther it says Permanent for an error that wraps either, with ReasonChannelGone for ErrChannelNotFound and the
+	// platform's own code, when it has one, in Verdict.Code, so a caller that asks Classify instead of errors.Is does not retry them
+	// either. A credential the platform rejects wraps neither: Classify(OpOther, err) says FatalAuth for it, and
+	// ChannelAccess itself stops nothing, so the caller decides what a rejected credential means.
+	// Any other error (a timeout, a server error, a rate limit, a cancelled context) may pass on another try and stays
+	// unclassified: Classify says Transient for it, with RetryAfter for a rate limit. An empty channel is
+	// ErrChannelNotFound with no call.
+	ChannelAccess(ctx context.Context, channel string) (Access, error)
 	// IsBot says whether user is a bot. It fails closed: a user it cannot read is a bot, with the error.
 	IsBot(ctx context.Context, user string) (bool, error)
 	// ResolveUser returns the user with the platform's ID id.
@@ -241,6 +329,10 @@ type Platform interface {
 	Classify(op Op, err error) Verdict
 	// Capabilities says what the platform can do and how much it shows.
 	Capabilities() Caps
+
+	Permalinker
+	ThreadReader
+	BusyMarker
 }
 
 // Op is the kind of call an error came from, since what is permanent differs: a post to a channel that

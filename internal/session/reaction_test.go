@@ -82,6 +82,9 @@ func TestQueuedReplysReactionIsTakenOffWhenTheTurnEnds(t *testing.T) {
 		want        TurnOutcome
 	}{
 		{"the agent refuses the identity", func(agent.Handler, int) error { return agent.ErrForbidden }, false, TurnForbidden},
+		{"the agent's card is answered 403", func(agent.Handler, int) error {
+			return fmt.Errorf("%w: connect to agent: %w", agent.ErrNotSent, agent.ErrAgentForbidden)
+		}, false, TurnForbidden},
 		{"the front door refuses the credentials", func(agent.Handler, int) error {
 			return fmt.Errorf("%w: %w", agent.ErrNotSent, agent.ErrCredentialsRejected)
 		}, false, TurnCredentialsRejected},

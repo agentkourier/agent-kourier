@@ -278,26 +278,6 @@ func TestLinks(t *testing.T) {
 	}
 }
 
-func TestExcludedDocs(t *testing.T) {
-	const mkdocs = "site_name: x\n\ndocs_dir: docs\n# The brand kit lives in docs/.\nexclude_docs: |\n  /brand/\n  /spikes/\n\ntheme:\n  name: material\n"
-	got, err := excludedDocs(mkdocs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := []string{"brand", "spikes"}; !slices.Equal(got, want) {
-		t.Errorf("excludedDocs = %v, want %v", got, want)
-	}
-	for name, bad := range map[string]string{
-		"no block":      "site_name: x\n",
-		"a glob":        "exclude_docs: |\n  *.draft.md\n",
-		"a nested path": "exclude_docs: |\n  /a/b/\n",
-	} {
-		if _, err := excludedDocs(bad); err == nil {
-			t.Errorf("%s: no error", name)
-		}
-	}
-}
-
 func writeTree(t *testing.T, root string, files map[string]string) {
 	t.Helper()
 	for rel, text := range files {
@@ -353,6 +333,9 @@ func TestPublicFiles(t *testing.T) {
 		"examples/recipes/sre/notes.md":             "WP-1\n",
 		"examples/recipes/sre/agent/main.go":        "package x // WP-1\n",
 		"examples/ax/README.md":                     "WP-1\n",
+		// The generated CRDs are public; other files under the chart's files/ are not.
+		"charts/agent-kourier/files/crds/agentkourier.dev_bindings.yaml": "x: 1\n",
+		"charts/agent-kourier/files/other.txt":                           "WP-1\n",
 		// Binary files are skipped.
 		"docs/assets/logo.png": "\x89PNG",
 		"docs/favicon.ico":     "\x00",
@@ -364,7 +347,8 @@ func TestPublicFiles(t *testing.T) {
 	}
 	slices.Sort(got)
 	want := []string{
-		"README.md", "charts/agent-kourier/README.md", "charts/agent-kourier/values.yaml",
+		"README.md", "charts/agent-kourier/README.md", "charts/agent-kourier/files/crds/agentkourier.dev_bindings.yaml",
+		"charts/agent-kourier/values.yaml",
 		"docs/_headers", "docs/assets/diagrams/map.svg", "docs/assets/film/captions.vtt", "docs/data.json",
 		"docs/how-to/a.md", "docs/how-to/brand/kept.md", "docs/index.md", "docs/notes.txt", "docs/page.html",
 		"docs/site.webmanifest", "docs/stylesheets/brand.css",
@@ -717,6 +701,31 @@ func TestRunScansTheRecipeYAML(t *testing.T) {
 	}
 }
 
+func TestRunScansTheGeneratedCRDs(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"mkdocs.yml":                       testMkdocs,
+		"api/v1alpha1/types.go":            apiTypes,
+		"README.md":                        "Fine.\n",
+		"charts/agent-kourier/README.md":   "Fine.\n",
+		"charts/agent-kourier/values.yaml": "# fine\n",
+		"docs/index.md":                    "# Home\n",
+		// controller-gen copies a Go doc comment into a description as it stands, decision ID included.
+		"charts/agent-kourier/files/crds/agentkourier.dev_bindings.yaml": "description: Set userId (D14).\n",
+		"charts/agent-kourier/files/crds/agentkourier.dev_clean.yaml":    "description: Fine.\n",
+	})
+	var out bytes.Buffer
+	if code := run(root, testWorkspace, &out); code != 1 {
+		t.Fatalf("run = %d, want 1; output:\n%s", code, out.String())
+	}
+	if want := "charts/agent-kourier/files/crds/agentkourier.dev_bindings.yaml:1: decision-id"; !strings.Contains(out.String(), want) {
+		t.Errorf("output lacks %q:\n%s", want, out.String())
+	}
+	if strings.Contains(out.String(), "dev_clean.yaml") {
+		t.Errorf("output names the clean CRD:\n%s", out.String())
+	}
+}
+
 func TestRunExitsZeroOnACleanTree(t *testing.T) {
 	root := t.TempDir()
 	writeTree(t, root, map[string]string{
@@ -827,6 +836,13 @@ func TestReleaseVersionFindings(t *testing.T) {
 		{"another project's version", "kagent 0.9.4 speaks A2A 0.3.\n", nil},
 		{"two references on one line, one stale", "ghcr.io/agentkourier/agent-kourier:v0.2.0 and ghcr.io/agentkourier/charts/agent-kourier:0.1.0\n", []int{1}},
 		{"the image with no version tag", "ghcr.io/agentkourier/agent-kourier@sha256:abc\n", nil},
+		{"the chart's version in a table row", "| Chart | `" + publishedChart + "`, version `0.1.0` |\n", []int{1}},
+		{"the chart's version on the next line", "and the Helm chart `" + publishedChart + "`\nversion `0.1.0`, which pins it.\n", []int{2}},
+		{"the chart's version in prose at the chart's version", "the chart `" + publishedChart + "`, version `0.2.0`\n", nil},
+		{"a version before the chart on its line", "version `0.1.0` of the docs; the chart `" + publishedChart + "`\n", nil},
+		{"a version later on the next line", "the chart `" + publishedChart + "`\nis new since version `0.1.0`.\n", nil},
+		{"a version later on the chart's line", "the chart `" + publishedChart + "`, which replaced version `0.1.0`\n", nil},
+		{"helm --version is counted once", "helm install x " + publishedChart + " --version 0.1.0\n", []int{1}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var got []int
@@ -840,6 +856,12 @@ func TestReleaseVersionFindings(t *testing.T) {
 				t.Errorf("findings on lines %v, want %v", got, tt.want)
 			}
 		})
+	}
+	for _, text := range []string{"| Chart | `" + publishedChart + "`, version `0.1.0` |\n", "the chart `" + publishedChart + "`\n  version `0.1.0`\n"} {
+		f := releaseVersionFindings("docs/x.md", text, "0.2.0")
+		if len(f) != 1 || !strings.HasPrefix(f[0].text[f[0].start:f[0].end], "version ") {
+			t.Errorf("chart prose %q: findings %+v, want one whose span starts at \"version \"", text, f)
+		}
 	}
 	if got := releaseVersionFindings("docs/x.md", "ghcr.io/agentkourier/agent-kourier:v0.1.0\n", ""); got != nil {
 		t.Errorf("with no chart version, findings %v, want none", got)

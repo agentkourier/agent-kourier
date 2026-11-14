@@ -19,7 +19,7 @@ const recoveredPrefix = "task:"
 // SystemUser is the user a turn is filed under when nobody wrote it (an alert's first
 // prompt): the store requires one. The value is stored (reply_queue.user_id, sessions.turn_user), so a change of it
 // needs a migration that rewrites those columns (0024 moved courier:system to this).
-const SystemUser = "agent-kourier:system"
+const SystemUser = store.SystemUser
 
 // Disposition says what Submit did with a turn.
 type Disposition string
@@ -64,6 +64,8 @@ type Inbound struct {
 	// (the default mode, all). It is read only when the session's own Binding has left the config, and then it
 	// decides whether a reply that does not mention Agent Kourier is answered with the Binding-gone notice (spec 8.2).
 	ChannelThreadReplies v1alpha1.ThreadReplies
+	// WholeThread says the turn carries what the thread holds, every author's, since the previous turn (store.Reply.WholeThread).
+	WholeThread bool
 	// Origin identifies the bounded source and subject the thread is started for. Like Binding it is used only to
 	// create a session; a follow-up never replaces the session's origin.
 	Origin store.Origin
@@ -84,9 +86,6 @@ type Result struct {
 	Admission Admission
 }
 
-// readAll is a threadTTL no session outlives: the real one is the session's Binding's.
-const readAll = 100 * 365 * 24 * time.Hour
-
 // Submit is the durable intake of a turn, called by the chat adapter before it acknowledges
 // the event (spec 6.1), and by the alert path. It decides who owns
 // the thread, writes the session row for a new one, and queues the turn (idempotently, by
@@ -106,7 +105,7 @@ func (m *Manager) Submit(ctx context.Context, in Inbound) (Result, error) {
 	// that the runner never sends the turn, and takes its reaction off, before the reaction was asked for (the
 	// sink is made to cope with that order too, but this is the cheap half of it).
 	if res.Acknowledgment != "" {
-		m.cfg.Sink.Notice(ctx, in.Key, Notice{ID: acknowledgmentID(in.MessageID), Kind: NoticeAcknowledged, MessageRef: in.MessageRef, Reaction: res.Acknowledgment})
+		m.cfg.Sink.Notice(ctx, in.Key, Notice{ID: AcknowledgmentID(in.MessageID), Kind: NoticeAcknowledged, MessageRef: in.MessageRef, Reaction: res.Acknowledgment})
 	} else if !res.AcknowledgmentConfigured && res.Queued && m.markPending(in.MessageID) {
 		m.cfg.Sink.Notice(ctx, in.Key, Notice{ID: queuedID(in.MessageID), Kind: NoticeQueued, MessageRef: in.MessageRef})
 	}
@@ -118,7 +117,10 @@ func (m *Manager) Submit(ctx context.Context, in Inbound) (Result, error) {
 // takes it off.
 func queuedID(id string) string { return id + "/queued" }
 
-func acknowledgmentID(id string) string { return id + "/acknowledgment" }
+// AcknowledgmentID is the ID of the notices that put the acknowledgment of the message id on and take it off. The outbox
+// keys the reaction by it, so whoever queues one of them uses this: the intake puts it on, unacknowledgeReply takes it off
+// for every removal the manager makes, and the broker's retention queues either again.
+func AcknowledgmentID(id string) string { return id + "/acknowledgment" }
 
 // markPending remembers that the turn id may carry the queued reaction (see Manager.marked), and reports
 // whether the reaction is still wanted: it is while this process has the turn to send (fresh). A turn that was
@@ -152,7 +154,7 @@ func (m *Manager) queue(ctx context.Context, in Inbound) (Result, error) {
 	}
 	// A duplicate, or a turn already delivered, is not queued again, and still wakes the runner.
 	parent, state := telemetry.Capture(ctx)
-	enqueued, err := m.cfg.Store.EnqueueReply(ctx, store.Reply{ID: in.MessageID, Key: in.Key, UserID: user, MessageRef: in.MessageRef, Acknowledgment: res.Acknowledgment, InteractionID: pin, Text: in.Text, EnqueuedAt: now, TraceParent: parent, TraceState: state})
+	enqueued, err := m.cfg.Store.EnqueueReply(ctx, store.Reply{ID: in.MessageID, Key: in.Key, UserID: user, MessageRef: in.MessageRef, Acknowledgment: res.Acknowledgment, InteractionID: pin, WholeThread: in.WholeThread, Text: in.Text, EnqueuedAt: now, TraceParent: parent, TraceState: state})
 	if err != nil {
 		return Result{}, fmt.Errorf("queue turn %s: %w", in.MessageID, err)
 	}
@@ -160,7 +162,7 @@ func (m *Manager) queue(ctx context.Context, in Inbound) (Result, error) {
 		// A duplicate was already acknowledged by the original intake. Do not add a reaction again,
 		// especially after the original turn has already ended.
 		res.Acknowledgment = ""
-		telemetry.Count(ctx, "agentkourier_intake_total", "reply_queue", "duplicate")
+		telemetry.Count(ctx, "agentkourier_intake_total", "reply_queue", "duplicate", in.Key.Connection)
 	}
 	if enqueued { // this process made the row, so nothing has sent the turn yet
 		m.mu.Lock()
@@ -170,29 +172,51 @@ func (m *Manager) queue(ctx context.Context, in Inbound) (Result, error) {
 	// It waits if turns are ahead of it, or a task of the session is active or paused. This is
 	// advisory: it races the runner, which may take the turn a moment later.
 	head, herr := m.cfg.Store.NextReply(ctx, in.Key)
-	sess, serr := m.cfg.Store.GetSession(ctx, in.Key, readAll, now)
+	sess, serr := m.cfg.Store.GetSession(ctx, in.Key, store.AnyAge, now)
 	res.Queued = (herr == nil && head.ID != in.MessageID) || (serr == nil && sess.TaskID != "")
 	return res, nil
 }
 
-// admit gathers the facts of the reply (the session, its Binding, expiry and, if the decision needs it, the pending
-// question), classifies the reply (ReplyFacts.Classify) and carries the admission out (carryOut).
+// admit classifies the reply by its facts (replyFacts, ReplyFacts.Classify) and carries the admission out (carryOut).
 func (m *Manager) admit(ctx context.Context, in Inbound, now time.Time) (Result, string, error) {
+	f, binding, err := m.replyFacts(ctx, in, now)
+	if err != nil {
+		return Result{}, "", err
+	}
+	return m.carryOut(ctx, in, f.Owned, binding, f.Classify(), now)
+}
+
+// Takes says whether Submit would queue in now, a turn or an answer, and writes nothing. It races what Submit does after it, so it
+// is an estimate that tells the caller what it need not start, and Submit still decides.
+func (m *Manager) Takes(ctx context.Context, in Inbound) (bool, error) {
+	f, _, err := m.replyFacts(ctx, in, m.cfg.Now())
+	if err != nil {
+		return false, err
+	}
+	return f.Classify().Queues(), nil
+}
+
+// replyFacts gathers the facts of the reply: the session, its Binding and expiry and, if the decision needs it, the pending question.
+// It returns the session's Binding too, empty where no session is. It only reads.
+func (m *Manager) replyFacts(ctx context.Context, in Inbound, now time.Time) (ReplyFacts, string, error) {
 	f := ReplyFacts{Create: in.Create, Mentioned: in.Mentioned, ChannelMode: in.ChannelThreadReplies}
 	binding := ""
-	sess, err := m.cfg.Store.GetSession(ctx, in.Key, readAll, now)
+	sess, err := m.cfg.Store.GetSession(ctx, in.Key, store.AnyAge, now)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 	case err != nil:
-		return Result{}, "", fmt.Errorf("read session %+v: %w", in.Key, err)
+		return ReplyFacts{}, "", fmt.Errorf("read session %+v: %w", in.Key, err)
 	default:
 		f.Owned, f.TaskID, binding = true, sess.TaskID, sess.Binding
-		backend, err := m.cfg.Bindings.Backend(sess.Binding)
+		backend, err := m.sessionBackend(sess)
 		if errors.Is(err, ErrUnknownBinding) { // expiry cannot be judged without it, so old or not
 			f.BindingGone = true
+			if takesOnlyMentions(sess) {
+				f.ChannelMode = v1alpha1.ThreadRepliesMention
+			}
 			break
 		} else if err != nil {
-			return Result{}, "", fmt.Errorf("session %+v: Binding %q: %w", in.Key, sess.Binding, err)
+			return ReplyFacts{}, "", fmt.Errorf("session %+v: Binding %q: %w", in.Key, sess.Binding, err)
 		}
 		f.Mode, f.Dialect = backend.ThreadReplies, backend.Dialect
 		// The store owns the expiry rule: ask it again, with the session's own threadTTL.
@@ -200,19 +224,37 @@ func (m *Manager) admit(ctx context.Context, in Inbound, now time.Time) (Result,
 		case errors.Is(err, store.ErrExpired):
 			f.Expired = true
 		case err != nil:
-			return Result{}, "", fmt.Errorf("read session %+v: %w", in.Key, err)
+			return ReplyFacts{}, "", fmt.Errorf("read session %+v: %w", in.Key, err)
 		}
 	}
 	if f.NeedsQuestion() {
 		switch q, err := m.cfg.Questions.PendingTextQuestion(ctx, in.Key); {
 		case errors.Is(err, store.ErrNotFound):
 		case err != nil:
-			return Result{}, "", fmt.Errorf("read the pending question of %+v: %w", in.Key, err)
+			return ReplyFacts{}, "", fmt.Errorf("read the pending question of %+v: %w", in.Key, err)
 		default:
 			f.Question = &PendingQuestion{ID: q.ID, TaskID: q.TaskID, Posted: q.MessageRef != ""}
 		}
 	}
-	return m.carryOut(ctx, in, f.Owned, binding, f.Classify(), now)
+	return f, binding, nil
+}
+
+// sessionBackend is the Backend that a session goes by: its Binding's, but a session that a bot's mention or a person's message
+// began takes only people's mentions, whatever the Binding says (takesOnlyMentions).
+func (m *Manager) sessionBackend(sess store.Session) (Backend, error) {
+	backend, err := m.cfg.Bindings.Backend(sess.Binding)
+	if err == nil && takesOnlyMentions(sess) {
+		backend.ThreadReplies = v1alpha1.ThreadRepliesMention
+	}
+	return backend, err
+}
+
+// takesOnlyMentions says the session was begun by a bot's mention or by a person's message that a personMessage trigger took,
+// which its origin keeps for the session's life. Either thread is people's to talk in: in a bot's mention's, people were talking
+// before another agent's mention came, and under a person's report the people who discuss it would otherwise make every word
+// a prompt, each one a turn that no limit of the trigger holds.
+func takesOnlyMentions(sess store.Session) bool {
+	return sess.Origin.Source == store.OriginBotMention || sess.Origin.Source == store.OriginPersonMessage
 }
 
 // carryOut does what the admission decided: for a turn it writes the row of a new thread or touches a live one; for an

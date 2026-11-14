@@ -4,8 +4,11 @@ For an operator running the Helm chart: at the end, Agent Kourier runs a newer r
 audit log intact, and you know how to roll back.
 
 Each release publishes a signed multi-arch image and a chart whose default image is that image by digest, as
-[Install with Helm](install-with-helm.md#the-release) describes. The current release is `0.1.1`. To run a build that is not
+[Install with Helm](install-with-helm.md#the-release) describes. The current release is `0.3.2`. To run a build that is not
 released, see [Build from source](install-with-helm.md#build-from-source).
+
+The [release notes](../release-notes.md) say what each release changed and what is breaking. 0.2.0 makes custom resources the chart's default, so a
+ConfigMap install must name its route before it upgrades: see [the release that makes custom resources the default](#upgrade-to-the-release-that-makes-custom-resources-the-default).
 
 ## Upgrade the chart
 
@@ -31,6 +34,14 @@ Deploy by digest. A released chart pins its image by digest, so `--set image.tag
 
 Install the previous chart version, whose default image is that release's digest, or set `image.digest` back to the
 previous release's digest. A bad release is not deleted or retagged: a new tag carries the fix.
+
+**A Binding that sets `chat.progress` does not load on `0.1.2`.** That release has no `progress` field, and its loader
+rejects a field it does not know, reporting `spec.chat.progress: unknown field` for the Binding. One Binding that fails
+fails the whole config: at start-up the broker exits with [code 2](../reference/cli.md#exit-codes) and the pod never
+becomes Ready, and a running broker that reloads keeps its last good config, as
+[the release that writes triggers in full](#upgrade-to-the-release-that-writes-triggers-in-full) describes. Before you
+roll back to `0.1.2`, remove `progress` from every Binding, in `config.bindings` or in the ConfigMap you name in
+`config.existingConfigMap`. `0.1.2` then shows no `Working…` card or line and sets no assistant status.
 
 ## Verify a release before you deploy it
 
@@ -61,6 +72,32 @@ does not avoid that; stopping every old pod first does. Upgrade once with `repli
 until the old pods have terminated, then upgrade again with `replicaCount` restored. Agent Kourier is down in between;
 if `podDisruptionBudget` is enabled, switch it off or to `maxUnavailable` before scaling to zero (see the chart's
 values).
+
+## Upgrade to the release that verifies Bindings
+
+This release has the leader check each Binding and report the result. No Binding fails to load for it, and it changes nothing about turns or `/readyz`.
+
+- **New metrics and log lines.** See [Binding verification](../reference/metrics.md#binding-verification). To alert on it, see [Alert on what matters](export-telemetry.md#alert-on-what-matters).
+- **New calls.** On each pass, the leader fetches each Binding's agent card and calls Slack's `conversations.info` for its channel. The scopes are `channels:read` and `groups:read`, which the manifest already asks for. An app without them reads `False/MissingScope`, and nothing else changes.
+- **New log lines on the first start.** A Binding that was already broken logs a WARN. See [A Binding is not ready](troubleshoot.md#a-binding-is-not-ready).
+
+## Upgrade to the release with step cards in alert threads
+
+This release shows an alert thread's tool calls as step cards, as a chat thread does. No Binding fails to load for it.
+
+- **An alert thread keeps a card for each tool call.** The reply's first post is unchanged: it shows the line of the latest
+  tool call, or `Working…`. Every update after it shows a step card for each tool call above the text, in place of the
+  line, and the final message keeps them, so an investigation ends with the trail of what it checked. With
+  `steps-and-activity` (the default) a gap of 3 seconds is a `Working…` card, which the next tool call takes over, as in a
+  chat thread. The reply shows the latest 20 cards, under a line that counts the earlier ones.
+- **One more update.** A reply that has cards when its first post is made makes one more update, once the throttle allows,
+  to show them, in place of the post's line if it shows one.
+- **A reply with cards and no text** ends with the cards, and no longer says `(no output)`.
+- **Unchanged:** `progress: activity` (one counting line that names no tool), `output: final`, and a platform without step
+  cards, which keeps the line. If Slack refuses an update with cards, it is sent again without them, and the reply shows the
+  line from then on.
+
+See [Output](../explanation/threads-and-sessions.md#output).
 
 ## Upgrade to the release that writes triggers in full
 
@@ -105,8 +142,9 @@ b.yaml#1 Binding sre/sre-alerts: spec.chat.triggers[0].promptTemplate: required
 A trigger that did not use a preset reports only some of these. One that still has a `match`, `exclude` or `extract` on
 `titleLink` or `attachmentText` also reports `unsupported message field`, and the error lists the field names that exist.
 
-**What the broker does with a Binding that does not load.** One Binding that fails fails the whole config, so none of
-them is served.
+**What the broker does with a Binding that does not load.** With the files route (the default, and the only one in this section's
+releases), one Binding that fails fails the whole config, so none of them is served. With custom resources only that Binding is left out: see
+[Choose a config route](../explanation/config-routes.md#what-a-bad-object-does).
 
 - *At start-up*, the broker does not start. It prints the error to stderr and exits with
   [code 2](../reference/cli.md#exit-codes), and the pod never becomes Ready. With SQLite (the default) the Deployment's strategy is `Recreate`, so the old pod is already gone when the
@@ -162,3 +200,688 @@ whole text.
 - **The actor names the platform.** The `agentkourier.dev/actor` metadata of a turn a person wrote gains `platform`
   (`slack`). On Slack the text prefix is unchanged, `[Slack: Name (U123) <email>]`
   ([Agent contract](../reference/agent-contract.md)).
+
+## Upgrade to the release with progress modes
+
+This release adds `chat.progress` to the Binding, and its default changes what a Binding that does not set it shows. No
+Binding fails to load for it.
+
+- **A chat thread gains `Working…` cards.** When 3 seconds pass with no new text and no tool call under way, a card titled
+  `Working…` begins in the stream. The next tool call takes that card over, so it carries the tool's name; if text comes
+  first, the card is retitled `Wrote the answer`, and `Wrote an update` if a tool call follows that text; a card still open when the turn ends becomes `Finished`, or `Stopped` (an
+  error) if the task failed or was cancelled. A thread that used to show one card for each tool call can now show one more,
+  and each gap longer than 3 seconds costs at most three more writes to Slack (the card's begin; its end, when no tool call
+  takes it over; and its retitle, when text ended it and a tool call follows that text). This needs a platform with step cards; an agent that marks no tool parts (see
+  [the next section](#upgrade-to-the-release-that-reads-tool-steps-on-every-dialect)) gets `Working…` cards alone.
+- **An alert thread gains a `Working…` line.** After the same 3 seconds, the message the investigation updates shows
+  `Working…` as a line of small print in place of the line of a tool call that returned, under the text so far if there is
+  some, and as the message's first post if nothing else has been said. The next text or tool call replaces it. Each gap
+  costs one more message update. A turn that is silent for 3 seconds and then ends with nothing to show, or fails, now
+  leaves a message saying `(no output)` where under `steps` it posted nothing.
+- **An alert thread on Slack gains an assistant status.** Agent Kourier sets Slack's `is working…` status on the thread when
+  the turn starts and again after each write but the last, because a reply in the thread may take it off, and clears it when the turn ends.
+  If Slack answers that the app or workspace cannot use the method, Agent Kourier logs that once at info level and sets no
+  status on that connection until it restarts; any other error stops it for that turn only. The manifest now asks for
+  `assistant:write`, with which we have seen the status render; an app made from an older manifest may get the status anyway
+  or be refused, and a refusal is only logged. Which scope the call needs is unverified; see [Configure Slack](configure-slack.md#what-the-app-is-allowed-to-do).
+  Each alert turn makes one `assistant.threads.setStatus` call when it starts, at most one after each write of its message
+  before the last, and one to clear the status when it ends.
+- **`output: final` is unchanged.** It posts once when the turn ends, whatever `progress` says.
+
+To keep the cards and lines as they were, set `progress: steps` on the Binding. `activity` shows one counting card or line
+that never names a tool (a tool approval prompt still does). See [Output](../explanation/threads-and-sessions.md#output).
+
+**Add `assistant:write` to an existing Slack app.** An app made from an older copy of the manifest lacks the scope: add
+`assistant:write` to the app's bot token scopes and reinstall the app to the workspace. Without it, Slack may refuse the
+call. A refusal whose code says the app, token or workspace cannot use the method (`missing_scope`,
+`not_allowed_token_type`, `not_allowed`, `access_denied`, `feature_not_enabled`, `no_permission` or `unknown_method`) turns
+the status off for that connection until the broker restarts, with one info log line. Any other error stops the status
+for that turn, with a warning. Neither fails a reply. See
+[An alert thread shows no "is working…" status](troubleshoot.md#an-alert-thread-shows-no-is-working-status).
+`progress: steps` sets no status, and makes no call for it.
+
+## Upgrade to the release that reads tool steps on every dialect
+
+This release reads tool calls and results the same way on every dialect: a data part whose metadata holds exactly one of
+`adk_type` (Google ADK's A2A converter), `kagent_type` (kagent 0.9.x) or `kagent.dev/a2a/part-type` (kagent 1.0), set to
+`function_call` or `function_response`, and whose data has a non-empty `name`, is a tool part, in an artifact or in a
+message from the agent ([Tool calls and results](../reference/agent-contract.md#tool-calls-and-results) lists where).
+Before, only the `kagent-v1` dialect read tool parts, only those marked `kagent.dev/a2a/part-type`, and only in artifacts.
+No Binding fails to load for it.
+
+- **More threads show tool steps.** On the `a2a` dialect, an agent that marks its tool parts, such as kagent 0.9.x or an
+  agent built on Google ADK's converter, now gets a step card for each tool call in a chat thread, and the line of the
+  latest call in an alert thread, each with a summary of the call's arguments from which secrets are redacted. Such a
+  thread makes more writes to Slack than it did. The same holds on `kagent-v1` for a part marked with either of the other
+  keys, and for a marked part in a message.
+- **Some parts that showed no longer do.** A marked part whose data has no `name`, or an empty one, is not a tool part, and
+  neither is a part whose metadata holds two of the keys with a marker value. On `kagent-v1` such a part showed as a step
+  before.
+
+For fewer cards, set `progress: activity`: one card (or, in an alert thread, one line) for the wait before the first
+text, which counts the calls and names none; a tool approval prompt still names the tool. `output: final` shows no cards
+or lines, and posts once when the turn ends. See [Output](../explanation/threads-and-sessions.md#output).
+
+## Upgrade to the release that reads kagent's extension on the a2a dialect
+
+This release lets an `a2a` Binding use kagent's human-in-the-loop extension, `https://kagent.dev/extensions/hitl/v1`, when
+the agent card lists it under `capabilities.extensions`, as kagent 1.0's does. No Binding fails to load for it. An agent
+whose card does not list the extension sees no change. For one whose card does, such as a kagent 1.0 agent on the `a2a`
+dialect:
+
+- **Every A2A call carries `A2A-Extensions: https://kagent.dev/extensions/hitl/v1`**, and the agent sends its structured
+  pauses.
+- **A tool approval is an approval.** With `interactions.toolApprovals: true` it is posted with approval buttons, and
+  `approverGroups` gate it. Without it the approval is denied through the dialect, with a notice in the thread, as on
+  `kagent-v1`; it used to be posted as a text question (`askUser: true`) or cancelled as one (`askUser: false`).
+- **A question with choices is shown with them**, and a structured question takes its answer from the prompt's controls
+  only: a typed reply in the thread does not answer it, even a question with no choices.
+- **A card that marks the extension `required` now connects**, where it failed with
+  `agent requires an unsupported extension`.
+
+See [Connect a generic A2A agent](connect-a2a-agent.md#what-works-on-this-dialect).
+
+Before you roll back to an earlier release, let pending approvals and structured questions on `a2a` Bindings end. The
+earlier release answers a pause on that dialect only with a plain text part, so for a pause this release stored:
+
+- **A press on an approval, or on a question with choices, is not taken.** The person is told the decision could not be
+  used, and the prompt stays pending until its timeout, when the agent's task is cancelled.
+- **An answer to a question with no choices is sent as plain text**, without the extension's payload. kagent 1.0.0-alpha5
+  takes it as an ordinary message, not as the question's answer: in the recorded case the task completed without it.
+
+## Upgrade to the release that shows an agent's working updates
+
+This release reads the status updates an agent sends in state `working` on every dialect, as
+[Working updates](../reference/agent-contract.md#working-updates) describes. No Binding fails to load for it, and an
+agent that sends no such update sees no change.
+
+- **`steps-and-activity` shows the agent's progress line.** When no tool call is under way, the text of a working update
+  titles the `Working…` card while it is open. In an alert thread with no card open it is a line of small print at the next
+  write, where `Working…` used to wait 3 seconds, so a turn that then ends empty leaves `(no output)` where it might have
+  posted nothing. Each change of line is one more write to Slack, by default at most
+  one every 2 seconds for each reply. No card is begun for a line.
+- **`activity` counts working updates.** Until the first tool call has its result, its card or line counts the updates
+  (`Working… 5 updates`). An update does not begin it: it still begins at the first tool call or result, or after 3 seconds.
+- **kagent 0.9.x** repeats its answer in a working update, so in `steps-and-activity` the start of the answer can title
+  an open card, or be an alert thread's line, for a moment before the answer itself.
+
+`progress: steps` shows no working update.
+
+## Upgrade to the release that lets another bot's mention start a turn
+
+This release adds `chat.botMentions`, and its default is `any`. At 0.1.6, a message from any other bot or app was ignored unless a `botMessage` trigger named its bot. Now, on a Binding with a
+`mention` trigger (which an empty `chat.triggers` is), a mention of Agent Kourier by **any bot or incoming webhook that can post in the channel** starts a turn in the mention's thread. The platform cannot tell an agent
+from any other bot, so every existing Binding with a mention trigger takes such mentions after the upgrade, with no change to its config. No Binding fails to load for it.
+
+- **To keep 0.1.6's behaviour,** set `chat.botMentions: none` on each Binding that should not take a bot's mention, in the config you upgrade with, in the same `helm upgrade`. With `config.existingConfigMap` the chart does not render your Bindings, so edit the ConfigMap right after the upgrade; until you do, they take bots' mentions. Do not set it before: 0.1.6 refuses a field it does not know, so a config that has `botMentions` fails to load on it, and a pod that restarts on it does not become Ready.
+- **The turns are limited, per Binding and across every bot:** 3 in any 30 minutes, 1 at a time, and 20 in any 24 hours. A mention past a limit starts no turn and posts nothing in the thread. See
+  [A bot's mention](../reference/chat-triggers.md#a-bots-mention) and [Limits](../reference/limits.md).
+- **What it never takes:** Agent Kourier's own posts, an edit that adds a mention, a bot that a `botMessage` trigger of the Binding names (that trigger reads its posts), and any bot's mention in a channel shared with another workspace.
+- **A session a bot's mention began** takes a person's reply as a turn only if it mentions Agent Kourier, whatever `chat.threadReplies` says.
+
+[Let another agent start yours](any-bot-trigger.md#let-another-agent-start-yours) says what this does not bound.
+
+## Upgrade to the release that bounds triggers, extract entries and headers
+
+Agent Kourier bounded none of these before. This release refuses a config that holds more than the bounds below, and
+loads a config within them as before. Nothing else about a Binding or an AgentBackend changes. No example, recipe or
+kind tier config in this repository has more than two triggers, three `extract` entries or one header, or a header name of
+more than 16 characters, so the bounds are far above what they use. [Limits](../reference/limits.md) lists the limits you can run into.
+
+| Where | Bound | The error |
+|---|---|---|
+| `spec.chat.triggers` of a Binding | 50 triggers | `spec.chat.triggers: has 51 items, maximum is 50` |
+| `extract` of a `botMessage` trigger | 32 entries | `spec.chat.triggers[1].extract: has 33 entries, maximum is 32` |
+| `spec.headers` of an AgentBackend | 32 headers | `spec.headers: has 33 items, maximum is 32` |
+| The `name` of a header | 256 bytes | `spec.headers[0].name: is 257 bytes, longer than the 256 byte limit` |
+
+A config over a bound is an invalid config, and the broker treats it as it treats the Binding that does not load in
+[the release that writes triggers in full](#upgrade-to-the-release-that-writes-triggers-in-full): at start-up it exits
+with [code 2](../reference/cli.md#exit-codes) and names the field, so the upgraded pod never becomes Ready, and on a
+reload it keeps its last good config. To find one before you upgrade, run `agent-kourier dry-run` of the new release
+against your config, as in [Check the values before you install](install-with-helm.md#check-the-values-before-you-install).
+It loads the files before it reads a token, so it reports the error without one.
+
+An earlier release has none of these four bounds, so after a [rollback](#roll-back) a config over one loads again.
+
+## Upgrade to the release that serves custom resources
+
+This release can read `Binding`, `AgentBackend` and `ChatConnection` from custom resources instead of files, and the chart's default is that route: read
+[the release that makes custom resources the default](#upgrade-to-the-release-that-makes-custom-resources-the-default) first. With `config.source: files`, the chart renders the
+objects it always has, and the route adds nothing to the pod's template (a release that also sets `GOMEMLIMIT` moves the
+template for that reason: see [the release that sets GOMEMLIMIT](#upgrade-to-the-release-that-sets-gomemlimit)). Release 0.1.6 has none of it.
+
+- **New values.** `config.source` (`crds`, the default, or `files`), `config.chatConnection`, `crds.install` and `rbac.secretNames`. To move, see
+  [Move the config between a ConfigMap and custom resources](migrate-config-source.md). The route needs Kubernetes 1.33 or later, and only the
+  route: the files route has no minimum.
+- **`--reuse-values` from 0.1.6 works.** The chart reads the values it adds as unset when the old values lack them, and an unset `config.source` as `files` (a release made by
+  the chart of 0.1.6 upgrades to this one with `--reuse-values`; what Helm hands the chart for the new chart's defaults under `--reuse-values` is not measured here).
+- **A reload can add a Secret in a namespace the broker was not watching, with no restart.** The broker follows each Secret the config names
+  with an informer of its own, so a new namespace works as long as its Role grants `list` and `watch` on the Secret. With the files route, a Secret it may not read fails the
+  reload, and the last good config stays, as before; with custom resources it makes that Binding's `BackendReachable` say `CredentialsUnreadable` and stops nothing.
+- **New bounds on triggers, extract entries and headers** apply on both routes: see
+  [the release that bounds them](#upgrade-to-the-release-that-bounds-triggers-extract-entries-and-headers), which also shows the check to run before you upgrade.
+- **A `promptTemplate` may no longer loop, define a template or use a variable, and three strings are bounded.** See
+  [the release that limits prompt templates](#upgrade-to-the-release-that-limits-prompt-templates).
+
+After you move to custom resources, rolling back to a release without them leaves the CRDs and every custom resource in the cluster, unread. Move back
+to the files route first, as in [Move back to the ConfigMap](migrate-config-source.md#move-back-to-the-configmap), then roll the chart back.
+
+## Upgrade to the release that makes custom resources the default
+
+The chart's `config.source` now defaults to `crds`, and an unset `crds.install` follows the route: true with `crds`, false with `files`. A values file that names no route gets custom resources and the three CRDs. A new install should use it:
+[Install with Helm](install-with-helm.md#install-on-custom-resources) is the path, and the ConfigMap is the quick route for a proof of concept. An install that reads a ConfigMap
+and upgrades with the values it has gets the new default, so it must name its route.
+
+**What an existing ConfigMap install must set to keep working.** In the values file:
+
+```yaml
+config:
+  source: files
+```
+
+That is all: with `files`, `crds.install` is false unless you set it, so the render is 0.1.6's, plus the `GOMEMLIMIT` variable that [this release sets](#upgrade-to-the-release-that-sets-gomemlimit), with no CRD (the chart's golden files pin it). Set `crds.install: true` only to have the chart install the CRDs
+with `files`, as step 1 of [the move](migrate-config-source.md) does; that needs a right to create CustomResourceDefinitions, which are cluster-scoped, and Helm refuses CRDs that `kubectl` made already (`invalid ownership metadata`).
+
+**What the chart refuses, and with what message.** The render fails before anything is applied, so nothing changes:
+
+| Your values | The message begins |
+|---|---|
+| `config.existingConfigMap`, and no `config.source` | `config.existingConfigMap is for config.source files, and config.source is crds (the chart's default unless your values set it): Agent Kourier would read custom resources, mount no ConfigMap and ignore it. To keep reading your ConfigMap, set config.source: files ...`, and it names [the move](migrate-config-source.md#move-a-configmap-you-manage-yourself) |
+| `config.agentBackends`, `config.chatConnections` or `config.bindings`, on a cluster that does not serve the CRDs, which is every cluster that has not had them installed | `config.source crds needs the CRDs (group agentkourier.dev, version v1alpha1) to be installed before a release that renders config.agentBackends, config.chatConnections or config.bindings as custom resources, and the cluster does not serve them yet: ... To keep the ConfigMap route, set config.source: files ...` |
+| A cluster older than Kubernetes 1.33 | `config.source crds needs Kubernetes 1.33 or later (it is the chart's default unless your values set it): the API server is v1.32.9 ... To install on this cluster, set config.source: files: the ConfigMap route has no minimum.` |
+| `config.chatConnection` and `config.connectionNamespaces` both empty, and `config.chatConnections` without exactly one entry (none, or several) | `config.source crds (the chart's default unless your values set it) needs config.chatConnection: the namespace/name of the one ChatConnection this broker serves ... A broker with no connection of its own, which serves only the ChatConnections of other namespaces, leaves config.chatConnection empty and sets config.connectionNamespaces to those namespaces instead. To supply the config as a ConfigMap instead, set config.source: files ...` |
+
+The messages are the chart's, run with `helm template` (the Kubernetes version of the third from `--kube-version`; a real `helm upgrade` reads the cluster's). The messages say "the chart's default unless your values set it" because the chart sees the same value whether your values file says `config.source: crds` or leaves it out, so it cannot tell which you did. The second row is the one an install of this
+kind meets when it upgrades with its inline config: setting `config.source: files` is the fix.
+
+**What it does not refuse.** With `config.*` resources and no `config.source`, on Kubernetes 1.33 or later and a cluster that already serves the CRDs, the chart renders the resources as custom resources: the
+Deployment moves to `AGENTKOURIER_CONFIG_SOURCE=crds`, its ConfigMap goes, and the pod restarts. That is step 2 of [the move](migrate-config-source.md#2-switch-the-route), done by the upgrade, and a render cannot tell it from a
+first install. A cluster serves the CRDs when you made the first step of that move or applied them yourself (`kubectl get crd bindings.agentkourier.dev`). Resources the chart creates have a new `creationTimestamp`,
+so by [the age rule](../explanation/config-routes.md#who-holds-a-channel) they can lose a channel to a Binding that a team already made. If you want to stay on the ConfigMap, set `config.source: files`; if you mean to move,
+run the server-side check of [step 2](migrate-config-source.md#2-switch-the-route) before you upgrade.
+
+**To move instead of staying,** follow [Move the config between a ConfigMap and custom resources](migrate-config-source.md): two upgrades, the CRDs first with `config.source: files`, then the route.
+Its step 1 now says `config.source=files`, since a values file from before names no route.
+
+**Argo CD users should read the CRD note** in [Stop it and keep the data](install-with-helm.md#stop-it-and-keep-the-data): on the route of custom resources an Application of the chart renders the CRDs, and
+with prune, turning `crds.install` off later (or moving it to `files`, which stops rendering them unless `crds.install` says true), or deleting the Application, may delete them and every team's Binding, AgentBackend and ChatConnection. The chart sets `argocd.argoproj.io/sync-options: Prune=false,Delete=false` on each CRD,
+which Argo CD's documentation says stops that; it is unverified, since Argo CD has not been run against this chart.
+
+## Upgrade to the release that sets GOMEMLIMIT
+
+The chart now gives the container `GOMEMLIMIT`, the Go runtime's soft memory limit, at 80% of `resources.limits.memory`, in bytes: the default
+limit of 256Mi gives 214748364. The runtime then collects more often as its memory nears the limit. The variable is part of the pod template, so
+**this upgrade restarts the pod**, as any change to the template does, with every values file that has a memory limit. With SQLite (`Recreate`) there is a gap
+while the new pod starts; with Postgres (`RollingUpdate`) the new pod starts beside the old one and takes over when the old one stops.
+
+- **It is soft.** It caps nothing. Memory that is live stays, so a number of large replies from agents read at the same time (each event of up to
+  2 MiB takes from about four and a half times its size, for text, to about fifty, for many small objects, while it is decoded, and a stream that is open keeps buffers of about
+  twice the largest event it has carried: see
+  [the release that lowers the bounds](#what-the-lower-bounds-buy-and-what-they-do-not)) can still pass the container's limit and be OOM-killed.
+  Raise `resources.limits.memory` for that.
+- **Your own wins.** A `GOMEMLIMIT` in `extraEnv` is the only one rendered, as you wrote it. The runtime reads a number of bytes, optionally with `B`, `KiB`, `MiB`,
+  `GiB` or `TiB` after it (`100MiB`), and 9223372036854775807, its default, turns the limit off.
+- **No variable** is rendered without a memory limit, for a limit that is an exponent or in milli-bytes, or under 1Mi.
+
+## Upgrade to the release that limits prompt templates
+
+A `promptTemplate` is run when a Binding loads, and again for each message a trigger matches. This release refuses a template that could
+run for ever or build a string without bound, and bounds three strings that had no limit. A config that does neither loads as before.
+No example, recipe or kind tier config in this repository uses a construct below: they read `.Channel`, `.State`, `.Key` and `.Fields.<name>`.
+The current values are on [Limits](../reference/limits.md#write-a-prompt-template).
+
+**What a template may use.** Text and comments, `if` (with `else if` and `else`), `with`, the view's fields (`.Channel`, `.State`, `.Key`,
+`.Link`, `.Source`), `.Fields.<name>` or `index .Fields "<name>"`, and the functions `and`, `eq`, `ge`, `gt`, `index`, `le`, `len`, `lt`, `ne`,
+`not`, `or` and `slice`. A template with anything else fails to load, whatever the route.
+
+| Refused | Example | Rewrite |
+|---|---|---|
+| `range` | `{{ range 3 }}x{{ end }}` | There is nothing to range over: `.Fields` cannot be read whole. Name each entry. |
+| `define`, `template`, `block` | `{{ define "a" }}...{{ end }}{{ template "a" }}` | Write the text where you use it. |
+| A variable, declared or assigned, also in `if` and `with` | `{{ $k := .Fields.alertname }}{{ $k }}` | Read the value where you use it: `{{ .Fields.alertname }}`. |
+| `print`, `printf`, `println` | `{{ printf "%s/%s" .Channel .Fields.alertname }}` | `{{ .Channel }}/{{ .Fields.alertname }}` |
+| `html`, `js`, `urlquery`, `call` | `{{ .Fields.alertname \| html }}` | Drop the call: a value is checked, by its characters, before the template sees it. |
+
+The error names the position and what is refused, as `dry-run` prints it for a template that starts with `{{ range 9000000000000000 }}{{ end }}`:
+
+```text
+b.yaml#1 Binding agent-kourier/ci-failures: spec.chat.triggers[0].promptTemplate: invalid template: promptTemplate:1:9: range is not allowed: a prompt template has no loops
+```
+
+The broker refuses the template before it runs it, so a template that would never return is refused at once.
+
+**What the template may write.** The load runs the template once over placeholder values of 64 bytes, and each render runs it over the message's values, through a
+buffer of 262144 bytes. A template that writes more fails, where before its output was built and then cut: at load, the Binding is invalid; at render, the trigger
+starts no turn, posts a note in the alert's thread, and is audited and counted in `agentkourier_trigger_refused_total` with the reason `render_error`. The prompt keeps
+only the first 4000 UTF-16 units of the template's output, so a template near the bound writes mostly what is thrown away.
+
+**Three strings are bounded.** They apply on both routes, and on the custom resource route the API server refuses a longer one when you create or
+update the object, with the CRD's `maxLength`, which counts characters where the broker counts bytes.
+
+| Where | Bound | The error |
+|---|---|---|
+| `promptTemplate` of a `botMessage` trigger | 8192 bytes | `spec.chat.triggers[1].promptTemplate: is 8193 bytes, longer than the 8192 byte limit` |
+| `spec.agent.name` of a Binding | 253 bytes | `spec.agent.name: is 254 bytes, longer than the 253 byte limit` |
+| `spec.identity.userId` of a Binding | 256 bytes | `spec.identity.userId: is 257 bytes, longer than the 256 byte limit` |
+
+A template over its bound is refused without being parsed. No example, recipe or kind tier config here has a template over 250 bytes, an agent name over 25 characters
+or a user ID over 25.
+
+**Check before you upgrade.** Run `agent-kourier dry-run` of the new release against your files, as in
+[the release that bounds triggers](#upgrade-to-the-release-that-bounds-triggers-extract-entries-and-headers). It loads them with the broker's loader and reports each of these
+errors without a token. It reads files, never the cluster, so on the custom resource route give it the YAML you applied.
+A custom resource that fails these checks after you upgrade is judged as
+[a bad object is](../explanation/config-routes.md#what-a-bad-object-does): the broker does not serve a new object that is invalid, and keeps serving the last good generation of one that is.
+
+## Upgrade to the release that lowers the bounds on what it reads
+
+This release bounds what Agent Kourier reads from an agent, so that a backend that sends large events costs the broker less memory. Release 0.1.6 had no bound of its own on any of
+these reads: the only limit was the A2A library's, which refuses one line of a stream over 10 MiB (`MaxSSETokenSize` in a2a-go v2.7.0, `internal/sse/sse.go`), and an event is many lines. The
+text a thread shows was cut at 12000 UTF-16 units, as it is now, but what the broker held of a reply was not bounded. It does not bound the
+memory a backend can make it use: read [What the lower bounds buy](#what-the-lower-bounds-buy-and-what-they-do-not) before you rely on it. The bounds:
+
+| What | At 0.1.6 | Now |
+|---|---|---|
+| One event of a stream (the lines of it, up to the blank line that ends it) | None on the event; 10 MiB on each line (a2a-go) | 2 MiB |
+| The answer to a call that is not a stream: `GetTask`, `CancelTask`, `ListTasks`, or a JSON answer to a call that asked for a stream | None | 4 MiB |
+| What one turn holds of the agent's reply (the text of its artifacts, tool results that wait for their call, the bookkeeping of each tool part) | None | 341 KiB |
+| The agent card | None | 1 MiB |
+
+**There is no setting for any of them**: they are constants of the binary, and no chart value, file or custom resource field reaches them, so
+a reply that is over them cannot be let through by configuration. Nothing in the chart's values changes. A backend that sends events of more than 2 MiB, or whose tasks
+grow past 4 MiB, needs a build with other constants.
+The current values, and what else the broker bounds, are on [Limits](../reference/limits.md#what-the-broker-reads-and-holds).
+
+**What an agent that sends more sees.**
+
+- **An event over 2 MiB** is not read. The read fails as the event passes the bound, never as a shortened event that parses, and the turn ends with the outcome
+  `response_too_large`. A tool result sits in one event, so one of more than 2 MiB (a large log dump, say) ends the turn.
+- **The tool output of a whole turn, on kagent 1.0, is limited to a little under 2 MiB, though no result is that large.** The final task of kagent 1.0 holds every tool call
+  and result of the turn again in its artifacts (read in the recorded fixture `test/fixtures/kagent/approval/02-approve.response.sse`), and it arrives as one event. So what has
+  to fit 2 MiB is the sum, and a turn that calls tools can pass it with a reply of a few bytes. Measured with 300 KiB results, in a test process: results adding up to 1800 KiB
+  made a final task of 1907 KiB, which is read; 2400 KiB (eight results) made 2543 KiB, which is not, and the turn ended at its final event with the reply already
+  shown. The `error` of the log line says `an event of more than 2097152 bytes`, as it does for one large result; that the text shown is short, and the tool steps before it
+  are many, says it is the sum.
+- **A reply that adds up to more than 341 KiB** in the text the turn holds ends the turn the same way, however many events it came in. At 0.1.6 the turn held a reply of any size.
+- **A person's answer to a paused task** is held to the same bounds, with these differences. What it reads of the paused task first, to tell what is new in the answer (the
+  tool calls and results of the turn that paused), is not counted against the 341 KiB, so the answer's own stream can be read for a task that paused after many tool steps (in a test, one
+  artifact of call and result pairs with 40-byte call IDs, the old charge passed the budget at about 600 pairs). That holds for the answer's stream only: **a follow reads the task with no such allowance**,
+  and a follow is what comes after a restart, after a lost stream past the reconnect limit, and after an answer that the agent refused as busy or whose outcome is unknown. In the same test a follow's
+  first snapshot passed 341 KiB at about 350 pairs, and a live turn at about 400, so a task of some 350 pairs or more that paused and then met a restart is stopped as too large and cancelled. The notes
+  the answer keeps of the paused task cost memory, held for the whole answer and for each answer in flight: 4.2 MiB or 5.2 MiB for a task of 53,847 of the smallest tool parts (78 bytes each on the wire, the most
+  that 4 MiB holds), measured in a test process, besides the memory to decode it. And a reply to the
+  answer that is too large before the agent names the task again ends the turn as any other does: Agent Kourier cancels the task that was answered, once, and the answer is not sent again. The task is not read first,
+  and not parked again for a person to answer into the same reply. The thread is told a sentence of its own, `what the agent sent after the answer was more than Agent Kourier can read or hold, so the turn stopped and its task is being
+  cancelled. The agent may have acted on the answer.`: the agent may have taken the answer, and what it sent after it was not read.
+- **An answer over 4 MiB** is not read either. The answer to `GetTask` carries the task with its whole history, so a long task with large tool results can pass it. The
+  turn ends in the same way wherever it reads its task: after a lost stream, after a stream that ended with the task settled and no final task, when it follows a
+  task again after a restart, when a person's answer or text reply to a paused task reads the task, and when the read after an answer of unknown outcome meets it. The task is
+  read once and not tried again, since the same answer would come again. A person's answer to a paused task also reads the task first, to tell what is new in the reply:
+  when that read is too large, the answer is sent without it.
+- **A cancel whose answer is over 4 MiB** is counted as cancelled, and it is not verified. An a2a-go server answers every cancel, and a repeat of one that already took, with the whole
+  task, and only a refusal is a small error (shown in a test against a real a2a-go handler; **not confirmed on kagent**). So Agent Kourier counts such a cancel as done, and so does the cancel of a pause that timed out or was cancelled:
+  the task is ended and the record cleared, which a thread held behind a task that was over for good would otherwise stay. What it read of the answer is only that it was too large, and
+  an error that carries a large body (a 200 with a JSON-RPC error whose data is large, say) reads the same, so nothing is claimed of what became of the task. The audit log records the cancel as
+  `failed response_too_large`, a WARN says that the cancel is counted as done without being verified. The same goes for a cancel that the agent refuses as "cannot be cancelled" when the task is then too large to read.
+- **A lookup that cannot read the list of tasks in full** does not send the turn. Before a message is sent again whose outcome is unknown, or that an earlier process queued, the agent's list of the
+  context's tasks is read for one that holds it. Each task of a page carries its history, so a page over 4 MiB is asked for again at half the size, down to three tasks, and the pages after
+  it at the size that fit (whether a backend continues a page token with another page size was not measured: an error on the first call after the size was lowered is taken as the list not read).
+  The lookup also gives up after **five minutes** for the whole walk, after **200 pages**, and on a page token that comes again. If an earlier page held the turn, that task is the answer.
+  If none did, Agent Kourier does not know whether the agent already has the turn and cannot find out, so it **does not send the turn again**: it fails, and the thread is told. This is for an agent
+  that can list tasks; an agent that cannot (A2A 0.3, kagent 0.9.x) is still sent the turn, which may run twice. Recovery after a restart follows the recorded task first, and the queued message then
+  fails the same way; nothing is asked for again and again. A reply that this process queued, and that the agent refused as busy or not ready, or that was held behind a task and never sent, is not in
+  this case: the agent does not have it, so it is sent when the agent is free, whatever the list says, and a WARN says so. A send that failed in any other way before a task was named (a JSON-RPC error such as -32603, say) is in
+  this case, since the agent may have started the task and failed on the way back.
+- **An agent card over 1 MiB** is no answer. It is read when a connection is opened, so a call that had to open one (a lookup, a cancel, a follow) can meet it, with nothing sent and nothing read of any task. It
+  is not counted as an answer past a bound: a cancel that met it is not done, a lookup that met it is retried like any lookup that could not reach the agent, and a follow that met it tells the thread
+  `Agent Kourier could not connect to the agent: its agent card is too large to read, so the turn stopped. The task stays at the agent. Once the card is fixed, restart Agent Kourier.` The task stays recorded and nothing follows it again by itself, and no control of the thread takes it up: once the card is fixed, a restart reads it and follows it (recovery), and it interrupts every turn of every tenant on that broker while it runs. The Binding's `BackendReachable` condition reports the card.
+
+**What the thread shows.** When a turn stops, text that arrived before the bound was passed stays shown, cut to what a message holds as it always was (12000 UTF-16 units in the
+Slack adapter, with a mark where it is cut). Then the thread gets one fixed sentence, `the agent sent more than Agent Kourier can read or hold, so the turn stopped`, and the
+turn has no final answer. The sentence is the same for a reply of sixteen bytes after tool results that add up to megabytes and for a reply of megabytes; it names no host and no
+size. The difference from 0.1.6 is for a reply over 341 KiB: it used to end as any turn does, with the cut text, and now the turn stops with the sentence and, when the agent had named a task,
+Agent Kourier cancels that task at the agent, once and within 30 seconds, so the agent's later work is lost. A reply that named no task has none to cancel, and an agent card over 1 MiB cancels nothing (see above). The text past 12000 units was never in the thread: what the
+bound keeps out of it is the turn's ending.
+
+For a message that was not sent because the lookup could not be read in full, the thread gets: `Agent Kourier could not tell if the agent already started this message, as its task list could not be read in full, so it did not send it. The agent may be running it. To run it, post it again.` A person who posts it again sends a new message, which is sent
+without a lookup. The sentence is the same whichever way the list could not be read (too large at every page size, too slow, too many pages), and it is short enough for a thread to show whole: a notice's detail
+is cut at 200 units, and a test holds every sentence of these to that.
+
+**What to do.** Make the agent send less in one piece: have its tools trim what they return to what the model needs (a result of 2 MiB is on the order of half a million tokens,
+an estimate that is past the context of most models), and keep a reply to what a person will read. Keep a thread's tasks small if the lookup notice appears. There is no
+counter of replies that are between the old bounds and the new ones before you upgrade. After it, three signals say what happened, and
+[Troubleshoot](troubleshoot.md#the-thread-says-the-agent-sent-more-than-agent-kourier-can-read-or-hold) reads them:
+
+- the turn outcome `response_too_large` (a turn that stopped) and `lookup_incomplete` (a message not sent, since the list of tasks could not be read in full), in `agentkourier_turn_outcomes_total`, which you can alert on;
+- the log lines of the turn, with the `error` that names the bound; and
+- the audit row of the call that failed with `response_too_large`.
+
+### What the lower bounds buy, and what they do not
+
+The bounds are of the bytes read. The memory it takes to read them depends on the shape of the JSON, which the backend chooses, so
+they do not bound the memory. **A backend that is hostile, or that sends a shape you did not test, can take the broker past the chart's default limit of 256Mi with two or three
+responses at once.** Trust each AgentBackend as you trust code that runs in the broker's pod, or give a backend you do not trust a broker of its own: a restart recovers the sessions, but it interrupts every turn of
+every tenant on that broker while it runs. A bound on memory, a token budget for what is decoded, is not built in this release.
+
+All of this was measured in a test process, not a pod: the Go test binary on a laptop (macOS), with the fake agent and the client in one process and a baseline of about 40 MiB of
+resident memory, through the broker's own client path (a `Pool`, the `generic` dialect and the transport that enforces the bounds). Each stream sent one event of exactly the bound and stayed open, all at
+once; each call read an answer of exactly the bound, all at once. Three runs of each. `GOMEMLIMIT` is off, or at 214748364 bytes (80% of 256 MiB).
+
+*Text, the shape the first table is of: one long string.* A pod's baseline and its cgroup accounting were not measured. The columns headed "earlier" were measured with a 10 MiB event and a 16 MiB answer, the bounds of a build made before this release; 0.1.6 had no bound on an answer.
+
+| | Earlier bounds | Now |
+|---|---|---|
+| Heap one open stream keeps after one event of the bound | 20 MiB | 4 MiB |
+| Heap at the peak of reading one event of the bound | about 50 MiB | about 9 MiB |
+| Heap at the peak of reading one answer of the bound | about 56 MiB | about 18 MiB |
+| Open streams that reach 256 MiB of resident memory, `GOMEMLIMIT` off | 5 | about 32 (a few runs of 32 were under, and 40 were over) |
+| Open streams that reach 256 MiB, `GOMEMLIMIT` at 214748364 | 7 to 8 | about 40 to 48 |
+| Answers read at once that reach 256 MiB, `GOMEMLIMIT` off | 4 | 17 to 24 |
+| Answers read at once that reach 256 MiB, `GOMEMLIMIT` at 214748364 | 5 to 8 | 25 to 32 |
+
+*A data part of many small objects (`{"a":0},` repeated), at the bound: the shape that took the most memory of those tried.* Resident memory, over three runs:
+
+| At once | 2 MiB event, now | 4 MiB answer, now | 10 MiB event, earlier | 16 MiB answer, earlier |
+|---|---|---|---|---|
+| 1 | 136 to 142 MiB | 232 to 254 MiB | 563 to 612 MiB | 853 to 900 MiB |
+| 2 | 238 to 254 MiB | 434 to 457 MiB | 1095 to 1197 MiB | 1676 to 1798 MiB |
+| 3 | 342 to 385 MiB | 638 to 704 MiB | | |
+| 4 | 448 to 502 MiB | | | |
+
+One 2 MiB event of that shape peaks at about 106 to 111 MiB of heap, about fifty times its size. Two of them come within a few MiB of the default limit, and one answer does too (232 to 254 MiB), and one more of either passes it; the bound on bytes does not stop that, and
+streams that ended right after their event, instead of staying open, were no better in the text shape (some runs of 32 streams reached the limit, and others did not by 64, as the
+garbage collector's timing decided). Nothing bounds how many streams or calls are open at once; the `rateLimit.maxConcurrent` of a `botMessage` trigger limits only the investigations
+that trigger starts. Size `resources.limits.memory` for the number of agents that can answer at once, with the worst shape in mind, and see
+[the release that sets GOMEMLIMIT](#upgrade-to-the-release-that-sets-gomemlimit).
+
+## Upgrade to the release that bounds what a trigger's regular expressions cost
+
+The 512 byte cap on a regular expression did not bound what it costs: a regular expression of 504 bytes, `.{0,1000}` written 56 times, compiles to 112002 instructions (counted with Go 1.27), and the time to try a regular expression on a message grows with that size and the
+message's length. This release holds the program of each regular expression of a Binding to a size, and the programs of a
+Binding to a total, and reads only the head of a long field. A config within them loads as before. The regular expressions of the example Bindings in this repository are 10
+to 98 instructions each (measured), so no example, recipe or kind tier config comes near a limit. The current values are on
+[Limits](../reference/limits.md#write-a-binding-an-agentbackend-or-a-chatconnection).
+
+| Where | Limit | The error |
+|---|---|---|
+| One regular expression of a trigger's `match`, `exclude` or an `extract` entry | 2000 instructions | `spec.chat.triggers[1].match.title: regular expression compiles to 2002 instructions, more than the 2000 instruction limit; the regular expressions after it are not checked` |
+| All the regular expressions of a Binding | 5000 instructions | `spec.chat.triggers[1].extract.state.regex: the regular expressions of the Binding compile to 5005 instructions with this one, more than the 5000 instruction limit for a Binding; the regular expressions after it are not checked` |
+
+The instructions are those of the program that Go compiles the expression to (`.{0,999}` is 2000 and `a` is 3), not its length in bytes. The check ends at the first regular expression it
+refuses, so a Binding that fails shows one error, and fixing it can show the next, such as an expression that does not compile. The API server cannot count instructions, so on the custom
+resource route it still creates the object; the broker then refuses it as it refuses any invalid spec.
+
+**What changes beyond the refusal.**
+
+- **A regular expression reads the first 16 KiB of its field.** `match`, `exclude` and `extract` see the same head, cut on a character boundary. Before, they read the whole field. A match on text
+  past 16 KiB no longer matches, and an expression that ends in `$` ends at the end of the head. An alert message does not come near it.
+- **The events of one Slack channel are handled one at a time and in order, and different channels at the same time.** Before, one event at a time across all channels, so a slow match delayed every
+  channel's acknowledgments. The broker now holds at most 16 events for a channel and 256 in all (a channel with none held always gets its first); an event past a bound is left unacknowledged, so Slack may send it again, and is counted in
+  `agentkourier_slack_events_shed_total` and logged at WARN. Slack's retries are finite (not verified here), so a shed event can be lost, and one that comes back after a later event of its channel was taken is handled after it: order within a thread
+  holds only while the bounds do. A crash loses no more than before: an event is still acknowledged only after the broker has written it. When the broker is stopping, the events still waiting on a lane are not handled and stay unacknowledged.
+  `agentkourier_slack_ack_duration_seconds` now counts from the moment the broker took the event off the connection, so it includes the wait behind the channel's earlier events.
+
+**Check before you upgrade.** Run `agent-kourier dry-run` of the new release against your files, as in
+[the release that bounds triggers](#upgrade-to-the-release-that-bounds-triggers-extract-entries-and-headers). It loads them with the broker's loader and reports each error
+above without a token, and it reads files, never the cluster, so on the custom resource route give it the YAML you applied. A file over a limit fails the load of the whole config
+on the files route: at start the broker exits with [code 2](../reference/cli.md#exit-codes) and names the field, and on a reload it keeps the last good config. On the custom resource
+route a Binding over a limit is not served after the upgrade, since a restarted broker has no earlier good generation of it: it has `Accepted=False` with the reason `InvalidSpec`, and its channel
+has no Binding until you edit it. An earlier release has none of these limits, so after a [rollback](#roll-back) such a config loads again.
+
+**What the limits do not make small.** They cap the cost, and the cost they allow is a fraction of a second to a second for each message. Go's regular expression engine does work in proportion to the
+instructions of the program times the length of the text, so the time grows with both, and it grows when the CPU is shared with other work. The benchmark `BenchmarkRegexCost` in `internal/trigger` measures it on 16 KiB fields, which is all a
+regular expression reads; run it on your own hardware with `go test ./internal/trigger -run '^$' -bench BenchmarkRegexCost -benchtime 3x` (it is not part of `make test`).
+
+One process, `GOMAXPROCS=1`, three runs of three iterations each, on an Apple M2 laptop with 8 CPUs (macOS arm64, Go 1.27, `-race` off), at a load average of 14.3 before the runs and 10.4 after, which is not an idle machine. The
+times are the median of the three, for one message whose six fields are 16 KiB each:
+
+| | `.{0,n}` | `\pL{0,n}` |
+|---|---|---|
+| One regular expression of about 2000 instructions that finds no match (`one_regex_miss`) | 0.38 s | 0.62 s |
+| The same, finding its match at the last byte (`one_regex_hit`) | 0.27 s | 0.30 s |
+| A Binding at the budget of 5000 instructions: two matches of about 2000 that find their match at the last byte, and an exclude of about 1000 that finds none (`binding_at_budget`) | 0.67 s | 0.81 s |
+
+The Binding took 1.8 times (`.`) and 1.3 times (`\pL`) the time of one regular expression that misses, and 2.5 and 2.7 times the time of one that hits, which is about the 2.5 that its instructions say (5000 over 2000). A miss costs more
+than a hit at the last byte, and a Unicode class costs more than the dot. The figures swing with the load: an earlier run of the same benchmark, at a load average of 7 to 12, gave 1.5 seconds for the dot's miss. They are for comparing the cases, not for sizing a machine; measure your own.
+
+The time runs on the lane of the channel, so the channel's own events wait behind it first, but it is CPU: many busy channels slow the acknowledgments of healthy ones too. Validating a Binding at every cap, with 2156 regular
+expressions of 512 bytes, took 7 to 20 milliseconds (`TestValidateOfAHostileBindingIsCheap` logs it with `-v`), where compiling every one of them with `regexp.Compile` took about 19 seconds in one measurement at a load average of about 3. Keep
+Bindings of channels that people you do not trust can post in well under the limits.
+
+## Upgrade to the release that caps the pause timeout and the thread TTL
+
+`interactions.timeout` and `session.threadTTL` had a lower bound and no upper one. This release refuses a config that sets either over its cap, and
+loads a config within the caps as before. No example, recipe or kind tier config in this repository sets either over
+its cap. [Limits](../reference/limits.md) lists both.
+
+| Field | Cap | The error |
+|---|---|---|
+| `spec.interactions.timeout` of a Binding | 168 hours (7 days) | `spec.interactions.timeout: 169h0m0s is out of range, must be at most 168h0m0s` |
+| `spec.session.threadTTL` of a Binding | 8760 hours (365 days) | `spec.session.threadTTL: 8761h0m0s is out of range, must be at most 8760h0m0s` |
+
+Both apply on both routes. On the custom resource route the API server also refuses a Binding over a cap when you create or update it, with a rule of the CRD
+(`is out of range, must be at most 168h`, or `8760h`). The retention of sessions needs the cap: it holds the sessions of a Binding that has left the config to the longest
+`threadTTL` of any Binding that is in it, so a very long one made every tenant's orphaned sessions live as long.
+
+!!! warning "Lowering a `threadTTL` deletes sessions"
+    A `threadTTL` over the cap has to come down to 8760h or less, and that shortens how long the Binding's threads live. A thread that has been idle for longer than the new
+    `threadTTL` expires: a reply in it gets the notice that the conversation has expired. A session idle for longer than the new `threadTTL` plus the 90 days of grace is
+    deleted at the next sweeps of the retention, with its reply queue, interactions and outbox rows and the rest in
+    [Stored data](../reference/stored-data.md#sessions-and-what-belongs-to-them); only its votes are kept. A deleted session does not come back, and a
+    [rollback](#roll-back) does not restore it. Lowering a Binding from 5 years to 8760h deletes the sessions of its threads that were idle for more than 455 days.
+    Check how long the Binding's threads have been idle before you change the value.
+
+**With the files route**, a Binding over a cap fails the config as any invalid file does: at start-up the broker exits with [code 2](../reference/cli.md#exit-codes) and names the
+field, so the upgraded pod never becomes Ready, and a running broker that reloads keeps its last good config.
+
+**With custom resources**, a Binding already in the cluster over a cap is not removed or changed. The upgrade restarts the broker, which has no earlier generation of it
+to keep serving, so it does not serve that Binding: its status says `Accepted=False` with the reason `InvalidSpec` and the error above, and it takes no message until you lower the value.
+Its own sessions are not deleted while it is not served. A broker that was already running when you edit a Binding over a cap keeps serving the last good generation
+(the status says `InvalidSpec` and `serving generation N`), and the next restart takes the Binding out of routing, as
+[what the custom resource route does not promise](../explanation/config-routes.md#what-the-custom-resource-route-does-not-promise) says.
+Whether the API server lets you edit another field of such a Binding before you lower the value depends on how it treats a stored value that breaks a rule: an ordinary update of such a
+Binding is accepted from Kubernetes 1.30 (see [the chart's README](https://github.com/agentkourier/agent-kourier/blob/main/charts/agent-kourier/README.md)); lower the value in the same edit anyway.
+
+**Other Bindings' sessions can be deleted by this, with no one editing them.** The sessions of a Binding that is not in the config (one that was deleted) are held to the longest
+`threadTTL` of the Bindings that are served, and to at least the default, plus the 90 days. A Binding that is not served drops out of that longest, so while a Binding with a `threadTTL`
+of 5 years is not served, the sessions of deleted Bindings that it was keeping, those idle for more than 180 days (the default, plus the 90), are past deleting at the next sweeps.
+Upgrading with such a Binding does this, because the upgrade stops serving it. Lower its `threadTTL` before you upgrade, with the warning above in mind, or accept that the
+sessions of deleted Bindings that were idle for more than 180 days, and for less than the old longest `threadTTL` plus 90 days, go.
+
+**Check before you upgrade.** Run `agent-kourier dry-run` of the new release against your files, as in
+[the release that bounds triggers](#upgrade-to-the-release-that-bounds-triggers-extract-entries-and-headers). It reports each of these errors without a token. It reads files,
+never the cluster, so on the custom resource route give it the YAML you applied, and list the Bindings in the cluster for a `threadTTL` or `timeout` over a cap
+(`kubectl get akbinding -A -o yaml`).
+
+An earlier release has no cap, so after a [rollback](#roll-back) a config over one loads again. Sessions deleted after you lowered a `threadTTL` stay deleted.
+
+## Upgrade to the release that bounds namespaces, chat IDs, URLs, header values and durations
+
+These fields had no bound in the schema or in the broker's own validation, so one namespace writer could store an object as large as the API server allows, and every
+broker keeps each object in memory. This release refuses a config over the bounds below and loads a config within them as before. No example, recipe, kind tier config or test fixture in this
+repository comes near one: the longest URL is under 100 characters, a header value is under 20, an `allowedNamespaces` list has one namespace, and a channel, a sender and a user group ID are 11
+characters, and a duration is written in at most 5 (`2160h`). [Limits](../reference/limits.md) lists every limit you can run into, and [Security](../explanation/security.md#what-the-people-who-write-these-objects-can-do) says what the bounds do and do not cap.
+
+| Where | Bound | The error |
+|---|---|---|
+| `spec.allowedNamespaces` of an AgentBackend or a ChatConnection | 256 namespaces | `spec.allowedNamespaces: has 257 items, maximum is 256` |
+| `spec.url` of an AgentBackend | 2048 bytes | `spec.url: is 2049 bytes, longer than the 2048 byte limit` |
+| `spec.url` of an AgentBackend | no `?` and no `#` | `spec.url: must not have a query or fragment` |
+| The `value` of a header | 4096 bytes | `spec.headers[0].value: is 4097 bytes, longer than the 4096 byte limit` |
+| `spec.chat.channel` of a Binding | 32 bytes | `spec.chat.channel: is 33 bytes, longer than the 32 byte limit` |
+| `from.id` of a trigger | 32 bytes | `spec.chat.triggers[1].from.id: is 33 bytes, longer than the 32 byte limit` |
+| An entry of `spec.interactions.approverGroups` | 32 bytes | `spec.interactions.approverGroups[0]: is 33 bytes, longer than the 32 byte limit` |
+| `spec.chat.acknowledgment.emoji` | 100 bytes | `spec.chat.acknowledgment.emoji: is 101 bytes, longer than the 100 byte limit` |
+| The name of an `extract` entry, and so of a `closeWhen` key | 63 bytes | `spec.chat.triggers[1].extract: entry 1, in name order, is named with 64 bytes, longer than the 63 byte limit` |
+| A value of `thread.closeWhen` | 256 bytes | `spec.chat.triggers[1].thread.closeWhen.state: is 257 bytes, longer than the 256 byte limit` |
+| The text of a duration: `interactions.timeout`, `session.threadTTL`, `thread.cooldown`, `thread.maxIdle`, `rateLimit.per` | 64 characters | `spec.session.threadTTL: is 65 characters, longer than the 64 character limit` |
+
+A mention's `name` over 63 characters and its `user` over 21 were refused before, by their patterns. The message now says the length, as the rows above do, and shows no value.
+
+**The text of a duration.** The schema's pattern let through any run of numbers and units (`0h0h0h` and on), and the broker read the value whatever the length of the text, so a duration could be as
+long as the object. The broker now reads the text of the five durations before it becomes a duration, on both routes, and refuses one of more than 64 characters, whatever its value, without showing it.
+A duration that is written the usual way is a few characters.
+
+**A `url` with a query or a fragment.** Before, such an AgentBackend loaded and passed the API server, and every connection to it failed when the broker built the endpoint, so no probe and no turn
+on it could succeed. It is now refused when it is read or written. The rule is wider than the connection's: a `?` or a `#` anywhere in the `url` is refused, even one with nothing after it.
+A bare `?` failed before too: the endpoint check kept it, and the card was fetched at a URL whose query held the path. A bare `#` worked, because the endpoint drops it, and is now refused.
+If the agent accepts it, move a token that rode in a query to a header with `valueSecretRef`; drop a fragment, which an HTTP client does not send.
+
+A config over a bound is an invalid config, and the broker treats it as it treats the one in
+[the release that bounds triggers](#upgrade-to-the-release-that-bounds-triggers-extract-entries-and-headers): with files it exits at start-up with [code 2](../reference/cli.md#exit-codes) and names the field,
+and on a reload it keeps its last good config. With custom resources the API server refuses the object when you create or update it, and an object already stored over a bound is not removed or changed.
+The broker judges it one object at a time, as [What a bad object does](../explanation/config-routes.md#what-a-bad-object-does) says: a Binding over a bound that the broker has no earlier generation of is not served
+(`Accepted=False`, `InvalidSpec`), a Binding that names an AgentBackend over a bound is dropped with `BackendRejected` unless the broker holds that AgentBackend's last good generation, and the broker's own ChatConnection over a bound
+stops the start with exit code 2. Edit such an object before you upgrade: whether the API server lets you change another field of a stored object that breaks a rule depends on its version (see
+[the chart's README](https://github.com/agentkourier/agent-kourier/blob/main/charts/agent-kourier/README.md)), so lower the value in the same edit.
+
+**Check before you upgrade.** Run `agent-kourier dry-run` of the new release against your files, as in
+[the release that bounds triggers](#upgrade-to-the-release-that-bounds-triggers-extract-entries-and-headers). It reports each of these errors without a token. It reads files, never the cluster, so on the
+custom resource route give it the YAML you applied, and look in the cluster for a URL with a query or fragment (`kubectl get akbackend -A -o yaml | grep -E 'url: .*[?#]'`).
+
+An earlier release has none of these bounds, so after a [rollback](#roll-back) a config over one loads again, and an AgentBackend with a query or a fragment in its `url` loads again, and fails each connection unless the fragment is a bare `#`.
+
+## Upgrade to the release that grants the ChatConnection's Secret
+
+On `config.source: crds`, the chart now grants `list` and `watch` on the one Secret that the served ChatConnection reads, by name, from `config.chatConnection` alone. The chart cannot read a
+ChatConnection that you apply yourself, so it takes the Secret's name from the connection's: the Secret `slack` for `config.chatConnection: agent-kourier/slack`, in the connection's namespace (the
+release's, when the value has no namespace). The new value `config.chatConnectionSecret` names the Secret when it is called something else. The `rbac.secretNames` entry for that Secret is no longer needed,
+and is not harmful: a name listed twice is granted once.
+
+- **A new grant on upgrade.** An install on `crds` that sets `config.chatConnection` gains `list` and `watch` on one more Secret by name: the one named like the connection, or `config.chatConnectionSecret`.
+  Nothing changes when `rbac.secretNames` already lists it or when `config.chatConnections` renders that connection (its `credentialsSecretRef` is granted instead, and no second Secret is added).
+  The Secret may not exist, for instance when the connection reads a Secret of another name that `rbac.secretNames` lists: the broker never reads that Secret, because only the chart knows the derived name and the broker reads the ChatConnection's own `credentialsSecretRef`, so the grant goes unused and covers no Secret until
+  one of that name is created in that namespace. Set `config.chatConnectionSecret` to the real name, so that the grant is on the Secret that is read. Check the render with `helm template ... | grep -A8 'kind: Role'`.
+- **A connection in another namespace.** With `config.chatConnection: other-ns/name`, the chart now renders a Role and RoleBinding named `<fullname>-secrets` in `other-ns`, which it did not before when
+  nothing else of yours named a Secret there. If a Role of that name exists there already, made by hand, the upgrade fails with `invalid ownership metadata`: delete the hand-made Role first, or give it
+  another name (the name the chart uses is `agent-kourier-secrets` for a release called `agent-kourier`).
+- **Nothing else derives a grant.** A Binding's token Secret and a header's Secret on a resource you apply yourself still need `rbac.secretNames`, a Role of your own, or the team's own Role in its
+  namespace: see [Let a team add its own Binding](migrate-config-source.md#let-a-team-add-its-own-binding).
+- **A clearer status.** A Binding whose Secret cannot be read still says `CredentialsUnreadable`, and its message now says which cause it is, and for a Secret in the Binding's namespace names the Secret and,
+  when the API server denied the read, the `list` and `watch` that Agent Kourier's ServiceAccount needs: [Binding status](../reference/binding-status.md).
+
+Remove `config.chatConnectionSecret` from the values before a [rollback](#roll-back) to a release without the derived grant: that release's values schema refuses a `config` key it does not have. An install that dropped the `rbac.secretNames` entry for the ChatConnection's Secret has no Role for it after the rollback, so restore the entry in the same change, or the pod exits with
+[code 3](../reference/cli.md#exit-codes) in a loop. Keeping the entry until you are sure not to roll back avoids both steps.
+
+## Upgrade to the release that limits the agents a Binding may name
+
+An AgentBackend on `dialect: kagent-v1` can now set `spec.agents` to list the agent namespaces its Bindings may name in `spec.agent.namespace`. The field is optional, and an AgentBackend
+without it behaves as before, so nothing changes until you set it. [Security](../explanation/security.md#what-the-people-who-write-these-objects-can-do) says what it bounds and what it does not.
+
+```yaml
+spec:
+  dialect: kagent-v1
+  agents:
+    sameNamespace: true        # a Binding may name an agent in its own namespace
+    namespaces: [shared]       # and any Binding that may use this backend may name one in shared
+```
+
+- **Set it only after the CRDs and the image are both new.** On the custom resource route the AgentBackend CRD changes (its schema hash with it). The chart applies it with the release when `crds.install` is true, or unset on `config.source: crds`; if you apply the CRDs yourself,
+  apply `charts/agent-kourier/files/crds` again. A CRD that does not have the field refuses it from `kubectl` and Helm 4, and drops it silently from a client that does not ask the API server to refuse unknown fields
+  ([Unknown fields](../explanation/config-routes.md#unknown-fields)). A broker older than this release ignores `spec.agents` on custom resources, so the Bindings are served with no limit: check
+  `agentkourier_crd_schema_state` and the broker's version before you rely on it. On the files route an older broker refuses the file as a whole, because it does not know the field.
+- **A Binding that no longer matches stops being served, on custom resources.** Setting or narrowing `agents` takes effect when the broker next reads the config: a Binding whose `agent.namespace` is not allowed is
+  left out and says `AgentNamespaceNotAllowed` ([Binding status](../reference/binding-status.md)), and the others keep running. List every namespace your Bindings name before you apply it:
+  `kubectl get akbinding -A -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,BACKEND-NS:.spec.agent.backendRef.namespace,BACKEND:.spec.agent.backendRef.name,AGENT-NS:.spec.agent.namespace`.
+  **On the files route** nothing is dropped, because the config resolves all or nothing: a broker that starts on it exits with [code 2](../reference/cli.md#exit-codes) and serves nothing, and a broker that reloads it keeps serving every Binding
+  under the last good config, with the old limit or none, and sets `agentkourier_config_stale` to 1. Make sure every Binding's `agent.namespace` is allowed before you change the file.
+- **A value that allows nothing is refused.** `agents: {}`, or `sameNamespace: false` with no `namespaces`, is invalid, and so is the field on an `a2a` AgentBackend. Both are refused by the API server and at load.
+  The list holds at most 256 namespaces ([Limits](../reference/limits.md)).
+- **Before a rollback to an earlier release, remove `agents` and expect the limit to end.** An earlier broker ignores the field on custom resources and serves every Binding the AgentBackend would
+  have admitted, in any agent namespace.
+
+## Upgrade to the release that serves team connections
+
+A team can bring its own Slack app: the platform team lists the team's namespace in the new value `config.connectionNamespaces`, and the broker serves the team's ChatConnection beside its own
+([Let a team bring its own Slack app](team-slack-app.md)). The broker serves nothing new until that list admits a namespace: the chart renders `AGENTKOURIER_CONNECTION_NAMESPACES` only for a
+non-empty list, and a broker without it serves its own connection alone. A broker may also have no connection of its own, with `config.chatConnection` empty and the list set
+([A broker with no connection of its own](team-slack-app.md#a-broker-with-no-connection-of-its-own)). Some changes below apply to every install, list or not.
+
+### Before you upgrade
+
+- **Bring the CRDs to this release with the image.** All three CRDs changed, and each has a new schema hash: the AgentBackend CRD gains `spec.agents`
+  ([the release that limits the agents a Binding may name](#upgrade-to-the-release-that-limits-the-agents-a-binding-may-name)), the Binding CRD's trigger `type` enum gains `personMessage`, with rules (CEL) that say which fields that trigger takes
+  ([A person's message](../reference/chat-triggers.md#a-persons-message)), and the ChatConnection CRD's description changed (its fields did not). The chart applies them with the release when `crds.install` is true, or unset on
+  `config.source: crds`. If you apply the CRDs yourself, apply `charts/agent-kourier/files/crds` first. Until all three match, `agentkourier_crd_schema_state` reports a mismatch, and an older Binding CRD refuses a `personMessage` trigger.
+- **If you ran 0.3.0-rc.1 with an empty `config.chatConnection`, check your values.** Under rc.1 an empty `config.chatConnection` with exactly one `config.chatConnections` entry made that entry
+  the broker's own connection, even with `config.connectionNamespaces` set. Now, with the list non-empty and `config.chatConnection` empty, the broker has no own connection, and that entry is a team connection: it is served as one if its
+  namespace is on the list, and the chart refuses to render if it is not. The fix is to set `config.chatConnection` to the entry (`namespace/name`), which keeps it the own connection ([Release notes](../release-notes.md#a-broker-with-no-connection-of-its-own)).
+  Values with `config.chatConnection` set, or with the list empty, mean what they meant.
+- **Change the queries that match six series one to one.** `agentkourier_intake_total`, `agentkourier_chat_api_calls_total`, `agentkourier_slack_events_shed_total`,
+  `agentkourier_slack_ack_duration_seconds`, `agentkourier_outbox_pending` and `agentkourier_outbox_oldest_age_seconds` gain a `connection` label. A query that sums over them, or selects by the labels it
+  names, gives what it did. An expression that matches one of them with a series that has no `connection` label, such as `agentkourier_outbox_pending + agentkourier_reply_queue_depth`, returns nothing
+  from the first scrape: add `ignoring(connection)` or aggregate first ([Metrics](../reference/metrics.md#series-by-connection)).
+- **Change log alerts on the reconnect line.** The WARN `connection attempt failed; retrying` is gone. A failed reconnect now logs `slack connection ended; connecting again`, with the error and the wait, once for
+  each attempt ([Troubleshoot](troubleshoot.md#the-log-says-slack-connection-ended-connecting-again)).
+- **Expect a new outcome on the approvals counter.** `agentkourier_approval_outcomes_total` gains `outcome="orphaned"`, and `agentkourier_interaction_timeouts_total` does not count those (see below).
+  A dashboard that lists the outcomes by name needs the new one.
+
+### What changes for every install
+
+- **A database migration, 0029, runs at the first start.** On SQLite and on Postgres it adds a `connection` column to `outbox` and to `interaction_presses`, `NOT NULL DEFAULT ''`, replaces the index on the outbox's
+  channel and thread with one that starts at the connection, and makes the table `served_connections`. It adds columns and a table, replaces one index, and rewrites no row. A row written before it, or by an older image after a rollback, has the empty
+  connection; the leader gives such rows to the broker's own connection each time it starts. A broker with no own connection has none to give them to, and its leader
+  refuses to start while any exist (exit code 2): set `config.chatConnection` once so they get an owner, then unset it ([Troubleshoot](troubleshoot.md#the-pod-exits-with-code-2)).
+- **Reconnects are paced by the broker.** After a failed attempt the broker waits 1 second, doubling to 60, each wait cut at random by up to half; a Retry-After from Slack is honoured up to 5 minutes
+  ([Limits](../reference/limits.md#run-the-broker)). Before, the Slack library retried by itself up to 5 minutes apart.
+- **`token_expired` on a reconnect stops the broker's own connection.** The process exits with [code 1](../reference/cli.md#exit-codes), as it does for the other rejected tokens; it used to retry without end.
+  New tokens apply at a restart, as before.
+- **A pause whose Binding is gone ends.** An approval or a question still waiting after its Binding was deleted used to stay pending, with its session, for as long as the broker ran. The sweep now ends
+  it 5 minutes after the first sweep that finds it both past its deadline and without a Binding, posts nothing, records it as `timed_out` in the store and as `orphaned` in the audit log and the metric, and leaves the agent's task
+  waiting for input at the agent. Such pauses left by an earlier release, already past their deadline, are ended about 5 minutes after the new leader starts, and their sessions can then be purged.
+- **`Ready` also needs `ApproversReadable`.** A Binding with `interactions.toolApprovals: true` and `interactions.approverGroups` has a new condition, which the leader sets by reading each group with the connection's bot. A bot that cannot read a
+  group (the app lacks `usergroups:read`, or the group does not exist; Slack's answer for a disabled group has not been measured) makes the Binding `READY` `False` and `agentkourier_binding_ready` 0, where 0.2.1 had it `True`. Turns still run. Read the Slack scopes in
+  [Configure Slack](configure-slack.md#what-the-app-is-allowed-to-do) and the reasons in [Troubleshoot](troubleshoot.md#approversreadable) before you upgrade a broker whose alerts fire on `agentkourier_binding_ready == 0`.
+- **Changing the broker's own connection tells the old one's Bindings.** If you change `config.chatConnection` to another ChatConnection, or empty it, the broker served the old one before, and it still exists, and its namespace is not on `config.connectionNamespaces`: its Bindings say `Accepted` `False` with
+  `ConnectionNotServed`, and the leader counts them in `agentkourier_config_binding_rejections{reason="ConnectionNotServed"}`, so `sum(agentkourier_config_binding_rejections) > 0` fires until that ChatConnection is deleted or this broker serves it again, even when another release serves it.
+  This happens with the list empty too. If the old one's namespace is on the list, it is served as a team connection and its Bindings are not told.
+
+### Admit team namespaces in a second change
+
+Upgrade with `config.connectionNamespaces` empty first, and check that the broker runs as before (below). Then set the list in its own `helm upgrade`. Until a team connection has been served, a rollback is the
+ordinary one; after, it needs the steps under [Roll back](#roll-back-from-this-release).
+
+Before you set the list:
+
+- **Each app the broker serves needs `users:read`, the broker's own included, if it has one.** With a team connection to serve, the leader asks Slack which app each bot belongs to (`auth.test`, then `bots.info`), its own
+  first if it has one, so that it serves one connection for each Slack app. Slack's documentation says `bots.info` needs `users:read` (not verified here); the manifest in
+  [Configure Slack](configure-slack.md#what-the-app-is-allowed-to-do) has it, for the audit log's `users.info`. If the broker cannot tell whose bot its own token is, no team connection starts, and the leader logs that
+  the identity of the own connection is not known yet. The own connection runs either way. A broker with no own connection has no such wait: it asks for each team connection's identity on its own.
+- **One broker for each namespace.** Two brokers that admit one namespace both open Socket Mode on its apps, and Slack hands each event to one of them
+  ([Troubleshoot](troubleshoot.md#the-status-of-a-binding-keeps-changing)).
+- **Know how to see a Binding that is not served.** A connection that is past the 16, whose namespace was taken off the list after this broker served it, that was the broker's own and is not now (and whose namespace is not on the list), or that is a second connection of a Slack app the broker already serves has Bindings that say `Accepted` `False`
+  with `ConnectionNotServed`. The leader counts those Bindings in `agentkourier_config_binding_rejections{reason="ConnectionNotServed"}` (a standby reads 0 for it, so sum over the replicas), which `sum(agentkourier_config_binding_rejections) > 0` includes
+  ([Metrics](../reference/metrics.md)); `kubectl get akbinding -A` shows which Bindings. The Bindings of a connection in a namespace that was never on the list get no status and no count.
+- **Size for the connections.** Each further connection adds about 0.4 MiB; at 16, the most one broker serves, the container's memory charge was 29 MiB under load
+  ([chart README](https://github.com/agentkourier/agent-kourier/tree/main/charts/agent-kourier#footprint)). The default request of 64 MiB covers it.
+
+### Check the upgrade
+
+- The pod runs the new image and is ready: `kubectl -n agent-kourier get deploy agent-kourier -o jsonpath='{.spec.template.spec.containers[0].image}'` shows the release's digest. The namespace is your release's, and so is the Deployment's name, which the chart
+  makes `<release>-agent-kourier`, or the release name itself when that already contains `agent-kourier`, or `fullnameOverride` when it is set.
+- `agentkourier_chat_connected{connection="<namespace>/<name>"}` is 1 for the broker's own connection, if it has one, and for each team connection once its Secret is granted. A broker with no own connection that serves only
+  team connections has an alert to add: [Metrics](../reference/metrics.md#alert-rules-for-a-broker-with-no-connection-of-its-own).
+- `kubectl get akbinding -A` shows each Binding `READY` `True`, as before the upgrade, with two kinds of exception. A Binding with `interactions.approverGroups` whose bot cannot read a group reads `READY` `False` with an `ApproversReadable` reason
+  (and `agentkourier_binding_ready` is 0 for it), because `Ready` now needs that condition too. A Binding on a ChatConnection that this broker does not serve says `Accepted` `False` with `ConnectionNotServed`: the connection is past the 16, is a second connection of one Slack app, its namespace was taken off the list after this broker served it,
+  or it was the broker's own and `config.chatConnection` now names another or is empty, and its namespace is not on the list. One whose namespace was never on the list has no status from this broker
+  ([Binding status](../reference/binding-status.md)).
+
+### Roll back from this release
+
+- **No team connection was ever served.** Roll back as [above](#roll-back), and take `config.connectionNamespaces` off the values if you set it: the chart of the earlier release refuses a `config` key it does not have.
+  The earlier image ignores the new column and table, and writes its rows with the empty connection, which a later upgrade gives back to the broker's own connection.
+  The new index stays: the earlier release deletes the settled outbox rows of an expired session by channel and thread, which an index that starts at the connection does not serve, so on SQLite each of those deletions reads the whole
+  `outbox` table until you upgrade again. It costs time, not data (Postgres was not measured).
+- **A broker with no connection of its own does not roll back in place.** 0.2.0, 0.2.1 and 0.3.0-rc.1 exit with [code 2](../reference/cli.md#exit-codes) on `config.source: crds` without `AGENTKOURIER_CHAT_CONNECTION` (read in their source, not run),
+  and a move to the ConfigMap route needs exactly one ChatConnection in its directory and refuses the list. Set `config.chatConnection` first (the move back is at the end of [Move a broker from its own connection to none](team-slack-app.md#move-a-broker-from-its-own-connection-to-none)), and follow the bullets here.
+- **A team connection was served.** Do not roll back while any team connection has an unposted row. The guard is those rows, not whether a connection is served now. The outbox of an earlier release posts every unposted row through its one chat platform,
+  so a post waiting for any team's connection would go out through the platform's app, and a connection that was served and is not now (its namespace was taken off the list, or its ChatConnection was deleted) keeps its unposted rows for up to 7 days.
+  While the connections are still served: end the team's pending interactions, delete its Bindings, check again that none is pending (one left after the delete is ended by the sweep 5 minutes after the first sweep that finds it both past its deadline and without a Binding),
+  check that no button press waits (the table `interaction_presses`, by `connection`), and wait until `agentkourier_outbox_pending{connection!="<own>"}` is 0 or absent on the leader while `agentkourier_outbox_pending{connection="<own>"}` is present (a failed scrape has no series at all), with `<own>` the broker's own connection as `namespace/name`, the value of `AGENTKOURIER_CHAT_CONNECTION` in the pod.
+  The store says it directly: no row of the table `outbox` has `message_ref = ''`, an unset `abandoned_at` (`IS NULL` on Postgres, `= 0` on SQLite) and a `connection` that is neither `<own>` nor empty.
+  Then take `config.connectionNamespaces` off the values in the same change as the rollback. To clear the rows of a connection that is no longer served, admit its namespace again, and have the team make its ChatConnection again under the same name, for the same Slack app, if it was deleted (the rows post through whatever app the new object's tokens belong to), so that they post, or wait out the 7 days: the outbox abandons a row older than that, which drops its text and keeps the row.
+  The steps are in [Let a team bring its own Slack app](team-slack-app.md#take-it-back).
+- **Remove every `personMessage` trigger from every Binding** before a rollback to 0.2.1 or earlier, as `progress` is removed [above](#roll-back). Those releases know only the trigger types `mention` and `botMessage`. On the files route one `personMessage` trigger fails the whole config: the broker exits with
+  [code 2](../reference/cli.md#exit-codes) at start, and a running broker that reloads keeps its last good config. On custom resources the older broker refuses that Binding as invalid (`Accepted` `False` with `InvalidSpec`) and does not serve it.
+- **Remove `spec.agents` from every AgentBackend** before a rollback, as [that section](#upgrade-to-the-release-that-limits-the-agents-a-binding-may-name) says.

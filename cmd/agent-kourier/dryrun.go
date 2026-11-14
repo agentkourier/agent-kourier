@@ -17,9 +17,9 @@ import (
 	slackgo "github.com/slack-go/slack"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
-	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/config"
+	"github.com/agentkourier/agent-kourier/internal/trigger"
 )
 
 // dryRunUsage is what `agent-kourier dry-run --help` prints.
@@ -153,14 +153,11 @@ func dryRunExitCode(err error) int {
 	switch {
 	case errors.As(err, &usageError{}):
 		return exitUsage
-	case errors.As(err, &slackErr) && slackAuthCodes[firstWord(slackErr.Err)]:
+	case errors.As(err, &slackErr) && slack.TokenRejected(firstWord(slackErr.Err)):
 		return exitSlackAuth
 	}
 	return exitFailure
 }
-
-// slackAuthCodes are the codes with which Slack rejects the token for good: a retry would be rejected again.
-var slackAuthCodes = map[string]bool{"invalid_auth": true, "not_authed": true, "token_revoked": true, "token_expired": true, "account_inactive": true}
 
 // firstWord is the text up to the first space.
 func firstWord(s string) string {
@@ -179,7 +176,7 @@ func dryRunReportOf(ctx context.Context, o dryRunOptions, getenv func(string) st
 	if err != nil {
 		return dryRunReport{}, usagef("%w", err)
 	}
-	replay, err := chat.NewReplay(b)
+	replay, err := trigger.NewReplay(b)
 	if err != nil {
 		return dryRunReport{}, usagef("Binding %s: %w", o.binding, err)
 	}
@@ -199,7 +196,7 @@ func dryRunReportOf(ctx context.Context, o dryRunOptions, getenv func(string) st
 	if o.since > 0 {
 		since = time.Now().Add(-o.since)
 	}
-	conn := v1alpha1.NamespacedName(cmp.Or(b.Spec.Chat.ConnectionRef.Namespace, b.Namespace), b.Spec.Chat.ConnectionRef.Name)
+	conn := v1alpha1.NamespacedName(b.Spec.Chat.ConnectionRef.NamespaceOr(b.Namespace), b.Spec.Chat.ConnectionRef.Name)
 	history, err := client.History(ctx, conn, channel, since)
 	if err != nil {
 		return dryRunReport{}, fmt.Errorf("read %s: %w%s", channel, err, slackHint(err))

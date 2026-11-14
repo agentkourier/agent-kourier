@@ -1,7 +1,6 @@
 package storetest
 
 import (
-	"context"
 	"fmt"
 	"runtime"
 	"slices"
@@ -15,12 +14,6 @@ import (
 
 func newReply(id string, k store.ConversationKey) store.Reply {
 	return store.Reply{ID: id, Key: k, UserID: "U1", MessageRef: "1700.01", Acknowledgment: "eyes", Text: "hello", EnqueuedAt: t0}
-}
-
-// replyClaimer is the part of a store that the interactions package asks for by type assertion and that
-// store.ReplyQueue does not list: pinning a queued answer to one question.
-type replyClaimer interface {
-	ClaimReplyInteraction(ctx context.Context, id, interaction string) error
 }
 
 func (su suite) replyQueue(t *testing.T) {
@@ -251,6 +244,40 @@ func (su suite) replyQueue(t *testing.T) {
 
 	// The context window of a mentioned turn starts at the previous turn's message (spec 8.2, D38), so the previous row
 	// is the session's own, whatever state it is in.
+	su.run(t, "a turn keeps whether it carries the whole thread", func(t *testing.T, s store.Store) {
+		ctx := t.Context()
+		plain, whole := newReply("w1", key), newReply("w2", key)
+		whole.WholeThread = true
+		for _, r := range []store.Reply{plain, whole} {
+			_, err := s.EnqueueReply(ctx, r)
+			noErr(t, err, "enqueue "+r.ID)
+		}
+		first, err := s.NextReply(ctx, key)
+		noErr(t, err, "NextReply")
+		if first.ID != "w1" || first.WholeThread {
+			t.Errorf("the plain turn = %+v; want w1 without WholeThread", first)
+		}
+		second, err := s.NextReplyAfter(ctx, key, first.Sequence)
+		noErr(t, err, "NextReplyAfter")
+		if second.ID != "w2" || !second.WholeThread {
+			t.Errorf("the marked turn = %+v; want w2 with WholeThread", second)
+		}
+		prev, err := s.PreviousReply(ctx, key, second.Sequence+1)
+		noErr(t, err, "PreviousReply")
+		if prev.ID != "w2" || !prev.WholeThread {
+			t.Errorf("PreviousReply = %+v; want w2 with WholeThread", prev)
+		}
+		_, err = s.EnqueueReply(ctx, newReply("w3", key)) // a plain turn after the marked one
+		noErr(t, err, "enqueue w3")
+		got, err := s.PreviousWholeReply(ctx, key, 1<<62)
+		noErr(t, err, "PreviousWholeReply")
+		if got.ID != "w2" || got.MessageRef != whole.MessageRef {
+			t.Errorf("PreviousWholeReply = %+v; want w2, past the plain turn after it", got)
+		}
+		_, err = s.PreviousWholeReply(ctx, key, second.Sequence)
+		isErr(t, err, store.ErrNotFound, "PreviousWholeReply with only a plain turn below")
+	})
+
 	su.run(t, "PreviousReply is the session's row just below a sequence, delivered rows and pinned ones included", func(t *testing.T, s store.Store) {
 		ctx := t.Context()
 		other := keyOf("2.2")
@@ -286,11 +313,7 @@ func (su suite) replyQueue(t *testing.T) {
 		}
 		// a2 is delivered (a tombstone, its text cleared) and a3 is pinned to a question: both are still rows.
 		noErr(t, s.MarkReplyDelivered(ctx, "a2", t0), "deliver a2")
-		c, ok := s.(replyClaimer)
-		if !ok {
-			t.Fatal("the store has no ClaimReplyInteraction")
-		}
-		noErr(t, c.ClaimReplyInteraction(ctx, "a3", "q1"), "pin a3")
+		noErr(t, s.ClaimReplyInteraction(ctx, "a3", "q1"), "pin a3")
 
 		for _, tc := range []struct{ below, want string }{
 			{"a4", "a3"}, // pinned: still the previous row
@@ -454,14 +477,9 @@ func (su suite) replyQueue(t *testing.T) {
 		}
 	})
 
-	// ClaimReplyInteraction is not in store.ReplyQueue, but the interactions package asks the store for it
-	// by type assertion, and a store without it cannot answer a text question.
+	// ClaimReplyInteraction is what lets a typed reply answer a text question.
 	su.run(t, "a queued answer is pinned to one question and cannot answer another", func(t *testing.T, s store.Store) {
 		ctx := t.Context()
-		c, ok := s.(replyClaimer)
-		if !ok {
-			t.Fatal("the store has no ClaimReplyInteraction(ctx, id, interaction) error: text replies need it")
-		}
 		for _, id := range []string{"r1", "r2"} {
 			_, err := s.EnqueueReply(ctx, newReply(id, key))
 			noErr(t, err, "enqueue "+id)
@@ -469,16 +487,16 @@ func (su suite) replyQueue(t *testing.T) {
 		if got, _ := s.NextReply(ctx, key); got.InteractionID != "" {
 			t.Fatalf("a reply is queued pinned to %q", got.InteractionID)
 		}
-		noErr(t, c.ClaimReplyInteraction(ctx, "r2", "q1"), "claim")
-		noErr(t, c.ClaimReplyInteraction(ctx, "r2", "q1"), "the same claim again")
+		noErr(t, s.ClaimReplyInteraction(ctx, "r2", "q1"), "claim")
+		noErr(t, s.ClaimReplyInteraction(ctx, "r2", "q1"), "the same claim again")
 		// Implicit: today a claim for another question fails with ErrNotFound, the error of an update
 		// that matched no row, and not with ErrConflict. Only the failure is pinned.
-		if err := c.ClaimReplyInteraction(ctx, "r2", "q2"); err == nil {
+		if err := s.ClaimReplyInteraction(ctx, "r2", "q2"); err == nil {
 			t.Error("a claim of a reply already pinned to another question succeeded")
 		}
-		isErr(t, c.ClaimReplyInteraction(ctx, "nope", "q1"), store.ErrNotFound, "claim of an unknown reply")
-		isErr(t, c.ClaimReplyInteraction(ctx, "", "q1"), store.ErrInvalid, "claim with no reply")
-		isErr(t, c.ClaimReplyInteraction(ctx, "r1", ""), store.ErrInvalid, "claim with no question")
+		isErr(t, s.ClaimReplyInteraction(ctx, "nope", "q1"), store.ErrNotFound, "claim of an unknown reply")
+		isErr(t, s.ClaimReplyInteraction(ctx, "", "q1"), store.ErrInvalid, "claim with no reply")
+		isErr(t, s.ClaimReplyInteraction(ctx, "r1", ""), store.ErrInvalid, "claim with no question")
 
 		head, err := s.NextReply(ctx, key)
 		if err != nil || head.ID != "r1" || head.InteractionID != "" {

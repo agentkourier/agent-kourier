@@ -2,7 +2,6 @@ package interact_test
 
 import (
 	"context"
-	"log/slog"
 	"testing"
 	"time"
 
@@ -14,6 +13,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 	"github.com/agentkourier/agent-kourier/internal/telemetry/telemetrytest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // A press recorded in one trace is processed, after a restart, in that trace: the processing span
@@ -52,7 +52,7 @@ func TestPressProcessingContinuesTheTraceOfThePressAcrossARestart(t *testing.T) 
 		seen <- trace.SpanContextFromContext(ctx)
 		return interact.Done, nil
 	}}
-	w, err := interact.NewWorker(interact.WorkerConfig{Processor: proc, Now: func() time.Time { return d0 }, Logger: slog.New(slog.DiscardHandler)})
+	w, err := interact.NewWorker(interact.WorkerConfig{Processor: proc, Now: func() time.Time { return d0 }, Logger: testutil.DiscardLogger()})
 	if err != nil {
 		t.Fatal(err)
 	}

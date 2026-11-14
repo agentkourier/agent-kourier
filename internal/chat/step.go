@@ -36,6 +36,8 @@ func (s StepState) String() string {
 	return "unknown"
 }
 
+func (s StepState) valid() bool { return s >= StepRunning && s <= StepEnded }
+
 // Step is one unit of the agent's work, such as a tool call, shown as progress in a stream while the reply is
 // written. A step is begun by Stream.Step with the state Running, and finished by Stream.Step again with the
 // same ID and another state. Nothing in a stream is taken back: a step is only ever moved forward.
@@ -47,7 +49,8 @@ type Step struct {
 	// comment), and must not be empty after cleaning, or the adapter shows it as blank.
 	Title string
 	// Detail is a short line about it, such as the redacted summary of a tool's arguments (the secrets taken out by
-	// the caller, never the raw arguments): literal text, one line, untrusted. It may be empty.
+	// the caller, never the raw arguments): literal text, one line, untrusted. It may be empty. A step's detail is the
+	// first non-empty detail it was sent with: a platform may show only that one, as Slack does.
 	Detail string
 	// State is how far the step has got.
 	State StepState

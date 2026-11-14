@@ -21,7 +21,7 @@ CTX=kind-agent-kourier-full
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source-path=SCRIPTDIR source=../lib.sh
 . "${HERE}/../lib.sh"
-CURL_IMAGE=curlimages/curl:8.23.0@sha256:a134550be58ab783810e613ae96fd253c38f7bdd16d9bf9be350700c7a29ac06
+CURL_IMAGE=curlimages/curl:8.23.0@sha256:3fb7e13e5d179a845c97d78204f3f1064d1907037f26a3ebf91710571151fd93
 K=(kubectl --context "${CTX}")
 NODE=agent-kourier-full-control-plane
 for tool in kubectl docker jq; do
@@ -278,13 +278,13 @@ fenced default app.kubernetes.io/name=oauth2-proxy "pod in default labelled as t
 echo "== agent-kourier: ready, connected to the fake Slack, and a turn through the front door"
 agentkourier_fail() {
   echo "FAIL: $1" >&2
-  "${K[@]}" -n agent-kourier get pods -l app.kubernetes.io/name=agent-kourier -o wide >&2 || true
+  "${K[@]}" -n agent-kourier get pods -l "${TIER_AGENTKOURIER_PODS}" -o wide >&2 || true
   "${K[@]}" -n agent-kourier logs deploy/agent-kourier --tail=60 >&2 || true
-  "${K[@]}" -n agent-kourier describe pods -l app.kubernetes.io/name=agent-kourier 2>&1 | sed -n '/^Events:/,$p' >&2 || true
+  "${K[@]}" -n agent-kourier describe pods -l "${TIER_AGENTKOURIER_PODS}" 2>&1 | sed -n '/^Events:/,$p' >&2 || true
   exit 1
 }
 "${K[@]}" -n agent-kourier rollout status deploy/agent-kourier --timeout=180s || agentkourier_fail "agent-kourier's rollout did not finish"
-agentkourier_pod=$("${K[@]}" -n agent-kourier get pods -l app.kubernetes.io/name=agent-kourier -o jsonpath='{.items[*].metadata.name}')
+agentkourier_pod=$("${K[@]}" -n agent-kourier get pods -l "${TIER_AGENTKOURIER_PODS}" -o jsonpath='{.items[*].metadata.name}')
 [[ -n "${agentkourier_pod}" && "${agentkourier_pod}" != *" "* ]] || agentkourier_fail "want exactly one Agent Kourier pod, have: ${agentkourier_pod:-none}"
 echo "ok: one Agent Kourier pod, ${agentkourier_pod}, rolled out"
 for path in healthz readyz; do

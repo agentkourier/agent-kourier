@@ -14,6 +14,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/internal/session"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // These are the golden wire comparisons of WP-37 S3: for a set of turn scripts, every request the renderer makes
@@ -186,7 +187,7 @@ func (e *env) writes() int {
 // owes, so that a window that opens does so for the events that were handled before it.
 func (e *env) settle(t *testing.T, writes int) {
 	t.Helper()
-	eventually(t, "the renderer to make the requests of the step", func() bool {
+	testutil.Eventually(t, "the renderer to make the requests of the step", func() bool {
 		if e.writes() < writes && e.clk.waiting() > 0 {
 			e.clk.advance(throttle)
 		}
@@ -226,6 +227,39 @@ func checkGolden(t *testing.T, name string, got golden) {
 	}
 }
 
+// checkStepFieldsOnce fails if any step ID has its details, or its output, in more than one task_update chunk. Slack
+// appends both to the card's (observed 2026-10-18), so a step that sent them twice shows them twice.
+func checkStepFieldsOnce(t *testing.T, g golden) {
+	t.Helper()
+	details, output := map[string]int{}, map[string]int{}
+	for _, r := range g.Requests {
+		chunks, _ := r.Form["chunks"].([]any)
+		for _, raw := range chunks {
+			c, _ := raw.(map[string]any)
+			if c["type"] != "task_update" {
+				continue
+			}
+			id, _ := c["id"].(string)
+			if d, _ := c["details"].(string); d != "" {
+				details[id]++
+			}
+			if o, _ := c["output"].(string); o != "" {
+				output[id]++
+			}
+		}
+	}
+	for id, n := range details {
+		if n > 1 {
+			t.Errorf("step %s sent its details in %d chunks; want one, since Slack appends them", id, n)
+		}
+	}
+	for id, n := range output {
+		if n > 1 {
+			t.Errorf("step %s sent its output in %d chunks; want one, since Slack appends it", id, n)
+		}
+	}
+}
+
 // scripts are the turns that are recorded. Each is a function of the environment that drives a turn to its end.
 var scripts = []struct {
 	name string
@@ -246,16 +280,29 @@ var scripts = []struct {
 		run.Handle(text("a", "Checking"))
 		e.settle(t, 1) // the post
 		run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "kubectl_get", Args: map[string]any{"namespace": "prod", "resource": "pods", "password": "hunter2", "url": "https://user:s3cr3t@host.test/x"}})
-		e.settle(t, 2) // the update with the tool line
+		e.settle(t, 2) // the update with the call's card, under way
 		run.Handle(agent.ToolResultEvent{CallID: "c1", Name: "kubectl_get"})
 		run.Handle(text("a", "Checking: three pods"))
-		e.settle(t, 3) // the update without it
+		e.settle(t, 3) // the update with the card done
 		run.Handle(agent.ToolCallEvent{CallID: "c2", Name: "search"})
 		run.Handle(text("a", "Checking: three pods, all ready"))
 		run.Handle(agent.FinalEvent{})
 		e.finish(t, run)
 	}},
-	{"a-tool-line-alone-and-no-output", func(t *testing.T, e *env) {
+	{"tools-with-secrets-on-a-platform-without-steps", func(t *testing.T, e *env) { // every write shows the status line
+		e.spy(t, false, nil)
+		run, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive})
+		run.Handle(text("a", "Checking"))
+		e.settle(t, 1) // the post
+		run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "kubectl_get", Args: map[string]any{"namespace": "prod", "resource": "pods", "password": "hunter2", "url": "https://user:s3cr3t@host.test/x"}})
+		e.settle(t, 2) // the update with the tool line
+		run.Handle(agent.ToolResultEvent{CallID: "c1", Name: "kubectl_get"})
+		run.Handle(text("a", "Checking: three pods"))
+		e.settle(t, 3) // the update without it
+		run.Handle(agent.FinalEvent{})
+		e.finish(t, run)
+	}},
+	{"a-tool-call-alone-ends-as-its-card", func(t *testing.T, e *env) {
 		run, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive})
 		run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "slow_query", Args: map[string]any{"q": "select 1"}})
 		e.settle(t, 1) // the post of the tool line alone
@@ -359,6 +406,7 @@ func TestTheWireIsWhatItWasBeforeThePort(t *testing.T) {
 			e := setup(t)
 			s.run(t, e)
 			got := e.record(t) // every script ends by waiting for its renderer to be done
+			checkStepFieldsOnce(t, got)
 			checkGolden(t, s.name, got)
 		})
 	}

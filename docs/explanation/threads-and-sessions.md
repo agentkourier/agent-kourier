@@ -55,15 +55,131 @@ others are ignored, and the next mentioned turn carries them to the agent as con
 
 ## Output
 
-With `output: live`, the answer streams into one message as the agent writes it; tool calls appear as short status
-lines or step cards. A dropped stream is reconciled by asking the agent for the task and subscribing to it again. With
-`output: final`, the answer is posted once, when the turn ends.
+With `output: live`, the answer streams into one message as the agent writes it. A dropped stream is reconciled by
+asking the agent for the task and subscribing to it again. With `output: final`, the answer is posted once, when the turn
+ends; nothing else is shown until then but the acknowledgment reaction, and `chat.progress` has no effect.
+
+What a live reply shows of the agent's work depends on where the thread is and on `chat.progress`.
+
+- **A chat thread** (a message someone sent, so Slack shows the stream to that person) shows a step card for each tool
+  call, in the order the calls were made. The card begins when the call arrives and finishes when its result does. Every
+  dialect reports the tool calls of an agent that marks them as Google ADK or kagent does; see
+  [Tool calls and results](../reference/agent-contract.md#tool-calls-and-results).
+- **An alert thread** has no one to show a stream to, so one message is posted and then updated instead. Its first post
+  has a line of small print that names the latest tool call: `Calling name(arguments)` while it is under way,
+  `Ran name(arguments)` once its result has arrived, and `name(arguments) failed` if the result reports a failure. Every
+  update after it shows a step card for each tool call above the text, in place of the line, as a chat thread does, and
+  the final message keeps them. It shows the latest 20 cards; when there are more, a line above them says how many earlier
+  steps are not shown. On a platform without step cards every write shows the line instead, and a call that has its result
+  is shown only while the message has no text yet: the text replaces the line.
+
+`chat.progress` adds a sign of life for the seconds when the agent says nothing, which is when a model is deciding its next
+step. It is one of three values:
+
+| `progress` | Chat thread | Alert thread |
+|---|---|---|
+| `steps` | A card for each tool call. | The line for the latest tool call in the first post, and a card for each tool call in every update after it. |
+| `steps-and-activity` (the default) | The same, and when 3 seconds pass with no new text and no tool call under way, a card titled `Working…` begins. The next tool call takes that card over, so it carries the tool's name and arguments from then on; text instead retitles it `Wrote the answer`, and a tool call after that text retitles it `Wrote an update`. The agent's own progress line, when it sends one, titles the card while it is open. | The same, and `Working…` once 3 seconds pass with nothing new: a line of small print in place of the line of a call that returned when it is the first post, and otherwise a card, which the next tool call takes over and text retitles, as in a chat thread. The agent's progress line titles that card while it is open, and with no card open is a line of small print at the next write, with no 3 second wait. |
+| `activity` | One card for the whole wait, begun at the first tool call or result, or after 3 seconds, and only before any text. Its title counts the tool calls that have a result, such as `Working… 12 steps, 3 failed`, or, until the first tool call has its result, the working updates, such as `Working… 5 updates`. At the first text it becomes `Worked`, with `Took 3 min 26 s, 16 steps (7 failed)`. | One line, `Working… (2 min, 12 steps, 3 failed)`, or `Working… (2 min, 5 updates)`, until the first text. |
+
+The `activity` mode never shows a tool's name or arguments, or the agent's progress line, in the reply's cards and lines; a
+tool approval prompt, with `interactions.toolApprovals`, still names the tool and shows its arguments. The `Working…` title
+says nothing about what the agent is doing. A progress line is whatever text the agent sent: text that its framework marks as
+the model's reasoning is left out, and reasoning it does not mark shows as any other line. The 3 second delay is not configurable. The
+`Working…` card or line is written once for a gap, and no other write follows the clock, save the update that shows an alert
+thread's cards after its first post. A gap longer than the delay costs at most three writes more than `steps`
+spends in a chat thread (the card's begin; its end, when no tool call takes it over; and its retitle, when text ended it and
+a tool call follows that text), and one more message update in an alert thread. An alert thread's reply that has cards when its first post
+is made makes one more update to show them, once the throttle allows: the post cannot carry them. An agent's progress line
+(see below) adds a write each time the line changes, at most once in a throttle window. The `activity` card is written when a
+result or a working update changes a count, at most once in a throttle window, and its line's elapsed minutes are refreshed only when an event makes a write.
+
+In an alert thread, a turn that is silent for 3 seconds now posts `Working…` as its message, and a turn that sends a progress
+line, or in the `activity` mode any working update, posts at once. If the turn then ends with
+nothing to show, or fails, that message is left saying `(no output)`, or, once an update has shown its `Working…` card, the
+card ended as a chat thread's is; under `steps` such a turn posted nothing. A turn whose
+updates show cards and that ends with no text ends with the cards and nothing under them, its fallback text the last card's
+title. A chat
+thread whose stream was started for a card, and whose platform then refuses cards, is stopped with the same `(no output)`
+when the turn ends empty, and is not left open.
+
+A `Working…` card that no tool call took over ends under a title that says how, never as a tick on `Working…`. If text came
+while it was open it is `Wrote the answer`, until a tool call follows that text: the text was then not the answer, and the
+card is retitled `Wrote an update`. If the turn ends first, it is `Finished` for a completed task, `Waiting for your
+answer` when the agent asks a question, and `Stopped`, shown as an error, when the task failed, was cancelled or was
+rejected, or when the request failed before the task ended, as when the agent did not take an answer. The failure notice
+is then a message of its own, and the reply's stream is stopped, not left running. A lost connection to the agent, or a
+restart of Agent Kourier, is not such a failure: the task is followed again, and the reply it had is taken over and
+updated, to `(no output)` if the task has nothing to show. Slack refuses an update with no text on a reply that holds only
+text, so a turn that takes such a reply over stops it if it still streams, keeps its text, and shows no card or `Working…` on it
+until the turn has text. If the turn ends with no text, the reply keeps what it says. A reply with any other block beside its
+text, such as a card or a line of small print, has no such protection: Slack takes the update, and the text is gone, for good if
+the turn never has text of its own. A reply of text alone also keeps it when the agent takes that text back and the turn ends
+with nothing. `(no output)` in a reply that was posted or updated is not text in this sense, so the next attempt's cards replace
+it. A stream that ended with nothing says it as text, which holds those cards back as any text does. Nor is a request that may have reached the agent but got no
+answer, such as one cut off by a timeout: the reply stays as it is while the request is looked up and followed, or sent
+again, and that attempt takes the reply over. If following the task again is refused, or finds it gone or wedged, or the
+request is given up on before the agent is known to have it, the reply is ended as a failed request's is, and keeps the
+text it had. When Agent Kourier restarts in between, the restarted process takes the reply over once it has something to
+show or the task ends. For those failures it stops a reply that still streams, which keeps its text and shows the card
+that was under way as ended, and leaves an alert thread's reply as the earlier process left it. The `activity` card ends the same way, as `Worked` for text or a
+completed task, with the same `Waiting for your answer` and `Stopped`. A card that was never sent when a turn ends with no text is not sent at all.
+
+A tool call's card that has no result when the turn ends is complete, with `No result was reported.` under it. When the
+agent pauses for a [tool approval](../how-to/agent-questions.md#tool-approvals), the card of each call the approval is
+about ends as `Approval requested: name`, complete, whatever the call reported before the pause (kagent reports such a
+call with an error that asks for the confirmation). The prompt is a message of its own, and the reply after the decision
+shows the call again with how it ended.
+
+A Binding that sets no `progress` gets `steps-and-activity`, so a Binding written before the field existed now shows
+`Working…` in a gap. Set `progress: steps` to keep the cards and lines alone.
+
+On Slack, an alert thread in `steps-and-activity` or `activity` also gets Slack's assistant status, `is working…`. Agent
+Kourier sets it when the turn starts, before the thread has any reply, and again after each write but the last, because a reply in the
+thread may take it off. It clears it when the turn ends, whether the turn finished, failed, was cancelled or stopped to ask a
+question. It adds no write of its own on a timer. A chat thread never sets it. If Slack answers that the app or workspace cannot use the method, Agent Kourier logs
+that once at info level and sets no status on that connection until it restarts; any other error stops it for that turn only.
+The replies are unaffected. In our testing the status reached only clients
+that were open when it was set, so it adds to the `Working…` card or line and does not replace it
+([Configure Slack](../how-to/configure-slack.md#what-the-app-is-allowed-to-do) has what was tested and which scope).
+
+Every dialect reads tool calls the same way, so an agent on the generic `a2a` dialect that marks its tool parts as Google
+ADK or kagent does (`adk_type`, `kagent_type` or `kagent.dev/a2a/part-type`) gets the same cards and lines. An agent that
+marks none has no tool events: `steps` shows nothing until text, `steps-and-activity` shows a `Working…` card in each gap,
+and `activity` shows its card with no step count. When the platform has no step cards, or Slack refuses them for a stream
+(the stream is then plain text), no mode shows a card. If Slack refuses an alert thread's update with cards, the update is
+sent again without them, and the reply shows the line from then on.
+
+Every dialect also reads the agent's working updates: a status update in state `working` that holds no tool part. The
+text of such an update, when the agent wrote one, is its progress line, such as `Reading the pod logs`. Text that the
+agent's framework marks as the model's reasoning is left out of it. Secrets are
+redacted from it, it is put on one line and cut to 160 UTF-16 units (160 characters of most text), and it is never part
+of the answer.
+
+- `steps` shows no working update.
+- `steps-and-activity` shows a progress line when no tool call is under way. It titles the `Working…` card that is open,
+  or the one that begins after 3 seconds, but begins no card itself, so a line that the answer follows at once leaves no
+  card behind. In an alert thread, with no card open, it is also a line of small print at the next write, under the
+  cards and text, until the card takes it as its title. It stands until the next event: an update with no text puts
+  `Working…` back, a tool call takes the card over, and text ends it as it ends any `Working…` card. An update with no
+  text shows nothing, and `Working…` still comes after 3 seconds. A tool call that has no ID, which no result can end,
+  counts as under way until the next event, and a working update is one, with or without text.
+- `activity` counts each working update, begins its card or line at the first one if no text has come, and shows the
+  count until the first tool call has its result.
+
+kagent 0.9.x repeats its answer in a status update just before the answer itself, so in `steps-and-activity` the start of
+the answer can title an open card, or be an alert thread's line, for a moment before the answer replaces it.
 
 ## Restarts
 
 Agent Kourier persists sessions, queued replies, pending questions and intended posts. After a restart it finds the
 tasks that were running, asks the agent for their state, and renders their output under the turn that started them, so
-a half-written message is replaced with the whole answer and the thread finishes once.
+a half-written message is replaced with the whole answer and the thread finishes once. In a chat thread the replacement
+keeps the cards the stream would show, before the text: each tool call's, or in the activity modes the `Working…` or
+activity card, kept up to date while the task runs, and a call with no result by the end says
+`No result was reported.`. The same holds when a reply's text changed after it was streamed and the message is
+rewritten, and for an alert thread's reply in the `steps` and `steps-and-activity` modes, which is updated with its
+cards. If Slack refuses the cards, the message is written again without them.
 
 ## Lifetime
 
@@ -81,3 +197,17 @@ the thread, and the next message starts a fresh context.
 An alert thread is a session like any other, started by a trigger instead of a person. Repeats of the same alert attach
 to the thread as notes, its resolve closes it with a note, and people continue the investigation by replying. The
 first turn names no person; it is filed under the system user. See [Chat triggers](../reference/chat-triggers.md).
+
+## A person's report
+
+A `personMessage` trigger starts a session on a message a person posts at the top level of the channel, in that message's thread. Unlike an
+alert's, the first turn is the person's: it names them, as a mention does. The session takes a reply only if it mentions Agent Kourier, whatever
+`chat.threadReplies` says, because people discuss a report under it. See [A person's message](../reference/chat-triggers.md#a-persons-message).
+
+## Another agent's mention
+
+Another bot's mention is a turn of the thread it is in, filed under the system user too. It can start a session in a thread Agent Kourier does not
+own, or continue one it does, and it carries what the thread holds, because the post that mentions says nothing of what was asked. A session it
+starts takes a person's reply only if it mentions Agent Kourier, whatever `chat.threadReplies` says: the thread was people's before another agent
+named this one in it. A thread Agent Kourier already owned keeps its Binding's rule. See
+[A bot's mention](../reference/chat-triggers.md#a-bots-mention).

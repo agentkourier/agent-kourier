@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"io/fs"
-	"log/slog"
 	"net/url"
 	"slices"
 	"testing"
@@ -14,6 +13,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/agentkourier/agent-kourier/internal/session"
+	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // The migrations of the rename: 0023 added the Agent Kourier names beside the courier ones, and 0024 drops the
@@ -56,22 +57,22 @@ func purgeFunctions(t *testing.T, pool *pgxpool.Pool) []string {
 // migrateUpTo applies the migrations numbered up to last to the schema of pool.
 func migrateUpTo(t *testing.T, pool *pgxpool.Pool, last int) {
 	t.Helper()
-	all, err := listMigrations(migrationFiles)
+	all, err := store.ListMigrations(migrationFiles)
 	if err != nil {
 		t.Fatal(err)
 	}
 	part := fstest.MapFS{}
 	for _, m := range all {
-		if m.version > last {
+		if m.Version > last {
 			continue
 		}
-		body, err := fs.ReadFile(migrationFiles, m.name)
+		body, err := fs.ReadFile(migrationFiles, m.Name)
 		if err != nil {
 			t.Fatal(err)
 		}
-		part[m.name] = &fstest.MapFile{Data: body}
+		part[m.Name] = &fstest.MapFile{Data: body}
 	}
-	if err := migrate(t.Context(), pool, part, slog.New(slog.DiscardHandler)); err != nil {
+	if err := migrate(t.Context(), pool, part, testutil.DiscardLogger()); err != nil {
 		t.Fatalf("migrate up to %d: %v", last, err)
 	}
 }

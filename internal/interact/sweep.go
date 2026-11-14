@@ -17,7 +17,6 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
-	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -37,6 +36,13 @@ type Enqueuer interface {
 // SessionReader reads a conversation's session, to name its Binding: the session store.
 type SessionReader interface {
 	GetSession(ctx context.Context, key store.ConversationKey, ttl time.Duration, now time.Time) (store.Session, error)
+}
+
+// Abandoner ends the pause of a task without asking the agent, for a pause whose Binding the config has not got: *session.Manager.
+type Abandoner interface {
+	// Abandon releases the runner parked on taskID and clears the task from the conversation's session, calling nothing. It answers
+	// session.ErrNotPaused when the conversation is not paused on that task.
+	Abandon(ctx context.Context, key store.ConversationKey, taskID a2a.TaskID, reason string) error
 }
 
 // PressQueue knows the presses that are recorded and not yet decided (WP-33d1 implements it).
@@ -65,6 +71,9 @@ const (
 	// Reopened): the task still waited for input, and Agent Kourier cancels it. It is the thread's only word of that, so it says
 	// the cancel is under way and not that it is done, which it may not be.
 	undeliveredDenialNotice = "The agent did not take Agent Kourier's denial of this request, so Agent Kourier is cancelling the task."
+	// undeliveredLeftNotice replaces it when the Binding is gone for longer than the OrphanGrace: there is nothing to cancel the task through, so
+	// the pause is released and the task is left with the agent.
+	undeliveredLeftNotice = "The agent did not take Agent Kourier's denial of this request, and Agent Kourier can no longer reach the agent to cancel the task, so the task is left with the agent."
 )
 
 // timeoutDenyReason is the reason the denial of a timed-out approval carries to the agent. It is its own, apart from
@@ -77,23 +86,37 @@ const timeoutDenyReason = "denied by agent-kourier: no one decided in time"
 // and only this sweep would end it.
 const maxAttempts = 5
 
-// readAll is a thread TTL no session outlives, to read a session whatever its age.
-const readAll = 100 * 365 * 24 * time.Hour
+// defaultOrphanGrace is how long a due interaction must be seen, at every sweep, without its Binding in the config or with its chat
+// connection not served, before the sweep ends it without the agent (SweepConfig.OrphanGrace). The config source defers the deletion
+// of an object by up to a minute and a read of the cluster is every 10 seconds, the supervisor looks at the connections every 5
+// seconds, and a takeover or a rollback of the chart takes the objects away one after another: five minutes is several of each, and short
+// against the pauses it ends, which have waited for their whole timeout already.
+const defaultOrphanGrace = 5 * time.Minute
 
-// SweepConfig configures a Sweeper. Everything but Now, Logger, Interval, Batch and Grace is required.
+// SweepConfig configures a Sweeper. Everything but Served, Now, Logger, Interval, Batch, Grace and OrphanGrace is required.
 type SweepConfig struct {
 	Store    store.Interactions
 	Sessions SessionReader
-	// Lookup gives the Binding of an approval's thread, whose dialect builds the denial that ends the approval.
+	// Lookup gives the Binding of an interaction's thread: its dialect builds the denial that ends an approval, and a Binding it does not
+	// have (an error wrapping session.ErrUnknownBinding) is what makes the interaction an orphan's, ended without the agent.
 	Lookup  Lookup
 	Session Session
-	Updater Updater
-	Outbox  Enqueuer
-	Auditor Auditor
+	// Abandoner ends the pause of an orphan, whose Binding is not in the config, so that Session.Cancel could only fail.
+	Abandoner Abandoner
+	// Updaters gives the platform of an interaction's connection, which edits its prompt.
+	Updaters chat.Resolver[Updater]
+	Outbox   Enqueuer
+	Auditor  Auditor
 	// Presses is asked before an interaction is timed out: one with a press recorded by its
 	// deadline and not yet decided is left, because deciding a press can take longer than the
 	// grace, and cancelling the task under it would drop an answer that came in time.
 	Presses PressQueue
+	// Served says whether this broker serves the chat connection named conn ("namespace/name"): the config has it and it is not refused (a second
+	// connection of a Slack app another connection uses). A connection that is served and not running for now (it has not started, or its
+	// credentials were rejected: Updaters answers that with chat.ErrConnectionDown) is not the gone one: its interactions wait for it. A connection
+	// that is not in the config (deleted, invalid with no good generation, outside the admission list, or past the 16) is not served, however its Binding is, since it cannot run while it stays so. An interaction of a connection that is
+	// not served is an orphan's even though its Binding is in the config. Nil: every connection is served.
+	Served func(conn string) bool
 	// Reopened tells the Sweeper of the denials the session took and then failed to deliver, so that their tasks are cancelled.
 	// It is the session's AnswerWatcher (session.Config.AnswerWatcher): the same value. Required.
 	Reopened *Reopened
@@ -107,11 +130,16 @@ type SweepConfig struct {
 	// Grace is how long past its deadline an interaction waits before it is swept (default 5
 	// seconds), so that a press that was being decided at the deadline has been recorded first.
 	Grace time.Duration
+	// OrphanGrace is how long a due interaction must have been seen without its Binding in the config, or with its chat connection not served
+	// (Served), at every sweep that looked at it, before it is ended without the agent (default 5 minutes). A Binding that is back, or
+	// a connection that is served again, in the meantime starts the count again.
+	OrphanGrace time.Duration
 	// OnTimeout is called once for each interaction that timed out, with its ID, for a metric. Required.
 	OnTimeout func(id string)
 	// OnApprovalOutcome is called once for each tool approval on a Binding that allows them (Binding.ToolApprovals) that
 	// timed out, with the Binding's name and OutcomeTimedOut, in the sweep that records the timeout. A question never calls
-	// it, nor does an approval on any other Binding, or on one that is not in the config: those are ended as a question's is.
+	// it, nor does an approval on any other Binding: those are ended as a question's is. An interaction of either kind that is ended
+	// without the agent (an orphan's) calls it with OutcomeOrphaned instead, and calls neither OnTimeout nor the approval's outcome.
 	// Required.
 	OnApprovalOutcome func(binding string, outcome Outcome)
 }
@@ -129,6 +157,11 @@ type Sweeper struct {
 	cfg SweepConfig
 	mu  sync.Mutex     // one sweep at a time
 	try map[string]int // sweeps that have failed at a step, by interaction; guarded by mu
+	// downSaid is the connections whose due interactions were left because they do not run, for which a WARN was logged; guarded by mu.
+	downSaid map[string]bool
+	// orphanSince is when each due interaction was first seen as an orphan, by interaction, and has been seen as one at every sweep since;
+	// guarded by mu. Only a sweep that finds it not an orphan, or the interaction settled, drops it.
+	orphanSince map[string]time.Time
 	// audited is the timeout decision audit written before a tool-approval denial reaches the
 	// session. It is process-local because a restart may write the audit again while the row is
 	// still pending; the interaction row remains the durable first-complete decision point.
@@ -143,8 +176,8 @@ type Sweeper struct {
 
 // NewSweeper returns a Sweeper over cfg.
 func NewSweeper(cfg SweepConfig) (*Sweeper, error) {
-	if cfg.Store == nil || cfg.Sessions == nil || cfg.Lookup == nil || cfg.Session == nil || cfg.Updater == nil || cfg.Outbox == nil || cfg.Auditor == nil || cfg.Presses == nil {
-		return nil, errors.New("interact: Store, Sessions, Lookup, Session, Updater, Outbox, Auditor and Presses are required")
+	if cfg.Store == nil || cfg.Sessions == nil || cfg.Lookup == nil || cfg.Session == nil || cfg.Abandoner == nil || cfg.Updaters == nil || cfg.Outbox == nil || cfg.Auditor == nil || cfg.Presses == nil {
+		return nil, errors.New("interact: Store, Sessions, Lookup, Session, Abandoner, Updaters, Outbox, Auditor and Presses are required")
 	}
 	if cfg.OnTimeout == nil {
 		return nil, errors.New("interact: OnTimeout is required")
@@ -170,7 +203,10 @@ func NewSweeper(cfg SweepConfig) (*Sweeper, error) {
 	if cfg.Grace <= 0 {
 		cfg.Grace = 5 * time.Second
 	}
-	return &Sweeper{cfg: cfg, try: map[string]int{}, audited: map[string]timeoutAudit{}, taken: map[string]pauseEnd{}, undelivered: map[string]*undelivered{}}, nil
+	if cfg.OrphanGrace <= 0 {
+		cfg.OrphanGrace = defaultOrphanGrace
+	}
+	return &Sweeper{cfg: cfg, try: map[string]int{}, downSaid: map[string]bool{}, orphanSince: map[string]time.Time{}, audited: map[string]timeoutAudit{}, taken: map[string]pauseEnd{}, undelivered: map[string]*undelivered{}}, nil
 }
 
 // Run sweeps at once and then every Interval until ctx ends, and returns its error.
@@ -192,7 +228,10 @@ func (s *Sweeper) Run(ctx context.Context) error {
 // Sweep times out up to Batch of the interactions that are past their deadline and grace, oldest
 // first, except those with a press waiting to be decided (see Presses). For each it ends the pause (below), replaces the
 // prompt, enqueues the notice, and records the timeout. A step that fails leaves the interaction pending for the next
-// sweep. It goes on past one it cannot finish, and returns every such error joined. For an enabled tool approval, the
+// sweep. It goes on past one it cannot finish, and returns every such error joined. An interaction whose chat connection is not
+// running is left pending, and not counted against Batch (down). An interaction that has no Binding in the config, or whose chat
+// connection is not served, cannot be timed out as above, and is ended without the agent once it has been seen so for the OrphanGrace
+// (orphaned, endOrphan). For an enabled tool approval, the
 // timeout decision is audited before the denial reaches the session; the audit is skipped on retries in this process.
 //
 // Then it cancels the task of each denial the session took and the agent did not (cancelUndelivered), which is how a timeout
@@ -207,8 +246,8 @@ func (s *Sweeper) Run(ctx context.Context) error {
 //
 // A question's pause is ended by cancelling its task. A tool approval's (the decoded request's Kind, never the row's: a
 // sub-agent's is stored as nested) is ended by denying every tool through the Binding's dialect (spec 8.4 step 6) only on a
-// Binding that allows approvals (Binding.ToolApprovals); on any other, or when the Binding is not in the config, it is ended
-// as a question's is, with a question's notice, and is not counted as an approval's outcome.
+// Binding that allows approvals (Binding.ToolApprovals); on any other it is ended as a question's is, with a question's notice, and is
+// not counted as an approval's outcome.
 func (s *Sweeper) Sweep(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -219,9 +258,24 @@ func (s *Sweeper) Sweep(ctx context.Context) error {
 		errs = append(errs, fmt.Errorf("interact: list the interactions that are due: %w", err))
 	}
 	done := 0
+	downNow := map[string]bool{} // the connections that do not run and have an interaction that is due, in this sweep
+	seen := map[string]bool{}    // the interactions looked at, to drop what is remembered of the others
+	looked := err == nil         // every due interaction was looked at (none was, if the listing failed)
 	for _, row := range due {
 		if done == s.cfg.Batch {
+			looked = false
 			break
+		}
+		seen[row.ID] = true
+		why, binding := s.orphaned(ctx, row, now)
+		if why == notOrphaned {
+			delete(s.orphanSince, row.ID) // the Binding is back, or the connection served again: the count starts over if it goes again
+		}
+		if why != notOrphaned && s.waitsOut(ctx, row, why, now) {
+			continue // not counted against the batch: it is not work
+		}
+		if why == notOrphaned && s.down(ctx, row, downNow) {
+			continue // not counted against the batch: it is not work
 		}
 		switch waiting, err := s.cfg.Presses.PendingPresses(ctx, row.ID, row.Deadline); { // if it cannot be known, wait
 		case err != nil:
@@ -231,13 +285,164 @@ func (s *Sweeper) Sweep(ctx context.Context) error {
 			continue // not counted against the batch: it is not work
 		}
 		done++
-		if err := s.timeOut(ctx, row, now); err != nil {
+		end := func() error { return s.timeOut(ctx, row, now) }
+		if why != notOrphaned {
+			end = func() error { return s.endOrphan(ctx, row, why, binding, now) }
+		}
+		if err := end(); err != nil {
 			errs = append(errs, err)
+		}
+	}
+	if looked {
+		for id := range s.orphanSince {
+			if !seen[id] {
+				delete(s.orphanSince, id) // settled, or no longer due
+			}
+		}
+		// a connection that nothing due waits on, or that runs, is said again if it stops
+		for conn := range s.downSaid {
+			if !downNow[conn] {
+				delete(s.downSaid, conn)
+			}
 		}
 	}
 	// After the timeouts, so that a denial the session took and the agent did not, in this very sweep, is found timed out.
 	errs = append(errs, s.cancelUndelivered(ctx)...)
 	return errors.Join(errs...)
+}
+
+// down says whether the chat connection of the interaction's thread is not running (it has not started, stopped, or was removed), in
+// which case the timeout waits for it. Ending the pause resumes the paused turn: the task is cancelled, or the approval's tools are
+// denied and the agent goes on, and its output is rendered into the connection's thread, which no platform can reach. The prompt's
+// edit and the notice are for that thread too. The interaction stays pending, and is timed out by the first sweep after the
+// connection runs (its deadline has passed already); the turn stays paused until then, as a connection's turns are not resumed until
+// it runs (session.Manager.Recover). It says so once for each connection, at WARN, and again after a sweep in which no due interaction waited on it (Sweep).
+// A platform that cannot be had for another reason is not waited for: the timeout goes on, and its
+// edit fails and is tried again as before. A connection that is not served and a Binding that is gone are not "down for now": they are
+// told apart first (orphaned), and a connection that is served and does not run keeps its interactions however long that takes.
+func (s *Sweeper) down(ctx context.Context, row store.Interaction, downNow map[string]bool) bool {
+	if _, err := s.cfg.Updaters.Platform(row.Key.Connection); !errors.Is(err, chat.ErrConnectionDown) {
+		return false
+	}
+	downNow[row.Key.Connection] = true
+	if !s.downSaid[row.Key.Connection] {
+		s.downSaid[row.Key.Connection] = true
+		s.cfg.Logger.WarnContext(ctx, "interact: the chat connection of interactions that are due is not running; they are not timed out until it runs", "connection", row.Key.Connection, "interaction", row.ID)
+	}
+	return true
+}
+
+// orphanReason says why the pause of a due interaction cannot be ended through its Binding and its connection, as a timeout ends it.
+type orphanReason int
+
+const (
+	// notOrphaned: the Binding is in the config and the connection is served, however it runs now.
+	notOrphaned orphanReason = iota
+	// bindingGone: the Binding of the interaction's thread is not in the config (it was deleted, or it is not served: its connection was
+	// taken away or is not among those this broker serves, or it is rejected with no good generation). Session.Cancel needs its backend and
+	// fails, at every sweep, for as long as it is missing.
+	bindingGone
+	// connectionNotServed: the Binding is in the config, and this broker does not serve the chat connection of the interaction's thread (a second
+	// connection of a Slack app another connection uses, or one that is not in the config: the Binding was pointed at another connection and this
+	// one deleted, say). Nothing posts for the connection and nothing answers for it, but the agent can be asked.
+	connectionNotServed
+)
+
+// orphaned says whether the pause of the due interaction row cannot be ended as a timeout ends it (see orphanReason), and the name of the
+// Binding of its thread ("" if the thread has no session). An error that does not say the Binding is unknown (the config has not loaded, say) is no
+// finding, and nor is a session that cannot be read; the timeout goes on and meets it as before. A denial the session took in an earlier sweep of this
+// row (taken) stands, whatever the config says now, and its row is not an orphan's.
+func (s *Sweeper) orphaned(ctx context.Context, row store.Interaction, now time.Time) (orphanReason, string) {
+	if _, taken := s.taken[row.ID]; taken {
+		return notOrphaned, ""
+	}
+	var binding string
+	if sess, err := s.cfg.Sessions.GetSession(ctx, row.Key, store.AnyAge, now); err == nil {
+		binding = sess.Binding
+		if _, err := s.cfg.Lookup.Binding(binding); errors.Is(err, session.ErrUnknownBinding) {
+			return bindingGone, binding
+		}
+	}
+	if s.cfg.Served != nil && !s.cfg.Served(row.Key.Connection) {
+		return connectionNotServed, binding
+	}
+	return notOrphaned, binding
+}
+
+// waitsOut says whether the orphan row is still inside its grace: the sweep that first finds it so starts the count (and says so once, at INFO), and it is
+// ended by the first sweep, after the OrphanGrace, that finds it so still. A sweep that finds it not an orphan drops the count (Sweep does).
+func (s *Sweeper) waitsOut(ctx context.Context, row store.Interaction, why orphanReason, now time.Time) bool {
+	since, counting := s.orphanSince[row.ID]
+	if !counting {
+		s.orphanSince[row.ID] = now
+		since = now
+		s.cfg.Logger.InfoContext(ctx, "interact: an interaction that is due cannot be ended through its Binding, and is ended without the agent if it stays so",
+			"interaction", row.ID, "connection", row.Key.Connection, "why", why.words(), "grace", s.cfg.OrphanGrace)
+	}
+	return now.Sub(since) < s.cfg.OrphanGrace
+}
+
+// words says it for a log line.
+func (w orphanReason) words() string {
+	if w == connectionNotServed {
+		return "the chat connection is not served"
+	}
+	return "the Binding is not in the config"
+}
+
+// endOrphan ends the interaction row, whose Binding is not in the config or whose chat connection is not served, without the agent's task
+// being ended through the Binding and with nothing posted by the sweep: the Binding's backend is not there to be called, and no platform
+// serves the connection to edit the prompt or post a notice. The pause is released (release), so that the parked runner lets go of its
+// task and retention can deal with the session, and the interaction is recorded as timed out: its time ran out with nobody answering. Then it is audited (DecisionOrphaned) and counted
+// (OnApprovalOutcome with OutcomeOrphaned, whatever the kind, and neither the approval's timed_out nor OnTimeout), once. The order is the timeout's: a
+// crash between the release and the record is finished by the next sweep, whose release finds nothing paused. A prompt that was posted
+// is edited to its ending by the repair loop (Replacer) if a platform can be had for it, and left otherwise.
+func (s *Sweeper) endOrphan(ctx context.Context, row store.Interaction, why orphanReason, binding string, now time.Time) error {
+	cancelled, err := s.release(ctx, row, why)
+	if err != nil {
+		return fmt.Errorf("interact: end the pause of %s without the agent: %w", row.ID, err)
+	}
+	switch err = s.cfg.Store.ResolveInteraction(ctx, row.ID, store.InteractionTimedOut, now); {
+	case errors.Is(err, store.ErrConflict): // decided in the meantime: the first decision stands
+		s.cfg.Logger.InfoContext(ctx, "interact: an interaction was decided while the sweep ended it without the agent; the decision stands", "interaction", row.ID)
+		s.forget(row.ID)
+		return nil
+	case errors.Is(err, store.ErrNotFound):
+		s.forget(row.ID)
+		return nil
+	case err != nil:
+		return fmt.Errorf("interact: record the end of %s: %w", row.ID, err)
+	}
+	s.forget(row.ID)
+	d := audit.Decision{InteractionID: row.ID, TaskID: a2a.TaskID(row.TaskID), Result: audit.DecisionOrphaned, At: now}
+	if err := s.cfg.Auditor.Decision(ctx, audit.Actor{Binding: binding}, d); err != nil { // as a timeout's is: it is logged, and never undoes the end
+		s.cfg.Logger.ErrorContext(ctx, "interact: an interaction that was ended without the agent was not audited", "interaction", row.ID, "err", err)
+	}
+	s.cfg.OnApprovalOutcome(binding, OutcomeOrphaned)
+	s.cfg.Logger.WarnContext(ctx, "interact: an interaction nobody could time out through its Binding was ended; the sweep posted nothing",
+		"interaction", row.ID, "binding", binding, "connection", row.Key.Connection, "task", row.TaskID, "why", why.words(), "task_cancelled_at_agent", cancelled)
+	return nil
+}
+
+// release ends the pause of row's task. When the Binding is in the config (its connection is not served) the agent is asked to cancel the
+// task: one Session.Cancel, which tries a transient failure up to three times (session cancelAttempts). That ends the pause too, and frees the agent of a task that waits for input for ever. A cancel that fails does not hold the end up: the pause is released without the agent. When the Binding is gone there is no backend to call, so the pause is released without the agent (Abandoner) and the task stays at the agent until
+// the agent's own expiry; Agent Kourier has nothing more to end it with. The release is never given up on: its failure leaves the interaction
+// pending, to be tried again. It says whether the agent cancelled the task.
+func (s *Sweeper) release(ctx context.Context, row store.Interaction, why orphanReason) (cancelled bool, err error) {
+	if why == connectionNotServed {
+		took, err := s.cancelled(ctx, row, "the interaction's chat connection is not served")
+		if err == nil { // cancelled, or not paused: either way there is no pause to release
+			return took, nil
+		}
+		s.cfg.Logger.WarnContext(ctx, "interact: the agent could not be asked to cancel the task of an interaction whose chat connection is not served, so the pause is released without it and the task is left at the agent",
+			"interaction", row.ID, "task", row.TaskID, "err", err)
+	}
+	switch err := s.cfg.Abandoner.Abandon(ctx, row.Key, a2a.TaskID(row.TaskID), "the interaction's Binding is not in the config or its chat connection is not served"); {
+	case err == nil, errors.Is(err, session.ErrNotPaused): // released, or nothing is paused on the task any more
+		return false, nil
+	default:
+		return false, err
+	}
 }
 
 // pauseEnd is how the pause of an interaction was ended, which says what its thread is told and whether it is counted as the
@@ -346,6 +551,7 @@ func (s *Sweeper) supersedeTimeout(ctx context.Context, row store.Interaction, n
 // forget drops what the sweeper remembers of an interaction whose timeout is recorded or was decided otherwise.
 func (s *Sweeper) forget(id string) {
 	delete(s.try, id)
+	delete(s.orphanSince, id)
 	delete(s.audited, id)
 	delete(s.taken, id)
 }
@@ -397,7 +603,7 @@ func (s *Sweeper) endApproval(ctx context.Context, row store.Interaction, in dia
 	}
 	_, alreadyAudited := s.audited[row.ID]
 	asked := pauseEnd{notice: timedOutNotice, audited: alreadyAudited}
-	sess, err := s.cfg.Sessions.GetSession(ctx, row.Key, readAll, now)
+	sess, err := s.cfg.Sessions.GetSession(ctx, row.Key, store.AnyAge, now)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		s.cfg.Logger.WarnContext(ctx, "interact: a timed-out approval has no session to name its Binding, so its task is cancelled", "interaction", row.ID)
@@ -408,9 +614,10 @@ func (s *Sweeper) endApproval(ctx context.Context, row store.Interaction, in dia
 	b, err := s.cfg.Lookup.Binding(sess.Binding)
 	switch {
 	case err != nil:
-		// The attempt to cancel needs the Binding's backend (session.Manager.Cancel reads it from the same config), so with the
-		// real session it fails for as long as the Binding is missing: the row is not timed out, and this line comes with each
-		// sweep. The same is true of a question under a Binding that has left the config.
+		// The Binding is missing, for a reason other than the one orphaned finds (the config has not loaded, or its backend cannot be
+		// built), or left the config since orphaned looked. The attempt to cancel needs the Binding's backend (session.Manager.Cancel reads it
+		// from the same config), so with the real session it fails for as long as that is so; the sweep that finds the Binding
+		// unknown for the OrphanGrace ends the row without the agent.
 		s.cfg.Logger.WarnContext(ctx, "interact: the Binding of a timed-out approval is not available, so its task is cancelled if it can be", "interaction", row.ID, "binding", sess.Binding, "err", err)
 		return asked, s.cancel(ctx, row)
 	case !b.ToolApprovals:
@@ -489,7 +696,11 @@ func (s *Sweeper) replace(ctx context.Context, row store.Interaction) error {
 	if err != nil {
 		return fmt.Errorf("interact: the ending of %s: %w", row.ID, err)
 	}
-	return s.cfg.Updater.Update(ctx, s.cfg.Updater.RefAt(row.Key.Channel, row.Key.Thread, row.MessageRef), chat.End(e))
+	u, err := s.cfg.Updaters.Platform(row.Key.Connection)
+	if err != nil {
+		return fmt.Errorf("interact: the platform to edit the prompt of %s: %w", row.ID, err)
+	}
+	return u.Update(ctx, u.RefAt(row.Key.Channel, row.Key.Thread, row.MessageRef), chat.End(e))
 }
 
 // notify enqueues the timeout's notice, text. Its ID comes from the interaction, so the same one is never posted twice.
@@ -499,9 +710,7 @@ func (s *Sweeper) notify(ctx context.Context, row store.Interaction, text string
 
 // notifyAs is notify with an outbox ID that comes from source, for a notice of the interaction that is not the timeout's.
 func (s *Sweeper) notifyAs(ctx context.Context, row store.Interaction, source, text string) error {
-	_, err := s.cfg.Outbox.Enqueue(ctx, outbox.Post{Source: source, Role: store.OutboxNotice, Channel: row.Key.Channel,
-		Thread: row.Key.Thread, Out: chat.Say(render.Notice(text, ""))})
-	return err
+	return enqueueNotice(ctx, s.cfg.Outbox, row.Key, source, text)
 }
 
 // report audits a timeout this sweep recorded and counts it: OnTimeout for any interaction, and OnApprovalOutcome for the
@@ -512,7 +721,7 @@ func (s *Sweeper) notifyAs(ctx context.Context, row store.Interaction, source, t
 func (s *Sweeper) report(ctx context.Context, row store.Interaction, end pauseEnd, now time.Time) {
 	if !end.audited {
 		var actor audit.Actor // no person decided it
-		if sess, err := s.cfg.Sessions.GetSession(ctx, row.Key, readAll, now); err == nil {
+		if sess, err := s.cfg.Sessions.GetSession(ctx, row.Key, store.AnyAge, now); err == nil {
 			actor.Binding = sess.Binding
 		} else {
 			actor.Binding = end.binding
@@ -534,6 +743,10 @@ type undelivered struct {
 	cancelled bool // the session cancelled the task; it is not asked again
 	told      bool // the notice is enqueued, or given up on
 	tries     int  // sweeps that failed to enqueue the notice
+	// missingSince is when a cancel first failed because the Binding is not in the config, and every cancel since has; zero if the last did not.
+	// It is the orphan's count (SweepConfig.OrphanGrace), kept here and not in orphanSince, which Sweep prunes of the rows that are not due.
+	missingSince time.Time
+	left         bool // the pause was released without the agent: the task is left with it, and the notice says so
 }
 
 // cancelUndelivered cancels the task of each approval whose denial the session took and then failed to deliver (Reopened), and
@@ -583,6 +796,30 @@ func (s *Sweeper) cancelOne(ctx context.Context, id string, u *undelivered) erro
 	var errs []error
 	if !u.cancelled {
 		took, err := s.cancelled(ctx, row, "the denial of the timed-out approval was not delivered")
+		released := false
+		if !errors.Is(err, session.ErrUnknownBinding) {
+			u.missingSince = time.Time{} // the Binding is there: a cancel that fails now fails for another reason, and is tried again
+		} else {
+			// The Binding was deleted after the denial was taken: there is no backend to cancel through. A Binding that is back in a moment (a
+			// reload that replaces it) lets the cancel through, so for the OrphanGrace the cancel is tried again at each sweep, and nothing is said
+			// of it. Past that the pause is released without the agent, whose task is left, as for any pause whose Binding is gone.
+			now := s.cfg.Now()
+			if u.missingSince.IsZero() {
+				u.missingSince = now
+				s.cfg.Logger.InfoContext(ctx, "interact: the Binding of a denial that was not delivered is not in the config; the task is cancelled if it is back, and the pause released without the agent if it stays so",
+					"interaction", id, "grace", s.cfg.OrphanGrace)
+			}
+			if now.Sub(u.missingSince) < s.cfg.OrphanGrace {
+				return nil
+			}
+			released = true
+			switch err = s.cfg.Abandoner.Abandon(ctx, row.Key, a2a.TaskID(row.TaskID), "the denial of the timed-out approval was not delivered and its Binding is not in the config"); {
+			case err == nil:
+				took, u.left = true, true
+			case errors.Is(err, session.ErrNotPaused):
+				took, err = false, nil
+			}
+		}
 		switch {
 		case err == nil && !took: // not paused any more: someone else ended it, or it moved on
 			s.cfg.Logger.InfoContext(ctx, "interact: the task of a denial that was not delivered is no longer paused, so it was left alone", "interaction", id, "task", row.TaskID)
@@ -592,11 +829,19 @@ func (s *Sweeper) cancelOne(ctx context.Context, id string, u *undelivered) erro
 			errs = append(errs, fmt.Errorf("interact: cancel the task of %s, whose denial was not delivered: %w", id, err))
 		default:
 			u.cancelled = true
-			s.cfg.Logger.WarnContext(ctx, "interact: the agent did not take the denial of a timed-out approval, so its task was cancelled", "interaction", id, "task", row.TaskID)
+			if released {
+				s.cfg.Logger.WarnContext(ctx, "interact: the agent did not take the denial of a timed-out approval and its Binding is gone, so the pause was released and the task is left at the agent", "interaction", id, "task", row.TaskID)
+			} else {
+				s.cfg.Logger.WarnContext(ctx, "interact: the agent did not take the denial of a timed-out approval, so its task was cancelled", "interaction", id, "task", row.TaskID)
+			}
 		}
 	}
 	if !u.told {
-		if err := s.notifyAs(ctx, row, id+"/undelivered", undeliveredDenialNotice); err == nil {
+		text := undeliveredDenialNotice
+		if u.left {
+			text = undeliveredLeftNotice
+		}
+		if err := s.notifyAs(ctx, row, id+"/undelivered", text); err == nil {
 			u.told = true
 		} else if u.tries++; u.tries >= maxAttempts { // as the edit and the notice of a timeout are
 			s.cfg.Logger.ErrorContext(ctx, "interact: giving up on the notice of a denial that was not delivered", "interaction", id, "err", err)

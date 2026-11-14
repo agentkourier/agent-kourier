@@ -5,9 +5,15 @@
 # doubles, through a build argument). Used by the scripts that source this file.
 # shellcheck disable=SC2034
 NODE_IMAGE=kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+# The oldest Kubernetes the chart admits (crMode's check in charts/agent-kourier/templates/_helpers.tpl), which only
+# the CRD corpus runs on (CRD_CORPUS_NODE=min, hack/kind/crd-corpus.sh). The digest is from the notes of kind v0.32.0,
+# the newest release that publishes a 1.33 node image; renovate.json holds it on 1.33. Keep its minor equal to that
+# check's, which test/kindmanifests guards.
+# shellcheck disable=SC2034
+NODE_IMAGE_MIN=kindest/node:v1.33.12@sha256:3f5c8443c620245e4d355cfe09e96a91ead32ceaa569d3f1ca9edf0cb2fe2ff4
 RUNTIME_IMAGE=gcr.io/distroless/static-debian12@sha256:d75cdd72874d4790092fcb1b058493ecf6bb5bf2b2b897045b00ff01d91843f2
-# The Go image Agent Kourier is built in (the Dockerfile's builder stage); go.mod's go version is 1.27.2.
-GO_IMAGE=golang:1.27.2@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8
+# The Go image Agent Kourier is built in (the Dockerfile's builder stage); go.mod's go version is 1.27.4.
+GO_IMAGE=golang:1.27.4@sha256:5e8afd493a7124a8586e134d9b532731161d4b9becf9dee5a5956b107426f93d
 # One full tier per Docker host: the cluster name is fixed, so two checkouts share it. The fast
 # tier is a separate cluster; use_tier fast points CLUSTER and OWNER_LABEL at it.
 CLUSTER=agent-kourier-full
@@ -16,6 +22,10 @@ CLUSTER=agent-kourier-full
 OWNER_LABEL=agentkourier.agent-kourier.dev/owner=up-full
 # Set by up-full.sh after creation; records which checkout owns the cluster.
 CHECKOUT_KEY=agentkourier.agent-kourier.dev/checkout
+# The pods of a tier's own Agent Kourier, release "agent-kourier": the two labels its Deployment selects them by. The name label alone will not
+# do: every release of the chart in the namespace carries it (the sandbox's and any other), since the front door's NetworkPolicy trusts it.
+# test/e2e's agentKourierPods is the same selector.
+TIER_AGENTKOURIER_PODS=app.kubernetes.io/name=agent-kourier,app.kubernetes.io/instance=agent-kourier
 
 die() {
   echo "error: $*" >&2
@@ -79,14 +89,24 @@ assert_owned() {
     die "kind cluster ${CLUSTER} exists but was not created by this script; refusing to touch it"
 }
 
-# refuse_while_sandbox_up: die while the sandbox tier's Agent Kourier (hack/kind/sandbox) is in the cluster. Its pod carries the label
-# app.kubernetes.io/name=agent-kourier that the front door's NetworkPolicy trusts (so it must), and the tests find Agent Kourier's pods by it, so a run of
-# the E2E tests would drive the sandbox's Agent Kourier and a bring-up would start the tier's beside it. An API error is not a refusal: only a
-# Deployment that is there is. Needs K.
+# refuse_while_sandbox_up: die while the sandbox tier's Agent Kourier (hack/kind/sandbox) is in the cluster. It takes the place of the tier's, which
+# sandbox/up.sh has scaled to zero, so a run of the E2E tests would find no Agent Kourier and a bring-up would start the tier's beside it. It looks for the
+# sandbox's Deployment by name, not for a label: another release of the chart in the namespace is no reason to refuse. An API error is not a
+# refusal: only a Deployment that is there is. Needs K.
 refuse_while_sandbox_up() {
   local found
   found=$("${K[@]}" -n agent-kourier get deploy agent-kourier-sandbox --ignore-not-found -o name 2>/dev/null) || found=
-  [ -z "${found}" ] || die "the sandbox tier is up (${found}); its Agent Kourier carries the tier's label. Run: make sandbox-down first"
+  [ -z "${found}" ] || die "the sandbox tier is up (${found}), with the tier's Agent Kourier at zero replicas. Run: make sandbox-down first"
+}
+
+# wait_tier_agentkourier_gone: wait for the tier's own Agent Kourier, which the caller has scaled to zero, to have no pod left: the chart's, and the
+# hand-made one of a tier brought up before the chart, which has no instance label at all. A selector has no "or", so each is a wait of its
+# own, and a wait that matches no pod returns at once. Another release of the chart in the namespace is not waited for: it does not exit. Needs K.
+wait_tier_agentkourier_gone() {
+  local selector
+  for selector in "${TIER_AGENTKOURIER_PODS}" 'app.kubernetes.io/name=agent-kourier,!app.kubernetes.io/instance'; do
+    "${K[@]}" -n agent-kourier wait --for=delete pod -l "${selector}" --timeout=90s >/dev/null
+  done
 }
 
 # owner_checkout: the checkout path recorded on the node, or "unknown".
@@ -122,7 +142,7 @@ build_doubles_image() {
     *) die "unsupported Docker architecture" ;;
   esac
   BUILD=$(mktemp -d)
-  for double in fakeslack stubagent sink signaler; do
+  for double in fakeslack stubagent sink signaler hitlagent; do
     GOOS=linux GOARCH=${goarch} CGO_ENABLED=0 go build -C "${ROOT}" -o "${BUILD}/${double}" "./test/${double}/cmd/${double}"
   done
   docker build -q -f "${HERE}/fast/Dockerfile" --build-arg "RUNTIME_IMAGE=${RUNTIME_IMAGE}" -t "${DOUBLES_IMAGE}" "${BUILD}" >/dev/null
@@ -135,8 +155,8 @@ build_doubles_image() {
 apply_doubles() {
   "${K[@]}" apply -f "${HERE}/fast/doubles.yaml" >/dev/null
   # Restart so a rebuilt image (same tag) is picked up.
-  "${K[@]}" -n e2e rollout restart deploy/fakeslack deploy/stubagent deploy/sink >/dev/null
-  "${K[@]}" -n e2e rollout status deploy/fakeslack deploy/stubagent deploy/sink --timeout=180s
+  "${K[@]}" -n e2e rollout restart deploy/fakeslack deploy/stubagent deploy/hitlagent deploy/sink >/dev/null
+  "${K[@]}" -n e2e rollout status deploy/fakeslack deploy/stubagent deploy/hitlagent deploy/sink --timeout=180s
   "${K[@]}" apply -f "${HERE}/fast/alertmanager.yaml" >/dev/null
   "${K[@]}" -n monitoring wait --for=condition=Available alertmanager/agent-kourier --timeout=180s
 }
@@ -181,8 +201,8 @@ assert_app_unpublished() {
 
 assert_never_published() {
   local app ingresses ports hostports apiserver='^6443/tcp -> 127\.0\.0\.1:[0-9]+$'
-  echo "== never published: the fake Slack's /_control/ and the stub agent's /_control/release/ have no authentication"
-  for app in fakeslack stubagent; do
+  echo "== never published: the fake Slack's /_control/ and the stub agent's /_control/release/ have no authentication, nor has hitlagent"
+  for app in fakeslack stubagent hitlagent; do
     assert_app_unpublished e2e "${app}"
   done
   ingresses=$("${K[@]}" -n e2e get ingress -o name)
@@ -297,28 +317,140 @@ install_agentkourier() {
   "${K[@]}" -n agent-kourier rollout restart deploy/agent-kourier >/dev/null
 }
 
-# deploy_agentkourier AGENTBACKEND [EXTRA_CONFIG_DIR]: Agent Kourier's namespace, fake Slack Secret, config and chart, which the fast and full tiers share.
+# require_config_source: die unless E2E_CONFIG_SOURCE is files (the tiers' default, the ConfigMap route: their values name it, since the chart's own default is crds) or crds (custom resources). Call it in a script's
+# preflight, before anything is changed.
+require_config_source() {
+  case "${E2E_CONFIG_SOURCE:-files}" in
+    files | crds) ;;
+    *) die "E2E_CONFIG_SOURCE must be files or crds" ;;
+  esac
+}
+
+# crds_held_by_release: succeed when the CRDs in the cluster were installed by the release agent-kourier (crds.install), so that a tier that goes back to
+# the ConfigMap route keeps crds.install on, as the chart README says to: a release without it no longer holds them. Needs K.
+crds_held_by_release() {
+  [ "$("${K[@]}" get crd bindings.agentkourier.dev -o 'jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}' 2>/dev/null || true)" = agent-kourier ]
+}
+
+# deploy_agentkourier AGENTBACKEND [EXTRA_CONFIG_DIR...]: Agent Kourier's namespace, fake Slack Secret, config and chart, which the fast and full tiers share.
 # AGENTKOURIER_VALUES is the values file (the fast tier's by default) and the array AGENTKOURIER_HELM_ARGS, if the caller set it, holds more helm
 # arguments. The config is the fast tier's Bindings and ChatConnection (fast/agent-kourier/config), with AGENTBACKEND, a file, in place of the fast
-# tier's AgentBackend: the Bindings name it `agents` in both tiers. EXTRA_CONFIG_DIR, if given, adds the YAML files of a directory: the fast
-# tier passes the Bindings that reach the stub agent through the a2a dialect, which the full tier, with no stub, must not load.
-# The Secrets are fake constants made here and never committed, and the agent token (Secret agent-kourier-agent-token) is the caller's to
-# make: it differs by tier. Needs HERE, ROOT, K, H.
+# tier's AgentBackend: the Bindings name it `agents` in both tiers. Each EXTRA_CONFIG_DIR adds the YAML files of a directory: the fast tier
+# passes the Bindings that reach the stub agent through the a2a dialect and those that verification checks against the stub, which the full
+# tier, with no stub, must not load.
+# E2E_CONFIG_SOURCE says where Agent Kourier reads that config from. files (the default of the tiers, whatever the chart's default is: the tiers' values set config.source files) puts it in the ConfigMap agent-kourier-config, which the chart
+# mounts. crds follows the move a user makes, in two upgrades: the CRDs first (the release as it was, with crds.install on), then the same files applied
+# as custom resources and the release upgraded with crds-values.yaml, so that the pod reads them and the ConfigMap is not mounted. The ConfigMap is still
+# made (a ConfigMap of a user's own is not touched by the move either), so that the tier can go back: running this again with files upgrades the release
+# to the ConfigMap route, and the custom resources stay in the cluster, unread, as the chart README says. Either way the config is the same files.
+# The array AGENTKOURIER_CRDS_ARGS, if the caller set it, holds more helm arguments for the route upgrade of crds only (the platform's admission list of
+# the tier with two Slack apps: a value the ConfigMap route refuses). The Secrets are fake constants made here and never committed, and the agent
+# token (Secret agent-kourier-agent-token) is the caller's to make: it differs by tier. Needs HERE, ROOT, K, H.
 deploy_agentkourier() {
-  local config
+  local config dir source=${E2E_CONFIG_SOURCE:-files} values=${AGENTKOURIER_VALUES:-${ROOT}/charts/agent-kourier/ci/fast-values.yaml}
+  require_config_source
   refuse_while_sandbox_up
   config=$(mktemp -d)
   trap 'rm -rf "${config}"; trap - RETURN' RETURN # the scratch directory goes however this ends
   cp "${HERE}"/fast/agent-kourier/config/*.yaml "${config}"
   cp "$1" "${config}/agentbackend.yaml"
-  if [ -n "${2:-}" ]; then
-    cp "$2"/*.yaml "${config}"
-  fi
+  shift
+  for dir in "$@"; do
+    cp "${dir}"/*.yaml "${config}"
+  done
   "${K[@]}" create namespace agent-kourier --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
   "${K[@]}" -n agent-kourier create secret generic slack-fast --from-literal=botToken=xoxb-fake-test-token \
     --from-literal=appToken=xapp-fake-test-token --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
   "${K[@]}" -n agent-kourier create configmap agent-kourier-config --from-file="${config}" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
-  install_agentkourier "${AGENTKOURIER_VALUES:-${ROOT}/charts/agent-kourier/ci/fast-values.yaml}" ${AGENTKOURIER_HELM_ARGS[@]+"${AGENTKOURIER_HELM_ARGS[@]}"} # (an empty array is unset to bash 3.2)
+  case "${source}" in
+    files)
+      # A tier that was on crds holds the CRDs under the release: keep them there. (An empty array is unset to bash 3.2.)
+      if crds_held_by_release; then
+        install_agentkourier "${values}" ${AGENTKOURIER_HELM_ARGS[@]+"${AGENTKOURIER_HELM_ARGS[@]}"} --set crds.install=true
+      else
+        install_agentkourier "${values}" ${AGENTKOURIER_HELM_ARGS[@]+"${AGENTKOURIER_HELM_ARGS[@]}"}
+      fi
+      ;;
+    crds)
+      # 1. The CRDs, the route still files: the pod's template does not move, so there is no restart. Skipped when the release already holds them,
+      # which is a tier that is already on crds being brought up again: it would put the pod on the ConfigMap route for the length of the step.
+      if ! crds_held_by_release; then
+        replace_unowned_deployment agent-kourier
+        adopt_into_release agent-kourier serviceaccount/agent-kourier role/agent-kourier-secrets rolebinding/agent-kourier-secrets service/agent-kourier pvc/agent-kourier-data
+        helm_install_agentkourier agent-kourier "${values}" ${AGENTKOURIER_HELM_ARGS[@]+"${AGENTKOURIER_HELM_ARGS[@]}"} --set crds.install=true
+      fi
+      "${K[@]}" wait --for=condition=Established --timeout=60s crd/bindings.agentkourier.dev crd/agentbackends.agentkourier.dev crd/chatconnections.agentkourier.dev >/dev/null
+      # 2. The config as custom resources (the files are manifests of the three kinds already), then the route. A server-side dry run first, so that a
+      # file the CRDs refuse stops here with the apiserver's words.
+      "${K[@]}" apply --dry-run=server -f "${config}" >/dev/null
+      "${K[@]}" apply -f "${config}" >/dev/null
+      install_agentkourier "${values}" ${AGENTKOURIER_HELM_ARGS[@]+"${AGENTKOURIER_HELM_ARGS[@]}"} -f "${HERE}/crds-values.yaml" ${AGENTKOURIER_CRDS_ARGS[@]+"${AGENTKOURIER_CRDS_ARGS[@]}"}
+      ;;
+  esac
+}
+
+# unsigned_jwt EMAIL: an unsigned JWT with an email claim, which is all the stub agent (-require-auth) asks of a bearer. A fake constant.
+unsigned_jwt() {
+  local header claims
+  header=$(printf %s '{"alg":"none"}' | base64 | tr -d '=\n' | tr '/+' '_-')
+  claims=$(printf %s "{\"email\":\"$1\"}" | base64 | tr -d '=\n' | tr '/+' '_-')
+  printf '%s.%s.' "${header}" "${claims}"
+}
+
+# fake_slack_app_connections APP_ID: how many Socket Mode clients of that app of the fake Slack are connected (/_control/apps), or nothing when it
+# could not be read. Asked from a throwaway pod in e2e, since the fake's control surface is published nowhere. Needs K, jq.
+fake_slack_app_connections() {
+  local pod=probe-apps-${RANDOM} out
+  out=$("${K[@]}" -n e2e run "${pod}" --rm -i --quiet --restart=Never --image="${CURL_IMAGE}" --command -- \
+    curl -sf -m 10 http://fakeslack.e2e.svc.cluster.local:8080/_control/apps 2>/dev/null) || out=
+  jq -r --arg app "$1" '.[] | select(.app_id == $app) | .connections' <<<"${out}" 2>/dev/null || true
+}
+
+# seat_two_apps_bots: put the bots in the channels of the Bindings of hack/kind/fast/two-apps in the fake Slack, before the Bindings are made: the bot of the
+# default app (UFAKEBOT) in the platform's, team-a's (ATEAMA) in its own, and both in CMCLOOP. A Binding's first probe then finds its channel joined; one probed
+# before the bot is in it is probed again only at the next pass (every five minutes), which a case that waits for Ready would wait for. The fake keeps this in
+# memory, so a restarted fake has to be told again, which the MC_ tests do for their channels. test/e2e's twoapps.go names the channels. Needs K.
+seat_two_apps_bots() {
+  local pod=seat-bots-${RANDOM} fs=http://fakeslack.e2e.svc.cluster.local:8080/_control
+  # shellcheck disable=SC2016 # the script runs in the pod
+  "${K[@]}" -n e2e run "${pod}" --rm -i --quiet --restart=Never --image="${CURL_IMAGE}" --command -- sh -c '
+    set -e
+    fs=$1
+    post() { curl -sf -m 10 -X POST -H "Content-Type: application/json" -d "$2" "$fs/$1" >/dev/null; }
+    post members "{\"channel\":\"CMCPLATFORM\",\"users\":[\"UFAKEBOT\"]}"
+    post members "{\"channel\":\"CMCPLATFINAL\",\"users\":[\"UFAKEBOT\"]}"
+    post members "{\"channel\":\"CMCLOOP\",\"users\":[\"UFAKEBOT\",\"UTEAMA\"]}"
+    post join "{\"channel\":\"CMCTEAMA\",\"app\":\"ATEAMA\"}"
+    post join "{\"channel\":\"CMCTEAMAFINAL\",\"app\":\"ATEAMA\"}"' sh "${fs}" >/dev/null || die "could not put the bots of the two apps in their channels in the fake Slack"
+}
+
+# deploy_two_apps: the tier's second Slack app (E2E_TWO_APPS=1; custom resources only): the namespaces team-a, team-b and team-c, team-a's Secrets (the
+# Slack tokens of the app ATEAMA that the fake Slack hosts, and an agent token), and hack/kind/fast/two-apps/two-apps.yaml: team-a's Role,
+# ChatConnection, AgentBackend and Binding, and the platform's Binding mc-platform. It returns once the fake Slack has a Socket Mode client of team-a's app,
+# which is the broker serving the connection, and dies if none comes in three minutes (each look is a pod, so the bound is the clock's). The Secrets are made with apply from a pipe, as deploy_agentkourier
+# makes the tier's. Needs HERE, K, jq, and the CRDs served (deploy_agentkourier with crds).
+deploy_two_apps() {
+  local ns deadline connected=
+  for ns in team-a team-b team-c; do
+    "${K[@]}" create namespace "${ns}" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  done
+  "${K[@]}" -n team-a create secret generic slack-team-a --from-literal=botToken=xoxb-fake-team-a-token \
+    --from-literal=appToken=xapp-fake-team-a-token --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  "${K[@]}" -n team-a create secret generic team-a-agent-token --from-literal=token="$(unsigned_jwt team-a@example.test)" \
+    --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  seat_two_apps_bots
+  "${K[@]}" apply -f "${HERE}/fast/two-apps/two-apps.yaml" >/dev/null
+  deadline=$((SECONDS + 180))
+  while [ "${SECONDS}" -lt "${deadline}" ]; do
+    connected=$(fake_slack_app_connections ATEAMA)
+    [ "${connected:-0}" -ge 1 ] 2>/dev/null && break
+    sleep 2
+  done
+  [ "${connected:-0}" -ge 1 ] 2>/dev/null || {
+    "${K[@]}" -n agent-kourier logs deploy/agent-kourier --tail=40 >&2 || true
+    die "the broker never connected team-a's Slack app to the fake Slack; is team-a in config.connectionNamespaces, and does team-a's Role name its Secret?"
+  }
+  echo "ok: team-a's Slack app is connected to the fake Slack"
 }
 
 # apply_signaler: the container signaler (fast/signaler.yaml, in namespace e2e), which S16 uses to freeze or kill an Agent Kourier replica; the fast
@@ -368,21 +500,35 @@ deploy_postgres() {
 }
 
 # The curl image the scripts' probe pods run, pinned; the same as the verify scripts'.
-CURL_IMAGE=curlimages/curl:8.23.0@sha256:a134550be58ab783810e613ae96fd253c38f7bdd16d9bf9be350700c7a29ac06
+CURL_IMAGE=curlimages/curl:8.23.0@sha256:3fb7e13e5d179a845c97d78204f3f1064d1907037f26a3ebf91710571151fd93
 
 # delete_agentkourier_pod NAME: delete a throwaway pod of namespace agent-kourier, if there is one. Needs K.
 # An empty NAME is nothing to delete.
 delete_agentkourier_pod() { [ -z "$1" ] || "${K[@]}" -n agent-kourier delete pod "$1" --ignore-not-found --wait=false >/dev/null 2>&1 || true; }
 
-# DEX_TOKEN_POD is the name of the pod refresh_dex_token is running, for a caller's EXIT trap: a Ctrl-C during its
-# `kubectl run` skips the function's own RETURN trap, and the pod's logs hold the token. Empty when there is none.
+# DEX_TOKEN_POD is the name of the pod refresh_dex_token is running, for a caller's EXIT trap: a Ctrl-C during one of its
+# kubectl calls skips the function's own RETURN trap, and the pod's status holds the token. Empty when there is none.
 DEX_TOKEN_POD=
 
-# dex_token_from: the token in what refresh_dex_token's pod printed, on stdin. The pod prints it as one line,
-# TOKEN:<jwt>:END, and the token is the first line that is exactly that. kubectl, when it cannot attach to the pod
-# under load, falls back to streaming the pod's logs, and can print them twice or cut a copy short and glue it to
-# the next: a line that is not wholly good is no token, and nothing is printed for it, so the caller tries again and
-# never stores a mangled one.
+# DEX_TOKEN_TRIES, DEX_TOKEN_POLLS and the sleeps between them are what refresh_dex_token waits for: up to DEX_TOKEN_TRIES pods, each given
+# DEX_TOKEN_POLLS looks, DEX_TOKEN_POLL_SLEEP seconds apart (two minutes: the first pod pulls the curl image), with DEX_TOKEN_RETRY_SLEEP
+# seconds between pods. The tests of test/kindmanifests set the sleeps to 0.
+: "${DEX_TOKEN_TRIES:=3}" "${DEX_TOKEN_POLLS:=120}" "${DEX_TOKEN_POLL_SLEEP:=1}" "${DEX_TOKEN_RETRY_SLEEP:=3}"
+
+# DEX_TOKEN_SCRIPT is what the pod of refresh_dex_token runs: it asks Dex for the Binding identity's ID token with the password grant (the client
+# and the user are the fake ones of full/dex.yaml) and writes it, as the one line TOKEN:<jwt>:END, to the pod's termination message, the file the
+# kubelet reads into the pod's status when the container ends. It exits 1 when Dex gave no token. Nothing is written to its output.
+# shellcheck disable=SC2016 # it runs in the pod, where its variables are
+DEX_TOKEN_SCRIPT='
+tok=$(curl -sf -m 20 -d grant_type=password -d client_id=agent-kourier-binding -d client_secret=fake-agent-kourier-binding-secret \
+  -d username=binding-test@example.test -d password=password -d "scope=openid email" \
+  http://dex.dex.svc.cluster.local:5556/dex/token | sed -n "s/.*\"id_token\":\"\([^\"]*\)\".*/\1/p")
+[ -n "${tok}" ] || exit 1
+printf "TOKEN:%s:END\n" "${tok}" >/dev/termination-log'
+
+# dex_token_from: the token in the termination message of refresh_dex_token's pod, on stdin. The pod writes it as one line,
+# TOKEN:<jwt>:END, and the token is the first line that is exactly that. A message that is not wholly good (the kubelet keeps 4096 bytes of
+# one, and cuts the rest) is no token, and nothing is printed for it, so the caller tries again and never stores a mangled one.
 dex_token_from() {
   sed -n 's/^TOKEN:\([A-Za-z0-9_-]\{1,\}\.[A-Za-z0-9_-]\{1,\}\.[A-Za-z0-9_-]\{1,\}\):END$/\1/p' | head -n 1
 }
@@ -392,27 +538,55 @@ dex_token_from() {
 # identity is a static user that signs in with the password grant, and its token lives 24 hours: run this before
 # each use of the full tier whose last refresh is not recent (up-full.sh and e2e-run.sh do). The token is made
 # inside the cluster by a throwaway pod, where Dex is, and goes from there to the Secret through pipes: it is
-# never printed, put on a command line or written to a file. The pod is deleted when this returns, whatever
-# happened, since its logs hold the token. Agent Kourier reads the Secret on every request, so a refreshed token is sent
-# from the next call. The client and the user are the fake ones of full/dex.yaml. Needs K.
+# never printed, put on a command line or written to a file. The pod runs to completion and the token is read from its status
+# (DEX_TOKEN_SCRIPT writes it to the termination message), not streamed: `kubectl run --rm -i` attaches to the pod and, on a loaded machine,
+# returned nothing, or a mangled copy of the logs, in about one try in ten. A try whose pod could not be made, did not finish or left no token
+# is tried again with a new pod, up to DEX_TOKEN_TRIES; the failure names what each try saw. The pod is deleted when
+# its try ends, whatever happened, since its status holds the token. The tracing of `set -x` is off inside the function, which
+# holds the token in a variable. Agent Kourier reads the Secret on every request, so a refreshed token is sent from the next call.
+# Needs K.
 refresh_dex_token() {
-  local pod tok attempt
+  local pod tok attempt phase polls out exit_code msg why tried= xtrace=
+  case $- in *x*) xtrace=1 ;; esac
+  set +x
   "${K[@]}" create namespace agent-kourier --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
-  for attempt in 1 2 3; do
+  for ((attempt = 1; attempt <= DEX_TOKEN_TRIES; attempt++)); do
+    [ "${attempt}" -eq 1 ] || sleep "${DEX_TOKEN_RETRY_SLEEP}"
     pod=dex-token-${RANDOM}
     DEX_TOKEN_POD=${pod}
-    trap 'delete_agentkourier_pod "${pod}"; trap - RETURN' RETURN # a return from here, an error included, still deletes it
-    tok=$("${K[@]}" -n agent-kourier run "${pod}" --rm -i --quiet --restart=Never --image="${CURL_IMAGE}" --command -- sh -c '
-      curl -sf -m 20 -d grant_type=password -d client_id=agent-kourier-binding -d client_secret=fake-agent-kourier-binding-secret \
-        -d username=binding-test@example.test -d password=password -d "scope=openid email" \
-        http://dex.dex.svc.cluster.local:5556/dex/token | sed -n "s/.*\"id_token\":\"\([^\"]*\)\".*/TOKEN:\1:END/p"' 2>/dev/null | dex_token_from) || tok=
+    tok=
+    why=
+    if ! "${K[@]}" -n agent-kourier run "${pod}" --restart=Never --image="${CURL_IMAGE}" --command -- sh -c "${DEX_TOKEN_SCRIPT}" >/dev/null 2>&1; then
+      why="kubectl run could not make the pod"
+    else
+      phase=
+      for ((polls = 0; polls < DEX_TOKEN_POLLS; polls++)); do
+        phase=$("${K[@]}" -n agent-kourier get pod "${pod}" -o 'jsonpath={.status.phase}' 2>/dev/null) || phase=
+        case "${phase}" in Succeeded | Failed) break ;; esac
+        sleep "${DEX_TOKEN_POLL_SLEEP}"
+      done
+      case "${phase}" in
+        Succeeded | Failed)
+          # "<exit code> <termination message>": the space is the template's, so a pod with no container status leaves both empty.
+          out=$("${K[@]}" -n agent-kourier get pod "${pod}" -o 'jsonpath={.status.containerStatuses[0].state.terminated.exitCode} {.status.containerStatuses[0].state.terminated.message}' 2>/dev/null) || out=" "
+          exit_code=${out%% *}
+          msg=${out#* }
+          tok=$(dex_token_from <<<"${msg}")
+          why="the pod ended ${phase} with exit code ${exit_code:-unknown} and ${#msg} bytes of termination message, none of them a token"
+          ;;
+        *) why="the pod was ${phase:-not found} after ${DEX_TOKEN_POLLS} looks" ;;
+      esac
+    fi
     delete_agentkourier_pod "${pod}"
     DEX_TOKEN_POD=
     [ -z "${tok}" ] || break
+    tried+="; try ${attempt}, pod ${pod}: ${why}"
   done
-  [ -n "${tok}" ] || die "Dex gave no ID token for the Binding identity after three tries (is Dex up? did the pod run?)"
+  [ -n "${tok}" ] || die "Dex gave no ID token for the Binding identity after ${DEX_TOKEN_TRIES} tries${tried} (is Dex up in namespace dex? each try runs a pod that asks it for the token and reads the pod's termination message)"
   printf %s "${tok}" | "${K[@]}" -n agent-kourier create secret generic agent-kourier-agent-token --from-file=token=/dev/stdin \
     --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  tok=
+  [ -z "${xtrace}" ] || set -x
 }
 
 # deploy_scenario_agents: the full tier's Phase 1 scenario agents (full/scenarios): the scenario model and the MCP
@@ -508,8 +682,8 @@ kindnet_log_failing() {
 }
 
 # NETPOL_PROBE_LABEL marks the probe pods of policy_probe, so that delete_netpol_probes finds them. The probe runs inside command
-# substitutions, which cannot hand a pod name back to the caller's trap, and the pod carries the Agent Kourier label (a leftover one fails
-# the next e2e-full, which wants exactly one such pod): so the traps delete by this label.
+# substitutions, which cannot hand a pod name back to the caller's trap, and the pod carries the Agent Kourier label and no instance label (a leftover
+# one is trusted by the front door, and holds up wait_tier_agentkourier_gone in the next make sandbox-up): so the traps delete by this label.
 NETPOL_PROBE_LABEL=agentkourier.agent-kourier.dev/probe=netpol
 
 # NETPOL_PROBE_SCRIPT: what the probe pod runs, with the control's URL as $1 and the controller's as $2. It prints one line,

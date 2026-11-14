@@ -23,12 +23,12 @@ flowchart TB
 ## One leader, one standby
 
 High availability is active/passive. Two replicas of one Deployment share a Postgres database. One is the **leader**:
-it holds a Kubernetes Lease and runs all of Agent Kourier's work, which is the Socket Mode connection, the session
-runners, the outbox, the sweeps and the digests. The other is the **standby**: it serves health and metrics and waits
+it holds a Kubernetes Lease and runs all of Agent Kourier's work, which is the Socket Mode connection of each ChatConnection it serves, the session
+runners, the outbox, the sweeps, the digests and the verification of Bindings. The other is the **standby**: it serves health and metrics and waits
 for the Lease.
 
 Active/active, with workers on every replica, is deferred until one replica's throughput is not enough. With one
-writer there is one place where turns are ordered, one Socket Mode connection, and one outbox, so every recovery rule
+writer there is one place where turns are ordered, one Socket Mode connection for each Slack app, and one outbox, so every recovery rule
 of a single replica holds unchanged.
 
 ## SQLite or Postgres
@@ -99,6 +99,14 @@ connections, so a second connection would send a share of them to a replica that
 `agentkourier_leader` is 1 on the leader and 0 on the standby, and `agentkourier_leader_takeovers_total` counts the times
 a replica took the leadership.
 
+**With custom resources** (`config.source: crds`) both replicas read the three kinds from the cluster, so the standby can take over with the
+config the leader has. Only the leader writes `Binding.status`, so with no leader the statuses stay as they were last written, and are
+not marked stale. A new leader starts every probed condition at `Pending` and does not write that over a good status of the generation it serves, so a
+failover does not blank what `kubectl get akbinding` shows. The last good generation of an invalid object is held in memory by each replica, which
+is why a replica that starts during an invalid generation serves nothing for that object: see
+[What the custom resource route does not promise](config-routes.md#what-the-custom-resource-route-does-not-promise). With SQLite there is one replica,
+no election, and it writes the status itself.
+
 ## A takeover is a restart
 
 On taking the Lease, a replica runs the leader's half of the start-up exactly as a start-up after a crash runs it. The
@@ -108,7 +116,8 @@ before a turn is resent, and a recovered stream escapes everything.
 
 - **A stream the old leader left open.** The session records which turn a task belongs to, so the new leader renders
   the recovered task under that turn: it finds the turn's outbox row and stream, ends the stream, and replaces the
-  half-written message with the whole output.
+  half-written message with the whole output, with the cards the stream would show before the text: each tool call's, or
+  in the activity modes the `Working…` or activity card.
 - **Slack events.** Agent Kourier acknowledges an event only after its turn is queued, so an event the old leader took
   and did not acknowledge is delivered again. If both replicas are briefly connected while one is paused, a message
   delivered to both is still one turn, because turns are queued by message ID.

@@ -24,6 +24,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/audit"
+	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/config/k8ssecrets"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/secret"
@@ -276,9 +277,9 @@ func TestRotationIsPickedUpWithoutRestart(t *testing.T) {
 	}
 	client := fake.NewClientset(sec("old-token", "old-key"))
 	registered := watchRegistered(client)
-	r := k8ssecrets.New(client, []string{"sre"})
+	r := k8ssecrets.New(client)
 	t.Cleanup(r.Stop)
-	if err := r.Start(t.Context()); err != nil {
+	if err := r.Watch(t.Context(), []config.SecretName{{Namespace: "sre", Name: "creds"}}); err != nil {
 		t.Fatal(err)
 	}
 	<-registered
@@ -368,6 +369,8 @@ func TestRejected(t *testing.T) {
 			nil, agent.ErrBusy, fmt.Errorf("x: %w", agent.ErrNotSent), context.Canceled, agent.ErrForbidden, agent.ErrTokenRequired,
 			// a status alone, without the sentinel the pool joins to it, is not for this hook
 			&dialect.HTTPStatusError{Code: 403}, fmt.Errorf("send: %w", &dialect.HTTPStatusError{Code: 401}),
+			// a card 403: the agent does not exist, or does not permit the identity; the token was not refused
+			fmt.Errorf("%w: %w: %w", agent.ErrNotSent, agent.ErrAgentForbidden, &dialect.HTTPStatusError{Code: 403}),
 		} {
 			f := newFixture(t, v1alpha1.Identity{TokenSecretRef: tokenRef()})
 			c := call
@@ -545,5 +548,46 @@ func TestIdentityNamesTheTokenSecretOrTheUserID(t *testing.T) {
 	}
 	if got := newFixture(t, v1alpha1.Identity{UserID: "svc"}).source().Identity(); got != "svc" {
 		t.Errorf("Identity with a userId only = %q, want it", got)
+	}
+}
+
+// TestUnreadableSecretErrorsSayWhichSecret: the error of an unreadable token or header Secret carries which Secret, which key, which
+// header and whether the Secret is in the Binding's namespace, as a *SecretError, so that a status can name a Secret of the Binding's own
+// namespace and no other. The error's text is the reader's, unchanged.
+func TestUnreadableSecretErrorsSayWhichSecret(t *testing.T) {
+	header := v1alpha1.Header{Name: "X-Api-Key", ValueSecretRef: &v1alpha1.SecretKeyRef{Name: "gw", Key: "api"}}
+	for _, tc := range []struct {
+		name    string
+		backend string // the AgentBackend's namespace
+		vals    map[string]string
+		want    SecretError
+	}{
+		{"token", "platform", map[string]string{"platform/gw/api": "k"},
+			SecretError{Namespace: "sre", Name: "creds", Key: "token", BindingNamespace: "sre"}},
+		{"header of a backend in another namespace", "platform", map[string]string{"sre/creds/token": "t"},
+			SecretError{Namespace: "platform", Name: "gw", Key: "api", Header: "X-Api-Key", BindingNamespace: "sre"}},
+		{"header of a backend in the Binding's namespace", "sre", map[string]string{"sre/creds/token": "t"},
+			SecretError{Namespace: "sre", Name: "gw", Key: "api", Header: "X-Api-Key", BindingNamespace: "sre"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, v1alpha1.Identity{TokenSecretRef: tokenRef()}, header)
+			f.backend.Namespace = tc.backend
+			f.reader.vals = tc.vals
+			_, err := f.source().Credentials(t.Context())
+			var got *SecretError
+			if !errors.As(err, &got) {
+				t.Fatalf("Credentials err = %v, want a *SecretError in its chain", err)
+			}
+			if got.Namespace != tc.want.Namespace || got.Name != tc.want.Name || got.Key != tc.want.Key ||
+				got.Header != tc.want.Header || got.BindingNamespace != tc.want.BindingNamespace {
+				t.Errorf("SecretError = %+v, want %+v", got, tc.want)
+			}
+			if !errors.Is(err, secret.ErrKeyNotFound) {
+				t.Errorf("err = %v, want it to wrap the reader's secret.ErrKeyNotFound", err)
+			}
+			if got.Error() != got.Err.Error() || strings.Count(err.Error(), tc.want.Namespace+"/"+tc.want.Name) != 1 {
+				t.Errorf("error text %q repeats what the reader said", err)
+			}
+		})
 	}
 }

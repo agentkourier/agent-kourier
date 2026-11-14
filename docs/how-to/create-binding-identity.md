@@ -144,8 +144,8 @@ staticClients:
 The account represents this Binding. The client identifies the application requesting tokens; its ID is the
 audience the front door must accept. The redirect URI is unused by this password-grant request. Enable the password
 grant explicitly by adding `password` to `oauth2.grantTypes` as shown above; preserve any other grants your deployment
-uses. The repository's reference deployment pins Dex v2.45.1, whose
-[configuration source](https://github.com/dexidp/dex/blob/v2.45.1/cmd/dex/config.go#L151-L154) defaults to all supported
+uses. The repository's reference deployment pins Dex v2.46.1, whose
+[configuration source](https://github.com/dexidp/dex/blob/v2.46.1/cmd/dex/config.go#L248-L251) defaults to all supported
 grants, while the current OAuth2 documentation linked above describes narrower defaults. Check the settings for
 your deployed version rather than relying on defaults. Keep the existing clients, users and OAuth2 settings when merging.
 
@@ -206,4 +206,4 @@ namespace. They hold different credentials and serve different purposes.
 
 Mention the bot in the bound channel. A successful agent reply checks that the configured identity can reach the
 backend. If the front door rejects the token, check the issuer, audience, expiry and account permissions; see
-[troubleshooting](troubleshoot.md#http-401-or-http-403-at-the-card-fetch).
+[troubleshooting](troubleshoot.md#http-401-at-the-card-fetch).

@@ -120,7 +120,8 @@ func (s *Source) Credentials(ctx context.Context) (dialect.Credentials, error) {
 				err = checkValue(v, s.backend.Namespace, ref.Name, key)
 			}
 			if err != nil {
-				return dialect.Credentials{}, fmt.Errorf("%w: header %q: %w", agent.ErrHeaderUnreadable, h.Name, err)
+				return dialect.Credentials{}, fmt.Errorf("%w: header %q: %w", agent.ErrHeaderUnreadable, h.Name, &SecretError{
+					Namespace: s.backend.Namespace, Name: ref.Name, Key: key, Header: h.Name, BindingNamespace: s.spec.Namespace, Err: err})
 			}
 			val = v
 		}
@@ -134,10 +135,10 @@ func (s *Source) Credentials(ctx context.Context) (dialect.Credentials, error) {
 }
 
 // Rejected is for the session manager to call with every failed agent call. When call.Err
-// carries agent.ErrCredentialsRejected (the front door answered 401 or 403) it re-reads the
-// token, writes an audit record of the call, and calls OnRejected; for any other error it
-// does nothing. It never retries: the turn has failed, and the next one reads the Secret
-// again.
+// carries agent.ErrCredentialsRejected (the front door answered 401, or 403 on an A2A call)
+// it re-reads the token, writes an audit record of the call, and calls OnRejected; for any
+// other error it does nothing. It never retries: the turn has failed, and the next one reads
+// the Secret again.
 //
 // This is the only audit write for a rejected call: the caller must not also audit it.
 // call names the operation and its message, context or task ID, as audit.Writer.AgentCall

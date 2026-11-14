@@ -4,19 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
-	"log/slog"
 	"testing"
 	"time"
 
 	"go.uber.org/goleak"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // flakySessions fails the next reads of a session.
@@ -55,21 +55,17 @@ type backstopRig struct {
 
 func newBackstopRig(t *testing.T) *backstopRig {
 	t.Helper()
-	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := sqlitetest.Open(t)
 	r := &backstopRig{st: st, sess: &flakySessions{SessionReader: st}, now: d0.Add(time.Hour)}
-	r.ob = &countedOutbox{Outbox: newOutbox(t, outbox.Config{Store: st, Platform: &poster{posted: map[string]string{}}, Now: func() time.Time { return r.now }, CallTimeout: time.Second,
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})}
+	r.ob = &countedOutbox{Outbox: newOutbox(t, outbox.Config{Store: st, Platforms: chattest.Same[outbox.Platform](&poster{posted: map[string]string{}}), Now: func() time.Time { return r.now }, CallTimeout: time.Second,
+		Logger: testutil.DiscardLogger()})}
 	return r
 }
 
 func (r *backstopRig) backstop(t *testing.T) *interact.Backstop {
 	t.Helper()
 	b, err := interact.NewBackstop(interact.BackstopConfig{Store: r.st, Sessions: r.sess, Outbox: r.ob, Now: func() time.Time { return r.now },
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Grace: time.Minute, Interval: 5 * time.Millisecond})
+		Logger: testutil.DiscardLogger(), Grace: time.Minute, Interval: 5 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +267,7 @@ func TestRunChecksAtOnceAndEndsWithItsContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- r.backstop(t).Run(ctx) }()
-	waitFor(t, "the notice", func() bool { _, ok := r.notice(t, "ix-1"); return ok })
+	testutil.Eventually(t, "the notice", func() bool { _, ok := r.notice(t, "ix-1"); return ok })
 	cancel()
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run = %v; want the context's error", err)

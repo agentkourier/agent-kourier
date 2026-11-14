@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -16,12 +17,14 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // windowCall is one call of Config.ThreadContext.
 type windowCall struct {
 	key                    Key
 	binding, after, before string
+	whole                  bool
 }
 
 // threadHook is a Config.ThreadContext that records its calls and answers with section.
@@ -31,10 +34,10 @@ type threadHook struct {
 	calls   []windowCall
 }
 
-func (h *threadHook) fn(_ context.Context, k Key, binding, after, before string) string {
+func (h *threadHook) fn(_ context.Context, k Key, binding, after, before string, whole bool) string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.calls = append(h.calls, windowCall{k, binding, after, before})
+	h.calls = append(h.calls, windowCall{k, binding, after, before, whole})
 	return h.section
 }
 
@@ -131,7 +134,7 @@ func TestThreadContextIsAppendedToAMentionedTurn(t *testing.T) {
 	if got, want := f.sentText(t, 1), "hello\n\n"+threadSection; got != want {
 		t.Errorf("second turn = %q; want the person's text, a blank line and the section: %q", got, want)
 	}
-	want := []windowCall{{key, "ns/b1", "1700.10", "1700.50"}}
+	want := []windowCall{{key, "ns/b1", "1700.10", "1700.50", false}}
 	if got := hook.seen(); !slices.Equal(got, want) {
 		t.Errorf("hook calls = %+v; want %+v: the window is the previous turn's message to this one's", got, want)
 	}
@@ -247,7 +250,7 @@ func TestThreadContextCacheIsPerTurn(t *testing.T) {
 	f.m.wake(key)
 	waitFinal(t, sink)
 	waitFinal(t, sink)
-	want := []windowCall{{key, "ns/b1", previousRef, "1700.50"}, {key, "ns/b1", "1700.50", "1700.70"}}
+	want := []windowCall{{key, "ns/b1", previousRef, "1700.50", false}, {key, "ns/b1", "1700.50", "1700.70", false}}
 	if got := hook.seen(); !slices.Equal(got, want) {
 		t.Errorf("hook calls = %+v; want %+v: each turn has its own window, from the row before it", got, want)
 	}
@@ -261,7 +264,7 @@ func TestThreadContextWindowIsTheSameAfterARestart(t *testing.T) {
 	f.agent.script = func(context.Context, int, agent.Handler) error { return fmt.Errorf("send message: %w", agent.ErrBusy) }
 	f.enqueue(t, "turn", queuedRef, "U1", false)
 	f.m.wake(key)
-	eventually(t, "the first process to send the turn", func() bool { sends, _, _ := f.agent.counts(); return sends >= 1 })
+	testutil.Eventually(t, "the first process to send the turn", func() bool { sends, _, _ := f.agent.counts(); return sends >= 1 })
 	if err := f.close(); err != nil { // the process dies
 		t.Fatal(err)
 	}
@@ -283,7 +286,7 @@ func TestThreadContextWindowIsTheSameAfterARestart(t *testing.T) {
 	f.m.wake(key)
 	waitFinal(t, sink)
 
-	want := []windowCall{{key, "ns/b1", previousRef, queuedRef}}
+	want := []windowCall{{key, "ns/b1", previousRef, queuedRef, false}}
 	if !slices.Equal(before, want) || !slices.Equal(again.seen(), want) {
 		t.Errorf("hook calls before the restart %+v and after %+v; want both %+v", before, again.seen(), want)
 	}
@@ -329,6 +332,36 @@ func TestThreadContextIsNotAskedWhenATaskIsFollowed(t *testing.T) {
 	})
 }
 
+// A bot's mention reads back past a person's turn to the last turn that carried the thread, and from the thread's start if none did:
+// a person's turn carried no bot's post. The person's turn itself still asks only for what came since the turn before it.
+func TestAWholeThreadTurnReadsBackPastAPlainTurn(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.threadReplies = v1alpha1.ThreadRepliesMention
+	hook := &threadHook{section: threadSection}
+	f.m.cfg.ThreadContext = hook.fn
+	turn := func(ref string, whole bool) {
+		t.Helper()
+		in := inbound(ref)
+		in.Mentioned = true
+		if whole {
+			in.UserID, in.WholeThread = "", true
+		}
+		if _, err := f.submit(in); err != nil {
+			t.Fatal(err)
+		}
+		waitFinal(t, sink)
+	}
+	turn("1700.10", false)
+	turn("1700.20", true)
+	turn("1700.30", false)
+	turn("1700.40", true)
+	want := []windowCall{{key, "ns/b1", "", "1700.20", true}, {key, "ns/b1", "1700.20", "1700.30", false}, {key, "ns/b1", "1700.20", "1700.40", true}}
+	if got := hook.seen(); !slices.Equal(got, want) {
+		t.Errorf("hook calls = %+v; want %+v", got, want)
+	}
+}
+
 // failingPrevious fails PreviousReply once, with a store error.
 type failingPrevious struct {
 	Store
@@ -369,5 +402,107 @@ func TestThreadContextWaitsForTheStore(t *testing.T) {
 	}
 	if got := sink.noticesOf(NoticeRetrying); len(got) != 0 {
 		t.Errorf("notices = %+v; want none: the agent was never called, so the thread is not told it cannot be reached", got)
+	}
+}
+
+const mentionLine = "To notify someone in this thread, write @name."
+
+// A session's first prompt ends with the line that tells the agent the names, after the attribution, the person's text and
+// anything else on it. The agent keeps the line from there, so a later turn does not say it again.
+func TestTheFirstPromptOfASessionTellsTheAgentTheNames(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.mentionPrompt = mentionLine
+	f.attr, f.platform = (&kagentv1.Dialect{}).Attribute, dialect.Platform{ID: "slack", Name: "Slack"}
+	if _, err := f.submit(inbound("1700.10")); err != nil {
+		t.Fatal(err)
+	}
+	waitFinal(t, sink)
+	if got, want := f.sentText(t, 0), "[Slack: U1]\nhello\n\n"+mentionLine; got != want {
+		t.Errorf("first turn = %q, want %q", got, want)
+	}
+	if _, err := f.submit(inbound("1700.50")); err != nil {
+		t.Fatal(err)
+	}
+	waitFinal(t, sink)
+	if got := f.sentText(t, 1); strings.Contains(got, mentionLine) {
+		t.Errorf("second turn = %q; the agent has been told", got)
+	}
+}
+
+// An alert's first prompt, which no person wrote, tells the agent the names too: it is what most mentions come of.
+func TestTheFirstPromptOfAnAlertTellsTheAgentTheNames(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.mentionPrompt = mentionLine
+	in := inbound("1700.10")
+	in.UserID = "" // an alert's prompt, which no Slack user wrote
+	if _, err := f.submit(in); err != nil {
+		t.Fatal(err)
+	}
+	waitFinal(t, sink)
+	if got := f.sentText(t, 0); !strings.HasSuffix(got, "hello\n\n"+mentionLine) {
+		t.Errorf("first turn = %q; want the alert's text, then the line", got)
+	}
+}
+
+// A Binding that declares nobody adds nothing to any prompt.
+func TestABindingWithNoMentionsAddsNothingToAPrompt(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	if _, err := f.submit(inbound("1700.10")); err != nil {
+		t.Fatal(err)
+	}
+	waitFinal(t, sink)
+	if got := f.sentText(t, 0); got != "hello" {
+		t.Errorf("first turn = %q, want the person's text alone", got)
+	}
+}
+
+// The renderer is told the Binding's people on every turn.
+func TestTurnRefCarriesTheBindingsPeople(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	people := []v1alpha1.ChatMention{{Name: "sam", User: "U0SAM"}}
+	f.mentions, f.maxMentions = people, 2
+	if _, err := f.submit(inbound("1700.10")); err != nil {
+		t.Fatal(err)
+	}
+	waitFinal(t, sink)
+	sink.mu.Lock()
+	ref := sink.refs[len(sink.refs)-1]
+	sink.mu.Unlock()
+	if !slices.Equal(ref.Mentions, people) || ref.MaxMentions != 2 {
+		t.Errorf("TurnRef = %+v, want the Binding's people and cap", ref)
+	}
+}
+
+// A turn marked WholeThread asks for the thread whatever the mode, and on the first turn of the thread too, from its start;
+// a later one asks from the previous turn, and says whole.
+func TestAWholeThreadTurnCarriesTheThread(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.threadReplies = v1alpha1.ThreadRepliesAll
+	hook := &threadHook{section: threadSection}
+	f.m.cfg.ThreadContext = hook.fn
+
+	first := inbound("1700.10")
+	first.UserID, first.WholeThread = "", true
+	if _, err := f.submit(first); err != nil {
+		t.Fatal(err)
+	}
+	waitFinal(t, sink)
+	if got, want := f.sentText(t, 0), "hello\n\n"+threadSection; got != want {
+		t.Errorf("first turn = %q; want the prompt and the section: %q", got, want)
+	}
+	second := inbound("1700.50")
+	second.UserID, second.WholeThread = "", true
+	if _, err := f.submit(second); err != nil {
+		t.Fatal(err)
+	}
+	waitFinal(t, sink)
+	want := []windowCall{{key, "ns/b1", "", "1700.10", true}, {key, "ns/b1", "1700.10", "1700.50", true}}
+	if got := hook.seen(); !slices.Equal(got, want) {
+		t.Errorf("hook calls = %+v; want %+v", got, want)
 	}
 }

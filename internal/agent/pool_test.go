@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"slices"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
 	"go.uber.org/goleak"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
@@ -55,8 +57,8 @@ func (fa *fakeAgent) auths() []string {
 	return out
 }
 
-// The Pool wires the dialect's ToolPart in, so an Agent from it cannot miss tool parts.
-func TestPoolAgentsRecognizeTheDialectsToolParts(t *testing.T) {
+// An Agent from the Pool delivers tool parts, whatever the dialect it was made with.
+func TestPoolAgentsDeliverToolParts(t *testing.T) {
 	fa := newFakeAgent(t, func(_ rpc, w http.ResponseWriter) { sse(t, w, "approval/01-pause-approve.response.sse", -1) })
 	h, got := collector()
 	if err := newPool(t).Agent(targetFor(fa, "team/sre", token("t"))).Send(t.Context(), message("add"), h); err != nil {
@@ -64,6 +66,37 @@ func TestPoolAgentsRecognizeTheDialectsToolParts(t *testing.T) {
 	}
 	if calls := slices.DeleteFunc(*got, func(e Event) bool { _, ok := e.(ToolCallEvent); return !ok }); len(calls) != 1 {
 		t.Errorf("%d tool call events, want 1", len(calls))
+	}
+}
+
+// An Agent from the Pool reads a paused task as its dialect does, so an approval (kagent 1.0, approval/02-approve) takes
+// the approved call from the task, and the call's step begins before the text that follows it.
+func TestPoolAgentsTellAnApprovalByTheirDialect(t *testing.T) {
+	paused := pausedTask(t)
+	body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": "1", "result": paused})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fa := newFakeAgent(t, func(call rpc, w http.ResponseWriter) {
+		switch call.Method {
+		case "GetTask":
+			_, _ = w.Write(body)
+		case "SendStreamingMessage":
+			sse(t, w, "approval/02-approve.response.sse", -1)
+		default:
+			t.Errorf("unexpected call %s", call.Method)
+		}
+	})
+	h, evs := collector()
+	msg := &a2a.Message{ID: "a1", Role: a2a.MessageRoleUser, TaskID: paused.ID, ContextID: paused.ContextID, Parts: a2a.ContentParts{a2a.NewTextPart("yes")}}
+	if err := newPool(t).Agent(targetFor(fa, "team/sre", token("t"))).Answer(t.Context(), msg, h); err != nil {
+		t.Fatal(err)
+	}
+	if g, want := outcomes(*evs), []string{"call call_1", `result call_1 {"output":"8"}`}; !slices.Equal(g, want) {
+		t.Errorf("tool events = %q, want %q", g, want)
+	}
+	if k := kinds(*evs); slices.Index(k, "call") < 0 || slices.Index(k, "text") < slices.Index(k, "call") {
+		t.Errorf("events = %q, want the approved call before the text", k)
 	}
 }
 
@@ -162,22 +195,6 @@ func TestPoolRefusesAnAgentThatDoesNotStream(t *testing.T) {
 	}
 }
 
-// Warm is for the Slack acknowledgement path: it must not wait for the card fetch, and the
-// first send must not fetch it again.
-func TestWarmReturnsAtOnceAndSharesTheConnect(t *testing.T) {
-	fa, p := newFakeAgent(t, liveStream(t)), newPool(t)
-	fa.cardGate = make(chan struct{}) // the card is held back until Warm has returned
-	tg := targetFor(fa, "team/sre", token("t"))
-	returns(t, "Warm", func() { p.Warm(tg) })
-	close(fa.cardGate)
-	if err := p.Agent(tg).Send(t.Context(), message("hi"), nil); err != nil {
-		t.Fatal(err)
-	}
-	if n := fa.count("card"); n != 1 {
-		t.Errorf("%d card fetches, want 1", n)
-	}
-}
-
 // returns fails the test if f is still running after 10 s. The window only bounds a hang;
 // nothing asserts how fast f is, so a slow machine cannot fail it.
 func returns(t *testing.T, what string, f func()) {
@@ -189,23 +206,6 @@ func returns(t *testing.T, what string, f func()) {
 	case <-time.After(10 * time.Second):
 		t.Fatalf("%s did not return: it is waiting for the card fetch", what)
 	}
-}
-
-func TestCloseStopsWarmUpsAndRefusesNewCalls(t *testing.T) {
-	fa, p := newFakeAgent(t, liveStream(t)), NewPool(kagentv1.New(0), quick)
-	fa.cardGate = make(chan struct{}) // the card never comes
-	tg := targetFor(fa, "team/sre", token("t"))
-	p.Warm(tg)
-	for fa.count("card") == 0 {
-		time.Sleep(time.Millisecond)
-	}
-	returns(t, "Close", p.Close) // cancels the warm-up's fetch
-	if err := p.Agent(tg).Send(t.Context(), message("hi"), nil); !errors.Is(err, ErrPoolClosed) {
-		t.Errorf("Send after Close = %v, want ErrPoolClosed", err)
-	}
-	p.Warm(tg) // must not start anything
-	fa.Close()
-	goleak.VerifyNone(t)
 }
 
 // lastCard returns the headers of the most recent card fetch fa got.

@@ -48,11 +48,7 @@ type fixture struct {
 func newFixture(t *testing.T, h HandlerFunc, mod ...func(*Config)) *fixture {
 	t.Helper()
 	ctx := context.Background()
-	s, err := sqlite.Open(ctx, sqlitetest.Path(t))
-	if err != nil {
-		t.Fatalf("sqlite.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s := sqlitetest.Open(t)
 	f := &fixture{ctx: ctx, store: s, clock: &fakeClock{t: t0}, log: &bytes.Buffer{}, ignore: goleak.IgnoreCurrent()}
 	cfg := Config{
 		Queue: s, Handler: h, Lease: lease, MaxAttempts: maxAttempts,
@@ -63,6 +59,7 @@ func newFixture(t *testing.T, h HandlerFunc, mod ...func(*Config)) *fixture {
 	for _, m := range mod {
 		m(&cfg)
 	}
+	var err error
 	if f.w, err = New(cfg); err != nil {
 		t.Fatalf("New: %v", err)
 	}

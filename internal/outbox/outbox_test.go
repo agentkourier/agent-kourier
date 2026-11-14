@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -15,12 +13,14 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/secret"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
@@ -50,6 +50,7 @@ type poster struct {
 	sent           []chat.Outgoing
 	tags           []string
 	targets        []chat.Target
+	findTargets    []chat.Target
 }
 
 func (p *poster) Post(ctx context.Context, t chat.Target, o chat.Outgoing, tag string) (chat.Ref, error) {
@@ -69,6 +70,7 @@ func (p *poster) Post(ctx context.Context, t chat.Target, o chat.Outgoing, tag s
 func (p *poster) Find(ctx context.Context, t chat.Target, id string, since time.Time) (chat.Ref, bool, error) {
 	p.mu.Lock()
 	p.finds++
+	p.findTargets = append(p.findTargets, t)
 	p.lastSince = since
 	fn, ts := p.onFind, p.found[id]
 	p.mu.Unlock()
@@ -144,19 +146,19 @@ func mustNew(t *testing.T, cfg outbox.Config) *outbox.Outbox {
 	return o
 }
 
-// New refuses a Config without its Store, Platform or OnAbandon, and the error names the field: a wiring that drops one
+// New refuses a Config without its Store, Platforms or OnAbandon, and the error names the field: a wiring that drops one
 // fails at start-up instead of posting nothing, or counting nothing.
 func TestNewNamesTheFieldThatIsMissing(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
-	full := outbox.Config{Store: st, Platform: &poster{}, OnAbandon: outbox.NoAbandon}
-	for _, tc := range []struct{ field string }{{"Store"}, {"Platform"}, {"OnAbandon"}} {
+	st := sqlitetest.Open(t)
+	full := outbox.Config{Store: st, Platforms: chattest.Same[outbox.Platform](&poster{}), OnAbandon: outbox.NoAbandon}
+	for _, tc := range []struct{ field string }{{"Store"}, {"Platforms"}, {"OnAbandon"}} {
 		t.Run(tc.field, func(t *testing.T) {
 			cfg := full
 			switch tc.field {
 			case "Store":
 				cfg.Store = nil
-			case "Platform":
-				cfg.Platform = nil
+			case "Platforms":
+				cfg.Platforms = nil
 			case "OnAbandon":
 				cfg.OnAbandon = nil
 			}
@@ -173,8 +175,8 @@ func TestNewNamesTheFieldThatIsMissing(t *testing.T) {
 
 func newOutbox(t *testing.T, st store.Outbox, p outbox.Platform) *outbox.Outbox {
 	t.Helper()
-	return mustNew(t, outbox.Config{Store: st, Platform: p, Now: func() time.Time { return t0 },
-		CallTimeout: time.Second, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	return mustNew(t, outbox.Config{Store: st, Platforms: chattest.Same[outbox.Platform](p), Now: func() time.Time { return t0 },
+		CallTimeout: time.Second, Logger: testutil.DiscardLogger()})
 }
 
 func reply(source string) outbox.Post {
@@ -192,7 +194,7 @@ func TestIDDerivesFromSourceAndRole(t *testing.T) {
 
 // TestSendWritesTheRowBeforePostingAndRecordsAfter has the poster look at the row as it posts.
 func TestSendWritesTheRowBeforePostingAndRecordsAfter(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	p := &poster{}
 	p.onPost = func(ctx context.Context) error {
 		row, err := st.GetOutbox(ctx, "ev1/reply")
@@ -219,7 +221,7 @@ func TestSendWritesTheRowBeforePostingAndRecordsAfter(t *testing.T) {
 }
 
 func TestSendRejectsEmptyContent(t *testing.T) {
-	ob := newOutbox(t, openStore(t, filepath.Join(t.TempDir(), "c.db")), &poster{})
+	ob := newOutbox(t, sqlitetest.Open(t), &poster{})
 	p := reply("ev1")
 	p.Out = chat.Say(chat.Message{})
 	if _, err := ob.Send(t.Context(), p); !errors.Is(err, store.ErrInvalid) {
@@ -237,7 +239,7 @@ func TestSendOfAnUnpostedRowLooksFirst(t *testing.T) {
 		{"it was posted", "55.5", 1}, // only the first, failed attempt
 		{"it was not", "", 2},
 	} {
-		st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+		st := sqlitetest.Open(t)
 		p := &poster{found: map[string]string{"ev1/reply": tt.inSlack}}
 		failing := true
 		p.onPost = func(context.Context) error {
@@ -262,7 +264,7 @@ func TestSendOfAnUnpostedRowLooksFirst(t *testing.T) {
 }
 
 func TestALookupErrorNeverPosts(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	if _, err := st.CreateOutbox(t.Context(), store.OutboxEntry{ID: "ev1/reply", EventID: "ev1", Role: store.OutboxReply, Channel: "C1",
 		CreatedAt: t0, Payload: neutral("hi")}); err != nil {
 		t.Fatal(err)
@@ -282,7 +284,7 @@ func TestALookupErrorNeverPosts(t *testing.T) {
 }
 
 func TestReconcile(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	row := func(src, payload string, at time.Duration) {
 		t.Helper()
 		e := store.OutboxEntry{ID: src + "/reply", EventID: src, Role: store.OutboxReply, Channel: "C1", CreatedAt: t0.Add(at), Payload: payload}
@@ -321,7 +323,7 @@ func TestReconcile(t *testing.T) {
 // TestSendAndReconcileNeverPostTwice holds Send inside its post and starts Reconcile, which has
 // listed the row as unposted. Reconcile must wait, then see the ref and leave the row alone.
 func TestSendAndReconcileNeverPostTwice(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	inPost, release := make(chan struct{}), make(chan struct{})
 	p := &poster{onPost: func(context.Context) error { close(inPost); <-release; return nil }}
 	ob := newOutbox(t, st, p)
@@ -350,10 +352,10 @@ func TestSendAndReconcileNeverPostTwice(t *testing.T) {
 // TestSlackCallsAreBounded hangs a call until its context ends. The delivery lock must not be
 // held for good, so a Send of another message goes through afterwards.
 func TestSlackCallsAreBounded(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	hang := func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }
 	p := &poster{onPost: hang}
-	ob := mustNew(t, outbox.Config{Store: st, Platform: p, Now: func() time.Time { return t0 }, CallTimeout: 20 * time.Millisecond})
+	ob := mustNew(t, outbox.Config{Store: st, Platforms: chattest.Same[outbox.Platform](p), Now: func() time.Time { return t0 }, CallTimeout: 20 * time.Millisecond})
 	done := make(chan error, 1)
 	go func() {
 		_, err := ob.Send(t.Context(), reply("ev1")) // hangs in Post
@@ -434,7 +436,7 @@ func TestCrashAfterPost(t *testing.T) {
 // TestShutdownAfterAPostStillRecords ends the context while the post is in flight: the message is
 // in Slack, so its ref is recorded all the same.
 func TestShutdownAfterAPostStillRecords(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	ob := newOutbox(t, st, &poster{onPost: func(context.Context) error { cancel(); return nil }})
 	ts, err := ob.Send(ctx, reply("ev1"))
@@ -446,10 +448,10 @@ func TestShutdownAfterAPostStillRecords(t *testing.T) {
 // TestLookupStartsWhereTheRowWasMade: a retry long after the row was written looks from its
 // creation, not from now, or it would miss the message it is looking for.
 func TestLookupStartsWhereTheRowWasMade(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	var clock atomic.Int64
 	p := &poster{onPost: func(context.Context) error { return errors.New("connection reset") }}
-	ob := mustNew(t, outbox.Config{Store: st, Platform: p, Now: func() time.Time { return t0.Add(time.Duration(clock.Load())) }, CallTimeout: time.Second})
+	ob := mustNew(t, outbox.Config{Store: st, Platforms: chattest.Same[outbox.Platform](p), Now: func() time.Time { return t0.Add(time.Duration(clock.Load())) }, CallTimeout: time.Second})
 	if _, err := ob.Send(t.Context(), reply("ev1")); err == nil {
 		t.Fatal("Send with a failing post succeeded")
 	}

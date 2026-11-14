@@ -76,13 +76,15 @@ func (s *Sink) Turn(ctx context.Context, t session.TurnRef) agent.Handler {
 	if mode == "" {
 		mode = v1alpha1.OutputLive
 	}
-	turn := Turn{Source: t.MessageID, Channel: t.Key.Channel, Thread: t.Key.Thread, Mode: mode, Recipient: recipient, Recovered: t.Recovered}
+	turn := Turn{Source: t.MessageID, Connection: t.Key.Connection, Channel: t.Key.Channel, Thread: t.Key.Thread, Mode: mode, Progress: t.Progress, Recipient: recipient, Recovered: t.Recovered}
 	turn.Footer = footerOf(t)
+	turn.Binding, turn.Mentions, turn.MaxMentions = t.Binding, t.Mentions, t.MaxMentions
 	return s.runs.Start(ctx, turn).Handle
 }
 
-// FollowUpHint is the line that ends the final message of a turn in a Binding whose chat.threadReplies is mention (D38): there, a
-// reply that does not mention Agent Kourier is ignored, and nothing else tells a person how to ask a follow-up. It is plain text, with no
+// FollowUpHint is the line that ends the final message of a turn in a thread that takes only mentioned replies: one of a Binding whose
+// chat.threadReplies is mention (D38), and one that a bot's mention (D49) or a person's message (D51) began, whatever the Binding
+// says. There a reply that does not mention Agent Kourier is ignored, and nothing else tells a person how to ask a follow-up. It is plain text, with no
 // mention syntax of any platform: the neutral model has no way to name Agent Kourier, and a line that said who to mention could not
 // be wrong about it.
 const FollowUpHint = "Mention me in this thread to ask a follow-up."
@@ -126,7 +128,7 @@ func (s *Sink) QueueNotice(ctx context.Context, key session.Key, n session.Notic
 		name, remove, ok = n.Reaction, n.Kind == session.NoticeUnacknowledged, true
 	}
 	if ok {
-		r := outbox.Reaction{Source: n.ID, Channel: key.Channel, TS: n.MessageRef, Name: name}
+		r := outbox.Reaction{Source: n.ID, Connection: key.Connection, Channel: key.Channel, TS: n.MessageRef, Name: name}
 		if remove {
 			_, err = s.queue.EnqueueUnreaction(ctx, r)
 		} else {
@@ -138,7 +140,7 @@ func (s *Sink) QueueNotice(ctx context.Context, key session.Key, n session.Notic
 			s.log.WarnContext(ctx, "live: a notice of a kind with no wording was dropped", "kind", n.Kind, "channel", key.Channel)
 			return nil
 		}
-		post := outbox.Post{Source: n.ID, Role: store.OutboxNotice, Channel: key.Channel, Thread: key.Thread, Out: chat.Say(render.Notice(text, n.Detail))}
+		post := outbox.Post{Source: n.ID, Role: store.OutboxNotice, Connection: key.Connection, Channel: key.Channel, Thread: key.Thread, Out: chat.Say(render.Notice(text, n.Detail))}
 		_, err = s.queue.Enqueue(ctx, post)
 	}
 	if errors.Is(err, store.ErrInvalid) {
@@ -170,6 +172,8 @@ func noticeText(kind session.NoticeKind) (string, bool) {
 		return "The agent rejected that answer, so I cancelled its task. You can ask again.", true
 	case session.NoticeAnswerDropped:
 		return "That answer arrived after the task had ended, so I did not send it.", true
+	case session.NoticeStopUnverified:
+		return "I asked the agent to stop the task, but what it answered was too large to read, so I can't tell whether it stopped. This thread no longer waits for it.", true
 	case session.NoticeStopped:
 		return "The task was stopped.", true
 	case session.NoticeWedged:

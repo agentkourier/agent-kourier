@@ -1,7 +1,6 @@
 package postgres
 
 import (
-	"log/slog"
 	"os"
 	"slices"
 	"strings"
@@ -11,6 +10,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 func migrationNames(t *testing.T, dir string) []string {
@@ -35,21 +36,6 @@ func TestMigrationsInStepWithSQLite(t *testing.T) {
 	got, want := migrationNames(t, "migrations"), migrationNames(t, "../sqlite/migrations")
 	if !slices.Equal(got, want) {
 		t.Errorf("postgres migrations = %v; want those of the SQLite store, %v: add the twin of the migration that has none", got, want)
-	}
-}
-
-func TestListMigrations(t *testing.T) {
-	ms, err := listMigrations(fstest.MapFS{
-		"migrations/0010_ten.sql": {}, "migrations/0002_two.sql": {}, "migrations/0001_one.sql": {},
-	})
-	if err != nil || len(ms) != 3 || ms[0].version != 1 || ms[1].version != 2 || ms[2].version != 10 {
-		t.Errorf("listMigrations = %+v, %v; want 1, 2, 10 in numeric order", ms, err)
-	}
-	if _, err := listMigrations(fstest.MapFS{"migrations/0001_a.sql": {}, "migrations/1_b.sql": {}}); err == nil {
-		t.Error("two files with one version were accepted")
-	}
-	if _, err := listMigrations(fstest.MapFS{"migrations/x_a.sql": {}}); err == nil {
-		t.Error("a file with no numeric version was accepted")
 	}
 }
 
@@ -144,7 +130,7 @@ func TestMigrationFailureLeavesEarlierOnes(t *testing.T) {
 		"migrations/0002_bad.sql":   {Data: []byte(`CREATE TABLE half (id integer); SELECT 1/0;`)},
 		"migrations/0003_never.sql": {Data: []byte(`CREATE TABLE never (id integer);`)},
 	}
-	if err := migrate(t.Context(), pool, fsys, slog.New(slog.DiscardHandler)); err == nil || !strings.Contains(err.Error(), "0002_bad.sql") {
+	if err := migrate(t.Context(), pool, fsys, testutil.DiscardLogger()); err == nil || !strings.Contains(err.Error(), "0002_bad.sql") {
 		t.Fatalf("migrate = %v; want the failure of 0002_bad.sql", err)
 	}
 	got := appliedVersions(t, dsn)

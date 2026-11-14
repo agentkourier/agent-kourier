@@ -3,7 +3,9 @@ package v1alpha1
 import (
 	"errors"
 	"fmt"
+	"math"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,6 +93,49 @@ func TestValidateJoinsAllProblems(t *testing.T) {
 	}
 }
 
+// headers returns n valid headers with distinct names.
+func headers(n int) []Header {
+	hs := make([]Header, n)
+	for i := range hs {
+		hs[i] = Header{Name: fmt.Sprintf("X-Header-%d", i), Value: "v"}
+	}
+	return hs
+}
+
+// namespaces returns n valid namespace names.
+func namespaces(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf("team-%d", i)
+	}
+	return out
+}
+
+// TestAgentBackendAgentsProblems holds Validate to what the CRD's two rules of agents give for one object: a value that allows
+// nothing on a dialect other than kagent-v1 breaks both, and a dialect that is not known is not one that sends agent.namespace.
+func TestAgentBackendAgentsProblems(t *testing.T) {
+	const notSupported = "spec.agents: is supported only on the kagent-v1 dialect, the only one that sends agent.namespace"
+	const allowsNothing = "spec.agents: allows no agent namespace: set sameNamespace to true or list at least one namespace in namespaces"
+	for _, tc := range []struct {
+		name    string
+		dialect Dialect
+		agents  AgentNamespaces
+		want    []string
+	}{
+		{"nothing allowed on a2a", DialectA2A, AgentNamespaces{}, []string{notSupported, allowsNothing}},
+		{"an unknown dialect", "foo", AgentNamespaces{SameNamespace: true},
+			[]string{`spec.dialect: unsupported value "foo", must be one of a2a, kagent-v1`, notSupported}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := load[AgentBackend](t, "agentbackend.yaml")
+			o.Spec.Dialect, o.Spec.Agents = tc.dialect, &tc.agents
+			if got := problemsOf(o.Validate()); !slices.Equal(got, tc.want) {
+				t.Fatalf("Validate() problems = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestAgentBackendValidate(t *testing.T) {
 	hdr := func(o *AgentBackend, h Header) { o.Spec.Headers = []Header{h} }
 	runMutations[AgentBackend](t, "agentbackend.yaml", []mutation[AgentBackend]{
@@ -101,6 +146,13 @@ func TestAgentBackendValidate(t *testing.T) {
 			`spec.url: invalid URL "ftp://kagent": must be an http or https URL with a host`},
 		{"url with credentials", func(o *AgentBackend) { o.Spec.URL = "http://user:pw@kagent" },
 			"spec.url: must not contain credentials; identity comes from the Binding (D14)"},
+		{"url with a query", func(o *AgentBackend) { o.Spec.URL = "http://kagent/a2a?x=1" }, "spec.url: must not have a query or fragment"},
+		{"url with a fragment", func(o *AgentBackend) { o.Spec.URL = "http://kagent/a2a#x" }, "spec.url: must not have a query or fragment"},
+		{"url with a bare question mark", func(o *AgentBackend) { o.Spec.URL = "http://kagent/a2a?" }, "spec.url: must not have a query or fragment"},
+		{"url with a bare fragment mark", func(o *AgentBackend) { o.Spec.URL = "http://kagent/a2a#" }, "spec.url: must not have a query or fragment"},
+		{"url at the length cap ok", func(o *AgentBackend) { o.Spec.URL = "http://" + strings.Repeat("a", maxURLLen-len("http://")) }, ""},
+		{"url over the length cap", func(o *AgentBackend) { o.Spec.URL = "http://" + strings.Repeat("a", maxURLLen-len("http://")+1) },
+			fmt.Sprintf("spec.url: is %d bytes, longer than the %d byte limit", maxURLLen+1, maxURLLen)},
 		{"missing name", func(o *AgentBackend) { o.Name = "" }, "metadata.name: required"},
 		{"missing namespace", func(o *AgentBackend) { o.Namespace = "" }, "metadata.namespace: required"},
 		{"invalid name", func(o *AgentBackend) { o.Name = "Kagent_Pilot" }, badName("metadata.name", "Kagent_Pilot")},
@@ -140,6 +192,47 @@ func TestAgentBackendValidate(t *testing.T) {
 		{"bad allowed namespace", func(o *AgentBackend) { o.Spec.AllowedNamespaces = []string{"sre", "Not_A_Namespace"} },
 			badNamespace("spec.allowedNamespaces[1]", "Not_A_Namespace")},
 		{"empty allowed namespace", func(o *AgentBackend) { o.Spec.AllowedNamespaces = []string{""} }, "spec.allowedNamespaces[0]: required"},
+		{"a header value at the length cap ok", func(o *AgentBackend) { hdr(o, Header{Name: "X-A", Value: strings.Repeat("v", maxHeaderValueLen)}) }, ""},
+		{"a header value over the length cap", func(o *AgentBackend) { hdr(o, Header{Name: "X-A", Value: strings.Repeat("v", maxHeaderValueLen+1)}) },
+			fmt.Sprintf("spec.headers[0].value: is %d bytes, longer than the %d byte limit", maxHeaderValueLen+1, maxHeaderValueLen)},
+		{"the most allowed namespaces ok", func(o *AgentBackend) { o.Spec.AllowedNamespaces = namespaces(maxAllowedNamespaces) }, ""},
+		{"too many allowed namespaces", func(o *AgentBackend) { o.Spec.AllowedNamespaces = namespaces(maxAllowedNamespaces + 1) },
+			fmt.Sprintf("spec.allowedNamespaces: has %d items, maximum is %d", maxAllowedNamespaces+1, maxAllowedNamespaces)},
+		{"too many allowed namespaces, none of them valid: one problem, not one for each", func(o *AgentBackend) {
+			o.Spec.AllowedNamespaces = slices.Repeat([]string{"Not_A_Namespace"}, maxAllowedNamespaces+1)
+		}, fmt.Sprintf("spec.allowedNamespaces: has %d items, maximum is %d", maxAllowedNamespaces+1, maxAllowedNamespaces)},
+		{"agents that allow the Binding's own namespace ok", func(o *AgentBackend) { o.Spec.Agents = &AgentNamespaces{SameNamespace: true} }, ""},
+		{"agents that list namespaces ok", func(o *AgentBackend) { o.Spec.Agents = &AgentNamespaces{Namespaces: []string{"kagent", "payments"}} }, ""},
+		{"agents that allow both ok", func(o *AgentBackend) {
+			o.Spec.Agents = &AgentNamespaces{SameNamespace: true, Namespaces: []string{"kagent"}}
+		}, ""},
+		{"agents that allow nothing", func(o *AgentBackend) { o.Spec.Agents = &AgentNamespaces{} },
+			"spec.agents: allows no agent namespace: set sameNamespace to true or list at least one namespace in namespaces"},
+		{"agents with sameNamespace false and an empty list allow nothing", func(o *AgentBackend) { o.Spec.Agents = &AgentNamespaces{Namespaces: []string{}} },
+			"spec.agents: allows no agent namespace: set sameNamespace to true or list at least one namespace in namespaces"},
+		{"agents on the a2a dialect", func(o *AgentBackend) {
+			o.Spec.Dialect = DialectA2A
+			o.Spec.Agents = &AgentNamespaces{SameNamespace: true}
+		}, "spec.agents: is supported only on the kagent-v1 dialect, the only one that sends agent.namespace"},
+		{"bad agent namespace", func(o *AgentBackend) {
+			o.Spec.Agents = &AgentNamespaces{Namespaces: []string{"kagent", "Not_A_Namespace"}}
+		},
+			badNamespace("spec.agents.namespaces[1]", "Not_A_Namespace")},
+		{"empty agent namespace", func(o *AgentBackend) { o.Spec.Agents = &AgentNamespaces{Namespaces: []string{""}} }, "spec.agents.namespaces[0]: required"},
+		{"the most agent namespaces ok", func(o *AgentBackend) { o.Spec.Agents = &AgentNamespaces{Namespaces: namespaces(maxAllowedNamespaces)} }, ""},
+		{"too many agent namespaces", func(o *AgentBackend) {
+			o.Spec.Agents = &AgentNamespaces{Namespaces: namespaces(maxAllowedNamespaces + 1)}
+		},
+			fmt.Sprintf("spec.agents.namespaces: has %d items, maximum is %d", maxAllowedNamespaces+1, maxAllowedNamespaces)},
+		{"too many agent namespaces, none of them valid: one problem, not one for each", func(o *AgentBackend) {
+			o.Spec.Agents = &AgentNamespaces{Namespaces: slices.Repeat([]string{"Not_A_Namespace"}, maxAllowedNamespaces+1)}
+		}, fmt.Sprintf("spec.agents.namespaces: has %d items, maximum is %d", maxAllowedNamespaces+1, maxAllowedNamespaces)},
+		{"the most headers ok", func(o *AgentBackend) { o.Spec.Headers = headers(maxHeaders) }, ""},
+		{"too many headers", func(o *AgentBackend) { o.Spec.Headers = headers(maxHeaders + 1) },
+			fmt.Sprintf("spec.headers: has %d items, maximum is %d", maxHeaders+1, maxHeaders)},
+		{"a header name at the length cap ok", func(o *AgentBackend) { hdr(o, Header{Name: strings.Repeat("x", maxHeaderNameLen), Value: "v"}) }, ""},
+		{"a header name over the length cap", func(o *AgentBackend) { hdr(o, Header{Name: strings.Repeat("x", maxHeaderNameLen+1), Value: "v"}) },
+			fmt.Sprintf("spec.headers[0].name: is %d bytes, longer than the %d byte limit", maxHeaderNameLen+1, maxHeaderNameLen)},
 	})
 }
 
@@ -150,6 +243,9 @@ func TestChatConnectionValidate(t *testing.T) {
 		{"credentials with bad name", func(o *ChatConnection) { o.Spec.CredentialsSecretRef.Name = "Slack_Main" },
 			badName("spec.credentialsSecretRef.name", "Slack_Main")},
 		{"empty allowed namespace", func(o *ChatConnection) { o.Spec.AllowedNamespaces = []string{""} }, "spec.allowedNamespaces[0]: required"},
+		{"the most allowed namespaces ok", func(o *ChatConnection) { o.Spec.AllowedNamespaces = namespaces(maxAllowedNamespaces) }, ""},
+		{"too many allowed namespaces", func(o *ChatConnection) { o.Spec.AllowedNamespaces = namespaces(maxAllowedNamespaces + 1) },
+			fmt.Sprintf("spec.allowedNamespaces: has %d items, maximum is %d", maxAllowedNamespaces+1, maxAllowedNamespaces)},
 	})
 }
 
@@ -157,6 +253,9 @@ func TestBindingValidate(t *testing.T) {
 	runMutations[Binding](t, "binding.yaml", []mutation[Binding]{
 		{"missing name", func(o *Binding) { o.Name = "" }, "metadata.name: required"},
 		{"agent without name", func(o *Binding) { o.Spec.Agent.Name = "" }, "spec.agent.name: required"},
+		{"an agent name at the length cap ok", func(o *Binding) { o.Spec.Agent.Name = strings.Repeat("a", maxAgentNameLen) }, ""},
+		{"an agent name over the length cap", func(o *Binding) { o.Spec.Agent.Name = strings.Repeat("a", maxAgentNameLen+1) },
+			fmt.Sprintf("spec.agent.name: is %d bytes, longer than the %d byte limit", maxAgentNameLen+1, maxAgentNameLen)},
 		{"agent without namespace", func(o *Binding) { o.Spec.Agent.Namespace = "" }, "spec.agent.namespace: required"},
 		{"agent with bad namespace", func(o *Binding) { o.Spec.Agent.Namespace = "Bad_NS" }, badNamespace("spec.agent.namespace", "Bad_NS")},
 		{"backendRef without name", func(o *Binding) { o.Spec.Agent.BackendRef.Name = "" }, "spec.agent.backendRef.name: required"},
@@ -166,6 +265,9 @@ func TestBindingValidate(t *testing.T) {
 			badNamespace("spec.agent.backendRef.namespace", "Bad_NS")},
 		{"backendRef without namespace ok", func(o *Binding) { o.Spec.Agent.BackendRef.Namespace = "" }, ""},
 		{"no identity", func(o *Binding) { o.Spec.Identity = Identity{} }, "spec.identity: set userId, tokenSecretRef, or both"},
+		{"a user ID at the length cap ok", func(o *Binding) { o.Spec.Identity.UserID = strings.Repeat("u", maxUserIDLen) }, ""},
+		{"a user ID over the length cap", func(o *Binding) { o.Spec.Identity.UserID = strings.Repeat("u", maxUserIDLen+1) },
+			fmt.Sprintf("spec.identity.userId: is %d bytes, longer than the %d byte limit", maxUserIDLen+1, maxUserIDLen)},
 		{"token-only identity ok", func(o *Binding) { o.Spec.Identity.UserID = "" }, ""},
 		{"identity token without name", func(o *Binding) { o.Spec.Identity.TokenSecretRef.Name = "" }, "spec.identity.tokenSecretRef.name: required"},
 		{"identity token with bad key", func(o *Binding) { o.Spec.Identity.TokenSecretRef.Key = "a b" },
@@ -174,9 +276,62 @@ func TestBindingValidate(t *testing.T) {
 		{"empty channel", func(o *Binding) { o.Spec.Chat.Channel = "" }, "spec.chat.channel: required"},
 		{"channel name instead of ID", func(o *Binding) { o.Spec.Chat.Channel = "#sre-alerts" },
 			`spec.chat.channel: invalid channel "#sre-alerts": must be a channel ID such as C0123456789, not a name`},
+		{"a channel at the length cap ok", func(o *Binding) { o.Spec.Chat.Channel = "C" + strings.Repeat("0", maxChatIDLen-1) }, ""},
+		{"a channel over the length cap", func(o *Binding) { o.Spec.Chat.Channel = "C" + strings.Repeat("0", maxChatIDLen) },
+			fmt.Sprintf("spec.chat.channel: is %d bytes, longer than the %d byte limit", maxChatIDLen+1, maxChatIDLen)},
+		{"a channel over the length cap that is not an ID is not shown", func(o *Binding) { o.Spec.Chat.Channel = "#" + strings.Repeat("x", maxChatIDLen) },
+			fmt.Sprintf("spec.chat.channel: is %d bytes, longer than the %d byte limit", maxChatIDLen+1, maxChatIDLen)},
 		{"bad output", func(o *Binding) { o.Spec.Chat.Output = "carrier-pigeon" },
 			`spec.chat.output: unsupported value "carrier-pigeon", must be one of live, final`},
 		{"final output ok", func(o *Binding) { o.Spec.Chat.Output = OutputFinal }, ""},
+		{"steps progress ok", func(o *Binding) { o.Spec.Chat.Progress = ProgressSteps }, ""},
+		{"steps-and-activity progress ok", func(o *Binding) { o.Spec.Chat.Progress = ProgressStepsAndActivity }, ""},
+		{"activity progress ok", func(o *Binding) { o.Spec.Chat.Progress = ProgressActivity }, ""},
+		{"activity progress with final output ok: output final ignores it", func(o *Binding) { o.Spec.Chat.Output, o.Spec.Chat.Progress = OutputFinal, ProgressActivity }, ""},
+		{"a mention ok", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "payments-owner", User: "U0123456789"}} }, ""},
+		{"a W user ID ok", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "W0123456789"}} }, ""},
+		{"mention with a name of capitals", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "Sam", User: "U0123456789"}} },
+			`spec.chat.mentions[0].name: invalid name "Sam": use lowercase letters, digits and '-', starting with a letter, at most 63 characters`},
+		{"a mention name at the length cap ok", func(o *Binding) {
+			o.Spec.Chat.Mentions = []ChatMention{{Name: strings.Repeat("a", maxMentionNameLen), User: "U0123456789"}}
+		}, ""},
+		{"a mention name over the length cap", func(o *Binding) {
+			o.Spec.Chat.Mentions = []ChatMention{{Name: strings.Repeat("a", maxMentionNameLen+1), User: "U0123456789"}}
+		}, fmt.Sprintf("spec.chat.mentions[0].name: is %d bytes, longer than the %d byte limit", maxMentionNameLen+1, maxMentionNameLen)},
+		{"a mention user at the length cap ok", func(o *Binding) {
+			o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "U" + strings.Repeat("0", maxMentionUserLen-1)}}
+		}, ""},
+		{"a mention user over the length cap", func(o *Binding) {
+			o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "U" + strings.Repeat("0", maxMentionUserLen)}}
+		}, fmt.Sprintf("spec.chat.mentions[0].user: is %d bytes, longer than the %d byte limit", maxMentionUserLen+1, maxMentionUserLen)},
+		{"mention with no name", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{User: "U0123456789"}} }, "spec.chat.mentions[0].name: required"},
+		{"mention named here", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "here", User: "U0123456789"}} },
+			`spec.chat.mentions[0].name: "here" is reserved: a broadcast cannot be declared`},
+		{"mention named channel", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "channel", User: "U0123456789"}} },
+			`spec.chat.mentions[0].name: "channel" is reserved: a broadcast cannot be declared`},
+		{"mention named everyone", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "everyone", User: "U0123456789"}} },
+			`spec.chat.mentions[0].name: "everyone" is reserved: a broadcast cannot be declared`},
+		{"mention with no user", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "sam"}} }, "spec.chat.mentions[0].user: required"},
+		{"mention of a user group", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "oncall", User: "S0123456789"}} },
+			`spec.chat.mentions[0].user: invalid user ID "S0123456789": must be a user ID such as U0123456789`},
+		{"mention with user markup", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "<@U0123456789>"}} },
+			`spec.chat.mentions[0].user: invalid user ID "<@U0123456789>": must be a user ID such as U0123456789`},
+		{"mention declared twice", func(o *Binding) {
+			o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "U0123456789"}, {Name: "sam", User: "U9876543210"}}
+		}, "spec.chat.mentions[1].name: duplicate of index 0"},
+		{"too many mentions", func(o *Binding) {
+			for i := range 51 {
+				o.Spec.Chat.Mentions = append(o.Spec.Chat.Mentions, ChatMention{Name: fmt.Sprintf("p%d", i), User: "U0123456789"})
+			}
+		}, "spec.chat.mentions: has 51 items, maximum is 50"},
+		{"the most mentions a turn may make ok", func(o *Binding) { o.Spec.Chat.MaxMentionsPerTurn = new(10) }, ""},
+		{"too many mentions a turn", func(o *Binding) { o.Spec.Chat.MaxMentionsPerTurn = new(11) }, "spec.chat.maxMentionsPerTurn: 11 is out of range, must be from 1 to 10"},
+		{"a negative cap on mentions", func(o *Binding) { o.Spec.Chat.MaxMentionsPerTurn = new(-1) }, "spec.chat.maxMentionsPerTurn: -1 is out of range, must be from 1 to 10"},
+		{"a cap of no mentions", func(o *Binding) { o.Spec.Chat.MaxMentionsPerTurn = new(0) }, "spec.chat.maxMentionsPerTurn: 0 is out of range, must be from 1 to 10"},
+		{"bad progress", func(o *Binding) { o.Spec.Chat.Progress = "spinner" },
+			`spec.chat.progress: unsupported value "spinner", must be one of steps, steps-and-activity, activity`},
+		{"progress wrong case", func(o *Binding) { o.Spec.Chat.Progress = "Steps" },
+			`spec.chat.progress: unsupported value "Steps", must be one of steps, steps-and-activity, activity`},
 		{"mention threadReplies ok", func(o *Binding) { o.Spec.Chat.ThreadReplies = ThreadRepliesMention }, ""},
 		{"all threadReplies ok", func(o *Binding) { o.Spec.Chat.ThreadReplies = ThreadRepliesAll }, ""},
 		{"threadReplies mentions", func(o *Binding) { o.Spec.Chat.ThreadReplies = "mentions" },
@@ -190,6 +345,9 @@ func TestBindingValidate(t *testing.T) {
 		{"acknowledgment emoji with uppercase", func(o *Binding) { o.Spec.Chat.Acknowledgment.Emoji = "Eyes" },
 			`spec.chat.acknowledgment.emoji: invalid reaction name "Eyes": use lowercase letters, digits, '-', '_' or '+', with '+1' and '-1' allowed`},
 		{"acknowledgment without an emoji is valid: the platform supplies one", func(o *Binding) { o.Spec.Chat.Acknowledgment.Emoji = "" }, ""},
+		{"an acknowledgment emoji at the length cap ok", func(o *Binding) { o.Spec.Chat.Acknowledgment.Emoji = strings.Repeat("e", maxEmojiLen) }, ""},
+		{"an acknowledgment emoji over the length cap", func(o *Binding) { o.Spec.Chat.Acknowledgment.Emoji = strings.Repeat("e", maxEmojiLen+1) },
+			fmt.Sprintf("spec.chat.acknowledgment.emoji: is %d bytes, longer than the %d byte limit", maxEmojiLen+1, maxEmojiLen)},
 		{"acknowledgment custom emoji ok", func(o *Binding) { o.Spec.Chat.Acknowledgment.Emoji = "eyes+1" }, ""},
 		{"tool approvals with valid groups", func(o *Binding) {
 			o.Spec.Interactions.ToolApprovals = true
@@ -207,6 +365,14 @@ func TestBindingValidate(t *testing.T) {
 			o.Spec.Interactions.ToolApprovals = true
 			o.Spec.Interactions.ApproverGroups = []string{"C0123456789"}
 		}, `spec.interactions.approverGroups[0]: invalid group ID "C0123456789": must be a Slack user group ID such as S0123456789`},
+		{"an approver group at the length cap ok", func(o *Binding) {
+			o.Spec.Interactions.ToolApprovals = true
+			o.Spec.Interactions.ApproverGroups = []string{"S" + strings.Repeat("0", maxChatIDLen-1)}
+		}, ""},
+		{"an approver group over the length cap", func(o *Binding) {
+			o.Spec.Interactions.ToolApprovals = true
+			o.Spec.Interactions.ApproverGroups = []string{"S" + strings.Repeat("0", maxChatIDLen)}
+		}, fmt.Sprintf("spec.interactions.approverGroups[0]: is %d bytes, longer than the %d byte limit", maxChatIDLen+1, maxChatIDLen)},
 		{"duplicate approver group", func(o *Binding) {
 			o.Spec.Interactions.ToolApprovals = true
 			o.Spec.Interactions.ApproverGroups = []string{"S0123456789", "S0123456789"}
@@ -221,5 +387,38 @@ func TestBindingValidate(t *testing.T) {
 		}, fmt.Sprintf("spec.interactions.approverGroups: has %d items, maximum is %d", maxApproverGroups+1, maxApproverGroups)},
 		{"negative interaction timeout", func(o *Binding) { o.Spec.Interactions.Timeout.Duration = -1 }, "spec.interactions.timeout: must be positive"},
 		{"negative threadTTL", func(o *Binding) { o.Spec.Session.ThreadTTL.Duration = -1 }, "spec.session.threadTTL: must be positive"},
+		{"interaction timeout at the cap", func(o *Binding) { o.Spec.Interactions.Timeout.Duration = MaxInteractionTimeout }, ""},
+		{"interaction timeout over the cap", func(o *Binding) { o.Spec.Interactions.Timeout.Duration = MaxInteractionTimeout + time.Nanosecond },
+			"spec.interactions.timeout: 168h0m0.000000001s is out of range, must be at most 168h0m0s"},
+		{"interaction timeout of the largest Duration", func(o *Binding) { o.Spec.Interactions.Timeout.Duration = math.MaxInt64 },
+			"spec.interactions.timeout: 2562047h47m16.854775807s is out of range, must be at most 168h0m0s"},
+		{"threadTTL at the cap", func(o *Binding) { o.Spec.Session.ThreadTTL.Duration = MaxThreadTTL }, ""},
+		{"threadTTL over the cap", func(o *Binding) { o.Spec.Session.ThreadTTL.Duration = MaxThreadTTL + time.Nanosecond },
+			"spec.session.threadTTL: 8760h0m0.000000001s is out of range, must be at most 8760h0m0s"},
+		{"threadTTL of the largest Duration", func(o *Binding) { o.Spec.Session.ThreadTTL.Duration = math.MaxInt64 },
+			"spec.session.threadTTL: 2562047h47m16.854775807s is out of range, must be at most 8760h0m0s"},
 	})
+}
+
+func TestIsChannelID(t *testing.T) {
+	tests := []struct {
+		in   string
+		want bool
+	}{
+		{"C0123456789", true},
+		{"G0123456789", true},
+		{"C", false},
+		{"", false},
+		{"general", false},
+		{"#general", false},
+		{"D0123456789", false},
+		{"c0123456789", false},
+		{"C012345678a", false},
+		{"C0123456789\n", false},
+	}
+	for _, tt := range tests {
+		if got := IsChannelID(tt.in); got != tt.want {
+			t.Errorf("IsChannelID(%q) = %v, want %v", tt.in, got, tt.want)
+		}
+	}
 }

@@ -44,7 +44,7 @@ type StoreConfig struct {
 	// Kind is StoreSQLite (also what the empty Kind means) or StorePostgres.
 	Kind StoreKind
 	// PostgresDSN is the Secret key that holds the Postgres DSN: required with StorePostgres, and refused with
-	// SQLite. The DSN is read through the same Secret caches as the config's Secrets, so its namespace is watched.
+	// SQLite. The DSN is read through the same Secret caches as the config's Secrets, so Run asks for that Secret to be followed.
 	PostgresDSN SecretKey
 	// PostgresRoleTimeouts says that the database role sets the idle-in-transaction and statement timeouts, so Agent Kourier
 	// sends none: for a connection pooler in transaction mode, which refuses them as startup parameters.
@@ -85,11 +85,13 @@ type secretValues interface {
 // openedStore is what Run needs of a store beyond store.Store: both stores give it.
 type openedStore interface {
 	store.Store
-	RegisterMetrics(prometheus.Registerer) error
+	// RegisterMetrics exposes the store's gauges. connections lists the ChatConnections ("namespace/name") the broker serves, read at each scrape:
+	// the outbox gauges say 0 for each that has no unposted row.
+	RegisterMetrics(reg prometheus.Registerer, connections func() []string) error
 }
 
 // openStore opens the store that c chooses: the SQLite file at dbPath, or the Postgres database whose DSN is in the
-// Secret that c names, read through secrets. extra are more options for the Postgres store (SQLite takes none): Run
+// Secret that c names, read through secrets. extra are more options for the Postgres store (SQLite takes only the logger): Run
 // passes the one that ends the process when a write finds that another replica has led since (spec D37). An error wraps ErrWiring when the config is at fault, which includes a
 // Secret that cannot be read (it is missing, has no such key, or is empty), and none carries the DSN or the password
 // in it.
@@ -98,7 +100,7 @@ func openStore(ctx context.Context, c StoreConfig, dbPath string, secrets secret
 		return nil, err
 	}
 	if c.kind() == StoreSQLite {
-		st, err := sqlite.Open(ctx, dbPath)
+		st, err := sqlite.Open(ctx, dbPath, sqlite.WithLogger(log))
 		if err != nil {
 			return nil, fmt.Errorf("open the sqlite store: %w", err)
 		}
@@ -108,12 +110,12 @@ func openStore(ctx context.Context, c StoreConfig, dbPath string, secrets secret
 	if err == nil {
 		// A Secret made from a file ends in a newline, which no DSN does.
 		if dsn = secret.New(strings.TrimSpace(dsn.Reveal())); dsn.IsEmpty() {
-			err = fmt.Errorf("secret %s/%s key %q: %w", c.PostgresDSN.Namespace, c.PostgresDSN.Name, c.PostgresDSN.Key, secret.ErrEmptyValue)
+			err = fmt.Errorf("key %q of secret %s/%s cannot be used: %w", c.PostgresDSN.Key, c.PostgresDSN.Namespace, c.PostgresDSN.Name, secret.ErrEmptyValue)
 		}
 	}
 	if err != nil {
 		// The error names the Secret and the key, which the resolver's does too, and never a value.
-		return nil, fmt.Errorf("%w: the Postgres DSN: %w", ErrWiring, err)
+		return nil, fmt.Errorf("%w: the Postgres DSN cannot be used: %w", ErrWiring, err)
 	}
 	// The errors of Open and of the store carry neither the DSN nor its password (internal/store/postgres).
 	st, err := postgres.Open(ctx, dsn.Reveal(), append(postgresOptions(c, log), extra...)...)

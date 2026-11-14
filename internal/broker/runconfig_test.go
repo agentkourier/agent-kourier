@@ -2,7 +2,6 @@ package broker
 
 import (
 	"errors"
-	"log/slog"
 	"net"
 	"reflect"
 	"strings"
@@ -10,6 +9,10 @@ import (
 	"time"
 
 	"k8s.io/client-go/rest"
+
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/retention"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // valid returns a RunConfig that passes validate: every required field set.
@@ -20,7 +23,7 @@ func valid(t *testing.T) RunConfig {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = ln.Close() })
-	return RunConfig{ConfigDir: "/etc/agent-kourier", DBPath: "/data/agent-kourier.db", Listener: ln, Logger: slog.New(slog.DiscardHandler)}
+	return RunConfig{ConfigDir: "/etc/agent-kourier", DBPath: "/data/agent-kourier.db", Listener: ln, Logger: testutil.DiscardLogger()}
 }
 
 // No build can start without the renderer or the interactions, or with different ones, and none can
@@ -50,10 +53,10 @@ func TestValidateChecksTheAuditRetention(t *testing.T) {
 		ok        bool
 	}{
 		"keep":                {0, true},
-		"the least":           {MinAuditRetention, true},
+		"the least":           {retention.MinAuditRetention, true},
 		"ninety days":         {90 * 24 * time.Hour, true},
 		"an hour":             {time.Hour, false},
-		"a day less a moment": {MinAuditRetention - time.Second, false},
+		"a day less a moment": {retention.MinAuditRetention - time.Second, false},
 		"negative":            {-time.Hour, false},
 	} {
 		c := valid(t)
@@ -80,6 +83,57 @@ func TestValidateRefusesWhatIsMissingAsAWiringError(t *testing.T) {
 		if !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), tc.names) {
 			t.Errorf("%s: validate = %v, want an ErrWiring naming %s", name, err, tc.names)
 		}
+	}
+}
+
+// The admission list is for the custom resources: the files source serves the one ChatConnection of its directory, and each item
+// of the list is a namespace name. The error names the item's position and not its value. With the custom resources the own
+// ChatConnection is optional when the list is not empty (spec D53); both empty is refused, and so is half a reference.
+func TestValidateChecksTheAdmissionList(t *testing.T) {
+	crds := func(c *RunConfig, namespaces ...string) {
+		c.ConfigSource, c.ChatConnection, c.ConnectionNamespaces = SourceCRDs, testConnection, namespaces
+	}
+	for name, tc := range map[string]struct {
+		mutate func(*RunConfig)
+		want   string // "" is accepted; otherwise a piece of the wiring error
+	}{
+		"none": {func(c *RunConfig) { crds(c) }, ""},
+		"no own connection, a list": {func(c *RunConfig) {
+			crds(c, "team-a")
+			c.ChatConnection = v1alpha1.ObjectRef{}
+		}, ""},
+		"no own connection, no list": {func(c *RunConfig) {
+			crds(c)
+			c.ChatConnection = v1alpha1.ObjectRef{}
+		}, "set ChatConnection to the broker's own ChatConnection, or ConnectionNamespaces to the namespaces whose ChatConnections it serves, or both"},
+		"half an own connection, a list": {func(c *RunConfig) {
+			crds(c, "team-a")
+			c.ChatConnection = v1alpha1.ObjectRef{Namespace: "agent-kourier-system"}
+		}, "ChatConnection must be set to a namespace and a name"},
+		"the other half, a list": {func(c *RunConfig) {
+			crds(c, "team-a")
+			c.ChatConnection = v1alpha1.ObjectRef{Name: "slack-main"}
+		}, "ChatConnection must be set to a namespace and a name"},
+		"some":                   {func(c *RunConfig) { crds(c, "team-a", "team-b") }, ""},
+		"files refuses a list":   {func(c *RunConfig) { c.ConnectionNamespaces = []string{"team-a"} }, "ConnectionNamespaces is set with the files config source"},
+		"a wildcard":             {func(c *RunConfig) { crds(c, "team-a", "*") }, "ConnectionNamespaces item 2"},
+		"uppercase":              {func(c *RunConfig) { crds(c, "Team-A") }, "ConnectionNamespaces item 1"},
+		"a namespace and a name": {func(c *RunConfig) { crds(c, "team-a/slack") }, "ConnectionNamespaces item 1"},
+		"an empty item":          {func(c *RunConfig) { crds(c, "") }, "ConnectionNamespaces item 1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := valid(t)
+			tc.mutate(&c)
+			err := c.validate()
+			switch {
+			case tc.want == "" && err != nil:
+				t.Errorf("validate = %v, want nil", err)
+			case tc.want != "" && (!errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), tc.want)):
+				t.Errorf("validate = %v, want an ErrWiring saying %q", err, tc.want)
+			case tc.want != "" && (strings.Contains(err.Error(), "team-a") || strings.Contains(err.Error(), "Team-A")):
+				t.Errorf("validate shows a value: %v", err)
+			}
+		})
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/audit"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // pauseFirst makes turn 0 pause for input on task t1 and every later turn complete.
@@ -197,7 +198,7 @@ func TestStopWithNoActiveTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFinal(t, sink)
-	eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
+	testutil.Eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
 	if did, err := f.m.Stop(t.Context(), key, "t1", "U9"); err != nil || did || len(f.cancelled()) != 0 {
 		t.Errorf("Stop = %v, %v, cancelled %v; want stopped=false and no cancel", did, err, f.cancelled())
 	}
@@ -218,7 +219,7 @@ func TestCancelWorksAfterARestart(t *testing.T) {
 	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the held runner to retire", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.convos) == 0 })
+	testutil.Eventually(t, "the held runner to retire", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.convos) == 0 })
 	if err := f.m.Cancel(t.Context(), key, "t1", "interaction timed out"); err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +232,7 @@ func TestCancelWorksAfterARestart(t *testing.T) {
 	}
 	f.amu.Unlock()
 	waitFinal(t, sink)
-	eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
+	testutil.Eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
 	if err := f.m.Cancel(t.Context(), key, "t1", "again"); !errors.Is(err, ErrNotPaused) {
 		t.Errorf("Cancel with no task = %v; want ErrNotPaused", err)
 	}
@@ -243,6 +244,13 @@ func pausedFirst(t *testing.T, answer func(*a2a.Message, agent.Handler) error) (
 	t.Helper()
 	f := newFixture(t)
 	sink := f.live()
+	pausedFirstOn(t, f, sink, answer)
+	return f, sink
+}
+
+// pausedFirstOn is pausedFirst on a fixture that is already live, for a test that set up what the manager logs and counts first.
+func pausedFirstOn(t *testing.T, f *fixture, sink *fakeSink, answer func(*a2a.Message, agent.Handler) error) {
+	t.Helper()
 	f.agent.script = pauseFirst
 	f.agent.answer = answer
 	f.agent.get = func(id a2a.TaskID) (*a2a.Task, error) { return working(t0)(id) }
@@ -253,8 +261,7 @@ func pausedFirst(t *testing.T, answer func(*a2a.Message, agent.Handler) error) (
 	}
 	waitFinal(t, sink)
 	f.nextSent()
-	eventually(t, "the runner to park", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return f.m.convos[key].parked == "t1" })
-	return f, sink
+	testutil.Eventually(t, "the runner to park", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return f.m.convos[key].parked == "t1" })
 }
 
 // answerMsg is the reply the dialect builds for the pause of task t1.
@@ -346,7 +353,7 @@ func TestAnswerRejectedAfterTheTaskIsNamedAgainIsNotALostStream(t *testing.T) {
 	if got := sink.noticesOf(NoticeAnswerRejected); len(got) != 1 {
 		t.Errorf("notices = %+v; want one", got)
 	}
-	eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
+	testutil.Eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
 	f.amu.Lock()
 	defer f.amu.Unlock()
 	if len(f.audits) == 0 || f.audits[0].Op != audit.OpAnswer {
@@ -411,7 +418,7 @@ func TestAnswerOfUnknownOutcomeReadsTheTask(t *testing.T) {
 		if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
 			t.Fatal(err)
 		}
-		eventually(t, "the pause to reopen", func() bool { return f.m.Answer(t.Context(), key, answerMsg("ans-2")) == nil })
+		testutil.Eventually(t, "the pause to reopen", func() bool { return f.m.Answer(t.Context(), key, answerMsg("ans-2")) == nil })
 	})
 	t.Run("working: the answer went through, and the task is followed", func(t *testing.T) {
 		f, sink := pausedFirst(t, unknown)
@@ -437,7 +444,7 @@ func TestAnswerOfUnknownOutcomeReadsTheTask(t *testing.T) {
 		if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
 			t.Fatal(err)
 		}
-		eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeAnswerDropped)) == 1 })
+		testutil.Eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeAnswerDropped)) == 1 })
 		if id, want := f.nextSent(), inbound("2").MessageID; id != want {
 			t.Errorf("sent %s; want the held reply %s", id, want)
 		}
@@ -473,7 +480,7 @@ func TestBusyAnswerReadsTheTask(t *testing.T) {
 			if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
 				t.Fatal(err)
 			}
-			eventually(t, "the notice", func() bool { return len(sink.noticesOf(tc.notice)) == 1 })
+			testutil.Eventually(t, "the notice", func() bool { return len(sink.noticesOf(tc.notice)) == 1 })
 			if got := len(f.cancelled()) == 1; got != tc.cancel {
 				t.Errorf("cancelled %v; want a cancel: %v", f.cancelled(), tc.cancel)
 			}
@@ -490,14 +497,15 @@ func TestAnswerThatCannotBeSentLeavesThePauseOpen(t *testing.T) {
 	for name, cause := range map[string]error{
 		"agent unreachable":   fmt.Errorf("%w: down", agent.ErrNotSent),
 		"credentials refused": fmt.Errorf("%w: %w", agent.ErrNotSent, agent.ErrCredentialsRejected),
+		"card answered 403":   fmt.Errorf("%w: connect to agent: %w", agent.ErrNotSent, agent.ErrAgentForbidden),
 	} {
 		t.Run(name, func(t *testing.T) {
 			f, sink := pausedFirst(t, func(*a2a.Message, agent.Handler) error { return cause })
 			if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
 				t.Fatal(err)
 			}
-			eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
-			eventually(t, "the pause to reopen", func() bool { return f.m.Answer(t.Context(), key, answerMsg("ans-2")) == nil })
+			testutil.Eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+			testutil.Eventually(t, "the pause to reopen", func() bool { return f.m.Answer(t.Context(), key, answerMsg("ans-2")) == nil })
 			f.amu.Lock()
 			defer f.amu.Unlock()
 			if errors.Is(cause, agent.ErrCredentialsRejected) != (len(f.rejected) >= 1) {
@@ -589,6 +597,7 @@ func TestFailedStopIsClassified(t *testing.T) {
 		{"the agent no longer knows it", a2a.NewError(a2a.ErrTaskNotFound, "gone"), true, nil, NoticeSessionGone, 1, 0, 1},
 		{"credentials refused", fmt.Errorf("%w: rejected", agent.ErrCredentialsRejected), false, agent.ErrCredentialsRejected, "", 0, 1, 1},
 		{"identity refused", fmt.Errorf("send: %w", agent.ErrForbidden), false, agent.ErrForbidden, "", 1, 0, 1},
+		{"card answered 403", fmt.Errorf("connect to agent: %w", agent.ErrAgentForbidden), false, agent.ErrAgentForbidden, "", 1, 0, 1},
 		{"it may pass, and does not", errors.New("agent unreachable"), false, nil, "", 1, 0, 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -657,7 +666,7 @@ func TestStopAfterARunnerExitThatLeftTheTaskRecorded(t *testing.T) {
 			}
 			f.agent.find = lookupsFailWhileRecorded(f)
 		}, "1", "2")
-		eventually(t, "the cancel to be refused for good", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+		testutil.Eventually(t, "the cancel to be refused for good", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
 		f.nextSent() // turn 1
 		if did, err := f.m.Stop(t.Context(), key, "t1", "U9"); err != nil || !did {
 			t.Fatalf("Stop = %v, %v", did, err)
@@ -685,7 +694,7 @@ func TestStopAfterARunnerExitThatLeftTheTaskRecorded(t *testing.T) {
 			t.Fatal(err)
 		}
 		close(gate)
-		eventually(t, "the runner to wait on the failing lookup", func() bool { _, finds, _ := f.agent.counts(); return finds > 0 })
+		testutil.Eventually(t, "the runner to wait on the failing lookup", func() bool { _, finds, _ := f.agent.counts(); return finds > 0 })
 		f.st.mu.Lock()
 		delete(f.st.stuck, "mark") // the store recovers
 		f.st.mu.Unlock()
@@ -696,6 +705,76 @@ func TestStopAfterARunnerExitThatLeftTheTaskRecorded(t *testing.T) {
 			t.Errorf("sent %s after the stop; want the turn, looked up and found absent: %s", id, want)
 		}
 	})
+}
+
+// A control that reads the session while the pause is open, and looks at the runner only after another control has ended the pause
+// and the runner has cleared the record and retired, finds no runner, which on its own means a conversation after a restart, and
+// used to cancel the task a second time. It reads the record again once it has seen no runner, finds the pause gone and does
+// nothing: one cancel, one audit row, and ErrNotPaused for the caller, who tells the thread nothing.
+func TestACancelThatReadTheSessionBeforeAnotherControlEndedThePauseDoesNotCancelAgain(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.agent.script = pauseFirst
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	waitFinal(t, sink)
+	f.nextSent()
+
+	f.m.afterSessionRead = func() {
+		// Called by the Cancel just before it looks at the runner, after every read of the session that comes before the look (a
+		// Stop does not come through here): a person stops the task now.
+		if did, err := f.m.Stop(t.Context(), key, "t1", "U9"); err != nil || !did {
+			t.Errorf("Stop = %v, %v; want it to stop the task", did, err)
+		}
+		testutil.Eventually(t, "the runner to clear the record and retire", func() bool {
+			f.m.mu.Lock()
+			defer f.m.mu.Unlock()
+			return len(f.m.convos) == 0 && f.taskID() == ""
+		})
+	}
+	if err := f.m.Cancel(t.Context(), key, "t1", "interaction timed out"); !errors.Is(err, ErrNotPaused) {
+		t.Errorf("Cancel = %v; want ErrNotPaused: the pause was ended by the stop", err)
+	}
+	if got := f.cancelled(); len(got) != 1 {
+		t.Errorf("the agent was asked to cancel %v; want the stop's one only", got)
+	}
+	f.amu.Lock()
+	defer f.amu.Unlock()
+	if len(f.audits) != 1 || f.actors[0].User != "U9" {
+		t.Errorf("audits %+v by %+v; want the stop's cancel alone", f.audits, f.actors)
+	}
+}
+
+// A control that has ended the pause sets the runner's released flag before it clears the record (releasePause, then m.end). A Cancel
+// whose look finds the runner still parked on the task, but released, is looking at a pause that is closing: it asks the agent for
+// nothing and answers ErrNotPaused, where it would cancel the task a second time.
+func TestACancelThatFindsAReleasedPauseDoesNotCancel(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.agent.script = pauseFirst
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	waitFinal(t, sink)
+	f.nextSent()
+
+	f.m.afterSessionRead = func() {
+		f.m.mu.Lock()
+		defer f.m.mu.Unlock()
+		c := f.m.convos[key]
+		if c == nil || c.parked != "t1" {
+			t.Errorf("the runner is not parked on t1: %+v", c)
+			return
+		}
+		c.released = true // as releasePause does, while another control ends the pause, before the record is cleared
+	}
+	if err := f.m.Cancel(t.Context(), key, "t1", "interaction timed out"); !errors.Is(err, ErrNotPaused) {
+		t.Errorf("Cancel = %v; want ErrNotPaused: another control is ending the pause", err)
+	}
+	if got := f.cancelled(); len(got) != 0 {
+		t.Errorf("the agent was asked to cancel %v; want nothing from this Cancel", got)
+	}
 }
 
 // Cancel is for a pause. A task that streams is not one, and is left alone.
@@ -820,9 +899,5 @@ func TestHoldsTaskSaysWhetherARunnerHasTheTask(t *testing.T) {
 	if did, err := f.m.Stop(t.Context(), key, "t1", "U9"); err != nil || !did {
 		t.Fatalf("Stop = %v, %v", did, err)
 	}
-	for deadline := time.Now().Add(5 * time.Second); f.m.HoldsTask(key, "t1"); time.Sleep(time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("HoldsTask is still true after the pause ended")
-		}
-	}
+	testutil.Eventually(t, "HoldsTask is still true after the pause ended", func() bool { return !f.m.HoldsTask(key, "t1") }, testutil.Within(5*time.Second))
 }

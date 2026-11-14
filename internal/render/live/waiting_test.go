@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -18,6 +16,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/internal/session"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // gatedAgent is a session.AgentAPI that takes each turn, names a task for it, and holds the task on that turn's
@@ -86,7 +85,7 @@ func (noAudit) AgentCall(context.Context, audit.Actor, audit.Call) error { retur
 // idOnly resolves every user to their ID alone.
 type idOnly struct{}
 
-func (idOnly) ResolveUser(_ context.Context, id string) (dialect.User, error) {
+func (idOnly) ResolveUser(_ context.Context, _, id string) (dialect.User, error) {
 	return dialect.User{ID: id}, nil
 }
 
@@ -112,7 +111,7 @@ func TestAReplyThatWaitedLosesItsHourglassWhenItIsSent(t *testing.T) {
 	ag := &gatedAgent{taken: make(chan string, 4)}
 	m, err := session.New(session.Config{
 		Store: e.store, Bindings: oneBinding{session.Backend{ThreadTTL: time.Hour, Agent: ag}}, Audit: noAudit{},
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Sink: noticeSink{e.sink(t, e.ob)},
+		Logger: testutil.DiscardLogger(), Sink: noticeSink{e.sink(t, e.ob)},
 		Users: idOnly{}, Questions: e.store, TextReply: session.NoTextReply, ThreadContext: session.NoThreadContext, OnTurnEnd: func(string, session.TurnOutcome) {},
 	})
 	if err != nil {
@@ -156,6 +155,6 @@ func TestAReplyThatWaitedLosesItsHourglassWhenItIsSent(t *testing.T) {
 
 	close(ag.gate(0)) // the first task ends, and the reply is sent; its own task is held on the second gate
 	<-ag.taken
-	eventually(t, "the hourglass to come off the reply that is now sent", func() bool { return !reacted(1) })
+	testutil.Eventually(t, "the hourglass to come off the reply that is now sent", func() bool { return !reacted(1) })
 	close(ag.gate(1))
 }

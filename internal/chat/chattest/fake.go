@@ -65,16 +65,25 @@ type FakePlatform struct {
 	messages   []*Message
 	byRef      map[chat.Ref]*Message // the index of messages, which find reads
 	ephemerals []Ephemeral
-	members    map[string][]string // channel to users
-	groups     map[string][]string // group ID to users
+	members    map[string][]string    // channel to users
+	groups     map[string][]string    // group ID to users
+	access     map[string]chat.Access // channel to how the fake stands to it, which SetAccess sets
 	users      map[string]chat.User
 	bots       map[string]bool
 	failures   map[string][]error // method to the errors the next calls return
 	sink       chat.Sink
 	ready      chan struct{}
 	runErr     error
-	sent       []Shown        // what was received since Sent was last called
-	said       []chat.Inbound // what Say delivered, which ThreadBetween reads with what was posted
+	sent       []Shown            // what was received since Sent was last called
+	said       []chat.Inbound     // what Say delivered, which ThreadBetween reads with what was posted
+	busy       map[[2]string]bool // the threads shown as busy, by channel and thread
+	busyCalls  []BusyCall
+}
+
+// BusyCall is a call of MarkBusy: the thread, and whether it set the mark or took it off.
+type BusyCall struct {
+	Target chat.Target
+	Busy   bool
 }
 
 // NewFake returns a fake with every capability, and limits like a real platform's.
@@ -82,10 +91,10 @@ func NewFake() *FakePlatform {
 	return &FakePlatform{
 		MaxQuestions: 20, MaxTools: 20, Now: time.Now,
 		caps: chat.Caps{
-			Streams: true, Steps: true, Ephemeral: true, Edits: true, Inputs: true, MaxText: 4000, AckReaction: "hourglass",
+			Streams: true, Steps: true, Ephemeral: true, Edits: true, Inputs: true, Busy: true, MaxText: 4000, AckReaction: "hourglass",
 			Limits: map[chat.Where]int{chat.WhereHeader: 150, chat.WhereButton: 75, chat.WhereChoice: 75, chat.WhereHint: 150, chat.WhereBody: 12000, chat.WhereStream: 12000},
 		},
-		byRef: map[chat.Ref]*Message{}, members: map[string][]string{}, groups: map[string][]string{}, users: map[string]chat.User{}, bots: map[string]bool{}, failures: map[string][]error{}, ready: make(chan struct{}),
+		byRef: map[chat.Ref]*Message{}, members: map[string][]string{}, groups: map[string][]string{}, access: map[string]chat.Access{}, users: map[string]chat.User{}, bots: map[string]bool{}, failures: map[string][]error{}, busy: map[[2]string]bool{}, ready: make(chan struct{}),
 	}
 }
 
@@ -127,12 +136,23 @@ func (f *FakePlatform) SetMembers(channel string, users ...string) {
 
 // SetGroup sets who is in the group with the platform ID id. A group the fake was not told of is unreadable: IsInAnyGroup
 // is false, with an error that wraps chat.ErrGroupsMisconfigured, as a platform's answer for a group that does not exist
-// does. FailNext("IsInAnyGroup", errors.New(...)) makes the other kind, an error that may pass on a retry, and
+// does, and GroupsReadable is a *chat.GroupError that also wraps chat.ErrGroupNotFound. FailNext("IsInAnyGroup", errors.New(...)) makes the other kind, an error that may pass on a retry, and
 // FailNext with an error that wraps chat.ErrGroupsMisconfigured makes the first for a group that is set.
 func (f *FakePlatform) SetGroup(id string, users ...string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.groups[id] = users
+}
+
+// SetAccess sets how the fake stands to channel, which ChannelAccess reads. A channel the fake was not told of does not
+// exist: ChannelAccess is the zero Access, with an error that wraps chat.ErrChannelNotFound, as a platform's answer for a
+// channel it has never heard of is. FailNext("ChannelAccess", err) injects a failure: wrap chat.ErrMissingScope for the
+// missing permission, and give a plain error for the kind that may pass on a retry. The fake does not tie this to
+// SetMembers, which IsMember reads for people: it has no user of its own.
+func (f *FakePlatform) SetAccess(channel string, a chat.Access) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.access[channel] = a
 }
 
 // Messages returns what is posted, oldest first, as copies.
@@ -241,6 +261,7 @@ func (f *FakePlatform) Post(_ context.Context, t chat.Target, o chat.Outgoing, t
 	}
 	ref := chat.Ref{Platform: "fake", Conn: t.Conn, Channel: t.Channel, Thread: t.Thread, ID: fmt.Sprintf("%d.000", len(f.messages)+1)}
 	f.keep(&Message{Ref: ref, Out: o, Tag: tag, Posted: f.Now()})
+	delete(f.busy, [2]string{t.Channel, t.Thread}) // a message in the thread takes the mark off, as a platform's may
 	f.sent = append(f.sent, f.show(o)...)
 	return ref, nil
 }
@@ -308,6 +329,7 @@ func (f *FakePlatform) Stream(_ context.Context, t chat.Target, to, markdown str
 	}
 	ref := chat.Ref{Platform: "fake", Conn: t.Conn, Channel: t.Channel, Thread: t.Thread, ID: fmt.Sprintf("%d.000", len(f.messages)+1)}
 	f.keep(&Message{Ref: ref, Streamed: markdown, Streaming: true, Recipient: to, Posted: f.Now()})
+	delete(f.busy, [2]string{t.Channel, t.Thread})
 	f.sent = append(f.sent, f.showMarkdown(markdown))
 	return &fakeStream{f, ref}, nil
 }
@@ -435,7 +457,66 @@ func (f *FakePlatform) Unreact(_ context.Context, r chat.Ref, name string) error
 	return nil
 }
 
-var _ chat.ThreadReader = (*FakePlatform)(nil)
+// Permalink implements chat.Permalinker: the fake makes no links.
+func (f *FakePlatform) Permalink(chat.Ref) (string, bool) { return "", false }
+
+// MarkBusy implements chat.BusyMarker. A thread stays busy until it is cleared or Post puts a message in it, which is
+// what a platform's mark does (chat.BusyMarker). A fake whose caps say no Busy says chat.ErrNoBusy and shows none.
+func (f *FakePlatform) MarkBusy(_ context.Context, t chat.Target, busy bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.caps.Busy {
+		return chat.ErrNoBusy
+	}
+	if t.Thread == "" {
+		return fmt.Errorf("fake platform: %w: a thread to mark", chat.ErrInvalid)
+	}
+	f.busyCalls = append(f.busyCalls, BusyCall{Target: t, Busy: busy})
+	if err := f.fail("MarkBusy"); err != nil {
+		return err
+	}
+	if busy {
+		f.busy[[2]string{t.Channel, t.Thread}] = true
+	} else {
+		delete(f.busy, [2]string{t.Channel, t.Thread})
+	}
+	return nil
+}
+
+// Busy says whether the thread t is shown as busy now.
+func (f *FakePlatform) Busy(t chat.Target) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.busy[[2]string{t.Channel, t.Thread}]
+}
+
+// BusyCalls returns the calls of MarkBusy that reached the platform, in order, those that failed included.
+func (f *FakePlatform) BusyCalls() []BusyCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.busyCalls)
+}
+
+// ThreadFromStart implements chat.ThreadReader: the message said or posted whose ID is the thread's, and then ThreadBetween's window.
+func (f *FakePlatform) ThreadFromStart(ctx context.Context, t chat.Target, before string, limit int) ([]chat.HistoryMessage, int, error) {
+	msgs, dropped, err := f.ThreadBetween(ctx, t, "", before, limit)
+	if err != nil {
+		return nil, 0, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, m := range f.said {
+		if m.At.Channel == t.Channel && m.At.ID == t.Thread {
+			return append([]chat.HistoryMessage{{Message: m}}, msgs...), dropped, nil
+		}
+	}
+	for _, m := range f.messages {
+		if m.Ref.Channel == t.Channel && m.Ref.ID == t.Thread {
+			return append([]chat.HistoryMessage{{Message: chat.Inbound{At: m.Ref, Text: m.Out.Message.Fallback}, Own: true}}, msgs...), dropped, nil
+		}
+	}
+	return msgs, dropped, nil
+}
 
 // ThreadBetween implements chat.ThreadReader over what the fake holds of the thread: what was posted in it (Agent Kourier's own,
 // Own) and what Say delivered to it, by their IDs, which it compares as a platform's timestamps ("seconds.fraction"; the
@@ -519,6 +600,44 @@ func (f *FakePlatform) IsInAnyGroup(_ context.Context, groups []string, user str
 	return false, nil
 }
 
+// GroupsReadable implements chat.Platform: a group that SetGroup was told of is readable, whoever is in it, and the first one it
+// was not told of ends the call with a *chat.GroupError that wraps chat.ErrGroupNotFound and chat.ErrGroupsMisconfigured. The
+// context is not read, as in the fake's other reads. FailNext("GroupsReadable", err) injects a failure, returned as it is.
+func (f *FakePlatform) GroupsReadable(_ context.Context, groups []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(groups) == 0 {
+		return nil
+	}
+	if err := f.fail("GroupsReadable"); err != nil {
+		return err
+	}
+	for _, g := range groups {
+		if _, ok := f.groups[g]; !ok {
+			return &chat.GroupError{Group: g, Err: fmt.Errorf("fake platform: no such group: %w: %w", chat.ErrGroupNotFound, chat.ErrGroupsMisconfigured)}
+		}
+	}
+	return nil
+}
+
+// ChannelAccess implements chat.Platform: the Access that SetAccess set, and for a channel it was not told of, or for none,
+// an error that wraps chat.ErrChannelNotFound. The context is not read, as in the fake's other reads.
+func (f *FakePlatform) ChannelAccess(_ context.Context, channel string) (chat.Access, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if channel == "" {
+		return chat.Access{}, fmt.Errorf("fake platform: no channel: %w", chat.ErrChannelNotFound)
+	}
+	if err := f.fail("ChannelAccess"); err != nil {
+		return chat.Access{}, err
+	}
+	a, ok := f.access[channel]
+	if !ok {
+		return chat.Access{}, fmt.Errorf("fake platform: no such channel %q: %w", channel, chat.ErrChannelNotFound)
+	}
+	return a, nil
+}
+
 // IsBot implements chat.Platform: a user the fake was not told of is a bot, with an error.
 func (f *FakePlatform) IsBot(_ context.Context, user string) (bool, error) {
 	f.mu.Lock()
@@ -573,11 +692,20 @@ func (f *FakePlatform) fits(p chat.Prompt) error {
 	return nil
 }
 
-// Classify implements chat.Platform: a FakeError says what it is, and any other error is transient.
-func (f *FakePlatform) Classify(_ chat.Op, err error) chat.Verdict {
+// Classify implements chat.Platform: a FakeError says what it is, an error of ChannelAccess that wraps chat.ErrChannelNotFound
+// or chat.ErrMissingScope is permanent for OpOther, as the contract of ChannelAccess says, and any other error is transient.
+func (f *FakePlatform) Classify(op chat.Op, err error) chat.Verdict {
 	var fe *FakeError
 	if errors.As(err, &fe) {
 		return fe.Verdict
+	}
+	if op == chat.OpOther {
+		switch {
+		case errors.Is(err, chat.ErrChannelNotFound):
+			return chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonChannelGone, Code: "channel_not_found"}
+		case errors.Is(err, chat.ErrMissingScope):
+			return chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonOther, Code: "missing_scope"}
+		}
 	}
 	return chat.Verdict{Class: chat.Transient}
 }
@@ -602,9 +730,41 @@ func (f *FakePlatform) Subject() Subject {
 			return s
 		},
 		Inert:         func() error { return nil },
+		Channels:      f.arrangeChannel,
+		Groups:        f.arrangeGroup,
 		ToolApprovals: true,
 		TooLargeTools: &chat.Prompt{ID: "ix-big-tools", Tools: make([]chat.Tool, f.MaxTools+1)},
 	}
+}
+
+// arrangeChannel is Subject.Channels of the fake: the channel it returns is one the fake stands to as state says.
+func (f *FakePlatform) arrangeChannel(state ChannelState) string {
+	channel := "C0" + strings.ToUpper(strings.ReplaceAll(state.String(), " ", ""))
+	switch state {
+	case ChannelJoined:
+		f.SetAccess(channel, chat.Access{Member: true})
+	case ChannelNotJoined:
+		f.SetAccess(channel, chat.Access{})
+	case ChannelArchived:
+		f.SetAccess(channel, chat.Access{Member: true, Archived: true})
+	case ChannelScopeMissing:
+		f.SetAccess(channel, chat.Access{Member: true})
+		f.FailNext("ChannelAccess", fmt.Errorf("fake platform: %w", chat.ErrMissingScope))
+	}
+	return channel // ChannelUnknown is a channel never set
+}
+
+// arrangeGroup is Subject.Groups of the fake: the group it returns is one the fake stands to as state says.
+func (f *FakePlatform) arrangeGroup(state GroupState) string {
+	group := "G0" + strings.ToUpper(strings.ReplaceAll(state.String(), " ", ""))
+	switch state {
+	case GroupReadable:
+		f.SetGroup(group, "U1")
+	case GroupScopeMissing:
+		f.SetGroup(group, "U1")
+		f.FailNext("GroupsReadable", &chat.GroupError{Group: group, Err: fmt.Errorf("fake platform: %w: %w", chat.ErrMissingScope, chat.ErrGroupsMisconfigured)})
+	}
+	return group // GroupUnknown is a group never set
 }
 
 // literal is s as the fake shows it at the place w.
@@ -614,10 +774,14 @@ func (f *FakePlatform) literal(s string, w chat.Where) Shown {
 
 func (f *FakePlatform) showMarkdown(md string) Shown { return f.literal(md, chat.WhereStream) }
 
-// show is every field of o as the fake shows it. The caller holds f.mu.
+// show is every field of o as the fake shows it: a fake whose caps say no Steps shows nothing of a message's steps. The
+// caller holds f.mu.
 func (f *FakePlatform) show(o chat.Outgoing) []Shown {
 	var out []Shown
 	for _, fld := range Fields(o) {
+		if !f.caps.Steps && (fld.Where == chat.WhereStepTitle || fld.Where == chat.WhereStepDetail) {
+			continue
+		}
 		out = append(out, f.literal(fld.Text, fld.Where))
 	}
 	return out

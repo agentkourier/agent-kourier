@@ -40,6 +40,66 @@ func (s *Server) SetMembers(channel string, users ...string) {
 	s.members[channel] = members
 }
 
+// SetArchived marks channel archived, or not. It does not register the channel: conversations.info reports
+// channel_not_found until SetMembers has. Only conversations.info reads the mark: the fake's chat.postMessage and its other
+// methods still accept a post to an archived channel.
+func (s *Server) SetArchived(channel string, archived bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if archived {
+		s.archived[channel] = true
+	} else {
+		delete(s.archived, channel)
+	}
+}
+
+// SetMissingScope makes the Web API method answer missing_scope, as Slack does for a token installed without the scope
+// the method needs, or lets it work again. It models no scope of its own: a test says which method the app lacks one for.
+func (s *Server) SetMissingScope(method string, missing bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if missing {
+		s.noScope[method] = true
+	} else {
+		delete(s.noScope, method)
+	}
+}
+
+func (s *Server) scopeMissing(method string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.noScope[method]
+}
+
+// conversationsInfo implements conversations.info
+// (https://docs.slack.dev/reference/methods/conversations.info/), read for the bot token's own view of a channel:
+// is_member is whether the calling app's bot user is among the members, so two apps see one channel differently.
+// Error code from the docs: channel_not_found, for a channel value that was invalid.
+//
+// UNCONFIRMED(BV-3): what Slack answers for a private channel the bot is not in (channel_not_found, or the channel with
+// is_member false): the page does not say. This fake knows every registered channel, so it answers the second. On the
+// page (read 2026-11-01), neither field is described in prose; its public-channel example response shows
+// is_archived (false) and no is_member, and it has no private-channel example. Both are in slack-go v0.33.0's Channel type
+// (channels.go, conversation.go).
+// That Slack sends is_member to a bot token at all is unconfirmed too: the page's example has none.
+// invalid_arguments for a call with no channel is also a guess: the page lists the code among its general ones.
+func (s *Server) conversationsInfo(app App, form url.Values) (response, string) {
+	channel := form.Get("channel")
+	if channel == "" {
+		return nil, "invalid_arguments"
+	}
+	s.mu.Lock()
+	users, ok := s.members[channel]
+	archived := s.archived[channel]
+	s.mu.Unlock()
+	if !ok {
+		return nil, "channel_not_found"
+	}
+	return response{"channel": map[string]any{
+		"id": channel, "is_channel": true, "is_member": slices.Contains(users, app.BotUser), "is_archived": archived,
+	}}, ""
+}
+
 // usersInfo implements users.info
 // (https://docs.slack.dev/reference/methods/users.info/).
 //

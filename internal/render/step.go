@@ -1,8 +1,13 @@
 package render
 
 import (
+	"fmt"
+	"strings"
+	"time"
+
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/redact"
 )
 
 // Step returns the progress step of a tool call in the state given: the tool's name as its title and the redacted summary
@@ -48,4 +53,201 @@ func Failed(response any) bool {
 		}
 	}
 	return false
+}
+
+// EarlierSteps is the line above the steps of a message that shows only the latest of them: how many came before, n of them.
+func EarlierSteps(n int) string {
+	if n == 1 {
+		return "1 earlier step is not shown."
+	}
+	return fmt.Sprintf("%d earlier steps are not shown.", n)
+}
+
+// ApprovalTitle begins the title of the step of a tool call that waits for a person to approve it, which the tool's name
+// ends.
+const ApprovalTitle = "Approval requested: "
+
+// AwaitingApproval is the step of a tool call that the task paused to have approved, in the state it is left in when the
+// stream stops at the pause: retitled to say that the approval was asked for, and done, since the call has not failed
+// and a platform may show a step that is not done at the stop of its stream as failed (Slack does). Its detail is the
+// call's, as Step has it. The answer's own message shows the call again, with how it ended.
+func AwaitingApproval(id string, call agent.ToolCallEvent) chat.Step {
+	st := Step(id, call, chat.StepDone)
+	st.Title = ApprovalTitle + st.Title
+	return st
+}
+
+// The titles of the cards that stand for time, not for a tool call. They name nothing the agent did: the model's reasoning
+// is never read, so a gap is not called thinking.
+const (
+	// WorkingTitle is the title of the idle card and of the activity card while it runs.
+	WorkingTitle = "Working…"
+	// WroteTitle is the title of an idle card that no tool call claimed, once text came while it was open and while no tool
+	// call has followed that text: the gap was the model writing, and what it wrote is the answer for all that is known.
+	WroteTitle = "Wrote the answer"
+	// UpdateTitle is the title of such a card once a tool call follows the text: the text was written on the way, and the
+	// answer comes after the call.
+	UpdateTitle = "Wrote an update"
+	// FinishedTitle is the title of an idle card that the end of a completed task closed, with no text since it opened.
+	FinishedTitle = "Finished"
+	// WorkedTitle is the title of the activity card when its task completed, or text came.
+	WorkedTitle = "Worked"
+	// WaitingTitle is the title of either card when the task paused to ask for input: what is shown next is the question.
+	WaitingTitle = "Waiting for your answer"
+	// StoppedTitle is the title of either card when the task failed, was cancelled or was rejected. The card is an error, not
+	// a tick: nothing was finished.
+	StoppedTitle = "Stopped"
+)
+
+// Ending is how a card that stands for time ended. The zero value is a card that is still under way.
+type Ending int
+
+// The endings of a card that stands for time.
+const (
+	// NotEnded is a card under way.
+	NotEnded Ending = iota
+	// EndedByText is a card that text came to while it was open.
+	EndedByText
+	// EndedByUpdate is a card that text came to while it was open, which a tool call followed: the text was not the answer.
+	EndedByUpdate
+	// EndedCompleted is a card that the end of a completed task closed.
+	EndedCompleted
+	// EndedPaused is a card that a pause for input closed.
+	EndedPaused
+	// EndedFailed is a card that a task that failed, was cancelled or was rejected closed.
+	EndedFailed
+)
+
+// endState is the state of a card that ended as e: done, or failed for a task that did not finish.
+func (e Ending) endState() chat.StepState {
+	if e == EndedFailed {
+		return chat.StepFailed
+	}
+	return chat.StepDone
+}
+
+// WorkingStep is the idle card: Working…, under way, with no detail. A platform that appends a card's detail (Slack
+// does) is sent the detail once, by the tool call that claims the card, so the card begins without one.
+func WorkingStep(id string) chat.Step {
+	return chat.Step{ID: id, Title: WorkingTitle, State: chat.StepRunning}
+}
+
+// WorkingEnded is an idle card that no tool call claimed, finished as e: it is retitled first, so that no card shows a tick
+// on Working…, and a task that did not finish gets an error and not a tick.
+func WorkingEnded(id string, e Ending) chat.Step {
+	title := FinishedTitle
+	switch e {
+	case EndedByText:
+		title = WroteTitle
+	case EndedByUpdate:
+		title = UpdateTitle
+	case EndedPaused:
+		title = WaitingTitle
+	case EndedFailed:
+		title = StoppedTitle
+	case NotEnded:
+		return WorkingStep(id)
+	}
+	return chat.Step{ID: id, Title: title, State: e.endState()}
+}
+
+// Counts is what the activity mode counts: the tool calls that have their result and the failures among them, and the
+// agent's working updates (agent.ProgressEvent), which a turn counts only until a step is counted. Each is left out
+// of what is shown at zero.
+type Counts struct {
+	Steps, Failed, Updates int
+}
+
+// ActivityStep is the one card of the activity mode: it counts the tool calls that have their result, how many of them
+// failed, and the working updates, and names no tool, no argument and nothing the agent said. The counts are in the title,
+// which a platform replaces; the summary, which is the detail a platform appends, is in the card only once it has ended,
+// so that it is sent once. A card that ended for text or a completed task is Worked; one that a pause closed is Waiting,
+// and one that a task that did not finish closed is Stopped, an error.
+func ActivityStep(id string, c Counts, elapsed time.Duration, e Ending) chat.Step {
+	if e == NotEnded {
+		title := WorkingTitle
+		if counts := counted(c); counts != "" {
+			title += " " + counts
+		}
+		return chat.Step{ID: id, Title: title, State: chat.StepRunning}
+	}
+	summary := "Took " + spoken(elapsed)
+	if c.Steps > 0 {
+		summary += ", " + plural(c.Steps, "step")
+		if c.Failed > 0 {
+			summary += fmt.Sprintf(" (%d failed)", c.Failed)
+		}
+	}
+	if c.Updates > 0 {
+		summary += ", " + plural(c.Updates, "update")
+	}
+	title := WorkedTitle
+	switch e {
+	case EndedPaused:
+		title = WaitingTitle
+	case EndedFailed:
+		title = StoppedTitle
+	}
+	return chat.Step{ID: id, Title: title, Detail: summary, State: e.endState()}
+}
+
+// ActivityLine is the activity mode's status line for a message that is updated: Working… with the whole minutes elapsed
+// and the counts. It is rewritten only when an event makes a write, so the minutes are those of that moment.
+func ActivityLine(elapsed time.Duration, c Counts) string {
+	var parts []string
+	if m := int(elapsed / time.Minute); m > 0 {
+		parts = append(parts, fmt.Sprintf("%d min", m))
+	}
+	if counts := counted(c); counts != "" {
+		parts = append(parts, counts)
+	}
+	if len(parts) == 0 {
+		return WorkingTitle
+	}
+	return WorkingTitle + " (" + strings.Join(parts, ", ") + ")"
+}
+
+// counted is "12 steps, 3 failed", or "5 updates": the steps that have their result, the failures among them, and the working
+// updates, each left out at zero.
+func counted(c Counts) string {
+	var parts []string
+	if c.Steps > 0 {
+		parts = append(parts, plural(c.Steps, "step"))
+	}
+	if c.Failed > 0 {
+		parts = append(parts, fmt.Sprintf("%d failed", c.Failed))
+	}
+	if c.Updates > 0 {
+		parts = append(parts, plural(c.Updates, "update"))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// ProgressLine is the agent's own progress line, the text of a working update (agent.ProgressEvent), as it titles the
+// Working… card or stands for the Working… line: secrets taken out first (redact.FreeTextLine), then put on one line and
+// capped as a tool's summary is, so that the line is short whatever the agent sent. It is untrusted text, literal like all
+// the rest, and empty when nothing of it shows.
+func ProgressLine(text string) string {
+	return chat.Truncate(chat.Clean(redact.FreeTextLine(text), true), maxToolArgs)
+}
+
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
+}
+
+// spoken is a duration in whole seconds, as "3 min 26 s", "2 min" or "42 s".
+func spoken(d time.Duration) string {
+	secs := int(d.Round(time.Second) / time.Second)
+	secs = max(secs, 0)
+	switch m, s := secs/60, secs%60; {
+	case m == 0:
+		return fmt.Sprintf("%d s", s)
+	case s == 0:
+		return fmt.Sprintf("%d min", m)
+	default:
+		return fmt.Sprintf("%d min %d s", m, s)
+	}
 }

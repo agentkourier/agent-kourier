@@ -5,6 +5,10 @@ import (
 	"time"
 )
 
+// SystemUser is the user a turn is filed under when nobody wrote it (an alert's first prompt, a bot's mention). The value is
+// stored (reply_queue.user_id, sessions.turn_user), so a change of it needs a migration that rewrites those columns.
+const SystemUser = "agent-kourier:system"
+
 // Reply is a thread reply waiting for its session's active task to finish
 // (spec 8.2, D21).
 type Reply struct {
@@ -26,12 +30,16 @@ type Reply struct {
 	Acknowledgment string
 	// InteractionID pins a text reply to its first question across recovery.
 	InteractionID string
-	Text          string
-	EnqueuedAt    time.Time
+	// WholeThread says the turn carries what the thread holds, every author's, since the session's previous turn: a bot's
+	// mention, whose own message says nothing of what was asked.
+	WholeThread bool
+	Text        string
+	EnqueuedAt  time.Time
 }
 
-// MaxReplyIDs is the most IDs that one HasReplies call may ask about (ErrInvalid above it). It bounds the size of one
-// call, and so of the statement or the chunks of statements that an adapter runs for it, not the answer.
+// MaxReplyIDs is the most IDs that one call that takes many reply IDs (HasReplies, AcknowledgmentLister's
+// SettleAcknowledgmentReplies) may name (ErrInvalid above it). It bounds the size of one call, and so of the statement or
+// the chunks of statements that an adapter runs for it, not the answer; a caller with more makes several calls.
 const MaxReplyIDs = 10000
 
 // ReplyQueue persists per-session FIFO queues of replies. Delivery is
@@ -43,11 +51,6 @@ const MaxReplyIDs = 10000
 // enqueued while it walked: a reply becomes visible only after every reply with a lower Sequence in
 // its session is. A store whose Sequence is assigned at insert and shown at commit must serialise
 // the enqueues of a session to keep this.
-//
-// Stores also provide ClaimReplyInteraction(ctx, id, interaction string) error, which pins a queued
-// answer to one question (ErrInvalid for an empty argument, ErrNotFound for an unknown reply, and
-// an error, today also ErrNotFound, for a reply pinned to another question). It is not listed
-// here because the interactions package asks for it by type assertion; storetest requires it.
 type ReplyQueue interface {
 	// EnqueueReply appends r to its session's queue, idempotently by ID, and
 	// reports whether it was newly enqueued; a delivered ID is a duplicate too.
@@ -76,6 +79,10 @@ type ReplyQueue interface {
 	// stored rows. ErrNotFound if the session has no row below it, as for its first turn; ErrInvalid for an invalid
 	// key or a sequence below 1.
 	PreviousReply(ctx context.Context, key ConversationKey, sequence int64) (Reply, error)
+	// PreviousWholeReply is PreviousReply among the rows marked WholeThread: the last turn below the given sequence that carried
+	// the thread. A turn between them carried no bot's post, so the next turn that carries the thread reads back to this one.
+	// ErrNotFound if no row of the session below it was marked; ErrInvalid as PreviousReply.
+	PreviousWholeReply(ctx context.Context, key ConversationKey, sequence int64) (Reply, error)
 	// MarkReplyDelivered records that the reply was sent at the given time and
 	// discards its text. Marking again is a no-op. It returns ErrNotFound for
 	// an unknown ID and ErrInvalid for an empty ID or zero time.
@@ -89,19 +96,32 @@ type ReplyQueue interface {
 	AbandonStrandedReplies(ctx context.Context, now time.Time, age time.Duration) (int, error)
 }
 
-// AcknowledgmentLister is an optional retention extension. It lists delivered
-// tombstones whose acknowledgment metadata still exists and whose originating
-// task is no longer active, so the broker can enqueue durable removals without
-// racing a task that is still processing the message.
-type AcknowledgmentLister interface {
-	ListAcknowledgmentReplies(ctx context.Context, now time.Time, age time.Duration) ([]Reply, error)
+// ReplyInteractionClaimer pins a queued answer to one question. It is not part of ReplyQueue, which the session
+// manager takes: only the interactions package claims a reply.
+type ReplyInteractionClaimer interface {
+	// ClaimReplyInteraction pins the queued reply id to the question interaction. A retry with the same pair changes
+	// nothing and succeeds; a reply already pinned to another question is left as it is, and the call returns
+	// ErrNotFound, as it does for a reply that is not queued. An empty id or interaction is ErrInvalid.
+	ClaimReplyInteraction(ctx context.Context, id, interaction string) error
 }
 
-// PendingAcknowledgmentLister is an optional retention extension. It lists replies
-// that carry acknowledgment metadata while their add may still be needed: an
-// undelivered reply, or a delivered reply whose originating task is still active.
-// The broker can retry the durable add. A paired removal in the outbox makes a
-// retry harmless after the task has ended.
+// AcknowledgmentLister is what retention reads to retry an acknowledgment's removal. It lists delivered tombstones
+// whose acknowledgment metadata still exists and whose originating task is no longer active (AcknowledgmentHeld), so
+// the broker can enqueue durable removals without racing a task that is still processing the message.
+type AcknowledgmentLister interface {
+	ListAcknowledgmentReplies(ctx context.Context) ([]Reply, error)
+	// SettleAcknowledgmentReplies records that the removals of the acknowledgments of the delivered replies ids are
+	// durably queued: it clears their acknowledgment metadata, so neither lister returns them again. Without it every
+	// tombstone would be listed, and its removal queued again, at each retention tick until its session is deleted.
+	// An undelivered reply, whose add may still be needed, and an unknown ID are left alone, and a repeat changes
+	// nothing. ErrInvalid for an empty ID among them or more than MaxReplyIDs.
+	SettleAcknowledgmentReplies(ctx context.Context, ids []string) error
+}
+
+// PendingAcknowledgmentLister is what retention reads to retry an acknowledgment's add. It lists replies that carry
+// acknowledgment metadata while their add may still be needed: an undelivered reply, or a delivered reply whose
+// originating task is still active (AcknowledgmentHeld). A paired removal in the outbox makes a retry harmless after
+// the task has ended.
 type PendingAcknowledgmentLister interface {
 	ListPendingAcknowledgmentReplies(ctx context.Context) ([]Reply, error)
 }

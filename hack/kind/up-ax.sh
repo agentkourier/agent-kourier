@@ -36,7 +36,7 @@ if docker inspect "${REGISTRY}" >/dev/null 2>&1; then
   docker start "${REGISTRY}" >/dev/null
 else
   docker run -d --restart=unless-stopped --name "${REGISTRY}" --label dev.agent-kourier.ax-registry=true \
-    -p "127.0.0.1:${REGISTRY_PORT}:5000" registry:3@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8 >/dev/null
+    -p "127.0.0.1:${REGISTRY_PORT}:5000" registry:3@sha256:82f6ff4a7f982960c8aa51617fea3aabc485df6e55cce80d22deb1de36f1bc3c >/dev/null
 fi
 if [ "$(docker inspect -f '{{if index .NetworkSettings.Networks "kind"}}yes{{end}}' "${REGISTRY}")" != yes ]; then docker network connect kind "${REGISTRY}"; fi
 # The image cache resolves the registry through CoreDNS's forwarding to Docker DNS.

@@ -215,6 +215,16 @@ func (p *recordingPlatform) IsInAnyGroup(context.Context, []string, string) (boo
 	return false, nil
 }
 
+func (p *recordingPlatform) GroupsReadable(context.Context, []string) error {
+	p.note("GroupsReadable")
+	return nil
+}
+
+func (p *recordingPlatform) ChannelAccess(context.Context, string) (chat.Access, error) {
+	p.note("ChannelAccess")
+	return chat.Access{}, nil
+}
+
 func (p *recordingPlatform) IsBot(context.Context, string) (bool, error) {
 	p.note("IsBot")
 	return false, nil
@@ -229,7 +239,20 @@ func (p *recordingPlatform) Classify(chat.Op, error) chat.Verdict {
 	p.note("Classify")
 	return chat.Verdict{}
 }
-func (p *recordingPlatform) Capabilities() chat.Caps { p.note("Capabilities"); return chat.Caps{} }
+func (p *recordingPlatform) Capabilities() chat.Caps           { p.note("Capabilities"); return chat.Caps{} }
+func (p *recordingPlatform) Permalink(chat.Ref) (string, bool) { p.note("Permalink"); return "", false }
+func (p *recordingPlatform) ThreadBetween(context.Context, chat.Target, string, string, int) ([]chat.HistoryMessage, int, error) {
+	p.note("ThreadBetween")
+	return nil, 0, nil
+}
+func (p *recordingPlatform) ThreadFromStart(context.Context, chat.Target, string, int) ([]chat.HistoryMessage, int, error) {
+	p.note("ThreadFromStart")
+	return nil, 0, nil
+}
+func (p *recordingPlatform) MarkBusy(context.Context, chat.Target, bool) error {
+	p.note("MarkBusy")
+	return nil
+}
 
 type recordingStream struct{ p *recordingPlatform }
 
@@ -248,9 +271,9 @@ func (s *recordingStream) Stop(context.Context, string, chat.Message, string) er
 // refused once the leader's lease is past its renew deadline; a read passes. A method that is in neither list fails
 // TestEveryChatMethodIsClassified, so that a method added to the interface is decided on before it can be called unfenced.
 var (
-	chatPlatformWrites = map[string]bool{"Post": true, "Update": true, "Stream": true, "Ephemeral": true, "React": true, "Unreact": true}
-	chatPlatformReads  = map[string]bool{"Run": true, "Find": true, "RefAt": true, "StreamAt": true, "IsMember": true, "IsInAnyGroup": true, "IsBot": true,
-		"ResolveUser": true, "Fits": true, "Classify": true, "Capabilities": true}
+	chatPlatformWrites = map[string]bool{"Post": true, "Update": true, "Stream": true, "Ephemeral": true, "React": true, "Unreact": true, "MarkBusy": true}
+	chatPlatformReads  = map[string]bool{"Run": true, "Find": true, "RefAt": true, "StreamAt": true, "IsMember": true, "IsInAnyGroup": true, "GroupsReadable": true, "ChannelAccess": true, "IsBot": true,
+		"ResolveUser": true, "Fits": true, "Classify": true, "Capabilities": true, "Permalink": true, "ThreadBetween": true, "ThreadFromStart": true}
 	chatStreamWrites = map[string]bool{"Append": true, "Step": true, "Stop": true}
 	chatStreamReads  = map[string]bool{"Ref": true}
 )
@@ -433,15 +456,8 @@ func (permalinkPlatform) Permalink(r chat.Ref) (string, bool) { return "link/" +
 
 func TestChatFencePassesPermalinksOn(t *testing.T) {
 	f := &leaseFence{clock: newLeaseClock(nil), limit: time.Hour, stop: func(string) {}}
-	with, ok := fenceChat(permalinkPlatform{&recordingPlatform{}}, f).(chat.Permalinker)
-	if !ok {
-		t.Fatal("the fenced platform is not a chat.Permalinker")
-	}
-	if got, ok := with.Permalink(chat.Ref{ID: "1.2"}); !ok || got != "link/1.2" {
+	if got, ok := fenceChat(permalinkPlatform{&recordingPlatform{}}, f).Permalink(chat.Ref{ID: "1.2"}); !ok || got != "link/1.2" {
 		t.Errorf("Permalink = %q, %v; want the platform's, with no lease needed: it is a read", got, ok)
-	}
-	if got, ok := permalinks(fenceChat(&recordingPlatform{}, f))(chat.Ref{ID: "1.2"}); ok || got != "" {
-		t.Errorf("Permalink of a platform that makes none = %q, %v; want none", got, ok)
 	}
 }
 
@@ -460,17 +476,12 @@ func (p *threadPlatform) ThreadBetween(_ context.Context, t chat.Target, after, 
 var errThreadRead = errors.New("the platform's own error")
 
 // A thread read is a read: it passes the fence whatever the lease says (this fence has never seen a renewal, which stops
-// the process for a write), and it gets the platform's answer as it is. A platform that cannot
-// read a thread is told of by the sentinel, from the wrapper that every platform is behind.
-func TestChatFencePassesThreadReadsOnAndSaysWhenThePlatformCannot(t *testing.T) {
+// the process for a write), and it gets the platform's answer as it is.
+func TestChatFencePassesThreadReadsOn(t *testing.T) {
 	var stops []string
 	fence := &leaseFence{clock: newLeaseClock(nil), limit: time.Second, stop: func(reason string) { stops = append(stops, reason) }} // never renewed: a write is refused
 	inner := &threadPlatform{recordingPlatform: &recordingPlatform{}}
-	reader, ok := fenceChat(inner, fence).(chat.ThreadReader)
-	if !ok {
-		t.Fatal("the fenced platform is not a chat.ThreadReader")
-	}
-	msgs, dropped, err := reader.ThreadBetween(context.Background(), chat.Target{Channel: "C1", Thread: "1.1"}, "1.2", "1.9", 7)
+	msgs, dropped, err := fenceChat(inner, fence).ThreadBetween(context.Background(), chat.Target{Channel: "C1", Thread: "1.1"}, "1.2", "1.9", 7)
 	if len(msgs) != 1 || msgs[0].Message.Text != "a reply" || dropped != 3 || !errors.Is(err, errThreadRead) {
 		t.Errorf("ThreadBetween = %+v, %d, %v; want the platform's answer unchanged", msgs, dropped, err)
 	}
@@ -478,14 +489,6 @@ func TestChatFencePassesThreadReadsOnAndSaysWhenThePlatformCannot(t *testing.T) 
 		t.Errorf("the platform was asked %v; want %v", inner.asked, want)
 	}
 
-	bare := &recordingPlatform{}
-	reader = fenceChat(bare, fence).(chat.ThreadReader)
-	if msgs, dropped, err := reader.ThreadBetween(context.Background(), chat.Target{}, "", "", 1); !errors.Is(err, chat.ErrNoThreadReads) || msgs != nil || dropped != 0 {
-		t.Errorf("ThreadBetween of a platform that cannot = %+v, %d, %v; want ErrNoThreadReads", msgs, dropped, err)
-	}
-	if n := len(bare.seen()); n != 0 {
-		t.Errorf("the platform that cannot was called %d times: %v", n, bare.seen())
-	}
 	if len(stops) != 0 {
 		t.Errorf("a read stopped the process: %v", stops)
 	}
@@ -509,4 +512,36 @@ func TestChatFenceIsBoundedByTheRenewDeadlineNotTheLeaseDuration(t *testing.T) {
 			t.Errorf("%s: the fence's limit is %s; want the renew deadline, %s, which is under the lease duration, %s", name, f.limit, want.RenewDeadline, want.LeaseDuration)
 		}
 	}
+}
+
+// busyPlatform is a platform that can show a thread as busy, and notes what it was asked.
+type busyPlatform struct {
+	*recordingPlatform
+	marks []bool
+}
+
+func (p *busyPlatform) MarkBusy(_ context.Context, _ chat.Target, busy bool) error {
+	p.note("MarkBusy")
+	p.marks = append(p.marks, busy)
+	return nil
+}
+
+// The busy mark is a write to the chat, so a leader past its renew deadline makes none, and one within it gets the
+// platform's answer.
+func TestChatFenceChecksBusyMarksAndPassesThemOn(t *testing.T) {
+	var stops []string
+	now := newStepClock()
+	lease := newLeaseClock(now.now)
+	lease.renewed(now.now())
+	fence := &leaseFence{clock: lease, limit: 10 * time.Second, stop: func(reason string) { stops = append(stops, reason) }}
+	inner := &busyPlatform{recordingPlatform: &recordingPlatform{}}
+	marker := fenceChat(inner, fence)
+	if err := marker.MarkBusy(t.Context(), chat.Target{Channel: "C1", Thread: "1.1"}, true); err != nil || !slices.Equal(inner.marks, []bool{true}) {
+		t.Errorf("MarkBusy with a good lease = %v, marks %v; want the platform's answer and its one call", err, inner.marks)
+	}
+	now.advance(time.Minute)
+	if err := marker.MarkBusy(t.Context(), chat.Target{Channel: "C1", Thread: "1.1"}, false); !errors.Is(err, ErrChatFenced) || len(inner.marks) != 1 || len(stops) != 1 {
+		t.Errorf("MarkBusy after the freeze = %v, marks %v, %d stops; want ErrChatFenced, no call and one stop", err, inner.marks, len(stops))
+	}
+
 }

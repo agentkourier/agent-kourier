@@ -158,8 +158,8 @@ SCRATCH=$(mktemp -d)
 render_agentkourier_config "${SCRATCH}" # the Binding, the connection and the verifying front door; with the alert source, the alert trial's Binding too
 "${K[@]}" -n agent-kourier create configmap agent-kourier-sandbox-config --from-file="${SCRATCH}" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
 # A sandbox brought up before the chart has a hand-made Deployment (its pod carries instance=sandbox), its own token refresh (which the chart's
-# replaces, under another name) and the volume, which the chart's release takes over. The Deployment goes first: nothing below waits for a pod
-# that it would otherwise leave running.
+# replaces, under another name) and the volume, which the chart's release takes over. The Deployment goes first: the release cannot take it
+# over, since a Deployment's selector cannot change.
 replace_unowned_deployment "${SANDBOX_RELEASE}"
 adopt_into_release "${SANDBOX_RELEASE}" "pvc/${SANDBOX_RELEASE}-data"
 "${K[@]}" -n agent-kourier delete cronjob/agent-kourier-token-refresh serviceaccount/agent-kourier-token-refresh role/agent-kourier-token-refresh rolebinding/agent-kourier-token-refresh --ignore-not-found >/dev/null
@@ -179,10 +179,10 @@ if ! "${K[@]}" -n agent-kourier wait --for=condition=Complete job/agent-kourier-
   die "no Binding token"
 fi
 "${K[@]}" -n agent-kourier delete job agent-kourier-token-refresh-bringup >/dev/null
-# One Agent Kourier at a time: the full tier's own goes to zero (down.sh puts it back), and the sandbox's starts. The tier's pod is the one that does not
-# carry this release's instance label: the hand-made one of a tier brought up before the chart has none at all.
+# The sandbox's Agent Kourier takes the place of the full tier's own, which goes to zero (down.sh puts it back). Any other release of the chart in the
+# namespace stays as it is, and is not waited for.
 "${K[@]}" -n agent-kourier scale deploy/agent-kourier --replicas=0 >/dev/null
-"${K[@]}" -n agent-kourier wait --for=delete pod -l "app.kubernetes.io/name=agent-kourier,app.kubernetes.io/instance!=${SANDBOX_RELEASE}" --timeout=90s >/dev/null
+wait_tier_agentkourier_gone
 helm_install_agentkourier "${SANDBOX_RELEASE}" "${ROOT}/charts/agent-kourier/ci/sandbox-values.yaml"
 # The restart picks up a rebuilt image (same tag) or a changed ConfigMap, for which Helm rolls nothing.
 "${K[@]}" -n agent-kourier rollout restart "deploy/${SANDBOX_RELEASE}" >/dev/null
@@ -272,8 +272,9 @@ check "the agent sandbox-sre is Ready" "${K[@]}" -n kagent wait --for=condition=
 # as agentkourier_chat_connected{...} 1 on /metrics. If Slack rejected the tokens it exits 1 (fatal auth: a restart would be rejected
 # again, so the pod crash-loops and says so); any other exit is a failure of the tier.
 SLACK_CONNECTED='slack: socket mode connected'
+# Both labels: the release's token refresh pods carry its instance label, and every release's Agent Kourier carries the name label.
 agentkourier_state() { # ready | fatal-auth | exit <code> | starting
-  "${K[@]}" -n agent-kourier get pods -l "app.kubernetes.io/instance=${SANDBOX_RELEASE}" -o json | jq -r '
+  "${K[@]}" -n agent-kourier get pods -l "app.kubernetes.io/name=agent-kourier,app.kubernetes.io/instance=${SANDBOX_RELEASE}" -o json | jq -r '
     [.items[] | select(.metadata.deletionTimestamp == null)] | sort_by(.metadata.creationTimestamp) | last // empty
     | .status.containerStatuses[0] // empty
     | if .ready then "ready"

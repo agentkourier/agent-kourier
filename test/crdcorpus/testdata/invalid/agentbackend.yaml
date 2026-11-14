@@ -1,0 +1,1209 @@
+# rule: agentbackend/spec.dialect: unsupported
+# want: spec.dialect: unsupported value "foo"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: foo
+  url: "http://kagent.kagent:8083/"
+---
+# rule: agentbackend/spec.url: required
+# want: spec.url: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: ""
+---
+# rule: agentbackend/spec.url: not parseable
+# want: spec.url: must be an http or https URL with a host
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://exa mple.com"
+---
+# rule: agentbackend/spec.url: credentials in the URL
+# want: spec.url: must not contain credentials
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://user:pw@kagent"
+---
+# rule: agentbackend/spec.url: scheme is not http or https
+# want: spec.url: invalid URL "ftp://kagent"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "ftp://kagent"
+---
+# rule: agentbackend/spec.url: control character
+# want: spec.url: must be an http or https URL with a host
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent\n"
+---
+# rule: agentbackend/spec.url: no host
+# want: spec.url: invalid URL "http:"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://"
+---
+# rule: agentbackend/spec.headers[].name: required
+# want: spec.headers[0].name: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: "", value: v}
+---
+# rule: agentbackend/spec.headers[].name: reserved, Authorization
+# want: is reserved for the Binding identity
+# schema: refuses
+# field: spec.headers[0].name
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: Authorization, value: v}
+---
+# rule: agentbackend/spec.headers[].name: reserved, proxy-authorization
+# want: is reserved for the Binding identity
+# schema: refuses
+# field: spec.headers[0].name
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: proxy-authorization, value: v}
+---
+# rule: agentbackend/spec.headers[].name: reserved, COOKIE
+# want: is reserved for the Binding identity
+# schema: refuses
+# field: spec.headers[0].name
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: COOKIE, value: v}
+---
+# rule: agentbackend/spec.headers[].name: reserved, X-User-Id
+# want: is reserved for the Binding identity
+# schema: refuses
+# field: spec.headers[0].name
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: X-User-Id, value: v}
+---
+# rule: agentbackend/spec.headers[].name: reserved, x-agent-name
+# want: is reserved for the Binding identity
+# schema: refuses
+# field: spec.headers[0].name
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: x-agent-name, value: v}
+---
+# rule: agentbackend/spec.headers[].name: reserved, X-Share-Token
+# want: is reserved for the Binding identity
+# schema: refuses
+# field: spec.headers[0].name
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: X-Share-Token, value: v}
+---
+# rule: agentbackend/spec.headers[].name: reserved, X-Kagent-Insecure-Runtime-Identity
+# want: is reserved for the Binding identity
+# schema: refuses
+# field: spec.headers[0].name
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: X-Kagent-Insecure-Runtime-Identity, value: v}
+---
+# rule: agentbackend/spec.headers[]: neither value nor valueSecretRef
+# want: spec.headers[0]: set exactly one of value and valueSecretRef
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: X-A}
+---
+# rule: agentbackend/spec.headers[]: both value and valueSecretRef
+# want: spec.headers[0]: set exactly one of value and valueSecretRef
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: X-A, value: v, valueSecretRef: {name: s}}
+---
+# rule: agentbackend/spec.headers[].valueSecretRef.name: missing
+# want: spec.headers[0].valueSecretRef.name: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: X-A, valueSecretRef: {key: k}}
+---
+# rule: agentbackend/spec.headers[].valueSecretRef.name: empty
+# want: spec.headers[0].valueSecretRef.name: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: X-A, valueSecretRef: {name: ""}}
+---
+# rule: agentbackend/spec.headers[].valueSecretRef.name: invalid
+# want: spec.headers[0].valueSecretRef.name: invalid name
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: X-A, valueSecretRef: {name: Bad_Name}}
+---
+# rule: agentbackend/spec.headers[].valueSecretRef.name: over 253 characters
+# want: spec.headers[0].valueSecretRef.name: invalid name
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - name: X-A
+      valueSecretRef:
+        name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+---
+# rule: agentbackend/spec.headers[].valueSecretRef.key: invalid
+# want: spec.headers[0].valueSecretRef.key: invalid key
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: X-A, valueSecretRef: {name: s, key: a/b}}
+---
+# rule: agentbackend/spec.headers[].valueSecretRef.key: dot dot
+# want: spec.headers[0].valueSecretRef.key: invalid key
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: X-A, valueSecretRef: {name: s, key: ".."}}
+---
+# rule: agentbackend/spec.allowedNamespaces[]: empty
+# want: spec.allowedNamespaces[0]: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  allowedNamespaces:
+    - ""
+---
+# rule: agentbackend/spec.allowedNamespaces[]: invalid
+# want: spec.allowedNamespaces[1]: invalid namespace
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  allowedNamespaces:
+    - sre
+    - Not_A_Namespace
+---
+# rule: agentbackend/spec.allowedNamespaces[]: over 63 characters
+# want: spec.allowedNamespaces[0]: invalid namespace
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  allowedNamespaces:
+    - aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+---
+# rule: agentbackend/spec.allowedNamespaces[]: a dotted name is a subdomain, not a label
+# want: spec.allowedNamespaces[0]: invalid namespace
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  allowedNamespaces:
+    - a.b
+---
+# rule: agentbackend/spec.headers: over the cap of 32
+# want: spec.headers: has 33 items, maximum is 32
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: X-H-0, value: v}
+    - {name: X-H-1, value: v}
+    - {name: X-H-2, value: v}
+    - {name: X-H-3, value: v}
+    - {name: X-H-4, value: v}
+    - {name: X-H-5, value: v}
+    - {name: X-H-6, value: v}
+    - {name: X-H-7, value: v}
+    - {name: X-H-8, value: v}
+    - {name: X-H-9, value: v}
+    - {name: X-H-10, value: v}
+    - {name: X-H-11, value: v}
+    - {name: X-H-12, value: v}
+    - {name: X-H-13, value: v}
+    - {name: X-H-14, value: v}
+    - {name: X-H-15, value: v}
+    - {name: X-H-16, value: v}
+    - {name: X-H-17, value: v}
+    - {name: X-H-18, value: v}
+    - {name: X-H-19, value: v}
+    - {name: X-H-20, value: v}
+    - {name: X-H-21, value: v}
+    - {name: X-H-22, value: v}
+    - {name: X-H-23, value: v}
+    - {name: X-H-24, value: v}
+    - {name: X-H-25, value: v}
+    - {name: X-H-26, value: v}
+    - {name: X-H-27, value: v}
+    - {name: X-H-28, value: v}
+    - {name: X-H-29, value: v}
+    - {name: X-H-30, value: v}
+    - {name: X-H-31, value: v}
+    - {name: X-H-32, value: v}
+---
+# rule: agentbackend/spec.headers[].name: over the cap of 256 bytes
+# want: spec.headers[0].name: is 257 bytes, longer than the 256 byte limit
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - name: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+      value: v
+---
+# rule: agentbackend/spec.headers[].name: under 256 characters but over 256 bytes
+# want: spec.headers[0].name: is 400 bytes, longer than the 256 byte limit
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - name: "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+      value: v
+---
+# rule: agentbackend/status: the kind has none
+# want: status: unknown field
+# field: status
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+status:
+  ready: true
+---
+# rule: agentbackend/spec.url: over 2048 characters
+# want: spec.url: is 2049 bytes, longer than the 2048 byte limit
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+---
+# rule: agentbackend/spec.url: has a query
+# want: spec.url: must not have a query or fragment
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/a2a?token=x"
+---
+# rule: agentbackend/spec.url: has a fragment
+# want: spec.url: must not have a query or fragment
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/a2a#x"
+---
+# rule: agentbackend/spec.url: has an empty query
+# want: spec.url: must not have a query or fragment
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/a2a?"
+---
+# rule: agentbackend/spec.url: has an empty fragment
+# want: spec.url: must not have a query or fragment
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/a2a#"
+---
+# rule: agentbackend/spec.allowedNamespaces: over the cap of 256
+# want: spec.allowedNamespaces: has 257 items, maximum is 256
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  allowedNamespaces:
+    - t0
+    - t1
+    - t2
+    - t3
+    - t4
+    - t5
+    - t6
+    - t7
+    - t8
+    - t9
+    - t10
+    - t11
+    - t12
+    - t13
+    - t14
+    - t15
+    - t16
+    - t17
+    - t18
+    - t19
+    - t20
+    - t21
+    - t22
+    - t23
+    - t24
+    - t25
+    - t26
+    - t27
+    - t28
+    - t29
+    - t30
+    - t31
+    - t32
+    - t33
+    - t34
+    - t35
+    - t36
+    - t37
+    - t38
+    - t39
+    - t40
+    - t41
+    - t42
+    - t43
+    - t44
+    - t45
+    - t46
+    - t47
+    - t48
+    - t49
+    - t50
+    - t51
+    - t52
+    - t53
+    - t54
+    - t55
+    - t56
+    - t57
+    - t58
+    - t59
+    - t60
+    - t61
+    - t62
+    - t63
+    - t64
+    - t65
+    - t66
+    - t67
+    - t68
+    - t69
+    - t70
+    - t71
+    - t72
+    - t73
+    - t74
+    - t75
+    - t76
+    - t77
+    - t78
+    - t79
+    - t80
+    - t81
+    - t82
+    - t83
+    - t84
+    - t85
+    - t86
+    - t87
+    - t88
+    - t89
+    - t90
+    - t91
+    - t92
+    - t93
+    - t94
+    - t95
+    - t96
+    - t97
+    - t98
+    - t99
+    - t100
+    - t101
+    - t102
+    - t103
+    - t104
+    - t105
+    - t106
+    - t107
+    - t108
+    - t109
+    - t110
+    - t111
+    - t112
+    - t113
+    - t114
+    - t115
+    - t116
+    - t117
+    - t118
+    - t119
+    - t120
+    - t121
+    - t122
+    - t123
+    - t124
+    - t125
+    - t126
+    - t127
+    - t128
+    - t129
+    - t130
+    - t131
+    - t132
+    - t133
+    - t134
+    - t135
+    - t136
+    - t137
+    - t138
+    - t139
+    - t140
+    - t141
+    - t142
+    - t143
+    - t144
+    - t145
+    - t146
+    - t147
+    - t148
+    - t149
+    - t150
+    - t151
+    - t152
+    - t153
+    - t154
+    - t155
+    - t156
+    - t157
+    - t158
+    - t159
+    - t160
+    - t161
+    - t162
+    - t163
+    - t164
+    - t165
+    - t166
+    - t167
+    - t168
+    - t169
+    - t170
+    - t171
+    - t172
+    - t173
+    - t174
+    - t175
+    - t176
+    - t177
+    - t178
+    - t179
+    - t180
+    - t181
+    - t182
+    - t183
+    - t184
+    - t185
+    - t186
+    - t187
+    - t188
+    - t189
+    - t190
+    - t191
+    - t192
+    - t193
+    - t194
+    - t195
+    - t196
+    - t197
+    - t198
+    - t199
+    - t200
+    - t201
+    - t202
+    - t203
+    - t204
+    - t205
+    - t206
+    - t207
+    - t208
+    - t209
+    - t210
+    - t211
+    - t212
+    - t213
+    - t214
+    - t215
+    - t216
+    - t217
+    - t218
+    - t219
+    - t220
+    - t221
+    - t222
+    - t223
+    - t224
+    - t225
+    - t226
+    - t227
+    - t228
+    - t229
+    - t230
+    - t231
+    - t232
+    - t233
+    - t234
+    - t235
+    - t236
+    - t237
+    - t238
+    - t239
+    - t240
+    - t241
+    - t242
+    - t243
+    - t244
+    - t245
+    - t246
+    - t247
+    - t248
+    - t249
+    - t250
+    - t251
+    - t252
+    - t253
+    - t254
+    - t255
+    - t256
+---
+# rule: agentbackend/spec.headers[].value: over 4096 characters
+# want: spec.headers[0].value: is 4097 bytes, longer than the 4096 byte limit
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  headers:
+    - {name: X-Long, value: "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"}
+---
+# rule: agentbackend/spec.agents: allows nothing, written empty
+# want: spec.agents: allows no agent namespace
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: kagent-v1
+  url: "http://kagent.kagent:8083/"
+  agents: {}
+---
+# rule: agentbackend/spec.agents: allows nothing, sameNamespace false and no list
+# want: spec.agents: allows no agent namespace
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: kagent-v1
+  url: "http://kagent.kagent:8083/"
+  agents:
+    sameNamespace: false
+---
+# rule: agentbackend/spec.agents: allows nothing, an empty list
+# want: spec.agents: allows no agent namespace
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: kagent-v1
+  url: "http://kagent.kagent:8083/"
+  agents:
+    namespaces: []
+---
+# rule: agentbackend/spec.agents: on the a2a dialect
+# want: spec.agents: is supported only on the kagent-v1 dialect
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  agents:
+    sameNamespace: true
+---
+# rule: agentbackend/spec.agents: on the a2a dialect, with a list
+# want: spec.agents: is supported only on the kagent-v1 dialect
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: a2a
+  url: "http://kagent.kagent:8083/"
+  agents:
+    namespaces: [kagent]
+---
+# rule: agentbackend/spec.agents.namespaces[]: empty
+# want: spec.agents.namespaces[0]: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: kagent-v1
+  url: "http://kagent.kagent:8083/"
+  agents:
+    namespaces:
+      - ""
+---
+# rule: agentbackend/spec.agents.namespaces[]: invalid
+# want: spec.agents.namespaces[1]: invalid namespace
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: kagent-v1
+  url: "http://kagent.kagent:8083/"
+  agents:
+    namespaces:
+      - kagent
+      - Not_A_Namespace
+---
+# rule: agentbackend/spec.agents.namespaces[]: over 63 characters
+# want: spec.agents.namespaces[0]: invalid namespace
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: kagent-v1
+  url: "http://kagent.kagent:8083/"
+  agents:
+    namespaces:
+      - aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+---
+# rule: agentbackend/spec.agents.namespaces[]: a dotted name is a subdomain, not a label
+# want: spec.agents.namespaces[0]: invalid namespace
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: kagent-v1
+  url: "http://kagent.kagent:8083/"
+  agents:
+    namespaces:
+      - kagent.prod
+---
+# rule: agentbackend/spec.agents.namespaces: over the cap of 256
+# want: spec.agents.namespaces: has 257 items, maximum is 256
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: kagent
+  namespace: sre
+spec:
+  dialect: kagent-v1
+  url: "http://kagent.kagent:8083/"
+  agents:
+    namespaces:
+      - t0
+      - t1
+      - t2
+      - t3
+      - t4
+      - t5
+      - t6
+      - t7
+      - t8
+      - t9
+      - t10
+      - t11
+      - t12
+      - t13
+      - t14
+      - t15
+      - t16
+      - t17
+      - t18
+      - t19
+      - t20
+      - t21
+      - t22
+      - t23
+      - t24
+      - t25
+      - t26
+      - t27
+      - t28
+      - t29
+      - t30
+      - t31
+      - t32
+      - t33
+      - t34
+      - t35
+      - t36
+      - t37
+      - t38
+      - t39
+      - t40
+      - t41
+      - t42
+      - t43
+      - t44
+      - t45
+      - t46
+      - t47
+      - t48
+      - t49
+      - t50
+      - t51
+      - t52
+      - t53
+      - t54
+      - t55
+      - t56
+      - t57
+      - t58
+      - t59
+      - t60
+      - t61
+      - t62
+      - t63
+      - t64
+      - t65
+      - t66
+      - t67
+      - t68
+      - t69
+      - t70
+      - t71
+      - t72
+      - t73
+      - t74
+      - t75
+      - t76
+      - t77
+      - t78
+      - t79
+      - t80
+      - t81
+      - t82
+      - t83
+      - t84
+      - t85
+      - t86
+      - t87
+      - t88
+      - t89
+      - t90
+      - t91
+      - t92
+      - t93
+      - t94
+      - t95
+      - t96
+      - t97
+      - t98
+      - t99
+      - t100
+      - t101
+      - t102
+      - t103
+      - t104
+      - t105
+      - t106
+      - t107
+      - t108
+      - t109
+      - t110
+      - t111
+      - t112
+      - t113
+      - t114
+      - t115
+      - t116
+      - t117
+      - t118
+      - t119
+      - t120
+      - t121
+      - t122
+      - t123
+      - t124
+      - t125
+      - t126
+      - t127
+      - t128
+      - t129
+      - t130
+      - t131
+      - t132
+      - t133
+      - t134
+      - t135
+      - t136
+      - t137
+      - t138
+      - t139
+      - t140
+      - t141
+      - t142
+      - t143
+      - t144
+      - t145
+      - t146
+      - t147
+      - t148
+      - t149
+      - t150
+      - t151
+      - t152
+      - t153
+      - t154
+      - t155
+      - t156
+      - t157
+      - t158
+      - t159
+      - t160
+      - t161
+      - t162
+      - t163
+      - t164
+      - t165
+      - t166
+      - t167
+      - t168
+      - t169
+      - t170
+      - t171
+      - t172
+      - t173
+      - t174
+      - t175
+      - t176
+      - t177
+      - t178
+      - t179
+      - t180
+      - t181
+      - t182
+      - t183
+      - t184
+      - t185
+      - t186
+      - t187
+      - t188
+      - t189
+      - t190
+      - t191
+      - t192
+      - t193
+      - t194
+      - t195
+      - t196
+      - t197
+      - t198
+      - t199
+      - t200
+      - t201
+      - t202
+      - t203
+      - t204
+      - t205
+      - t206
+      - t207
+      - t208
+      - t209
+      - t210
+      - t211
+      - t212
+      - t213
+      - t214
+      - t215
+      - t216
+      - t217
+      - t218
+      - t219
+      - t220
+      - t221
+      - t222
+      - t223
+      - t224
+      - t225
+      - t226
+      - t227
+      - t228
+      - t229
+      - t230
+      - t231
+      - t232
+      - t233
+      - t234
+      - t235
+      - t236
+      - t237
+      - t238
+      - t239
+      - t240
+      - t241
+      - t242
+      - t243
+      - t244
+      - t245
+      - t246
+      - t247
+      - t248
+      - t249
+      - t250
+      - t251
+      - t252
+      - t253
+      - t254
+      - t255
+      - t256

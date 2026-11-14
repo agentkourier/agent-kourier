@@ -1,0 +1,17 @@
+{{- /* The CustomResourceDefinitions that `make crds` generates from api/v1alpha1 into files/crds, as they are, with additions to the metadata: the chart's
+       labels, and the annotations helm.sh/resource-policy keep (a Helm uninstall leaves them, and with them every resource of the cluster) and
+       argocd.argoproj.io/sync-options Prune=false,Delete=false (the same for Argo CD, which may not read the Helm one; taken from Argo CD's documentation, not run here). The files already carry
+       the annotation agentkourier.dev/schema-sha256 (their hash without that line, which make crds adds), so whatever applies them applies it.
+       They are in templates/ and not crds/ so that an upgrade of the release applies a changed schema. The file is not parsed and written
+       again, which could change a number's form; the lines go in after the one that opens the metadata. */ -}}
+{{- if include "agentkourier.installCRDs" . }}
+{{- range $path, $_ := .Files.Glob "files/crds/*.yaml" }}
+{{- $text := $.Files.Get $path }}
+{{- $opening := "(?m)^metadata:\n  annotations:\n" }}
+{{- if not (regexMatch $opening $text) }}
+{{- fail (printf "%s does not open its metadata with annotations, as controller-gen writes it, so the chart cannot add its own" $path) }}
+{{- end }}
+{{- $added := printf "metadata:\n  labels:\n%s\n  annotations:\n    helm.sh/resource-policy: keep\n    argocd.argoproj.io/sync-options: Prune=false,Delete=false\n" (include "agentkourier.labels" $ | indent 4) }}
+{{ regexReplaceAllLiteral $opening $text $added | trim }}
+{{ end }}
+{{- end }}

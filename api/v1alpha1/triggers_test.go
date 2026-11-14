@@ -1,6 +1,7 @@
 package v1alpha1
 
 import (
+	"fmt"
 	"maps"
 	"reflect"
 	"regexp"
@@ -311,6 +312,32 @@ func TestParsePromptTemplate(t *testing.T) {
 // bot returns the botMessage trigger of binding.yaml, after defaulting, which is [1].
 func bot(o *Binding) *Trigger { return &o.Spec.Chat.Triggers[1] }
 
+// manyTriggers returns n valid triggers, the mention trigger and n-1 botMessage triggers of distinct senders. Their regexes
+// are small: the fixture's trigger is about 370 instructions, so fifty of them are about 18500, over the budget of a Binding.
+func manyTriggers(o *Binding, n int) []Trigger {
+	ts := []Trigger{o.Spec.Chat.Triggers[0]}
+	for i := 1; i < n; i++ {
+		tr := *bot(o)
+		tr.From = &BotSource{ID: fmt.Sprintf("B%010d", i), Kind: SenderKindBot}
+		tr.Match, tr.Exclude = map[MessageField]string{FieldTitle: "^FIRING"}, nil
+		tr.Extract = map[string]Extract{}
+		for _, name := range []string{"state", "key", "alertname"} {
+			tr.Extract[name] = Extract{Field: FieldTitle, Regex: "(?P<" + name + ">x)"}
+		}
+		ts = append(ts, tr)
+	}
+	return ts
+}
+
+// moreExtracts makes tr's extract hold n entries, the first of which are the fixture's three.
+func moreExtracts(tr *Trigger, n int) {
+	tr.Extract = maps.Clone(tr.Extract)
+	for i := len(tr.Extract); i < n; i++ {
+		name := fmt.Sprintf("e%d", i)
+		tr.Extract[name] = Extract{Field: FieldText, Regex: fmt.Sprintf("(?P<%s>x)", name)}
+	}
+}
+
 func TestTriggersValidate(t *testing.T) {
 	const at = "spec.chat.triggers[1]"
 	fieldsList := "text, title, link, fallback, footer, body"
@@ -319,7 +346,7 @@ func TestTriggersValidate(t *testing.T) {
 		{"the fixture is valid", func(*Binding) {}, ""},
 		{"no triggers at all", func(o *Binding) { o.Spec.Chat.Triggers = nil }, ""},
 		{"unknown kind", func(o *Binding) { bot(o).Type = "message" },
-			at + `.type: unsupported value "message", must be one of mention, botMessage`},
+			at + `.type: unsupported value "message", must be one of mention, botMessage, personMessage`},
 		{"mention with a source", func(o *Binding) { o.Spec.Chat.Triggers[0].From = &BotSource{ID: "B0123456789"} },
 			"spec.chat.triggers[0].from: not allowed with type: mention"},
 		{"mention with a prompt", func(o *Binding) { o.Spec.Chat.Triggers[0].PromptTemplate = "x" },
@@ -332,6 +359,9 @@ func TestTriggersValidate(t *testing.T) {
 		{"empty bot ID", func(o *Binding) { bot(o).From.ID = "" }, at + ".from.id: required"},
 		{"bot name instead of ID", func(o *Binding) { bot(o).From.ID = "alertmanager" },
 			at + `.from.id: invalid sender ID "alertmanager": must be the sender's ID (Slack: a bot ID such as B0123456789), not a name`},
+		{"a bot ID at the length cap ok", func(o *Binding) { bot(o).From.ID = "B" + strings.Repeat("0", maxChatIDLen-1) }, ""},
+		{"a bot ID over the length cap", func(o *Binding) { bot(o).From.ID = "B" + strings.Repeat("0", maxChatIDLen) },
+			at + fmt.Sprintf(".from.id: is %d bytes, longer than the %d byte limit", maxChatIDLen+1, maxChatIDLen)},
 		{"user ID instead of bot ID", func(o *Binding) { bot(o).From.ID = "U0123456789" },
 			at + `.from.id: invalid sender ID "U0123456789": must be the sender's ID (Slack: a bot ID such as B0123456789), not a name`},
 		{"kind other than bot", func(o *Binding) { bot(o).From.Kind = "webhook" },
@@ -399,6 +429,14 @@ func TestTriggersValidate(t *testing.T) {
 		{"extract name a template cannot read", func(o *Binding) {
 			bot(o).Extract["Alert-Name"] = Extract{Field: FieldTitle, Regex: `(?P<Alert_Name>x)`}
 		}, at + `.extract.Alert-Name: invalid extract name "Alert-Name": must start with a lower-case letter and use only letters, digits and '_', so a template can read .Fields.Alert-Name`},
+		{"an extract name at the length cap ok", func(o *Binding) {
+			name := strings.Repeat("e", maxExtractNameLen)
+			bot(o).Extract[name] = Extract{Field: FieldText, Regex: "(?P<" + name + ">x)"}
+		}, ""},
+		{"an extract name over the length cap", func(o *Binding) {
+			name := strings.Repeat("e", maxExtractNameLen+1)
+			bot(o).Extract[name] = Extract{Field: FieldText, Regex: "(?P<" + name + ">x)"}
+		}, at + fmt.Sprintf(".extract: entry 1, in name order, is named with %d bytes, longer than the %d byte limit", maxExtractNameLen+1, maxExtractNameLen)},
 		{"an extra extract is fine", func(o *Binding) {
 			bot(o).Extract["env"] = Extract{Field: FieldText, Regex: `env=(?P<env>\w+)`}
 		}, ""},
@@ -424,6 +462,12 @@ func TestTriggersValidate(t *testing.T) {
 		}, at + ".thread.closeWhen.status: not an extracted field"},
 		{"closeWhen with an empty value", func(o *Binding) { bot(o).Thread.CloseWhen["state"] = "" },
 			at + ".thread.closeWhen.state: required"},
+		{"a closeWhen value at the length cap ok", func(o *Binding) { bot(o).Thread.CloseWhen["state"] = strings.Repeat("v", maxCloseWhenValueLen) }, ""},
+		{"a closeWhen value over the length cap", func(o *Binding) { bot(o).Thread.CloseWhen["state"] = strings.Repeat("v", maxCloseWhenValueLen+1) },
+			at + fmt.Sprintf(".thread.closeWhen.state: is %d bytes, longer than the %d byte limit", maxCloseWhenValueLen+1, maxCloseWhenValueLen)},
+		{"a closeWhen key over the length cap", func(o *Binding) {
+			bot(o).Thread.CloseWhen[strings.Repeat("e", maxExtractNameLen+1)] = "x"
+		}, at + fmt.Sprintf(".thread.closeWhen: entry 0, in name order, is named with %d bytes, longer than the %d byte limit", maxExtractNameLen+1, maxExtractNameLen)},
 		{"closeWhen on an extra extracted field", func(o *Binding) {
 			bot(o).Extract["env"] = Extract{Field: FieldText, Regex: `env=(?P<env>\w+)`}
 			bot(o).Thread.CloseWhen = map[string]string{"env": "dev"}
@@ -473,8 +517,14 @@ func TestTriggersValidate(t *testing.T) {
 		{"typo in a top-level field in the else branch", func(o *Binding) {
 			bot(o).PromptTemplate = `{{ if eq .State "FIRING" }}x{{ else }}{{ .Stat }}{{ end }}`
 		}, at + `.promptTemplate: invalid template: promptTemplate:1:41: no field .Stat in the prompt view (it has .Channel, .State, .Key, .Link, .Source and .Fields)`},
-		{"the whole of .Fields", func(o *Binding) { bot(o).PromptTemplate = `{{ range .Fields }}{{ . }}{{ end }}` },
-			at + `.promptTemplate: invalid template: promptTemplate:1:9: .Fields as a whole cannot be read: name an entry, such as .Fields.alertname`},
+		{"the whole of .Fields", func(o *Binding) { bot(o).PromptTemplate = `{{ len .Fields }}` },
+			at + `.promptTemplate: invalid template: promptTemplate:1:7: .Fields as a whole cannot be read: name an entry, such as .Fields.alertname`},
+		{"a range", func(o *Binding) { bot(o).PromptTemplate = `{{ range 3 }}x{{ end }}` },
+			at + `.promptTemplate: invalid template: promptTemplate:1:9: range is not allowed: a prompt template has no loops`},
+		{"a variable", func(o *Binding) { bot(o).PromptTemplate = `{{ $k := .State }}{{ $k }}` },
+			at + `.promptTemplate: invalid template: promptTemplate:1:3: a variable is not allowed: read the value where you use it`},
+		{"printf", func(o *Binding) { bot(o).PromptTemplate = `{{ printf "%s" .State }}` },
+			at + `.promptTemplate: invalid template: promptTemplate:1:3: function printf is not allowed: use only and, eq, ge, gt, index, le, len, lt, ne, not, or and slice`},
 		{"a slice of the key that a long key fits", func(o *Binding) {
 			bot(o).PromptTemplate = `{{ slice .Key 0 10 }} {{ slice .Fields.alertname 0 10 }}`
 		}, ""},
@@ -484,6 +534,19 @@ func TestTriggersValidate(t *testing.T) {
 		{"template reading every view field and every extract", func(o *Binding) {
 			bot(o).PromptTemplate = "{{ .Channel }} {{ .State }} {{ .Key }} {{ .Link }} {{ .Source }} {{ .Fields.state }} {{ .Fields.key }} {{ .Fields.alertname }}"
 		}, ""},
+
+		// Caps, which the CRD schema carries too.
+		{"a template at the length cap ok", func(o *Binding) { bot(o).PromptTemplate = strings.Repeat("x", maxPromptTemplateLen) }, ""},
+		{"a template over the length cap", func(o *Binding) { bot(o).PromptTemplate = strings.Repeat("x", maxPromptTemplateLen+1) },
+			fmt.Sprintf("%s.promptTemplate: is %d bytes, longer than the %d byte limit", at, maxPromptTemplateLen+1, maxPromptTemplateLen)},
+		{"a template over the length cap is not parsed", func(o *Binding) { bot(o).PromptTemplate = strings.Repeat("{{", maxPromptTemplateLen) },
+			fmt.Sprintf("%s.promptTemplate: is %d bytes, longer than the %d byte limit", at, 2*maxPromptTemplateLen, maxPromptTemplateLen)},
+		{"the most triggers ok", func(o *Binding) { o.Spec.Chat.Triggers = manyTriggers(o, maxTriggers) }, ""},
+		{"too many triggers", func(o *Binding) { o.Spec.Chat.Triggers = manyTriggers(o, maxTriggers+1) },
+			fmt.Sprintf("spec.chat.triggers: has %d items, maximum is %d", maxTriggers+1, maxTriggers)},
+		{"the most extracts ok", func(o *Binding) { moreExtracts(bot(o), maxExtract) }, ""},
+		{"too many extracts", func(o *Binding) { moreExtracts(bot(o), maxExtract+1) },
+			fmt.Sprintf("%s.extract: has %d entries, maximum is %d", at, maxExtract+1, maxExtract)},
 
 		// Duplicates.
 		{"the same bot, match and exclude but a different extract is not a duplicate", func(o *Binding) {
@@ -509,6 +572,80 @@ func TestTriggersValidate(t *testing.T) {
 		{"another bot with the same match is not a duplicate", func(o *Binding) {
 			other := *bot(o)
 			other.From = &BotSource{ID: "B0000000001", Kind: SenderKindBot}
+			o.Spec.Chat.Triggers = append(o.Spec.Chat.Triggers, other)
+		}, ""},
+	})
+}
+
+// person appends a valid personMessage trigger to o's triggers, and returns it: [2].
+func person(o *Binding) *Trigger {
+	perDay := int32(50)
+	o.Spec.Chat.Triggers = append(o.Spec.Chat.Triggers, Trigger{
+		Type:           TriggerPersonMessage,
+		Exclude:        map[MessageField]string{FieldText: `^(?:thanks|ok)\b`},
+		PromptTemplate: "A person reported something in {{ .Channel }}: {{ .Link }}.",
+		Limits: TriggerLimits{
+			RateLimit:     &RateLimit{MaxRuns: 6, Per: metav1.Duration{Duration: 30 * time.Minute}, MaxConcurrent: 2},
+			MaxRunsPerDay: &perDay,
+		},
+	})
+	return &o.Spec.Chat.Triggers[2]
+}
+
+// A personMessage trigger is bounded like a botMessage trigger: it needs limits and a prompt template. A person's message has
+// no sender to name, no structured part to read and no key to thread by, so it takes no from, extract or thread, and match and
+// exclude read only text. A trigger that lacks its limits is pointed at the personMessage example, not the Alertmanager one.
+func TestPersonMessageTriggerValidate(t *testing.T) {
+	const (
+		at         = "spec.chat.triggers[2]"
+		personHint = "see the example in reference/chat-triggers (https://agentkourier.dev/reference/chat-triggers/#a-persons-message)"
+	)
+	runMutations[Binding](t, "binding.yaml", []mutation[Binding]{
+		{"a personMessage trigger ok", func(o *Binding) { person(o) }, ""},
+		{"with a match on text ok", func(o *Binding) { person(o).Match = map[MessageField]string{FieldText: "(?i)down"} }, ""},
+		{"beside a mention trigger and a botMessage trigger ok", func(o *Binding) { person(o) }, ""},
+		{"without a mention trigger ok", func(o *Binding) { person(o); o.Spec.Chat.Triggers = o.Spec.Chat.Triggers[1:] }, ""},
+		{"with a daily cap of 0 ok", func(o *Binding) { person(o).Limits.MaxRunsPerDay = new(int32(0)) }, ""},
+		{"with a source", func(o *Binding) { person(o).From = &BotSource{ID: "B0123456789", Kind: SenderKindBot} },
+			at + ".from: not allowed with type: personMessage"},
+		{"with an extract", func(o *Binding) {
+			person(o).Extract = map[string]Extract{"key": {Field: FieldText, Regex: "(?P<key>.+)"}}
+		}, at + ".extract: not allowed with type: personMessage"},
+		{"with a thread rule", func(o *Binding) { person(o).Thread.By = ThreadByKey },
+			at + ".thread: not allowed with type: personMessage"},
+		{"with a cooldown", func(o *Binding) { person(o).Thread.Cooldown = metav1.Duration{Duration: time.Hour} },
+			at + ".thread: not allowed with type: personMessage"},
+		{"with a match on a field a person's message lacks", func(o *Binding) { person(o).Match = map[MessageField]string{FieldTitle: "x"} },
+			at + ".match.title: a person's message has only the field text"},
+		{"with an exclude on a field a person's message lacks", func(o *Binding) { person(o).Exclude = map[MessageField]string{FieldBody: "x"} },
+			at + ".exclude.body: a person's message has only the field text"},
+		{"with a match on an unknown field", func(o *Binding) { person(o).Match = map[MessageField]string{"subject": "x"} },
+			at + `.match.subject: unsupported message field "subject", must be one of text, title, link, fallback, footer, body`},
+		{"with a match regex that does not compile", func(o *Binding) { person(o).Match = map[MessageField]string{FieldText: "("} },
+			at + ".match.text: invalid regular expression: error parsing regexp: missing closing ): `(`"},
+		{"with an exclude regex over the length cap", func(o *Binding) { person(o).Exclude = map[MessageField]string{FieldText: strings.Repeat("a", 513)} },
+			at + ".exclude.text: regular expression is 513 bytes, longer than the 512 byte limit"},
+		{"without a rate limit", func(o *Binding) { person(o).Limits.RateLimit = nil },
+			at + ".limits.rateLimit: required: set maxRuns, per and maxConcurrent; " + personHint},
+		{"without a daily cap", func(o *Binding) { person(o).Limits.MaxRunsPerDay = nil },
+			at + ".limits.maxRunsPerDay: required: set the cap for a day, or 0 for no cap; " + personHint},
+		{"with a rate window over a day", func(o *Binding) { person(o).Limits.RateLimit.Per = metav1.Duration{Duration: 25 * time.Hour} },
+			at + ".limits.rateLimit.per: 25h0m0s is out of range, must be between 10s and 24h0m0s"},
+		{"without a prompt template", func(o *Binding) { person(o).PromptTemplate = "" }, at + ".promptTemplate: required"},
+		{"with a template that reads an extract it has not", func(o *Binding) { person(o).PromptTemplate = "{{ .Fields.alertname }}" },
+			at + ".promptTemplate: invalid template: promptTemplate:1:10: .Fields.alertname is not an extract of this trigger (extract has none)"},
+		{"with a template that loops", func(o *Binding) { person(o).PromptTemplate = `{{ range 3 }}x{{ end }}` },
+			at + `.promptTemplate: invalid template: promptTemplate:1:9: range is not allowed: a prompt template has no loops`},
+		{"with a template over the length cap", func(o *Binding) { person(o).PromptTemplate = strings.Repeat("x", maxPromptTemplateLen+1) },
+			fmt.Sprintf("%s.promptTemplate: is %d bytes, longer than the %d byte limit", at, maxPromptTemplateLen+1, maxPromptTemplateLen)},
+		{"twice with the same match and exclude", func(o *Binding) {
+			dup := *person(o)
+			dup.PromptTemplate = "another prompt"
+			o.Spec.Chat.Triggers = append(o.Spec.Chat.Triggers, dup)
+		}, "spec.chat.triggers[3]: duplicate of spec.chat.triggers[2]"},
+		{"twice with another match is not a duplicate", func(o *Binding) {
+			other := *person(o)
+			other.Match = map[MessageField]string{FieldText: "database"}
 			o.Spec.Chat.Triggers = append(o.Spec.Chat.Triggers, other)
 		}, ""},
 	})

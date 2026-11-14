@@ -18,6 +18,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/telemetry/telemetrytest"
+	"github.com/agentkourier/agent-kourier/internal/trigger"
 )
 
 const (
@@ -41,7 +42,7 @@ func (s *startSubmitter) Submit(_ context.Context, in session.Inbound) (session.
 	defer s.mu.Unlock()
 	s.got = append(s.got, in)
 	if s.res.Disposition == "" && s.err == nil {
-		return session.Result{Disposition: session.Created}, nil
+		return session.Result{Disposition: session.Created, Admission: session.Admission{Kind: session.AdmitTurn}}, nil
 	}
 	return s.res, s.err
 }
@@ -88,10 +89,10 @@ func newStarter(t *testing.T) *starter {
 	s := &starter{sub: &startSubmitter{}, notes: &startNotes{}, aud: &startAudit{}, logs: &bytes.Buffer{}, tel: telemetrytest.New(t)}
 	var err error
 	s.triggerStarter, err = newTriggerStarter(triggerStarterConfig{
-		Conn: startConn, Submit: s.sub, Notice: s.notes.take, Audit: s.aud,
-		Link: func(r chat.Ref) (string, bool) {
+		Submit: s.sub, Takes: alwaysTakes, Notice: s.notes.take, Audit: s.aud,
+		Links: chattest.Same[chat.Permalinker](linkFunc(func(r chat.Ref) (string, bool) {
 			return "https://example.slack.com/archives/" + r.Channel + "/p" + strings.Replace(r.ID, ".", "", 1), true
-		},
+		})),
 		Log: slog.New(slog.NewTextHandler(s.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	})
 	if err != nil {
@@ -100,12 +101,15 @@ func newStarter(t *testing.T) *starter {
 	return s
 }
 
+// alwaysTakes is the Takes of a session that takes any turn.
+func alwaysTakes(context.Context, session.Inbound) (bool, error) { return true, nil }
+
 // firing is the match of a kind-firing alert with the Alertmanager trigger: what the Intake hands the starter.
-func firing(t *testing.T) chat.TriggerMatch {
+func firing(t *testing.T) trigger.Match {
 	t.Helper()
 	tr := chattest.AlertmanagerTrigger("B0123456789")
 	const link = "http://alertmanager.kind.local/#/alerts?receiver=slack-critical-kind"
-	return chat.TriggerMatch{
+	return trigger.Match{
 		Binding: startBinding, Index: 1, PromptTemplate: tr.PromptTemplate, Thread: tr.Thread, MessageID: "slack:" + startConn + ":C0123456789:" + alertTS,
 		Fields:   map[string]string{"state": "FIRING", "key": "KubePodCrashLooping shop", "alertname": "KubePodCrashLooping"},
 		Received: time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC),
@@ -231,7 +235,7 @@ func TestOnStartLinkIsTheAgentKourierBuiltPermalinkNotTheMessagesOwnLink(t *test
 // than a guess, and the turn still starts.
 func TestOnStartWithoutAPermalinkHasAnEmptyLink(t *testing.T) {
 	s := newStarter(t)
-	s.link = noPermalink
+	s.links = noPermalink()
 	m := firing(t)
 	m.PromptTemplate = "Alert [{{ .Link }}]"
 	if err := s.OnStart(s.tel.Ctx, m); err != nil {
@@ -240,7 +244,7 @@ func TestOnStartWithoutAPermalinkHasAnEmptyLink(t *testing.T) {
 	if got := instructionOf(t, s.sub.got[0].Text); got != "Alert []" {
 		t.Errorf("instruction = %q; want an empty link", got)
 	}
-	s.link = func(chat.Ref) (string, bool) { return "", false }
+	s.links = noPermalink()
 	if err := s.OnStart(s.tel.Ctx, m); err != nil {
 		t.Fatalf("OnStart = %v", err)
 	}
@@ -253,17 +257,17 @@ func TestOnStartWithoutAPermalinkHasAnEmptyLink(t *testing.T) {
 // render nothing, queue nothing, tell no thread or audit no refusal.
 func TestNewTriggerStarterNamesTheFieldThatIsMissing(t *testing.T) {
 	full := triggerStarterConfig{
-		Conn: startConn, Submit: &startSubmitter{}, Notice: (&startNotes{}).take, Audit: &startAudit{}, Link: noPermalink, Log: slog.Default(),
+		Submit: &startSubmitter{}, Takes: alwaysTakes, Notice: (&startNotes{}).take, Audit: &startAudit{}, Links: noPermalink(), Log: slog.Default(),
 	}
 	for _, tc := range []struct {
 		field string
 		clear func(*triggerStarterConfig)
 	}{
-		{"Conn", func(c *triggerStarterConfig) { c.Conn = "" }},
 		{"Submit", func(c *triggerStarterConfig) { c.Submit = nil }},
+		{"Takes", func(c *triggerStarterConfig) { c.Takes = nil }},
 		{"Notice", func(c *triggerStarterConfig) { c.Notice = nil }},
 		{"Audit", func(c *triggerStarterConfig) { c.Audit = nil }},
-		{"Link", func(c *triggerStarterConfig) { c.Link = nil }},
+		{"Links", func(c *triggerStarterConfig) { c.Links = nil }},
 		{"Log", func(c *triggerStarterConfig) { c.Log = nil }},
 	} {
 		t.Run(tc.field, func(t *testing.T) {
@@ -279,14 +283,66 @@ func TestNewTriggerStarterNamesTheFieldThatIsMissing(t *testing.T) {
 	}
 }
 
-// A platform that makes no permalink is given noPermalink, and not nil: the start asks it for a link either way.
-func TestPermalinksOfAPlatformThatMakesNoneIsNoPermalink(t *testing.T) {
-	if link, ok := permalinks(struct{ chat.Platform }{})(chat.Ref{Channel: "C1", ID: "1.1"}); ok || link != "" {
-		t.Errorf("permalinks = %q, %v; want none", link, ok)
+// linkFunc is a Permalinker made of a function.
+type linkFunc func(chat.Ref) (string, bool)
+
+func (f linkFunc) Permalink(r chat.Ref) (string, bool) { return f(r) }
+
+// noPermalink is the Links of a platform that makes none: the prompt's link is empty.
+func noPermalink() chat.Resolver[chat.Permalinker] {
+	return chattest.Same[chat.Permalinker](linkFunc(func(chat.Ref) (string, bool) { return "", false }))
+}
+
+// The session of a start is the connection of the message, and its link is made by the platform of that connection: two
+// connections' alerts in one channel ID are two sessions, each linked by its own app.
+func TestStartIsOfTheConnectionOfTheMessage(t *testing.T) {
+	s := newStarter(t)
+	s.links = chat.PlatformSet[chat.Permalinker]{
+		"ns/a": linkFunc(func(r chat.Ref) (string, bool) { return "https://a.example/" + r.ID, true }),
+		"ns/b": linkFunc(func(r chat.Ref) (string, bool) { return "https://b.example/" + r.ID, true }),
+	}
+	for _, conn := range []string{"ns/a", "ns/b"} {
+		m := firing(t)
+		m.Message.At.Conn = conn
+		m.PromptTemplate = "{{ .Link }}"
+		if err := s.OnStart(s.tel.Ctx, m); err != nil {
+			t.Fatalf("OnStart on %s: %v", conn, err)
+		}
+	}
+	for i, conn := range []string{"ns/a", "ns/b"} {
+		got := s.sub.got[i]
+		if got.Key.Connection != conn || instructionOf(t, got.Text) != "https://"+conn[len("ns/"):]+".example/"+alertTS {
+			t.Errorf("start %d = key %+v, text %q; want the session of %s and the link its own platform made", i, got.Key, got.Text, conn)
+		}
+	}
+	// A connection no platform runs makes no link, as a platform that makes none; the start goes on.
+	m := firing(t)
+	m.Message.At.Conn = "ns/gone"
+	m.PromptTemplate = "Alert [{{ .Link }}]"
+	if err := s.OnStart(s.tel.Ctx, m); err != nil {
+		t.Fatalf("OnStart on a connection that is down: %v", err)
+	}
+	if got := instructionOf(t, s.sub.got[2].Text); got != "Alert []" || s.sub.got[2].Key.Connection != "ns/gone" {
+		t.Errorf("start on a connection that is down = %q on %+v; want an empty link", got, s.sub.got[2].Key)
 	}
 }
 
-// Every trigger start reports botMessage as the source, in the view and in the session's origin.
+// A message that names no connection could file a session under none, so it starts nothing: the Intake treats the start as
+// handled, and nothing is submitted.
+func TestStartRefusesAMessageThatNamesNoConnection(t *testing.T) {
+	s := newStarter(t)
+	m := firing(t)
+	m.Message.At.Conn = ""
+	if err := s.OnStart(s.tel.Ctx, m); !errors.Is(err, trigger.ErrNotStarted) {
+		t.Errorf("OnStart = %v; want ErrNotStarted", err)
+	}
+	if len(s.sub.got) != 0 {
+		t.Errorf("submitted %+v; want nothing", s.sub.got)
+	}
+}
+
+// A botMessage trigger's start reports botMessage as the source, in the view and in the session's origin (a personMessage
+// trigger's reports its own: TestOnStartOfAPersonsMessageIsTheirTurn).
 func TestOnStartSourceIsTheTriggerType(t *testing.T) {
 	s := newStarter(t)
 	m := firing(t)
@@ -311,8 +367,8 @@ func TestOnStartRefusesAValueThatFailsItsCheck(t *testing.T) {
 	m := firing(t)
 	m.Fields["alertname"] = hostile
 	err := s.OnStart(s.tel.Ctx, m)
-	if !errors.Is(err, chat.ErrNotStarted) {
-		t.Fatalf("OnStart = %v; want an error wrapping chat.ErrNotStarted", err)
+	if !errors.Is(err, trigger.ErrNotStarted) {
+		t.Fatalf("OnStart = %v; want an error wrapping trigger.ErrNotStarted", err)
 	}
 	if len(s.sub.got) != 0 {
 		t.Fatalf("%d turns submitted after a refusal; want none", len(s.sub.got))
@@ -359,22 +415,22 @@ func TestOnStartRefusalNamesTheValueAndTheReason(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		template string
-		mutate   func(*chat.TriggerMatch)
+		mutate   func(*trigger.Match)
 		ref      string
 		reason   string
 		detail   string
 	}{
-		{"a key that has spaces, as an Alertmanager group's does", "Key {{ .Key }}", func(*chat.TriggerMatch) {}, "Key", "characters", ".Key failed the prompt check."},
-		{"a state that is too long", "{{ .State }}", func(m *chat.TriggerMatch) { m.Fields["state"] = long }, "State", "too_long", ".State failed the prompt check."},
-		{"an entry with a quote", "{{ .Fields.alertname }}", func(m *chat.TriggerMatch) { m.Fields["alertname"] = `a"b` }, "Fields.alertname", "characters", ".Fields.alertname failed the prompt check."},
-		{"a channel that is no name", "{{ .Channel }}", func(m *chat.TriggerMatch) { m.Message.At.Channel = "C 1" }, "Channel", "characters", ".Channel failed the prompt check."},
+		{"a key that has spaces, as an Alertmanager group's does", "Key {{ .Key }}", func(*trigger.Match) {}, "Key", "characters", ".Key failed the prompt check."},
+		{"a state that is too long", "{{ .State }}", func(m *trigger.Match) { m.Fields["state"] = long }, "State", "too_long", ".State failed the prompt check."},
+		{"an entry with a quote", "{{ .Fields.alertname }}", func(m *trigger.Match) { m.Fields["alertname"] = `a"b` }, "Fields.alertname", "characters", ".Fields.alertname failed the prompt check."},
+		{"a channel that is no name", "{{ .Channel }}", func(m *trigger.Match) { m.Message.At.Channel = "C 1" }, "Channel", "characters", ".Channel failed the prompt check."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newStarter(t)
 			m := firing(t)
 			m.PromptTemplate = tc.template
 			tc.mutate(&m)
-			if err := s.OnStart(s.tel.Ctx, m); !errors.Is(err, chat.ErrNotStarted) {
+			if err := s.OnStart(s.tel.Ctx, m); !errors.Is(err, trigger.ErrNotStarted) {
 				t.Fatalf("OnStart = %v; want a refusal", err)
 			}
 			if len(s.aud.got) != 1 || s.aud.got[0].Ref != tc.ref || s.aud.got[0].Reason != tc.reason {
@@ -403,7 +459,7 @@ func TestOnStartARenderErrorIsRefusedLikeACheck(t *testing.T) {
 			s := newStarter(t)
 			m := firing(t)
 			m.PromptTemplate = tmpl
-			if err := s.OnStart(s.tel.Ctx, m); !errors.Is(err, chat.ErrNotStarted) {
+			if err := s.OnStart(s.tel.Ctx, m); !errors.Is(err, trigger.ErrNotStarted) {
 				t.Fatalf("OnStart = %v; want a refusal", err)
 			}
 			if len(s.sub.got) != 0 {
@@ -431,7 +487,7 @@ func TestOnStartARefusalWhoseNoteFailedIsAnErrorAndNotYetCounted(t *testing.T) {
 	m := firing(t)
 	m.Fields["alertname"] = "bad value"
 	err := s.OnStart(s.tel.Ctx, m)
-	if err == nil || errors.Is(err, chat.ErrNotStarted) {
+	if err == nil || errors.Is(err, trigger.ErrNotStarted) {
 		t.Fatalf("OnStart = %v; want the note's error, not a refusal", err)
 	}
 	if len(s.aud.got) != 0 || s.tel.Counter(t, "agentkourier_trigger_refused_total", map[string]string{"binding": startBinding, "trigger": "1", "ref": "Fields.alertname", "reason": "characters"}) != 0 {
@@ -446,7 +502,7 @@ func TestOnStartAFailedAuditStillRefuses(t *testing.T) {
 	s.aud.err = errors.New("disk full")
 	m := firing(t)
 	m.Fields["alertname"] = "bad value"
-	if err := s.OnStart(s.tel.Ctx, m); !errors.Is(err, chat.ErrNotStarted) {
+	if err := s.OnStart(s.tel.Ctx, m); !errors.Is(err, trigger.ErrNotStarted) {
 		t.Fatalf("OnStart = %v; want a refusal", err)
 	}
 	if len(s.notes.got) != 1 {
@@ -467,7 +523,7 @@ func TestOnStartASubmitFailureIsRedelivered(t *testing.T) {
 			s := newStarter(t)
 			set(s.sub)
 			err := s.OnStart(s.tel.Ctx, firing(t))
-			if err == nil || errors.Is(err, chat.ErrNotStarted) {
+			if err == nil || errors.Is(err, trigger.ErrNotStarted) {
 				t.Fatalf("OnStart = %v; want an error that is not a refusal", err)
 			}
 			if len(s.aud.got) != 0 || len(s.notes.got) != 0 {
@@ -525,4 +581,200 @@ func untrustedTag(t *testing.T, prompt string) string {
 		t.Fatalf("the block's tag is untrusted-data-%s; want a 12 digit hash", hash)
 	}
 	return "untrusted-data-" + hash
+}
+
+// mentioned is the match of a bot's mention in a thread: what the Intake hands the starter.
+func mentioned() trigger.Match {
+	return trigger.Match{
+		Binding: startBinding, PromptTemplate: trigger.BotMentionPrompt, Mention: true, MessageID: "slack:" + startConn + ":C0123456789:2.2",
+		Received: time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC),
+		Message: chat.Inbound{
+			At:   chat.Ref{Platform: "slack", Conn: startConn, Channel: "C0123456789", Thread: "1.1", ID: "2.2"},
+			User: "UBOT", Text: "The agent named probe in this thread.", Mentioned: true, Bot: &chat.BotMessage{ID: "B0123456789"},
+		},
+	}
+}
+
+// A bot's mention is a turn of the thread it is in, with the fixed prompt, marked to carry the thread, and with what the post
+// said in the untrusted block. It names no user: the bot is no person, and the turn is filed as nobody's.
+func TestOnStartOfABotsMentionIsATurnOfItsThread(t *testing.T) {
+	s := newStarter(t)
+	if err := s.OnStart(s.tel.Ctx, mentioned()); err != nil {
+		t.Fatalf("OnStart = %v", err)
+	}
+	if len(s.sub.got) != 1 {
+		t.Fatalf("%d turns submitted; want 1", len(s.sub.got))
+	}
+	in := s.sub.got[0]
+	if want := (session.Key{Connection: startConn, Channel: "C0123456789", Thread: "1.1"}); in.Key != want || in.MessageRef != "2.2" || !in.Create || !in.WholeThread || in.UserID != "" {
+		t.Errorf("submitted %+v; want a turn of the thread %+v for the message 2.2, marked WholeThread, with no user", in, want)
+	}
+	if want := (store.Origin{Source: "botMention"}); in.Origin != want {
+		t.Errorf("Origin = %+v; want %+v, which feedback attributes to no alert", in.Origin, want)
+	}
+	if !strings.HasPrefix(in.Text, "Another agent mentioned you in a thread of channel C0123456789: https://") {
+		t.Errorf("the turn starts %q; want the fixed prompt with the channel and the link", firstLine(in.Text))
+	}
+	tag := untrustedTag(t, in.Text)
+	if before, _, _ := strings.Cut(in.Text, "<"+tag+">"); strings.Contains(before, "The agent named probe") {
+		t.Errorf("the post's text is outside the untrusted block:\n%s", in.Text)
+	}
+	if !strings.Contains(in.Text, "The agent named probe in this thread.") {
+		t.Errorf("the turn lacks the post's text:\n%s", in.Text)
+	}
+}
+
+// A mention at the top level opens its own thread.
+func TestOnStartOfATopLevelBotMentionOpensItsThread(t *testing.T) {
+	s := newStarter(t)
+	m := mentioned()
+	m.Message.At.Thread = ""
+	if err := s.OnStart(s.tel.Ctx, m); err != nil {
+		t.Fatalf("OnStart = %v", err)
+	}
+	if got := s.sub.got[0].Key.Thread; got != "2.2" {
+		t.Errorf("thread = %q; want the mention's own message", got)
+	}
+}
+
+// A thread that cannot be continued takes no turn from a bot, and nothing will change that: no retry, and no note in the thread.
+func TestOnStartOfABotsMentionInAThreadThatCannotContinue(t *testing.T) {
+	s := newStarter(t)
+	s.sub.res = session.Result{Disposition: session.Expired, Admission: session.Admission{Kind: session.AdmitNotice, Notice: session.NoticeExpired}}
+	if err := s.OnStart(s.tel.Ctx, mentioned()); !errors.Is(err, trigger.ErrNotStarted) {
+		t.Fatalf("OnStart = %v; want ErrNotStarted", err)
+	}
+	if len(s.notes.got) != 0 {
+		t.Errorf("notes = %+v; want none", s.notes.got)
+	}
+}
+
+// A mention that a limit stopped is audited, by message and limit and with nothing the post said. Nobody wrote it, so it names
+// no user.
+func TestAMentionALimitStoppedIsAudited(t *testing.T) {
+	s := newStarter(t)
+	if err := s.Limited(s.tel.Ctx, mentioned(), store.LimitRate); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.aud.got) != 1 || s.aud.got[0].Ref != "botMention" || s.aud.got[0].Reason != "limit_rate" || s.aud.got[0].MessageID != mentioned().MessageID || s.aud.who[0].Binding != startBinding || s.aud.who[0].User != "" {
+		t.Errorf("audited %+v by %+v; want one refusal of the mention by the rate limit, by no user", s.aud.got, s.aud.who)
+	}
+}
+
+// An alert's start that a limit stopped is counted and not audited, even if it reaches Limited.
+func TestAnAlertALimitStoppedIsNotAudited(t *testing.T) {
+	s := newStarter(t)
+	m := reported()
+	m.Person = false
+	if err := s.Limited(s.tel.Ctx, m, store.LimitRate); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.aud.got) != 0 {
+		t.Errorf("audited %+v; want nothing for an alert", s.aud.got)
+	}
+}
+
+// An audit row that could not be written is an error of Limited, so that the Intake tells the person's next stopped start again.
+func TestAStoppedReportThatWasNotAuditedSaysSo(t *testing.T) {
+	s := newStarter(t)
+	s.aud.err = errors.New("the audit log is down")
+	if err := s.Limited(s.tel.Ctx, reported(), store.LimitRate); err == nil {
+		t.Error("Limited = nil; want the failed write's error")
+	}
+}
+
+// A person's report that a limit stopped is audited under that person, by message, trigger and limit, so that a member who
+// spends the limits for everyone can be found; nothing they wrote is in it.
+func TestAPersonsReportALimitStoppedIsAuditedAsTheirs(t *testing.T) {
+	s := newStarter(t)
+	m := reported()
+	if err := s.Limited(s.tel.Ctx, m, store.LimitDaily); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.aud.got) != 1 || s.aud.got[0].Ref != "personMessage" || s.aud.got[0].Reason != "limit_daily" || s.aud.got[0].MessageID != m.MessageID || s.aud.got[0].Trigger != m.Index {
+		t.Fatalf("audited %+v; want one refusal of the report by the daily cap", s.aud.got)
+	}
+	if who := s.aud.who[0]; who.Binding != startBinding || who.User != m.Message.User {
+		t.Errorf("audited by %+v; want the Binding and the person %s", who, m.Message.User)
+	}
+	if strings.Contains(fmt.Sprintf("%+v", s.aud.got[0]), "checkout") {
+		t.Errorf("audited %+v; want nothing the person wrote", s.aud.got[0])
+	}
+}
+
+// reported is the match of a person's top-level message by a personMessage trigger: what the Intake hands the starter.
+func reported() trigger.Match {
+	return trigger.Match{
+		Binding: startBinding, Index: 1, Person: true, MessageID: "slack:" + startConn + ":C0123456789:3.3", Fields: map[string]string{},
+		PromptTemplate: "A person reported something in {{ .Channel }} ({{ .Source }}): {{ .Link }}.",
+		Received:       time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC),
+		Message: chat.Inbound{
+			At:   chat.Ref{Platform: "slack", Conn: startConn, Channel: "C0123456789", ID: "3.3"},
+			User: "U0REPORTER", Text: "checkout is down since the deploy",
+		},
+	}
+}
+
+// A person's message is that person's turn: the thread is the message's own, the turn names its author, so that the session
+// manager attributes it and audits the person, it carries no thread, and the session's origin says the source personMessage,
+// which feedback attributes to no alert. The prompt reports the source too, and holds what the person wrote in the untrusted
+// block only.
+func TestOnStartOfAPersonsMessageIsTheirTurn(t *testing.T) {
+	s := newStarter(t)
+	if err := s.OnStart(s.tel.Ctx, reported()); err != nil {
+		t.Fatalf("OnStart = %v", err)
+	}
+	if len(s.sub.got) != 1 {
+		t.Fatalf("%d turns submitted; want 1", len(s.sub.got))
+	}
+	in := s.sub.got[0]
+	if want := (session.Key{Connection: startConn, Channel: "C0123456789", Thread: "3.3"}); in.Key != want || in.MessageRef != "3.3" || in.MessageID != reported().MessageID || !in.Create || in.Binding != startBinding {
+		t.Errorf("submitted %+v; want a new session of thread %+v for the message 3.3 under %s", in, want, startBinding)
+	}
+	if in.UserID != "U0REPORTER" || in.WholeThread {
+		t.Errorf("UserID %q, WholeThread %v; want the person who wrote it, and no thread to carry", in.UserID, in.WholeThread)
+	}
+	if want := (store.Origin{Source: "personMessage"}); in.Origin != want {
+		t.Errorf("Origin = %+v; want %+v", in.Origin, want)
+	}
+	if got, want := instructionOf(t, in.Text), "A person reported something in C0123456789 (personMessage): https://example.slack.com/archives/C0123456789/p33."; got != want {
+		t.Errorf("instruction %q; want %q", got, want)
+	}
+	tag := untrustedTag(t, in.Text)
+	if before, inside, _ := strings.Cut(in.Text, "<"+tag+">"); strings.Contains(before, "checkout is down") || !strings.Contains(inside, "checkout is down since the deploy") {
+		t.Errorf("the person's text is not in the untrusted block alone:\n%s", in.Text)
+	}
+}
+
+// A prompt that is refused for a person's message is audited as that person's, as the turn would have been.
+func TestOnStartARefusedPersonsMessageIsAuditedWithThePerson(t *testing.T) {
+	s := newStarter(t)
+	m := reported()
+	m.PromptTemplate = "Report {{ .Nope }}"
+	if err := s.OnStart(s.tel.Ctx, m); !errors.Is(err, trigger.ErrNotStarted) {
+		t.Fatalf("OnStart = %v; want ErrNotStarted", err)
+	}
+	if len(s.aud.who) != 1 || s.aud.who[0] != (audit.Actor{Binding: startBinding, User: "U0REPORTER"}) {
+		t.Errorf("audited by %+v; want the Binding and the person", s.aud.who)
+	}
+	if len(s.sub.got) != 0 {
+		t.Errorf("submitted %+v; want nothing", s.sub.got)
+	}
+}
+
+// The session of a mention is asked about the thread that holds the mention, as a start, with what the turn would be.
+func TestTakesBotMentionAsksAboutTheThreadOfTheMention(t *testing.T) {
+	var asked session.Inbound
+	s, err := newTriggerStarter(triggerStarterConfig{
+		Submit: &startSubmitter{}, Notice: (&startNotes{}).take, Audit: &startAudit{}, Links: noPermalink(), Log: slog.Default(),
+		Takes: func(_ context.Context, in session.Inbound) (bool, error) { asked = in; return false, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := mentioned()
+	got, err := s.TakesBotMention(t.Context(), m)
+	if want := (session.Key{Connection: startConn, Channel: m.Message.At.Channel, Thread: m.Message.At.Thread}); err != nil || got || asked.Key != want || !asked.Create || asked.Binding != m.Binding {
+		t.Errorf("TakesBotMention = %v, %v after asking %+v; want false, and a start in thread %+v", got, err, asked, want)
+	}
 }

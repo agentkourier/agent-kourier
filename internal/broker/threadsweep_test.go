@@ -113,11 +113,7 @@ func TestThreadSweepNeedsAStore(t *testing.T) {
 // maxIdle, and keeps a closed one inside its cooldown and an open one idle for less, which a trigger with a long
 // maxIdle (30 days at most) still counts as live.
 func TestThreadSweepDeletesOnlyWhatNoTriggerStillCountsLive(t *testing.T) {
-	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := sqlitetest.Open(t)
 	day := 24 * time.Hour
 	// seed makes a started thread opened at opened, last seen then, closed at closed (zero for open), with a cooldown of 4h.
 	seed := func(key string, opened, closed time.Time) {

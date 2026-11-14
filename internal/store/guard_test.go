@@ -128,13 +128,6 @@ func abandonOutbox(at time.Time) call {
 	return func(ctx context.Context, s store.Store) error { _, err := s.AbandonOutbox(ctx, "o1", at); return err }
 }
 
-func abandonOutboxBefore(before, at time.Time) call {
-	return func(ctx context.Context, s store.Store) error {
-		_, err := s.AbandonOutboxBefore(ctx, before, at)
-		return err
-	}
-}
-
 func upsertSession(f func(*store.Session)) call {
 	return func(ctx context.Context, s store.Store) error { return s.UpsertSession(ctx, mut(okSession, f)) }
 }
@@ -172,6 +165,10 @@ func purgeExpiredSessions(h store.SessionHorizons, limit int) call {
 
 func listStaleTasks(h store.SessionHorizons, limit int) call {
 	return func(ctx context.Context, s store.Store) error { _, err := s.ListStaleTasks(ctx, h, limit); return err }
+}
+
+func staleTaskTurn(k store.ConversationKey, taskID string) call {
+	return func(ctx context.Context, s store.Store) error { _, err := s.StaleTaskTurn(ctx, k, taskID); return err }
 }
 
 func endStaleTask(h store.SessionHorizons, t store.StaleTask, now time.Time) call {
@@ -232,6 +229,19 @@ func recordPress(f func(*store.Press), limits store.PressLimits) call {
 	}
 }
 
+func replaceServedConnections(now time.Time, connections ...string) call {
+	return func(ctx context.Context, s store.Store) error {
+		return s.ReplaceServedConnections(ctx, connections, now)
+	}
+}
+
+func attributeConnection(connection string) call {
+	return func(ctx context.Context, s store.Store) error {
+		_, err := s.AttributeConnection(ctx, connection)
+		return err
+	}
+}
+
 func pendingPresses(id string, before time.Time) call {
 	return func(ctx context.Context, s store.Store) error {
 		_, err := s.PendingPresses(ctx, id, before)
@@ -267,12 +277,23 @@ func hasReplies(ids []string) call {
 	return func(ctx context.Context, s store.Store) error { _, err := s.HasReplies(ctx, ids); return err }
 }
 
+func settleAcknowledgmentReplies(ids []string) call {
+	return func(ctx context.Context, s store.Store) error { return s.SettleAcknowledgmentReplies(ctx, ids) }
+}
+
 func nextReply(k store.ConversationKey) call {
 	return func(ctx context.Context, s store.Store) error { _, err := s.NextReply(ctx, k); return err }
 }
 
 func nextReplyAfter(k store.ConversationKey, after int64) call {
 	return func(ctx context.Context, s store.Store) error { _, err := s.NextReplyAfter(ctx, k, after); return err }
+}
+
+func previousWholeReply(k store.ConversationKey, sequence int64) call {
+	return func(ctx context.Context, s store.Store) error {
+		_, err := s.PreviousWholeReply(ctx, k, sequence)
+		return err
+	}
 }
 
 func previousReply(k store.ConversationKey, sequence int64) call {
@@ -437,12 +458,6 @@ func specs() []spec {
 			"epoch":        abandonOutbox(epoc),
 			"before epoch": abandonOutbox(epoc.Add(-time.Hour)),
 		}},
-		{"AbandonOutboxBefore", abandonOutboxBefore(t0, t0), map[string]call{
-			"before is zero":  abandonOutboxBefore(time.Time{}, t0),
-			"before is epoch": abandonOutboxBefore(epoc, t0),
-			"at is zero":      abandonOutboxBefore(t0, time.Time{}),
-			"at is epoch":     abandonOutboxBefore(t0, epoc),
-		}},
 		{"ListUnposted", func(ctx context.Context, s store.Store) error { _, err := s.ListUnposted(ctx); return err }, nil},
 
 		{"UpsertSession", upsertSession(nil), with(
@@ -477,6 +492,9 @@ func specs() []spec {
 		{"ListStaleTasks", listStaleTasks(horizons, 10), with(
 			limitCalls(func(n int) call { return listStaleTasks(horizons, n) }),
 			horizonCalls(func(h store.SessionHorizons) call { return listStaleTasks(h, 10) }))},
+		{"StaleTaskTurn", staleTaskTurn(key, "t1"), with(
+			withKeys(func(k store.ConversationKey) call { return staleTaskTurn(k, "t1") }),
+			map[string]call{"no TaskID": staleTaskTurn(key, "")})},
 		{"EndStaleTask", endStaleTask(horizons, store.StaleTask{Key: key, TaskID: "t1"}, t0), with(
 			horizonCalls(func(h store.SessionHorizons) call {
 				return endStaleTask(h, store.StaleTask{Key: key, TaskID: "t1"}, t0)
@@ -538,6 +556,14 @@ func specs() []spec {
 			"PerUser limit 0":  recordPress(nil, store.PressLimits{Total: 10, PerUser: 0}),
 		}},
 		{"ListPresses", func(ctx context.Context, s store.Store) error { _, err := s.ListPresses(ctx); return err }, nil},
+		{"ServedConnections", func(ctx context.Context, s store.Store) error { _, err := s.ServedConnections(ctx); return err }, nil},
+		{"ReplaceServedConnections", replaceServedConnections(t0, "ns/a", "ns/b"), map[string]call{
+			"an empty connection": replaceServedConnections(t0, "ns/a", ""),
+			"zero time":           replaceServedConnections(time.Time{}, "ns/a"),
+			"epoch":               replaceServedConnections(epoc, "ns/a"),
+		}},
+		{"AttributeConnection", attributeConnection("slack"), map[string]call{"no connection": attributeConnection("")}},
+		{"UnattributedRows", func(ctx context.Context, s store.Store) error { _, err := s.UnattributedRows(ctx); return err }, nil},
 		{"PendingPresses", pendingPresses("i1", t0), map[string]call{
 			"no ID":     pendingPresses("", t0),
 			"no before": pendingPresses("i1", time.Time{}),
@@ -569,10 +595,23 @@ func specs() []spec {
 		{"PreviousReply", previousReply(key, 1), with(
 			withKeys(func(k store.ConversationKey) call { return previousReply(k, 1) }),
 			map[string]call{"sequence 0": previousReply(key, 0)})},
+		{"PreviousWholeReply", previousWholeReply(key, 1), with(
+			withKeys(func(k store.ConversationKey) call { return previousWholeReply(k, 1) }),
+			map[string]call{"sequence 0": previousWholeReply(key, 0)})},
 		{"MarkReplyDelivered", markReplyDelivered("r1", t0), map[string]call{
 			"no ID":   markReplyDelivered("", t0),
 			"no time": markReplyDelivered("r1", time.Time{}),
 		}},
+		{"ListAcknowledgmentReplies", func(ctx context.Context, s store.Store) error { _, err := s.ListAcknowledgmentReplies(ctx); return err }, nil},
+		{"SettleAcknowledgmentReplies", settleAcknowledgmentReplies([]string{"r1", "r2"}), map[string]call{
+			"an empty ID among others": settleAcknowledgmentReplies([]string{"r1", "", "r2"}),
+			"only an empty ID":         settleAcknowledgmentReplies([]string{""}),
+			"over MaxReplyIDs":         settleAcknowledgmentReplies(replyIDs(store.MaxReplyIDs + 1)),
+		}},
+		{"ListPendingAcknowledgmentReplies", func(ctx context.Context, s store.Store) error {
+			_, err := s.ListPendingAcknowledgmentReplies(ctx)
+			return err
+		}, nil},
 		{"AbandonStrandedReplies", abandonStrandedReplies(t0, time.Hour), map[string]call{
 			"no now": abandonStrandedReplies(time.Time{}, time.Hour),
 			"age 0":  abandonStrandedReplies(t0, 0),
@@ -676,7 +715,6 @@ func specs() []spec {
 // timeCalls are the calls that check a time with validTime, each with the time put in the argument that is checked.
 var timeCalls = map[string]func(time.Time) call{
 	"AbandonOutbox":       abandonOutbox,
-	"AbandonOutboxBefore": func(at time.Time) call { return abandonOutboxBefore(at, t0) },
 	"AdmitTriggerRun":     func(at time.Time) call { return admitTriggerRun(func(r *store.TriggerRun) { r.At = at }, okRunLimits) },
 	"ListTriggerDigests":  listTriggerDigests,
 	"MarkTriggerDigested": func(at time.Time) call { return markTriggerDigested("ns/b", 0, at) },
@@ -728,7 +766,7 @@ func horizonCalls(f func(store.SessionHorizons) call) map[string]call {
 
 // operations are the methods of store.Store that the guard does not record as operations: Close ends the store and has
 // no span, and the claim of a reply's question has never had one.
-var untracked = []string{"Close"}
+var untracked = []string{"Close", "ClaimReplyInteraction"}
 
 // storeMethods returns the names of the operations of store.Store.
 func storeMethods() []string {
@@ -902,5 +940,21 @@ func TestHasRepliesAcceptsNoIDsAndUpToTheBound(t *testing.T) {
 		if !c.ok && (!errors.Is(err, store.ErrInvalid) || len(a.calls) != 0) {
 			t.Errorf("%s: HasReplies = %v, adapter calls %v; want ErrInvalid and no call", name, err, a.calls)
 		}
+	}
+}
+
+// TestReplaceServedConnectionsGivesTheAdapterTheSetSortedWithNoRepeats: a connection listed twice is one, and the adapter does not
+// depend on the order the caller used.
+func TestReplaceServedConnectionsGivesTheAdapterTheSetSortedWithNoRepeats(t *testing.T) {
+	in := []string{"ns/b", "ns/a", "ns/b"}
+	a := &fakeAdapter{}
+	if err := store.Guard(a).ReplaceServedConnections(t.Context(), in, t0); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.row.([]string); !slices.Equal(got, []string{"ns/a", "ns/b"}) {
+		t.Errorf("the adapter was given %v; want [ns/a ns/b]", got)
+	}
+	if !slices.Equal(in, []string{"ns/b", "ns/a", "ns/b"}) {
+		t.Errorf("the caller's slice is now %v; want it untouched", in)
 	}
 }

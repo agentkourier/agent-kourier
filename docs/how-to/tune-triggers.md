@@ -1,10 +1,10 @@
 # Tune triggers with a dry run
 
-For anyone writing or changing a Binding's `botMessage` triggers: at the end, you have replayed a channel's real
+For anyone writing or changing a Binding's `botMessage` or `personMessage` triggers: at the end, you have replayed a channel's real
 history through the triggers and seen what each message would become, before going live.
 
 `agent-kourier dry-run` only reads Slack (`auth.test` and `conversations.history`). It posts nothing, starts no session, writes nothing
-and needs no cluster.
+and needs no cluster. It shows nothing of [another bot's mention](any-bot-trigger.md#let-another-agent-start-yours), which arrives as its own event and not in history.
 
 ## Before you start
 
@@ -57,12 +57,13 @@ TS                 SENDER       OUTCOME    TRIGGER  STATE     ALERTNAME         
 - **SENDER** is the bot ID, `person:<user ID>`, `agent-kourier` for Agent Kourier's own post, or `unknown` for a message the adapter drops. **TRIGGER** is the
   index in `chat.triggers`.
 - **OUTCOME**:
-    - `matched`: the trigger took it; STATE, ALERTNAME and KEY are what it extracted.
-    - `unmatched`: a trigger names the bot, and none took the message. The last column says where each trigger turned
+    - `matched`: the trigger took it; STATE, ALERTNAME and KEY are what it extracted (a `personMessage` trigger extracts nothing).
+    - `unmatched`: a trigger names the bot, or a `personMessage` trigger is tried against a person's message, and none took the message. The last column says where each trigger turned
       it away, at the first step that failed: a regex, or the sender's kind.
     - `excluded`: every `match` regex matched and an `exclude` regex turned it away.
     - `other_bot`: a bot that no trigger names.
-    - `own`, `person`, `ignored`: Agent Kourier's own post, a person's message, and something the intake leaves alone.
+    - `own`, `person`, `ignored`: Agent Kourier's own post, a person's message that no `personMessage` trigger is tried against (the
+      Binding has none, the message is a reply, or it is a mention that the `mention` trigger takes), and something the intake leaves alone.
 
 ## Fix what it shows
 
@@ -74,4 +75,5 @@ TS                 SENDER       OUTCOME    TRIGGER  STATE     ALERTNAME         
 - **Flapping.** The summary lists keys that fired and closed at least 3 times. A `cooldown` shorter than the gap
   between those cycles starts a new investigation each time.
 
-Copy the Binding, change its `match`, `exclude` and `extract`, and run again until the lines read right.
+Copy the Binding, change its `match`, `exclude` and `extract`, and run again until the lines read right. The sizes a trigger is held to,
+and what a limit does to a start, are on [Limits](../reference/limits.md).

@@ -1,5 +1,6 @@
 .DS_Store
 /bin/
+/mkdocs.sitebuild.yml
 /dist/
 *.test
 *.out

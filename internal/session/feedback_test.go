@@ -1,6 +1,7 @@
 package session
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
@@ -40,6 +41,30 @@ func TestTurnRefSaysWhichFeedbackTheFinalMessageCarries(t *testing.T) {
 	}
 }
 
+// A turn nobody wrote is an investigation unless a bot's mention began its task: a mention is answered like a person's, in whichever
+// thread, and through an answer that a person typed.
+func TestFeedbackOfATurnNobodyWrote(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		turn     store.TaskTurn
+		feedback bool
+		want     store.FeedbackKind
+	}{
+		{"an alert's first prompt", store.TaskTurn{User: SystemUser, MessageRef: "1.1"}, false, store.FeedbackInvestigation},
+		{"an alert's first prompt recorded with no message", store.TaskTurn{User: SystemUser}, false, store.FeedbackInvestigation},
+		{"a mention, without feedback", store.TaskTurn{User: SystemUser, MessageRef: "1.1", Mention: "1.1"}, false, ""},
+		{"a mention, with feedback", store.TaskTurn{User: SystemUser, MessageRef: "1.1", Mention: "1.1"}, true, store.FeedbackAnswer},
+		{"a mention in a thread it did not open, without feedback", store.TaskTurn{User: SystemUser, MessageRef: "2.2", Mention: "2.2"}, false, ""},
+		{"a mention that a person answered, with feedback", store.TaskTurn{User: "U1", MessageRef: "2.3", Mention: "2.2"}, true, store.FeedbackAnswer},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := feedbackOf(tc.turn, Backend{Feedback: tc.feedback}); got != tc.want {
+				t.Errorf("feedbackOf = %q; want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // The origin, and the agent of the Binding, are written when the session is made and by nothing after: a reply in the thread,
 // which names none, neither clears it nor replaces it, and a message that creates no session writes none.
 func TestSubmitKeepsTheOriginOfTheSession(t *testing.T) {
@@ -69,11 +94,13 @@ func TestRecoveredTurnCarriesTheFeedbackOfItsRecordedTurn(t *testing.T) {
 	}{
 		{"an alert's first prompt", SystemUser, store.FeedbackInvestigation},
 		{"a person's turn on a Binding with feedback", "U1", store.FeedbackAnswer},
+		{"a bot's mention on a Binding with feedback", SystemUser + "|mention", store.FeedbackAnswer},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, sink := restarted(t)
 			f.feedback = true
-			recordedTurn(t, f, store.TaskTurn{ID: inbound("1").MessageID, User: tc.user})
+			user, mention, _ := strings.Cut(tc.user, "|")
+			recordedTurn(t, f, store.TaskTurn{ID: inbound("1").MessageID, User: user, Mention: mention})
 			f.recover(t)
 			waitFinal(t, sink)
 			sink.mu.Lock()
@@ -112,6 +139,36 @@ func TestTurnRefCarriesTheBindingsThreadReplies(t *testing.T) {
 			defer sink.mu.Unlock()
 			if len(sink.refs) != 1 || sink.refs[0].ThreadReplies != tc.mode {
 				t.Errorf("turn refs = %+v; want one with thread replies %q", sink.refs, tc.mode)
+			}
+		})
+	}
+}
+
+// The renderer is told the Binding's chat.progress on every turn, whoever wrote it.
+func TestTurnRefCarriesTheBindingsProgress(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode v1alpha1.ProgressMode
+		user string
+	}{
+		{"activity, a person's turn", v1alpha1.ProgressActivity, "U1"},
+		{"steps, an alert's first prompt", v1alpha1.ProgressSteps, ""},
+		{"unset", "", "U1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			sink := f.live()
+			f.progress = tc.mode
+			in := inbound("1")
+			in.UserID = tc.user
+			if _, err := f.submit(in); err != nil {
+				t.Fatal(err)
+			}
+			<-sink.finals
+			sink.mu.Lock()
+			defer sink.mu.Unlock()
+			if len(sink.refs) != 1 || sink.refs[0].Progress != tc.mode {
+				t.Errorf("turn refs = %+v; want one with progress %q", sink.refs, tc.mode)
 			}
 		})
 	}

@@ -22,13 +22,15 @@ import (
 //   - The agent's own answer comes back at once, typed as for Send: errors.Is(err,
 //     a2a.ErrTaskNotFound) when it no longer knows the task (the session may be gone),
 //     ErrForbidden when the caller does not own it.
+//   - A reply that is too large (dialect.ErrResponseTooLarge: an event or an answer past the dialect's bound, or more
+//     than MaxReplyBytes held) comes back at once, and is no lost stream: the agent would send the same again.
 //   - A stream that drops is resumed up to MaxReconnects times in a row, then Follow returns
 //     a *StreamLostError carrying the task ID, so the caller may follow again later. That
 //     includes a 408, 429 or 503 that outlasts the reconnects.
 //   - A request the backend refuses (a 4xx other than 408 or 429) is not a lost stream: it comes
-//     back at once, typed, and does not match ErrStreamLost. A 401 or 403 matches
+//     back at once, typed, and does not match ErrStreamLost. A 401, or a 403 on a call, matches
 //     ErrCredentialsRejected: the caller re-mints the credential (D34), and already holds
-//     the task ID.
+//     the task ID. A 403 at the card fetch matches ErrAgentForbidden instead.
 //
 // h may be nil. A task ID is required.
 func (a *Agent) Follow(ctx context.Context, id a2a.TaskID, h Handler) (telemetryErr error) {
@@ -43,8 +45,10 @@ func (a *Agent) Follow(ctx context.Context, id a2a.TaskID, h Handler) (telemetry
 	if err != nil {
 		return fmt.Errorf("connect to agent: %w", typed(err, false))
 	}
-	asm := newAssembler(h, a.tool)
+	asm := newAssembler(h)
+	asm.interaction, asm.limit = a.cfg.ParseInteraction, a.cfg.MaxReplyBytes
 	asm.taskID = id
+	defer asm.release("")           // a result still waiting for its call has no later assembler to deliver it
 	fail := func(err error) error { // the agent answered, or refused, or the caller gave up
 		if ctx.Err() == nil {
 			err = typed(err, false)

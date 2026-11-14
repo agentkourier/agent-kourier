@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"go.uber.org/goleak"
+
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // specDir copies spec 7's examples into a fresh directory.
@@ -41,7 +43,7 @@ func (c *countingSecrets) Keys(ctx context.Context, namespace, name string) ([]s
 }
 
 func newTestReloader(dir string, secrets SecretResolver) *Reloader {
-	return NewReloader(ReloaderConfig{Dir: dir, Secrets: secrets, Logger: slog.New(slog.DiscardHandler)})
+	return NewReloader(ReloaderConfig{Dir: dir, Secrets: secrets, Logger: testutil.DiscardLogger()})
 }
 
 func mustRead(t *testing.T, path string) string {
@@ -111,7 +113,7 @@ func TestReloaderCallsOnErrorForEachCountedFailure(t *testing.T) {
 	dir := specDir(t)
 	path := filepath.Join(dir, "binding.yaml")
 	var seen []error
-	r := NewReloader(ReloaderConfig{Dir: dir, Secrets: specSecrets(), Logger: slog.New(slog.DiscardHandler), OnError: func(err error) { seen = append(seen, err) }})
+	r := NewReloader(ReloaderConfig{Dir: dir, Secrets: specSecrets(), Logger: testutil.DiscardLogger(), OnError: func(err error) { seen = append(seen, err) }})
 	mustReload(t, r, true)
 
 	writeFile(t, path, "kind: [")
@@ -147,15 +149,41 @@ func TestReloaderRebuildsOnlyOnChangeButRechecksSecrets(t *testing.T) {
 	}
 }
 
-func TestReloaderWarnsWhenApprovalsHaveNoApproverGroups(t *testing.T) {
-	dir := specDir(t)
-	path := filepath.Join(dir, "binding.yaml")
-	writeFile(t, path, strings.Replace(mustRead(t, path), "    askUser: true\n", "    askUser: true\n    toolApprovals: true\n", 1))
-	var logs bytes.Buffer
-	r := NewReloader(ReloaderConfig{Dir: dir, Secrets: specSecrets(), Logger: slog.New(slog.NewTextHandler(&logs, nil))})
-	mustReload(t, r, true)
-	if got := logs.String(); !strings.Contains(got, "tool approvals are enabled without approver groups; any non-bot channel member may decide") || !strings.Contains(got, "binding=sre/sre-alerts") {
-		t.Errorf("warning log = %q; want a warning naming the Binding", got)
+// Both dialects post tool approvals: a2a for an agent whose card lists kagent's HITL extension. The warning cannot know
+// the card at load, so it is the same on both.
+func TestReloaderWarnsAboutApproversOnEveryDialect(t *testing.T) {
+	const anyMember = "tool approvals are enabled without approver groups; any non-bot channel member may decide"
+	for _, tc := range []struct {
+		name, dialect, interactions string
+		warn                        bool
+	}{
+		{"kagent without groups", "kagent-v1", "    toolApprovals: true\n", true},
+		{"kagent with groups", "kagent-v1", "    toolApprovals: true\n    approverGroups: [S0123456789]\n", false},
+		{"a2a without groups", "a2a", "    toolApprovals: true\n", true},
+		{"a2a with groups", "a2a", "    toolApprovals: true\n    approverGroups: [S0123456789]\n", false},
+		{"a2a without approvals", "a2a", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := specDir(t)
+			// Each edit must find its line, or a case would run on the testdata as it is (kagent-v1, no approvals) and pass.
+			edit := func(file, old, replacement string) {
+				path := filepath.Join(dir, file)
+				body := mustRead(t, path)
+				if !strings.Contains(body, old) {
+					t.Fatalf("%s has no %q to replace", file, old)
+				}
+				writeFile(t, path, strings.Replace(body, old, replacement, 1))
+			}
+			edit("binding.yaml", "    askUser: true\n", "    askUser: true\n"+tc.interactions)
+			edit("agentbackend.yaml", "dialect: kagent-v1", "dialect: "+tc.dialect)
+			var logs bytes.Buffer
+			r := NewReloader(ReloaderConfig{Dir: dir, Secrets: specSecrets(), Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+			mustReload(t, r, true)
+			got := logs.String()
+			if warned := strings.Contains(got, anyMember) && strings.Contains(got, "binding=sre/sre-alerts"); warned != tc.warn {
+				t.Errorf("log = %q; want the warning naming the Binding: %v", got, tc.warn)
+			}
+		})
 	}
 }
 
@@ -184,6 +212,46 @@ func TestReloaderWarnsApprovalsOnlyForInitialOrChangedConfig(t *testing.T) {
 	mustReload(t, r, true)
 	if got := strings.TrimPrefix(logs.String(), beforeRecheck); strings.Contains(got, warning) {
 		t.Errorf("unchanged forced policy recheck logged a policy warning: %q", got)
+	}
+}
+
+// The warning is about a Binding, so a change to the config that leaves that Binding's policy alone, such as another team's edit
+// under a source that is edited all the time, does not say it again, as the report logs each refused object once. A policy
+// that is fixed and then enabled again is a new one and is said again.
+func TestReloaderWarnsOfAnApprovalPolicyOncePerBinding(t *testing.T) {
+	dir := specDir(t)
+	path := filepath.Join(dir, "binding.yaml")
+	other := filepath.Join(dir, "binding-minimal.yaml")
+	const warning = "tool approvals are enabled without approver groups; any non-bot channel member may decide"
+	enabled := strings.Replace(mustRead(t, path), "    askUser: true\n", "    askUser: true\n    toolApprovals: true\n", 1)
+	writeFile(t, path, enabled)
+	var logs bytes.Buffer
+	r := NewReloader(ReloaderConfig{Dir: dir, Secrets: specSecrets(), Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+	warned := func(from int) bool {
+		t.Helper()
+		return strings.Contains(logs.String()[from:], warning)
+	}
+
+	mustReload(t, r, true)
+	if !warned(0) {
+		t.Fatal("the policy was not warned of at the first load")
+	}
+	for i := range 3 { // edits of another Binding's file, each a changed read
+		before := logs.Len()
+		writeFile(t, other, mustRead(t, other)+strings.Repeat("#", i+1)+"\n")
+		mustReload(t, r, false)
+		if warned(before) {
+			t.Errorf("edit %d of another Binding's file warned of the policy of sre-alerts again: %q", i+1, logs.String()[before:])
+		}
+	}
+
+	writeFile(t, path, strings.Replace(enabled, "    toolApprovals: true\n", "", 1))
+	mustReload(t, r, false)
+	before := logs.Len()
+	writeFile(t, path, enabled)
+	mustReload(t, r, false)
+	if !warned(before) {
+		t.Error("a policy that was fixed and enabled again was not warned of")
 	}
 }
 
@@ -297,6 +365,14 @@ func TestReloaderLoadsOneGeneration(t *testing.T) {
 	mustReload(t, r, true)
 	if rb, ok := r.Current().Binding("sre", "sre-alerts"); !ok || rb.Backend.Name != "kagent-two" {
 		t.Errorf("Binding = %+v, %v; want the generation that was current when the load ended", rb, ok)
+	}
+	// The retry's fingerprint is the one kept: a poll that finds the directory as the retry
+	// read it rebuilds nothing, so the revision stays.
+	secrets.onRead = nil
+	rev := r.Revision(context.Background())
+	mustReload(t, r, false)
+	if got := r.Revision(context.Background()); got != rev {
+		t.Errorf("revision after a poll that found no change = %q, want %q", got, rev)
 	}
 }
 

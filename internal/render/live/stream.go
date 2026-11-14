@@ -7,6 +7,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
+	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -28,6 +29,11 @@ import (
 // and begins no more than maxBegins new ones, which the next window goes on with (the text waits for them: it is never
 // sent ahead of a step that came before it). The final has no such limit, since it is the last window there is.
 //
+// A step that stands for time is a step like these. A Working… card is begun when the delay passes (steps.go, openIdle), and
+// the call that claims it moves it on under the call's title, with the call's detail. Every chunk of a step carries its
+// detail, as chat.Step says; a platform that shows only the first non-empty one (Slack appends a card's detail) is the
+// adapter's to handle, so the card has the detail once.
+//
 // A platform that refuses the stream for good, as it would a start it can never take, does not cost the reply: the
 // turn goes to the post path through the outbox, under a row of its own, as a recovered turn that finds a row with no
 // ts does.
@@ -36,16 +42,17 @@ import (
 // reply: its text goes out once. A step still under way at the stop has no outcome to show, and it is ended before the
 // stop is sent, with the steps, so that the stop is the one call that carries the last of the text and nothing else. If the
 // text is no longer a prefix of the state, nothing can be appended: the stream is stopped with no suffix, and an
-// Update then replaces the message with the final one, never while the stream runs.
+// Update then replaces the message with the final one, never while the stream runs. Slack drops a stream's cards from a
+// message it updates (probed 2026-10-21), so that update carries the steps, ended as the stop ends them.
 func (u *Run) writeStream(ctx context.Context, ref *chat.Ref, v view) error {
 	id := outbox.ID(u.turn.Source, store.OutboxReply)
 	if !u.rowMade {
-		created, err := u.cfg.Store.CreateOutbox(ctx, store.OutboxEntry{ID: id, EventID: u.turn.Source, Role: store.OutboxReply, Channel: u.turn.Channel, Thread: u.turn.Thread, CreatedAt: u.cfg.Now()})
+		created, err := u.cfg.Store.CreateOutbox(ctx, store.OutboxEntry{ID: id, EventID: u.turn.Source, Role: store.OutboxReply, Connection: u.turn.Connection, Channel: u.turn.Channel, Thread: u.turn.Thread, CreatedAt: u.cfg.Now()})
 		if err != nil {
 			return err
 		}
 		if !created { // an earlier attempt at this turn started a stream, or tried to
-			return u.takeOver(ctx, ref, v, id)
+			return u.takeOver(ctx, ref, id)
 		}
 		u.rowMade = true
 	}
@@ -54,11 +61,11 @@ func (u *Run) writeStream(ctx context.Context, ref *chat.Ref, v view) error {
 		if len(v.steps) > 0 { // the text before the first step: the step comes where its call was made
 			first = v.body[:v.pos[0]]
 		}
-		s, err := u.cfg.Platform.Stream(ctx, chat.Target{Channel: u.turn.Channel, Thread: u.turn.Thread}, u.turn.Recipient, first)
+		s, err := u.platform.Stream(ctx, chat.Target{Conn: u.turn.Connection, Channel: u.turn.Channel, Thread: u.turn.Thread}, u.turn.Recipient, first)
 		if err != nil {
-			if u.cfg.Platform.Classify(chat.OpPost, err).Class == chat.Permanent {
+			if u.platform.Classify(chat.OpPost, err).Class == chat.Permanent {
 				u.cfg.Logger.WarnContext(ctx, "live: the platform refused the stream for good; the reply is posted instead", "channel", u.turn.Channel, "err", err)
-				return u.postInstead(ctx, ref, v)
+				return u.postInstead(ctx, ref)
 			}
 			return err
 		}
@@ -70,8 +77,8 @@ func (u *Run) writeStream(ctx context.Context, ref *chat.Ref, v view) error {
 		}
 		u.recorded = true
 	}
-	for _, st := range v.steps { // the steps with an outcome to show, which are over, and ask nothing of the text
-		if sent, begun := u.stepState(st.ID); begun && sent != st.State && st.State != chat.StepRunning {
+	for _, st := range v.steps { // the steps with an outcome or a title to show, which ask nothing of the text
+		if sent, begun := u.sentOf(st.ID); begun && (sent.Title != st.Title || (sent.State != st.State && st.State != chat.StepRunning)) {
 			if ok, err := u.sendStep(ctx, st, v.final); err != nil {
 				return err
 			} else if !ok {
@@ -81,7 +88,7 @@ func (u *Run) writeStream(ctx context.Context, ref *chat.Ref, v view) error {
 	}
 	limit, begins := len(v.body), 0 // the text is sent as far as the steps that are begun allow
 	for i, st := range v.steps {
-		if _, begun := u.stepState(st.ID); begun {
+		if _, begun := u.sentOf(st.ID); begun {
 			continue
 		}
 		if !v.final && begins == maxBegins {
@@ -113,12 +120,17 @@ func (u *Run) writeStream(ctx context.Context, ref *chat.Ref, v view) error {
 			u.diverged, suffix = true, ""
 		}
 		if err := u.stream.Stop(ctx, suffix, u.stopFooter(v), id); err != nil {
-			return err
+			if !u.cutShort || !errors.Is(err, chat.ErrNotStreaming) {
+				return err
+			}
+			// A turn cut short whose stream ended already, as the platform may end a stream left idle: there is nothing
+			// left to end, and no final text to replace it with.
+			u.diverged = false
 		}
 		u.stopped = true
 	}
-	if u.diverged {
-		if err := u.cfg.Platform.Update(ctx, u.stream.Ref(), chat.Say(v.m)); err != nil {
+	if u.diverged { // the update replaces the stream's cards as well as its text, so it carries the steps (message)
+		if err := u.update(ctx, u.stream.Ref(), v); err != nil {
 			return err
 		}
 		u.diverged = false
@@ -151,14 +163,14 @@ func (u *Run) appendText(ctx context.Context, body string, n int) error {
 	return nil
 }
 
-// stepState is the state the step id was last sent in, and whether it was sent at all.
-func (u *Run) stepState(id string) (chat.StepState, bool) {
+// sentOf is the step id as it was last sent, and whether it was sent at all.
+func (u *Run) sentOf(id string) (chat.Step, bool) {
 	for _, s := range u.stepsSent {
 		if s.ID == id {
-			return s.State, true
+			return s, true
 		}
 	}
-	return 0, false
+	return chat.Step{}, false
 }
 
 // sentStep records that st was sent.
@@ -172,13 +184,12 @@ func (u *Run) sentStep(st chat.Step) {
 	u.stepsSent = append(u.stepsSent, st)
 }
 
-// shown is v as the stream shows it now: the text and the steps that have been sent, each in the state it was sent in.
+// shown is v as the stream shows it now: the text and the steps that have been sent, each as it was sent.
 func (u *Run) shown(v view) view {
 	out := view{body: u.streamed}
 	for _, st := range v.steps {
-		if sent, begun := u.stepState(st.ID); begun {
-			st.State = sent
-			out.steps = append(out.steps, st)
+		if sent, begun := u.sentOf(st.ID); begun {
+			out.steps = append(out.steps, sent)
 		}
 	}
 	return out
@@ -195,7 +206,8 @@ func (u *Run) shown(v view) view {
 // A stream that has ended says so to the text that follows, which is where it is dealt with.
 //
 // When the steps of a turn are ended, the cards already shown stay in the state they were last sent in, a running one
-// among them. UNCONFIRMED(WP-04): how Slack shows such a card once the stream stops.
+// among them. Slack shows every card that is not complete as an error once the stream stops (probed on 2026-10-21, not
+// in its documentation).
 func (u *Run) sendStep(ctx context.Context, st chat.Step, final bool) (bool, error) {
 	err := u.stream.Step(ctx, st)
 	if err == nil {
@@ -203,7 +215,7 @@ func (u *Run) sendStep(ctx context.Context, st chat.Step, final bool) (bool, err
 		u.stepFails = 0
 		return true, nil
 	}
-	verdict := u.cfg.Platform.Classify(chat.OpPost, err)
+	verdict := u.platform.Classify(chat.OpPost, err)
 	switch {
 	case errors.Is(err, chat.ErrNotStreaming):
 		return false, nil
@@ -233,28 +245,58 @@ func (u *Run) sendStep(ctx context.Context, st chat.Step, final bool) (bool, err
 
 // takeOver carries on a turn whose stream row exists already. With the ts recorded, the stream of
 // the earlier attempt is the message: it is stopped, if it still runs, and updated to the whole
-// text. It shows no steps of its own, so none of the earlier attempt's is shown twice: a step is begun only on
-// the stream this run started. With none, the earlier attempt may have started a stream that cannot be found (R16): the
-// whole text is posted as a new message, under a row of its own.
-// UNCONFIRMED(WP-04): whether the update that follows the stop of an adopted stream removes the cards the earlier run
-// showed, or leaves them as they were last sent.
-func (u *Run) takeOver(ctx context.Context, ref *chat.Ref, v view, id string) error {
+// text. A step is begun only on the stream this run started, so none is added to the earlier attempt's stream. Its
+// updates carry the run's steps instead (carries), the earlier attempt's calls among them, since the agent reports
+// them again: Slack drops a stream's cards from a message it updates, and shows the task_card blocks of the update
+// (probed 2026-10-21 in a sandbox workspace, by chat.update read back through conversations.replies and seen in the
+// web client). An update with no text cannot replace a message that holds only text, which the run finds out from the
+// platform (update). With no ts, the earlier attempt may have started a stream that cannot be found (R16): the whole text is
+// posted as a new message, under a row of its own, through the outbox, which stores no steps.
+func (u *Run) takeOver(ctx context.Context, ref *chat.Ref, id string) error {
 	row, err := u.cfg.Store.GetOutbox(ctx, id)
 	if err != nil {
 		return err
 	}
 	if row.MessageRef != "" {
-		u.streaming = false
-		*ref, u.adoptStop = u.cfg.Platform.RefAt(u.turn.Channel, u.turn.Thread, row.MessageRef), true
-		return u.write(ctx, ref, v)
+		u.streaming, u.adopted = false, true
+		*ref, u.adoptStop = u.platform.RefAt(u.turn.Channel, u.turn.Thread, row.MessageRef), true
+		return u.writeMoved(ctx, ref)
 	}
-	return u.postInstead(ctx, ref, v)
+	return u.postInstead(ctx, ref)
 }
 
 // postInstead gives up the stream and posts the reply through the outbox, under a row of its own: the row of the
 // stream has no payload, and is not one that Run ever delivers.
-func (u *Run) postInstead(ctx context.Context, ref *chat.Ref, v view) error {
+func (u *Run) postInstead(ctx context.Context, ref *chat.Ref) error {
 	u.streaming = false
 	u.turn.Source = outbox.RepostedSource(u.turn.Source)
+	return u.writeMoved(ctx, ref)
+}
+
+// writeMoved writes a turn that has just moved from the stream to the update path. The view it was given was the stream's,
+// which shows a tool call as a step and a wait as a card, and so may have no message at all; the update path's own view
+// shows them as status lines, or, for a turn that took over a stream, as the steps its updates carry, and is the one to
+// write. A state with nothing to show yet writes nothing. A turn that ended
+// with nothing, no text and no step, follows the rule of the run loop: where a message stands (the one an earlier run left,
+// which this turn took over) it is updated to "(no output)", so that no status line is left up; where there is none, nothing
+// is posted, and the turn ends as errNothingToShow. A stream that was refused showed nothing, so nothing is lost by it.
+func (u *Run) writeMoved(ctx context.Context, ref *chat.Ref) error {
+	v := u.snapshot()
+	if !v.ok {
+		switch {
+		case !v.final:
+			return nil
+		case ref.ID == "":
+			return errNothingToShow
+		}
+		v.m, v.ok = render.Nothing(), true
+	}
 	return u.write(ctx, ref, v)
 }
+
+// errNothingToShow is what a write says when the turn ended with nothing to show and there is no message to leave.
+var errNothingToShow = errors.New("live: the turn ended with nothing to show")
+
+// errMessageStands is what a write says when the platform refused to put content with no text in the place of what the message
+// holds (update). It is no failed write: the run does not try it again.
+var errMessageStands = errors.New("live: the message stands until the turn has text")

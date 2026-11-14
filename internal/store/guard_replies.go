@@ -34,11 +34,20 @@ func (g *Guarded) HasReply(ctx context.Context, id string) (found bool, err erro
 	return found, err
 }
 
+// validReplyIDs is the precondition of a call that takes many reply IDs: none empty, and at most MaxReplyIDs. op names
+// the call in the error, which wraps ErrInvalid.
+func validReplyIDs(op string, ids []string) error {
+	if len(ids) > MaxReplyIDs || slices.Contains(ids, "") {
+		return fmt.Errorf("%s: %d IDs, none empty and at most %d, are required: %w", op, len(ids), MaxReplyIDs, ErrInvalid)
+	}
+	return nil
+}
+
 // HasReplies implements ReplyQueue.
 func (g *Guarded) HasReplies(ctx context.Context, ids []string) (found map[string]bool, err error) {
 	err = g.run(ctx, "agentkourier.store.HasReplies", func(ctx context.Context) error {
-		if len(ids) > MaxReplyIDs || slices.Contains(ids, "") {
-			return fmt.Errorf("has replies: %d IDs, none empty and at most %d, are required: %w", len(ids), MaxReplyIDs, ErrInvalid)
+		if err := validReplyIDs("has replies", ids); err != nil {
+			return err
 		}
 		var err error
 		found, err = g.a.HasReplies(ctx, ids)
@@ -86,6 +95,19 @@ func (g *Guarded) PreviousReply(ctx context.Context, key ConversationKey, sequen
 	return r, err
 }
 
+// PreviousWholeReply implements ReplyQueue.
+func (g *Guarded) PreviousWholeReply(ctx context.Context, key ConversationKey, sequence int64) (r Reply, err error) {
+	err = g.run(ctx, "agentkourier.store.PreviousWholeReply", func(ctx context.Context) error {
+		if !validKey(key) || sequence < 1 {
+			return fmt.Errorf("previous whole reply %+v below %d: a key and a sequence from 1 are required: %w", key, sequence, ErrInvalid)
+		}
+		var err error
+		r, err = g.a.PreviousWholeReply(ctx, key, sequence)
+		return err
+	})
+	return r, err
+}
+
 // MarkReplyDelivered implements ReplyQueue.
 func (g *Guarded) MarkReplyDelivered(ctx context.Context, id string, at time.Time) error {
 	return g.run(ctx, "agentkourier.store.MarkReplyDelivered", func(ctx context.Context) error {
@@ -111,20 +133,23 @@ func (g *Guarded) AbandonStrandedReplies(ctx context.Context, now time.Time, age
 
 // ListAcknowledgmentReplies implements AcknowledgmentLister. It is used by
 // retention to retry removals whose replies were already delivered.
-func (g *Guarded) ListAcknowledgmentReplies(ctx context.Context, now time.Time, age time.Duration) (replies []Reply, err error) {
+func (g *Guarded) ListAcknowledgmentReplies(ctx context.Context) (replies []Reply, err error) {
 	err = g.run(ctx, "agentkourier.store.ListAcknowledgmentReplies", func(ctx context.Context) error {
-		if now.IsZero() || age <= 0 {
-			return fmt.Errorf("list acknowledgment replies: a time and a positive age are required: %w", ErrInvalid)
-		}
-		lister, ok := g.a.(AcknowledgmentLister)
-		if !ok {
-			return fmt.Errorf("list acknowledgment replies: adapter does not support retention metadata: %w", ErrInvalid)
-		}
 		var err error
-		replies, err = lister.ListAcknowledgmentReplies(ctx, now, age)
+		replies, err = g.a.ListAcknowledgmentReplies(ctx)
 		return err
 	})
 	return replies, err
+}
+
+// SettleAcknowledgmentReplies implements AcknowledgmentLister.
+func (g *Guarded) SettleAcknowledgmentReplies(ctx context.Context, ids []string) error {
+	return g.run(ctx, "agentkourier.store.SettleAcknowledgmentReplies", func(ctx context.Context) error {
+		if err := validReplyIDs("settle acknowledgment replies", ids); err != nil {
+			return err
+		}
+		return g.a.SettleAcknowledgmentReplies(ctx, ids)
+	})
 }
 
 // ListPendingAcknowledgmentReplies implements PendingAcknowledgmentLister. It
@@ -132,12 +157,8 @@ func (g *Guarded) ListAcknowledgmentReplies(ctx context.Context, now time.Time, 
 // is still active or whose queue row has not been delivered.
 func (g *Guarded) ListPendingAcknowledgmentReplies(ctx context.Context) (replies []Reply, err error) {
 	err = g.run(ctx, "agentkourier.store.ListPendingAcknowledgmentReplies", func(ctx context.Context) error {
-		lister, ok := g.a.(PendingAcknowledgmentLister)
-		if !ok {
-			return fmt.Errorf("list pending acknowledgment replies: adapter does not support retention metadata: %w", ErrInvalid)
-		}
 		var err error
-		replies, err = lister.ListPendingAcknowledgmentReplies(ctx)
+		replies, err = g.a.ListPendingAcknowledgmentReplies(ctx)
 		return err
 	})
 	return replies, err

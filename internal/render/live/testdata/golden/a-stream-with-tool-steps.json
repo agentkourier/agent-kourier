@@ -42,7 +42,6 @@
         "channel": "C1",
         "chunks": [
           {
-            "details": "namespace=\"prod\", password=[redacted], resource=\"pods\", url=\"https://[redacted]@host.test/x\"",
             "id": "s1",
             "status": "complete",
             "title": "kubectl_get",

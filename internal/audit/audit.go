@@ -134,6 +134,10 @@ const (
 	// DecisionAnswerCleared is an answered interaction whose pause came again after retention had cleared the
 	// answer: it cannot be sent again, and the task is cancelled.
 	DecisionAnswerCleared DecisionResult = "answer_cleared"
+	// DecisionOrphaned is an interaction that nobody could answer or time out through its Binding, and that the sweep ended after its time
+	// ran out: its Binding is not in the config, or this broker does not serve its chat connection. The agent was not asked about the pause
+	// through a Binding that is gone, and nobody is told in the thread.
+	DecisionOrphaned DecisionResult = "orphaned"
 )
 
 // Decision is a person's (or the timeout's) decision on an interaction.
@@ -247,6 +251,25 @@ func (w *Writer) TriggerRefused(ctx context.Context, a Actor, r TriggerRefusal) 
 	subj := "message=" + clean(r.MessageID, maxField) + " trigger=" + strconv.Itoa(r.Trigger)
 	outcome := string(SourceChat) + ": trigger_refused ref=" + clean(r.Ref, maxField) + " reason=" + clean(r.Reason, maxField) + " len=" + strconv.Itoa(r.Len)
 	return w.append(ctx, store.AuditEvent, a, w.opts.Now(), subj, outcome)
+}
+
+// Mention is one person a turn's reply named, for whom a message that mentions them was queued (spec D48). It holds the declared
+// name and the user config gives it. Text the agent wrote is never in it: a name that mentions nobody is only counted, in a metric.
+type Mention struct {
+	// Turn is the turn whose reply named the person, and Channel and Thread the conversation it is in.
+	Turn, Channel, Thread string
+	// Name is the declared name, and User the person it notifies.
+	Name, User string
+}
+
+// Mention records that a mention of a person was queued, as an event of the chat source. It is a record of something already
+// done: the caller follows its failure as the failure policy says, which is to log and carry on.
+func (w *Writer) Mention(ctx context.Context, a Actor, m Mention) error {
+	if a.Binding == "" || m.Turn == "" || m.Channel == "" || m.Thread == "" || m.Name == "" || m.User == "" {
+		return fail(store.ErrInvalid, "audit mention in %q: a Binding, turn, channel, thread, name and user are required", m.Turn)
+	}
+	subj := "mention turn=" + clean(m.Turn, maxField) + " channel=" + clean(m.Channel, maxField) + " thread=" + clean(m.Thread, maxField)
+	return w.append(ctx, store.AuditEvent, a, w.opts.Now(), subj, string(SourceChat)+": mention name="+clean(m.Name, maxField)+" user="+clean(m.User, maxField))
 }
 
 // FeedbackVote is a person's verdict on a message of an investigation (spec 8.7). It names the message by identifiers and
@@ -365,7 +388,7 @@ func (w *Writer) AgentCall(ctx context.Context, a Actor, c Call) error {
 // Decision records who decided an interaction, when, and the shape of the answer.
 func (w *Writer) Decision(ctx context.Context, a Actor, d Decision) error {
 	switch d.Result {
-	case DecisionAnswered, DecisionIncomplete, DecisionDenied, DecisionSuperseded, DecisionTimedOut, DecisionAutoDenied, DecisionAnswerCleared, DecisionNotApprover:
+	case DecisionAnswered, DecisionIncomplete, DecisionDenied, DecisionSuperseded, DecisionTimedOut, DecisionAutoDenied, DecisionAnswerCleared, DecisionNotApprover, DecisionOrphaned:
 	default:
 		return fail(store.ErrInvalid, "audit decision %q: unknown result %q", d.InteractionID, d.Result)
 	}
@@ -650,9 +673,14 @@ func errorTags(err error) []string {
 	}{
 		{agent.ErrCredentialsRejected, "credentials_rejected"}, {agent.ErrNotSent, "not_sent"},
 		{agent.ErrOutcomeUnknown, "outcome_unknown"}, {agent.ErrMessageReply, "message_reply"}, {agent.ErrStreamLost, "stream_lost"}, {agent.ErrNotReady, "not_ready"}, {agent.ErrBusy, "busy"},
-		{agent.ErrForbidden, "forbidden"}, {agent.ErrAnswerRejected, "answer_rejected"}, {agent.ErrCancelFailed, "cancel_failed"}, {agent.ErrTokenRequired, "token_required"},
+		{agent.ErrForbidden, "forbidden"}, {agent.ErrAgentForbidden, "agent_forbidden"}, {agent.ErrAnswerRejected, "answer_rejected"}, {agent.ErrCancelFailed, "cancel_failed"}, {agent.ErrTokenRequired, "token_required"},
 		{agent.ErrTokenUnreadable, "token_unreadable"}, {agent.ErrHeaderUnreadable, "header_unreadable"},
 		{agent.ErrPoolClosed, "pool_closed"}, {agent.ErrStreamingUnsupported, "streaming_unsupported"},
+		// What the broker would not read or hold of a response (an event, an answer, a page of tasks, a reply), and the
+		// agent card, which is not an answer to a call and says nothing of a task: it comes when a connection is opened.
+		{dialect.ErrCardTooLarge, "card_too_large"},
+		// A lookup that could not read the agent's list of tasks in full, so it is not known whether the agent has the turn.
+		{agent.ErrLookupIncomplete, "lookup_incomplete"},
 		// Answer's automatic cancel (R17) can fail and is joined to ErrAnswerRejected: a wedged task must not read as cleared.
 		{a2a.ErrTaskNotCancelable, "task_not_cancelable"}, {a2a.ErrTaskNotFound, "task_not_found"},
 		{context.Canceled, "canceled"}, {context.DeadlineExceeded, "deadline_exceeded"},
@@ -660,6 +688,9 @@ func errorTags(err error) []string {
 		if errors.Is(err, t.err) {
 			tags = append(tags, t.tag)
 		}
+	}
+	if dialect.AnswerTooLarge(err) {
+		tags = append(tags, "response_too_large")
 	}
 	var hs *dialect.HTTPStatusError
 	if errors.As(err, &hs) {
@@ -722,9 +753,5 @@ func capped(s string, limit int) string {
 	if len(s) <= limit {
 		return s
 	}
-	cut := limit - len("...")
-	for cut > 0 && !utf8.RuneStart(s[cut]) {
-		cut--
-	}
-	return s[:cut] + "..."
+	return s[:redact.RuneBoundary(s, limit-len("..."))] + "..."
 }

@@ -1,6 +1,16 @@
-// Package config loads Agent Kourier's resources (AgentBackend, ChatConnection, Binding) from YAML
-// files (D30, spec section 7). It checks one object at a time; cross-object checks belong to
-// the snapshot builder.
+// Package config turns Agent Kourier's resources (AgentBackend, ChatConnection, Binding) into the routing table the broker serves,
+// whichever route they came by. Load reads them from YAML files (all or nothing: one bad file fails the load), and DecodeObject
+// decodes one object that a custom resource source read from the cluster (internal/config/crsource), tolerating fields it does not
+// know. Both run Default and Validate on one object at a time, and the objects are collected in a Set.
+//
+// Resolve and ResolvePartial then check the references between the objects of a Set (a namespace other than the referrer's needs
+// allowedNamespaces, one Binding per channel) and build a Snapshot. Resolve is all or nothing, as the files are, and also requires
+// each Secret that an object names to exist with its keys. ResolvePartial leaves out the Bindings that fail and returns a Rejection
+// for each, for a source whose objects have different owners; it checks no Secret.
+//
+// A Reloader polls a Source (a directory of files, or the custom resource source, behind one interface), resolves the Set it reads
+// when the source's fingerprint moves or the Secrets may have changed, and publishes the latest good Snapshot, keeping the last one
+// when a read or a resolution fails. Alongside each Snapshot it publishes a Report, which names the objects that are not served as written (none for files).
 package config
 
 import (
@@ -47,6 +57,14 @@ type Set struct {
 	AgentBackends   []v1alpha1.AgentBackend
 	ChatConnections []v1alpha1.ChatConnection
 	Bindings        []v1alpha1.Binding
+	// Invalid lists the objects that a source that fails one object at a time refused, which are not in the lists above, or
+	// are there as the last good generation of themselves (Invalid.Served). Load and file mode never fill it. Resolve
+	// ignores it, and so does ResolvePartial: a Reloader that runs per object reads it (Report).
+	Invalid []Invalid
+	// UnservedConnections lists the ChatConnections of the namespaces the source reads that it does not serve, for a reason that is not
+	// the object's own (UnservedConnection), and that are in no list above. Load and file mode never fill it. Resolve and ResolvePartial
+	// ignore it, and a Reloader that runs per object passes it on (Report).
+	UnservedConnections []UnservedConnection
 
 	// sources maps each object to its location, "<file>#<n>" as in Load's problems. It is keyed by
 	// identity, so an object added or renamed after Load has the location Load gave its new identity, if any. A Set not
@@ -57,7 +75,7 @@ type Set struct {
 // Load reads every *.yaml and *.yml file directly inside dir, in lexical order. Each file may
 // hold several documents separated by "---". Documents that are empty or only comments are
 // skipped and not counted. Each other document must carry the v1alpha1 apiVersion and a known
-// kind, decode without unknown fields, and pass Default and Validate.
+// kind, decode without unknown fields, and pass Default and Validate. A Binding must also have no status key.
 //
 // Load reports every problem it finds, joined, each prefixed with "<file>#<n> <kind>
 // <namespace>/<name>:" (n is the 1-based document number in the file) and returns a nil Set.
@@ -184,7 +202,7 @@ func (l *loader) document(file string, n, line int, doc []byte) {
 	case "ChatConnection":
 		errs = decode(j, &l.set.ChatConnections)
 	case "Binding":
-		errs = decode(j, &l.set.Bindings)
+		errs = decodeBindingFile(j, &l.set.Bindings)
 	default:
 		l.fail(loc, fmt.Errorf("unknown kind %q, must be one of AgentBackend, ChatConnection, Binding", h.Kind))
 		return
@@ -223,21 +241,63 @@ func decode[T any, PT interface {
 	return errs
 }
 
+// errStatusInFile is the problem with a Binding file that has a status key.
+var errStatusInFile = errors.New("status: a file may not set it, remove it")
+
+// decodeBindingFile is decode for the Binding in a file, which may not set a status. The Binding type has the field,
+// so strict decoding accepts it and this refuses it. The refusal is here, not in decode or Validate, because a custom
+// resource source will decode the objects of an API server through decode, and they carry a status. Any status key
+// is refused, even an empty or null one. It follows the problems decode reports; when decode cannot decode the
+// document at all, as with a status of the wrong type, it reports that one problem and the refusal follows it, and
+// Validate has not run. Like decode, it adds the Binding to dst when decode found no problem, and Load returns no Set
+// when any problem was found.
+func decodeBindingFile(j []byte, dst *[]v1alpha1.Binding) []error {
+	errs := decode(j, dst)
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(j, &top); err != nil {
+		return append(errs, err)
+	}
+	if _, ok := top["status"]; ok {
+		errs = append(errs, errStatusInFile)
+	}
+	return errs
+}
+
 // strictDecode decodes the JSON in j into obj and returns each unknown field as an error "path: unknown field".
 // The error result is set when j cannot be decoded at all, as with a value of the wrong type.
 func strictDecode(j []byte, obj any) (unknown []error, err error) {
-	strict, err := kjson.UnmarshalStrict(j, obj, kjson.DisallowUnknownFields)
+	paths, other, err := scanDecode(j, obj)
 	if err != nil {
 		return nil, err
+	}
+	for _, p := range paths {
+		unknown = append(unknown, fmt.Errorf("%s: unknown field", p))
+	}
+	return append(unknown, other...), nil
+}
+
+// scanDecode decodes the JSON in j into obj, which holds every field that obj has, and returns the path of each field it
+// does not have, in document order, and any other problem the strict decoder found. The error result is set when j cannot
+// be decoded at all.
+func scanDecode(j []byte, obj any) (paths []string, other []error, err error) {
+	strict, err := kjson.UnmarshalStrict(j, obj, kjson.DisallowUnknownFields)
+	if err != nil {
+		return nil, nil, err
 	}
 	for _, e := range strict {
 		var fe kjson.FieldError
 		if errors.As(e, &fe) {
-			e = fmt.Errorf("%s: unknown field", fe.FieldPath())
+			paths = append(paths, fe.FieldPath())
+		} else {
+			other = append(other, e)
 		}
-		unknown = append(unknown, e)
 	}
-	return unknown, nil
+	// A Duration is decoded from its text, and Validate sees only the result, so the cap on the text is checked here, on the
+	// document, for both routes.
+	if _, isBinding := obj.(*v1alpha1.Binding); isBinding {
+		other = append(other, v1alpha1.DurationTextProblems(j)...)
+	}
+	return paths, other, nil
 }
 
 // DecodeStrict decodes the YAML in data into obj as the loader decodes a resource: a duplicate key is an

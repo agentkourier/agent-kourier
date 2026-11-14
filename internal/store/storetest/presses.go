@@ -18,8 +18,14 @@ func press(id, user string, at time.Time) store.Press {
 	return store.Press{InteractionID: id, User: user, Channel: "C1", MessageRef: "1700.01", Inputs: []byte(`{"q0":{"a0":"typed"}}`), PressedAt: at}
 }
 
+func pressOn(conn, id, user string, at time.Time) store.Press {
+	p := press(id, user, at)
+	p.Connection = conn
+	return p
+}
+
 func samePress(a, b store.Press) bool {
-	return a.Seq == b.Seq && a.InteractionID == b.InteractionID && a.User == b.User && a.Channel == b.Channel &&
+	return a.Seq == b.Seq && a.InteractionID == b.InteractionID && a.User == b.User && a.Connection == b.Connection && a.Channel == b.Channel &&
 		a.MessageRef == b.MessageRef && bytes.Equal(a.Inputs, b.Inputs) && a.PressedAt.Equal(b.PressedAt)
 }
 
@@ -127,6 +133,63 @@ func (su suite) presses(t *testing.T) {
 		}
 		_, err = record("U3")
 		isErr(t, err, store.ErrLimit, "full again")
+	})
+
+	su.runReopen(t, "a press keeps its connection", func(t *testing.T, s store.Store, reopen func() store.Store) {
+		ctx := t.Context()
+		a, b := pressOn("ns/a", "ix", "U1", t0), pressOn("ns/b", "ix", "U1", t0.Add(time.Second))
+		var seqs []int64
+		for _, p := range []store.Press{a, b, press("ix", "U1", t0.Add(2*time.Second))} {
+			seq, err := s.RecordPress(ctx, p, roomy)
+			noErr(t, err, "RecordPress")
+			seqs = append(seqs, seq)
+		}
+		want := []store.Press{a, b, press("ix", "U1", t0.Add(2*time.Second))}
+		for i := range want {
+			want[i].Seq = seqs[i]
+		}
+		check := func(s store.Store) {
+			t.Helper()
+			got, err := s.ListPresses(ctx)
+			if err != nil || len(got) != len(want) {
+				t.Fatalf("ListPresses = %+v, %v; want %d", got, err, len(want))
+			}
+			for i := range want {
+				if !samePress(got[i], want[i]) {
+					t.Errorf("press %d = %+v; want %+v", i, got[i], want[i])
+				}
+			}
+		}
+		check(s)
+		check(reopen())
+	})
+
+	// The cap is counted for each connection, so that a flood on one app cannot refuse the presses of another.
+	su.run(t, "the press limits are counted for each connection", func(t *testing.T, s store.Store) {
+		ctx := t.Context()
+		limits := store.PressLimits{Total: 3, PerUser: 2}
+		record := func(conn, who string) error {
+			_, err := s.RecordPress(ctx, pressOn(conn, "ix", who, t0), limits)
+			return err
+		}
+		for _, who := range []string{"U1", "U1", "U2"} {
+			noErr(t, record("ns/a", who), "A's press by "+who)
+		}
+		isErr(t, record("ns/a", "U3"), store.ErrLimit, "a fourth press of A")
+		isErr(t, record("ns/a", "U1"), store.ErrLimit, "a third press of A by U1")
+		// B is untouched by A's flood, in all and for the same person, and has limits of its own.
+		for _, who := range []string{"U1", "U1", "U2"} {
+			noErr(t, record("ns/b", who), "B's press by "+who)
+		}
+		isErr(t, record("ns/b", "U3"), store.ErrLimit, "a fourth press of B")
+		isErr(t, record("ns/b", "U1"), store.ErrLimit, "a third press of B by U1")
+		// A press with no connection (one that was recorded before they were) is counted with the rest of its own.
+		noErr(t, record("", "U1"), "the first press with no connection")
+		got, err := s.ListPresses(ctx)
+		noErr(t, err, "ListPresses")
+		if len(got) != 7 {
+			t.Errorf("%d presses stored; want 7", len(got))
+		}
 	})
 
 	su.run(t, "the limit of one user binds with room in the store", func(t *testing.T, s store.Store) {
@@ -238,6 +301,31 @@ func (su suite) presses(t *testing.T) {
 		}
 	})
 
+	// A turn that nobody wrote, such as a bot's mention, is never an answer, so it does not hold a question back from its timeout.
+	su.run(t, "PendingPresses ignores a queued turn that nobody wrote", func(t *testing.T, s store.Store) {
+		ctx := t.Context()
+		k := store.ConversationKey{Connection: "ns/conn", Channel: "C1", Thread: "1.1"}
+		i := store.Interaction{ID: "ix-text", Key: k, TaskID: "t1", Kind: store.InteractionAskUser, Request: []byte(`{}`), TextReplies: true, CreatedAt: t0, Deadline: t0.Add(time.Hour)}
+		if _, err := s.CreateInteraction(ctx, i); err != nil {
+			t.Fatal(err)
+		}
+		noErr(t, s.SetInteractionMessageRef(ctx, i.ID, "1.2"), "SetInteractionMessageRef")
+		system := store.Reply{ID: "mention", Key: k, UserID: store.SystemUser, MessageRef: "1.3", Text: "a bot's mention", EnqueuedAt: t0.Add(time.Minute)}
+		if _, err := s.EnqueueReply(ctx, system); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := s.PendingPresses(ctx, i.ID, i.Deadline); err != nil || got {
+			t.Errorf("with a bot's mention queued = %v, %v; want false, so that the question times out", got, err)
+		}
+		person := store.Reply{ID: "person", Key: k, UserID: "U1", MessageRef: "1.4", Text: "my answer", EnqueuedAt: t0.Add(2 * time.Minute)}
+		if _, err := s.EnqueueReply(ctx, person); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := s.PendingPresses(ctx, i.ID, i.Deadline); err != nil || !got {
+			t.Errorf("with a person's reply queued = %v, %v; want true", got, err)
+		}
+	})
+
 	// PendingPresses says whether a press of the interaction made at or before a time is waiting.
 	su.run(t, "PendingPresses says whether a press made at or before a time is waiting", func(t *testing.T, s store.Store) {
 		ctx := t.Context()
@@ -333,15 +421,11 @@ func (su suite) presses(t *testing.T) {
 
 	su.run(t, "a reply pinned to a question delays its timeout until it is delivered, in or out of the store", func(t *testing.T, s store.Store) {
 		ctx := t.Context()
-		c, ok := s.(replyClaimer)
-		if !ok {
-			t.Fatal("the store has no ClaimReplyInteraction")
-		}
 		r := newReply("r1", key)
 		r.EnqueuedAt = t0.Add(time.Minute)
 		_, err := s.EnqueueReply(ctx, r)
 		noErr(t, err, "enqueue")
-		noErr(t, c.ClaimReplyInteraction(ctx, "r1", "q"), "claim")
+		noErr(t, s.ClaimReplyInteraction(ctx, "r1", "q"), "claim")
 		for _, tc := range []struct {
 			before time.Time
 			want   bool

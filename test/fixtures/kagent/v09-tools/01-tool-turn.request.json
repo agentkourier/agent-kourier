@@ -1,0 +1,18 @@
+{
+ "jsonrpc": "2.0",
+ "id": "1",
+ "method": "message/stream",
+ "params": {
+  "message": {
+   "kind": "message",
+   "messageId": "fixture-tool-stream-1",
+   "role": "user",
+   "parts": [
+    {
+     "kind": "text",
+     "text": "How many namespaces does the cluster have? Make exactly one tool call to list them, then answer in one sentence."
+    }
+   ]
+  }
+ }
+}

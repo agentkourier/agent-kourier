@@ -1,7 +1,8 @@
 package v1alpha1
 
 import (
-	"io"
+	"bytes"
+	"errors"
 	"maps"
 	"slices"
 	"strings"
@@ -30,8 +31,9 @@ type (
 
 // Values of the trigger enumerations.
 const (
-	TriggerMention    TriggerType = "mention"
-	TriggerBotMessage TriggerType = "botMessage"
+	TriggerMention       TriggerType = "mention"
+	TriggerBotMessage    TriggerType = "botMessage"
+	TriggerPersonMessage TriggerType = "personMessage"
 
 	FieldText     MessageField = "text"
 	FieldTitle    MessageField = "title"
@@ -59,31 +61,79 @@ func messageFields() []MessageField {
 	return []MessageField{FieldText, FieldTitle, FieldLink, FieldFallback, FieldFooter, FieldBody}
 }
 
-// Trigger is one way an event in the bound channel starts or continues a turn (spec 8.2).
+// The CEL rules on a trigger copy rules of Validate and refuse nothing that Validate accepts. A rule that forbids a field
+// is gated on the type mention or personMessage, and one that requires a field on the type botMessage or personMessage; the thread rules (by key, closeWhen
+// keys, the ranges) hold for every type, since Validate refuses those fields on a mention trigger anyway. A value that
+// Validate reads as unset counts as unset here: a missing field, an empty list or map, a zero duration (CEL's duration()
+// parses as time.ParseDuration does: spec D50). A field absent from the object is read with has(), since the apiserver
+// checks the object as it was written, before Default. (Not in the doc comment below, which the reference pages print,
+// while no CRD ships.)
+
+// Trigger is one way an event in the bound channel starts or continues a turn.
 // Triggers are tried in order and the first that matches handles the event.
+//
+// +kubebuilder:validation:XValidation:rule="self.type != 'mention' || !has(self.from)",message="not allowed with type: mention",fieldPath=".from"
+// +kubebuilder:validation:XValidation:rule="self.type != 'mention' || !has(self.match) || size(self.match) == 0",message="not allowed with type: mention",fieldPath=".match"
+// +kubebuilder:validation:XValidation:rule="self.type != 'mention' || !has(self.exclude) || size(self.exclude) == 0",message="not allowed with type: mention",fieldPath=".exclude"
+// +kubebuilder:validation:XValidation:rule="self.type != 'mention' || !has(self.extract) || size(self.extract) == 0",message="not allowed with type: mention",fieldPath=".extract"
+// +kubebuilder:validation:XValidation:rule=`self.type != 'mention' || !has(self.thread) || !((has(self.thread.by) && self.thread.by != "") || (has(self.thread.cooldown) && duration(self.thread.cooldown) != duration('0s')) || (has(self.thread.maxIdle) && duration(self.thread.maxIdle) != duration('0s')) || (has(self.thread.closeWhen) && size(self.thread.closeWhen) > 0))`,message="not allowed with type: mention",fieldPath=".thread"
+// +kubebuilder:validation:XValidation:rule=`self.type != 'mention' || !has(self.promptTemplate) || self.promptTemplate == ""`,message="not allowed with type: mention",fieldPath=".promptTemplate"
+// +kubebuilder:validation:XValidation:rule="self.type != 'mention' || !has(self.limits) || !(has(self.limits.rateLimit) || has(self.limits.maxRunsPerDay))",message="not allowed with type: mention",fieldPath=".limits"
+// +kubebuilder:validation:XValidation:rule="self.type != 'botMessage' || has(self.from)",message="required with type: botMessage",fieldPath=".from.id"
+// +kubebuilder:validation:XValidation:rule=`self.type != 'botMessage' || (has(self.promptTemplate) && self.promptTemplate != "")`,message="required with type: botMessage",fieldPath=".promptTemplate"
+// +kubebuilder:validation:XValidation:rule="self.type != 'botMessage' || (has(self.limits) && has(self.limits.rateLimit))",message="required with type: botMessage: set maxRuns, per and maxConcurrent",fieldPath=".limits.rateLimit"
+// +kubebuilder:validation:XValidation:rule="self.type != 'botMessage' || (has(self.limits) && has(self.limits.maxRunsPerDay))",message="required with type: botMessage: set the cap for a day, or 0 for no cap",fieldPath=".limits.maxRunsPerDay"
+// +kubebuilder:validation:XValidation:rule="self.type != 'personMessage' || !has(self.from)",message="not allowed with type: personMessage",fieldPath=".from"
+// +kubebuilder:validation:XValidation:rule="self.type != 'personMessage' || !has(self.match) || self.match.all(k, k == 'text')",message="a person's message has only the field text",fieldPath=".match"
+// +kubebuilder:validation:XValidation:rule="self.type != 'personMessage' || !has(self.exclude) || self.exclude.all(k, k == 'text')",message="a person's message has only the field text",fieldPath=".exclude"
+// +kubebuilder:validation:XValidation:rule="self.type != 'personMessage' || !has(self.extract) || size(self.extract) == 0",message="not allowed with type: personMessage",fieldPath=".extract"
+// +kubebuilder:validation:XValidation:rule=`self.type != 'personMessage' || !has(self.thread) || !((has(self.thread.by) && self.thread.by != "") || (has(self.thread.cooldown) && duration(self.thread.cooldown) != duration('0s')) || (has(self.thread.maxIdle) && duration(self.thread.maxIdle) != duration('0s')) || (has(self.thread.closeWhen) && size(self.thread.closeWhen) > 0))`,message="not allowed with type: personMessage",fieldPath=".thread"
+// +kubebuilder:validation:XValidation:rule=`self.type != 'personMessage' || (has(self.promptTemplate) && self.promptTemplate != "")`,message="required with type: personMessage",fieldPath=".promptTemplate"
+// +kubebuilder:validation:XValidation:rule="self.type != 'personMessage' || (has(self.limits) && has(self.limits.rateLimit))",message="required with type: personMessage: set maxRuns, per and maxConcurrent",fieldPath=".limits.rateLimit"
+// +kubebuilder:validation:XValidation:rule="self.type != 'personMessage' || (has(self.limits) && has(self.limits.maxRunsPerDay))",message="required with type: personMessage: set the cap for a day, or 0 for no cap",fieldPath=".limits.maxRunsPerDay"
+// +kubebuilder:validation:XValidation:rule="!(has(self.thread) && has(self.thread.by) && self.thread.by == 'key') || (has(self.extract) && 'key' in self.extract)",message=`thread.by: key requires an extract named "key"`,fieldPath=".thread.by"
+// +kubebuilder:validation:XValidation:rule="!has(self.thread) || !has(self.thread.closeWhen) || self.thread.closeWhen.all(k, has(self.extract) && k in self.extract)",message="every key must be the name of an entry of extract",fieldPath=".thread.closeWhen"
 type Trigger struct {
-	// Type is mention, a person @mentioning Agent Kourier, or botMessage, a message a bot posts.
-	// A mention trigger takes no other field. The key is type, not on: YAML 1.1 reads a bare
+	// Type is mention, a person @mentioning Agent Kourier, botMessage, a message a bot posts, or personMessage, a
+	// top-level message a person posts. A mention trigger takes no other field. The key is type, not on: YAML 1.1 reads a bare
 	// on as the boolean true, and the loader's decoder follows it.
-	// +kubebuilder:validation:Enum=mention;botMessage
+	// +kubebuilder:validation:Enum=mention;botMessage;personMessage
 	Type TriggerType `json:"type"`
 	// From names the sender a botMessage trigger accepts. Required for botMessage.
 	From *BotSource `json:"from,omitempty"`
-	// Match maps a message field to a regex it must match. Every entry must match.
+	// Match maps a message field to a regex it must match. Every entry must match. A personMessage trigger has the
+	// field text alone.
+	// +kubebuilder:validation:MaxProperties=6
+	// +kubebuilder:validation:XValidation:rule="self.all(k, k in ['text', 'title', 'link', 'fallback', 'footer', 'body'])",message="unsupported message field, must be one of text, title, link, fallback, footer, body"
+	// +kubebuilder:validation:XValidation:rule="self.all(k, size(self[k]) > 0)",message="a regular expression is required"
+	// +kubebuilder:validation:XValidation:rule="self.all(k, size(self[k]) <= 512)",message="a regular expression is longer than the 512 byte limit"
 	Match map[MessageField]string `json:"match,omitempty"`
-	// Exclude maps a message field to a regex; a message matching any entry is ignored.
+	// Exclude maps a message field to a regex; a message matching any entry is ignored. A personMessage trigger has
+	// the field text alone.
+	// +kubebuilder:validation:MaxProperties=6
+	// +kubebuilder:validation:XValidation:rule="self.all(k, k in ['text', 'title', 'link', 'fallback', 'footer', 'body'])",message="unsupported message field, must be one of text, title, link, fallback, footer, body"
+	// +kubebuilder:validation:XValidation:rule="self.all(k, size(self[k]) > 0)",message="a regular expression is required"
+	// +kubebuilder:validation:XValidation:rule="self.all(k, size(self[k]) <= 512)",message="a regular expression is longer than the 512 byte limit"
 	Exclude map[MessageField]string `json:"exclude,omitempty"`
 	// Extract names the values to pull out of a message. A message in which one of these
-	// regexes does not match does not match the trigger.
+	// regexes does not match does not match the trigger. At most 32, each named in at most 63 bytes. A
+	// personMessage trigger takes none.
+	// +kubebuilder:validation:MaxProperties=32
+	// +kubebuilder:validation:XValidation:rule="self.all(k, size(k) <= 63)",message="an extract name is longer than the 63 byte limit"
+	// +kubebuilder:validation:XValidation:rule="self.all(k, k.matches('^[a-z][A-Za-z0-9_]*$'))",message="invalid extract name: it must start with a lower-case letter and use only letters, digits and '_', so a template can read .Fields.<name>"
+	// +kubebuilder:validation:XValidation:rule="self.all(k, self[k].regex.contains('(?P<' + k + '>') || self[k].regex.contains('(?<' + k + '>'))",message="every regex must have a named group (?P<name>...) that is the entry's name, and supplies the value"
 	Extract map[string]Extract `json:"extract,omitempty"`
-	// Thread ties messages that share an extracted key to one thread.
+	// Thread ties messages that share an extracted key to one thread. A personMessage trigger takes none: each
+	// message it matches is a thread of its own.
 	// +optional
 	Thread TriggerThread `json:"thread,omitzero"`
 	// PromptTemplate is a Go template over the trigger's view of the message (.Channel,
-	// .State, .Key, .Fields, .Link, .Source). Required for botMessage.
+	// .State, .Key, .Fields, .Link, .Source). Required for botMessage and personMessage. At most 8192 bytes; it has no loops,
+	// variables or defined templates, and calls only and, eq, ge, gt, index, le, len, lt, ne, not, or and slice.
+	// +kubebuilder:validation:MaxLength=8192
 	PromptTemplate string `json:"promptTemplate,omitempty"`
 	// Limits bounds how many investigations the trigger starts (rate, concurrency and a daily cap). Required
-	// for botMessage: both rateLimit and maxRunsPerDay.
+	// for botMessage and personMessage: both rateLimit and maxRunsPerDay.
 	// +optional
 	Limits TriggerLimits `json:"limits,omitzero"`
 }
@@ -94,10 +144,12 @@ type BotSource struct {
 	// ID is the sender's ID on the platform, never a display name (Slack: the bot ID, `B…`). The load cannot know
 	// Agent Kourier's own ID, so naming it loads: Agent Kourier's own posts are never forwarded, so the trigger
 	// matches nothing, and the Slack adapter logs one warning, the first time one of its posts arrives.
+	// At most 32 bytes.
+	// +kubebuilder:validation:MaxLength=32
 	// +kubebuilder:validation:Pattern=`^B[A-Z0-9]+$`
 	ID string `json:"id"`
 	// Kind is what kind of sender ID names. Only bot exists today, and it is the default.
-	// +kubebuilder:validation:Enum=bot
+	// +kubebuilder:validation:Enum=bot;""
 	// +kubebuilder:default=bot
 	// +optional
 	Kind SenderKind `json:"kind,omitempty"`
@@ -109,36 +161,65 @@ type Extract struct {
 	// Field is the message field the regex runs on.
 	// +kubebuilder:validation:Enum=text;title;link;fallback;footer;body
 	Field MessageField `json:"field"`
+	// The schema's maxLength counts characters and Agent Kourier counts bytes, so maxLength is never the stricter of the two,
+	// and the CEL rule counts bytes, as Validate does, to refuse a regex of multibyte characters that is over the limit
+	// in bytes. (Not in the doc comment below, which the reference pages print, while no CRD ships.)
+
 	// Regex is a Go (RE2) regular expression of at most 512 bytes.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=512
+	// +kubebuilder:validation:XValidation:rule="size(bytes(self)) <= 512",message="regular expression is longer than the 512 byte limit"
 	Regex string `json:"regex"`
 }
 
 // TriggerThread decides which thread a message joins and when it closes the thread.
+//
+// +kubebuilder:validation:XValidation:rule=`(has(self.by) && self.by != "") || !has(self.cooldown) || duration(self.cooldown) == duration('0s')`,message="requires thread.by",fieldPath=".cooldown"
+// +kubebuilder:validation:XValidation:rule=`(has(self.by) && self.by != "") || !has(self.maxIdle) || duration(self.maxIdle) == duration('0s')`,message="requires thread.by",fieldPath=".maxIdle"
+// +kubebuilder:validation:XValidation:rule=`(has(self.by) && self.by != "") || !has(self.closeWhen) || size(self.closeWhen) == 0`,message="requires thread.by",fieldPath=".closeWhen"
+// +kubebuilder:validation:XValidation:rule=`!(has(self.by) && self.by != "") || (has(self.cooldown) && duration(self.cooldown) != duration('0s'))`,message="required with thread.by",fieldPath=".cooldown"
+// +kubebuilder:validation:XValidation:rule="!has(self.cooldown) || duration(self.cooldown) == duration('0s') || (duration(self.cooldown) >= duration('1m') && duration(self.cooldown) <= duration('168h'))",message="is out of range, must be between 1m and 168h",fieldPath=".cooldown"
+// +kubebuilder:validation:XValidation:rule="!has(self.maxIdle) || duration(self.maxIdle) == duration('0s') || (duration(self.maxIdle) >= (has(self.cooldown) ? duration(self.cooldown) + duration(self.cooldown) : duration('0s')) && duration(self.maxIdle) <= duration('720h'))",message="is out of range, must be between twice the cooldown and 720h",fieldPath=".maxIdle"
 type TriggerThread struct {
 	// By is key: messages with the same extracted "key" share a thread.
-	// +kubebuilder:validation:Enum=key
+	// +kubebuilder:validation:Enum=key;""
 	// +optional
 	By ThreadBy `json:"by,omitempty"`
 	// Cooldown is how long after a turn the same key starts no new turn. Required with by,
 	// and between 1m and 168h.
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`
 	// +optional
 	Cooldown metav1.Duration `json:"cooldown,omitzero"`
 	// MaxIdle is how long an open thread may go without a message of its key before Agent Kourier counts it
 	// abandoned, so that the key's next fire starts a new investigation instead of a note. It covers a
 	// resolve that never arrived. It needs by, is at least twice the cooldown, and is at most 720h; unset
-	// means the larger of 24h and twice the cooldown (see EffectiveMaxIdle). It must be longer than the
+	// means the larger of 24h and twice the cooldown. It must be longer than the
 	// sender's repeat interval (Alertmanager's repeat_interval): an alert that keeps firing repeats at that
 	// interval, and a maxIdle shorter than it counts a live alert abandoned between two repeats and
 	// starts a second investigation for it. Twice the cooldown covers that only for a 4h cooldown
 	// against Alertmanager's 4h repeat_interval; a longer repeat_interval needs a maxIdle set
 	// above it.
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`
 	// +optional
 	// +doc:default=Larger of `24h` and twice the cooldown
 	MaxIdle metav1.Duration `json:"maxIdle,omitzero"`
 	// CloseWhen maps an extracted field to the value that closes the thread: Agent Kourier posts a
-	// note and starts no turn. Every entry must equal.
+	// note and starts no turn. Every entry must equal. It names only extracted fields, so it holds at most as many
+	// entries as extract does, 32. A value is at most 256 bytes.
+	// +kubebuilder:validation:MaxProperties=32
+	// +kubebuilder:validation:XValidation:rule="self.all(k, size(self[k]) > 0)",message="the value that closes the thread is required"
+	// +kubebuilder:validation:XValidation:rule="self.all(k, size(self[k]) <= 256)",message="a value is longer than the 256 byte limit"
 	// +optional
 	CloseWhen map[string]string `json:"closeWhen,omitempty"`
+}
+
+// isSet says whether any thread rule is set.
+func (t TriggerThread) isSet() bool {
+	return t.By != "" || t.Cooldown.Duration != 0 || t.MaxIdle.Duration != 0 || len(t.CloseWhen) > 0
 }
 
 // MaxThreadMaxIdle is the most idle time a trigger can mean (720h): the ceiling validation holds a set
@@ -205,7 +286,7 @@ type PromptView struct {
 	// Link is the platform's permalink of the triggering message, built by Agent Kourier from the channel
 	// and the message's ID. It is not taken from the message: never the message's own link field.
 	Link string
-	// Source names what sent the message: "botMessage" for a trigger of that type.
+	// Source names what sent the message: "botMessage" or "personMessage", the type of the trigger.
 	Source string
 	// Fields holds one value per extract entry, by the entry's name.
 	Fields map[string]string
@@ -218,6 +299,37 @@ func ParsePromptTemplate(name, text string) (*template.Template, error) {
 	return template.New(name).Option("missingkey=error").Parse(text)
 }
 
+// MaxPromptOutput caps what a prompt template may write, in bytes. The renderer keeps the first
+// MaxInstructionUnits (4000) UTF-16 units of the output, so a template that reaches this writes
+// mostly what is thrown away; it is a template that should not run, not one that is cut.
+const MaxPromptOutput = 256 << 10
+
+// ErrPromptOutputTooLarge is the error of a template that writes more than MaxPromptOutput bytes.
+var ErrPromptOutputTooLarge = errors.New("prompt template output is longer than the byte limit")
+
+// ExecutePrompt runs tmpl over view and returns what it writes. It writes through a buffer that
+// fails, with ErrPromptOutputTooLarge, at the write that would pass MaxPromptOutput, so a template
+// that writes without end stops there and holds at most that much, never what it would have
+// written. Load-time validation and the renderer both run templates through it. A template must
+// have passed TemplateRefs first: the limit bounds what is written, not the time a loop takes.
+func ExecutePrompt(tmpl *template.Template, view PromptView) (string, error) {
+	var out cappedBuffer
+	if err := tmpl.Execute(&out, view); err != nil {
+		return "", err
+	}
+	return out.buf.String(), nil
+}
+
+// cappedBuffer is a bytes.Buffer that refuses a write that would take it past MaxPromptOutput.
+type cappedBuffer struct{ buf bytes.Buffer }
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	if b.buf.Len()+len(p) > MaxPromptOutput {
+		return 0, ErrPromptOutputTooLarge
+	}
+	return b.buf.Write(p)
+}
+
 // placeholderLen is the length of the placeholder values checkPromptTemplate runs a template
 // against. It is long, so a template that slices a value ({{ slice .Key 0 10 }}) loads. The
 // trade-off is accepted: a slice longer than a real value ({{ slice .State 0 10 }} on
@@ -225,10 +337,12 @@ func ParsePromptTemplate(name, text string) (*template.Template, error) {
 // an error, and CT-4b surfaces render errors like refusals (audited, no turn).
 const placeholderLen = 64
 
-// checkPromptTemplate parses text, walks its parse trees so that every reference is checked in
-// every branch (see TemplateRefs; each .Fields entry must also be an extract of the trigger),
-// and then runs it once against a view whose values are placeholders, for the errors a walk
-// cannot see, such as a function called with the wrong arguments. The parse is the renderer's
+// checkPromptTemplate parses text, walks its parse tree so that every reference is checked in
+// every branch and a template that would loop, recurse or grow without bound is refused (see
+// TemplateRefs; each .Fields entry must also be an extract of the trigger), and then runs it once
+// against a view whose values are placeholders, through ExecutePrompt's limit, for the errors a
+// walk cannot see, such as a function called with the wrong arguments. The run comes after the
+// walk, so a template the walk refuses is never run. The parse is the renderer's
 // (ParsePromptTemplate), so a template that passes here parses there.
 func checkPromptTemplate(name, text string, extract map[string]Extract) error {
 	tmpl, err := ParsePromptTemplate(name, text)
@@ -247,5 +361,6 @@ func checkPromptTemplate(name, text string, extract map[string]Extract) error {
 	for n := range extract {
 		view.Fields[n] = placeholder
 	}
-	return tmpl.Execute(io.Discard, view)
+	_, err = ExecutePrompt(tmpl, view)
+	return err
 }

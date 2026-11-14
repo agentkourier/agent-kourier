@@ -81,6 +81,86 @@ func TestADenialTheAgentDidNotTakeEndsInACancelAndOneNotice(t *testing.T) {
 	}
 }
 
+// TestADenialTheAgentDidNotTakeFromABindingThatStaysDeletedReleasesThePauseAfterTheGrace: the denial was taken and not delivered, and then the
+// Binding was deleted. Session.Cancel fails with ErrUnknownBinding for as long as it is missing, and used to be tried at every sweep for ever.
+// For the grace the cancel is tried again and nothing is said or released, in case the Binding is back; past it the sweep releases the pause
+// without the agent, once, tells the thread that the task is left with the agent, and is done with the denial.
+func TestADenialTheAgentDidNotTakeFromABindingThatStaysDeletedReleasesThePauseAfterTheGrace(t *testing.T) {
+	r, sw := timedOutAndDenied(t)
+	r.reopen(t)
+	r.look.bindings = nil
+	r.sess.always = fmt.Errorf("session Binding %q: %w", "ns/b", session.ErrUnknownBinding)
+	r.abandon.current = "task-1"
+	sweep := func() {
+		t.Helper()
+		if err := sw.Sweep(t.Context()); err != nil {
+			t.Fatalf("Sweep = %v; want none: there is nothing to report", err)
+		}
+	}
+	sweep()
+	r.advance(orphanGrace - time.Second)
+	sweep()
+	if got := r.abandon.got(); len(got) != 0 {
+		t.Fatalf("the pause was released %v inside the grace; want the cancel tried again", got)
+	}
+	if got := r.sess.cancelled(); len(got) != 2 {
+		t.Errorf("the session was asked to cancel %d times inside the grace; want it asked at each sweep", len(got))
+	}
+	if notices := r.noticeTexts(t); len(notices) != 1 {
+		t.Fatalf("notices %q inside the grace; want the timeout's alone: nothing is said of a cancel that has not been made", notices)
+	}
+	r.advance(time.Second)
+	for range 3 {
+		sweep()
+	}
+	if got := r.abandon.got(); !slices.Equal(got, []a2a.TaskID{"task-1"}) {
+		t.Errorf("the pause was released %v; want task-1, once", got)
+	}
+	if sw.UndeliveredCount() != 0 {
+		t.Error("the sweeper still holds a denial it dealt with")
+	}
+	if notices := r.noticeTexts(t); len(notices) != 2 || !strings.Contains(notices[1], "left with the agent") || strings.Contains(notices[1], "is cancelling") {
+		t.Errorf("notices %q; want the timeout's, and one that says the task is left with the agent", notices)
+	}
+}
+
+// TestADenialTheAgentDidNotTakeFromABindingThatIsBackWithinTheGraceIsCancelled: a Binding missing for a reload and back before the grace is out
+// lets the cancel through, and nothing is released without the agent; the thread is told that the task is being cancelled, as ever.
+func TestADenialTheAgentDidNotTakeFromABindingThatIsBackWithinTheGraceIsCancelled(t *testing.T) {
+	r, sw := timedOutAndDenied(t)
+	r.reopen(t)
+	bindings := r.look.bindings
+	r.look.bindings = nil
+	r.sess.always = fmt.Errorf("session Binding %q: %w", "ns/b", session.ErrUnknownBinding)
+	r.abandon.current = "task-1"
+	if err := sw.Sweep(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	r.advance(orphanGrace - time.Minute)
+	r.look.bindings = bindings
+	r.sess.mu.Lock()
+	r.sess.always = nil // the Binding is back: the cancel works
+	r.sess.mu.Unlock()
+	r.advance(2 * time.Minute) // more than the grace since the first sweep
+	for range 2 {
+		if err := sw.Sweep(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := r.abandon.got(); len(got) != 0 {
+		t.Errorf("the pause was released %v; want the cancel made through the Binding that is back", got)
+	}
+	if got := r.sess.cancelled(); len(got) != 2 {
+		t.Errorf("the session was asked to cancel %d times; want the failed try and the one that worked", len(got))
+	}
+	if notices := r.noticeTexts(t); len(notices) != 2 || !strings.Contains(notices[1], undeliveredNotice) {
+		t.Errorf("notices %q; want the timeout's, and that the task is being cancelled", notices)
+	}
+	if sw.UndeliveredCount() != 0 {
+		t.Error("the sweeper still holds a denial it dealt with")
+	}
+}
+
 // TestTheNoticeOfADenialThatWasNotTakenIsPostedOnceFromItsOwnSource: its outbox ID is the interaction's, with a suffix, so
 // it is not the timeout's notice and is one post however often it is enqueued (the sweeper of another process says it too).
 func TestTheNoticeOfADenialThatWasNotTakenIsPostedOnceFromItsOwnSource(t *testing.T) {

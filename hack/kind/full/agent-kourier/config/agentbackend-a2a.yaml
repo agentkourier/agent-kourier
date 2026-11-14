@@ -1,0 +1,10 @@
+# The generic a2a dialect against real kagent: the same front door as agentbackend.yaml, at the exact A2A URL of the
+# approval agent, which the a2a dialect uses as written (kagent-v1 adds /agents/<namespace>/<name> itself). kagent's card
+# lists its HITL extension, so the dialect asks for it and reads kagent's approvals (S19 and S20 over a2a).
+# test/kindmanifests pins the dialect and the URL.
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: agents-a2a, namespace: agent-kourier}
+spec:
+  dialect: a2a
+  url: http://kagent-frontdoor.kagent.svc.cluster.local:4180/agents/kagent/scenario-approval

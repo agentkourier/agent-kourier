@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -213,6 +214,136 @@ func TestSlackSetsUpUsersAndMembers(t *testing.T) {
 	}
 }
 
+// The control client puts the bot of another app in a channel, counts the connections of one app, and revokes an app's tokens, as the scenarios of
+// several Slack apps do.
+func TestSlackDrivesSeveralApps(t *testing.T) {
+	teamA := fakeslack.App{AppID: "ATEAMA", BotUser: "UTEAMA", BotID: "BTEAMA", BotToken: "xoxb-fake-team-a-token", AppToken: "xapp-fake-team-a-token"}
+	fake := fakeslack.New(fakeslack.WithApp(teamA))
+	t.Cleanup(fake.Close)
+	sl, ctx := NewSlack(fake.URL()), t.Context()
+
+	if err := sl.Join(ctx, "C1", "ATEAMA"); err != nil {
+		t.Fatal(err)
+	}
+	bot := slack.New(teamA.BotToken, slack.OptionAPIURL(fake.URL()+"/"))
+	if m, _, err := bot.GetUsersInConversation(&slack.GetUsersInConversationParameters{ChannelID: "C1"}); err != nil || len(m) != 1 || m[0] != "UTEAMA" {
+		t.Errorf("conversations.members = %v, %v; want team-a's bot only", m, err)
+	}
+	var se *StatusError
+	if err := sl.Join(ctx, "C1", "ANOSUCHAPP"); !errors.As(err, &se) || se.Status != http.StatusNotFound {
+		t.Errorf("Join of an app the fake does not host = %v; want a 404", err)
+	}
+
+	if n, err := sl.AppConnections(ctx, "ATEAMA"); err != nil || n != 0 {
+		t.Errorf("AppConnections before a client = %d, %v; want 0", n, err)
+	}
+	connectSocket(t, slack.New(teamA.BotToken, slack.OptionAPIURL(fake.URL()+"/"), slack.OptionAppLevelToken(teamA.AppToken)), true)
+	if n, err := sl.AppConnections(ctx, "ATEAMA"); err != nil || n != 1 {
+		t.Errorf("AppConnections with a client = %d, %v; want 1", n, err)
+	}
+	if n, err := sl.AppConnectionsOpened(ctx, "ATEAMA"); err != nil || n != 1 {
+		t.Errorf("AppConnectionsOpened with one client = %d, %v; want 1", n, err)
+	}
+	if n, err := sl.AppConnections(ctx, "AFAKEAPP"); err != nil || n != 0 {
+		t.Errorf("AppConnections of the default app = %d, %v; want 0: the client is team-a's", n, err)
+	}
+
+	if err := sl.SetRevoked(ctx, "ATEAMA", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bot.AuthTestContext(ctx); err == nil || !strings.Contains(err.Error(), "token_revoked") {
+		t.Errorf("auth.test with a revoked token = %v; want token_revoked", err)
+	}
+	if err := sl.SetRevoked(ctx, "ATEAMA", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bot.AuthTestContext(ctx); err != nil {
+		t.Errorf("auth.test after the tokens were given back = %v", err)
+	}
+	if err := sl.SetRevoked(ctx, "ANOSUCHAPP", true); !errors.As(err, &se) || se.Status != http.StatusNotFound {
+		t.Errorf("SetRevoked of an app the fake does not host = %v; want a 404", err)
+	}
+
+	if err := sl.HoldPosts(ctx, "ATEAMA", true); err != nil {
+		t.Fatal(err)
+	}
+	posted := make(chan error, 1)
+	go func() {
+		_, _, err := bot.PostMessageContext(ctx, "C1", slack.MsgOptionText("held", false))
+		posted <- err
+	}()
+	if err := Wait(ctx, 5*time.Second, "a post to wait on the hold", func(ctx context.Context) (bool, error) {
+		n, err := sl.HeldPosts(ctx, "ATEAMA")
+		return n == 1, err
+	}); err != nil {
+		t.Error(err)
+	}
+	if err := sl.HoldPosts(ctx, "ATEAMA", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-posted; err != nil {
+		t.Errorf("the held post after the release = %v", err)
+	}
+	if n, err := sl.HeldPosts(ctx, "ATEAMA"); err != nil || n != 0 {
+		t.Errorf("HeldPosts after the release = %d, %v; want 0", n, err)
+	}
+	if ids, err := sl.EventEnvelopes(ctx, "ATEAMA", "C1", "1.000001"); err != nil || len(ids) != 0 {
+		t.Errorf("EventEnvelopes of a message nobody posted = %v, %v; want none", ids, err)
+	}
+	if _, err := sl.EventEnvelopes(ctx, "ANOSUCHAPP", "C1", "1.000001"); !errors.As(err, &se) || se.Status != http.StatusNotFound {
+		t.Errorf("EventEnvelopes of an app the fake does not host = %v; want a 404", err)
+	}
+	if err := sl.HoldPosts(ctx, "ANOSUCHAPP", true); !errors.As(err, &se) || se.Status != http.StatusNotFound {
+		t.Errorf("HoldPosts of an app the fake does not host = %v; want a 404", err)
+	}
+	if _, err := sl.HeldPosts(ctx, "ANOSUCHAPP"); !errors.As(err, &se) || se.Status != http.StatusNotFound {
+		t.Errorf("HeldPosts of an app the fake does not host = %v; want a 404", err)
+	}
+
+	if err := sl.RotateTokens(ctx, "ATEAMA", "xoxb-fake-team-a-rotated", "xapp-fake-team-a-rotated"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bot.AuthTestContext(ctx); err == nil || !strings.Contains(err.Error(), "token_revoked") {
+		t.Errorf("auth.test with the old token after a rotation = %v; want token_revoked", err)
+	}
+	if got, err := slack.New("xoxb-fake-team-a-rotated", slack.OptionAPIURL(fake.URL()+"/")).AuthTestContext(ctx); err != nil || got.UserID != "UTEAMA" {
+		t.Errorf("auth.test with the new token = %+v, %v; want team-a's bot", got, err)
+	}
+	if err := sl.RotateTokens(ctx, "ATEAMA", "xapp-wrong", "xapp-fake-team-a-rotated"); !errors.As(err, &se) || se.Status != http.StatusBadRequest {
+		t.Errorf("RotateTokens with a bad bot token = %v; want a 400", err)
+	}
+	if err := sl.RotateTokens(ctx, "ANOSUCHAPP", "xoxb-new", "xapp-new"); !errors.As(err, &se) || se.Status != http.StatusNotFound {
+		t.Errorf("RotateTokens of an app the fake does not host = %v; want a 404", err)
+	}
+}
+
+// The control client archives a channel and puts it back, as conversations.info shows.
+func TestSlackArchivesAChannel(t *testing.T) {
+	f, ctx := newFixture(t), t.Context()
+	if err := f.sl.SetMembers(ctx, "C1", "UFAKEBOT"); err != nil {
+		t.Fatal(err)
+	}
+	info := func() (*slack.Channel, error) {
+		return f.bot.GetConversationInfo(&slack.GetConversationInfoInput{ChannelID: "C1"})
+	}
+	if err := f.sl.SetArchived(ctx, "C1", true); err != nil {
+		t.Fatal(err)
+	}
+	if ch, err := info(); err != nil || !ch.IsArchived || !ch.IsMember {
+		t.Errorf("conversations.info = %+v, %v; want an archived channel the bot is in", ch, err)
+	}
+	if err := f.sl.SetArchived(ctx, "C1", false); err != nil {
+		t.Fatal(err)
+	}
+	if ch, err := info(); err != nil || ch.IsArchived {
+		t.Errorf("conversations.info = %+v, %v; want the channel not archived", ch, err)
+	}
+	var se *StatusError
+	if err := f.sl.SetArchived(ctx, "", true); !errors.As(err, &se) || se.Status != http.StatusBadRequest {
+		t.Errorf("SetArchived with no channel = %v; want a 400", err)
+	}
+}
+
 func TestSlackShowsAStreamingMessage(t *testing.T) {
 	f, ctx := newFixture(t), t.Context()
 	root := f.post(t, slack.MsgOptionText("question", false))
@@ -318,5 +449,22 @@ func TestConnectSocketWaitsForItsOwnConnection(t *testing.T) {
 		if _, err := f.sl.AckWait(ctx, 2*time.Second, id); err != nil {
 			t.Fatalf("the acking client never got the event: %v", err)
 		}
+	}
+}
+
+func TestSlackShowsTheStatusCallsOfAThread(t *testing.T) {
+	f, ctx := newFixture(t), t.Context()
+	root := f.post(t, slack.MsgOptionText("alert", false))
+	if got, err := f.sl.ThreadStatuses(ctx, "C1"); err != nil || got == nil || len(got) != 0 {
+		t.Fatalf("ThreadStatuses before any call = %#v, %v; want an empty list", got, err)
+	}
+	for _, status := range []string{"is working…", ""} {
+		if err := f.bot.SetAssistantThreadsStatus(slack.AssistantThreadsSetStatusParameters{ChannelID: "C1", ThreadTS: root, Status: status}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []fakeslack.ThreadStatus{{Channel: "C1", ThreadTS: root, Status: "is working…"}, {Channel: "C1", ThreadTS: root}}
+	if got, err := f.sl.ThreadStatuses(ctx, "C1"); err != nil || len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("ThreadStatuses = %+v, %v; want %+v", got, err, want)
 	}
 }

@@ -55,8 +55,9 @@ type Message struct {
 	LatestReply string `json:"latest_reply,omitempty"`
 
 	// Streaming is true from chat.startStream until chat.stopStream, and Chunks
-	// holds every chunk the streaming calls sent, as sent. Both are for test
-	// assertions and are not part of Slack's message shape.
+	// holds every chunk the streaming calls sent, as sent, until a chat.update with
+	// blocks replaces them, as it replaces the stream's cards in Slack. Both are
+	// for test assertions and are not part of Slack's message shape.
 	Streaming bool              `json:"-"`
 	Chunks    []json.RawMessage `json:"-"`
 
@@ -110,11 +111,11 @@ func cloneValue(v any) any {
 	return v
 }
 
-// botMessage returns a new message from the bot, which carries the bot's user,
+// botMessage returns a new message from the bot of app, which carries the bot's user,
 // bot_id and app_id.
-func (s *Server) botMessage(text, threadTS string) *Message {
+func botMessage(app App, text, threadTS string) *Message {
 	return &Message{
-		Type: "message", User: s.bot.user, BotID: s.bot.id, AppID: s.bot.app,
+		Type: "message", User: app.BotUser, BotID: app.BotID, AppID: app.AppID,
 		Text: text, ThreadTS: threadTS,
 	}
 }

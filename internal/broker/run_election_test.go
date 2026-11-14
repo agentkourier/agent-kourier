@@ -17,6 +17,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // fakeFence is the epoch of a database that two fencing stores share: what Postgres keeps in the leadership table.
@@ -84,7 +85,7 @@ func TestRunOnlyTheLeaderStartsTheLeaderHalf(t *testing.T) {
 	client, fence := cluster(), &fakeFence{}
 	ca, a := electionConfig(t, client, fence, "pod-a_1")
 	a.running = start(t, ca)
-	eventually(t, 10*time.Second, "the first replica did not start the leader half", func() bool { return a.built.Load() == 1 })
+	testutil.Eventually(t, "the first replica did not start the leader half", func() bool { return a.built.Load() == 1 }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	cb, b := electionConfig(t, client, fence, "pod-b_1")
 	b.running = start(t, cb)
 
@@ -115,7 +116,7 @@ func TestRunAStandbyTakesOverWhenTheLeaderStopsGracefully(t *testing.T) {
 	client, fence := cluster(), &fakeFence{}
 	ca, a := electionConfig(t, client, fence, "pod-a_1")
 	a.running = start(t, ca)
-	eventually(t, 10*time.Second, "the first replica did not start the leader half", func() bool { return a.built.Load() == 1 })
+	testutil.Eventually(t, "the first replica did not start the leader half", func() bool { return a.built.Load() == 1 }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	cb, b := electionConfig(t, client, fence, "pod-b_1")
 	b.running = start(t, cb)
 	b.until("/readyz", http.StatusOK)
@@ -126,7 +127,7 @@ func TestRunAStandbyTakesOverWhenTheLeaderStopsGracefully(t *testing.T) {
 		t.Fatalf("the leader's Run = %v after a signal; want a clean stop", err)
 	}
 
-	eventually(t, 10*time.Second, "the standby did not take over", func() bool { return b.built.Load() == 1 })
+	testutil.Eventually(t, "the standby did not take over", func() bool { return b.built.Load() == 1 }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	if took := time.Since(start); took > testElection.LeaseDuration {
 		t.Errorf("the takeover took %s after a graceful stop; want less than the lease duration, %s", took, testElection.LeaseDuration)
 	}
@@ -149,7 +150,7 @@ func TestRunTheNewLeaderUsesTheCredentialsOfNowAndNotOfItsStart(t *testing.T) {
 	client, fence := cluster(), &fakeFence{}
 	ca, a := electionConfig(t, client, fence, "pod-a_1")
 	a.running = start(t, ca)
-	eventually(t, 10*time.Second, "the first replica did not start the leader half", func() bool { return a.built.Load() == 1 })
+	testutil.Eventually(t, "the first replica did not start the leader half", func() bool { return a.built.Load() == 1 }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	cb, b := electionConfig(t, client, fence, "pod-b_1")
 	var token atomic.Value
 	cb.newSlack = func(sc slack.Config) slackAPI { token.Store(sc.BotToken.Reveal()); b.built.Add(1); return idleSlack{} }
@@ -163,7 +164,7 @@ func TestRunTheNewLeaderUsesTheCredentialsOfNowAndNotOfItsStart(t *testing.T) {
 	}
 	a.cancel()
 
-	eventually(t, 10*time.Second, "the standby did not take over", func() bool { return b.built.Load() == 1 })
+	testutil.Eventually(t, "the standby did not take over", func() bool { return b.built.Load() == 1 }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	if got := token.Load(); got != "rotated-bot-token" {
 		t.Errorf("the new leader's bot token = %v; want the rotated one: it read the Secret at its start", got)
 	}
@@ -172,6 +173,7 @@ func TestRunTheNewLeaderUsesTheCredentialsOfNowAndNotOfItsStart(t *testing.T) {
 // A leader that cannot renew its lease ends the process at once, with exit 5 and one line, and without the shutdown
 // that would post.
 func TestRunTheProcessExitsWhenTheLeaseIsLost(t *testing.T) {
+	t.Parallel()
 	client, fence := cluster(), &fakeFence{}
 	var unreachable atomic.Bool
 	client.PrependReactor("*", "leases", func(k8stesting.Action) (bool, runtime.Object, error) {
@@ -185,7 +187,7 @@ func TestRunTheProcessExitsWhenTheLeaseIsLost(t *testing.T) {
 	ca, a := electionConfig(t, client, fence, "pod-a_1")
 	ca.shutdownTrace = func(step string) { mu.Lock(); steps = append(steps, step); mu.Unlock() }
 	a.running = start(t, ca)
-	eventually(t, 10*time.Second, "the replica did not start the leader half", func() bool { return a.built.Load() == 1 })
+	testutil.Eventually(t, "the replica did not start the leader half", func() bool { return a.built.Load() == 1 }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	a.until("/readyz", http.StatusOK)
 
 	unreachable.Store(true)
@@ -211,6 +213,7 @@ func TestRunTheProcessExitsWhenTheLeaseIsLost(t *testing.T) {
 // A replica that cannot be given the epoch does not hold the lease for ever: after the time a leader is given to renew,
 // Run ends with the error, so that its restart, or the other replica, can try.
 func TestRunEndsWhenTheEpochCannotBeTakenAndHandsTheLeaseOver(t *testing.T) {
+	t.Parallel()
 	client, fence := cluster(), &fakeFence{failing: true}
 	ca, a := electionConfig(t, client, fence, "pod-a_1")
 	a.running = start(t, ca)
@@ -233,7 +236,7 @@ func TestRunAStandbyStopsCleanly(t *testing.T) {
 	client, fence := cluster(), &fakeFence{}
 	ca, a := electionConfig(t, client, fence, "pod-a_1")
 	a.running = start(t, ca)
-	eventually(t, 10*time.Second, "the first replica did not start the leader half", func() bool { return a.built.Load() == 1 })
+	testutil.Eventually(t, "the first replica did not start the leader half", func() bool { return a.built.Load() == 1 }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	cb, b := electionConfig(t, client, fence, "pod-b_1")
 	b.running = start(t, cb)
 	b.until("/readyz", http.StatusOK)
@@ -260,7 +263,7 @@ func TestRunWithSQLiteHasNoElection(t *testing.T) {
 	c.newSlack = func(slack.Config) slackAPI { built.Add(1); return idleSlack{} }
 	r := start(t, c)
 
-	eventually(t, 10*time.Second, "the leader half did not start", func() bool { return built.Load() == 1 })
+	testutil.Eventually(t, "the leader half did not start", func() bool { return built.Load() == 1 }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	r.until("/readyz", http.StatusOK)
 
 	for _, a := range c.Client.(*fake.Clientset).Actions() {
@@ -284,5 +287,23 @@ func TestRunRefusesAFencingStoreWithoutAnElection(t *testing.T) {
 
 	if err := r.wait(); !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), "election") {
 		t.Errorf("Run = %v; want an ErrWiring about the election", err)
+	}
+}
+
+// The Lease is held through the election's own client, and only through it: the client that the Secret informers use never
+// sees the Lease, which is how a burst of their lists cannot delay a renewal.
+func TestRunTakesTheLeaseThroughItsOwnClient(t *testing.T) {
+	secrets, lease := cluster(), fake.NewClientset()
+	c, a := electionConfig(t, secrets, &fakeFence{}, "pod-a_1")
+	c.LeaseClient = lease
+	a.running = start(t, c)
+	testutil.Eventually(t, "the replica did not take the lease through its own client", func() bool {
+		l, err := lease.CoordinationV1().Leases(testElection.Namespace).Get(t.Context(), testElection.Name, metav1.GetOptions{})
+		return err == nil && l.Spec.HolderIdentity != nil && *l.Spec.HolderIdentity == "pod-a_1"
+	}, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
+	for _, act := range secrets.Actions() {
+		if act.GetResource().Resource == "leases" {
+			t.Errorf("the Secrets' client was asked for a Lease: %v", act)
+		}
 	}
 }

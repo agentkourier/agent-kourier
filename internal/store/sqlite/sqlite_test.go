@@ -1,17 +1,21 @@
 package sqlite
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 var (
@@ -114,10 +118,10 @@ func TestMigrateAppliesInOrderOnceAndRollsBackFailures(t *testing.T) {
 		"migrations/0001_a.sql": good["migrations/0001_a.sql"],
 		"migrations/0002_b.sql": {Data: []byte("CREATE TABLE b (x INTEGER); NOT SQL;")},
 	}
-	if err := migrate(ctx, db, broken); err == nil {
+	if err := migrate(ctx, db, broken, discardLog); err == nil {
 		t.Fatal("migrate with a broken migration returned nil")
 	}
-	if err := migrate(ctx, db, good); err != nil { // idempotent: 0001 is already applied
+	if err := migrate(ctx, db, good, discardLog); err != nil { // idempotent: 0001 is already applied
 		t.Fatalf("re-running an applied migration: %v", err)
 	}
 	var v1, v2, hasA, hasB int
@@ -131,14 +135,45 @@ func TestMigrateAppliesInOrderOnceAndRollsBackFailures(t *testing.T) {
 	}
 }
 
-func TestListMigrationsRejectsDuplicateVersionsAndSortsNumerically(t *testing.T) {
-	ok := fstest.MapFS{"migrations/10_b.sql": {}, "migrations/9_a.sql": {}}
-	ms, err := listMigrations(ok)
-	if err != nil || len(ms) != 2 || ms[0].version != 9 || ms[1].version != 10 {
-		t.Fatalf("listMigrations = %+v, %v; want 9 then 10", ms, err)
+var discardLog = testutil.DiscardLogger()
+
+// TestNewerSchemaIsWarnedAbout: a database that records a migration this build does not have (a rollback, or a replica
+// not upgraded yet) opens, with a warning that names the versions; a fresh database, whose schema_migrations does not
+// exist until Open makes it, is migrated without one.
+func TestNewerSchemaIsWarnedAbout(t *testing.T) {
+	ctx := context.Background()
+	known, err := store.ListMigrations(migrationFiles)
+	if err != nil || len(known) == 0 {
+		t.Fatalf("ListMigrations = %v, %v; want the embedded migrations", known, err)
 	}
-	dup := fstest.MapFS{"migrations/0002_a.sql": {}, "migrations/2_b.sql": {}}
-	if _, err := listMigrations(dup); err == nil {
-		t.Fatal("duplicate version accepted")
+	path := filepath.Join(t.TempDir(), "agent-kourier.db")
+	var quiet bytes.Buffer
+	s, err := Open(ctx, path, WithLogger(slog.New(slog.NewTextHandler(&quiet, nil))))
+	if err != nil {
+		t.Fatalf("Open a fresh database: %v", err)
+	}
+	if quiet.Len() != 0 {
+		t.Errorf("a fresh database logged %q", quiet.String())
+	}
+	if _, err := s.a.write.ExecContext(ctx, `INSERT INTO schema_migrations (version, applied_at) VALUES (9999, 0)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	s, err = Open(ctx, path, WithLogger(slog.New(slog.NewTextHandler(&buf, nil))))
+	if err != nil {
+		t.Fatalf("Open a database with a newer schema: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	for _, want := range []string{
+		"level=WARN", `msg="the database schema is newer than this build of Agent Kourier"`,
+		fmt.Sprintf("newest_known_migration=%d", known[len(known)-1].Version), "newest_in_database=9999",
+	} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("log = %q; want it to hold %q", buf.String(), want)
+		}
 	}
 }

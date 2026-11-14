@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
@@ -20,7 +21,7 @@ import (
 // enqueuer is an Outbox over st that only enqueues, for the tests that seed a store before Run opens it.
 func enqueuer(t testing.TB, st store.Outbox) *outbox.Outbox {
 	t.Helper()
-	o, err := outbox.New(outbox.Config{Store: st, Platform: slack.NewPlatform(idleSlack{}, "ns/conn"), OnAbandon: outbox.NoAbandon})
+	o, err := outbox.New(outbox.Config{Store: st, Platforms: chattest.Same[outbox.Platform](slack.NewPlatform(idleSlack{}, "ns/conn")), OnAbandon: outbox.NoAbandon})
 	if err != nil {
 		t.Fatalf("outbox.New = %v", err)
 	}
@@ -147,11 +148,11 @@ func TestInteractionDecisionCountsByResultAndFoldsTheRest(t *testing.T) {
 	}
 }
 
-// The outcomes of a decided approval, and a timed-out one, are in the closed set: each is a series of its own, per
+// The outcomes of a decided approval, a timed-out one and an orphaned pause are in the closed set: each is a series of its own, per
 // Binding, and not "other". The set is closed, so a new constant that is not listed here and in ApprovalOutcome folds into "other".
 func TestApprovalOutcomesOfADecidedApprovalAreSeriesOfTheirOwn(t *testing.T) {
 	m := mustMetrics(t, nil)
-	for _, o := range []interact.Outcome{interact.OutcomeApproved, interact.OutcomeApproved, interact.OutcomeDenied, interact.OutcomePartiallyApproved, interact.OutcomeTimedOut} {
+	for _, o := range []interact.Outcome{interact.OutcomeApproved, interact.OutcomeApproved, interact.OutcomeDenied, interact.OutcomePartiallyApproved, interact.OutcomeTimedOut, interact.OutcomeOrphaned} {
 		m.ApprovalOutcome("sre/sre-alerts", o)
 	}
 	m.ApprovalOutcome("sre/other", interact.OutcomeApproved)
@@ -161,6 +162,7 @@ func TestApprovalOutcomesOfADecidedApprovalAreSeriesOfTheirOwn(t *testing.T) {
 		`agentkourier_approval_outcomes_total{binding=sre/sre-alerts,outcome=denied} 1`,
 		`agentkourier_approval_outcomes_total{binding=sre/sre-alerts,outcome=partially_approved} 1`,
 		`agentkourier_approval_outcomes_total{binding=sre/sre-alerts,outcome=timed_out} 1`,
+		`agentkourier_approval_outcomes_total{binding=sre/sre-alerts,outcome=orphaned} 1`,
 		`agentkourier_approval_outcomes_total{binding=sre/other,outcome=approved} 1`,
 	} {
 		if !strings.Contains(got, want) {
@@ -246,4 +248,14 @@ func TestReadyzDoesNotWaitForTheChatConnection(t *testing.T) {
 	r.until("/readyz", http.StatusOK)
 
 	r.waitMetric(`agentkourier_chat_connected{connection="agent-kourier-system/slack-main"} 0`)
+}
+
+// The outbox gauges say 0 for the connection the broker serves while it has nothing unposted, so that it always has a series.
+func TestRunShowsTheOutboxGaugesOfTheServedConnection(t *testing.T) {
+	const name = "agent-kourier-system/slack-main"
+	r := start(t, startConfig(t))
+	r.until("/readyz", http.StatusOK)
+
+	r.waitMetric(`agentkourier_outbox_pending{connection="` + name + `"} 0`)
+	r.waitMetric(`agentkourier_outbox_oldest_age_seconds{connection="` + name + `"} 0`)
 }

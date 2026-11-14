@@ -5,20 +5,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // edits records the edits made to prompts, whole.
@@ -71,16 +71,13 @@ func newReplaceRig(t *testing.T) *replaceRig { return newReplaceRigWith(t, nil) 
 // newReplaceRigWith is newReplaceRig with the Replacer's configuration changed by mod.
 func newReplaceRigWith(t *testing.T, mod func(*interact.ReplacerConfig)) *replaceRig {
 	t.Helper()
-	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := sqlitetest.Open(t)
 	rig := &replaceRig{st: st, up: &edits{}}
-	cfg := interact.ReplacerConfig{Store: st, Updater: rig.up, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	cfg := interact.ReplacerConfig{Store: st, Updaters: chattest.Same[interact.Editor](rig.up), Logger: testutil.DiscardLogger()}
 	if mod != nil {
 		mod(&cfg)
 	}
+	var err error
 	rig.r, err = interact.NewReplacer(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -254,7 +251,9 @@ func withinASecond(t *testing.T, what string, f func()) {
 // the prompt is not counted as replaced, so that it is tried again.
 func TestAHungEditIsCutOffAndRetried(t *testing.T) {
 	h := &hangs{}
-	r := newRepairRig(t, func(c *interact.ReplacerConfig) { c.Updater, c.EditTimeout = h, 20*time.Millisecond })
+	r := newRepairRig(t, func(c *interact.ReplacerConfig) {
+		c.Updaters, c.EditTimeout = chattest.Same[interact.Editor](h), 20*time.Millisecond
+	})
 	r.decided(t, "ix-1", asked, r.resolve(store.InteractionTimedOut))
 	var err error
 	withinASecond(t, "Replace", func() { err = r.r.Replace(t.Context(), "ix-1") })
@@ -269,7 +268,7 @@ func TestAHungEditIsCutOffAndRetried(t *testing.T) {
 
 func TestNewReplacerNeedsItsParts(t *testing.T) {
 	if _, err := interact.NewReplacer(interact.ReplacerConfig{}); err == nil {
-		t.Error("NewReplacer accepted no Store or Updater")
+		t.Error("NewReplacer accepted no Store or Updaters")
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // A turn that fails after the task was named, with an error that is no lost stream (a refused identity on
@@ -34,6 +35,15 @@ func TestTurnThatFailsForAGoodAfterTheTaskIsNamedIsTold(t *testing.T) {
 				return fmt.Errorf("send message: %w", agent.ErrForbidden)
 			}
 		}, "the agent refused to continue the task", TurnRefused},
+		{"a reconnect whose card is answered 403", func(f *fixture) {
+			f.agent.script = lost(fmt.Errorf("reconnect to agent: %w", agent.ErrAgentForbidden))
+		}, "the agent refused to continue the task", TurnRefused},
+		{"a read of the lost task whose card is answered 403", func(f *fixture) {
+			f.agent.script = lost(errors.New("connection reset"))
+			f.agent.get = func(a2a.TaskID) (*a2a.Task, error) {
+				return nil, fmt.Errorf("connect to agent: %w", agent.ErrAgentForbidden)
+			}
+		}, "the agent refused to continue the task", TurnRefused},
 		{"a stream that ends with no final task", func(f *fixture) {
 			f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
 				accepted(h, n)
@@ -49,8 +59,8 @@ func TestTurnThatFailsForAGoodAfterTheTaskIsNamedIsTold(t *testing.T) {
 			if _, err := f.submit(in); err != nil {
 				t.Fatal(err)
 			}
-			eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) >= 1 })
-			eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= 1 })
+			testutil.Eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) >= 1 })
+			testutil.Eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= 1 })
 			f.retired(t)
 			wantID := in.MessageID + "/failed"
 			if tc.outcome == TurnRefused {
@@ -72,6 +82,11 @@ func TestTurnThatFailsForAGoodAfterTheTaskIsNamedIsTold(t *testing.T) {
 			if f.taskID() != "t1" {
 				t.Errorf("task %q recorded; want t1 kept, for reconciliation", f.taskID())
 			}
+			f.amu.Lock()
+			defer f.amu.Unlock()
+			if len(f.rejected) != 0 {
+				t.Errorf("Rejected calls = %+v; want none: no credential was refused", f.rejected)
+			}
 		})
 	}
 	t.Run("a shutdown that cuts the stream tells nobody", func(t *testing.T) {
@@ -84,7 +99,7 @@ func TestTurnThatFailsForAGoodAfterTheTaskIsNamedIsTold(t *testing.T) {
 		if _, err := f.submit(inbound("1")); err != nil {
 			t.Fatal(err)
 		}
-		eventually(t, "the task to be recorded", func() bool { return f.taskID() == "t1" })
+		testutil.Eventually(t, "the task to be recorded", func() bool { return f.taskID() == "t1" })
 		if err := f.close(); err != nil {
 			t.Fatal(err)
 		}
@@ -131,7 +146,7 @@ func TestTextSaidBeforeALostStreamCountsAfterTheFollow(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFinal(t, sink)
-	eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
+	testutil.Eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
 	f.retired(t)
 	if _, _, follows := f.agent.counts(); follows != 1 {
 		t.Fatalf("%d follows; want the one that ends the turn", follows)

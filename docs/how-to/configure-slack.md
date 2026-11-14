@@ -8,7 +8,7 @@ needs, its tokens are in a Kubernetes Secret, and a ChatConnection points at it.
 - Permission to install an app in the Slack workspace. Workspace settings can require an admin to approve each app; a
   member without that permission sees **Request to Install** instead of **Install**, and can copy the bot token only
   after an admin approves the request.
-- A Slack app that no other running Agent Kourier uses (see the warning at the end of the steps).
+- A Slack app that no other running Agent Kourier uses (see the warning at the end of the steps). A team that brings an app of its own to the platform's broker does the same steps, and then follows [Let a team bring its own Slack app](team-slack-app.md).
 - `kubectl` access to the namespace Agent Kourier runs in.
 - For the check in the last step: Go, at the version in `go.mod`, and a checkout of the repository.
 
@@ -65,7 +65,7 @@ needs, its tokens are in a Kubernetes Secret, and a ChatConnection points at it.
     Make the Secret from the file:
 
     ```sh
-    kubectl -n agent-kourier create secret generic agent-kourier-slack \
+    kubectl -n agent-kourier create secret generic slack \
       --from-env-file="$HOME/.config/agent-kourier/slack-secret.env"
     ```
 
@@ -74,18 +74,19 @@ needs, its tokens are in a Kubernetes Secret, and a ChatConnection points at it.
 
     The path is only an example: any file that only you can read works, and Agent Kourier never reads it; kubectl does.
     If your cluster's Secrets come from a secrets manager (External Secrets, Sealed Secrets), create
-    `agent-kourier-slack` with the keys `botToken` and `appToken` that way instead, and skip the file; step 6 then
+    `slack` with the keys `botToken` and `appToken` that way instead, and skip the file; step 6 then
     needs `SLACK_BOT_TOKEN` set some other way.
 
     **5. Declare the connection.** In the chart's values:
 
     ```yaml
     config:
+      source: files # the ConfigMap route
       chatConnections:
         slack:
           spec:
             platform: slack
-            credentialsSecretRef: {name: agent-kourier-slack}
+            credentialsSecretRef: {name: slack}
             allowedNamespaces: [payments] # (1)!
     ```
 
@@ -125,15 +126,47 @@ Every Slack call Agent Kourier makes, and the scope in the manifest that allows 
 | Call | Scope |
 |---|---|
 | `auth.test` | none |
+| `bots.info`, made by the leader for each ChatConnection it serves, the broker's own included, but only when it serves a team ChatConnection, to tell which Slack app the bot belongs to: again at each look until Slack answers, and for a team's connection again after its ChatConnection or its Secret changes | `users:read` (Slack's documentation for the method; not verified here) |
 | `users.info`, with the email for the audit log | `users:read`, `users:read.email` |
 | `chat.postMessage`, `chat.update`, `chat.postEphemeral` | `chat:write` |
 | `chat.startStream`, `chat.appendStream`, `chat.stopStream` | `chat:write` |
 | `reactions.add`, `reactions.remove` | `reactions:write` |
+| `assistant.threads.setStatus` | `assistant:write` (`chat:write` may also do; see below) |
 | `conversations.history`, `conversations.replies` | `channels:history`, `groups:history` |
 | `conversations.members` | `channels:read`, `groups:read` |
-| `usergroups.users.list` | `usergroups:read` when a Binding sets `interactions.approverGroups` |
+| `conversations.info`, made by the leader to [verify each Binding](troubleshoot.md#a-binding-is-not-ready) | `channels:read`, `groups:read` |
+| `conversations.list`, made only by `agent-kourier init`, to find the ID of a channel given by name | `channels:read`, `groups:read` |
+| `usergroups.users.list`, made when someone presses a tool approval on a Binding that sets `interactions.approverGroups`, and by the leader to [verify each such Binding](troubleshoot.md#a-binding-is-not-ready) | `usergroups:read` when a Binding sets `interactions.approverGroups` |
 | Events `app_mention`, `message.channels`, `message.groups` | `app_mentions:read`, `channels:history`, `groups:history` |
 | Socket Mode | the app-level token, `connections:write` |
+
+The `message.channels` and `message.groups` events carry a person's replies in a thread Agent Kourier owns and, for a Binding with a
+[`personMessage` trigger](../reference/chat-triggers.md#a-persons-message), each message a person posts outside a thread; no other scope or event is needed for it.
+
+The leader calls `conversations.info` once for each Binding's channel on each pass of [Binding verification](../reference/metrics.md#binding-verification), and `usergroups.users.list` up to once for each approver group that the Bindings setting `interactions.approverGroups` name, a group that several Bindings name once unless a read is cut short at its Binding's 8 second bound, when the next Binding that needs the group reads it again (a Binding's read stops at the first group that fails, and none is made while the chat credentials Secret differs from the tokens in use or is unusable: gone, empty, missing a key, or of a type that is never read). An app without the scope reads `False/MissingScope` on `ChannelJoined`, or on `ApproversReadable` for the groups; the calls only report, and turns still run.
+
+Agent Kourier reads the `botToken` and `appToken` of the broker's own connection when it starts. A new token written to its Secret is not used until a restart, and until then `ChannelJoined` (and `ApproversReadable`, for a Binding with approver groups) reads `Unknown/ChatCredentialsChanged` and the probe does not call Slack. A team ChatConnection restarts by itself at the first look after Agent Kourier has the change to its Secret or its spec, which comes every 5 seconds, and until then its Bindings read the same reason when the tokens in its Secret differ from the ones it runs on.
+
+While an agent investigates an alert thread, Agent Kourier calls `assistant.threads.setStatus`, which shows Slack's assistant
+status (`is working…`) in the thread. It does this only when `chat.progress` is not `steps` and `output` is `live`, and
+never in a thread that a person's message started, whose reply streams instead. It sets the status when the turn starts and
+again after each write but the last, because a reply in the thread may take it off, and clears it when the turn ends.
+
+The manifest asks for `assistant:write` because that is the scope with which we have seen the status render. The Slack Go
+library that Agent Kourier uses says the method accepts `chat:write` or `assistant:write`, and that `assistant:write` is
+being deprecated in favor of `chat:write` (unverified against Slack's own documentation). In our testing an app that had
+only `chat:write` was answered `ok`; whether it showed the status was not checked. An app made from an older copy of the
+manifest, without `assistant:write`, may get the status anyway or may be refused, and a refusal is only logged. If Slack answers with a code that says the app,
+token or workspace cannot use the method (`missing_scope`, `not_allowed_token_type`, `not_allowed`, `access_denied`,
+`feature_not_enabled`, `no_permission` or `unknown_method`; these codes are unverified, since none has been recorded from
+Slack), Agent Kourier logs that once at info level and sets no status on that connection until it restarts. Replies are
+unaffected.
+
+In our testing (Slack's desktop web client, October 2026; mobile not checked), the status reached only clients that were open
+when it was set, a reply in the thread removed it, and it had not expired after nearly three minutes. It rendered for an app
+that had `assistant:write` with Slack's agent app feature switched off. To add the scope to an installed app, add it to the app's
+bot scopes and reinstall the app; removing a scope and reinstalling did not remove it from the token (observed 2026-10-18),
+so the token's scopes are not a check on the app's configuration.
 
 The manifest enables no direct messages: it has no `im:` scopes or events. The manifest includes `usergroups:read`. If
 your app was not made from this manifest, add that scope to the bot token's scopes and reinstall the app before using
@@ -155,9 +188,10 @@ printf 'header = "Authorization: Bearer %s"\n' "$(sed -n 's/^botToken=//p' ~/.co
 
 A workspace whose plan has no user groups cannot use `approverGroups`. Slack's page for `usergroups.users.list`, the
 method Agent Kourier calls on each press, lists the error `plan_upgrade_required`, and Agent Kourier treats that code as
-a permanent group-read failure.
+a permanent group-read failure. The Binding's `ApproversReadable` condition reads `False/GroupsUnreadable` for it. That a workspace without user groups gets this code has not been checked against a live workspace.
 
 ## Related
 
 - [ChatConnection reference](../reference/chatconnection.md)
+- [Let a team bring its own Slack app](team-slack-app.md), which has the broker serve a team's app from the team's namespace.
 - [Write a Binding](write-a-binding.md), which places an agent in a channel.

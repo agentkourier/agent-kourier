@@ -25,7 +25,7 @@ var (
 	// long task. Agent Kourier refuses such an agent instead.
 	ErrStreamingUnsupported = errors.New("agent: the agent card does not advertise streaming")
 	// ErrTokenRequired means a Target with TokenRequired got credentials without a token.
-	ErrTokenRequired = errors.New("agent: the Binding requires a bearer token and the credentials carry none")
+	ErrTokenRequired = errors.New("agent: the Binding requires a token and the credentials carry none")
 	// ErrTokenUnreadable means the Binding's token could not be read, or read as an empty or
 	// malformed value. The turn fails: a Binding with a token never falls back to its userId.
 	// The error wraps the cause.
@@ -41,6 +41,9 @@ var (
 // cannot be read. The Pool calls it for every operation and stores nothing it returns, so a
 // rotated token (WP-21e) takes effect on the next call. On error the call fails: the
 // identity never falls back to X-User-Id.
+//
+// It must return when ctx ends. Pool.Check passes a context that ends when the Pool closes or
+// ConnectTimeout passes, and Pool.Close waits for the Check, so a function that ignores ctx holds Close.
 type CredentialsFunc func(ctx context.Context) (dialect.Credentials, error)
 
 // Target is one agent as one Binding reaches it.
@@ -67,20 +70,20 @@ type entry struct {
 }
 
 // Pool keeps one connected client per (Binding, agent), reconnecting when the backend URL or
-// the credentials change. Connecting fetches the agent card, a network round trip: keep it
-// off Slack's 3-second acknowledgement path by calling Warm there and Send later. It is safe
-// for concurrent use.
+// the credentials change. Connecting fetches the agent card, a network round trip, on an
+// Agent's first use, so that use belongs off Slack's 3-second acknowledgement path. It is
+// safe for concurrent use.
 type Pool struct {
 	dialect dialect.Dialect
 	cfg     Config
-	bg      context.Context // ends the warm-ups when the pool closes
+	bg      context.Context // ends the connects in flight when the pool closes
 	stop    context.CancelFunc
-	warming sync.WaitGroup
 	key     [32]byte // keys the seal
 
 	mu      sync.Mutex
 	entries map[poolKey]*entry
 	closed  bool
+	probes  sync.WaitGroup // the Checks in flight; Add only under mu while not closed, so Close's Wait cannot race it
 }
 
 // NewPool returns a Pool that connects through d. cfg applies to every Agent it returns.
@@ -95,33 +98,19 @@ func NewPool(d dialect.Dialect, cfg Config) *Pool {
 func (p *Pool) Agent(t Target) *Agent {
 	cfg := p.cfg
 	cfg.NotReady = p.dialect.NotReady
-	return New(func(ctx context.Context) (Conn, error) { return p.conn(ctx, t) }, p.dialect.ToolPart, cfg)
+	cfg.ParseInteraction = p.dialect.ParseInteraction
+	return New(func(ctx context.Context) (Conn, error) { return p.conn(ctx, t) }, cfg)
 }
 
-// Warm connects to t's agent in the background and returns at once. A failed warm-up is
-// forgotten: the next call connects again and reports the error.
-func (p *Pool) Warm(t Target) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.closed {
-		return
-	}
-	p.warming.Add(1)
-	go func() {
-		defer p.warming.Done()
-		_, _ = p.conn(p.bg, t)
-	}()
-}
-
-// Close stops the warm-ups, waits for them, and closes every client. Calls after it fail
-// with ErrPoolClosed; streams already running end with their own context.
+// Close cancels the connects and the Checks in flight, waits for the Checks to return, and closes every
+// client. Calls after it fail with ErrPoolClosed; streams already running end with their own context.
 func (p *Pool) Close() {
 	p.mu.Lock()
 	p.closed = true
 	entries := slices.Collect(maps.Values(p.entries))
 	p.mu.Unlock()
 	p.stop()
-	p.warming.Wait()
+	p.probes.Wait() // after the lock is released: a Check takes it to finish
 	for _, e := range entries {
 		e.mu.Lock()
 		if e.client != nil {
@@ -132,15 +121,56 @@ func (p *Pool) Close() {
 	}
 }
 
+// credentials resolves t's credentials, and refuses a Target that requires a token when they carry none.
+func (p *Pool) credentials(ctx context.Context, t Target) (dialect.Credentials, error) {
+	creds, err := t.Credentials(ctx)
+	if err != nil {
+		return dialect.Credentials{}, fmt.Errorf("resolve credentials of binding %s: %w", t.Binding, err)
+	}
+	if t.TokenRequired && creds.Token.IsEmpty() {
+		return dialect.Credentials{}, fmt.Errorf("binding %s: %w", t.Binding, ErrTokenRequired)
+	}
+	return creds, nil
+}
+
+// bounded returns ctx ended also by the ConnectTimeout and by the pool closing, and the function that releases it.
+// Close waits for what holds the entry's lock (a connect) and for the Checks, so what they wait on must end with the pool.
+func (p *Pool) bounded(ctx context.Context) (context.Context, func()) {
+	ctx, cancel := context.WithTimeout(ctx, p.cfg.ConnectTimeout)
+	stop := context.AfterFunc(p.bg, cancel)
+	return ctx, func() { stop(); cancel() }
+}
+
+// connect makes a client for t with creds, which fetches the agent card, and refuses an agent whose card does
+// not advertise streaming. A client it refuses is destroyed. The connect ends when the caller's context, the
+// ConnectTimeout, or the pool ends.
+func (p *Pool) connect(ctx context.Context, t Target, creds dialect.Credentials) (*a2aclient.Client, error) {
+	ctx, release := p.bounded(ctx)
+	defer release()
+	return p.open(ctx, t, creds)
+}
+
+// open is connect without the bound: ctx must already end with the pool.
+func (p *Pool) open(ctx context.Context, t Target, creds dialect.Credentials) (*a2aclient.Client, error) {
+	client, err := p.dialect.Connect(ctx, t.Backend, t.Agent, creds)
+	if err != nil {
+		return nil, fmt.Errorf("binding %s: %w", t.Binding, err)
+	}
+	// WP-01d measured kagent 1.0.0-alpha5's card: capabilities.streaming is true
+	// (test/fixtures/kagent/card/test-agent.card.json).
+	if !client.Card().Capabilities.Streaming {
+		_ = client.Destroy()
+		return nil, fmt.Errorf("agent %s/%s: %w", t.Agent.Namespace, t.Agent.Name, ErrStreamingUnsupported)
+	}
+	return client, nil
+}
+
 // conn resolves the credentials, then returns the cached client if they and the backend URL
 // are unchanged, or connects a new one.
 func (p *Pool) conn(ctx context.Context, t Target) (Conn, error) {
-	creds, err := t.Credentials(ctx)
+	creds, err := p.credentials(ctx, t)
 	if err != nil {
-		return nil, fmt.Errorf("resolve credentials of binding %s: %w", t.Binding, err)
-	}
-	if t.TokenRequired && creds.Token.IsEmpty() {
-		return nil, fmt.Errorf("binding %s: %w", t.Binding, ErrTokenRequired)
+		return nil, err
 	}
 	e := p.entry(poolKey{t.Binding, t.Agent})
 	seal := p.seal(t.Backend.Spec.URL, creds)
@@ -152,22 +182,77 @@ func (p *Pool) conn(ctx context.Context, t Target) (Conn, error) {
 	if e.client != nil && e.seal == seal {
 		return e.client, nil
 	}
-	// Close waits for the entry's lock, so it must be able to cut short a connect a caller
-	// started: the connect ends when the caller's context, the timeout, or the pool ends.
-	ctx, cancel := context.WithTimeout(ctx, p.cfg.ConnectTimeout)
-	defer cancel()
-	defer context.AfterFunc(p.bg, cancel)() //nolint:contextcheck // p.bg is the pool's own lifetime, joined to the caller's on purpose
-	client, err := p.dialect.Connect(ctx, t.Backend, t.Agent, creds)
-	if err != nil {
-		return nil, fmt.Errorf("binding %s: %w", t.Binding, err)
-	}
-	// WP-01d measured kagent 1.0.0-alpha5's card: capabilities.streaming is true
-	// (test/fixtures/kagent/card/test-agent.card.json).
-	if !client.Card().Capabilities.Streaming {
-		return nil, fmt.Errorf("agent %s/%s: %w", t.Agent.Namespace, t.Agent.Name, ErrStreamingUnsupported)
+	client, err := p.connect(ctx, t, creds)
+	if err != nil { // the card fetch is the request a connect makes, so an HTTP status here is the card's
+		return nil, cardError(err)
 	}
 	e.client, e.seal = client, seal // a replaced client is left to finish the streams it carries
 	return client, nil
+}
+
+// Check reports whether t's agent can be reached now: it resolves the credentials as a call does,
+// connects afresh, which fetches the agent card, applies the check that the card advertises
+// streaming, and destroys the client. It sends the agent no message.
+//
+// The connect is always fresh because conn returns the cached client while the credentials and the
+// URL are unchanged, so a probe through it would stop touching the backend after its first success.
+// Check neither reads nor writes the cached clients, so it cannot disturb a stream or hide an
+// outage behind one. It also asks the dialect for a new connection (dialect.WithFreshConnection): the card
+// fetch does its own DNS lookup, dial and TLS handshake, so a connection a turn holds open cannot carry
+// it, and a name, certificate or network path that only a new connection needs fails the check. The one
+// narrow exception is under HTTP/2: a probe cancelled just after its TLS handshake can leave an unused
+// connection that the next probe to that host and port rides, until the idle timeout.
+// It holds no entry lock while it waits on the network, so it never delays a turn.
+//
+// The credentials read and the connect together end at the ConnectTimeout, when ctx ends, or when the
+// Pool closes. It returns the error of the card fetch as it is, not typed by what a status
+// means to a call: a 403 is a dialect.HTTPStatusError and not ErrCredentialsRejected. It also
+// returns ErrTokenUnreadable, ErrHeaderUnreadable, ErrTokenRequired, ErrStreamingUnsupported,
+// dialect.ErrUnsupportedExtension, dialect.ErrNoJSONRPCInterface, dialect.ErrInvalidAgentCard (the front door
+// answered 200 with a body that is not a usable card) and dialect.ErrResponseTooLarge (the card is past dialect.MaxCardBytes), all findable with errors.Is, and *agentcard.ErrStatusNotOK
+// for a 2xx other than 200, findable with errors.As.
+// After Close it returns ErrPoolClosed: at once when Close came before the call, and otherwise when the
+// credentials read or the connect ends in a cancellation once the pool is closed. Close waits for a Check that
+// is in flight, so none outlives it. An error that is not a cancellation keeps its own type, even when Close
+// runs just after it.
+func (p *Pool) Check(ctx context.Context, t Target) error {
+	if !p.beginProbe() {
+		return ErrPoolClosed
+	}
+	defer p.probes.Done()
+	ctx, release := p.bounded(dialect.WithFreshConnection(ctx))
+	defer release()
+	creds, err := p.credentials(ctx, t)
+	if err != nil {
+		return p.closedOr(err)
+	}
+	client, err := p.open(ctx, t, creds)
+	if err != nil {
+		return p.closedOr(err)
+	}
+	_ = client.Destroy()
+	return nil
+}
+
+// beginProbe registers a Check unless the pool is closed. It registers under the lock Close sets closed under, so
+// Close's wait sees every Check that was not refused.
+func (p *Pool) beginProbe() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return false
+	}
+	p.probes.Add(1)
+	return true
+}
+
+// closedOr is ErrPoolClosed when err is a cancellation and the pool is closed, whoever cancelled: Close has run,
+// so that is the answer either way. Any other error is returned as it is.
+func (p *Pool) closedOr(err error) error {
+	if errors.Is(err, context.Canceled) && p.isClosed() {
+		return ErrPoolClosed
+	}
+	return err
 }
 
 // entry returns the entry for k, made on first use. It does not look at closed: conn does,

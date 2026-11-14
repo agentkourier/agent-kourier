@@ -23,6 +23,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
@@ -30,6 +31,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
@@ -40,13 +42,16 @@ type clock struct {
 	mu     sync.Mutex
 	now    time.Time
 	timers []timer
+	made   int           // how many timers After has made
 	gate   chan struct{} // while it is open, Now waits for it to close
 }
 
 type timer struct {
 	at   time.Time
 	ch   chan time.Time
-	long bool // the final text's deadline, which no test waits on
+	long bool          // the final text's deadline, which no test waits on
+	n    int           // the order After made it in
+	d    time.Duration // how long it was armed for
 }
 
 func (c *clock) Now() time.Time {
@@ -65,21 +70,65 @@ func (c *clock) After(d time.Duration) <-chan time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	ch := make(chan time.Time, 1)
-	c.timers = append(c.timers, timer{c.now.Add(d), ch, d == 10*time.Minute})
+	c.timers = append(c.timers, timer{c.now.Add(d), ch, d == 10*time.Minute, c.made, d})
+	c.made++
 	return ch
 }
 
-// due is when the earliest timer fires.
-func (c *clock) due() time.Time {
+// mark is how many timers After has made so far: catchUp is told which timers to turn the clock for by two of these.
+func (c *clock) mark() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.made
+}
+
+// catchUp turns the clock to the earliest pending timer that a turn of the clock could not reach, and fires what is due by
+// then, and returns how far it turned the clock: a timer After made since stopped, and a write window it made since began.
+// A longer timer made between the two is left alone, and so is any timer made before began: the turn had its chance at those.
+// With no such timer it fires what is due, and moves nothing.
+func (c *clock) catchUp(began, stopped int) time.Duration {
+	c.mu.Lock()
+	d, found := time.Duration(0), false
+	for _, tm := range c.timers {
+		late := tm.n >= stopped || (tm.n >= began && tm.d <= throttle)
+		if left := tm.at.Sub(c.now); late && !tm.long && (!found || left < d) {
+			d, found = left, true
+		}
+	}
+	c.mu.Unlock()
+	d = max(d, 0)
+	c.advance(d)
+	return d
+}
+
+// earliest is when the first pending timer that pick takes fires, the final text's deadline aside. It is the zero time if there
+// is none.
+func (c *clock) earliest(pick func(timer) bool) time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var earliest time.Time
 	for _, tm := range c.timers {
-		if !tm.long && (earliest.IsZero() || tm.at.Before(earliest)) {
+		if !tm.long && pick(tm) && (earliest.IsZero() || tm.at.Before(earliest)) {
 			earliest = tm.at
 		}
 	}
 	return earliest
+}
+
+// due is when the earliest timer fires.
+func (c *clock) due() time.Time {
+	return c.earliest(func(timer) bool { return true })
+}
+
+// dueForAtOnce is when the earliest timer fires that atOnce turns the clock to: one armed for no more than a write window and due
+// by by.
+func (c *clock) dueForAtOnce(by time.Time) time.Time {
+	return c.earliest(func(tm timer) bool { return tm.d <= throttle && !tm.at.After(by) })
+}
+
+// dueBy is when the earliest timer fires, if that is by by.
+func (c *clock) dueBy(by time.Time) time.Time {
+	return c.earliest(func(tm timer) bool { return !tm.at.After(by) })
 }
 
 // waiting is how many timers are pending, but for the final text's deadline.
@@ -89,6 +138,22 @@ func (c *clock) waiting() int {
 	n := 0
 	for _, tm := range c.timers {
 		if !tm.long {
+			n++
+		}
+	}
+	return n
+}
+
+// waitingSince is how many timers are pending of those After has made since the mark since, but for the final text's deadline.
+// It is how a test waits for the one timer a run arms next. waiting counts every pending timer, and the clock keeps a timer
+// that its run has stopped waiting on until time passes it: the delay of the gap a timed turn begins with is one, which the
+// run arms only if it gets there before the turn's first event, and leaves when that event ends the gap.
+func (c *clock) waitingSince(since int) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, tm := range c.timers {
+		if !tm.long && tm.n >= since {
 			n++
 		}
 	}
@@ -108,6 +173,87 @@ func (c *clock) advance(d time.Duration) {
 		}
 	}
 	c.timers = keep
+}
+
+// waitingSince leaves out a timer made before its mark, which waiting counts: a run that waits for one window is seen to,
+// whatever an earlier wait left pending.
+func TestWaitingSinceCountsOnlyTheTimersMadeSinceTheMark(t *testing.T) {
+	c := &clock{now: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)}
+	c.After(3 * time.Second) // a delay its run left behind
+	since := c.mark()
+	if got := c.waitingSince(since); got != 0 {
+		t.Fatalf("waitingSince = %d with only a timer made before the mark; want 0", got)
+	}
+	c.After(throttle)
+	c.After(10 * time.Minute) // the final text's deadline
+	if got, all := c.waitingSince(since), c.waiting(); got != 1 || all != 2 {
+		t.Errorf("waitingSince = %d and waiting = %d; want 1, the window, and 2, with the delay", got, all)
+	}
+	c.advance(throttle)
+	if got := c.waitingSince(since); got != 0 {
+		t.Errorf("waitingSince = %d once the window has fired; want 0", got)
+	}
+}
+
+// catchUp reaches the window a slow run armed while the clock was turning, which falls due past where the clock stopped, and
+// a timer of any length armed after the stop. It leaves the delay armed during the turn, or a thing that comes too late would
+// pass until.
+func TestCatchUpTurnsOnlyForATimerTheTurnCouldNotReach(t *testing.T) {
+	c := &clock{now: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)}
+	began := c.mark()
+	c.advance(step)
+	delay := c.After(3 * time.Second)
+	window := c.After(throttle)
+	c.advance(throttle - step)
+	stopped := c.mark()
+	if d := c.catchUp(began, stopped); d != step {
+		t.Fatalf("catchUp turned the clock %v; want %v, to the window", d, step)
+	}
+	if len(window) != 1 {
+		t.Error("the window armed during the turn did not fire")
+	}
+	if d := c.catchUp(began, stopped); d != 0 {
+		t.Errorf("catchUp turned the clock %v for the delay armed during the turn; want none", d)
+	}
+	if len(delay) != 0 {
+		t.Error("the delay armed during the turn fired")
+	}
+	after := c.After(5 * time.Second)
+	if d := c.catchUp(began, stopped); d != 5*time.Second {
+		t.Errorf("catchUp turned the clock %v; want 5s, to the timer armed after the stop", d)
+	}
+	if len(after) != 1 {
+		t.Error("the timer armed after the stop did not fire")
+	}
+}
+
+// atOnce turns to a write window due by the end of its own, and never to a longer timer, however soon that falls due: a delay the
+// run left behind must not move the clock under a wait the run is arming.
+func TestDueForAtOnceLeavesTheDelay(t *testing.T) {
+	start := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	c := &clock{now: start}
+	c.After(3 * time.Second)
+	if got := c.dueForAtOnce(start.Add(4 * time.Second)); !got.IsZero() {
+		t.Errorf("due %v with only a delay pending, due by the limit; want none", got)
+	}
+	if got, want := c.dueBy(start.Add(4*time.Second)), start.Add(3*time.Second); !got.Equal(want) {
+		t.Errorf("dueBy %v; want the delay, %v", got, want)
+	}
+	if got := c.dueBy(start.Add(2 * time.Second)); !got.IsZero() {
+		t.Errorf("dueBy %v with the delay due past the limit; want none", got)
+	}
+	window := start.Add(throttle)
+	c.After(throttle)
+	if got := c.dueForAtOnce(window.Add(-time.Millisecond)); !got.IsZero() {
+		t.Errorf("due %v with the window due past the limit; want none", got)
+	}
+	if got := c.dueForAtOnce(window); !got.Equal(window) {
+		t.Errorf("due %v; want the window, %v", got, window)
+	}
+	c.After(time.Second)
+	if got, want := c.dueForAtOnce(window), start.Add(time.Second); !got.Equal(want) {
+		t.Errorf("due %v; want the earlier of the two, %v", got, want)
+	}
 }
 
 // recorder is the HTTP transport of the Slack client: it keeps every request's form, and fails
@@ -255,6 +401,13 @@ type env struct {
 	live   *live.Renderer
 	root   string
 	logs   *bytes.Buffer
+	// platform is the platform the Renderer is configured with (cfg.Platforms answers every connection with it); use replaces it.
+	platform chat.Platform
+}
+
+// use makes p the platform of every connection of e.cfg, for the Renderer that a test makes from it next.
+func (e *env) use(p chat.Platform) {
+	e.platform, e.cfg.Platforms = p, chattest.Same[chat.Platform](p)
 }
 
 func setup(t *testing.T) *env {
@@ -273,15 +426,13 @@ func setup(t *testing.T) *env {
 	e.root = root
 	client := slack.New(slack.Config{BotToken: secret.New("xoxb-fake"), AppToken: secret.New("xapp-fake"), APIURL: e.fake.URL() + "/", HTTPClient: &http.Client{Transport: e.rec}})
 	e.client = client
-	if e.store, err = sqlite.Open(t.Context(), sqlitetest.Path(t)); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = e.store.Close() })
-	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	e.store = sqlitetest.Open(t)
+	quiet := testutil.DiscardLogger()
 	platform := slack.NewPlatform(client, "ns/conn")
-	e.ob = newOutbox(t, outbox.Config{Store: e.store, Platform: platform, Logger: quiet})
+	e.ob = newOutbox(t, outbox.Config{Store: e.store, Platforms: chattest.Same[outbox.Platform](platform), Logger: quiet})
 	e.rf = &recordFail{Outbox: e.store}
-	e.cfg = live.Config{Sender: e.ob, Platform: platform, Store: e.rf, Throttle: throttle, FinalDeadline: 10 * time.Minute, Now: e.clk.Now, After: e.clk.After, Logger: slog.New(slog.NewTextHandler(e.logs, nil))}
+	e.platform = platform
+	e.cfg = live.Config{Sender: e.ob, Platforms: chattest.Same[chat.Platform](platform), Store: e.rf, Throttle: throttle, FinalDeadline: 10 * time.Minute, Now: e.clk.Now, After: e.clk.After, Logger: slog.New(slog.NewTextHandler(e.logs, nil))}
 	e.live = newRenderer(t, e.cfg)
 	t.Cleanup(func() { // a run that saw its final goes on without its context: turn the clock for it
 		for deadline := time.Now().Add(3 * time.Second); runsAlive() && time.Now().Before(deadline); time.Sleep(time.Millisecond) {
@@ -314,17 +465,17 @@ func newRenderer(t *testing.T, cfg live.Config) *live.Renderer {
 	return r
 }
 
-// New refuses a Config without its Sender, Platform or Store, and the error names the field.
+// New refuses a Config without its Sender, Platforms or Store, and the error names the field.
 func TestNewNamesTheFieldThatIsMissing(t *testing.T) {
 	e := setup(t)
-	for _, field := range []string{"Sender", "Platform", "Store"} {
+	for _, field := range []string{"Sender", "Platforms", "Store"} {
 		t.Run(field, func(t *testing.T) {
 			cfg := e.cfg
 			switch field {
 			case "Sender":
 				cfg.Sender = nil
-			case "Platform":
-				cfg.Platform = nil
+			case "Platforms":
+				cfg.Platforms = nil
 			case "Store":
 				cfg.Store = nil
 			}
@@ -351,29 +502,18 @@ func (e *env) startFor(t *testing.T, turn live.Turn) (*live.Run, context.CancelF
 // reply is the last message in the thread.
 func (e *env) reply() fakeslack.Message { th := e.fake.Thread("C1", e.root); return th[len(th)-1] }
 
-// eventually polls cond until it holds. The deadline is only how long a condition that will never hold is
-// waited for before the test fails, and is long, since a loaded machine can starve the goroutine that makes it hold.
-func eventually(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	for deadline := time.Now().Add(30 * time.Second); !cond(); time.Sleep(time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-	}
-}
-
 // drain turns the clock until every run r started has ended, which is when each has written what it owes. r is the
 // Renderer that started the turn under test: e.live for a turn made through e.sink, and the test's own for one it built.
 // It is how a test waits for the end of a turn. A quiet clock is not: a run that has not yet asked for its next window
 // has no timer waiting, and a timer the test has just fired is gone before the run has written for it. The wait ends
-// with eventually's deadline, so that a run that never ends fails the test rather than hanging the package.
+// with testutil.Eventually's deadline, so that a run that never ends fails the test rather than hanging the package.
 func (e *env) drain(t *testing.T, r *live.Renderer) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	over := make(chan error, 1)
 	go func() { over <- r.Wait(ctx) }()
-	eventually(t, "the runs to end", func() bool {
+	testutil.Eventually(t, "the runs to end", func() bool {
 		select {
 		case err := <-over:
 			if err != nil {
@@ -395,7 +535,7 @@ func (e *env) drain(t *testing.T, r *live.Renderer) {
 // finish turns the clock until the run is done.
 func (e *env) finish(t *testing.T, run *live.Run) {
 	t.Helper()
-	eventually(t, "the run to end", func() bool {
+	testutil.Eventually(t, "the run to end", func() bool {
 		select {
 		case <-run.Done():
 			return true
@@ -416,9 +556,9 @@ func TestDeltasInOneWindowAreOneUpdate(t *testing.T) {
 	e := setup(t)
 	run, _ := e.start(t, v1alpha1.OutputLive, false)
 	run.Handle(text("a", "Hel"))
-	eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+	testutil.Eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
 	run.Handle(text("a", "Hello"))
-	eventually(t, "the update to wait for its window", func() bool { return e.clk.waiting() == 1 })
+	testutil.Eventually(t, "the update to wait for its window", func() bool { return e.clk.waiting() == 1 })
 	for _, s := range []string{"Hello wor", "Hello world"} { // more deltas while it waits
 		run.Handle(text("a", s))
 	}
@@ -426,7 +566,7 @@ func TestDeltasInOneWindowAreOneUpdate(t *testing.T) {
 		t.Fatalf("%d updates inside the window; want none", n)
 	}
 	e.clk.advance(throttle)
-	eventually(t, "the latest text", func() bool { return e.reply().Text == "Hello world" })
+	testutil.Eventually(t, "the latest text", func() bool { return e.reply().Text == "Hello world" })
 	if n := len(e.rec.sent("/chat.update")); n != 1 {
 		t.Fatalf("%d updates for the window; want one", n)
 	}
@@ -439,21 +579,23 @@ func TestDeltasInOneWindowAreOneUpdate(t *testing.T) {
 
 func TestFinalTextIsTheLastUpdateAndToolLinesAreDropped(t *testing.T) {
 	e := setup(t)
+	// The status line is the update path's on a platform without steps; on one with steps the updates show cards (listed_test.go).
+	e.spy(t, false, nil)
 	run, _ := e.start(t, v1alpha1.OutputLive, false)
 	run.Handle(text("a", "Looking"))
-	eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+	testutil.Eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
 	run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "search", Args: map[string]any{"q": "pods"}})
-	eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
+	testutil.Eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
 	e.clk.advance(throttle)
-	eventually(t, "the live tool line", func() bool { return strings.Contains(string(e.reply().Blocks), "Calling search") })
+	testutil.Eventually(t, "the live tool line", func() bool { return strings.Contains(string(e.reply().Blocks), "Calling search") })
 	if !strings.Contains(string(e.reply().Blocks), `"context"`) || !strings.Contains(string(e.reply().Blocks), `"plain_text"`) {
 		t.Fatalf("blocks %s; want the tool line in a plain_text context block, not the markdown block", e.reply().Blocks)
 	}
 	run.Handle(agent.ToolResultEvent{CallID: "c1", Name: "search"})
 	run.Handle(text("a", "Looking again"))
-	eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
+	testutil.Eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
 	e.clk.advance(throttle)
-	eventually(t, "the tool line to go with its result", func() bool {
+	testutil.Eventually(t, "the tool line to go with its result", func() bool {
 		return e.reply().Text == "Looking again" && !strings.Contains(string(e.reply().Blocks), "Calling")
 	})
 	run.Handle(agent.ToolCallEvent{CallID: "c2", Name: "search"}) // still running when the turn ends
@@ -496,7 +638,7 @@ func TestFailedUpdateIsRetriedAndLosesNoText(t *testing.T) {
 	e.rec.failUpdates = 2
 	run, _ := e.start(t, v1alpha1.OutputLive, false)
 	run.Handle(text("a", "first"))
-	eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+	testutil.Eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
 	run.Handle(text("a", "SECRETTEXT final answer"))
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
@@ -539,7 +681,7 @@ func TestWaitGivesUpWhenItsContextEndsAndLeavesTheRunToItsOwn(t *testing.T) {
 	e := setup(t)
 	run, cancel := e.start(t, v1alpha1.OutputLive, false)
 	run.Handle(text("a", "partial"))
-	eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+	testutil.Eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
 	run.Handle(text("a", "partial, more")) // the run waits for its window and does not end of itself
 	ctx, end := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer end()
@@ -550,24 +692,28 @@ func TestWaitGivesUpWhenItsContextEndsAndLeavesTheRunToItsOwn(t *testing.T) {
 		t.Errorf("Wait = %v, want the context's deadline, the run being still alive", err)
 	}
 	cancel()
-	<-run.Done()
+	e.finish(t, run) // the run ends what it showed in its window, which the clock opens
 	if err := e.live.Wait(t.Context()); err != nil {
 		t.Errorf("Wait after the run ended = %v, want nil", err)
 	}
 }
 
-func TestAbandonedTurnEndsWithItsContext(t *testing.T) {
+// A turn whose context ends with no final, while it waits for its window, writes what it has in that window, as the end of
+// the turn, and ends. After the end an event does nothing.
+func TestAbandonedTurnSettlesItsMessageAndEnds(t *testing.T) {
 	e := setup(t)
 	run, cancel := e.start(t, v1alpha1.OutputLive, false)
 	run.Handle(text("a", "partial"))
-	eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+	testutil.Eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
 	run.Handle(text("a", "partial, more")) // leaves the goroutine waiting for its window
-	eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
+	testutil.Eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
 	cancel()
-	select {
-	case <-run.Done():
-	case <-time.After(5 * time.Second):
-		t.Fatal("the run did not end when its context did")
+	e.finish(t, run)
+	if m := e.reply(); m.Text != "partial, more" {
+		t.Errorf("message %q; want the text the turn had when its context ended", m.Text)
 	}
 	run.Handle(text("a", "after the end")) // must not block or panic
+	if n := e.updates(); n != 1 {
+		t.Errorf("%d updates; want the one that settled the message", n)
+	}
 }

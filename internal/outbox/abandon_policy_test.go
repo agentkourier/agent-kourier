@@ -3,7 +3,6 @@ package outbox_test
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 )
 
 // timedOutRow returns an Outbox over a store holding one unposted row, whose lookups hang until
@@ -18,7 +18,7 @@ import (
 // itself, is how "some other Slack call worked" is shown.
 func timedOutRow(t *testing.T) (ob *outbox.Outbox, st store.Outbox, clock *atomic.Int64, hooks *abandons) {
 	t.Helper()
-	st = openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st = sqlitetest.Open(t)
 	if _, err := st.CreateOutbox(t.Context(), store.OutboxEntry{ID: "ev1/reply", EventID: "ev1", Role: store.OutboxReply, Channel: "C1", CreatedAt: t0, Payload: neutral("hi")}); err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestLookupTimeoutsNeedAnHourAndAWorkingSlack(t *testing.T) {
 // code is classified like a post, not retried for the whole retention.
 func TestAnUnreachableChannelFailsTheLookupForGood(t *testing.T) {
 	for _, code := range []string{"channel_not_found", "not_in_channel"} { // both are channel_gone to a metric
-		st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+		st := sqlitetest.Open(t)
 		if _, err := st.CreateOutbox(t.Context(), store.OutboxEntry{ID: "ev1/reply", EventID: "ev1", Role: store.OutboxReply, Channel: "C1", CreatedAt: t0, Payload: neutral("hi")}); err != nil {
 			t.Fatal(err)
 		}
@@ -93,7 +93,7 @@ func TestAnUnreachableChannelFailsTheLookupForGood(t *testing.T) {
 			t.Errorf("%s: OnAbandon calls = %q, warnings = %d; want one of each", code, got, warnings(logs))
 		}
 	}
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	if _, err := st.CreateOutbox(t.Context(), store.OutboxEntry{ID: "ev1/reply", EventID: "ev1", Role: store.OutboxReply, Channel: "C1", CreatedAt: t0, Payload: neutral("hi")}); err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestAnUnreachableChannelFailsTheLookupForGood(t *testing.T) {
 // TestAShutdownMidAbandonStillRecordsIt: the context ends while the post is in flight and fails
 // for good; the abandon is recorded all the same.
 func TestAShutdownMidAbandonStillRecordsIt(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	st := sqlitetest.Open(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	p := &poster{onPost: func(context.Context) error { cancel(); return slackErr("is_archived") }}
 	ob, hooks, _ := abandoning(t, st, p, nil)
@@ -119,26 +119,23 @@ func TestAShutdownMidAbandonStillRecordsIt(t *testing.T) {
 	}
 }
 
-// TestThePurgeRunsAtMostEveryFiveMinutes: Reconcile runs on every signal and tick, and the purge is
-// a write; a row that has just come due waits for the next one.
-func TestThePurgeRunsAtMostEveryFiveMinutes(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+// TestARowPastRetentionIsAbandonedAtTheNextPass: every pass looks at the age of the rows it drains, so a row that has just come due
+// goes at the next one, and is reported once.
+func TestARowPastRetentionIsAbandonedAtTheNextPass(t *testing.T) {
+	st := sqlitetest.Open(t)
 	var clock atomic.Int64
 	p := &poster{onPost: func(context.Context) error { return errors.New("connection reset") }}
 	ob, hooks, _ := abandoning(t, st, p, func(c *outbox.Config) {
 		c.Now = func() time.Time { return t0.Add(time.Duration(clock.Load())) }
 	})
-	if err := ob.Reconcile(t.Context()); err != nil { // the first one purges
-		t.Fatal(err)
-	}
-	old := store.OutboxEntry{ID: "old/reply", EventID: "old", Role: store.OutboxReply, Channel: "C1", CreatedAt: t0.Add(-8 * 24 * time.Hour), Payload: neutral("hi")}
+	old := store.OutboxEntry{ID: "old/reply", EventID: "old", Role: store.OutboxReply, Channel: "C1", CreatedAt: t0.Add(-7*24*time.Hour + time.Minute), Payload: neutral("hi")}
 	if _, err := st.CreateOutbox(t.Context(), old); err != nil {
 		t.Fatal(err)
 	}
 	for _, step := range []struct {
 		at   time.Duration
 		gone bool
-	}{{time.Minute, false}, {4 * time.Minute, false}, {5 * time.Minute, true}} {
+	}{{0, false}, {59 * time.Second, false}, {time.Minute + time.Nanosecond, true}, {time.Hour, true}} {
 		clock.Store(int64(step.at))
 		_ = ob.Reconcile(t.Context())
 		if got := abandoned(t, st, "old/reply"); got != step.gone {

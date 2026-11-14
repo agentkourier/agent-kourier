@@ -17,6 +17,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/stubagent"
 )
 
@@ -96,6 +97,7 @@ func seedQueuedTurn(t *testing.T, c RunConfig, url string) {
 // The control of the test below: with a lease that is as young as renewals keep it, the queued turn is sent to the agent,
 // once, and nothing stops the process.
 func TestRunALeaderWhoseLeaseIsFreshSendsTheQueuedTurnToTheAgent(t *testing.T) {
+	t.Parallel()
 	agent, url := newSendCounter(t)
 	client, fence := clusterWithJWT(), &fakeFence{}
 	c, rep := agentConfig(t, client, fence, url)
@@ -103,7 +105,7 @@ func TestRunALeaderWhoseLeaseIsFreshSendsTheQueuedTurnToTheAgent(t *testing.T) {
 	c.leaseNow = func() time.Time { return now } // time stands still, so the lease is never older than its last renewal
 	rep.running = start(t, c)
 
-	eventually(t, 10*time.Second, "the queued turn did not reach the agent", func() bool { return agent.sends.Load() == 1 })
+	testutil.Eventually(t, "the queued turn did not reach the agent", func() bool { return agent.sends.Load() == 1 }, testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 	time.Sleep(testElection.RetryPeriod * 3)
 	if n := agent.sends.Load(); n != 1 {
 		t.Errorf("%d sends reached the agent; want exactly one", n)
@@ -120,6 +122,7 @@ func TestRunALeaderWhoseLeaseIsFreshSendsTheQueuedTurnToTheAgent(t *testing.T) {
 // reaches the agent, the process is stopped once, with exit 5, for the reason that an agent call was refused, and not for the loss
 // of the lease, which refuses nothing. The turn is still queued, for the leader that takes over.
 func TestRunALeaderPastItsRenewDeadlineSendsNothingToTheAgent(t *testing.T) {
+	t.Parallel()
 	agent, url := newSendCounter(t)
 	client, fence := clusterWithJWT(), &fakeFence{}
 	c, rep := agentConfig(t, client, fence, url)

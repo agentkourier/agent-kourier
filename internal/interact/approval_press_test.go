@@ -3,8 +3,6 @@ package interact_test
 import (
 	"encoding/json"
 	"errors"
-	"io"
-	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -19,6 +17,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // A press decides an approval: the tests below put a press through the pipeline and the decider against the rigs the
@@ -111,8 +110,6 @@ func platformSent(msg *a2a.Message) string {
 }
 
 func stringOf(v any) string { s, _ := v.(string); return s }
-
-func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 // approvalBinding is a Binding that allows tool approvals.
 func approvalBinding() interact.Binding {
@@ -212,13 +209,13 @@ func TestAPressDecidesAnApproval(t *testing.T) {
 // what, by tool, and holds none of the arguments.
 func TestTheAuditRowOfAnApprovalNamesTheToolsAndNotTheirArguments(t *testing.T) {
 	r := newApprovalRig(t)
-	w := newWriter(t, r.st, audit.Options{Logger: quietLogger()})
-	d, err := interact.NewDecider(decideCfg(interact.DecideConfig{Store: r.st, Auditor: w, Ephemerals: r.eph, Session: r.sess, Sessions: r.st, Replacer: r.rep, Outbox: r.out}))
+	w := newWriter(t, r.st, audit.Options{Logger: testutil.DiscardLogger()})
+	d, err := interact.NewDecider(decideCfg(interact.DecideConfig{Store: r.st, Auditor: w, Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Session: r.sess, Sessions: r.st, Replacer: r.rep, Outbox: r.out}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	pl, err := interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{approvalBinding()}, Authorizer: r.az, Ephemerals: r.eph, Decider: d, Auditor: w,
-		Logger: quietLogger(), Now: func() time.Time { return r.now }}))
+	pl, err := interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{approvalBinding()}, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Decider: d, Auditor: w,
+		Logger: testutil.DiscardLogger(), Now: func() time.Time { return r.now }}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -620,7 +617,7 @@ func TestPressesRecordedInEachStoredFormAreRead(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newApprovalRig(t)
-			press := store.Press{InteractionID: "ix-1", User: "UALICE1", Channel: key.Channel, MessageRef: "100.1", Inputs: []byte(tc.inputs), PressedAt: r.now}
+			press := store.Press{InteractionID: "ix-1", User: "UALICE1", Connection: key.Connection, Channel: key.Channel, MessageRef: "100.1", Inputs: []byte(tc.inputs), PressedAt: r.now}
 			seq, err := r.st.RecordPress(t.Context(), press, store.PressLimits{Total: 10, PerUser: 2})
 			if err != nil {
 				t.Fatal(err)
@@ -724,7 +721,7 @@ func TestTheReplacementOfADecidedApproval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rr := newReplaceRigWith(t, func(c *interact.ReplacerConfig) { c.Updater = fake })
+	rr := newReplaceRigWith(t, func(c *interact.ReplacerConfig) { c.Updaters = chattest.Same[interact.Editor](fake) })
 	copied := store.Interaction{ID: "ix-2", Key: key, TaskID: "task-1", Kind: store.InteractionNested, Request: row.Request, CreatedAt: d0, Deadline: deadline}
 	if _, err := rr.st.CreateInteraction(t.Context(), copied); err != nil {
 		t.Fatal(err)

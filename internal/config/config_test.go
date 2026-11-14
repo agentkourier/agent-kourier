@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"sigs.k8s.io/yaml"
+
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 )
 
@@ -26,7 +28,14 @@ kind: ChatConnection
 metadata: { name: slack-main, namespace: agent-kourier-system }
 spec: { platform: slack, credentialsSecretRef: { name: slack-main } }
 `
-	bindingDoc = `apiVersion: agentkourier.dev/v1alpha1
+	// statusDoc is a status as the API server serves one.
+	statusDoc = `status:
+  conditions:
+    - { type: Ready, status: "True", reason: Ready, lastTransitionTime: "2026-11-04T10:00:00Z", observedGeneration: 1 }
+`
+	// statusInFileMessage is what the loader says of a status in a Binding file, after the document's location.
+	statusInFileMessage = "status: a file may not set it, remove it"
+	bindingDoc          = `apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata: { name: sre-alerts, namespace: sre }
 spec:
@@ -193,6 +202,15 @@ func TestLoadKeepsAnExplicitNoDailyCap(t *testing.T) {
 	}
 }
 
+// A cap of 0 says something a Binding cannot mean, so it is refused and not read as unset, which would notify people.
+func TestLoadRefusesACapOfNoMentions(t *testing.T) {
+	binding := strings.Replace(bindingDoc, "channel: C0123456789 }", "channel: C0123456789, maxMentionsPerTurn: 0 }", 1)
+	_, err := Load(context.Background(), write(t, map[string]string{"a.yaml": backendDoc, "c.yaml": connectionDoc, "b.yaml": binding}))
+	if want := "spec.chat.maxMentionsPerTurn: 0 is out of range, must be from 1 to 10"; err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("Load = %v, want %q", err, want)
+	}
+}
+
 func TestLoadRejectsBadTriggers(t *testing.T) {
 	const who = "b.yaml#1 Binding sre/sre-alerts: "
 	const hint = "see the example in how-to/investigate-alertmanager-alerts (https://agentkourier.dev/how-to/investigate-alertmanager-alerts/)"
@@ -200,7 +218,7 @@ func TestLoadRejectsBadTriggers(t *testing.T) {
 		{
 			name:     "bare on, which YAML reads as true",
 			triggers: "      - on: mention\n",
-			want:     who + "spec.chat.triggers[0].true: unknown field\n" + who + "spec.chat.triggers[0].type: unsupported value \"\", must be one of mention, botMessage",
+			want:     who + "spec.chat.triggers[0].true: unknown field\n" + who + "spec.chat.triggers[0].type: unsupported value \"\", must be one of mention, botMessage, personMessage",
 		},
 		{
 			name:     "regex that does not compile",
@@ -326,10 +344,58 @@ func TestLoadRejects(t *testing.T) {
 			want: []string{`b.yaml#1 Binding sre/sre-alerts: spec.alerts: unknown field`},
 		},
 		{
-			// A Binding has no status: its conditions were never set, and return with the controller that sets them.
-			name:  "removed status field",
-			files: map[string]string{"b.yaml": bindingDoc + "status:\n  conditions: []\n"},
-			want:  []string{`b.yaml#1 Binding sre/sre-alerts: status: unknown field`},
+			// A file never sets status. The Binding type has the field, so strict decoding does not refuse it and the
+			// loader does.
+			name:  "status in a Binding file",
+			files: map[string]string{"b.yaml": bindingDoc + statusDoc},
+			want:  []string{`b.yaml#1 Binding sre/sre-alerts: ` + statusInFileMessage},
+		},
+		{
+			name:  "empty status in a Binding file",
+			files: map[string]string{"b.yaml": bindingDoc + "status: {}\n"},
+			want:  []string{`b.yaml#1 Binding sre/sre-alerts: ` + statusInFileMessage},
+		},
+		{
+			// Strict decoding is case-sensitive, so a key that is not exactly status is an unknown field.
+			name:  "Status with a capital in a Binding file",
+			files: map[string]string{"b.yaml": bindingDoc + "Status:\n  conditions: []\n"},
+			want:  []string{`b.yaml#1 Binding sre/sre-alerts: Status: unknown field`},
+		},
+		{
+			// A status of the wrong type stops the decode before Validate runs, so only the type error and the
+			// refusal are reported.
+			name:  "status of the wrong type in a Binding file",
+			files: map[string]string{"b.yaml": bindingDoc + "status: hello\n"},
+			want: []string{
+				`b.yaml#1 Binding sre/sre-alerts: json: cannot unmarshal string into Go struct field Binding.status of type v1alpha1.BindingStatus`,
+				`b.yaml#1 Binding sre/sre-alerts: ` + statusInFileMessage,
+			},
+		},
+		{
+			name:  "null status in a Binding file",
+			files: map[string]string{"b.yaml": bindingDoc + "status:\n"},
+			want:  []string{`b.yaml#1 Binding sre/sre-alerts: ` + statusInFileMessage},
+		},
+		{
+			// The other problems of the document are reported with it, and a later document is still checked.
+			name:  "status with other problems in a Binding file",
+			files: map[string]string{"b.yaml": bindingDoc + "  bogus: 1\n" + statusDoc + "---\n" + strings.Replace(bindingDoc, "name: sre-alerts", "name: other", 1) + statusDoc},
+			want: []string{
+				`b.yaml#1 Binding sre/sre-alerts: spec.bogus: unknown field`,
+				`b.yaml#1 Binding sre/sre-alerts: ` + statusInFileMessage,
+				`b.yaml#2 Binding sre/other: ` + statusInFileMessage,
+			},
+		},
+		{
+			// Only a Binding has a status. The other kinds keep the plain strict-decode refusal.
+			name:  "status in an AgentBackend file",
+			files: map[string]string{"b.yaml": backendDoc + statusDoc},
+			want:  []string{`b.yaml#1 AgentBackend agent-kourier-system/kagent-pilot: status: unknown field`},
+		},
+		{
+			name:  "status in a ChatConnection file",
+			files: map[string]string{"c.yaml": connectionDoc + statusDoc},
+			want:  []string{`c.yaml#1 ChatConnection agent-kourier-system/slack-main: status: unknown field`},
 		},
 		{
 			name: "removed directMessages field",
@@ -411,6 +477,25 @@ func TestLoadRejects(t *testing.T) {
 				t.Errorf("problems:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(tc.want, "\n"))
 			}
 		})
+	}
+}
+
+// decode, which Default and Validate follow, is open to a status: only the file path refuses one. A custom resource
+// source will decode the objects of an API server through decode, and they carry a status.
+func TestDecodeKeepsAStatus(t *testing.T) {
+	j, err := yaml.YAMLToJSONStrict([]byte(bindingDoc + statusDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []v1alpha1.Binding
+	if errs := decode(j, &got); len(errs) != 0 {
+		t.Fatalf("decode of a Binding with a status: %v, want no problems", errs)
+	}
+	if len(got) != 1 || len(got[0].Status.Conditions) != 1 {
+		t.Fatalf("decode kept %+v, want one Binding with one condition", got)
+	}
+	if c := got[0].Status.Conditions[0]; c.Type != "Ready" || c.Reason != "Ready" || c.ObservedGeneration != 1 {
+		t.Errorf("the condition after decode = %+v", c)
 	}
 }
 

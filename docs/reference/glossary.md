@@ -6,6 +6,11 @@ A2A
 :   The Agent2Agent protocol. Agent Kourier speaks A2A 1.0 over JSON-RPC, and A2A 0.3 to an agent whose card is a 0.3
     card, and needs an agent that streams.
 
+Accepted
+:   The condition of a Binding's status that says the broker took the Binding as written. With custom resources it is
+    `False` with a reason such as `InvalidSpec` or `ChannelConflict` when it did not
+    ([Binding status](binding-status.md)).
+
 Actor
 :   Who a turn is from, as the agent sees it: the `agentkourier.dev/actor` metadata (`id`, `platform`, and `name` and
     `email` when the chat platform knows them) and the prefix at the start of the text. It is information for the agent,
@@ -26,13 +31,22 @@ Binding identity
 :   The one service identity, a bearer token or a user ID, that every turn of a Binding runs as, chat or alert. The
     person who wrote a message is carried as attribution, never as the identity.
 
+Binding verification
+:   The leader's repeated check that a Binding can be served: that its agent's card can be fetched, that the bot is
+    in its channel and, for a Binding whose tool approvals name approver groups, that each group can be read. It reports through metrics and log lines and, with custom resources, in the Binding's status, and changes
+    nothing else. See [Metrics](metrics.md#binding-verification) and [Binding status](binding-status.md).
+
 Channel
 :   A place in a chat platform where people post, named by its ID. One channel takes at most one Binding per
     connection.
 
 ChatConnection
 :   The resource that connects Agent Kourier to one chat platform workspace, with the Secret that holds its tokens.
-    Owned by the platform team.
+    The platform team owns the broker's own; a team may own one in a namespace the platform admits.
+
+Config route
+:   Where the broker reads its resources from, chosen when it starts: `files` (usually a ConfigMap, all or nothing) or `crds`
+    (custom resources, one object at a time), which is the chart's default. See [Choose a config route](../explanation/config-routes.md).
 
 Context
 :   The A2A `contextId` that a session maps to. Agent Kourier resumes the same context for every turn of a thread.
@@ -42,11 +56,13 @@ Cooldown
     the same key adds a note and starts no turn.
 
 Dialect
-:   The per-backend part of the A2A client: URL layout, card location, identity header and how a pause is read. `a2a`
-    is generic; `kagent-v1` adds kagent's human-in-the-loop extension.
+:   The per-backend part of the A2A client: URL layout, card location, identity header and how a pause is read. Both
+    ask for kagent's human-in-the-loop extension when the agent card lists it; `kagent-v1` reads a pause only through
+    it, and `a2a` reads it through the extension or as a text question.
 
 Digest line
-:   One line at the top level of a channel that counts the alerts a trigger's limits stopped in a window.
+:   One line at the top level of a channel that counts the messages that limits stopped from starting an investigation
+    in a window: a trigger's, or the fixed ones on a bot's mention.
 
 Epoch
 :   With Postgres, the leadership number in the database. A replica that takes the Lease increments it, and every write
@@ -61,11 +77,12 @@ Front door
     Required in front of kagent.
 
 Interaction
-:   A pause in which the agent waits for a person: a question (ask-user), or a kagent-v1 tool approval when the Binding
-    enables `interactions.toolApprovals`. A generic A2A structured pause is unusable.
+:   A pause in which the agent waits for a person: a question, when the Binding enables
+    `interactions.askUser`, or a tool approval, when it enables `interactions.toolApprovals`. Both default to off, and a
+    pause the Binding does not allow is refused and its task cancelled. Structured pauses use kagent's human-in-the-loop extension.
 
 Investigation
-:   A session that a trigger or an alert started rather than a person.
+:   A session that a `botMessage` or `personMessage` trigger started, such as an alert's, rather than a mention.
 
 Kind full tier
 :   The local kind cluster that `make e2e-full-up` builds from a checkout of the repository, with kagent 1.0, Agent
@@ -115,8 +132,8 @@ Thread
 :   A message and its replies. Agent Kourier owns a thread it started, or one it was mentioned in.
 
 Trigger
-:   A rule in a Binding's `chat.triggers` that decides what starts a turn: `mention`, or `botMessage` for another bot's
-    posts.
+:   A rule in a Binding's `chat.triggers` that decides what starts a turn: `mention`, `botMessage` for another bot's
+    posts, or `personMessage` for the messages people post at the top level of the channel.
 
 Turn
 :   One message to the agent and the task that answers it. A session's turns run one at a time, in order.

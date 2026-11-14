@@ -1,17 +1,24 @@
 package broker
 
 import (
+	"context"
 	"errors"
 	"net/http"
+	"slices"
+	"strings"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/agentkourier/agent-kourier/internal/bindingcheck"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
 // otherLabel is the value of a label whose input is outside the fixed set it takes.
@@ -35,7 +42,22 @@ type Metrics struct {
 	turns         *prometheus.CounterVec
 	leader        prometheus.Gauge
 	takeovers     prometheus.Counter
+	bindingCond   *prometheus.GaugeVec
+	bindingReady  *prometheus.GaugeVec
+	probeDuration *prometheus.HistogramVec
+	invalid       *prometheus.GaugeVec
+	bindingRej    *prometheus.GaugeVec
+	heldObjects   *prometheus.GaugeVec
+	statusWrites  *prometheus.CounterVec
+	crdSchema     *prometheus.GaugeVec // series only once set, which only a broker on the custom resources does (crdschema.go)
 }
+
+// The kinds and reasons that the config gauges carry, a closed set each.
+var (
+	configKinds      = []string{config.KindAgentBackend, config.KindChatConnection, config.KindBinding}
+	rejectionReasons = []config.RejectionReason{config.ReasonInvalidSpec, config.ReasonBackendNotFound, config.ReasonBackendRejected,
+		config.ReasonConnectionNotFound, config.ReasonConnectionRejected, config.ReasonNamespaceNotAllowed, config.ReasonAgentNamespaceNotAllowed, config.ReasonChannelConflict}
+)
 
 // NewMetrics returns the metrics. stale is read at each scrape for agentkourier_config_stale, and
 // may be nil (never stale): it is Config.Stale.
@@ -51,7 +73,7 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 		reloadErrors: prometheus.NewCounter(prometheus.CounterOpts{Name: "agentkourier_config_reload_errors_total",
 			Help: "Config reloads that failed."}),
 		approvals: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_approval_outcomes_total",
-			Help: "What became of pauses, by Binding and outcome: turned away by the Binding's policy (auto_denied, ask_user_cancelled), or a tool approval that was decided (approved, denied, partially_approved) or timed out (timed_out)."}, []string{"binding", "outcome"}),
+			Help: "What became of pauses, by Binding and outcome: turned away by the Binding's policy (auto_denied, ask_user_cancelled), a tool approval that was decided (approved, denied, partially_approved) or timed out (timed_out), or a pause of either kind that nothing could end through its Binding and was ended without the agent after its time ran out (orphaned: the Binding is not in the config, or its chat connection is not served)."}, []string{"binding", "outcome"}),
 		timeouts: prometheus.NewCounter(prometheus.CounterOpts{Name: "agentkourier_interaction_timeouts_total",
 			Help: "Interactions that timed out unanswered."}),
 		removed: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_retention_removed_total",
@@ -66,16 +88,34 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 			Help: "1 while this replica does Agent Kourier's work (it leads, or it is the only replica: SQLite), 0 while it is a standby."}),
 		takeovers: prometheus.NewCounter(prometheus.CounterOpts{Name: "agentkourier_leader_takeovers_total",
 			Help: "Times this replica took the leadership: it won the lease and was given the next epoch."}),
+		bindingCond: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_binding_condition",
+			Help: "1 for the status a Binding's condition has (true, false or unknown) and 0 for the other two, by Binding and condition. Only the leader reports it. A condition has series once its first probe has ended; Ready has them once every first probe of the Binding has ended or one found it false."}, []string{"binding", "condition", "status"}),
+		bindingReady: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_binding_ready",
+			Help: "1 while every condition of the Binding is true, 0 while one is false or not yet known, by Binding. Only the leader reports it. A Binding has the series once every first probe of it has ended or one found it false."}, []string{"binding"}),
+		probeDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "agentkourier_binding_probe_duration_seconds",
+			Help: "How long a probe of a Binding took, by condition: the time the checker took, whatever it found.", Buckets: prometheus.DefBuckets}, []string{"condition"}),
+		invalid: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_config_invalid_objects",
+			Help: "Objects of the custom resource config source that the broker refuses or holds past their deletion, by kind: a Binding of this broker (it names this broker's connection, or none that exists) that fails Default or Validate; any AgentBackend in the cluster that does, whoever uses it; this broker's own ChatConnection when it fails them or was deleted and is held; and, while that connection is held, each Binding of it and each AgentBackend they use that was deleted and is held with it. Each is served from its last good generation, or left out if it has none; a held Binding that resolution leaves out, for any reason (it lost its channel, its backend is gone, or its backend no longer allows it), is counted and not served. 0 while the config is read from files, where one bad object fails the whole reload."}, []string{"kind"}),
+		heldObjects: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_config_held_objects",
+			Help: "Objects of the custom resource config source that were deleted and that the broker holds at their last good generation, by kind, while its own ChatConnection is deleted and held: the connection, the Bindings of it that are gone, and the AgentBackends that they and the Bindings of it that are still there use and that are gone. A held Binding that resolution leaves out, for any reason (it lost its channel, its backend is gone, or its backend no longer allows it), is held and not served. 0 when nothing is held, and always while the config is read from files."}, []string{"kind"}),
+		bindingRej: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_config_binding_rejections",
+			Help: "Bindings of the custom resource config source that are not accepted as written, by reason: InvalidSpec, BackendNotFound, BackendRejected, ConnectionNotFound, ConnectionRejected, ConnectionNotServed, NamespaceNotAllowed, AgentNamespaceNotAllowed or ChannelConflict. A Binding that is served from an older generation counts too. The series can overlap: a Binding with more than one rejection is counted under each of its reasons, so their sum can exceed the number of Bindings that are not accepted. ConnectionNotServed is the leader's alone (a standby says 0): it counts the Bindings whose status the leader writes that reason to. 0 while the config is read from files."}, []string{"reason"}),
+		statusWrites: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_binding_status_writes_total",
+			Help: "Writes of a Binding's status by the leader, by result: written, put_back (written again to the words it already had, because the status had been changed: a person's edit, or another writer), or failed (the API server refused or could not be reached; it is tried again). The series exist only once the leader of a broker that reads the custom resources has tried a write."}, []string{"result"}),
+		crdSchema: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_crd_schema_state",
+			Help: "1 for what the broker found when it compared each CRD's schema hash with the one it was built with, at start and every minute, and 0 for the other states, by CRD and state (match, mismatch, unannotated or unknown). Only a broker that reads custom resources has these series; with files there are none."}, []string{"crd", "state"}),
 	}
+	m.ConfigReport(config.Report{})
+	m.UnservedBindings(0)
 	staleGauge := prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "agentkourier_config_stale",
-		Help: "1 while the latest config reload failed, so the running config lags the files."}, func() float64 {
+		Help: "1 before the first config load, and while the running config may lag its source: the latest reload failed, or the source says it cannot be reached."}, func() float64 {
 		if stale != nil && stale() {
 			return 1
 		}
 		return 0
 	})
 	var err error
-	for _, c := range []prometheus.Collector{m.auditFailures, m.rejections, m.abandons, m.reloadErrors, m.approvals, m.timeouts, m.removed, m.decisions, m.chatUp, m.turns, m.leader, m.takeovers, staleGauge} {
+	for _, c := range []prometheus.Collector{m.auditFailures, m.rejections, m.abandons, m.reloadErrors, m.approvals, m.timeouts, m.removed, m.decisions, m.chatUp, m.turns, m.leader, m.takeovers, m.bindingCond, m.bindingReady, m.probeDuration, m.invalid, m.bindingRej, m.heldObjects, m.crdSchema, m.statusWrites, staleGauge} {
 		err = errors.Join(err, m.reg.Register(c))
 	}
 	if err != nil {
@@ -99,6 +139,54 @@ func (m *Metrics) CredentialRejected(binding string) { m.rejections.WithLabelVal
 // ReloadError counts a failed config reload: BootstrapOptions.OnReloadError.
 func (m *Metrics) ReloadError(error) { m.reloadErrors.Inc() }
 
+// ConfigReport sets the gauges of what the config source refused: BootstrapOptions.OnReport. Every kind and every reason has
+// its series, set at each report, so that one that cleared reads 0 and no series comes or goes. A reason outside the closed
+// set is counted as "other".
+func (m *Metrics) ConfigReport(r config.Report) {
+	kinds, heldKinds := make(map[string]int, len(configKinds)), make(map[string]int, len(configKinds))
+	for _, inv := range r.Invalid {
+		kinds[inv.Kind]++
+		if inv.Deleted {
+			heldKinds[inv.Kind]++
+		}
+	}
+	for _, k := range configKinds {
+		m.invalid.WithLabelValues(k).Set(float64(kinds[k]))
+		m.heldObjects.WithLabelValues(k).Set(float64(heldKinds[k]))
+	}
+	reasons := make(map[string]int, len(rejectionReasons)+1)
+	for _, rej := range r.Rejections {
+		label := string(rej.Reason)
+		if !slices.Contains(rejectionReasons, rej.Reason) {
+			label = otherLabel
+		}
+		reasons[label]++
+	}
+	for _, reason := range rejectionReasons {
+		m.bindingRej.WithLabelValues(string(reason)).Set(float64(reasons[string(reason)]))
+	}
+	m.bindingRej.WithLabelValues(otherLabel).Set(float64(reasons[otherLabel]))
+}
+
+// UnservedBindings sets the series of agentkourier_config_binding_rejections for ConnectionNotServed to n: statusConfig.OnUnserved. It is
+// the number of Bindings whose Accepted condition the status writer says ConnectionNotServed, which no source's report holds (the
+// writer composes it from the connections left out and the second connections of one Slack app), so ConfigReport leaves the series
+// alone. Only the leader runs the writer, so only the leader's series is ever above 0.
+func (m *Metrics) UnservedBindings(n int) {
+	m.bindingRej.WithLabelValues(string(config.ReasonConnectionNotServed)).Set(float64(n))
+}
+
+// StatusWrite counts a write of a Binding's status: statusConfig.OnWrite. A result outside the three the writer reports is
+// one series, "other".
+func (m *Metrics) StatusWrite(result string) {
+	switch result {
+	case "written", "put_back", "failed":
+	default:
+		result = otherLabel
+	}
+	m.statusWrites.WithLabelValues(result).Inc()
+}
+
 // ApprovalOutcome counts what became of a pause, by Binding: one a Binding's policy turned away (interact.Config.OnApprovalOutcome),
 // a tool approval that a person decided (interact.DecideConfig.OnApprovalOutcome), or one that timed out on a Binding that
 // allows approvals (interact.SweepConfig.OnApprovalOutcome). An outcome outside the closed set
@@ -107,7 +195,7 @@ func (m *Metrics) ApprovalOutcome(binding string, outcome interact.Outcome) {
 	label := string(outcome)
 	switch outcome {
 	case interact.OutcomeAskUserCancelled, interact.OutcomeAutoDenied,
-		interact.OutcomeApproved, interact.OutcomeDenied, interact.OutcomePartiallyApproved, interact.OutcomeTimedOut:
+		interact.OutcomeApproved, interact.OutcomeDenied, interact.OutcomePartiallyApproved, interact.OutcomeTimedOut, interact.OutcomeOrphaned:
 	default:
 		label = otherLabel
 	}
@@ -139,7 +227,7 @@ func (m *Metrics) TurnOutcome(binding string, outcome session.TurnOutcome) {
 // not a label.
 func (m *Metrics) InteractionTimeout(string) { m.timeouts.Inc() }
 
-// RetentionRemoved counts n items that retention removed: what is one of the Removed constants, a closed set.
+// RetentionRemoved counts n items that retention removed: what is one of retention's Removed constants, a closed set.
 func (m *Metrics) RetentionRemoved(what string, n int) {
 	m.removed.WithLabelValues(what).Add(float64(n))
 }
@@ -171,6 +259,17 @@ func (m *Metrics) ChatConnected(connection string, up bool) {
 	m.chatUp.WithLabelValues(connection).Set(v)
 }
 
+// ConnectionRemoved is told that the ChatConnection named connection ("namespace/name") is not served by this broker: it was taken out of
+// the config or out of the set the broker serves, or it was stopped as a second connection of a Slack app another connection uses. It deletes the
+// series the connection has: agentkourier_chat_connected, which would otherwise say 0 for a connection that is not served, and the ones that
+// carry its name in the telemetry (telemetry.ForgetConnection). It is the one place that lists them, so a series that gains a connection label is
+// deleted here. A connection that restarts, or is stopped for its credentials, is still served and keeps its series. A connection with no series
+// is no error.
+func (m *Metrics) ConnectionRemoved(ctx context.Context, connection string) {
+	m.chatUp.DeleteLabelValues(connection)
+	telemetry.ForgetConnection(ctx, connection)
+}
+
 // Leader sets agentkourier_leader: 1 once this replica does Agent Kourier's work, 0 while it waits to.
 func (m *Metrics) Leader(leading bool) {
 	v := 0.0
@@ -182,6 +281,59 @@ func (m *Metrics) Leader(leading bool) {
 
 // Takeover counts a leadership taken: the lease won and the epoch bumped.
 func (m *Metrics) Takeover() { m.takeovers.Inc() }
+
+// BindingCondition records a condition of a Binding that changed: bindingcheck.Options.OnTransition. The condition's series
+// say its new status (1 for it, 0 for the other two), and a change of Ready also sets agentkourier_binding_ready, which is 1
+// for True and 0 for False and Unknown. The reason is not a label: a reason that flaps would make series come and go, and
+// it is in the log line of the transition.
+//
+// A Ready that is still Pending (no condition is False, and a first probe has not ended: bindingcheck names a Pending condition
+// before any other Unknown, so the order in which the probes end does not matter) gets no series of its own and no ready gauge: the
+// Binding is not known to be unready, only not yet known, and a rule on == 0 would fire after every restart for the length of the slower
+// probe. A Binding that a first result has already found False has the series at once, with 0, which is true. The other conditions'
+// series are exported as they end. Ready can be Pending again later (when an edit gives a Binding approver groups, or a Binding made again under its name drops a condition of the old one), and then its series keep the
+// last value they had until the probe of the groups ends.
+func (m *Metrics) BindingCondition(tr bindingcheck.Transition) {
+	if tr.New.Type == bindingcheck.Ready && tr.New.Pending() {
+		return
+	}
+	for _, s := range [...]bindingcheck.Status{bindingcheck.True, bindingcheck.False, bindingcheck.Unknown} {
+		v := 0.0
+		if tr.New.Status == s {
+			v = 1
+		}
+		m.bindingCond.WithLabelValues(tr.Binding, string(tr.New.Type), strings.ToLower(string(s))).Set(v)
+	}
+	if tr.New.Type == bindingcheck.Ready {
+		v := 0.0
+		if tr.New.Status == bindingcheck.True {
+			v = 1
+		}
+		m.bindingReady.WithLabelValues(tr.Binding).Set(v)
+	}
+}
+
+// BindingsPruned deletes every series of the Bindings that left the config: bindingcheck.Options.OnPrune. The Prober calls it after
+// the last transition it reports for a Binding, so a series it deletes is not set again.
+func (m *Metrics) BindingsPruned(names []string) {
+	for _, name := range names {
+		m.bindingCond.DeletePartialMatch(prometheus.Labels{"binding": name})
+		m.bindingReady.DeleteLabelValues(name)
+	}
+}
+
+// BindingConditionDropped deletes the series of one condition of a Binding that stays in the config but no longer has that condition
+// (an edit took its approver groups away): bindingcheck.Options.OnDrop. The Prober calls it after the last transition it reports for
+// the condition, and after the change of Ready that the removal causes, so a series it deletes is not set again unless the Binding gains
+// groups later, when the condition is new and its series come back with its first result. The Binding's other series are untouched.
+func (m *Metrics) BindingConditionDropped(binding string, cond bindingcheck.ConditionType) {
+	m.bindingCond.DeletePartialMatch(prometheus.Labels{"binding": binding, "condition": string(cond)})
+}
+
+// BindingProbed observes how long a probe of a condition took.
+func (m *Metrics) BindingProbed(cond bindingcheck.ConditionType, d time.Duration) {
+	m.probeDuration.WithLabelValues(string(cond)).Observe(d.Seconds())
+}
 
 // Handler serves the registry in the Prometheus text format.
 func (m *Metrics) Handler() http.Handler {

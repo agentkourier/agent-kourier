@@ -225,6 +225,23 @@ func TestReplyAndDMDeliverMessageEvents(t *testing.T) {
 	}
 }
 
+// Say is a person's message at the top level of a channel: one message event with no thread, stored in the channel. A direct
+// message is refused, as DM is the way there.
+func TestSayDeliversATopLevelMessage(t *testing.T) {
+	fake, smc := connected(t)
+	said, err := fake.Say("C1", "U1", "checkout is down")
+	if err != nil {
+		t.Fatalf("Say: %v", err)
+	}
+	wantMessage(t, smc, said, "", "channel", "checkout is down")
+	if msgs := fake.Messages("C1"); len(msgs) != 1 || msgs[0].TS != said.TS || msgs[0].User != "U1" || msgs[0].ThreadTS != "" {
+		t.Fatalf("messages = %+v; want the person's message at the top level", msgs)
+	}
+	if _, err := fake.Say(fakeslack.DMChannel("U1"), "U1", "hi"); err == nil {
+		t.Fatal("Say in a direct message succeeded; want it refused")
+	}
+}
+
 func TestUserActionsNeedAClient(t *testing.T) {
 	leakCheck(t)
 	fake := fakeslack.New()

@@ -17,3 +17,4 @@ spec:
     connectionRef: {namespace: agent-kourier, name: slack-fast}
     channel: CS13
     output: live
+    progress: steps                  # the scenario asserts exactly one card per tool call; a gap would add a Working… card

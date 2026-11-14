@@ -15,9 +15,11 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // fakeProc is a PressProcessor that does what handle says, and keeps what it was asked.
@@ -123,7 +125,7 @@ func TestPressesOfOneInteractionRunOneAtATimeInOrder(t *testing.T) {
 	for seq := int64(1); seq <= 5; seq++ {
 		w.Submit(pr(seq, "ix-1"))
 	}
-	waitFor(t, "five presses", func() bool { mu.Lock(); defer mu.Unlock(); return len(order) == 5 })
+	testutil.Eventually(t, "five presses", func() bool { mu.Lock(); defer mu.Unlock(); return len(order) == 5 })
 	if most.Load() != 1 || !slices.IsSorted(order) {
 		t.Errorf("most at once %d, order %v; want one at a time, oldest first", most.Load(), order)
 	}
@@ -143,7 +145,7 @@ func TestInteractionsRunInParallelUpToTheBound(t *testing.T) {
 	for seq := int64(1); seq <= 32; seq++ {
 		w.Submit(pr(seq, fmt.Sprintf("ix-%d", seq)))
 	}
-	waitFor(t, "eight running", func() bool { return running.Load() == 8 })
+	testutil.Eventually(t, "eight running", func() bool { return running.Load() == 8 })
 	time.Sleep(20 * time.Millisecond) // a worker beyond the bound would have started by now
 	if running.Load() != 8 {
 		t.Fatalf("%d running with eight workers", running.Load())
@@ -151,7 +153,7 @@ func TestInteractionsRunInParallelUpToTheBound(t *testing.T) {
 	for range 32 {
 		release <- struct{}{}
 	}
-	waitFor(t, "all 32", func() bool { return len(f.processed()) == 32 && running.Load() == 0 })
+	testutil.Eventually(t, "all 32", func() bool { return len(f.processed()) == 32 && running.Load() == 0 })
 	if most.Load() != 8 {
 		t.Errorf("most at once %d; want 8: the bound, reached", most.Load())
 	}
@@ -164,11 +166,11 @@ func TestAPressSubmittedAgainWhileItIsInFlightRunsOnce(t *testing.T) {
 	var once sync.Once
 	t.Cleanup(func() { once.Do(func() { close(gate) }) })
 	w.Submit(pr(1, "ix-1"))
-	waitFor(t, "the press", func() bool { return len(f.processed()) == 1 })
+	testutil.Eventually(t, "the press", func() bool { return len(f.processed()) == 1 })
 	w.Submit(pr(1, "ix-1")) // recovery and the sink can both announce a press
 	once.Do(func() { close(gate) })
 	w.Submit(pr(2, "ix-1")) // a later press of the same interaction is another press
-	waitFor(t, "the second press", func() bool { return f.processed()[2] == 1 })
+	testutil.Eventually(t, "the second press", func() bool { return f.processed()[2] == 1 })
 	if got := f.processed(); got[1] != 1 {
 		t.Errorf("processed %v; want press 1 once", got)
 	}
@@ -187,7 +189,7 @@ func TestARetryWaitsAGrowingTimeBeforeTheNext(t *testing.T) {
 	}}
 	w, logs, _ := startWorker(t, f, func(c *interact.WorkerConfig) { c.Backoff, c.MaxBackoff = 20*time.Millisecond, 60*time.Millisecond })
 	w.Submit(pr(1, "ix-1"))
-	waitFor(t, "five tries", func() bool { mu.Lock(); defer mu.Unlock(); return len(at) == 5 })
+	testutil.Eventually(t, "five tries", func() bool { mu.Lock(); defer mu.Unlock(); return len(at) == 5 })
 	for i, want := range []time.Duration{20, 40, 60, 60} { // doubling, to the cap
 		if got := at[i+1].Sub(at[i]); got < want*time.Millisecond {
 			t.Errorf("try %d came %v after the one before; want at least %v", i+2, got, want*time.Millisecond)
@@ -209,7 +211,7 @@ func TestAPressWaitingToBeTriedAgainHoldsNoWorker(t *testing.T) {
 	w, _, _ := startWorker(t, f, func(c *interact.WorkerConfig) { c.Workers, c.Backoff, c.MaxBackoff = 1, time.Hour, time.Hour })
 	w.Submit(pr(1, "ix-a"))
 	w.Submit(pr(2, "ix-b"))
-	waitFor(t, "the other interaction", func() bool { return f.processed()[2] == 1 })
+	testutil.Eventually(t, "the other interaction", func() bool { return f.processed()[2] == 1 })
 }
 
 // TestAPressThatKeepsFailingIsGivenUpOn: the cap is the press's age by Agent Kourier's clock, so a restart
@@ -228,9 +230,9 @@ func TestAPressThatKeepsFailingIsGivenUpOn(t *testing.T) {
 		c.Now = func() time.Time { return d0.Add(time.Duration(step.Load()) * time.Minute) }
 	})
 	w.Submit(pr(1, "ix-1"))
-	waitFor(t, "the press to be given up", func() bool { return len(f.gaveUpOn()) == 1 })
+	testutil.Eventually(t, "the press to be given up", func() bool { return len(f.gaveUpOn()) == 1 })
 	w.Submit(pr(2, "ix-2")) // the pool goes on, and the press that was given up is not tried again
-	waitFor(t, "another press", func() bool { return f.processed()[2] > 0 })
+	testutil.Eventually(t, "another press", func() bool { return f.processed()[2] > 0 })
 	if got := f.processed()[1]; got != 3 || !slices.Equal(f.gaveUpOn(), []int64{1}) {
 		t.Errorf("press 1 tried %d times, given up on %v; want 3 tries, then one give-up", got, f.gaveUpOn())
 	}
@@ -246,7 +248,7 @@ func TestAPressThatCannotBeGivenUpOnIsTriedAgain(t *testing.T) {
 		c.Now = func() time.Time { return d0.Add(time.Hour) }
 	})
 	w.Submit(pr(1, "ix-1"))
-	waitFor(t, "a second give-up", func() bool { return len(f.gaveUpOn()) == 2 })
+	testutil.Eventually(t, "a second give-up", func() bool { return len(f.gaveUpOn()) == 2 })
 	if got := f.processed()[1]; got != 2 {
 		t.Errorf("tried %d times; want 2: a press whose give-up failed is not lost, and not given up on early", got)
 	}
@@ -257,7 +259,7 @@ func TestAPressOlderThanTheCapStillGetsOneTry(t *testing.T) {
 	f := &fakeProc{handle: func(context.Context, store.Press) (interact.Result, error) { return interact.Done, nil }}
 	w, _, _ := startWorker(t, f, func(c *interact.WorkerConfig) { c.Now = func() time.Time { return d0.Add(240 * time.Hour) } })
 	w.Submit(pr(1, "ix-1"))
-	waitFor(t, "the press", func() bool { return f.processed()[1] == 1 })
+	testutil.Eventually(t, "the press", func() bool { return f.processed()[1] == 1 })
 	if len(f.gaveUpOn()) != 0 {
 		t.Errorf("gave up on %v; want a press that is decided never given up on", f.gaveUpOn())
 	}
@@ -277,7 +279,7 @@ func TestShuttingDownLeavesAPressRecorded(t *testing.T) {
 	})
 	w.Submit(pr(1, "ix-1")) // would be given up on, if it were a failure
 	w.Submit(pr(2, "ix-2"))
-	waitFor(t, "both presses", func() bool { return len(f.processed()) == 2 })
+	testutil.Eventually(t, "both presses", func() bool { return len(f.processed()) == 2 })
 	if err := stop(); err == nil {
 		t.Error("Run returned nil; want the context's error")
 	}
@@ -296,7 +298,7 @@ func TestPressesWaitingOutABackoffLeaveNoTimerBehind(t *testing.T) {
 	for seq := int64(1); seq <= 3; seq++ {
 		w.Submit(pr(seq, fmt.Sprintf("ix-%d", seq)))
 	}
-	waitFor(t, "three tries", func() bool { return len(f.processed()) == 3 })
+	testutil.Eventually(t, "three tries", func() bool { return len(f.processed()) == 3 })
 	_ = stop()
 	goleak.VerifyNone(t, before)
 }
@@ -326,7 +328,7 @@ func TestAnEarlyPressIsEndedByItsOwnWindowAndNotMultipliedByTheWorker(t *testing
 		c.Backoff, c.MaxBackoff, c.Now = time.Millisecond, time.Millisecond, func() time.Time { return r.now }
 	})
 	w.Submit(r.got[0])
-	waitFor(t, "the press to be ended", func() bool { return r.waiting(t) == 0 })
+	testutil.Eventually(t, "the press to be ended", func() bool { return r.waiting(t) == 0 })
 	if got := r.eph.list(); len(got) != 1 || !strings.Contains(got[0], "not ready yet") || proc.tries.Load() != 5 {
 		t.Errorf("told %q after %d tries; want one notice, at the fifth try, which is two minutes in", got, proc.tries.Load())
 	}
@@ -363,7 +365,7 @@ func TestARefusedAnswerOnAParkedTaskIsTriedTwiceAndNoMore(t *testing.T) {
 		c.Backoff, c.MaxBackoff, c.Now = 30*time.Millisecond, time.Second, func() time.Time { return r.now }
 	})
 	w.Submit(r.got[0])
-	waitFor(t, "the press to be done", func() bool { return r.waiting(t) == 0 })
+	testutil.Eventually(t, "the press to be done", func() bool { return r.waiting(t) == 0 })
 	if got := len(r.sess.answers()); got != 2 || len(r.eph.list()) != 0 || len(r.out.list()) != 0 {
 		t.Errorf("%d sends, told %q, %d notices; want two sends and nothing said: it is not known whether an answer got through", got, r.eph.list(), len(r.out.list()))
 	}
@@ -377,7 +379,7 @@ func TestTheFirstBackoffIsSeconds(t *testing.T) {
 	f := &fakeProc{handle: func(context.Context, store.Press) (interact.Result, error) { return interact.Retry, errBoom }}
 	w, _, _ := startWorker(t, f, nil)
 	w.Submit(pr(1, "ix-1"))
-	waitFor(t, "the first try", func() bool { return f.processed()[1] == 1 })
+	testutil.Eventually(t, "the first try", func() bool { return f.processed()[1] == 1 })
 	time.Sleep(200 * time.Millisecond) // an immediate retry, or a backoff of milliseconds, would have come by now
 	if got := f.processed()[1]; got != 1 {
 		t.Errorf("%d tries after 200ms; want one: the default first backoff is seconds", got)
@@ -392,7 +394,7 @@ func TestRecordingAPressNeverWaitsForTheWorker(t *testing.T) {
 	f := &fakeProc{handle: func(context.Context, store.Press) (interact.Result, error) { <-gate; return interact.Done, nil }}
 	w, _, _ := startWorker(t, f, func(c *interact.WorkerConfig) { c.Workers = 1 })
 	t.Cleanup(func() { close(gate) }) // before the worker is stopped
-	pl, err := interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{}, Authorizer: r.az, Ephemerals: r.eph, Decider: r.d, Auditor: r.aud,
+	pl, err := interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{}, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Decider: r.d, Auditor: r.aud,
 		Limits: store.PressLimits{Total: 100, PerUser: 100}, Notify: w.Submit}))
 	if err != nil {
 		t.Fatal(err)
@@ -442,13 +444,13 @@ func TestRecoverSubmitsEveryRecordedPressOnceAndInOrder(t *testing.T) {
 	release := func() { once.Do(func() { close(gate) }) }
 	t.Cleanup(release)      // before the worker is stopped
 	w.Submit(pr(2, "ix-1")) // announced by the sink as well as listed: it still runs once
-	waitFor(t, "press 2 to be in flight", func() bool { return f.processed()[2] == 1 })
+	testutil.Eventually(t, "press 2 to be in flight", func() bool { return f.processed()[2] == 1 })
 	src := fakeSource{presses: []store.Press{pr(1, "ix-1"), pr(2, "ix-1"), pr(3, "ix-1")}}
 	if err := w.Recover(t.Context(), src); err != nil {
 		t.Fatal(err)
 	}
 	release()
-	waitFor(t, "three presses", func() bool { mu.Lock(); defer mu.Unlock(); return len(order) == 3 })
+	testutil.Eventually(t, "three presses", func() bool { mu.Lock(); defer mu.Unlock(); return len(order) == 3 })
 	if got := f.processed(); got[1] != 1 || got[2] != 1 || got[3] != 1 || !slices.Equal(order[1:], []int64{1, 3}) {
 		t.Errorf("processed %v, in order %v; want each press once, the listed ones oldest first", got, order)
 	}
@@ -489,7 +491,7 @@ func TestAPressThatCannotBeCheckedIsEndedByTheWorkersCapAlone(t *testing.T) {
 	}
 	c.now = c.now.Add(61 * time.Minute) // past the cap, and the deadline: before the restart, so no goroutine races the clock
 	c.restart(t, nil)
-	waitFor(t, "the press to be given up on", func() bool { return c.waiting(t) == 0 })
+	testutil.Eventually(t, "the press to be given up on", func() bool { return c.waiting(t) == 0 })
 	want := "UALICE1: Couldn't process your answer. Please press Submit again."
 	if got := strings.Join(c.eph.list(), "|"); got != want || c.row(t).State != store.InteractionPending || len(c.aud.got) != 0 {
 		t.Errorf("told %q, state %s, %d audit rows; want the person told to press again, the question untouched and nothing audited", got, c.row(t).State, len(c.aud.got))
@@ -507,7 +509,7 @@ func TestAPressRecordedBeforeACrashIsDecidedAfterIt(t *testing.T) {
 		t.Fatalf("%d presses waiting, state %s; want the press recorded and nothing decided", c.waiting(t), c.row(t).State)
 	}
 	c.restart(t, nil)
-	waitFor(t, "the press to be decided", func() bool { return c.waiting(t) == 0 })
+	testutil.Eventually(t, "the press to be decided", func() bool { return c.waiting(t) == 0 })
 	if row := c.row(t); row.State != store.InteractionAnswered || row.Decider != "UALICE1" || len(c.sess.answers()) != 1 || len(c.eph.list()) != 0 {
 		t.Errorf("state %s by %q, %d sends, told %q; want answered by the presser, sent once, no one told", row.State, row.Decider, len(c.sess.answers()), c.eph.list())
 	}
@@ -524,13 +526,13 @@ func TestACrashAfterTheDecisionIsRecordedSendsTheAnswerAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 	stop := c.restart(t, func(cfg *interact.WorkerConfig) { cfg.Backoff, cfg.MaxBackoff = time.Hour, time.Hour })
-	waitFor(t, "the decision and its failed send", func() bool { return len(c.sess.answers()) == 1 })
+	testutil.Eventually(t, "the decision and its failed send", func() bool { return len(c.sess.answers()) == 1 })
 	_ = stop() // the crash
 	if c.row(t).State != store.InteractionAnswered || c.waiting(t) != 1 {
 		t.Fatalf("state %s, %d presses waiting; want the answer recorded and the press kept", c.row(t).State, c.waiting(t))
 	}
 	stop = c.restart(t, nil)
-	waitFor(t, "the press to be decided again", func() bool { return c.waiting(t) == 0 })
+	testutil.Eventually(t, "the press to be decided again", func() bool { return c.waiting(t) == 0 })
 	sent := c.sess.answers()
 	if len(sent) != 2 || sent[0].ID != sent[1].ID || len(c.aud.got) != 1 || len(c.eph.list()) != 0 || c.row(t).Decider != "UALICE1" {
 		t.Errorf("%d sends, %d audit rows, told %q; want the same message sent twice, one decision, and no one told they lost", len(sent), len(c.aud.got), c.eph.list())
@@ -550,7 +552,7 @@ func TestPressesRecordedTwiceAreDecidedOnceInOrder(t *testing.T) {
 		}
 	}
 	c.restart(t, nil)
-	waitFor(t, "all three presses", func() bool { return c.waiting(t) == 0 })
+	testutil.Eventually(t, "all three presses", func() bool { return c.waiting(t) == 0 })
 	want := []string{"UBOB22: @UALICE1 answered this question first."}
 	if got := c.eph.list(); !slices.Equal(got, want) || len(c.sess.answers()) != 2 || len(c.aud.got) != 1 || c.aud.got[0].Result != audit.DecisionAnswered {
 		t.Errorf("told %q, %d sends, audit %+v; want the repeat sent again, the other told, and the one decision audited", got, len(c.sess.answers()), c.aud.got)

@@ -1,16 +1,20 @@
 package broker
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/config"
+	"github.com/agentkourier/agent-kourier/internal/identity"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/postgres"
@@ -19,14 +23,14 @@ import (
 
 // Run starts the broker and runs until ctx ends or something fails. It returns nil after a clean stop
 // (ctx ended, even while it was still starting), and otherwise an error: one wrapping ErrWiring is a usage error, one wrapping
-// k8ssecrets.ErrAccessDenied is missing RBAC, and any other is a failure of a dependency. cmd/agent-kourier
+// k8ssecrets.ErrAccessDenied or crsource.ErrAccessDenied is missing RBAC, and any other is a failure of a dependency. cmd/agent-kourier
 // maps them to exit codes.
 //
 // The order is klog (before anything uses client-go, so even its first line is capped and routed),
 // the Kubernetes client, the health server (so that /healthz answers from here on), Bootstrap (the
-// config and the Secret caches), the one ChatConnection, the store (SQLite, or Postgres with its DSN read from
+// config, from files or, with cfg.ConfigSource crds, from the custom resources of the cluster, and the Secret caches), the broker's own ChatConnection if it has one (spec D53), the store (SQLite, or Postgres with its DSN read from
 // a Secret: cfg.Store), and then readiness: /readyz says 503 "starting" until the last of those is done. The
-// connection comes before the store, so a config that v1 cannot serve leaves no database behind. That is what every
+// own connection comes before the store, so a config that v1 cannot serve leaves no database behind. That is what every
 // replica runs, a standby included (spec 11).
 //
 // What only the leader runs follows, as leaderHalf.start has it: the audit writer, the Bindings, the chat platform,
@@ -41,6 +45,23 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		return err
 	}
 	log := slog.New(telemetry.LogHandler{Handler: cfg.logger().Handler()})
+	// The first line of a log, before the exporter or klog can say anything: the two routes read the same way after it, and a pod that was moved from one to the other is told
+	// apart from its old one by it. With crds the connection is the own one the broker is configured to serve, which "serving a
+	// ChatConnection" confirms once it is read, and it is left out when the broker has none (spec D53); connection_namespaces, when there is a
+	// list, is the namespaces whose ChatConnections it serves besides (names only, each a DNS-1123 label by now, so no pasted token can pass).
+	// With files the connection is whichever the directory holds, and only that later line names it.
+	if cfg.source() == SourceCRDs {
+		attrs := []any{"config_source", string(SourceCRDs)}
+		if !cfg.noOwnConnection() {
+			attrs = append(attrs, "connection", v1alpha1.NamespacedName(cfg.ChatConnection.Namespace, cfg.ChatConnection.Name))
+		}
+		if len(cfg.ConnectionNamespaces) > 0 {
+			attrs = append(attrs, "connection_namespaces", strings.Join(cfg.ConnectionNamespaces, ","))
+		}
+		log.InfoContext(ctx, "config route", attrs...)
+	} else {
+		log.InfoContext(ctx, "config route", "config_source", string(SourceFiles))
+	}
 	provider := cfg.TracerProvider
 	if provider == nil {
 		var shutdown func(context.Context) error
@@ -77,6 +98,33 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		if client, err = InClusterClient(); err != nil {
 			return err
 		}
+	}
+	var crds *CRDSource    // the custom resources are read only when the config source says so
+	var status *statusSink // and Binding.status is written only then, and only by the leader
+	if cfg.source() == SourceCRDs {
+		dyn := cfg.Dynamic
+		if dyn == nil {
+			if dyn, err = InClusterDynamicClient(); err != nil {
+				return err
+			}
+		}
+		crds = &CRDSource{Client: dyn, Connection: cfg.ChatConnection, ConnectionNamespaces: cfg.ConnectionNamespaces}
+		status = &statusSink{client: cfg.StatusClient, warnings: cmp.Or(cfg.statusWarnings, &warningCounter{})}
+		if status.client == nil {
+			if status.client, err = InClusterStatusClient(status.warnings); err != nil {
+				return err
+			}
+		}
+	}
+	// The election has a client of its own, so that the informers' lists cannot queue a renewal of the Lease behind them.
+	leaseClient := cfg.LeaseClient
+	if leaseClient == nil && cfg.Client == nil && cfg.Store.kind() == StorePostgres {
+		if leaseClient, err = InClusterLeaseClient(); err != nil {
+			return err
+		}
+	}
+	if leaseClient == nil {
+		leaseClient = client
 	}
 	// runCtx is the broker's own: a signal ends ctx, and the shutdown then stops the parts in order, one
 	// step at a time, where a context derived from ctx would stop them all at once. Until startup has
@@ -121,25 +169,36 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	}()
 	sd.add(stepHealth, func(c context.Context) { stopServing(); waitFor(c, servedDone) })
 
-	var extraNamespaces []string // the Postgres DSN's Secret is Agent Kourier's own, so no resource of the config names its namespace
+	var extraSecrets []config.SecretName // the Postgres DSN's Secret is Agent Kourier's own, so no resource of the config names it
 	if cfg.Store.kind() == StorePostgres {
-		extraNamespaces = append(extraNamespaces, cfg.Store.PostgresDSN.Namespace)
+		extraSecrets = append(extraSecrets, config.SecretName{Namespace: cfg.Store.PostgresDSN.Namespace, Name: cfg.Store.PostgresDSN.Name})
 	}
 	boot, err := Bootstrap(runCtx, client, BootstrapOptions{
-		Dir: cfg.ConfigDir, ExtraNamespaces: extraNamespaces, SyncTimeout: cfg.SyncTimeout, PollInterval: cfg.reloadPoll, Logger: log, OnReloadError: metrics.ReloadError,
+		Dir: cfg.ConfigDir, ExtraSecrets: extraSecrets, SyncTimeout: cfg.SyncTimeout, PollInterval: cfg.reloadPoll, Logger: log, OnReloadError: metrics.ReloadError,
+		OnReport: metrics.ConfigReport, CRDs: crds,
 	})
 	if err != nil {
 		return fmt.Errorf("bootstrap: %w", err)
 	}
 	current.Store(boot)
-	sd.add(stepResolver, func(context.Context) { cancel(); boot.Reloader.Wait(); boot.Stop() }) // the Reloader stops before the resolver
+	// With the custom resources only, and after Bootstrap, so that an API server that does not answer, or CRDs that are absent, are met first
+	// where they are named clearly: the comparison of each CRD's schema hash with this build's, at once and every minute (crdschema.go).
+	schemaDone := startSchemaWatch(runCtx, crds, log, metrics)
+	sd.add(stepResolver, func(c context.Context) { cancel(); waitFor(c, schemaDone); boot.Reloader.Wait(); boot.Stop() }) // the Reloader stops before the resolver
 
-	conn, err := ChooseConnection(runCtx, boot.Reloader.Current(), boot.Secrets)
-	if err != nil {
-		return err
+	// The connections served, which the leader half's supervisor keeps (supervisor.publish): the own connection until it does, so that a replica that
+	// does not lead names its own. The store's outbox gauges say 0 for each of them that has no unposted row. A broker with no own connection starts
+	// with none: it has no ChatConnection to find, and its team connections are the leader's to start.
+	var connsServed atomic.Pointer[[]Connection]
+	connsServed.Store(&[]Connection{})
+	if !cfg.noOwnConnection() {
+		conn, err := ChooseConnection(runCtx, boot.Reloader.Current(), cfg.ChatConnection, boot.Secrets)
+		if err != nil {
+			return err
+		}
+		log.InfoContext(ctx, "serving a ChatConnection", "connection", v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name))
+		connsServed.Store(&[]Connection{conn})
 	}
-	connName := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
-	log.InfoContext(ctx, "serving a ChatConnection", "connection", connName)
 
 	// A write that finds another replica has led since ends the process (spec D37): the error alone would be handled
 	// by whichever part made the write, and the part could carry on. SQLite never calls it.
@@ -154,7 +213,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	}
 	auditEndpoint.Set(st)
 	log.InfoContext(ctx, "opened the store", "store", cfg.Store.kind()) // the kind only: a DSN is never logged
-	if err := st.RegisterMetrics(metrics.reg); err != nil {
+	if err := st.RegisterMetrics(metrics.reg, func() []string { return connectionNames(*connsServed.Load()) }); err != nil {
 		_ = st.Close()
 		return fmt.Errorf("store metrics: %w", err)
 	}
@@ -187,7 +246,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		lease = newLeaseClock(cfg.leaseNow)
 		guard = newLeaseFence(cfg.Election, lease, fail.now)
 	}
-	leader := &leaderHalf{cfg: cfg, log: log, sd: sd, metrics: metrics, boot: boot, st: st, leaseFence: guard}
+	leader := &leaderHalf{cfg: cfg, log: log, sd: sd, metrics: metrics, boot: boot, st: st, leaseFence: guard, status: status, connsServed: &connsServed}
 	leaderDone := make(chan error, 1)
 	runLeader := func() {
 		leave, ok := gate.enter()
@@ -206,7 +265,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		}
 		// The connection and its Secrets as they are now: the startup read above only checks that the config can be served.
 		// Everything else the leader half uses (the Bindings, the config snapshot, the Secrets) it reads live.
-		current, err := ChooseConnection(runCtx, boot.Reloader.Current(), boot.Secrets)
+		current, err := chooseConnections(runCtx, cfg, boot.Reloader.Current(), boot.Secrets)
 		if err != nil {
 			leave()
 			leaderDone <- err
@@ -219,6 +278,9 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 			leaderDone <- err
 			return
 		}
+		if cfg.leaderStarted != nil {
+			cfg.leaderStarted()
+		}
 		leaderDone <- <-chatDone
 	}
 	// From here a signal ends ctx only, and the shutdown stops the parts in order. A signal during the leader half's
@@ -229,7 +291,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	if fenced == nil {
 		go runLeader()
 	} else {
-		cand, err = startCandidacy(ctx, client, cfg.Election, log, lease, candidacyCallbacks{
+		cand, err = startCandidacy(ctx, leaseClient, cfg.Election, log, lease, candidacyCallbacks{
 			gained: func(context.Context) { runLeader() },
 			lost:   func() { fail.now(leaseLostReason) },
 		})
@@ -252,6 +314,21 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		served <- err // for the cleanup, which waits for it too
 		return fmt.Errorf("the health server stopped before the broker did: %w", err)
 	}
+}
+
+// noOwnConnection says the broker has no ChatConnection of its own (spec D53): it reads the custom resources and is given none. The files
+// route always has the one connection of its directory, whose reference is the zero value too.
+func (c RunConfig) noOwnConnection() bool {
+	return c.source() == SourceCRDs && c.ChatConnection == (v1alpha1.ObjectRef{})
+}
+
+// chooseConnections are the connections a leader half starts on: the own connection, if the broker has one, and the team connections. With no
+// own connection that is every ChatConnection of the snapshot, none of which can fail the start (ChooseTeamConnections).
+func chooseConnections(ctx context.Context, cfg RunConfig, snap *config.Snapshot, secrets identity.SecretReader) (Connections, error) {
+	if cfg.noOwnConnection() {
+		return ChooseTeamConnections(ctx, snap, secrets), nil
+	}
+	return ChooseConnections(ctx, snap, cfg.ChatConnection, secrets)
 }
 
 // takeLeadership gives the store its epoch, trying again until the time the leader is allowed to renew its lease has

@@ -43,7 +43,7 @@ var markdownCases = []struct {
 	{"07 a fence in a list item", "- item:\n  ```\n  x\n  ```\n- next", "- item:\n```\nx\n```\n- next"},
 	{"25 a fence in a numbered item", "1. step:\n   ```bash\n   x\n     y\n   ```\n2. next", "1. step:\n```\nx\n  y\n```\n2. next"},
 	{"22 a list, a fence at column 0, a list", "1. a\n```\nx\n```\n2. b", "1. a\n```\nx\n```\n2. b"},
-	{"39 a fence on the marker line is prose", "- ```\n  x", "- \\`\\`\\`\n  x"},
+	{"39 a fence on the list marker line is a block at column 0, the marker dropped", "- ```\n  x", "```\nx"},
 	{"08 a fence indented by 1", " ```\nx\n ```", "```\nx\n```"},
 	{"09 a fence indented by 3", "   ```\nx\n   ```", "```\nx\n```"},
 	{"09 a fence indented by 4 or a tab", "    ```\n    x\n    ```\n\t```\n\tx\n\t```", "```\nx\n```\n```\nx\n```"},
@@ -53,9 +53,94 @@ var markdownCases = []struct {
 	{"13 a tilde fence is written as a backtick one", "~~~\nx\n~~~", "```\nx\n```"},
 	{"13 a fence opened by tildes is closed by backticks", "~~~\nx\n```\ny", "```\nx\n```\ny"},
 	{"23 an indented block is prose", "a\n\n    x <y>", "a\n\n    x &lt;y&gt;"},
-	{"24 a fence in a quote is prose", "> ```\n> x\n> ```", "&gt; \\`\\`\\`\n&gt; x\n&gt; \\`\\`\\`"},
+	{"24 a fence in a quote is a block at column 0, the marks dropped", "> ```\n> x\n> ```", "```\nx\n```"},
 	{"30 a fence after a quote line", "> q\n```\nx\n```", "&gt; q\n```\nx\n```"},
 	{"31 a fence after an unclosed span", "a ` b\n```\nx\n```", "a \\` b\n```\nx\n```"},
+
+	// A fence after a list marker or a quote mark is a block at column 0: the marker is dropped, and the block's lines lose
+	// the item's content column, or a quote's mark. The list or the quote goes on as prose after the block.
+	{"a fence after a list marker, the issue's example", "- ```\n  owner @sam failed\n  ```\nthen @lee please", "```\nowner @sam failed\n```\nthen @lee please"},
+	{"a fence after a star", "* ```\n  x\n  ```", "```\nx\n```"},
+	{"a fence after a plus", "+ ```\n  x\n  ```", "```\nx\n```"},
+	{"a fence after a number and a dot", "1. ```bash\n   x\n     y\n   ```\n2. next", "```\nx\n  y\n```\n2. next"},
+	{"a fence after a number and a bracket", "1) ```\n   x\n   ```", "```\nx\n```"},
+	{"a fence after a long number", "123456789. ```\n           x\n           ```", "```\nx\n```"},
+	{"a fence after an indented marker", "  - ```\n    x\n    ```", "```\nx\n```"},
+	{"a fence after a marker and more white space", "-   ```\n    x\n    ```", "```\nx\n```"},
+	{"a tilde fence after a marker", "- ~~~\n  x\n  ~~~", "```\nx\n```"},
+	{"a fence after a marker, its lines indented less than the item", "- ```\nx\n y\n   z\n  ```", "```\nx\ny\n z\n```"},
+	{"a fence after a marker, the list goes on", "- a\n- ```\n  x\n  ```\n- b\n  c <d>", "- a\n```\nx\n```\n- b\n  c &lt;d&gt;"},
+	{"a fence after a marker, the block never closed", "- ```\n  x", "```\nx"},
+	{"a fence after a marker, then nothing", "- ```", "```"},
+	{"a fence after a marker, closed by a line with a marker of its own", "- ```\n  x\n- ```\ny", "```\nx\n```\ny"},
+	{"a fence after a marker, closed by a line with no indent", "- ```\n  x\n```\ny", "```\nx\n```\ny"},
+	{"a fence after a marker, what follows the closing run is prose", "- ```\n  x\n  ``` and <b>\n  y", "```\nx\n```\nand &lt;b&gt;\ny"},
+	{"a list item with a span of three backticks is prose and a span", "- ```echo hi```", "- `echo hi`"},
+	{"a numbered item with a span of three backticks, a tail and a name", "1. ```make test``` first, then @sam", "1. `make test` first, then @sam"},
+	{"a numbered item with a span of three backticks and a tail", "1. ```echo hi``` and <b>", "1. `echo hi` and &lt;b&gt;"},
+	{"a list item with a span of three backticks and a space inside", "- ``` echo hi ```", "- ` echo hi `"},
+	{"a tilde fence after a marker, a one-line block", "- ~~~echo hi~~~", "```\necho hi\n```"},
+	{"a tilde fence after a marker, a one-line block with a tail", "1. ~~~echo hi~~~ and <b>", "```\necho hi\n```\nand &lt;b&gt;"},
+	{"a backtick in an info string, no closing run, is a fence line", "- ```x`y\n  z\n  ```", "```\nz\n```"},
+	{"a list item with backticks of another length is a block of one line", "- ```@sam```` x", "```\n@sam\n```\nx"},
+	{"a span-shaped line with a list marker closes a list block", "- ```\n  x\n- ```@sam``` @lee\n  ```\n@kim", "```\nx\n```\n@sam\\`\\`\\` @lee\n```\n@kim"},
+	{"a span-shaped line with a quote mark closes a quote block", "> ```\n> x\n> ```@sam``` @lee\n> ```\n@kim", "```\nx\n```\n@sam\\`\\`\\` @lee\n```\n@kim"},
+	{"a fence at column 0 and a one-line block keep their rule", "  ```echo hi``` and <b>", "```\necho hi\n```\nand &lt;b&gt;"},
+	{"a fence after a marker, a first line on the fence line", "- ```kubectl get pods\n  x\n  ```", "```\nkubectl get pods\nx\n```"},
+	{"a fence after a marker keeps tokens out of its code", "- ```\n  <@U1> <!here> <#C1>\n  ```", "```\n&lt;@U1> &lt;!here> &lt;#C1>\n```"},
+	{"a fence after a marker, a marker line in its block is code", "- ```\n  - x\n  1. y\n  > z\n  ```", "```\n- x\n1. y\n> z\n```"},
+	{"a fence after a marker, a nested fence line with a quote mark is code", "- ```\n  > ```\n  x\n  ```", "```\n> ```\nx\n```"},
+	{"a marker line whose rest is not a fence is prose", "- a ```\n- `` x\n1. ~~ y", "- a \\`\\`\\`\n- \\`\\` x\n1. ~~ y"},
+	{"a marker with no white space after it is no marker", "-```\nx\n*```\n1.```", "-\\`\\`\\`\nx\n*\\`\\`\\`\n1.\\`\\`\\`"},
+	{"a number of ten digits is no marker", "1234567890. ```\nx", "1234567890. \\`\\`\\`\nx"},
+	{"a number with no dot is no marker", "1 ```\nx", "1 \\`\\`\\`\nx"},
+	{"a second marker is no fence line", "- - ```\n- > ```\n1. - ```", "- - \\`\\`\\`\n- &gt; \\`\\`\\`\n1. - \\`\\`\\`"},
+	{"a list marker before a run does not close a block that opened with none", "```\nx\n- ```\ny\n```\nz", "```\nx\n- ```\ny\n```\nz"},
+	{"a fence after a marker, and a table after it", "- ```\n  x\n  ```\n| a |\n|---|\n| 1 |", "```\nx\n```\n```\n| a   |\n|-----|\n| 1   |\n```"},
+
+	{"a fence after a quote mark, the issue's example", "> ```\n> owner @sam failed\n> ```\nthen @lee please", "```\nowner @sam failed\n```\nthen @lee please"},
+	{"a quote with a mark on every line", "> ```\n> owner @sam failed\n> ```\n> then @lee please", "```\nowner @sam failed\n```\n&gt; then @lee please"},
+	{"a fence after a quote mark with no space", ">```\n>x\n>```", "```\nx\n```"},
+	{"a tilde fence after a quote mark", "> ~~~\n> x\n> ~~~", "```\nx\n```"},
+	{"a fence after a quote mark with a language", "> ```bash\n> x\n> ```", "```\nx\n```"},
+	{"a fence after an indented quote mark", "  > ```\n  > x\n  > ```", "```\nx\n```"},
+	{"a quote mark loses one space", "> ```\n>   x\n>x\n> ```", "```\n  x\nx\n```"},
+	{"a block in a quote with a line that has no mark", "> ```\n> x\ny\n> ```", "```\nx\ny\n```"},
+	{"a block in a quote closed by a line with no mark", "> ```\n> x\n```\ny", "```\nx\n```\ny"},
+	{"a block in a quote, a blank quote line", "> ```\n>\n> x\n> ```", "```\n\nx\n```"},
+	{"a block in a quote, a second quote mark is code", "> ```\n> > x\n> > ```\n> ```", "```\n> x\n> ```\n```"},
+	{"a block in a quote, a list marker line is code", "> ```\n> - ```\n> ```", "```\n- ```\n```"},
+	{"a block in a quote, the fence line's own white space is dedented", ">   ```\n>   x\n>  y\n> ```", "```\nx\ny\n```"},
+	{"a block in a quote keeps tokens out of its code", "> ```\n> <@U1> <!here>\n> ```", "```\n&lt;@U1> &lt;!here>\n```"},
+	// The item goes on after the block of a list marker: its lines lose the item's content column while they have it, so that
+	// they are not the indented code (row 23) that they are not in the item.
+	{"an item's line after its block, after a blank line", "- ```\n  x\n  ```\n\n    @lee owns it", "```\nx\n```\n\n  @lee owns it"},
+	{"an item's line after the block of a nested item", "- step one\n  - ```\n    kubectl get pods\n    ```\n    then ask @lee", "- step one\n```\nkubectl get pods\n```\nthen ask @lee"},
+	{"an item's line after the block of a two-digit number", "10. ```\n    make test\n    ```\n    then ask @lee", "```\nmake test\n```\nthen ask @lee"},
+	{"an item's lines go on until one has less white space than the item", "- ```\n  x\n  ```\n  a\n\n  b\n     c\n d\n    e", "```\nx\n```\na\n\nb\n   c\n d\n    e"},
+	{"a line with white space less than the item's ends it for good", "- ```\n  x\n  ```\n d\n    e", "```\nx\n```\n d\n    e"},
+	{"the next item ends the item's lines", "1. ```\n   x\n   ```\n   a\n2. b\n     c", "```\nx\n```\na\n2. b\n     c"},
+	{"the lines of an item after a one-line block", "- ~~~x~~~ tail\n  more", "```\nx\n```\ntail\nmore"},
+	{"an item's line after a block closed by a marker line", "- ```\n  x\n- ```\n  more", "```\nx\n```\nmore"},
+	{"a table in the item's lines ends them", "- ```\n  x\n  ```\n  | a |\n  |---|\n  | 1 |\n  after", "```\nx\n```\n```\n| a   |\n|-----|\n| 1   |\n```\n  after"},
+	{"an indented fence in an item has no such rule", "- item:\n  ```\n  x\n  ```\n    then", "- item:\n```\nx\n```\n    then"},
+	{"a quote's lines after its block are quote lines", "> ```\n> x\n> ```\n>   y", "```\nx\n```\n&gt;   y"},
+
+	// What follows a fence on its line is put back to be read, and no mark counts in it: only at the start of a line of the text.
+	{"the tail of a closing line has no list marker", "```\nlog\n``` - ```\n@lee\n```\n@sam", "```\nlog\n```\n- \\`\\`\\`\n@lee\n```\n@sam"},
+	{"the tail of a closing line has no quote mark", "```\nlog\n``` > ```\n@lee\n```\n@sam", "```\nlog\n```\n&gt; \\`\\`\\`\n@lee\n```\n@sam"},
+	{"the inner text of a one-line block has no list marker", "- ~~~ - ``` ~~~\n@lee", "```\n- ```\n```\n@lee"},
+	{"the inner text of a one-line block has no quote mark", "````> ``` x````\n@lee", "```\n> ``` x\n```\n@lee"},
+	{"the first line of a block has no list marker", "- ~~~ - ``` x\n  y\n  ~~~\n@lee", "```\n- ``` x\ny\n```\n@lee"},
+	{"a quote block's first line keeps its mark as text", "> ``` > x\n> y\n> ```", "```\n> x\ny\n```"},
+	{"a quote goes on as prose after its block", "> a\n> ```\n> x\n> ```\n> b <c>", "&gt; a\n```\nx\n```\n&gt; b &lt;c&gt;"},
+	{"a block in a quote never closed", "> ```\n> x\n> y", "```\nx\ny"},
+	{"a quote with a span of three backticks is prose and a span", "> ```x``` y", "&gt; `x` y"},
+	{"a quote with a span of three backticks and a tail", "> ```echo hi``` and <b>", "&gt; `echo hi` and &lt;b&gt;"},
+	{"a quote with a span of three backticks and no space after the mark", ">```x``` y", "&gt;`x` y"},
+	{"a tilde fence in a quote, a one-line block", "> ~~~echo hi~~~ and <b>", "```\necho hi\n```\nand &lt;b&gt;"},
+	{"a quote mark line whose rest is not a fence is prose", "> a ```\n> `` x", "&gt; a \\`\\`\\`\n&gt; \\`\\` x"},
+	{"a second quote mark is no fence line", "> > ```\n>> ```", "&gt; &gt; \\`\\`\\`\n&gt;&gt; \\`\\`\\`"},
 
 	// What is inside a block is not a closer, but for a line that starts with a fence.
 	{"32 a fence mid-line in a block", "```\nfoo ``` bar\n```", "```\nfoo ``` bar\n```"},
@@ -87,12 +172,38 @@ var markdownCases = []struct {
 	{"a span with a backtick in it is no span", "``a`b``", "\\`\\`a\\`b\\`\\`"},
 	{"34 backticks mid-line", "a ``` b", "a \\`\\`\\` b"},
 	{"35 tildes mid-line", "a ~~~ b", "a \\~\\~\\~ b"},
-	{"42 tildes in a quote", "> ~~~", "&gt; \\~\\~\\~"},
-	{"43 backticks in a quote", "> ```", "&gt; \\`\\`\\`"},
+	{"42 tildes in a quote", "> a ~~~ b", "&gt; a \\~\\~\\~ b"},
+	{"43 backticks in a quote", "> a ``` b", "&gt; a \\`\\`\\` b"},
 	{"tildes of two are strikethrough", "~~x~~ and ~y~", "~~x~~ and ~y~"},
 	{"50 a stray run, then a span", "a `` b `[t](url) <@U1> 2>&1 <pod>`", "a \\`\\` b `[t](url) &lt;@U1> 2>&1 <pod>`"},
 	{"two spans in a line", "`a` and `b`", "`a` and `b`"},
 	{"two backtick runs side by side are one run", "`a``b`", "\\`a\\`\\`b\\`"},
+
+	// A pipe table is a block, its columns aligned.
+	{"a table", "| a | b |\n|---|---|\n| 1 | 2 |", "```\n| a   | b   |\n|-----|-----|\n| 1   | 2   |\n```"},
+	{"a table and the line break after it", "| a | b |\n|---|---|\n| 1 | 2 |\n", "```\n| a   | b   |\n|-----|-----|\n| 1   | 2   |\n```\n"},
+	{"a table ends at a blank line", "| a |\n|---|\n| 1 |\n\nafter <b>", "```\n| a   |\n|-----|\n| 1   |\n```\n\nafter &lt;b&gt;"},
+	{"a table ends at a line that is not a row", "| a |\n|---|\n| 1 |\nafter", "```\n| a   |\n|-----|\n| 1   |\n```\nafter"},
+	{"a table with no rows", "| head | x |\n| --- | --- |", "```\n| head | x   |\n|------|-----|\n```"},
+	{"a table's spans lose their backticks", "| Pod | Node |\n|---|---|\n| `web-1` | ``a b`` and ``c`d`` |", "```\n| Pod   | Node            |\n|-------|-----------------|\n| web-1 | a b and ``c`d`` |\n```"},
+	{"a table's escaped pipe is a pipe in its cell", "| a | b |\n|---|---|\n| x \\| y | 2 |", "```\n| a     | b   |\n|-------|-----|\n| x | y | 2   |\n```"},
+	{"a table's alignment is kept", "| name | n | mid |\n|:--|--:|:-:|\n| a | 1 | b |\n| bb | 100 | ccccc |", "```\n| name |   n |  mid  |\n|------|-----|-------|\n| a    |   1 |   b   |\n| bb   | 100 | ccccc |\n```"},
+	{"a table's short row is padded and its long row kept whole", "| a | b |\n|---|---|\n| 1 |\n| 1 | 2 | 3 |", "```\n| a   | b   |     |\n|-----|-----|-----|\n| 1   |     |     |\n| 1   | 2   | 3   |\n```"},
+	{"a table's code is raw but for tokens", "| a |\n|---|\n| <@U1> <!here> [t](u) & 2>&1 |", "```\n| a                                 |\n|-----------------------------------|\n| &lt;@U1> &lt;!here> [t](u) & 2>&1 |\n```"},
+	{"a table's fence in a cell is text", "| ``` |\n|---|\n| ~~~ |", "```\n| ``` |\n|-----|\n| ~~~ |\n```"},
+	{"a table in a list item is a block at column 0", "- see:\n  | a |\n  |---|\n  | 1 |\n- next", "- see:\n```\n| a   |\n|-----|\n| 1   |\n```\n- next"},
+	{"a table's span before a token is as wide as it is shown", "| a |\n|---|\n| `<`@U1 |", "```\n| a       |\n|---------|\n| &lt;@U1 |\n```"},
+	{"a table too wide for a line is a record a row", "| Pod | Namespace | Request |\n|---|---|---|\n| kube-apiserver-proxmox-quickstart-control-plane-2zfxq | kube-system | 250m |\n| `sre-agent-54b48c9c66-tg829` | kagent | 1500m |",
+		"```\nPod:       kube-apiserver-proxmox-quickstart-control-plane-2zfxq\nNamespace: kube-system\nRequest:   250m\n\nPod:       sre-agent-54b48c9c66-tg829\nNamespace: kagent\nRequest:   1500m\n```"},
+	{"a table's delimiter may have any white space", "| a |\n|\u00a0--- |\n| 1 |\n", "```\n| a   |\n|-----|\n| 1   |\n```\n"},
+	{"a header and a delimiter of different widths is no table", "| a | b |\n|---|", "| a | b |\n|---|"},
+	{"a header and no delimiter is no table", "| a | b |\nnot | a delimiter", "| a | b |\nnot | a delimiter"},
+	{"a delimiter with no pipe is a setext heading", "| a\n---", "| a\n---"},
+	{"a table needs its leading pipe", "a | b\n|---|---|\n1 | 2", "a | b\n|---|---|\n1 | 2"},
+	{"a lone row is prose", "| a & b |", "| a &amp; b |"},
+	{"the table of 2026-10-18",
+		"**Highest CPU requests on the busiest worker (`gq82h`)**\n\n| Pod | Request | Limit |\n|---|---:|---:|\n| `metrics-server-7d9c` | 100m | — |\n| `cilium-x2b4k` | 100m | — |\n| `sre-agent-54b48c9c66-tg829` | 500m | 1500m |\n\nTo get actual usage, run:",
+		"**Highest CPU requests on the busiest worker (`gq82h`)**\n\n```\n| Pod                        | Request | Limit |\n|----------------------------|---------|-------|\n| metrics-server-7d9c        |    100m |     — |\n| cilium-x2b4k               |    100m |     — |\n| sre-agent-54b48c9c66-tg829 |    500m | 1500m |\n```\n\nTo get actual usage, run:"},
 
 	// The trial of 2026-10-04.
 	{"trial: the OOMKilled answer's list item",
@@ -180,6 +291,308 @@ func TestMarkdownStreamHoldsBackOnlyWhatIsUndecided(t *testing.T) {
 	}
 }
 
+// A list marker or a quote mark at the start of a line, and the white space after it, are held back until a character says
+// whether a fence follows, and no longer: a line that turns out to be prose is written from there on as it comes.
+func TestMarkdownStreamHoldsBackAMarkUntilItIsKnownToBeProse(t *testing.T) {
+	var m mdText
+	steps := []struct {
+		in, want string
+		final    bool
+	}{
+		{"-", "", false},                // a list marker, if white space follows
+		{" ", "", false},                // a fence may follow the marker
+		{"item", "- item", false},       // it does not
+		{"\n12", "\n", false},           // the number of a marker
+		{")", "", false},                // and its bracket
+		{" `", "", false},               // a run that may go on
+		{"x", "12) ", false},            // not a fence line: from the backtick, the line waits for a span to close
+		{"`\n>", "`x`\n", false},        // a quote mark
+		{" ", "", false},                // and its space
+		{"q\n- ``", "&gt; q\n", false},  // the start of a fence line
+		{"`bash\n  x", "```\nx", false}, // is held to the end of the line, as one at column 0 is
+		{"\n  ``", "\n", false},         // a closer is too
+		{"`\n>", "```\n", false},        // the list is over, and a quote mark may start a fence line again
+		{" ```", "", false},
+		{"\n> y\n> ``", "```\ny\n", false}, // a quoted block loses the mark of each line
+		{"`\n>", "```\n", false},           // its closer has one
+		{"", "&gt;", true},                 // the end of the text writes what is held
+	}
+	for i, st := range steps {
+		if got := m.text(st.in, math.MaxInt, st.final); got != st.want {
+			t.Fatalf("step %d, %q: got %q, want %q", i, st.in, got, st.want)
+		}
+	}
+	if m.held != "" {
+		t.Fatalf("held %q at the end", m.held)
+	}
+}
+
+// In a block a line's start is held back only where it can matter: a block opened with white space alone takes no mark, so
+// each character of its lines is written as it comes; one opened after a list marker waits on a marker that may close it;
+// and one opened after a quote mark waits on the mark that each of its lines loses.
+func TestMarkdownStreamInABlockHoldsBackOnlyWhatMayCloseIt(t *testing.T) {
+	for _, tc := range []struct {
+		name, open, first, written, second, then string
+	}{
+		{"no mark", "```\n", "- ", "- ", "x", "x"},
+		{"no mark, a quote", "```\n", ">", ">", " x", " x"},
+		{"a list marker", "- ```\n", "  - ", "", "x", "- x"},
+		{"a list marker, a quote mark is code", "- ```\n", ">", ">", " x", " x"},
+		{"a quote mark", "> ```\n", "> ", "", "x", "x"},
+		{"a quote mark, a list marker is code", "> ```\n", "> - ", "- ", "x", "x"},
+		{"a quote mark, white space first", "> ```\n", "  ", "", "x", "  x"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var m mdText
+			m.text(tc.open, math.MaxInt, false)
+			if got := m.text(tc.first, math.MaxInt, false); got != tc.written {
+				t.Fatalf("after %q: got %q, want %q", tc.first, got, tc.written)
+			}
+			if got := m.text(tc.second, math.MaxInt, false); got != tc.then {
+				t.Fatalf("after %q: got %q, want %q", tc.second, got, tc.then)
+			}
+		})
+	}
+}
+
+// A table is held back until it ends, since its last row may widen a column.
+func TestMarkdownStreamHoldsBackATableUntilItEnds(t *testing.T) {
+	var m mdText
+	steps := []struct {
+		in, want string
+		final    bool
+	}{
+		{"Rows:\n", "Rows:\n", false},
+		{"| a |", "", false}, // a header, until the next line says
+		{"\n|--", "", false}, // what may be a delimiter
+		{"-|\n| 1 |\n", "", false},
+		{"| 22222 |\n  ", "", false}, // a row may follow
+		{"x", "```\n| a     |\n|-------|\n| 1     |\n| 22222 |\n```\n  x", false},
+		{"\n| a |\nb", "\n| a |\nb", true}, // a header without a delimiter is prose
+	}
+	for i, st := range steps {
+		if got := m.text(st.in, math.MaxInt, st.final); got != st.want {
+			t.Fatalf("step %d, %q: got %q, want %q", i, st.in, got, st.want)
+		}
+	}
+	if m.held != "" {
+		t.Fatalf("held %q at the end", m.held)
+	}
+}
+
+// A table longer than tableHold is written as it comes once its columns are set: no text of it is cut that fits the
+// limit of a text, and a stream shows its rows before it ends. Its rows after the hold keep the columns of those before.
+func TestMarkdownTableLongerThanTheHoldStreams(t *testing.T) {
+	for _, tc := range []struct {
+		name, header, row string
+		rows              int
+	}{
+		{"aligned", "| Pod | Namespace | Request |\n|---|---|--:|\n", "| pod-%03d-abcdefghijklmnopqrstuvwxyz0123 | default | 100m |\n", 190},
+		{"a record a row", "| Pod | Namespace | Request |\n|---|---|---|\n", "| kube-apiserver-proxmox-quickstart-control-plane-2zfxq-%03d | kube-system | 250m |\n", 130},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pieces := []string{"Pods:\n\n" + tc.header}
+			for i := range tc.rows {
+				pieces = append(pieces, fmt.Sprintf(tc.row, i))
+			}
+			pieces = append(pieces, "\nThe busiest is <@U1> `pod-007`.\n", "Done.")
+			in := strings.Join(pieces, "")
+			if chat.Units(in) > maxMarkdown {
+				t.Fatalf("the input is %d units, over the limit it must fit", chat.Units(in))
+			}
+
+			var m mdText
+			var got strings.Builder
+			shownBeforeTheEnd := false
+			for i, p := range pieces {
+				out := m.text(p, maxMarkdown, i == len(pieces)-1)
+				if strings.HasSuffix(out, chat.Truncated) {
+					t.Fatalf("piece %d was cut: %d units", i, chat.Units(out))
+				}
+				if chat.Units(out) > tableHold+200 {
+					t.Fatalf("piece %d is %d units: the table was held back past its hold", i, chat.Units(out))
+				}
+				shownBeforeTheEnd = shownBeforeTheEnd || (i > 1 && i < tc.rows && out != "")
+				got.WriteString(out)
+			}
+			want := markdown(in, math.MaxInt)
+			if got.String() != want {
+				t.Fatalf("in pieces:\n%q\nat once:\n%q", got.String(), want)
+			}
+			if !shownBeforeTheEnd {
+				t.Fatal("no row was shown before the table ended")
+			}
+			if m.code || m.tbl.layout != nil || m.held != "" {
+				t.Fatalf("state at the end: %+v", m)
+			}
+			if bad := slackReading(want); len(bad) > 0 {
+				t.Fatalf("%v in %q", bad, want)
+			}
+			if !strings.HasSuffix(want, "```\n\nThe busiest is &lt;@U1&gt; `pod-007`.\nDone.") {
+				t.Fatalf("the text after the table is not prose after its block: %q", want[max(len(want)-120, 0):])
+			}
+			for i := range tc.rows {
+				if !strings.Contains(want, fmt.Sprintf("-%03d", i)) {
+					t.Fatalf("row %d is missing", i)
+				}
+			}
+			if records := strings.Contains(want, "\nPod:       kube-"); records != (tc.name == "a record a row") {
+				t.Fatalf("written a record a row: %v", records)
+			}
+			if tc.name == "aligned" {
+				lines := strings.Split(want, "\n")
+				var widths []int
+				for _, l := range lines {
+					if strings.HasPrefix(l, "| pod-") {
+						widths = append(widths, utf8.RuneCountInString(l))
+					}
+				}
+				if len(widths) != 190 || widths[0] != widths[189] {
+					t.Fatalf("%d rows, the first %d wide and the last %v", len(widths), widths[0], widths[len(widths)-1])
+				}
+			}
+		})
+	}
+}
+
+// A row after the hold that is wider than its column pushes the rest of its row out, and a line that is no row closes
+// the block before it.
+func TestMarkdownTableRowsAfterTheHold(t *testing.T) {
+	m := mdText{code: true, tbl: openTable{layout: headerLayout([]string{"a", "b"}, []byte("lr"))}}
+	got := m.text("| xxxxx | 1 | extra |\n| y |\nafter", math.MaxInt, true)
+	want := "| xxxxx |   1 | extra |\n| y   |     |\n```\nafter"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if m.code || m.tbl.layout != nil {
+		t.Fatalf("state after the table: %+v", m)
+	}
+}
+
+// A row that would pad every row of a table to its width does not: it makes the table compact, or, past the hold, it is
+// written after the rows held, in their columns. An unfit header keeps a table aligned however wide it is.
+func TestMarkdownWideRowPadsNoRowHeld(t *testing.T) {
+	for _, tc := range []struct {
+		width      int
+		first, end string // the first row, and the end of the last
+	}{
+		{3000, "| 0 | x |\n", strings.Repeat("y", 3000) + " |\n```\nafter\n"},
+		{5000, "| 0   | x   |\n", strings.Repeat("y", 5000) + " |\n```\nafter\n"},
+	} {
+		var b strings.Builder
+		b.WriteString("| ~n | v |\n|---|---|\n")
+		for i := range 60 {
+			fmt.Fprintf(&b, "| %d | x |\n", i)
+		}
+		b.WriteString("| 61 | " + strings.Repeat("y", tc.width) + " |\nafter\n")
+		in := b.String()
+		want := markdown(in, math.MaxInt)
+		if chat.Units(want) > chat.Units(in)+400 {
+			t.Fatalf("width %d: %d units written of %d", tc.width, chat.Units(want), chat.Units(in))
+		}
+		var m mdText
+		var got strings.Builder
+		for i := 0; i < len(in); i += 5 {
+			out := m.text(in[i:min(i+5, len(in))], maxMarkdown, i+5 >= len(in))
+			if strings.HasSuffix(out, chat.Truncated) {
+				t.Fatalf("width %d: the piece at %d was cut: %d units", tc.width, i, chat.Units(out))
+			}
+			got.WriteString(out)
+		}
+		if got.String() != want {
+			t.Fatalf("width %d, in pieces:\n%q\nat once:\n%q", tc.width, got.String(), want)
+		}
+		if !strings.Contains(want, "|\n"+tc.first) || !strings.HasSuffix(want, tc.end) {
+			t.Fatalf("width %d: want the first row %q and the end %q: %q", tc.width, tc.first, tc.end, want[:120])
+		}
+	}
+}
+
+// A table that would be much longer written than as the agent wrote it is written compact, and one that fits the
+// limit of a text as the agent wrote it fits it written.
+func TestMarkdownTableTooLongWrittenIsCompact(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("| Pod | Status | Restarts | Age | Node |\n|---|---|---|---|---|\n")
+	for i := 0; chat.Units(b.String()) < 11400; i++ {
+		if i%40 == 0 {
+			fmt.Fprintf(&b, "| very-long-pod-name-deployment-abcdef-%d | CrashLoopBackOff | 12 | 5d | worker-gq82h |\n", i)
+		} else {
+			fmt.Fprintf(&b, "| p%d | Running | 0 | 1d | w1 |\n", i)
+		}
+	}
+	in := b.String()
+	got := markdown(in, maxMarkdown)
+	if strings.HasSuffix(got, chat.Truncated) {
+		t.Fatalf("%d units as the agent wrote it, cut written", chat.Units(in))
+	}
+	if !strings.HasPrefix(got, "```\n| Pod | Status | Restarts | Age | Node |\n|---|---|---|---|---|\n") || !strings.Contains(got, "\n| p1 | Running | 0 | 1d | w1 |\n") {
+		t.Fatalf("not compact: %q", got[:300])
+	}
+}
+
+// Rows after the hold that would make the table too long padded in its columns are written compact from the first
+// that would.
+func TestMarkdownTableRowsAfterTheHoldGoCompact(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("| Pod | Node |\n|---|---|\n")
+	for i := range 80 {
+		fmt.Fprintf(&b, "| pod-%03d-abcdefghijklmnopqrstuvwxyz-0123456789 | worker-%03d |\n", i, i)
+	}
+	for i := range 2000 {
+		fmt.Fprintf(&b, "| %d | w |\n", i)
+	}
+	in := b.String() + "after"
+	got := markdown(in, math.MaxInt)
+	if tooLong(chat.Units(got), chat.Units(in), tableHold) {
+		t.Fatalf("%d units written of %d", chat.Units(got), chat.Units(in))
+	}
+	if !strings.Contains(got, "|\n|"+strings.Repeat("-", 40)) || !strings.Contains(got, "\n| 1999 | w |\n```\nafter") {
+		t.Fatalf("the rows are not aligned, then compact: %q", got[len(got)-200:])
+	}
+}
+
+// A table past its hold that ends with the text, after its line break, ends as a table within it does: with the fence
+// and the line break.
+func TestMarkdownTablePastTheHoldEndsWithItsLineBreak(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("| a |\n|---|\n")
+	for i := range 300 {
+		fmt.Fprintf(&b, "| row-%03d-xxxxxxx |\n", i)
+	}
+	if got := markdown(b.String(), math.MaxInt); !strings.HasSuffix(got, "| row-299-xxxxxxx |\n```\n") {
+		t.Fatalf("ends %q", got[len(got)-40:])
+	}
+}
+
+// With a small hold every table of the cases goes past it: the same text in pieces is the same text at once, and it
+// and every cut of it are read by Slack as Agent Kourier means.
+func TestMarkdownSmallHold(t *testing.T) {
+	for _, hold := range []int{1, 40, 120} {
+		for _, tc := range markdownCases {
+			want := (&mdText{hold: hold}).text(tc.in, math.MaxInt, true)
+			if bad := slackReading(want); len(bad) > 0 {
+				t.Fatalf("hold %d, %s: %v in %q", hold, tc.name, bad, want)
+			}
+			runes := []rune(tc.in)
+			for at := 0; at <= len(runes); at++ {
+				m := mdText{hold: hold}
+				got := m.text(string(runes[:at]), math.MaxInt, false) + m.text(string(runes[at:]), math.MaxInt, true)
+				if got != want {
+					t.Fatalf("hold %d, %s, cut at %d: %q\nwant %q", hold, tc.name, at, got, want)
+				}
+			}
+			for limit := 0; limit < 80; limit += 3 {
+				m := mdText{hold: hold}
+				first := m.text(tc.in, limit, false)
+				rest := m.text("\n<@U1> `x` [a](b)\n```\n<!here>\n```\nend ``` ~~~", math.MaxInt, true)
+				if bad := slackReading(first + rest); len(bad) > 0 {
+					t.Fatalf("hold %d, %s, limit %d: %v in %q", hold, tc.name, limit, bad, first+rest)
+				}
+			}
+		}
+	}
+}
+
 func TestMarkdownBlindEscapesEverything(t *testing.T) {
 	m := mdText{blind: true}
 	in := "```bash\nmodel = [] <!here>\n```\nsee `a<b>`"
@@ -189,6 +602,11 @@ func TestMarkdownBlindEscapesEverything(t *testing.T) {
 	}
 	if got := m.text("```", math.MaxInt, true); got != "```" {
 		t.Fatalf("blind: later text read as %q", got)
+	}
+	// a fence after a list marker or a quote mark is no code to a blind stream either
+	m = mdText{blind: true}
+	if got, want := m.text("- ```\n  x <!here>\n  ```\n> ```\n> y\n> ```", math.MaxInt, true), "- ```\n  x &lt;!here&gt;\n  ```\n&gt; ```\n&gt; y\n&gt; ```"; got != want {
+		t.Fatalf("blind, marks: got %q, want %q", got, want)
 	}
 }
 
@@ -206,6 +624,9 @@ func TestMarkdownCutLeavesTheStateAsSent(t *testing.T) {
 		{"after a span", "ab `c` gh", 6, "ab `c`", false},
 		{"before a run of tildes", "ab ~~~ cd", 5, "ab ", false},
 		{"in a block", "```\nabcdef\n```", 7, "```\nabc", true},
+		{"in a block after a list marker", "- ```\n  abcdef\n  ```", 7, "```\nabc", true},
+		{"in a block after a quote mark", "> ```\n> abcdef\n> ```", 7, "```\nabc", true},
+		{"before a fence after a marker", "- ```\n  abc\n  ```\nx", 8, "```\nabc\n", true},
 		{"before a fence", "```\nabc\n```\nx", 8, "```\nabc\n", true},
 		{"a fence is written with its line break, or not at all", "```\nabc\n```\nx", 11, "```\nabc\n", true},
 		{"after a block", "```\nabc\n```\nx", 12, "```\nabc\n```\n", false},
@@ -399,6 +820,8 @@ func markdownSeeds() []string {
 		"````\n```\nx\n````\n```` ````",
 		"```a``` ``` b ```` `c` ``d`e`` ~~~ ~~~x~~~",
 		"> ```\n    ```\n\t~~~\n```\n\t```\n   x",
+		"- ```\n  a\n- ```\n1) ~~~\n   b <!here>\n  ```\n  1. ```x```\n*```",
+		"> ```\n> a\n>\n```\n>```\n> > ```\n>   ```b```\n>",
 	}
 	for _, tc := range markdownCases {
 		seeds = append(seeds, tc.in)
@@ -423,13 +846,14 @@ func FuzzMarkdownReading(f *testing.F) {
 		f.Add(s, uint16(len(s)/2), uint16(len(s)))
 	}
 	f.Fuzz(func(t *testing.T, in string, at, limit uint16) {
-		whole := markdown(in, math.MaxInt)
+		hold := fuzzHold(uint64(limit))
+		whole := (&mdText{hold: hold}).text(in, math.MaxInt, true)
 		if bad := slackReading(whole); len(bad) > 0 {
-			t.Fatalf("%v\nin  %q\nout %q", bad, in, whole)
+			t.Fatalf("hold %d: %v\nin  %q\nout %q", hold, bad, in, whole)
 		}
 		clean := chat.Clean(in, false)
 		cut := runeBoundary(clean, int(at))
-		var m mdText
+		m := mdText{hold: hold}
 		first := m.text(clean[:cut], int(limit)%400, false)
 		if chat.Units(first) > int(limit)%400 {
 			t.Fatalf("%d units for a limit of %d: %q", chat.Units(first), int(limit)%400, first)
@@ -448,9 +872,10 @@ func FuzzMarkdownChunks(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, in string, seed uint64) {
 		clean := chat.Clean(in, false)
-		want := markdown(clean, math.MaxInt)
+		hold := fuzzHold(seed)
+		want := (&mdText{hold: hold}).text(clean, math.MaxInt, true)
 		rnd := rand.New(rand.NewPCG(seed, 7))
-		var m mdText
+		m := mdText{hold: hold}
 		var got strings.Builder
 		var pieces []string
 		for rest := clean; rest != ""; {
@@ -464,7 +889,23 @@ func FuzzMarkdownChunks(f *testing.F) {
 		}
 		got.WriteString(m.text("", math.MaxInt, true))
 		if got.String() != want {
-			t.Fatalf("in pieces %q\n got %q\nwant %q", pieces, got.String(), want)
+			t.Fatalf("hold %d, in pieces %q\n got %q\nwant %q", hold, pieces, got.String(), want)
 		}
 	})
+}
+
+// headerLayout is the layout of a table of the header head alone, for the tests of rows after the hold.
+func headerLayout(head []string, aligns []byte) *tableLayout {
+	var f tableFit
+	f.add(head, "| "+strings.Join(head, " | ")+" |")
+	return f.layout(aligns, tableHold)
+}
+
+// fuzzHold is the hold of a table for a fuzz run: tableHold for a third of them, and otherwise one so small that the
+// tables of short inputs go past it.
+func fuzzHold(n uint64) int {
+	if n%3 == 0 {
+		return 0
+	}
+	return 1 + int(n>>2%200)
 }

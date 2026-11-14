@@ -1,0 +1,25 @@
+# How GitHub groups a release's generated notes (the release workflow asks for them). A pull request goes under the
+# first category whose label it has. hack/github/pr-labels.sh sets these labels from the pull request title.
+changelog:
+  exclude:
+    labels:
+      - release
+  categories:
+    - title: Breaking changes
+      labels:
+        - breaking-change
+    - title: Features
+      labels:
+        - enhancement
+    - title: Fixes
+      labels:
+        - bug
+    - title: Documentation
+      labels:
+        - documentation
+    - title: Dependencies
+      labels:
+        - dependencies
+    - title: Other changes
+      labels:
+        - "*"

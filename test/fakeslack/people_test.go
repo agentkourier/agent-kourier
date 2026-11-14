@@ -212,3 +212,57 @@ func TestOldestLatestAndInclusive(t *testing.T) {
 		t.Fatalf("cursor after the last page = %q; want none", page.ResponseMetaData.NextCursor)
 	}
 }
+
+func TestConversationsInfo(t *testing.T) {
+	fake, api := newFake(t)
+	bot := "UFAKEBOT" // the fake's default bot user
+	fake.SetMembers("CJOINED", "U1", bot)
+	fake.SetMembers("CNOTJOINED", "U1")
+	fake.SetMembers("CARCHIVED", bot)
+	fake.SetArchived("CARCHIVED", true)
+	fake.SetArchived("CUNREGISTERED", true)
+
+	for _, tc := range []struct {
+		channel          string
+		member, archived bool
+		wantErr          string
+	}{
+		{"CJOINED", true, false, ""},
+		{"CNOTJOINED", false, false, ""},
+		{"CARCHIVED", true, true, ""},
+		{"CNONE", false, false, "channel_not_found"},
+		{"CUNREGISTERED", false, false, "channel_not_found"}, // an archived flag alone does not make a channel known
+	} {
+		ch, err := api.GetConversationInfo(&slack.GetConversationInfoInput{ChannelID: tc.channel})
+		if tc.wantErr != "" {
+			if err == nil || err.Error() != tc.wantErr {
+				t.Errorf("GetConversationInfo(%s) = %v; want %s", tc.channel, err, tc.wantErr)
+			}
+			continue
+		}
+		if err != nil || ch.ID != tc.channel || ch.IsMember != tc.member || ch.IsArchived != tc.archived {
+			t.Errorf("GetConversationInfo(%s) = %+v, %v; want member %t, archived %t", tc.channel, ch, err, tc.member, tc.archived)
+		}
+	}
+
+	fake.SetArchived("CARCHIVED", false)
+	if ch, err := api.GetConversationInfo(&slack.GetConversationInfoInput{ChannelID: "CARCHIVED"}); err != nil || ch.IsArchived {
+		t.Errorf("after unarchiving, GetConversationInfo = %+v, %v; want not archived", ch, err)
+	}
+}
+
+func TestConversationsInfoReportsAMissingScopeForThatMethodAlone(t *testing.T) {
+	fake, api := newFake(t)
+	fake.SetMembers("C1", "UFAKEBOT")
+	fake.SetMissingScope("conversations.info", true)
+	if _, err := api.GetConversationInfo(&slack.GetConversationInfoInput{ChannelID: "C1"}); err == nil || err.Error() != "missing_scope" {
+		t.Errorf("GetConversationInfo without the scope = %v; want missing_scope", err)
+	}
+	if _, _, err := api.GetUsersInConversation(&slack.GetUsersInConversationParameters{ChannelID: "C1"}); err != nil {
+		t.Errorf("conversations.members = %v; the scope is missing for conversations.info alone", err)
+	}
+	fake.SetMissingScope("conversations.info", false)
+	if _, err := api.GetConversationInfo(&slack.GetConversationInfoInput{ChannelID: "C1"}); err != nil {
+		t.Errorf("GetConversationInfo with the scope back = %v", err)
+	}
+}

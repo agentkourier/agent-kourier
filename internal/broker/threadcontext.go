@@ -42,13 +42,12 @@ const (
 	threadUnsupported = "unsupported" // the platform cannot read a thread: the turn went with the mentioned message alone
 )
 
-// threadContextConfig configures a threadContext. Platform and Replies are required: newThreadContext refuses a config
+// threadContextConfig configures a threadContext. Platforms and Replies are required: newThreadContext refuses a config
 // without them, naming the field. Logger and After are tunables with defaults.
 type threadContextConfig struct {
-	// Platform is the built chat platform, as the broker uses it (the fenced one, with an election). Whether it can read a
-	// thread is asked of it by a type assertion on this value, as the trigger start asks for chat.Permalinker, and never of
-	// builtPlatform, which hides it.
-	Platform chat.Platform
+	// Platforms gives the built chat platform of a turn's connection, as the broker uses it (the fenced one, with an election).
+	// A platform that cannot read a thread says chat.ErrNoThreadReads.
+	Platforms chat.Resolver[chat.Platform]
 	// Replies is the reply queue, which session.WereAdmitted reads to tell a reply that was a turn or an answer.
 	Replies session.ReplyRecord
 	Logger  *slog.Logger
@@ -58,11 +57,10 @@ type threadContextConfig struct {
 
 // threadContext implements session.Config.ThreadContext.
 type threadContext struct {
-	platform chat.Platform
-	reader   chat.ThreadReader // nil if the platform does not implement it
-	replies  session.ReplyRecord
-	log      *slog.Logger
-	after    func(time.Duration) <-chan time.Time
+	platforms chat.Resolver[chat.Platform]
+	replies   session.ReplyRecord
+	log       *slog.Logger
+	after     func(time.Duration) <-chan time.Time
 
 	mu    sync.Mutex
 	noted map[string]bool // the Bindings that were told of an unsupported platform in the log
@@ -71,13 +69,12 @@ type threadContext struct {
 // newThreadContext returns a threadContext over cfg.
 func newThreadContext(cfg threadContextConfig) (*threadContext, error) {
 	switch {
-	case cfg.Platform == nil:
-		return nil, errors.New("broker: a Platform is required for the thread context")
+	case cfg.Platforms == nil:
+		return nil, errors.New("broker: Platforms is required for the thread context")
 	case cfg.Replies == nil:
 		return nil, errors.New("broker: Replies is required for the thread context: it asks whether a message was a turn")
 	}
-	t := &threadContext{platform: cfg.Platform, replies: cfg.Replies, log: cfg.Logger, after: cfg.After, noted: map[string]bool{}}
-	t.reader, _ = cfg.Platform.(chat.ThreadReader)
+	t := &threadContext{platforms: cfg.Platforms, replies: cfg.Replies, log: cfg.Logger, after: cfg.After, noted: map[string]bool{}}
 	if t.log == nil {
 		t.log = slog.Default()
 	}
@@ -90,35 +87,51 @@ func newThreadContext(cfg threadContextConfig) (*threadContext, error) {
 // Section is session.Config.ThreadContext: the section of the replies in the thread key between the messages after and
 // before (both exclusive) for a mentioned turn of binding, or the fixed line that says they could not be read, or "". It
 // never fails, and it logs no content (DP-2): a failure is counted and logged by Binding and error alone.
-func (t *threadContext) Section(ctx context.Context, key session.Key, binding, after, before string) string {
-	section, outcome := t.build(ctx, key, binding, after, before)
+func (t *threadContext) Section(ctx context.Context, key session.Key, binding, after, before string, whole bool) string {
+	section, outcome := t.build(ctx, key, binding, after, before, whole)
 	telemetry.Count(ctx, "agentkourier_thread_context_total", binding, outcome)
 	return section
 }
 
-func (t *threadContext) build(ctx context.Context, key session.Key, binding, after, before string) (section, outcome string) {
-	if after == before { // nothing lies between a message and itself; an inverted window is the platform's to say (chat.ThreadReader)
+func (t *threadContext) build(ctx context.Context, key session.Key, binding, after, before string, whole bool) (section, outcome string) {
+	if after == before || (whole && key.Thread == before) { // a mention that opens its own thread has nothing before it; and nothing lies between a message and itself; an inverted window is the platform's to say (chat.ThreadReader)
 		return "", threadEmpty
 	}
-	if t.reader == nil {
-		return "", t.unsupported(ctx, binding)
-	}
 	target := chat.Target{Conn: key.Connection, Channel: key.Channel, Thread: key.Thread}
-	msgs, dropped, err := t.read(ctx, target, after, before)
+	pl, err := t.platforms.Platform(key.Connection)
+	if err != nil { // the connection is not running: the turn goes with the line that says the replies could not be read
+		return t.failed(ctx, binding, "find the platform of the connection", err)
+	}
+	fromStart := whole && after == "" // no turn has carried the thread: what opened it is no reply, and may be what it is all about
+	msgs, dropped, err := t.read(ctx, pl, target, after, before, fromStart)
+	tooLong := errors.Is(err, chat.ErrThreadTooLong) && fromStart && len(msgs) > 0 // what opened it came back with the error
 	switch {
 	case errors.Is(err, chat.ErrNoThreadReads):
 		return "", t.unsupported(ctx, binding)
-	case err != nil:
+	case err != nil && !tooLong:
 		return t.failed(ctx, binding, "read the thread", err)
 	}
-	people, err := t.eligible(ctx, msgs)
+	people, err := t.eligible(ctx, msgs, whole)
 	if err != nil {
 		return t.failed(ctx, binding, "ask which messages were turns", err)
 	}
-	if over := len(people) - render.MaxThreadReplies; over > 0 { // the older ones are cut whatever their names; do not look them up
-		dropped, people = dropped+over, people[over:]
+	pinned := 0
+	if fromStart && len(people) > 0 && people[0].Message.At.ID == key.Thread {
+		pinned = 1 // what opened the thread stays, whatever else is left out
 	}
-	section, leftOut := render.ThreadRepliesCounted(t.named(ctx, people), dropped)
+	if over := len(people) - render.MaxThreadReplies; over > 0 { // the older ones are cut whatever their names; do not look them up
+		dropped, people = dropped+over, append(people[:pinned:pinned], people[pinned+over:]...)
+	}
+	var leftOut int
+	if whole {
+		section, leftOut = render.ThreadMessagesCounted(t.named(ctx, pl, people), pinned, dropped)
+	} else {
+		section, leftOut = render.ThreadRepliesCounted(t.named(ctx, pl, people), dropped)
+	}
+	if tooLong { // the line says the rest is missing
+		line, failed := t.failed(ctx, binding, "read the thread", err)
+		return strings.TrimPrefix(section+"\n\n"+line, "\n\n"), failed
+	}
 	switch {
 	case section == "":
 		return "", threadEmpty
@@ -128,35 +141,44 @@ func (t *threadContext) build(ctx context.Context, key session.Key, binding, aft
 	return section, threadRead
 }
 
-// read reads the window, and once more if the platform said to wait a few seconds: a rate limit that asks for up to
-// threadRateWaitMax is waited out once; any other error, a longer wait, or a second refusal is the caller's to do without.
-func (t *threadContext) read(ctx context.Context, target chat.Target, after, before string) ([]chat.HistoryMessage, int, error) {
-	msgs, dropped, err := t.reader.ThreadBetween(ctx, target, after, before, threadFetchLimit)
+// read reads the window, from the thread's start if fromStart says so, and once more if the platform said to wait a few seconds: a
+// rate limit that asks for up to threadRateWaitMax is waited out once; any other error, a longer wait, or a second refusal is the
+// caller's to do without.
+func (t *threadContext) read(ctx context.Context, pl chat.Platform, target chat.Target, after, before string, fromStart bool) ([]chat.HistoryMessage, int, error) {
+	once := func() ([]chat.HistoryMessage, int, error) {
+		if fromStart {
+			return pl.ThreadFromStart(ctx, target, before, threadFetchLimit)
+		}
+		return pl.ThreadBetween(ctx, target, after, before, threadFetchLimit)
+	}
+	msgs, dropped, err := once()
 	if err == nil || errors.Is(err, chat.ErrNoThreadReads) || errors.Is(err, chat.ErrThreadTooLong) {
 		return msgs, dropped, err
 	}
-	wait := t.platform.Classify(chat.OpOther, err).RetryAfter
+	wait := pl.Classify(chat.OpOther, err).RetryAfter
 	if wait <= 0 || wait > threadRateWaitMax {
-		return nil, 0, err
+		return msgs, dropped, err
 	}
 	select {
 	case <-t.after(wait):
 	case <-ctx.Done():
 		return nil, 0, ctx.Err()
 	}
-	return t.reader.ThreadBetween(ctx, target, after, before, threadFetchLimit)
+	return once()
 }
 
 // eligible returns the replies of msgs that the context shows, oldest first: a person's message that the adapter would
 // forward, which is not Agent Kourier's own (its answers and notes), not a bot's (D36), has a user, has text once normalized (a
 // reply of zero-width characters is blank to the block, and must not take one of its newest fifty places or cost a lookup)
 // and was not itself a turn or an answer (the reply queue holds it, queued or delivered), so the agent is not told what it
-// has already been sent. The checks that need no lookup come first, and the reply queue is asked once, about what is left.
-func (t *threadContext) eligible(ctx context.Context, msgs []chat.HistoryMessage) ([]chat.HistoryMessage, error) {
+// has already been sent. With whole, a bot's message counts too (threadText), and Agent Kourier's own still does not. The checks
+// that need no lookup come first, and the reply queue is asked once, about what is left.
+func (t *threadContext) eligible(ctx context.Context, msgs []chat.HistoryMessage, whole bool) ([]chat.HistoryMessage, error) {
 	var people []chat.HistoryMessage
 	var ids []string
 	for _, m := range msgs {
-		if m.Own || m.Ignored || m.Message.Bot != nil || m.Message.User == "" || strings.TrimSpace(redact.Normalize(m.Message.Text)) == "" {
+		bot := m.Message.Bot != nil
+		if m.Own || m.Ignored || (!whole && (bot || m.Message.User == "")) || strings.TrimSpace(redact.Normalize(threadText(m.Message))) == "" {
 			continue
 		}
 		people = append(people, m)
@@ -178,21 +200,43 @@ func (t *threadContext) eligible(ctx context.Context, msgs []chat.HistoryMessage
 	return out, nil
 }
 
+// threadText is what a message of the thread said: its text and, for a bot's post, what its structured part holds, which is where
+// an alert's post keeps its detail. The fallback only summarises the rest, so it is read when there is nothing else.
+func threadText(m chat.Inbound) string {
+	if m.Bot == nil {
+		return m.Text
+	}
+	var parts []string
+	for _, s := range []string{m.Text, m.Bot.Title, m.Bot.Link, m.Bot.Body, m.Bot.Footer} {
+		if s != "" {
+			parts = append(parts, s)
+		}
+	}
+	if len(parts) == 0 {
+		return m.Bot.Fallback
+	}
+	return strings.Join(parts, "\n")
+}
+
 // named returns msgs as the replies the render shows, with the names the platform gives their authors (its user cache
 // answers a person who wrote more than once). A name that cannot be had is left out: the reply shows the ID alone.
-func (t *threadContext) named(ctx context.Context, msgs []chat.HistoryMessage) []render.ThreadReply {
+func (t *threadContext) named(ctx context.Context, pl chat.Platform, msgs []chat.HistoryMessage) []render.ThreadReply {
 	names := map[string]string{}
 	out := make([]render.ThreadReply, len(msgs))
 	for i, m := range msgs {
 		id := m.Message.User
+		if id == "" && m.Message.Bot != nil { // a webhook's post has no user: its bot is who wrote it
+			out[i] = render.ThreadReply{UserID: m.Message.Bot.ID, Text: threadText(m.Message)}
+			continue
+		}
 		name, ok := names[id]
 		if !ok {
-			if u, err := t.platform.ResolveUser(ctx, id); err == nil {
+			if u, err := pl.ResolveUser(ctx, id); err == nil {
 				name = u.Name
 			}
 			names[id] = name
 		}
-		out[i] = render.ThreadReply{UserID: id, Name: name, Text: m.Message.Text}
+		out[i] = render.ThreadReply{UserID: id, Name: name, Text: threadText(m.Message)}
 	}
 	return out
 }

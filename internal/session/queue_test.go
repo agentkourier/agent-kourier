@@ -12,6 +12,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // nextSent takes the messageId of the next Send, or fails the test if none comes.
@@ -102,7 +103,7 @@ func TestRepliesAreHeldWhileAPauseLasts(t *testing.T) {
 	if id, want := f.nextSent(), inbound("2").MessageID; id != want {
 		t.Errorf("sent %s after the pause; want %s", id, want)
 	}
-	eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
+	testutil.Eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
 }
 
 // -32004 leaves the turn queued and resends it unchanged after a backoff, which doubles up to
@@ -190,7 +191,7 @@ func TestLookupFindsTheTurnOrFailsWithoutSending(t *testing.T) {
 	if sends != 2 || finds != 2 || !slices.Equal(follows, []a2a.TaskID{"t9"}) {
 		t.Errorf("%d sends, %d lookups, followed %v; want 2 sends (the turn once, busy), 2 lookups (failed, found) and t9 followed", sends, finds, follows)
 	}
-	eventually(t, "the turn delivered and its task cleared", func() bool { return f.taskID() == "" })
+	testutil.Eventually(t, "the turn delivered and its task cleared", func() bool { return f.taskID() == "" })
 	if _, err := f.st.NextReply(t.Context(), key); err == nil {
 		t.Error("the followed turn is still queued")
 	}
@@ -266,7 +267,7 @@ func TestEndPauseWithNoRunnerClearsTheRecordedTask(t *testing.T) {
 	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the held runner to retire", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.convos) == 0 })
+	testutil.Eventually(t, "the held runner to retire", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.convos) == 0 })
 	if err := f.m.endPause(t.Context(), key, "t9"); !errors.Is(err, ErrNotParked) {
 		t.Fatalf("endPause of another task = %v; want ErrNotParked", err)
 	}
@@ -316,6 +317,48 @@ func TestRetryStateStartsOverAfterANamedTurn(t *testing.T) {
 	}
 	if want := []time.Duration{time.Second, 2 * time.Second, time.Second}; !slices.Equal(waits, want) {
 		t.Errorf("waits = %v; want %v: turn 2's first wait is the base, not the third step turn 1's count would give", waits, want)
+	}
+}
+
+// A turn this process queued is not a resend, however soon the runner reads it: the intake marks it fresh only after
+// it writes the row, and the runner waits for that. Turn 2 has a context to look in, so a lookup would show.
+func TestATurnReadAsItIsQueuedIsNotLookedUp(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	<-sink.finals
+	f.nextSent()
+	f.retired(t) // turn 1's runner is gone, so the runner the hook starts is the one reader, and it reads through onNext
+	read := make(chan struct{})
+	f.st.mu.Lock()
+	f.st.onEnqueued = func() { // the row is written and not yet marked: a runner takes it up now
+		f.st.mu.Lock()
+		f.st.onEnqueued = nil
+		f.st.onNext = func() { // the runner's read, the first while the intake waits here
+			f.st.mu.Lock()
+			f.st.onNext = nil
+			f.st.mu.Unlock()
+			close(read)
+		}
+		f.st.mu.Unlock()
+		f.m.start(key)
+		<-read
+		select { // a runner past the read that does not wait for the intake looks the turn up and sends now
+		case <-f.agent.sent:
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	f.st.mu.Unlock()
+	if _, err := f.submit(inbound("2")); err != nil {
+		t.Fatal(err)
+	}
+	<-sink.finals
+	f.agent.mu.Lock()
+	defer f.agent.mu.Unlock()
+	if want := "[send send]"; fmt.Sprint(f.agent.seq) != want {
+		t.Errorf("calls = %v; want %s: turn 2's first send is no resend, so it has no lookup", f.agent.seq, want)
 	}
 }
 
@@ -400,7 +443,7 @@ func TestAttemptedTurnIsForgottenWhenTheQueueEmpties(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.nextSent()
-	eventually(t, "the runner to retire", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.convos) == 0 })
+	testutil.Eventually(t, "the runner to retire", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.convos) == 0 })
 	f.m.mu.Lock()
 	recorded := len(f.m.attempted)
 	f.m.mu.Unlock()
@@ -411,7 +454,7 @@ func TestAttemptedTurnIsForgottenWhenTheQueueEmpties(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.m.start(key)
-	eventually(t, "the entry to go", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.attempted) == 0 })
+	testutil.Eventually(t, "the entry to go", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.attempted) == 0 })
 }
 
 // After Close, no pause can be ended: the runner is gone, and a call must not look as if it
@@ -447,7 +490,7 @@ func TestPauseEventFollowedByALostStreamLeavesNoStalePause(t *testing.T) {
 	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the runner to wait to follow the lost stream", func() bool { return waits.Load() == 1 })
+	testutil.Eventually(t, "the runner to wait to follow the lost stream", func() bool { return waits.Load() == 1 })
 	if err := f.m.endPause(t.Context(), key, "t1"); !errors.Is(err, ErrNotParked) {
 		t.Errorf("endPause = %v; want ErrNotParked: the runner is not parked", err)
 	}
@@ -475,7 +518,7 @@ func TestReleaseOfAPauseInAFailedStreamIsDrained(t *testing.T) {
 	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the runner to wait to follow the lost stream", func() bool { return waits.Load() == 1 })
+	testutil.Eventually(t, "the runner to wait to follow the lost stream", func() bool { return waits.Load() == 1 })
 	f.m.mu.Lock()
 	defer f.m.mu.Unlock()
 	if c := f.m.convos[key]; callErr != nil || len(c.resume) != 0 || c.parked != "" {
@@ -503,7 +546,7 @@ func TestDuplicateEndPauseWhileThePauseIsBeingEnded(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFinal(t, sink)
-	eventually(t, "the runner to park", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return f.m.convos[key].parked == "t1" })
+	testutil.Eventually(t, "the runner to park", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return f.m.convos[key].parked == "t1" })
 	if err := f.m.endPause(t.Context(), key, "t1"); err != nil {
 		t.Fatal(err)
 	}

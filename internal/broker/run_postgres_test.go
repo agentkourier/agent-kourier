@@ -22,6 +22,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/secret"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/postgres"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // postgresDSNEnv names the variable that holds the DSN of the database these tests run against: the one the Postgres
@@ -196,7 +197,7 @@ func TestRunOnPostgresLeadsWithTheEpochAndAStandbyTakesOver(t *testing.T) {
 	a := &replica{exits: make(chan int, 4), logs: &logBuffer{}}
 	ca.newSlack = func(slack.Config) slackAPI { a.built.Add(1); return idleSlack{} }
 	a.running = start(t, ca)
-	eventually(t, 20*time.Second, "the first replica did not lead", func() bool { return a.built.Load() == 1 })
+	testutil.Eventually(t, "the first replica did not lead", func() bool { return a.built.Load() == 1 }, testutil.Within(20*time.Second), testutil.Every(10*time.Millisecond))
 	if epoch, holder := leadershipRow(t, schema); epoch != 1 || holder != testElection.Identity {
 		t.Errorf("leadership = (%d, %q); want epoch 1 held by %q", epoch, holder, testElection.Identity)
 	}
@@ -213,7 +214,7 @@ func TestRunOnPostgresLeadsWithTheEpochAndAStandbyTakesOver(t *testing.T) {
 		t.Fatalf("the leader's Run = %v after a signal", err)
 	}
 
-	eventually(t, 20*time.Second, "the standby did not take over", func() bool { return b.built.Load() == 1 })
+	testutil.Eventually(t, "the standby did not take over", func() bool { return b.built.Load() == 1 }, testutil.Within(20*time.Second), testutil.Every(10*time.Millisecond))
 	if epoch, holder := leadershipRow(t, schema); epoch != 2 || holder != "pod-b_1" {
 		t.Errorf("leadership = (%d, %q); want epoch 2 held by pod-b_1", epoch, holder)
 	}
@@ -232,7 +233,7 @@ func TestRunOnPostgresTheProcessExitsWhenAWriteFindsTheEpochStale(t *testing.T) 
 	var captured atomic.Pointer[openedStore]
 	c.wrapStore = func(s openedStore) openedStore { captured.Store(&s); return s }
 	a.running = start(t, c)
-	eventually(t, 20*time.Second, "the replica did not lead", func() bool { return a.built.Load() == 1 })
+	testutil.Eventually(t, "the replica did not lead", func() bool { return a.built.Load() == 1 }, testutil.Within(20*time.Second), testutil.Every(10*time.Millisecond))
 	rival, err := postgres.Open(t.Context(), dsn)
 	if err != nil {
 		t.Fatal(err)

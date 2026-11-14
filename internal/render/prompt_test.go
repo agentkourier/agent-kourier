@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -436,7 +437,7 @@ func TestPromptFieldCheck(t *testing.T) {
 			set: field("alertname", "a b"), ref: "Fields.alertname", want: "has characters outside the allowed set",
 		},
 		{
-			name: "read after a function", text: `{{ printf "%.5s" .Fields.alertname | html }}`, set: field("alertname", "a b"),
+			name: "read after a function", text: `{{ if eq (len .Fields.alertname) 3 }}{{ slice .Fields.alertname 0 2 }}{{ end }}`, set: field("alertname", "a b"),
 			ref: "Fields.alertname", want: "has characters outside the allowed set",
 		},
 
@@ -772,6 +773,26 @@ func TestPromptTemplateErrors(t *testing.T) {
 			}
 		}
 	})
+	t.Run("a template that would hang or balloon is refused before it runs", func(t *testing.T) {
+		for name, text := range map[string]string{
+			"a range that does not end":    `{{range 9000000000000000}}{{end}}x`,
+			"a string that doubles":        `{{$x := "xxxx"}}{{range 40}}{{$x = print $x $x}}{{end}}x`,
+			"a template that calls itself": `{{define "a"}}{{template "a"}}{{end}}{{template "a"}}`,
+			"a width":                      `{{printf "%2000000000d" 1}}`,
+			"a pipeline of js":             `{{.State` + strings.Repeat(" | js", 60) + `}}`,
+		} {
+			done := make(chan error, 1)
+			go func() { _, err := NewPrompt("promptTemplate", text); done <- err }()
+			select {
+			case err := <-done:
+				if err == nil || !strings.Contains(err.Error(), "is not allowed") {
+					t.Errorf("%s: NewPrompt() = %v, want a refusal that says what is not allowed", name, err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatalf("%s: NewPrompt still running after 5s", name)
+			}
+		}
+	})
 	t.Run("a template that reads an entry the view lacks", func(t *testing.T) {
 		v := simpleView()
 		delete(v.Fields, "alertname")
@@ -793,6 +814,46 @@ func TestPromptTemplateErrors(t *testing.T) {
 	})
 }
 
+// TestPromptOutputIsBounded holds that the render runs the template through the byte limit the load-time check
+// uses: a template that writes more than v1alpha1.MaxPromptOutput fails, with no prompt, instead of being built in
+// memory and then cut.
+func TestPromptOutputIsBounded(t *testing.T) {
+	v := simpleView()
+	v.Fields["alertname"] = strings.Repeat("a", 128)
+	// Each read writes 128 bytes, so this writes 150% of the limit.
+	reads := v1alpha1.MaxPromptOutput * 3 / 2 / 128
+	got, err := newPrompt(t, strings.Repeat("{{ .Fields.alertname }}", reads)).Render(v, TriggerMessage{})
+	if !errors.Is(err, v1alpha1.ErrPromptOutputTooLarge) || got != "" {
+		t.Errorf("Render() = %d bytes, %v; want v1alpha1.ErrPromptOutputTooLarge and no prompt", len(got), err)
+	}
+	var re *RefusedError
+	if errors.As(err, &re) {
+		t.Errorf("an output over the limit is a template fault, not a refusal of hostile text: %v", err)
+	}
+	// The same template at the limit still renders, cut to the instruction cap as before.
+	got, err = newPrompt(t, strings.Repeat("{{ .Fields.alertname }}", v1alpha1.MaxPromptOutput/128)).Render(v, TriggerMessage{})
+	if err != nil || !strings.Contains(got, chat.Truncated) {
+		t.Errorf("Render() at the limit = %d bytes, %v; want the instruction cut and marked", len(got), err)
+	}
+}
+
+// TestPromptPermittedTemplatesRenderAsBefore holds the forms the walk keeps: a condition, with, an entry by name
+// and by index, slice and len.
+func TestPromptPermittedTemplatesRenderAsBefore(t *testing.T) {
+	v := simpleView()
+	for text, want := range map[string]string{
+		"Investigate {{ .Fields.alertname }} in {{ .Channel }}":                             "Investigate KubePodCrashLooping in C0123456789",
+		`{{ if eq .State "FIRING" }}{{ index .Fields "alertname" }}{{ else }}none{{ end }}`: "KubePodCrashLooping",
+		`{{ with .State }}{{ $.Fields.alertname }}{{ end }}`:                                "KubePodCrashLooping",
+		`{{ slice .Fields.alertname 0 4 }} {{ len .State }}`:                                "Kube 6",
+	} {
+		got, err := newPrompt(t, text).Render(v, TriggerMessage{})
+		if err != nil || !strings.HasPrefix(got, want+"\n\n") {
+			t.Errorf("Render(%q) = %q, %v; want it to start with %q", text, got, err, want)
+		}
+	}
+}
+
 func TestPromptParsesLikeTheLoadCheck(t *testing.T) {
 	// The renderer parses with v1alpha1.ParsePromptTemplate, which the load-time check uses too.
 	// So a syntax error reads the same in both, and a template the load accepts parses here.
@@ -808,6 +869,7 @@ func TestPromptParsesLikeTheLoadCheck(t *testing.T) {
 }
 
 func TestPromptCaps(t *testing.T) {
+	t.Parallel()
 	long := strings.Repeat(strings.Repeat("a", 20)+" ", 5_000) // words: an unbroken run over redact.MaxBytes is cut whole
 	hostileAll := TriggerMessage{Text: long, Title: long, Link: long, Fallback: long, Footer: long, Body: long}
 

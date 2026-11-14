@@ -17,9 +17,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/config/k8ssecrets"
 	"github.com/agentkourier/agent-kourier/internal/secret"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // fakePassword is a password that the tests look for in every error and log line. It is made up.
@@ -45,13 +47,11 @@ func (v *values) Value(_ context.Context, namespace, name, key string) (secret.V
 	return secret.New(v.dsn), nil
 }
 
-func discard() *slog.Logger { return slog.New(slog.DiscardHandler) }
-
 func TestOpenStoreDefaultsToSQLiteOnTheGivenPath(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agent-kourier.db")
 	for name, kind := range map[string]StoreKind{"unset": "", "named": StoreSQLite} {
 		t.Run(name, func(t *testing.T) {
-			st, err := openStore(t.Context(), StoreConfig{Kind: kind}, path, &values{}, discard())
+			st, err := openStore(t.Context(), StoreConfig{Kind: kind}, path, &values{}, testutil.DiscardLogger())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -66,7 +66,7 @@ func TestOpenStoreDefaultsToSQLiteOnTheGivenPath(t *testing.T) {
 
 func TestOpenStoreSQLiteReadsNoSecret(t *testing.T) {
 	v := &values{}
-	st, err := openStore(t.Context(), StoreConfig{}, filepath.Join(t.TempDir(), "agent-kourier.db"), v, discard())
+	st, err := openStore(t.Context(), StoreConfig{}, filepath.Join(t.TempDir(), "agent-kourier.db"), v, testutil.DiscardLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestOpenStoreSQLiteReadsNoSecret(t *testing.T) {
 
 func TestOpenStorePostgresAsksForTheConfiguredSecretKey(t *testing.T) {
 	v := &values{dsn: deadDSN}
-	_, err := openStore(t.Context(), StoreConfig{Kind: StorePostgres, PostgresDSN: dsnRef}, "", v, discard())
+	_, err := openStore(t.Context(), StoreConfig{Kind: StorePostgres, PostgresDSN: dsnRef}, "", v, testutil.DiscardLogger())
 	if err == nil {
 		t.Fatal("openStore on a server nobody listens on succeeded")
 	}
@@ -141,13 +141,13 @@ func TestOpenStorePostgresRefusesASecretThatCannotBeRead(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			r := k8ssecrets.New(client, []string{"agent-kourier"})
+			r := k8ssecrets.New(client, k8ssecrets.WithPinned(config.SecretName{Namespace: "agent-kourier", Name: "agent-kourier-pg"}))
 			if err := r.Start(t.Context()); err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(r.Stop)
 
-			_, err := openStore(t.Context(), StoreConfig{Kind: StorePostgres, PostgresDSN: dsnRef}, "", r, discard())
+			_, err := openStore(t.Context(), StoreConfig{Kind: StorePostgres, PostgresDSN: dsnRef}, "", r, testutil.DiscardLogger())
 
 			if !errors.Is(err, ErrWiring) || (tc.want != nil && !errors.Is(err, tc.want)) {
 				t.Errorf("openStore = %v, want ErrWiring wrapping %v", err, tc.want)
@@ -164,7 +164,7 @@ func TestOpenStorePostgresRefusesASecretThatCannotBeRead(t *testing.T) {
 }
 
 func TestOpenStoreRefusesWhatItDoesNotKnow(t *testing.T) {
-	_, err := openStore(t.Context(), StoreConfig{Kind: "mysql"}, "x", &values{}, discard())
+	_, err := openStore(t.Context(), StoreConfig{Kind: "mysql"}, "x", &values{}, testutil.DiscardLogger())
 	if !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), "mysql") {
 		t.Errorf("openStore = %v, want ErrWiring naming the store", err)
 	}
@@ -227,7 +227,7 @@ func TestPostgresSendsItsTimeoutsUnlessTheRoleSetsThem(t *testing.T) {
 	}{"agent-kourier's own": {false, true}, "the role's": {true, false}} {
 		t.Run(name, func(t *testing.T) {
 			dsn, params := startupParams(t)
-			_, err := openStore(t.Context(), StoreConfig{Kind: StorePostgres, PostgresDSN: dsnRef, PostgresRoleTimeouts: tc.role}, "", &values{dsn: dsn}, discard())
+			_, err := openStore(t.Context(), StoreConfig{Kind: StorePostgres, PostgresDSN: dsnRef, PostgresRoleTimeouts: tc.role}, "", &values{dsn: dsn}, testutil.DiscardLogger())
 			if err == nil {
 				t.Fatal("openStore on a server that closes every connection succeeded")
 			}

@@ -49,12 +49,16 @@ const agentKourierDir = "../../hack/kind/fast/agent-kourier/"
 // front door (spec D32, R4).
 const a2aDir = "../../hack/kind/fast/agent-kourier/a2a"
 
+// verifyDir is the fast tier's other extra config: the Bindings of the verification scenario, whose assertions rest on the stub agent's
+// answers. up-fast.sh gives it to deploy_agentkourier, and up-full.sh does not.
+const verifyDir = "../../hack/kind/fast/agent-kourier/verify"
+
 // fastConfig returns a directory holding the config the fast tier deploys, assembled as up-fast.sh does through deploy_agentkourier: the
-// files of agentKourierDir/config, then the extra config of a2aDir.
+// files of agentKourierDir/config, then the extra config of a2aDir and verifyDir.
 func fastConfig(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	for _, glob := range []string{agentKourierDir + "config/*.yaml", a2aDir + "/*.yaml"} {
+	for _, glob := range []string{agentKourierDir + "config/*.yaml", a2aDir + "/*.yaml", verifyDir + "/*.yaml"} {
 		files, err := filepath.Glob(glob)
 		if err != nil || len(files) == 0 {
 			t.Fatalf("no files match %s: %v", glob, err)
@@ -79,8 +83,8 @@ func TestShippedConfigLoadsAndResolves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(set.Bindings) != 22 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 4 {
-		t.Fatalf("Load = %d Bindings, %d connections and %d backends; want a Binding for the smoke test and one for each of fourteen scenarios, three for S16's cases, four for the a2a dialect against the plain pod, one connection, and the backend of the kagent-v1 Bindings and three of the a2a ones (a2aDir)",
+	if len(set.Bindings) != 29 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 6 {
+		t.Fatalf("Load = %d Bindings, %d connections and %d backends; want a Binding for the smoke test and one for each of fourteen scenarios, three for S16's cases, four for the verification of Bindings, five for the a2a dialect against the plain pod and two against hitlagent, one connection, and the backend of the kagent-v1 Bindings and five of the a2a ones (a2aDir)",
 			len(set.Bindings), len(set.ChatConnections), len(set.AgentBackends))
 	}
 	snap, err := config.Resolve(t.Context(), set, upFastSecrets)
@@ -176,10 +180,17 @@ func TestScenarioBindings(t *testing.T) {
 		{"S16", e2e.ChannelS16, "scenario-gated", false, false, v1alpha1.OutputLive},
 		{"S16b", e2e.ChannelS16B, "test-agent", false, false, v1alpha1.OutputFinal},
 		{"S16c", e2e.ChannelS16C, "scenario-gated", false, false, v1alpha1.OutputLive},
+		{"verification: ready", e2e.ChannelVerifyReady, "test-agent", false, false, v1alpha1.OutputLive},
+		{"verification: no such agent", e2e.ChannelVerifyNoAgent, "verify-no-such-agent", false, false, v1alpha1.OutputLive},
+		{"verification: not joined", e2e.ChannelVerifyNotJoined, "test-agent", false, false, v1alpha1.OutputLive},
+		{"verification: archived", e2e.ChannelVerifyArchived, "test-agent", false, false, v1alpha1.OutputLive},
 		{"S1 over a2a", e2e.ChannelA2AS1, "scenario-gated", false, false, v1alpha1.OutputLive},
 		{"context over a2a", e2e.ChannelA2AMemory, "scenario-memory", false, false, v1alpha1.OutputLive},
 		{"S4 over a2a", e2e.ChannelA2AS4, "scenario-gated", false, false, v1alpha1.OutputLive},
 		{"S5 over a2a", e2e.ChannelA2AS5, "test-agent", false, false, v1alpha1.OutputFinal},
+		{"S19 over a2a", e2e.ChannelA2AS19, "spike-approve", false, true, v1alpha1.OutputLive},
+		{"S19 over a2a with hitlagent", e2e.ChannelA2AContractS19, "hitlagent", false, true, v1alpha1.OutputLive},
+		{"S20 over a2a with hitlagent", e2e.ChannelA2AContractS20, "hitlagent", false, true, v1alpha1.OutputLive},
 	} {
 		rb, ok := snap.BindingForChannel("agent-kourier", "slack-fast", tc.channel)
 		if !ok {
@@ -222,6 +233,7 @@ func TestA2ABindingsReachTheStubAgentByItsExactURL(t *testing.T) {
 		{"context", e2e.ChannelA2AMemory, "scenario-memory"},
 		{"S4", e2e.ChannelA2AS4, "scenario-gated"},
 		{"S5", e2e.ChannelA2AS5, "test-agent"},
+		{"S19", e2e.ChannelA2AS19, "spike-approve"},
 	} {
 		rb, ok := snap.BindingForChannel("agent-kourier", "slack-fast", tc.channel)
 		if !ok {
@@ -236,6 +248,12 @@ func TestA2ABindingsReachTheStubAgentByItsExactURL(t *testing.T) {
 			t.Errorf("%s over a2a: channel %s has the token reference %+v; want the static token of Secret agent-kourier-agent-token", tc.scenario, tc.channel, ref)
 		}
 	}
+	for _, channel := range []string{e2e.ChannelA2AContractS19, e2e.ChannelA2AContractS20} {
+		rb, ok := snap.BindingForChannel("agent-kourier", "slack-fast", channel)
+		if !ok || rb.Backend.Spec.Dialect != v1alpha1.DialectA2A || rb.Backend.Spec.URL != "http://hitlagent.e2e.svc.cluster.local:8080/" {
+			t.Errorf("channel %s resolves to %+v, %v; want the a2a dialect at hitlagent's URL", channel, rb, ok)
+		}
+	}
 	// The other Bindings stay on kagent's dialect: only the a2a channels change it.
 	rb, ok := snap.BindingForChannel("agent-kourier", "slack-fast", e2e.ChannelS1)
 	if !ok || rb.Backend.Spec.Dialect != v1alpha1.DialectKagentV1 || rb.Backend.Spec.URL != "http://stubagent.e2e.svc.cluster.local:8080" {
@@ -243,11 +261,12 @@ func TestA2ABindingsReachTheStubAgentByItsExactURL(t *testing.T) {
 	}
 }
 
-// TestTheA2AFilesAreForTheFastTierOnly: the AgentBackends and Bindings that reach the stub agent through the a2a dialect are in a2aDir,
-// beside the fast tier's config and not in it. up-fast.sh gives that directory to deploy_agentkourier, which copies it in; up-full.sh does not,
+// TestTheStubOnlyFilesAreForTheFastTierOnly: the AgentBackends and Bindings that reach the stub agent through the a2a dialect are in a2aDir, and
+// the Bindings of the verification scenario in verifyDir, beside the fast tier's config and not in it. up-fast.sh gives those directories to
+// deploy_agentkourier, which copies them in; up-full.sh does not,
 // so the full tier, where the stub is not, is left with its one AgentBackend, the front door. The full tier adds its approval Bindings
 // from full/agent-kourier/config (TestFullTierConfig uses the same file selection as up-full.sh).
-func TestTheA2AFilesAreForTheFastTierOnly(t *testing.T) {
+func TestTheStubOnlyFilesAreForTheFastTierOnly(t *testing.T) {
 	read := func(file string) string {
 		raw, err := os.ReadFile("../../hack/kind/" + file)
 		if err != nil {
@@ -255,25 +274,31 @@ func TestTheA2AFilesAreForTheFastTierOnly(t *testing.T) {
 		}
 		return string(raw)
 	}
-	if !strings.Contains(read("up-fast.sh"), `deploy_agentkourier "${FAST}/agent-kourier/config/agentbackend.yaml" "${FAST}/agent-kourier/a2a"`) {
-		t.Error("up-fast.sh does not give fast/agent-kourier/a2a to deploy_agentkourier as its extra config")
+	if !strings.Contains(read("up-fast.sh"), `deploy_agentkourier "${FAST}/agent-kourier/config/agentbackend.yaml" "${FAST}/agent-kourier/a2a" "${FAST}/agent-kourier/verify"`) {
+		t.Error("up-fast.sh does not give fast/agent-kourier/a2a and fast/agent-kourier/verify to deploy_agentkourier as its extra config")
 	}
 	full := read("up-full.sh")
-	if !strings.Contains(full, "\ndeploy_agentkourier \"${FULL}/agent-kourier/agentbackend.yaml\" \"${FULL}/agent-kourier/config\"\n") || strings.Contains(full, "agent-kourier/a2a") {
-		t.Error("up-full.sh's deploy_agentkourier call is not the front door's AgentBackend plus full-tier config, or it names the a2a directory")
+	if !strings.Contains(full, "\ndeploy_agentkourier \"${FULL}/agent-kourier/agentbackend.yaml\" \"${FULL}/agent-kourier/config\"\n") || strings.Contains(full, "agent-kourier/a2a") || strings.Contains(full, "agent-kourier/verify") {
+		t.Error("up-full.sh's deploy_agentkourier call is not the front door's AgentBackend plus full-tier config, or it names the a2a or verify directory")
 	}
 	lib := read("lib.sh")
-	if !strings.Contains(lib, `cp "${HERE}"/fast/agent-kourier/config/*.yaml "${config}"`) || !strings.Contains(lib, "if [ -n \"${2:-}\" ]; then\n    cp \"$2\"/*.yaml \"${config}\"") {
+	if !strings.Contains(lib, `cp "${HERE}"/fast/agent-kourier/config/*.yaml "${config}"`) || !strings.Contains(lib, "shift\n  for dir in \"$@\"; do\n    cp \"${dir}\"/*.yaml \"${config}\"") {
 		t.Error("lib.sh's deploy_agentkourier does not copy the fast config, and the extra config only when it is given one")
 	}
 	if files, _ := filepath.Glob(agentKourierDir + "config/*a2a*.yaml"); len(files) != 0 {
 		t.Errorf("%v are in the fast tier's config, which the full tier copies; they belong in %s", files, a2aDir)
 	}
+	if files, _ := filepath.Glob(agentKourierDir + "config/*verify*.yaml"); len(files) != 0 {
+		t.Errorf("%v are in the fast tier's config, which the full tier copies; they belong in %s", files, verifyDir)
+	}
 }
 
-// TestTheRunnerJobRunsTheA2AContextTest: the Job runs the tests its -test.run pattern selects, and a test whose name matches none of its
-// alternatives is silently never run. The context test of the a2a dialect is named TestA2A_..., apart from the S-scenarios.
-func TestTheRunnerJobRunsTheA2AContextTest(t *testing.T) {
+// TestTheRunnerJobRunsEveryE2ETest: the Job runs the tests its -test.run pattern selects, and a test whose name matches none of its
+// alternatives is silently never run (a run with E2E_RUN, which replaces the pattern, still runs it, so it can pass alone and be
+// missed by the Job). Every test function of the e2e-tagged files of test/e2e, TestMain apart, must match the pattern, so a family
+// of tests added without its alternative fails here; and the families are named once, so that dropping an alternative whose tests
+// are all gone from the files is caught too.
+func TestTheRunnerJobRunsEveryE2ETest(t *testing.T) {
 	var job batchv1.Job
 	load(t, "../../hack/kind/e2e/runner.yaml", "Job", &job)
 	var pattern string
@@ -286,7 +311,43 @@ func TestTheRunnerJobRunsTheA2AContextTest(t *testing.T) {
 	if err != nil || pattern == "" {
 		t.Fatalf("the Job's -test.run pattern is %q (%v); want a regular expression", pattern, err)
 	}
-	for _, name := range []string{"TestA2A_APlainPodThatRestartedAnswersAThreadFromAFreshContext", "TestS1_AReplyStreamsIntoANewThreadOverTheA2ADialect"} {
+	files, err := filepath.Glob("../e2e/*_test.go")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no e2e test files: %v", err)
+	}
+	funcName := regexp.MustCompile(`(?m)^func (Test\w+)\(`)
+	seen := 0
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(string(raw), "//go:build e2e") { // the others are unit tests of the harness, which make test runs
+			continue
+		}
+		for _, m := range funcName.FindAllStringSubmatch(string(raw), -1) {
+			if m[1] == "TestMain" {
+				continue
+			}
+			// The MC_ tests (a broker with two Slack apps) are make e2e-two-apps's, in a Job of its own: the main Job leaves them out, so that its run stays well
+			// inside the Job's time limit (TestTheTwoAppsScriptRunsEveryMCTest).
+			if strings.HasPrefix(m[1], "TestMC_") {
+				if re.MatchString(m[1]) {
+					t.Errorf("the Job's pattern %q selects %s (%s): the MC_ tests are run by make e2e-two-apps, not by the main Job", pattern, m[1], filepath.Base(f))
+				}
+				continue
+			}
+			seen++
+			if !re.MatchString(m[1]) {
+				t.Errorf("the Job's pattern %q does not select %s (%s), so the Job would never run it", pattern, m[1], filepath.Base(f))
+			}
+		}
+	}
+	if seen < 20 {
+		t.Errorf("found %d e2e tests; the scan is not looking at them", seen)
+	}
+	// Each family the files hold has a test the pattern selects, named here: a family that is dropped from the pattern fails even if the scan misses it.
+	for _, name := range []string{"TestSmoke", "TestFault_X", "TestS1_X", "TestAX_X", "TestA2A_APlainPodThatRestartedAnswersAThreadFromAFreshContext", "TestVerify_BindingsThatCannotBeServedAreNotReadyAndTheLeaderSaysWhy", "TestCR_X"} {
 		if !re.MatchString(name) {
 			t.Errorf("the Job's pattern %q does not select %s, so it would never run", pattern, name)
 		}
@@ -466,13 +527,15 @@ func TestS16StormHasS15sLimitsAndTheAlertBotOfItsOwn(t *testing.T) {
 func TestRunnerJobGetsItsTier(t *testing.T) {
 	var job batchv1.Job
 	load(t, "../../hack/kind/e2e/runner.yaml", "Job", &job)
-	var tier, stub string
+	var tier, stub, source string
 	for _, e := range job.Spec.Template.Spec.Containers[0].Env {
 		switch e.Name {
 		case "E2E_TIER":
 			tier = e.Value
 		case "E2E_STUB_URL":
 			stub = e.Value
+		case "E2E_CONFIG_SOURCE":
+			source = e.Value
 		}
 	}
 	script, err := os.ReadFile("../../hack/kind/e2e-run.sh")
@@ -486,6 +549,12 @@ func TestRunnerJobGetsItsTier(t *testing.T) {
 		!strings.Contains(string(script), "fast) gate_url=http://stubagent.e2e.svc.cluster.local:8080") ||
 		!strings.Contains(string(script), "full) gate_url=http://scenariollm.kagent.svc.cluster.local:8080") {
 		t.Errorf("E2E_STUB_URL = %q in the Job; want the placeholder @STUB_URL@, which e2e-run.sh sets to the stub's Service in the fast tier and the scenario model's in the full tier", stub)
+	}
+	// Where Agent Kourier reads its config from is read from its Deployment as it is when the Job is made, so that a tier moved between the ConfigMap and the
+	// custom resources in place is run as it is now, and not as it was brought up.
+	if source != "@CONFIG_SOURCE@" || !strings.Contains(string(script), `-e "s/@CONFIG_SOURCE@/${config_source}/"`) ||
+		!strings.Contains(string(script), `env[?(@.name=="AGENTKOURIER_CONFIG_SOURCE")].value`) {
+		t.Errorf("E2E_CONFIG_SOURCE = %q in the Job; want the placeholder @CONFIG_SOURCE@, which e2e-run.sh sets from the AGENTKOURIER_CONFIG_SOURCE of the Deployment", source)
 	}
 }
 
@@ -519,8 +588,8 @@ func TestFullTierConfig(t *testing.T) {
 		}
 	}
 	set, err := config.Load(t.Context(), dir)
-	if err != nil || len(set.AgentBackends) != 1 {
-		t.Fatalf("Load = %+v, %v; want one AgentBackend", set, err)
+	if err != nil || len(set.AgentBackends) != 2 {
+		t.Fatalf("Load = %+v, %v; want two AgentBackends: the front door for kagent-v1, and an a2a one at the approval agent", set, err)
 	}
 	snap, err := config.Resolve(t.Context(), set, upFastSecrets)
 	if err != nil {
@@ -537,6 +606,20 @@ func TestFullTierConfig(t *testing.T) {
 		}
 		if rb.Binding.Spec.Agent.Namespace != "kagent" {
 			t.Errorf("channel %s names agent namespace %q; the full tier's agents are in kagent", channel, rb.Binding.Spec.Agent.Namespace)
+		}
+	}
+	// S19 and S20 again over the a2a dialect: the same front door, at the approval agent's exact URL, with approvals on.
+	for _, channel := range []string{e2e.ChannelA2AS19, e2e.ChannelA2AS20} {
+		rb, ok := snap.BindingForChannel("agent-kourier", "slack-fast", channel)
+		if !ok {
+			t.Errorf("channel %s resolves to no Binding in the full tier", channel)
+			continue
+		}
+		if b := rb.Backend.Spec; b.Dialect != v1alpha1.DialectA2A || b.URL != "http://kagent-frontdoor.kagent.svc.cluster.local:4180/agents/kagent/scenario-approval" {
+			t.Errorf("channel %s goes to %s (%s); want the a2a dialect at the approval agent's URL behind the front door", channel, b.URL, b.Dialect)
+		}
+		if rb.Binding.Spec.Agent.Name != "scenario-approval" || !rb.Binding.Spec.Interactions.ToolApprovals {
+			t.Errorf("channel %s is bound to %s with toolApprovals %t; want scenario-approval with approvals on", channel, rb.Binding.Spec.Agent.Name, rb.Binding.Spec.Interactions.ToolApprovals)
 		}
 	}
 }

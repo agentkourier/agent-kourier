@@ -3,20 +3,19 @@ package broker
 import (
 	"context"
 	"errors"
-	"io"
-	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/audit"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
-	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 type readinessSink struct{}
@@ -33,18 +32,14 @@ func (readinessBindings) Backend(string) (session.Backend, error) {
 
 func readinessParts(t *testing.T, entered chan<- struct{}) (interactionDeps, *interactionRuntime, *session.Manager) {
 	t.Helper()
-	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	st := sqlitetest.Open(t)
+	log := testutil.DiscardLogger()
 	aud, err := audit.New(st, audit.Options{OnFailure: audit.NoFailure, Logger: log})
 	if err != nil {
 		t.Fatal(err)
 	}
 	platform := builtPlatform{Platform: chattest.NewFake()}
-	ob, err := outbox.New(outbox.Config{Store: st, Platform: platform, OnAbandon: outbox.NoAbandon, Logger: log})
+	ob, err := outbox.New(outbox.Config{Store: st, Platforms: chattest.Same[outbox.Platform](platform), OnAbandon: outbox.NoAbandon, Logger: log})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +47,7 @@ func readinessParts(t *testing.T, entered chan<- struct{}) (interactionDeps, *in
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := interactionDeps{st: st, ob: ob, platform: platform, auditor: aud, bindings: &Bindings{}, metrics: metrics, log: log}
+	d := interactionDeps{st: st, ob: ob, platforms: chattest.Same[chat.Platform](platform), auditor: aud, bindings: &Bindings{}, metrics: metrics, log: log}
 	ix, err := d.build(readinessSink{})
 	if err != nil {
 		t.Fatal(err)
@@ -64,7 +59,7 @@ func readinessParts(t *testing.T, entered chan<- struct{}) (interactionDeps, *in
 			return ix.replies.Decide(ctx, key, reply, task)
 		}
 	}
-	mgr, err := session.New(session.Config{Context: t.Context(), Store: st, Questions: st, Bindings: readinessBindings{}, Users: users{platform}, Sink: ix.tap, Audit: aud, TextReply: textReply, ThreadContext: session.NoThreadContext, OnTurnEnd: metrics.TurnOutcome, Logger: log})
+	mgr, err := session.New(session.Config{Context: t.Context(), Store: st, Questions: st, Bindings: readinessBindings{}, Users: users{chattest.Same[chat.Platform](platform)}, Sink: ix.tap, Audit: aud, TextReply: textReply, ThreadContext: session.NoThreadContext, OnTurnEnd: metrics.TurnOutcome, Logger: log})
 	if err != nil {
 		t.Fatal(err)
 	}

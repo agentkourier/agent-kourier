@@ -32,13 +32,13 @@ const lookupSkew = 5 * time.Minute
 // that five minutes allows for the clock skew.
 func (c *Client) Find(ctx context.Context, channel, threadTS, outboxID string, since time.Time) (ts string, found bool, err error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.Find")
-	defer func() { finishChat(ctx, op, "Find", err) }()
+	defer func() { c.finishChat(ctx, op, "Find", err) }()
 	auth, err := c.api.AuthTestContext(ctx)
 	if err != nil {
-		return "", false, c.scrub("auth.test", err)
+		return "", false, c.scrub("auth.test call", err)
 	}
 	if auth.UserID == "" {
-		return "", false, errors.New("slack auth.test: no bot user ID")
+		return "", false, errors.New("slack auth.test call: no bot user ID")
 	}
 	err = c.walk(ctx, channel, threadTS, since.Add(-lookupSkew), func(msgs []slackgo.Message) bool {
 		for _, m := range msgs {

@@ -25,7 +25,8 @@ const (
 	TurnCanceled  TurnOutcome = "canceled"
 	// TurnCredentialsRejected is a turn the agent's front door refused the Binding's credentials of.
 	TurnCredentialsRejected TurnOutcome = "credentials_rejected"
-	// TurnForbidden is a turn the agent refused the Binding's identity for.
+	// TurnForbidden is a turn the agent refused the Binding's identity for, or whose agent's card
+	// was answered 403: the agent does not exist, or does not permit the identity.
 	TurnForbidden TurnOutcome = "forbidden"
 	// TurnUnreachable is a turn given up on after SendGiveUp of an agent that could not be reached.
 	TurnUnreachable TurnOutcome = "unreachable"
@@ -46,12 +47,20 @@ const (
 	TurnRefused TurnOutcome = "refused"
 	// TurnNoFinal is a turn whose stream ended cleanly with no final task, which a real client never does.
 	TurnNoFinal TurnOutcome = "no_final"
+	// TurnResponseTooLarge is a turn that stopped because what the agent sent was more than Agent Kourier can read or hold: an
+	// event, an answer to a call, the reply of the turn (dialect.ErrResponseTooLarge). The task is cancelled, if it was named, and
+	// the reply is not read on.
+	TurnResponseTooLarge TurnOutcome = "response_too_large"
+	// TurnLookupIncomplete is a turn that was not sent again, because it had to be looked up first and the agent's list of tasks could not
+	// be read in full (a page past the bound at every size, the walk's deadline or page limit; agent.ErrLookupIncomplete), so that it could
+	// not be known whether the agent already had it. Nothing was sent.
+	TurnLookupIncomplete TurnOutcome = "lookup_incomplete"
 )
 
 // TurnOutcomes returns every outcome a turn can have.
 func TurnOutcomes() []TurnOutcome {
 	return []TurnOutcome{TurnCompleted, TurnFailed, TurnRejected, TurnCanceled, TurnCredentialsRejected, TurnForbidden, TurnUnreachable,
-		TurnSessionGone, TurnBindingGone, TurnWedged, TurnUncancellable, TurnPauseEnded, TurnAnswerRejected, TurnRefused, TurnNoFinal}
+		TurnSessionGone, TurnBindingGone, TurnWedged, TurnUncancellable, TurnPauseEnded, TurnAnswerRejected, TurnRefused, TurnNoFinal, TurnResponseTooLarge, TurnLookupIncomplete}
 }
 
 // Valid reports whether o is one of TurnOutcomes.
@@ -111,6 +120,9 @@ func (m *Manager) finish(t *tstate, outcome TurnOutcome, extra ...any) {
 	m.mu.Unlock()
 	m.unqueue(t) // however it ended, the reply waits no more: most turns have been unqueued, when they were sent
 	m.unacknowledge(t)
+	if t.c != nil && t.c.left != nil && t.c.left.r.ID == t.r.ID { // it ended before an attempt took over what it handed on
+		m.endLeft(t.c)
+	}
 	attrs := append(m.turnAttrs(t), "outcome", string(outcome))
 	if begun {
 		attrs = append(attrs, "duration_ms", m.cfg.Now().Sub(start).Milliseconds())
@@ -149,7 +161,14 @@ func (m *Manager) unacknowledgeReply(key Key, r store.Reply, sourceID string) {
 	if sourceID == "" || r.MessageRef == "" || r.Acknowledgment == "" {
 		return
 	}
-	m.cfg.Sink.Notice(m.ctx, key, Notice{ID: acknowledgmentID(sourceID), Kind: NoticeUnacknowledged, MessageRef: r.MessageRef, Reaction: r.Acknowledgment})
+	n := Notice{ID: AcknowledgmentID(sourceID), Kind: NoticeUnacknowledged, MessageRef: r.MessageRef, Reaction: r.Acknowledgment}
+	if m.cfg.Unacknowledge == nil {
+		m.cfg.Sink.Notice(m.ctx, key, n)
+		return
+	}
+	if err := m.cfg.Unacknowledge(m.ctx, key, sourceID, n); err != nil && m.ctx.Err() == nil {
+		m.cfg.Logger.WarnContext(m.ctx, "session: an acknowledgment removal did not complete; retention will finish it", "channel", key.Channel, "err", err)
+	}
 }
 
 // discardAnswer settles a consumed text reply when the interaction policy did not enqueue a continuation. A consumed

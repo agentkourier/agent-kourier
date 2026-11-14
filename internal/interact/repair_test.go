@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"strings"
 	"sync/atomic"
@@ -15,9 +14,11 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // repairRig is a replaceRig whose clock the test moves, an hour past the deadline of every interaction.
@@ -101,7 +102,7 @@ func TestRepairFindsWhatTheSweepGaveUpOn(t *testing.T) {
 		t.Fatal("the sweep did not time the question out and give up on the edit")
 	}
 	up := &edits{}
-	rp, err := interact.NewReplacer(interact.ReplacerConfig{Store: sw.st, Updater: up, Now: func() time.Time { return *sw.clock }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	rp, err := interact.NewReplacer(interact.ReplacerConfig{Store: sw.st, Updaters: chattest.Same[interact.Editor](up), Now: func() time.Time { return *sw.clock }, Logger: testutil.DiscardLogger()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,11 +206,11 @@ func TestARateLimitIsWaitedOutFromWhenItArrives(t *testing.T) {
 	var r *repairRig
 	var attempts atomic.Int32
 	r = newRepairRig(t, func(c *interact.ReplacerConfig) {
-		c.Updater = updateFunc(func(context.Context) error {
+		c.Updaters = chattest.Same[interact.Editor](updateFunc(func(context.Context) error {
 			attempts.Add(1)
 			r.advance(40 * time.Second) // the edit takes 40 seconds to be refused
 			return fmt.Errorf("slack chat.update: %w", &slackgo.RateLimitedError{RetryAfter: 30 * time.Second})
-		})
+		}))
 	})
 	r.decided(t, "ix-1", asked, r.resolve(store.InteractionTimedOut))
 	_ = r.r.Repair(t.Context()) // refused at 40 seconds into the pass: Slack asks for nothing before 70
@@ -295,8 +296,8 @@ func TestARestartRepairsOnceMoreWithTheSameEdit(t *testing.T) {
 	if len(r.up.list()) != 1 {
 		t.Fatalf("%d edits; want the repair to leave what was replaced", len(r.up.list()))
 	}
-	restarted, err := interact.NewReplacer(interact.ReplacerConfig{Store: r.st, Updater: r.up, Now: func() time.Time { return time.Unix(0, r.now.Load()).UTC() },
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	restarted, err := interact.NewReplacer(interact.ReplacerConfig{Store: r.st, Updaters: chattest.Same[interact.Editor](r.up), Now: func() time.Time { return time.Unix(0, r.now.Load()).UTC() },
+		Logger: testutil.DiscardLogger()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,14 +317,14 @@ func TestRunDrainsAtStartRelistsAndEnds(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- r.r.Run(ctx) }()
-	waitFor(t, "the first prompt", func() bool { return len(r.up.list()) == 1 })
+	testutil.Eventually(t, "the first prompt", func() bool { return len(r.up.list()) == 1 })
 	r.decided(t, "second", asked, r.resolve(store.InteractionCancelled))
 	time.Sleep(30 * time.Millisecond) // many ticks, but no listing is due yet
 	if len(r.up.list()) != 1 {
 		t.Fatal("a prompt decided since was repaired before the next listing was due")
 	}
 	r.advance(time.Minute)
-	waitFor(t, "the second prompt", func() bool { return len(r.up.list()) == 2 })
+	testutil.Eventually(t, "the second prompt", func() bool { return len(r.up.list()) == 2 })
 	cancel()
 	if err := <-done; err == nil {
 		t.Fatal("Run returned nil; want the context's error")
@@ -339,7 +340,7 @@ func TestRunRepairsAtOnceAndNotAfterTheFirstTick(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- r.r.Run(ctx) }()
-	waitFor(t, "the prompt, long before the first tick", func() bool { return len(r.up.list()) == 1 })
+	testutil.Eventually(t, "the prompt, long before the first tick", func() bool { return len(r.up.list()) == 1 })
 	cancel()
 	_ = <-done
 }
@@ -348,7 +349,9 @@ func TestRunRepairsAtOnceAndNotAfterTheFirstTick(t *testing.T) {
 // next prompt, and the next repair is not held behind the lock of one that is stuck.
 func TestAHungEditDoesNotHoldUpTheRepair(t *testing.T) {
 	h := &hangs{}
-	r := newRepairRig(t, func(c *interact.ReplacerConfig) { c.Updater, c.EditTimeout = h, 20*time.Millisecond })
+	r := newRepairRig(t, func(c *interact.ReplacerConfig) {
+		c.Updaters, c.EditTimeout = chattest.Same[interact.Editor](h), 20*time.Millisecond
+	})
 	r.decided(t, "ix-1", asked, r.resolve(store.InteractionTimedOut))
 	r.decided(t, "ix-2", asked, r.resolve(store.InteractionTimedOut))
 	for pass := 1; pass <= 2; pass++ {

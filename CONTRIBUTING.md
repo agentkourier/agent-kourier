@@ -33,7 +33,12 @@ end-to-end tiers (`make e2e-fast-up`, then `make e2e-fast`) need Docker and kind
 - Write the test first where you can. Unit tests use the standard library `testing` package,
   table-driven where it fits.
 - Use [Conventional Commits](https://www.conventionalcommits.org/) for commit messages and the
-  pull request title, for example `fix(session): keep the reply queue across a reload`.
+  pull request title, for example `fix(session): keep the reply queue across a reload`. The title's
+  type sets the pull request's type label (`feat` is `enhancement`, `fix` is `bug`, a `deps` scope
+  is `dependencies`, a `!` adds `breaking-change`; [hack/github/pr-labels.sh](hack/github/pr-labels.sh)
+  has the full list), and the release notes group changes by that label. Retitle to change it;
+  a type label added by hand is removed when the title does not call for it. A pull request from
+  a fork gets its label when it merges.
 - Opening a pull request asks the code owner in [.github/CODEOWNERS](.github/CODEOWNERS) for a
   review.
 - Never commit a real token, Secret or private message. Test credentials are fake constants.
@@ -62,6 +67,27 @@ expansion of a value an outsider controls (a pull request title, a branch name) 
 keeps its credentials, `actions/cache` or a setup action's cache in a release workflow, or an action not pinned by
 a full commit SHA. It is not a required check yet. If you change a workflow, run `make lint-workflows` (it installs the pinned zizmor and needs `jq`); `.github/zizmor.yml` says how a finding is
 fixed or suppressed.
+
+`ci` also runs `test-postgres` (`make test-postgres`), the Postgres store's tests and the broker's Postgres tests
+against a throwaway Postgres container; in `test` and `test-testhooks`, which have no database, those tests skip. It is
+not a required check yet. If you change the store or a migration, run it locally; it needs Docker.
+
+`ci` also runs `crd-corpus` (`make crd-corpus`): a throwaway kind cluster with only the CRDs from
+`charts/agent-kourier/files/crds`, to which `test/crdcorpus` sends the corpus of valid and invalid objects as server-side
+dry-run creates, and thousands of variations of valid objects that it generates. It fails if the generated schema, with
+its CEL rules, refuses an object that `Default` and `Validate` accept, if an entry's `# schema:` flag no longer says what
+the schema does with it or its refusal names another field, or if the corpus has lost an entry or an entry reports more
+than one problem. It runs on two Kubernetes versions, as the required checks `crd-corpus (1.37)` and `crd-corpus (1.33)`: the
+node image the kind tiers use, and the oldest Kubernetes the chart admits. If you change an API type, a marker or a rule of
+`api/v1alpha1/validate.go`, run `make crds` and then `make crd-corpus` locally, and `CRD_CORPUS_NODE=min make crd-corpus` for the
+oldest; it needs Docker, `kind` and `kubectl`
+(or `CRD_CORPUS_KUBECONFIG`, a kubeconfig for a local cluster you made), and takes a minute or two once the node image
+is pulled. A new field or rule gets an entry in `test/crdcorpus/testdata/invalid`, whose `# broker-only:` line says why
+the CRD leaves it to the broker if no marker or CEL rule refuses it, and, if you write a CEL rule, an entry in
+`testdata/valid` at each edge where the rule could refuse an object that `Validate` accepts. A CEL rule may refuse only
+what `Validate` refuses: a rule you cannot make exact stays out, and the entry says why. In a marker on a type, write
+an empty string in a rule as `""` inside backticks, never `''`: gofmt rewrites two apostrophes in a doc comment into a
+typographic quote, which breaks the rule.
 
 The `docs` workflow (`build`, the strict site build, and `links`, an external link check) runs only
 when a pull request touches the documentation sources, and its checks are not required; keep them

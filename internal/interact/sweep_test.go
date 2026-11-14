@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"slices"
 	"strings"
@@ -18,6 +17,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/interact"
@@ -26,6 +26,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // callLog records the order of the sweep's calls on its fakes. A nil log records nothing.
@@ -273,7 +274,9 @@ type sweepRig struct {
 	calls *callLog
 	logs  *logBuf
 	look  *sweepLookup
-	outs  []string // "binding outcome", for each call of OnApprovalOutcome
+	// abandon is the session as the sweep ends a pause that no agent can be asked about.
+	abandon *abandons
+	outs    []string // "binding outcome", for each call of OnApprovalOutcome
 	// reopened is what the session tells of the denials it took and did not deliver; a test plays the session with it.
 	reopened *interact.Reopened
 }
@@ -281,9 +284,14 @@ type sweepRig struct {
 // sweepLookup is the Lookup of the sweep: the Binding of a name, or err for a name it does not have.
 type sweepLookup struct {
 	bindings map[string]interact.Binding
+	// err, if set, is what every lookup answers, as a config that has not loaded does.
+	err error
 }
 
 func (l *sweepLookup) Binding(name string) (interact.Binding, error) {
+	if l.err != nil {
+		return interact.Binding{}, l.err
+	}
 	if b, ok := l.bindings[name]; ok {
 		return b, nil
 	}
@@ -293,7 +301,7 @@ func (l *sweepLookup) Binding(name string) (interact.Binding, error) {
 func (r *sweepRig) sweeper(t *testing.T, mod func(*interact.SweepConfig)) *interact.Sweeper {
 	t.Helper()
 	cfg := interact.SweepConfig{
-		Store: r.st, Sessions: r.st, Lookup: r.look, Session: r.sess, Updater: r.upd, Outbox: r.enq, Auditor: r.aud, Presses: r.press, Reopened: r.reopened,
+		Store: r.st, Sessions: r.st, Lookup: r.look, Session: r.sess, Abandoner: r.abandon, Updaters: chattest.Same[interact.Updater](r.upd), Outbox: r.enq, Auditor: r.aud, Presses: r.press, Reopened: r.reopened,
 		Now:       func() time.Time { return *r.clock },
 		Logger:    slog.New(slog.NewTextHandler(r.logs, nil)),
 		OnTimeout: func(id string) { r.mu.Lock(); r.hooks = append(r.hooks, id); r.mu.Unlock() },
@@ -328,19 +336,16 @@ func (r *sweepRig) hooked() []string {
 
 func newSweepRig(t *testing.T) *sweepRig {
 	t.Helper()
-	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := sqlitetest.Open(t)
 	now := t0.Add(timeout + time.Minute) // a minute past the deadline of a pause made at t0
 	r := &sweepRig{st: &flakyResolve{Store: st}, sess: &sweepSess{current: "task-1"}, upd: &updates{}, aud: &audits{}, clock: &now, press: &presses{waiting: map[string]bool{}},
 		look: &sweepLookup{bindings: map[string]interact.Binding{"ns/b": {Dialect: kagentv1.New(0), Timeout: timeout, ToolApprovals: true, Platform: dialect.Platform{ID: "slack", Name: "Slack"}}}}}
 	r.reopened = interact.NewReopened(st)
-	r.ob = newOutbox(t, outbox.Config{Store: st, Platform: &poster{posted: map[string]string{}}, Now: func() time.Time { return t0 }, CallTimeout: 30 * time.Second,
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	r.ob = newOutbox(t, outbox.Config{Store: st, Platforms: chattest.Same[outbox.Platform](&poster{posted: map[string]string{}}), Now: func() time.Time { return t0 }, CallTimeout: 30 * time.Second,
+		Logger: testutil.DiscardLogger()})
 	r.enq = &flakyEnqueue{Outbox: r.ob}
 	r.calls, r.logs = &callLog{}, &logBuf{}
+	r.abandon = &abandons{log: r.calls}
 	r.sess.log, r.upd.log, r.enq.log, r.st.log = r.calls, r.calls, r.calls, r.calls
 	if err := st.UpsertSession(t.Context(), store.Session{Key: key, ContextID: "ctx-1", TaskID: "task-1", Binding: "ns/b", LastActivity: t0}); err != nil {
 		t.Fatal(err)
@@ -614,25 +619,14 @@ func TestRunSweepsOnItsInterval(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- sw.Run(ctx) }()
-	waitFor(t, "the first interaction", func() bool { return len(r.hooked()) == 1 })
+	testutil.Eventually(t, "the first interaction", func() bool { return len(r.hooked()) == 1 })
 	r.pending(t, "ix-2", "task-9", t0.Add(timeout)) // due later, on a tick
-	waitFor(t, "the second interaction", func() bool { return len(r.hooked()) == 2 })
+	testutil.Eventually(t, "the second interaction", func() bool { return len(r.hooked()) == 2 })
 	cancel()
 	if err := <-done; err == nil {
 		t.Fatal("Run returned nil; want the context's error")
 	}
 	goleak.VerifyNone(t, before)
-}
-
-// waitFor polls cond until it holds. The deadline is only how long a condition that will never hold is waited
-// for before the test fails, and is long: a loaded machine can starve the goroutine that makes it hold.
-func waitFor(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	for deadline := time.Now().Add(30 * time.Second); !cond(); time.Sleep(time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-	}
 }
 
 // TestAnInteractionAnsweredMeanwhileIsNotReportedAsTimedOut: the answer won the race, so the
@@ -691,5 +685,93 @@ func TestAPressCheckThatFailsHoldsTheTimeout(t *testing.T) {
 	r.press.err = errBoom
 	if err := r.sweeper(t, nil).Sweep(t.Context()); err == nil || r.state(t, "ix-1") != store.InteractionPending || len(r.sess.cancelled()) != 0 {
 		t.Fatalf("Sweep = %v, state %v, cancels %v; want an error, and nothing done", err, r.state(t, "ix-1"), r.sess.cancelled())
+	}
+}
+
+// TestSweepLeavesAnInteractionOfAConnectionThatIsDownUntilItRuns: ending a pause resumes the paused turn (a question's task is
+// cancelled, an approval's tools are denied), and the prompt and the notice are for the connection's thread, which nothing can reach
+// while no platform runs it. So the sweep leaves the interaction pending, ends nothing, and spends none of its batch on it: another
+// connection's interaction is timed out in the same sweep. Once the connection runs the interaction is timed out as any is.
+func TestSweepLeavesAnInteractionOfAConnectionThatIsDownUntilItRuns(t *testing.T) {
+	r := newSweepRig(t)
+	r.pending(t, "ix-down", "task-1", t0.Add(timeout)) // on key's connection, which nothing runs yet
+	if err := r.st.UpsertSession(t.Context(), store.Session{Key: keyB, ContextID: "ctx-2", TaskID: "task-2", Binding: "ns/b", LastActivity: t0}); err != nil {
+		t.Fatal(err)
+	}
+	req, _ := json.Marshal(dialect.Interaction{Kind: dialect.AskUser, TaskID: "task-2", RequestID: "req-up", Questions: []dialect.Question{{Text: "Which?", Choices: []string{"a", "b"}}}})
+	if _, err := r.st.CreateInteraction(t.Context(), store.Interaction{ID: "ix-up", Key: keyB, TaskID: "task-2", Kind: store.InteractionAskUser, Request: req, CreatedAt: t0, Deadline: t0.Add(timeout + time.Second)}); err != nil {
+		t.Fatal(err)
+	}
+	r.sess.current = "" // the cancel of either task is ErrNotPaused: only the calls are looked at
+	running := chat.PlatformSet[interact.Updater]{keyB.Connection: r.upd}
+	sw := r.sweeper(t, func(c *interact.SweepConfig) { c.Updaters, c.Batch = running, 1 })
+
+	if err := sw.Sweep(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if r.state(t, "ix-up") != store.InteractionTimedOut {
+		t.Error("the interaction of the connection that runs was not timed out: the one that waits took its place in the batch")
+	}
+	if got := r.state(t, "ix-down"); got != store.InteractionPending {
+		t.Errorf("the interaction of the connection that is down is %s; want it pending", got)
+	}
+	if got := r.sess.cancelled(); len(got) != 1 || got[0] != "task-2" {
+		t.Errorf("cancelled %v; want only task-2: the pause of the connection that is down is not ended", got)
+	}
+	if got := r.upd.list(); len(got) != 0 {
+		t.Errorf("updates %q; want none: ix-up was never posted, and ix-down waits", got)
+	}
+
+	if err := sw.Sweep(t.Context()); err != nil { // and again: the operator is told once
+		t.Fatal(err)
+	}
+	if got := strings.Count(r.logs.String(), "level=WARN msg=\"interact: the chat connection of interactions that are due is not running"); got != 1 {
+		t.Errorf("%d warnings that the connection is not running; want one, naming it:\n%s", got, r.logs.String())
+	}
+
+	running[key.Connection] = r.upd
+	if err := sw.Sweep(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.state(t, "ix-down"); got != store.InteractionTimedOut {
+		t.Errorf("the interaction is %s once its connection runs; want it timed out", got)
+	}
+	if got := r.upd.list(); len(got) != 1 || got[0] != "C1 100.001 timed_out" {
+		t.Errorf("updates %q; want the prompt replaced once", got)
+	}
+}
+
+// TestSweepSaysAgainWhenAConnectionStopsAfterRunning: the warning that a connection's due interactions wait is given once for an outage.
+// A sweep in which nothing due waits on the connection ends the outage for it, whether it ran again or the interactions were settled
+// meanwhile, so that the next outage is said too.
+func TestSweepSaysAgainWhenAConnectionStopsAfterRunning(t *testing.T) {
+	r := newSweepRig(t)
+	r.pending(t, "ix-1", "task-1", t0.Add(timeout))
+	running := chat.PlatformSet[interact.Updater]{}
+	sw := r.sweeper(t, func(c *interact.SweepConfig) { c.Updaters = running })
+	said := func() int {
+		return strings.Count(r.logs.String(), "level=WARN msg=\"interact: the chat connection of interactions that are due is not running")
+	}
+	sweep := func() {
+		t.Helper()
+		if err := sw.Sweep(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sweep()
+	sweep()
+	if said() != 1 {
+		t.Fatalf("%d warnings for one outage; want one", said())
+	}
+	// The interaction is settled while the connection is down (a press can be, a task that ended): nothing due waits on it next sweep.
+	if err := r.st.ResolveInteraction(t.Context(), "ix-1", store.InteractionCancelled, t0); err != nil {
+		t.Fatal(err)
+	}
+	sweep()
+	r.pending(t, "ix-2", "task-2", t0.Add(timeout)) // the connection is still down, or down again: a new outage
+	sweep()
+	if said() != 2 {
+		t.Errorf("%d warnings for two outages; want two", said())
 	}
 }

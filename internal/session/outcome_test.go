@@ -13,6 +13,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/audit"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // notices returns the sink's notices of kind.
@@ -228,26 +229,79 @@ func TestCredentialsRejectedFailsTheTurn(t *testing.T) {
 }
 
 // A refused identity (-31403) also fails the turn without a retry, and is audited: nothing
-// else records it.
+// else records it. So does a card the agent's backend answered with 403 (ErrAgentForbidden):
+// kagent 1.0 says that of an agent that does not exist as of one this identity may not use, so
+// it is no refused credential, and the identity Source is not told (it would re-mint the token,
+// and count and audit a rejection).
 func TestForbiddenFailsTheTurnAndIsAudited(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want error
+	}{
+		{"the agent refuses the identity", fmt.Errorf("send message: %w", agent.ErrForbidden), agent.ErrForbidden},
+		{"the card is answered 403", fmt.Errorf("%w: connect to agent: %w", agent.ErrNotSent, agent.ErrAgentForbidden), agent.ErrAgentForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			sink := f.live()
+			waits := f.countWaits()
+			f.agent.script = func(context.Context, int, agent.Handler) error { return tc.err }
+			if _, err := f.submit(inbound("1")); err != nil {
+				t.Fatal(err)
+			}
+			testutil.Eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+			f.retired(t)
+			if sends, _, _ := f.agent.counts(); sends != 1 || waits.Load() != 0 {
+				t.Errorf("%d sends, %d retry waits; want one send and no retry", sends, waits.Load())
+			}
+			f.amu.Lock()
+			defer f.amu.Unlock()
+			if len(f.audits) != 1 || f.audits[0].Op != audit.OpSend || !errors.Is(f.audits[0].Err, tc.want) || len(f.rejected) != 0 {
+				t.Errorf("audits %+v, Rejected %+v; want one send audited, and no Rejected", f.audits, f.rejected)
+			}
+		})
+	}
+}
+
+// A card 403 on a resend's lookup is retried like any failed lookup, not failed as a send is: the agent may have the
+// turn, unrecorded, and an agent being recreated answers again. So the reply is not dropped, and the task is followed.
+func TestLookupOfACardAnswered403IsRetried(t *testing.T) {
 	f := newFixture(t)
 	sink := f.live()
-	waits := f.countWaits()
-	f.agent.script = func(context.Context, int, agent.Handler) error {
-		return fmt.Errorf("send message: %w", agent.ErrForbidden)
+	f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, time.Millisecond
+	f.agent.script = unknown(1)
+	lookups := 0
+	f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
+		if lookups++; lookups < 3 {
+			return nil, nil, fmt.Errorf("connect to agent: %w", agent.ErrAgentForbidden)
+		}
+		return &a2a.Task{ID: "t9", ContextID: "c1"}, []a2a.TaskID{"t9"}, nil
 	}
-	if _, err := f.submit(inbound("1")); err != nil {
-		t.Fatal(err)
+	f.agent.follow = func(id a2a.TaskID, h agent.Handler) error {
+		h(agent.StateEvent{TaskID: id, ContextID: "c1", State: a2a.TaskStateWorking})
+		h(agent.FinalEvent{Task: &a2a.Task{ID: id, ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateCompleted}}})
+		return nil
 	}
-	eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
-	f.retired(t)
-	if sends, _, _ := f.agent.counts(); sends != 1 || waits.Load() != 0 {
-		t.Errorf("%d sends, %d retry waits; want one send and no retry", sends, waits.Load())
+	for _, ts := range []string{"1", "2"} {
+		if _, err := f.submit(inbound(ts)); err != nil {
+			t.Fatal(err)
+		}
+		waitFinal(t, sink)
+	}
+	if got := sink.noticesOf(NoticeFailed); len(got) != 0 {
+		t.Errorf("failed notices = %+v; a lookup that fails drops nothing", got)
+	}
+	f.agent.mu.Lock()
+	sends, finds, follows := len(f.agent.msgs), len(f.agent.finds), slices.Clone(f.agent.follows)
+	f.agent.mu.Unlock()
+	if sends != 2 || finds != 3 || !slices.Equal(follows, []a2a.TaskID{"t9"}) {
+		t.Errorf("%d sends, %d lookups, followed %v; want 2 sends, 3 lookups and t9 followed", sends, finds, follows)
 	}
 	f.amu.Lock()
 	defer f.amu.Unlock()
-	if len(f.audits) != 1 || f.audits[0].Op != audit.OpSend || !errors.Is(f.audits[0].Err, agent.ErrForbidden) || len(f.rejected) != 0 {
-		t.Errorf("audits %+v, Rejected %+v; want one send audited, and no Rejected", f.audits, f.rejected)
+	if len(f.rejected) != 0 {
+		t.Errorf("Rejected %+v; a card 403 is no rejected credential", f.rejected)
 	}
 }
 
@@ -359,7 +413,7 @@ func TestUnknownOutcomeGivesUpWhenTheLookupNeverAnswers(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	eventually(t, "the turn to fail", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+	testutil.Eventually(t, "the turn to fail", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
 	if sends, _, _ := f.agent.counts(); sends != 2 {
 		t.Errorf("%d sends; want turn 1 and turn 2 once: a failed lookup never lets a resend through", sends)
 	}
@@ -486,7 +540,7 @@ func TestLostStreamWithRefusedCredentialsIsNotFollowed(t *testing.T) {
 	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+	testutil.Eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
 	f.amu.Lock()
 	defer f.amu.Unlock()
 	if len(f.rejected) != 1 || !errors.Is(f.rejected[0].Err, agent.ErrCredentialsRejected) || len(f.audits) != 0 {
@@ -648,7 +702,7 @@ func TestRefusedCredentialWithoutASourceIsAudited(t *testing.T) {
 	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+	testutil.Eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
 	f.amu.Lock()
 	defer f.amu.Unlock()
 	if len(f.audits) != 1 || !errors.Is(f.audits[0].Err, agent.ErrCredentialsRejected) {
@@ -776,10 +830,11 @@ func TestFailedCancelOfAWedgedTaskIsClassified(t *testing.T) {
 	}{
 		{"the credentials are refused", fmt.Errorf("%w: rejected", agent.ErrCredentialsRejected), true},
 		{"the identity is refused", fmt.Errorf("send message: %w", agent.ErrForbidden), false},
+		{"the card is answered 403", fmt.Errorf("connect to agent: %w", agent.ErrAgentForbidden), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, sink := wedgedFixture(t, func(f *fixture) { f.agent.cancelErr = func(int) error { return tc.cause } }, "1")
-			eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+			testutil.Eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
 			time.Sleep(50 * time.Millisecond) // a retry loop would show by now
 			f.amu.Lock()
 			defer f.amu.Unlock()
@@ -789,6 +844,9 @@ func TestFailedCancelOfAWedgedTaskIsClassified(t *testing.T) {
 			}
 			if cancels := f.agent.cancels; len(cancels) != 1 || rows != 1 {
 				t.Errorf("%d cancels, %d audit rows; want one of each", len(cancels), rows)
+			}
+			if !tc.source && len(f.rejected) != 0 {
+				t.Errorf("Rejected calls = %+v; want none: the credentials were not refused", f.rejected)
 			}
 		})
 	}
@@ -801,7 +859,7 @@ func TestFailedCancelOfAWedgedTaskIsClassified(t *testing.T) {
 				return errors.New("agent unreachable")
 			}
 		}, "1")
-		eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+		testutil.Eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
 		f.amu.Lock()
 		defer f.amu.Unlock()
 		if len(f.audits) != 1 || f.audits[0].Op != audit.OpCancel {
@@ -904,28 +962,36 @@ func TestNotSentDoesNotForgetAnEarlierUnknownOutcome(t *testing.T) {
 // A turn the agent may have taken is never given up on: however long the lookups fail, it is not
 // failed, and is followed when the agent answers.
 func TestHeldTurnNeverGivesUp(t *testing.T) {
-	t.Run("a held turn whose lookups keep failing", func(t *testing.T) {
-		f := newFixture(t)
-		sink := f.live()
-		f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, time.Millisecond
-		f.seed("ns/b1", 0) // a task t1 is recorded, so the head is held until it is looked up
-		lookups := 0
-		f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
-			if lookups++; lookups < 4 {
-				f.now.Store(t0.Add(time.Duration(lookups) * 10 * time.Minute).UnixNano())
-				return nil, nil, errors.New("agent unreachable")
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"a held turn whose lookups keep failing", errors.New("agent unreachable")},
+		{"a held turn whose lookups keep getting a card 403", fmt.Errorf("connect to agent: %w", agent.ErrAgentForbidden)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			sink := f.live()
+			f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, time.Millisecond
+			f.seed("ns/b1", 0) // a task t1 is recorded, so the head is held until it is looked up
+			lookups := 0
+			f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
+				if lookups++; lookups < 4 {
+					f.now.Store(t0.Add(time.Duration(lookups) * 10 * time.Minute).UnixNano())
+					return nil, nil, tc.err
+				}
+				return &a2a.Task{ID: "t1", ContextID: "c1"}, []a2a.TaskID{"t1"}, nil
 			}
-			return &a2a.Task{ID: "t1", ContextID: "c1"}, []a2a.TaskID{"t1"}, nil
-		}
-		f.agent.follow = func(_ a2a.TaskID, h agent.Handler) error { return turn(h, 0, a2a.TaskStateCompleted) }
-		if _, err := f.submit(inbound("1")); err != nil {
-			t.Fatal(err)
-		}
-		waitFinal(t, sink)
-		if got := sink.noticesOf(NoticeFailed); len(got) != 0 {
-			t.Errorf("failed notices = %+v; a turn the agent has is never given up on", got)
-		}
-	})
+			f.agent.follow = func(_ a2a.TaskID, h agent.Handler) error { return turn(h, 0, a2a.TaskStateCompleted) }
+			if _, err := f.submit(inbound("1")); err != nil {
+				t.Fatal(err)
+			}
+			waitFinal(t, sink)
+			if got := sink.noticesOf(NoticeFailed); len(got) != 0 {
+				t.Errorf("failed notices = %+v; a turn the agent has is never given up on", got)
+			}
+		})
+	}
 }
 
 // One -32004 must not make an unreachable agent patient for ever: a busy session means the agent
@@ -945,7 +1011,7 @@ func TestBusyThenUnreachableStillGivesUp(t *testing.T) {
 	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) >= 1 })
+	testutil.Eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) >= 1 })
 	f.retired(t)
 	if got := sink.noticesOf(NoticeFailed); len(got) != 1 {
 		t.Errorf("failed notices = %+v; want exactly one", got)
@@ -977,7 +1043,7 @@ func TestSessionGoneSurvivesAFailedResetWithOneTurn(t *testing.T) {
 			if _, err := f.submit(inbound("1")); err != nil {
 				t.Fatal(err)
 			}
-			eventually(t, "the session to be reset", func() bool {
+			testutil.Eventually(t, "the session to be reset", func() bool {
 				sess, _ := f.session()
 				return sess.ContextID == "" && sess.TaskID == "" && len(sink.noticesOf(NoticeSessionGone)) == 1
 			})
@@ -1007,7 +1073,7 @@ func TestSilentTaskIsCancelledDespiteSnapshotsReplayedByEachFollow(t *testing.T)
 	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the silent task to be presumed wedged", func() bool { return len(sink.noticesOf(NoticeWedged)) == 1 })
+	testutil.Eventually(t, "the silent task to be presumed wedged", func() bool { return len(sink.noticesOf(NoticeWedged)) == 1 })
 	if got := f.cancelled(); len(got) != 1 || got[0] != "t1" {
 		t.Errorf("cancelled %v; want t1 once", got)
 	}
@@ -1040,7 +1106,7 @@ func TestAgeWithoutAUsableTimestamp(t *testing.T) {
 			if _, err := f.submit(inbound("1")); err != nil {
 				t.Fatal(err)
 			}
-			eventually(t, "the task to be presumed wedged", func() bool { return len(sink.noticesOf(NoticeWedged)) == 1 })
+			testutil.Eventually(t, "the task to be presumed wedged", func() bool { return len(sink.noticesOf(NoticeWedged)) == 1 })
 		})
 	}
 }

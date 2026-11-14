@@ -11,7 +11,6 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
-	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 )
 
@@ -20,11 +19,7 @@ import (
 // starter; and the check that a stale reservation's turn was queued reads the store's reply queue, which is what
 // closes the window between queueing a turn and marking its thread.
 func TestIntakeConfigConnectsTheTriggerPath(t *testing.T) {
-	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := sqlitetest.Open(t)
 	s := newStarter(t)
 	cfg, err := newIntakeConfig(intakeParts{
 		conn: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"}, snapshot: func() *config.Snapshot { return nil },
@@ -79,11 +74,7 @@ func TestIntakeConfigConnectsTheTriggerPath(t *testing.T) {
 // newIntakeConfig refuses a part that is left out, and the error names it: each is a part of the path that would compile
 // and run without it, and do nothing.
 func TestIntakeConfigNamesThePartThatIsMissing(t *testing.T) {
-	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := sqlitetest.Open(t)
 	s := newStarter(t)
 	full := intakeParts{
 		conn: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"}, snapshot: func() *config.Snapshot { return nil },
