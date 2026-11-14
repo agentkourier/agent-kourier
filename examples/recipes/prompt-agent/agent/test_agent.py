@@ -256,6 +256,31 @@ REFUSALS = {  # an agent.yaml `capabilities:` list, and what the refusal must na
         "authorization_token",
     ),
     "MCP with an IPv6 url and no id": ("- MCP: {url: 'http://[::1]:8080/mcp', allowed_tools: [a]}", "colon"),
+    "MCP with an IPv6 url and a null id": ("- MCP: {url: 'http://[::1]/mcp', allowed_tools: [a], id: null}", "id"),
+    "MCP with an id that has a colon": ("- MCP: {url: 'http://[::1]/mcp', allowed_tools: [a], id: 'a:b'}", "id"),
+    "MCP with an id that is not a string": ("- MCP: {url: 'http://[::1]/mcp', allowed_tools: [a], id: 5}", "id"),
+    "MCP with an empty id": ("- MCP: {url: 'http://x/mcp', allowed_tools: [a], id: ''}", "id"),
+    "MCP with a token that has a newline and a header named like the token": (
+        "- MCP: {url: 'http://x/mcp', allowed_tools: [a], authorization_token: \"a\\nb\","
+        " headers: {authorization_token: ok}}",
+        "authorization_token",
+    ),
+    "MCP with a header name that is not a string": (
+        "- MCP: {url: 'http://x/mcp', allowed_tools: [a], headers: {5: v}}",
+        "headers",
+    ),
+    "MCP with a header name that holds a CRLF": (
+        "- MCP: {url: 'http://x/mcp', allowed_tools: [a], headers: {\"X-Id\\r\\nX-Evil\": v}}",
+        "headers",
+    ),
+    "MCP with a header value outside ASCII": (
+        "- MCP: {url: 'http://x/mcp', allowed_tools: [a], headers: {X-Id: \"a\\u2028b\"}}",
+        "header X-Id",
+    ),
+    "MCP with a token outside ASCII": (
+        "- MCP: {url: 'http://x/mcp', allowed_tools: [a], authorization_token: \"Bearer caf\\u00e9\"}",
+        "authorization_token",
+    ),
     "MCP with a header value that is not a string": (
         "- MCP: {url: 'http://x/mcp', allowed_tools: [a], headers: {X-Id: 5}}",
         "headers",
@@ -351,6 +376,12 @@ MODEL_REFUSALS = {  # a model: line the agent refuses, and what the refusal must
     "search in upper case": ("openai-chat:My-SEARCH-model", "search"),
     "an OpenRouter preset as the model": ("openrouter:@preset/web", "preset"),
     "an OpenRouter preset after a model": ("openrouter:openai/gpt-6-luna@preset/x", "preset"),
+    "a preset with its @ escaped": ("openrouter:%40preset/web", "characters"),
+    "a preset with a full-width @": ("openrouter:\uff20preset/web", "characters"),
+    "a NUL in the name": ("openai:gpt-6-luna\x00", "characters"),
+    "a space in the name": ("openai:gpt 6", "characters"),
+    "a newline in the name": ("openai:gpt-6\nluna", "characters"),
+    "a Cyrillic look-alike of search": ("openai:gpt-6-s\u0435arch-preview", "characters"),
 }
 
 
@@ -358,7 +389,7 @@ MODEL_REFUSALS = {  # a model: line the agent refuses, and what the refusal must
 def test_the_agent_refuses_a_provider_it_does_not_allow_or_a_model_that_searches_on_its_own(tmp_path, model, names):
     """A search model or :online makes the provider search the web itself: a tool agent.yaml does not list."""
     path = tmp_path / "agent.yaml"
-    path.write_text(f"model: '{model}'\n" if model else "name: x\n")
+    path.write_text(f"model: {json.dumps(model)}\n" if model else "name: x\n")
     with pytest.raises(SystemExit, match=f"{path}.*{names}"):
         agent.load_agent(str(path))
 
@@ -370,6 +401,7 @@ def test_the_agent_refuses_a_provider_it_does_not_allow_or_a_model_that_searches
         "openai:gpt-6-luna",
         "openai-responses:gpt-6-luna",
         "openai-chat:gemma4",
+        "ollama:llama3.3:70b-instruct-q4_K_M",
         "openrouter:anthropic/claude-haiku-5-5",
         "ollama:gemma4",
         "bedrock:us.anthropic.claude-haiku-5-5",

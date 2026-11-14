@@ -143,6 +143,11 @@ PROVIDERS = {"anthropic", "openai", "openai-responses", "openai-chat", "openrout
 # Models that search the web on the provider's side: OpenRouter's :online, OpenAI's search and deep research models,
 # Perplexity's.
 SEARCHES = re.compile(r":online|search|perplexity", re.IGNORECASE)
+# The characters of a model's name: ASCII letters, digits and . _ / : ~ -, so that an escaped, a full-width or a
+# look-alike character cannot hide a name from the checks.
+MODEL_NAME = re.compile(r"[A-Za-z0-9._/:~-]+")
+# The characters of an HTTP header's name (a token in RFC 9110).
+HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
 # The MCP keywords allowed. local: would connect to a URL of its own, with the token, instead of url.
 MCP_KEYS = {"url", "allowed_tools", "native", "authorization_token", "headers", "description", "id"}
 
@@ -158,12 +163,15 @@ def check_model(path: str, model) -> None:
     provider, _, name = model.partition(":")
     if not name or provider not in PROVIDERS:
         raise SystemExit(f"{path}: model {model!r}: the provider must be one of {', '.join(sorted(PROVIDERS))}")
-    if found := SEARCHES.search(name):
-        raise SystemExit(f"{path}: model {model!r} ({found.group()}) makes the provider search the web itself")
     # An OpenRouter preset (@preset/..., anywhere in the name) keeps settings in OpenRouter's dashboard, server tools
-    # among them, where agent.yaml cannot see them.
+    # among them, where agent.yaml cannot see them. Checked before the characters, which refuse an @ too, for this
+    # message.
     if "@" in name:
         raise SystemExit(f"{path}: model {model!r} names an OpenRouter preset, whose tools agent.yaml cannot see")
+    if not MODEL_NAME.fullmatch(name):
+        raise SystemExit(f"{path}: model {model!r} has characters other than ASCII letters, digits and . _ / : ~ -")
+    if found := SEARCHES.search(name):
+        raise SystemExit(f"{path}: model {model!r} ({found.group()}) makes the provider search the web itself")
 
 
 def load_agent(path: str, model=None) -> tuple[Agent, set[str]]:
@@ -199,9 +207,12 @@ def load_agent(path: str, model=None) -> tuple[Agent, set[str]]:
         parts = urlparse(url)
         if parts.scheme not in ("http", "https") or not parts.netloc or url.lower().endswith((".py", ".js")):
             raise SystemExit(f"{path}: an MCP entry needs url: http(s)://host/..., as a keyword, and not a script")
-        # Pydantic AI names the entry after the url's host and refuses a name with a colon, so an IPv6 host
-        # (http://[::1]:8080/mcp) needs an id: of its own.
-        if ":" in (parts.hostname or "") and "id" not in args:
+        # Pydantic AI names the entry after id:, or else after the url's host, and refuses a name with a colon. So an
+        # id: must be a name with no colon, and an IPv6 host (http://[::1]:8080/mcp) needs one.
+        if "id" in args:
+            if not (isinstance(args["id"], str) and args["id"] and ":" not in args["id"]):
+                raise SystemExit(f"{path}: an MCP id must be a name with no colon")
+        elif ":" in (parts.hostname or ""):
             raise SystemExit(f"{path}: an MCP entry with an IPv6 url needs an id:, since its host has a colon")
         # Pydantic AI filters tools only for a list: null, or no list at all, would offer every tool the server has.
         tools = args.get("allowed_tools")
@@ -212,19 +223,25 @@ def load_agent(path: str, model=None) -> tuple[Agent, set[str]]:
             raise SystemExit(f"{path}: native MCP is not allowed: the model provider would call the server itself")
         # A token belongs in these two places, and only here is ${NAME} expanded: an expanded prompt would send the
         # token to the model.
+        sent = []  # (what a refusal names, the value as it will be sent)
         if "authorization_token" in args:
             if not isinstance(args["authorization_token"], str):
                 raise SystemExit(f"{path}: authorization_token must be a string")
             args["authorization_token"] = expand(args["authorization_token"], path, secrets)
+            sent.append(("authorization_token", args["authorization_token"]))
         headers = args.get("headers")
         if headers is not None:
-            if not (isinstance(headers, dict) and all(isinstance(v, str) for v in headers.values())):
-                raise SystemExit(f"{path}: headers must be a mapping of names to string values")
+            if not isinstance(headers, dict) or not all(
+                isinstance(name, str) and HEADER_NAME.fullmatch(name) and isinstance(value, str)
+                for name, value in headers.items()
+            ):
+                raise SystemExit(f"{path}: headers must be a mapping of header names to string values")
             args["headers"] = {name: expand(value, path, secrets) for name, value in headers.items()}
-        # A control character is not legal in a header, whether written here or expanded; never quote the value.
-        written = {"authorization_token": args.get("authorization_token", ""), **(args.get("headers") or {})}
-        if held := sorted(name for name, value in written.items() if CONTROL.search(value)):
-            raise SystemExit(f"{path}: MCP {', '.join(held)} holds a control character")
+            sent += [(f"header {name}", value) for name, value in args["headers"].items()]
+        # A control character (tab included), or one outside ASCII, is refused in a header, written or expanded: the
+        # HTTP client would fail every turn on it. The value is never quoted.
+        if held := [label for label, value in sent if CONTROL.search(value) or not value.isascii()]:
+            raise SystemExit(f"{path}: MCP {', '.join(held)} holds a control character or one outside ASCII")
         cap.arguments = args
     # Limits Pydantic AI sets, which agent.yaml cannot: the MCP client waits 5 seconds to connect and initialize, and
     # 5 minutes for an answer. A server that does not connect in time fails the task; a tool call with no answer in time
