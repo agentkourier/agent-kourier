@@ -13,9 +13,9 @@ supported. [Move the config between a ConfigMap and custom resources](../how-to/
 | Who writes them | Whoever edits the ConfigMap or the values | Whoever Kubernetes RBAC lets write the objects in each namespace |
 | One bad object | The whole config is refused | That object is refused; the others carry on |
 | What a Binding's owner sees | The broker's log and metrics | `Binding.status`, in `kubectl get akbinding` |
-| ChatConnections | Exactly one in the directory | Many in the cluster; the broker serves its own, if it has one (`AGENTKOURIER_CHAT_CONNECTION`), and those of the namespaces `AGENTKOURIER_CONNECTION_NAMESPACES` admits, at most 16 in all |
+| ChatConnections | Exactly one in the directory | Many in the cluster; the broker serves its own, if it has one (`AGENTKOURIER_CHAT_CONNECTION`), and those of the namespaces it admits: a list (`AGENTKOURIER_CONNECTION_NAMESPACES`), a label selector (`AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR`), or every namespace when none of the three is set; at most 16 in all |
 | Kubernetes | No minimum | 1.33 or later, which the chart checks |
-| Extra grants | A Role for the Secrets in each namespace | A ClusterRole to read the three kinds and write `bindings/status`, and Roles that name the Secrets |
+| Extra grants | A Role for the Secrets in each namespace | A ClusterRole to read the three kinds and write `bindings/status` (and to list and watch namespaces with a label selector other than `{}`), and Roles that name the Secrets |
 | Unknown fields | The loader refuses the file | The API server refuses them at apply, or drops them; the broker ignores one its own types lack (see below) |
 | A change is read | At the next check of the files, every 10 seconds, and the chart rolls the pod when its ConfigMap changes | At the next check, every 10 seconds |
 
@@ -54,7 +54,7 @@ file and field. On a reload it keeps the last good config, logs `config reload f
 | A Binding names an agent namespace that its AgentBackend's `agents` field does not allow | Drops the Binding from routing, with `AgentNamespaceNotAllowed`. |
 | A Binding names an AgentBackend that is invalid | Serves the AgentBackend's last good generation, or drops the Binding if it has none, with `BackendRejected`. |
 | The broker's own ChatConnection is edited into something invalid | Keeps serving its last good generation, and each of its Bindings says `ConnectionRejected`. |
-| A Binding names a ChatConnection that exists and that this broker does not serve | If the broker served the connection before and does not now (its namespace was taken off the list, or it was the broker's own and the setting now names another or none, and its namespace is not on the list), or the connection is past the 16, or it is a second connection of a Slack app, and in all three cases the connection admits the Binding's namespace, the leader writes `Accepted=False` with `ConnectionNotServed`, once, and does not put it back, so that a broker that serves the connection has the last word. Otherwise (a connection in a namespace that was never on the list, or a Binding the connection does not admit) nothing reads the Binding and nothing writes its status: `READY` stays empty. Point `connectionRef` at a connection that a broker serves. |
+| A Binding names a ChatConnection that exists and that this broker does not serve | If the broker served the connection before and does not now (its namespace was taken off the list or lost the label the selector matches, or it was the broker's own and the setting now names another or none, and its namespace is not admitted), or the connection is past the 16, or it is a second connection of a Slack app, and in all three cases the connection admits the Binding's namespace, the leader writes `Accepted=False` with `ConnectionNotServed`, once, and does not put it back, so that a broker that serves the connection has the last word. Otherwise (a connection in a namespace that was never admitted, or a Binding the connection does not admit) nothing reads the Binding and nothing writes its status: `READY` stays empty. Point `connectionRef` at a connection that a broker serves. |
 | A Binding's Secret is missing, unreadable or lacks the key | Keeps the Binding served. `BackendReachable` says `CredentialsUnreadable`. |
 | Two Bindings on one channel | The older holds it. The other has `ChannelConflict`. |
 | An object is edited again and again | Serves each read as it was when the read began, and reads again at the next check, so an edit is served within one check (10 seconds) plus up to two reads: the one that is running when it lands, then its own. One team editing its Binding in a loop does not hold back another's. But each read that finds a change moves the config's revision, so the Binding verification pass, which probes every Binding of the connection, runs at most every 30 seconds for as long as the loop lasts, where it would run every 5 minutes (see [Binding verification](../reference/metrics.md#binding-verification)). Measured only in a test against a fake API server in the test process, not against a real API server: a Binding of about 0.4 MiB, edited with a 10 ms pause between edits (50 to 85 edits a second in the runs), took 35 to 50 ms to read, or about 0.5 s under the race detector, and a Binding that another team added during the loop was served 50 to 150 ms later with the test's 100 ms check (1.1 to 1.2 s under the race detector). |
@@ -151,21 +151,45 @@ no annotation reads `unannotated`. To end the mismatch, bring the CRDs and the i
 
 ## Which ChatConnections a broker serves
 
-On files the directory holds exactly one `ChatConnection`: the broker refuses to start with none or with more, and `AGENTKOURIER_CHAT_CONNECTION` and
-`AGENTKOURIER_CONNECTION_NAMESPACES` are refused.
+On files the directory holds exactly one `ChatConnection`: the broker refuses to start with none or with more, and `AGENTKOURIER_CHAT_CONNECTION`,
+`AGENTKOURIER_CONNECTION_NAMESPACES` and `AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR` are refused.
 
 On custom resources a cluster can hold many connections. A broker may have an own connection, named as `namespace/name` in
-`AGENTKOURIER_CHAT_CONNECTION`; if it has one, it always serves it. It also serves the ChatConnections in the namespaces that `AGENTKOURIER_CONNECTION_NAMESPACES`
-lists, except a second connection of a Slack app that it already serves, which it refuses, so that a team can bring its own chat app without running a broker ([Let a team bring its own Slack app](../how-to/team-slack-app.md)).
-The variable may be left out when the list has at least one namespace: the broker then has no connection of its own and serves only the teams'
-([A broker with no connection of its own](../how-to/team-slack-app.md#a-broker-with-no-connection-of-its-own)). With neither, the broker exits with code 2, since it
-could serve nothing until a restart. What an own connection has that a team connection does not: a token Slack rejects ends the process with code 1, where a team connection stops alone;
+`AGENTKOURIER_CHAT_CONNECTION`; if it has one, it always serves it. It also serves the ChatConnections of the namespaces it admits, except a second
+connection of a Slack app that it already serves, which it refuses, so that a team can bring its own chat app without running a broker
+([Let a team bring its own Slack app](../how-to/team-slack-app.md)). It admits:
+
+| `AGENTKOURIER_CHAT_CONNECTION` | `AGENTKOURIER_CONNECTION_NAMESPACES` | `AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR` | The broker serves the ChatConnections of |
+|---|---|---|---|
+| unset | unset | unset | every namespace |
+| any | any | `{}` | every namespace, and its own, if it has one |
+| any | a list | unset | the listed namespaces, and its own, if it has one |
+| any | unset | a selector | the namespaces whose labels match it, and its own, if it has one |
+| any | a list | a selector | the listed namespaces and those whose labels match, and its own, if it has one |
+| set | unset | unset | none: its own alone |
+
+The list is read at start, so a change to it is a restart. The selector is read at start too, but the namespaces' labels are followed live, with an
+informer on namespaces: a namespace that gains a matching label is admitted at the next read, every 10 seconds, and one that loses it stops being
+admitted at the next read, with no restart. While the broker cannot reach the API server it keeps the labels it last read. Only a selector other than
+`{}` reads namespaces, and so needs `list` and `watch` on them; every namespace and a list read none. The first line of the log, `config route`, names
+the admission in `connection_admission` (`all`, `list`, `selector`, `list+selector`, or `own` for none besides the own connection), with
+`connection_namespaces` when there is a list and `connection_namespace_selector` when there is a selector other than `{}`.
+
+**Every namespace is a setting for a cluster with one broker.** A broker that admits every namespace serves a second broker's connections too, that
+broker's own included, and the two open Socket Mode on the same Slack apps, so each event goes to one of them and the other misses it. Both serve the
+same Bindings, and where their words differ each puts back the status the other writes: the leader logs `binding status: something else keeps changing the status of a Binding,
+and this broker keeps putting it back` once it has put one back three times in a row, and counts each in
+`agentkourier_binding_status_writes_total{result="put_back"}` ([Troubleshoot](../how-to/troubleshoot.md#the-status-of-a-binding-keeps-changing)). With two brokers in a cluster, give each its own connections and admit with a list or a selector
+that the other's do not overlap.
+
+With no own connection the broker serves only the teams' connections
+([A broker with no connection of its own](../how-to/team-slack-app.md#a-broker-with-no-connection-of-its-own)). What an own connection has that a team connection does not: a token Slack rejects ends the process with code 1, where a team connection stops alone;
 its ChatConnection is held when it is deleted; and it takes the first of the 16 places and the first claim of its Slack app. A broker with no own connection stays up, and ready, when every
 token is rejected, and serves the 16 oldest connections, the oldest claiming a Slack app first.
 It serves at most 16 connections, its own included: the own one, if there is one, counts first, the others are taken oldest first (then by namespace and name), and a
-connection past the limit is not served. No setting changes the limit ([Limits](../reference/limits.md#run-the-broker)). A broker serves the Bindings
-whose `connectionRef` names a connection it serves, and no others, so two releases can still share a cluster. A Binding whose `connectionRef` names a
+connection past the limit is not served. With every namespace admitted the 16 places are shared by every ChatConnection of the cluster. No setting changes the limit ([Limits](../reference/limits.md#run-the-broker)). A broker serves the Bindings
+whose `connectionRef` names a connection it serves, and no others, so two releases can share a cluster when neither admits the other's connections. A Binding whose `connectionRef` names a
 connection that does not exist is reported by the leader of every broker that sees it, as `ConnectionNotFound`, since none owns it. A Binding that names a connection that exists and that this broker does not serve is
-told `ConnectionNotServed` by its leader in three cases: the broker served the connection before (its namespace was taken off the list, or it was the broker's own and `AGENTKOURIER_CHAT_CONNECTION` now names another or is unset, and its namespace is not on the list),
-the connection is past the limit, or it is a second connection of a Slack app. Only a Binding that the connection admits is told, and a connection in a namespace that was never on the list tells nobody
+told `ConnectionNotServed` by its leader in three cases: the broker served the connection before (its namespace was taken off the list, its namespace lost the label the selector matches, or it was the broker's own and `AGENTKOURIER_CHAT_CONNECTION` now names another or is unset, and its namespace is not admitted),
+the connection is past the limit, or it is a second connection of a Slack app. Only a Binding that the connection admits is told, and a connection in a namespace that was never admitted tells nobody
 ([Binding status](../reference/binding-status.md#accepted)). A broker that does serve the connection writes its own status over it.

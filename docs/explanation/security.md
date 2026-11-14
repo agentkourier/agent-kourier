@@ -81,22 +81,45 @@ audited and counted; nothing falls back.
 
 ## A team brings its own chat app
 
-With `config.connectionNamespaces` set, one broker holds the chat credentials of more than one app: its own connection's, if it has one, and
-the bot token and app-level token of every ChatConnection in the namespaces on the list, read from the Secret each names in its own
+On custom resources one broker can hold the chat credentials of more than one app: its own connection's, if it has one, and
+the bot token and app-level token of every ChatConnection it admits, read from the Secret each names in its own
 namespace. They sit in the memory of one pod, in the redacting type of the section above, beside the Binding tokens the broker
 already holds for every team. A reader of that pod's memory has them all, and a platform that admits a team's namespace takes on
 the tokens of the team's app: see [Let a team bring its own Slack app](../how-to/team-slack-app.md).
 
-**The admission list is the consent.** Without it, any namespace where someone may create a ChatConnection would make the broker
-open a chat connection on tokens nobody at the platform reviewed. So the broker serves its own ChatConnection, if it has one (the one
-`config.chatConnection` names, in any namespace), and the ChatConnections of the namespaces on the list, and no other. Another
-ChatConnection of the release's namespace is not served unless that namespace is on the list. A ChatConnection that is not served is
-not run, and the broker does not read the Secret it names. The list is read at start: taking a namespace off it is a restart, after which the connection is no longer served.
+**Admission decides whose apps the broker runs.** The broker serves its own ChatConnection, if it has one (the one
+`config.chatConnection` names, in any namespace), and the ChatConnections of the namespaces it admits, and no other. A ChatConnection that is not
+served is not run, and the broker does not read the Secret it names. There are three ways to admit, and they say who consents:
 
-A second key stands beside it. The Secret of a team connection is in the team's namespace, and the broker's ServiceAccount can
+- **Every namespace**, when `config.chatConnection`, `config.connectionNamespaces` and `config.connectionNamespaceSelector` are all unset
+  (and `config.chatConnections` has no entry), or when the selector is `{}`. The broker serves every ChatConnection of the cluster, up to the cap below.
+  Nobody at the platform reviews a team's app: what lets a team attach one is the right to create a ChatConnection in its namespace, and
+  the grant of its Secret to the broker. The chart adds no rule for the three kinds to the `admin` or `edit` role (it labels no ClusterRole for
+  aggregation), so a namespace's `admin` or `edit` cannot create a ChatConnection unless someone grants that right; whoever does is
+  the consent. Every namespace is a setting for a cluster with one broker: a second broker's connections, its own included, are served by this one
+  too, and two Socket Mode connections of one Slack app split its events between the two brokers.
+- **A list**, `config.connectionNamespaces`: the namespaces by name. Listing one is the platform's consent to the ChatConnections created there.
+  The broker reads the list at start: taking a namespace off it is a restart, after which the connection is no longer served.
+- **A selector**, `config.connectionNamespaceSelector`: the namespaces whose labels match it. The consent is a namespace's label, so whoever may
+  set the labels of a namespace, or create a namespace with them, decides. A namespace is cluster-scoped, so a Role in the namespace cannot grant
+  that, and it is usually a platform right; check who holds `update` or `patch` on namespaces, and `create`, before you choose a label.
+  A selector that matches the absence of a label (`NotIn`, `DoesNotExist`) admits a namespace that nobody labelled, a new one included. The broker
+  follows the labels live, with an informer on namespaces: a namespace that gains a matching label is admitted at the next read (every 10 seconds), and
+  one that loses it stops being admitted, with its Bindings told `ConnectionNotServed`, with no restart. While the broker cannot reach the API server
+  it keeps the labels it last read, so a namespace stays admitted, or not, as it was. Only this way reads namespaces: the chart adds `list` and `watch`
+  on `namespaces` to its ClusterRole for a selector other than `{}`, and nothing for every namespace or a list.
+
+The list and the selector can be set together, and a namespace is admitted if either admits it. With an own connection and neither of them, the
+broker serves its own connection alone.
+
+A second key stands beside admission. The Secret of a team connection is in the team's namespace, and the broker's ServiceAccount can
 read it only if someone grants that: the team, with a Role that names the Secret, or the platform, with `rbac.secretNames` or
 `rbac.secretNamespaces`. `credentialsSecretRef` takes a name and never a namespace, so a team cannot point its connection at a
-Secret of another namespace. The broker reads the two keys `botToken` and `appToken` of the Secret, and uses them to call Slack.
+Secret of another namespace. The broker reads the two keys `botToken` and `appToken` of the Secret, and uses them to call Slack. A connection
+whose Secret the broker cannot read is not started: the broker logs a WARN, `the ChatConnection is not started yet: its credentials cannot be used`,
+`agentkourier_chat_connected` is 0 for it, and it starts once the Secret can be read. In a namespace of `rbac.secretNamespaces` the broker
+may read every Secret, so there a ChatConnection that is admitted needs no grant from the team: with every namespace admitted, that is each
+namespace of `rbac.secretNamespaces`.
 
 What a team that may write a ChatConnection in an admitted namespace can do, and what it cannot:
 
@@ -108,14 +131,16 @@ What a team that may write a ChatConnection in an admitted namespace can do, and
   and the broker sends the value to that AgentBackend's `url`, as described below. Anyone who may write Bindings or AgentBackends in an admitted
   namespace can then do this with the team's `botToken` and `appToken`. Grant the Secret only if they may hold the tokens.
 - It can fill the places. The broker serves at most 16 connections, its own first, if it has one, and the others oldest first, and no setting changes that.
-  A team that creates many leaves a later team's connection out, and that connection's Bindings say `ConnectionNotServed`. Bound
-  it with a `ResourceQuota` on `count/chatconnections.agentkourier.dev` in each admitted namespace, as the section below does for Bindings (Kubernetes's own object-count quota for a custom resource; not run here for this kind).
+  With every namespace admitted the 16 are shared by the whole cluster. A connection takes its place whether or not its Secret can be read, since
+  the broker counts the objects and not their Secrets, so a team needs no grant to fill places. A team that creates many leaves a later team's connection out, and that connection's Bindings say `ConnectionNotServed`. Bound
+  it with a `ResourceQuota` on `count/chatconnections.agentkourier.dev` in each admitted namespace (with every namespace admitted, in each namespace where someone may create one), as the section below does for Bindings (Kubernetes's own object-count quota for a custom resource; not run here for this kind).
 - It cannot stop the broker or another team's connection. A rejected token, an invalid ChatConnection and a Secret that cannot be read
   stop or hold back that connection only, with its Bindings reporting why. The broker's own connection, if it has one, keeps its rule: a token Slack rejects
   ends the process. A broker with no own connection has no such rule, and with every token rejected it stays up and ready, so alert on `agentkourier_chat_connected`
   ([Metrics](../reference/metrics.md#alert-rules-for-a-broker-with-no-connection-of-its-own)).
 - It stops the broker's use of its app by deleting its ChatConnection, which takes effect without a hold. The platform stops it by taking
-  the namespace off the list, with the restart that applies the change.
+  the namespace off the list, with the restart that applies the change, or by removing the label the selector matches, which applies at the next read.
+  With every namespace admitted the platform has no per-namespace switch: it narrows the admission to a list or a selector, which is an upgrade.
 
 ## What the people who write these objects can do
 

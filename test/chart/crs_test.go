@@ -193,18 +193,13 @@ func TestDocumentedOwnAppInstallsGrantTheConnectionsSecret(t *testing.T) {
 }
 
 // TestDocumentedTeamAppInstalls: the install that the chart README and Install with Helm lead with is a broker with no Slack app of its own. The
-// chart README's values admit team-a (the list, and no own connection); Install with Helm's file is what init writes, comments only, which
-// renders every namespace (no list, no selector and no own connection). Both must grant no Secret, since both say the team grants its own,
+// values of both are comments only (Install with Helm's is what init writes), which show team-a in config.connectionNamespaces commented out
+// and render every namespace: no list, no selector and no own connection. Both must grant no Secret, since both say the team grants its own,
 // and the ServiceAccount their RoleBinding names must be the one the chart renders.
 func TestDocumentedTeamAppInstalls(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
-	for _, d := range []struct {
-		path string
-		// all is true when the page's values set no key, so that the broker serves every namespace.
-		all bool
-	}{{"../../docs/how-to/install-with-helm.md", true}, {chartReadme, false}} {
-		doc := d.path
+	for _, doc := range []string{"../../docs/how-to/install-with-helm.md", chartReadme} {
 		t.Run(filepath.Base(doc), func(t *testing.T) {
 			t.Parallel()
 			raw, err := os.ReadFile(doc)
@@ -228,15 +223,14 @@ func TestDocumentedTeamAppInstalls(t *testing.T) {
 			}
 			objs := mustRender(t, "agent-kourier", "agent-kourier", "--kube-version", "v1.33.2", "--set", "image.repository=agent-kourier", "-f", file)
 			env := podEnv(deployment(t, objs))
-			wantList := "team-a"
-			if d.all {
-				wantList = ""
+			if v, has := env["AGENTKOURIER_CHAT_CONNECTION"]; has || env["AGENTKOURIER_CONFIG_SOURCE"] != "crds" {
+				t.Errorf("environment %v (own connection %q); want crds and no own connection", env, v)
 			}
-			if v, has := env["AGENTKOURIER_CHAT_CONNECTION"]; has || env["AGENTKOURIER_CONFIG_SOURCE"] != "crds" || env["AGENTKOURIER_CONNECTION_NAMESPACES"] != wantList {
-				t.Errorf("environment %v (own connection %q); want crds, the list %q and no own connection", env, v, wantList)
+			if list, has := env["AGENTKOURIER_CONNECTION_NAMESPACES"]; has {
+				t.Errorf("the list is %q; want none (every namespace)", list)
 			}
 			if sel, has := env["AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR"]; has {
-				t.Errorf("the selector is %q; want none", sel)
+				t.Errorf("the selector is %q; want none (every namespace)", sel)
 			}
 			if got := secretRoles(t, objs); len(got) != 0 {
 				t.Errorf("Secret Roles %v; want none (the team grants its own)", got)

@@ -3,6 +3,54 @@
 What changed in each release, newest first, and what you must do about it. The steps for an upgrade are in
 [Upgrade](how-to/upgrade.md), which has a section for each change that needs one; this page says what changed and points to it.
 
+## Version 0.4.0 (unreleased)
+
+On custom resources a broker can admit namespaces by their labels, and a broker that names nothing it serves serves the ChatConnections of every
+namespace. Every values file and environment that worked with 0.3.2 keeps its meaning, but for one value of
+`AGENTKOURIER_CONNECTION_NAMESPACES` that the chart never renders (below): with nothing set, 0.3.2 refused to render the chart and the broker
+refused to start. [Which ChatConnections a broker serves](explanation/config-routes.md#which-chatconnections-a-broker-serves) has the rule, and
+[A team brings its own chat app](explanation/security.md#a-team-brings-its-own-chat-app) what each way of admitting means for who consents.
+
+### Breaking changes
+
+- **`AGENTKOURIER_CONNECTION_NAMESPACES` that names no namespace is refused.** A value of only commas and spaces was read as no list: with
+  `AGENTKOURIER_CHAT_CONNECTION` set the broker served its own connection alone, and without it the start failed. Read as no list now, with nothing
+  else set, it would serve every namespace, so the broker exits with code 2 whatever else is set, with a message that says the variable names no
+  namespace. A Deployment that sets the variable itself to only separators, beside an own connection, stops starting: unset the variable. The chart
+  is not affected: it renders the variable from `config.connectionNamespaces`, whose items must be namespace names, and renders nothing when the
+  list is empty.
+
+### Namespaces admitted by label, or every namespace
+
+- **New value `config.connectionNamespaceSelector`** (the environment variable `AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR`, a label selector as
+  JSON), with custom resources only: the broker also serves the ChatConnections of the namespaces whose labels match it, beside its own and the
+  list's, under the same cap of 16. `null`, the default, is no selector, and `{}` admits every namespace. The broker reads the selector at start and
+  follows the namespaces' labels live, with an informer on namespaces: a namespace that gains a matching label is admitted at the next read, every
+  10 seconds, and one that loses it stops being admitted, with no restart, its connections stopped and the Bindings on them told
+  `ConnectionNotServed`. While the broker cannot reach the API server it keeps the labels it last read. A selector that cannot be read is refused
+  (exit code 2) with a message that does not show the value; the chart's schema checks it first, and the chart refuses it with `config.source: files`.
+  Whoever may set a namespace's labels decides whether its ChatConnections are admitted
+  ([Security model](explanation/security.md#a-team-brings-its-own-chat-app)).
+- **A selector other than `{}` adds a rule to the chart's ClusterRole:** `list` and `watch` on `namespaces` (no `get`). `{}`, no selector and a
+  list add nothing. A broker given a selector without that rule exits with code 3 at start.
+- **With nothing set, the broker serves every namespace.** With custom resources, no `config.chatConnection`, no `config.connectionNamespaces`, no
+  `config.connectionNamespaceSelector` and no `config.chatConnections` entry, the chart renders none of the three variables, and the broker serves
+  the ChatConnections of every namespace, up to 16 for the whole cluster (the oldest first). Both used to fail. The rule that the one
+  `config.chatConnections` entry is the own connection when the other three are empty is unchanged, so adding one entry to such an install makes it
+  serve that connection alone; two or more entries are still refused.
+- **Every namespace is a setting for a cluster with one broker.** A broker that serves every namespace serves a second broker's connections too,
+  that broker's own included, and the two open Socket Mode on the same Slack apps, which splits each app's events between them. Where the two
+  write different statuses for the same Binding, `agentkourier_binding_status_writes_total{result="put_back"}` climbs and the leader logs that
+  something else keeps changing the status ([Troubleshoot](how-to/troubleshoot.md#the-status-of-a-binding-keeps-changing)). With two brokers,
+  admit with a list or a selector on each.
+- **The `config route` log line says what the broker admits**: `connection_admission` is `all`, `list`, `selector`, `list+selector` or `own`
+  (its own connection alone), with `connection_namespaces` for a list and `connection_namespace_selector` for a selector other than `{}`.
+
+### Other changes to `init`
+
+- **`agent-kourier init` writes the platform team's values as comments only**, so the broker it installs serves every namespace; the comments show
+  the list and the selector for a platform that serves fewer. A values file that an earlier `init` wrote keeps its list, and its meaning. See [Write the files with `init`](how-to/install-with-helm.md#write-the-files-with-init).
+
 ## Version 0.3.2
 
 `agent-kourier init` writes the chart's default route, for a team that brings its own Slack app. The broker's code, the CRDs and the chart's
