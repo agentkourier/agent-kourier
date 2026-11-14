@@ -115,6 +115,9 @@ type RunConfig struct {
 	probeEvery, probeTick time.Duration
 	// probeGap is the least time between a pass of the verification and one that a change of the config calls for (30 seconds if zero).
 	probeGap time.Duration
+	// statusTimes are the status writer's Gap, Tick and Slow (statusConfig; statusGap, statusTick and statusSlow where zero): a seam for
+	// this package's tests, which cannot wait for a gap of 10 seconds between a Binding's writes.
+	statusTimes struct{ Gap, Tick, Slow time.Duration }
 	// shutdownTrace is told as each shutdown step begins, so a test can see the order and act in between.
 	shutdownTrace func(step string)
 	// stopTrace is told the name of each stop of the interactions' step as it begins, so a test can see

@@ -210,6 +210,12 @@ type running struct {
 // (goleak) or other process-wide value.
 func runsAlongside(c *RunConfig) { c.leaveKlog = true }
 
+// paceStatusQuickly gives c's status writer a gap of 200 ms between a Binding's writes, a look at what moved each 20 ms and a whole pass
+// each 200 ms, in place of 10 s, 1 s and 10 s, for a test that waits on what a status says and not on how often it is written.
+func paceStatusQuickly(c *RunConfig) {
+	c.statusTimes.Gap, c.statusTimes.Tick, c.statusTimes.Slow = 200*time.Millisecond, 20*time.Millisecond, 200*time.Millisecond
+}
+
 func start(t *testing.T, c RunConfig) *running {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())

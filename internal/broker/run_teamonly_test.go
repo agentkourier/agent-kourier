@@ -34,6 +34,7 @@ func teamOnlyWorld(t *testing.T, idErr map[string]error, edit ...func(*RunConfig
 	}
 	cluster := newStatusClusterOn(w.dyn)
 	w.c.StatusClient = cluster.dyn
+	paceStatusQuickly(&w.c)
 	w.c.probeEvery, w.c.probeTick, w.c.probeGap = 50*time.Millisecond, 10*time.Millisecond, time.Millisecond
 	for tok, err := range idErr {
 		w.idErr[tok] = err
