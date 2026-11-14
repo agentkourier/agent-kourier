@@ -65,8 +65,14 @@ A pull request merges into `main` only when these checks pass and its branch is 
   `trivy (linux-arm64)` (a vulnerability scan of the production image built for each platform).
 - From `codeql`: `analyze (go)` (CodeQL code scanning).
 
-On a pull request whose changed paths are all on the list in `hack/ci/docs-only.sh`, each as a regular file or deleted,
-the code jobs check out and pass without running their other steps; `lint`, `zizmor` and `gitleaks` always run.
+A gated job checks out and passes without running its other steps when every path a pull request changes, each as a
+regular file or deleted, is one its class in `hack/ci/docs-only.sh` does not read. Every job skips on the docs-only
+list there (maintainer prose, `docs/brand`, `docs/spikes`, the site's media under `docs/assets`). The test jobs read
+`README.md` and the pages, so they run on those; the scanners (`govulncheck`, `trivy`, `analyze`) and `crd-corpus` also
+skip Markdown outside every directory that holds Go code, `echo-agent` too but in its own directory, and `docs-agent`
+too but under `docs/` and its own recipe. A pull request that changes `README.md` and pages under `docs/` therefore
+runs `lint`, the test jobs and `docs-agent`, and skips the scanners, `crd-corpus` and `echo-agent`. `lint`, `zizmor`
+and `gitleaks` always run.
 
 `ci` also runs `zizmor` (`make lint-workflows`), which audits the workflows under `.github/workflows` with
 [zizmor](https://docs.zizmor.sh) and fails on any finding: a `pull_request_target` or `workflow_run` trigger,

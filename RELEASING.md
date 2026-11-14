@@ -275,18 +275,35 @@ only when those files or the Python version change, and `cache-prune` then delet
 tiers are not in CI, which is why "Cut a release" has you run them, with the custom resource scenarios, by hand. They would need a runner with Docker and about 8 GB free, the `kind`, `kubectl`,
 `helm` and `jq` binaries installed at pinned versions (`hack/ci/install-kind-tools.sh` installs them, each checked
 against a pinned sha256), and the pinned node and base images pulled (the tiers
-take minutes to bring up, so they are best as a separate nightly or label-triggered workflow, not on every PR). The `crd-corpus` job is not a tier: its cluster has only the CRDs, and it runs on every PR but a docs-only one.
+take minutes to bring up, so they are best as a separate nightly or label-triggered workflow, not on every PR). The `crd-corpus` job is not a tier: its cluster has only the CRDs, and it runs on every PR but one that changes only paths it does not read (below).
 
-A docs-only pull request changes nothing but paths on the list in `hack/ci/docs-only.sh`, each as a regular file or
-deleted (maintainer prose such as `spec.md` and `AGENTS.md`, `docs/brand`, `docs/spikes`, and the site's media under
-`docs/assets`), whose content no test, image, scanner or CodeQL reads, but for two tests of the docs checks that `make
-docs-check` in `lint` repeats; `README.md` and the pages under `docs/` are not on it, since tests read them. A symlink
-or submodule on the list is not docs-only: the docs agent's tests walk the real `docs/` and refuse any symlink in it. On
-one, the `test-shard` and `test-testhooks-shard` legs, `test-scripts`, `test-postgres`, both `crd-corpus` jobs,
-`docs-agent`, `echo-agent`, the `govulncheck` and `trivy` jobs and `analyze` check out, find the pull request
-docs-only, and skip their other steps, so each still reports success under its own name, and `test` and
-`test-testhooks` pass as their legs did; `lint`, `zizmor` and `gitleaks` run in full. Anything else, including a failure to
-list the paths or a merge commit whose second parent is not the pull request's head, runs every step. A push to `main`
-always runs every step, so the push runs the release gate reads, and the caches they save, are as before. The header of
-`ci.yml` says why the jobs skip steps rather than the whole job, and `hack/ci/docsonly`'s test keeps the copies of the
-gate in the jobs alike.
+Each gated job passes a class to `hack/ci/docs-only.sh` in its first step after the checkout, and on a pull request
+whose changed paths are all, as regular files or deleted, paths its class does not read, it skips its other steps and
+still reports success under its own name. Every class skips the docs-only list (maintainer prose such as `spec.md` and
+`AGENTS.md`, `docs/brand`, `docs/spikes`, and the site's media under `docs/assets`), whose content no test, image,
+scanner or CodeQL reads, but for two tests of the docs checks that `make docs-check` in `lint` repeats. Beyond it:
+
+- `tests` (the `test-shard` and `test-testhooks-shard` legs, `test-scripts`, `test-postgres`): nothing more. Tests read
+  `README.md` and pages under `docs/` and elsewhere when they run, which only running them shows.
+- `scan` (the three `govulncheck` jobs, both `trivy` jobs, `analyze`) and `crd-corpus` (both jobs): any Markdown
+  (`*.md`, in lower case) outside every Go package's tree, such as `README.md`, the pages under `docs/` and the chart's
+  README. govulncheck reads Go packages and the files they embed; the image holds only the binary; CodeQL's Go autobuild
+  extracts `.go` files; `crd-corpus` builds and runs `test/crdcorpus` and reads only YAML from its corpus.
+- `docs-agent`: the same Markdown except under `docs/`, its corpus, and `examples/recipes/docs-agent/`.
+- `echo-agent`: the same Markdown except under `examples/recipes/echo-agent/agent/`, the one directory it reads.
+
+A Go package's tree is a directory of the merge commit with a `.go` file in it, and everything below it; the script
+finds them on each run, so no class skips a page under a new package's directory, which the package could embed, with
+no list to edit. The rule is wider than what Go embeds: a page in such a tree runs the jobs whether or not anything
+embeds it. So a pull request that changes `README.md` and pages under `docs/` skips both `crd-corpus` jobs,
+`echo-agent`, the `govulncheck` and `trivy` jobs and `analyze`; one that changes only `README.md` also skips
+`docs-agent`; one that changes only the docs-only list skips every gated job, and `test` and `test-testhooks` pass as
+their legs did. A pull request that skips `govulncheck` or `trivy` does not see a vulnerability published since its
+base was scanned; `main`'s push runs do, and so does the nightly `security` run's `govulncheck`. `lint`, `zizmor` and
+`gitleaks` always run in full. A symlink or submodule anywhere in the changes runs every step of every gated job: the
+docs agent's tests walk the real `docs/` and refuse any symlink in it. So does a path the class reads, an unknown
+class, a failure to list the paths or the merge commit's tree, or a merge commit whose second parent is not the pull
+request's head. There is no cap on how many paths it lists. A push to `main` always runs every step, so the push runs
+the release gate reads (`hack/release/check-ci.sh` reads only push runs on `main`), and the caches they save, are as
+before. The header of `ci.yml` says why the jobs skip steps rather than the whole job, and `hack/ci/docsonly`'s test
+keeps the copies of the gate in the jobs alike and holds each job to its class.
