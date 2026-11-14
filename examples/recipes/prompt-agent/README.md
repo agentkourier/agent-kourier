@@ -50,13 +50,13 @@ The wrapper enforces which tools the agent can call. It does not, and cannot, en
   names, and `ask_user`, and nothing else. Pydantic AI offers the model only those tools, and a call to any other is
   answered as an unknown tool and never reaches the MCP server. Chat and alert text is untrusted, and a model can be
   talked into anything in words. In a hand run on 2026-10-17, a model (gemma4, on Ollama) told to restart a cluster
-  called a `restart_cluster` tool it did not have, which never reached the server, and then replied "DONE". **Never trust the agent's claim that it did something.**
-  Check what the tool or the system it acts on records.
+  called a `restart_cluster` tool it did not have, which never reached the server, and then replied "DONE".
+  **Never trust the agent's claim that it did something.** Check what the tool or the system it acts on records.
 - **A cancelled action may be redone on the next turn.** A cancel stops the run, but it cannot undo what an MCP tool
   already did, and the history the agent keeps holds the call. On the next turn the model may make the same call again,
-  unasked: in the same hand run, a model (Claude Haiku) did exactly that with a slow tool cancelled in flight. Prefer read-only tools. For a tool with side
-  effects, tell the agent in `instructions` to confirm with `ask_user` before it calls it, and have the MCP server
-  refuse a repeat it should not run.
+  unasked: in the same hand run, a model (Claude Haiku) did exactly that with a slow tool cancelled in flight. Prefer
+  read-only tools. For a tool with side effects, tell the agent in `instructions` to confirm with `ask_user` before it
+  calls it, and have the MCP server refuse a repeat it should not run.
 - **`allowed_tools` bounds the tools' names, not their arguments.** An allowed tool can be called with any arguments
   the model writes, including ones a message in the thread put there. The MCP server must authorize what each call
   does: which namespace, which object, which action. Give its token no more rights than the tools need.
@@ -132,8 +132,8 @@ Edit `agent.yaml` in `agent/manifests/configmap.yaml`: the ConfigMap is what the
 `agent/manifests/deployment.yaml`:
 
 - Name the model key's variable after your provider: the Deployment sets `ANTHROPIC_API_KEY`, for the example's
-  `anthropic:` model. That route, to Anthropic's own API, is not one that has been run; `openrouter:` is
-  ([Providers](#providers)). For another provider, rename it ([Providers](#providers)) and add any base URL it needs as a
+  `anthropic:` model. That route, to Anthropic's own API, is not one that has been run; `openrouter:` is. For another
+  provider, rename it ([Providers](#providers)) and add any base URL it needs as a
   plain `value`.
 - For each `${NAME}` in your `agent.yaml`, set a variable `NAME` from a Secret. The Deployment sets
   `RUNBOOKS_MCP_TOKEN` from the Secret `prompt-agent-mcp`, for the example's MCP entry. Remove it if your MCP server
@@ -266,8 +266,8 @@ Then mention the bot in the channel and ask a question your agent's tools can an
 - **The Binding.** The channel. `interactions.askUser: true` lets the agent's `ask_user` reach the thread: without it,
   Agent Kourier cancels the task when the agent asks and tells the thread so, so leave it on unless your
   `instructions` never ask. `chat.threadReplies: mention` makes only a reply that mentions the bot a turn, for threads
-  where people talk to each other. `chat.botMentions: none` keeps other bots' mentions from starting turns. The names `prompt-agents`, `prompt-chat` and the namespace `prompt-agent` if they
-  collide with yours. `agent.name` and `agent.namespace` are labels on the `a2a` dialect: the backend's URL alone
+  where people talk to each other. `chat.botMentions: none` keeps other bots' mentions from starting turns. The names
+  `prompt-agents`, `prompt-chat` and the namespace `prompt-agent` if they collide with yours. `agent.name` and `agent.namespace` are labels on the `a2a` dialect: the backend's URL alone
   selects the agent.
 - **The AgentBackend.** Its `url` is the Service, `http://prompt-agent.prompt-agent.svc.cluster.local:8080`, with no
   path: the agent serves JSON-RPC at the root and its card at `/.well-known/agent-card.json`. Change it if the agent
@@ -338,8 +338,8 @@ agent at start, since Pydantic AI would drop a misspelt or newer key without a w
 | Key | What it does here |
 |---|---|
 | `model` | Required. `provider:name`, of a provider in the table below. See [Providers](#providers). |
-| `name`, `description` | The agent card's name and description; the name defaults to `prompt-agent`. |
-| `instructions` | The prompt: a string, or a list of strings. `${NAME}` is not expanded here, so a token never reaches the model through it. But a string with `{{` in it is a Handlebars template to Pydantic AI, rendered with no data: `{{alertname}}` reaches the model as nothing, and one it cannot parse, such as `{{ .Values.image }}`, stops the agent at start with `HandlebarsParseError`. Write `\{{` for a literal `{{`. |
+| `name`, `description` | The agent card's name and description; the name defaults to `prompt-agent`. A `{{` in `description` is parsed as a template too, so one it cannot parse stops the agent at start; the card shows the text as written. |
+| `instructions` | The prompt: a string, or a list of strings. `${NAME}` is not expanded here, so a token never reaches the model through it. But a string with `{{` in it is a Handlebars template to Pydantic AI, rendered with no data: `{{alertname}}` reaches the model as nothing, and one it cannot parse, such as `{{ .Values.image }}`, stops the agent at start with `HandlebarsParseError`. Write `\{{` for a literal `{{` (in a double-quoted YAML string, `\\{{`). |
 | `capabilities` | A list of `MCP` entries, and nothing else. See [MCP entries](#mcp-entries). |
 | `model_settings` | Only the provider-neutral settings: `max_tokens`, `temperature`, `top_p`, `top_k`, `timeout`, `parallel_tool_calls`, `tool_choice`, `seed`, `presence_penalty`, `frequency_penalty`, `logit_bias`, `stop_sequences`, `thinking`, `cache`, `service_tier`. |
 | `retries` | How many times Pydantic AI lets the model retry a tool call that failed, or an output it could not use (1 by default): an integer, or `{tools: n, output: n}`. |
