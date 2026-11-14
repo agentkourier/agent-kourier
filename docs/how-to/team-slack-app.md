@@ -336,11 +336,30 @@ The same path on a kind cluster, with the
 Slack app that stands for the team's. It runs as a cluster administrator, so it leaves out step 1's Role (and the Role that lets the team write its Bindings and AgentBackends), and the namespace `team-a` exists before
 it starts. The wait for the Binding to turn Ready, about 25 seconds here, is cut.
 
-The platform team installs the broker with no app of its own and admits `team-a`:
+The platform team installs the broker with no app of its own. The values file holds comments only, so the chart sets no
+`config.chatConnection`, no `config.connectionNamespaces` and no `config.connectionNamespaceSelector`, and the broker serves the ChatConnections of every
+namespace. To serve `team-a` alone, uncomment `config:` and `connectionNamespaces`. To admit by label, uncomment `config:` and `connectionNamespaceSelector` with its `matchLabels` line:
 
 ```yaml title="my-values.yaml"
-config:
-  connectionNamespaces: [team-a]
+# A first install of the Agent Kourier Helm chart on custom resources, the chart's default route, for a broker
+# with no Slack app of its own: it serves the ChatConnections that teams make in their namespaces with their own apps.
+#
+# Written by "agent-kourier init", with team-a.yaml beside it, which the team applies once the chart is installed. The
+# steps are in https://agentkourier.dev/how-to/team-slack-app/#the-whole-path-recorded.
+# Keep the file: an upgrade passes it again.
+#
+# Nothing is set, so the broker serves the ChatConnections of every namespace. That is a setting for a cluster with one
+# broker: this one would also serve a second broker's connections, its own included, and one Slack app would then have
+# two Socket Mode connections that split its events. To serve fewer, uncomment "config:" and one or both controls under
+# it. A namespace is admitted if it is on the list or its labels match the selector.
+#
+# config:
+#   # The namespaces by name. The broker reads the list at start, so a change restarts it.
+#   connectionNamespaces: [team-a]
+#   # The namespaces by label, followed live: a namespace that gains the label is admitted at the next read, and one
+#   # that loses it stops being admitted.
+#   connectionNamespaceSelector:
+#     matchLabels: {agentkourier.dev/serve: "true"}
 ```
 
 ```sh

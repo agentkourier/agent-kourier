@@ -40,7 +40,8 @@ team's file. It posts nothing and changes nothing in Slack or in a cluster. A va
 
 On custom resources (--source crds, the chart's default route) the broker has no Slack app of its own, and the team
 brings its own. It writes two files:
-  my-values.yaml   the platform team's values: config.connectionNamespaces, the team's namespace
+  my-values.yaml   the platform team's values: comments only, no keys, so the broker serves every namespace; they show
+                   config.connectionNamespaces (with the team's namespace) and config.connectionNamespaceSelector, commented out
   <team>.yaml      the team's ChatConnection <team>-slack (the team's app, reading the Secret <team>-slack), its
                    AgentBackend agent and its Binding my-binding, all in the team's namespace
 <team>.yaml goes in the directory of --out. With --source files it writes one values file for the ConfigMap route
@@ -553,19 +554,29 @@ config:
 `
 
 // The files that init writes on the chart's default route, custom resources, for a broker with no Slack app of its own:
-// the values admit the team's namespace, and the team's file holds the team's ChatConnection, AgentBackend and Binding,
-// all in that namespace. They are the files of the team-app guide's recorded path with the person's values in them; a
-// test holds them together.
+// the values file is comments only (the chart then serves every namespace) and shows the platform's two controls, and the
+// team's file holds the team's ChatConnection, AgentBackend and Binding, all in that namespace. They are the files of
+// the team-app guide's recorded path with the person's values in them; a test holds them together.
 const (
 	initCRValuesTemplate = `# A first install of the Agent Kourier Helm chart on custom resources, the chart's default route, for a broker
-# with no Slack app of its own: it serves the ChatConnection that the team makes in its namespace with the team's app.
+# with no Slack app of its own: it serves the ChatConnections that teams make in their namespaces with their own apps.
 #
 # Written by "agent-kourier init", with {{ .TeamFile }} beside it, which the team applies once the chart is installed. The
 # steps are in https://agentkourier.dev/how-to/team-slack-app/#the-whole-path-recorded.
 # Keep the file: an upgrade passes it again.
-config:
-  # The namespaces whose ChatConnections the broker serves. It has none of its own, so it names no config.chatConnection.
-  connectionNamespaces: [{{ q .TeamNamespace }}]
+#
+# Nothing is set, so the broker serves the ChatConnections of every namespace. That is a setting for a cluster with one
+# broker: this one would also serve a second broker's connections, its own included, and one Slack app would then have
+# two Socket Mode connections that split its events. To serve fewer, uncomment "config:" and one or both controls under
+# it. A namespace is admitted if it is on the list or its labels match the selector.
+#
+# config:
+#   # The namespaces by name. The broker reads the list at start, so a change restarts it.
+#   connectionNamespaces: [{{ q .TeamNamespace }}]
+#   # The namespaces by label, followed live: a namespace that gains the label is admitted at the next read, and one
+#   # that loses it stops being admitted.
+#   connectionNamespaceSelector:
+#     matchLabels: {agentkourier.dev/serve: "true"}
 `
 
 	initTeamTemplate = `# The team's resources for Agent Kourier, all in the team's namespace: the team's Slack app, its agent, and which
