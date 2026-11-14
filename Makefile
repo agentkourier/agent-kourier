@@ -18,23 +18,41 @@ lint: ## Run golangci-lint (also over the e2e, image, crdcorpus and testhooks ta
 
 test: test-race test-testhooks test-scripts ## Run all the unit tests: with the race detector, again with the testhooks tag where it changes the build, the scripts' own (CI runs the three apart)
 
-test-race: ## Run unit tests with the race detector (the chart tests need helm; AGENTKOURIER_REQUIRE_HELM=1 fails without it)
+# TEST_SHARD=I/N runs only leg I of N of a pass, test-race or test-testhooks: hack/ci/test-shard.sh splits the pass's
+# packages over N legs by the seconds in hack/ci/test-weights, so that the N legs together run each package once. CI's
+# matrix legs set it. Unset, as make test leaves it, a pass runs all its packages.
+TEST_SHARD ?=
+
+test-race: ## Run unit tests with the race detector (the chart tests need helm; AGENTKOURIER_REQUIRE_HELM=1 fails without it); TEST_SHARD=I/N runs one leg
+ifeq ($(TEST_SHARD),)
 	go test -race -timeout 20m ./...
+else
+	pkgs=$$(go list -race ./...) && \
+		pkgs=$$(hack/ci/test-shard.sh pick hack/ci/test-weights/race.txt '$(TEST_SHARD)' $$pkgs) && \
+		go test -race -timeout 20m $$pkgs
+endif
 
 # The testhooks pass's build flags besides -tags. The selector lists packages under the same ones: they select files too.
 TESTHOOKS_BUILD_FLAGS := -race
 
-test-testhooks: ## Run with the race detector and the testhooks tag the internal packages whose test build the tag changes (hack/ci/testhooks-packages.sh); the others compile as in test-race, which ran them
+test-testhooks: ## Run with the race detector and the testhooks tag the internal packages whose test build the tag changes (hack/ci/testhooks-packages.sh); the others compile as in test-race, which ran them; TEST_SHARD=I/N runs one leg
+ifeq ($(TEST_SHARD),)
 	pkgs=$$(TESTHOOKS_BUILD_FLAGS='$(TESTHOOKS_BUILD_FLAGS)' hack/ci/testhooks-packages.sh ./internal/...) && \
 		go test $(TESTHOOKS_BUILD_FLAGS) -timeout 20m -tags testhooks $$pkgs
+else
+	pkgs=$$(TESTHOOKS_BUILD_FLAGS='$(TESTHOOKS_BUILD_FLAGS)' hack/ci/testhooks-packages.sh ./internal/...) && \
+		pkgs=$$(hack/ci/test-shard.sh pick hack/ci/test-weights/testhooks.txt '$(TEST_SHARD)' $$pkgs) && \
+		go test $(TESTHOOKS_BUILD_FLAGS) -timeout 20m -tags testhooks $$pkgs
+endif
 
-test-scripts: ## Run kind, security policy, release gate, PR label, CI tool installer, testhooks package selection, Actions cache upkeep and docs-only classification tests (no cluster)
+test-scripts: ## Run kind, security policy, release gate, PR label, CI tool installer, testhooks package selection, test leg split, Actions cache upkeep and docs-only classification tests (no cluster)
 	hack/kind/netpol_test.sh
 	hack/security/test.sh
 	hack/release/test.sh
 	hack/github/test.sh
 	hack/ci/test.sh
 	hack/ci/testhooks-packages_test.sh
+	hack/ci/test-shard_test.sh
 	hack/ci/actions-cache_test.sh
 	hack/ci/docs-only_test.sh
 
