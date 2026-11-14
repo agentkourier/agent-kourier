@@ -1352,8 +1352,8 @@ func TestNothingIsWrittenBeforeTheConfigHasLoaded(t *testing.T) {
 	}
 }
 
-// A writer given no timings, which is what Run gives it unless a test sets RunConfig.statusTimes, runs on the defaults that the
-// limits page documents; one given timings keeps them.
+// A writer given no timings, which is what Run gives it unless a test sets RunConfig.statusTimes, runs on its defaults
+// (statusGap and statusTick are on the limits page); one given timings keeps them.
 func TestTheStatusWriterTakesItsDefaultTimingsWhereNoneAreGiven(t *testing.T) {
 	zero := newStatusRigWith(t, newStatusCluster(t), nil, func(c *statusConfig) { c.Gap, c.Tick, c.Slow, c.Timeout = 0, 0, 0, 0 }).w.cfg
 	if zero.Gap != statusGap || zero.Tick != statusTick || zero.Slow != statusSlow || zero.Timeout != statusTimeout {
