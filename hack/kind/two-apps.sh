@@ -273,7 +273,11 @@ cleanup() {
   local rc=$?
   if [ -n "${RESTORE}" ] && [ "${TWO_APPS_KEEP:-}" != 1 ]; then
     echo "==> the tier back on its own connection and the full admission list, with no selector and team-a unlabelled"
-    { label_team_a off && upgrade && rolled_out; } >"${OUT}/restore.log" 2>&1 || {
+    # Each part runs whatever the other did: a failed unlabel must not leave the tier on the selector or "all" values.
+    local restored=1
+    label_team_a off >"${OUT}/restore.log" 2>&1 || restored=
+    { upgrade && rolled_out; } >>"${OUT}/restore.log" 2>&1 || restored=
+    [ -n "${restored}" ] || {
       echo "error: putting the own connection and the admission list back failed; see ${OUT}/restore.log (hack/kind/down.sh fast and a bring-up is the way out)" >&2
       [ "${rc}" -ne 0 ] || rc=1
     }

@@ -96,6 +96,8 @@ func TestEnvAdmitsFailsOnWhatItCannotRead(t *testing.T) {
 		{"a selector with a field twice", Env{ConfigSource: "crds", ConnectionNamespaceSelector: `{"matchLabels":{"a":"b"},"matchLabels":{}}`, Namespaces: testNamespaces}, "team-a", "E2E_CONNECTION_NAMESPACE_SELECTOR"},
 		{"a selector with an invalid label key", Env{ConfigSource: "crds", ConnectionNamespaceSelector: `{"matchLabels":{"no spaces":"b"}}`, Namespaces: testNamespaces}, "team-a", "E2E_CONNECTION_NAMESPACE_SELECTOR"},
 		{"a selector with an operator Kubernetes does not have", Env{ConfigSource: "crds", ConnectionNamespaceSelector: `{"matchExpressions":[{"key":"a","operator":"Is"}]}`, Namespaces: testNamespaces}, "team-a", "E2E_CONNECTION_NAMESPACE_SELECTOR"},
+		{"a selector that is null", Env{ConfigSource: "crds", ConnectionNamespaceSelector: "null", Namespaces: testNamespaces}, "team-a", "E2E_CONNECTION_NAMESPACE_SELECTOR"},
+		{"a selector that is a list", Env{ConfigSource: "crds", ConnectionNamespaceSelector: "[]", Namespaces: testNamespaces}, "team-a", "E2E_CONNECTION_NAMESPACE_SELECTOR"},
 		{"a selector and no namespaces", Env{ConfigSource: "crds", ConnectionNamespaceSelector: `{"matchLabels":{"a":"b"}}`}, "team-a", "E2E_NAMESPACES"},
 		{"namespaces that are not JSON", Env{ConfigSource: "crds", ConnectionNamespaceSelector: `{"matchLabels":{"a":"b"}}`, Namespaces: "team-a"}, "team-a", "E2E_NAMESPACES"},
 		{"a namespace the run did not read", Env{ConfigSource: "crds", ConnectionNamespaceSelector: `{"matchLabels":{"a":"b"}}`, Namespaces: testNamespaces}, "team-c", "team-c"},
