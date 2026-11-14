@@ -255,4 +255,14 @@ only when those files or the Python version change, and `cache-prune` then delet
 tiers are not in CI, which is why "Cut a release" has you run them, with the custom resource scenarios, by hand. They would need a runner with Docker and about 8 GB free, the `kind`, `kubectl`,
 `helm` and `jq` binaries installed at pinned versions (`hack/ci/install-kind-tools.sh` installs them, each checked
 against a pinned sha256), and the pinned node and base images pulled (the tiers
-take minutes to bring up, so they are best as a separate nightly or label-triggered workflow, not on every PR). The `crd-corpus` job is not a tier: its cluster has only the CRDs, and it runs on every PR.
+take minutes to bring up, so they are best as a separate nightly or label-triggered workflow, not on every PR). The `crd-corpus` job is not a tier: its cluster has only the CRDs, and it runs on every PR but a docs-only one.
+
+A docs-only pull request changes nothing but paths on the list in `hack/ci/docs-only.sh` (maintainer prose such as
+`spec.md` and `AGENTS.md`, `docs/brand`, `docs/spikes`, and the site's media under `docs/assets`), which no test, image,
+scanner or CodeQL reads, but for two tests of the docs checks that `make docs-check` in `lint` repeats; `README.md` and
+the pages under `docs/` are not on it, since tests read them. On one, `test`,
+`test-testhooks`, `test-postgres`, both `crd-corpus` jobs, `docs-agent`, `echo-agent`, the `govulncheck` and `trivy` jobs
+and `analyze` check out, find the pull request docs-only, and skip their other steps, so each still reports success under
+its required name; `lint`, `zizmor` and `gitleaks` run in full. Anything else, including a failure to list the paths, runs
+every step. A push to `main` always runs every step, so the push runs the release gate reads, and the caches they save,
+are as before. The header of `ci.yml` says why the jobs skip steps rather than the whole job.
