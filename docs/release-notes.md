@@ -10,6 +10,8 @@ namespace. Every values file and environment that worked with 0.3.2 keeps its me
 `AGENTKOURIER_CONNECTION_NAMESPACES` that the chart never renders (below): with nothing set, 0.3.2 refused to render the chart and the broker
 refused to start. [Which ChatConnections a broker serves](explanation/config-routes.md#which-chatconnections-a-broker-serves) has the rule, and
 [A team brings its own chat app](explanation/security.md#a-team-brings-its-own-chat-app) what each way of admitting means for who consents.
+[Upgrade to the release that admits namespaces by label](how-to/upgrade.md#upgrade-to-the-release-that-admits-namespaces-by-label) has the
+steps, and how to roll back.
 
 ### Breaking changes
 
