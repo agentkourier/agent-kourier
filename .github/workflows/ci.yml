@@ -450,9 +450,10 @@ jobs:
   # serves, and sets the DSN those tests read, so they cannot skip here. It builds two packages the race pass builds,
   # internal/broker and internal/store/postgres, with -race as that pass does, and runs their tests with -count=1, which
   # never reads a cached result, so it saves no cache. It restores the second race leg's: under the weights checked in,
-  # that leg runs internal/broker, which imports internal/store/postgres, so its cache holds both builds; were a refresh
-  # of the weights to move broker to the other leg, this job would build what it lacks, a slower run and no failure
-  # (hack/ci/test-shard.sh says how to check after a refresh).
+  # that leg runs internal/broker, which imports internal/store/postgres, so its cache holds broker's builds and
+  # store/postgres's package build (the job still compiles store/postgres's tests, which the first leg runs); were a
+  # refresh of the weights to move broker to the other leg, this job would build what it lacks, a slower run and no
+  # failure (hack/ci/test-shard.sh says how to check after a refresh).
   test-postgres:
     runs-on: ubuntu-26.04
     timeout-minutes: 30
