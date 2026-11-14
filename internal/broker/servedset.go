@@ -20,8 +20,10 @@ import (
 // servedRecord knows which chat connections this broker serves, and which it served and does not now (spec D52). A broker that stops
 // serving a connection that still exists must tell the connection's Bindings so, once, because the last status a broker wrote
 // (Ready=True, perhaps) would otherwise stay over a Binding that nobody serves, and must keep their sessions, whose threadTTL it does not
-// know. While it runs it sees the connection leave the Snapshot; but the admission list is read at start, so a namespace taken off it is a
-// restart, and a broker cannot remember what it served before one. The store does.
+// know. While it runs it sees the connection leave the Snapshot: a namespace that the selector stops admitting (a label removed) leaves it
+// at the next read, with no restart. The admission list is read at start, so a namespace taken off it is a restart, and a broker cannot
+// remember what it served before one. The store does, and the same record serves both: a connection the record has and the Snapshot has
+// not is stopped, whichever way it left.
 //
 // The record in the store holds the connections served now and those served before that still exist in the cluster. A connection that the
 // record has and the Snapshot has not, and that still exists, is stopped: it stays in the record, so that every later start finds it

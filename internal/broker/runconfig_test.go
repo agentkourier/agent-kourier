@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/rest"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
@@ -86,13 +87,16 @@ func TestValidateRefusesWhatIsMissingAsAWiringError(t *testing.T) {
 	}
 }
 
-// The admission list is for the custom resources: the files source serves the one ChatConnection of its directory, and each item
-// of the list is a namespace name. The error names the item's position and not its value. With the custom resources the own
-// ChatConnection is optional when the list is not empty (spec D53); both empty is refused, and so is half a reference.
+// The admission list and the selector are for the custom resources: the files source serves the one ChatConnection of its directory, and
+// each item of the list is a namespace name. The error names the item's position and not its value. With the custom resources the own
+// ChatConnection is optional (spec D53), and with no list and no selector either the broker serves every namespace (spec D54); half a
+// reference is refused, and so is a selector that selects nothing (labels.Nothing(), what LabelSelectorAsSelector makes of a nil one),
+// which is never what an unset selector means.
 func TestValidateChecksTheAdmissionList(t *testing.T) {
 	crds := func(c *RunConfig, namespaces ...string) {
 		c.ConfigSource, c.ChatConnection, c.ConnectionNamespaces = SourceCRDs, testConnection, namespaces
 	}
+	team := labels.SelectorFromSet(labels.Set{"team": "yes"})
 	for name, tc := range map[string]struct {
 		mutate func(*RunConfig)
 		want   string // "" is accepted; otherwise a piece of the wiring error
@@ -102,10 +106,28 @@ func TestValidateChecksTheAdmissionList(t *testing.T) {
 			crds(c, "team-a")
 			c.ChatConnection = v1alpha1.ObjectRef{}
 		}, ""},
-		"no own connection, no list": {func(c *RunConfig) {
+		"no own connection, no list, no selector: every namespace": {func(c *RunConfig) {
 			crds(c)
 			c.ChatConnection = v1alpha1.ObjectRef{}
-		}, "set ChatConnection to the broker's own ChatConnection, or ConnectionNamespaces to the namespaces whose ChatConnections it serves, or both"},
+		}, ""},
+		"no own connection, a selector": {func(c *RunConfig) {
+			crds(c)
+			c.ChatConnection, c.ConnectionNamespaceSelector = v1alpha1.ObjectRef{}, team
+		}, ""},
+		"no own connection, an empty selector": {func(c *RunConfig) {
+			crds(c)
+			c.ChatConnection, c.ConnectionNamespaceSelector = v1alpha1.ObjectRef{}, labels.Everything()
+		}, ""},
+		"an own connection, a list and a selector": {func(c *RunConfig) {
+			crds(c, "team-a")
+			c.ConnectionNamespaceSelector = team
+		}, ""},
+		"a selector that selects nothing": {func(c *RunConfig) {
+			crds(c)
+			c.ConnectionNamespaceSelector = labels.Nothing()
+		}, "ConnectionNamespaceSelector selects nothing"},
+		"files refuses a selector":        {func(c *RunConfig) { c.ConnectionNamespaceSelector = team }, "ConnectionNamespaceSelector is set with the files config source"},
+		"files refuses an empty selector": {func(c *RunConfig) { c.ConnectionNamespaceSelector = labels.Everything() }, "ConnectionNamespaceSelector is set with the files config source"},
 		"half an own connection, a list": {func(c *RunConfig) {
 			crds(c, "team-a")
 			c.ChatConnection = v1alpha1.ObjectRef{Namespace: "agent-kourier-system"}
