@@ -1,0 +1,1 @@
+{"matchExpressions":[{"key":"tier","operator":"In","values":["a","b"]}],"matchLabels":{"agentkourier.dev/serve":"true"}}
