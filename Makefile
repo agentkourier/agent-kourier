@@ -28,7 +28,7 @@ test-testhooks: ## Run with the race detector and the testhooks tag the internal
 	pkgs=$$(TESTHOOKS_BUILD_FLAGS='$(TESTHOOKS_BUILD_FLAGS)' hack/ci/testhooks-packages.sh ./internal/...) && \
 		go test $(TESTHOOKS_BUILD_FLAGS) -timeout 20m -tags testhooks $$pkgs
 
-test-scripts: ## Run kind, security policy, release gate, PR label, CI tool installer, testhooks package selection and Actions cache upkeep tests (no cluster)
+test-scripts: ## Run kind, security policy, release gate, PR label, CI tool installer, testhooks package selection, Actions cache upkeep and docs-only classification tests (no cluster)
 	hack/kind/netpol_test.sh
 	hack/security/test.sh
 	hack/release/test.sh
@@ -36,6 +36,7 @@ test-scripts: ## Run kind, security policy, release gate, PR label, CI tool inst
 	hack/ci/test.sh
 	hack/ci/testhooks-packages_test.sh
 	hack/ci/actions-cache_test.sh
+	hack/ci/docs-only_test.sh
 
 lint-workflows: ## Lint .github/workflows with zizmor after proving its policy fails each unsafe fixture (installs the pinned zizmor unless ZIZMOR_BIN is set; needs jq)
 	hack/security/lint-workflows.sh

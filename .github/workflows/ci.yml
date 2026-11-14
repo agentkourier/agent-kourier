@@ -2,9 +2,33 @@
 # test-race, test-testhooks and test-scripts in turn; here they are jobs of their own, which run side by side,
 # because the two race passes alone outlast one job's budget on a runner of this size. make test-postgres, which make
 # test does not run, is a job of its own too. Nothing is retried. test-testhooks runs only the packages the testhooks
-# tag changes, as its comment explains; nothing else is skipped. The kind tiers (make e2e-fast and the
-# others) are not here; RELEASING.md says what they would need. The one job that uses kind is crd-corpus, whose cluster
-# has only the CRDs.
+# tag changes, as its comment explains; nothing else is skipped but on a docs-only pull request, below. The kind tiers
+# (make e2e-fast and the others) are not here; RELEASING.md says what they would need. The one job that uses kind is
+# crd-corpus, whose cluster has only the CRDs.
+#
+# A docs-only pull request is one whose changed paths are all on the list in hack/ci/docs-only.sh, each as a regular
+# file or deleted: maintainer prose such as spec.md and AGENTS.md, docs/brand, docs/spikes, and the site's media under
+# docs/assets, whose content no Go test, script test, image build, scanner or CodeQL reads but for two tests that repeat
+# make docs-check, which lint runs (the script says which). A symlink or submodule anywhere on the list runs everything:
+# the docs agent's tests walk the real docs/ and refuse any symlink in it. README.md and the pages under docs/ are not
+# on it: tests read them. On one, test, test-testhooks, test-postgres, crd-corpus, docs-agent and echo-agent still
+# start, check out and run the docs-only step, then skip every other step, and each reports success under its own name,
+# as do govulncheck and trivy in security.yml and analyze in codeql.yml. They skip steps, not the job: a job-level if is
+# evaluated before the matrix expands (it cannot read matrix), so a crd-corpus skipped there reports no check named
+# crd-corpus (1.37) or crd-corpus (1.33), and those required checks would wait forever. lint runs in full: it takes
+# about a minute and a half, and its make docs-check reads the text files under docs/assets (SVG, captions), as
+# docs.yml's build does on a pull request that touches docs/. zizmor runs in full, and gitleaks in security.yml.
+# hack/ci/docsonly's test holds every copy of the docs-only step to one text and the checkouts before it alike, and
+# every later step to the gate unless its if holds only on a push; it reads each if as terms joined by && and refuses
+# one with ||, a negated event or a bracket (status calls such as always() aside).
+#
+# The docs-only step fails open. It runs only on a pull_request event and lists the paths with git, the merge commit
+# against its first parent (the checkout fetches both parents on a pull request), so there is no cap on how many paths
+# it lists. Only its exact answer skip=true skips anything: a path off the list or not a regular file, a listing that
+# fails or is empty, a commit that is not a merge whose second parent is the pull request's head
+# (github.event.pull_request.head.sha, through env), or the step failing (continue-on-error keeps the job going) runs
+# every step. A push to main never runs the step and so runs everything, as before: main's push runs, which the release
+# gate (hack/release/check-ci.sh) reads and which save the caches, are unchanged.
 name: ci
 
 on:
@@ -114,17 +138,32 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The merge commit and both its parents, for the docs-only step.
+          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
+      # On a docs-only pull request every step after this one skips; the header says why that is safe.
+      - id: docs-only
+        name: Classify the pull request's changes
+        if: ${{ github.event_name == 'pull_request' }}
+        continue-on-error: true
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          scope=$(hack/ci/docs-only.sh)
+          echo "${scope}" >>"${GITHUB_OUTPUT}"
       - id: setup-go
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: false
       - id: go-env
         name: Locate the Go caches
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
         run: |
           echo "modcache=$(go env GOMODCACHE)" >>"${GITHUB_OUTPUT}"
           echo "gocache=$(go env GOCACHE)" >>"${GITHUB_OUTPUT}"
       - id: go-cache
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -140,14 +179,17 @@ jobs:
         run: hack/ci/actions-cache.sh mark
       # The chart tests (test/chart) render with helm and skip without it, so CI installs it and
       # AGENTKOURIER_REQUIRE_HELM below turns a missing helm into a failure, never a pass by skipping.
-      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+      - if: ${{ steps.docs-only.outputs.skip != 'true' }}
+        uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
         with:
           # The version test/chart passes with; release.yml pins the same one.
           version: v4.3.2
-      - run: make test-race
+      - if: ${{ steps.docs-only.outputs.skip != 'true' }}
+        run: make test-race
         env:
           AGENTKOURIER_REQUIRE_HELM: "1"
-      - run: make test-scripts
+      - if: ${{ steps.docs-only.outputs.skip != 'true' }}
+        run: make test-scripts
       - id: go-trim
         name: Trim the Go caches to what this run used
         if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -174,17 +216,32 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The merge commit and both its parents, for the docs-only step.
+          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
+      # On a docs-only pull request every step after this one skips; the header says why that is safe.
+      - id: docs-only
+        name: Classify the pull request's changes
+        if: ${{ github.event_name == 'pull_request' }}
+        continue-on-error: true
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          scope=$(hack/ci/docs-only.sh)
+          echo "${scope}" >>"${GITHUB_OUTPUT}"
       - id: setup-go
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: false
       - id: go-env
         name: Locate the Go caches
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
         run: |
           echo "modcache=$(go env GOMODCACHE)" >>"${GITHUB_OUTPUT}"
           echo "gocache=$(go env GOCACHE)" >>"${GITHUB_OUTPUT}"
       - id: go-cache
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -198,7 +255,8 @@ jobs:
           CACHE_KEY: ${{ steps.go-cache.outputs.cache-primary-key }}
           CACHE_RESTORED_KEY: ${{ steps.go-cache.outputs.cache-matched-key }}
         run: hack/ci/actions-cache.sh mark
-      - run: make test-testhooks
+      - if: ${{ steps.docs-only.outputs.skip != 'true' }}
+        run: make test-testhooks
       - id: go-trim
         name: Trim the Go caches to what this run used
         if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -223,17 +281,32 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The merge commit and both its parents, for the docs-only step.
+          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
+      # On a docs-only pull request every step after this one skips; the header says why that is safe.
+      - id: docs-only
+        name: Classify the pull request's changes
+        if: ${{ github.event_name == 'pull_request' }}
+        continue-on-error: true
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          scope=$(hack/ci/docs-only.sh)
+          echo "${scope}" >>"${GITHUB_OUTPUT}"
       - id: setup-go
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: false
       - id: go-env
         name: Locate the Go caches
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
         run: |
           echo "modcache=$(go env GOMODCACHE)" >>"${GITHUB_OUTPUT}"
           echo "gocache=$(go env GOCACHE)" >>"${GITHUB_OUTPUT}"
       - id: go-cache
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -241,7 +314,8 @@ jobs:
             ${{ steps.go-env.outputs.gocache }}
           key: go-test-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
           restore-keys: go-test-${{ runner.os }}-
-      - run: make test-postgres
+      - if: ${{ steps.docs-only.outputs.skip != 'true' }}
+        run: make test-postgres
 
   # The CRDs' schemas are a fast-fail copy of the broker's validation, and the invariant is that nothing the schema refuses is
   # accepted by the broker (spec D50). This job holds them to it: a kind cluster with only the three CRDs, no image and no
@@ -271,17 +345,32 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The merge commit and both its parents, for the docs-only step.
+          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
+      # On a docs-only pull request every step after this one skips; the header says why that is safe.
+      - id: docs-only
+        name: Classify the pull request's changes
+        if: ${{ github.event_name == 'pull_request' }}
+        continue-on-error: true
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          scope=$(hack/ci/docs-only.sh)
+          echo "${scope}" >>"${GITHUB_OUTPUT}"
       - id: setup-go
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: false
       - id: go-env
         name: Locate the Go caches
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
         run: |
           echo "modcache=$(go env GOMODCACHE)" >>"${GITHUB_OUTPUT}"
           echo "gocache=$(go env GOCACHE)" >>"${GITHUB_OUTPUT}"
       - id: go-cache
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -296,8 +385,10 @@ jobs:
           CACHE_RESTORED_KEY: ${{ steps.go-cache.outputs.cache-matched-key }}
         run: hack/ci/actions-cache.sh mark
       # It puts the tools in $RUNNER_TEMP/bin and on the path of the steps after it, and fails on a checksum that is not the pin.
-      - run: hack/ci/install-kind-tools.sh
-      - run: make crd-corpus
+      - if: ${{ steps.docs-only.outputs.skip != 'true' }}
+        run: hack/ci/install-kind-tools.sh
+      - if: ${{ steps.docs-only.outputs.skip != 'true' }}
+        run: make crd-corpus
         env:
           CRD_CORPUS_NODE: ${{ matrix.node }}
       - id: go-trim
@@ -337,18 +428,33 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The merge commit and both its parents, for the docs-only step.
+          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
+      # On a docs-only pull request every step after this one skips; the header says why that is safe.
+      - id: docs-only
+        name: Classify the pull request's changes
+        if: ${{ github.event_name == 'pull_request' }}
+        continue-on-error: true
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          scope=$(hack/ci/docs-only.sh)
+          echo "${scope}" >>"${GITHUB_OUTPUT}"
       # Its lint builds golangci-lint from the root module, so the key covers both go.sum files.
       - id: setup-go
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: false
       - id: go-env
         name: Locate the Go caches
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
         run: |
           echo "modcache=$(go env GOMODCACHE)" >>"${GITHUB_OUTPUT}"
           echo "gocache=$(go env GOCACHE)" >>"${GITHUB_OUTPUT}"
       - id: go-cache
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -363,8 +469,10 @@ jobs:
           CACHE_KEY: ${{ steps.go-cache.outputs.cache-primary-key }}
           CACHE_RESTORED_KEY: ${{ steps.go-cache.outputs.cache-matched-key }}
         run: hack/ci/actions-cache.sh mark ~/.cache/golangci-lint
-      - run: make docs-agent-test
-      - run: make docs-agent-lint
+      - if: ${{ steps.docs-only.outputs.skip != 'true' }}
+        run: make docs-agent-test
+      - if: ${{ steps.docs-only.outputs.skip != 'true' }}
+        run: make docs-agent-lint
       - id: go-trim
         name: Trim the Go caches to what this run used
         if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -391,14 +499,29 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The merge commit and both its parents, for the docs-only step.
+          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
+      # On a docs-only pull request every step after this one skips; the header says why that is safe.
+      - id: docs-only
+        name: Classify the pull request's changes
+        if: ${{ github.event_name == 'pull_request' }}
+        continue-on-error: true
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          scope=$(hack/ci/docs-only.sh)
+          echo "${scope}" >>"${GITHUB_OUTPUT}"
       - id: setup-python
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.14"
       - id: pip-env
         name: Locate the pip cache
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
         run: echo "cache=$(python -m pip cache dir)" >>"${GITHUB_OUTPUT}"
       - id: pip-cache
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.pip-env.outputs.cache }}
@@ -406,9 +529,12 @@ jobs:
           restore-keys: |
             pip-echo-agent-${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-
             pip-echo-agent-${{ runner.os }}-
-      - run: make echo-agent-test
-      - run: make echo-agent-lint
-      - run: make echo-agent-image
+      - if: ${{ steps.docs-only.outputs.skip != 'true' }}
+        run: make echo-agent-test
+      - if: ${{ steps.docs-only.outputs.skip != 'true' }}
+        run: make echo-agent-lint
+      - if: ${{ steps.docs-only.outputs.skip != 'true' }}
+        run: make echo-agent-image
       - if: ${{ !cancelled() && steps.pip-cache.outcome == 'success' && steps.pip-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

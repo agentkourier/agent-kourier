@@ -1,3 +1,7 @@
+# On a docs-only pull request (the header of ci.yml says what that is and why skipping is safe), govulncheck and trivy
+# start and report success under their own names but skip every step after their docs-only step: no Go or image file
+# changed, so neither has anything new to scan. gitleaks scans the whole tree and its history, so it always runs in
+# full. On any other event the docs-only step does not run, and the jobs run as they did before it.
 name: security
 
 on:
@@ -50,18 +54,33 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The merge commit and both its parents, for the docs-only step.
+          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
+      # On a docs-only pull request every step after this one skips; the header says why that is safe.
+      - id: docs-only
+        name: Classify the pull request's changes
+        if: ${{ github.event_name == 'pull_request' }}
+        continue-on-error: true
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          scope=$(hack/ci/docs-only.sh)
+          echo "${scope}" >>"${GITHUB_OUTPUT}"
       # A cache per module, as ci.yml describes. The script pins govulncheck's version, so it is in the key too.
       - id: setup-go
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: false
       - id: go-env
         name: Locate the Go caches
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
         run: |
           echo "modcache=$(go env GOMODCACHE)" >>"${GITHUB_OUTPUT}"
           echo "gocache=$(go env GOCACHE)" >>"${GITHUB_OUTPUT}"
       - id: go-cache
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -76,6 +95,7 @@ jobs:
           CACHE_RESTORED_KEY: ${{ steps.go-cache.outputs.cache-matched-key }}
         run: hack/ci/actions-cache.sh mark
       - name: Run govulncheck
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
         env:
           MODULE_DIR: ${{ matrix.directory }}
         run: hack/security/govulncheck.sh "${MODULE_DIR}"
@@ -143,13 +163,28 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+          # The merge commit and both its parents, for the docs-only step.
+          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
+      # On a docs-only pull request every step after this one skips; the header says why that is safe.
+      - id: docs-only
+        name: Classify the pull request's changes
+        if: ${{ github.event_name == 'pull_request' }}
+        continue-on-error: true
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          scope=$(hack/ci/docs-only.sh)
+          echo "${scope}" >>"${GITHUB_OUTPUT}"
+      - if: ${{ steps.docs-only.outputs.skip != 'true' }}
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Install pinned Trivy
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
         id: trivy
         run: |
           path=$(hack/security/install-trivy.sh "${RUNNER_TEMP}/security-tools")
           echo "path=${path}" >>"${GITHUB_OUTPUT}"
       - name: Build the production image
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
         env:
           PLATFORM: ${{ matrix.platform }}
           IMAGE_REF: agent-kourier-security:${{ matrix.name }}
@@ -164,6 +199,7 @@ jobs:
             --tag "${IMAGE_REF}" \
             .
       - name: Scan the production image
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
         env:
           IMAGE_REF: agent-kourier-security:${{ matrix.name }}
           PLATFORM: ${{ matrix.platform }}
@@ -171,7 +207,7 @@ jobs:
           REPORT_NAME: trivy-${{ matrix.name }}
         run: hack/security/scan-image.sh "${IMAGE_REF}" "${PLATFORM}" "${RUNNER_TEMP}/${REPORT_NAME}.sarif"
       - name: Upload Trivy report
-        if: always()
+        if: ${{ always() && steps.docs-only.outputs.skip != 'true' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: trivy-${{ matrix.name }}
