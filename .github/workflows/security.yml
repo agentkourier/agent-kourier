@@ -1,7 +1,10 @@
-# On a docs-only pull request (the header of ci.yml says what that is and why skipping is safe), govulncheck and trivy
-# start and report success under their own names but skip every step after their docs-only step: no Go or image file
-# changed, so neither has anything new to scan. gitleaks scans the whole tree and its history, so it always runs in
-# full. On any other event the docs-only step does not run, and the jobs run as they did before it.
+# govulncheck and trivy pass the class scan to the docs-only step (the header of ci.yml says what the classes are and
+# why skipping is safe): on a pull request that changes only paths on the docs-only list or Markdown outside every Go
+# package's tree (README.md and the pages under docs/, say), they start and report success under their own names but
+# skip every step after their docs-only step. govulncheck reads a module's Go packages and the files they embed, and
+# the image holds only the binary built from Go, so neither has new code to scan. gitleaks scans the whole tree and
+# its history, so it always runs in full. On any other event the docs-only step does not run, and the jobs run as they
+# did before it.
 name: security
 
 on:
@@ -56,15 +59,17 @@ jobs:
           persist-credentials: false
           # The merge commit and both its parents, for the docs-only step.
           fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
-      # On a docs-only pull request every step after this one skips; the header says why that is safe.
+      # On a pull request that changes only paths its class (DOCS_ONLY_CLASS) does not read, every step after this
+      # one skips; the header says why that is safe.
       - id: docs-only
         name: Classify the pull request's changes
         if: ${{ github.event_name == 'pull_request' }}
         continue-on-error: true
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DOCS_ONLY_CLASS: scan
         run: |
-          scope=$(hack/ci/docs-only.sh)
+          scope=$(hack/ci/docs-only.sh "${DOCS_ONLY_CLASS}")
           echo "${scope}" >>"${GITHUB_OUTPUT}"
       # A cache per module, as ci.yml describes. The script pins govulncheck's version, so it is in the key too.
       - id: setup-go
@@ -165,15 +170,17 @@ jobs:
           persist-credentials: false
           # The merge commit and both its parents, for the docs-only step.
           fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
-      # On a docs-only pull request every step after this one skips; the header says why that is safe.
+      # On a pull request that changes only paths its class (DOCS_ONLY_CLASS) does not read, every step after this
+      # one skips; the header says why that is safe.
       - id: docs-only
         name: Classify the pull request's changes
         if: ${{ github.event_name == 'pull_request' }}
         continue-on-error: true
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DOCS_ONLY_CLASS: scan
         run: |
-          scope=$(hack/ci/docs-only.sh)
+          scope=$(hack/ci/docs-only.sh "${DOCS_ONLY_CLASS}")
           echo "${scope}" >>"${GITHUB_OUTPUT}"
       - if: ${{ steps.docs-only.outputs.skip != 'true' }}
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
