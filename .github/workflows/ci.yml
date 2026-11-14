@@ -145,9 +145,12 @@ jobs:
       # workflow (zizmor.yml names the gap), actions not pinned by SHA. .github/zizmor.yml is its policy and
       # hack/security/lint-workflows.sh what the step proves. It needs no Go and about 10 s, so it is a step here rather
       # than a job of its own, and it runs whatever the steps before it did (!cancelled()), so a lint or build failure
-      # does not hide a finding; hack/ci/docsonly's test holds it to that. The token is only for zizmor's online audits
-      # (impostor commits, known vulnerable actions), and only this step gets it; it is the job's read-only token, as on
-      # a fork's pull request. Findings print in the log; none is uploaded as SARIF, which needs security-events: write.
+      # does not hide a finding; hack/ci/docsonly's test holds it to that and to its env. GH_TOKEN is for zizmor's online
+      # audits (impostor commits, known vulnerable actions); without it the script runs zizmor offline and skips them.
+      # This is the only run step with the job's token in its environment, so make lint, make build and the other steps
+      # that run the pull request's code never see it (actions/checkout and setup-go take it through their own token
+      # input). It is the job's read-only token, as on a fork's pull request. Findings print in the log; none is
+      # uploaded as SARIF, which needs security-events: write.
       - if: ${{ !cancelled() }}
         run: make lint-workflows
         env:

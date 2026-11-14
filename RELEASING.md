@@ -246,10 +246,14 @@ workflow, `NODE_IMAGE_MIN`, the ruleset and `CI_REQUIRED_JOBS` together. A run t
 (`hack/security/lint-workflows.sh`), audits every workflow with a pinned zizmor under the policy in
 `.github/zizmor.yml` and fails on any finding; it first proves the policy still fails a set of unsafe fixtures
 (`hack/security/testdata/zizmor`), and then that the inline ignore comments hide only the findings the script lists.
-It runs even when an earlier step of `lint` failed, and it is the only step given the job's token, which is
-`contents: read`, for zizmor's online audits; it uploads no SARIF, so it behaves the same on a fork's pull request.
-Because it is a step of `lint`, a required check, a finding blocks the merge and the release; `hack/ci/docsonly`'s
-test fails if the step leaves `lint` or stops running on every pull request. The Go jobs in `ci.yml`, `security.yml`, `codeql.yml` and `docs.yml` keep the module cache and the build cache
+It runs even when an earlier step of `lint` failed. It is the only `run` step with the job's token (`contents: read`)
+in its environment, for zizmor's online audits, so `make lint`, `make build` and the other steps that run the pull
+request's code never see it; it uploads no SARIF, so it behaves the same on a fork's pull request. Because it is a
+step of `lint`, a required check, a finding blocks the merge and the release. The online audits can raise a finding
+that no change in the pull request caused: an advisory published against a pinned action fails `lint` on every pull
+request, docs-only ones included, until the pin moves. A failed download of zizmor or a GitHub API error during the
+online audits also fails `lint`; a re-run clears it. `hack/ci/docsonly`'s test fails if the step leaves `lint`, loses
+its token, or gets an `if` other than `!cancelled()`, or if `lint` gets a job-level `if`. The Go jobs in `ci.yml`, `security.yml`, `codeql.yml` and `docs.yml` keep the module cache and the build cache
 (plus golangci-lint's cache in the jobs that lint) in Actions caches, one per job and one per leg of `test-shard` and
 `test-testhooks-shard` (`go-test-<leg>-…`, `go-test-testhooks-<leg>-…`), except that `test-postgres` restores the first
 race leg's and the two `crd-corpus` jobs share one, which `crd-corpus (1.37)` saves. A key is

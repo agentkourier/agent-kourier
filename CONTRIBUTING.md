@@ -81,8 +81,11 @@ runs `lint`, the test jobs and `docs-agent`, and skips the scanners, `crd-corpus
 expansion of a value an outsider controls (a pull request title, a branch name) into a `run` step, a checkout that
 keeps its credentials, `actions/cache` or a setup action's cache in a release workflow, or an action not pinned by
 a full commit SHA. `lint` is a required check, so a finding blocks the merge; the audit runs even when an earlier
-step of `lint` failed, so its findings show in the same run. If you change a workflow, run `make lint-workflows` (it
-installs the pinned zizmor and needs `jq`); `.github/zizmor.yml` says how a finding is fixed or suppressed.
+step of `lint` failed, so its findings show in the same run. Its online audits can fail `lint` with no change in your
+pull request: an advisory published against a pinned action fails every pull request, docs-only ones included, until
+the pin moves. A failed zizmor download or a GitHub API error during those audits fails `lint` too; re-run the job.
+If you change a workflow, run `make lint-workflows` (it installs the pinned zizmor and needs `jq`);
+`.github/zizmor.yml` says how a finding is fixed or suppressed.
 
 `ci` also runs `test-postgres` (`make test-postgres`), the Postgres store's tests and the broker's Postgres tests
 against a throwaway Postgres container; in the race passes, which have no database, those tests skip. It is
