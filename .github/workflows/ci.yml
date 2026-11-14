@@ -174,10 +174,10 @@ jobs:
   # together run each package once, longest first. A leg's number and the number of legs come from the strategy
   # context, not from the matrix's values, so the split always covers every leg the matrix has; hack/ci/testshards'
   # test holds the legs' list, cache keys and cache-prune's prefixes to each other. Two legs: the weights in
-  # race.txt sum to about 1,560 s, about 390 s of wall time at four packages at a time on 4 vCPUs, and the slowest,
-  # internal/render at about 185 s, is the floor of the leg that runs it; two legs of about 780 s each (about 195 s of
-  # wall time) are about at that floor, so a third would end at most about 10 s sooner and would cost a runner and a
-  # cache. Each leg's cache is its
+  # race.txt sum to about 1,220 s, about 305 s of wall time at four packages at a time on 4 vCPUs, and the slowest,
+  # internal/redact at about 125 s, is the floor of the leg that runs it; two legs of about 610 s each (about 155 s of
+  # wall time) end about 30 s above that floor, so a third would end at most about 30 s sooner and would cost a runner
+  # and a cache. Each leg's cache is its
   # own (go-test-<leg>-): one cache that one leg saved would hold only that leg's packages and test results. The job
   # test below is the required check. Observed on a cold cache: go test -race ./... took 16 minutes in one job, with no
   # failure; 30 is nearly twice that, for a leg that builds about half of it.
@@ -345,8 +345,8 @@ jobs:
   # hack/ci/testhooks-packages.sh computes the list with go list on each run, so a package that gains such an import
   # joins it, and fails rather than run an empty one; every leg computes the same list and takes its part. Every other
   # package compiles to the same packages with the tag as without it, so the race pass has already run it. Two legs: in
-  # a push run on main the 14 packages' times sum to about 645 s, and the slowest, internal/broker at about 115 s, is
-  # the floor; two legs of about 320 s (80 s at four at a time) reach it. It has no chart tests, so no helm. 30 is the
+  # a push run on main the 14 packages' times sum to about 585 s, and the slowest, internal/broker at about 110 s, is
+  # the floor; two legs of about 290 s (75 s at four at a time) reach it. It has no chart tests, so no helm. 30 is the
   # same budget as the race pass's, whose build it repeats in part. Each leg's cache is its own
   # (go-test-testhooks-<leg>-), since the race legs' hold neither the tagged builds nor their test results.
   test-testhooks-shard:
@@ -449,9 +449,10 @@ jobs:
   # suite runs on SQLite only. hack/postgres/test.sh starts a throwaway Postgres container, which the runner's Docker
   # serves, and sets the DSN those tests read, so they cannot skip here. It builds two packages the race pass builds,
   # internal/broker and internal/store/postgres, with -race as that pass does, and runs their tests with -count=1, which
-  # never reads a cached result, so it saves no cache. It restores the first race leg's: under the weights checked in,
-  # that leg runs both packages, so its cache holds their builds; were a refresh of the weights to move one to the
-  # other leg, this job would build what it lacks, a slower run and no failure.
+  # never reads a cached result, so it saves no cache. It restores the second race leg's: under the weights checked in,
+  # that leg runs internal/broker, which imports internal/store/postgres, so its cache holds both builds; were a refresh
+  # of the weights to move broker to the other leg, this job would build what it lacks, a slower run and no failure
+  # (hack/ci/test-shard.sh says how to check after a refresh).
   test-postgres:
     runs-on: ubuntu-26.04
     timeout-minutes: 30
@@ -492,8 +493,8 @@ jobs:
           path: |
             ${{ steps.go-env.outputs.modcache }}
             ${{ steps.go-env.outputs.gocache }}
-          key: go-test-1-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
-          restore-keys: go-test-1-${{ runner.os }}-
+          key: go-test-2-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: go-test-2-${{ runner.os }}-
       - if: ${{ steps.docs-only.outputs.skip != 'true' }}
         run: make test-postgres
 

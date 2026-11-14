@@ -221,9 +221,10 @@ target with `TEST_SHARD=<leg>/<legs>`, its number and the number of legs taken f
 `hack/ci/test-shard.sh` gives it its part of the pass's packages: each package goes to exactly one leg, longest first,
 balanced by the seconds in `hack/ci/test-weights` (a package not listed there weighs 10). A leg that would get no
 package, when a pass has fewer packages than legs, fails rather than run none. There are two legs per pass because the
-slowest package is the floor of its leg's time (`internal/render`, about 185 s of a race pass whose weights sum to
-about 1,560 s at four at a time, and `internal/broker`, about 115 s of 647 s in the testhooks pass), and two legs
-are about at it: a third would end at most about 10 s sooner and would cost a runner and a cache. A leg is added by adding its number
+slowest package is the floor of its leg's time (`internal/redact`, about 125 s of a race pass whose weights sum to
+about 1,220 s, and `internal/broker`, about 110 s of about 585 s in the testhooks pass, at four packages at a time).
+Two race legs end about 30 s above their floor and two testhooks legs at theirs, so a third would end at most about
+30 s sooner and would cost a runner and a cache. A leg is added by adding its number
 to the job's `matrix.leg` and its cache prefix to `cache-prune`; `hack/ci/testshards`' test fails until both are there.
 `hack/ci/test-shard.sh` says how to refresh the weights from a push run on `main`; stale weights only unbalance the
 legs. The required checks `test` and `test-testhooks` are jobs of their own that run however their legs ended and fail
@@ -255,8 +256,8 @@ request, docs-only ones included, until the pin moves. A failed download of zizm
 online audits also fails `lint`; a re-run clears it. `hack/ci/docsonly`'s test fails if the step leaves `lint`, loses
 its token, or gets an `if` other than `!cancelled()`, or if `lint` gets a job-level `if`. The Go jobs in `ci.yml`, `security.yml`, `codeql.yml` and `docs.yml` keep the module cache and the build cache
 (plus golangci-lint's cache in the jobs that lint) in Actions caches, one per job and one per leg of `test-shard` and
-`test-testhooks-shard` (`go-test-<leg>-…`, `go-test-testhooks-<leg>-…`), except that `test-postgres` restores the first
-race leg's and the two `crd-corpus` jobs share one, which `crd-corpus (1.37)` saves. A key is
+`test-testhooks-shard` (`go-test-<leg>-…`, `go-test-testhooks-<leg>-…`), except that `test-postgres` restores the
+second race leg's, which runs `internal/broker`, and the two `crd-corpus` jobs share one, which `crd-corpus (1.37)` saves. A key is
 `go-<cache>-<runner OS>-go<Go version>-<hash of the go.sum files it builds from (and, for govulncheck, its script)>-<commit>`, and a run restores the newest
 entry whose key starts with `go-<cache>-<runner OS>-`, so a pull request starts from what the latest push to `main`
 saved, test results included. Every push run on `main` saves, whether its steps passed or failed (a cancelled job saves
